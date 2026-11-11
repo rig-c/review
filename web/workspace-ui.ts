@@ -5,11 +5,11 @@ import {bindDomI18n,getLinkLanguage,setLanguagePreference,setLinkLanguage,tr,onL
 import {panelMake,actionButton,labelledControl} from './view-controls.ts';
 
 /** Header availability belongs to the shared shell, independently of the removed step chips. */
-export function bindHeaderModeAvailability(options:{model:boolean;preRig?:boolean;root?:Pick<Document,'querySelectorAll'>}):()=>void {
+export function bindHeaderModeAvailability(options:{model:boolean;preRig?:boolean;parts?:boolean;root?:Pick<Document,'querySelectorAll'>}):()=>void {
  const root=options.root??document,reason=options.preRig?'RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.':!options.model?'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.':null;
  if(!reason)return ()=>{};
  const modes=[...root.querySelectorAll<HTMLButtonElement>('[data-mode]')].map(button=>({button,disabled:button.disabled,title:button.getAttribute('title'),pressed:button.getAttribute('aria-pressed')}));
- const render=()=>{for(const {button}of modes){button.disabled=true;button.title=tr(reason);button.setAttribute('title',tr(reason));if(button.getAttribute('aria-pressed')!=='false')button.setAttribute('aria-pressed','false');}};
+ const render=()=>{for(const {button}of modes){if(options.parts&&button.dataset.mode==='rig')continue;button.disabled=true;button.title=tr(reason);button.setAttribute('title',tr(reason));if(button.getAttribute('aria-pressed')!=='false')button.setAttribute('aria-pressed','false');}};
  const refuse=(event:Event)=>{event.preventDefault();event.stopImmediatePropagation();render();};
  const observer=new MutationObserver(render);for(const {button}of modes){observer.observe(button,{attributes:true,attributeFilter:['aria-pressed']});button.addEventListener('click',refuse,true);}
  const off=onLanguageChange(render);render();

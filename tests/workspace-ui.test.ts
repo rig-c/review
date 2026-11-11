@@ -1,3 +1,4 @@
+import {createRigViewControls} from './helpers/rig-view-controls.ts';
 import {composedRigMarkup} from './helpers/workspace-status-dom.ts';
 import {getLanguagePreference,getLinkLanguage,setLanguagePreference,setLinkLanguage,t} from '../web/i18n.ts';
 import {mountRigInspector,mountBottomPanel,mountActBar,type ActSaveKind} from '../web/inspector-blocks.ts';
@@ -29,7 +30,7 @@ class Host extends EventTarget {
  closest(selector:string):Host|null {return this.tagName.toLowerCase()===selector?this:this.parentElement?.closest(selector)??null;}
  remove(node?:Host){if(!node){this.parentElement?.remove(this);return;}this.children=this.children.filter(n=>n!==node);node.parentElement=null;}
  replaceChildren(...nodes:Host[]){for(const child of [...this.children])this.remove(child);this.append(...nodes);}
- append(...nodes:Host[]){for(const node of nodes){node.parentElement?.remove(node);node.parentElement=this;this.children.push(node);}}
+ append(...nodes:(Host|string)[]){for(const value of nodes){const node=typeof value==='string'?Object.assign(new Host('#text'),{textContent:value}):value;node.parentElement?.remove(node);node.parentElement=this;this.children.push(node);}}
  prepend(...nodes:Host[]){for(const node of [...nodes].reverse()){node.parentElement?.remove(node);node.parentElement=this;this.children.unshift(node);}}
  before(node:Host){const parent=this.parentElement!;node.parentElement?.remove(node);node.parentElement=parent;parent.children.splice(parent.children.indexOf(this),0,node);}
  after(node:Host){const parent=this.parentElement!;node.parentElement?.remove(node);node.parentElement=parent;parent.children.splice(parent.children.indexOf(this)+1,0,node);}
@@ -224,7 +225,15 @@ test('each panel header is the first child of its panel and carries the sticky c
 test('rig mounts distinct primary and secondary toolbar regions using the shared control constructor',async()=>{
  const html=await indexHtml(),main=await mainSource();
  for(const seam of ['data-workspace-comment','data-workspace-layers','data-workspace-view-tools','data-workspace-camera'])expect(html).toContain(seam);
- expect(main).toContain("createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(id=>setView(id as SingleLayout))})");
+ const app=openHost({explorerLeft:true,tabs:['rig','playback']});try{
+  for(const partsOnly of [false,true]){
+   const changes:string[]=[],controls=createRigViewControls(id=>changes.push(id),partsOnly);
+   expect(controls.viewModeIds).toEqual(partsOnly?['compare','reference','rig','difference']:['compare','reference','rig']);
+   const root=controls.viewSwitch as unknown as Host,list=root.children[1]!;root.open=true;list.children[2]!.click();
+   expect(changes).toEqual(['rig']);expect(root.open).toBe(false);
+   expect(list.children.filter(node=>node.tagName==='BUTTON').map(node=>node.textContent)).toEqual((partsOnly?['Side by side','Reference','Rig','Difference']:['Side by side','Reference','Rig']).map(label=>t(label)));
+  }
+ }finally{app.close();}
  for(const id of ['layer-images','layer-mesh','layer-bones'])expect(rigLayerControlsMarkup).toContain(`id="${id}"`);
  expect(sharedCommentMarkup.match(/id="stage-comment"/g)?.length).toBe(1);
  const css=await stylesCss();expect(css).toContain('.workspace-main-toolbar');expect(css).toContain('.workspace-secondary-toolbar');
@@ -367,7 +376,7 @@ test('#671 actual rig selection adapter restores without explicit reveal and sen
 
 test('#735 source-only startup disables Comments without changing its preserved act or mode row',async()=>{
  const source=await mainSource(),a=source.indexOf('    let writes:',source.indexOf('async function start():')),b=source.indexOf('    submittedBaseline=',a);
- const initialize=new Function('scope','with(scope){return (async()=>{'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a,b))+'})();}');
+ const initialize=new Function('scope','with(scope){return '+new Bun.Transpiler({loader:'ts'}).transformSync('(async()=>{'+source.slice(a,b)+'})()')+';}');
  for(const preRig of [false,true]){
   const comment=new Host('button'),act=new Host();
   const scope={data:null,session:null,readOnly:null,rigInspector:{act,comments:{button:comment}},access:{},readOnlyReason:()=>null,
@@ -404,7 +413,7 @@ test('#671 real mounted outer tab-panel relationships preserve original nodes an
   expect(page.all().filter(node=>node.attrs.get('aria-labelledby')?.startsWith('block-tab-')).map(node=>[node.id,node.getAttribute('role'),node.getAttribute('aria-labelledby')])).toEqual(innerBefore);
   const source=await mainSource(),a=source.indexOf('    let writes:',source.indexOf('async function start():')),b=source.indexOf('    submittedBaseline=',a);
   const scope={data:null as unknown,session:null as unknown,readOnly:null as unknown,rigInspector:mounted,access:{},readOnlyReason:()=>null,button:(id:string)=>document.getElementById(id)!,api:async(path:string)=>path==='/api/review'?{capabilities:{preRig:true}}:path==='/api/session'?{status:'pending'}:{capabilityRequired:false}};
-  await new Function('scope','with(scope){return(async()=>{'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a,b))+'})();}')(scope);
+  await new Function('scope','with(scope){return '+new Bun.Transpiler({loader:'ts'}).transformSync('(async()=>{'+source.slice(a,b)+'})()')+';}')(scope);
   const preRig=bindInspectorTabs(()=>{},()=>{},row);
   try{preRig.select('feedback');expect(preRig.state()).toBe('rig');expect(originals[2]!.hidden).toBe(true);expect((mounted.comments.button as any).disabled).toBe(true);expect(mounted.act.hidden).toBe(true);expect(row.tabs.map(tab=>tab.id)).toEqual(['rig','playback']);}
   finally{preRig.dispose();}
@@ -491,7 +500,7 @@ test('#676 parts-shaped act bar derives its label, shares state nodes and operat
  }finally{bar?.dispose();setLinkLanguage(link);setLanguagePreference(preference);hostDocument=oldFocus;if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });
 
-test('#695 act bar save state: one model renders saved, unsaved, saving, failed with retry and read-only into the act node and its copies',()=>{
+test('#695 act bar save state: one model renders saved, unsaved, saving, failed with retry and read-only into the act node and its copies',async()=>{
  const previous=Object.getOwnPropertyDescriptor(globalThis,'document'),preference=getLanguagePreference(),link=getLinkLanguage();
  Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Host(tag)}});
  let bar:ReturnType<typeof mountActBar>|undefined;
@@ -513,6 +522,12 @@ test('#695 act bar save state: one model renders saved, unsaved, saving, failed 
   bar.setSaveState({kind:'read-only',text:'Read-only view: reopen with rig-review open to edit.',retry:{label:'Submit review',run:()=>retried++}});shown('read-only','Read-only view: reopen with rig-review open to edit.');expect(retry.hidden).toBe(true);
   bar.setSaveState({kind:'failed',text:'Save failed.',retry:{label:'Submit review',run:()=>retried+=10}});expect(retry.hidden).toBe(false);expect(actions.children.filter(node=>node===retry).length).toBe(1);retry.click();expect(retried).toBe(11);
   const snapshot=bar.saveState()!;snapshot.text='changed';expect(bar.saveState()?.text).toBe('Save failed.');
+  const source=await mainSource(),start=source.indexOf(' const state=rigInspector.actBar;',source.indexOf('async function startParts(')),end=source.indexOf(" select('review-status')",start);
+  expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
+  const initializeParts=new Function('rigInspector','readOnly',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end)));
+  for(const readOnly of [null,'Read-only view: reopen with rig-review open to edit.']){
+   initializeParts({actBar:bar},readOnly);shown(readOnly?'read-only':'unsaved',readOnly??'Not submitted');
+  }
   bar.dispose();expect(actions.children).toEqual([state,submit]);
  }finally{bar?.dispose();setLinkLanguage(link);setLanguagePreference(preference);if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });

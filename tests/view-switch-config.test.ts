@@ -128,7 +128,7 @@ for(const language of ['en','ko'] as const)test(`#736 Amendment 1 ${language}: a
  const {controls,buttons,label}=menu(),panes=new Map<string,{hidden:boolean}>();
  let state:{requested:string;effective:string|null;reasons:Record<string,string>}={requested:'compare',effective:'rig',reasons:{compare:'REFERENCE_ABSENT: not supplied',reference:'REFERENCE_ABSENT: not supplied'}};
  const call=new Bun.Transpiler({loader:'ts'}).transformSync('let effectiveView;'+source.slice(start,end)+';return renderLayout;');
- const render=new Function('layoutEligibility','controls','el','text','fitCamera',call)(()=>state,controls,(id:string)=>{if(!panes.has(id))panes.set(id,{hidden:false});return panes.get(id);},()=>{},()=>{}) as ()=>void;
+ const render=new Function('layoutEligibility','controls','el','text','fitCamera','partsSubject','tr',call)(()=>state,controls,(id:string)=>{if(!panes.has(id))panes.set(id,{hidden:false});return panes.get(id);},()=>{},()=>{},null,t) as ()=>void;
  render();expect(label.textContent).toBe(t('Rig'));expect(controls.viewModeIds).toEqual(['compare','reference','rig']);
  expect(buttons.map(button=>button.disabled)).toEqual([true,true,false]);
  expect(buttons[1]!.title).toBe(state.reasons.reference!);expect(buttons[1]!.getAttribute('aria-description')).toBe(state.reasons.reference!);

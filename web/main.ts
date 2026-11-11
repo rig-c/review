@@ -1,3 +1,4 @@
+import {createPartsViewportProvider,bindPartsSubject,type PartsSubjectEntry,type PartsSubjectSession} from './parts-viewport-provider.ts';
 import {rigWorkspaceMarkup,rigFeedbackMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {bindDirectionPanel} from './direction-panel.ts';
 import {bindWorkspaceVisibility} from './workspace-visibility.ts';
@@ -95,6 +96,7 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 // Capability is consumed before shell composition or any URL-dependent binding.
 // A live job (#709) hosts this screen for a rig subject: its routes, its session and its submit.
 const host=rigHost(),access=host?.access??pageInstanceAccess();
+const partsOnly=host?.subject==='parts'||document.getElementById('app')?.dataset.reviewScreen==='parts';
 const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
 const rigStatusBar=mountStatusBar({
  message:'Loading local review package…',
@@ -122,14 +124,17 @@ const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearch
 el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.append(createRigLayerControls());
 el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;
-const controls=createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(id=>setView(id as SingleLayout))}),cameraControls=el('app').querySelector<HTMLElement>('[data-workspace-camera]')!;cameraControls.append(controls.syncLabel,controls.zoomGroup!);
+const controls=createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(chooseInspectionView,partsOnly)}),cameraControls=el('app').querySelector<HTMLElement>('[data-workspace-camera]')!;cameraControls.append(controls.syncLabel,controls.zoomGroup!);
 const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.classList.add('workspace-main-toolbar');
 const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
 const rigInspector=mountRigInspector();
 const rigAsk=panelMake('span',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigInspector.act.prepend(rigAsk);
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
-const viewport=createViewportController(createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay},viewportState),viewportState);
+const partsCanvas=document.createElement('canvas'),partsReference=document.createElement('canvas');partsCanvas.width=partsCanvas.height=partsReference.width=partsReference.height=0;
+let partsSubject:ReturnType<typeof bindPartsSubject>|null=null;
+if(partsOnly){partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);el('reference-content').append(partsReference);}
+const viewport=createViewportController(partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay},viewportState),viewportState);
 const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera,unitScaleCamera}=viewport;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
 if(!host)connectLiveWindow(access);
@@ -328,12 +333,20 @@ function renderCheckpoint(): void {
 }
 
 function setView(value: typeof view): void {view=value;renderLayout();}
+function chooseInspectionView(id:string):void {
+ if(!partsSubject){setView(id as SingleLayout);return;}
+ const overlay=document.getElementById('parts-overlay') as HTMLInputElement;
+ if(id==='difference')overlay.checked=false;
+ partsSubject.setComparison(id==='difference'?'difference':overlay.checked?'overlay':'part');
+ setView(id==='difference'?'rig':id as SingleLayout);
+}
 function layoutEligibility(){return singleEligibility({rig:rigInput,reference:referenceInput,requested:view});}
 /** Unavailable layouts stay visible but disabled with their named reason; no placeholder pane stands in for a missing input. */
 function renderLayout():void {
  const state=layoutEligibility();effectiveView=state.effective;
- for(const id of controls.viewModeIds)controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
- controls.setMode(state.effective,state.effective??state.requested);
+ for(const id of controls.viewModeIds)if(id!=='difference')controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
+ controls.setMode(partsSubject?.comparison().mode==='difference'?'difference':state.effective,state.effective??state.requested);
+ if(partsSubject){controls.setDisabled('difference',partsSubject.differenceAvailable()&&rigInput.state==='loaded'&&referenceInput.state==='loaded'?null:tr('PARTS_DIFFERENCE_UNAVAILABLE: missing painting_in_rig declaration or painting_in_rig.json sidecar and its bound operand.'));if(partsSubject.comparison().mode==='difference')controls.setMode('difference');}
  el('reference-pane').hidden=state.effective!=='compare'&&state.effective!=='reference';el('rig-pane').hidden=state.effective!=='compare'&&state.effective!=='rig';
  const shown={compare:'Side by side',reference:'Reference only',rig:'Rig only'};
  text('layout-state',state.effective===null?`No input rendered · ${state.reasons.compare??''}`:state.effective===state.requested?shown[state.effective]:`${shown[state.effective]} · ${shown[state.requested]} unavailable: ${state.reasons[state.requested]??''}`);
@@ -1061,10 +1074,7 @@ function bind(): void {
     const picker=select('part-set');picker.value=name;picker.dispatchEvent(new Event('change',{bubbles:true}));
   });
   viewDisposers.push(()=>directionPanel?.dispose());
-  workspace=bindWorkspaceUI({regions:{layout:document.querySelector<HTMLElement>('.layout')!,left:document.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:document.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
-  viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
-  appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
-  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
+  bindWorkspace();
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(tr(text)),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
@@ -1114,17 +1124,27 @@ function bind(): void {
   input('idle-repeat').onchange=()=>{syncPlayerLoop();renderIdle();if(canRepeatIdle())void playPreview();};
   bindEnvironment();
   for(const id of ['proposal-panel','checkpoint-detail'])el(id).addEventListener('focusin',pause);
-  bindInspector();bindReviewDialog();
+  bindInspector();
   document.addEventListener('visibilitychange',()=>{if(document.hidden){const resume=playing;pause();suspendedPreview=resume;}else if(suspendedPreview){suspendedPreview=false;void playPreview();}});
   const resize = viewport.observeResize();
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
   window.addEventListener('pagehide', () => { comments?.dispose();persistence?.dispose();turnPad?.dispose();inspectorTabs?.dispose();workspace?.dispose();pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
 }
 
+/** The one shell and block binding, for either subject. */
+function bindWorkspace():void {
+  workspace=bindWorkspaceUI({regions:{layout:document.querySelector<HTMLElement>('.layout')!,left:document.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:document.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
+  viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
+  appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
+  bindReviewDialog();
+  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
+}
 async function start(): Promise<void> {
   try {
     let writes: { capabilityRequired: boolean; control?: boolean };
-    [data, session, writes] = await Promise.all([api<ReviewResponse>('/api/review'), api<ReviewSession>('/api/session'), api<{ capabilityRequired: boolean; control?: boolean }>('/api/access')]);
+    const [opened,saved,accessState]=await Promise.all([api<ReviewResponse|PartsSubjectEntry>('/api/review'),api<ReviewSession|PartsSubjectSession>('/api/session'),api<{capabilityRequired:boolean;control?:boolean}>('/api/access')]);
+    if('subject' in opened&&opened.subject==='parts'){await startParts(opened,saved as PartsSubjectSession,accessState);return;}
+    data=opened as ReviewResponse;session=saved as ReviewSession;writes=accessState;
     readOnly = readOnlyReason(access, writes.capabilityRequired);
     if(data.capabilities.preRig){rigInspector.comments.button.disabled=true;rigInspector.act.hidden=true;}
     submittedBaseline=structuredClone(session);
@@ -1158,6 +1178,69 @@ async function start(): Promise<void> {
     if(host){host.attach({pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message});showInspector('playback');host.displayed();}
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
 }
+/** Parts have a verdict and image-space pixels, never fabricated model/session fields. */
+async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,writes:{capabilityRequired:boolean}):Promise<void>{
+ const subject=opened.parts,issues=saved.issues,submittedIssues=new Set(host? saved.issues.map(issue=>issue.id):[]);
+ if(!partsOnly)throw new Error('PARTS_SUBJECT_ENTRY_REQUIRED');
+ readOnly=readOnlyReason(access,writes.capabilityRequired);
+ text('package-title',subject.title);text('revision','Parts package, before rigging');text('source-hash',`source ${subject.sourceHash.slice(0,12)}`);document.title=subject.title;
+ bindWorkspace();bindInspector(true);
+ const base=host?'/api/stage-parts':'/api/parts';
+ const request=async(path:string,init?:RequestInit)=>{
+  const response=await fetch(access.route(path),{...init,headers:access.headers(init?.headers)});
+  if(!response.ok){const body=await response.json();throw new Error(typeof body.error==='string'?body.error:body.error?.code??'PARTS_PAINT_FAILED');}return response;
+ };
+ const changed=()=>{dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});setSourceText(rigInspector.comments.button,`Comments (${issues.length})`);};
+ // A parts verdict is saved only over a drawn subject: until the first paint, or after a failed one, Save stays off.
+ const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded';
+ text('rig-empty','Loading package…');
+ partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),issues,request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,changed,selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
+ parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>openReview());
+ const thumbnails=new PartThumbnails();viewDisposers.push(()=>thumbnails.dispose());
+ parts.registerImages({thumbnail:(icon,item,glyph)=>thumbnails.showOriginal(icon,item,()=>partsSubject!.image(item.index),glyph),items:subject.items,selected:partsSubject.selected,solo:partsSubject.solo,visible:partsSubject.visible,select:partsSubject.select,isolate:partsSubject.isolate,show:partsSubject.show});
+ const unavailable='PARTS_RIG_UNAVAILABLE: this parts subject has no compiled rig.';
+ for(const node of el('proposal-panel').children)if(node.id!=='comments-list-host')(node as HTMLElement).hidden=true;
+ for(const control of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('#checkpoint-detail input,#proposal-panel input,#proposal-panel select,#proposal-panel button,#strip-panel input,#strip-panel select,#strip-panel button'))if(!control.closest('#comments-list-host')){control.disabled=true;setSourceAttribute(control,'title',unavailable);if(control instanceof HTMLInputElement&&control.name==='outcome')control.checked=false;}
+ text('detail-note',unavailable);text('checkpoint-note','');el('strip-panel').hidden=true;
+ text('provenance-version','Parts package, before rigging');text('provenance-rig','Not supplied');text('provenance-motion','Not supplied');
+ text('provenance-full',JSON.stringify({subject:'parts',sourceHash:subject.sourceHash,painting:subject.painting,images:subject.items.map(({name,imageHash})=>({name,imageHash}))},null,2));
+ text('source-files',`source ${subject.sourceHash}`);const provenanceHint=document.querySelector<HTMLElement>('.provenance>.hint');if(provenanceHint)setSourceText(provenanceHint,'Source files remain unchanged.');
+ for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-block-target]'))if(!['selected-part','feedback'].includes(tab.dataset.blockTarget??'')){tab.disabled=true;setSourceAttribute(tab,'title',unavailable);}
+ for(const tool of document.querySelectorAll<HTMLButtonElement>('[data-workspace-view-tools] button')){tool.hidden=false;tool.disabled=true;setSourceAttribute(tool,'title',unavailable);}
+ input('layer-images').disabled=false;input('layer-mesh').disabled=!subject.items.some(item=>item.mesh);input('layer-bones').disabled=true;
+ describeLayerToggles(document,unavailable);
+ for(const [id,key]of [['layer-images','images'],['layer-mesh','mesh']]as const)input(id).onchange=()=>{layers[key]=input(id).checked;partsSubject?.redraw();};
+ const overlay=panelMake('input',{id:'parts-overlay',type:'checkbox',disabled:!subject.painting}),opacity=panelMake('input',{id:'parts-opacity',type:'range',min:'0',max:'1',step:'0.001',value:'0.5',disabled:!subject.painting});
+ const overlayLabel=panelMake('label',{},overlay,tr('Overlay')),opacityLabel=panelMake('label',{},tr('Part opacity'),opacity);
+ if(!subject.painting)for(const node of [overlayLabel,opacityLabel])setSourceAttribute(node,'title','PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');
+ secondaryToolbar.append(overlayLabel,opacityLabel);
+ overlay.onchange=()=>{partsSubject?.setComparison(overlay.checked?'overlay':'part');if(overlay.checked){view='rig';renderLayout();}};
+ opacity.oninput=()=>partsSubject?.opacity(Number(opacity.value));
+ controls.setDisabled('difference',subject.differenceAvailable&&subject.painting?null:tr('PARTS_DIFFERENCE_UNAVAILABLE: missing painting_in_rig declaration or painting_in_rig.json sidecar and its bound operand.'));
+ const reference=select('reference-select');reference.replaceChildren(option('',subject.painting?'Original painting':'No references supplied'));reference.disabled=true;
+ el('package-context').removeAttribute('open');el('reference-empty').hidden=!!subject.painting;el('rig-overlay').hidden=true;
+ const state=rigInspector.actBar;state.setSaveState({kind:readOnly?'read-only':'unsaved',text:readOnly??'Not submitted'});
+ select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
+ button('save').disabled=saveBlocked();
+ button('save').onclick=async()=>{
+  if(saving||saveBlocked())return;saving=true;button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});
+  const frozen=structuredClone(issues);
+  try{
+   if(host?.submitParts)message(await host.submitParts(frozen));
+   else await request(base+'/verdict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:frozen.length?'changes-requested':'approved',issues:frozen})});
+   if(host)for(const issue of frozen)submittedIssues.add(issue.id);
+   dirty=JSON.stringify(issues)!==JSON.stringify(frozen);state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
+  }catch(error){message(errorText(error),true);state.setSaveState({kind:'failed',text:'Save failed.'});}
+  finally{saving=false;button('save').disabled=saveBlocked();}
+ };
+ viewDisposers.push(viewport.bindControls(),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
+ const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
+ viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message('Parts ready. Source files remain unchanged.');referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
+ renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
+ if(host){host.attach({stage:()=>null,redraw:()=>partsSubject?.redraw(),message,pendingSubjects:renderPendingSubjects});host.displayed();}
+ window.addEventListener('pagehide',()=>{partsSubject?.dispose();inspectorTabs?.dispose();workspace?.dispose();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());});
+ document.body.dataset.ready='true';
+}
 /** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {
  const requests:Record<string,string>={'parts-verdict':'Check the parts and meshes.','interview-picks':'Answer these questions.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.','review-verdict:image-review':'Check these images.','checkpoint':'Review this checkpoint.','signoff':'Approve this stage.','reopen':'Review the reopened stage.'};
@@ -1172,16 +1255,16 @@ function hostStage():RigHostStage|null {
 }
 /** Old feedback bookmarks keep their inspection mode; only an explicit reveal opens the act. */
 function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)inspectorTabs?.select(name);else inspectorTabs?.restore(name);}
-function bindInspector():void {
+function bindInspector(partsSubject=false):void {
  inspectorTabs?.dispose();
  rigInspector.row.reveal=()=>workspace?.revealInspector();
  inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode)inspectorBlocks?.activate(mode);workspace?.afterTab();fitCamera();},()=>workspace?.beforeTab(),rigInspector.row);
- viewDisposers.push(bindHeaderModeAvailability({model:!!data.manifest.model,preRig:data.capabilities.preRig}));
+ viewDisposers.push(bindHeaderModeAvailability(partsSubject?{model:false,parts:true}:{model:!!data.manifest.model,preRig:data.capabilities.preRig}));
  for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
-function openReview():void {pause();syncCorrectionStage();inspectorBlocks?.select(selectedInspector()??'rig','feedback');workspace?.revealInspector();}
-function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');button('native-one').onclick=()=>cameraAction(()=>{const target=availableCamera();unitScaleCamera(target);message(target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');});}
+function openReview():void {pause();if(!partsOnly)syncCorrectionStage();inspectorBlocks?.select(selectedInspector()??'rig','feedback');workspace?.revealInspector();}
+function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');button('native-one').onclick=()=>cameraAction(()=>{const target=availableCamera();unitScaleCamera(target);message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');});}
 
 /** Rig world → rig-pane pixels for the current camera. */
 function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*viewport.state.rigScale,y:parseFloat(root.style.top||'0')-y*viewport.state.rigScale});}

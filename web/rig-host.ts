@@ -1,6 +1,7 @@
 /** The one review screen's host seam (#709). A live job sets it before importing the rig composition
  * (`main.ts`): the job keeps the transport, the screen keeps its own view. Unset, the screen is the package page. */
 import type {ModelAssets, PosedFrame} from '@rig-c/play';
+import type {PartsIssue} from '../src/parts-comment.ts';
 import type {PendingAskV3} from '../src/job-contract.ts';
 import type {ReviewSession} from '../src/session.ts';
 import type {InstanceAccess} from './instance-access.ts';
@@ -26,6 +27,8 @@ export interface RigHostCommit {
   readonly review?: Pick<ReviewSession, 'status' | 'feedback'>;
 }
 export interface RigHost {
+  readonly subject?:'parts';
+  submitParts?(issues:readonly PartsIssue[]):Promise<string>;
   readonly access: InstanceAccess;
   /** Existing pending subjects, for the local act heading only; no wire field. */
   pendingSubjects?():readonly PendingAskV3['subject'][];

@@ -615,7 +615,7 @@ export function measurePartsExplorerPanel(
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))));
     await new Promise(r => setTimeout(r, 120));
 
-    const explorer = document.getElementById('parts-explorer');
+    const explorer = (document.getElementById('parts-explorer')??document.getElementById('workspace-left'));
     const list = explorer?.querySelector('[data-part-list]');
     if (!explorer || !list) {
       throw new Error('Missing #parts-explorer or [data-part-list]');
@@ -1012,7 +1012,7 @@ export async function runPartsExplorerVerification(options?: {
     if (options?.screenshotDir) {
       await mkdir(options.screenshotDir, { recursive: true });
       const panelRect = await session.evaluate<{ x: number; y: number; width: number; height: number }>(`(() => {
-        const el = document.getElementById('parts-explorer');
+        const el = (document.getElementById('parts-explorer')??document.getElementById('workspace-left'));
         const r = el.getBoundingClientRect();
         return { x: Math.max(0, Math.floor(r.left - 4)), y: Math.max(0, Math.floor(r.top - 4)), width: Math.ceil(r.width + 8), height: Math.ceil(r.height + 8) };
       })()`);

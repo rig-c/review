@@ -268,34 +268,8 @@ test('no page module reads a block\'s visibility, so nothing pauses or re-measur
  // A hidden panel loses nothing only if no code depends on it being on screen. The visibility readers in web/ are
  // named here with what they watch; a new one has to say what it watches before this passes.
  const known:Record<string,string>={'part-thumbnails.ts':'the Parts explorer list (outside the Inspector)','live-connection.ts':'the document'};
- // Only this document-hidden handler inside bindAssemblyPicking releases the temporary P hold.
- const documentHiddenRelease = [
-  '  const onVisibilityChange = () => {',
-  "    if (doc.visibilityState === 'hidden') releasePainting();",
-  '  };',
- ].join('\n');
- const pickingFunction = /function bindAssemblyPicking\(\):void \{[\s\S]*?\n\}/;
- const hasUnapprovedVisibilityRead = (name: string, text: string) => {
-  const inspected = name === 'parts.ts'
-   ? text.replace(pickingFunction, picking => picking.replace(documentHiddenRelease, ''))
-   : text;
-  return /IntersectionObserver|checkVisibility|offsetParent|visibilityState/.test(inspected);
- };
- const parts = await webFile('parts.ts');
- expect(parts.split(documentHiddenRelease)).toHaveLength(2);
- expect(parts.match(pickingFunction)?.[0]).toContain(documentHiddenRelease);
- expect(parts.match(pickingFunction)?.[0]).toContain("[doc, 'visibilitychange', onVisibilityChange]");
- expect(hasUnapprovedVisibilityRead('parts.ts', parts)).toBe(false);
- const negativeControls = [
-  {purpose: 'another reader in parts.ts', source: parts + '\nconst hiddenInspector = inspector.offsetParent;'},
-  {purpose: 'hidden handler remeasures', source: parts.replace(documentHiddenRelease, documentHiddenRelease.replace('releasePainting()', 'viewport?.fitCamera()'))},
-  {purpose: 'release under another function name', source: parts.replace('function bindAssemblyPicking()', 'function inspectHiddenPanel()')},
-  {purpose: 'release outside bindAssemblyPicking', source: parts.replace(documentHiddenRelease, '') + '\n' + documentHiddenRelease},
- ];
- for (const control of negativeControls) {
-  expect({purpose: control.purpose, forbidden: hasUnapprovedVisibilityRead('parts.ts', control.source)})
-   .toEqual({purpose: control.purpose, forbidden: true});
- }
+ const hasUnapprovedVisibilityRead = (_name:string,text:string) => /IntersectionObserver|checkVisibility|offsetParent|visibilityState/.test(text);
+ for(const planted of ['IntersectionObserver','checkVisibility','offsetParent','visibilityState'])expect(hasUnapprovedVisibilityRead('main.ts',`const planted = inspector.${planted};`)).toBe(true);
  const readers:string[]=[];
  for(const name of (await readdir(new URL('../web/',import.meta.url))).filter(n=>n.endsWith('.ts')).sort()){
   const text=await webFile(name);if(hasUnapprovedVisibilityRead(name,text))readers.push(name);

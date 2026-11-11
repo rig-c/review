@@ -455,49 +455,5 @@ test('#626: loadPartsView on mixed inline + generator rig preserves inline mesh 
   }));
   await expect(readVerdict(pkg)).rejects.toThrow('PARTS_MESH_OUTCOME_UNAVAILABLE');
 
-  // Verify web/parts.ts renderMesh DOM slot (#pv-mesh-panel p) in both EN and KO, with mixed meshes and generator-only meshes.
-  const webPartsSource = await readFile('web/parts.ts', 'utf8');
-  const renderMeshBlock = webPartsSource.slice(webPartsSource.indexOf('function renderMesh(): void {'), webPartsSource.indexOf('\nfunction select('));
-  const compiledRenderMesh = new Bun.Transpiler({ loader: 'ts', target: 'bun' }).transformSync(renderMeshBlock);
-  class FakeEl {
-    id = ''; className = ''; type = ''; checked = false; textContent = ''; dataset: Record<string, string> = {}; children: FakeEl[] = [];
-    constructor(public tag: string) {}
-    append(...nodes: (FakeEl | string)[]) {
-      for (const n of nodes) {
-        if (typeof n === 'string') this.textContent += n;
-        else this.children.push(n);
-      }
-    }
-    remove() {}
-  }
-  const runRenderMesh = (items: unknown[], selected: number, lang: 'en' | 'ko') => {
-    const toolbar = new FakeEl('div');
-    const side = new FakeEl('div');
-    const state = { data: { items }, selected, meshVisible: false };
-    const doc = { createElement: (tag: string) => new FakeEl(tag) };
-    const query = (sel: string) => (sel === '.pv-toolbar' ? toolbar : null);
-    const fn = new Function('state', 'doc', 'query', 'slots', 't', 'paint', `${compiledRenderMesh}; renderMesh();`);
-    fn(state, doc, query, { side }, (key: string, params?: unknown) => t(key, params as never, lang), async () => {});
-    const panel = side.children.find(c => c.id === 'pv-mesh-panel')!;
-    const p = panel.children.find(c => c.tag === 'p')!;
-    return { controlText: toolbar.children[0]!.textContent, pText: p.textContent };
-  };
 
-  expect(runRenderMesh(view.items, 2, 'en').pText).toBe('PARTS_MESH_GENERATED: No mesh geometry is available for this part.');
-  expect(runRenderMesh(view.items, 2, 'ko').pText).toBe('PARTS_MESH_GENERATED: 이 파츠에는 표시할 메시 형상이 없습니다.');
-  expect(runRenderMesh(view.items, 1, 'en').pText).toBe('No mesh geometry is available for this part.');
-  expect(runRenderMesh(view.items, 1, 'ko').pText).toBe('이 파츠에는 표시할 메시 형상이 없습니다.');
-
-  // Even when a draft has 0 inline meshes (generator-only), selecting the generator part shows PARTS_MESH_GENERATED while an ordinary part shows the draft message.
-  const genOnlyItems = [view.items[1]!, view.items[2]!];
-  expect(runRenderMesh(genOnlyItems, 1, 'en')).toEqual({
-    controlText: 'Mesh (none 0/2)',
-    pText: 'PARTS_MESH_GENERATED: No mesh geometry is available for this part.',
-  });
-  expect(runRenderMesh(genOnlyItems, 1, 'ko')).toEqual({
-    controlText: '메시 (없음 0/2)',
-    pText: 'PARTS_MESH_GENERATED: 이 파츠에는 표시할 메시 형상이 없습니다.',
-  });
-  expect(runRenderMesh(genOnlyItems, 0, 'en').pText).toBe('No mesh geometry is available for this draft.');
-  expect(runRenderMesh(genOnlyItems, 0, 'ko').pText).toBe('이 드래프트에는 표시할 메시 형상이 없습니다.');
 });

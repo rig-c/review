@@ -424,12 +424,12 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .job-window .job-stage{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
 .job-window .job-stage #stage-layout{height:auto;flex:1;min-height:0}
 .job-window .job-stage .viewbar,.job-window .job-transport{flex:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden])) #stage-layout{min-height:max(60%,150px)}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport){height:48px;flex-wrap:nowrap;padding:2px 8px;overflow-x:auto;overflow-y:hidden;white-space:nowrap}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport)>*{flex:none}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport)>label{display:flex;align-items:center;gap:4px}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>.job-transport>select{width:auto}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>.job-transport input[type=number]{width:8rem}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden])) #stage-layout{min-height:max(60%,150px)}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport){height:48px;flex-wrap:nowrap;padding:2px 8px;overflow-x:auto;overflow-y:hidden;white-space:nowrap}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport)>*{flex:none}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport)>label{display:flex;align-items:center;gap:4px}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden]))>.job-transport>select{width:auto}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden]))>.job-transport input[type=number]{width:8rem}
 .job-window .job-forms{overflow:auto;border-top:1px solid var(--border);padding:12px;background:var(--rv-panel)}
 .job-window .job-forms form{margin:0 0 12px;padding:12px;border:1px solid var(--border);border-radius:var(--radius)}
 .job-window .job-forms fieldset{border:0;padding:0;min-width:0}
@@ -453,16 +453,6 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
   transform: none;
   opacity: 1;
 }
-
-/* Parts publications reuse the shared parts columns and fill the job workspace. */
-.job-window .job-inspection[data-job-parts-workspace]{flex:1;grid-template-columns:240px minmax(0,1fr) 300px;grid-template-rows:minmax(0,1fr);min-height:0;min-width:0}
-.job-window .job-inspection[data-job-parts-workspace]>.job-forms{grid-column:3;grid-row:1;min-height:0;min-width:0;border-top:0;border-left:1px solid var(--border)}
-
-/* Both job and standalone hosts use the existing parts workspace presentation. */
-.job-window [data-job-parts-workspace]{--panel:var(--rv-panel);--line:var(--border);--text:var(--fg);--muted:var(--fg-muted);--accent:var(--link);--flag:var(--warn);--clean:var(--pass)}
-.job-window .job-parts-stage{display:flex;flex-direction:column;flex:1;min-height:180px;min-width:0;position:relative}
-.job-window .job-parts-stage>main{display:flex;flex:1;min-height:0;min-width:0}
-.job-window [data-job-parts-workspace] [hidden]{display:none!important}
 
 .job-window [data-job-checkpoint-evidence]{min-width:0;margin:12px 0}
 /* The shared gallery supplies inline column flow; checkpoint tiles wrap inside the existing form. */
@@ -520,3 +510,6 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .inspector-heading .workspace-act-bar .review-draft-state{max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .workspace-act-ask{max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #comments-list-host .stage-comment-list-inline{position:static;width:auto;max-width:none;max-height:none;border:0;padding:0}
+
+.parts-explorer li:has([data-pv-visible]){display:flex;align-items:center;gap:4px}
+.parts-explorer li:has([data-pv-visible]) button{flex:1;min-width:0}
