@@ -57,6 +57,18 @@ export const layerShortcuts=Object.freeze([
  Object.freeze({key:'m',id:'layer-mesh',label:'Mesh edges'}),
  Object.freeze({key:'b',id:'layer-bones',label:'Bone points'}),
 ] as const);
+import {rigLayerControlsMarkup} from '../src/compare-html.ts';
+/** Mount the canonical rig layer markup; job hosts retain their translation and state binding. */
+export function createRigLayerControls(options:{jobText?:boolean;translate?:(key:string)=>string}={}):HTMLFieldSetElement {
+ const host=document.createElement('div');host.innerHTML=rigLayerControlsMarkup;
+ const fieldset=host.querySelector<HTMLFieldSetElement>('#layer-controls')!;
+ for(const element of fieldset.querySelectorAll<HTMLElement>('legend,span')){
+  const key=element.textContent??'';
+  if(options.jobText)element.dataset.jobText=key;
+  if(options.translate)element.textContent=options.translate(key);
+ }
+ return fieldset;
+}
 const nonTextInputs=new Set(['checkbox','radio','button','submit','reset','range','color','file','image']);
 /** A focused text field, textarea, select or contenteditable keeps its keys. */
 export function textEntryFocused(target:unknown):boolean {

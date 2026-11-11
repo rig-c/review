@@ -1199,7 +1199,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
 }
 /** Browser mount is explicit so importing transaction helpers never starts an app. */
 export async function mountJobSession(host: HTMLElement): Promise<() => void> {
-    const [{ createViewportController, createViewportState }, { createRigViewportProvider }, { mountViewportPair }, { RigOverlays }, { bindLayerShortcuts, describeLayerToggles, layerShortcuts }, i18n] = await Promise.all([
+    const [{ createViewportController, createViewportState }, { createRigViewportProvider }, { mountViewportPair }, { RigOverlays }, { bindLayerShortcuts, describeLayerToggles, createRigLayerControls }, i18n] = await Promise.all([
         import('./viewport-controller.ts'), import('./rig-viewport-provider.ts'),
         import('./viewport-pair.ts'), import('./rig-overlays.ts'), import('./view-controls.ts'), import('./i18n.ts'),
     ]);
@@ -2444,21 +2444,10 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         stage.className = 'job-stage';
         const controls = node('div');
         controls.className = 'viewbar';
-        const layerSet = node('fieldset');
-        layerSet.id = 'layer-controls';
-        layerSet.className = 'layer-toggles';
+        const layerSet = createRigLayerControls({jobText: true, translate: t});
         layerSet.hidden = true;
-        const legend = node('legend', 'Rig layers');
-        legend.className = 'sr-only';
-        layerSet.append(legend);
-        for (const item of layerShortcuts) {
-            const label = node('label');
-            label.className = 'layer-toggle';
-            const box = node('input');
-            box.id = item.id;
-            box.type = 'checkbox';
-            box.setAttribute('aria-keyshortcuts', item.key.toUpperCase());
-            const keyName = item.id === 'layer-images' ? 'images' : item.id === 'layer-mesh' ? 'mesh' : 'bones';
+        for (const keyName of ['images', 'mesh', 'bones'] as const) {
+            const box = layerSet.querySelector<HTMLInputElement>('#layer-' + keyName)!;
             box.checked = layers[keyName];
             box.disabled = true;
             box.onchange = () => {
@@ -2468,11 +2457,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     rememberDraw();
                 }
             };
-            const kbd = node('kbd');
-            kbd.setAttribute('aria-hidden', 'true');
-            kbd.textContent = item.key.toUpperCase();
-            label.append(box, node('span', item.label), kbd);
-            layerSet.append(label);
         }
         describeLayerToggles({ getElementById: id => layerSet.querySelector('#' + id) }, t('No rig supplied'));
         for (const label of layerSet.querySelectorAll<HTMLElement>('.layer-toggle')) label.title = i18n.tr(label.title);
