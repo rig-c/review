@@ -1,7 +1,8 @@
 import {expect,test} from 'bun:test';
 import {RigPlayer} from '@rig-c/play';
 import {loadSetupAssets,setupRoot} from './helpers/setup-mesh.ts';
-import {boneHierarchy,channelSegments,evaluateBoneLocals,filterTracks,readAnimationInspection,CHANNELS,type LocalProperty} from '../src/animation-inspection.ts';
+import {boneHierarchy,channelSegments,evaluateBoneLocals,filterTracks,readAnimationInspection,CHANNELS,type AnimationInspection,type LocalProperty} from '../src/animation-inspection.ts';
+import type {AnimationSideState} from '../web/animation-inspection.ts';
 import {InspectionSelection} from '../web/inspection-selection.ts';
 import {inspectionControl,properties,bytes,fixedTimes,matrixAnimations,recognizedCases} from './helpers/animation-inspection.ts';
 import {pickedSlot} from '../web/stage-pick.ts';
@@ -88,8 +89,8 @@ async function actualAnimationActions(document:{createElement(tag:string):Animat
 test('#658 animation tree actions preserve order, literal labels and captured bone/slot selections',async()=>{
  const document={createElement:(tag:string)=>new AnimationActionNode(tag)},pane=new AnimationActionNode('div');
  const actions=await actualAnimationActions(document),seen:unknown[]=[];
- const inspection=readAnimationInspection(await inspectionControl(),'control');
- inspection.slots.push({name:'sleeve',bone:'probe'} as never);
+ const storedInspection=readAnimationInspection(await inspectionControl(),'control');
+ const inspection:AnimationInspection={...storedInspection,slots:[...storedInspection.slots,{name:'sleeve',bone:'probe'}]};
  const host={panes:new Map([['tree',pane]]),inspection,select:(value:unknown)=>seen.push(value)};
  actions.renderTree.call(host);
  const buttons:AnimationActionNode[]=[];
@@ -103,7 +104,8 @@ test('#658 animation tree actions preserve order, literal labels and captured bo
 test('#658 actual timeline key action receives native Events, keeps shift/detail suppression and uses live key indexes',async()=>{
  const actions=await actualAnimationActions({createElement:(tag:string)=>new AnimationActionNode(tag)}),calls:unknown[]=[];
  const track={pointer:'/track',keys:[{time:.25}]},liveTrack={pointer:'/track',keys:[{time:.5},{time:1.5}]};
- const host={inspection:{tracks:[liveTrack]},animation:'idle',runtimeDuration:2,suppressNextKeyClick:false,track:null,channel:1,selectedKey:null,selectedKeys:[],
+ const selection:Pick<AnimationSideState,'selectedKey'|'selectedKeys'>&{track:typeof liveTrack|null}={track:null,selectedKey:null,selectedKeys:[]};
+ const host={inspection:{tracks:[liveTrack]},animation:'idle',runtimeDuration:2,suppressNextKeyClick:false,...selection,channel:1,
   renderChannels:()=>calls.push('channels'),toggleKeySelection:(...args:unknown[])=>calls.push(['toggle',...args]),autoSyncPoseModeFromProperty:(value:string)=>calls.push(['pose',value]),syncTimelineKeysInPlace:()=>calls.push('timeline'),syncKeyInspectorInPlace:()=>calls.push('inspector'),setEditorStatus:(...args:unknown[])=>calls.push(['status',...args]),options:{seek:(value:number)=>calls.push(['seek',value])}};
  const mark=actions.makeMark.call(host,track,0,true,{trackIndex:7,property:'rotate'},'read-only') as AnimationActionNode;
  mark.dataset.keyIndex='1';
@@ -111,7 +113,8 @@ test('#658 actual timeline key action receives native Events, keeps shift/detail
  mark.dispatchEvent(Object.assign(new Event('click'),{detail:0,shiftKey:true}));
  expect(calls).toEqual(['channels',['toggle',7,1,'/track'],['seek',1.5]]);expect(host.track).toBe(liveTrack);
  calls.length=0;mark.dispatchEvent(new Event('click'));
- expect(host.selectedKey).toEqual({animation:'idle',trackIndex:7,keyIndex:1,pointer:'/track'});
- expect(host.selectedKeys).toEqual([host.selectedKey]);expect(calls).toEqual(['channels',['pose','rotate'],'timeline','inspector',['seek',1.5]]);
+ const expected={animation:'idle',trackIndex:7,keyIndex:1,pointer:'/track'};
+ expect(host.selectedKey).toEqual(expected);
+ expect(host.selectedKeys).toEqual([expected]);expect(calls).toEqual(['channels',['pose','rotate'],'timeline','inspector',['seek',1.5]]);
  calls.length=0;host.suppressNextKeyClick=true;mark.dispatchEvent(new Event('click'));expect(calls).toEqual([]);expect(host.suppressNextKeyClick).toBe(false);
 });

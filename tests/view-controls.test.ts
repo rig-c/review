@@ -574,19 +574,21 @@ test('#658 literal actions preserve properties, handler identity, native Event/t
  const descriptor=Object.getOwnPropertyDescriptor(globalThis,'document');
  class Action extends EventTarget {
   writes:string[]=[];values:Record<string,unknown>={disabled:false};
+  private handler:((this:EventTarget,event?:Event)=>void)|null=null;
   get type(){return this.values.type;}set type(value){this.writes.push('type');this.values.type=value;}
   get textContent(){return this.values.textContent;}set textContent(value){this.writes.push('textContent');this.values.textContent=value;}
   get disabled(){return this.values.disabled;}set disabled(value){this.writes.push('disabled');this.values.disabled=value;}
-  get onclick(){return this.values.onclick;}set onclick(value){this.writes.push('onclick');this.values.onclick=value;this.addEventListener('click',value as EventListener);}
+  get onclick(){return this.handler;}set onclick(value:((this:EventTarget,event?:Event)=>void)|null){this.writes.push('onclick');this.values.onclick=value;this.handler=value;if(value)this.addEventListener('click',value);}
   append(..._children:unknown[]){}
  }
  const created:Action[]=[];
  Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement(tag:string){expect(tag).toBe('button');const value=new Action();created.push(value);return value;}}});
  try{
   const seen:{receiver:unknown;event:unknown}[]=[];
-  function click(this:HTMLButtonElement,event?:MouseEvent){seen.push({receiver:this,event});event?.preventDefault();}
+  function click(this:EventTarget,event?:Event){seen.push({receiver:this,event});event?.preventDefault();}
   const actions=[actionButton('<literal> & action',click),actionButton('undefined',click,undefined),actionButton('enabled',click,false),actionButton('disabled',click,true)];
-  expect(actions).toEqual(created as unknown as HTMLButtonElement[]);
+  expect(actions).toHaveLength(created.length);
+  for(const [index,value] of actions.entries())expect(Object.is(value,created[index])).toBe(true);
   expect(actions.map(value=>value.type)).toEqual(['button','button','button','button']);
   expect(actions.map(value=>value.textContent)).toEqual(['<literal> & action','undefined','enabled','disabled']);
   expect(actions.map(value=>value.disabled)).toEqual([false,false,false,true]);
@@ -594,12 +596,12 @@ test('#658 literal actions preserve properties, handler identity, native Event/t
    ['type','textContent','onclick'],['type','textContent','onclick'],
    ['type','textContent','disabled','onclick'],['type','textContent','disabled','onclick'],
   ]);
-  for(const value of actions)expect(value.onclick).toBe(click);
+  for(const value of created)expect(value.onclick).toBe(click);
   const event=new Event('click',{cancelable:true});
   expect(actions[0]!.dispatchEvent(event)).toBe(false);
   expect(seen).toEqual([{receiver:actions[0],event}]);
   expect(event.defaultPrevented).toBe(true);
-  actions[1]!.onclick!.call(actions[1]!,undefined as unknown as MouseEvent);
+  created[1]!.onclick!.call(created[1]!);
   expect(seen[1]).toEqual({receiver:actions[1],event:undefined});
  }finally{if(descriptor)Object.defineProperty(globalThis,'document',descriptor);else Reflect.deleteProperty(globalThis,'document');}
 });
