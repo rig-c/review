@@ -1,6 +1,6 @@
 /** Lane B's frozen-port fake. This proves window behavior, never backend authority. */
 import { JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_API_SCHEMA } from '../../src/job-contract.ts';
-import type { ActV3, DisplayPublicationV3, EventV3, JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobHostPorts, JobPendingAsk, JobPublication, JobResult, JobSourceBinding, JobEnabledActKind, JobActValues, PendingAskV3, } from '../../src/job-contract.ts';
+import type { ActV3, DisplayPublicationV3, EventV3, JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobHostPorts, JobPendingAsk, JobPublication, JobResult, JobSourceBinding, JobEnabledActKind, JobActValues, JobCommentsAct, PendingAskV3, } from '../../src/job-contract.ts';
 export function fixturePublication(index = 1): JobDisplayPublication {
     const hash = String(index).padStart(64, '0');
     const source: JobSourceBinding = {
@@ -131,7 +131,7 @@ export function createJobWindowFixture(jobId = 'window-fixture') {
     };
 }
 /** C2 fixture sources carry the explicit producer-published identities verbatim. */
-export function fixtureAct(kind: JobEnabledActKind, words = ''): JobAct {
+export function fixtureAct(kind: JobEnabledActKind, words = ''): Exclude<JobAct, JobCommentsAct> {
     const source = {
         ...fixturePublication(1).publication.source,
         projectHash: 'a'.repeat(64),
@@ -163,7 +163,7 @@ export function fixtureAct(kind: JobEnabledActKind, words = ''): JobAct {
         authority: { actor: 'human', channel: 'review-ui', reviewer: { id: 'fixture-owner', role: 'owner' } },
         source: { ...source, selector: kind === 'parts-verdict' ? { kind: 'draft', id: 'draft-one' } : { kind: 'rig', version: 1 } },
         value: values[kind],
-    } as JobAct;
+    } as Exclude<JobAct, JobCommentsAct>;
 }
 
 import {jobFixture} from './job-api-fixture.ts';

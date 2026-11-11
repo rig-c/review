@@ -11,8 +11,9 @@ import { requirementsSummaryLine } from './requirements.ts';
 import { scheduleContextLine } from './environment-schedule.ts';
 import {parseCommentsSession} from './session.ts';
 import {projectComments} from './stage-comment.ts';
-import type {ReviewCommentsSession, JobCommentFeedbackAnchor} from './job-contract.ts';
-import type {JobComment, JobActValues, ActV3} from './job-contract.ts';
+import type {ReviewCommentsSession, JobCommentFeedbackAnchor, JobCommentPartsAnchor} from './job-contract.ts';
+import type {PartsIssue} from './parts-comment.ts';
+import type {JobComment, JobActValues, ActV3, JobCommentsAct} from './job-contract.ts';
 import type {CompareFeedback} from './compare-session.ts';
 import {parseRecordAct} from './job-api.ts';
 
@@ -29,6 +30,16 @@ export function checkpointNoteComments(value: Pick<JobActValues['checkpoint'], '
 /** Per-ask feedback has no ask anchor in act@6. */
 export function feedbackWordsComments(words: string): JobComment[] {
   return [{text: words}];
+}
+
+/** Pointed Parts issues keep their source-bound anchor; the summary becomes the comment text. */
+export function partsIssueComments(issues: readonly PartsIssue[]): {text: string; anchor: JobCommentPartsAnchor}[] {
+  return issues.map(({summary, ...anchor}) => ({text: summary, anchor: structuredClone(anchor)}));
+}
+
+/** A blank note has no comment form: it maps to no comments, never to a padded entry. */
+export function noteComments(words: string): JobComment[] {
+  return words.trim() ? feedbackWordsComments(words) : [];
 }
 
 /** Named-image notes retain sealed image names; no region evidence is manufactured. */
@@ -50,7 +61,7 @@ export function legacyRecordActComments(raw: unknown): {text: string}[] {
 }
 
 /** Display projection of already-decoded @2–@5 acts, without upgrading their envelopes. */
-export function legacyActComments(act: ActV3): {text: string}[] {
+export function legacyActComments(act: Exclude<ActV3, JobCommentsAct>): {text: string}[] {
   if (act.kind === 'interview-picks') return [];
   const value = act.value;
   const fields = [value.words];

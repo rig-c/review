@@ -1,6 +1,7 @@
 /** Closed parts evidence. No synthetic model, frame, slot or package identity. */
 import { parsePartsComparison, type PartsComparison } from './parts-comparison.ts';
 import type { MarkRegion } from './stage-comment.ts';
+import type { JobComment } from './job-contract.ts';
 
 export const PARTS_COMMENT_SCHEMA = 'rig-review-parts-comment/1' as const;
 export const PARTS_ISSUE_SCHEMA = 'rig-review-parts-comment/2' as const;
@@ -341,4 +342,10 @@ export function assertPartsIssueBinding(
   if (r.x < minX || r.y < minY || r.x + r.width > maxX || r.y + r.height > maxY) {
     fail('PARTS_COMMENT_OUT_OF_BOUNDS', 'region exceeds union of issue parts');
   }
+}
+
+/** The pointed issues of an act@6 Parts verdict: its comments with Parts anchors, in stored order. */
+export function commentPartsIssues(comments: readonly JobComment[]): PartsIssue[] {
+  return comments.flatMap(comment => comment.anchor && 'schema' in comment.anchor ?
+    [{...structuredClone(comment.anchor), summary: comment.text} as PartsIssue] : []);
 }

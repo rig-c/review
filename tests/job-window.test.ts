@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import {partsIssueComments} from '../src/feedback-export.ts';
 import {prepareJobInspection, resolveJobPanels, jobPartsReviewState, jobPartsPainting, type JobInspectionMetadataV3, createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
 import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type UISubmissionV3, type ActV3, type JobPartsVerdictAct, type RecordAct } from '../src/job-contract.ts';
 import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRecordSource, recordInstanceKey } from '../src/job-api.ts';
@@ -865,7 +866,8 @@ describe('the real standing owner host', () => {
             expectedGeneration: f.host.session.status().generation, submissionId: 'real-save', kind: 'checkpoint',
             value: {checkpointId: 'step-one', outcome: 'pass', words: ''}})).json();
         expect(saved.ok).toBe(true);
-        expect(saved.value.value).toEqual({checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass', words: ''});
+        expect(saved.value.schema).toBe('rig-review/act@6');
+        expect(saved.value.value).toEqual({checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass', comments: []});
         expect(saved.value.authority.reviewer).toEqual({id: 'declared-owner', role: 'owner'});
         expect(saved.value.source).toEqual(publication.source);
         expect(await jobInputHashes(f.input.root)).toEqual(original);
@@ -4167,6 +4169,30 @@ describe('C4 shared parts host', () => {
         expect(requests.slice(2).map(input => input.submissionId)).toEqual(['signoff-submit', 'signoff-submit']);
     });
 
+    test('#713 an act@6 parts verdict counts as finalized and its retried signoff resends its general note', async () => {
+        const h = await partsHarness();
+        const act6 = {...h.act, schema: 'rig-review/act@6', value: {verdict: 'approved',
+            comments: [{text: h.act.value.words}]}} as unknown as ActV3;
+        const requests: UISubmissionV3[] = [];
+        let fail = 'signoff';
+        h.fixture.ports.commitUIAct = async (_job, request) => {
+            const input = await request.json() as UISubmissionV3;
+            requests.push(input);
+            if (input.kind === fail) return {ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}};
+            return {ok: true, value: input.kind === 'parts-verdict' ? act6 : {...fixtureAct('signoff'),
+                askId: h.signoff.askId, source: h.act.source, value: input.value} as ActV3};
+        };
+        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(false);
+        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('retry-signoff');
+        fail = '';
+        // The retry reads the finalized @6 verdict, not the form, and resends its one general comment as words.
+        expect((await h.window.submitParts({...h.input, value: {...h.input.value, words: 'edited'}} as UISubmissionV3,
+            'signoff-submit')).ok).toBe(true);
+        expect(requests.map(input => input.kind)).toEqual(['parts-verdict', 'signoff', 'signoff']);
+        expect(requests[2]!.value).toEqual({stage: 'parts-review', decision: 'approved', words: h.act.value.words});
+        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('approved');
+    });
+
     test('C4 act events and reconnect replay retain the finalized value and never fabricate a signoff', async () => {
         const h = await partsHarness();
         h.window.event(actEvent(h.act));
@@ -4799,7 +4825,7 @@ test('#623: job stage-parts accepts a sealed source-only painting outside parts 
             kind: 'parts-verdict',
             askId: asked.value.askId,
             publicationId: publication.publicationId,
-            value: {verdict: 'changes-requested', issues: [overlayBody.comment], words: 'overlay alignment shift'},
+            value: {verdict: 'changes-requested', comments: [...partsIssueComments([overlayBody.comment]), {text: 'overlay alignment shift'}]},
         },
     });
     const fetchedAct = await (await fetch(f.locator + '/api', {
@@ -5066,7 +5092,7 @@ test('#626: retained job publication with producer.config, producer.parts, produ
             kind: 'parts-verdict',
             askId: asked.value.askId,
             publicationId: publication.publicationId,
-            value: {verdict: 'changes-requested', issues: [overlayBody.comment], words: 'face generator part reviewed'},
+            value: {verdict: 'changes-requested', comments: [...partsIssueComments([overlayBody.comment]), {text: 'face generator part reviewed'}]},
         },
     });
 

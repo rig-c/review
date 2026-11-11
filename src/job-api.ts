@@ -1399,7 +1399,7 @@ function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
   return structuredClone(item) as unknown as Exclude<SourceV3, OptionSource>;
 }
 
-/** Public @6 decoder. Current UI finalizers continue to emit their existing versions. */
+/** Public @6 decoder. The UI finalizers write checkpoint, parts, rig/post verdict and signoff acts at @6 (#713). */
 export function parseCommentsAct(raw: unknown): JobCommentsAct {
   return decodeCommentsAct(raw, false) as JobCommentsAct;
 }
