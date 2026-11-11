@@ -1,7 +1,7 @@
 /** Serves the parts and atlas view (#348): the page, its bundle, the part and page images by index, and the sign-off. */
 import { PNG } from 'pngjs';
 import { readFile } from 'node:fs/promises';
-import { appRoot, buildWeb } from './build.ts';
+import { appRoot, buildWeb, setupEntryHtml } from './build.ts';
 import { accessGate } from './open-protocol.ts';
 import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
@@ -49,7 +49,8 @@ export interface PartsServerOptions {
 export async function startPartsServer(pkg: PartsViewPackage, options: PartsServerOptions = {}) {
   const by = options.by;
   if (by !== undefined && (typeof by !== 'string' || !by.trim())) throw new Error('PARTS_VERDICT_INVALID: reviewer name must be nonblank');
-  const bundle = await buildWeb('parts');
+  const bundle = await buildWeb();
+  const page = await setupEntryHtml('parts');
   let rawStop: ((closeActiveConnections?: boolean) => void) | null = null;
   let pendingSaves = 0, saveCount = 0;
   let saveQueue: Promise<void> = Promise.resolve();
@@ -89,6 +90,14 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
       }
       live.onRequestStart(url.pathname);
       try {
+        // A parts subject has its own identity and verdict; never synthesize a rig manifest or session.
+        if (req.method === 'GET' && ['/api/review','/api/session','/api/access'].includes(url.pathname)) {
+          await assertPartsUnchanged(pkg);
+          if(url.pathname==='/api/access')return json({capabilityRequired:!!options.capability,control:false});
+          const saved=await readVerdict(pkg);
+          if(url.pathname==='/api/session')return json({subject:'parts',issues:saved.verdict?.issues??saved.legacy?.issues??[]});
+          return json({subject:'parts',parts:partsViewJson(pkg,saved)});
+        }
         if (url.pathname === '/api/parts' && req.method === 'GET'){await assertPartsUnchanged(pkg);return json(partsViewJson(pkg,await readVerdict(pkg)));}
         if(url.pathname==='/api/parts/comment'&&req.method==='POST'){if(req.headers.get('origin')!==origin)return json({error:'Same-origin Origin required'},403);await assertPartsUnchanged(pkg);return json({comment:await preparePartsComment(pkg,await bodyJson(req))});}
         if(url.pathname==='/api/parts/export'&&req.method==='GET'){await assertPartsUnchanged(pkg);const saved=await readVerdict(pkg);if(!saved.verdict)return json({error:'PARTS_VERDICT_UNAVAILABLE: save a verdict first'},409);return new Response(exportPartsVerdict(saved.verdict,url.searchParams.get('format')==='issue'?'issue':'json'),{headers:{...headers,'Content-Type':url.searchParams.get('format')==='issue'?'text/markdown':'application/json'}});}
@@ -112,9 +121,11 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
           const pinned=pkg.files.find(f=>f.abs===path);if(!pinned)return json({error:'PARTS_IMAGE_UNBOUND'},409);return serveReference(req,path,pinned.sha256,headers);
 
         }
-        if (url.pathname === '/parts.js') return new Response(req.method === 'HEAD' ? null : bundle, { headers: { ...headers, 'Content-Type': 'text/javascript' } });
-        if (url.pathname === '/' || url.pathname === '/parts.html') return new Response(req.method === 'HEAD' ? null : await readFile(appRoot + 'web/parts.html'), { headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' } });
-        if (url.pathname === '/parts.css') return new Response(req.method === 'HEAD' ? null : await readFile(appRoot + 'web/parts.css'), { headers: { ...headers, 'Content-Type': 'text/css' } });
+        const read=req.method==='GET'||req.method==='HEAD';
+        if(read&&url.pathname==='/parts.html')return new Response(null,{status:302,headers:{...headers,Location:'/'+url.search}});
+        if(read&&url.pathname==='/main.js')return new Response(req.method==='HEAD'?null:bundle,{headers:{...headers,'Content-Type':'text/javascript'}});
+        if(read&&(url.pathname==='/'||url.pathname==='/index.html'))return new Response(req.method==='HEAD'?null:page,{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
+        if(read&&url.pathname==='/styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/styles.css'),{headers:{...headers,'Content-Type':'text/css'}});
         return json({ error: 'Not found' }, 404);
       } finally { live.onRequestEnd(url.pathname); }
     } catch (e) {

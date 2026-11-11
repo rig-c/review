@@ -1,3 +1,4 @@
+import {resolvePartsPaintingInRig} from './parts-view.ts';
 import {checkpointEvidenceFields, checkpointEvidenceMetadata} from './job-checkpoint-evidence.ts';
 import { randomUUID } from 'node:crypto';
 import { type Dirent, lstatSync, readdirSync, realpathSync, type Stats } from 'node:fs';
@@ -234,6 +235,21 @@ function referenceRow(raw: unknown, row: number, hashed: boolean): JobPartsFileR
   return {path, role, ...(hashed ? {sha256: item.sha256 as string} : {})};
 }
 
+/** Reuse the official-reference PNG admission and decoded-size bound for generic sidecar operands. */
+function assertPartsReferencePng(data: Buffer, detail: string): void {
+  if (data.length < 33 || !data.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) ||
+    data.readUInt32BE(8) !== 13 || data.toString('ascii', 12, 16) !== 'IHDR') {
+    throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_PNG_INVALID ${detail}`);
+  }
+  const width = data.readUInt32BE(16), height = data.readUInt32BE(20);
+  if (!width || !height) throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_PNG_INVALID ${detail}`);
+  if (width > Math.floor(maxFileBytes / 4 / height)) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', `PARTS_REFERENCE_LIMIT ${detail}`);
+  }
+  try { PNG.sync.read(data); }
+  catch { throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_PNG_INVALID ${detail}`); }
+}
+
 function partsIdentityHeader(value: unknown): {raw: Record<string, unknown>; version: string} {
   const raw = jobObject(value, ['enumeratorVersion', 'manifest', 'images']);
   return {raw, version: jobPartsEnumeratorVersion(raw.enumeratorVersion)};
@@ -265,7 +281,7 @@ export function parseJobPartsIdentity(value: unknown): JobPartsIdentity {
  * enumerator. Review compares its exact array and validates byte boundaries.
  */
 async function prepareParts(root: string, snapshotRoot: string, claimed: JobPartsIdentity | null,
-  enumerator?: JobPartsEnumerator): Promise<{identity: JobPartsIdentity | null; bytes: Map<string, Buffer>}> {
+  declared: readonly JobFileIdentity[], enumerator?: JobPartsEnumerator): Promise<{identity: JobPartsIdentity | null; bytes: Map<string, Buffer>}> {
   const bytes = new Map<string, Buffer>();
   if (claimed === null) return {identity: null, bytes};
   if (!enumerator) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_ENUMERATOR_UNAVAILABLE');
@@ -334,17 +350,7 @@ async function prepareParts(root: string, snapshotRoot: string, claimed: JobPart
       }
     }
     if (!decoded.has(path)) {
-      if (data.length < 33 || !data.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) ||
-        data.readUInt32BE(8) !== 13 || data.toString('ascii', 12, 16) !== 'IHDR') {
-        throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_PNG_INVALID ${detail}`);
-      }
-      const width = data.readUInt32BE(16), height = data.readUInt32BE(20);
-      if (!width || !height) throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_PNG_INVALID ${detail}`);
-      if (width > Math.floor(maxFileBytes / 4 / height)) {
-        throw new JobError('JOB_SOURCE_UNRETAINABLE', `PARTS_REFERENCE_LIMIT ${detail}`);
-      }
-      try { PNG.sync.read(data); }
-      catch { throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_PNG_INVALID ${detail}`); }
+      assertPartsReferencePng(data, detail);
       bytes.set(path, data);
       decoded.add(path);
     }
@@ -353,6 +359,29 @@ async function prepareParts(root: string, snapshotRoot: string, claimed: JobPart
       throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_HASH_MISMATCH ${detail}`);
     }
     images.push({path: reference.path, role: reference.role, sha256});
+  }
+  // Inline declarations retain their historical admission behavior; fallback is never a rescue.
+  if (!Object.hasOwn(JSON.parse(manifestBytes.toString('utf8')), 'painting_in_rig')) {
+    try {
+      const resolved = await resolvePartsPaintingInRig(dirname(join(root, manifestPath)), manifestBytes,
+        async (absolute, kind) => {
+          const data = sourceBytes(root, rootRelative(root, absolute));
+          if (kind === 'painting') assertPartsReferencePng(data, 'painting_in_rig');
+          return data;
+        });
+      if (resolved.sidecar) for (const file of resolved.files) {
+        const path = rootRelative(root, file.declaredPath ?? file.abs);
+        if (!declared.some(row => row.path === path && row.sha256 === file.sha256)) {
+          throw new JobError('JOB_SOURCE_MISMATCH', 'PARTS_DIFFERENCE_PROVENANCE: sidecar and painting require generic file identities');
+        }
+        const data = sourceBytes(root, path);
+        if (jobHash(data) !== file.sha256) throw new JobError('JOB_SOURCE_MISMATCH');
+        bytes.set(path, data);
+      }
+    } catch (error) {
+      if (error instanceof JobError) throw error;
+      throw new JobError('JOB_SOURCE_MISMATCH', error instanceof Error ? error.message : 'PARTS_DIFFERENCE_PROVENANCE');
+    }
   }
   return {identity: {enumeratorVersion: version, manifest: {path: manifestPath, sha256: jobHash(manifestBytes)}, images}, bytes};
 }
@@ -1317,7 +1346,7 @@ export async function prepareJobSource(options: {
     const imageSet = context.imageSet === undefined ? null : prepareJobImageSet(context.imageSet,
       path => sourceBytes(root.path, path));
     for (const image of imageSet?.imageSet.images ?? []) add(image.path, image.sha256);
-    const parts = await prepareParts(root.path, snapshotRoot, context.parts, options.partsEnumerator);
+    const parts = await prepareParts(root.path, snapshotRoot, context.parts, declared, options.partsEnumerator);
     for (const [path, bytes] of parts.bytes) add(path, jobHash(bytes));
     if (wanted.size > maxSourceFiles) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_LIMIT');
     let size = 0;

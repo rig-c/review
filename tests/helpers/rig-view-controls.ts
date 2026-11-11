@@ -7,5 +7,5 @@ export function createRigViewControls(setView:(id:string)=>void=()=>{}) {
  const start=source.indexOf("createViewControls({layout:'rigStep1'"),end=source.indexOf('),cameraControls=',start);
  if(start<0||end<start)throw new Error('Rig control constructor boundary missing');
  const call=new Bun.Transpiler({loader:'ts'}).transformSync('return '+source.slice(start,end+1));
- return new Function('createViewControls','inspectionViewSwitch','setView',call)(createViewControls,inspectionViewSwitch,setView) as ReturnType<typeof createViewControls>;
+ return new Function('createViewControls','inspectionViewSwitch','chooseInspectionView','partsOnly',call)(createViewControls,inspectionViewSwitch,setView,false) as ReturnType<typeof createViewControls>;
 }

@@ -124,6 +124,14 @@ function zoomViewport(target:CameraTarget,deltaY:number,point?:CameraPoint|null)
  const layout=provider.layoutKey(),relaid=layout!==state.cameraLayout;
  // An owed or held Fit settles first: it fits every pane to its own frame, so there is nothing left to align.
  if(!fitting&&(fitOwed||fitHeld&&relaid)){state.cameraLayout=layout;if(settleFit())return;}
+ if(provider.nativeScale&&state.cameraSync&&!state.cameraRestoring&&!fitting&&relaid){
+  const visible=targets().flatMap(target=>{const frame=paneFrame(target);return frame?[{target,frame}]:[];});
+  const minimum=Math.max(...visible.map(({frame})=>range(frame).min)),maximum=Math.min(...visible.map(({frame})=>range(frame).max));
+  for(const {target}of visible){
+   const camera=paneCamera(target),zoom=Math.max(minimum,Math.min(maximum,camera.zoom));
+   if(zoom!==camera.zoom)writeCamera(target,{zoom,center:camera.center});
+  }
+ }
  if(state.cameraSync&&!state.cameraRestoring&&!fitting&&relaid)alignCameras();state.cameraLayout=layout;
  provider.render(api);
  }

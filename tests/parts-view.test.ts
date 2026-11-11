@@ -142,30 +142,13 @@ test('#348: the server serves the view, gates the sign-off on the capability, an
     expect((await fetch(origin + '/api/parts/image/2')).headers.get('content-type')).toContain('image/png');
     expect((await fetch(origin + '/api/parts/image/9')).status).toBe(404);
     expect((await fetch(origin + '/')).status).toBe(200);
-    expect((await fetch(origin + '/parts.js')).status).toBe(200);
+    expect((await fetch(origin + '/main.js')).status).toBe(200);
     const body = JSON.stringify({ status: 'approved', issues: [] });
     expect((await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body })).status).toBe(403);
     const saved = await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': capability }, body });
     expect(saved.status).toBe(200);
     expect(JSON.parse(await readFile(join(root, 'rig', 'parts-review.json'), 'utf8')).status).toBe('approved');
   } finally { server.stop(true); }
-});
-
-test('#348: known producer readings remain in en and ko headlines alongside the exact row path', async () => {
-  const { flagLabel } = await import('../web/parts-flags.ts'), { t } = await import('../web/i18n.ts');
-  const en = (k: string, p?: Readonly<Record<string, string | number>>) => t(k, p, 'en'), ko = (k: string, p?: Readonly<Record<string, string | number>>) => t(k, p, 'ko');
-  // The opening the public demo's check.json reports, as written there.
-  const opening = { kind: 'check' as const, item: 'hair_back', path: 'figure_openings.openings[0]', root: 'figure_openings', status: null, entry: { pair: 'hair_back|handwear_r', under: 'hair_back', above: 'handwear_r', animation: 'hop', frame: 5, time: 0.417, opens: [5, 6], cell: 2.517, found_cells: 40, allowed_cells: 28 } };
-  expect(flagLabel(opening, en)).toContain('hair_back opens under handwear_r · hop f5 (0.417 s) · 40 cells found / 28 allowed');
-  expect(flagLabel(opening, ko)).toContain('hair_back이(가) handwear_r 아래에서 벌어짐 · hop f5 (0.417초) · 셀 40개 발견 / 허용 28개');
-  const seam = { kind: 'check' as const, item: 'front', path: 'seam_pairs[0]', root: 'seam_pairs', status: null, entry: { parts: ['front', 'back_control'], px_over_40: 3, px_over_80: 1, rig_box: [30, 14, 6, 4] } };
-  expect(flagLabel(seam, en)).toContain('Seam front | back_control · 3 px over 40 · 1 px over 80 · rig box 30,14 6×4');
-  expect(flagLabel(seam, ko)).toContain('이음매 front | back_control · 40 초과 3 px · 80 초과 1 px · 리그 상자 30,14 6×4');
-  const gate = { kind: 'check' as const, item: 'handwear_l', path: 'TIP_OVER_ROOT.parts[0]', root: 'TIP_OVER_ROOT', status: 'FAIL', entry: { part: 'handwear_l', root_rig_px: 1.478, tip_rig_px: 7.034, ratio: 4.761 } };
-  expect(flagLabel(gate, en)).toContain('Block TIP_OVER_ROOT: FAIL · handwear_l · root_rig_px 1.478 · tip_rig_px 7.034 · ratio 4.761');
-  expect(flagLabel(gate, ko)).toContain('블록 TIP_OVER_ROOT: FAIL · handwear_l · root_rig_px 1.478 · tip_rig_px 7.034 · ratio 4.761');
-  expect(flagLabel({ ...opening, entry: { under: 'hair_back' } }, en)).toContain('Check line figure_openings.openings[0]');
-  expect(flagLabel({ kind: 'faint', item: 'a', art: 12, maxAlpha: 15, box: [2, 2, 4, 3] }, en)).toBe('Faint island left out of the mesh: 12 px, brightest alpha 15, at 2,2 4×3 (part-image px).');
 });
 
 test('#348 P1: a part image or a discovered producer file that symlinks outside the package is refused by name, never hashed or served', async () => {

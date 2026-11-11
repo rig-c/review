@@ -295,3 +295,38 @@ test('#706 a held Fit fits each synchronized native pane to its own frame withou
  reference.clientWidth=496;reference.clientHeight=140;expect(()=>c.fitCamera()).not.toThrow();
  expect(c.paneCamera('reference').zoom).toBe((140-24)/862);
 });
+
+
+test('#737 pending parts Fit ignores zero-size entry canvases, settles on real art, and retains later camera actions',()=>{
+ const nodes=new Map<string,any>();const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:450,clientHeight:800,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const canvas={width:0,height:0};let drawn:{w:number;h:number}|null=null;
+ const c=createPartsViewport({el,canvas:canvas as HTMLCanvasElement,reference:()=>null,frameSize:()=>drawn,message:()=>{}});c.state.cameraSync=false;
+ c.requestFit();c.fitCamera();expect(c.paneFrame('rig')).toBeNull();expect(c.numericView().cameras.rig).toBeNull();expect(c.state.zoom).toBe(1);
+ drawn={w:1920,h:1080};Object.assign(canvas,{width:1920,height:1080});c.fitCamera();
+ expect(c.paneCamera('rig')).toEqual({zoom:(450-24)/1920,center:{x:960,y:540}});
+ c.unitScaleCamera('rig');c.zoomCamera(1.25,'rig');const actual=structuredClone(c.paneCamera('rig'));
+ // A late initial promise changes neither geometry nor explicit camera; resize delivery must retain it.
+ c.fitCamera();expect(c.paneCamera('rig')).toEqual(actual);expect(actual.zoom).toBe(1.25);
+});
+
+test('#737 explicit native Fit followed by wider Reference layout must not refuse the camera',()=>{
+ const nodes=new Map<string,any>();const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:655,clientHeight:471,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const canvas={width:1920,height:1080},reference={...canvas};
+ const c=createPartsViewport({el,canvas:canvas as HTMLCanvasElement,reference:()=>reference as HTMLCanvasElement,frameSize:()=>({w:1920,h:1080}),message:()=>{}});c.state.cameraSync=true;c.requestFit();c.fitActiveCamera('rig');
+ const before=structuredClone(c.paneCamera('reference'));expect(before.zoom).toBe((655-24)/1920);
+ el('rig-pane').hidden=true;el('rig-viewport').clientWidth=0;el('reference-viewport').clientWidth=1318;
+ console.log('U3_LAYOUT_RANGE_INPUT',JSON.stringify({before,minimumAfter:Math.min((1318-24)/1920,(471-24)/1080),cameraSync:c.state.cameraSync}));
+ expect(()=>c.fitCamera()).not.toThrow();
+ expect(c.paneCamera('reference')).toEqual({zoom:(471-24)/1080,center:before.center});
+});
+
+test('#737 sync native relayout admits a camera when visible peers have unequal fit scales',()=>{
+ const nodes=new Map<string,any>();const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:1318,clientHeight:471,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ el('rig-pane').hidden=true;el('rig-viewport').clientWidth=0;
+ const c=createPartsViewport({el,canvas:{width:1920,height:1080}as HTMLCanvasElement,reference:()=>({width:3840,height:2160})as HTMLCanvasElement,frameSize:t=>t==='rig'?{w:1920,h:1080}:{w:3840,h:2160},message:()=>{}});c.state.cameraSync=true;c.requestFit();c.fitActiveCamera('reference');
+ const before=structuredClone(c.paneCamera('reference'));expect(before.zoom).toBe((471-24)/2160);
+ el('rig-pane').hidden=false;el('rig-viewport').clientWidth=655;el('reference-viewport').clientWidth=655;
+ console.log('U3_UNEQUAL_NATIVE_RELAYOUT',JSON.stringify({before,minimumRigAfter:(655-24)/1920,minimumReferenceAfter:(655-24)/3840}));
+ expect(()=>c.fitCamera()).not.toThrow();
+ expect(c.paneCamera('reference')).toEqual({zoom:(655-24)/1920,center:before.center});expect(c.paneCamera('rig')).toEqual({zoom:(655-24)/1920,center:{x:960,y:540}});
+});

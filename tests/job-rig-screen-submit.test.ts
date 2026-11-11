@@ -82,6 +82,8 @@ for (const rigPending of [false, true]) test(`#721 checkpoint commit leaves comm
       async load() {rigHost()!.displayed();}});
     screen.commit(prepared);
     await screen.painted(prepared, new AbortController().signal);
+    await expect(rigHost()!.read('/api/session','PUT')).rejects.toThrow('JOB_REVIEW_READ_ONLY');
+    await expect(rigHost()!.read('/api/unknown','GET')).rejects.toThrow('JOB_REVIEW_READ_ONLY');
     expect(rigHost()!.pendingSubjects?.()).toEqual(f.session.status().pending.filter(ask=>ask.status==='pending').map(ask=>ask.subject));
     const current = structuredClone(initial);
     current.checkpoints['step-one'] = {outcome: 'pass', note: 'checkpoint words'};
@@ -193,4 +195,25 @@ test('#721 a full committed verdict marks its exact comments submitted while an 
     expect(app.locked(comment.id)).toBe(true);
     expect(app.state().submittedBaseline.checkpoints).toEqual({});
   }
+});
+
+for(const failure of ['abort','source-mismatch']as const)test(`#737 parts host preparation preserves active host on ${failure}`,async()=>{
+ const originalFetch=globalThis.fetch,activeHost=rigHost(),display=fixturePublication() as unknown as import('../src/job-contract.ts').DisplayPublicationV3;
+ const source=display.publication.source;
+ Object.assign(source,{selector:{kind:'draft',id:'synthetic-parts'},parts:{manifest:{path:'parts.json',sha256:'a'.repeat(64)},images:[]}});
+ const controller=new AbortController();let entered!:()=>void;const requested=new Promise<void>(resolve=>{entered=resolve;}),signals:AbortSignal[]=[];
+ const host=createJobRigScreen({host:{}as HTMLElement,pageId:'synthetic-page',access:{capability:null,headers:init=>new Headers(init)},
+  window:{state:()=>({pending:[],receipt:null,generation:1,preparing:false,closed:false}),submit:async()=>{throw Error('PREPARE_MUST_NOT_SUBMIT');}},
+  routes:()=>({entry:'http://127.0.0.1/synthetic/',api:path=>'http://127.0.0.1/synthetic/'+path}),refusal:String,translate:key=>key,load:async()=>{throw Error('PREPARE_MUST_NOT_MOUNT');}});
+ try{
+  globalThis.fetch=(async(url,init)=>{
+   expect(init?.signal).toBe(controller.signal);signals.push(init!.signal!);
+   if(String(url).endsWith('/review'))return Response.json({manifest:{...source.package,checkpoints:[]},reviewedSource:{rig:source.model},sourceHash:source.sourceHash});
+   expect(String(url)).toEndWith('/stage-parts');entered();
+   if(failure==='source-mismatch')return Response.json({mode:'parts',sourceHash:'f'.repeat(64)});
+   return await new Promise<Response>((_resolve,reject)=>controller.signal.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true}));
+  })as typeof fetch;
+  const preparation=host.prepare(display,controller.signal);await requested;if(failure==='abort')controller.abort();
+  await expect(preparation).rejects.toThrow(failure==='abort'?'aborted':'JOB_DISPLAY_MISMATCH');expect(signals.length).toBe(2);expect(rigHost()).toBe(activeHost);
+ }finally{globalThis.fetch=originalFetch;}
 });
