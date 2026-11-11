@@ -19,7 +19,7 @@ import {
 } from '../src/cut-edits.ts';
 import {canvasToCrop} from './chest-editor.ts';
 import type {OverlayMarker,OverlayPoint,OverlayProject,OverlayRegion} from './rig-overlays.ts';
-import {textEntryFocused} from './view-controls.ts';
+import {panelNode as node,panelMake as make,textEntryFocused} from './view-controls.ts';
 import type {PatchJobView,RebuildRefusal} from './rebuild-client.ts';
 
 export interface CutsPanelDeps {
@@ -50,8 +50,6 @@ export interface CutsPanel {
  status(text:string,error:boolean):void;busy(value:boolean):void;
  restore():void;clear():void;sync():void;dispose():void;
 }
-const node=<T extends HTMLElement>(id:string)=>{const found=document.getElementById(id);if(!found)throw new Error(`Missing UI element: ${id}`);return found as T;};
-const make=<K extends keyof HTMLElementTagNameMap>(tag:K,props:Record<string,unknown>={},...children:(Node|string)[]):HTMLElementTagNameMap[K]=>{const item=document.createElement(tag);Object.assign(item,props);item.append(...children);return item;};
 const fmt=(p:readonly number[])=>`[${p.join(', ')}]`;
 /** The handle under the pointer (canvas px), within 9 px; the nearest wins. */
 export function hitHandle(points:readonly {id:string;at:OverlayPoint}[],p:OverlayPoint):string|null {

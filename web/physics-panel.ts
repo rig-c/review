@@ -4,6 +4,7 @@
  * Reset, the Apply status and the check readout. The panel's inputs carry no ids, so the source draft keeps only the
  * pending-ops record (`#physics-pending`) and never counts a control per constraint.
  */
+import {panelNode as node,panelMake as make} from './view-controls.ts';
 import {applyRamp,componentValue,draftEdits,draftText,nearestChain,patchOps,physicsChains,rowControls,setEdit,TUNING_FIELDS,COMPONENT_FIELDS,type PendingEdit,type PhysicsChain,type PhysicsField,type TuningRow,type TuningTable} from '../src/physics-tuning.ts';
 import type {PatchOp} from '../src/config-patch.ts';
 import type {PhysicsPreviewRead} from './preview.ts';
@@ -35,8 +36,6 @@ export interface PhysicsPanel {
  dispose():void;
 }
 
-const node=<T extends HTMLElement>(id:string)=>{const found=document.getElementById(id);if(!found)throw new Error(`Missing UI element: ${id}`);return found as T;};
-const make=<K extends keyof HTMLElementTagNameMap>(tag:K,props:Record<string,unknown>={},...children:(Node|string)[]):HTMLElementTagNameMap[K]=>{const item=document.createElement(tag);Object.assign(item,props);item.append(...children);return item;};
 const shown=(value:number|undefined)=>value===undefined?'—':String(Number(value.toPrecision(6)));
 
 export function bindPhysicsPanel(deps:PhysicsPanelDeps):PhysicsPanel {

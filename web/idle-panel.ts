@@ -7,6 +7,7 @@
  * "preview — Apply decides"; it is cleared on Apply and Reset and is never recorded: the source draft keeps only the
  * pending ops (`#idle-pending`) and the panel's own inputs carry no ids.
  */
+import {panelNode as node,panelMake as make} from './view-controls.ts';
 import {AMP_RANGE,addTrack,entryChanged,idleDraftState,idleDraftText,idleOps,initialState,isChain,orderedEntries,periodFits,periodOffers,precheck,previewPlan,removeTrack,setBlink,stateFromOps,setField,setLinkAmp,SINGLE_PROPS,type BlinkField,type ChainField,type IdleKeying,type IdleSource,type IdleState,type IdleStatus,type PreviewPlan,type SingleField} from '../src/idle-tracks.ts';
 import {scrubBox} from './scrub-box.ts';
 import type {PatchOp} from '../src/config-patch.ts';
@@ -51,8 +52,6 @@ export interface IdlePanel {
  dispose():void;
 }
 
-const node=<T extends HTMLElement>(id:string)=>{const found=document.getElementById(id);if(!found)throw new Error(`Missing UI element: ${id}`);return found as T;};
-const make=<K extends keyof HTMLElementTagNameMap>(tag:K,props:Record<string,unknown>={},...children:(Node|string)[]):HTMLElementTagNameMap[K]=>{const item=document.createElement(tag);Object.assign(item,props);item.append(...children);return item;};
 const shown=(value:number|undefined)=>value===undefined?'—':String(Number(value.toPrecision(6)));
 export const PREVIEW_LABEL='preview — Apply decides';
 /** Degrees of amplitude per pane pixel dragged on a chain handle. */

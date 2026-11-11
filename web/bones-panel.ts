@@ -12,7 +12,7 @@ import type {CropWorldMapping} from '../src/chest-regions.ts';
 import type {BonesCheckResult} from '../src/bones-check.ts';
 import {canvasToCrop} from './chest-editor.ts';
 import type {OverlayAnchors,OverlayPoint,OverlayProject} from './rig-overlays.ts';
-import {textEntryFocused} from './view-controls.ts';
+import {panelNode as node,panelMake as make,textEntryFocused} from './view-controls.ts';
 
 export type BonesCheckView=BonesCheckResult|{status:'refused';error:string};
 export interface BonesPanelDeps {
@@ -68,8 +68,6 @@ export function anchorLines(bones:readonly ConfigBone[],at:(path:string)=>RigPoi
  return out;
 }
 const fmt=(p:RigPoint)=>`[${p[0]}, ${p[1]}]`;
-const node=<T extends HTMLElement>(id:string)=>{const found=document.getElementById(id);if(!found)throw new Error(`Missing UI element: ${id}`);return found as T;};
-const make=<K extends keyof HTMLElementTagNameMap>(tag:K,props:Record<string,unknown>={},...children:(Node|string)[]):HTMLElementTagNameMap[K]=>{const item=document.createElement(tag);Object.assign(item,props);item.append(...children);return item;};
 
 export function bindBonesPanel(deps:BonesPanelDeps):BonesPanel {
  const state=node('bones-panel-state'),toggle=node<HTMLButtonElement>('bones-edit'),picker=node<HTMLSelectElement>('bones-select'),editor=node('bones-anchor-editor'),pending=node('bones-pending-list');

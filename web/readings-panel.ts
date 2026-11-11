@@ -4,6 +4,7 @@
  * lines and the timeline ticks on the transport scrub — two colours, the inspected build above the scratch build — each
  * tick a button that seeks to its frame's time. The server runs `rigc render`; this draws what came back.
  */
+import {panelNode as node,panelMake as make} from './view-controls.ts';
 import {readingTicks,ticksOnClip,TICK_EDGE,worstLine,type ReadingBuild,type ReadingRequest,type ReadingResult,type ReadingTick} from '../src/readings.ts';
 import {scrubBox} from './scrub-box.ts';
 
@@ -23,8 +24,6 @@ export interface ReadingsPanel {
 }
 export interface ReadingsPanelDeps {run:()=>void;seek:(animation:string,frame:number,time:number|null,label:string)=>void}
 
-const node=<T extends HTMLElement>(id:string)=>{const found=document.getElementById(id);if(!found)throw new Error(`Missing UI element: ${id}`);return found as T;};
-const make=<K extends keyof HTMLElementTagNameMap>(tag:K,props:Record<string,unknown>={},...children:(Node|string)[]):HTMLElementTagNameMap[K]=>{const item=document.createElement(tag);Object.assign(item,props);item.append(...children);return item;};
 /** The range input's thumb travels inside the track by about its own width; ticks sit under the thumb's centre. */
 const THUMB=14;
 export const EDGE=TICK_EDGE;

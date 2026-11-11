@@ -6,6 +6,7 @@
  * op at `/meshes/<part>`), Reset, the counts and `TEXTURE_STRETCH` after a build and the folds reading on the
  * revision. The draft (`#mesh-pending`) keeps the part and its pending entry; nothing reaches the package.
  */
+import {panelNode as node,panelMake as make} from './view-controls.ts';
 import {
  addSegment,entryChanges,entryRegions,entrySegments,entryValue,freeRegionName,hitRegionPoint,meshDraftText,meshMode,modeNotEditable,moveRegionPoint,
  paramsFor,parseMeshDraft,polygonRegion,precheckEntry,removeSegment,segmentChoices,setEntryValue,setRibs,snapPoint,withRegions,FLOORS,RULES,MESH_PANEL_SCHEMA,
@@ -49,8 +50,6 @@ export interface MeshPanel {
  dispose():void;
 }
 
-const node=<T extends HTMLElement>(id:string)=>{const found=document.getElementById(id);if(!found)throw new Error(`Missing UI element: ${id}`);return found as T;};
-const make=<K extends keyof HTMLElementTagNameMap>(tag:K,props:Record<string,unknown>={},...children:(Node|string)[]):HTMLElementTagNameMap[K]=>{const item=document.createElement(tag);Object.assign(item,props);item.append(...children);return item;};
 const shown=(v:JsonValue|undefined)=>v===undefined?'(absent)':JSON.stringify(v);
 const isObject=(v:unknown):v is Record<string,JsonValue>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 
