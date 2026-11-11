@@ -54,7 +54,9 @@ test('C4 job browser runtime graph excludes the server manifest and Node imports
     }
     const graph = await runtimeGraph();
     expect(graph.files.has(new URL('../src/job-contract.ts', import.meta.url).href)).toBe(true);
-    expect(graph.files.has(new URL('../web/parts-viewport-provider.ts', import.meta.url).href)).toBe(false);
+    // The rig provider reuses the parts raster provider for Setup Difference (#739), so it is reachable here;
+    // the boundary that matters stays: no server manifest and no node: import (assertBrowserBoundary).
+    expect(graph.files.has(new URL('../web/parts-viewport-provider.ts', import.meta.url).href)).toBe(true);
     expect(graph.files.has(new URL('../web/parts.ts', import.meta.url).href)).toBe(false);
     const contractSource = await Bun.file(new URL('../src/job-contract.ts', import.meta.url)).text();
     expect(transpiler.scan(transpiler.transformSync(contractSource)).imports).toEqual([]);
