@@ -1,3 +1,5 @@
+import {readFileSync} from 'node:fs';
+import {createRigViewControls} from './helpers/rig-view-controls.ts';
 import {expect,test} from 'bun:test';
 import {createViewControls,type ViewSwitchConfig} from '../web/view-controls.ts';
 import {getLanguagePreference,setLanguagePreference,t} from '../web/i18n.ts';
@@ -21,7 +23,7 @@ function withControls(run:()=>void){
  }
 }
 function menu(config?:ViewSwitchConfig){
- const controls=createViewControls({layout:'rigStep1',...(config?{viewSwitch:config}:{})});
+ const controls=config?createViewControls({layout:'rigStep1',viewSwitch:config}):createRigViewControls();
  const root=controls.viewSwitch as unknown as ControlNode;
  const summary=root.children[0] as ControlNode,list=root.children[1] as ControlNode;
  return {controls,root,summary,label:summary.children[1] as ControlNode,list,buttons:list.children.filter((node):node is ControlNode=>typeof node!=='string'&&node.tagName==='button')};
@@ -82,3 +84,35 @@ test('#677 hidden modes and empty groups introduce no orphan separators',()=>wit
  expect(buttons.map(button=>button.dataset.view)).toEqual(['assembled','part','overlay','difference','region','pages']);
  expect(list.children.filter(node=>(node as ControlNode).tagName==='hr')).toHaveLength(1);
 }));
+
+test('#677 runtime mode updates use configured labels without notifying, including unavailable effective input',()=>withControls(()=>{
+ const changes:string[]=[],{controls,label,buttons,root}=menu(partsConfig(false,id=>changes.push(id)));
+ root.open=true;controls.setMode('overlay');
+ expect(label.textContent).toBe(t('Overlay'));expect(root.open).toBe(true);expect(changes).toEqual([]);
+ expect(buttons.map(button=>button.getAttribute('aria-pressed'))).toEqual(['false','false','true','false','true','false']);
+ controls.setMode(null,'part');expect(label.textContent).toBe(t('Part'));
+ expect(buttons.every(button=>button.getAttribute('aria-pressed')==='false')).toBe(true);
+ controls.setMode('missing');expect(label.textContent).toBe(t('Part'));expect(changes).toEqual([]);
+ controls.setMode('pages');expect(label.textContent).toBe(t('Pages'));expect(buttons[5]!.getAttribute('aria-pressed')).toBe('true');
+}));
+
+test('#677 runtime Difference refusal can be cleared, re-enabled and selected with one callback',()=>withControls(()=>{
+ const changes:string[]=[],{controls,label,buttons}=menu(partsConfig(false,id=>changes.push(id))),difference=buttons[3]!;
+ controls.setDisabled('difference',null);
+ expect(difference.disabled).toBe(false);expect(difference.title).toBe('');expect(difference.getAttribute('aria-description')).toBeNull();
+ difference.onclick!();expect(changes).toEqual(['difference']);expect(label.textContent).toBe(t('Difference'));
+ const reason=t('Difference unavailable');controls.setDisabled('difference',reason);
+ expect(difference.disabled).toBe(true);expect(difference.title).toBe(reason);expect(difference.getAttribute('aria-description')).toBe(reason);
+ difference.onclick!();expect(changes).toEqual(['difference']);controls.setDisabled('missing',reason);
+ controls.setMode('part');expect(label.textContent).toBe(t('Part'));expect(changes).toEqual(['difference']);
+}));
+
+test('#677 production view-state writes stay in the shared constructor and rig configuration is required',()=>{
+ const source=readFileSync(new URL('../web/main.ts',import.meta.url),'utf8');
+ expect(source).not.toContain('[data-view]');expect(source).not.toContain('view-menu-label');expect(source).not.toContain('menuLabels');
+ // CI's typecheck proves that the rig layout cannot omit its screen configuration.
+ if(false){
+  // @ts-expect-error rigStep1 requires viewSwitch.
+  createViewControls({layout:'rigStep1'});
+ }
+});

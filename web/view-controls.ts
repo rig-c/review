@@ -21,7 +21,7 @@ export const labelledControl=(
  ...(controlFirst?[control,label]:[label,control]),
 );
 export type ThemePreference = 'system' | 'dark' | 'light';
-import {t} from './i18n.ts';
+import {t,setSourceText} from './i18n.ts';
 
 export interface ViewPoint { x:number; y:number }
 export function stageOrientation(width:number,height:number):'horizontal'|'vertical' {return width>=height?'horizontal':'vertical';}
@@ -95,15 +95,12 @@ export interface ViewSwitchConfig {
  currentMode:string;
  onChange?:(id:string)=>void;
 }
-const rigViewSwitch:ViewSwitchConfig={currentMode:'compare',groups:[{modes:[
- {id:'compare',labelKey:'Side by side',pressed:true},
- {id:'reference',labelKey:'Reference',pressed:false},
- {id:'rig',labelKey:'Rig',pressed:false},
-]}]};
-export type ViewControlsOptions = {viewSwitch?:ViewSwitchConfig}&({layout:'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'} | {
+export type ViewControlsOptions = {layout:'rigStep1';viewSwitch:ViewSwitchConfig} | {
+ layout:'legacyCompareStep3'|'legacyPartsStep2';
+} | {
  layout:'legacyCompiledJobStep5';
  inputLabel:(key:string,input:HTMLElement)=>HTMLElement;
-});
+};
 /** One creation site for each common control; hosts retain adjacent tools and camera/event binding. */
 export function createViewControls(options:ViewControlsOptions) {
  const parts=options.layout==='legacyPartsStep2',rig=options.layout==='rigStep1',compare=options.layout==='legacyCompareStep3';
@@ -121,7 +118,20 @@ export function createViewControls(options:ViewControlsOptions) {
  const zoomGroup=parts||rig||compare?panelMake(parts?'span':'div',{className:parts?'pv-group':rig?'zoom-controls':'row'}):null;
  const nativeOne=parts||rig?actionButton('1:1',null):null;
  if(nativeOne)nativeOne.id='native-one';
- let viewSwitch:HTMLDetailsElement|null=null;
+ let viewSwitch:HTMLDetailsElement|null=null,viewLabel:HTMLSpanElement|null=null;
+ const modes=new Map<string,{mode:ViewSwitchMode;button:HTMLButtonElement;group:readonly ViewSwitchMode[]}>();
+ /** A null effective mode clears pressed states but may still name the requested mode. */
+ const setMode=(id:string|null,summaryId:string|null=id)=>{
+  const selected=id===null?undefined:modes.get(id),summary=summaryId===null?undefined:modes.get(summaryId);
+  if(id!==null&&!selected)return;
+  for(const item of modes.values())if(id===null||item.group===selected?.group)item.button.setAttribute('aria-pressed',String(item===selected));
+  if(viewLabel&&summary)setSourceText(viewLabel,t(summary.mode.labelKey));
+ };
+ const setDisabled=(id:string,reason:string|null)=>{
+  const item=modes.get(id);if(!item)return;
+  item.button.disabled=!!reason;item.button.title=reason??'';
+  if(reason)item.button.setAttribute('aria-description',reason);else item.button.removeAttribute('aria-description');
+ };
  let choices:{assemble:HTMLButtonElement;comparisonGroup:HTMLSpanElement;atlasSwitch:HTMLSpanElement}|null=null;
  if(parts) {
   nativeOne!.setAttribute('aria-pressed','true');
@@ -141,31 +151,30 @@ export function createViewControls(options:ViewControlsOptions) {
   choices={assemble,comparisonGroup,atlasSwitch};
  }
  if(rig){
-  const config=options.viewSwitch??rigViewSwitch;
+  const config=options.viewSwitch;
   viewSwitch=panelMake('details',{id:'view-menu',className:'view-menu'});
   const groups=config.groups.filter(group=>!group.hidden).map(group=>group.modes.filter(mode=>!mode.hidden)).filter(modes=>modes.length);
   const current=groups.flat().find(mode=>mode.id===config.currentMode);
-  const label=panelMake('span',{id:'view-menu-label',textContent:current?t(current.labelKey):''});
+  const label=viewLabel=panelMake('span',{id:'view-menu-label',textContent:current?t(current.labelKey):''});
   const summary=panelMake('summary',{},t('View switch')+' ',label);summary.setAttribute('aria-label',t('View layout'));
   const list=panelMake('div',{className:'view-menu-list'});list.setAttribute('role','group');list.setAttribute('aria-label',t('View'));
-  for(const [index,modes] of groups.entries()){
+  for(const [index,group] of groups.entries()){
    if(index)list.append(panelMake('hr',{role:'separator'}));
-   const buttons:HTMLButtonElement[]=[];
-   for(const mode of modes){
+   for(const mode of group){
     const button=actionButton(t(mode.labelKey),()=>{
      if(button.disabled)return;
-     for(const choice of buttons)choice.setAttribute('aria-pressed',String(choice===button));
-     label.textContent=t(mode.labelKey);viewSwitch!.open=false;config.onChange?.(mode.id);
+     setMode(mode.id);viewSwitch!.open=false;config.onChange?.(mode.id);
     });
     button.dataset.view=mode.id;button.setAttribute('aria-pressed',String(mode.pressed));
-    if(mode.disabledReason){button.disabled=true;button.title=mode.disabledReason;button.setAttribute('aria-description',mode.disabledReason);}
-    buttons.push(button);list.append(button);
+    modes.set(mode.id,{mode,button,group});
+    if(mode.disabledReason)setDisabled(mode.id,mode.disabledReason);
+    list.append(button);
    }
   }
   viewSwitch.append(summary,list);
   zoomGroup!.append(zoomIn,zoomOut,fit,nativeOne!,viewSwitch,value);
  }else if(compare)zoomGroup!.append(syncLabel,zoomOut,value,zoomIn,fit);
- return {zoomButtons,zoomGroup,syncLabel,value,choices,nativeOne,viewSwitch};
+ return {zoomButtons,zoomGroup,syncLabel,value,choices,nativeOne,viewSwitch,viewModeIds:[...modes.keys()],setMode,setDisabled};
 }
 
 // Nested or separately disposed pan binders must not restore another binder's override.

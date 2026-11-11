@@ -1,3 +1,4 @@
+import {createRigViewControls} from './helpers/rig-view-controls.ts';
 import {createViewControls} from '../web/view-controls.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {createViewportController,createViewportState} from '../web/viewport-controller.ts';
@@ -676,7 +677,7 @@ test('#671 common group composition retains each finite host tag, class, child o
  Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Element(tag)}});
  try{
   for(const layout of ['legacyPartsStep2','rigStep1','legacyCompareStep3'] as const){
-   const controls=createViewControls({layout}),group=controls.zoomGroup as unknown as Element;
+   const controls=layout==='rigStep1'?createRigViewControls():createViewControls({layout}),group=controls.zoomGroup as unknown as Element;
    const expected=layout==='legacyPartsStep2'?['zoom-out','zoom-value','zoom-in','fit','native-one']:layout==='rigStep1'?['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']:['camera-sync','zoom-out','zoom-label','zoom-in','fit'];
    expect(group.tagName).toBe(layout==='legacyPartsStep2'?'span':'div');expect(group.className).toBe(layout==='legacyPartsStep2'?'pv-group':layout==='rigStep1'?'zoom-controls':'row');
    expect(group.children.map(node=>node.id||(node===controls.syncLabel?'camera-sync':null))).toEqual(expected);

@@ -303,8 +303,8 @@ function layoutEligibility(){return singleEligibility({rig:rigInput,reference:re
 /** Unavailable layouts stay visible but disabled with their named reason; no placeholder pane stands in for a missing input. */
 function renderLayout():void {
  const state=layoutEligibility();effectiveView=state.effective;
- for(const item of document.querySelectorAll<HTMLButtonElement>('[data-view]')){const layout=item.dataset.view as SingleLayout,reason=state.reasons[layout]??'';item.setAttribute('aria-pressed',String(layout===state.effective));item.disabled=!!reason;item.title=reason;if(reason)item.setAttribute('aria-description',reason);else item.removeAttribute('aria-description');}
- const menuLabels={compare:'Side by side',reference:'Reference',rig:'Rig'};text('view-menu-label',menuLabels[state.effective??state.requested]);
+ for(const id of controls.viewModeIds)controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
+ controls.setMode(state.effective,state.effective??state.requested);
  el('reference-pane').hidden=state.effective!=='compare'&&state.effective!=='reference';el('rig-pane').hidden=state.effective!=='compare'&&state.effective!=='rig';
  const shown={compare:'Side by side',reference:'Reference only',rig:'Rig only'};
  text('layout-state',state.effective===null?`No input rendered · ${state.reasons.compare??''}`:state.effective===state.requested?shown[state.effective]:`${shown[state.effective]} · ${shown[state.requested]} unavailable: ${state.reasons[state.requested]??''}`);

@@ -1,3 +1,4 @@
+import {createRigViewControls} from './helpers/rig-view-controls.ts';
 import {test,expect} from 'bun:test';
 import {mkdtemp,writeFile,readFile,mkdir,rm,cp} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -674,8 +675,9 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   contains(target:FakeHTMLElement|null):boolean{
    return !!target&&(target===this||this.children.some(c=>c.contains(target)));
   }
-  append(...items:FakeHTMLElement[]){
-   for(const item of items){
+  append(...items:(FakeHTMLElement|string)[]){
+   for(const child of items){
+    const item=typeof child==='string'?Object.assign(new FakeHTMLElement('span'),{textContent:child}):child;
     if(item.parentElement){
      item.parentElement.children=item.parentElement.children.filter(c=>c!==item);
      item.parentElement.childNodes=item.parentElement.childNodes.filter(c=>c!==item);
@@ -997,6 +999,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
 
   inspectorBinding=bindInspectorTabs(()=>{},()=>{}, {tabs:inspectorTabs.map(button=>({id:button.dataset.inspector!,button:button as unknown as HTMLButtonElement,panels:[],attribute:'aria-selected' as const})),panels:[],initialize:true,reveal:()=>mainScope.workspace.revealInspector()});
   const mainScope:any={
+   controls:createRigViewControls(),
    refreshedBuilds,
    HTMLInputElement:FakeHTMLInputElement,
    HTMLSelectElement:FakeHTMLElement,
