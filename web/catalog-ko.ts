@@ -1,4 +1,11 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+ "Difference: {0} of {1} compared pixels \u00b7 rest still vs original painting.": "차이: 비교한 {1}픽셀 중 {0}픽셀 · 정지 셋업과 원본 그림.",
+ "PARTS_PAINTING_MAPPING: declared rig_size and positive scale_rig_per_source required": "PARTS_PAINTING_MAPPING: 선언된 rig_size와 양수 scale_rig_per_source가 필요해요.",
+ "RIG_DIFFERENCE_SETUP_ONLY: Difference is available in Setup.": "RIG_DIFFERENCE_SETUP_ONLY: 차이 보기는 셋업에서 사용할 수 있어요.",
+ "RIG_DIFFERENCE_MODEL_UNAVAILABLE: no compiled rig is loaded.": "RIG_DIFFERENCE_MODEL_UNAVAILABLE: 컴파일된 리그를 불러오지 못했어요.",
+ "RIG_DIFFERENCE_REFERENCE_UNAVAILABLE: select a loaded original painting image.": "RIG_DIFFERENCE_REFERENCE_UNAVAILABLE: 불러온 원본 그림 이미지를 선택하세요.",
+ "RIG_DIFFERENCE_NATIVE_SCALE: original painting and declared rig canvas must align at native scale.": "RIG_DIFFERENCE_NATIVE_SCALE: 원본 그림과 선언된 리그 캔버스가 원래 배율로 일치해야 해요.",
+ "RIG_DIFFERENCE_COMMENT_UNAVAILABLE: return to Rig or Reference before adding a comment.": "RIG_DIFFERENCE_COMMENT_UNAVAILABLE: 리그 또는 참조로 돌아간 뒤 코멘트를 추가하세요.",
  'rig review ': 'rig review ',
  'Language ': '언어 ',
  'More act actions': '작업 더 보기',

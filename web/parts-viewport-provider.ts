@@ -45,12 +45,25 @@ export function createPartsViewportProvider(host:PartsViewportHost,state:Viewpor
 export function createPartsViewport(host:PartsViewportHost){const state=createViewportState();state.cameraSync=false;return createViewportController(createPartsViewportProvider(host,state),state);}
 
 import type {partsViewJson} from '../src/parts-view.ts';
-import {defaultPartsComparison,paintingRectangle,type PartsComparison} from '../src/parts-comparison.ts';
+import {defaultPartsComparison,paintingRectangle,differencePixels,assertOriginalPaintingSize,type PartsComparison} from '../src/parts-comparison.ts';
 import {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,type Box} from './parts-render.ts';
 import {bindStageComments,type CommentCodec,type CommentUiPose} from './stage-comments.ts';
 import {parsePartsIssue,assertPartsIssueBinding,snapImageRegion,type PartsIssue} from '../src/parts-comment.ts';
 import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
 import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
+/** U5 uses the same native raster paint path as a parts subject, with the whole rig as one operand. */
+export function paintRigDifference(canvas:HTMLCanvasElement,still:HTMLCanvasElement,painting:HTMLImageElement) {
+ assertOriginalPaintingSize(painting.naturalWidth,painting.naturalHeight,[still.width,still.height],1);
+ const original=Object.assign(document.createElement('canvas'),{width:still.width,height:still.height});
+ original.getContext('2d')!.drawImage(painting,0,0);
+ const raster=(source:HTMLCanvasElement)=>({width:source.width,height:source.height,data:new Uint8Array(source.getContext('2d')!.getImageData(0,0,source.width,source.height).data)});
+ const difference=differencePixels(raster(still),{x:0,y:0,w:still.width,h:still.height},raster(original),[],0,false);
+ const pixels=Object.assign(document.createElement('canvas'),{width:difference.width,height:difference.height});
+ pixels.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(difference.data),difference.width,difference.height),0,0);
+ canvas.width=difference.width;canvas.height=difference.height;
+ paintAssembly(canvas.getContext('2d')!,canvas.width,canvas.height,[{box:{name:'',index:0,x:0,y:0,w:canvas.width,h:canvas.height},image:pixels}],{bg:'checker',alpha:false,transparent:true});
+ return {count:difference.count,compared:difference.compared};
+}
 export type PartsSubjectData=ReturnType<typeof partsViewJson>;
 export interface PartsSubjectEntry {subject:'parts';parts:PartsSubjectData}
 export interface PartsSubjectSession {subject:'parts';issues:PartsIssue[]}

@@ -1,4 +1,5 @@
-import {createPartsViewportProvider,bindPartsSubject,type PartsSubjectEntry,type PartsSubjectSession} from './parts-viewport-provider.ts';
+import {captureRigRestStill,rigRestCanvas} from './job-rig-capture.ts';
+import {createPartsViewportProvider,bindPartsSubject,paintRigDifference,type PartsSubjectEntry,type PartsSubjectSession} from './parts-viewport-provider.ts';
 import {rigWorkspaceMarkup,rigFeedbackMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {bindDirectionPanel} from './direction-panel.ts';
 import {bindWorkspaceVisibility} from './workspace-visibility.ts';
@@ -124,17 +125,21 @@ const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearch
 el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.append(createRigLayerControls());
 el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;
-const controls=createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(chooseInspectionView,partsOnly)}),cameraControls=el('app').querySelector<HTMLElement>('[data-workspace-camera]')!;cameraControls.append(controls.syncLabel,controls.zoomGroup!);
+const controls=createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(chooseInspectionView,true)}),cameraControls=el('app').querySelector<HTMLElement>('[data-workspace-camera]')!;cameraControls.append(controls.syncLabel,controls.zoomGroup!);
 const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.classList.add('workspace-main-toolbar');
 const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
+for(const event of ['click','change'])secondaryToolbar.addEventListener(event,()=>{if(rigDifference){leaveRigDifference();renderLayout();}},true);
 const rigInspector=mountRigInspector();
 const rigAsk=panelMake('span',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigInspector.act.prepend(rigAsk);
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
 const partsCanvas=document.createElement('canvas'),partsReference=document.createElement('canvas');partsCanvas.width=partsCanvas.height=partsReference.width=partsReference.height=0;
 let partsSubject:ReturnType<typeof bindPartsSubject>|null=null;
+let rigDifference:{assets:ModelAssets;painting:HTMLImageElement;camera:ReturnType<typeof createViewportState>;hidden:Map<HTMLElement,boolean>;label:string;bookmark:InspectionBookmark}|null=null;
+let rigDifferenceFailure:string|null=null;
+const rigRaster={el,canvas:partsCanvas,message,reference:()=>null,frameSize:()=>({w:partsCanvas.width,h:partsCanvas.height}),active:()=>!!rigDifference};
 if(partsOnly){partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);el('reference-content').append(partsReference);}
-const viewport=createViewportController(partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay},viewportState),viewportState);
+const viewport=createViewportController(partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,raster:rigRaster},viewportState),viewportState);
 const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera,unitScaleCamera}=viewport;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
 if(!host)connectLiveWindow(access);
@@ -334,19 +339,54 @@ function renderCheckpoint(): void {
 
 function setView(value: typeof view): void {view=value;renderLayout();}
 function chooseInspectionView(id:string):void {
- if(!partsSubject){setView(id as SingleLayout);return;}
+ if(!partsSubject){
+  if(id==='difference'){
+   const reason=rigDifferenceReason();if(reason){message(reason,true);renderLayout();return;}
+   try{
+    const painting=el('reference-content').querySelector<HTMLImageElement>('img')!;
+    const still=captureRigRestStill(assets!,{width:painting.naturalWidth,height:painting.naturalHeight});
+    const result=paintRigDifference(partsCanvas,still,painting);
+    pause();
+    if(!rigDifference)rigDifference={assets:assets!,painting,camera:structuredClone(viewport.state),hidden:new Map(),label:sourceTextContent(el('rig-label')),bookmark:inspectionBookmark()};
+    partsCanvas.id='rig-difference-canvas';el('rig-root').append(partsCanvas);partsCanvas.hidden=false;
+    for(const node of [...el('rig-root').children,...el('rig-viewport').children])if(node instanceof HTMLElement&&node!==partsCanvas&&node!==el('rig-root')&&node!==el('rig-label')&&node!==el('rig-empty')){if(!rigDifference.hidden.has(node))rigDifference.hidden.set(node,node.hidden);node.hidden=true;}
+    viewport.cancelFit();viewport.state.cameraFrames={};viewport.state.cameraCenter=null;viewport.state.referenceCenter=null;viewport.state.activeCamera='rig';
+    text('rig-label','Difference');setView('rig');viewport.fitActiveCamera('rig');
+    message(t('Difference: {0} of {1} compared pixels · rest still vs original painting.',[result.count,result.compared],'en'));
+   }catch(error){leaveRigDifference();rigDifferenceFailure=errorText(error);message(rigDifferenceFailure,true);renderLayout();}
+  }else{leaveRigDifference();setView(id as SingleLayout);}
+  return;
+ }
  const overlay=document.getElementById('parts-overlay') as HTMLInputElement;
  if(id==='difference')overlay.checked=false;
  partsSubject.setComparison(id==='difference'?'difference':overlay.checked?'overlay':'part');
  setView(id==='difference'?'rig':id as SingleLayout);
 }
+/** Availability follows the actual loaded image and declared native rig canvas, never a resized reference. */
+function rigDifferenceReason():string|null {
+ if(selectedInspector()!=='rig')return 'RIG_DIFFERENCE_SETUP_ONLY: Difference is available in Setup.';
+ if(!assets||!player||rigInput.state!=='loaded')return 'RIG_DIFFERENCE_MODEL_UNAVAILABLE: no compiled rig is loaded.';
+ const painting=el('reference-content').querySelector<HTMLImageElement>('img');
+ if(referenceInput.state!=='loaded'||!painting?.naturalWidth)return 'RIG_DIFFERENCE_REFERENCE_UNAVAILABLE: select a loaded original painting image.';
+ try{rigRestCanvas(assets,{width:painting.naturalWidth,height:painting.naturalHeight});}catch{return 'RIG_DIFFERENCE_NATIVE_SCALE: original painting and declared rig canvas must align at native scale.';}
+ return rigDifferenceFailure;
+}
+/** Restore the compiled view without carrying image-space zoom, hidden layers or diagnostic pixels into capture. */
+function leaveRigDifference():void {
+ const previous=rigDifference;if(!previous)return;rigDifference=null;
+ partsCanvas.remove();for(const [node,hidden]of previous.hidden)node.hidden=hidden;
+ viewport.cancelFit();Object.assign(viewport.state,previous.camera);viewport.state.cameraFrames={};viewport.state.cameraLayout='';
+ text('rig-label',previous.label);
+}
 function layoutEligibility(){return singleEligibility({rig:rigInput,reference:referenceInput,requested:view});}
 /** Unavailable layouts stay visible but disabled with their named reason; no placeholder pane stands in for a missing input. */
 function renderLayout():void {
+ if(rigDifference&&(rigDifferenceReason()||rigDifference.assets!==assets||rigDifference.painting!==el('reference-content').querySelector('img')))leaveRigDifference();
  const state=layoutEligibility();effectiveView=state.effective;
  for(const id of controls.viewModeIds)if(id!=='difference')controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
- controls.setMode(partsSubject?.comparison().mode==='difference'?'difference':state.effective,state.effective??state.requested);
+ controls.setMode(rigDifference||partsSubject?.comparison().mode==='difference'?'difference':state.effective,state.effective??state.requested);
  if(partsSubject){controls.setDisabled('difference',partsSubject.differenceAvailable()&&rigInput.state==='loaded'&&referenceInput.state==='loaded'?null:tr('PARTS_DIFFERENCE_UNAVAILABLE: missing painting_in_rig declaration or painting_in_rig.json sidecar and its bound operand.'));if(partsSubject.comparison().mode==='difference')controls.setMode('difference');}
+ if(!partsSubject){controls.setDisabled('difference',tr(rigDifferenceReason()??'')||null);if(rigDifference)controls.setMode('difference');}
  el('reference-pane').hidden=state.effective!=='compare'&&state.effective!=='reference';el('rig-pane').hidden=state.effective!=='compare'&&state.effective!=='rig';
  const shown={compare:'Side by side',reference:'Reference only',rig:'Rig only'};
  text('layout-state',state.effective===null?`No input rendered · ${state.reasons.compare??''}`:state.effective===state.requested?shown[state.effective]:`${shown[state.effective]} · ${shown[state.requested]} unavailable: ${state.reasons[state.requested]??''}`);
@@ -420,6 +460,7 @@ function renderSequenceFrame(): void {
 }
 
 async function showReference(id: string): Promise<void> {
+  rigDifferenceFailure=null;leaveRigDifference();
   const generation = ++referenceGeneration;
   video?.pause(); video = null;controlledVideoSample=null;delete viewport.state.cameraFrames.reference; viewport.state.referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; selectedPerson=''; lastPoseFrame = -1; el('person-control').hidden = true;
   const content = el('reference-content'); content.replaceChildren();
@@ -539,6 +580,7 @@ function seekFrame(frame: number): void {
 }
 
 function drawRig(action:()=>void):void {
+ if(rigDifference&&rigDifference.assets!==assets){leaveRigDifference();renderLayout();}
  inDrawRig=true;
  try{action();parts?.present('single');if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);}
  catch(error){animationPanel?.capture(null,undefined);overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);throw error;}
@@ -546,6 +588,7 @@ function drawRig(action:()=>void):void {
 }
 
 function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): void {
+  if(rigDifference){leaveRigDifference();renderLayout();}
   pause(); animation = name; axisInspection = false; el('angle-panel').hidden = true;
   const runtimeAnimation = assets?.animations.find(item => item.name === name);
   duration = clipDuration(name);
@@ -558,6 +601,7 @@ function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): voi
 }
 
 function seek(value: number, move?: ClipMove): void {
+  if(rigDifference){leaveRigDifference();renderLayout();}
   time = duration > 0 ? Math.min(Math.max(0, value), duration) : Math.max(0, value);
   clipMoved(move ?? { kind: 'seek', to: time });
   if (player && player.current) { try { player.seek(time); drawRig(()=>player!.draw()); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
@@ -1155,7 +1199,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{const part=parts?.value();if(!stageCorrectionRebinding&&(previous?.side!==part?.side||previous?.slot!==part?.slot||previous?.mode!==part?.mode))stageDraftRequestToken++;if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){player.seek(time);drawRig(()=>player!.draw());}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(rigDifference){leaveRigDifference();renderLayout();}const part=parts?.value();if(!stageCorrectionRebinding&&(previous?.side!==part?.side||previous?.slot!==part?.slot||previous?.mode!==part?.mode))stageDraftRequestToken++;if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){player.seek(time);drawRig(()=>player!.draw());}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     // A job rig subject lands in Animate before the model finishes loading (#709).
@@ -1251,14 +1295,14 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
 function hostStage():RigHostStage|null {
  if(!player)return null;const frame=parts?.frame('single');
  return {pane:el('rig-viewport'),paneHidden:el('rig-pane').hidden,root:el('rig-root'),player,frameGeneration:frame?.generation,camera:numericView().cameras.rig,frame:paneFrame('rig'),
-  wholeRig:!parts?.value()&&player.slots===null&&layers.images,playing,posed:frame,assets};
+  wholeRig:!rigDifference&&!parts?.value()&&player.slots===null&&layers.images,playing,posed:frame,assets};
 }
 /** Old feedback bookmarks keep their inspection mode; only an explicit reveal opens the act. */
 function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)inspectorTabs?.select(name);else inspectorTabs?.restore(name);}
 function bindInspector(partsSubject=false):void {
  inspectorTabs?.dispose();
  rigInspector.row.reveal=()=>workspace?.revealInspector();
- inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode)inspectorBlocks?.activate(mode);workspace?.afterTab();fitCamera();},()=>workspace?.beforeTab(),rigInspector.row);
+ inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode)inspectorBlocks?.activate(mode);workspace?.afterTab();renderLayout();},()=>workspace?.beforeTab(),rigInspector.row);
  viewDisposers.push(bindHeaderModeAvailability(partsSubject?{model:false,parts:true}:{model:!!data.manifest.model,preRig:data.capabilities.preRig}));
  for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
 }
@@ -1269,6 +1313,7 @@ function bindReviewDialog():void {select('correction-stage').onchange=syncCorrec
 /** Rig world → rig-pane pixels for the current camera. */
 function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*viewport.state.rigScale,y:parseFloat(root.style.top||'0')-y*viewport.state.rigScale});}
 function redrawOverlay(fresh:boolean):void {
+ if(rigDifference)return;
  animationPanel?.redraw(layers.bones);
  if(!overlays||!player)return;
  const project=rigProject();
@@ -1361,7 +1406,7 @@ async function decodedControlTime(media:HTMLVideoElement,target:number,signal:Ab
 function numericView():ControlView {return viewport.numericView();}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data.sourceHash,rigs:[data.reviewedSource.rig?.sha256??null]};}
 // Persist the displayed inspection clock; the runtime clock accumulates across idle loops for physics.
-function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode??selectedInspector()??'rig',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
+function inspectionBookmark():InspectionBookmark {if(rigDifference)return structuredClone(rigDifference.bookmark);return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode??selectedInspector()??'rig',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false,keepCamera=true):Promise<void> {
  await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal,preserveSeconds,keepCamera),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
 }
@@ -2621,6 +2666,7 @@ void start();
 
 /** Only live, unrecorded authoring effects block capture; unsent form ops alone do not. */
 function commentCaptureRefusal():string|null {
+ if(rigDifference)return 'RIG_DIFFERENCE_COMMENT_UNAVAILABLE: return to Rig or Reference before adding a comment.';
  if(appliedOnStage)return 'COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build';
  if(rebuildBusy)return 'COMMENT_SOURCE_BUSY: wait for the rebuild or candidate model replacement before commenting';
  const preview=idleAdjust?'Idle tracks':typeof animAdjust!=='undefined'&&animAdjust?'Keyed animation preview':dialAdjust?'Rig fields turn dial':physicsPreview.read().length?'Physics live overrides':stripPending?'Density strip candidate':
