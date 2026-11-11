@@ -3,7 +3,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
 import {mountViewportPair} from '../web/viewport-pair.ts';
-import {layerShortcuts, describeLayerToggles} from '../web/view-controls.ts';
+import {layerShortcuts, describeLayerToggles, createViewControls} from '../web/view-controls.ts';
 import {SENTINELS} from '../web/parts-render.ts';
 import {RigOverlays} from '../web/rig-overlays.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -240,18 +240,18 @@ function mountActualBuild(body: string, prepared: JobPreparedInspection): MountE
     return select;
   };
   replaceGlobal('HTMLElement', MountElement);
-  replaceGlobal('document', {createTextNode: (text: string) => {const node = new MountElement('#text'); node.textContent = text; return node;}});
+  replaceGlobal('document', {createElement: node, createTextNode: (text: string) => {const node = new MountElement('#text'); node.textContent = text; return node;}});
   // Execute the actual nested production build body, without adding a product test seam.
   const javascript = new Bun.Transpiler({loader: 'ts'}).transformSync(body);
   const build = new Function('deps', `
-    const {node, inputLabel, selectValues, mountViewportPair, t, layerShortcuts,
+    const {node, inputLabel, selectValues, mountViewportPair, t, layerShortcuts, createViewControls,
       describeLayerToggles, SENTINELS, RigOverlays} = deps;
     let loop = true, stageBackground = '';
     const layers = {images: true, mesh: false, bones: false, meshOpacity: 0.65};
     const i18n = {tr: t}, overlays = new WeakMap();
     ${javascript}
     return build;
-  `)({node, inputLabel, selectValues, mountViewportPair, t: translate, layerShortcuts,
+  `)({node, inputLabel, selectValues, mountViewportPair, t: translate, layerShortcuts, createViewControls,
     describeLayerToggles, SENTINELS, RigOverlays}) as (prepared: JobPreparedInspection) => MountElement;
   const host = node('main'); host.append(build(prepared));
   return host;
