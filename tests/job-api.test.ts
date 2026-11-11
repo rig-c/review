@@ -334,9 +334,10 @@ test('#557 control default checkpoint fetch keeps the API envelope and exact rev
   expect(await response.text()).toBe(JSON.stringify({schema: JOB_API_SCHEMA, verb: 'fetch-act',
     jobId: f.session.jobId, requestId: request.requestId, generation: f.session.status().generation,
     ok: true, value: saved.value}));
-  expect(saved.value.schema).toBe('rig-review/act@2');
+  expect(saved.value.schema).toBe('rig-review/act@6');
   expect(saved.value).not.toHaveProperty('still');
-  expect(saved.value.value).toEqual({...value, planStepId: 'step-one'});
+  expect(saved.value.value).toEqual({checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass',
+    comments: [{text: value.words, anchor: {checkpointId: 'step-one', planStepId: 'step-one'}}]});
 });
 
 test('#557 R08 raw negotiation returns the act bytes while the default envelope remains separate', async () => {

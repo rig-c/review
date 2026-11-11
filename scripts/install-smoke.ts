@@ -77,6 +77,7 @@ import {
  type JobRecordReopenSubject, type JobRecordReopenValue, type JobUISubmissionV3,
  type JobComment, type JobCommentAnchor, type JobCommentFeedbackAnchor, type JobCommentPartsAnchor, type JobCommentImageAnchor,
  type JobCommentsAct, type JobCommentsActValues, type ReviewCommentsSession, type CompareCommentsSession, type PartsCommentsVerdict,
+ type JobCommentContext, type JobContextComment, type JobContextCommentsAct,
 } from '@rig-c/review/job-host';
 import * as publicHost from '@rig-c/review/job-host';
 
@@ -100,16 +101,22 @@ export type PublicTypes = [
  JobRecordReopenSubject, JobRecordReopenValue, JobUISubmissionV3,
  JobComment, JobCommentAnchor, JobCommentFeedbackAnchor, JobCommentPartsAnchor, JobCommentImageAnchor,
  JobCommentsAct, JobCommentsActValues, ReviewCommentsSession, CompareCommentsSession, PartsCommentsVerdict,
+ JobCommentContext, JobContextComment, JobContextCommentsAct,
 ];
+// Review #713: JobAct admits fresh act@6 comments acts from the UI writers.
+export type JobActAdmitsComments = JobCommentsAct extends JobAct ? true : never;
+const jobActAdmitsComments: JobActAdmitsComments = true;
 function assert(ok: unknown, name: string): asserts ok {
  if (!ok) throw new Error('SMOKE_PUBLIC_HOST_' + name);
 }
+assert(jobActAdmitsComments, 'JOB_ACT_ADMITS_COMMENTS');
 const expectedExports = ['assertJobImageSetCapability', 'JOB_CAPABILITIES', 'startJobHost', 'startJobHub', 'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID', 'JOB_PARTS_ENUMERATOR_RANGE',
  'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
  'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordAct', 'prepareJobRecordSource',
  'JOB_COMMENTS_ACT_SCHEMA', 'REVIEW_COMMENTS_SESSION_SCHEMA', 'REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA',
  'PARTS_COMMENTS_VERDICT_SCHEMA', 'parseCommentsAct', 'projectComments', 'parseCommentsSession',
- 'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'projectSelectedCommentsFeedback'];
+ 'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'projectSelectedCommentsFeedback',
+ 'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct'];
 assert(JSON.stringify(Object.keys(publicHost).sort()) === JSON.stringify(expectedExports.sort()), 'EXPORTS');
 assert(JOB_API_SCHEMA === 'rig-review/job-api@2' && JOB_ACT_SCHEMA === 'rig-review/act@2' &&
  JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <3.0.0', 'SCHEMAS');
@@ -269,6 +276,7 @@ try {
   method: 'POST', headers: uiHeaders, body: JSON.stringify({...displayed.value, askId: imageAsk.value.askId,
    expectedGeneration: session.status().generation, submissionId: 'installed-image-submit', kind: 'review-verdict', value: imageValue})}));
  assert(imageAct.ok && imageAct.value.kind === 'review-verdict', 'IMAGE_UI_ACT');
+ assert(imageAct.value.schema === JOB_ACT_SCHEMA, 'IMAGE_ACT_STAYS_AT_2');
  assert(JSON.stringify(imageAct.value.source) === JSON.stringify(imageSource) &&
   JSON.stringify(imageAct.value.value) === JSON.stringify(imageValue), 'IMAGE_SOURCE_WORDS_EXACT');
  const imageFetched = await call({...base, verb: 'fetch-act', requestId: 'image-fetch', actId: imageAct.value.actId}, true);

@@ -1,8 +1,8 @@
+import {createPartsViewportProvider,bindPartsSubject,type PartsSubjectEntry,type PartsSubjectSession} from './parts-viewport-provider.ts';
 import {rigWorkspaceMarkup,rigFeedbackMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {bindDirectionPanel} from './direction-panel.ts';
 import {bindWorkspaceVisibility} from './workspace-visibility.ts';
 import type {DirectionInspection} from '../src/direction-inspection.ts';
-import {bindStageNav} from './stage-nav.ts';
 import {timeOnlyBasis,feedbackTimingLabel,requireFeedbackFrames,isTimeOnlyFeedback} from '../src/stage-comment.ts';
 import {bindStageComments,type CommentPose} from './stage-comments.ts';
 import {discoverTurnDials,TurnState} from '../src/turn-pad.ts';
@@ -15,7 +15,7 @@ import {createViewportController,createViewportState,type CameraTarget} from './
 import {createRigViewportProvider,rigPanCarry} from './rig-viewport-provider.ts';
 import {mountViewportPair} from './viewport-pair.ts';
 import {rendererStatus} from './renderer-status.ts';
-import {panelMake,createRigLayerControls,createViewControls,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
+import {panelMake,createRigLayerControls,createViewControls,inspectionViewSwitch,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,idlePreviewOnOpen,bookmarkCameraKept,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
 import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
 import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
 import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
@@ -36,13 +36,14 @@ import type {RetargetFlags} from '../src/retarget.ts';
 import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
-import {mountWorkspaceShell,mountStatusBar,bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
+import {mountWorkspaceShell,mountStatusBar,bindWorkspaceUI,bindHeaderModeAvailability,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
 import {setSourceAttribute,setSourceText,sourceTextContent,t,tr} from './i18n.ts';
 import {holdScrubBox,releaseScrubBox,scrubBox} from './scrub-box.ts';
 import {mountRigInspector,bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
 import {connectControl} from './control.ts';
 import {connectLiveWindow} from './live-connection.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
+import {rigHost,type RigHostStage} from './rig-host.ts';
 import {controlComparison,type ControlCommand,type ControlInspection,type ControlView} from '../src/control.ts';
 import {singleEligibility,videoReferenceAt,type InputState,type SingleLayout} from '../src/comparison-eligibility.ts';
 import {parseBookmark,connectInspectionPersistence,serializableView,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
@@ -53,8 +54,8 @@ import type { Checkpoint, Json, Reference, ReviewedSource, ReviewManifest } from
 import type { Feedback, ReviewSession } from '../src/session.ts';
 import type { ReportEvent, ReportSeeds } from '../src/report.ts';
 import { frameAtTime, lastFrame as lastProducerFrame, rigPaneLabel, timeAtFrame, transportClock, type StageClock } from '../src/frame-clock.ts';
-import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, type FeedbackCatalog } from '../src/feedback-validation.ts';
-import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, reportDraftForMarker, targetLabel } from './report-view.ts';
+import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection, validateTimedFeedbackSelection, type FeedbackCatalog } from '../src/feedback-validation.ts';
+import { eventCoordinates, eventSeekTime, eventSelection, eventTimingLabel, reportCounts, targetLabel } from './report-view.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPacket,dueJolts,dragImpulse,loadModelDocument,environmentContext,environmentJson,type JoltStep,type WindSnapshot,type WindState} from '../src/environment.ts';
 import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
@@ -93,7 +94,9 @@ const text = (id: string, value: string) => { const node = el(id); setSourceText
 const option = (value: string, label: string) => { const item = document.createElement('option'); item.value = value; item.textContent = label; return item; };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 // Capability is consumed before shell composition or any URL-dependent binding.
-const access = pageInstanceAccess();
+// A live job (#709) hosts this screen for a rig subject: its routes, its session and its submit.
+const host=rigHost(),access=host?.access??pageInstanceAccess();
+const partsOnly=host?.subject==='parts'||document.getElementById('app')?.dataset.reviewScreen==='parts';
 const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
 const rigStatusBar=mountStatusBar({
  message:'Loading local review package…',
@@ -121,20 +124,20 @@ const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearch
 el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.append(createRigLayerControls());
 el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;
-const controls=createViewControls({layout:'rigStep1',viewSwitch:{currentMode:'compare',groups:[{modes:[
- {id:'compare',labelKey:'Side by side',pressed:true},
- {id:'reference',labelKey:'Reference',pressed:false},
- {id:'rig',labelKey:'Rig',pressed:false},
-]}],onChange:id=>setView(id as SingleLayout)}}),cameraControls=el('app').querySelector<HTMLElement>('[data-workspace-camera]')!;cameraControls.append(controls.syncLabel,controls.zoomGroup!);
+const controls=createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(chooseInspectionView,partsOnly)}),cameraControls=el('app').querySelector<HTMLElement>('[data-workspace-camera]')!;cameraControls.append(controls.syncLabel,controls.zoomGroup!);
 const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.classList.add('workspace-main-toolbar');
 const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
 const rigInspector=mountRigInspector();
+const rigAsk=panelMake('span',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigInspector.act.prepend(rigAsk);
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
-const viewport=createViewportController(createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay},viewportState),viewportState);
+const partsCanvas=document.createElement('canvas'),partsReference=document.createElement('canvas');partsCanvas.width=partsCanvas.height=partsReference.width=partsReference.height=0;
+let partsSubject:ReturnType<typeof bindPartsSubject>|null=null;
+if(partsOnly){partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);el('reference-content').append(partsReference);}
+const viewport=createViewportController(partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay},viewportState),viewportState);
 const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera,unitScaleCamera}=viewport;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
-connectLiveWindow(access);
+if(!host)connectLiveWindow(access);
 let readOnly: string | null = null;
 let data: ReviewResponse;
 let directionPanel:ReturnType<typeof bindDirectionPanel>|undefined;
@@ -239,6 +242,7 @@ function message(value: string, error = false): void {
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase();
+  const hosted = host?.read(path, method); if (hosted) return await hosted as T;
   const response = await fetch(access.route(path), method === 'GET' || method === 'HEAD' ? init : { ...init, headers: access.headers(init?.headers) });
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
   return await response.json() as T;
@@ -300,7 +304,7 @@ function renderCheckpoints(): void {
 
 async function chooseCheckpoint(point: Checkpoint,initial?:{referenceId?:string;updateUrl:boolean}): Promise<void> {
   pause(); checkpoint = point; axisInspection = false;
-  if(initial?.updateUrl!==false){const url = new URL(location.href); url.searchParams.set('checkpoint', point.id); window.history.replaceState(null, '', url);}
+  if(!host&&initial?.updateUrl!==false){const url = new URL(location.href); url.searchParams.set('checkpoint', point.id); window.history.replaceState(null, '', url);}
   if (point.animation) chooseAnimation(point.animation);
   time = point.time ?? 0;
   const referenceId=initial?.referenceId??point.reference;
@@ -310,6 +314,8 @@ async function chooseCheckpoint(point: Checkpoint,initial?:{referenceId?:string;
   viewport.state.zoom = Math.min(8, Math.max(.25, point.camera?.zoom ?? 1));
   if(viewport.state.cameraSync)viewport.state.activeCamera=player?'rig':'reference';
   viewport.state.cameraCenter = point.camera ? { x: point.camera.x, y: point.camera.y } : null;
+  // A checkpoint without its own camera opens at Fit, held until the panes are measured and until someone moves it.
+  if(point.camera)viewport.cancelFit();else viewport.requestFit();
   seek(time);
   if (point.axis && player && !input('axis-value').disabled) {
     select('axis-select').value = point.axis.id; chooseAxis(); input('axis-value').value = String(point.axis.value); applyAxis();
@@ -322,18 +328,25 @@ function renderCheckpoint(): void {
   text('detail-title', checkpoint?.title ?? 'No checkpoint supplied');
   text('detail-note', checkpoint?.note ?? 'Record checkpoint notes and outcomes.');
   const entry = checkpoint ? session.checkpoints[checkpoint.id] : undefined;
-  el<HTMLTextAreaElement>('checkpoint-note').value = entry?.note ?? '';
-  el<HTMLTextAreaElement>('checkpoint-note').disabled = !checkpoint;
+  el('checkpoint-note').textContent = entry?.note ?? '';
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="outcome"]')) { radio.checked = radio.value === (entry?.outcome ?? 'pending'); radio.disabled = !checkpoint; }
 }
 
 function setView(value: typeof view): void {view=value;renderLayout();}
+function chooseInspectionView(id:string):void {
+ if(!partsSubject){setView(id as SingleLayout);return;}
+ const overlay=document.getElementById('parts-overlay') as HTMLInputElement;
+ if(id==='difference')overlay.checked=false;
+ partsSubject.setComparison(id==='difference'?'difference':overlay.checked?'overlay':'part');
+ setView(id==='difference'?'rig':id as SingleLayout);
+}
 function layoutEligibility(){return singleEligibility({rig:rigInput,reference:referenceInput,requested:view});}
 /** Unavailable layouts stay visible but disabled with their named reason; no placeholder pane stands in for a missing input. */
 function renderLayout():void {
  const state=layoutEligibility();effectiveView=state.effective;
- for(const id of controls.viewModeIds)controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
- controls.setMode(state.effective,state.effective??state.requested);
+ for(const id of controls.viewModeIds)if(id!=='difference')controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
+ controls.setMode(partsSubject?.comparison().mode==='difference'?'difference':state.effective,state.effective??state.requested);
+ if(partsSubject){controls.setDisabled('difference',partsSubject.differenceAvailable()&&rigInput.state==='loaded'&&referenceInput.state==='loaded'?null:tr('PARTS_DIFFERENCE_UNAVAILABLE: missing painting_in_rig declaration or painting_in_rig.json sidecar and its bound operand.'));if(partsSubject.comparison().mode==='difference')controls.setMode('difference');}
  el('reference-pane').hidden=state.effective!=='compare'&&state.effective!=='reference';el('rig-pane').hidden=state.effective!=='compare'&&state.effective!=='rig';
  const shown={compare:'Side by side',reference:'Reference only',rig:'Rig only'};
  text('layout-state',state.effective===null?`No input rendered · ${state.reasons.compare??''}`:state.effective===state.requested?shown[state.effective]:`${shown[state.effective]} · ${shown[state.requested]} unavailable: ${state.reasons[state.requested]??''}`);
@@ -626,8 +639,7 @@ function prefillReportEvent(): void {
 }
 
 function chooseReportEvent(event: ReportEvent): void {
-  const draft = reportDraftForMarker(selectedReportEvent?.id ?? null, event.id, { category: select('feedback-category').value, summary: input('feedback-summary').value });
-  select('feedback-category').value = draft.category; input('feedback-summary').value = draft.summary;
+  if (selectedReportEvent?.id !== event.id) select('feedback-category').value = '';
   pause(); selectedReportEvent = event; selectedReportTime = undefined; selectedReportTarget = undefined;
   const selection = eventSelection(event);
   const times = select('report-time'); times.replaceChildren();
@@ -791,8 +803,15 @@ function applyAxis(): void {
   const value = Number(input('axis-value').value); text('axis-value-label', value.toFixed(3)); seek((value - axis.min) / (axis.max - axis.min) * duration);
 }
 
+/** A changed draft with the same id is still editable; only the exact submitted row is locked. */
+function isSubmittedFeedback(id:string):boolean {
+  const row=session.feedback.find(item=>item.id===id);
+  return !!row&&!!submittedBaseline?.updatedAt&&submittedBaseline.feedback.some(item=>item.id===id&&JSON.stringify(item)===JSON.stringify(row));
+}
+
 function renderProposals(): void {
   comments?.refresh();
+  const count=session.feedback.length;setSourceText(rigInspector.comments.button, `Comments (${count})`);
   const area = el('proposal-list'); area.replaceChildren();
   const warnings = el('feedback-warnings'); warnings.hidden = session.feedbackWarnings.length === 0;
   const unchecked = session.feedback.map(f => appliedCheckRefusal((f.context as Record<string, unknown> | undefined)?.applied)).find(Boolean) ?? null;
@@ -803,7 +822,8 @@ function renderProposals(): void {
     const title = document.createElement('span'); title.className = 'feedback-heading'; title.textContent = `${feedback.category} · ${feedback.target.kind}:${feedback.target.name} · `;
     const timing = document.createElement('span'); timing.textContent = feedbackTimingLabel(feedback); heading.append(title, timing);
     const description = document.createElement('span'); description.className = 'feedback-summary'; description.textContent = feedback.summary;
-    item.append(heading, description);
+    const marked=(feedback.context as any)?.comment?.schema==='rig-review-comment/1';
+    if(!marked)item.append(heading, description);
     const context = feedback.context as Record<string, Json> | undefined;
     const correction = context?.correction as {path?: string;selector?:{kind?:string}} | undefined;
     if (correction) {
@@ -819,7 +839,7 @@ function renderProposals(): void {
       item.append(label);
     }
     if ((context?.comment as {schema?: string} | undefined)?.schema === 'rig-review-comment/1' &&
-        !submittedBaseline?.feedback.some(row => row.id === feedback.id)) {
+        !isSubmittedFeedback(feedback.id)) {
       const describe = document.createElement('button');
       describe.type = 'button';
       setSourceText(describe, 'Use as described correction');
@@ -832,7 +852,7 @@ function renderProposals(): void {
     for (const warning of session.feedbackWarnings.filter(value => value.id === feedback.id)) { const note = document.createElement('p'); note.className = 'hint'; note.textContent = `Validation warning · ${warning.error}`; item.append(note); }
     const details = document.createElement('details'), summary = document.createElement('summary'), source = document.createElement('pre'); summary.textContent = 'Saved feedback and inspection context'; source.className = 'feedback-json'; source.textContent = JSON.stringify(feedback, null, 2); details.append(summary, source);
     const remove = actionButton('Delete', () => { session.feedback = session.feedback.filter(item => item.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); markDirty(); renderProposals(); });
-    item.append(details);if((feedback.context as any)?.comment?.schema!=='rig-review-comment/1'||!submittedBaseline?.feedback.some(f=>f.id===feedback.id))item.append(remove); area.append(item);
+    item.append(details);if((feedback.context as any)?.comment?.schema!=='rig-review-comment/1'||!isSubmittedFeedback(feedback.id))item.append(remove); const commentRow=marked?document.querySelector<HTMLElement>(`[data-comment-id="${feedback.id}"]`):null;(commentRow??area).append(item);
   }
   updateSavedState();
 }
@@ -872,9 +892,9 @@ function propose(tool: string): void {
     angle: { target: 'rig', hint: 'One-line feedback on face or torso angle deformation' }, pose: { target: 'bone', hint: 'One-line feedback on differences from the input pose' }, timing: { target: 'rig', hint: 'One-line feedback on timing in the selected range' }, audio: { target: 'rig', hint: 'One-line feedback on event or audio links' },
   };
   const choice = choices[tool]; if (!choice) return;
-  select('feedback-target-kind').value = choice.target; input('feedback-target-name').value = choice.target === 'rig' ? data.manifest.id : ''; input('feedback-summary').placeholder = choice.hint;
+  select('feedback-target-kind').value = choice.target; input('feedback-target-name').value = choice.target === 'rig' ? data.manifest.id : '';
   renderFeedbackTargets();
-  showInspector('feedback');input('feedback-summary').focus(); message('Specify a frame range and actual bone or slot name to add feedback. Motion keys are not edited.');
+  showInspector('feedback');input('feedback-start').focus(); message('Specify a frame range and actual bone or slot name to add feedback. Motion keys are not edited.');
 }
 
 
@@ -930,6 +950,44 @@ async function exportStrip(): Promise<void> {
 }
 
 
+function recordFeedback(summary:string,feedback?:Feedback,correction?:ReturnType<typeof correctionSelection>):void {
+    const start = input('feedback-start').value.trim(), end = input('feedback-end').value.trim(), frameStart = start ? Number(start) : feedback?.frameStart??null, frameEnd = end ? Number(end) : feedback?.frameEnd??null;
+    const name = input('feedback-target-name').value.trim();
+    if(!feedback&&(!start||!end))throw new Error(tr('Enter nonnegative integer start and end frames, with the end at or after the start.'));
+    if (start || end) { if (!start || !end || !Number.isSafeInteger(Number(start)) || !Number.isSafeInteger(Number(end)) || Number(start) < 0 || Number(end) < Number(start)) throw new Error(tr('Enter nonnegative integer start and end frames, with the end at or after the start.')); }
+    if (!['bone', 'slot', 'rig'].includes(select('feedback-target-kind').value) || !['defect', 'quality'].includes(select('feedback-category').value || feedback?.category || '')) throw new Error(tr('Select a target type and defect or quality category.'));
+    if (!name) throw new Error(tr('Enter the actual target name and a one-line summary of up to 1,000 characters.'));
+    const target: Feedback['target'] = { kind: select('feedback-target-kind').value as Feedback['target']['kind'], name };
+    const captured=feedback?.context as Record<string,Json>|undefined;
+    const selectedAnimation = feedback?(typeof captured?.animation==='string'?captured.animation:null):feedbackAnimation();
+    if(feedback&&feedback.frameStart===null&&(start||end))throw new Error(tr('Frame ranges require an explicit producer frame. Leave both fields empty for this seconds-only comment.'));
+    if(frameStart!==null&&frameEnd!==null)validateFeedbackSelection(data.feedbackCatalog, { frameStart, frameEnd, target, animation: selectedAnimation });
+    else validateTimedFeedbackSelection(data.feedbackCatalog,{target,animation:selectedAnimation,time:Number(captured?.time)});
+    const box = assets?.stage ?? player?.bounds();
+    const center = viewport.state.cameraCenter ?? (box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null);
+    session.feedback.push({ id:feedback?.id??crypto.randomUUID(), ...feedback, frameStart, frameEnd, target, category: (select('feedback-category').value || feedback?.category || '') as Feedback['category'], summary, context: {...(feedback?.context as Record<string,Json>),...(turnPad?{turn:JSON.parse(JSON.stringify(turnPad.snapshot())) as Json}:{}),part:parts?.feedback()??null,
+      ...(correction ? { correction } : {}),
+      interval: frameStart===null||frameEnd===null ? null : { frameStart, frameEnd, inclusive: true },
+      checkpoint: checkpoint?.id ?? null, animation: selectedAnimation, time:captured?.time??time, frame:feedback?captured?.frame??null:frameAtTime(activeFrameClock(),time),
+      reference: select('reference-select').value || null, person: selectedPerson || null,
+      sourceTime: sequence ? sequence.frames[0]!.t + time : time,
+      camera: center ? { zoom:viewport.state.zoom, x: center.x, y: center.y, coordinateSystem: 'world-y-up' } : { zoom:viewport.state.zoom, coordinateSystem: 'reference-fit' },
+      view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},
+      axis: axisInspection ? { id: select('axis-select').value, value: Number(input('axis-value').value) } : null,
+      environment: feedbackEnvironment(),
+      // The exported schedule (#112): the drawn clip's rigc-environment/1 bytes and their sha256, and whether readings and Apply read them.
+      environmentSchedule: feedbackSchedule() as unknown as Json,
+      // The exact last applied designation and the producer's line, only while that scratch build is what is drawn.
+      applied: appliedOnStage ? JSON.parse(JSON.stringify(appliedOnStage)) as Json : null,
+      // The readings chosen (#108): the pairs of the last finished run and the builds they ran on, not their results.
+      readings: readingsContext() as unknown as Json,
+      // The declared requirements (#113): the file by hash and content, and its last check, or null when none are declared.
+      requirements: (requirementsPanel?.context() ?? null) as unknown as Json,
+      reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
+    } });
+}
+
+
 function bind(): void {
   button('strip-export').onclick = () => { void exportStrip(); };
   button('chest-export').onclick = () => { void exportChest(); };
@@ -962,62 +1020,44 @@ function bind(): void {
   select('report-time').onchange = () => { selectedReportTime = Number(select('report-time').value); renderReportSelection(); seekReportEvent(); };
   select('report-target').onchange = () => { const value = select('report-target').value; selectedReportTarget = value ? Number(value) : undefined; prefillReportEvent(); };
   select('review-status').onchange = () => { session.status = select('review-status').value as ReviewSession['status']; markDirty(); };
-  el<HTMLTextAreaElement>('checkpoint-note').oninput = () => { const entry = checkpointEntry(); if (entry) { entry.note = el<HTMLTextAreaElement>('checkpoint-note').value; markDirty(); } };
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="outcome"]')) radio.onchange = () => { const entry = checkpointEntry(); if (entry) { entry.outcome = radio.value as typeof entry.outcome; markDirty(); renderCheckpoints(); } };
   select('feedback-target-kind').onchange = () => renderFeedbackTargets();
   button('add-proposal').onclick = async () => {
-    const start = input('feedback-start').value.trim(), end = input('feedback-end').value.trim(), frameStart = Number(start), frameEnd = Number(end);
-    const name = input('feedback-target-name').value.trim();
-    const path = select('correction-path').value, capturedApply = appliedOnStage;
-    let summary = input('feedback-summary').value.trim(), correction: ReturnType<typeof correctionSelection> | undefined;
-    if (path === 'described' || path === 'made') {
-      try {
-        correction = correctionSelection(path);
-        summary = input('feedback-summary').value;
-        const file = input('correction-words').files?.[0];
-        if (file) {
-          if (file.size > 4000) throw new Error(tr('Correction text must be valid UTF-8 and at most 1,000 characters.'));
-          summary = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer());
-        }
-        if (!summary.trim() || summary.length > 1000) throw new Error(tr('Correction text must be valid UTF-8 and at most 1,000 characters.'));
-        if (path === 'made' && (!capturedApply || capturedApply !== appliedOnStage)) throw new Error(tr('CORRECTION_APPLY_PENDING: Apply and check the correction first.'));
-      } catch (error) { message(errorText(error), true); return; }
-    }
-    if (!start || !end || !Number.isSafeInteger(frameStart) || !Number.isSafeInteger(frameEnd) || frameStart < 0 || frameEnd < frameStart) { message('Enter nonnegative integer start and end frames, with the end at or after the start.', true); return; }
-    if (!['bone', 'slot', 'rig'].includes(select('feedback-target-kind').value) || !['defect', 'quality'].includes(select('feedback-category').value)) { message('Select a target type and defect or quality category.', true); return; }
-    if (!name || !summary || (!correction && /[\r\n]/.test(summary)) || summary.length > 1000) { message('Enter the actual target name and a one-line summary of up to 1,000 characters.', true); return; }
-    const target: Feedback['target'] = { kind: select('feedback-target-kind').value as Feedback['target']['kind'], name };
-    const selectedAnimation = feedbackAnimation();
-    try { validateFeedbackSelection(data.feedbackCatalog, { frameStart, frameEnd, target, animation: selectedAnimation }); } catch (error) { message(errorText(error), true); return; }
-    const box = assets?.stage ?? player?.bounds();
-    const center = viewport.state.cameraCenter ?? (box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null);
-    session.feedback.push({ id: crypto.randomUUID(), frameStart, frameEnd, target, category: select('feedback-category').value as Feedback['category'], summary, context: {...(turnPad?{turn:JSON.parse(JSON.stringify(turnPad.snapshot())) as Json}:{}),part:parts?.feedback()??null,
-      ...(correction ? { correction } : {}),
-      interval: { frameStart, frameEnd, inclusive: true },
-      checkpoint: checkpoint?.id ?? null, animation: selectedAnimation, time, frame: frameAtTime(activeFrameClock(), time),
-      reference: select('reference-select').value || null, person: selectedPerson || null,
-      sourceTime: sequence ? sequence.frames[0]!.t + time : time,
-      camera: center ? { zoom:viewport.state.zoom, x: center.x, y: center.y, coordinateSystem: 'world-y-up' } : { zoom:viewport.state.zoom, coordinateSystem: 'reference-fit' },
-      view:{...serializableView(numericView()),theme:appearance?.get()??'system',layers:{...layers}},
-      axis: axisInspection ? { id: select('axis-select').value, value: Number(input('axis-value').value) } : null,
-      environment: feedbackEnvironment(),
-      // The exported schedule (#112): the drawn clip's rigc-environment/1 bytes and their sha256, and whether readings and Apply read them.
-      environmentSchedule: feedbackSchedule() as unknown as Json,
-      // The exact last applied designation and the producer's line, only while that scratch build is what is drawn.
-      applied: appliedOnStage ? JSON.parse(JSON.stringify(appliedOnStage)) as Json : null,
-      // The readings chosen (#108): the pairs of the last finished run and the builds they ran on, not their results.
-      readings: readingsContext() as unknown as Json,
-      // The declared requirements (#113): the file by hash and content, and its last check, or null when none are declared.
-      requirements: (requirementsPanel?.context() ?? null) as unknown as Json,
-      reportEvent: selectedReportEvent ? { id: selectedReportEvent.id, field: selectedReportEvent.field, source: { ...selectedReportEvent.source }, frames: selectedReportEvent.frames ? [...selectedReportEvent.frames] : null, exactTime: eventSeekTime(selectedReportEvent, selectedReportTime), targets: selectedReportEvent.targets.map(target => ({ ...target })) } : null,
-    } });
-    input('feedback-summary').value = ''; input('correction-words').value = ''; markDirty(); renderProposals(); message('Added structured feedback. Submit the review to save it.');
+    const path=select('correction-path').value,capturedApply=appliedOnStage;
+    try {
+      if(path!=='described'&&path!=='made')throw new Error(tr('Choose the explicit Create source identity.'));
+      const correction=correctionSelection(path),file=input('correction-words').files?.[0];
+      if(!file||file.size>4000)throw new Error(tr('Correction text must be valid UTF-8 and at most 1,000 characters.'));
+      const summary=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(await file.arrayBuffer());
+      if(!summary.trim()||summary.length>1000)throw new Error(tr('Correction text must be valid UTF-8 and at most 1,000 characters.'));
+      if(path==='made'&&(!capturedApply||capturedApply!==appliedOnStage))throw new Error(tr('CORRECTION_APPLY_PENDING: Apply and check the correction first.'));
+      recordFeedback(summary,undefined,correction);
+      input('correction-words').value='';markDirty();renderProposals();message('Added structured feedback. Submit the review to save it.');
+    }catch(error){message(errorText(error),true);}
   };
   button('save').onclick = async () => {
     if(readOnly){message(readOnly,true);return;}
     if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}
     if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; }
     saving = true; updateSavedState(); const savedPayload = JSON.stringify(session);
+    if (host) {
+      try {
+        const sent = await host.submit(structuredClone(session), async committed => {
+          submittedBaseline = {...submittedBaseline!, ...committed.review,
+            checkpoints: {...submittedBaseline!.checkpoints, ...committed.checkpoints}, updatedAt: committed.at};
+          session.updatedAt = committed.at;
+          const ids = new Set([...Object.keys(session.checkpoints), ...Object.keys(submittedBaseline.checkpoints)]);
+          dirty = session.status !== submittedBaseline.status || JSON.stringify(session.feedback) !== JSON.stringify(submittedBaseline.feedback) ||
+            [...ids].some(id => JSON.stringify(session.checkpoints[id] ?? {outcome: 'pending', note: ''}) !==
+              JSON.stringify(submittedBaseline!.checkpoints[id] ?? {outcome: 'pending', note: ''}));
+          await persistence?.submitted(submittedBaseline);
+          comments?.refresh(); renderProposals();
+        });
+        message(sent);
+      } catch (error) { message(errorText(error), true); }
+      finally { saving = false; updateSavedState(); }
+      return;
+    }
     try { const saved = await api<ReviewSession>('/api/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: savedPayload });
       if (JSON.stringify(session) === savedPayload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;
       submittedBaseline=structuredClone(saved);comments?.refresh();await persistence?.submitted(saved);renderProvenance();renderProposals();
@@ -1034,11 +1074,7 @@ function bind(): void {
     const picker=select('part-set');picker.value=name;picker.dispatchEvent(new Event('change',{bubbles:true}));
   });
   viewDisposers.push(()=>directionPanel?.dispose());
-  viewDisposers.push(bindStageNav({access,interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,direction:active=>directionPanel?.show(active),setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',refresh:fn=>{refreshStageParts=fn;},correction:openStageCorrection}));
-  workspace=bindWorkspaceUI({regions:{layout:document.querySelector<HTMLElement>('.layout')!,left:document.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:document.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
-  viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
-  appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
-  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],changed:()=>persistence?.save()});
+  bindWorkspace();
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(tr(text)),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
@@ -1088,19 +1124,29 @@ function bind(): void {
   input('idle-repeat').onchange=()=>{syncPlayerLoop();renderIdle();if(canRepeatIdle())void playPreview();};
   bindEnvironment();
   for(const id of ['proposal-panel','checkpoint-detail'])el(id).addEventListener('focusin',pause);
-  bindInspector();bindReviewDialog();
+  bindInspector();
   document.addEventListener('visibilitychange',()=>{if(document.hidden){const resume=playing;pause();suspendedPreview=resume;}else if(suspendedPreview){suspendedPreview=false;void playPreview();}});
   const resize = viewport.observeResize();
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
   window.addEventListener('pagehide', () => { comments?.dispose();persistence?.dispose();turnPad?.dispose();inspectorTabs?.dispose();workspace?.dispose();pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
 }
 
+/** The one shell and block binding, for either subject. */
+function bindWorkspace():void {
+  workspace=bindWorkspaceUI({regions:{layout:document.querySelector<HTMLElement>('.layout')!,left:document.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:document.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
+  viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
+  appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
+  bindReviewDialog();
+  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
+}
 async function start(): Promise<void> {
   try {
     let writes: { capabilityRequired: boolean; control?: boolean };
-    [data, session, writes] = await Promise.all([api<ReviewResponse>('/api/review'), api<ReviewSession>('/api/session'), api<{ capabilityRequired: boolean; control?: boolean }>('/api/access')]);
+    const [opened,saved,accessState]=await Promise.all([api<ReviewResponse|PartsSubjectEntry>('/api/review'),api<ReviewSession|PartsSubjectSession>('/api/session'),api<{capabilityRequired:boolean;control?:boolean}>('/api/access')]);
+    if('subject' in opened&&opened.subject==='parts'){await startParts(opened,saved as PartsSubjectSession,accessState);return;}
+    data=opened as ReviewResponse;session=saved as ReviewSession;writes=accessState;
     readOnly = readOnlyReason(access, writes.capabilityRequired);
-    if(data.capabilities.preRig){button('workspace-tab-feedback').hidden=true;rigInspector.act.hidden=true;rigInspector.row.tabs=rigInspector.row.tabs.filter(tab=>tab.id!=='feedback');rigInspector.row.panels=rigInspector.row.panels.filter(panel=>panel.id!=='inspector-feedback');}
+    if(data.capabilities.preRig){rigInspector.comments.button.disabled=true;rigInspector.act.hidden=true;}
     submittedBaseline=structuredClone(session);
     text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));
@@ -1112,6 +1158,8 @@ async function start(): Promise<void> {
     populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{const part=parts?.value();if(!stageCorrectionRebinding&&(previous?.side!==part?.side||previous?.slot!==part?.slot||previous?.mode!==part?.mode))stageDraftRequestToken++;if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){player.seek(time);drawRig(()=>player!.draw());}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
+    // A job rig subject lands in Animate before the model finishes loading (#709).
+    if(host)showInspector('playback');
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
     await initPlayer(first);
     // initPlayer keeps `player` only after its first draw succeeded; a declared model path alone never counts.
@@ -1123,23 +1171,100 @@ async function start(): Promise<void> {
     else if (readOnly) message(readOnly, true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
-    const restored=await setupPersistence();setupComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(!restored&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();setupComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
     bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause});
-  } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
+    if(host){host.attach({pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message});showInspector('playback');host.displayed();}
+  } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
+}
+/** Parts have a verdict and image-space pixels, never fabricated model/session fields. */
+async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,writes:{capabilityRequired:boolean}):Promise<void>{
+ const subject=opened.parts,issues=saved.issues,submittedIssues=new Set(host? saved.issues.map(issue=>issue.id):[]);
+ if(!partsOnly)throw new Error('PARTS_SUBJECT_ENTRY_REQUIRED');
+ readOnly=readOnlyReason(access,writes.capabilityRequired);
+ text('package-title',subject.title);text('revision','Parts package, before rigging');text('source-hash',`source ${subject.sourceHash.slice(0,12)}`);document.title=subject.title;
+ bindWorkspace();bindInspector(true);
+ const base=host?'/api/stage-parts':'/api/parts';
+ const request=async(path:string,init?:RequestInit)=>{
+  const response=await fetch(access.route(path),{...init,headers:access.headers(init?.headers)});
+  if(!response.ok){const body=await response.json();throw new Error(typeof body.error==='string'?body.error:body.error?.code??'PARTS_PAINT_FAILED');}return response;
+ };
+ const changed=()=>{dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});setSourceText(rigInspector.comments.button,`Comments (${issues.length})`);};
+ // A parts verdict is saved only over a drawn subject: until the first paint, or after a failed one, Save stays off.
+ const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded';
+ text('rig-empty','Loading package…');
+ partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),issues,request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,changed,selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
+ parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>openReview());
+ const thumbnails=new PartThumbnails();viewDisposers.push(()=>thumbnails.dispose());
+ parts.registerImages({thumbnail:(icon,item,glyph)=>thumbnails.showOriginal(icon,item,()=>partsSubject!.image(item.index),glyph),items:subject.items,selected:partsSubject.selected,solo:partsSubject.solo,visible:partsSubject.visible,select:partsSubject.select,isolate:partsSubject.isolate,show:partsSubject.show});
+ const unavailable='PARTS_RIG_UNAVAILABLE: this parts subject has no compiled rig.';
+ for(const node of el('proposal-panel').children)if(node.id!=='comments-list-host')(node as HTMLElement).hidden=true;
+ for(const control of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('#checkpoint-detail input,#proposal-panel input,#proposal-panel select,#proposal-panel button,#strip-panel input,#strip-panel select,#strip-panel button'))if(!control.closest('#comments-list-host')){control.disabled=true;setSourceAttribute(control,'title',unavailable);if(control instanceof HTMLInputElement&&control.name==='outcome')control.checked=false;}
+ text('detail-note',unavailable);text('checkpoint-note','');el('strip-panel').hidden=true;
+ text('provenance-version','Parts package, before rigging');text('provenance-rig','Not supplied');text('provenance-motion','Not supplied');
+ text('provenance-full',JSON.stringify({subject:'parts',sourceHash:subject.sourceHash,painting:subject.painting,images:subject.items.map(({name,imageHash})=>({name,imageHash}))},null,2));
+ text('source-files',`source ${subject.sourceHash}`);const provenanceHint=document.querySelector<HTMLElement>('.provenance>.hint');if(provenanceHint)setSourceText(provenanceHint,'Source files remain unchanged.');
+ for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-block-target]'))if(!['selected-part','feedback'].includes(tab.dataset.blockTarget??'')){tab.disabled=true;setSourceAttribute(tab,'title',unavailable);}
+ for(const tool of document.querySelectorAll<HTMLButtonElement>('[data-workspace-view-tools] button')){tool.hidden=false;tool.disabled=true;setSourceAttribute(tool,'title',unavailable);}
+ input('layer-images').disabled=false;input('layer-mesh').disabled=!subject.items.some(item=>item.mesh);input('layer-bones').disabled=true;
+ describeLayerToggles(document,unavailable);
+ for(const [id,key]of [['layer-images','images'],['layer-mesh','mesh']]as const)input(id).onchange=()=>{layers[key]=input(id).checked;partsSubject?.redraw();};
+ const overlay=panelMake('input',{id:'parts-overlay',type:'checkbox',disabled:!subject.painting}),opacity=panelMake('input',{id:'parts-opacity',type:'range',min:'0',max:'1',step:'0.001',value:'0.5',disabled:!subject.painting});
+ const overlayLabel=panelMake('label',{},overlay,tr('Overlay')),opacityLabel=panelMake('label',{},tr('Part opacity'),opacity);
+ if(!subject.painting)for(const node of [overlayLabel,opacityLabel])setSourceAttribute(node,'title','PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');
+ secondaryToolbar.append(overlayLabel,opacityLabel);
+ overlay.onchange=()=>{partsSubject?.setComparison(overlay.checked?'overlay':'part');if(overlay.checked){view='rig';renderLayout();}};
+ opacity.oninput=()=>partsSubject?.opacity(Number(opacity.value));
+ controls.setDisabled('difference',subject.differenceAvailable&&subject.painting?null:tr('PARTS_DIFFERENCE_UNAVAILABLE: missing painting_in_rig declaration or painting_in_rig.json sidecar and its bound operand.'));
+ const reference=select('reference-select');reference.replaceChildren(option('',subject.painting?'Original painting':'No references supplied'));reference.disabled=true;
+ el('package-context').removeAttribute('open');el('reference-empty').hidden=!!subject.painting;el('rig-overlay').hidden=true;
+ const state=rigInspector.actBar;state.setSaveState({kind:readOnly?'read-only':'unsaved',text:readOnly??'Not submitted'});
+ select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
+ button('save').disabled=saveBlocked();
+ button('save').onclick=async()=>{
+  if(saving||saveBlocked())return;saving=true;button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});
+  const frozen=structuredClone(issues);
+  try{
+   if(host?.submitParts)message(await host.submitParts(frozen));
+   else await request(base+'/verdict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:frozen.length?'changes-requested':'approved',issues:frozen})});
+   if(host)for(const issue of frozen)submittedIssues.add(issue.id);
+   dirty=JSON.stringify(issues)!==JSON.stringify(frozen);state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
+  }catch(error){message(errorText(error),true);state.setSaveState({kind:'failed',text:'Save failed.'});}
+  finally{saving=false;button('save').disabled=saveBlocked();}
+ };
+ viewDisposers.push(viewport.bindControls(),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
+ const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
+ viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message('Parts ready. Source files remain unchanged.');referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
+ renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
+ if(host){host.attach({stage:()=>null,redraw:()=>partsSubject?.redraw(),message,pendingSubjects:renderPendingSubjects});host.displayed();}
+ window.addEventListener('pagehide',()=>{partsSubject?.dispose();inspectorTabs?.dispose();workspace?.dispose();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());});
+ document.body.dataset.ready='true';
+}
+/** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
+function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {
+ const requests:Record<string,string>={'parts-verdict':'Check the parts and meshes.','interview-picks':'Answer these questions.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.','review-verdict:image-review':'Check these images.','checkpoint':'Review this checkpoint.','signoff':'Approve this stage.','reopen':'Review the reopened stage.'};
+ const labels=subjects.map(subject=>requests[subject.kind+':'+subject.stage]??requests[subject.kind]).filter((label):label is string=>!!label);
+ rigAsk.hidden=!labels.length;setSourceText(rigAsk,labels.join(' · '));setSourceAttribute(rigAsk,'title',labels.join(' · '));
+}
+/** The rig pane for a live job's still (#709): the job binds and copies it, this screen keeps its view. */
+function hostStage():RigHostStage|null {
+ if(!player)return null;const frame=parts?.frame('single');
+ return {pane:el('rig-viewport'),paneHidden:el('rig-pane').hidden,root:el('rig-root'),player,frameGeneration:frame?.generation,camera:numericView().cameras.rig,frame:paneFrame('rig'),
+  wholeRig:!parts?.value()&&player.slots===null&&layers.images,playing,posed:frame,assets};
 }
 /** Old feedback bookmarks keep their inspection mode; only an explicit reveal opens the act. */
 function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)inspectorTabs?.select(name);else inspectorTabs?.restore(name);}
-function bindInspector():void {
+function bindInspector(partsSubject=false):void {
  inspectorTabs?.dispose();
- rigInspector.row.reveal=id=>{if(id==='feedback'){document.querySelector<HTMLButtonElement>('[data-review-stage="3"]')?.click();pause();syncCorrectionStage();}workspace?.revealInspector();};
- inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode==='feedback'){pause();syncCorrectionStage();}if(mode==='rig'||mode==='playback')for(const button of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))button.setAttribute('aria-pressed',String(button.dataset.mode===mode));workspace?.afterTab();fitCamera();},()=>workspace?.beforeTab(),rigInspector.row);
+ rigInspector.row.reveal=()=>workspace?.revealInspector();
+ inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode)inspectorBlocks?.activate(mode);workspace?.afterTab();fitCamera();},()=>workspace?.beforeTab(),rigInspector.row);
+ viewDisposers.push(bindHeaderModeAvailability(partsSubject?{model:false,parts:true}:{model:!!data.manifest.model,preRig:data.capabilities.preRig}));
  for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
-function openReview():void {inspectorTabs?.select('feedback');}
-function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');button('native-one').onclick=()=>cameraAction(()=>{const target=availableCamera();unitScaleCamera(target);message(target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');});}
+function openReview():void {pause();if(!partsOnly)syncCorrectionStage();inspectorBlocks?.select(selectedInspector()??'rig','feedback');workspace?.revealInspector();}
+function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');button('native-one').onclick=()=>cameraAction(()=>{const target=availableCamera();unitScaleCamera(target);message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');});}
 
 /** Rig world → rig-pane pixels for the current camera. */
 function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*viewport.state.rigScale,y:parseFloat(root.style.top||'0')-y*viewport.state.rigScale});}
@@ -1170,7 +1295,7 @@ async function playPreview():Promise<void> {
  if(video&&referenceInput.state==='loaded'){try{await video.play();}catch(error){pause();message(`Playback is paused: ${errorText(error)}. Use Play to retry.`,true);return;}}
  if(intent!==playbackIntent||!desiredPlay){if(!desiredPlay)video?.pause();return;}playing=true;lastFrame=0;player?.hold(false);player?.resume();button('play').textContent='Ⅱ';button('play').setAttribute('aria-label','Pause');
 }
-function localDraft():boolean{return !!comments?.draft()||dirty||!!input('feedback-summary').value.trim()||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
+function localDraft():boolean{return !!comments?.draft()||dirty||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
 function controlState():ControlInspection {
  const box=assets?.stage??player?.bounds(),center=viewport.paneFrame('rig')?.center??(box?{x:box.x+box.width/2,y:box.y+box.height/2}:null);
  return {part:parts?.value()??null,partGeneration:parts?.observation()?.generation??null,view:numericView(),theme:appearance?.get()??'system',layout:'auto',effectiveLayout:el('stage-layout').dataset.orientation==='vertical'?'column':'row',cameras:{rig:{zoom:player?viewport.state.zoom:1,pan:{x:center&&viewport.state.cameraCenter?(center.x-viewport.state.cameraCenter.x)*viewport.state.rigScale:0,y:center&&viewport.state.cameraCenter?(viewport.state.cameraCenter.y-center.y)*viewport.state.rigScale:0}},reference:{zoom:referenceSize?viewport.state.referenceZoom:1,pan:{x:referenceSize&&viewport.state.referenceCenter?(referenceSize.width/2-viewport.state.referenceCenter.x)*viewport.state.referenceScale:0,y:referenceSize&&viewport.state.referenceCenter?(referenceSize.height/2-viewport.state.referenceCenter.y)*viewport.state.referenceScale:0}}},animation:animation||null,time,playing,loop:canRepeatIdle()?'idle':'off',layers:{images:!!player&&layers.images,meshes:!!player&&layers.mesh,bones:!!player&&layers.bones},ready:!!data,seeking:seekingControl||!!video?.seeking||!!persistence?.restoring(),dirty:localDraft(),busy:saving||stripBusy||!!persistence?.restoring(),feedbackEligible:!persistence?.restoring(),comparison:controlComparison(layoutEligibility()),capabilities:{camera:!!player,referenceCamera:!!referenceSize,animation:!!player,time:duration>0,playback:duration>0,layers:{images:!!player,meshes:!!player,bones:!!player}}};
@@ -1237,8 +1362,8 @@ function numericView():ControlView {return viewport.numericView();}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data.sourceHash,rigs:[data.reviewedSource.rig?.sha256??null]};}
 // Persist the displayed inspection clock; the runtime clock accumulates across idle loops for physics.
 function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode??selectedInspector()??'rig',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
-async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false):Promise<void> {
- await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal,preserveSeconds),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
+async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false,keepCamera=true):Promise<void> {
+ await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal,preserveSeconds,keepCamera),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
 }
 /** Read the SELECTED reference without replacing the currently inspected DOM/player. */
 async function inspectionReferenceInfo(id:string|null,signal:AbortSignal):Promise<{width:number;height:number;duration:number|null;people:string[]}> {
@@ -1272,7 +1397,7 @@ async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal)
  // Range fitting belongs to the transactional apply after that layout is measured.
  if(signal.aborted)throw new Error('Inspection restore superseded');
 }
-async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false):Promise<void> {
+async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false,keepCamera=true):Promise<void> {
  viewport.state.cameraRestoring=true;try{
  const selection=bookmark.selection;
  if(turnPad){if(selection.turn)turnPad.restore(selection.turn);else{turnPad.state.reset();turnPad.restore(turnPad.snapshot());}}
@@ -1295,16 +1420,22 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,pr
  const camera=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference,rigViewport=el('rig-viewport'),referenceViewport=el('reference-viewport');
  const nextZoom=camera&&player&&rigViewport.clientWidth&&rigViewport.clientHeight?restoredZoom(camera,viewport.state.rigScale/viewport.state.zoom,rigViewport.clientWidth,rigViewport.clientHeight):camera?.zoom??null;
  const nextReferenceZoom=ref&&referenceSize&&referenceViewport.clientWidth&&referenceViewport.clientHeight?restoredZoom(ref,viewport.state.referenceScale/viewport.state.referenceZoom,referenceViewport.clientWidth,referenceViewport.clientHeight):ref?.zoom??null;
+ // A job rig subject opens at Fit (#709): the bookmark camera was saved at another window size, so opening requests the Fit instead.
+ if(keepCamera){viewport.cancelFit();
  if(nextZoom!==null&&camera){viewport.state.zoom=nextZoom;viewport.state.cameraCenter={...camera.center};}
- if(nextReferenceZoom!==null&&ref){viewport.state.referenceZoom=nextReferenceZoom;viewport.state.referenceCenter={...ref.center};}
+ if(nextReferenceZoom!==null&&ref){viewport.state.referenceZoom=nextReferenceZoom;viewport.state.referenceCenter={...ref.center};}}
  viewport.state.cameraSync=bookmark.view.cameraSync??false;viewport.state.activeCamera=bookmark.view.activeCamera==='reference'?'reference':'rig';
  if(player)drawRig(()=>player!.draw());if(selection.part)parts?.assertIdentity(selection.part);fitCamera();redrawOverlay(false);pause();renderTransport();renderCameraControls();
  }finally{viewport.state.cameraRestoring=false;}
+ if(!keepCamera){viewport.requestFit();fitCamera();}
 }
 async function waitReferenceMetadata(media:HTMLVideoElement,signal:AbortSignal):Promise<void> {if(media.readyState>=1)return;await new Promise<void>((resolve,reject)=>{const clean=()=>{clearTimeout(timer);media.removeEventListener('loadedmetadata',ready);media.removeEventListener('error',fail);signal.removeEventListener('abort',fail);};const ready=()=>{clean();resolve();},fail=()=>{clean();reject(new Error('Saved reference metadata unavailable'));};const timer=setTimeout(fail,10000);media.addEventListener('loadedmetadata',ready,{once:true});media.addEventListener('error',fail,{once:true});signal.addEventListener('abort',fail,{once:true});});}
+let inspectionOpening=false;
 async function setupPersistence():Promise<boolean> {
- persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();renderProvenance();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b))),
+ inspectionOpening=true;try{
+ persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();renderProvenance();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b)),bookmarkCameraKept(inspectionOpening,!!host)),
  ui:()=>({inspectorScroll:workspace?.scroll()??'{}',...(inspectorBlocks?activeBlocksUI(inspectorBlocks.state()):{}),reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();inspectorBlocks?.restore(restoreActiveBlocksUI(value));workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{const target=input('feedback-target-name').value;renderFeedbackTargets(true);if(select('feedback-target-kind').value!=='rig')input('feedback-target-name').value=target;renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{draftStatus=value;renderDraftState();}});
+ }finally{inspectionOpening=false;}
  return persistence.restored;
 }
 /** Setup's Chest regions tool: designation values, an overlay and a two-file client download. Nothing reaches the session's feedback or the package. */
@@ -2500,14 +2631,14 @@ function commentCaptureRefusal():string|null {
  return preview?`COMMENT_UNAPPLIED_PREVIEW: ${preview} is active; leave or disable that preview before commenting (nothing is cleared or applied automatically)`:null;
 }
 function setupComments():void {
- comments=bindStageComments({toolbar:el('stage-comment').parentElement!,viewports:{rig:el('rig-viewport'),reference:el('reference-viewport')},
+ comments=bindStageComments({listHost:el('comments-list-host'),toolbar:el('stage-comment').parentElement!,viewports:{rig:el('rig-viewport'),reference:el('reference-viewport')},
   pose:view=>{
    if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;
    const renderer=player?.renderer;const current=time,index=frameAtTime(activeFrameClock(),current),referenceId=view==='reference'?select('reference-select').value||null:null,referenceHash=referenceId?data.referenceHashes?.[referenceId]??(data.explicitReference?.id===referenceId?data.explicitReference.sha256:null):null;
    return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;
   },
   pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:inspectionBookmark,restore:(b,timed)=>restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal,!!timed),feedback:()=>session.feedback,
-  locked:id=>!!submittedBaseline?.updatedAt&&submittedBaseline.feedback.some(f=>f.id===id),add:f=>session.feedback.push(f),changed:()=>{markDirty();renderProposals();persistence?.save();},error:value=>message(value,true),
+  locked:isSubmittedFeedback,add:f=>session.feedback.push(f),changed:()=>{markDirty();renderProposals();persistence?.save();},error:value=>message(value,true),
   refusal:commentCaptureRefusal,blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
  });
 }

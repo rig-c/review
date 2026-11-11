@@ -174,7 +174,6 @@ The stage buttons navigate within that source binding.
    standalone inspection and named limits on direct correction.
 2. **Interview.** In the joined draft workspace choose **2 Interview**. For
    choices bound to a recorded rig, open its package with the Stage 3 command.
-   The standalone entry is `rig-review interview <project> --picks-dir <picks-dir>`.
    Beside the bound parts or source image, the person chooses among the saved
    options with the agent's recommendation and rationale, then uses
    **Save explicit picks**. Read the `rig-review/interview-picks@1` file for the

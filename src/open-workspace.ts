@@ -7,7 +7,7 @@ import {createCompareRequestContext} from './compare-server.ts';
 import {createLiveLifecycle, type UpgradableServer} from './live-lifecycle.ts';
 import {prepareOpenTarget} from './open.ts';
 import {sameSecret} from './open-protocol.ts';
-import {boundedBody, frontRoute, maximumUpstreamStreams, stageFrameQuery} from './front.ts';
+import {boundedBody, frontRoute, maximumUpstreamStreams} from './front.ts';
 import {assertCompareUnchanged} from './compare.ts';
 import {assertReviewUnchanged} from './reference.ts';
 import {parseDesignation, parseRegistry, readPrivate, targetCapability, workspaceDirectory, workspaceError, writePrivate} from './open-workspace-state.ts';
@@ -212,8 +212,7 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
     const agentControl = path === '/api/control' || path === '/api/control/commands' || /^\/api\/control\/receipts\/[a-f0-9-]+$/.test(path);
     if (!frontRoute(target.view.mode, request.method, path) && !(agentControl && target.stored.controlToken)) return refused('WORKSPACE_ROUTE_REFUSED', 404);
     const landing = path === '/' || path === '/index.html';
-    const stageFrame = path === '/stage-parts.html' || path === '/stage-interview.html';
-    if (stageFrame ? !stageFrameQuery(target.view.mode, url.search) : !landing && !!url.search) return refused('FRONT_QUERY_REFUSED', 400);
+    if (!landing && !!url.search) return refused('FRONT_QUERY_REFUSED', 400);
     if (request.method !== 'GET' && request.method !== 'HEAD' && sentOrigin !== record.origin) return refused('WORKSPACE_SAME_ORIGIN_REQUIRED', 403);
     if (path === '/api/live' && live.connections >= WORKSPACE_SOCKET_LIMIT) return refused('WORKSPACE_BUSY', 503);
     if (activeStreams >= maximumUpstreamStreams) return refused('WORKSPACE_BUSY', 503);

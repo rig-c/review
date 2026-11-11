@@ -10,7 +10,7 @@ import {singleCameraWiring} from './helpers/viewport-387-wiring.ts';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature} from '../web/camera-view.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import {test,expect} from 'bun:test';
-import {labelledControl,actionButton,stageOrientation,syncStageLayout,panCenter,idleAvailable,initialIdleAnimation,themePreference,automaticIdlePreview} from '../web/view-controls.ts';
+import {labelledControl,actionButton,stageOrientation,syncStageLayout,panCenter,idleAvailable,initialIdleAnimation,themePreference,automaticIdlePreview,idlePreviewOnOpen,bookmarkCameraKept} from '../web/view-controls.ts';
 test('orientation follows available center rectangle, with stable square tie',()=>{expect(stageOrientation(900,600)).toBe('horizontal');expect(stageOrientation(600,900)).toBe('vertical');expect(stageOrientation(600,600)).toBe('horizontal');});
 test('pan preserves coordinate signs and scales independently of pose time',()=>{expect(panCenter({x:10,y:20},40,20,2,'world')).toEqual({x:-10,y:30});expect(panCenter({x:10,y:20},40,20,2,'image')).toEqual({x:-10,y:10});expect(panCenter({x:10,y:20},40,20,4,'world')).toEqual({x:0,y:25});expect(()=>panCenter({x:0,y:0},1,1,0,'world')).toThrow('positive scale');});
 test('only actual exact idle can preview; explicit inspection wins startup',()=>{expect(idleAvailable(['idle','walk'],'walk')).toBe(false);expect(idleAvailable(['idle_variant'],'idle')).toBe(false);expect(idleAvailable(['idle'],'idle')).toBe(true);expect(initialIdleAnimation(['walk','idle'],'walk',false)).toBe('idle');expect(initialIdleAnimation(['walk','idle'],'walk',true)).toBe('walk');expect(initialIdleAnimation(['walk'],'walk',false)).toBe('walk');expect(initialIdleAnimation([],null,false)).toBe(null);});
@@ -669,10 +669,10 @@ test('#671 common group composition retains each finite host tag, class, child o
  }
  Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Element(tag)}});
  try{
-  for(const layout of ['legacyPartsStep2','rigStep1','legacyCompareStep3'] as const){
+  for(const layout of ['rigStep1','legacyCompareStep3'] as const){
    const controls=layout==='rigStep1'?createRigViewControls():createViewControls({layout}),group=controls.zoomGroup as unknown as Element;
-   const expected=layout==='legacyPartsStep2'?['zoom-out','zoom-value','zoom-in','fit','native-one']:layout==='rigStep1'?['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']:['camera-sync','zoom-out','zoom-label','zoom-in','fit'];
-   expect(group.tagName).toBe(layout==='legacyPartsStep2'?'span':'div');expect(group.className).toBe(layout==='legacyPartsStep2'?'pv-group':layout==='rigStep1'?'zoom-controls':'row');
+   const expected=layout==='rigStep1'?['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']:['camera-sync','zoom-out','zoom-label','zoom-in','fit'];
+   expect(group.tagName).toBe('div');expect(group.className).toBe(layout==='rigStep1'?'zoom-controls':'row');
    expect(group.children.map(node=>node.id||(node===controls.syncLabel?'camera-sync':null))).toEqual(expected);
    expect(group.children).toContain(controls.value);for(const button of controls.zoomButtons)expect(group.children).toContain(button);
    if(layout==='legacyCompareStep3'){expect(group.children[0]).toBe(controls.syncLabel);expect(controls.nativeOne).toBeNull();expect(controls.viewSwitch).toBeNull();}
@@ -680,4 +680,28 @@ test('#671 common group composition retains each finite host tag, class, child o
   }
   const controls=createViewControls({layout:'legacyCompiledJobStep5',inputLabel:(_key,input)=>input});expect(controls.zoomGroup).toBeNull();expect(controls.zoomButtons.map(button=>button.id)).toEqual(['zoom-in','zoom-out','fit']);
  }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
+});
+
+test('#709 a job rig subject keeps idle looping after a restored inspection; the standalone review keeps the restored frame paused', async () => {
+  expect(idlePreviewOnOpen(false, false)).toBe(true);
+  expect(idlePreviewOnOpen(true, false)).toBe(false);
+  expect(idlePreviewOnOpen(false, true)).toBe(true);
+  expect(idlePreviewOnOpen(true, true)).toBe(true);
+  // The open path in main.ts gates the automatic idle preview on this decision, with the job host as `hosted`.
+  const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
+  expect(main.match(/if\(idlePreviewOnOpen\(restored,!!host\)&&canRepeatIdle\(\)&&automaticIdlePreview\(/g)?.length).toBe(1);
+  expect(main).not.toContain('if(!restored&&canRepeatIdle()');
+});
+
+test('#709 a job rig subject opens at Fit over a restored bookmark camera; the standalone review and later view links keep it', async () => {
+  expect(bookmarkCameraKept(true, false)).toBe(true);
+  expect(bookmarkCameraKept(false, false)).toBe(true);
+  expect(bookmarkCameraKept(false, true)).toBe(true);
+  expect(bookmarkCameraKept(true, true)).toBe(false);
+  const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
+  // The open-time restore passes the decision, the camera writes sit behind it, and a dropped camera requests the Fit after restoring.
+  expect(main.match(/bookmarkCameraKept\(inspectionOpening,!!host\)/g)?.length).toBe(1);
+  expect(main).toContain('if(keepCamera){viewport.cancelFit();');
+  expect(main).toContain('}finally{viewport.state.cameraRestoring=false;}\n if(!keepCamera){viewport.requestFit();fitCamera();}');
+  expect(main).toContain('inspectionOpening=true;try{');
 });

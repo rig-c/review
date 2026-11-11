@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import {partsIssueComments} from '../src/feedback-export.ts';
 import {prepareJobInspection, resolveJobPanels, jobPartsReviewState, jobPartsPainting, type JobInspectionMetadataV3, createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
 import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type UISubmissionV3, type ActV3, type JobPartsVerdictAct, type RecordAct } from '../src/job-contract.ts';
 import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRecordSource, recordInstanceKey } from '../src/job-api.ts';
@@ -25,8 +26,11 @@ test('C4 job browser runtime graph excludes the server manifest and Node imports
     const entry = new URL('../web/job-session.ts', import.meta.url);
     const manifest = new URL('../src/manifest.ts', import.meta.url).href;
     const transpiler = new Bun.Transpiler({loader: 'ts', target: 'browser'});
-    async function runtimeGraph(extraEntryImport = '') {
-        const pending = [entry];
+    // The rig composition (web/main.ts) is the one review screen; job-session.ts loads it lazily for rig
+    // publications (#709). It is walked as its own graph below, so the job-only graph stays node-free.
+    const rigComposition = new URL('../web/main.ts', import.meta.url).href;
+    async function runtimeGraph(extraEntryImport = '', start = entry, skip = rigComposition) {
+        const pending = [start];
         const files = new Set<string>();
         const imports = new Set<string>();
         while (pending.length) {
@@ -35,8 +39,9 @@ test('C4 job browser runtime graph excludes the server manifest and Node imports
             files.add(file.href);
             if (!file.pathname.endsWith('.ts') && !file.pathname.endsWith('.js')) continue;
             const source = await Bun.file(file).text();
-            const javascript = transpiler.transformSync(source + (file.href === entry.href ? extraEntryImport : ''));
+            const javascript = transpiler.transformSync(source + (file.href === start.href ? extraEntryImport : ''));
             for (const dependency of transpiler.scan(javascript).imports) {
+                if (dependency.path.startsWith('.') && new URL(dependency.path, file).href === skip) continue;
                 imports.add(dependency.path);
                 if (dependency.path.startsWith('.')) pending.push(new URL(dependency.path, file));
             }
@@ -49,7 +54,8 @@ test('C4 job browser runtime graph excludes the server manifest and Node imports
     }
     const graph = await runtimeGraph();
     expect(graph.files.has(new URL('../src/job-contract.ts', import.meta.url).href)).toBe(true);
-    expect(graph.files.has(new URL('../web/parts.ts', import.meta.url).href)).toBe(true);
+    expect(graph.files.has(new URL('../web/parts-viewport-provider.ts', import.meta.url).href)).toBe(false);
+    expect(graph.files.has(new URL('../web/parts.ts', import.meta.url).href)).toBe(false);
     const contractSource = await Bun.file(new URL('../src/job-contract.ts', import.meta.url)).text();
     expect(transpiler.scan(transpiler.transformSync(contractSource)).imports).toEqual([]);
     assertBrowserBoundary(graph);
@@ -57,6 +63,12 @@ test('C4 job browser runtime graph excludes the server manifest and Node imports
     expect(mutant.files.has(manifest)).toBe(true);
     expect([...mutant.imports]).toContain('node:fs/promises');
     expect(() => assertBrowserBoundary(mutant)).toThrow();
+    expect(await Bun.file(entry).text()).toContain("import('./main.ts')");
+    const rig = await runtimeGraph('', new URL(rigComposition), '');
+    expect(rig.files.has(manifest)).toBe(false);
+    expect(rig.files.has(new URL('../web/parts-viewport-provider.ts', import.meta.url).href)).toBe(true);
+    // Pinned: the standalone rig screen's existing value imports (config-patch, producer, retarget). A new one fails.
+    expect([...rig.imports].filter(path => path.startsWith('node:')).sort()).toEqual(['node:crypto', 'node:fs', 'node:path']);
 });
 
 test('window refusals retain registered codes and bound arbitrary runtime prose', () => {
@@ -865,7 +877,8 @@ describe('the real standing owner host', () => {
             expectedGeneration: f.host.session.status().generation, submissionId: 'real-save', kind: 'checkpoint',
             value: {checkpointId: 'step-one', outcome: 'pass', words: ''}})).json();
         expect(saved.ok).toBe(true);
-        expect(saved.value.value).toEqual({checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass', words: ''});
+        expect(saved.value.schema).toBe('rig-review/act@6');
+        expect(saved.value.value).toEqual({checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass', comments: []});
         expect(saved.value.authority.reviewer).toEqual({id: 'declared-owner', role: 'owner'});
         expect(saved.value.source).toEqual(publication.source);
         expect(await jobInputHashes(f.input.root)).toEqual(original);
@@ -1372,7 +1385,8 @@ import {createViewportController, createViewportState} from '../web/viewport-con
 import {createRigViewportProvider} from '../web/rig-viewport-provider.ts';
 import {mountViewportPair} from '../web/viewport-pair.ts';
 import * as i18nModule from '../web/i18n.ts';
-import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, jobRigPixelPlacement} from '../web/job-rig-capture.ts';
+import {recordJobRigDraw, jobRigDrawState} from '../web/job-rig-capture.ts';
+import {isJobRigScreen} from '../web/job-rig-screen.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {JOB_HUB_READY} from '../web/job-hub.ts';
@@ -1386,7 +1400,7 @@ import {mountWorkspaceShell} from '../web/workspace-ui.ts';
 import {SENTINELS} from '../web/parts-render.ts';
 import {JOB_PLAN_TEXT_FIELDS, type JobPlanTextProjection} from '../src/job-contract.ts';
 
-describe('#559 continuous Rig motion transport and mid-play verdict capture', () => {
+describe('#559 continuous Rig motion transport and job forms', () => {
     class RuntimeDomNode {
         id = '';
         className = '';
@@ -2022,7 +2036,9 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 partImages: new Map(),
                 partPages: new Map(),
                 interviewImages: new Map(),
-                imageSetImages: [],
+                imageSetImages: display.publication.source.subject === 'image-set'
+                    ? display.publication.source.imageSet.images.map(() => Object.assign(new RuntimeDomNode('img'),
+                        {complete: true, naturalWidth: 64, naturalHeight: 64}) as unknown as HTMLImageElement) : [],
                 ...(options?.evidence ? {checkpointEvidence: [{packet: options.evidence.packet, table: options.evidence.table,
                     images: options.evidence.packet.tiles.map(() => new RuntimeDomNode('img') as unknown as HTMLImageElement)}]} : {}),
                 references,
@@ -2089,6 +2105,13 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             if (ask.source.sourceHash !== display.publication.source.sourceHash) throw new Error('JOB_ACT_SOURCE_STALE');
         };
         const startEvents = () => ({displayed() {}, visibility() {}, done: Promise.resolve()});
+        // Force the job route so even a missed shared-screen dispatch cannot resurrect a rig verdict form.
+        const oldWindowRigScreen = () => ({mounted: () => false, prepare: async () => null});
+        const presentJobRigStage = (stage: {pane: RuntimeDomNode}) => {
+            const presentation = presentJobRigViewport();
+            stage.pane.append(presentation.canvas as unknown as RuntimeDomNode);
+            return presentation;
+        };
 
         const runner = new Function(
             'host', 'access', 'hubIncarnation', 'hubVisible', 'events', 'pageId', 'transport', 'abort',
@@ -2096,8 +2119,9 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             'RigOverlays', 'labelledControl', 'createViewControls', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'createRigLayerControls', 'SENTINELS',
             'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal', 'jobPartsReviewState',
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
-            'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
+            'recordJobRigDraw',
             'presentJobRigViewport', 'CanvasRenderer', 'enCatalog', 'koCatalog', 'JOB_HUB_READY', 'jobHubMessageMatches', 'advancePlayback', 'JOB_PLAN_TEXT_FIELDS',
+            'jobRigDrawState', 'presentJobRigStage', 'createJobRigScreen', 'isJobRigScreen',
             transpiled,
         );
         const mounted = runner(
@@ -2106,8 +2130,9 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             RigOverlays, labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls, SENTINELS,
             createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal, jobPartsReviewState,
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
-            recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
+            recordJobRigDraw,
             presentJobRigViewport, CanvasRenderer, enCatalog, koCatalog, JOB_HUB_READY, jobHubMessageMatches, advancePlayback, JOB_PLAN_TEXT_FIELDS,
+            jobRigDrawState, presentJobRigStage, oldWindowRigScreen, isJobRigScreen,
         ) as {window: ReturnType<typeof createJobWindow>; workspace: RuntimeDomNode; stop: () => void};
 
         async function drainPreparing() {
@@ -2198,13 +2223,92 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         };
     }
 
+    test('#709 production rig verdict has no fallback form for late or mixed unsupported asks in EN and KO', async () => {
+        const preference = i18nModule.getLanguagePreference();
+        for (const language of ['en', 'ko'] as const) {
+            const s = await mountRuntimeSession();
+            try {
+                i18nModule.setLanguagePreference(language);
+                const display = await s.publishRig(1);
+                const verdict: PendingAskV3 = {askId: 'rig-only', publicationId: display.publication.publicationId,
+                    source: display.publication.source, subject: {kind: 'review-verdict', stage: 'rig-review'}, status: 'pending'};
+                s.fixture.pending(verdict, 2);
+                s.window.event(s.fixture.events.at(-1)!);
+                expect(s.workspace.querySelector('form[data-job-ask="rig-only"]')).toBeNull();
+                expect(s.workspace.textContent).toContain(i18nModule.t('JOB_ACT_KIND_DISABLED'));
+                const signoff: PendingAskV3 = {...verdict, askId: 'signoff', subject: {kind: 'signoff', stage: 'rig-review'}};
+                s.fixture.pending(signoff, 3);
+                s.window.event(s.fixture.events.at(-1)!);
+                expect(s.workspace.querySelector('form[data-job-ask="signoff"]')).not.toBeNull();
+                expect(s.workspace.querySelector('form[data-job-ask="rig-only"]')).toBeNull();
+                expect(s.outgoingSubmits).toEqual([]);
+            } finally {s.cleanup(); i18nModule.setLanguagePreference(preference);}
+        }
+    });
+
+    test('#709 a rig verdict in job-window preload refuses before display acknowledgment or form mount', async () => {
+        const s = await mountRuntimeSession();
+        try {
+            const display = fixturePublication();
+            const ask: PendingAskV3 = {askId: 'preloaded-rig', publicationId: display.publication.publicationId,
+                source: display.publication.source, subject: {kind: 'review-verdict', stage: 'rig-review'}, status: 'pending'};
+            s.fixture.pending(ask, 2);
+            s.window.event(s.fixture.events.at(-1)!);
+            s.fixture.publish(display);
+            s.window.event(s.fixture.events.at(-1)!);
+            await s.window.settled();
+            expect(s.window.state().error).toBe('JOB_ACT_KIND_DISABLED');
+            expect(s.window.state().receipt).toBeNull();
+            expect(s.fixture.acknowledgments).toEqual([]);
+            expect(s.host.querySelector('form[data-job-ask="preloaded-rig"]')).toBeNull();
+            expect(s.outgoingSubmits).toEqual([]);
+        } finally {s.cleanup();}
+    });
+
+    test('#709 retained image and direction verdict forms submit their unchanged values through the synthetic transport', async () => {
+        for (const stage of ['image-review', 'direction-review'] as const) {
+            const s = await mountRuntimeSession();
+            try {
+                const base = fixturePublication();
+                if (base.publication.source.subject === 'image-set') throw new Error('Expected model fixture');
+                const {model, selector, checkpointEvidence, ...common} = base.publication.source;
+                const {prepareJobImageSet} = await import('../src/job-image-set.ts');
+                const imageSet = prepareJobImageSet({purpose: 'plate-adoption', images: [
+                    {role: 'source', name: 'Source', path: 'source.png'},
+                    {role: 'candidate', name: 'Candidate', path: 'candidate.png'}]}, () => new Uint8Array([1, 2, 3]));
+                const source = stage === 'image-review' ? {...common, subject: 'image-set' as const, ...imageSet} :
+                    {...base.publication.source, selector: {kind: 'post' as const, version: 1, rigVersion: 1},
+                        direction: {path: 'direction.json', sha256: 'd'.repeat(64)}};
+                const display = {...base, publication: {...base.publication, source}};
+                await s.publishDisplay(display);
+                const ask: PendingAskV3 = {askId: stage, publicationId: display.publication.publicationId,
+                    source, subject: {kind: 'review-verdict', stage}, status: 'pending'};
+                s.fixture.pending(ask, 2);
+                s.window.event(s.fixture.events.at(-1)!);
+                const form = s.workspace.querySelector(`form[data-job-ask="${stage}"]`)!;
+                expect(form).not.toBeNull();
+                form.querySelector('select[name="verdict"]')!.value = 'approved';
+                form.querySelector('textarea[name="note"]')!.value = '  preserve 원문\n';
+                if (stage === 'image-review') form.querySelector('textarea[name="image-note-1"]')!.value = 'candidate note';
+                const value = {stage, verdict: 'approved', words: '  preserve 원문\n',
+                    ...(stage === 'image-review' ? {imageNotes: [{name: 'Candidate', words: 'candidate note'}]} : {})};
+                s.fixture.returnAct({...fixtureAct('review-verdict'), askId: ask.askId, source, value} as ActV3);
+                form.dispatchEvent({type: 'input'});
+                await form.onsubmit?.({preventDefault() {}});
+                expect(s.outgoingSubmits).toHaveLength(1);
+                expect(s.outgoingSubmits[0]!.body.value).toEqual(value);
+                expect(s.outgoingSubmits[0]!.body).not.toHaveProperty('capture');
+            } finally {s.cleanup();}
+        }
+    });
+
     test('#659 actual job labels retain localized span/control order and identity across language refresh', async () => {
         const preference = i18nModule.getLanguagePreference();
         const s = await mountRuntimeSession();
         try {
             const display = await s.publishRig(1);
             const ask: PendingAskV3 = {askId:'label-form',publicationId:display.publication.publicationId,
-                source:display.publication.source,subject:{kind:'review-verdict',stage:'rig-review'},status:'pending'};
+                source:display.publication.source,subject:{kind:'signoff',stage:'inspection'},status:'pending'};
             s.fixture.pending(ask,2);
             s.window.event(s.fixture.events.at(-1)!);
             const form = s.workspace.querySelector('form[data-job-ask="label-form"]')!;
@@ -2242,30 +2346,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
     test('#559 runtime transport lifecycle: #job-play, #job-loop, single rAF, loop wrap, physics-reset loop toggle, and one-shot completion', async () => {
         const s = await mountRuntimeSession();
         try {
-            const act = fixtureAct('review-verdict', 'wrapped endpoint check');
-            if (act.schema !== 'rig-review/act@2' || act.kind !== 'review-verdict' || act.value.stage !== 'rig-review') {
-                throw new Error('Expected review-verdict fixture act');
-            }
-            const display = await s.publishRig(1);
-            const source = display.publication.source;
-            if (source.subject === 'image-set' || source.selector?.kind !== 'rig' || !source.model) {
-                throw new Error('Expected rig model source');
-            }
-            const ask = {
-                askId: act.askId,
-                publicationId: display.publication.publicationId,
-                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
-                source,
-                status: 'pending' as const,
-            };
-            s.fixture.pending(ask, 2);
-            s.window.event(s.fixture.events.at(-1)!);
-            s.fixture.returnAct({
-                ...act,
-                publicationId: display.publication.publicationId,
-                source: {...source, selector: source.selector, model: source.model},
-                value: act.value,
-            });
+            await s.publishRig(1);
             // Reached existing controls on initial Setup mount (no autoplay):
             const animationSelect = s.workspace.querySelector('#job-animation')!;
             const timeInput = s.workspace.querySelector('#job-time')!;
@@ -2347,40 +2428,15 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(timeInput.value).toBe('0');
             expect(Number(timeInput.value)).toBe(player.entry(0)!.animationTime);
 
-            const form = s.workspace.querySelector(`form[data-job-ask="${ask.askId}"]`)!;
-            const verdictSelect = form.querySelector('select[name="verdict"]')!;
-            const noteInput = form.querySelector('textarea[name="note"]')!;
-            verdictSelect.value = 'approved';
-            noteInput.value = 'wrapped endpoint check';
-            form.dispatchEvent({type: 'input'});
-            await form.onsubmit?.({preventDefault() {}});
-            expect(s.outgoingSubmits).toHaveLength(1);
-            expect(s.outgoingSubmits[0]!.body.capture.playing).toBe(false);
-            expect(s.outgoingSubmits[0]!.body.capture.animation).toBe('inspect');
-            expect(s.outgoingSubmits[0]!.body.capture.frame).toBe(0);
         } finally {
             s.cleanup();
         }
     });
 
-    test('#559 raw floating boundary time formats only the readout and preserves paused canonical capture and manual precision', async () => {
+    test('#559 raw floating boundary time formats only the readout and preserves paused time and manual precision', async () => {
         const s = await mountRuntimeSession({clips: [{name: 'inspect', duration: 1}]});
         try {
-            const act = fixtureAct('review-verdict', 'raw boundary capture');
-            if (act.schema !== 'rig-review/act@2' || act.kind !== 'review-verdict' || act.value.stage !== 'rig-review') {
-                throw new Error('Expected review-verdict fixture act');
-            }
-            const display = await s.publishRig(1);
-            const source = display.publication.source;
-            if (source.subject === 'image-set' || source.selector?.kind !== 'rig' || !source.model) {
-                throw new Error('Expected rig model source');
-            }
-            const ask = {askId: act.askId, publicationId: display.publication.publicationId,
-                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const}, source, status: 'pending' as const};
-            s.fixture.pending(ask, 2);
-            s.window.event(s.fixture.events.at(-1)!);
-            s.fixture.returnAct({...act, publicationId: display.publication.publicationId,
-                source: {...source, selector: source.selector, model: source.model}, value: act.value});
+            await s.publishRig(1);
             const animationSelect = s.workspace.querySelector('#job-animation')!;
             const clock = s.workspace.querySelector('#job-time')!;
             const play = s.workspace.querySelector('#job-play')!;
@@ -2428,16 +2484,6 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(player.paused).toBe(true);
             expect(play.getAttribute('aria-pressed')).toBe('false');
             expect(play.dataset.jobText).toBe('Play');
-            const form = s.workspace.querySelector(`form[data-job-ask="${ask.askId}"]`)!;
-            form.querySelector('select[name="verdict"]')!.value = 'approved';
-            form.querySelector('textarea[name="note"]')!.value = 'raw boundary capture';
-            form.dispatchEvent({type: 'input'});
-            await form.onsubmit?.({preventDefault() {}});
-            expect(s.outgoingSubmits).toHaveLength(1);
-            expect(s.outgoingSubmits[0]!.body.capture.frame).toBe(residue);
-            expect(s.outgoingSubmits[0]!.body.capture.playing).toBe(false);
-            expect(player.entry(0)!.animationTime).toBe(residue);
-
             clock.value = '1';
             clock.dispatchEvent({type: 'change'});
             expect(clock.value).toBe('0');
@@ -2464,116 +2510,6 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             clock.value = String(residue);
             clock.dispatchEvent({type: 'change'});
             expect(clock.value).toBe(String(residue));
-        } finally {
-            s.cleanup();
-        }
-    });
-
-    test('#559 runtime mid-play verdict capture without pause and byte-exact first request across motion, seek, play/pause, loop, camera, and part selection', async () => {
-        const s = await mountRuntimeSession();
-        try {
-            const act = fixtureAct('review-verdict', '  원문 그대로\n');
-            if (act.schema !== 'rig-review/act@2' || act.kind !== 'review-verdict' || act.value.stage !== 'rig-review') {
-                throw new Error('Expected review-verdict fixture act');
-            }
-            const display = await s.publishRig(1);
-            const source = display.publication.source;
-            if (source.subject === 'image-set' || source.selector?.kind !== 'rig' || !source.model) {
-                throw new Error('Expected rig model source');
-            }
-            const ask = {
-                askId: act.askId,
-                publicationId: display.publication.publicationId,
-                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
-                source,
-                status: 'pending' as const,
-            };
-            s.fixture.pending(ask, 2);
-            s.window.event(s.fixture.events.at(-1)!);
-            s.fixture.returnAct({
-                ...act,
-                publicationId: display.publication.publicationId,
-                source: {...source, selector: source.selector, model: source.model},
-                value: act.value,
-            });
-
-            const animationSelect = s.workspace.querySelector('#job-animation')!;
-            animationSelect.value = 'inspect';
-            animationSelect.dispatchEvent({type: 'change'});
-            const player = s.activePlayer();
-
-            const playButton = s.workspace.querySelector('#job-play')!;
-            const loopInput = s.workspace.querySelector('#job-loop')!;
-            expect(playButton).not.toBeNull();
-            expect(loopInput).not.toBeNull();
-            playButton.click();
-
-            // Step across loop seam (0.6s unwrapped -> 0.1s wrapped visible animationTime):
-            s.stepRaf(0);
-            for (let i = 0; i < 6; i++) s.stepRaf(100);
-            expect(player.time).toBeCloseTo(0.6, 5);
-            expect(player.entry(0)?.animationTime).toBeCloseTo(0.1, 5);
-            expect(player.paused).toBe(false);
-
-            const form = s.workspace.querySelector(`form[data-job-ask="${ask.askId}"]`)!;
-            const verdictSelect = form.querySelector('select[name="verdict"]')!;
-            const noteInput = form.querySelector('textarea[name="note"]')!;
-            verdictSelect.value = 'approved';
-            noteInput.value = '  원문 그대로\n';
-            form.dispatchEvent({type: 'input'});
-
-            // First submit loses reply in transport while playback is active:
-            const pausesBeforeCapture = player.counts().pauseCalls;
-            s.failNextTransportSubmit();
-            await form.onsubmit?.({preventDefault() {}});
-            expect(player.counts().pauseCalls).toBe(pausesBeforeCapture); // No pause() during mid-play capture
-            expect(player.paused).toBe(false);
-            expect(s.rafCount()).toBe(1);
-            expect(s.outgoingSubmits).toHaveLength(1);
-            expect(s.fixture.submissions).toHaveLength(0);
-            const firstAttempt = s.outgoingSubmits[0]!;
-            expect(firstAttempt.body.value.words).toBe('  원문 그대로\n');
-            expect(firstAttempt.body.capture.playing).toBe(true);
-            expect(firstAttempt.body.capture.animation).toBe('inspect');
-            expect(firstAttempt.body.capture.frame).toBeCloseTo(0.1, 5);
-            expect(typeof firstAttempt.body.capture.png).toBe('string');
-            expect(firstAttempt.body.capture.png.length).toBeGreaterThan(0);
-            expect(typeof firstAttempt.body.displayedNonce).toBe('string');
-            expect(typeof firstAttempt.body.submissionId).toBe('string');
-            expect(firstAttempt.body.expectedGeneration).toBe(2);
-
-            // While form is unchanged, advance natural motion, manual seek, play/pause, toggle loop, pan/zoom camera, and select part:
-            s.stepRaf(100);
-            const timeInput = s.workspace.querySelector('#job-time')!;
-            timeInput.value = '0.25';
-            timeInput.dispatchEvent({type: 'change'});
-            expect(player.paused).toBe(true);
-            expect(s.rafCount()).toBe(0);
-            playButton.click();
-            expect(player.paused).toBe(false);
-            playButton.click();
-            expect(player.paused).toBe(true);
-            loopInput.checked = false;
-            loopInput.dispatchEvent({type: 'change'});
-            s.workspace.querySelector('#zoom-in')!.click();
-            const partSelect = s.workspace.querySelector('#job-part')!;
-            partSelect.value = 'body';
-            partSelect.dispatchEvent({type: 'change'});
-
-            // Retry submit with unchanged form: must send byte-exact first mid-loop request without re-evaluating view guards:
-            await form.onsubmit?.({preventDefault() {}});
-            expect(s.outgoingSubmits).toHaveLength(2);
-            const retryAttempt = s.outgoingSubmits[1]!;
-            expect(retryAttempt.raw).toBe(firstAttempt.raw);
-            expect(retryAttempt.body).toEqual(firstAttempt.body);
-            expect(retryAttempt.body.capture.png).toBe(firstAttempt.body.capture.png);
-            expect(retryAttempt.body.value.words).toBe(firstAttempt.body.value.words);
-            expect(retryAttempt.body.displayedNonce).toBe(firstAttempt.body.displayedNonce);
-            expect(retryAttempt.body.submissionId).toBe(firstAttempt.body.submissionId);
-            expect(retryAttempt.body.expectedGeneration).toBe(firstAttempt.body.expectedGeneration);
-            expect(s.fixture.submissions).toHaveLength(1);
-            const committed = s.fixture.submissions[0]!.body as any;
-            expect(committed).toEqual(firstAttempt.body);
         } finally {
             s.cleanup();
         }
@@ -2781,41 +2717,13 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         }
     });
 
-    test('#559 runtime time input while playing: typing into #job-time pauses owned rAF without overwriting typed text or resetting rigSubmission, and commits seek on change', async () => {
+    test('#559 runtime time input while playing: typing into #job-time pauses owned rAF without overwriting typed text, and commits seek on change', async () => {
         const s = await mountRuntimeSession();
         try {
-            const act = fixtureAct('review-verdict', 'check time input while playing');
-            if (act.schema !== 'rig-review/act@2' || act.kind !== 'review-verdict' || act.value.stage !== 'rig-review') {
-                throw new Error('Expected review-verdict fixture act');
-            }
-            const display = await s.publishRig(1);
-            const source = display.publication.source;
-            if (source.subject === 'image-set' || source.selector?.kind !== 'rig' || !source.model) {
-                throw new Error('Expected rig model source');
-            }
-            const ask = {
-                askId: act.askId,
-                publicationId: display.publication.publicationId,
-                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
-                source,
-                status: 'pending' as const,
-            };
-            s.fixture.pending(ask, 2);
-            s.window.event(s.fixture.events.at(-1)!);
-            s.fixture.returnAct({
-                ...act,
-                publicationId: display.publication.publicationId,
-                source: {...source, selector: source.selector, model: source.model},
-                value: act.value,
-            });
-
+            await s.publishRig(1);
             const animationSelect = s.workspace.querySelector('#job-animation')!;
             const timeInput = s.workspace.querySelector('#job-time')!;
             const playButton = s.workspace.querySelector('#job-play')!;
-            const form = s.workspace.querySelector(`form[data-job-ask="${ask.askId}"]`)!;
-            const verdictSelect = form.querySelector('select[name="verdict"]')!;
-            const noteInput = form.querySelector('textarea[name="note"]')!;
-
             animationSelect.value = 'inspect';
             animationSelect.dispatchEvent({type: 'change'});
             playButton.click();
@@ -2827,15 +2735,6 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             const pausedFrameTime = s.activePlayer().time;
             expect(pausedFrameTime).toBeCloseTo(0.1, 5);
             expect(Number(timeInput.value)).toBeCloseTo(0.1, 5);
-
-            // Stage a failed submit so entry.rigSubmission holds an immutable first request:
-            verdictSelect.value = 'approved';
-            noteInput.value = 'check time input while playing';
-            form.dispatchEvent({type: 'input'});
-            s.failNextTransportSubmit();
-            await form.onsubmit?.({preventDefault() {}});
-            expect(s.outgoingSubmits).toHaveLength(1);
-            const firstAttempt = s.outgoingSubmits[0]!;
 
             // User starts typing '0.375' into #job-time without change/blur:
             timeInput.value = '0.375';
@@ -2852,11 +2751,6 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             // Uncommitted input must not seek player before change:
             expect(s.activePlayer().time).toBeCloseTo(pausedFrameTime, 5);
 
-            // Typing into #job-time must not reset entry.rigSubmission when form inputs are unchanged:
-            await form.onsubmit?.({preventDefault() {}});
-            expect(s.outgoingSubmits).toHaveLength(2);
-            expect(s.outgoingSubmits[1]!.raw).toBe(firstAttempt.raw);
-
             // Committing #job-time via change seeks the paused player to 0.375:
             timeInput.dispatchEvent({type: 'change'});
             expect(timeInput.value).toBe('0.375');
@@ -2864,7 +2758,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(s.activePlayer().paused).toBe(true);
             expect(s.rafCount()).toBe(0);
 
-            // Active-animation manual seek at exact duration (0.5) under Repeat=true synchronizes UI #job-time, public entry(0).animationTime and captured frame to 0:
+            // Active-animation manual seek at exact duration (0.5) under Repeat=true synchronizes UI #job-time, public entry(0).animationTime to 0:
             const loopCheckbox = s.workspace.querySelector('#job-loop')!;
             expect(loopCheckbox.checked).toBe(true);
             timeInput.value = '0.5';
@@ -2874,25 +2768,6 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(Number(timeInput.value)).toBe(s.activePlayer().entry(0)!.animationTime);
             expect(s.activePlayer().paused).toBe(true);
             expect(s.rafCount()).toBe(0);
-
-            const askAtDuration = {
-                askId: 'ask-seek-duration-loop',
-                publicationId: display.publication.publicationId,
-                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
-                source,
-                status: 'pending' as const,
-            };
-            s.fixture.pending(askAtDuration, 3);
-            s.window.event(s.fixture.events.at(-1)!);
-            const formAtDuration = s.workspace.querySelector(`form[data-job-ask="${askAtDuration.askId}"]`)!;
-            formAtDuration.querySelector('select[name="verdict"]')!.value = 'approved';
-            formAtDuration.querySelector('textarea[name="note"]')!.value = 'seek duration under Repeat=true';
-            formAtDuration.dispatchEvent({type: 'input'});
-            s.failNextTransportSubmit();
-            await formAtDuration.onsubmit?.({preventDefault() {}});
-            expect(s.outgoingSubmits).toHaveLength(3);
-            expect(s.outgoingSubmits[2]!.body.capture.frame).toBe(0);
-            expect(s.outgoingSubmits[2]!.body.capture.animation).toBe('inspect');
 
             // Setup (animation === '') preserves reference-only time without wrapping:
             animationSelect.value = '';
@@ -3366,7 +3241,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             const ask1 = {
                 askId: 'ask-rig-1',
                 publicationId: first.publication.publicationId,
-                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
+                subject: {kind: 'signoff' as const, stage: 'inspection' as const},
                 source: firstSource,
                 status: 'pending' as const,
             };
@@ -3402,7 +3277,6 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
 
             // Edit draft on Rig 1:
             const form1 = s.workspace.querySelector(`form[data-job-ask="${ask1.askId}"]`)!;
-            form1.querySelector('select[name="verdict"]')!.value = 'changes-requested';
             form1.querySelector('textarea[name="note"]')!.value = '  keep rig 1 draft bound to source 1\n';
             form1.dispatchEvent({type: 'input'});
 
@@ -3425,7 +3299,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 label: 'Rig 1',
                 value: [{
                     askId: 'ask-rig-1',
-                    value: {stage: 'rig-review', verdict: 'changes-requested', words: '  keep rig 1 draft bound to source 1\n'},
+                    value: {stage: 'inspection', decision: 'approved', words: '  keep rig 1 draft bound to source 1\n'},
                 }],
             }]);
             expect(s.workspace.querySelector('[data-job-history]')!.textContent).toContain(first.publication.source.sourceHash);
@@ -3464,7 +3338,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             const ask1 = {
                 askId: 'ask-reconnect-1',
                 publicationId: firstDisplay.publication.publicationId,
-                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
+                subject: {kind: 'signoff' as const, stage: 'inspection' as const},
                 source: firstSource,
                 status: 'pending' as const,
             };
@@ -3493,7 +3367,6 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             await Bun.sleep(1);
 
             const form1 = s1.workspace.querySelector(`form[data-job-ask="${ask1.askId}"]`)!;
-            form1.querySelector('select[name="verdict"]')!.value = 'changes-requested';
             form1.querySelector('textarea[name="note"]')!.value = '  draft from rig 1\n';
             form1.dispatchEvent({type: 'input'});
 
@@ -3503,14 +3376,13 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             const ask2 = {
                 askId: 'ask-reconnect-2',
                 publicationId: secondDisplay.publication.publicationId,
-                subject: {kind: 'review-verdict' as const, stage: 'rig-review' as const},
+                subject: {kind: 'signoff' as const, stage: 'inspection' as const},
                 source: secondSource,
                 status: 'pending' as const,
             };
             s1.fixture.pending(ask2, 4);
             s1.window.event(s1.fixture.events.at(-1)!);
             const form2 = s1.workspace.querySelector(`form[data-job-ask="${ask2.askId}"]`)!;
-            form2.querySelector('select[name="verdict"]')!.value = 'approved';
             form2.querySelector('textarea[name="note"]')!.value = '  active draft on rig 2\n';
             form2.dispatchEvent({type: 'input'});
         } finally {
@@ -3531,7 +3403,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 ask: {
                     askId: 'ask-reconnect-2',
                     publicationId: secondDisplay!.publication.publicationId,
-                    subject: {kind: 'review-verdict', stage: 'rig-review'},
+                    subject: {kind: 'signoff', stage: 'inspection'},
                     source: secondSource,
                     status: 'pending',
                 },
@@ -3549,7 +3421,6 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(s2.workspace.querySelector('[data-job-direction]')!.hidden).toBe(false);
 
             const restoredForm2 = s2.workspace.querySelector('form[data-job-ask="ask-reconnect-2"]')!;
-            expect(restoredForm2.querySelector('select[name="verdict"]')!.value).toBe('approved');
             expect(restoredForm2.querySelector('textarea[name="note"]')!.value).toBe('  active draft on rig 2\n');
             expect(s2.window.state().retainedDrafts).toEqual([{
                 publicationId: 'publication-1',
@@ -3558,7 +3429,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 label: 'Rig 1',
                 value: [{
                     askId: 'ask-reconnect-1',
-                    value: {stage: 'rig-review', verdict: 'changes-requested', words: '  draft from rig 1\n'},
+                    value: {stage: 'inspection', decision: 'approved', words: '  draft from rig 1\n'},
                 }],
             }]);
             expect(s2.workspace.querySelector('[data-job-history]')!.textContent).toContain(firstDisplay!.publication.source.sourceHash);
@@ -3607,13 +3478,12 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             s1.fixture.pending({
                 askId: 'ask-bounded-1',
                 publicationId: firstDisplay.publication.publicationId,
-                subject: {kind: 'review-verdict', stage: 'rig-review'},
+                subject: {kind: 'signoff', stage: 'inspection'},
                 source: firstSource,
                 status: 'pending',
             }, 2);
             s1.window.event(s1.fixture.events.at(-1)!);
             const form1 = s1.workspace.querySelector('form[data-job-ask="ask-bounded-1"]')!;
-            form1.querySelector('select[name="verdict"]')!.value = 'changes-requested';
             form1.querySelector('textarea[name="note"]')!.value = 'valid retained draft on rig 1';
             form1.dispatchEvent({type: 'input'});
 
@@ -3623,13 +3493,12 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             s1.fixture.pending({
                 askId: 'ask-bounded-2',
                 publicationId: secondDisplay.publication.publicationId,
-                subject: {kind: 'review-verdict', stage: 'rig-review'},
+                subject: {kind: 'signoff', stage: 'inspection'},
                 source: secondSource,
                 status: 'pending',
             }, 4);
             s1.window.event(s1.fixture.events.at(-1)!);
             const form2 = s1.workspace.querySelector('form[data-job-ask="ask-bounded-2"]')!;
-            form2.querySelector('select[name="verdict"]')!.value = 'approved';
             form2.querySelector('textarea[name="note"]')!.value = 'valid active draft on rig 2';
             form2.dispatchEvent({type: 'input'});
 
@@ -3693,7 +3562,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             sourceHash: 'a'.repeat(64),
             source: {...firstDisplay!.publication.source, sourceHash: 'b'.repeat(64)},
             label: 'Mismatched source',
-            forms: [{askId: 'ask-bad', value: {stage: 'rig-review', verdict: 'approved', words: 'spoof'}}],
+            forms: [{askId: 'ask-bad', value: {stage: 'inspection', decision: 'approved', words: 'spoof'}}],
         }));
 
         // Also corrupt saved camera zoom (out of bounds) and change slot attachment identity on reconnect:
@@ -3721,7 +3590,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 ask: {
                     askId: 'ask-bounded-2',
                     publicationId: secondDisplay!.publication.publicationId,
-                    subject: {kind: 'review-verdict', stage: 'rig-review'},
+                    subject: {kind: 'signoff', stage: 'inspection'},
                     source: secondSource,
                     status: 'pending',
                 },
@@ -3744,11 +3613,10 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 label: 'Rig 1',
                 value: [{
                     askId: 'ask-bounded-1',
-                    value: {stage: 'rig-review', verdict: 'changes-requested', words: 'valid retained draft on rig 1'},
+                    value: {stage: 'inspection', decision: 'approved', words: 'valid retained draft on rig 1'},
                 }],
             }]);
             const restoredForm2 = s2.workspace.querySelector('form[data-job-ask="ask-bounded-2"]')!;
-            expect(restoredForm2.querySelector('select[name="verdict"]')!.value).toBe('approved');
             expect(restoredForm2.querySelector('textarea[name="note"]')!.value).toBe('valid active draft on rig 2');
         } finally {
             s2.cleanup();
@@ -3784,7 +3652,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         }
     });
 
-    test('#630 compiled wire inspector adapter: layer controls, I/M/B shortcuts, textEntryFocused guard, checkpoint-only SENTINELS background, and still-capture invalidation', async () => {
+    test('#630 compiled wire inspector adapter: layer controls, I/M/B shortcuts, textEntryFocused guard, checkpoint-only SENTINELS background, and canonical presentation invalidation', async () => {
         const s = await mountRuntimeSession();
         try {
             const base = fixturePublication(1);
@@ -3808,10 +3676,6 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
 
             // 1. Default model representation starts unchanged (images: true, mesh: false, bones: false),
             // and both layer controls and background selector stay hidden/disabled on normal asks:
-            const verdictAct = fixtureAct('review-verdict', 'verdict after wire check');
-            if (verdictAct.schema !== 'rig-review/act@2' || verdictAct.kind !== 'review-verdict' || verdictAct.value.stage !== 'rig-review') {
-                throw new Error('Expected review-verdict act');
-            }
             const verdictAsk = {
                 askId: 'ask-verdict-630',
                 publicationId: display.publication.publicationId,
@@ -3930,38 +3794,9 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             bgSelect.dispatchEvent({type: 'change'});
             expect(rigViewport.style.backgroundColor).toBe(SENTINELS.green);
 
-            // 7. Canonical review-verdict still capture is refused while any overlay layer or non-default background is active:
-            s.fixture.returnAct({
-                ...verdictAct,
-                askId: verdictAsk.askId,
-                publicationId: display.publication.publicationId,
-                source: {...source, selector: {kind: 'rig', version: 1}, model: source.model!},
-                value: verdictAct.value,
-            });
-            const vForm = s.workspace.querySelector(`form[data-job-ask="${verdictAsk.askId}"]`)!;
-            vForm.querySelector('select[name="verdict"]')!.value = 'approved';
-            vForm.querySelector('textarea[name="note"]')!.value = 'verdict after wire check';
-            vForm.dispatchEvent({type: 'input'});
-            await vForm.onsubmit?.({preventDefault() {}});
+            // Rig verdicts have no job-window form, including while checkpoint overlays are active.
+            expect(s.workspace.querySelector(`form[data-job-ask="${verdictAsk.askId}"]`)).toBeNull();
             expect(s.outgoingSubmits).toHaveLength(0);
-            expect(vForm.querySelector('[role="status"]')!.dataset.jobText).toBe('JOB_STILL_VIEW_UNSUPPORTED');
-
-            // Restore layers (Images on, Mesh off, Bones off), but leave sentinel background on -> still refused:
-            s.emitGlobal('keydown', {key: 'i', target: rigViewport, preventDefault() {}});
-            s.emitGlobal('keydown', {key: 'm', target: rigViewport, preventDefault() {}});
-            s.emitGlobal('keydown', {key: 'b', target: rigViewport, preventDefault() {}});
-            expect(layerImages.checked).toBe(true);
-            expect(layerMesh.checked).toBe(false);
-            expect(layerBones.checked).toBe(false);
-            vForm.dispatchEvent({type: 'input'});
-            await vForm.onsubmit?.({preventDefault() {}});
-            expect(s.outgoingSubmits).toHaveLength(0);
-            expect(vForm.querySelector('[role="status"]')!.dataset.jobText).toBe('JOB_STILL_VIEW_UNSUPPORTED');
-
-            // Re-enable wire + green background for checkpoint submission:
-            s.emitGlobal('keydown', {key: 'i', target: rigViewport, preventDefault() {}});
-            s.emitGlobal('keydown', {key: 'm', target: rigViewport, preventDefault() {}});
-            s.emitGlobal('keydown', {key: 'b', target: rigViewport, preventDefault() {}});
 
             // 8. Typing I/M/B in checkpoint textarea[name="note"] must NOT toggle layers, and checkpoint submits verbatim words:
             const cpForm = s.workspace.querySelector(`form[data-job-ask="${checkpointAsk.askId}"]`)!;
@@ -4007,18 +3842,8 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             expect(rigViewport.dataset.jobRigCanonical).toBe('');
             expect(rigViewport.querySelector('[data-job-rig-presentation]')).not.toBeNull();
 
-            s.fixture.returnAct({
-                ...verdictAct,
-                askId: verdictAsk.askId,
-                publicationId: display.publication.publicationId,
-                source: {...source, selector: {kind: 'rig', version: 1}, model: source.model!},
-                value: verdictAct.value,
-            });
-            vForm.dispatchEvent({type: 'input'});
-            await vForm.onsubmit?.({preventDefault() {}});
-            expect(s.outgoingSubmits).toHaveLength(2);
-            expect(s.outgoingSubmits[1]!.body.kind).toBe('review-verdict');
-            expect(s.outgoingSubmits[1]!.body.capture.view).toBe('whole-rig');
+            expect(s.workspace.querySelector(`form[data-job-ask="${verdictAsk.askId}"]`)).toBeNull();
+            expect(s.outgoingSubmits).toHaveLength(1);
 
             // 10. Transition 2 (Publication swap while a checkpoint ask is pending with active wire/background resets state on the new publication):
             const checkpointAsk2 = {
@@ -4167,6 +3992,30 @@ describe('C4 shared parts host', () => {
         expect(requests.slice(2).map(input => input.submissionId)).toEqual(['signoff-submit', 'signoff-submit']);
     });
 
+    test('#713 an act@6 parts verdict counts as finalized and its retried signoff resends its general note', async () => {
+        const h = await partsHarness();
+        const act6 = {...h.act, schema: 'rig-review/act@6', value: {verdict: 'approved',
+            comments: [{text: h.act.value.words}]}} as unknown as ActV3;
+        const requests: UISubmissionV3[] = [];
+        let fail = 'signoff';
+        h.fixture.ports.commitUIAct = async (_job, request) => {
+            const input = await request.json() as UISubmissionV3;
+            requests.push(input);
+            if (input.kind === fail) return {ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}};
+            return {ok: true, value: input.kind === 'parts-verdict' ? act6 : {...fixtureAct('signoff'),
+                askId: h.signoff.askId, source: h.act.source, value: input.value} as ActV3};
+        };
+        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(false);
+        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('retry-signoff');
+        fail = '';
+        // The retry reads the finalized @6 verdict, not the form, and resends its one general comment as words.
+        expect((await h.window.submitParts({...h.input, value: {...h.input.value, words: 'edited'}} as UISubmissionV3,
+            'signoff-submit')).ok).toBe(true);
+        expect(requests.map(input => input.kind)).toEqual(['parts-verdict', 'signoff', 'signoff']);
+        expect(requests[2]!.value).toEqual({stage: 'parts-review', decision: 'approved', words: h.act.value.words});
+        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('approved');
+    });
+
     test('C4 act events and reconnect replay retain the finalized value and never fabricate a signoff', async () => {
         const h = await partsHarness();
         h.window.event(actEvent(h.act));
@@ -4199,12 +4048,12 @@ describe('C4 shared parts host', () => {
 
     test('C4 source mounts one workspace and removes duplicate parts controls', async () => {
         const source = await Bun.file(new URL('../web/job-session.ts', import.meta.url)).text();
-        expect(source.match(/mountPartsWorkspace\(panel\.slots/g)).toHaveLength(1);
+        expect(source.match(/mountPartsWorkspace\(panel\.slots/g)).toBeNull();
         expect(source).not.toContain("images.className = 'job-part-images'");
         expect(source).not.toContain("partOutcome.name = 'parts.'");
         expect(source).not.toContain("panels.id = 'job-panel'");
-        expect(source).toContain("import('./parts.ts')");
-        expect(source).toContain('return {...panel.output.value(), words: note.value}');
+        expect(source).not.toContain("import('./parts.ts')");
+        expect(source).not.toContain('return {...panel.output.value(), words: note.value}');
     });
 });
 
@@ -4354,263 +4203,13 @@ test('C4 native crop host retains the job source identity through the trusted se
     }
 });
 
-describe('C4 async source and host ownership', () => {
-    const roots: string[] = [];
-    afterEach(async () => {
-        const {rm} = await import('node:fs/promises');
-        for (const root of roots.splice(0)) await rm(root, {recursive: true, force: true});
-    });
-    // Exercise the production C4 adapter closures. Browser validation uses the shared C3 mount.
-    async function adapters() {
-        const [{parsePartsIssue}, {commentFixture, candidate}, {mkdtemp}, {tmpdir}] = await Promise.all([
-            import('../src/parts-comment.ts'), import('./helpers/parts-comments-package.ts'),
-            import('node:fs/promises'), import('node:os'),
-        ]);
-        const h = harness();
-        let preparation!: AbortSignal;
-        h.prepareWith(async (_display, signal) => {preparation = signal;});
-        const display = await h.publish(1);
-        const prepared = {display};
-        const root = await mkdtemp(join(tmpdir(), 'review-c4-adapters-'));
-        roots.push(root);
-        const pkg = await commentFixture(root);
-        const sample = candidate(pkg);
-        const item = pkg.items[0]!;
-        const issue = {...sample, sourceHash: display.publication.source.sourceHash,
-            parts: [{name: item.name, imageHash: sample.parts[0]!.imageHash}],
-            imageRegion: {x: 0, y: 0, width: 1, height: 1},
-            rigRegion: {x: item.x, y: item.y, width: 1, height: 1}};
-        const sourceText = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
-        const mountStart = sourceText.indexOf('    async function mountJobParts(');
-        const adapterStart = sourceText.indexOf('        const lifetime = new AbortController();', mountStart);
-        const adapterEnd = sourceText.indexOf('        try {\n            mounted = mountPartsWorkspace(', adapterStart);
-        const readyStart = sourceText.indexOf('            await Promise.race(', adapterEnd);
-        const readyEnd = sourceText.indexOf(';', readyStart);
-        const readyExpression = sourceText.slice(readyStart + '            await '.length, readyEnd);
-        const paintStart = sourceText.indexOf('            await new Promise<void>((resolve, reject)', adapterEnd);
-        const paintEnd = sourceText.indexOf('\n            if (signal.aborted)', paintStart);
-        const paintExpression = sourceText.slice(paintStart + '            await '.length, paintEnd).trim().replace(/;$/, '');
-        const finalizerStart = sourceText.indexOf('        } finally {', adapterEnd) + '        } finally {'.length;
-        const finalizerEnd = sourceText.indexOf('\n        }', finalizerStart);
-        const bytesStart = sourceText.indexOf('async function jobBytes(');
-        const bytesEnd = sourceText.indexOf('async function jobDigest(', bytesStart);
-        const jsonStart = sourceText.indexOf('async function jobJson<');
-        const jsonEnd = sourceText.indexOf('function mediaReady(', jsonStart);
-        expect(adapterStart).toBeGreaterThan(mountStart);
-        expect(adapterEnd).toBeGreaterThan(adapterStart);
-        expect(readyStart).toBeGreaterThan(adapterEnd);
-        expect(paintStart).toBeGreaterThan(readyEnd);
-        const panel: {issues: typeof issue[]; legacy: unknown; composition: {side: string[]}; output?: unknown; dispose?: () => void} = {
-            issues: [issue], legacy: null, composition: {side: ['parts.issues', 'act.submit']},
-        };
-        const partsForm = {dirty: false, submissionId: 'original-parts-id'};
-        const otherForm = {dirty: false, submissionId: 'original-other-id'};
-        const forms = new Map([['parts-ask', partsForm], ['other-ask', otherForm]]);
-        h.window.event({type: 'pending', jobId: 'window-fixture', generation: 2, cursor: '2', ask: {
-            askId: 'parts-ask', publicationId: display.publication.publicationId,
-            source: display.publication.source, status: 'pending', subject: {kind: 'parts-verdict', draftId: 'draft-one'},
-        }});
-        let saves = 0;
-        const signals: AbortSignal[] = [];
-        let fetcher = async (_url: string, init: RequestInit): Promise<Response> => {
-            if (init.method === 'POST') return Response.json({error: {code: 'PARTS_COMMENT_UNAVAILABLE'}}, {status: 409});
-            return Response.json({sourceHash: display.publication.source.sourceHash});
-        };
-        const fetchAdapter = (url: string, init: RequestInit) => {signals.push(init.signal as AbortSignal); return fetcher(url, init);};
-        const frames = new Map<number, FrameRequestCallback>();
-        let frameId = 0;
-        const code = sourceText.slice(bytesStart, bytesEnd) + sourceText.slice(jsonStart, jsonEnd) +
-            sourceText.slice(adapterStart, adapterEnd) + '\nreturn {source, host, lifetime, preparationCancelled,\n' +
-            'finishPreparation() {' + sourceText.slice(finalizerStart, finalizerEnd) + '\n},\n' +
-            'waitForPaint() {return ' + paintExpression + ';},\n' +
-            'waitUntilReady(ready) {const mounted = {ready}; return ' + readyExpression + ';},\n' +
-            'activate(value) {current = value;}};';
-        const run = new Function('prepared', 'current', 'signal', 'panel', 'routes', 'painting', 'forms', 'window',
-            'access', 'fetch', 'parsePartsIssue', 'saveDraft', 'jobPartsReviewState', 'requestAnimationFrame', 'cancelAnimationFrame',
-            new Bun.Transpiler({loader: 'ts'}).transformSync(code));
-        const probe = run(prepared, prepared, preparation, panel,
-            jobPublicationRoutes(display, 'http://127.0.0.1:4318'), null, forms, h.window,
-            {headers: (init: HeadersInit) => new Headers(init)}, fetchAdapter, parsePartsIssue, () => {saves++;}, jobPartsReviewState,
-            (callback: FrameRequestCallback) => {frames.set(++frameId, callback); return frameId;},
-            (id: number) => {frames.delete(id);}) as {
-                source: import('../web/parts.ts').PartsSource;
-                host: import('../web/parts.ts').PartsHost;
-                lifetime: AbortController;
-                preparationCancelled: Promise<never>;
-                waitUntilReady(ready: Promise<void>): Promise<void>;
-                finishPreparation(): void;
-                waitForPaint(): Promise<void>;
-                activate(value: object): void;
-            };
-        return {...h, probe, prepared, panel, partsForm, otherForm, signals, issue, preparation,
-            saved: () => saves, frames,
-            frame() {const first = frames.entries().next().value; if (first) {frames.delete(first[0]); first[1](0);}},
-            fetchWith(value: typeof fetcher) {fetcher = value;}};
-    }
-
-    test('C4 failed replacement keeps the retained adapter usable after its preparation signal aborts', async () => {
-        const h = await adapters();
-        await h.probe.source.view();
-        const painted = h.probe.waitForPaint();
-        h.frame(); h.frame();
-        await painted;
-        h.probe.finishPreparation();
-        h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
-        await h.publish(2);
-        expect(h.preparation.aborted).toBe(true);
-        expect(h.window.state().displayed?.publication.publicationId).toBe('publication-1');
-        expect(h.probe.lifetime.signal.aborted).toBe(false);
-        await expect(h.probe.source.view()).resolves.toMatchObject({sourceHash: h.issue.sourceHash});
-        await expect(h.probe.source.crop(h.issue)).rejects.toThrow('PARTS_COMMENT_UNAVAILABLE');
-        expect(h.signals.every(signal => signal === h.probe.lifetime.signal && !signal.aborted)).toBe(true);
-        h.panel.dispose!();
-    });
-
-    test('C4 cancellation while preparing aborts the actual source request and settles readiness', async () => {
-        const h = await adapters();
-        h.fetchWith(async (_url, init) => new Promise<Response>((_resolve, reject) => {
-            init.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once: true});
-        }));
-        const refused = h.probe.source.view().catch(error => error);
-        const readiness = h.probe.preparationCancelled.catch(error => error);
-        h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
-        await h.publish(2);
-        expect((await refused).message).toContain('Aborted');
-        expect((await readiness).message).toBe('JOB_PRELOAD_CANCELLED');
-        expect(h.probe.lifetime.signal.aborted).toBe(true);
-        h.panel.dispose!();
-    });
-
-    test('C4 awaits the handle readiness contract after source loading and propagates its rejection', async () => {
-        const text = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
-        expect(text).toContain('await Promise.race([mounted.ready, preparationCancelled]);');
-        const readyIndex = text.indexOf('await Promise.race([mounted.ready, preparationCancelled]);');
-        const fitIndex = text.indexOf("panel.slots.toolbar.querySelector<HTMLButtonElement>('#fit')?.click();", readyIndex);
-        const paintIndex = text.indexOf('await new Promise<void>((resolve, reject)', readyIndex);
-        expect(fitIndex).toBeGreaterThan(readyIndex);
-        expect(fitIndex).toBeLessThan(paintIndex);
-        const h = await adapters();
-        await h.probe.source.view();
-        const ready = deferred<void>();
-        let settled = false;
-        const waiting = h.probe.waitUntilReady(ready.promise).then(() => {settled = true;});
-        await Promise.resolve();
-        expect(settled).toBe(false);
-        ready.resolve();
-        await waiting;
-        expect(settled).toBe(true);
-        const failure = new Error('PARTS_PAINT_FAILED');
-        await expect(h.probe.waitUntilReady(Promise.reject(failure))).rejects.toBe(failure);
-        h.probe.finishPreparation();
-        h.panel.dispose!();
-    });
-
-    test('C4 replacement cancels preparation while handle readiness is unresolved', async () => {
-        const h = await adapters();
-        await h.probe.source.view();
-        const ready = deferred<void>();
-        const waiting = h.probe.waitUntilReady(ready.promise).catch(error => error);
-        h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
-        await h.publish(2);
-        expect((await waiting).message).toBe('JOB_PRELOAD_CANCELLED');
-        expect(h.probe.lifetime.signal.aborted).toBe(true);
-        ready.resolve();
-        expect(h.frames.size).toBe(0);
-        h.panel.dispose!();
-    });
-
-    test('C4 cancellation between paint frames releases preparation without waiting for another frame', async () => {
-        for (const deliveredFrames of [0, 1]) {
-            const h = await adapters();
-            await h.probe.source.view();
-            const painted = h.probe.waitForPaint().catch(error => error);
-            if (deliveredFrames) h.frame();
-            h.prepareWith(async () => {throw new Error('JOB_PRELOAD_FAILED');});
-            await h.publish(2);
-            expect((await painted).message).toBe('JOB_PRELOAD_CANCELLED');
-            expect(h.frames.size).toBe(0);
-            h.probe.finishPreparation();
-            h.panel.dispose!();
-        }
-    });
-
-    test('C4 late callbacks from an inactive or disposed adapter leave current forms and output intact', async () => {
-        const h = await adapters();
-        h.probe.finishPreparation();
-        const original = h.panel.issues;
-        const output = {kind: 'parts-verdict' as const, value: () => ({verdict: 'approved' as const, issues: [], words: ''})};
-        h.probe.activate({});
-        h.probe.host.changed([]);
-        h.probe.host.register(output);
-        expect(h.panel.issues).toBe(original);
-        expect(h.panel.output).toBeUndefined();
-        expect(h.partsForm).toEqual({dirty: false, submissionId: 'original-parts-id'});
-        expect(h.saved()).toBe(0);
-        h.probe.activate(h.prepared);
-        h.panel.dispose!();
-        h.probe.host.changed([]);
-        h.probe.host.register(output);
-        expect(h.panel.issues).toBe(original);
-        expect(h.panel.output).toBeUndefined();
-        expect(h.partsForm).toEqual({dirty: false, submissionId: 'original-parts-id'});
-        expect(h.probe.host.locked()).toBe('sent');
-    });
-
-    test('C4 active callbacks retain initial issues and dirty only the parts form', async () => {
-        const h = await adapters();
-        expect(h.probe.host.initial()).toBe(h.panel.issues);
-        h.probe.finishPreparation();
-        h.probe.host.changed([]);
-        expect(h.panel.issues).toEqual([]);
-        expect(h.partsForm.dirty).toBe(true);
-        expect(h.partsForm.submissionId).not.toBe('original-parts-id');
-        expect(h.otherForm).toEqual({dirty: false, submissionId: 'original-other-id'});
-        expect(h.saved()).toBe(1);
-        const output = {kind: 'parts-verdict' as const, value: () => ({verdict: 'approved' as const, issues: [], words: ''})};
-        h.probe.host.register(output);
-        expect(h.panel.output).toBe(output);
-        h.panel.dispose!();
-    });
-
-    test('C4 a late crop reply is refused after owner replacement or disposal', async () => {
-        for (const dispose of [false, true]) {
-            const h = await adapters();
-            h.probe.finishPreparation();
-            const response = deferred<Response>();
-            h.fetchWith(async () => response.promise);
-            const refused = h.probe.source.crop(h.issue).catch(error => error);
-            if (dispose) h.panel.dispose!(); else h.probe.activate({});
-            response.resolve(Response.json({comment: h.issue}));
-            expect((await refused).message).toBe('JOB_ACT_SOURCE_STALE');
-            expect(h.partsForm.dirty).toBe(false);
-            h.panel.dispose!();
-        }
-    });
-
-    test('C4 disposal aborts an active crop once and refuses subsequent crop requests', async () => {
-        const h = await adapters();
-        h.probe.finishPreparation();
-        let aborted = 0;
-        h.fetchWith(async (_url, init) => new Promise<Response>((_resolve, reject) => {
-            init.signal!.addEventListener('abort', () => {aborted++; reject(new DOMException('Aborted', 'AbortError'));}, {once: true});
-        }));
-        const refused = h.probe.source.crop(h.issue).catch(error => error);
-        h.panel.dispose!();
-        h.panel.dispose!();
-        expect((await refused).message).toContain('Aborted');
-        expect(aborted).toBe(1);
-        await expect(h.probe.source.crop(h.issue)).rejects.toThrow('JOB_ACT_SOURCE_STALE');
-        expect(h.signals).toHaveLength(1);
-    });
-});
-
 test('C4 base inspection resources are disposed even when workspace cleanup throws', async () => {
     const text = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
     const start = text.indexOf('            prepared.dispose = () =>');
     const end = text.indexOf('\n', start);
     const prepared = {dispose() {}};
     let disposed = 0;
-    new Function('prepared', 'panel', 'dispose', text.slice(start, end))(
+    new Function('prepared', 'instance', 'prevDispose', text.slice(start, end))(
         prepared, {dispose() {throw new Error('Declared cleanup failure');}}, () => {disposed++;});
     expect(() => prepared.dispose()).toThrow('Declared cleanup failure');
     expect(disposed).toBe(1);
@@ -4799,7 +4398,7 @@ test('#623: job stage-parts accepts a sealed source-only painting outside parts 
             kind: 'parts-verdict',
             askId: asked.value.askId,
             publicationId: publication.publicationId,
-            value: {verdict: 'changes-requested', issues: [overlayBody.comment], words: 'overlay alignment shift'},
+            value: {verdict: 'changes-requested', comments: [...partsIssueComments([overlayBody.comment]), {text: 'overlay alignment shift'}]},
         },
     });
     const fetchedAct = await (await fetch(f.locator + '/api', {
@@ -5066,7 +4665,7 @@ test('#626: retained job publication with producer.config, producer.parts, produ
             kind: 'parts-verdict',
             askId: asked.value.askId,
             publicationId: publication.publicationId,
-            value: {verdict: 'changes-requested', issues: [overlayBody.comment], words: 'face generator part reviewed'},
+            value: {verdict: 'changes-requested', comments: [...partsIssueComments([overlayBody.comment]), {text: 'face generator part reviewed'}]},
         },
     });
 

@@ -23,19 +23,20 @@ export type {
   JobRootIdentity,
 } from './job-source.ts';
 export {parseRecordAct} from './job-api.ts';
-export {parseCommentsAct} from './job-api.ts';
+export {parseCommentsAct, parseContextCommentsAct} from './job-api.ts';
 export {projectComments} from './stage-comment.ts';
 export {parseCommentsSession} from './session.ts';
 export {parseCommentsCompareSession} from './compare-session.ts';
 export {parseCommentsPartsVerdict} from './parts-view.ts';
 export {projectSelectedCommentsFeedback} from './feedback-export.ts';
 export {
-  JOB_COMMENTS_ACT_SCHEMA, REVIEW_COMMENTS_SESSION_SCHEMA,
+  JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, REVIEW_COMMENTS_SESSION_SCHEMA,
   REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA, PARTS_COMMENTS_VERDICT_SCHEMA,
 } from './job-contract.ts';
 export type {
   JobComment, JobCommentAnchor, JobCommentFeedbackAnchor, JobCommentPartsAnchor, JobCommentImageAnchor,
-  JobCommentsAct, JobCommentsActValues, ReviewCommentsSession, CompareCommentsSession, PartsCommentsVerdict,
+  JobCommentsAct, JobCommentsActValues, ReviewCommentsSession,
+  JobCommentContext, JobContextComment, JobContextCommentsAct, CompareCommentsSession, PartsCommentsVerdict,
 } from './job-contract.ts';
 export {prepareJobRecordAct} from './job-act.ts';
 export {

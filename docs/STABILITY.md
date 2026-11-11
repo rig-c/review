@@ -564,9 +564,28 @@ model binding nor a valid image-set binding uses `JOB_ASK_INVALID`.
 The backend rig-still extension retains the original twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill` and `JobPartsVerdictAct` at act@5 (`PartsVerdictValue` with pointed `issues` and `words`, while preserving `JobLegacyPartsVerdictValue` at act@2 for historical acts). The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobPartsVerdictAct`, `JobLegacyPartsVerdictValue`, `PartsVerdictValue`, `JobPanelComposition`, `PanelComponent`, `JobRigStill` and `JobRigCapture` exports, [Review #563](https://github.com/rig-c/review/issues/563) adds five type-only exports (`JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`, `JobHostAttachField` and `JobHostAttachFailure`), and [Review #555](https://github.com/rig-c/review/issues/555) adds four type-only interview diagnostic exports (`JobInterviewJson`, `JobInterviewRecord`, `JobInterviewDiagnostic` and `JobInterviewDiagnostics`). [Review #588](https://github.com/rig-c/review/issues/588) activates record mode when `readRecordPublished` and `recordReaderId` are supplied to a host or session (`publicationMode: 'record-and-package'`), serving `rig-review/job-api@3` (`JOB_API_V3_SCHEMA`), `rig-review/act@4` (`JOB_RECORD_ACT_SCHEMA`) and normal owner URL model-free record inspection while keeping default package-only hosts and exact `package-only` `job-ui/<jobId>.json` descriptor bytes at @2 and enforcing `publicationMode` / `recordReaderId` reuse compatibility across ordinary reuse and strict `reuseOnly` attachment. It exports six additional record-mode runtime symbols (`JOB_API_V3_SCHEMA`, `JOB_RECORD_ACT_SCHEMA`, `JOB_RECORD_READER_ID`, `parseRecordAct`, `prepareJobRecordAct` and `prepareJobRecordSource`, for eighteen runtime exports total) and the V3/record type surface listed below. The rig and parts-verdict act revision constants, transport limits and the internal `POST /jobs/<jobId>/host` helper remain internal to their modules. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend) and [Model-free record mode and source seam](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
 
 The comments decoder extension adds six functions and four schema constants,
-for twenty-eight runtime exports total. It is a read-only contract preparation;
-the existing UI finalizers and legacy type unions retain their current versions.
+for twenty-eight runtime exports total.
 See [Comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
+
+[Review #714](https://github.com/rig-c/review/issues/714) adds the act@7 decoder
+`parseContextCommentsAct` and its constant `JOB_COMMENT_CONTEXT_ACT_SCHEMA`
+(`rig-review/act@7`), for thirty runtime exports total, plus the type-only
+`JobCommentContext`, `JobContextComment` and `JobContextCommentsAct`. The change
+is additive: `parseCommentsAct`, `JobComment` and `JobCommentsAct` keep their @6
+shapes, and @2–@6 decode unchanged. Review does not emit @7 until Create pins a
+Review version that reads it. See [Comment context (act@7)](REVIEW_PACKAGE.md#comment-context-act7).
+
+[Review #713](https://github.com/rig-c/review/issues/713) turns on the act@6
+writers. `JobAct` widens to `JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct |
+JobCommentsAct`, so `JobActV3`, `JobEvent`, `JobEventV3`, `JobNextValue`,
+`JobNextValueV3` and `JobHostPorts.commitUIAct` admit fresh act@6 values. No
+export is added or removed, and `JobComment` is unchanged. Fresh UI checkpoint,
+parts-verdict, rig and direction review-verdict and signoff acts are
+`rig-review/act@6`. Image-review verdicts and interview picks stay at act@2, and
+record acts stay at act@4. Consumers narrow on `schema`. A consumer's
+`Extract<JobAct, {kind: ...}>` alias now also contains the act@6 arm of that
+kind. This changes the type on the consumer's next pin and does not break any
+runtime reader. Historical act@2–@5 bytes keep their readers.
 
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
@@ -578,12 +597,14 @@ values from the frozen semantic contract.
 - `prepareJobRecordAct`
 - `prepareJobRecordSource`
 - `parseCommentsAct`
+- `parseContextCommentsAct`
 - `projectComments`
 - `parseCommentsSession`
 - `parseCommentsCompareSession`
 - `parseCommentsPartsVerdict`
 - `projectSelectedCommentsFeedback`
 - `JOB_COMMENTS_ACT_SCHEMA`
+- `JOB_COMMENT_CONTEXT_ACT_SCHEMA`
 - `REVIEW_COMMENTS_SESSION_SCHEMA`
 - `REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA`
 - `PARTS_COMMENTS_VERDICT_SCHEMA`
@@ -756,6 +777,9 @@ without aliases or copied wire shapes.
 - `JobCommentImageAnchor`
 - `JobCommentsAct`
 - `JobCommentsActValues`
+- `JobCommentContext`
+- `JobContextComment`
+- `JobContextCommentsAct`
 - `ReviewCommentsSession`
 - `CompareCommentsSession`
 - `PartsCommentsVerdict`
@@ -771,7 +795,7 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer checks the twenty-eight runtime exports and every listed type, including
+A consumer checks the thirty runtime exports and every listed type, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and

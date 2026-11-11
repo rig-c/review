@@ -6,7 +6,7 @@ import {startServer} from '../src/server.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {setLanguagePreference,t} from '../web/i18n.ts';
-import {bindStageNav,stageReason} from '../web/stage-nav.ts';
+import {bindHeaderModeAvailability} from '../web/workspace-ui.ts';
 import {bindInspectorTabs} from '../web/view-controls.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
 
@@ -153,7 +153,6 @@ class HarnessMutationObserver {
 
 function matchesSelector(node:HarnessElement,selector:string):boolean {
  return selector.split(',').map(part=>part.trim()).some(part=>{
-  if(part==='[data-stage-nav]')return node.dataset.stageNav!==undefined;
   if(part==='.mode-switch')return node.className.split(/\s+/).includes('mode-switch');
   if(part==='.layout')return node.className.split(/\s+/).includes('layout');
   if(part==='.pv-layout')return node.className.split(/\s+/).includes('pv-layout');
@@ -222,11 +221,7 @@ function buildHeaderDom() {
  sideB.setAttribute('aria-pressed','false');
  picker.append(sideA,sideB);
 
- const host=new HarnessElement('nav');
- host.className='review-stage-nav';
- host.setAttribute('data-stage-nav','');
-
- header.append(modeSwitch,picker,host);
+ header.append(modeSwitch,picker);
 
  const workspace=new HarnessElement('div');
  workspace.className='layout';
@@ -258,22 +253,7 @@ function buildHeaderDom() {
   querySelector:(selector:string)=>root.querySelector(selector),
   querySelectorAll:(selector:string)=>root.querySelectorAll(selector),
  };
- return {root,body,header,modeSwitch,setupBtn,animateBtn,compareBtn,compareTitle,picker,host,workspace,tabView,tabRig,panelRig,panelPlayback,documentStub};
-}
-
-/** Returns any mode/inspector control that remains usable (visible switch or enabled/pressed control) while Stage 3 is refused. */
-function exposedUsableControls(dom:ReturnType<typeof buildHeaderDom>):string[] {
- const exposed:string[]=[];
- const cssHidesSwitch=dom.root.dataset.inspectionStage!=='3'||dom.root.dataset.stageRefused==='true';
- if(!dom.modeSwitch.hidden&&!cssHidesSwitch)exposed.push('mode-switch:visible');
- if(!dom.picker.hidden&&dom.root.dataset.inspectionStage==='3'&&dom.root.dataset.stageRefused!=='true')exposed.push('mode-build-picker:visible');
- for(const btn of [dom.setupBtn,dom.animateBtn,dom.compareBtn,dom.tabView,dom.tabRig]){
-  const id=btn.dataset.mode??btn.dataset.inspector??'unknown';
-  if(!btn.disabled)exposed.push(`${id}:enabled`);
-  if(btn.getAttribute('aria-pressed')==='true')exposed.push(`${id}:aria-pressed`);
-  if(btn.getAttribute('aria-selected')==='true')exposed.push(`${id}:aria-selected`);
- }
- return exposed;
+ return {root,body,header,modeSwitch,setupBtn,animateBtn,compareBtn,compareTitle,picker,workspace,tabView,tabRig,panelRig,panelPlayback,documentStub};
 }
 
 function withDom<T>(dom:ReturnType<typeof buildHeaderDom>,href:string,run:()=>Promise<T>|T):Promise<T> {
@@ -299,153 +279,22 @@ function withDom<T>(dom:ReturnType<typeof buildHeaderDom>,href:string,run:()=>Pr
  })();
 }
 
-test('styles.css hides .mode-switch and #mode-build-picker whenever Stage 3 is refused',async()=>{
- const css=await readFile(new URL('../web/styles.css',import.meta.url),'utf8');
- expect(css).toContain(':root[data-stage-refused="true"] .mode-switch{display:none}');
- expect(css).toContain(':root[data-stage-refused="true"] #mode-build-picker{display:none!important}');
-});
-
-test('refused Stage 3 with no recorded rig hides and disables Setup/Animate/Compare with exact reason in en/ko, and fails on a planted unguarded control',async()=>{
- const dom=buildHeaderDom();
- await withDom(dom,'http://127.0.0.1:4318/',async()=>{
-  setLanguagePreference('en');
-  bindInspectorTabs(()=>{});
-  const dispose=bindStageNav({preRig:true,model:false,interview:true});
+test('#735 refused header controls retain exact EN/KO reasons, relock mutations and restore their original attributes',async()=>{
+ const dom=buildHeaderDom();await withDom(dom,'http://127.0.0.1:4318/',async()=>{
+  setLanguagePreference('en');const dispose=bindHeaderModeAvailability({model:false,preRig:true});
   try{
-   expect(dom.root.dataset.inspectionStage).toBe('1');
-   expect(dom.root.dataset.stageRefused).toBeUndefined();
-
-   // Select Stage 3 (Rig + animation) on a pre-rig draft with no recorded rig package.
-   const stage3Btn=dom.host.children[2]!;
-   stage3Btn.click();
-   expect(dom.root.dataset.inspectionStage).toBe('3');
-   expect(dom.root.dataset.stageRefused).toBe('true');
-
-   const panel=dom.body.querySelector('.review-stage-panel')!;
-   expect(panel.hidden).toBe(false);
-   expect(dom.workspace.inert).toBe(true);
-   const status=panel.children[0]!;
-   const enReason=enCatalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.']!;
-   expect(status.textContent).toBe(enReason);
-
-   // Zero usable mode/inspector controls may remain exposed on refused Stage 3.
-   expect(exposedUsableControls(dom)).toEqual([]);
-   expect(dom.modeSwitch.hidden).toBe(true);
-   expect(dom.picker.hidden).toBe(true);
-   for(const btn of [dom.setupBtn,dom.animateBtn,dom.compareBtn,dom.tabView,dom.tabRig]){
-    expect(btn.disabled).toBe(true);
-    expect(btn.getAttribute('title')).toBe(enReason);
-    if(btn.hasAttribute('aria-pressed'))expect(btn.getAttribute('aria-pressed')).toBe('false');
-    if(btn.hasAttribute('aria-selected'))expect(btn.getAttribute('aria-selected')).toBe('false');
-   }
-
-   // Live language switch to Korean translates both the stage refusal status and every disabled control reason.
-   setLanguagePreference('ko');
-   const koReason=koCatalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.']!;
-   expect(status.textContent).toBe(koReason);
-   for(const btn of [dom.setupBtn,dom.animateBtn,dom.compareBtn,dom.tabView,dom.tabRig]){
-    expect(btn.disabled).toBe(true);
-    expect(btn.getAttribute('title')).toBe(koReason);
-   }
-
-   // Attempting to click or mutate aria-pressed/aria-selected while Stage 3 is refused is immediately re-locked by the observer/listener guard.
-   dom.animateBtn.click();
-   dom.tabRig.setAttribute('aria-selected','true');
-   expect(dom.tabRig.getAttribute('aria-selected')).toBe('false');
-   expect(exposedUsableControls(dom)).toEqual([]);
-
-   // Planted unguarded state (simulating pre-#441 behavior with observer disconnected) must be caught by the regression oracle.
-   HarnessMutationObserver.active.clear();
-   delete dom.root.dataset.stageRefused;
-   dom.modeSwitch.hidden=false;
-   dom.setupBtn.disabled=false;
-   dom.setupBtn.setAttribute('aria-pressed','true');
-   dom.animateBtn.disabled=false;
-   expect(exposedUsableControls(dom)).toEqual(['mode-switch:visible','rig:enabled','rig:aria-pressed','playback:enabled']);
-
-   // Re-selecting Stage 3 re-applies the refusal guard immediately.
-   stage3Btn.click();
-   expect(exposedUsableControls(dom)).toEqual([]);
-  }finally{
-   dispose();
-   setLanguagePreference('en');
-  }
+   for(const lang of ['en','ko'] as const){setLanguagePreference(lang);const reason=(lang==='en'?enCatalog:koCatalog)['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.'];for(const button of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){expect(button.disabled).toBe(true);expect(button.getAttribute('title')).toBe(reason);expect(button.getAttribute('aria-pressed')).toBe('false');}}
+   dom.animateBtn.click();dom.animateBtn.setAttribute('aria-pressed','true');expect(dom.animateBtn.getAttribute('aria-pressed')).toBe('false');
+   // Planted unguarded header is detected by the same enabled/pressed oracle.
+   HarnessMutationObserver.active.clear();dom.setupBtn.disabled=false;dom.setupBtn.setAttribute('aria-pressed','true');expect([dom.setupBtn,dom.animateBtn].filter(button=>!button.disabled||button.getAttribute('aria-pressed')==='true')).toEqual([dom.setupBtn]);
+  }finally{dispose();setLanguagePreference('en');}
+  expect(dom.setupBtn.disabled).toBe(false);expect(dom.setupBtn.getAttribute('aria-pressed')).toBe('true');expect(dom.setupBtn.getAttribute('title')).toBeNull();expect(dom.compareBtn.disabled).toBe(true);expect(dom.compareBtn.getAttribute('title')).toBe(dom.compareTitle);expect(dom.workspace.inert).toBe(false);
  });
 });
-
-test('teardown restores original control attributes and supported real model path restores Stage 3 Setup/Animate navigation',async()=>{
- const dom=buildHeaderDom();
- await withDom(dom,'http://127.0.0.1:4318/',async()=>{
-  setLanguagePreference('en');
-  // 1. Mount with no compiled model (MODEL_UNAVAILABLE), then teardown.
-  const disposeNoModel=bindStageNav({model:false});
-  const modelReason=t(stageReason(3,false)!);
-  expect(dom.root.dataset.inspectionStage).toBe('3');
-  expect(dom.root.dataset.stageRefused).toBe('true');
-  expect(exposedUsableControls(dom)).toEqual([]);
-  for(const btn of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){
-   expect(btn.disabled).toBe(true);
-   expect(btn.getAttribute('title')).toBe(modelReason);
-  }
-  disposeNoModel();
-
-  // Teardown must restore exact pre-mount DOM state, including Compare's own disabled+title attributes and empty host.
-  expect(dom.host.children).toHaveLength(0);
-  expect(dom.root.dataset.inspectionStage).toBeUndefined();
-  expect(dom.root.dataset.stageRefused).toBeUndefined();
-  expect(dom.modeSwitch.hidden).toBe(false);
-  expect(dom.picker.hidden).toBe(true);
-  expect(dom.picker.getAttribute('aria-label')).toBe('Picked build for Setup and Animate');
-  expect(dom.workspace.inert).toBe(false);
-  expect(dom.setupBtn.disabled).toBe(false);
-  expect(dom.setupBtn.getAttribute('title')).toBeNull();
-  expect(dom.setupBtn.getAttribute('aria-pressed')).toBe('true');
-  expect(dom.animateBtn.disabled).toBe(false);
-  expect(dom.animateBtn.getAttribute('title')).toBeNull();
-  expect(dom.animateBtn.getAttribute('aria-pressed')).toBe('false');
-  expect(dom.compareBtn.disabled).toBe(true);
-  expect(dom.compareBtn.getAttribute('title')).toBe(dom.compareTitle);
-  expect(dom.compareBtn.getAttribute('aria-pressed')).toBe('false');
-  expect(dom.tabView.getAttribute('aria-selected')).toBe('true');
-  expect(dom.tabRig.getAttribute('aria-selected')).toBe('false');
-
-  // 2. Mount supported real model path on the restored DOM and verify Stage 3 + Setup/Animate navigation works.
-  let setupCalls=0;
-  bindInspectorTabs(()=>{});
-  const disposeSupported=bindStageNav({model:true,setup:()=>{setupCalls++;dom.setupBtn.click();}});
-  try{
-   expect(dom.root.dataset.inspectionStage).toBe('3');
-   expect(dom.root.dataset.stageRefused).toBeUndefined();
-   expect(dom.modeSwitch.hidden).toBe(false);
-   expect(dom.workspace.inert).toBe(false);
-   expect(dom.setupBtn.disabled).toBe(false);
-   expect(dom.animateBtn.disabled).toBe(false);
-   expect(dom.compareBtn.disabled).toBe(true);
-   expect(dom.compareBtn.getAttribute('title')).toBe(dom.compareTitle);
-
-   // Animate button switches mode in Stage 3.
-   dom.animateBtn.click();
-   expect(dom.animateBtn.getAttribute('aria-pressed')).toBe('true');
-   expect(dom.setupBtn.getAttribute('aria-pressed')).toBe('false');
-   expect(dom.panelPlayback.hidden).toBe(false);
-   expect(dom.panelRig.hidden).toBe(true);
-
-   // Switching to Stage 1 hides .mode-switch, and clicking "Open setup mesh instruments" returns to Stage 3 Setup.
-   dom.host.children[0]!.click();
-   expect(dom.root.dataset.inspectionStage).toBe('1');
-   expect(dom.modeSwitch.hidden).toBe(true);
-   const panel=dom.body.querySelector('.review-stage-panel')!;
-   const meshBtn=panel.children.find(child=>child.tagName==='BUTTON')!;
-   expect(meshBtn.hidden).toBe(false);
-   meshBtn.click();
-   expect(dom.root.dataset.inspectionStage).toBe('3');
-   expect(dom.modeSwitch.hidden).toBe(false);
-   expect(setupCalls).toBe(1);
-   expect(dom.setupBtn.getAttribute('aria-pressed')).toBe('true');
-   expect(dom.panelRig.hidden).toBe(false);
-  }finally{
-   disposeSupported();
-  }
+test('#735 no-model header is refused by name and a supported header keeps real Setup/Animate navigation',async()=>{
+ const dom=buildHeaderDom();await withDom(dom,'http://127.0.0.1:4318/',async()=>{
+  const dispose=bindHeaderModeAvailability({model:false});for(const button of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){expect(button.disabled).toBe(true);expect(button.title).toBe(t('MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.'));}dispose();
+  const tabs=bindInspectorTabs(()=>{}),supported=bindHeaderModeAvailability({model:true});try{dom.animateBtn.click();expect(dom.animateBtn.getAttribute('aria-pressed')).toBe('true');expect(dom.setupBtn.getAttribute('aria-pressed')).toBe('false');expect(dom.panelPlayback.hidden).toBe(false);expect(dom.panelRig.hidden).toBe(true);dom.setupBtn.click();expect(dom.panelRig.hidden).toBe(false);expect(dom.compareBtn.disabled).toBe(true);expect(dom.compareBtn.title).toBe(dom.compareTitle);}finally{supported();tabs.dispose();}
  });
 });
 
@@ -462,24 +311,10 @@ test('pre-rig joined project preserves source-bound refusal and verdict output a
   expect(review.manifest.model).toBeUndefined();
   expect(review.capabilities).toMatchObject({preRig:true,interview:true,playback:false});
 
-  // Bind stage navigation using the exact server capabilities for this pre-rig draft.
-  const dom=buildHeaderDom();
-  await withDom(dom,origin+'/',async()=>{
-   const dispose=bindStageNav({
-    preRig:review.capabilities.preRig,
-    interview:review.capabilities.interview,
-    model:Boolean(review.manifest.model),
-   });
-   try{
-    dom.host.children[2]!.click();
-    expect(dom.root.dataset.inspectionStage).toBe('3');
-    expect(dom.root.dataset.stageRefused).toBe('true');
-    expect(exposedUsableControls(dom)).toEqual([]);
-    const status=dom.body.querySelector('.review-stage-panel')!.children[0]!;
-    expect(status.textContent).toBe(enCatalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.']);
-   }finally{
-    dispose();
-   }
+  // Header availability consumes the exact server capabilities for this pre-rig draft.
+  const dom=buildHeaderDom();await withDom(dom,origin+'/',async()=>{
+   const dispose=bindHeaderModeAvailability({model:Boolean(review.manifest.model),preRig:review.capabilities.preRig});
+   try{for(const button of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){expect(button.disabled).toBe(true);expect(button.getAttribute('aria-pressed')).toBe('false');expect(button.title).toBe(enCatalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.']);}}finally{dispose();}
   });
 
   // Session submission remains refused with MODEL_UNAVAILABLE on pre-rig draft.

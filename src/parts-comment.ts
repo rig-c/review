@@ -1,6 +1,7 @@
 /** Closed parts evidence. No synthetic model, frame, slot or package identity. */
 import { parsePartsComparison, type PartsComparison } from './parts-comparison.ts';
 import type { MarkRegion } from './stage-comment.ts';
+import type { JobComment } from './job-contract.ts';
 
 export const PARTS_COMMENT_SCHEMA = 'rig-review-parts-comment/1' as const;
 export const PARTS_ISSUE_SCHEMA = 'rig-review-parts-comment/2' as const;
@@ -43,7 +44,7 @@ export interface PartsIssue {
   sourceHash: string;
   rigRegion: MarkRegion;
   imageRegion: MarkRegion | null;
-  view: PartsComment['view'] & { mode: 'item' | 'assembled' };
+  view: PartsComment['view'] & { mode: 'item' | 'assembled'; visibleLayers?: { name: string; imageHash: string }[] };
   crop: PartsCrop & { png?: string };
   nativeCrop: PartsCrop | null;
 }
@@ -97,9 +98,22 @@ function parseView(raw: unknown, withMode: boolean): Record<string, any> {
     'footprints',
     'mesh',
     ...(Object.hasOwn(view, 'comparison') ? ['comparison'] : []),
+    ...(withMode && Object.hasOwn(view, 'visibleLayers') ? ['visibleLayers'] : []),
   ]);
   if (withMode && view.mode !== 'item' && view.mode !== 'assembled') {
     fail('PARTS_COMMENT_INVALID', 'view mode');
+  }
+  if (Object.hasOwn(view, 'visibleLayers')) {
+    if (!withMode || view.mode !== 'assembled' || !Array.isArray(view.visibleLayers) || view.visibleLayers.length > 1000) {
+      fail('PARTS_COMMENT_INVALID', 'assembled visible layers required');
+    }
+    const seen = new Set<string>();
+    for (const rawLayer of view.visibleLayers) {
+      const layer = obj(rawLayer);
+      exact(layer, ['name', 'imageHash']);
+      if (!token(layer.name) || !hash(layer.imageHash) || seen.has(layer.name)) fail('PARTS_COMMENT_INVALID', 'visible layer binding');
+      seen.add(layer.name);
+    }
   }
   if (Object.hasOwn(view, 'comparison')) {
     parsePartsComparison(view.comparison);
@@ -284,6 +298,11 @@ export function assertPartsIssueBinding(
   if (c.sourceHash !== sourceHash) {
     fail('PARTS_COMMENT_STALE_SOURCE', 'original image or package source hash differs');
   }
+  for (const layer of c.view.visibleLayers ?? []) {
+    const item = items.get(layer.name);
+    if (!item) fail('PARTS_COMMENT_PART_MISMATCH', 'visible layer belongs to another part');
+    if (item!.imageHash !== layer.imageHash) fail('PARTS_COMMENT_STALE_SOURCE', 'visible layer image hash differs');
+  }
   const matchedItems: { name: string; x: number; y: number; w: number; h: number; imageHash: string }[] = [];
   for (const p of c.parts) {
     const item = items.get(p.name);
@@ -323,4 +342,10 @@ export function assertPartsIssueBinding(
   if (r.x < minX || r.y < minY || r.x + r.width > maxX || r.y + r.height > maxY) {
     fail('PARTS_COMMENT_OUT_OF_BOUNDS', 'region exceeds union of issue parts');
   }
+}
+
+/** The pointed issues of an act@6 Parts verdict: its comments with Parts anchors, in stored order. */
+export function commentPartsIssues(comments: readonly JobComment[]): PartsIssue[] {
+  return comments.flatMap(comment => comment.anchor && 'schema' in comment.anchor ?
+    [{...structuredClone(comment.anchor), summary: comment.text} as PartsIssue] : []);
 }

@@ -400,21 +400,8 @@ footer.status-bar{flex-wrap:nowrap}
 main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{white-space:nowrap;flex:none}#stage-comment-refusal{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.stage-comment-refusal-note{display:block;margin-top:4px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--fg-muted)}.stage-comment-mode{cursor:crosshair}.stage-comment-mode video{pointer-events:none}.stage-comment-layer{position:absolute;inset:0;pointer-events:none;z-index:20;overflow:hidden}.stage-comment-region{position:absolute;border:2px solid var(--link);pointer-events:none}.stage-comment-pin{position:absolute;transform:translate(-50%,-50%);border-radius:50%;min-width:26px;height:26px;padding:2px 5px;background:var(--link);color:var(--btn-fg);pointer-events:auto}.stage-comment-composer{position:absolute;z-index:30;width:286px;max-width:calc(100% - 8px);max-height:calc(100% - 8px);overflow:auto;overflow-wrap:anywhere;padding:10px;background:var(--rv-panel);border:1px solid var(--link);border-radius:6px;box-shadow:0 4px 20px var(--rv-backdrop)}.stage-comment-composer input{width:100%}.stage-comment-composer small{display:block;margin-top:6px;color:var(--fg-muted)}.stage-comment-composer p{color:var(--fail);margin:4px 0}.stage-comment-list{position:absolute;position-anchor:--stage-comment-bar;z-index:40;right:8px;top:calc(anchor(bottom,50px) + 5px);width:310px;max-width:90%;max-height:60%;overflow:auto;background:var(--rv-panel);border:1px solid var(--border-strong);padding:12px;border-radius:6px}.stage-comment-item{padding:8px 0;border-bottom:1px solid var(--border)}.stage-comment-item>button:first-child{display:block;width:100%;text-align:left;overflow-wrap:anywhere}.stage-comment-item span{display:block;color:var(--fg-muted)}
 :root:lang(ko){word-break:keep-all;overflow-wrap:break-word}
 
-/* Stage navigation retains mounted inspection tools and their state. */
-.review-stage-nav{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
-.review-stage-nav button{font:inherit;white-space:nowrap;padding:5px 8px}
-.review-stage-nav [aria-current="step"]{font-weight:700;text-decoration:underline;text-underline-offset:4px}
-.review-stage-panel{position:fixed;inset:0;z-index:90;display:flex;flex-direction:column;padding:12px;background:var(--bg);color:inherit;overflow:auto}
-.review-stage-panel[hidden]{display:none}
-.review-stage-panel iframe{width:100%;flex:1;min-height:240px;border:0;background:var(--bg)}
-.review-stage-panel iframe[hidden]{display:none}
 .topbar,.pv-top{flex-wrap:wrap}
 
-/* Setup/Animate/Compare are instruments within stage 3, never additional primary stages. */
-:root[data-inspection-stage]:not([data-inspection-stage="3"]) .mode-switch,:root[data-stage-refused="true"] .mode-switch{display:none}
-:root[data-inspection-stage="1"] #mode-build-picker{display:flex!important}
-:root[data-inspection-stage="1"] #mode-build-picker>.eyebrow{display:none}
-:root[data-inspection-stage="2"] #mode-build-picker,:root[data-inspection-stage="4"] #mode-build-picker,:root[data-stage-refused="true"] #mode-build-picker{display:none!important}
 #direction-panel{flex:none;max-height:40%;overflow:auto;padding:.5rem .75rem;overflow-wrap:anywhere}
 #direction-panel ul{margin:.4rem 0;padding-inline-start:1.4rem}
 #direction-authored-body{display:none;flex:1;min-height:0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:.75rem}
@@ -424,20 +411,6 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 #direction-panel[open]:not([hidden]):has(#direction-authored-keys[open]:not([hidden])) + #direction-authored-body ~ #stage-layout{
   display:none
 }
-.review-stage-panel.with-interview {
-  display: grid;
-  grid-template: min-content minmax(240px, 1fr) / minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
-}
-.review-stage-panel.with-interview[hidden] { display: none; }
-.review-stage-panel.with-interview > p { grid-column: 1 / -1; margin: 0; }
-.review-stage-panel.with-interview > iframe { height: 100%; grid-area: 2 / 1; }
-.review-stage-panel.with-interview > .review-interview-frame { grid-area: 2 / 2; }
-@media (max-width: 65rem) {
-  .review-stage-panel.with-interview { grid-template: min-content repeat(2, minmax(420px, 1fr)) / minmax(0, 1fr); }
-  .review-stage-panel.with-interview > .review-interview-frame { grid-area: 3 / 1; }
-}
-
 /* Persistent job inspection uses the canonical pair and camera controls. */
 body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:100dvh;overflow:hidden}
 .job-window .job-header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--rv-bar);border-bottom:1px solid var(--border)}
@@ -451,12 +424,12 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .job-window .job-stage{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}
 .job-window .job-stage #stage-layout{height:auto;flex:1;min-height:0}
 .job-window .job-stage .viewbar,.job-window .job-transport{flex:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden])) #stage-layout{min-height:max(60%,150px)}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport){height:48px;flex-wrap:nowrap;padding:2px 8px;overflow-x:auto;overflow-y:hidden;white-space:nowrap}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport)>*{flex:none}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport)>label{display:flex;align-items:center;gap:4px}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>.job-transport>select{width:auto}
-.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))>.job-transport input[type=number]{width:8rem}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden])) #stage-layout{min-height:max(60%,150px)}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport){height:48px;flex-wrap:nowrap;padding:2px 8px;overflow-x:auto;overflow-y:hidden;white-space:nowrap}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport)>*{flex:none}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden]))>:is(.viewbar,.job-transport)>label{display:flex;align-items:center;gap:4px}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden]))>.job-transport>select{width:auto}
+.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden]))>.job-transport input[type=number]{width:8rem}
 .job-window .job-forms{overflow:auto;border-top:1px solid var(--border);padding:12px;background:var(--rv-panel)}
 .job-window .job-forms form{margin:0 0 12px;padding:12px;border:1px solid var(--border);border-radius:var(--radius)}
 .job-window .job-forms fieldset{border:0;padding:0;min-width:0}
@@ -480,16 +453,6 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
   transform: none;
   opacity: 1;
 }
-
-/* Parts publications reuse the shared parts columns and fill the job workspace. */
-.job-window .job-inspection[data-job-parts-workspace]{flex:1;grid-template-columns:240px minmax(0,1fr) 300px;grid-template-rows:minmax(0,1fr);min-height:0;min-width:0}
-.job-window .job-inspection[data-job-parts-workspace]>.job-forms{grid-column:3;grid-row:1;min-height:0;min-width:0;border-top:0;border-left:1px solid var(--border)}
-
-/* Both job and standalone hosts use the existing parts workspace presentation. */
-.job-window [data-job-parts-workspace]{--panel:var(--rv-panel);--line:var(--border);--text:var(--fg);--muted:var(--fg-muted);--accent:var(--link);--flag:var(--warn);--clean:var(--pass)}
-.job-window .job-parts-stage{display:flex;flex-direction:column;flex:1;min-height:180px;min-width:0;position:relative}
-.job-window .job-parts-stage>main{display:flex;flex:1;min-height:0;min-width:0}
-.job-window [data-job-parts-workspace] [hidden]{display:none!important}
 
 .job-window [data-job-checkpoint-evidence]{min-width:0;margin:12px 0}
 /* The shared gallery supplies inline column flow; checkpoint tiles wrap inside the existing form. */
@@ -529,8 +492,24 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .workspace-review-panel .review-dialog-header{padding:0 0 10px}
 .workspace-review-panel .review-dialog-header h2{flex:none}
 .workspace-review-panel .review-dialog-header .hint{font-size:11px}
-.inspector[data-collapsed=true] .inspector-heading{flex-wrap:wrap}.inspector[data-collapsed=true] .workspace-act-bar{padding:0;border:0;margin-left:auto}
-.inspector[data-collapsed=true] .workspace-act-bar .review-dialog-actions{flex:none}
+/* The act bar lives in the bottom panel heading in every state (#709); only the drawer holds it in its body. */
+.inspector-heading .workspace-act-bar{padding:0;border:0;margin-left:auto}
+.inspector-heading .workspace-act-bar .review-dialog-actions{flex:none;flex-wrap:nowrap}
+.inspector-heading .workspace-act-bar .review-message{flex:0 1 auto;max-width:36ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .workspace-drawer>.inspector-body{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
 .workspace-drawer>.inspector-body>[data-inspector-panel]{flex:1;min-height:0;overflow:auto;padding:12px}
 .workspace-drawer>.inspector-body>#inspector-playback:not([hidden]){display:grid;grid-template-columns:minmax(0,1fr);overflow:auto}
+
+/* The header owns mode; its existing block row and one Comments tab fill the heading. */
+/* The heading's block row wraps rather than scrolls, so no scrollbar shows at any width; below
+   the tabs' 380px basis the act bar moves to its own line instead of squeezing the tabs (#735). */
+.workspace-bottom-tabs{min-width:0;flex:1 1 380px;flex-wrap:nowrap}
+.workspace-bottom-tabs>.block-row{position:static;min-width:0;margin:0;padding:0;border:0;flex:1;flex-wrap:wrap;row-gap:4px;overflow:visible}
+.inspector-body>[data-comments=true]{display:none!important}
+.inspector-heading .workspace-act-bar{flex:none;flex-wrap:nowrap;gap:6px}
+.inspector-heading .workspace-act-bar .review-draft-state{max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.workspace-act-ask{max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#comments-list-host .stage-comment-list-inline{position:static;width:auto;max-width:none;max-height:none;border:0;padding:0}
+
+.parts-explorer li:has([data-pv-visible]){display:flex;align-items:center;gap:4px}
+.parts-explorer li:has([data-pv-visible]) button{flex:1;min-width:0}

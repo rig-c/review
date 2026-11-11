@@ -3,6 +3,7 @@ import {mkdir, readFile, unlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {startJobHub, startJobHost, JOB_API_SCHEMA, JOB_ACT_SCHEMA,
   type JobHubJob, type JobHubJobOptions, type JobOwnerHub, type JobPublication} from '../src/job-host.ts';
+import {JOB_COMMENTS_ACT_SCHEMA} from '../src/job-contract.ts';
 import {jobFixture, jobInputHashes} from './helpers/job-api-fixture.ts';
 import {redactCapability} from '../scripts/redact.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
@@ -69,7 +70,7 @@ test('#557 backend real hub HTTP keeps capture, raw act and PNG bound to its job
   expect(submitted.status).toBe(200);
   const saved = await submitted.json();
   expect(saved.ok).toBe(true);
-  expect(saved.value.schema).toBe('rig-review/act@3');
+  expect(saved.value.schema).toBe('rig-review/act@6');
   for (const accept of ['application/vnd.rig-review.act+json', 'image/png']) {
     const response = await fetch(job.origin + `/jobs/${job.session.jobId}/api`, {method: 'POST',
       headers: {'Content-Type': 'application/json', Accept: accept,
@@ -110,7 +111,7 @@ test('one embedded listener owns nine independent jobs, asks, generations and fi
       expectedGeneration: job.session.status().generation, submissionId: 'synthetic-save', kind: 'checkpoint',
       value: {checkpointId: 'step-one', outcome: 'pass', words: 'synthetic human UI transport fixture'}});
     const act = await response.json(); expect(act.ok).toBe(true);
-    expect(act.value.schema).toBe(JOB_ACT_SCHEMA);
+    expect(act.value.schema).toBe(JOB_COMMENTS_ACT_SCHEMA);
     expect(act.value.authority.reviewer).toEqual(reviewer);
     expect(act.value.jobId).toBe(job.session.jobId); acts.push(act.value);
     const fetched = await api(job, {verb: 'fetch-act', actId: act.value.actId}, grants[index]);

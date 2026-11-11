@@ -3,8 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   JOB_ACT_SCHEMA,
-  JOB_RIG_REVIEW_ACT_SCHEMA,
-  JOB_PARTS_VERDICT_ACT_SCHEMA,
+  JOB_COMMENTS_ACT_SCHEMA,
   JOB_API_SCHEMA,
   type JobAct,
   type JobActSources,
@@ -17,7 +16,6 @@ import {
   type JobImageSetInput,
   type JobNextValue,
   type JobRigStill,
-  type JobRigReviewAct,
 } from '../src/job-contract.ts';
 import { jobHash } from '../src/job-api.ts';
 import { jobCommand } from '../src/job-cli.ts';
@@ -100,12 +98,14 @@ function assertNextVerbatimOracle(
     const act: JobAct = event.act;
     const rig = expected.kind === 'review-verdict' &&
       (expected.value as {stage?: string}).stage === 'rig-review';
-    expect(act.schema).toBe(rig ? JOB_RIG_REVIEW_ACT_SCHEMA :
-      expected.kind === 'parts-verdict' ? JOB_PARTS_VERDICT_ACT_SCHEMA : JOB_ACT_SCHEMA);
+    // #713: fresh checkpoint, parts, rig/post verdict and signoff acts are act@6; surveys and image review stay @2.
+    const comments = expected.kind !== 'interview-picks' &&
+      (expected.value as {stage?: string}).stage !== 'image-review';
+    expect(act.schema).toBe(comments ? JOB_COMMENTS_ACT_SCHEMA : JOB_ACT_SCHEMA);
     if (rig) {
       const expectedStill = expected.still;
       expect(expectedStill).toBeDefined();
-      expect((act as JobRigReviewAct).still).toEqual(expectedStill!);
+      expect((act as {still?: JobRigStill}).still).toEqual(expectedStill!);
     }
     expect(act.actId).toBe(expected.actId);
     expect(act.jobId).toBe(expected.jobId);
@@ -114,9 +114,24 @@ function assertNextVerbatimOracle(
     expect(act.kind).toBe(expected.kind);
     expect(act.authority).toEqual(expected.authority);
     expect(act.source).toEqual(expected.source);
-    expect(act.value).toEqual(expected.value);
+    expect(act.value).toEqual((comments ? writtenComments(expected) : expected.value) as never);
   }
   return response;
+}
+
+/** The submitted words and issues, spelled as the act@6 value the writer must emit. */
+function writtenComments(expected: ExpectedActOracleInput): unknown {
+  const {words, ...value} = expected.value as {words: string; issues?: readonly PartsIssue[]};
+  const note = words.trim() ? [{text: words}] : [];
+  if (expected.kind === 'checkpoint') {
+    const {checkpointId, planStepId} = value as unknown as {checkpointId: string; planStepId: string};
+    return {...value, comments: words.trim() ? [{text: words, anchor: {checkpointId, planStepId}}] : []};
+  }
+  if (expected.kind === 'parts-verdict') {
+    const {issues, ...rest} = value;
+    return {...rest, comments: [...issues!.map(({summary, ...anchor}) => ({text: summary, anchor})), ...note]};
+  }
+  return {...value, comments: note};
 }
 
 interface NamedMutantCase {
@@ -293,35 +308,35 @@ test('real semantic next preserves verbatim reviewer words across checkpoint, si
   const mutants: NamedMutantCase[] = [
     {
       name: 'planted-mutant:checkpoint-trimmed-whitespace-and-newlines',
-      targetField: 'events[checkpoint].act.value.words',
+      targetField: 'events[checkpoint].act.value.comments[0].text',
       originalWords: checkpointWords,
       mutatedWords: checkpointWords.trim().replace(/\s+/g, ' '),
       mutate(cloned) {
         const event = cloned.value.events.find(e => e.type === 'act' && e.act.kind === 'checkpoint');
         if (!event || event.type !== 'act' || event.act.kind !== 'checkpoint') throw new Error('Missing checkpoint act');
-        (event.act.value as { words: string }).words = checkpointWords.trim().replace(/\s+/g, ' ');
+        (event.act.value as unknown as { comments: { text: string }[] }).comments[0]!.text = checkpointWords.trim().replace(/\s+/g, ' ');
       },
     },
     {
       name: 'planted-mutant:signoff-stripped-emoji-and-korean',
-      targetField: 'events[signoff].act.value.words',
+      targetField: 'events[signoff].act.value.comments[0].text',
       originalWords: signoffWords,
       mutatedWords: ' [Sign-off] plan-approved passed. ',
       mutate(cloned) {
         const event = cloned.value.events.find(e => e.type === 'act' && e.act.kind === 'signoff');
         if (!event || event.type !== 'act' || event.act.kind !== 'signoff') throw new Error('Missing signoff act');
-        (event.act.value as { words: string }).words = ' [Sign-off] plan-approved passed. ';
+        (event.act.value as unknown as { comments: { text: string }[] }).comments[0]!.text = ' [Sign-off] plan-approved passed. ';
       },
     },
     {
       name: 'planted-mutant:rig-review-paraphrased-reviewer-words',
-      targetField: 'events[review-verdict].act.value.words',
+      targetField: 'events[review-verdict].act.value.comments[0].text',
       originalWords: rigVerdictWords,
       mutatedWords: rigVerdictWords.replace('+3.5° 조정 필요 🛠️', '+3.5도 수정 요망'),
       mutate(cloned) {
         const event = cloned.value.events.find(e => e.type === 'act' && e.act.kind === 'review-verdict');
         if (!event || event.type !== 'act' || event.act.kind !== 'review-verdict') throw new Error('Missing review-verdict act');
-        (event.act.value as { words: string }).words = rigVerdictWords.replace('+3.5° 조정 필요 🛠️', '+3.5도 수정 요망');
+        (event.act.value as unknown as { comments: { text: string }[] }).comments[0]!.text = rigVerdictWords.replace('+3.5° 조정 필요 🛠️', '+3.5도 수정 요망');
       },
     },
   ];
@@ -331,7 +346,7 @@ test('real semantic next preserves verbatim reviewer words across checkpoint, si
   }
 });
 
-test('real semantic next preserves verbatim issue summaries in act5 parts-verdict and rejects named in-memory mutations', async () => {
+test('real semantic next preserves verbatim issue summaries in act@6 parts-verdict and rejects named in-memory mutations', async () => {
   // Parts verdicts carry spatial issues. Preserve both human summaries and the final Words value.
   const partsFixture = await fixture();
   const partsIdentity = await syntheticJobParts(partsFixture, { project: true, painting: true });
@@ -423,14 +438,14 @@ test('real semantic next preserves verbatim issue summaries in act5 parts-verdic
 
   assertPlantedMutantRejectedBySameOracle(genuinePartsNext, partsFixture.session.jobId, expectedPartsActs, {
     name: 'planted-mutant:parts-verdict-issue-summary-rewrite',
-    targetField: 'events[parts-verdict].act.value.issues[1].summary',
+    targetField: 'events[parts-verdict].act.value.comments[1].text',
     originalWords: bodyMeshNote,
     mutatedWords: bodyMeshNote.trim(),
     mutate(cloned) {
       const event = cloned.value.events.find(e => e.type === 'act' && e.act.kind === 'parts-verdict');
-      if (!event || event.type !== 'act' || event.act.kind !== 'parts-verdict' || event.act.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA)
-        throw new Error('Missing act5 parts-verdict');
-      event.act.value.issues[1]!.summary = bodyMeshNote.trim();
+      if (!event || event.type !== 'act' || event.act.kind !== 'parts-verdict' || event.act.schema !== JOB_COMMENTS_ACT_SCHEMA)
+        throw new Error('Missing act@6 parts-verdict');
+      (event.act.value.comments[1] as { text: string }).text = bodyMeshNote.trim();
     },
   });
 });

@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import {compareViewSwitch,compareViewModes,eligibilityViewSwitch,type ViewSwitchConfig} from '../web/view-controls.ts';
+import {compareViewModes,eligibilityViewSwitch,type ViewSwitchConfig} from '../web/view-controls.ts';
 import {pairEligibility,pairLayouts,type InputState,type PairInputs} from '../src/comparison-eligibility.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
@@ -9,6 +9,7 @@ const base:PairInputs={a:loaded,b:loaded,reference:loaded,domain:{end:2}};
 const modes=(config:ViewSwitchConfig)=>config.groups.flatMap(group=>group.modes);
 const reasonOf=(config:ViewSwitchConfig,id:string)=>modes(config).find(mode=>mode.id===id)?.disabledReason;
 const pressed=(config:ViewSwitchConfig)=>modes(config).filter(mode=>mode.pressed).map(mode=>mode.id);
+const compareViewSwitch=(state:ReturnType<typeof pairEligibility>,onChange?:(id:typeof state.requested)=>void)=>eligibilityViewSwitch(state,compareViewModes,onChange);
 const build=(inputs:PairInputs)=>{const state=pairEligibility(inputs);return {state,config:compareViewSwitch(state)};};
 
 test('one group in the order Side by side · Reference · A · B, covering every pair layout',()=>{
