@@ -144,7 +144,7 @@ export function mountActBar(options:ActBarOptions):ActBar {
    if(key==='Escape'){event.preventDefault();close();return;}
    if(['ArrowDown','ArrowUp','Home','End'].includes(key)){event.preventDefault();const index=items.indexOf(event.target as HTMLButtonElement);items[key==='Home'?0:key==='End'?items.length-1:(index+(key==='ArrowDown'?1:items.length-1))%items.length]!.focus();}
   });
-  listen(menu,'focusout',event=>{if(!menu.contains((event as FocusEvent).relatedTarget as Node|null))close(false);});
+  listen(menu,'focusout',event=>{const target=(event as FocusEvent).relatedTarget;if(target!==button&&!menu.contains(target as Node|null))close(false);});
   // Item listeners own activation; events from the sibling popup never trigger submit.
   actions.append(button,menu);labels.push({button,label:'More act actions'});
  }

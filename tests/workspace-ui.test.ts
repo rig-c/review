@@ -485,13 +485,16 @@ test('#676 parts-shaped act bar derives its label, shares state nodes and operat
   const root=bar.element as unknown as Host,actions=root.children[0]!,button=actions.children[2]!,menu=actions.children[3]!,items=menu.children;
   expect(actions.children.slice(0,2)).toEqual([saved,submit]);expect(submit.textContent).toBe('Approve parts and sign off');
   issues=2;bar.refresh();expect(submit.textContent).toBe('Request fixes (2 issues)');
-  setLanguagePreference('ko');expect(submit.textContent).toBe('수정 요청 보내기 (이슈 2)');expect(button.getAttribute('aria-label')).toBe('추가 검토 작업');
+  setLanguagePreference('ko');expect(submit.textContent).toBe('수정 요청 보내기 (이슈 2)');expect(button.getAttribute('aria-label')).toBe('작업 더 보기');
   setLanguagePreference('en');expect(menu.hidden).toBe(true);expect(button.getAttribute('aria-haspopup')).toBe('menu');expect(menu.getAttribute('role')).toBe('menu');
   const key=(node:Host,value:string,target:Host=node)=>{const event=new Event('keydown',{cancelable:true});Object.defineProperties(event,{key:{value},target:{value:target}});node.dispatchEvent(event);return event;};
   expect(key(button,'ArrowDown').defaultPrevented).toBe(true);expect(menu.hidden).toBe(false);expect(hostDocument.activeElement).toBe(items[0]!);
   key(menu,'End',items[0]);expect(hostDocument.activeElement).toBe(items[1]!);
   key(menu,'ArrowDown',items[1]);expect(hostDocument.activeElement).toBe(items[0]!);
   key(menu,'Escape',items[0]);expect(menu.hidden).toBe(true);expect(hostDocument.activeElement).toBe(button);
+  button.click();expect(menu.hidden).toBe(false);
+  const toButton=new Event('focusout');Object.defineProperty(toButton,'relatedTarget',{value:button});menu.dispatchEvent(toButton);
+  expect(menu.hidden).toBe(false);button.click();expect(menu.hidden).toBe(true);expect(button.getAttribute('aria-expanded')).toBe('false');
   key(button,'Enter');items[0]!.click();expect(json).toBe(1);expect(menu.hidden).toBe(true);expect(hostDocument.activeElement).toBe(button);
   key(button,' ');items[1]!.click();expect(issue).toBe(1);expect(hostDocument.activeElement).toBe(button);
   key(button,'ArrowUp');expect(hostDocument.activeElement).toBe(items[1]!);menu.dispatchEvent(new Event('focusout'));expect(menu.hidden).toBe(true);
