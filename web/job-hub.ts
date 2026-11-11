@@ -1,3 +1,4 @@
+import {mountWorkspaceShell} from './workspace-ui.ts';
 /** Owner-only job selection. Each retained frame owns its existing job window and draft. */
 import type {JobHubList, JobHubRow} from '../src/job-hub.ts';
 
@@ -64,12 +65,8 @@ export async function mountJobHub(root: HTMLElement): Promise<() => void> {
   const access = jobHubAccess(location.href, storage, href => history.replaceState(history.state, '', href));
   const requestedLanguage = new URL(location.href).searchParams.get('lang');
   if (requestedLanguage === 'en' || requestedLanguage === 'ko') i18n.setLanguagePreference(requestedLanguage);
-  const header = document.createElement('header'); header.className = 'hub-header';
-  const title = document.createElement('h1');
-  const notice = document.createElement('p'); notice.className = 'hub-status'; notice.setAttribute('role', 'status');
-  const language = document.createElement('select');
-  for (const name of ['en', 'ko']) {const option = document.createElement('option'); option.value = name; language.append(option);}
-  header.append(title, notice, language);
+  const shell = mountWorkspaceShell({compatibility: 'legacyHubStep6'});
+  const {header, title} = shell, notice = shell.status!, language = shell.language!;
   const list = document.createElement('nav'); list.className = 'hub-list';
   const stage = document.createElement('main'); stage.className = 'hub-stage';
   root.replaceChildren(header, list, stage);

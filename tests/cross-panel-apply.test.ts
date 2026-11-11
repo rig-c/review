@@ -23,7 +23,7 @@ import {
   APPLIED_RETARGET_SCHEMA,
   parseAppliedContext,
 } from '../src/applied-context.ts';
-import { renderCompareHtml } from '../src/compare-html.ts';
+import { rigWorkspaceMarkup,rigReviewDialogMarkup,renderCompareHtml } from '../src/compare-html.ts';
 import { loadCompare } from '../src/compare.ts';
 import { startCompareServer } from '../src/compare-server.ts';
 import { CONFIG_PATCH_SCHEMA, type ConfigPatch, type PatchOp } from '../src/config-patch.ts';
@@ -235,7 +235,7 @@ const sampleRecords: Record<RebuildPanelKind, { record: unknown; part?: string; 
 };
 
 test('#250 condition 1: every panel kind shows a plain-words statement beside its Apply button before the click when another panel is applied, none on initial/same-panel second Apply, no modal, and refuses unknown records by name (with failing control)', () => {
-  const indexHtml = readFileSync(join(import.meta.dir, '../web/index.html'), 'utf8');
+  const indexHtml = (rigWorkspaceMarkup+rigReviewDialogMarkup);
   const compareTemplate = readFileSync(join(import.meta.dir, '../web/compare.html'), 'utf8');
   const compareHtml = renderCompareHtml(compareTemplate, indexHtml);
   const retargetSource = readFileSync(join(import.meta.dir, '../web/retarget-panel.ts'), 'utf8');

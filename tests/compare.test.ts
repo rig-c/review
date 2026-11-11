@@ -63,32 +63,42 @@ test('comparison reference refuses same-size overwritten and atomically replaced
 
 import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
-import { assertSharedCompareMarkup, extractSharedWorkspaceMarkup, renderCompareHtml, type SharedWorkspaceMarkup } from '../src/compare-html.ts';
+import { assertSharedCompareMarkup, extractSharedWorkspaceMarkup, renderCompareHtml, rigWorkspaceMarkup, legacyCompareHeaderContent, type SharedWorkspaceMarkup } from '../src/compare-html.ts';
 import { frontRoute } from '../src/front.ts';
 import { openReview } from '../src/open.ts';
 import { decodeBookmark, encodeBookmark, parseBookmark, type InspectionBinding, type InspectionBookmark } from '../web/inspection-persistence.ts';
 import { stageCommentMode } from '../src/stage-comment.ts';
 
-test('single and compare shells share Setup · Animate · Compare top switch and identical Setup/Animate markup, failing on a planted difference', async () => {
+test('compare mounts shared header content and retains eight identical canonical Setup/Animate regions, failing on planted differences', async () => {
   const [indexHtml, compareTemplate] = await Promise.all([
     readFile(new URL('../web/index.html', import.meta.url), 'utf8'),
     readFile(new URL('../web/compare.html', import.meta.url), 'utf8'),
   ]);
-  expect(indexHtml).toContain('data-mode="compare" aria-pressed="false" disabled title="No second build supplied: reopen with --compare &lt;built&gt; --reference &lt;video&gt;">Compare</button>');
-  expect(compareTemplate).toContain('data-mode="rig" aria-pressed="false">Setup</button>');
-  expect(compareTemplate).toContain('data-mode="playback" aria-pressed="false">Animate</button>');
-  expect(compareTemplate).toContain('data-mode="compare" aria-pressed="true">Compare</button>');
-  const rendered = renderCompareHtml(compareTemplate, indexHtml);
-  expect(() => assertSharedCompareMarkup(rendered, indexHtml)).not.toThrow();
-  const shared = extractSharedWorkspaceMarkup(indexHtml);
+  expect(indexHtml).not.toContain('id="package-title"');
+  expect(indexHtml).not.toContain('id="inspector-rig"');
+  expect(indexHtml).toContain('<div id="app"></div>');
+  expect(compareTemplate).toContain('data-workspace-header');
+  expect(compareTemplate).toContain('data-workspace-camera');
+  expect(compareTemplate).toContain('data-workspace-view-tools');
+  expect(compareTemplate).not.toContain('<!-- shared:view-tools -->');
+  expect(compareTemplate).not.toContain('id="camera-sync"');
+  expect(legacyCompareHeaderContent.modeSwitch).toContain('data-mode="rig" aria-pressed="false">Setup</button>');
+  expect(legacyCompareHeaderContent.modeSwitch).toContain('data-mode="playback" aria-pressed="false">Animate</button>');
+  expect(legacyCompareHeaderContent.modeSwitch).toContain('data-mode="compare" aria-pressed="true">Compare</button>');
+  const rendered = renderCompareHtml(compareTemplate);
+  expect(() => assertSharedCompareMarkup(rendered)).not.toThrow();
+  const shared = extractSharedWorkspaceMarkup();
   const keys = Object.keys(shared) as (keyof SharedWorkspaceMarkup)[];
-  expect(keys.length).toBe(9);
+  expect(keys.length).toBe(8);
   for (const key of keys) {
     const planted = rendered.replace(shared[key], shared[key] + '<!-- planted-difference -->');
-    expect(() => assertSharedCompareMarkup(planted, indexHtml)).toThrow(`COMPARE_SHARED_MARKUP_DRIFT: ${key}`);
+    expect(() => assertSharedCompareMarkup(planted)).toThrow(`COMPARE_SHARED_MARKUP_DRIFT: ${key}`);
   }
+  for (const id of ['inspector-rig', 'inspector-playback']) expect(rigWorkspaceMarkup).toContain(`id="${id}"`);
+  expect(() => extractSharedWorkspaceMarkup(rigWorkspaceMarkup.replace('<section id="modeling-tools"', '<section id="missing-modeling-tools"'))).toThrow('COMPARE_SHARED_MARKUP_MISSING: setupPanels');
+  expect(() => assertSharedCompareMarkup(rendered + '<div id="selected-part"></div>')).toThrow('COMPARE_DUPLICATE_ID: duplicate id="selected-part"');
   const missingPlaceholder = compareTemplate.replace('<!-- shared:setup-panels -->', '');
-  expect(() => renderCompareHtml(missingPlaceholder, indexHtml)).toThrow('COMPARE_SHARED_MARKUP_MISSING: placeholder <!-- shared:setup-panels -->');
+  expect(() => renderCompareHtml(missingPlaceholder)).toThrow('COMPARE_SHARED_MARKUP_MISSING: placeholder <!-- shared:setup-panels -->');
 });
 
 test('compare bookmarks and stage comments carry setup, animate and compare modes and reject mismatched mode/inspector pairs', () => {
@@ -225,8 +235,7 @@ fs.writeFileSync(path.join(out,'page.png'),'rebuilt-png');console.log('rigc: wro
     const landing = await fetch(opened.url);
     expect(landing.status).toBe(200);
     const html = await landing.text();
-    const indexHtml = await readFile(new URL('../web/index.html', import.meta.url), 'utf8');
-    expect(() => assertSharedCompareMarkup(html, indexHtml)).not.toThrow();
+    expect(() => assertSharedCompareMarkup(html)).not.toThrow();
 
     const statusA = await (await fetch(base + 'api/compare/a/rebuild')).json();
     const statusB = await (await fetch(base + 'api/compare/b/rebuild')).json();

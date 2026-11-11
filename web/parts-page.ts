@@ -1,3 +1,4 @@
+import { mountWorkspaceShell } from './workspace-ui.ts';
 import { bindDomI18n, unbindDomI18n, onLanguageChange, setLanguagePreference, setLinkLanguage, t } from './i18n.ts';
 import { pageInstanceAccess } from './instance-access.ts';
 import { connectLiveWindow } from './live-connection.ts';
@@ -10,6 +11,8 @@ export function bootPartsPage(): PartsWorkspaceHandle {
   const access = pageInstanceAccess();
   const url = new URL(location.href);
   const embedded = url.searchParams.get('stageEmbed') === '1';
+  const shell = mountWorkspaceShell({compatibility: 'legacyPartsStep2', embedded});
+  document.querySelector('.pv-layout')!.before(shell.header, '\n ');
   const side = url.searchParams.get('side');
   const partsApi = embedded
     ? (side === 'a' || side === 'b' ? `/api/compare/${side}/stage-parts` : '/api/stage-parts')
@@ -188,7 +191,6 @@ export function bootPartsPage(): PartsWorkspaceHandle {
     button.onclick = () => {void action();}; actions.append(button);
     disposers.push(onLanguageChange(() => {button.textContent = t(label);}));
   }
-  if (embedded) required('.pv-top').hidden = true;
   const ready = mounted.ready.then(async () => {
     if (disposed) return;
     if (restore) await mounted.restore(restore);

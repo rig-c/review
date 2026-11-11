@@ -1,3 +1,4 @@
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readdir,readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -67,7 +68,7 @@ test('Bar 2: checkWebHardcodedStrings passes on web/, lists every exemption with
  const files:Array<{path:string;content:string}>=[];
  for(const name of entries.sort()){
   if(name.endsWith('.html')||name.endsWith('.ts')){
-   files.push({path:`web/${name}`,content:await readFile(new URL(name,webDir),'utf8')});
+   files.push({path:`web/${name}`,content:await readFile(new URL(name,webDir),'utf8')+(name==='index.html'?rigWorkspaceMarkup+rigReviewDialogMarkup+rigLayerControlsMarkup+sharedViewToolsMarkup+sharedCommentMarkup:'')});
   }
  }
  const clean=checkWebHardcodedStrings(files);
@@ -86,13 +87,13 @@ test('Bar 2: checkWebHardcodedStrings passes on web/, lists every exemption with
  expect(()=>checkWebHardcodedStrings(files,{exemptions:[...WEB_STRING_EXEMPTIONS,{file:'web/main.ts',match:'foo',reason:'   '}]})).toThrow('I18N_EXEMPTION_REASON_REQUIRED');
 
  // Planted control 1: hardcoded visible text in HTML fails.
- const plantedHtml=files.map(f=>f.path==='web/index.html'?{...f,content:f.content.replace('</header>','<button type="button">Planted hardcoded button label</button></header>')}:f);
+ const plantedHtml=files.map(f=>f.path==='web/index.html'?{...f,content:f.content.replace('</body>','<button type="button">Planted hardcoded button label</button></body>')}:f);
  const resHtml=checkWebHardcodedStrings(plantedHtml);
  expect(resHtml.ok).toBe(false);
  expect(resHtml.violations.some(v=>v.file==='web/index.html'&&v.kind==='html-text'&&v.text==='Planted hardcoded button label')).toBe(true);
 
  // Planted control 2: hardcoded visible attribute in HTML fails.
- const plantedAttr=files.map(f=>f.path==='web/compare.html'?{...f,content:f.content.replace('</header>','<input aria-label="Planted hardcoded aria label"></header>')}:f);
+ const plantedAttr=files.map(f=>f.path==='web/compare.html'?{...f,content:f.content.replace('</body>','<input aria-label="Planted hardcoded aria label"></body>')}:f);
  const resAttr=checkWebHardcodedStrings(plantedAttr);
  expect(resAttr.ok).toBe(false);
  expect(resAttr.violations.some(v=>v.file==='web/compare.html'&&v.kind==='html-attr'&&v.text==='Planted hardcoded aria label')).toBe(true);

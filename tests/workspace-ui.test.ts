@@ -1,5 +1,8 @@
+import {mountRigInspector} from '../web/inspector-blocks.ts';
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {workspaceResizeRange,workspaceResizeTarget,bindWorkspaceUI} from '../web/workspace-ui.ts';
+import {bindInspectorTabs,type InspectorTabRow} from '../web/view-controls.ts';
 import {allocateWorkspaceLayout} from '../web/workspace-layout.ts';
 import {workspacePreferenceKey,WorkspacePreferenceStore} from '../web/workspace-preferences.ts';
 
@@ -20,14 +23,17 @@ class Host extends EventTarget {
  constructor(tag='div'){super();this.tagName=tag.toUpperCase();}
  get className(){return [...this.classes].join(' ');}set className(value:string){this.classes=new Set(value.split(' '));}
  get childNodes(){return this.children;}
- remove(node:Host){this.children=this.children.filter(n=>n!==node);node.parentElement=null;}
+ get firstElementChild(){return this.children[0]??null;}
+ closest(selector:string):Host|null {return this.tagName.toLowerCase()===selector?this:this.parentElement?.closest(selector)??null;}
+ remove(node?:Host){if(!node){this.parentElement?.remove(this);return;}this.children=this.children.filter(n=>n!==node);node.parentElement=null;}
+ replaceChildren(...nodes:Host[]){for(const child of [...this.children])this.remove(child);this.append(...nodes);}
  append(...nodes:Host[]){for(const node of nodes){node.parentElement?.remove(node);node.parentElement=this;this.children.push(node);}}
  prepend(...nodes:Host[]){for(const node of [...nodes].reverse()){node.parentElement?.remove(node);node.parentElement=this;this.children.unshift(node);}}
  before(node:Host){const parent=this.parentElement!;node.parentElement?.remove(node);node.parentElement=parent;parent.children.splice(parent.children.indexOf(this),0,node);}
  after(node:Host){const parent=this.parentElement!;node.parentElement?.remove(node);node.parentElement=parent;parent.children.splice(parent.children.indexOf(this)+1,0,node);}
  contains(node:unknown):boolean{return node===this||this.children.some(n=>n.contains(node));}
  all():Host[]{return this.children.flatMap(n=>[n,...n.all()]);}
- querySelector(selector:string):Host|null {return this.all().find(n=>selector.startsWith('.')?n.classes.has(selector.slice(1)):selector==='main'?n.tagName==='MAIN':selector.includes('aria-selected=true')&&n.attrs.get('aria-selected')==='true'||selector.includes('aria-pressed=true')&&n.attrs.get('aria-pressed')==='true')??null;}
+ querySelector(selector:string):Host|null {return this.all().find(n=>selector.startsWith('.')?n.classes.has(selector.slice(1)):selector.startsWith('#')?n.id===selector.slice(1):selector.startsWith('label[for=')?n.tagName==='LABEL'&&n.attrs.get('for')==='review-status':selector==='main'?n.tagName==='MAIN':selector.includes('aria-selected=true')&&n.attrs.get('aria-selected')==='true'||selector.includes('aria-pressed=true')&&n.attrs.get('aria-pressed')==='true')??null;}
  set innerHTML(value:string){this.children=[];for(const match of value.matchAll(/<(select|input|button|p)[^>]*id="([^"]+)"[^>]*>/g)){const n=new Host(match[1]);n.id=match[2]!;if(match[0].includes('data-app-preference'))n.attrs.set('data-app-preference','');this.append(n);}}
  getAttribute(name:string){return this.attrs.get(name)??null;}setAttribute(name:string,value:string){this.attrs.set(name,value);}removeAttribute(name:string){this.attrs.delete(name);}
  getBoundingClientRect(){return {width:this.clientWidth,height:this.classes.has('workspace-drawer-triggers')?0:this.clientHeight};}
@@ -37,9 +43,16 @@ class Host extends EventTarget {
  setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);}
 }
 let hostDocument:{activeElement:Host|null};
-function openHost(options:{explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean}={}){
+function openHost(options:{explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean;bottomPanel?:boolean}={}){
  const body=new Host('body'),layout=new Host(),main=new Host('main'),left=new Host('aside'),right=new Host('aside'),stage=new Host(),inspector=new Host(),heading=new Host();layout.className='layout';left.className='left-panel';right.id='parts-explorer';stage.id='stage-layout';inspector.className='inspector';heading.clientHeight=30;
+ const language=new Host('select');language.id='settings-language';const languageLabel=new Host('label');languageLabel.append(language);body.append(languageLabel);
  const tabs=options.tabs??['view','rig','playback','feedback'],panels={} as Record<string,Host>;for(const tab of tabs){const panel=new Host('section'),button=new Host('button');panel.id='inspector-'+tab;panel.dataset.inspectorPanel=tab;panel.hidden=tab!==tabs[0];panel.clientHeight=200;panel.clientWidth=500;button.dataset.inspector=tab;button.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(tab===tabs[0]));panels[tab]=panel;if(options.pressed){button.dataset.mode=tab;body.append(button);inspector.append(panel);}else inspector.append(button,panel);}
+ let bottomPanel:{strip:Host;act:Host;actHome:Host;collapse:Host}|undefined,bottomBody:Host|undefined;
+ if(options.bottomPanel){
+  const strip=new Host('nav'),bottomHeading=new Host(),act=new Host(),collapse=new Host('button');bottomBody=new Host();bottomBody.className='inspector-body';bottomHeading.clientHeight=30;
+  for(const child of [...inspector.children])if(child.dataset.inspector)strip.append(child);else bottomBody.append(child);
+  const actHome=panels.feedback!;act.id='workspace-review-act';actHome.append(act);bottomHeading.append(strip,collapse);inspector.append(bottomHeading,bottomBody);bottomPanel={strip,act,actHome,collapse};
+ }
  main.append(heading,stage,inspector);
  if(options.direction){
   layout.clientWidth=1440;layout.clientHeight=969;heading.clientHeight=80;
@@ -52,11 +65,15 @@ if(options.leftHeader){const header=new Host(),strip=new Host('details');header.
  const document=Object.assign(new EventTarget(),{body,hidden:false,activeElement:null as Host|null,getElementById:(id:string)=>body.all().find(n=>n.id===id)??null,querySelector:(selector:string)=>body.querySelector(selector),createElement:(tag:string)=>new Host(tag)});hostDocument=document;
  const globals={document,window:events,localStorage:{getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value)},requestAnimationFrame:(callback:()=>void)=>{frames.set(++handle,callback);return handle;},cancelAnimationFrame:(id:number)=>frames.delete(id),ResizeObserver:class{observe(){}disconnect(){}},MutationObserver:class{constructor(_callback:()=>void){}observe(){}disconnect(){}}};
  const old=new Map<string,PropertyDescriptor|undefined>();for(const [key,value]of Object.entries(globals)){old.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});}
- let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({changed:()=>changed++,defaultTheme:value=>{currentTheme=value;},...(options.currentTheme?{currentTheme:options.currentTheme}:{})});
+ let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({changed:()=>changed++,defaultTheme:value=>{currentTheme=value;},...(options.currentTheme?{currentTheme:options.currentTheme}:{}),...(bottomPanel?{bottomPanel:bottomPanel as unknown as Parameters<typeof bindWorkspaceUI>[0]['bottomPanel']}:{})});
  const flush=()=>{for(let i=0;i<5;i++){const pending=[...frames.values()];frames.clear();for(const run of pending)run();}};flush();
+ const tabBinding=bottomPanel?bindInspectorTabs(()=>ui.afterTab(),()=>ui.beforeTab(),{
+  tabs:bottomPanel.strip.children.map(button=>({id:button.dataset.inspector!,button:button as unknown as HTMLButtonElement,panels:[panels[button.dataset.inspector!] as unknown as HTMLElement],attribute:'aria-selected' as const})),
+  panels:Object.values(panels) as unknown as HTMLElement[],initialize:true,reveal:()=>ui.revealInspector(),
+ }):undefined;
  const get=(id:string)=>document.getElementById(id)!;
  const choose=(id:string,value:string|boolean)=>{const node=get(id);if(typeof value==='boolean')node.checked=value;else node.value=value;(node as unknown as {onchange:()=>void}).onchange();};
- return {ui,get,choose,values,layout,panels,flush,changed:()=>changed,theme:()=>currentTheme,events,activate(tab:string){ui.beforeTab();for(const node of [...inspector.children,...body.children])if(node.dataset.inspector)node.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(node.dataset.inspector===tab));for(const [name,node]of Object.entries(panels))node.hidden=name!==tab;ui.afterTab();flush();},close(){ui.dispose();for(const [key,value]of old)if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}};
+ return {ui,get,choose,values,layout,panels,flush,tabBinding,bottomPanel,bottomBody,focus:()=>document.activeElement,changed:()=>changed,theme:()=>currentTheme,events,activate(tab:string){ui.beforeTab();for(const node of [...inspector.children,...body.children])if(node.dataset.inspector)node.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(node.dataset.inspector===tab));for(const [name,node]of Object.entries(panels))node.hidden=name!==tab;ui.afterTab();flush();},close(){tabBinding?.dispose();ui.dispose();for(const [key,value]of old)if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}};
 }
 
 test('Settings changes future sync/idle defaults only; transient source state and Reset remain independent',()=>{
@@ -115,19 +132,14 @@ test('an explorer inside the left column makes it the parts column: no right col
  }finally{app.close();}
 });
 
-const indexHtml=()=>readFile(new URL('../web/index.html',import.meta.url),'utf8');
+const indexHtml=async()=>rigWorkspaceMarkup+rigReviewDialogMarkup;
 const between=(html:string,start:string,end:string)=>{const a=html.indexOf(start),b=html.indexOf(end,a);if(a<0||b<a)throw new Error(`index.html region missing: ${start} … ${end}`);return html.slice(a,b+end.length);};
-test('the Inspector has two sections, Setup and Animate; the header switch is the only section selector and none sits inside the Inspector',async()=>{
+test('canonical rig content preserves both source sections and all 18 real tool tabs; C6 mounts the Review act separately',async()=>{
  const html=await indexHtml(),inspector=between(html,'<section class="inspector"','</main>');
- expect(inspector).not.toMatch(/data-inspector="/);
- // The only tablists inside are the two block rows (#308): they switch blocks within a section, never the section.
- expect([...inspector.matchAll(/<[a-z]+[^>]*role="tablist"[^>]*>/g)].map(m=>m[0])).toEqual(['<nav class="block-row" role="tablist" aria-label="Setup blocks">','<nav class="block-row" role="tablist" aria-label="Animate blocks">']);
- const tabs=[...inspector.matchAll(/<[a-z]+[^>]*role="tab"[^>]*>/g)].map(m=>m[0]);expect(tabs.length).toBe(18);for(const tab of tabs)expect(tab).toMatch(/ data-block-target="[a-z-]+"/);
- const selectors=[...html.matchAll(/<button type="button" data-mode="([^"]+)" data-inspector="([^"]+)" aria-controls="([^"]+)"[^>]*>([^<]+)<\/button>/g)].map(m=>m.slice(1));
- expect(selectors).toEqual([['rig','rig','inspector-rig','Setup'],['playback','playback','inspector-playback','Animate']]);
- expect(html.match(/data-inspector="/g)?.length).toBe(2);expect(between(html,'<div class="mode-switch"','</div>').match(/data-inspector="/g)?.length).toBe(2);
- expect([...html.matchAll(/data-inspector-panel="([^"]+)"/g)].map(m=>m[1])).toEqual(['rig','playback']);
- for(const gone of ['id="inspector-view"','id="tab-view"','id="tab-rig"','id="tab-playback"','id="tab-feedback"','data-inspector="feedback"','data-inspector-panel="feedback"'])expect(html).not.toContain(gone);
+ expect([...inspector.matchAll(/role="tab"[^>]*data-block-target="([^"]+)"/g)].map(m=>m[1])).toEqual(['selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields','cuts-panel','cloth-panel','motion-tools','sound-panel','environment','physics-panel','idle-tracks','readings','requirements','retarget','report-panel']);
+ expect([...inspector.matchAll(/data-inspector-panel="([^"]+)"/g)].map(m=>m[1])).toEqual(['rig','playback']);
+ const source=await readFile(new URL('../web/inspector-blocks.ts',import.meta.url),'utf8');
+ expect(source).toContain("feedback.dataset.inspectorPanel='feedback'");expect(source).toContain('body.append(feedback);dialog.remove()');expect(source).toContain("row:{tabs,panels:tabs.flatMap(tab=>tab.panels),initialize:true}");
 });
 /** Controls that seek or play the shared playhead. */
 const seekOrPlay=['play','animation-select','scrub','frame-number','frame-jump','frame-scrub','idle-repeat','axis-select','axis-value','report-seek','report-time'];
@@ -141,17 +153,13 @@ test('Setup holds no control that seeks or plays: the angle tool and panel and e
 const mainSource=()=>readFile(new URL('../web/main.ts',import.meta.url),'utf8');
 /** Every id of the former Feedback section, unchanged so drafts, the control page and tests keep resolving them. */
 const feedbackIds=['inspector-feedback','review-status','provenance-version','provenance-rig','provenance-motion','provenance-full','source-files','checkpoint-detail','detail-title','detail-note','checkpoint-note','proposal-panel','feedback-start','feedback-end','feedback-range-hint','feedback-target-kind','feedback-target-name','feedback-target-names','feedback-target-hint','feedback-category','feedback-summary','add-proposal','proposal-boundary','feedback-warnings','proposal-list','strip-panel','strip-scope','strip-reference','strip-format','strip-export','strip-status'];
-test('the top bar has no export buttons; Write review opens the review dialog holding every Feedback id and the Submit button',async()=>{
- const html=await indexHtml(),top=between(html,'<div class="top-actions">','</header>'),dialog=between(html,'<dialog id="review-dialog"','</dialog>');
- for(const gone of ['id="export"','id="export-markdown"','Feedback JSON','Issue Markdown'])expect(html).not.toContain(gone);
- expect(top).toContain('<button id="write-review" type="button" class="primary" aria-haspopup="dialog" aria-controls="review-dialog">Write review</button>');expect(top).not.toContain('id="save"');
+test('the real review decision and Submit nodes move to the bottom act end without a proxy submit',async()=>{
+ const html=await indexHtml(),dialog=between(html,'<dialog id="review-dialog"','</dialog>');
  for(const id of feedbackIds){expect(dialog).toContain(` id="${id}"`);expect(html.split(` id="${id}"`).length).toBe(2);}
- expect(between(dialog,'<div class="review-dialog-actions">','</div>')).toContain('<button id="save" class="primary" disabled>Submit review</button>');
- // The modal makes the footer inert, so the dialog repeats the message, draft readout and recovery actions for its reader.
- for(const id of ['review-message','review-draft-state','review-draft-recovery'])expect(between(dialog,'<div class="review-dialog-actions">','</div>')).toContain(`id="${id}"`);
- const main=await mainSource();
- expect(main).toContain("button('write-review').onclick=openReview;");expect(main).toMatch(/function openReview\(\):void \{[^\n]*dialog\.showModal\(\);\}/);
- expect(main).toContain("dialog.addEventListener('close',()=>{button('write-review').setAttribute('aria-expanded','false');button('write-review').focus();});");
+ expect(dialog.match(/id="save"/g)?.length).toBe(1);
+ const composition=await readFile(new URL('../web/inspector-blocks.ts',import.meta.url),'utf8');
+ expect(composition).toContain("label,status,actions");expect(composition).toContain('feedback.append(act)');expect(composition).toContain('dialog.remove()');
+ const main=await mainSource();expect(main).toContain("rigInspector.row.reveal=id=>");expect(main).not.toContain('dialog.showModal()');expect(main).not.toContain("button('write-review')");
  expect(main).toContain("text('review-draft-state',value);");expect(main).toContain("text('review-message', value);");
  for(const gone of ["button('export')","button('export-markdown')"])expect(main).not.toContain(gone);
 });
@@ -211,15 +219,13 @@ test('each panel header is the first child of its panel and carries the sticky c
  }finally{app.close();}
 });
 
-test('the view bar holds layers, sync and zoom, then a View menu holding the three layouts, and wraps without clipping layer toggles',async()=>{
- const html=await indexHtml(),css=await stylesCss(),bar=between(html,'<div class="viewbar">','<div id="stage-layout"');
- for(const id of ['layer-images','layer-mesh','layer-bones','camera-sync','zoom-out','zoom-in','fit'])expect(bar).toContain(`id="${id}"`);
- const menu=between(bar,'<details id="view-menu"','</details>');expect(bar).toMatch(/<\/details><\/div>(<div id="chest-editor-bar"[^]*<\/span><\/div>)?<div id="stage-layout"$/);
- expect([...menu.matchAll(/data-view="([^"]+)"/g)].map(m=>m[1])).toEqual(['compare','reference','rig']);expect(html.match(/data-view=/g)?.length).toBe(3);expect(menu).toContain('id="view-menu-label"');
- expect(ruleBodies(css,'.viewbar').at(-1)).toContain('flex-wrap:wrap');
- const layerToggles=ruleBodies(css,'.viewbar>.layer-toggles');
- expect(layerToggles.at(-1)).toContain('flex:none');
- expect(layerToggles.join(';')).not.toContain('overflow:hidden');
+test('rig mounts distinct primary and secondary toolbar regions using the shared control constructor',async()=>{
+ const html=await indexHtml(),main=await mainSource();
+ for(const seam of ['data-workspace-comment','data-workspace-layers','data-workspace-view-tools','data-workspace-camera'])expect(html).toContain(seam);
+ expect(main).toContain("createViewControls({layout:'rigStep1'})");
+ for(const id of ['layer-images','layer-mesh','layer-bones'])expect(rigLayerControlsMarkup).toContain(`id="${id}"`);
+ expect(sharedCommentMarkup.match(/id="stage-comment"/g)?.length).toBe(1);
+ const css=await stylesCss();expect(css).toContain('.workspace-main-toolbar');expect(css).toContain('.workspace-secondary-toolbar');
 });
 
 test('one thin scrollbar rule from theme tokens covers every scrolling region',async()=>{
@@ -311,4 +317,107 @@ test('#666 actual compare bookmark restoration delegates selection between the e
  const apply=new Function('scope','with(scope){'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a,b))+';return applyInspection;}')(scope);
  await apply({selection:{inspector:'playback',side:'b',mode:'animate'},time:null,theme:'dark',layers:{images:true,meshes:false,bones:true},view:{cameras:{}}},new AbortController().signal);
  expect(trace).toEqual(['before','restore:playback','after','side:b','mode:animate:{"fromTab":true}']);expect(scope.cameraRestoring).toBe(false);
+});
+
+
+test('#671 real bottom tabs reveal selected Setup and Animate bodies in a short embedded-layout drawer without restore side effects',()=>{
+ const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});
+ try{
+  const original=app.bottomBody!,strip=app.bottomPanel!.strip,act=app.bottomPanel!.act;
+  app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();
+  const drawer=app.get('workspace-drawer-inspectorHeight');
+  expect(original.parentElement).toBe(drawer);expect(drawer.open).toBe(false);
+  app.tabBinding!.restore('playback');app.flush();expect(drawer.open).toBe(false);expect(app.panels.playback!.hidden).toBe(false);
+  for(const name of ['playback','rig','rig','playback']){
+   app.tabBinding!.select(name);app.flush();expect(drawer.open).toBe(true);expect(original.hidden).toBe(false);expect(app.panels[name]!.hidden).toBe(false);
+   expect(strip.parentElement!.parentElement).toBe(app.get('workspace-inspector'));expect(drawer.contains(act)).toBe(true);
+   drawer.close();app.flush();expect(drawer.open).toBe(false);expect(app.focus()?.dataset.inspector).toBe(name);expect(act.parentElement).toBe(strip.parentElement);
+  }
+  const first=strip.children[0]!,key=Object.assign(new Event('keydown',{cancelable:true}),{key:'ArrowRight'});
+  (first as unknown as {onkeydown:(event:KeyboardEvent)=>void}).onkeydown(key as KeyboardEvent);app.flush();expect(key.defaultPrevented).toBe(true);expect(drawer.open).toBe(true);expect(app.focus()).toBe(drawer);
+  app.layout.clientWidth=1400;app.layout.clientHeight=900;app.ui.refresh();app.flush();
+  expect(drawer.open).toBe(false);expect(original.parentElement).toBe(app.get('workspace-inspector'));expect(drawer.contains(original)).toBe(false);expect(act.parentElement).toBe(app.bottomPanel!.actHome);
+ }finally{app.close();}
+});
+
+test('#671 collapse and expand keep single act identity and explicit selected-tab activation restores the real body',()=>{
+ const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});
+ try{
+  const {collapse,act,strip,actHome}=app.bottomPanel!,body=app.bottomBody!;
+  collapse.click();app.flush();expect(body.hidden).toBe(true);expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('true');
+  app.tabBinding!.restore('rig');app.flush();expect(body.hidden).toBe(true);
+  app.tabBinding!.select('rig');app.flush();expect(body.hidden).toBe(false);expect(act.parentElement).toBe(actHome);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('false');
+  app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();
+  collapse.click();app.flush();expect(body.hidden).toBe(true);
+  collapse.click();app.flush();const drawer=app.get('workspace-drawer-inspectorHeight');expect(body.hidden).toBe(false);expect(drawer.open).toBe(true);expect(drawer.contains(act)).toBe(true);
+  expect(app.bottomPanel!.act).toBe(act);expect(app.bottomPanel!.strip).toBe(strip);
+ }finally{app.close();}
+});
+
+test('#671 actual rig selection adapter restores without explicit reveal and sends repeated user acts through the shared tab authority',async()=>{
+ const source=await mainSource(),a=source.indexOf('function showInspector('),b=source.indexOf('function bindInspector(',a),trace:string[]=[];
+ const inspectorTabs={select:(name:string)=>trace.push('select:'+name),restore:(name:string)=>trace.push('restore:'+name)},openReview=()=>trace.push('review');
+ const show=new Function('inspectorTabs','openReview',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a,b))+';return showInspector;')(inspectorTabs,openReview);
+ show('rig',false);show('playback',false);show('feedback',false);expect(trace).toEqual(['restore:rig','restore:playback']);
+ show('rig');show('rig');show('playback');show('feedback');expect(trace.slice(2)).toEqual(['select:rig','select:rig','select:playback','review']);
+});
+
+
+test('#671 actual source-only startup guard excludes unavailable Review from actual API and keyboard choices, preserving compiled choices',async()=>{
+ const source=await mainSource(),a=source.indexOf('    let writes:',source.indexOf('async function start():')),b=source.indexOf('    submittedBaseline=',a);
+ const initialize=new Function('scope','with(scope){return (async()=>{'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a,b))+'})();}');
+ for(const preRig of [false,true]){
+  const buttons=['rig','playback','feedback'].map(id=>{const node=new Host('button');node.setAttribute('aria-selected',String(id==='rig'));return node;}),panels=['rig','playback','feedback'].map(id=>{const panel=new Host('section');panel.id='inspector-'+id;panel.hidden=id!=='rig';return panel;});
+  const feedback=buttons[2]!,act=new Host(),row:InspectorTabRow={tabs:buttons.map((button,index)=>({id:['rig','playback','feedback'][index]!,button:button as unknown as HTMLButtonElement,panels:[panels[index] as unknown as HTMLElement],attribute:'aria-selected'})),panels:panels as unknown as HTMLElement[],initialize:true};
+  const scope={data:null as unknown,session:null as unknown,readOnly:null as unknown,rigInspector:{act,row},
+   api:async(path:string)=>path==='/api/review'?{capabilities:{preRig}}:path==='/api/session'?{status:'pending'}:{capabilityRequired:false},
+   access:{},readOnlyReason:()=>null,button:(id:string)=>{if(id!=='workspace-tab-feedback')throw new Error('Missing real review tab');return feedback;},
+  };
+  await initialize(scope);expect(feedback.hidden).toBe(preRig);expect(act.hidden).toBe(preRig);
+  const binding=bindInspectorTabs(()=>{},()=>{},row);
+  try{
+   binding.select('feedback');expect(binding.state()).toBe(preRig?'rig':'feedback');expect(panels[2]!.hidden).toBe(preRig);
+   binding.restore('rig');
+   const key=Object.assign(new Event('keydown',{cancelable:true}),{key:'ArrowLeft'});
+   // The actual shared engine wraps only through this host's registered choices.
+   const oldFocus=hostDocument;hostDocument={activeElement:null};
+   try{(buttons[0] as unknown as {onkeydown:(event:KeyboardEvent)=>void}).onkeydown(key as KeyboardEvent);}finally{hostDocument=oldFocus;}
+   expect(binding.state()).toBe(preRig?'playback':'feedback');expect(key.defaultPrevented).toBe(true);
+  }finally{binding.dispose();}
+ }
+});
+
+
+test('#671 real mounted outer tab-panel relationships preserve original nodes and inner rows, including pre-rig exclusion',async()=>{
+ const page=new Host('body'),stack=[page],voidTags=new Set(['input','br','img','meta','link','hr','source','col','area','base','embed','param','track','wbr']);
+ for(const match of (rigWorkspaceMarkup+rigReviewDialogMarkup).matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"]|"[^"]*")*)>/g)){
+  const [,close,raw,attrs]=match,tag=raw!.toLowerCase();if(close){if(!voidTags.has(tag))stack.pop();continue;}
+  const node=new Host(tag);for(const attribute of attrs!.matchAll(/([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:="([^"]*)")?/g)){
+   const key=attribute[1]!,value=attribute[2]??'';node.setAttribute(key,value);if(key==='id')node.id=value;if(key==='class')node.className=value;if(key==='hidden')node.hidden=true;
+   if(key.startsWith('data-'))node.dataset[key.slice(5).replace(/-([a-z])/g,(_,c:string)=>c.toUpperCase())]=value;
+  }
+  stack.at(-1)!.append(node);if(!voidTags.has(tag)&&!attrs!.trimEnd().endsWith('/'))stack.push(node);
+ }
+ const document={getElementById:(id:string)=>page.all().find(node=>node.id===id)??null,querySelector:(selector:string)=>page.querySelector(selector),querySelectorAll:(selector:string)=>selector==='[data-mode]'?page.all().filter(node=>'mode' in node.dataset):[],createElement:(tag:string)=>new Host(tag)};
+ const previous=Object.getOwnPropertyDescriptor(globalThis,'document'),oldFocus=hostDocument;Object.defineProperty(globalThis,'document',{configurable:true,value:document});hostDocument={activeElement:null};
+ const originals=['rig','playback','feedback'].map(id=>document.getElementById('inspector-'+id)!);
+ const innerBefore=page.all().filter(node=>node.attrs.get('aria-labelledby')?.startsWith('block-tab-')).map(node=>[node.id,node.getAttribute('role'),node.getAttribute('aria-labelledby')]);
+ try{
+  const mounted=mountRigInspector(document as unknown as Document),row=mounted.row,owners=row.tabs.map(tab=>tab.button.id);
+  expect(new Set(owners).size).toBe(3);
+  for(const [index,tab] of row.tabs.entries()){
+   const panel=tab.panels[0]!;expect(panel).toBe(originals[index] as unknown as HTMLElement);expect(panel.getAttribute('role')).toBe('tabpanel');expect(panel.getAttribute('aria-labelledby')).toBe(tab.button.id);expect(tab.button.getAttribute('aria-controls')).toBe(panel.id);
+   expect(document.getElementById(panel.getAttribute('aria-labelledby')!)).toBe(tab.button as unknown as Host);
+  }
+  const binding=bindInspectorTabs(()=>{},()=>{},row);
+  for(const id of ['rig','playback','feedback']){binding.select(id);expect(originals.map(panel=>panel.hidden)).toEqual(['rig','playback','feedback'].map(name=>name!==id));expect(row.tabs.filter(tab=>tab.button.getAttribute('aria-selected')==='true').map(tab=>tab.id)).toEqual([id]);}
+  binding.restore('rig');binding.dispose();
+  expect(page.all().filter(node=>node.attrs.get('aria-labelledby')?.startsWith('block-tab-')).map(node=>[node.id,node.getAttribute('role'),node.getAttribute('aria-labelledby')])).toEqual(innerBefore);
+  const source=await mainSource(),a=source.indexOf('    let writes:',source.indexOf('async function start():')),b=source.indexOf('    submittedBaseline=',a);
+  const scope={data:null as unknown,session:null as unknown,readOnly:null as unknown,rigInspector:mounted,access:{},readOnlyReason:()=>null,button:(id:string)=>document.getElementById(id)!,api:async(path:string)=>path==='/api/review'?{capabilities:{preRig:true}}:path==='/api/session'?{status:'pending'}:{capabilityRequired:false}};
+  await new Function('scope','with(scope){return(async()=>{'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a,b))+'})();}')(scope);
+  const preRig=bindInspectorTabs(()=>{},()=>{},row);
+  try{preRig.select('feedback');expect(preRig.state()).toBe('rig');expect(originals[2]!.hidden).toBe(true);expect(document.getElementById('workspace-tab-feedback')!.hidden).toBe(true);expect(mounted.act.hidden).toBe(true);expect(row.tabs.map(tab=>tab.id)).toEqual(['rig','playback']);}
+  finally{preRig.dispose();}
+ }finally{hostDocument=oldFocus;if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });

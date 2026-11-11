@@ -1,9 +1,10 @@
+import {rigWorkspaceMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readFile,readdir} from 'node:fs/promises';
 test('Comment is visible as one control on both stage toolbars with no reference to the removed list-toggle id',async()=>{
  const removedId='stage-comment-'+'list-toggle';
  for(const file of ['web/index.html','web/compare.html']){
-  const html=await readFile(file,'utf8');
+  const source=await readFile(file,'utf8');expect(file==='web/index.html'?rigWorkspaceMarkup:source).toContain('data-workspace-comment');const html=sharedCommentMarkup;
   expect(html).toContain('id="stage-comment"');
   expect(html).toContain('Comment · C (0)');
   expect(html).toContain('aria-controls="stage-comment-list"');

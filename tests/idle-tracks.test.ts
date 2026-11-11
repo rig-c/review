@@ -1,3 +1,4 @@
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {mkdir,mkdtemp,readFile,realpath,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -153,7 +154,7 @@ test('bar 4: the patch round-trips — applied to the source config it gives byt
 test('the draft keeps the pending ops and nothing of the preview; the panel\'s preview toggle carries no id',async()=>{
  const s=src(),ops=idleOps(s,edited(s)),text=idleDraftText(ops);
  expect(Object.keys(JSON.parse(text))).toEqual(['schema','ops']);expect(text).not.toContain('preview');
- const html=await readFile(new URL('../web/index.html',import.meta.url),'utf8'),panel=html.slice(html.indexOf('<section id="idle-tracks"'),html.indexOf('</section>',html.indexOf('<section id="idle-tracks"')));
+ const html=(rigWorkspaceMarkup+rigReviewDialogMarkup),panel=html.slice(html.indexOf('<section id="idle-tracks"'),html.indexOf('</section>',html.indexOf('<section id="idle-tracks"')));
  expect(panel).toContain('<input data-idle-preview type="checkbox" checked>');
  // The only form fields with ids in the panel are the hidden pending-ops record: the source draft captures nothing else.
  expect([...panel.matchAll(/<(input|select|textarea)\b[^>]*\bid="([^"]+)"/g)].map(m=>m[2])).toEqual(['idle-pending']);

@@ -1,3 +1,4 @@
+import {mountWorkspaceShell} from './workspace-ui.ts';
 /** Live job window transactions. Every form remains bound to its displayed publication. */
 import { parseControlPart, type ControlPart } from '../src/control.ts';
 import type {
@@ -1226,20 +1227,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         }
         return value;
     };
-    const title = node('h1', 'job.title');
-    const languages = node('select');
-    for (const value of ['en', 'ko']) {
-        const option = node('option');
-        option.value = value;
-        option.textContent = value;
-        languages.append(option);
-    }
+    const shell = mountWorkspaceShell({compatibility: 'legacyJobStep5', title: t('job.title')});
+    const {header, title} = shell, languages = shell.language!;
     languages.value = i18n.getLanguage();
     languages.setAttribute('aria-label', t('interview.language'));
     languages.onchange = () => { i18n.setLinkLanguage(null); i18n.setLanguagePreference(languages.value === 'ko' ? 'ko' : 'en'); };
-    const header = node('header');
-    header.className = 'job-header';
-    header.append(title, languages);
     const notice = node('p', 'job.waiting');
     notice.className = 'job-notice';
     notice.setAttribute('role', 'status');

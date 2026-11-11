@@ -1381,6 +1381,7 @@ import {parseManifest} from '../src/manifest.ts';
 import type {JobPreparedInspection} from '../web/job-session.ts';
 import {RigOverlays} from '../web/rig-overlays.ts';
 import {labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts} from '../web/view-controls.ts';
+import {mountWorkspaceShell} from '../web/workspace-ui.ts';
 import {SENTINELS} from '../web/parts-render.ts';
 import {JOB_PLAN_TEXT_FIELDS, type JobPlanTextProjection} from '../src/job-contract.ts';
 
@@ -2089,7 +2090,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
 
         const runner = new Function(
             'host', 'access', 'hubIncarnation', 'hubVisible', 'events', 'pageId', 'transport', 'abort',
-            'i18n', 't', 'createViewportController', 'createViewportState', 'createRigViewportProvider', 'mountViewportPair',
+            'i18n', 't', 'createViewportController', 'createViewportState', 'createRigViewportProvider', 'mountViewportPair', 'mountWorkspaceShell',
             'RigOverlays', 'labelledControl', 'createViewControls', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'SENTINELS',
             'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal', 'jobPartsReviewState',
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
@@ -2099,7 +2100,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         );
         const mounted = runner(
             host, access, hubIncarnation, hubVisible, undefined, options?.pageId ?? 'page-one', transport, abort,
-            i18nModule, i18nModule.t, createViewportController, createViewportState, createRigViewportProvider, mountViewportPair,
+            i18nModule, i18nModule.t, createViewportController, createViewportState, createRigViewportProvider, mountViewportPair, mountWorkspaceShell,
             RigOverlays, labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, SENTINELS,
             createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal, jobPartsReviewState,
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,

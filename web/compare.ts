@@ -1,3 +1,4 @@
+import {sharedViewToolsMarkup,sharedCommentMarkup,legacyCompareLayerControlsMarkup,legacyCompareHeaderContent} from '../src/compare-html.ts';
 import {bindStageNav} from './stage-nav.ts';
 import {bindWorkspaceVisibility} from './workspace-visibility.ts';
 import {requireFeedbackFrames} from '../src/stage-comment.ts';
@@ -15,11 +16,11 @@ import { commonDomain, drawSynchronizedPair, compareSeekStep, feedbackTrace, ins
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection } from '../src/feedback-validation.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 
-import {actionButton,bindAppearance,bindPan,bindStageLayout,bindInspectorTabs,syncStageLayout,idleAvailable} from './view-controls.ts';
+import {createViewControls,panelMake,actionButton,bindAppearance,bindPan,bindStageLayout,bindInspectorTabs,syncStageLayout,idleAvailable} from './view-controls.ts';
 import {CLICK_SLOP_PX} from './stage-pick.ts';
 import {dragImpulse} from '../src/environment.ts';
 import {RigOverlays} from './rig-overlays.ts';
-import {bindWorkspaceUI,type WorkspaceUI} from './workspace-ui.ts';
+import {mountWorkspaceShell,bindWorkspaceUI,type WorkspaceUI} from './workspace-ui.ts';
 import {connectControl} from './control.ts';
 import {connectLiveWindow} from './live-connection.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
@@ -31,6 +32,24 @@ import {ComparePresentation,type PresentationState} from '../src/compare-present
 import {nextReferenceInterval,ReferenceSelectionUnavailable,inspectionReferenceFrame,lastSupportedReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,type ReferenceFrameIndex,type VideoInfo,type VideoFrame} from '../src/reference-frames.ts';
 import {mountComparePickedTools,type ComparePickedTools} from './compare-picked-tools.ts';
 import {appliedCheckRefusal} from '../src/applied-context.ts';
+/** Compose trusted content through the existing C1/C5b owners before domain lookups. */
+function mountComparisonChrome(){
+ const domain={} as Record<keyof typeof legacyCompareHeaderContent,HTMLElement>;
+ for(const key of ['modeSwitch','buildPicker','actions'] as const){
+  const template=panelMake('template');template.innerHTML=legacyCompareHeaderContent[key];
+  domain[key]=template.content.firstElementChild as HTMLElement;
+ }
+ const shell=mountWorkspaceShell({compatibility:'legacyCompareStep3',compare:domain});
+ document.querySelector('[data-workspace-header]')!.replaceWith(shell.header);
+ for(const [seam,markup] of [['comment',sharedCommentMarkup],['view-tools',sharedViewToolsMarkup],['layers',legacyCompareLayerControlsMarkup]] as const){
+  const template=panelMake('template');template.innerHTML=markup;
+  document.querySelector(`[data-workspace-${seam}]`)!.replaceWith(template.content);
+ }
+ const controls=createViewControls({layout:'legacyCompareStep3'});
+ document.querySelector('[data-workspace-camera]')!.replaceWith(controls.zoomGroup!);
+ return shell;
+}
+const shell=mountComparisonChrome();
 type Side = 'a' | 'b';
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const node = document.getElementById(id); if (!node) throw new Error(`Missing compare UI element: ${id}`); return node as T;
@@ -422,7 +441,7 @@ function bind(): void {
   button('export-json').onclick = () => { download(`${session.id}-feedback.json`, JSON.stringify({ ...session, schema: 'rig-review-compare-feedback/1', issues: session.feedback.map(issue) }, null, 2) + '\n', 'application/json'); };
   button('export-markdown').onclick = () => { download(`${session.id}-issues.md`, [`# ${md(data.title)}`, '', 'Ordered A/B and reference provenance:', ...JSON.stringify(session.binding, null, 2).split('\n').map(line => '    ' + line), '', 'Validation warnings:', ...JSON.stringify(session.feedbackWarnings, null, 2).split('\n').map(line => '    ' + line), '', ...session.feedback.flatMap(feedback => { const entry = issue(feedback); return [`## ${md(entry.title)}`, '', entry.body, '', '---', '']; })].join('\n'), 'text/markdown'); };
   // Saved browser defaults seed a new inspection; explicit links and source drafts restore over them.
-  workspace=bindWorkspaceUI({changed:fit,defaultTheme:theme=>appearance?.set(theme)});
+  workspace=bindWorkspaceUI({changed:fit,defaultTheme:theme=>appearance?.set(theme),language:shell.language!});
   cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('appearance'),workspace.defaults().theme);
   for(const side of ['a','b'] as const)overlays[side]=new RigOverlays({canvas:el<HTMLCanvasElement>(side+'-overlay'),rigRoot:el(side+'-root')});
@@ -441,7 +460,7 @@ function bind(): void {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){suspendedPreview=!video.paused;stop();}else if(suspendedPreview&&!idleHeld){suspendedPreview=false;void playComparison().catch(error=>message(describe(error),true));}});
   const observer = new ResizeObserver(fit); observer.observe(el('a-viewport')); observer.observe(el('b-viewport'));observer.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { pickedTools?.dispose();comments?.dispose();persistence?.dispose();turnPad?.dispose();inspectorTabs?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { thumbnails[side]?.dispose(); players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
+  window.addEventListener('pagehide', () => { shell.dispose();pickedTools?.dispose();comments?.dispose();persistence?.dispose();turnPad?.dispose();inspectorTabs?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { thumbnails[side]?.dispose(); players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
 }
 
 async function start(): Promise<void> {

@@ -1,6 +1,21 @@
 import {test,expect} from 'bun:test';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature} from '../web/camera-view.ts';
 
+test('#671 reciprocal fit scale means CSS px per pane unit, with validated relative signatures',()=>{
+ const world=cameraFrame('world',{x:-300,y:80,width:200,height:600},600,400,28,58)!;
+ const image=cameraFrame('image',{x:0,y:0,width:1920,height:1080},300,800,24,56)!;
+ for(const frame of [world,image]){
+  const signature={zoom:1/frame.baseScale,pan:{x:0,y:0}},camera=cameraFromSignature(signature,frame);
+  expect(frame.baseScale*camera.zoom).toBeCloseTo(1,12);expect(camera.center).toEqual(frame.center);
+  expect(cameraSignature(camera,frame)).toEqual(signature);
+ }
+ const tiny=cameraFrame('world',{x:0,y:0,width:10000,height:10000},100,100)!;
+ expect(()=>assertCameraView({zoom:1/tiny.baseScale,center:tiny.center},tiny)).toThrow('VIEW_CAMERA_RANGE');
+ expect(()=>cameraFromSignature({zoom:1/tiny.baseScale,pan:{x:0,y:0}},tiny)).toThrow();
+ // Wheel zoom clamps by design; the unit-scale action must never use it to fake success.
+ expect(zoomSignature({zoom:1,pan:{x:0,y:0}},1/tiny.baseScale).zoom).toBe(8);
+});
+
 test('normalized camera motion uses each viewport and image/world Y sign, never common pixels or centers',()=>{
  const world=cameraFrame('world',{x:-300,y:80,width:200,height:600},600,400,28,58)!;
  const image=cameraFrame('image',{x:0,y:0,width:1920,height:1080},300,800,24,56)!;

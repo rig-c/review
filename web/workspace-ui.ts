@@ -2,6 +2,79 @@
 import {WorkspacePreferenceStore,panelBounds,type WorkspaceLanguage,type WorkspacePanels,type WorkspacePreferences,type WorkspaceTheme} from './workspace-preferences.ts';
 import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,workspaceMinimums,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange} from './workspace-layout.ts';
 import {bindDomI18n,getLinkLanguage,setLanguagePreference,setLinkLanguage,tr} from './i18n.ts';
+import {panelMake,actionButton,labelledControl} from './view-controls.ts';
+
+export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyJobStep5'|'legacyHubStep6'|'legacyOwnerStep6';
+export interface WorkspaceHeaderOptions {
+ compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;
+ /** Only the stopped compare host supplies its existing domain controls and actions. */
+ compare?:{modeSwitch:HTMLElement;buildPicker:HTMLElement;actions:HTMLElement};
+}
+export interface WorkspaceHeader {
+ header:HTMLElement;title:HTMLElement;subtitle:HTMLElement|null;modeSwitch:HTMLElement|null;dirty:HTMLElement|null;
+ stages:HTMLElement|null;status:HTMLParagraphElement|null;language:HTMLSelectElement|null;languageLabel:HTMLLabelElement|null;
+ dispose:()=>void;
+}
+/** One C1 construction path; the finite legacy choices expire at their named screen migrations. */
+export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHeader {
+ const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',parts=kind==='legacyPartsStep2',interview=kind==='legacyInterviewStep4',job=kind==='legacyJobStep5',hub=kind==='legacyHubStep6',owner=kind==='legacyOwnerStep6';
+ const branded=rig||compare||parts,settingsLanguage=rig||compare;
+ const header=panelMake('header');
+ const headerClass=rig?'topbar':parts?'pv-top':job?'job-header':hub?'hub-header':owner?'owner-header':null;
+ if(headerClass)header.className=headerClass;
+ if(branded){
+  const brand=panelMake('div',{className:parts?'pv-brand':'brand'});
+  const mark=panelMake('span',compare?{}:{className:parts?'pv-mark':'brand-mark'},compare?'COMPARE':'r');
+  if(compare)brand.append('rig review ',mark);else brand.append(mark,'rig review');
+  header.append(brand);
+ }
+ const title=panelMake(rig||parts?'strong':'h1');
+ const titleId=rig?'package-title':compare?'title':parts?'pv-title':null;
+ if(titleId)title.id=titleId;
+ title.textContent=options.title??(rig?'Review package':compare?'A / B comparison':parts?'Parts review':'');
+ if(job)title.dataset.jobText='job.title';
+ let subtitle:HTMLElement|null=null;
+ if(branded){
+  subtitle=panelMake('span',{id:rig?'revision':compare?'animation':'pv-mode',className:rig?'subtle':compare?'hint':'pv-subtle',textContent:options.revision??''});
+  const identity=panelMake('div',{},title,...(parts?[' ']:[]),subtitle);header.append(identity);
+ }else{if(interview)header.append('\n    ');header.append(title);}
+ let modeSwitch:HTMLElement|null=null,dirty:HTMLElement|null=null;
+ if(rig||compare){
+  modeSwitch=compare?options.compare!.modeSwitch:panelMake('div',{className:'mode-switch'});
+  if(rig){
+   modeSwitch.setAttribute('role','group');modeSwitch.setAttribute('aria-label','Mode');
+   for(const [mode,label] of [['rig','Setup'],['playback','Animate'],['compare','Compare']] as const){
+    const button=actionButton(label,null);button.dataset.mode=mode;button.setAttribute('aria-pressed',String(mode==='rig'));
+    if(mode==='compare'){button.disabled=true;button.title='No second build supplied: reopen with --compare <built> --reference <video>';}
+    else{button.dataset.inspector=mode;button.setAttribute('aria-controls','inspector-'+mode);}
+    modeSwitch.append(button);
+   }
+  }
+  header.append(modeSwitch);
+  if(compare)header.append(options.compare!.buildPicker,options.compare!.actions);
+  else{dirty=panelMake('span',{id:'dirty',className:'subtle',textContent:'Loading…'});header.append(panelMake('div',{className:'top-actions'},dirty));}
+ }
+ let stages:HTMLElement|null=null,status:HTMLParagraphElement|null=null;
+ if(branded||interview){
+  stages=panelMake('nav');stages.dataset.stageNav='';
+  if(branded){stages.className='review-stage-nav';stages.setAttribute('aria-label','Inspection stages');}
+  if(interview)header.append('\n    ');header.append(stages);
+ }
+ if(hub||owner){status=panelMake('p',{className:hub?'hub-status':'owner-status'});status.setAttribute('role','status');header.append(status);}
+ let language:HTMLSelectElement|null=null,languageLabel:HTMLLabelElement|null=null;
+ if(!parts){
+  language=panelMake('select');
+  if(settingsLanguage){language.id='settings-language';language.dataset.appPreference='';}
+  for(const value of settingsLanguage?['system','en','ko']:['en','ko']){
+   const text=settingsLanguage?(value==='system'?'System':value==='en'?'English':'한국어'):interview?(value==='en'?'English':'한국어'):job?value:'';
+   language.append(panelMake('option',{value,textContent:text}));
+  }
+  if(settingsLanguage){languageLabel=labelledControl('Language ',language);if(rig)header.append(languageLabel);}
+  else{if(interview)header.append('\n    ');header.append(language);if(interview)header.append('\n  ');}
+ }
+ if(options.embedded){if(rig||parts)header.hidden=true;else if(interview)language!.hidden=true;}
+ return {header,title,subtitle,modeSwitch,dirty,stages,status,language,languageLabel,dispose(){header.remove();languageLabel?.remove();}};
+}
 
 /** Reachable effective bounds, accounting for the other panel's saved desired size. */
 export function workspaceResizeRange(available:{width:number;height:number},desired:WorkspacePanels,panel:WorkspacePanel,columns:WorkspaceColumns=defaultWorkspaceColumns):SeparatorRange {
@@ -26,7 +99,7 @@ export interface WorkspaceUI {
  revealInspector:()=>void;refresh:()=>void;dispose:()=>void;
 }
 /** `currentTheme`, when given, is the appearance the Settings theme select shows; otherwise it shows the saved default. */
-export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined}):WorkspaceUI {
+export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
  const require=<T extends HTMLElement=HTMLElement>(id:string)=>{const node=document.getElementById(id);if(!node)throw new Error('Missing workspace element: '+id);return node as T;};
  const layout=document.querySelector<HTMLElement>('.layout')!,main=layout.querySelector<HTMLElement>('main')!,stage=require('stage-layout'),inspector=document.querySelector<HTMLElement>('.inspector')!,explorer=require('parts-explorer');
  layout.classList.add('workspace-layout');
@@ -44,9 +117,11 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
  const settings=document.createElement('section');settings.className='workspace-settings';settings.setAttribute('aria-label','Settings');
  // The header holds the expand/collapse control; the body is hidden while collapsed (a workspace preference, default collapsed).
  const settingsHeader=document.createElement('h2'),settingsToggle=document.createElement('button'),settingsBody=document.createElement('div');settingsHeader.className='sticky-header settings-header';settingsToggle.type='button';settingsToggle.id='settings-toggle';settingsToggle.className='settings-toggle';settingsToggle.textContent='Settings';settingsToggle.setAttribute('aria-controls','settings-body');settingsBody.id='settings-body';settingsBody.className='settings-body';settingsHeader.append(settingsToggle);settings.append(settingsHeader,settingsBody);
- settingsBody.innerHTML='<label>Theme <select id="settings-theme" data-app-preference><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><label>Language <select id="settings-language" data-app-preference><option value="system">System</option><option value="en">English</option><option value="ko">한국어</option></select></label><label><input id="settings-sync" data-app-preference type="checkbox">Sync cameras by default</label><label><input id="settings-idle" data-app-preference type="checkbox">Repeat idle by default</label><button id="settings-reset" type="button">Reset layout</button><p class="hint">Defaults apply to new inspections. Links and source drafts retain their explicit view.</p><p id="settings-state" class="hint" role="status"></p>';
+ settingsBody.innerHTML='<label>Theme <select id="settings-theme" data-app-preference><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><label><input id="settings-sync" data-app-preference type="checkbox">Sync cameras by default</label><label><input id="settings-idle" data-app-preference type="checkbox">Repeat idle by default</label><button id="settings-reset" type="button">Reset layout</button><p class="hint">Defaults apply to new inspections. Links and source drafts retain their explicit view.</p><p id="settings-state" class="hint" role="status"></p>';
+ const sharedLanguage=options.language??require<HTMLSelectElement>('settings-language');
+ if(!sharedLanguage.closest('header'))settingsBody.firstElementChild!.after(sharedLanguage.parentElement!);
  sourceList.append(settings);
- const theme=require<HTMLSelectElement>('settings-theme'),language=require<HTMLSelectElement>('settings-language'),sync=require<HTMLInputElement>('settings-sync'),idle=require<HTMLInputElement>('settings-idle'),status=require('settings-state');
+ const theme=require<HTMLSelectElement>('settings-theme'),language=sharedLanguage,sync=require<HTMLInputElement>('settings-sync'),idle=require<HTMLInputElement>('settings-idle'),status=require('settings-state');
  const store=new WorkspacePreferenceStore({onStatus:value=>{status.textContent=tr(value.detail);}});let desired={...store.get().panels};
  const stack=document.createElement('div');stack.className='workspace-stage-stack';for(const child of [...main.children])if(child!==inspector)stack.append(child);main.prepend(stack);
  const triggers=document.createElement('div');triggers.className='workspace-drawer-triggers';triggers.setAttribute('aria-label','Workspace panels');stack.prepend(triggers);
@@ -64,6 +139,9 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
   const header=document.createElement('div');header.className='sticky-header workspace-drawer-header';const title=document.createElement('span');title.textContent=labels[panel];header.append(title,close);dialog.append(header);document.body.append(dialog);dialogs[panel]=dialog;
   disposers.push(bindWorkspaceDrawer({trigger,drawer:dialog,label:labels[panel],close}));
  }
+ const bottom=options.bottomPanel,bottomBody=bottom?inspector.querySelector<HTMLElement>('.inspector-body')!:null,bottomHeading=bottom?bottom.strip.parentElement!:null;
+ let collapsed=false;
+ if(bottom){try{collapsed=localStorage.getItem('rig-review-bottom-collapsed/rig')==='true';}catch{}}
  const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=selectedInspector() as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
  let disposed=false,frame=0,applying=false,available={width:0,height:0},effective=allocateWorkspaceLayout(available,desired,columns);
  const panelFor=(tab:InspectorTab)=>{const section=require('inspector-'+tab);return (typeof section.querySelector==='function'?section.querySelector<HTMLElement>('.animate-blocks-panel'):null)??section;};
@@ -73,6 +151,11 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
  const schedule=()=>{if(!disposed&&!frame)frame=requestAnimationFrame(()=>{frame=0;apply();});};
  const dock=(panel:WorkspacePanel,drawer:boolean)=>{
   const element=node(panel),dialog=dialogs[panel],trigger=buttons[panel];trigger.hidden=!drawer;handles[panel].hidden=drawer;
+  if(bottom&&panel==='inspectorHeight'){
+   trigger.hidden=true;handles[panel].hidden=drawer||collapsed;
+   if(!drawer&&dialog.open)dialog.close();
+   const target=drawer?dialog:inspector;if(bottomBody!.parentElement!==target)target.append(bottomBody!);return;
+  }
   if(drawer&&element.parentElement!==dialog){const focus=element.contains(document.activeElement);dialog.append(element);if(focus)trigger.focus({preventScroll:true});}
   if(!drawer&&element.parentElement===dialog){const focused=element.contains(document.activeElement)||document.activeElement===trigger;if(dialog.open)dialog.close();trigger.setAttribute('aria-expanded','false');if(sides[panel]==='left')layout.prepend(element);else if(sides[panel]==='right')layout.append(element);else main.append(element);if(focused){element.tabIndex=-1;element.focus({preventScroll:true});}}
  };
@@ -88,11 +171,28 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
    for(const panel of present)dock(panel,mode(panel)==='drawer');
    const gap=workspaceMinimums.separator,side=(key:WorkspaceColumns['left'])=>key&&mode(key)==='panel'?{width:effective[key],separator:gap}:{width:0,separator:0},l=side(columns.left),r=side(columns.right);
    layout.style.setProperty('--workspace-columns',`${l.width}px ${l.separator}px minmax(0,1fr) ${r.separator}px ${r.width}px`);
-   main.style.gridTemplateRows=`minmax(0,1fr) ${effective.inspectorMode==='panel'?gap:0}px ${effective.inspectorHeight}px`;
+   let bottomHeight=effective.inspectorHeight;
+   if(bottom){
+    const compact=collapsed||effective.inspectorMode==='drawer';bottomBody!.hidden=collapsed;
+    const actTarget=compact&&!dialogs.inspectorHeight.open?bottomHeading!:bottom.actHome;if(bottom.act.parentElement!==actTarget)actTarget.append(bottom.act);
+    inspector.dataset.collapsed=String(compact);bottom.collapse.setAttribute('aria-expanded',String(!collapsed));bottom.collapse.textContent=tr(collapsed?'Expand bottom panel':'Collapse bottom panel');
+    if(compact)bottomHeight=bottomHeading!.getBoundingClientRect().height;
+   }
+   main.style.gridTemplateRows=`minmax(0,1fr) ${effective.inspectorMode==='panel'&&!collapsed?gap:0}px ${bottomHeight}px`;
    layout.dataset.stageMinimum=String(effective.stageMinimumSatisfied);for(const binding of bindings)binding.refresh();options.changed();restore();
   }finally{applying=false;}
  }
  const renderSettings=()=>{const value=store.get();setLanguagePreference(value.language);settingsToggle.setAttribute('aria-expanded',String(!value.settingsCollapsed));settingsBody.hidden=value.settingsCollapsed;settings.dataset.collapsed=String(value.settingsCollapsed);theme.value=options.currentTheme?.()??value.theme;language.value=getLinkLanguage()??value.language;sync.checked=value.defaultCameraSync;idle.checked=value.defaultIdleRepeat;status.textContent=tr(store.status().detail);};
+ const revealInspector=()=>{
+  if(bottom&&collapsed){collapsed=false;try{localStorage.setItem('rig-review-bottom-collapsed/rig','false');}catch{}apply();}
+  if(effective.inspectorMode==='drawer'&&!dialogs.inspectorHeight.open){for(const dialog of Object.values(dialogs))if(dialog.open)dialog.close();buttons.inspectorHeight.click();if(bottom)apply();}
+ };
+ if(bottom){
+  const closed=()=>{if(disposed)return;apply();bottom.strip.querySelector<HTMLButtonElement>('[aria-selected=true]')?.focus({preventScroll:true});};
+  dialogs.inspectorHeight.addEventListener('close',closed);
+  bottom.collapse.onclick=()=>{capture();collapsed=!collapsed;try{localStorage.setItem('rig-review-bottom-collapsed/rig',String(collapsed));}catch{}if(dialogs.inspectorHeight.open)dialogs.inspectorHeight.close();apply();if(!collapsed)revealInspector();};
+  disposers.push(()=>{bottom.collapse.onclick=null;dialogs.inspectorHeight.removeEventListener('close',closed);});
+ }
  theme.onchange=()=>{store.update({theme:theme.value as WorkspaceTheme});options.defaultTheme(store.get().theme);};language.onchange=()=>{setLinkLanguage(null);store.update({language:language.value as WorkspaceLanguage});setLanguagePreference(store.get().language);};sync.onchange=()=>{store.update({defaultCameraSync:sync.checked});};idle.onchange=()=>{store.update({defaultIdleRepeat:idle.checked});};require<HTMLButtonElement>('settings-reset').onclick=()=>store.resetLayout();settingsToggle.onclick=()=>{store.update({settingsCollapsed:!store.get().settingsCollapsed});};
  bindDomI18n(document);const unsubscribe=store.subscribe(value=>{desired={...value.panels};renderSettings();schedule();});renderSettings();
  for(const tab of tabs){
@@ -110,7 +210,7 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
  }
  const observer=new ResizeObserver(schedule);observer.observe(layout);for(const node of [...stack.children])if(node!==stage)observer.observe(node);for(const tab of tabs)observer.observe(panelFor(tab));
  const resumed=()=>{if(!document.hidden)store.refresh();};document.addEventListener('visibilitychange',resumed);schedule();
- return {defaults:()=>store.get(),beforeTab:capture,afterTab:restore,scroll:()=>{capture();return JSON.stringify(memory.snapshot());},restoreScroll(value){if(typeof value!=='string')return;memory.replace(JSON.parse(value));restore();},revealInspector(){if(effective.inspectorMode==='drawer'&&!dialogs.inspectorHeight.open){for(const dialog of Object.values(dialogs))if(dialog.open)dialog.close();buttons.inspectorHeight.click();}},refresh:schedule,
+ return {defaults:()=>store.get(),beforeTab:capture,afterTab:restore,scroll:()=>{capture();return JSON.stringify(memory.snapshot());},restoreScroll(value){if(typeof value!=='string')return;memory.replace(JSON.parse(value));restore();},revealInspector,refresh:schedule,
   dispose(){if(disposed)return;capture();disposed=true;if(frame)cancelAnimationFrame(frame);observer.disconnect();document.removeEventListener('visibilitychange',resumed);unsubscribe();for(const binding of bindings)binding.dispose();for(const dispose of disposers)dispose();memory.dispose();store.dispose();}
  };
 }

@@ -4,7 +4,7 @@ import type {ViewportProvider,ViewportState,ViewportController} from './viewport
 import {dragImpulse} from '../src/environment.ts';
 import {CLICK_SLOP_PX} from './stage-pick.ts';
 export interface RigViewportHost {
- el:ViewportProvider['el'];player:()=>RigPlayer|null;assets:()=>ModelAssets|null;
+ fitLabel?:string;el:ViewportProvider['el'];player:()=>RigPlayer|null;assets:()=>ModelAssets|null;
  referenceSize:()=>{width:number;height:number}|null;view:()=>string;referenceGeneration:()=>number;
  parts:()=>{value:()=>unknown;bounds:()=>PoseBounds|null;frame?:(side:'single')=>PosedFrame|undefined}|null;
  text:(id:string,value:string)=>void;message:ViewportProvider['message'];redrawOverlay:(fresh:boolean)=>void;
@@ -58,7 +58,7 @@ function render(controller:ViewportController): void {
   player.renderer.syncPixelRatio();redrawOverlay(false);renderNumericView();
 }
 
-function renderControls(controller:ViewportController):void {const {availableCamera,paneCamera}=controller;input('camera-sync').checked=state.cameraSync;const target=availableCamera();text('zoom-value',`${Math.round((target?paneCamera(target).zoom:1)*100)}% · ${target==='reference'?'Reference':'Rig'}`);button('fit').textContent=state.cameraSync?'Fit views':'Fit active';text('coordinates',state.cameraSync?'Cameras synchronized · drag to pan · scroll to zoom':'Independent cameras · drag to pan · scroll to zoom');}
+function renderControls(controller:ViewportController):void {const {availableCamera,paneCamera}=controller;input('camera-sync').checked=state.cameraSync;const target=availableCamera();text('zoom-value',`${Math.round((target?paneCamera(target).zoom:1)*100)}% · ${target==='reference'?'Reference':'Rig'}`);button('fit').textContent=host.fitLabel??(state.cameraSync?'Fit views':'Fit active');text('coordinates',state.cameraSync?'Cameras synchronized · drag to pan · scroll to zoom':'Independent cameras · drag to pan · scroll to zoom');}
  return {el,message,render,renderControls,
  geometry:target=>{const referenceSize=host.referenceSize();const box=target==='rig'?rigFramingBox():referenceSize?{x:0,y:0,...referenceSize}:null;if(!box)return null;return {space:target==='rig'?'world':'image',box,marginX:target==='rig'?28:24,marginY:target==='rig'?58:56};},
  layoutKey:()=>{const player=host.player(),referenceSize=host.referenceSize(),view=host.view(),referenceGeneration=host.referenceGeneration();const boxKey=rigFramingBox();return ['rig','reference'].map(target=>{const v=el(target+'-viewport');return `${v.clientWidth}:${v.clientHeight}`;}).join('|')+view+referenceGeneration+!!player+JSON.stringify(referenceSize)+JSON.stringify(boxKey);},
