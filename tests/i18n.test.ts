@@ -1220,3 +1220,12 @@ test('assembly caption reports the visible part count in both languages', async 
  expect(enCatalog['Assembled parts']).toBe('Assembled parts');expect(koCatalog['Assembled parts']).toBe('조립된 파츠');
  expect(source).not.toContain('Selection and verdict remain per part.');
 });
+
+
+test('#739 rig Difference pixel count translates and round-trips in the existing dynamic DOM path',()=>{
+ const key='Difference: {0} of {1} pixels differ, compared where the rig draws · rest still vs original painting.';
+ const english=t(key,[64,100],'en'),korean=t(key,[64,100],'ko');
+ expect(english).toBe('Difference: 64 of 100 pixels differ, compared where the rig draws · rest still vs original painting.');
+ expect(korean).toBe('차이: 리그가 그리는 100픽셀 중 64픽셀 다름 · 정지 셋업과 원본 그림.');
+ expect(tr(english,'ko')).toBe(korean);expect(tr(korean,'en')).toBe(english);
+});

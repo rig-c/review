@@ -631,3 +631,14 @@ test('#559 UI reply-loss retry preserves byte-exact first submission across moti
   expect(copies).toBe(2);
   expect(fresh.capture).toMatchObject({png: laterPng, frame: 0.375, animation: 'inspect', playing: true});
 });
+
+test('#739 standalone rest canvas uses the declared native stage and refuses inferred or rescaled geometry', async () => {
+  const {rigRestCanvas} = await import('../web/job-rig-capture.ts');
+  const stage = {x: -960, y: 0, width: 1920, height: 1080};
+  expect(rigRestCanvas({stage}, {width: 1920, height: 1080})).toEqual({x: -960, y: 0, width: 1920, height: 1080});
+  expect(rigRestCanvas({stage: {...stage, x: 12, y: -7}}, {width: 1920, height: 1080})).toEqual({x: 12, y: -7, width: 1920, height: 1080});
+  expect(() => rigRestCanvas({stage}, {width: 960, height: 540})).toThrow('PARTS_PAINTING_SIZE');
+  expect(() => rigRestCanvas({stage: null}, {width: 1920, height: 1080})).toThrow('PARTS_PAINTING_MAPPING');
+  expect(() => rigRestCanvas({stage: {...stage, x: .5}}, {width: 1920, height: 1080})).toThrow('PARTS_PAINTING_MAPPING');
+  expect(() => rigRestCanvas({stage: {...stage, width: 16385}}, {width: 16385, height: 1080})).toThrow('PARTS_PAINTING_MAPPING');
+});
