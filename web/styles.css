@@ -555,3 +555,16 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 
 .parts-explorer li:has([data-pv-visible]){display:flex;align-items:center;gap:4px}
 .parts-explorer li:has([data-pv-visible]) button{flex:1;min-width:0}
+
+/* The existing record drawer hosts the one interview form and shared image controls. */
+.interview-answer{display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden}
+.interview-answer>.interview-view{display:grid;flex:1;min-height:0;grid-template-rows:auto minmax(100px,1fr) 5px var(--interview-answer-height,262px);gap:0;margin:0}
+.interview-answer .interview-viewport{height:auto;min-height:100px;grid-row:2}
+.interview-answer .zoom-controls{grid-row:1;padding-bottom:8px}
+.interview-answer .interview-bottom-resize{grid-row:3}
+.interview-answer-fields{grid-row:4;overflow:auto;min-height:0;border:0;padding:12px!important}
+.interview-answer .interview-ask{min-width:0}
+.interview-answer>p[role=status]{flex:none;margin:4px}
+.interview-delegate{justify-self:start;font-size:11px;color:var(--fg-muted)}
+
+.workspace-act-ask:disabled{opacity:1;cursor:default}

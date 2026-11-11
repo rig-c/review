@@ -134,6 +134,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "interview.choose": "Choose one option per prompt, then save.",
   "interview.readOnly": "Read-only view. Open the launch URL to save picks.",
   "interview.answered": "Answered {0} / {1}",
+  "interview.delegate": "Delegate",
   "interview.open": "Open interview",
   "interview.close": "Close interview",
   "PARTS_DIFFERENCE_PROVENANCE: declared path, lowercase SHA-256 and lanczos3-rgb-opaque required": "PARTS_DIFFERENCE_PROVENANCE: declared path, lowercase SHA-256 and lanczos3-rgb-opaque required",

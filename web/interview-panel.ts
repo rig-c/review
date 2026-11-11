@@ -2,8 +2,9 @@ import type { HistoricalInterview, InterviewQuestion, InterviewDiagnostic } from
 import type { Picks } from '../src/interview-picks.ts';
 import { onLanguageChange, t } from './i18n.ts';
 import type { InstanceAccess } from './instance-access.ts';
-import { bindWorkspaceDrawer } from './workspace-layout.ts';
+import { bindWorkspaceSeparator } from './workspace-layout.ts';
 import { createViewControls } from './view-controls.ts';
+import {WorkspacePreferenceStore,panelBounds} from './workspace-preferences.ts';
 import { createPartsViewport } from './parts-viewport-provider.ts';
 
 type Question = Omit<InterviewQuestion,'images'> & {images:{name:string;url:string}[]; saved:Picks|null};
@@ -90,6 +91,7 @@ export function interviewAskGroup(ask: Ask, options: {text?: InterviewText; name
       options.onPick?.(option.kind === 'other' ? {...next, other_text:other.value} : next);
     };
     label.append(radio, element('strong', option.label), element('span', option.effect));
+    if(option.kind==='auto'){const badge=text('b','interview.delegate');badge.className='interview-delegate';label.append(badge);}
     if (option.recommended) {
       const badge = text('b', 'interview.recommended'); badge.className = 'interview-recommended';
       label.dataset.recommended = '';
@@ -125,42 +127,12 @@ export function interviewQuestionList(items: readonly {label: string; answered: 
   return nav;
 }
 
-/** Create step 2 as a modal over the one review screen: the workspace drawer dialog (`bindWorkspaceDrawer`). */
-export function interviewModal(options: {parent: HTMLElement; trigger: HTMLButtonElement; id: string; text?: InterviewText;
-    onOpen?: () => void; onClose?: () => void}): {dialog: HTMLDialogElement; body: HTMLElement; open(): void; localize(): void; dispose(): void} {
-  const text = options.text ?? translated;
-  const dialog = element('dialog');
-  dialog.className = 'workspace-drawer interview-modal';
-  dialog.id = options.id;
-  const header = element('div');
-  header.className = 'sticky-header workspace-drawer-header';
-  const title = text('h2', 'interview.title');
-  const close = text('button', 'interview.close');
-  close.type = 'button'; close.className = 'workspace-drawer-close';
-  header.append(title, close);
-  const body = element('div');
-  body.className = 'interview-modal-body';
-  dialog.append(header, body);
-  options.parent.append(dialog);
-  const unbind = bindWorkspaceDrawer({trigger:options.trigger, drawer:dialog, label:t('interview.title'), close});
-  const opened = () => {if (dialog.open) options.onOpen?.();};
-  const closed = () => options.onClose?.();
-  options.trigger.addEventListener('click', opened);
-  dialog.addEventListener('close', closed);
-  return {dialog, body,
-    open() {if (!dialog.open) options.trigger.click();},
-    localize() {title.textContent = t('interview.title'); close.textContent = t('interview.close'); dialog.setAttribute('aria-label', t('interview.title'));},
-    dispose() {
-      unbind(); options.trigger.removeEventListener('click', opened); dialog.removeEventListener('close', closed); dialog.remove();
-    }};
-}
-
 /**
  * The question's bound images in the shared native-image viewport (#708 return): the parts page's camera through
  * createPartsViewport and the shared control set in its fixed order (Zoom in, Zoom out, Fit, 1:1, View switch), where the
  * view switch picks the bound image. Control ids are dropped so the modal never shadows the page's own main view.
  */
-export function interviewImageView(images: readonly {name: string; src: string}[], selected: number, onSelect: (index: number) => void) {
+export function interviewImageView(images: readonly {name: string; src: string}[], selected: number, onSelect: (index: number) => void, bottom?:HTMLElement) {
   const image = images[selected]!;
   const controls = createViewControls({layout:'rigStep1', viewSwitch:{currentMode:String(selected), groups:[{modes:images.map((asset, index) =>
     ({id:String(index), labelKey:asset.name, pressed:index === selected}))}], onChange:id => onSelect(Number(id))}});
@@ -199,6 +171,16 @@ export function interviewImageView(images: readonly {name: string; src: string}[
   let fitted = false;
   const fit = () => {if (!fitted && loaded && camera.paneFrame('rig')) {fitted = true; camera.fitActiveCamera('rig');} else camera.fitCamera();};
   const resize = new ResizeObserver(fit); resize.observe(viewport);
+  if(bottom){
+    const preferences=new WorkspacePreferenceStore();let height=preferences.get().panels.inspectorHeight;
+    const separator=element('div');separator.className='workspace-separator interview-bottom-resize';
+    view.append(separator,bottom);
+    const range=()=>({min:panelBounds.inspectorHeight.min,max:Math.max(panelBounds.inspectorHeight.min,view.clientHeight-200),value:bottom.getBoundingClientRect().height,enabled:true});
+    const apply=(value:number)=>{height=value;view.style.setProperty('--interview-answer-height',Math.min(range().max,Math.max(range().min,value))+'px');};
+    const binding=bindWorkspaceSeparator({element:separator,panel:'inspectorHeight',controls:bottom.id,label:t('Resize Inspector'),range,desired:()=>height,resize:apply,commit:value=>preferences.update({panels:{inspectorHeight:value}})});
+    const observer=new ResizeObserver(()=>{apply(height);binding.refresh();});observer.observe(view);
+    disposers.push(()=>{observer.disconnect();binding.dispose();});apply(height);
+  }
   const source = new Image();
   source.onload = () => {
     canvas.width = source.naturalWidth; canvas.height = source.naturalHeight; loaded = true;
@@ -206,7 +188,7 @@ export function interviewImageView(images: readonly {name: string; src: string}[
   };
   source.onerror = () => {viewport.hidden = true; unavailable.hidden = false;};
   source.alt = image.name; source.src = image.src;
-  return {element:view, dispose() {resize.disconnect(); for (const dispose of disposers) dispose();}};
+  return {element:view, dispose() {source.onload=source.onerror=null;source.src='';resize.disconnect(); for (const dispose of disposers) dispose();}};
 }
 
 export async function mountInterview(host: HTMLElement, access: InstanceAccess) {

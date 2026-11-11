@@ -16,6 +16,7 @@ import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
 const arg=(name:string)=>{const i=Bun.argv.indexOf(name);return i<0?undefined:Bun.argv[i+1];};
+const interviewOnly=Bun.argv.includes('--interview-only');
 const output=resolve(arg('--out')??'artifacts/record-screen-750');await mkdir(output,{recursive:true});
 const sha=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('hex');
 const profile=await mkdtemp(join(tmpdir(),'review-750-browser-'));
@@ -33,13 +34,13 @@ try{
  page=await launchCdpSession(profile,{onEvent:(event,send)=>{command=send;if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
  await page.setViewport(1600,1000);
- for(const kind of ['checkpoint','signoff','reopen','interview-picks'] as RecordScreenKind[])for(const picture of [false,true]){
+ for(const kind of (interviewOnly?['interview-picks']:['checkpoint','signoff','reopen','interview-picks']) as RecordScreenKind[])for(const picture of [false,true]){
   const fixture=await recordScreenFixture(kind,picture);const before=await jobInputHashes(fixture.root);
   try{
    for(const language of ['en','ko'] as const){
     const out=join(output,kind,picture?'picture':'empty',language);await mkdir(out,{recursive:true});fixture.output(out);
     const observation:Record<string,unknown>={kind,picture,language,sourceHash:fixture.display.publication.source.sourceHash,readerPhases:fixture.reader.calls.map(call=>call.phase),fixture:'synthetic trusted-host record reader and deterministic act writer'};
-    for(const mode of ['one-screen','job-window']){
+    for(const mode of (kind==='interview-picks'?['one-screen']:['one-screen','job-window'])){
      fixture.mode(mode);const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href);
      if(mode==='job-window')await page.evaluate(`(async()=>{const module=await import(new URL('job.js',location.href).href);await module.mountJobSession(document.body,true);return true;})()`);
      const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
@@ -53,35 +54,55 @@ try{
       if(!picture){assert.equal(state.noPicture,(language==='en'?enCatalog:koCatalog)['This request has no picture.']);assert.equal(state.backgroundStatus,state.noPicture);assert.equal(state.emptyListText,'');assert.equal(state.saveState,(language==='en'?enCatalog:koCatalog)['Not submitted']);}
       assert.ok(state.dialogRect.x>=0&&state.dialogRect.y>=0&&state.dialogRect.x+state.dialogRect.width<=1600&&state.dialogRect.y+state.dialogRect.height<=1000);
       observation.screen=state;
-      await click(page,'dialog[open] .workspace-drawer-close');assert.equal(await page.evaluate(`document.activeElement.id==='save'&&document.getElementById('save').getAttribute('aria-expanded')==='false'`),true,'shared drawer returns focus to the existing act button');await writeFile(join(out,'backdrop.png'),await page.screenshot());
-      await click(page,'#save');await wait(`!!document.querySelector('dialog[open]')`,'reopen-modal');
+      await click(page,'dialog[open] .workspace-drawer-close');assert.equal(await page.evaluate(`document.activeElement.id==='workspace-pending-ask'&&document.getElementById('workspace-pending-ask').getAttribute('aria-expanded')==='false'`),true,'shared drawer returns focus to the existing act button');await writeFile(join(out,'backdrop.png'),await page.screenshot());
+      await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('dialog[open]')`,'reopen-modal');
      }
-     const values=await page.evaluate<any>(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});const note=form.querySelector('textarea[name="note"]');note.value='  Same reviewer words · 원문\\n';for(const select of form.querySelectorAll('select')){select.value=select.name==='outcome'?'pass':select.name==='choice.topology'?'topology_other':select.options[1].value;select.dispatchEvent(new Event('change',{bubbles:true}));}const other=form.querySelector('textarea[name="other.topology"]');if(other)other.value='  Custom topology · 직접 입력\\n';form.dispatchEvent(new Event('input',{bubbles:true}));return [...form.querySelectorAll('input[name],textarea[name],select[name]')].map(node=>({name:node.name,value:node.value}));})()`);
+     if(kind==='interview-picks'){
+      const draft=JSON.stringify({other:'  Custom topology · 직접 입력\n',note:'  Same reviewer words · 원문\n'});
+      await page.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)}),draft=${draft};for(const value of ['topology_other','density_auto'])form.querySelector('input[type=radio][value="'+value+'"]').click();const other=form.querySelector('textarea[name="other.topology"]');other.value=draft.other;other.dispatchEvent(new Event('input',{bubbles:true}));const note=form.querySelector('textarea[name="note"]');note.value=draft.note;note.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      const identities:unknown=await page.evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(selector+' input[type=radio]')}),input=>({name:input.name,value:input.value}))`);
+      await page.goto(url.href);await wait(`!!document.querySelector(${JSON.stringify(selector+' fieldset:not(:disabled)')})`,'interview draft reopen');
+      const reopened:any=await page.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});return {identities:[...form.querySelectorAll('input[type=radio]')].map(input=>({name:input.name,value:input.value})),checked:[...form.querySelectorAll('input:checked')].map(input=>input.value),other:form.querySelector('textarea[name="other.topology"]').value,note:form.querySelector('textarea[name="note"]').value,otherVisible:!form.querySelector('textarea[name="other.topology"]').hidden,selects:form.querySelectorAll('select').length,recommended:form.querySelectorAll('.interview-recommended').length,delegates:form.querySelectorAll('.interview-delegate').length,viewports:form.querySelectorAll('.interview-viewport').length,bottom:!!form.querySelector('.interview-bottom-resize[role=separator]')};})()`);
+      assert.deepEqual(reopened.identities,identities);assert.deepEqual(reopened.checked,['topology_other','density_auto']);assert.equal(reopened.other,'  Custom topology · 직접 입력\n');assert.equal(reopened.note,'  Same reviewer words · 원문\n');assert.equal(reopened.otherVisible,true);assert.equal(reopened.selects,0);assert.equal(reopened.recommended,2);assert.equal(reopened.delegates,2);assert.equal(reopened.viewports,1);assert.equal(reopened.bottom,true);observation.reopened=reopened;
+      const viewport:any=await page.evaluate<any>(`(()=>{const form=document.querySelector(${JSON.stringify(selector)}),view=form.querySelector('.interview-viewport'),bottom=form.querySelector('.interview-answer-fields');return {view:view.getBoundingClientRect().toJSON(),bottom:bottom.getBoundingClientRect().toJSON(),controls:[...form.querySelectorAll('.zoom-controls>button')].map(button=>button.textContent)};})()`);
+      assert.ok(viewport.bottom.top>viewport.view.bottom);assert.ok(viewport.view.height>=100);observation.interviewViewport=viewport;
+      const separatorSelector=selector+' .interview-bottom-resize';
+      const resize:any=await page.evaluate<any>(`(()=>{const separator=document.querySelector(${JSON.stringify(separatorSelector)}),before=Number(separator.getAttribute('aria-valuenow'));separator.focus();separator.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',shiftKey:true,bubbles:true}));return {before,after:Number(separator.getAttribute('aria-valuenow'))};})()`);assert.ok(resize.after>resize.before);observation.resized=resize;
+      await click(page,selector+' .zoom-controls>button:nth-child(1)');
+      await click(page,selector+' .zoom-controls>button:nth-child(4)');
+      await click(page,selector+' .zoom-controls>button:nth-child(3)');
+      await page.evaluate(`document.querySelector(${JSON.stringify(selector+' .interview-answer-fields')}).scrollTop=0`);
+      await writeFile(join(out,'radio-cards.png'),await page.screenshot());
+      // Auto was restored by its original ID above. Submit that existing option, never a fabricated Delegate act.
+     }
+     const values=kind==='interview-picks'?await page.evaluate<any>(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked,'+selector+' textarea')})].map(input=>({name:input.name,value:input.value}))`):await page.evaluate<any>(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});const note=form.querySelector('textarea[name="note"]');note.value='  Same reviewer words · 원문\\n';for(const select of form.querySelectorAll('select')){select.value=select.name==='outcome'?'pass':select.name==='choice.topology'?'topology_other':select.options[1].value;select.dispatchEvent(new Event('change',{bubbles:true}));}const other=form.querySelector('textarea[name="other.topology"]');if(other)other.value='  Custom topology · 직접 입력\\n';form.dispatchEvent(new Event('input',{bubbles:true}));return [...form.querySelectorAll('input[name],textarea[name],select[name]')].map(node=>({name:node.name,value:node.value}));})()`);
      observation[mode+'Controls']=values;
      await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type="submit"]')}).scrollIntoView({block:'center'});`);
      await writeFile(join(out,mode+'-answered.png'),await page.screenshot());
      await click(page,selector+' button[type="submit"]');
-     const path=join(out,mode+'.json');await wait(`document.querySelector(${JSON.stringify(selector+' [role="status"]')})?.textContent===${JSON.stringify((language==='en'?enCatalog:koCatalog)['job.saved'])}`,kind+'/'+mode+'/saved');
+     const path=join(out,mode+'.json');await wait(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')})?.textContent===${JSON.stringify((language==='en'?enCatalog:koCatalog)['job.saved'])}`,kind+'/'+mode+'/saved');
      assert.ok(existsSync(path),'writer actually persisted '+mode);const act=parseRecordAct(JSON.parse(await readFile(path,'utf8')));
      assert.equal(act.at,'2026-11-08T12:00:00.000Z');
-     if(act.kind==='interview-picks'){assert.equal(act.value.note,'  Same reviewer words · 원문\n');assert.deepEqual(act.value.selections,[{itemId:'topology',optionId:'topology_other',otherText:'  Custom topology · 직접 입력\n'},{itemId:'detail_level',optionId:'density_high',otherText:null}]);}
+     if(act.kind==='interview-picks'){assert.equal(act.value.note,'  Same reviewer words · 원문\n');assert.deepEqual(act.value.selections,[{itemId:'topology',optionId:'topology_other',otherText:'  Custom topology · 직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}]);}
      else{assert.equal(act.value.words,'  Same reviewer words · 원문\n');if(act.kind==='checkpoint')assert.equal(act.value.outcome,'pass');if(act.kind==='signoff')assert.equal(act.value.decision,'approved');}
      await writeFile(join(out,mode+'-submitted.png'),await page.screenshot());
      await page.goto('about:blank');
     }
+    if(kind!=='interview-picks'){
     assert.deepEqual(observation['one-screenControls'],observation['job-windowControls']);
     const one=await readFile(join(out,'one-screen.json')),legacy=await readFile(join(out,'job-window.json'));
     assert.deepEqual(one,legacy,'actual persisted act bytes for '+kind+'/'+language+'/'+picture);
     observation.persistedAct={byteEqual:true,bytes:one.length,oneScreenSha256:sha(one),jobWindowSha256:sha(legacy),oneScreenFile:join(out,'one-screen.json'),jobWindowFile:join(out,'job-window.json')};
+    }else{const bytes=await readFile(join(out,'one-screen.json'));observation.persistedAct={bytes:bytes.length,sha256:sha(bytes),file:join(out,'one-screen.json')};}
     await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');cases.push(observation);
-    console.log('750_BROWSER_CASE_PASS '+kind+' '+(picture?'picture':'empty')+' '+language+' bytes='+one.length);
+    console.log('750_BROWSER_CASE_PASS '+kind+' '+(picture?'picture':'empty')+' '+language+' bytes='+(observation.persistedAct as {bytes:number}).bytes);
    }
    assert.deepEqual(await jobInputHashes(fixture.root),before,'inspected source files remain immutable');
   }finally{await fixture.close();}
  }
  assert.equal(exceptions.length,0,'no browser exceptions');
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
- const result={cases:cases.length,persistedByteComparisons:cases.length,askKinds:4,languages:['en','ko'],backdrops:['empty','picture'],viewport:{width:1600,height:1000},exceptions,mutations,browserWorkers:'single-process/no-zygote; one renderer; raster threads=1; JS heap 1024MiB'};
+ const result={cases:cases.length,persistedByteComparisons:interviewOnly?0:cases.length-4,askKinds:interviewOnly?1:4,languages:['en','ko'],backdrops:['empty','picture'],viewport:{width:1600,height:1000},exceptions,mutations,browserWorkers:'single-process/no-zygote; one renderer; raster threads=1; JS heap 1024MiB'};
  await writeFile(join(output,'result.json'),JSON.stringify(result,null,2)+'\n');console.log('750_BROWSER_PASS '+JSON.stringify(result));
 }catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,completedCases:cases},null,2)+'\n');if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await rm(profile,{recursive:true,force:true});}

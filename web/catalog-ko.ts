@@ -134,6 +134,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "interview.choose": "각 질문에서 하나씩 직접 선택한 뒤 저장하세요.",
   "interview.readOnly": "읽기 전용입니다. 선택 기록을 저장하려면 실행 시 표시된 URL을 여세요.",
   "interview.answered": "답변 {0} / {1}",
+  "interview.delegate": "위임",
   "interview.open": "인터뷰 열기",
   "interview.close": "인터뷰 닫기",
   "PARTS_DIFFERENCE_PROVENANCE: declared path, lowercase SHA-256 and lanczos3-rgb-opaque required": "PARTS_DIFFERENCE_PROVENANCE: 선언된 경로, 소문자 SHA-256, lanczos3-rgb-opaque가 필요해요.",

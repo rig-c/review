@@ -131,7 +131,7 @@ const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.
 const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
 for(const event of ['click','change'])secondaryToolbar.addEventListener(event,()=>{if(rigDifference){leaveRigDifference();renderLayout();}},true);
 const rigInspector=mountRigInspector();
-const rigAsk=panelMake('span',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigInspector.act.prepend(rigAsk);
+const rigAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigAsk.type='button';rigInspector.act.prepend(rigAsk);
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
 const partsCanvas=document.createElement('canvas'),partsReference=document.createElement('canvas');partsCanvas.width=partsCanvas.height=partsReference.width=partsReference.height=0;
@@ -1310,12 +1310,14 @@ function renderRecordForms(forms:readonly HTMLFormElement[]):void {
  if(!recordDialog){
   recordDialog=panelMake('dialog',{id:'job-record-asks',className:'workspace-drawer'});recordDialog.setAttribute('aria-label',tr('job.pending'));
   const close=panelMake('button',{className:'workspace-drawer-close',type:'button'},tr('Close'));recordDialog.append(close);app.append(recordDialog);
-  viewDisposers.push(bindWorkspaceDrawer({trigger:button('save'),drawer:recordDialog,label:tr('job.pending'),close}));
+  viewDisposers.push(bindWorkspaceDrawer({trigger:rigAsk,drawer:recordDialog,label:tr('job.pending'),close}));
   viewDisposers.push(()=>{recordDialog?.close();recordDialog?.remove();recordDialog=null;});
  }
+ recordDialog.classList.toggle('interview-modal',forms.some(form=>form.classList.contains('interview-answer')));
+ for(const form of recordDialog.querySelectorAll<HTMLFormElement>('form[data-job-ask]'))if(!forms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
  const added=forms.filter(form=>!recordDialog!.contains(form));
- for(const form of added){form.style.overflow='auto';form.style.minHeight='0';recordDialog.append(form);}
- button('save').disabled=!forms.length;button('save').onclick=null;
+ for(const form of added){if(!form.classList.contains('interview-answer'))form.style.overflow='auto';form.style.minHeight='0';recordDialog.append(form);}
+ button('save').disabled=!forms.length;rigAsk.disabled=!forms.length;button('save').onclick=()=>rigAsk.click();
  if(added.length&&!recordDialog.open)button('save').click();
 }
 /** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
