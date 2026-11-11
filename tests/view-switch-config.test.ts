@@ -1,0 +1,84 @@
+import {expect,test} from 'bun:test';
+import {createViewControls,type ViewSwitchConfig} from '../web/view-controls.ts';
+import {getLanguagePreference,setLanguagePreference,t} from '../web/i18n.ts';
+
+/** Numeric DOM host: no browser, layout or rendering claims. */
+class ControlNode {
+ id='';className='';textContent='';dataset:Record<string,string>={};children:(ControlNode|string)[]=[];
+ attrs=new Map<string,string>();disabled=false;title='';open=false;onclick:(()=>void)|null=null;
+ constructor(readonly tagName:string){}
+ append(...children:(ControlNode|string)[]){this.children.push(...children);}
+ setAttribute(key:string,value:string){this.attrs.set(key,value);}
+ removeAttribute(key:string){this.attrs.delete(key);}
+ getAttribute(key:string){return this.attrs.get(key)??null;}
+}
+function withControls(run:()=>void){
+ const descriptor=Object.getOwnPropertyDescriptor(globalThis,'document'),language=getLanguagePreference();
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new ControlNode(tag)}});
+ try{run();}finally{
+  if(descriptor)Object.defineProperty(globalThis,'document',descriptor);else Reflect.deleteProperty(globalThis,'document');
+  setLanguagePreference(language);
+ }
+}
+function menu(config?:ViewSwitchConfig){
+ const controls=createViewControls({layout:'rigStep1',...(config?{viewSwitch:config}:{})});
+ const root=controls.viewSwitch as unknown as ControlNode;
+ const summary=root.children[0] as ControlNode,list=root.children[1] as ControlNode;
+ return {controls,root,summary,label:summary.children[1] as ControlNode,list,buttons:list.children.filter((node):node is ControlNode=>typeof node!=='string'&&node.tagName==='button')};
+}
+function partsConfig(hidden=false,onChange?:(id:string)=>void):ViewSwitchConfig{
+ return {currentMode:'part',onChange,groups:[{modes:[
+  {id:'assembled',labelKey:'Assembled',pressed:false},
+  {id:'part',labelKey:'Part',pressed:true},
+  {id:'overlay',labelKey:'Overlay',pressed:false},
+  {id:'difference',labelKey:'Difference',pressed:false,disabledReason:t('Difference unavailable')},
+ ]},{hidden,modes:[{id:'region',labelKey:'Region',pressed:true},{id:'pages',labelKey:'Pages',pressed:false}]}]};
+}
+
+for(const language of ['en','ko'] as const){
+ test(`#677 ${language}: rig retains ids, order, aria and localized text`,()=>withControls(()=>{
+  setLanguagePreference(language);
+  const {controls,root,summary,label,list,buttons}=menu();
+  const group=controls.zoomGroup as unknown as ControlNode;
+  expect(group.children.map(node=>(node as ControlNode).id)).toEqual(['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']);
+  expect(group.className).toBe('zoom-controls');expect(root.id).toBe('view-menu');expect(root.className).toBe('view-menu');
+  expect(summary.getAttribute('aria-label')).toBe(t('View layout'));expect(summary.children[0]).toBe(t('View switch')+' ');
+  expect(label.id).toBe('view-menu-label');expect(label.textContent).toBe(t('Side by side'));
+  expect(list.getAttribute('role')).toBe('group');expect(list.getAttribute('aria-label')).toBe(t('View'));
+  expect(buttons.map(button=>button.dataset.view)).toEqual(['compare','reference','rig']);
+  expect(buttons.map(button=>button.textContent)).toEqual(['Side by side','Reference','Rig'].map(key=>t(key)));
+  expect(buttons.map(button=>button.getAttribute('aria-pressed'))).toEqual(['true','false','false']);
+  expect(buttons.every(button=>!button.disabled&&button.title==='')).toBe(true);
+ }));
+ test(`#677 ${language}: parts configuration orders six modes, separates groups and names disabled reason`,()=>withControls(()=>{
+  setLanguagePreference(language);
+  const {list,buttons,label}=menu(partsConfig());
+  expect(list.children.map(node=>(node as ControlNode).dataset.view??(node as ControlNode).tagName)).toEqual(['assembled','part','overlay','difference','hr','region','pages']);
+  expect((list.children[4] as ControlNode as unknown as {role:string}).role).toBe('separator');
+  expect(buttons.map(button=>button.textContent)).toEqual(['Assembled','Part','Overlay','Difference','Region','Pages'].map(key=>t(key)));
+  expect(buttons.map(button=>button.getAttribute('aria-pressed'))).toEqual(['false','true','false','false','true','false']);
+  expect(buttons[3]!.disabled).toBe(true);expect(buttons[3]!.title).toBe(t('Difference unavailable'));
+  expect(buttons[3]!.getAttribute('aria-description')).toBe(t('Difference unavailable'));expect(label.textContent).toBe(t('Part'));
+  const hidden=menu(partsConfig(true));expect(hidden.buttons.map(button=>button.dataset.view)).toEqual(['assembled','part','overlay','difference']);
+  expect(hidden.list.children.some(node=>(node as ControlNode).tagName==='hr')).toBe(false);
+ }));
+}
+
+test('#677 mode selection notifies once, closes the switch, updates summary and preserves the other group',()=>withControls(()=>{
+ const changes:string[]=[],config=partsConfig(false,id=>changes.push(id)),{root,label,buttons}=menu(config);
+ root.open=true;buttons[2]!.onclick!();
+ expect(changes).toEqual(['overlay']);expect(root.open).toBe(false);expect(label.textContent).toBe(t('Overlay'));
+ expect(buttons.map(button=>button.getAttribute('aria-pressed'))).toEqual(['false','false','true','false','true','false']);
+ buttons[3]!.onclick!();expect(changes).toEqual(['overlay']);expect(label.textContent).toBe(t('Overlay'));
+ buttons[5]!.onclick!();expect(changes).toEqual(['overlay','pages']);expect(label.textContent).toBe(t('Pages'));
+ expect(buttons[2]!.getAttribute('aria-pressed')).toBe('true');expect(buttons[4]!.getAttribute('aria-pressed')).toBe('false');
+ expect(config.groups[0]!.modes[1]!.pressed).toBe(true); // Configuration is not mutated.
+}));
+
+test('#677 hidden modes and empty groups introduce no orphan separators',()=>withControls(()=>{
+ const config=partsConfig();
+ config.groups=[{modes:[]},{modes:[{id:'hidden',labelKey:'Rig',pressed:false,hidden:true}]},...config.groups,{modes:[]}];
+ const {list,buttons}=menu(config);
+ expect(buttons.map(button=>button.dataset.view)).toEqual(['assembled','part','overlay','difference','region','pages']);
+ expect(list.children.filter(node=>(node as ControlNode).tagName==='hr')).toHaveLength(1);
+}));

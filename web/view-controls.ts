@@ -84,10 +84,26 @@ export function describeLayerToggles(root:{getElementById(id:string):unknown},re
 }
 
 /** Finite composition: target rig; compare/Parts/job compatibility expires at steps 3/2/5. */
-export type ViewControlsOptions = {layout:'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'} | {
+export interface ViewSwitchMode {
+ id:string;labelKey:string;pressed:boolean;hidden?:boolean;
+ /** Localized explanation shown on the disabled choice. */
+ disabledReason?:string;
+}
+export interface ViewSwitchGroup {modes:readonly ViewSwitchMode[];hidden?:boolean}
+export interface ViewSwitchConfig {
+ groups:readonly ViewSwitchGroup[];
+ currentMode:string;
+ onChange?:(id:string)=>void;
+}
+const rigViewSwitch:ViewSwitchConfig={currentMode:'compare',groups:[{modes:[
+ {id:'compare',labelKey:'Side by side',pressed:true},
+ {id:'reference',labelKey:'Reference',pressed:false},
+ {id:'rig',labelKey:'Rig',pressed:false},
+]}]};
+export type ViewControlsOptions = {viewSwitch?:ViewSwitchConfig}&({layout:'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'} | {
  layout:'legacyCompiledJobStep5';
  inputLabel:(key:string,input:HTMLElement)=>HTMLElement;
-};
+});
 /** One creation site for each common control; hosts retain adjacent tools and camera/event binding. */
 export function createViewControls(options:ViewControlsOptions) {
  const parts=options.layout==='legacyPartsStep2',rig=options.layout==='rigStep1',compare=options.layout==='legacyCompareStep3';
@@ -125,10 +141,27 @@ export function createViewControls(options:ViewControlsOptions) {
   choices={assemble,comparisonGroup,atlasSwitch};
  }
  if(rig){
+  const config=options.viewSwitch??rigViewSwitch;
   viewSwitch=panelMake('details',{id:'view-menu',className:'view-menu'});
-  const summary=panelMake('summary',{},t('View switch')+' ',panelMake('span',{id:'view-menu-label',textContent:t('Side by side')}));summary.setAttribute('aria-label',t('View layout'));
+  const groups=config.groups.filter(group=>!group.hidden).map(group=>group.modes.filter(mode=>!mode.hidden)).filter(modes=>modes.length);
+  const current=groups.flat().find(mode=>mode.id===config.currentMode);
+  const label=panelMake('span',{id:'view-menu-label',textContent:current?t(current.labelKey):''});
+  const summary=panelMake('summary',{},t('View switch')+' ',label);summary.setAttribute('aria-label',t('View layout'));
   const list=panelMake('div',{className:'view-menu-list'});list.setAttribute('role','group');list.setAttribute('aria-label',t('View'));
-  for(const [view,label] of [['compare','Side by side'],['reference','Reference'],['rig','Rig']] as const){const button=actionButton(t(label),null);button.dataset.view=view;button.setAttribute('aria-pressed',String(view==='compare'));list.append(button);}
+  for(const [index,modes] of groups.entries()){
+   if(index)list.append(panelMake('hr',{role:'separator'}));
+   const buttons:HTMLButtonElement[]=[];
+   for(const mode of modes){
+    const button=actionButton(t(mode.labelKey),()=>{
+     if(button.disabled)return;
+     for(const choice of buttons)choice.setAttribute('aria-pressed',String(choice===button));
+     label.textContent=t(mode.labelKey);viewSwitch!.open=false;config.onChange?.(mode.id);
+    });
+    button.dataset.view=mode.id;button.setAttribute('aria-pressed',String(mode.pressed));
+    if(mode.disabledReason){button.disabled=true;button.title=mode.disabledReason;button.setAttribute('aria-description',mode.disabledReason);}
+    buttons.push(button);list.append(button);
+   }
+  }
   viewSwitch.append(summary,list);
   zoomGroup!.append(zoomIn,zoomOut,fit,nativeOne!,viewSwitch,value);
  }else if(compare)zoomGroup!.append(syncLabel,zoomOut,value,zoomIn,fit);
