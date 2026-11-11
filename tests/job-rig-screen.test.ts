@@ -64,13 +64,14 @@ test('#709 pending decisions are never sent; the verdict goes last and words are
   expect(decided.map(item => item.kind)).toEqual(['checkpoint', 'review-verdict']);
   expect(decided[0]!.value).toEqual({checkpointId: 'step-one', outcome: 'fail', words: ''});
   expect(decided[1]!.value).toEqual({stage: 'rig-review', verdict: 'changes-requested',
-    words: '[["slot","sleeve",3,5,null]]\nSleeve tears at the elbow\nduring the swing'});
+    words: '[["slot","sleeve",3,5,null]]\nSleeve tears at the elbow\nduring the swing', feedback: [feedback]});
   expect(jobRigScreenDecisions(session({status: 'approved'}), asks, 'other-publication')).toEqual([]);
 });
 
-test('#709 the rig screen writes the same act kind, version and shape as the job window; words are the projection', async () => {
+test('#746 the rig screen keeps act@6 and structured feedback instead of a general words projection', async () => {
   const f = await fixture(), publication = await f.publish();
-  const note = projectComments(feedbackItemComments([feedback]));
+  const rows = [{...feedback, summary: 'Sleeve tears at the elbow'}];
+  const note = projectComments(feedbackItemComments(rows));
   async function commit(askId: string, value: unknown, submissionId: string) {
     const ask = f.session.status().pending.find(item => item.askId === askId)!, page = await f.display(publication);
     const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId, expectedGeneration: f.session.status().generation,
@@ -82,12 +83,16 @@ test('#709 the rig screen writes the same act kind, version and shape as the job
   // The job window's value shape `{stage, verdict, words}`, carrying the same words.
   const before = await commit(today.askId, {stage: 'rig-review', verdict: 'approved', words: note}, 'today');
   const after = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
-  const [decision] = jobRigScreenDecisions(session({status: 'approved', feedback: [feedback]}),
+  const [decision] = jobRigScreenDecisions(session({status: 'approved', feedback: rows}),
     f.session.status().pending as unknown as PendingAskV3[], publication.publicationId);
   expect(decision!.ask.askId).toBe(after.askId);
   expect(decision!.value.words).toBe(note);
   const screen = await commit(after.askId, decision!.value, 'screen');
-  expect(actBytes(screen)).toBe(actBytes(before));
+  expect(parseCommentsAct(screen)).toMatchObject({schema: 'rig-review/act@6', kind: 'review-verdict',
+    value: {comments: feedbackItemComments(rows)}});
+  expect(projectComments(parseCommentsAct(screen).value.comments)).toBe(note);
+  expect(parseCommentsAct(before).value.comments).toEqual([{text: note}]);
+  expect(actBytes(screen)).not.toBe(actBytes(before));
 });
 
 test('#709 a checkpoint act from the rig screen has the job window\'s kind, version and shape; words are the projection', async () => {
@@ -143,7 +148,7 @@ test('#709 the rig screen still does not depend on the mesh or bone overlay togg
   // still backend"); mesh edges and bone points are overlays, so they no longer make the whole rig ineligible.
   const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
   const stage = main.slice(main.indexOf('function hostStage():RigHostStage|null {'), main.indexOf('/** Old feedback bookmarks keep'));
-  expect(stage).toContain('wholeRig:!parts?.value()&&player.slots===null&&layers.images,');
+  expect(stage).toContain('wholeRig:!rigDifference&&!parts?.value()&&player.slots===null&&layers.images,');
   expect(stage).not.toContain('layers.mesh');
   expect(stage).not.toContain('layers.bones');
 });

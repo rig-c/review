@@ -154,7 +154,7 @@ test('#735 Made correction records from the existing UTF-8 file path on applied 
   const exact='Keep these precise words.  \r\n', bytes=new TextEncoder().encode(exact),saved=sessionInput().session;
   saved.feedback=[];const errors:string[]=[],button:any={};
   values['correction-words']={value:'request.txt',files:[{size:bytes.length,arrayBuffer:async()=>bytes.buffer}]};
-  const scope:any={input:(id:string)=>values[id],select:(id:string)=>values[id],button:()=>button,session:saved,appliedOnStage:applied,
+  const scope:any={input:(id:string)=>values[id],select:(id:string)=>values[id],button:()=>button,session:saved,appliedOnStage:applied,rigDifference:null,
     data:{feedbackCatalog:{rig:'package',bones:['elbow'],slots:[],animations:null,clock:null,clockAnimation:null}},
     tr:(value:string)=>value,t:(value:string)=>value,message:(value:string,error:boolean)=>{if(error)errors.push(value);},errorText:(error:Error)=>error.message,
     validateFeedbackSelection,validateTimedFeedbackSelection,feedbackAnimation:()=>null,assets:null,player:null,viewport:{state:{cameraCenter:null,zoom:1}},
