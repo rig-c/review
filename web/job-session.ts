@@ -1883,10 +1883,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         source.className = 'job-source';
         source.textContent = prepared.display.publication.label + ' · ' + ask.source.sourceHash;
         fields.append(source);
-        const note = textArea(fields, 'interview.note');
+        const subject = ask.subject;
+        const note = subject.kind === 'signoff' || subject.kind === 'reopen'
+            ? null : textArea(fields, 'interview.note');
         let read: () => UISubmissionV3['value'];
         let submitKey = 'Submit review';
-        const subject = ask.subject;
         if (subject.kind === 'interview-picks') {
             const question = prepared.interview?.questions.find(item => item.set.id === subject.setId && item.set.question === subject.questionId);
             if (!question || !question.editable) throw new Error('JOB_ASK_INVALID');
@@ -1955,7 +1956,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             }
             read = () => ({ questionId: subject.questionId,
                 selections: answers.map(({ item, pick, other }) => ({ itemId: item.id, optionId: pick.value,
-                    otherText: item.options.find(option => option.id === pick.value)?.kind === 'other' ? other.value : null })), note: note.value });
+                    otherText: item.options.find(option => option.id === pick.value)?.kind === 'other' ? other.value : null })), note: note?.value ?? '' });
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
@@ -2021,8 +2022,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             const outcome = selectValues(['', 'pass', 'fail'], ['Pending', 'Pass', 'job.fail']);
             outcome.required = true;
             outcome.name = 'outcome';
-            fields.append(outcome, note.parentElement!);
-            read = () => ({ checkpointId: subject.checkpointId, outcome: outcome.value as 'pass' | 'fail', words: note.value });
+            fields.append(outcome, note!.parentElement!);
+            read = () => ({ checkpointId: subject.checkpointId, outcome: outcome.value as 'pass' | 'fail', words: note?.value ?? '' });
             submitKey = 'job.saveCheckpoint';
         }
         else if (subject.kind === 'parts-verdict') {
@@ -2030,7 +2031,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 const panel = partsPanels.get(prepared);
                 if (panel?.legacy) throw new Error('JOB_PARTS_LEGACY_DRAFT');
                 if (!panel?.output) throw new Error('JOB_PANEL_OUTPUT_MISSING');
-                return {...panel.output.value(), words: note.value};
+                return {...panel.output.value(), words: note?.value ?? ''};
             };
             submitKey = 'job.partsApprove';
         }
@@ -2053,19 +2054,19 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 read = () => {
                     const notes = imageNotes.filter(note => note.input.value !== '')
                         .map(note => ({name: note.name, words: note.input.value}));
-                    return {stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: note.value,
+                    return {stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: note?.value ?? '',
                         ...(notes.length ? {imageNotes: notes} : {})};
                 };
             } else {
-                read = () => ({ stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: note.value });
+                read = () => ({ stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: note?.value ?? '' });
             }
         }
         else if (subject.kind === 'signoff') {
             const stage = node('p');
             stage.textContent = subject.stage;
             fields.append(stage);
-            if (ask.source.plan) fields.append(planTextList(ask.source.plan, prepared.metadata.planText), note.parentElement!);
-            read = () => ({ stage: subject.stage, decision: 'approved', words: note.value });
+            if (ask.source.plan) fields.append(planTextList(ask.source.plan, prepared.metadata.planText));
+            read = () => ({ stage: subject.stage, decision: 'approved', words: note?.value ?? '' });
             submitKey = 'job.signoff';
         }
         else if (subject.kind === 'reopen') {
@@ -2081,7 +2082,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             const stage = node('p');
             stage.textContent = subject.stage;
             fields.append(stage);
-            read = () => ({ stage: subject.stage, words: note.value });
+            read = () => ({ stage: subject.stage, words: note?.value ?? '' });
             submitKey = 'job.reopen';
         }
         else {

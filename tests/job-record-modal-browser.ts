@@ -81,12 +81,13 @@ try {
     for (const [index, subject] of subjects.entries()) {
         const selector = `form[data-job-ask="${asks[index].askId}"]`;
         if (subject.kind !== 'checkpoint') {
+            assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector)}).querySelectorAll('textarea').length`),0);
             await openAndClose(selector+' [data-job-record-opener="job.'+subject.kind+'"]',subject.kind,true);
             await page.evaluate(`document.querySelector(${JSON.stringify(selector+' [data-job-record-opener]')}).click()`);
         }
-        const words: string = `  ${subject.kind} ${language} 한글\n`;
+        const words: string = subject.kind === 'checkpoint' ? `  ${subject.kind} ${language} 한글\n` : '';
         await page.evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(selector)});
-            f.querySelector('textarea[name=note]').value=${JSON.stringify(words)};
+            const note=f.querySelector('textarea[name=note]');if(note)note.value=${JSON.stringify(words)};
             const outcome=f.querySelector('select[name=outcome]');if(outcome)outcome.value='pass';
             f.dispatchEvent(new Event('input',{bubbles:true}));f.querySelector('button[type=submit]').click();})()`);
         await until(`document.querySelector(${JSON.stringify(selector)}).querySelector('[role=status]').dataset.jobText==='job.saved'`);
@@ -100,6 +101,8 @@ try {
         assert.equal(act.source.sourceHash,publication.source.sourceHash);
         assert.deepEqual(act.value,subject.kind==='checkpoint'?{checkpointId:'step_layout',planStepId:'step_layout',outcome:'pass',words}:
             subject.kind==='signoff'?{stage:'plan-approved',decision:'approved',words}:{stage:'plan-approved',words});
+        if (subject.kind !== 'checkpoint') assert.equal(JSON.stringify(act.value), subject.kind === 'signoff'
+            ? '{"stage":"plan-approved","decision":"approved","words":""}' : '{"stage":"plan-approved","words":""}');
         observations.push({kind:subject.kind,value:act.value,schema:act.schema,sourceHash:act.source.sourceHash});
     }
     assert.deepEqual(await jobInputHashes(root),hashes);
