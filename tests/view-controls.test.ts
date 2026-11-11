@@ -629,3 +629,21 @@ test('#659 labelledControl preserves literal trailing space and supplied Node id
   expect(created[2]!.children[0]).toBe(control);expect(created[2]!.children[1]).toBe(label);
  }finally{if(descriptor)Object.defineProperty(globalThis,'document',descriptor);else Reflect.deleteProperty(globalThis,'document');}
 });
+
+
+test('#666 outer select, restore and disposal keep callback timing and current handler ownership',async()=>{
+ const source=await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8'),a=source.indexOf('export function bindInspectorTabs(');
+ const node=(id:string)=>{const attrs=new Map([['aria-selected',String(id==='rig')]]);return {dataset:{inspector:id},tabIndex:0,onclick:null as unknown,onkeydown:null as unknown,setAttribute(k:string,v:string){attrs.set(k,v);},getAttribute(k:string){return attrs.get(k)??null;},focus(){}};};
+ const tabs=['rig','playback','feedback'].map(node),panels=tabs.map(t=>({dataset:{inspectorPanel:t.dataset.inspector},hidden:t.dataset.inspector!=='rig'}));
+ const mode={dataset:{mode:'playback'},onclick:null as unknown,pressed:'',setAttribute(_k:string,v:string){this.pressed=v;}};
+ const document={querySelectorAll:(selector:string)=>selector==='[data-inspector]'?tabs:selector==='[data-mode]'?[mode]:panels};
+ const bind=new Function('document',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a).replace('export function','function'))+';return bindInspectorTabs;')(document);
+ const trace:string[]=[],binding=bind(()=>trace.push('after:'+panels.map(p=>p.hidden)),()=>trace.push('before:'+panels.map(p=>p.hidden)));
+ binding.select('playback');expect(trace).toEqual(['before:false,true,true','after:true,false,true']);expect(binding.state()).toBe('playback');
+ binding.select('playback');expect(trace.length).toBe(4); // Outer same-tab clicks still notify.
+ binding.restore('feedback');expect(trace.length).toBe(4);expect(binding.state()).toBe('feedback');expect(mode.pressed).toBe('false');expect(panels.map(p=>p.hidden)).toEqual([true,true,false]);
+ binding.restore('missing');expect(binding.state()).toBe('feedback');
+ const next=bind(()=>trace.push('next'));binding.dispose();(tabs[0]!.onclick as ()=>void)();expect(trace.at(-1)).toBe('next');
+ next.dispose();expect(tabs.every(t=>t.onclick===null&&t.onkeydown===null)).toBe(true);expect(mode.onclick).toBeNull();
+ next.select('playback');expect(panels.map(p=>p.hidden)).toEqual([false,true,true]);
+});

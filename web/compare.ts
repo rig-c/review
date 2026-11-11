@@ -53,6 +53,7 @@ const rigScales:Record<Side,number>={a:1,b:1};
 let cameraSync=true,activeCamera:CameraTarget='a',cameraRestoring=false,cameraLayout='';
 let idleHeld=true,loopRestarting=false,suspendedPreview=false;
 let appearance:ReturnType<typeof bindAppearance>|null=null,controlDispose:(()=>void)|null=null,workspace:WorkspaceUI|null=null;
+let inspectorTabs:ReturnType<typeof bindInspectorTabs>|null=null;
 const viewDisposers:(()=>void)[]=[];
 let parts:PartExplorer|null=null,turnPad:TurnPad|null=null;
 const thumbnails:Partial<Record<Side,PartThumbnails>>={};
@@ -440,7 +441,7 @@ function bind(): void {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){suspendedPreview=!video.paused;stop();}else if(suspendedPreview&&!idleHeld){suspendedPreview=false;void playComparison().catch(error=>message(describe(error),true));}});
   const observer = new ResizeObserver(fit); observer.observe(el('a-viewport')); observer.observe(el('b-viewport'));observer.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', () => { pickedTools?.dispose();comments?.dispose();persistence?.dispose();turnPad?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { thumbnails[side]?.dispose(); players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
+  window.addEventListener('pagehide', () => { pickedTools?.dispose();comments?.dispose();persistence?.dispose();turnPad?.dispose();inspectorTabs?.dispose();workspace?.dispose();disposed = true; seekAbort?.abort();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());for(const overlay of Object.values(overlays))overlay.dispose();stop(); if (videoCallback !== null) video.cancelVideoFrameCallback(videoCallback); if (fallbackCallback !== null) cancelAnimationFrame(fallbackCallback); for (const side of ['a', 'b'] as const) { thumbnails[side]?.dispose(); players[side]?.dispose(); assets[side]?.dispose(); } observer.disconnect(); });
 }
 
 async function start(): Promise<void> {
@@ -520,7 +521,7 @@ function redrawOverlays(fresh:boolean):void {
  text('layer-state',warnings.join(' · ')||'Actual last-drawn mesh edges / bone points');
  if(!fresh&&needsCapture&&trace&&!seeking&&!video.seeking&&players.a&&players.b){try{drawSynchronizedPair(inspectionPlayer('a'),inspectionPlayer('b'));redrawOverlays(true);for(const side of ['a','b'] as const)text(`${side}-renderer`,rendererBadges[side].observe('drawn',players[side]!.renderer).label);}catch(error){failPair(error);}}
 }
-function bindInspector():void {bindInspectorTabs(()=>{pickedTools?.onInspectorTabChanged();workspace?.afterTab();if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]')){idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);}fit();},()=>workspace?.beforeTab());}
+function bindInspector():void {inspectorTabs?.dispose();inspectorTabs=bindInspectorTabs(()=>{pickedTools?.onInspectorTabChanged();workspace?.afterTab();if(document.querySelector('[data-inspector="feedback"][aria-selected="true"]')){idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);}fit();},()=>workspace?.beforeTab());}
 
 function canRepeatIdle():boolean{return data?.animation==='idle'&&idleAvailable(assets.a?.animations.map(a=>a.name)??[],data.animation)&&idleAvailable(assets.b?.animations.map(a=>a.name)??[],data.animation)&&input('idle-repeat').checked&&!!domain&&domain.end>0;}
 function renderIdle():void {text('idle-state',canRepeatIdle()?'Actual idle · repeat enabled':'Bound non-idle inspection · no automatic playback');}
@@ -588,7 +589,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal):P
  parts?.select(bookmark.selection.part??null);
  idleHeld=true;stop();if(bookmark.time!==null){await seekTo(bookmark.time);if(signal.aborted||!trace)throw new Error('Saved reference inspection could not settle');}
  appearance?.set(bookmark.theme);Object.assign(layers,{images:bookmark.layers.images,mesh:bookmark.layers.meshes,bones:bookmark.layers.bones});input('layer-images').checked=layers.images;input('layer-mesh').checked=layers.mesh;input('layer-bones').checked=layers.bones;
- if(bookmark.selection.inspector){workspace?.beforeTab();for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-inspector]')){const selected=tab.dataset.inspector===bookmark.selection.inspector;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==bookmark.selection.inspector;workspace?.afterTab();}
+ if(bookmark.selection.inspector){workspace?.beforeTab();inspectorTabs?.restore(bookmark.selection.inspector);workspace?.afterTab();}
  if(typeof pickedTools!=='undefined'&&pickedTools){if(bookmark.selection.side==='a'||bookmark.selection.side==='b')pickedTools.setPickedSide(bookmark.selection.side);const nextMode=bookmark.selection.mode??(bookmark.selection.inspector==='rig'?'setup':bookmark.selection.inspector==='playback'?'animate':'compare');pickedTools.setMode(nextMode,{fromTab:true});}
  syncStageLayout(el('stage-layout'));fit();
  for(const target of ['a','b','reference'] as const){const camera=bookmark.view.cameras[target],frame=paneFrame(target,true);if(camera&&frame)cameras[target]={zoom:restoredZoom(camera,frame.baseScale,frame.width,frame.height),center:{...camera.center}};}
