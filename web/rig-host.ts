@@ -17,12 +17,18 @@ export interface RigHostScreen {
   redraw(): void;
   message(text: string, error?: boolean): void;
 }
+/** Only the content carried by an act the host has actually committed. This is local UI state, not an act field. */
+export interface RigHostCommit {
+  readonly at: string;
+  readonly checkpoints?: ReviewSession['checkpoints'];
+  readonly review?: Pick<ReviewSession, 'status' | 'feedback'>;
+}
 export interface RigHost {
   readonly access: InstanceAccess;
   /** A read the host answers itself, or undefined to fetch it from the subject's routes. */
   read(path: string, method: string): Promise<unknown> | undefined;
   /** The act bar's Submit review: the session's decisions go out as the pending asks' acts. */
-  submit(session: ReviewSession): Promise<string>;
+  submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>): Promise<string>;
   attach(screen: RigHostScreen): void;
   /** The first rig draw is on screen (or the open failed): the job acknowledges the display after it. */
   displayed(): void;

@@ -792,6 +792,12 @@ function applyAxis(): void {
   const value = Number(input('axis-value').value); text('axis-value-label', value.toFixed(3)); seek((value - axis.min) / (axis.max - axis.min) * duration);
 }
 
+/** A changed draft with the same id is still editable; only the exact submitted row is locked. */
+function isSubmittedFeedback(id:string):boolean {
+  const row=session.feedback.find(item=>item.id===id);
+  return !!row&&!!submittedBaseline?.updatedAt&&submittedBaseline.feedback.some(item=>item.id===id&&JSON.stringify(item)===JSON.stringify(row));
+}
+
 function renderProposals(): void {
   comments?.refresh();
   const area = el('proposal-list'); area.replaceChildren();
@@ -820,7 +826,7 @@ function renderProposals(): void {
       item.append(label);
     }
     if ((context?.comment as {schema?: string} | undefined)?.schema === 'rig-review-comment/1' &&
-        !submittedBaseline?.feedback.some(row => row.id === feedback.id)) {
+        !isSubmittedFeedback(feedback.id)) {
       const describe = document.createElement('button');
       describe.type = 'button';
       setSourceText(describe, 'Use as described correction');
@@ -833,7 +839,7 @@ function renderProposals(): void {
     for (const warning of session.feedbackWarnings.filter(value => value.id === feedback.id)) { const note = document.createElement('p'); note.className = 'hint'; note.textContent = `Validation warning · ${warning.error}`; item.append(note); }
     const details = document.createElement('details'), summary = document.createElement('summary'), source = document.createElement('pre'); summary.textContent = 'Saved feedback and inspection context'; source.className = 'feedback-json'; source.textContent = JSON.stringify(feedback, null, 2); details.append(summary, source);
     const remove = actionButton('Delete', () => { session.feedback = session.feedback.filter(item => item.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); markDirty(); renderProposals(); });
-    item.append(details);if((feedback.context as any)?.comment?.schema!=='rig-review-comment/1'||!submittedBaseline?.feedback.some(f=>f.id===feedback.id))item.append(remove); area.append(item);
+    item.append(details);if((feedback.context as any)?.comment?.schema!=='rig-review-comment/1'||!isSubmittedFeedback(feedback.id))item.append(remove); area.append(item);
   }
   updateSavedState();
 }
@@ -1019,7 +1025,24 @@ function bind(): void {
     if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}
     if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; }
     saving = true; updateSavedState(); const savedPayload = JSON.stringify(session);
-    if (host) { try { const sent = await host.submit(structuredClone(session)); if (JSON.stringify(session) === savedPayload) dirty = false; session.updatedAt = new Date().toISOString(); submittedBaseline = structuredClone(session); comments?.refresh(); renderProposals(); message(sent); } catch (error) { message(errorText(error), true); } finally { saving = false; updateSavedState(); } return; }
+    if (host) {
+      try {
+        const sent = await host.submit(structuredClone(session), async committed => {
+          submittedBaseline = {...submittedBaseline!, ...committed.review,
+            checkpoints: {...submittedBaseline!.checkpoints, ...committed.checkpoints}, updatedAt: committed.at};
+          session.updatedAt = committed.at;
+          const ids = new Set([...Object.keys(session.checkpoints), ...Object.keys(submittedBaseline.checkpoints)]);
+          dirty = session.status !== submittedBaseline.status || JSON.stringify(session.feedback) !== JSON.stringify(submittedBaseline.feedback) ||
+            [...ids].some(id => JSON.stringify(session.checkpoints[id] ?? {outcome: 'pending', note: ''}) !==
+              JSON.stringify(submittedBaseline!.checkpoints[id] ?? {outcome: 'pending', note: ''}));
+          await persistence?.submitted(submittedBaseline);
+          comments?.refresh(); renderProposals();
+        });
+        message(sent);
+      } catch (error) { message(errorText(error), true); }
+      finally { saving = false; updateSavedState(); }
+      return;
+    }
     try { const saved = await api<ReviewSession>('/api/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: savedPayload });
       if (JSON.stringify(session) === savedPayload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;
       submittedBaseline=structuredClone(saved);comments?.refresh();await persistence?.submitted(saved);renderProvenance();renderProposals();
@@ -2525,7 +2548,7 @@ function setupComments():void {
    return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;
   },
   pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:inspectionBookmark,restore:(b,timed)=>restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal,!!timed),feedback:()=>session.feedback,
-  locked:id=>!!submittedBaseline?.updatedAt&&submittedBaseline.feedback.some(f=>f.id===id),add:f=>session.feedback.push(f),changed:()=>{markDirty();renderProposals();persistence?.save();},error:value=>message(value,true),
+  locked:isSubmittedFeedback,add:f=>session.feedback.push(f),changed:()=>{markDirty();renderProposals();persistence?.save();},error:value=>message(value,true),
   refusal:commentCaptureRefusal,blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
  });
 }
