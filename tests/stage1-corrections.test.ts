@@ -412,6 +412,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
  const {singleEligibility}=await import('../src/comparison-eligibility.ts');
  const {rendererStatus}=await import('../web/renderer-status.ts');
  const {selectedInspector}=await import('../web/workspace-ui.ts');
+ const {bindInspectorTabs}=await import('../web/view-controls.ts');
  const {modelBoneNames,readSetupPose}=await import('../web/setup-pose.ts');
  const {chestInputIds,chestRegionRows,chestRowId,evaluateChestForm}=await import('../web/chest-regions-tool.ts');
  const {LANDMARKS}=await import('../web/chest-editor.ts');
@@ -816,9 +817,6 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   const btn=makeNode('button',`inspector-tab-${tab}`);
   btn.setAttribute('data-inspector',tab);
   btn.setAttribute('aria-selected',String(tab==='view'));
-  btn.onclick=()=>{
-   for(const other of inspectorTabs)other.setAttribute('aria-selected',String(other===btn));
-  };
   inspectorTabs.push(btn);
   bodyNode.append(btn);
  }
@@ -882,6 +880,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   [`http://127.0.0.1:4173/rebuild/${unclippedScratchId}/skeleton.model.json`,{bytes:unclippedScratchBytes}],
  ]);
 
+ let inspectorBinding:ReturnType<typeof bindInspectorTabs>|null=null;
  try{
   globals.Image=LocalImage;
   globals.HTMLImageElement=LocalImage;
@@ -906,11 +905,8 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   };
   let fitCameraHook:(()=>void)|null=null;
   const mainSlice=[
-   sliceBetween('const viewportState=createViewportState();','const access = pageInstanceAccess();').replace(
-    'const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera}=viewport;',
-    'const {paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera}=viewport;const fitCamera=()=>{viewport.fitCamera();onFitCamera?.();};',
-   ),
-   sliceBetween('let partModel:unknown=null;','let referenceSize:'),
+   sliceBetween('const viewportState=createViewportState();','connectLiveWindow(access);').replace('const {fitCamera,','const {')+'\nconst fitCamera=()=>{viewport.fitCamera();onFitCamera?.();};',
+   sliceBetween('let partModel:unknown=null;','let referenceSize:').replace('let inspectorTabs:ReturnType<typeof bindInspectorTabs>|null=null;','let inspectorTabs=stageInspectorTabs;'),
    sliceBetween('function setView(','function setReferenceInput('),
    sliceBetween('function drawRig(','function chooseAnimation('),
    sliceBetween('function stageLoadInputs(','async function initPlayer('),
@@ -999,6 +995,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    reason:null,
   };
 
+  inspectorBinding=bindInspectorTabs(()=>{},()=>{}, {tabs:inspectorTabs.map(button=>({id:button.dataset.inspector!,button:button as unknown as HTMLButtonElement,panels:[],attribute:'aria-selected' as const})),panels:[],initialize:true,reveal:()=>mainScope.workspace.revealInspector()});
   const mainScope:any={
    refreshedBuilds,
    HTMLInputElement:FakeHTMLInputElement,
@@ -1019,6 +1016,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    singleEligibility,
    rendererStatus,
    selectedInspector,
+   stageInspectorTabs:inspectorBinding,
    modelBoneNames,
    readSetupPose,
    cropWorldMapping,
@@ -1634,6 +1632,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   fns.getState().player?.dispose();
   fns.getState().assets?.dispose();
  }finally{
+  inspectorBinding?.dispose();
   for(const [key,descriptor] of savedGlobals){
    if(descriptor)Object.defineProperty(globalThis,key,descriptor);
    else delete globals[key];
