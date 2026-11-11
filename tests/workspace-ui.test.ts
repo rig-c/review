@@ -1,4 +1,5 @@
-import {mountRigInspector} from '../web/inspector-blocks.ts';
+import {getLanguagePreference,getLinkLanguage,setLanguagePreference,setLinkLanguage} from '../web/i18n.ts';
+import {mountRigInspector,mountBottomPanel} from '../web/inspector-blocks.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {workspaceResizeRange,workspaceResizeTarget,bindWorkspaceUI} from '../web/workspace-ui.ts';
@@ -43,15 +44,15 @@ class Host extends EventTarget {
  setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);}
 }
 let hostDocument:{activeElement:Host|null};
-function openHost(options:{explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean;bottomPanel?:boolean}={}){
+function openHost(options:{explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean;bottomPanel?:boolean;kind?:string;stored?:Record<string,string>}={}){
  const body=new Host('body'),layout=new Host(),main=new Host('main'),left=new Host('aside'),right=new Host('aside'),stage=new Host(),inspector=new Host(),heading=new Host();layout.className='layout';left.className='left-panel';right.id='parts-explorer';stage.id='stage-layout';inspector.className='inspector';heading.clientHeight=30;
  const language=new Host('select');language.id='settings-language';const languageLabel=new Host('label');languageLabel.append(language);body.append(languageLabel);
  const tabs=options.tabs??['view','rig','playback','feedback'],panels={} as Record<string,Host>;for(const tab of tabs){const panel=new Host('section'),button=new Host('button');panel.id='inspector-'+tab;panel.dataset.inspectorPanel=tab;panel.hidden=tab!==tabs[0];panel.clientHeight=200;panel.clientWidth=500;button.dataset.inspector=tab;button.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(tab===tabs[0]));panels[tab]=panel;if(options.pressed){button.dataset.mode=tab;body.append(button);inspector.append(panel);}else inspector.append(button,panel);}
- let bottomPanel:{strip:Host;act:Host;actHome:Host;collapse:Host}|undefined,bottomBody:Host|undefined;
+ let bottomPanel:{kind:string;strip:Host;act:Host;actHome:Host;collapse:Host}|undefined,bottomBody:Host|undefined;
  if(options.bottomPanel){
   const strip=new Host('nav'),bottomHeading=new Host(),act=new Host(),collapse=new Host('button');bottomBody=new Host();bottomBody.className='inspector-body';bottomHeading.clientHeight=30;
   for(const child of [...inspector.children])if(child.dataset.inspector)strip.append(child);else bottomBody.append(child);
-  const actHome=panels.feedback!;act.id='workspace-review-act';actHome.append(act);bottomHeading.append(strip,collapse);inspector.append(bottomHeading,bottomBody);bottomPanel={strip,act,actHome,collapse};
+  const actHome=panels.feedback!;act.id='workspace-review-act';actHome.append(act);bottomHeading.append(strip,collapse);inspector.append(bottomHeading,bottomBody);bottomPanel={kind:options.kind??'rig',strip,act,actHome,collapse};
  }
  main.append(heading,stage,inspector);
  if(options.direction){
@@ -61,7 +62,7 @@ function openHost(options:{explorerLeft?:boolean;tabs?:string[];currentTheme?:()
   keys.id='direction-authored-keys';direction.append(keys);body.id='direction-authored-body';stage.before(direction);stage.before(body);body.clientHeight=0;
  }
 if(options.leftHeader){const header=new Host(),strip=new Host('details');header.className='left-header parts-header';strip.id='package-context';left.append(header,strip);}if(options.explorerLeft){left.append(right);layout.append(left,main);}else layout.append(left,main,right);body.append(layout);
- const values=new Map<string,string>(),events=new EventTarget(),frames=new Map<number,()=>void>();let handle=0;
+ const values=new Map<string,string>(Object.entries(options.stored??{})),events=new EventTarget(),frames=new Map<number,()=>void>();let handle=0;
  const document=Object.assign(new EventTarget(),{body,hidden:false,activeElement:null as Host|null,getElementById:(id:string)=>body.all().find(n=>n.id===id)??null,querySelector:(selector:string)=>body.querySelector(selector),createElement:(tag:string)=>new Host(tag)});hostDocument=document;
  const globals={document,window:events,localStorage:{getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value)},requestAnimationFrame:(callback:()=>void)=>{frames.set(++handle,callback);return handle;},cancelAnimationFrame:(id:number)=>frames.delete(id),ResizeObserver:class{observe(){}disconnect(){}},MutationObserver:class{constructor(_callback:()=>void){}observe(){}disconnect(){}}};
  const old=new Map<string,PropertyDescriptor|undefined>();for(const [key,value]of Object.entries(globals)){old.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});}
@@ -420,4 +421,54 @@ test('#671 real mounted outer tab-panel relationships preserve original nodes an
   try{preRig.select('feedback');expect(preRig.state()).toBe('rig');expect(originals[2]!.hidden).toBe(true);expect(document.getElementById('workspace-tab-feedback')!.hidden).toBe(true);expect(mounted.act.hidden).toBe(true);expect(row.tabs.map(tab=>tab.id)).toEqual(['rig','playback']);}
   finally{preRig.dispose();}
  }finally{hostDocument=oldFocus;if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
+});
+
+
+test('#674 stored rig collapse preference survives and screen kinds keep independent preferences',()=>{
+ for(const kind of ['rig','synthetic']){
+  const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true,kind,stored:{'rig-review-bottom-collapsed/rig':'true'}});
+  try{
+   expect(app.bottomBody!.hidden).toBe(kind==='rig');
+   expect(app.bottomPanel!.collapse.getAttribute('aria-expanded')).toBe(String(kind!=='rig'));
+   app.bottomPanel!.collapse.click();app.flush();
+   expect(app.values.get('rig-review-bottom-collapsed/'+kind)).toBe(String(kind!=='rig'));
+   if(kind!=='rig')expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('true');
+  }finally{app.close();}
+ }
+});
+
+test('#674 non-rig tabs reuse the C6 strip and collapse structure with a screen-owned act and sibling column',()=>{
+ const previous=Object.getOwnPropertyDescriptor(globalThis,'document');
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Host(tag)}});
+ try{
+  const heading=new Host(),layout=new Host(),column=new Host(),act=new Host(),actHome=new Host(),panels=[new Host('section'),new Host('section')];
+  panels[0]!.id='synthetic-issues';panels[1]!.id='synthetic-flags';actHome.append(act);layout.append(heading,column);
+  const mounted=mountBottomPanel({kind:'synthetic',heading:heading as unknown as HTMLElement,act:act as unknown as HTMLElement,actHome:actHome as unknown as HTMLElement,tabs:panels.map((panel,index)=>({id:['issues','flags'][index]!,label:['Setup','Animate'][index]!,panel:panel as unknown as HTMLElement}))});
+  expect(mounted.kind).toBe('synthetic');expect(mounted.act).toBe(act as unknown as HTMLElement);expect(mounted.actHome).toBe(actHome as unknown as HTMLElement);expect(act.parentElement).toBe(actHome);
+  expect(heading.children).toEqual([mounted.strip,mounted.collapse] as unknown as Host[]);expect(layout.children).toEqual([heading,column]);
+  expect(mounted.strip.className).toBe('workspace-bottom-tabs');expect(mounted.strip.getAttribute('role')).toBe('tablist');expect(mounted.strip.getAttribute('aria-label')).toBe('Inspection controls');
+  expect(mounted.collapse.id).toBe('workspace-bottom-collapse');expect(mounted.collapse.getAttribute('aria-controls')).toBe('workspace-inspector');expect(mounted.collapse.getAttribute('aria-expanded')).toBe('true');expect(mounted.collapse.textContent).toBe('Collapse bottom panel');
+  expect(mounted.row.tabs.map(tab=>[tab.id,tab.button.id,tab.button.textContent,tab.button.getAttribute('role'),tab.button.getAttribute('aria-controls'),tab.button.getAttribute('aria-selected'),tab.button.tabIndex])).toEqual([
+   ['issues','workspace-tab-issues','Setup','tab','synthetic-issues','true',0],['flags','workspace-tab-flags','Animate','tab','synthetic-flags','false',-1],
+  ]);
+  for(const [index,tab] of mounted.row.tabs.entries()){expect(tab.panels[0]).toBe(panels[index] as unknown as HTMLElement);expect(tab.panels[0]!.getAttribute('role')).toBe('tabpanel');expect(tab.panels[0]!.getAttribute('aria-labelledby')).toBe(tab.button.id);}
+ }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
+});
+
+
+test('#674 shared bottom strip keeps rig labels and accessibility text in EN and KO',()=>{
+ const previous=Object.getOwnPropertyDescriptor(globalThis,'document'),preference=getLanguagePreference(),link=getLinkLanguage();
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Host(tag)}});
+ try{
+  setLinkLanguage(null);
+  for(const language of ['en','ko'] as const){
+   setLanguagePreference(language);
+   const heading=new Host(),act=new Host(),actHome=new Host();
+   const mounted=mountBottomPanel({kind:'rig',heading:heading as unknown as HTMLElement,act:act as unknown as HTMLElement,actHome:actHome as unknown as HTMLElement,tabs:['rig','playback','feedback'].map((id,index)=>{const panel=new Host('section');panel.id='inspector-'+id;return {id,label:['Setup','Animate','Write review'][index]!,panel:panel as unknown as HTMLElement};})});
+   expect(mounted.row.tabs.map(tab=>tab.button.textContent)).toEqual(language==='en'?['Setup','Animate','Write review']:['셋업','애니메이트','리뷰 작성']);
+   expect(mounted.strip.getAttribute('aria-label')).toBe(language==='en'?'Inspection controls':'검사 컨트롤');
+   expect(mounted.collapse.textContent).toBe(language==='en'?'Collapse bottom panel':'하단 패널 접기');
+   expect(mounted.row.tabs.map(tab=>tab.button.getAttribute('aria-controls'))).toEqual(['inspector-rig','inspector-playback','inspector-feedback']);
+  }
+ }finally{setLinkLanguage(link);setLanguagePreference(preference);if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });

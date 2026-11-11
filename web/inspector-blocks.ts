@@ -72,22 +72,38 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
 }
 
 /** Compose the real rig acts into C6; all fields, submit nodes and their listeners retain identity. */
-export function mountRigInspector(root:Document=document):{row:InspectorTabRow;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement} {
+export function mountRigInspector(root:Document=document):BottomPanel {
  const inspector=root.querySelector<HTMLElement>('.inspector')!,body=inspector.querySelector<HTMLElement>('.inspector-body')!,heading=inspector.querySelector<HTMLElement>('.inspector-heading')!;
  const feedback=root.getElementById('inspector-feedback')!,dialog=root.getElementById('review-dialog')!,actions=dialog.querySelector<HTMLElement>('.review-dialog-actions')!;
  const status=root.getElementById('review-status')!,label=feedback.querySelector<HTMLLabelElement>('label[for="review-status"]')!;
  const act=panelMake('div',{className:'workspace-act-bar',id:'workspace-review-act'},label,status,actions);
  const title=dialog.querySelector<HTMLElement>('.review-dialog-header')!;title.querySelector('#review-dialog-close')?.remove();
  feedback.dataset.inspectorPanel='feedback';feedback.className='workspace-review-panel';feedback.hidden=true;feedback.prepend(title);feedback.append(act);body.append(feedback);dialog.remove();
+ // Header modes retain inspection mode while Review is revealed; the bottom row alone owns panel selection.
+ for(const mode of root.querySelectorAll<HTMLElement>('[data-mode]'))mode.removeAttribute('data-inspector');
+ return mountBottomPanel({kind:'rig',heading,act,actHome:feedback,tabs:([{id:'rig',label:'Setup'},{id:'playback',label:'Animate'},{id:'feedback',label:'Write review'}]).map(tab=>({...tab,panel:root.getElementById('inspector-'+tab.id)!}))});
+}
+
+export interface BottomPanel {
+ row:InspectorTabRow;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement;kind:string;
+}
+export interface BottomPanelOptions {
+ kind:string;
+ tabs:{id:string;label:string;panel:HTMLElement}[];
+ /** Only the supplied heading is replaced; sibling columns and panel layout remain screen-owned. */
+ heading:HTMLElement;
+ act:HTMLElement;
+ actHome:HTMLElement;
+}
+/** Build C6 once from screen-owned tabs and act nodes, independently of the rig dialog. */
+export function mountBottomPanel(options:BottomPanelOptions):BottomPanel {
  const strip=panelMake('nav',{className:'workspace-bottom-tabs'});strip.setAttribute('role','tablist');strip.setAttribute('aria-label',tr('Inspection controls'));
- const tabs=(['rig','playback','feedback'] as const).map((id,index)=>{
-  const button=actionButton(tr(['Setup','Animate','Write review'][index]!),null);button.id='workspace-tab-'+id;button.dataset.inspector=id;button.setAttribute('role','tab');button.setAttribute('aria-controls','inspector-'+id);button.setAttribute('aria-selected',String(index===0));button.tabIndex=index===0?0:-1;
-  const panel=root.getElementById('inspector-'+id)!;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',button.id);
+ const tabs=options.tabs.map(({id,label,panel},index)=>{
+  const button=actionButton(tr(label),null);button.id='workspace-tab-'+id;button.dataset.inspector=id;button.setAttribute('role','tab');button.setAttribute('aria-controls',panel.id);button.setAttribute('aria-selected',String(index===0));button.tabIndex=index===0?0:-1;
+  panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',button.id);
   strip.append(button);return {id,button,panels:[panel],attribute:'aria-selected' as const};
  });
  const collapse=actionButton(tr('Collapse bottom panel'),null);collapse.id='workspace-bottom-collapse';collapse.setAttribute('aria-expanded','true');collapse.setAttribute('aria-controls','workspace-inspector');
- heading.replaceChildren(strip,collapse);
- // Header modes retain inspection mode while Review is revealed; the bottom row alone owns panel selection.
- for(const mode of root.querySelectorAll<HTMLElement>('[data-mode]'))mode.removeAttribute('data-inspector');
- return {row:{tabs,panels:tabs.flatMap(tab=>tab.panels),initialize:true},strip,act,actHome:feedback,collapse};
+ options.heading.replaceChildren(strip,collapse);
+ return {row:{tabs,panels:tabs.flatMap(tab=>tab.panels),initialize:true},strip,act:options.act,actHome:options.actHome,collapse,kind:options.kind};
 }
