@@ -866,8 +866,10 @@ its internal `/api/review` response contains `subject: "interview"`, project
 path/hash, source hash, label and capability flags, with no manifest, model,
 reviewed-package identity or package session. The existing modal mounts the
 existing interview form. Model APIs refuse `MODEL_UNAVAILABLE`; source drift
-refuses `INTERVIEW_OPTIONS_STALE`. Reads do not write sources. Existing picks,
-act and verdict payloads and all explicit version/draft joins are unchanged.
+refuses `INTERVIEW_OPTIONS_STALE`. Reads do not write sources. The joined dialog and standing record form use one shared list | image | survey
+answer builder. There is no form-level Note input; new answers serialize
+`note: ''`. Historical records, picks/act/verdict schemas and explicit
+version/draft joins retain their existing readers and checks.
 This opening form does not replace the semantic standing review cycle.
 
 ## Stage-1 draft mesh inspection

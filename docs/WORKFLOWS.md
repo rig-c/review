@@ -738,8 +738,10 @@ The interview opens and closes as a modal over the existing Review workspace.
 The workspace reports model-dependent sections as `MODEL_UNAVAILABLE` and
 creates no model, review package or package session. Reads preserve project and
 input bytes. Changed project, option or source bytes require reopening, with
-`INTERVIEW_OPTIONS_STALE`. Existing interview choices, Other text, notes and
-picks-file payloads are unchanged. The active standing live-job cycle above
+`INTERVIEW_OPTIONS_STALE`. Interview choices and inline Other text use the same list | image | survey
+answer builder as the standing record dialog. There is no form-level Note input;
+new answers serialize `note: ''`. Historical records remain readable and the
+picks-file schema is unchanged. The active standing live-job cycle above
 still uses semantic acts and the trusted consumer; this inspection form does
 not authorize an agent to manufacture or carry picks files.
 
@@ -779,8 +781,9 @@ offered and picked. Auto stays pending until create has a covered agent
 decision. Historical choice sets are read-only.
 
 Each saved set has its own `<raw-set-sha256>.json` in the designated directory.
-Reopening restores picks and note for the same retained set. A new set starts
-without selections. The directory must exist inside the project and be
+Reopening restores picks for the same retained set. Existing records keep their
+original note field; the current survey has no Note control and emits `note: ''`.
+A new set starts without selections. The directory must exist inside the project and be
 separate from every bound input. A stale context, forged selection or
 superseded set is refused. Review writes only `rig-review/interview-picks@1`
 files. To ingest a file, run create separately from the project root:

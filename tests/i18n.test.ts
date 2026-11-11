@@ -7,7 +7,8 @@ import {join} from 'node:path';
 import {feedbackTimingLabel,timeOnlyBasis} from '../src/stage-comment.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
-import {interviewErrors,mountInterview} from '../web/interview-panel.ts';
+import {interviewErrors} from '../web/interview-panel.ts';
+import {joinedInterviewForms} from '../web/job-session.ts';
 import {
  WEB_STRING_EXEMPTIONS,
  applyDomI18n,
@@ -500,6 +501,8 @@ class TestElement {
   walk(this);
   return out;
  }
+ prepend(...nodes:(TestElement|TestTextNode|string)[]):void{const existing=[...this.childNodes];this.replaceChildren(...nodes,...existing);}
+ dispatchEvent(event:Event):boolean{return true;}
  focus():void{}
  getBoundingClientRect(){return {left:0,top:0};}
  addEventListener():void{}
@@ -1117,7 +1120,8 @@ test('scene interview warnings and historical issues render in EN/KO while origi
   Object.defineProperty(globalThis, 'document', {value: doc, configurable: true});
   const fetchMock: typeof fetch = Object.assign(async () => Response.json(payload), {preconnect: previousFetch.preconnect});
   globalThis.fetch = fetchMock;
-  unmount = await mountInterview(host as unknown as HTMLElement, {base: '/', key: 'synthetic', capability: 'a'.repeat(64), route: path => path, headers: init => new Headers(init)});
+  const dialog=doc.createElement('dialog');dialog.setAttribute('open','');host.append(dialog);
+  unmount = await joinedInterviewForms({base:'/',key:'synthetic',capability:'a'.repeat(64),route:path=>path,headers:init=>new Headers(init)},forms=>dialog.replaceChildren(...forms as unknown as TestElement[]));
   for (const language of ['en', 'ko'] as const) {
    setLanguagePreference(language);
    // #708: the modal's question list replaces the set picker.
@@ -1132,6 +1136,9 @@ test('scene interview warnings and historical issues render in EN/KO while origi
    (host.querySelectorAll('.interview-question')[1] as any).onclick();
    expect(host.querySelectorAll('fieldset')[0]!.disabled).toBe(false);
    expect(host.textContent).toContain(t('interview.save', undefined, language));
+   expect(host.querySelectorAll('textarea')).toHaveLength(0);
+   expect(host.textContent).not.toContain(t('interview.note',undefined,language));
+   expect(host.querySelectorAll('dialog')).toHaveLength(1);
   }
  } finally {
   unmount?.(); globalThis.fetch = previousFetch; setLanguagePreference(preference);

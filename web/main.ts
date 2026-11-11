@@ -1,5 +1,5 @@
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
-import {mountInterview} from './interview-panel.ts';
+import {joinedInterviewForms} from './job-session.ts';
 import {bindWorkspaceDrawer} from './workspace-layout.ts';
 import {captureRigRestStill,rigRestCanvas} from './job-rig-capture.ts';
 import {createPartsViewportProvider,bindPartsSubject,paintRigDifference,type PartsSubjectEntry,type PartsSubjectSession} from './parts-viewport-provider.ts';
@@ -1304,9 +1304,9 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty',unavailable);
  for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')){control.disabled=true;setSourceAttribute(control,'title',unavailable);}
  if(interview){
-  const content=panelMake('div');viewDisposers.push(await mountInterview(content,access));
   const label=()=>{setSourceText(button('save'),t('interview.title'));recordDialog?.setAttribute('aria-label',t('interview.title'));};
-  label();viewDisposers.push(onLanguageChange(label));renderRecordForms([content],t('interview.title'),true);
+  label();viewDisposers.push(onLanguageChange(label));
+  viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,t('interview.title'),true)));
   text('provenance-rig',unavailable);text('provenance-motion',unavailable);text('source-files','project.json');
  }else{host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message});host!.displayed();}
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
@@ -1324,9 +1324,10 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
   viewDisposers.push(()=>{recordDialog?.close();recordDialog?.remove();recordDialog=null;});
  }
  recordDialog.classList.toggle('interview-modal',forms.some(form=>form.classList.contains('interview-answer')));
- for(const form of recordDialog.querySelectorAll<HTMLFormElement>('form[data-job-ask]'))if(!forms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
+ for(const form of recordDialog.querySelectorAll<HTMLFormElement>('form.interview-answer,form[data-job-ask]'))if(!forms.includes(form)){if(!standalone)form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
  const added=forms.filter(form=>!recordDialog!.contains(form));
  for(const form of added){if(!form.classList.contains('interview-answer'))form.style.overflow='auto';form.style.minHeight='0';recordDialog.append(form);}
+ if(standalone){rigAsk.hidden=false;setSourceText(rigAsk,t('interview.title'));}
  button('save').disabled=!forms.length;rigAsk.disabled=!forms.length;button('save').onclick=()=>rigAsk.click();
  if(added.length&&!recordDialog.open)button('save').click();
 }
