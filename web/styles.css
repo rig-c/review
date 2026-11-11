@@ -429,11 +429,11 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .interview-modal-body{flex:1;min-height:0;overflow:auto;padding:0 4px 8px}
 .interview-modal h2{font-size:14px;font-weight:600;margin:0}
 .interview-modal .workspace-drawer-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
-.interview-grid{display:grid;grid-template-columns:minmax(11rem,.7fr) minmax(14rem,1.2fr) minmax(20rem,2fr);gap:12px;align-items:start}
+.interview-grid{display:grid;grid-template-columns:minmax(10rem,.55fr) minmax(0,1.6fr) minmax(22rem,1.25fr);gap:12px;align-items:start}
 .interview-grid>*{min-width:0}
 .interview-grid>aside,.interview-grid>form{background:var(--rv-raised);border:1px solid var(--border-strong);border-radius:8px;padding:12px}
 .interview-grid>aside{position:sticky;top:0}
-.interview-grid aside img:not([hidden]){display:block;max-width:100%;max-height:60dvh;margin:10px auto;background:var(--rv-media-bg)}
+.interview-view{display:flex;flex-direction:column;gap:8px;margin-top:10px}.interview-view .zoom-controls{flex-wrap:wrap}.interview-viewport{position:relative;overflow:hidden;height:min(66dvh,640px);min-height:320px;touch-action:none;border:1px solid var(--border);border-radius:6px;background:var(--rv-media-bg);background-image:radial-gradient(var(--rv-grid-dot) .7px,transparent .7px);background-size:22px 22px}.interview-view-root{position:absolute;transform-origin:0 0}.interview-view-root canvas{display:block}
 .interview-questions>p{margin:0 0 8px;color:var(--fg-muted);font-size:11px}
 .interview-questions ol{list-style:none;margin:0;padding:0;display:grid;gap:4px}
 .interview-question{width:100%;text-align:left;white-space:normal;overflow-wrap:anywhere;line-height:1.5;background:transparent;border-color:var(--border)}

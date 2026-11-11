@@ -32,7 +32,7 @@ import {advancePlayback} from './playback-clock.ts';
 import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl,createViewControls} from './view-controls.ts';
 import {SENTINELS} from './parts-render.ts';
-import {interviewAskGroup, interviewModal, interviewQuestionList, jobInterviewValue} from './interview-panel.ts';
+import {interviewAskGroup, interviewImageView, interviewModal, interviewQuestionList, jobInterviewValue} from './interview-panel.ts';
 import {CanvasRenderer} from '@rig-c/play';
 import {JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsSource, PartsHost} from './parts.ts';
@@ -1898,12 +1898,21 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             });
             fields.append(note.parentElement!);
             const art = node('aside');
-            for (const image of question.images) {
+            const images = question.images.map(image => {
                 const visual = prepared.interviewImages.get(image.url);
                 if (!visual)
                     throw new Error('JOB_VISUAL_UNAVAILABLE');
-                art.append(visual.cloneNode(true));
-            }
+                return {name: image.name, src: visual.src};
+            });
+            // The bound images open in the shared interview viewport; the view switch picks the image.
+            let disposeView: (() => void) | undefined;
+            const showImage = (index: number) => {
+                disposeView?.();
+                const view = interviewImageView(images, index, showImage);
+                disposeView = view.dispose;
+                art.replaceChildren(view.element);
+            };
+            if (images.length) showImage(0);
             interview = {label: question.set.question + ' · ' + question.set.id, art};
             read = () => jobInterviewValue(subject.questionId, answers.map(({item}) => item),
                 ask => answers.find(({item}) => item === ask)!.answer.value(), note.value);

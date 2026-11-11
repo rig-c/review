@@ -3,6 +3,8 @@ import type { Picks } from '../src/interview-picks.ts';
 import { onLanguageChange, t } from './i18n.ts';
 import type { InstanceAccess } from './instance-access.ts';
 import { bindWorkspaceDrawer } from './workspace-layout.ts';
+import { createViewControls } from './view-controls.ts';
+import { createPartsViewport } from './parts-viewport-provider.ts';
 
 type Question = Omit<InterviewQuestion,'images'> & {images:{name:string;url:string}[]; saved:Picks|null};
 type Ask = InterviewQuestion['set']['asks'][number];
@@ -153,6 +155,60 @@ export function interviewModal(options: {parent: HTMLElement; trigger: HTMLButto
     }};
 }
 
+/**
+ * The question's bound images in the shared native-image viewport (#708 return): the parts page's camera through
+ * createPartsViewport and the shared control set in its fixed order (Zoom in, Zoom out, Fit, 1:1, View switch), where the
+ * view switch picks the bound image. Control ids are dropped so the modal never shadows the page's own main view.
+ */
+export function interviewImageView(images: readonly {name: string; src: string}[], selected: number, onSelect: (index: number) => void) {
+  const image = images[selected]!;
+  const controls = createViewControls({layout:'rigStep1', viewSwitch:{currentMode:String(selected), groups:[{modes:images.map((asset, index) =>
+    ({id:String(index), labelKey:asset.name, pressed:index === selected}))}], onChange:id => onSelect(Number(id))}});
+  const sync = controls.syncLabel.querySelector('input')!;
+  const named = new Map<string, HTMLElement>([['zoom-in', controls.zoomButtons[0]!], ['zoom-out', controls.zoomButtons[1]!],
+    ['fit', controls.zoomButtons[2]!], ['native-one', controls.nativeOne!], ['zoom-value', controls.value], ['camera-sync', sync]]);
+  const toolbar = controls.zoomGroup!;
+  const viewport = element('div'); viewport.className = 'interview-viewport';
+  const root = element('div'); root.className = 'interview-view-root';
+  // A canvas starts at 300 x 150; the camera has no frame until the bound image has drawn.
+  const canvas = element('canvas'); root.append(canvas); viewport.append(root);
+  let loaded = false;
+  const reference = element('div'); reference.hidden = true;
+  for (const [id, node] of [['rig-viewport', viewport], ['rig-pane', viewport], ['stage-layout', viewport], ['rig-root', root],
+    ['reference-viewport', reference], ['reference-pane', reference], ['reference-content', reference]] as const) named.set(id, node);
+  for (const node of [toolbar, ...toolbar.querySelectorAll('[id]'), sync]) node.removeAttribute('id');
+  const unavailable = element('p'); unavailable.setAttribute('role', 'status'); unavailable.hidden = true;
+  const view = element('div'); view.className = 'interview-view'; view.append(toolbar, viewport, unavailable);
+  const camera = createPartsViewport({el:<T extends HTMLElement>(id: string) => named.get(id) as T, canvas, message:() => {},
+    reference:() => null, frameSize:target => target === 'rig' && loaded ? {w:canvas.width, h:canvas.height} : null});
+  const localize = () => {
+    for (const button of toolbar.querySelectorAll<HTMLButtonElement>('[data-view]')) button.textContent = images[Number(button.dataset.view)]!.name;
+    const summary = toolbar.querySelector('.view-menu summary');
+    if (summary?.firstChild) summary.firstChild.textContent = t('View switch') + ' ';
+    summary?.setAttribute('aria-label', t('View layout'));
+    if (summary?.lastElementChild) summary.lastElementChild.textContent = image.name;
+    for (const [button, key] of [[controls.zoomButtons[0]!, 'Zoom in'], [controls.zoomButtons[1]!, 'Zoom out']] as const) {
+      button.textContent = t(key); button.setAttribute('aria-label', t(key));
+    }
+    unavailable.textContent = t('interview.imageUnavailable');
+  };
+  // Agent-authored part names stay verbatim; the controls' own words follow the shared catalogs.
+  const unlocalize = onLanguageChange(() => {camera.renderCameraControls(); localize();}); localize();
+  const disposers = [camera.bindControls(), camera.bindNavigation(), unlocalize];
+  controls.nativeOne!.onclick = () => camera.cameraAction(() => camera.updateCamera('rig', {zoom:1, pan:{x:0, y:0}}));
+  let fitted = false;
+  const fit = () => {if (!fitted && loaded && camera.paneFrame('rig')) {fitted = true; camera.fitActiveCamera('rig');} else camera.fitCamera();};
+  const resize = new ResizeObserver(fit); resize.observe(viewport);
+  const source = new Image();
+  source.onload = () => {
+    canvas.width = source.naturalWidth; canvas.height = source.naturalHeight; loaded = true;
+    canvas.getContext('2d')?.drawImage(source, 0, 0); fit();
+  };
+  source.onerror = () => {viewport.hidden = true; unavailable.hidden = false;};
+  source.alt = image.name; source.src = image.src;
+  return {element:view, dispose() {resize.disconnect(); for (const dispose of disposers) dispose();}};
+}
+
 export async function mountInterview(host: HTMLElement, access: InstanceAccess) {
   let data: {questions:Question[];historical:HistoricalInterview[]; diagnostics?:InterviewDiagnostic[]; binding?:{projectHash:string;sourceHash:string;version?:number;draftId?:string}};
   try {data = await request(access, '/api/interview');}
@@ -174,6 +230,7 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
   // The modal opens on the first question still waiting for explicit picks.
   let selected = Math.max(0, questions.findIndex((question, index) => question.editable && !drafts[index]!.answered));
   let busy = false;
+  let disposeView: (() => void) | undefined;
   const render = () => {
     const joined = data.binding;
     const source = joined ? element('p', t(joined.draftId===undefined?'interview.joined':'interview.joinedDraft', [joined.draftId??String(joined.version), joined.projectHash, joined.sourceHash])) : null;
@@ -214,22 +271,12 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
     art.append(element('h2', t(question.hasParts ? 'interview.parts' : 'interview.source')));
     if (!question.hasParts) art.append(element('p', t('interview.noParts')));
     if (question.partsUnavailable) art.append(element('p', t('interview.partsUnavailable')));
-    const image = question.images[state.image];
-    if (image) {
-      const tabs = element('div');
-      question.images.forEach((asset, index) => {
-        const button = element('button', asset.name);
-        button.type = 'button';
-        button.setAttribute('aria-pressed', String(index === state.image));
-        button.onclick = () => {state.image = index; render();};
-        tabs.append(button);
-      });
-      const preview = element('img'); preview.alt = image.name; preview.src = access.route(image.url);
-      const unavailable = element('p', t('interview.imageUnavailable'));
-      unavailable.setAttribute('role','status');
-      unavailable.hidden = true;
-      preview.onerror = () => {preview.hidden = true; unavailable.hidden = false;};
-      art.append(tabs, preview, unavailable);
+    disposeView?.(); disposeView = undefined;
+    if (question.images[state.image]) {
+      const view = interviewImageView(question.images.map(asset => ({name:asset.name, src:access.route(asset.url)})), state.image,
+        index => {state.image = index; render();});
+      disposeView = view.dispose;
+      art.append(view.element);
     }
 
     const form = element('form');
@@ -291,5 +338,5 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
     host.append(diagnostics);
     if (legacy.length) host.append(archive);
   };
-  const unmount = onLanguageChange(render); render(); return unmount;
+  const unmount = onLanguageChange(render); render(); return () => {unmount(); disposeView?.();};
 }
