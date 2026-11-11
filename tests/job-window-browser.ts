@@ -890,7 +890,8 @@ try {
     assert.ok(finalized.every(act => act.authority.actor === 'human' && act.authority.channel === 'review-ui'));
     const checkpointAct = finalized.find(act => act.kind === 'checkpoint')!;
     assert.ok(checkpointAct.kind === 'checkpoint');
-    assert.equal(checkpointAct.value.words, '');
+    assert.equal(checkpointAct.schema, 'rig-review/act@6');
+    assert.deepEqual('comments' in checkpointAct.value ? checkpointAct.value.comments : null, []);
     assert.deepEqual(checkpointAct.source.plan, rig.source.plan);
     assert.deepEqual(await jobInputHashes(fixture.input.root), immutable);
     await checkpoints('five-ui-acts', finalized);

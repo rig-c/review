@@ -124,7 +124,7 @@ test('crop409 leads: EN act leaves package immutable and independent KO-height r
                 value: {verdict: 'changes-requested', words: '', issues: [comment]},
             });
             expect(submitted.status).toBe(200);
-            expect((await submitted.json()).value.schema).toBe('rig-review/act@5');
+            expect((await submitted.json()).value.schema).toBe('rig-review/act@6');
             expect(await jobInputHashes(fixture.input.root)).toEqual(before);
             await assertPartsUnchanged(pkg);
             assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);

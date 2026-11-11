@@ -107,6 +107,7 @@ if (mode === 'sqlite-crash') {
     sourceHash: event.act.source.sourceHash, authority: event.act.authority } }) + '\n');
   const second = await publish(next.generation, 'agent-second');
   await invoke({ verb: 'close', expectedGeneration: second.generation, idempotencyKey: 'agent-close', reason: 'explicit completion' });
-  writeSync(1, JSON.stringify({ completed: true, actId: event.act.actId, words: event.act.value.words,
+  writeSync(1, JSON.stringify({ completed: true, actId: event.act.actId, schema: event.act.schema,
+    texts: event.act.value.comments.map((comment: {text: string}) => comment.text),
     firstPublication: first.value.publicationId, secondPublication: second.value.publicationId, askId: asked.value.askId }) + '\n');
 } else throw new Error('Unknown process control mode');

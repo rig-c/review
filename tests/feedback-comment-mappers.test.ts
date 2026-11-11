@@ -2,7 +2,7 @@ import {expect, test} from 'bun:test';
 import {checkpointNoteComments, feedbackItemComments, feedbackWordsComments, imageNoteComments,
   legacyActComments, legacyRecordActComments, legacySessionComments} from '../src/feedback-export.ts';
 import {parseComments, parseRecordAct} from '../src/job-api.ts';
-import type {ActV3} from '../src/job-contract.ts';
+import type {ActV3, JobCommentsAct} from '../src/job-contract.ts';
 import type {Feedback} from '../src/session.ts';
 import legacy from './fixtures/comments-contract-legacy.json';
 
@@ -49,7 +49,7 @@ test('legacy record display reuses decoder and preserves original bytes', () => 
 });
 test('legacy acts preserve words and issue precedence, without reclassifying surveys', () => {
   for (const key of ['@2', '@3', '@5'] as const) {
-    const act = JSON.parse(legacy.records[key].raw) as ActV3;
+    const act = JSON.parse(legacy.records[key].raw) as Exclude<ActV3, JobCommentsAct>;
     expect(legacyActComments(act)[0]).toEqual({text: (act.value as any).words});
   }
   const base = JSON.parse(legacy.records['@2'].raw);

@@ -266,7 +266,8 @@ test('normal CLI invocation waits across the genuine 30-second server boundary f
     const terminal = JSON.parse(result.stdout);
     const event = terminal.value.events.find((event: {type: string}) => event.type === 'act');
     expect(event.act).toEqual(committed.value);
-    expect(event.act.value.words).toBe(value.words);
+    expect(event.act.schema).toBe('rig-review/act@6');
+    expect(event.act.value.comments).toEqual([{text: value.words, anchor: {checkpointId: 'step-one', planStepId: 'step-one'}}]);
     expect(committedMs).toBeGreaterThanOrEqual(31000);
     expect(monotonicElapsedMs).toBeGreaterThanOrEqual(31000);
     expect(host.requests).toHaveLength(2);

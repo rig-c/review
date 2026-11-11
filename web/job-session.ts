@@ -33,7 +33,7 @@ import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture
 import {labelledControl,createViewControls} from './view-controls.ts';
 import {SENTINELS} from './parts-render.ts';
 import {CanvasRenderer} from '@rig-c/play';
-import {JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
+import {JOB_COMMENTS_ACT_SCHEMA, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsSource, PartsHost} from './parts.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 
@@ -373,7 +373,9 @@ export function createJobWindow<Prepared>(options: {
             ask.subject.kind !== 'parts-verdict') throw new Error('JOB_ACT_SOURCE_STALE');
         assertJobAskSource(ask, displayed);
         const previous = ask.act;
-        const value = (previous?.kind === 'parts-verdict' ? previous.value : input.value) as PartsVerdictValue;
+        // An act@6 verdict's note is its one general comment; the signoff resends it.
+        const value = (previous?.kind !== 'parts-verdict' ? input.value : previous.schema !== JOB_COMMENTS_ACT_SCHEMA ? previous.value :
+            {verdict: previous.value.verdict, words: previous.value.comments.find(comment => !comment.anchor)?.text ?? ''}) as Pick<PartsVerdictValue, 'verdict' | 'words'>;
         const signoff = [...pending.values()].find(item => item.publicationId === publicationId &&
             item.subject.kind === 'signoff' && item.subject.stage === 'parts-review' && item.status === 'pending');
         if (value.verdict === 'approved' && !signoff) throw new Error('JOB_PARTS_SIGNOFF_MISSING');
@@ -382,7 +384,7 @@ export function createJobWindow<Prepared>(options: {
             result = await submit(input);
             if (!result.ok) return result;
         } else {
-            if (!previous || previous.kind !== 'parts-verdict' || previous.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA ||
+            if (!previous || previous.kind !== 'parts-verdict' || (previous.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA && previous.schema !== JOB_COMMENTS_ACT_SCHEMA) ||
                 value.verdict !== 'approved') throw new Error('JOB_ACT_SOURCE_STALE');
             result = {ok: true, value: previous};
         }
@@ -720,7 +722,7 @@ export function jobPartsReviewState(asks: readonly JobWindowAsk[], publicationId
     const bound = asks.filter(ask => ask.publicationId === publicationId);
     const verdict = bound.filter(ask => ask.subject.kind === 'parts-verdict').at(-1);
     const act = verdict?.act;
-    if (act?.kind !== 'parts-verdict' || act.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA) return 'reviewing';
+    if (act?.kind !== 'parts-verdict' || (act.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA && act.schema !== JOB_COMMENTS_ACT_SCHEMA)) return 'reviewing';
     if (act.value.verdict === 'changes-requested') return 'sent';
     const approved = bound.some(ask => ask.subject.kind === 'signoff' && ask.subject.stage === 'parts-review' &&
         ask.act?.kind === 'signoff' && ask.act.value.decision === 'approved');
@@ -2230,7 +2232,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     }
     async function mountJobParts(prepared: JobPreparedInspection, signal: AbortSignal): Promise<void> {
         const panel = partsPanels.get(prepared)!;
-        const [{mountPartsWorkspace}, {parsePartsIssue}] = await Promise.all([
+        const [{mountPartsWorkspace}, {parsePartsIssue, commentPartsIssues}] = await Promise.all([
             import('./parts.ts'), import('../src/parts-comment.ts'),
         ]);
         if (signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
@@ -2238,6 +2240,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             ask.publicationId === prepared.display.publication.publicationId && ask.subject.kind === 'parts-verdict').at(-1)?.act;
         if (finalized?.kind === 'parts-verdict') {
             if (finalized.schema === JOB_PARTS_VERDICT_ACT_SCHEMA) panel.issues = [...finalized.value.issues];
+            else if (finalized.schema === JOB_COMMENTS_ACT_SCHEMA) panel.issues = commentPartsIssues(finalized.value.comments);
             else panel.legacy = finalized.value;
         }
         panel.issues = panel.issues.map(issue => parsePartsIssue(issue, true, false, false));
