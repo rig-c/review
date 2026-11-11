@@ -20,8 +20,8 @@ test('joined open requires an explicit project, version and picks directory toge
   expect(() => parseOpenInputs(['out', ...flags, '--compare','other'])).toThrow('OPEN_OPTION_INVALID --project');
 });
 
-test('joined front allowlists only the existing bounded interview routes and fixed frame', () => {
-  expect(frontRoute('single','GET','/stage-interview.html')).not.toBeNull();
+test('joined front allowlists only the existing bounded interview routes and no frame page', () => {
+  for (const path of ['/stage-interview.html','/interview.js','/interview.css']) expect(frontRoute('single','GET',path)).toBeNull();
   expect(frontRoute('single','GET','/api/interview/image/' + 'a'.repeat(64) + '/0')).not.toBeNull();
   expect(frontRoute('single','POST','/api/interview/picks')?.limit).toBe(256*1024);
   for (const path of ['/api/interview/project.json','/api/interview/image/../../project.json','/api/interview/image/' + 'a'.repeat(64) + '/00']) {
@@ -100,16 +100,8 @@ test('real Create v2 joins existing Stage 1 and 2 without changing the feedback 
     const sourceParts = JSON.parse(await readFile(join(input,'parts.json'),'utf8'));
     expect(parts.inspectionSourceHash).toBe(old.contentHash);
     expect(parts.items.map((p:{name:string})=>p.name).sort()).toEqual(sourceParts.parts.map((p:{name:string})=>p.name).sort());
-    expect((await get('/stage-interview.html?stageEmbed=1&lang=ko')).headers.get('Content-Security-Policy')).toContain("frame-ancestors 'self'");
-    for (const lang of ['en', 'ko']) {
-      for (const hash of ['', '#cap=' + capability, '#review=' + capability]) {
-        const entry = await get('/stage-interview.html?stageEmbed=1&lang=' + lang + hash);
-        expect(entry.status).toBe(200);
-        expect(entry.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
-        await entry.body?.cancel();
-      }
-    }
-    expect((await get('/interview.js')).status).toBe(200);
+    // #726: the stage interview frame is deleted; the API above is the interview's only route.
+    for (const path of ['/stage-interview.html?stageEmbed=1&lang=ko','/interview.js','/interview.css']) expect((await get(path)).status).toBe(404);
     expect((await post({Origin:origin})).status).toBe(403);
     expect((await post({Origin:'https://example.test','X-Review-Capability':capability})).status).toBe(403);
     expect((await post({Origin:origin,'X-Review-Capability':capability})).status).toBe(400);

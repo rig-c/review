@@ -1,31 +1,22 @@
 import { mountWorkspaceShell } from './workspace-ui.ts';
-import { bindDomI18n, unbindDomI18n, onLanguageChange, setLanguagePreference, setLinkLanguage, t } from './i18n.ts';
+import { bindDomI18n, unbindDomI18n, onLanguageChange, t } from './i18n.ts';
 import { pageInstanceAccess } from './instance-access.ts';
 import { connectLiveWindow } from './live-connection.ts';
-import { bindStageNav, type StagePartsState, type StagePartsWindow } from './stage-nav.ts';
+import { bindStageNav } from './stage-nav.ts';
 import { parsePartsIssue } from '../src/parts-comment.ts';
 import { mountPartsWorkspace, type PanelOutput, type PartsHost, type PartsSource, type PartsWorkspaceHandle, type ViewData } from './parts.ts';
 
-/** Standalone and joined-stage transport for the shared parts workspace. */
+/** Standalone transport for the shared parts workspace. */
 export function bootPartsPage(): PartsWorkspaceHandle {
   const access = pageInstanceAccess();
-  const url = new URL(location.href);
-  const embedded = url.searchParams.get('stageEmbed') === '1';
-  const shell = mountWorkspaceShell({compatibility: 'legacyPartsStep2', embedded});
+  const shell = mountWorkspaceShell({compatibility: 'legacyPartsStep2', embedded: false});
   document.querySelector('.pv-layout')!.before(shell.header, '\n ');
-  const side = url.searchParams.get('side');
-  const partsApi = embedded
-    ? (side === 'a' || side === 'b' ? `/api/compare/${side}/stage-parts` : '/api/stage-parts')
-    : '/api/parts';
-  let build = 'inspected';
-  let restore: StagePartsState | null = null;
+  const partsApi = '/api/parts';
   let currentView: ViewData | null = null;
   let output: PanelOutput | null = null;
   let busy = false;
   let disposed = false;
   let workspace: PartsWorkspaceHandle | null = null;
-  let receiveSource!: () => void;
-  const sourceReady = new Promise<void>(resolve => { receiveSource = resolve; });
   const disposers: (() => void)[] = [];
   const objectUrls = new Set<string>();
   const pendingImages = new Set<() => void>();
@@ -39,7 +30,7 @@ export function bootPartsPage(): PartsWorkspaceHandle {
     toolbar: required('.pv-toolbar'), side: required('.pv-side'),
   };
   const actions = required('#parts-actions');
-  const headers = () => access.headers(embedded ? {'X-Review-Stage-Build': build} : {});
+  const headers = () => access.headers({});
   const request = async (path: string): Promise<Response> => {
     const response = await fetch(access.route(path), {headers: headers()});
     if (!response.ok) {
@@ -70,12 +61,9 @@ export function bootPartsPage(): PartsWorkspaceHandle {
   };
   const source: PartsSource = {
     async view() {
-      if (embedded) await sourceReady;
       if (disposed) throw new Error('PARTS_PAINT_FAILED');
-      const requestedBuild = build;
       const data = await (await request(partsApi)).json() as ViewData;
       if (disposed) throw new Error('PARTS_PAINT_FAILED');
-      if (requestedBuild !== build) throw new Error('STAGE_DRAFT_CHANGED');
       currentView = data;
       document.title = data.title;
       required('#pv-title').textContent = data.title;
@@ -87,7 +75,6 @@ export function bootPartsPage(): PartsWorkspaceHandle {
     painting: () => currentView?.painting ? image('/api/parts/painting') : null,
     difference: (index, threshold, footprints) => request(`${partsApi}/difference/${index}?threshold=${threshold}&footprints=${footprints}`),
     async crop(issue) {
-      if (embedded) throw new Error('PARTS_JOINED_ISSUE_UNSUPPORTED');
       const response = await fetch(access.route('/api/parts/comment'), {
         method: 'POST', headers: access.headers({'Content-Type': 'application/json'}), body: JSON.stringify(issue),
       });
@@ -101,8 +88,7 @@ export function bootPartsPage(): PartsWorkspaceHandle {
       (currentView?.verdict?.comments ?? []).map(issue => parsePartsIssue(issue, true, true, false)),
     changed() {},
     register(value) { output = value; },
-    locked: () => busy || currentView?.legacyVerdict?.readOnly ||
-      embedded && (!currentView?.joinedVerdictBinding || !access.capability || build !== 'inspected') ? 'sent' : 'open',
+    locked: () => busy || currentView?.legacyVerdict?.readOnly ? 'sent' : 'open',
   };
   const save = async () => {
     if (!currentView || !output || host.locked() !== 'open') return;
@@ -112,12 +98,7 @@ export function bootPartsPage(): PartsWorkspaceHandle {
     try {
       const value = output.value();
       if (!('issues' in value) || !('verdict' in value)) throw new Error('PARTS_VERDICT_INVALID');
-      if (embedded && value.issues.length > 0) {
-        status.textContent = t('PARTS_JOINED_ISSUE_UNSUPPORTED'); status.dataset.result = 'refused';
-        return;
-      }
-      const body = {status: value.verdict, issues: value.issues,
-        ...(embedded ? {binding: currentView.joinedVerdictBinding} : {})};
+      const body = {status: value.verdict, issues: value.issues};
       const writeHeaders = headers(); writeHeaders.set('Content-Type', 'application/json');
       const response = await fetch(access.route(`${partsApi}/verdict`), {
         method: 'POST', headers: writeHeaders, body: JSON.stringify(body),
@@ -139,14 +120,13 @@ export function bootPartsPage(): PartsWorkspaceHandle {
     const data = currentView;
     if (!data) return;
     try {
-      const response = await request(embedded ? `${partsApi}/export/${format}` : `/api/parts/export?format=${format}`);
+      const response = await request(`/api/parts/export?format=${format}`);
       const value = await response.text();
       if (disposed) return;
       const objectUrl = URL.createObjectURL(new Blob([value], {type: format === 'json' ? 'application/json' : 'text/markdown'}));
       objectUrls.add(objectUrl);
       const anchor = document.createElement('a'); anchor.href = objectUrl;
-      anchor.download = embedded ? (format === 'json' ? data.verdictFile : data.verdictFile.replace(/\.json$/, '.md'))
-        : format === 'json' ? 'parts-review-export.json' : 'parts-review-export.md';
+      anchor.download = format === 'json' ? 'parts-review-export.json' : 'parts-review-export.md';
       anchor.click();
       const timer = setTimeout(() => {URL.revokeObjectURL(objectUrl); objectUrls.delete(objectUrl);}, 1000);
       disposers.push(() => clearTimeout(timer));
@@ -154,33 +134,14 @@ export function bootPartsPage(): PartsWorkspaceHandle {
       if (!disposed) required('#pv-save-status').textContent = t(error instanceof Error ? error.message : 'Save failed.');
     }
   };
-  const onMessage = (event: MessageEvent) => {
-    if (event.source !== parent || event.origin !== location.origin) return;
-    const message = event.data;
-    if (message?.type === 'review-stage-source' && (message.buildId === 'inspected' || /^[a-f0-9]{64}$/.test(message.buildId))) {
-      build = message.buildId; restore = message.state ?? null; receiveSource();
-    } else if (message?.type === 'review-stage-language' && (message.language === 'en' || message.language === 'ko')) {
-      setLinkLanguage(null); setLanguagePreference(message.language);
-    } else if (message?.type === 'review-stage-restore' && message.state) {
-      void workspace?.restore(message.state);
-    } else if (message?.type === 'review-stage-revalidate') {
-      if (message.buildId === 'inspected' || typeof message.buildId === 'string' && /^[a-f0-9]{64}$/.test(message.buildId)) build = message.buildId;
-      void workspace?.revalidate(message.state).then(syncActions);
-    }
-  };
-  const correction = (event: Event) => parent.postMessage((event as CustomEvent).detail, location.origin);
-  window.addEventListener('message', onMessage); disposers.push(() => window.removeEventListener('message', onMessage));
-  slots.stage.addEventListener('parts-correction', correction); disposers.push(() => slots.stage.removeEventListener('parts-correction', correction));
   bindDomI18n(document); disposers.push(unbindDomI18n);
-  disposers.push(bindStageNav({partsOnly: true, model: false}));
+  disposers.push(bindStageNav({only: 1, model: false}));
   disposers.push(connectLiveWindow(access));
   const syncActions = () => {
-    actions.hidden = embedded && !currentView?.joinedVerdictBinding;
     const button = required<HTMLButtonElement>('#pv-save');
     button.disabled = host.locked() !== 'open';
-    button.title = embedded && !access.capability ? t('Read-only view: reopen with rig-review open to edit.') : '';
   };
-  const mounted = mountPartsWorkspace(slots, source, host, {defaultView: 'item', embedded});
+  const mounted = mountPartsWorkspace(slots, source, host, {defaultView: 'item'});
   actions.replaceChildren(); actions.classList.add('pv-verdict');
   for (const [id, label, action] of [
     ['pv-save', 'Save sign-off', save],
@@ -193,7 +154,6 @@ export function bootPartsPage(): PartsWorkspaceHandle {
   }
   const ready = mounted.ready.then(async () => {
     if (disposed) return;
-    if (restore) await mounted.restore(restore);
     syncActions(); document.body.dataset.ready = 'true';
   });
   void ready.catch(error => {
@@ -201,17 +161,14 @@ export function bootPartsPage(): PartsWorkspaceHandle {
     const status = required('#pv-load'); status.dataset.result = 'refused';
     status.textContent = t(error instanceof Error ? error.message : 'PARTS_PAINT_FAILED');
   });
-  const stageApi = {snapshot: () => mounted.snapshot()};
-  if (embedded) (window as StagePartsWindow).rigReviewStageParts = stageApi;
   workspace = {...mounted, ready, dispose() {
     if (disposed) return;
-    disposed = true; receiveSource();
+    disposed = true;
     mounted.dispose();
     for (const dispose of disposers.splice(0)) dispose();
     for (const cancel of pendingImages) cancel();
     for (const objectUrl of objectUrls) URL.revokeObjectURL(objectUrl);
     objectUrls.clear(); actions.replaceChildren();
-    if ((window as StagePartsWindow).rigReviewStageParts === stageApi) delete (window as StagePartsWindow).rigReviewStageParts;
   }};
   return workspace;
 }

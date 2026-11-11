@@ -21,15 +21,14 @@ screen needs behavior a component lacks, extend the component for every screen.
   it through the app shell (C1). No screen adds an HTML page or a per-screen
   server route for its markup (R5).
 - **E2** These public URLs keep working, as routes or redirects into the single
-  entry: `/` and `/instances/<key>/…` (rig and compare), `/stage-parts.html` and
-  `/stage-interview.html` (stage frames, `stageEmbed`, `lang`, `side`),
+  entry: `/` and `/instances/<key>/…` (rig and compare),
   `/jobs/<jobId>/` (`lang`, `hub`), `/hub/` (`workspace`, `lang`), the owner
   workspace root, `?lang=en|ko`, and `#cap=` / `#review=` in the hash. Capability
   handling and the API routes stay as they are. The single entry changes markup
   delivery, not API contracts.
 - **E3** The screen to mount is chosen from the route and the session payload,
   not from which HTML file was served.
-- *Today*: six HTML entries (`index`, `compare`, `parts`, `interview`, `job-hub`,
+- *Today*: five HTML entries (`index`, `compare`, `parts`, `job-hub`,
   `owner-workspace`) plus an inline job document written by `src/job-front.ts`.
   `src/compare-html.ts` splices nine `<!-- shared:… -->` regions of `index.html`
   into `compare.html`.
@@ -62,8 +61,12 @@ workspace layout that places C2–C7.
 - **MUST** show the pipeline stages (**1 Parts + mesh · 2 Interview · 3 Rig +
   animation · 4 Direction**) with the current stage marked, on every screen that
   belongs to a project stage, including job screens.
-- *Today*: `stage-nav.ts` is shared by rig, compare, parts and interview. Job
-  screens have none.
+- **MUST** open a mode of the one screen from each chip, or name the chip
+  unavailable: 1 → Setup, 2 → the interview modal, 3 → Animate, 4 → not
+  available. No chip loads a page or a frame (#726).
+- *Today*: `stage-nav.ts` is shared by rig, compare and parts. The stage frames
+  and the standalone interview command are deleted (#726). Chip 2 names itself
+  unavailable until the modal passes its opener. Job screens have none.
 
 ### C2 Navigator (left panel)
 
@@ -290,8 +293,8 @@ for the copies it replaces.
 2. Parts review and job parts move onto the shell. `parts.html` is removed.
 3. Compare moves onto C5 and the shared camera. `compare.html`,
    `compare-html.ts` splicing and the compare camera stack are removed.
-4. C9 survey, then interview and job interview-picks move. `interview.html` and
-   the job `<select>` rebuild are removed.
+4. C9 survey, then interview and job interview-picks move. The job `<select>`
+   rebuild is removed. (The interview entry page was deleted early with the stage frames, #726.)
 5. Job rig, package, checkpoint, image-set, plan, signoff and reopen move. The
    inline job document in `job-front.ts` is removed.
 6. Hub and owner workspace move. `job-hub.html` and `owner-workspace.html` are

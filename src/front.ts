@@ -55,12 +55,10 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  const read=method==='GET'||method==='HEAD',get:Route={mutation:false,limit:0,timeoutMs:30000,control:false};
  if(path===LIVE_PATH)return method==='GET'?{...get,live:true}:null;
  if(['/','/index.html','/main.js','/styles.css','/api/access'].includes(path))return read?get:null;
- if(['/stage-parts.html','/parts.js','/parts.css'].includes(path))return read?get:null;
  if((mode==='single'?/^\/api\/stage-parts(?:\/(?:image|page)\/\d+)?$/:/^\/api\/compare\/(?:a|b)\/stage-parts(?:\/(?:image|page)\/\d+)?$/).test(path))return read?get:null;
  if(mode==='single'){
   if(path==='/api/stage-parts/verdict')return method==='POST'?{...get,mutation:true,limit:stageVerdictLimit}:null;
   if(path==='/api/stage-parts/export/json'||path==='/api/stage-parts/export/issue')return read?get:null;
-  if(['/stage-interview.html','/interview.js','/interview.css'].includes(path))return method==='GET'?get:null;
   if(interviewRequest(path))return path==='/api/interview/picks'?
    method==='POST'?{...get,mutation:true,limit:picksLimit}:null:method==='GET'?get:null;
  }
@@ -103,12 +101,6 @@ async function instanceRecord(control:string,key:string):Promise<RecordFile|null
 /** Worker errors default to front codes unless an inspection refusal is allowlisted. */
 const upstreamFailure:Record<number,string>={400:'FRONT_UPSTREAM_REJECTED',403:'FRONT_UPSTREAM_FORBIDDEN',404:'FRONT_UPSTREAM_NOT_FOUND',405:'FRONT_UPSTREAM_METHOD',409:'FRONT_UPSTREAM_CONFLICT'};
 const responseHeaders=['content-type','content-length','content-range','accept-ranges','content-disposition','cache-control','content-security-policy','x-content-type-options','referrer-policy'];
-/** The trusted atlas frame alone may carry this closed navigation query. */
-export function stageFrameQuery(mode:'single'|'compare',search:string):boolean {
- const params=new URLSearchParams(search),keys=[...params.keys()];
- const allowed=mode==='single'?['stageEmbed','lang']:['stageEmbed','lang','side'];
- return keys.length===allowed.length&&new Set(keys).size===keys.length&&keys.every(k=>allowed.includes(k))&&params.get('stageEmbed')==='1'&&['en','ko'].includes(params.get('lang')??'')&&(mode==='single'||['a','b'].includes(params.get('side')??''));
-}
 // The submitted Apply can supply the check line. Accept the producer's structured
 // summary fields, never an arbitrary suffix after the failed-check code.
 const submitCheckPrefix = 'EDIT_SUBMIT_UNCHECKED: applied build failed check — ';
@@ -172,7 +164,7 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    if(req.headers.get('sec-fetch-site')==='cross-site'||sentOrigin!==null&&sentOrigin!==origin)return refuse('FRONT_SAME_ORIGIN_REQUIRED',403);
    const record=await instanceRecord(options.control,key);if(!record)return refuse('FRONT_INSTANCE_UNKNOWN: reopen with rig-review open',404);
    const route=frontRoute(record.mode,req.method,path);if(!route)return refuse('FRONT_ROUTE_REFUSED',404);
-   const landing=path==='/'||path==='/index.html',stageFrame=path==='/stage-parts.html'||path==='/stage-interview.html';if(stageFrame?!stageFrameQuery(record.mode,url.search):!landing&&!!url.search)return refuse('FRONT_QUERY_REFUSED',400);
+   const landing=path==='/'||path==='/index.html';if(!landing&&!!url.search)return refuse('FRONT_QUERY_REFUSED',400);
    if(route.live){
     if(sentOrigin!==origin)return refuse('FRONT_SAME_ORIGIN_REQUIRED',403);
     if(req.headers.get('upgrade')?.toLowerCase()!=='websocket')return refuse('FRONT_UPGRADE_REQUIRED',426);
@@ -217,7 +209,7 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    active++;let released=false;const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),route.timeoutMs);const release=()=>{if(released)return;released=true;active--;clearTimeout(timer);};
    req.signal.addEventListener('abort',()=>abort.abort(),{once:true});
    let upstream:Response;
-   try{upstream=await fetch(record.origin+path+(landing||stageFrame?url.search:''),{method:req.method,headers,...(body?{body}:{}),redirect:'manual',signal:abort.signal});}
+   try{upstream=await fetch(record.origin+path+(landing?url.search:''),{method:req.method,headers,...(body?{body}:{}),redirect:'manual',signal:abort.signal});}
    catch{release();return abort.signal.aborted&&!req.signal.aborted?refuse('FRONT_UPSTREAM_TIMEOUT',504):refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);}
    if(upstream.headers.get(openKeyHeader)!==key){void upstream.body?.cancel().catch(()=>{});release();return refuse('FRONT_INSTANCE_REPLACED: reopen with rig-review open',410);}
    if(upstream.status>=400&&upstream.status!==416){const named=await inspectionRefusal(record.mode,req.method,path,upstream,record.fingerprint===options.fingerprint);void upstream.body?.cancel().catch(()=>{});release();if(named)return refuse(named,upstream.status);const code=upstreamFailure[upstream.status];return refuse(code??'FRONT_UPSTREAM_FAILED',code?upstream.status:502);}

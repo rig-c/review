@@ -501,7 +501,7 @@ On the view you are inspecting, choose **Comment · C (n)**, drag over the detai
 
 The four-stage navigator preserves this entry and its explicit save behavior. Compiled sessions reuse the atlas surface read-only; see [Four inspection stages](PANELS.md#four-inspection-stages).
 
-The managed front forwards only the trusted stage-atlas frame query (`stageEmbed=1`, `lang=en|ko`, and a required `side=a|b` for compare; no side for single). Unknown or duplicate keys are refused; the frame carries no filesystem path, command or capability. Stage navigation never changes CLI arguments or package bindings.
+The managed front forwards a query only to the landing page; every other route refuses one. Stage navigation never changes CLI arguments or package bindings.
 
 ## Embedded semantic jobs
 
@@ -741,15 +741,8 @@ package is unavailable. Reopen with a rig version once Create records one.
 
 When the recorded draft entry includes `config`, `parts`, `rig` and `check` directories and the draft is editable (`parts` or `parts-review` stage without an effective `parts-review` sign-off, and not `--view-only`), **1 Parts + mesh** also offers the Chest regions, Mesh parameters and Edit Mesh instruments for mesh-bearing parts regardless of whether `--parts-verdict-dir` is supplied. Selecting an instrument opens the Setup inspector for that part while direct selection of **3 Rig + animation** remains refused with `RIG_VERSION_UNAVAILABLE`. Apply runs the installed producer and compiler in scratch under the existing discovery and operation-capability floors while keeping the recorded draft producer as provenance, and returning to **1 Parts + mesh** or running Undo or Reset updates the displayed mesh and report readings from the active build (verdict saving remains read-only on scratch builds and when `--parts-verdict-dir` is omitted).
 
-From a create project with retained choice sets, create a dedicated output
-directory and open the foreground Stage 2 view:
-
-```sh
-mkdir -p scratch/review-picks
-rig-review interview . --picks-dir scratch/review-picks
-```
-
-Open the printed loopback URL. Select a question and inspect its bound parts
+The interview opens over the review screen of a joined workspace (the `open`
+command above with `--picks-dir`): choose **2 Interview**. Select a question and inspect its bound parts
 or source image. A direction set that binds only source inputs displays those
 inputs with the no-bound-parts notice. Each recommendation shows the retained
 reason and author/date. Choose an option for every prompt and save explicitly.
