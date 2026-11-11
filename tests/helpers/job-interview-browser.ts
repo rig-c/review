@@ -570,7 +570,7 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
         }
         const after = await jobInputHashes(entry.root);
         const matches = Object.keys(after).length === Object.keys(entry.beforeInputs).length &&
-            Object.entries(entry.beforeInputs).every(([path,sha256])=>after[path]===sha256);
+            Object.entries(entry.beforeInputs).every(([path, sha256]) => after[path] === sha256);
         inputReadbacks.push({ mode: entry.mode, status: 'read', before: entry.beforeInputs, after, matches });
         entry.inputReadbackDone = true;
         assert.deepEqual(after, entry.beforeInputs, 'fixture input bytes remain immutable before disposal');
@@ -675,7 +675,18 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                 for (let index = 0; index < geometry.tabs.length; index++) {
                     await page.evaluate(`document.querySelectorAll('.interview-image-tabs button')[${index}].click()`);
                     await wait(`document.querySelector('.interview-image-preview img')?.complete && document.querySelector('.interview-image-preview img').naturalWidth>0`);
-                    const image = await page.evaluate<any>(`(()=>{const art=document.querySelector('.interview-images'),img=art.querySelector('img');art.scrollIntoView({block:'center'});const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};return {src:img.src,naturalWidth:img.naturalWidth,naturalHeight:img.naturalHeight,image:rect(img),preview:rect(img.parentElement),selected:art.querySelectorAll('button')[${index}].getAttribute('aria-pressed')};})()`);
+                    const image = await page.evaluate<any>(`(()=>{
+                        const art=document.querySelector('.interview-images'),img=art.querySelector('img');
+                        const target=${JSON.stringify(mode)}==='package'?img.parentElement:art;
+                        target.scrollIntoView({block:'center',inline:'nearest'});
+                        const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
+                        return {src:img.src,naturalWidth:img.naturalWidth,naturalHeight:img.naturalHeight,
+                            image:rect(img),preview:rect(img.parentElement),tab:rect(art.querySelectorAll('button')[${index}]),
+                            forms:rect(document.querySelector(${JSON.stringify(selector)}).closest('[data-job-forms]')),
+                            selected:art.querySelectorAll('button')[${index}].getAttribute('aria-pressed')};
+                    })()`);
+                    const imageObservation: any = { index, ...image };
+                    phase.images.push(imageObservation);
                     const mapping = imageMapping[index];
                     const png = decodedImages.get(index);
                     assert.ok(mapping && png);
@@ -696,7 +707,11 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                         return {width:canvas.width,height:canvas.height,
                             rgba:Array.from(context.getImageData(0,0,canvas.width,canvas.height).data)};
                     })()`);
+                    Object.assign(imageObservation, { mapping, normalRouteRawSha256: mapping.rawSha256,
+                        decodedWidth: png.width, decodedHeight: png.height,
+                        canvasReadback: { width: displayed.width, height: displayed.height, rgbaBytes: displayed.rgba.length, sha256: digest(Buffer.from(displayed.rgba)) } });
                     const decodedDisplay = assertScreenADisplayedPixels(png, displayed);
+                    imageObservation.decodedDisplay = decodedDisplay;
                     const colors = new Map<string, number>();
                     for (let at = 0; at < png.data.length; at += 4) {
                         if (png.data[at + 3] !== 255)
@@ -719,12 +734,18 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                             number,
                             number
                         ], leftROI: box, rightAdjacent: box });
+                    Object.assign(imageObservation, { pixelOracle: pixels, matchedPixels: pixels.leftROI.backgroundPixels,
+                        matchedROI: pixels.leftROI, expectedRgba: color[0].split(',').map(Number) });
+                    await writeFile(join(output, mode + '-' + sample.width + '-' + sample.phase + '-image' + index + '.png'), shot);
                     assert.ok(pixels.inBounds && pixels.leftROI.backgroundPixels > 0);
                     assert.equal(image.selected, 'true');
                     assert.ok(image.image.left >= image.preview.left - 1 && image.image.right <= image.preview.right + 1 && image.image.top >= image.preview.top - 1 && image.image.bottom <= image.preview.bottom + 1);
-                    phase.images.push({ ...image, mapping, normalRouteRawSha256: mapping.rawSha256, decodedDisplay, decodedWidth: png.width, decodedHeight: png.height,
-                        matchedPixels: pixels.leftROI.backgroundPixels, matchedROI: pixels.leftROI, expectedRgba: color[0].split(',').map(Number) });
-                    await writeFile(join(output, mode + '-' + sample.width + '-' + sample.phase + '-image' + index + '.png'), shot);
+                    if (mode === 'package') {
+                        assert.ok(image.preview.height >= 159 && image.preview.height <= Math.min(220, image.forms.height / 2) + 1, 'package context preview has bounded usable height');
+                        for (const box of [image.image, image.preview, image.tab])
+                            assert.ok(box.left >= image.forms.left - 1 && box.right <= image.forms.right + 1 &&
+                                box.top >= image.forms.top - 1 && box.bottom <= image.forms.bottom + 1, 'package context tab and image fit inside visible form region');
+                    }
                 }
                 await writeFile(join(output, mode + '-' + sample.width + '-' + sample.phase + '-layout.png'), await page.screenshot());
             }
