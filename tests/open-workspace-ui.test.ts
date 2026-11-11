@@ -26,7 +26,8 @@ test('admission and retained frame mounting share one application bound with ide
   const source = await readFile(new URL('../web/owner-workspace.ts', import.meta.url), 'utf8');
   const contract = await readFile(new URL('../src/open-workspace-contract.ts', import.meta.url), 'utf8');
   expect(WORKSPACE_TARGET_LIMIT).toBe(32);
-  expect(source).toContain('frames.size >= WORKSPACE_TARGET_LIMIT');
+  expect(source).toContain('limit: () => WORKSPACE_TARGET_LIMIT');
+  expect(source).toContain('if (retained.atLimit())');
   expect(source).toContain('value.targets.length > WORKSPACE_TARGET_LIMIT');
   expect(contract).not.toContain('WORKSPACE_MOUNT_LIMIT');
   expect(enCatalog.WORKSPACE_MOUNT_LIMIT).toBeUndefined(); expect(koCatalog.WORKSPACE_MOUNT_LIMIT).toBeUndefined();

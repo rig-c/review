@@ -1,7 +1,8 @@
 import {expect, test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
-import {jobHubAccess, checkedJobHubList, jobHubMessageMatches, JOB_HUB_READY, JOB_HUB_VISIBILITY,
+import {checkedJobHubLocation, checkedJobHubList, jobHubMessageMatches, JOB_HUB_READY, JOB_HUB_VISIBILITY,
   type JobHubBinding} from '../web/job-hub.ts';
+import {hashCapabilityAccess} from '../web/hash-capability.ts';
 import type {JobHubList} from '../src/job-hub.ts';
 
 const incarnation = '12345678-1234-1234-1234-123456789abc';
@@ -12,16 +13,21 @@ const binding: JobHubBinding = {incarnation, jobId: 'synthetic-job', publication
 test('hub owner access is incarnation-scoped and strips the grant before subsequent requests', () => {
   const values = new Map<string, string>();
   const storage = {getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => {values.set(key, value);}};
+  const access = (href: string, storage: Parameters<typeof hashCapabilityAccess>[2], replace: (href: string) => void) => {
+    const {url, incarnation} = checkedJobHubLocation(href);
+    return {incarnation, capability: hashCapabilityAccess(url, 'rig-review-job-hub/1:' + url.origin + ':' + incarnation,
+      storage, replace, 'validate')};
+  };
   let address = '';
   const url = origin + '/hub/?workspace=' + incarnation;
-  expect(jobHubAccess(url + '#cap=' + 'c'.repeat(64), storage, value => {address = value;}))
+  expect(access(url + '#cap=' + 'c'.repeat(64), () => storage, value => {address = value;}))
     .toEqual({incarnation, capability: 'c'.repeat(64)});
   expect(address).toBe(url);
-  expect(jobHubAccess(url, storage, () => {}).capability).toBe('c'.repeat(64));
+  expect(access(url, () => storage, () => {}).capability).toBe('c'.repeat(64));
   const next = 'abcdefab-1234-1234-1234-123456789abc';
-  expect(jobHubAccess(origin + '/hub/?workspace=' + next, storage, () => {}).capability).toBe('');
+  expect(access(origin + '/hub/?workspace=' + next, () => storage, () => {}).capability).toBe('');
   for (const query of ['', '?workspace=' + incarnation + '&workspace=' + incarnation, '?workspace=' + incarnation + '&extra=1',
-    '?workspace=' + incarnation + '&lang=other']) expect(() => jobHubAccess(origin + '/hub/' + query, storage, () => {})).toThrow('JOB_REQUEST_INVALID');
+    '?workspace=' + incarnation + '&lang=other']) expect(() => access(origin + '/hub/' + query, () => storage, () => {})).toThrow('JOB_REQUEST_INVALID');
 });
 
 test('visibility and ready messages bind origin, exact window, job, publication, source and incarnation', () => {
@@ -52,9 +58,12 @@ test('retained frame geometry and child visibility integration preserve inspecti
   expect(css).toMatch(/\.hub-stage iframe\[hidden\]\s*\{[^}]*display:\s*block\s*!important;[^}]*visibility:\s*hidden/);
   expect(css).toMatch(/\.hub-header select\s*\{[^}]*width:\s*auto;[^}]*min-width:\s*6rem;[^}]*max-width:\s*12rem/);
   const owner = await readFile(new URL('../web/job-hub.ts', import.meta.url), 'utf8');
-  expect(owner).toContain('frames.size >= current.limit');
+  expect(owner).toContain('limit: () => current!.limit');
+  expect(owner).toContain('!current || retained.atLimit()');
   expect(owner).toContain("row.status === 'closed'");
-  expect(owner).toContain('entry.frame.inert = entry.frame.hidden');
+  const shared = await readFile(new URL('../web/retained-frame-stage.ts', import.meta.url), 'utf8');
+  expect(shared).toContain('entry.frame.inert = entry.frame.hidden');
+  expect(owner).toContain('createRetainedFrameStage<Frame>');
   expect(owner).not.toContain('connectLiveWindow');
   const child = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
   const start = child.indexOf('    const hubVisibility =');
