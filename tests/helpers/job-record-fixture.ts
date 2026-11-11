@@ -260,6 +260,7 @@ export function createSyntheticPlanRecordWorkspace(
   options?: {
     readonly steps?: readonly { readonly id: string; readonly hash: string }[];
     readonly subjects?: PlanContext['subjects'];
+    readonly text?: {does:string; produces:string; bar:string; rests_on:readonly string[]};
   },
 ): SyntheticPlanWorkspace {
   const inputImage = writeWorkspaceFile(root, 'inputs/reference.png', makeSyntheticPngBytes(180, 90, 40));
@@ -294,6 +295,7 @@ export function createSyntheticPlanRecordWorkspace(
         title: `Title for ${step.id}`,
         // Arbitrary internal fields; Review must treat official step.hash as opaque.
         customProducerField: `opaque-${step.id}`,
+        ...(options?.text ?? {}),
       })),
     },
   };

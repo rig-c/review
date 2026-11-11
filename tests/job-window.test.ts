@@ -1382,6 +1382,7 @@ import type {JobPreparedInspection} from '../web/job-session.ts';
 import {RigOverlays} from '../web/rig-overlays.ts';
 import {bindLayerShortcuts, describeLayerToggles, layerShortcuts} from '../web/view-controls.ts';
 import {SENTINELS} from '../web/parts-render.ts';
+import {JOB_PLAN_TEXT_FIELDS, type JobPlanTextProjection} from '../src/job-contract.ts';
 
 describe('#559 continuous Rig motion transport and mid-play verdict capture', () => {
     class RuntimeDomNode {
@@ -1777,6 +1778,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         visible?: boolean;
         clips?: readonly {name: string; duration: number}[];
         interview?: JobPreparedInspection['interview'];
+        planText?: JobPlanTextProjection;
         clipsFor?: (display: JobDisplayPublication) => readonly {name: string; duration: number}[];
         slotsFor?: (display: JobDisplayPublication) => readonly string[];
         slotIdentityFor?: (display: JobDisplayPublication, slot: string) => string;
@@ -1997,6 +1999,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                     manifest: parseManifest({schema: 'rig-review/1', ...pkgIdentity,
                         title: 'Rig fixture', model: 'skeleton.model.json'}),
                     sourceHash: display.publication.source.sourceHash,
+                    ...(options?.planText ? {planText:options.planText} : {}),
                     reviewedSource: {
                         packageRevision: pkgIdentity.revision,
                         viewerVersion: '2.4.6',
@@ -2091,7 +2094,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal', 'jobPartsReviewState',
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
             'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
-            'presentJobRigViewport', 'CanvasRenderer', 'enCatalog', 'koCatalog', 'JOB_HUB_READY', 'jobHubMessageMatches', 'advancePlayback',
+            'presentJobRigViewport', 'CanvasRenderer', 'enCatalog', 'koCatalog', 'JOB_HUB_READY', 'jobHubMessageMatches', 'advancePlayback', 'JOB_PLAN_TEXT_FIELDS',
             transpiled,
         );
         const mounted = runner(
@@ -2101,7 +2104,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal, jobPartsReviewState,
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
             recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
-            presentJobRigViewport, CanvasRenderer, enCatalog, koCatalog, JOB_HUB_READY, jobHubMessageMatches, advancePlayback,
+            presentJobRigViewport, CanvasRenderer, enCatalog, koCatalog, JOB_HUB_READY, jobHubMessageMatches, advancePlayback, JOB_PLAN_TEXT_FIELDS,
         ) as {window: ReturnType<typeof createJobWindow>; workspace: RuntimeDomNode; stop: () => void};
 
         async function drainPreparing() {
@@ -2856,6 +2859,64 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         } finally {
             s.cleanup();
         }
+    });
+
+    test('#606 shared plan text renders in checkpoint and record signoff forms with unchanged selects/drafts/words in EN/KO', async () => {
+        const values = {does:'  <mark>literal</mark> 한글 e\u0301\r\n',produces:'',bar:' exact bar\n ',rests_on:['bones','bones','']};
+        const record = {path:'project.json' as const,sha256:'a'.repeat(64)};
+        const plan = {steps:[{id:'meshes',hash:'b'.repeat(64)}]};
+        const projection: JobPlanTextProjection = {schema:'rig-review/job-plan-text@1',record,status:'projected',
+            steps:[{...plan.steps[0]!,...values,issues:[]}]};
+        const fixture = createJobWindowFixture();
+        const store = new Map<string,string>();
+        const words = '  exact owner 한글\n';
+        let session: Awaited<ReturnType<typeof mountRuntimeSession>> | undefined;
+        const preference = i18nModule.getLanguagePreference();
+        try {
+            session = await mountRuntimeSession({fixture,localStore:store,planText:projection});
+            const display = fixturePublication();
+            Object.assign(display.publication.source,{plan});
+            await session.publishDisplay(display);
+            const ask: PendingAskV3 = {askId:'plan-text-checkpoint',publicationId:display.publication.publicationId,
+                source:display.publication.source,subject:{kind:'checkpoint',checkpointId:'alias',planStepId:'meshes'},status:'pending'};
+            fixture.pending(ask,2);session.window.event(fixture.events.at(-1)!);
+            const form = session.workspace.querySelector('form[data-job-ask="plan-text-checkpoint"]')!;
+            for (const language of ['en','ko'] as const) {
+                i18nModule.setLanguagePreference(language);
+                expect(form.querySelector('[data-job-plan-field="does"]')!.textContent).toBe(values.does);
+                expect(form.querySelector('[data-job-plan-field="produces"]')!.textContent).toBe('');
+                expect(form.querySelector('[data-job-plan-field="bar"]')!.textContent).toBe(values.bar);
+                expect(form.querySelector('[data-job-plan-field="rests_on"]')!.querySelectorAll('li').map(item=>item.textContent)).toEqual(values.rests_on);
+                expect(form.querySelector('[data-job-text="job.plan.bar"]')!.textContent).toBe(i18nModule.t('job.plan.bar'));
+                expect(form.querySelectorAll('mark')).toHaveLength(0);
+            }
+            const note = form.querySelector('textarea[name="note"]')!;
+            const outcome = form.querySelector('select[name="outcome"]')!;
+            expect(outcome.value).toBe('');
+            note.value=words;outcome.value='fail';form.dispatchEvent({type:'input'});
+            session.failNextTransportSubmit();await form.onsubmit?.({preventDefault(){}});
+            expect(session.outgoingSubmits.at(-1)!.body.value).toEqual({checkpointId:'alias',outcome:'fail',words});
+            session.cleanup();session=undefined;
+            session=await mountRuntimeSession({fixture,localStore:store,planText:projection});
+            await session.replayPublication(display);
+            session.window.event(fixture.events.find(event=>event.type === 'pending')!);
+            const restored=session.workspace.querySelector('form[data-job-ask="plan-text-checkpoint"]')!;
+            expect(restored.querySelector('select[name="outcome"]')!.value).toBe('fail');
+            expect(restored.querySelector('textarea[name="note"]')!.value).toBe(words);
+            const recordDisplay: DisplayPublicationV3 = {...display,publication:{...display.publication,publicationId:'record-plan-text',generation:3,
+                source:{sourceHash:'c'.repeat(64),projectHash:record.sha256,record,subject:'plan',selection:{kind:'plan'},
+                    optionSet:null,optionSetFile:null,inputs:[],files:[record],plan,subjects:[{kind:'signoff',stage:'rigging-interview'}]}}};
+            await session.publishDisplay(recordDisplay);
+            const signoff: PendingAskV3={askId:'plan-text-signoff',publicationId:'record-plan-text',source:recordDisplay.publication.source,
+                subject:{kind:'signoff',stage:'rigging-interview'},status:'pending'};
+            fixture.pending(signoff,4);session.window.event(fixture.events.at(-1)!);
+            expect(session.workspace.querySelector('[data-job-record="plan"]')!.textContent).toContain(values.bar);
+            const signform=session.workspace.querySelector('form[data-job-ask="plan-text-signoff"]')!;
+            expect(signform.textContent).toContain(values.does);
+            signform.querySelector('textarea[name="note"]')!.value=words;
+            session.failNextTransportSubmit();await signform.onsubmit?.({preventDefault(){}});
+            expect(session.outgoingSubmits.at(-1)!.body.value).toEqual({stage:'rigging-interview',decision:'approved',words});
+        } finally {session?.cleanup();i18nModule.setLanguagePreference(preference);}
     });
 
     test('#629 checkpoint gallery keeps 103 ordered scalar rows, EN/KO mapping, verbatim payload and reconnect draft', async () => {
@@ -5052,6 +5113,30 @@ describe('#629 sealed checkpoint preparation without browser or raster execution
             expect(f.revoked).toEqual(f.created);
         } finally {await f.close();}
     });
+    for (const kind of ['plan','package'] as const) test('#606 '+kind+' real preparation checks plan metadata association while trusting daemon strings',async()=>{
+        const f=await setup(kind);
+        try {
+            const rows=f.source.plan!.steps.map(step=>({...step,does:'exact\r\n',produces:'',bar:'bar',rests_on:['a','a'],issues:[]}));
+            const projection:any={schema:'rig-review/job-plan-text@1',record:{path:'project.json',sha256:f.source.projectHash},status:'projected',steps:rows};
+            (f.metadata as any).planText=projection;
+            const ready=await prepareJobInspection(f.display,new AbortController().signal);
+            expect(ready.metadata.planText).toEqual(projection);ready.dispose();
+            projection.steps[0].bar='post-server type-valid mutation';
+            const trusted=await prepareJobInspection(f.display,new AbortController().signal);
+            expect(trusted.metadata.planText?.status).toBe('projected');trusted.dispose();
+            for (const mutate of [
+                (p:any)=>{p.record.sha256='0'.repeat(64);},
+                (p:any)=>{p.steps.reverse();},
+                (p:any)=>{p.steps[0].hash='0'.repeat(64);},
+            ]) {
+                const changed=structuredClone(projection);mutate(changed);(f.metadata as any).planText=changed;
+                await expect(prepareJobInspection(f.display,new AbortController().signal)).rejects.toThrow('PLAN_TEXT_SOURCE_MISMATCH');
+            }
+            (f.metadata as any).planText={...projection,extra:true};
+            await expect(prepareJobInspection(f.display,new AbortController().signal)).rejects.toThrow('PLAN_TEXT_METADATA_INVALID');
+        } finally {await f.close();}
+    });
+
     test('#629 missing evidence keeps legacy record preparation manifest-free without evidence fetch', async () => {
         const f = await setup('plan', true);
         try {

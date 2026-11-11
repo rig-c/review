@@ -178,6 +178,79 @@ export interface JobPlanIdentity {
   readonly steps: readonly JobPlanStepIdentity[];
 }
 
+/** Ephemeral owner metadata, projected by the daemon from the sealed project. */
+export const JOB_PLAN_TEXT_SCHEMA = 'rig-review/job-plan-text@1' as const;
+export const JOB_PLAN_TEXT_FIELDS = ['does', 'produces', 'bar', 'rests_on'] as const;
+export type JobPlanTextField = typeof JOB_PLAN_TEXT_FIELDS[number];
+export interface JobPlanTextStep {
+  readonly id: string;
+  readonly hash: string;
+  does?: string;
+  produces?: string;
+  bar?: string;
+  rests_on?: readonly string[];
+  readonly issues: {field: JobPlanTextField; reason: 'absent' | 'invalid' | 'limit'}[];
+}
+export const JOB_PLAN_TEXT_UNAVAILABLE = [
+  'PLAN_TEXT_RECORD_UNAVAILABLE', 'PLAN_TEXT_RECORD_UNSUPPORTED', 'PLAN_TEXT_STEPS_ABSENT',
+  'PLAN_TEXT_STEPS_INVALID', 'PLAN_TEXT_MAPPING_UNAVAILABLE', 'PLAN_TEXT_LIMIT',
+] as const;
+export type JobPlanTextProjection = {
+  readonly schema: typeof JOB_PLAN_TEXT_SCHEMA;
+  readonly record: {readonly path: 'project.json'; readonly sha256: string};
+  readonly status: 'projected';
+  readonly steps: readonly JobPlanTextStep[];
+} | {
+  readonly schema: typeof JOB_PLAN_TEXT_SCHEMA;
+  readonly record: {readonly path: 'project.json'; readonly sha256: string} | null;
+  readonly status: 'unavailable';
+  readonly reason: typeof JOB_PLAN_TEXT_UNAVAILABLE[number];
+};
+
+/** Closed delivery grammar. Field contents have the normal daemon's authority. */
+export function parseJobPlanTextProjection(value: unknown): JobPlanTextProjection {
+  const fail = (): never => {throw new Error('PLAN_TEXT_METADATA_INVALID');};
+  const object = (input: unknown, keys: readonly string[]): Record<string, unknown> => {
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        Object.keys(input).some(key => !keys.includes(key))) return fail();
+    return input as Record<string, unknown>;
+  };
+  const envelope = object(value, ['schema', 'record', 'status', 'steps', 'reason']);
+  if (envelope.schema !== JOB_PLAN_TEXT_SCHEMA || !Object.hasOwn(envelope, 'record') ||
+      new TextEncoder().encode(JSON.stringify(value)).length > 512 * 1024) return fail();
+  if (envelope.record !== null) {
+    const record = object(envelope.record, ['path', 'sha256']);
+    if (record.path !== 'project.json' || typeof record.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(record.sha256)) return fail();
+  }
+  if (envelope.status === 'unavailable') {
+    if (Object.hasOwn(envelope, 'steps') || !(JOB_PLAN_TEXT_UNAVAILABLE as readonly unknown[]).includes(envelope.reason)) return fail();
+    return value as JobPlanTextProjection;
+  }
+  if (envelope.status !== 'projected' || envelope.record === null || Object.hasOwn(envelope, 'reason') ||
+      !Array.isArray(envelope.steps) || envelope.steps.length > 4096) return fail();
+  const ids = new Set<string>();
+  for (const raw of envelope.steps) {
+    const row = object(raw, ['id', 'hash', ...JOB_PLAN_TEXT_FIELDS, 'issues']);
+    if (typeof row.id !== 'string' || row.id.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(row.id) ||
+        ids.has(row.id) || typeof row.hash !== 'string' || !/^[a-f0-9]{64}$/.test(row.hash) || !Array.isArray(row.issues)) return fail();
+    ids.add(row.id);
+    const missing = JOB_PLAN_TEXT_FIELDS.filter(field => !Object.hasOwn(row, field));
+    if (row.issues.length !== missing.length) return fail();
+    row.issues.forEach((rawIssue, index) => {
+      const issue = object(rawIssue, ['field', 'reason']);
+      if (issue.field !== missing[index] || typeof issue.reason !== 'string' || !['absent', 'invalid', 'limit'].includes(issue.reason)) fail();
+    });
+    for (const field of JOB_PLAN_TEXT_FIELDS) {
+      if (!Object.hasOwn(row, field)) continue;
+      const content = row[field];
+      if (field === 'rests_on') {
+        if (!Array.isArray(content) || content.length > 4096 || content.some(item => typeof item !== 'string')) return fail();
+      } else if (typeof content !== 'string') return fail();
+    }
+  }
+  return value as JobPlanTextProjection;
+}
+
 /** Literal work-root-relative manifest path, validated at runtime. */
 export type JobPartsManifestPath = string;
 /** Literal path relative to the bound manifest directory. */
