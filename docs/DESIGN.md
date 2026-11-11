@@ -28,7 +28,7 @@ plan, checkpoint, rig, direction, image review and signoff.
   Remove separate memo, note, per-part note, summary and `words` feedback input
   surfaces. Survey answers are a separate input kind. Preserve interview
   selections, inline Other text and per-question note inputs through the existing
-  interview answer contract. R2 applies to feedback inputs. (Naru, 2026-11-11)
+  interview answer contract. R2 applies to feedback inputs.
 - **R3** Inspection uses the main view's Difference switch to cover all regions.
   Remove separate sidebar key-region checkpoint and evidence panels. Retain the
   supported checkpoint act flow through its existing contract.
