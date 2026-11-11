@@ -1380,7 +1380,7 @@ import {parseControlPart, parsePartIdentity, type ControlPart} from '../src/cont
 import {parseManifest} from '../src/manifest.ts';
 import type {JobPreparedInspection} from '../web/job-session.ts';
 import {RigOverlays} from '../web/rig-overlays.ts';
-import {bindLayerShortcuts, describeLayerToggles, layerShortcuts} from '../web/view-controls.ts';
+import {labelledControl, bindLayerShortcuts, describeLayerToggles, layerShortcuts} from '../web/view-controls.ts';
 import {SENTINELS} from '../web/parts-render.ts';
 import {JOB_PLAN_TEXT_FIELDS, type JobPlanTextProjection} from '../src/job-contract.ts';
 
@@ -2090,7 +2090,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         const runner = new Function(
             'host', 'access', 'hubIncarnation', 'hubVisible', 'events', 'pageId', 'transport', 'abort',
             'i18n', 't', 'createViewportController', 'createViewportState', 'createRigViewportProvider', 'mountViewportPair',
-            'RigOverlays', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'SENTINELS',
+            'RigOverlays', 'labelledControl', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'SENTINELS',
             'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal', 'jobPartsReviewState',
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
             'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
@@ -2100,7 +2100,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         const mounted = runner(
             host, access, hubIncarnation, hubVisible, undefined, options?.pageId ?? 'page-one', transport, abort,
             i18nModule, i18nModule.t, createViewportController, createViewportState, createRigViewportProvider, mountViewportPair,
-            RigOverlays, bindLayerShortcuts, describeLayerToggles, layerShortcuts, SENTINELS,
+            RigOverlays, labelledControl, bindLayerShortcuts, describeLayerToggles, layerShortcuts, SENTINELS,
             createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal, jobPartsReviewState,
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
             recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
@@ -2194,6 +2194,47 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             },
         };
     }
+
+    test('#659 actual job labels retain localized span/control order and identity across language refresh', async () => {
+        const preference = i18nModule.getLanguagePreference();
+        const s = await mountRuntimeSession();
+        try {
+            const display = await s.publishRig(1);
+            const ask: PendingAskV3 = {askId:'label-form',publicationId:display.publication.publicationId,
+                source:display.publication.source,subject:{kind:'review-verdict',stage:'rig-review'},status:'pending'};
+            s.fixture.pending(ask,2);
+            s.window.event(s.fixture.events.at(-1)!);
+            const form = s.workspace.querySelector('form[data-job-ask="label-form"]')!;
+            expect(form).not.toBeNull();
+            const input = s.workspace.querySelector('#job-time')!;
+            const note = form.querySelector('textarea[name="note"]')!;
+            expect(input).not.toBeNull();expect(note).not.toBeNull();
+            const pairs = [{control:input,key:'job.time'},{control:note,key:'interview.note'}].map(({control,key}) => {
+                const label = control.parentElement!;
+                const span = label.children[0]!;
+                expect(label.tagName).toBe('label');
+                expect(span.tagName).toBe('span');
+                expect(span.dataset.jobText).toBe(key);
+                expect(label.children).toEqual([span,control]);
+                return {control,key,label,span};
+            });
+            note.value = '  literal reviewer text 한글\n';
+            for (const language of ['en','ko'] as const) {
+                i18nModule.setLanguagePreference(language);
+                for (const {control,key,label,span} of pairs) {
+                    expect(span.textContent).toBe(i18nModule.t(key));
+                    expect(label.children[0]).toBe(span);
+                    expect(label.children[1]).toBe(control);
+                }
+                expect(s.workspace.querySelector('#job-time')!).toBe(input);
+                expect(form.querySelector('textarea[name="note"]')!).toBe(note);
+                expect(note.value).toBe('  literal reviewer text 한글\n');
+            }
+        } finally {
+            s.cleanup();
+            i18nModule.setLanguagePreference(preference);
+        }
+    });
 
     test('#559 runtime transport lifecycle: #job-play, #job-loop, single rAF, loop wrap, physics-reset loop toggle, and one-shot completion', async () => {
         const s = await mountRuntimeSession();

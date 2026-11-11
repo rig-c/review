@@ -6,7 +6,7 @@ import {singleCameraWiring} from './helpers/viewport-387-wiring.ts';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature} from '../web/camera-view.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import {test,expect} from 'bun:test';
-import {actionButton,stageOrientation,syncStageLayout,panCenter,idleAvailable,initialIdleAnimation,themePreference,automaticIdlePreview} from '../web/view-controls.ts';
+import {labelledControl,actionButton,stageOrientation,syncStageLayout,panCenter,idleAvailable,initialIdleAnimation,themePreference,automaticIdlePreview} from '../web/view-controls.ts';
 test('orientation follows available center rectangle, with stable square tie',()=>{expect(stageOrientation(900,600)).toBe('horizontal');expect(stageOrientation(600,900)).toBe('vertical');expect(stageOrientation(600,600)).toBe('horizontal');});
 test('pan preserves coordinate signs and scales independently of pose time',()=>{expect(panCenter({x:10,y:20},40,20,2,'world')).toEqual({x:-10,y:30});expect(panCenter({x:10,y:20},40,20,2,'image')).toEqual({x:-10,y:10});expect(panCenter({x:10,y:20},40,20,4,'world')).toEqual({x:0,y:25});expect(()=>panCenter({x:0,y:0},1,1,0,'world')).toThrow('positive scale');});
 test('only actual exact idle can preview; explicit inspection wins startup',()=>{expect(idleAvailable(['idle','walk'],'walk')).toBe(false);expect(idleAvailable(['idle_variant'],'idle')).toBe(false);expect(idleAvailable(['idle'],'idle')).toBe(true);expect(initialIdleAnimation(['walk','idle'],'walk',false)).toBe('idle');expect(initialIdleAnimation(['walk','idle'],'walk',true)).toBe('walk');expect(initialIdleAnimation(['walk'],'walk',false)).toBe('walk');expect(initialIdleAnimation([],null,false)).toBe(null);});
@@ -603,5 +603,29 @@ test('#658 literal actions preserve properties, handler identity, native Event/t
   expect(event.defaultPrevented).toBe(true);
   created[1]!.onclick!.call(created[1]!);
   expect(seen[1]).toEqual({receiver:actions[1],event:undefined});
+ }finally{if(descriptor)Object.defineProperty(globalThis,'document',descriptor);else Reflect.deleteProperty(globalThis,'document');}
+});
+
+
+test('#659 labelledControl preserves literal trailing space and supplied Node identity in both orders',()=>{
+ const descriptor=Object.getOwnPropertyDescriptor(globalThis,'document');
+ const created:{tag:string;children:unknown[]}[]=[];
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement(tag:string){
+  const element={tag,children:[] as unknown[],append(...children:unknown[]){this.children.push(...children);}};
+  created.push(element);return element;
+ }}});
+ try{
+  const control={} as HTMLElement,label={} as Node;
+  const literal=labelledControl('Kind ',control);
+  const nodeFirst=labelledControl(label,control);
+  const controlFirst=labelledControl(label,control,true);
+  expect(Object.is(literal,created[0])).toBe(true);
+  expect(Object.is(nodeFirst,created[1])).toBe(true);
+  expect(Object.is(controlFirst,created[2])).toBe(true);
+  expect(created.map(item=>item.tag)).toEqual(['label','label','label']);
+  expect(created[0]!.children).toEqual(['Kind ',control]);
+  expect(created[0]!.children[1]).toBe(control);
+  expect(created[1]!.children[0]).toBe(label);expect(created[1]!.children[1]).toBe(control);
+  expect(created[2]!.children[0]).toBe(control);expect(created[2]!.children[1]).toBe(label);
  }finally{if(descriptor)Object.defineProperty(globalThis,'document',descriptor);else Reflect.deleteProperty(globalThis,'document');}
 });

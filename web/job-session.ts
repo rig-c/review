@@ -29,6 +29,7 @@ import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigS
     type JobRigDraw, type JobRigDrawState} from './job-rig-capture.ts';
 import {advancePlayback} from './playback-clock.ts';
 import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
+import {labelledControl} from './view-controls.ts';
 import {SENTINELS} from './parts-render.ts';
 import {CanvasRenderer} from '@rig-c/play';
 import {JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
@@ -1743,9 +1744,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         catch { /* The in-memory retained draft remains source-bound. */ }
     }
     function inputLabel(key: string, input: HTMLElement): HTMLElement {
-        const label = node('label');
-        label.append(node('span', key), input);
-        return label;
+        return labelledControl(node('span', key), input);
     }
     function selectValues(values: readonly string[], labels: readonly string[]): HTMLSelectElement {
         const select = node('select');

@@ -7,7 +7,7 @@
  * its frame. The map starts from a loaded `rig-pose-map/1` file (read in the page, sent by content) or the body-18
  * chains with no bone picked. Review authors no keys: the motion is the producer's.
  */
-import {panelNode as node,panelMake as make} from './view-controls.ts';
+import {panelNode as node,panelMake as make,labelledControl} from './view-controls.ts';
 import {DEFAULT_CLEAN,DEFAULT_FLAGS,POSE_MAP_SCHEMA,type RetargetFlags,type RetargetLine} from '../src/retarget.ts';
 import type {RetargetJobView,RetargetStatusView,RebuildRefusal} from './rebuild-client.ts';
 
@@ -60,7 +60,7 @@ export interface RetargetPanel {
 }
 
 // A checkbox reads after its box; a field after its name.
-const labelled=(text:string,control:HTMLElement)=>control instanceof HTMLInputElement&&control.type==='checkbox'?make('label',{},control,text):make('label',{},text,control);
+const labelled=(text:string,control:HTMLElement)=>labelledControl(text,control,control instanceof HTMLInputElement&&control.type==='checkbox');
 const numberInput=(id:string,value:number,step:string,label:string)=>{const n=make('input',{id,type:'number',step,value:String(value)});n.setAttribute('aria-label',label);return n;};
 const checkbox=(id:string,checked=false)=>make('input',{id,type:'checkbox',checked});
 

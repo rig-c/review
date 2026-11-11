@@ -8,7 +8,7 @@
  * A kind the rig cannot offer (no mesh slot, no ik or transform constraint, fewer than two slots) is disabled with the
  * reason. Scene targets, stage-point targets, the part exception lists and waivers (`may_fold`) are not written here.
  */
-import {panelNode as node,panelMake as make} from './view-controls.ts';
+import {panelNode as node,panelMake as make,labelledControl as labelled} from './view-controls.ts';
 import {KIND_FIELDS,REQUIREMENT_KINDS,REQUIREMENT_NAME,REQUIREMENTS_CONTEXT_SCHEMA,requirementEntry,requirementsDocument,requirementsFileText,type BonePoint,type Requirement,type RequirementKind,type RequirementRow,type RequirementsBuild,type RequirementsContext} from '../src/requirements.ts';
 
 export interface RequirementsCatalogView {status:'ready'|'unavailable';reason:string|null;bones:string[];slots:string[];meshes:Record<string,string[]>;slotBones:Record<string,string>;constraints:{name:string;type:'ik'|'transform';bones:string[];drives:string[]}[];animations:{name:string;duration:number|null}[];scratch:string|null}
@@ -79,7 +79,6 @@ export function measuredFor(row:RequirementRow|undefined,field:string):number|nu
 }
 
 const options=(select:HTMLSelectElement,values:readonly string[],label=(v:string)=>v)=>{const keep=select.value;select.replaceChildren(...values.map(v=>make('option',{value:v,textContent:label(v)})));if(values.includes(keep))select.value=keep;};
-const labelled=(text:string,control:HTMLElement)=>make('label',{},text,control);
 
 export function bindRequirementsPanel(deps:RequirementsPanelDeps):RequirementsPanel {
  const body=node('requirements-body');
