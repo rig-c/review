@@ -65,7 +65,7 @@ export function bindPartsSubject(host:{
 }) {
  const data=host.data,hidden=new Set<string>(),images=new Map<number,Promise<HTMLImageElement>>();
  let selected:string|null=null,solo=false,comparison:PartsComparison=defaultPartsComparison(),token=0,disposed=false,busy=false,failed=false;
- let drawnFrame:{w:number;h:number}|null=null;
+ let drawnFrame:{w:number;h:number}|null=null,drawnReferenceFrame:{w:number;h:number}|null=null;
  let original:Promise<HTMLImageElement>|null=null,comments:ReturnType<typeof bindStageComments<PartsIssue,PartsPose>>|null=null;
  const makeCanvas=(w:number,h:number)=>Object.assign(document.createElement('canvas'),{width:w,height:h});
  const item=()=>data.items.find(item=>item.name===selected)??data.items[0]!;
@@ -92,8 +92,15 @@ export function bindPartsSubject(host:{
   const bitmaps:ImageBitmap[]=[];
   try{
    if(data.mode!=='parts'||!data.items.length)throw new Error('PARTS_IMAGE_UNAVAILABLE');
-   const frame=box(),shown=assembled()?data.items.filter(item=>!hidden.has(item.name)):[item()];
+   const frame=box(),referenceBox=selected===null?null:item(),shown=assembled()?data.items.filter(item=>!hidden.has(item.name)):[item()];
    const layers=await Promise.all(shown.map(async entry=>({box:entry,image:await image(entry)})));
+   let reference:HTMLCanvasElement|null=null;
+   if(data.painting&&data.rigSize){
+    const original=await painting();
+    reference=makeCanvas(referenceBox?.w??original.naturalWidth,referenceBox?.h??original.naturalHeight);
+    if(referenceBox)paintPaintingCrop(reference.getContext('2d')!,original,paintingRectangle(referenceBox,data.rigSize,data.painting),referenceBox.w,referenceBox.h,'checker');
+    else reference.getContext('2d')!.drawImage(original,0,0);
+   }
    const raster=makeCanvas(frame.w,frame.h),ctx=raster.getContext('2d')!;
    if(comparison.mode==='difference'){
     const differences=[];
@@ -110,9 +117,10 @@ export function bindPartsSubject(host:{
    if(host.mesh())for(const layer of layers){if(!layer.box.mesh)continue;ctx.save();if(assembled())ctx.translate(layer.box.x,layer.box.y);paintMesh(ctx,layer.image,layer.box.w,layer.box.h,layer.box.mesh,makeCanvas,{tint:selected===null||selected===layer.box.name});ctx.restore();}
    if(disposed||navigation!==token)return;
    host.canvas.width=frame.w;host.canvas.height=frame.h;host.canvas.getContext('2d')!.drawImage(raster,0,0);
+   if(reference){host.referenceCanvas.width=reference.width;host.referenceCanvas.height=reference.height;host.referenceCanvas.getContext('2d')!.drawImage(reference,0,0);drawnReferenceFrame={w:reference.width,h:reference.height};}
    drawnFrame={w:frame.w,h:frame.h};failed=false;host.drawn({state:'loaded'});host.el('rig-empty').hidden=true;host.el('rig-label').textContent=t(assembled()?'Assembled parts':'Selected part');
    host.viewport.fitCamera();comments?.refresh();
-  }catch(error){if(!disposed&&navigation===token){failed=true;drawnFrame=null;host.drawn({state:'failed',reason:error instanceof Error?error.message:'PARTS_PAINT_FAILED'});host.canvas.getContext('2d')?.clearRect(0,0,host.canvas.width,host.canvas.height);host.message(error instanceof Error?error.message:'PARTS_PAINT_FAILED',true);throw error;}}
+  }catch(error){if(!disposed&&navigation===token){failed=true;drawnFrame=null;drawnReferenceFrame=null;host.drawn({state:'failed',reason:error instanceof Error?error.message:'PARTS_PAINT_FAILED'});host.canvas.getContext('2d')?.clearRect(0,0,host.canvas.width,host.canvas.height);host.referenceCanvas.getContext('2d')?.clearRect(0,0,host.referenceCanvas.width,host.referenceCanvas.height);host.message(error instanceof Error?error.message:'PARTS_PAINT_FAILED',true);throw error;}}
   finally{for(const bitmap of bitmaps)bitmap.close();if(navigation===token){busy=false;host.el('stage-layout').setAttribute('aria-busy','false');comments?.refresh();}}
  }
  const redraw=()=>{void paint().catch(()=>{});};
@@ -136,7 +144,7 @@ export function bindPartsSubject(host:{
   restore:async raw=>{const issue=parsePartsIssue(raw,false,true,false);assertPartsIssueBinding(issue,sourceItems(),data.sourceHash);selected=issue.parts[0]!.name;solo=issue.view.mode==='item';comparison=issue.view.comparison??defaultPartsComparison();host.restoreMesh(issue.view.mesh);if(issue.view.visibleLayers){const visible=new Set(issue.view.visibleLayers.map(part=>part.name));hidden.clear();for(const item of data.items)if(!visible.has(item.name))hidden.add(item.name);}await paint();host.viewport.writeCamera('rig',issue.view.camera);host.viewport.fitCamera();host.selectionChanged();},
   feedback:()=>host.issues,locked:host.locked,refusal:host.refusal,add:issue=>host.issues.push(issue),changed:host.changed,error:host.message,blocked:()=>busy||failed||disposed,busy:()=>busy,codec});
  return {
-  frameSize:(target:CameraTarget)=>target==='rig'?drawnFrame:data.painting?{w:data.painting.width,h:data.painting.height}:null,
+  frameSize:(target:CameraTarget)=>target==='rig'?drawnFrame:drawnReferenceFrame,
   image:(index:number)=>{const entry=data.items.find(item=>item.index===index);if(!entry)return Promise.reject(new Error('PARTS_IMAGE_UNAVAILABLE'));return image(entry);},
   selected:()=>selected,solo:()=>solo,visible:(name:string)=>!hidden.has(name),issues:()=>host.issues,
   select:(name:string|null)=>{selected=name;if(name===null)solo=false;redraw();host.selectionChanged();},isolate:(value:boolean)=>{solo=value;redraw();host.selectionChanged();},
@@ -144,7 +152,7 @@ export function bindPartsSubject(host:{
   differenceAvailable:()=>data.differenceAvailable&&!!data.painting&&!failed,
   comparison:()=>comparison,setComparison:(mode:PartsComparison['mode'])=>{comparison=mode==='difference'?{mode,opacity:comparison.opacity,threshold:0}:{mode,opacity:comparison.opacity};redraw();},
   opacity:(value:number)=>{comparison.opacity=value;redraw();},paint,redraw,
-  async ready(){if(data.painting){const original=await painting();host.referenceCanvas.width=original.naturalWidth;host.referenceCanvas.height=original.naturalHeight;host.referenceCanvas.getContext('2d')!.drawImage(original,0,0);}await paint();},
+  async ready(){if(data.painting)host.viewport.state.cameraSync=true;await paint();},
   dispose(){disposed=true;++token;comments?.dispose();images.clear();},
  };
 }
