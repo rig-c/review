@@ -224,7 +224,7 @@ test('each panel header is the first child of its panel and carries the sticky c
 test('rig mounts distinct primary and secondary toolbar regions using the shared control constructor',async()=>{
  const html=await indexHtml(),main=await mainSource();
  for(const seam of ['data-workspace-comment','data-workspace-layers','data-workspace-view-tools','data-workspace-camera'])expect(html).toContain(seam);
- expect(main).toMatch(/createViewControls\(\{layout:'rigStep1',viewSwitch:\{currentMode:'compare',groups:\[\{modes:\[\s*\{id:'compare',labelKey:'Side by side',pressed:true\},\s*\{id:'reference',labelKey:'Reference',pressed:false\},\s*\{id:'rig',labelKey:'Rig',pressed:false\}/);
+ expect(main).toContain("createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(id=>setView(id as SingleLayout))})");
  for(const id of ['layer-images','layer-mesh','layer-bones'])expect(rigLayerControlsMarkup).toContain(`id="${id}"`);
  expect(sharedCommentMarkup.match(/id="stage-comment"/g)?.length).toBe(1);
  const css=await stylesCss();expect(css).toContain('.workspace-main-toolbar');expect(css).toContain('.workspace-secondary-toolbar');
