@@ -17,14 +17,17 @@ import {
 } from './job-contract.ts';
 import { JobError } from './job-store.ts';
 import type { JobSession } from './job-session.ts';
-import { JOB_COMMENTS_ACT_SCHEMA, type JobComment, type JobCommentAnchor, type JobCommentsAct,
+import { JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, type JobCommentContext, type JobContextComment,
+  type JobContextCommentsAct, type JobComment, type JobCommentAnchor, type JobCommentsAct,
   type SourceV3, type JobRigStill } from './job-contract.ts';
 import { parseFeedback } from './session.ts';
 import { parsePartsIssue } from './parts-comment.ts';
-import { parseStageComment, hasStageComment, projectComments } from './stage-comment.ts';
+import { parseStageComment, hasStageComment, projectComments, commentModes } from './stage-comment.ts';
 import { validatePngCrop, validatePngCropMetadata } from './comment-crops.ts';
 import {parseJobImageSetBinding} from './job-image-set.ts';
 import {parseJobPartsIdentity} from './job-source.ts';
+import {parseControlPart, parseControlView} from './control.ts';
+import {EMIT_UNPINNED_CREATE_FIELDS} from './create-pin-gate.ts';
 
 export type {
   JobInterviewJson,
@@ -1269,24 +1272,91 @@ function parseCommentAnchor(raw: unknown, text: string, source?: SourceV3 | stri
 
 /** Structural/source-identity decoding only. Original asset freshness remains with the retained-source owner. */
 export function parseComments(value: unknown, source?: SourceV3 | string): JobComment[] {
+  return decodeComments(value, source, false);
+}
+
+function decodeComments(value: unknown, source: SourceV3 | string | undefined, withContext: false): JobComment[];
+function decodeComments(value: unknown, source: SourceV3 | string | undefined, withContext: true): JobContextComment[];
+function decodeComments(value: unknown, source: SourceV3 | string | undefined, withContext: boolean): JobContextComment[] {
   return asCode(() => {
     if (!Array.isArray(value) || value.length > 1000) throw new JobError('JOB_ACT_INVALID');
     const ids = new Set<string>();
-    const comments = value.map(raw => {
-      const item = commentsObject(raw, ['text'], ['anchor']);
+    const comments: JobContextComment[] = value.map(raw => {
+      const item = commentsObject(raw, ['text'], withContext ? ['anchor', 'context'] : ['anchor']);
       const text = parseActWords(item.text, 'JOB_ACT_INVALID');
       if (!text.trim()) throw new JobError('JOB_ACT_INVALID');
-      if (!Object.hasOwn(item, 'anchor')) return {text};
+      const context = Object.hasOwn(item, 'context') ? {context: parseCommentContext(item.context, source)} : {};
+      if (!Object.hasOwn(item, 'anchor')) return {text, ...context};
       const anchor = parseCommentAnchor(item.anchor, text, source);
       if ('id' in anchor) {
         if (ids.has(anchor.id)) throw new JobError('JOB_ACT_INVALID');
         ids.add(anchor.id);
       }
-      return {text, anchor};
+      return {text, anchor, ...context};
     });
-    projectComments(comments);
+    // The signed projection covers text and anchor only; context restores a view and is not signed text.
+    projectComments(comments.map(({text, anchor}) => anchor === undefined ? {text} : {text, anchor}));
     return comments;
   }, 'JOB_ACT_INVALID');
+}
+
+/** act@7 comment context. Each field reuses the decoder of the pin or restore path it copies. */
+function parseCommentContext(raw: unknown, source?: SourceV3 | string): JobCommentContext {
+  const item = commentsObject(raw, [], ['subject', 'mode', 'tab', 'part', 'region', 'viewMode', 'camera', 'frame']);
+  if (!Object.keys(item).length) throw new JobError('JOB_ACT_INVALID');
+  const out: Record<string, unknown> = {};
+  if ('subject' in item) {
+    const subject = commentsObject(item.subject, ['ask', 'sourceHash'], ['selector']);
+    const ask = parseJobSubject(subject.ask), sourceHash = jobSha(subject.sourceHash);
+    const selector = 'selector' in subject ? parseJobSelector(subject.selector) : undefined;
+    if (selector === null) throw new JobError('JOB_ACT_INVALID');
+    const bound = typeof source === 'string' ? source : source?.sourceHash;
+    if (bound && sourceHash !== bound) throw new JobError('JOB_ACT_SOURCE_STALE');
+    if (selector && source && typeof source !== 'string' && !('record' in source) && source.subject !== 'image-set' &&
+        JSON.stringify(selector) !== JSON.stringify(source.selector)) throw new JobError('JOB_ACT_SOURCE_STALE');
+    out.subject = {ask, sourceHash, ...(selector ? {selector} : {})};
+  }
+  if ('mode' in item) {
+    if (!(commentModes as readonly unknown[]).includes(item.mode)) throw new JobError('JOB_ACT_INVALID');
+    out.mode = item.mode;
+  }
+  if ('tab' in item) {
+    // The inspector values parseBookmark accepts (web/inspection-persistence.ts).
+    if (!['view', 'rig', 'playback', 'feedback'].includes(item.tab as string)) throw new JobError('JOB_ACT_INVALID');
+    out.tab = item.tab;
+  }
+  if ('part' in item) {
+    const part = parseControlPart(item.part);
+    if (!part) throw new JobError('JOB_ACT_INVALID');
+    out.part = part;
+  }
+  if ('region' in item) {
+    const region = commentsObject(item.region, ['x', 'y', 'width', 'height']);
+    for (const axis of ['x', 'y', 'width', 'height']) {
+      const n = region[axis];
+      if (typeof n !== 'number' || !Number.isFinite(n) || Math.abs(n) > Number.MAX_SAFE_INTEGER) throw new JobError('JOB_ACT_INVALID');
+    }
+    if ((region.width as number) < 0 || (region.height as number) < 0) throw new JobError('JOB_ACT_INVALID');
+    out.region = {x: region.x, y: region.y, width: region.width, height: region.height};
+  }
+  if ('viewMode' in item) {
+    if (item.viewMode !== 'item' && item.viewMode !== 'assembled') throw new JobError('JOB_ACT_INVALID');
+    out.viewMode = item.viewMode;
+  }
+  if ('camera' in item) {
+    const space = (item.camera as {space?: unknown} | null)?.space;
+    if (space !== 'world' && space !== 'image') throw new JobError('JOB_ACT_INVALID');
+    const cameras = {rig: null, a: null, b: null, reference: null, [space === 'world' ? 'rig' : 'reference']: item.camera};
+    const view = parseControlView({schema: 'rig-review-view/1', cameras});
+    out.camera = space === 'world' ? view.cameras.rig : view.cameras.reference;
+  }
+  if ('frame' in item) {
+    const frame = commentsObject(item.frame, ['index', 'basis']);
+    if (!Number.isSafeInteger(frame.index) || (frame.index as number) < 0 ||
+        (frame.basis !== 'producer' && frame.basis !== 'reference')) throw new JobError('JOB_ACT_INVALID');
+    out.frame = {index: frame.index, basis: frame.basis};
+  }
+  return out as JobCommentContext;
 }
 
 function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
@@ -1331,9 +1401,28 @@ function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
 
 /** Public @6 decoder. Current UI finalizers continue to emit their existing versions. */
 export function parseCommentsAct(raw: unknown): JobCommentsAct {
+  return decodeCommentsAct(raw, false) as JobCommentsAct;
+}
+
+/** Public @7 decoder: the @6 rules plus an optional `context` on each comment. @6 input refuses. */
+export function parseContextCommentsAct(raw: unknown): JobContextCommentsAct {
+  return decodeCommentsAct(raw, true) as JobContextCommentsAct;
+}
+
+/** The comments act a writer sends. With EMIT_UNPINNED_CREATE_FIELDS off, contexts are dropped and @6 goes out. */
+export function commentsActForEmission(act: JobCommentsAct | JobContextCommentsAct,
+  emitUnpinned: boolean = EMIT_UNPINNED_CREATE_FIELDS): JobCommentsAct | JobContextCommentsAct {
+  const value = act.value as {comments: readonly JobContextComment[]};
+  const comments = value.comments.map(({context, ...comment}) => emitUnpinned && context ? {...comment, context} : comment);
+  const schema = emitUnpinned && comments.some(comment => 'context' in comment) ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA;
+  const next = {...structuredClone(act), schema, value: {...structuredClone(act.value), comments: structuredClone(comments)}};
+  return schema === JOB_COMMENTS_ACT_SCHEMA ? parseCommentsAct(next) : parseContextCommentsAct(next);
+}
+
+function decodeCommentsAct(raw: unknown, withContext: boolean): JobCommentsAct | JobContextCommentsAct {
   return asCode(() => {
     const item = commentsObject(raw, ['schema', 'actId', 'jobId', 'askId', 'publicationId', 'kind', 'authority', 'at', 'source', 'value'], ['still']);
-    if (item.schema !== JOB_COMMENTS_ACT_SCHEMA) throw new JobError('JOB_ACT_INVALID');
+    if (item.schema !== (withContext ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA)) throw new JobError('JOB_ACT_INVALID');
     for (const key of ['actId', 'jobId', 'askId', 'publicationId']) jobId(item[key]);
     parseHumanAuthority(item.authority, 'JOB_ACT_INVALID');
     if (typeof item.at !== 'string' || !Number.isFinite(Date.parse(item.at))) throw new JobError('JOB_ACT_INVALID');
@@ -1347,8 +1436,10 @@ export function parseCommentsAct(raw: unknown): JobCommentsAct {
     if (!keys) throw new JobError('JOB_ACT_INVALID');
     if (source.subject === 'image-set' && item.kind !== 'review-verdict') throw new JobError('JOB_ACT_INVALID');
     const value = commentsObject(item.value, keys);
-    const comments = parseComments(value.comments, source);
+    const comments = withContext ? decodeComments(value.comments, source, true) : parseComments(value.comments, source);
     if (comments.some(comment => comment.anchor && 'side' in comment.anchor)) throw new JobError('JOB_ACT_INVALID');
+    if ((comments as readonly JobContextComment[]).some(comment => comment.context?.subject &&
+        comment.context.subject.ask.kind !== item.kind)) throw new JobError('JOB_ACT_INVALID');
     if (item.kind === 'checkpoint') {
       const checkpointId = jobId(value.checkpointId), planStepId = jobId(value.planStepId);
       if (typeof value.outcome !== 'string' || !['pass', 'fail'].includes(value.outcome)) throw new JobError('JOB_ACT_INVALID');
@@ -1377,7 +1468,7 @@ export function parseCommentsAct(raw: unknown): JobCommentsAct {
           (still.frame === 'setup' ? 'animation' in still : typeof still.frame !== 'number' || !Number.isFinite(still.frame) ||
             still.frame < 0 || typeof still.animation !== 'string' || !still.animation)) throw new JobError('JOB_ACT_INVALID');
     } else if ('still' in item) throw new JobError('JOB_ACT_INVALID');
-    return {...structuredClone(item), source, value: {...value, comments}} as unknown as JobCommentsAct;
+    return {...structuredClone(item), source, value: {...value, comments}} as unknown as JobCommentsAct | JobContextCommentsAct;
   }, 'JOB_ACT_INVALID');
 }
 

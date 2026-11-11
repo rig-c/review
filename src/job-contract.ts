@@ -17,6 +17,7 @@ import type { Feedback, ReviewSession } from './session.ts';
 import type { CompareFeedback, CompareSession } from './compare-session.ts';
 import type { MarkRegion } from './stage-comment.ts';
 import type { PartsVerdict } from './parts-view.ts';
+import type { ControlNumericCamera, ControlPart } from './control.ts';
 
 export const JOB_API_SCHEMA = 'rig-review/job-api@2' as const;
 export const JOB_API_V3_SCHEMA = 'rig-review/job-api@3' as const;
@@ -29,6 +30,8 @@ export const JOB_RECORD_ACT_SCHEMA = 'rig-review/act@4' as const;
 export const JOB_PARTS_VERDICT_ACT_SCHEMA = 'rig-review/act@5' as const;
 /** Read/parse contract only until the Create comments consumer is published. */
 export const JOB_COMMENTS_ACT_SCHEMA = 'rig-review/act@6' as const;
+/** @6 plus an optional per-comment `context`. Emitted only behind EMIT_UNPINNED_CREATE_FIELDS (#714). */
+export const JOB_COMMENT_CONTEXT_ACT_SCHEMA = 'rig-review/act@7' as const;
 export const REVIEW_COMMENTS_SESSION_SCHEMA = 'rig-review-session/2' as const;
 export const REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA = 'rig-review-compare-session/2' as const;
 export const PARTS_COMMENTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/5' as const;
@@ -44,6 +47,32 @@ export type JobCommentImageAnchor = { readonly name: string } | {
 export type JobCommentAnchor = JobCommentFeedbackAnchor | JobCommentPartsAnchor | JobCommentImageAnchor
   | { readonly checkpointId: string; readonly planStepId: string };
 export interface JobComment { readonly text: string; readonly anchor?: JobCommentAnchor }
+/** Where a comment was made, so opening it can restore that view (#714, act@7).
+ * Every field is optional and copies a value an existing pin or restore path already carries.
+ */
+export interface JobCommentContext {
+  /** The ask subject, its source hash and its version selector, bound to the act's own source. */
+  readonly subject?: {
+    readonly ask: JobSubject;
+    readonly sourceHash: JobSha256;
+    readonly selector?: JobSelector;
+  };
+  /** Workspace mode: StageComment.mode and InspectionSelection.mode. */
+  readonly mode?: 'setup' | 'animate' | 'compare';
+  /** Inspector tab: InspectionSelection.inspector. */
+  readonly tab?: 'view' | 'rig' | 'playback' | 'feedback';
+  /** Selected part: InspectionSelection.part. */
+  readonly part?: ControlPart;
+  /** Marked region in world space: StageComment.world and PartsIssue.rigRegion. */
+  readonly region?: MarkRegion;
+  /** Parts view mode: PartsIssue.view.mode. */
+  readonly viewMode?: 'item' | 'assembled';
+  /** Numeric camera: StageComment.camera. */
+  readonly camera?: ControlNumericCamera;
+  /** Explicit frame: StageComment.frame. */
+  readonly frame?: { readonly index: number; readonly basis: 'producer' | 'reference' };
+}
+export interface JobContextComment extends JobComment { readonly context?: JobCommentContext }
 export interface JobCommentsActValues {
   readonly checkpoint: { readonly checkpointId: string; readonly planStepId: string;
     readonly outcome: 'pass' | 'fail'; readonly comments: readonly JobComment[] };
@@ -58,6 +87,13 @@ export type JobCommentsAct = {
     readonly actId: string; readonly jobId: string; readonly askId: string; readonly publicationId: string;
     readonly kind: Kind; readonly authority: JobHumanAuthority; readonly at: string;
     readonly source: Exclude<SourceV3, OptionSource>; readonly value: JobCommentsActValues[Kind]; readonly still?: JobRigStill;
+  }
+}[keyof JobCommentsActValues];
+/** act@7: the @6 envelope whose comments may carry `context`. */
+export type JobContextCommentsAct = {
+  [Kind in keyof JobCommentsActValues]: Omit<Extract<JobCommentsAct, { readonly kind: Kind }>, 'schema' | 'value'> & {
+    readonly schema: typeof JOB_COMMENT_CONTEXT_ACT_SCHEMA;
+    readonly value: Omit<JobCommentsActValues[Kind], 'comments'> & { readonly comments: readonly JobContextComment[] };
   }
 }[keyof JobCommentsActValues];
 export type ReviewCommentsSession = Omit<ReviewSession, 'schema' | 'feedback' | 'checkpoints'> & {
