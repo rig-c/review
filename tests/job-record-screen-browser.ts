@@ -1,6 +1,6 @@
 /** #750 ordinary Nova only. Real shipped UI paths and retained record reader/writer doubles.
- * Each comparison reads two independently written act files; no normalization or reconstruction.
- * EN/KO, four ask kinds, picture/empty, 1600x1000; no installed-producer conformance claim. */
+ * Interview-only shared screen proof; approval modals are covered by job-record-modal-browser.ts.
+ * EN/KO, interview picks, picture/empty, 1600x1000; no installed-producer conformance claim. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {existsSync,readdirSync} from 'node:fs';
@@ -38,19 +38,18 @@ try{
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
  for(const [width,height] of (interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]])){
  await page.setViewport(width!,height!);
- for(const kind of (interviewOnly?['interview-picks']:['checkpoint','signoff','reopen','interview-picks']) as RecordScreenKind[])for(const picture of [false,true]){
+ for(const kind of ['interview-picks'] as RecordScreenKind[])for(const picture of [false,true]){
   const fixture=await recordScreenFixture(kind,picture);const before=await jobInputHashes(fixture.root);
   try{
    for(const language of ['en','ko'] as const){
     const out=join(output,width+'x'+height,kind,picture?'picture':'empty',language);await mkdir(out,{recursive:true});fixture.output(out);
     const observation:Record<string,unknown>={kind,picture,language,width,height,sourceHash:fixture.display.publication.source.sourceHash,readerPhases:fixture.reader.calls.map(call=>call.phase),fixture:'synthetic trusted-host record reader and deterministic act writer'};
-    for(const mode of (kind==='interview-picks'?['one-screen']:['one-screen','job-window'])){
+    for(const mode of ['one-screen']){
      fixture.mode(mode);const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href);
-     if(mode==='job-window')await page.evaluate(`(async()=>{const module=await import(new URL('job.js',location.href).href);await module.mountJobSession(document.body,true);return true;})()`);
      const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
      await wait(`!!document.querySelector(${JSON.stringify(selector+' fieldset:not(:disabled)')})`,kind+'/'+mode+'/receipt');
      if(mode==='one-screen'){
-      await wait(`!!document.querySelector('dialog[open] '+${JSON.stringify(selector)})`,kind+'/dialog');
+      if(!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('dialog[open] '+${JSON.stringify(selector)})`,kind+'/dialog');
       if(picture)await wait(`!!document.querySelector('#rig-root canvas')`,kind+'/picture');
       const state:any=await page.evaluate<any>(`(()=>{const dialog=document.querySelector('dialog[open]'),form=document.querySelector(${JSON.stringify(selector)}),box=dialog.getBoundingClientRect();return {language:document.documentElement.lang,width:innerWidth,height:innerHeight,legacySeen:globalThis.__record750legacySeen,legacyForms:document.querySelectorAll('[data-job-forms]').length,topbars:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,formInsideNativeDialog:!!form.closest('dialog[open]'),focusContained:dialog.contains(document.activeElement),dialogRect:{x:box.x,y:box.y,width:box.width,height:box.height},noPicture:document.getElementById('rig-empty').textContent,backgroundStatus:document.getElementById('message')?.textContent??'',emptyListText:document.querySelector('[data-part-list]')?.textContent??'',saveState:document.getElementById('dirty').textContent,controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(node=>node.id)};})()`);
       assert.equal(state.language,language);assert.equal(state.width,width);assert.equal(state.height,height);assert.equal(state.legacySeen,false);assert.equal(state.legacyForms,0);assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.formInsideNativeDialog,true);assert.equal(state.focusContained,true);
@@ -97,12 +96,7 @@ try{
      await writeFile(join(out,mode+'-submitted.png'),await page.screenshot());
      await page.goto('about:blank');
     }
-    if(kind!=='interview-picks'){
-    assert.deepEqual(observation['one-screenControls'],observation['job-windowControls']);
-    const one=await readFile(join(out,'one-screen.json')),legacy=await readFile(join(out,'job-window.json'));
-    assert.deepEqual(one,legacy,'actual persisted act bytes for '+kind+'/'+language+'/'+picture);
-    observation.persistedAct={byteEqual:true,bytes:one.length,oneScreenSha256:sha(one),jobWindowSha256:sha(legacy),oneScreenFile:join(out,'one-screen.json'),jobWindowFile:join(out,'job-window.json')};
-    }else{const bytes=await readFile(join(out,'one-screen.json'));observation.persistedAct={bytes:bytes.length,sha256:sha(bytes),file:join(out,'one-screen.json')};}
+    const one=await readFile(join(out,'one-screen.json'));observation.persistedAct={bytes:one.length,oneScreenSha256:sha(one),oneScreenFile:join(out,'one-screen.json')};
     await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');cases.push(observation);
     console.log('750_BROWSER_CASE_PASS '+kind+' '+(picture?'picture':'empty')+' '+language+' bytes='+(observation.persistedAct as {bytes:number}).bytes);
    }
@@ -112,7 +106,7 @@ try{
  }
  assert.equal(exceptions.length,0,'no browser exceptions');
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
- const result={cases:cases.length,persistedByteComparisons:interviewOnly?0:cases.length-4,askKinds:interviewOnly?1:4,languages:['en','ko'],backdrops:['empty','picture'],viewports:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],exceptions,mutations,browserWorkers:'single-process/no-zygote; one renderer; raster threads=1; JS heap 1024MiB'};
+ const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:0,askKinds:1,languages:['en','ko'],backdrops:['empty','picture'],viewports:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],exceptions,mutations,browserWorkers:'single-process/no-zygote; one renderer; raster threads=1; JS heap 1024MiB'};
  await writeFile(join(output,'result.json'),JSON.stringify(result,null,2)+'\n');console.log('750_BROWSER_PASS '+JSON.stringify(result));
 }catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,completedCases:cases},null,2)+'\n');if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await rm(profile,{recursive:true,force:true});}

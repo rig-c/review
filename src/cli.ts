@@ -18,7 +18,7 @@ import { readFeedbackSession, readFeedbackCompareSession } from './session-histo
 import { startServer } from './server.ts';
 import { loadCompare } from './compare.ts';
 import { startCompareServer } from './compare-server.ts';
-import { loadPartsView, readVerdict, readPartsVerdictForCli, readPartsVerdictJson, exportPartsVerdict, exportPartsCorrection, assertPartsUnchanged, type PartsViewOptions } from './parts-view.ts';
+import { loadPartsView, readVerdict, readPartsVerdictForCli, readPartsVerdictJson, exportPartsVerdict, exportPartsCorrection, assertPartsUnchanged, assertPartsCanOpen, type PartsViewOptions } from './parts-view.ts';
 import { startPartsServer } from './parts-server.ts';
 import { readSession, parseSession, sessionFile, type Feedback } from './session.ts';
 import { readCompareSession } from './compare-session.ts';
@@ -203,8 +203,8 @@ function commandHelpRequested(args:readonly string[],command:'open'|'review'|'ch
  }
  return false;
 }
-const partsUsage='Usage: rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--by <name>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       A directory holding parts.json (or a build root whose rig/ holds it) opens in parts mode, before rigging; a review package or check/ folder opens its atlas.\n       The sign-off is written to parts-review.json beside parts.json (or the model), or to --verdict.';
-/** `rig-review parts` (#348): the parts and atlas view, served in the foreground; exits when its last tab closes. */
+const partsUsage='Usage: rig-review parts <build root | parts dir | review package> [--rig <file>] [--mesh-report <file>] [--check <file>] [--verdict <file>] [--painting <png>] [--by <name>] [--format json|issue] [--correction <item id> --parts-file <inventory> [--part-note <part>]] [--port <n>]\n       A directory holding parts.json (or a build root whose rig/ holds it) opens in parts mode, before rigging. Atlas-only inputs refuse PARTS_ATLAS_NOT_CARRIED; open the rig review for inspection.\n       --format json|issue still reads saved parts or atlas verdicts. The sign-off is written to parts-review.json beside parts.json, or to --verdict.';
+/** `rig-review parts` (#348): parts inspection in the foreground, or read-only parts/atlas verdict export. */
 async function partsCommand(args:string[]){
  const input=args.shift();if(!input||input==='--help'||input==='-h'){console.log(partsUsage);return;}
  const options:PartsViewOptions={};let port=4317,format:'json'|'issue'|null=null;const seen=new Set<string>();
@@ -228,6 +228,7 @@ async function partsCommand(args:string[]){
  }
  if(format==='json'){process.stdout.write(await readPartsVerdictJson(pkg));return;}
  if(format){const verdict=await readPartsVerdictForCli(pkg);if(!verdict)throw new Error('PARTS_VERDICT_UNAVAILABLE: save a verdict first');process.stdout.write(exportPartsVerdict(verdict,format));return;}
+ assertPartsCanOpen(pkg);
  const capability=randomBytes(32).toString('hex');
  let outputFailure: Error | null = null;
  let rejectWrite: ((error: Error) => void) | undefined;

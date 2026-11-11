@@ -25,10 +25,7 @@ export function feedbackWordsComments(words: string): JobComment[] {
   return [{text: words}];
 }
 
-/** Pointed Parts issues keep their source-bound anchor; the summary becomes the comment text. */
-export function partsIssueComments(issues: readonly PartsIssue[]): {text: string; anchor: JobCommentPartsAnchor}[] {
-  return issues.map(({summary, ...anchor}) => ({text: summary, anchor: structuredClone(anchor)}));
-}
+export {partsIssueComments} from './parts-comment.ts';
 
 /** A blank note has no comment form: it maps to no comments, never to a padded entry. */
 export function noteComments(words: string): JobComment[] {

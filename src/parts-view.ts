@@ -1,7 +1,7 @@
 /**
  * The parts and atlas view (#348): every part as an image, before any rig is built, and the atlas a built rig ships.
  *
- * Two inputs open it:
+ * Two inputs can be read (only parts mode opens the parts workspace):
  * - **parts mode** — a parts package as rig-parts assemble writes it: `parts.json` (draw order, back first) beside
  *   `parts/<name>.png`, each PNG cropped to its own box at `x`/`y` in rig pixels;
  * - **atlas mode** — a review package (or rig-parts build root) whose compiled model declares `pages[].regions[]`.
@@ -518,6 +518,11 @@ export async function loadPartsView(input: string, options: PartsViewOptions = {
     if (existsSync(join(abs, 'rig', 'parts.json')) && !existsSync(join(abs, 'review.json'))) return checkedVerdict(await loadPartsMode(join(abs, 'rig'), options));
   }
   return checkedVerdict(await loadAtlasMode(input, options));
+}
+
+/** Opening is narrower than loading: keep embedded atlas inspection and saved verdict reads available. */
+export function assertPartsCanOpen(pkg: Pick<PartsViewPackage, 'mode'>): void {
+  if (pkg.mode === 'atlas') refuse('PARTS_ATLAS_NOT_CARRIED', 'atlas inspection is not available in the parts workspace; open the rig review instead.');
 }
 
 /** Compare names, real paths (including parent links), and filesystem identities before creating output. */
