@@ -540,6 +540,10 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
     const inputReadbacks: unknown[] = [];
     const cleanupErrors: string[] = [];
     let failure: unknown;
+    let activeDraftReadback: {
+        mode: string;
+        read: () => Promise<unknown>;
+    } | undefined;
     function recordCleanupError(stage: string, error: unknown) {
         cleanupErrors.push(stage + ': ' + String(error));
         if (failure === undefined)
@@ -791,6 +795,28 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
             const first = question.set.asks[0];
             const expected = { questionId: question.set.question, selections: question.set.asks.map((ask: any, index: number) => { const option = ask.options.find((item: any) => index === 0 ? item.kind === 'other' : item.kind === 'auto'); assert.ok(option); return { itemId: ask.id, optionId: option.id, otherText: index === 0 ? exactOther : null }; }), note: exactNote };
             await page.evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(selector)});for(const pick of ${JSON.stringify(expected.selections)}){[...f.querySelectorAll('input[type=radio]')].find(n=>n.name==='choice.'+pick.itemId&&n.value===pick.optionId).click();}f.querySelector(${JSON.stringify('textarea[name="other.' + first.id + '"]')}).value=${JSON.stringify(exactOther)};f.querySelector('textarea[name=note]').value=${JSON.stringify(exactNote)};f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+            const storageKey = 'rig-review-job-draft/1:' + host.session.jobId + ':' + publication.publicationId + ':' + publication.source.sourceHash;
+            const readDraft = () => page.evaluate<any>(`(()=>{
+                const sourceIdentity=source=>source?{sourceHash:source.sourceHash,projectHash:source.projectHash,
+                    optionSet:source.optionSet,record:source.record,package:source.package,selector:source.selector}:null;
+                const raw=localStorage.getItem(${JSON.stringify(storageKey)});
+                let saved=null,parseError=null;
+                try{saved=raw===null?null:JSON.parse(raw);}catch(error){parseError=String(error);}
+                const form=document.querySelector(${JSON.stringify(selector)});
+                return {storageKey:${JSON.stringify(storageKey)},present:raw!==null,parseError,
+                    stored:saved?{publicationId:saved.publicationId,sourceHash:saved.sourceHash,source:sourceIdentity(saved.source),
+                        forms:Array.isArray(saved.forms)?saved.forms.map(item=>({askId:item.askId,source:sourceIdentity(item.source),
+                            subject:item.subject,value:item.value,controls:item.controls})):null}:null,
+                    currentForm:form?{askId:form.dataset.jobAsk,fieldsetDisabled:form.querySelector('fieldset')?.disabled??null,
+                        controls:[...form.querySelectorAll('input[name],textarea[name],select[name]')].map(input=>({name:input.name,
+                            type:input.type,value:input.value,checked:input.type==='radio'?input.checked:undefined}))}:null};
+            })()`);
+            const persistence: any = { publicationBinding: { publicationId: publication.publicationId, sourceHash: publication.source.sourceHash,
+                    optionSet: publication.source.optionSet }, currentAsk: { askId: asked.askId, sourceHash: asked.source.sourceHash,
+                    optionSet: asked.source.optionSet, subject: asked.subject } };
+            Object.assign(observations[mode] as object, { persistence });
+            activeDraftReadback = { mode, read: readDraft };
+            persistence.before = await readDraft();
             const alternate = language === 'en' ? 'ko' : 'en';
             await page.evaluate(`(()=>{const language=document.querySelector('.job-header select');language.value=${JSON.stringify(alternate)};language.dispatchEvent(new Event('change',{bubbles:true}));})()`);
             assert.equal(await page.evaluate(`document.querySelector('.interview-option b').textContent`), (alternate === 'ko' ? koCatalog : enCatalog)['interview.recommended']);
@@ -798,6 +824,7 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
             await page.goto('about:blank');
             await page.goto(owner.href);
             await wait(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector + ' fieldset')}).disabled`);
+            persistence.after = await readDraft();
             assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector + ' textarea[name=note]')}).value`), exactNote);
             await page.evaluate(`document.querySelector(${JSON.stringify(selector)}).requestSubmit()`);
             let act: any;
@@ -816,6 +843,7 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
             await readbackInputs(managed);
             Object.assign(observations[mode] as object, { actId: act.actId, expected, sourceFiles: before });
             await closeManaged(managedHosts[managedHosts.length - 1]!);
+            activeDraftReadback = undefined;
         }
         observations.browserErrors = browserErrors;
         assert.deepEqual(browserErrors, []);
@@ -823,6 +851,14 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
     catch (error) {
         failure = error;
         observations.failure = String(error);
+        if (activeDraftReadback) {
+            try {
+                (observations[activeDraftReadback.mode] as any).persistence.onFailure = await activeDraftReadback.read();
+            }
+            catch (captureError) {
+                recordCleanupError('draft binding readback', captureError);
+            }
+        }
         try {
             await writeFile(join(output, 'failure.png'), await page.screenshot());
         }

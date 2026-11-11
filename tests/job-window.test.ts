@@ -2091,9 +2091,12 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         const access = {jobId: fixture.jobId, capability: 'c'.repeat(64)};
         const abort = new AbortController();
         class CanvasRenderer {}
-        const assertJobAskSource = (ask: {source: {sourceHash: string}}, display: JobDisplayPublication) => {
-            if (ask.source.sourceHash !== display.publication.source.sourceHash) throw new Error('JOB_ACT_SOURCE_STALE');
-        };
+        const guardStart=source.indexOf('function isRecordSource(');
+        const guardEnd=source.indexOf('/** Build pending form dependencies',guardStart);
+        expect(guardStart).toBeGreaterThan(0);expect(guardEnd).toBeGreaterThan(guardStart);
+        const guardCode=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(guardStart,guardEnd));
+        const {isRecordSource,sourceSnapshot,assertJobAskSource}=new Function(guardCode+
+            '\nreturn {isRecordSource,sourceSnapshot,assertJobAskSource};')();
         const startEvents = () => ({displayed() {}, visibility() {}, done: Promise.resolve()});
 
         const runner = new Function(
@@ -2101,7 +2104,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             'i18n', 't', 'createViewportController', 'createViewportState', 'createRigViewportProvider', 'mountViewportPair',
             'RigOverlays', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'SENTINELS',
             'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal', 'jobPartsReviewState',
-            'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
+            'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'isRecordSource', 'sourceSnapshot', 'parseControlPart',
             'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
             'presentJobRigViewport', 'CanvasRenderer', 'enCatalog', 'koCatalog', 'JOB_HUB_READY', 'jobHubMessageMatches', 'advancePlayback', 'JOB_PLAN_TEXT_FIELDS',
             'renderAskGroup', 'renderQuestionImages', 'refreshInterviewConstraints', 'localizeQuestionImages',
@@ -2112,7 +2115,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             i18nModule, i18nModule.t, createViewportController, createViewportState, createRigViewportProvider, mountViewportPair,
             RigOverlays, bindLayerShortcuts, describeLayerToggles, layerShortcuts, SENTINELS,
             createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal, jobPartsReviewState,
-            prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
+            prepareJobInspection, startEvents, assertJobAskSource, isRecordSource, sourceSnapshot, parseControlPart,
             recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
             presentJobRigViewport, CanvasRenderer, enCatalog, koCatalog, JOB_HUB_READY, jobHubMessageMatches, advancePlayback, JOB_PLAN_TEXT_FIELDS,
             renderAskGroup, renderQuestionImages, refreshInterviewConstraints, localizeQuestionImages,
@@ -2990,6 +2993,85 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 expect(s.outgoingSubmits[0]!.body.value).toEqual(originalSelectValue);
                 expect(JSON.stringify(s.outgoingSubmits[0]!.body.value)).toBe(JSON.stringify(originalSelectValue));
             } finally {s.cleanup();}
+        });
+    }
+
+    for(const scenario of [
+        {name:'legacy SELECT publication-source draft',binding:false,refused:false,change:(_draft:any)=>{}},
+        {name:'per-form current ask binding',binding:true,refused:false,change:(_draft:any)=>{}},
+        {name:'stale publication ID',binding:false,refused:true,change:(draft:any)=>{draft.publicationId='other-publication';}},
+        {name:'stale publication hash',binding:false,refused:true,change:(draft:any)=>{draft.sourceHash='f'.repeat(64);}},
+        {name:'changed full publication source',binding:false,refused:true,change:(draft:any)=>{draft.source.projectHash='f'.repeat(64);}},
+        {name:'stale publication set',binding:false,refused:true,change:(draft:any)=>{draft.source.optionSet={id:'other-set',sha256:'a'.repeat(64)};}},
+        {name:'different stored ask ID',binding:false,refused:true,change:(draft:any)=>{draft.forms[0].askId='other-ask';}},
+        {name:'different stored question',binding:false,refused:true,change:(draft:any)=>{draft.forms[0].value.questionId='other-question';}},
+        {name:'different per-form set ID',binding:true,refused:true,change:(draft:any)=>{draft.forms[0].source.optionSet.id='other-set';}},
+        {name:'different per-form set SHA',binding:true,refused:true,change:(draft:any)=>{draft.forms[0].source.optionSet.sha256='f'.repeat(64);}},
+        {name:'different per-form subject',binding:true,refused:true,change:(draft:any)=>{draft.forms[0].subject.questionId='other-question';}},
+        {name:'partial per-form binding',binding:true,refused:true,change:(draft:any)=>{delete draft.forms[0].subject;}},
+    ]){
+        test('#605 real package source guards — '+scenario.name,async()=>{
+            const question=structuredClone(screenAQuestion),store=new Map<string,string>();
+            const s=await mountRuntimeSession({localStore:store,interview:{questions:[question]} as any});
+            try{
+                const display=await s.publishRig(1,{optionSet:null});
+                expect(display.publication.source.optionSet).toBeNull();
+                const ask:PendingAskV3={askId:'package-source-draft',publicationId:display.publication.publicationId,
+                    source:{...display.publication.source,optionSet:{id:question.set.id,sha256:question.ref.sha256}},
+                    subject:{kind:'interview-picks',questionId:question.set.question,setId:question.set.id},status:'pending'};
+                const expected={questionId:'bones',selections:[{itemId:'shape',optionId:'other',otherText:'  exact Other 한글\n '},
+                    {itemId:'detail',optionId:'auto',otherText:null}],note:'  exact package note <owner>\n '};
+                const controls=[{name:'choice.shape',value:'other'},{name:'other.shape',value:expected.selections[0]!.otherText!},
+                    {name:'choice.detail',value:'auto'},{name:'other.detail',value:''},{name:'note',value:expected.note}];
+                const draft:any={publicationId:display.publication.publicationId,sourceHash:display.publication.source.sourceHash,
+                    source:structuredClone(display.publication.source),forms:[{askId:ask.askId,value:expected,controls,
+                        ...(scenario.binding?{source:structuredClone(ask.source),subject:structuredClone(ask.subject)}:{})}]};
+                scenario.change(draft);
+                const key='rig-review-job-draft/1:'+s.fixture.jobId+':'+display.publication.publicationId+':'+display.publication.source.sourceHash;
+                store.set(key,JSON.stringify(draft));
+                s.fixture.pending(ask,2);s.window.event(s.fixture.events.at(-1)!);
+                const form=s.workspace.querySelector('form[data-job-ask="package-source-draft"]')!;
+                expect(form).not.toBeNull();
+                if(scenario.refused){
+                    expect(form.querySelector('textarea[name="note"]')!.value).toBe('');
+                    expect(form.querySelectorAll('input').filter(radio=>radio.checked)).toHaveLength(0);
+                    return;
+                }
+                expect(form.querySelector('textarea[name="note"]')!.value).toBe(expected.note);
+                expect(form.querySelector('textarea[name="other.shape"]')!.value).toBe(expected.selections[0]!.otherText!);
+                const act=fixtureAct('interview-picks',expected.note);
+                s.fixture.returnAct({...act,source:ask.source,value:expected} as any);
+                form.dispatchEvent({type:'input'});
+                const saved=JSON.parse(store.get(key)!);
+                expect(saved.source).toEqual(display.publication.source);
+                expect(saved.forms[0].source).toEqual(ask.source);
+                expect(saved.forms[0].subject).toEqual(ask.subject);
+                expect(saved.forms[0].controls.filter((control:any)=>control.name.startsWith('choice.'))).toEqual([controls[0],controls[2]]);
+                await form.onsubmit?.({preventDefault(){}});
+                expect(s.outgoingSubmits).toHaveLength(1);
+                expect(s.outgoingSubmits[0]!.body.value).toEqual(expected);
+            }finally{s.cleanup();}
+        });
+    }
+
+    for(const variant of ['missing ask set','wrong ask set','retained question SHA','changed ask publication source']){
+        test('#605 actual current ask/retained question guard refuses '+variant,async()=>{
+            const question=structuredClone(screenAQuestion);
+            if(variant==='retained question SHA')question.ref.sha256='f'.repeat(64);
+            const s=await mountRuntimeSession({interview:{questions:[question]} as any});
+            try{
+                const display=await s.publishRig(1,{optionSet:null});
+                const source:any={...display.publication.source,optionSet:{id:'legacy-set',sha256:'a'.repeat(64)}};
+                if(variant==='missing ask set')source.optionSet=null;
+                if(variant==='wrong ask set')source.optionSet.id='other-set';
+                if(variant==='changed ask publication source')source.projectHash='f'.repeat(64);
+                const ask:PendingAskV3={askId:'refused-current-binding',publicationId:display.publication.publicationId,
+                    source,subject:{kind:'interview-picks',questionId:'bones',setId:'legacy-set'},status:'pending'};
+                s.fixture.pending(ask,2);s.window.event(s.fixture.events.at(-1)!);
+                expect(s.workspace.querySelector('form[data-job-ask="refused-current-binding"]')).toBeNull();
+                expect(s.workspace.textContent).toContain(i18nModule.t('JOB_ACT_SOURCE_STALE'));
+                expect(s.outgoingSubmits).toHaveLength(0);
+            }finally{s.cleanup();}
         });
     }
 

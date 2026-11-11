@@ -1382,6 +1382,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         fieldset: HTMLFieldSetElement;
         read: () => UISubmissionV3['value'];
         localizeInterview?: () => void;
+        source: SourceV3;
+        subject: PendingAskV3['subject'];
         submissionId: string;
         dirty: boolean;
         submitting: boolean;
@@ -1736,7 +1738,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 source: current.display.publication.source,
                 label: current.display.publication.label,
                 forms: [...forms].filter(([, item]) => item.dirty).map(([askId, item]) => ({
-                    askId, value: item.read(),
+                    askId, source:item.source, subject:item.subject, value: item.read(),
                     controls: [...item.form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')]
                         .filter(input => !(input instanceof HTMLInputElement && input.type === 'radio') || input.checked)
                         .map(input => ({ name: input.name, value: input.value })),
@@ -2069,17 +2071,29 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         const status = node('p');
         status.setAttribute('role', 'status');
         form.append(status);
-        const entry: JobForm = { form, fieldset: fields, read, localizeInterview:refreshInterview, submissionId: crypto.randomUUID(), dirty: false,
+        const entry: JobForm = { form, fieldset: fields, read, source:ask.source, subject:ask.subject, localizeInterview:refreshInterview, submissionId: crypto.randomUUID(), dirty: false,
             submitting: false, rigSubmission: createJobRigSubmission() };
         const signoffSubmissionId = crypto.randomUUID();
         try {
             const saved = JSON.parse(localStorage.getItem(localDraftKey(prepared.display)) ?? 'null');
             if (saved?.publicationId === prepared.display.publication.publicationId &&
                 saved?.sourceHash === prepared.display.publication.source.sourceHash) {
-                assertJobAskSource({...ask, source: saved.source}, prepared.display);
+                if (sourceSnapshot(saved.source) !== sourceSnapshot(prepared.display.publication.source))
+                    throw new Error('JOB_ACT_SOURCE_STALE');
+                assertJobAskSource(ask, prepared.display);
                 const original = saved.forms?.find((item: {
                     askId: string;
                 }) => item.askId === ask.askId);
+                if (!original) throw new Error('JOB_ASK_INVALID');
+                if (subject.kind === 'interview-picks' && original.value?.questionId !== subject.questionId)
+                    throw new Error('JOB_ACT_SOURCE_STALE');
+                // Legacy forms use the exact publication binding plus the current retained question and ask ID.
+                if ('source' in original || 'subject' in original) {
+                    if (sourceSnapshot(original.source) !== sourceSnapshot(ask.source) ||
+                        sourceSnapshot(original.subject) !== sourceSnapshot(ask.subject))
+                        throw new Error('JOB_ACT_SOURCE_STALE');
+                    assertJobAskSource({...ask, source: original.source}, prepared.display);
+                }
                 if (subject.kind === 'parts-verdict') {
                     const panel = partsPanels.get(prepared);
                     if (panel && Array.isArray(original?.value?.issues)) panel.issues = structuredClone(original.value.issues);
