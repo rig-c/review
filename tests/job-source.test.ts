@@ -608,3 +608,132 @@ test('#606 closed metadata grammar rejects malformed value/issue entries while r
     (p:any)=>{p.steps.push(structuredClone(p.steps[0]));},
   ]) {const bad=structuredClone(good);mutate(bad);expect(()=>parseJobPlanTextProjection(bad)).toThrow('PLAN_TEXT_METADATA_INVALID');}
 });
+
+// #645 backend-only cases: actual source/session/front paths, without changes to shared harnesses.
+import {job645SidecarFixture} from './helpers/645-sidecar-fixture.ts';
+import {loadPartsView as load645Parts} from '../src/parts-view.ts';
+import {candidate as candidate645} from './helpers/parts-comments-package.ts';
+import {PNG as JobPNG645} from 'pngjs';
+
+test('#645 generic sidecar closure retains official identity and serves retained Difference', async () => {
+  const {f, dir, packet, parts, files} = await job645SidecarFixture();
+  try {
+    const publication = await f.publish(), retained = f.session.retainedSource(publication.publicationId);
+    expect(publication.source.parts).toEqual(parts);
+    expect(publication.source.parts!.images.every(image => image.role === 'part')).toBe(true);
+    expect(Object.hasOwn(publication.source, 'paintingInRig')).toBe(false);
+    for (const file of files) {
+      expect(retained.seals).toContainEqual(file);
+      expect(jobHash(await readFile(join(retained.snapshotRoot, file.path)))).toBe(file.sha256);
+    }
+    expect(await readFile(join(dir, 'parts.json'))).toEqual(packet.manifestBytes);
+    const route = retainedPublicationRoutes(f.session);
+    const read = (path: string, query = '') => route(f.session.jobId, publication.publicationId, publication.instanceKey,
+      path, new Request(f.origin + '/' + path + query));
+    const metadata = await (await read('api/stage-parts')).json();
+    expect(metadata.differenceAvailable).toBe(true);
+    expect(metadata.sourceHash).toBe(publication.source.sourceHash);
+    const response = await read('api/stage-parts/difference/0', '?threshold=16&footprints=false');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe('image/png');
+    expect(response.headers.get('X-Difference-Count')).not.toBeNull();
+    expect(JobPNG645.sync.read(Buffer.from(await response.arrayBuffer())).width).toBe(20);
+    expect((await read('api/stage-parts/difference/0', '?threshold=256&footprints=false')).status).toBe(409);
+    expect((await read('api/stage-parts/difference/99', '?threshold=16&footprints=false')).status).toBe(409);
+    const changed = Buffer.concat([packet.sidecarBytes, Buffer.from(' ')]);
+    await writeFile(join(dir, 'painting_in_rig.json'), changed);
+    f.setContext({...f.getContext(), files: files.map(file => file.path.endsWith('.json') ? {...file, sha256: jobHash(changed)} : file)});
+    const next = await f.publish();
+    expect(next.source.sourceHash).not.toBe(publication.source.sourceHash);
+    expect(next.instanceKey).not.toBe(publication.instanceKey);
+    expect(next.source.parts).toEqual(parts);
+    // The old route reads its sealed snapshot, never the modified live JSON.
+    expect((await read('api/stage-parts/difference/0', '?threshold=16&footprints=false')).status).toBe(200);
+  } finally {await f.close();}
+});
+
+test('#645 sidecar admission requires both generic identities and refuses malformed manifest binding', async () => {
+  const {f, dir, packet, files} = await job645SidecarFixture();
+  try {
+    for (const missing of files) {
+      f.setContext({...f.getContext(), files: files.filter(file => file.path !== missing.path)});
+      const result = await (await f.call(await f.publishRequest())).json();
+      expect(result.ok).toBe(false);
+      expect(result.error.code).toBe('JOB_SOURCE_MISMATCH');
+      expect(f.session.status().publication).toBeNull();
+    }
+    f.setContext({...f.getContext(), files});
+    await writeFile(join(dir, 'painting_in_rig.json'), JSON.stringify({...packet.sidecar, manifest_sha256: '0'.repeat(64)}));
+    const result = await (await f.call(await f.publishRequest())).json();
+    expect(result.error.message).toContain('PARTS_DIFFERENCE_HASH');
+    expect(f.session.status().generation).toBe(0);
+  } finally {await f.close();}
+});
+
+test('#645 item and assembled Difference comments reach native crop and final act with composite source binding', async () => {
+  const {f, dir, packet} = await job645SidecarFixture();
+  try {
+    const publication = await f.publish(), retained = f.session.retainedSource(publication.publicationId);
+    const route = retainedPublicationRoutes(f.session), pkg = await load645Parts(join(retained.snapshotRoot, 'standalone'));
+    const issue = candidate645(pkg), item = pkg.items[0]!;
+    issue.sourceHash = publication.source.sourceHash;
+    issue.parts = [{name: item.name, imageHash: pkg.files.find(file => file.abs === pkg.imagePaths[0])!.sha256}];
+    issue.rigRegion = {...issue.imageRegion!, x: item.x + issue.imageRegion!.x, y: item.y + issue.imageRegion!.y};
+    issue.view.comparison = {mode: 'difference', opacity: .5, threshold: 16};
+    const request = new Request(f.origin + '/api/stage-parts/comment', {method: 'POST',
+      headers: {Origin: f.origin, 'Content-Type': 'application/json', 'X-Review-Capability': f.credentials.ui}, body: JSON.stringify(issue)});
+    const response = await route(f.session.jobId, publication.publicationId, publication.instanceKey, 'api/stage-parts/comment', request);
+    expect(response.status).toBe(200);
+    const {comment} = await response.json();
+    expect(comment.sourceHash).toBe(publication.source.sourceHash);
+    expect(comment.nativeCrop).not.toBeNull();
+    expect(comment.parts).toEqual(issue.parts);
+    const assembled = {...issue, id: '645-assembled', imageRegion: null, nativeCrop: null,
+      rigRegion: {x: 4, y: 4, width: 20, height: 16},
+      view: {...issue.view, mode: 'assembled'},
+      parts: pkg.items.map(part => ({name: part.name, imageHash: pkg.files.find(file => file.abs === pkg.imagePaths[part.index])!.sha256}))};
+    const assembledResponse = await route(f.session.jobId, publication.publicationId, publication.instanceKey,
+      'api/stage-parts/comment', new Request(f.origin + '/api/stage-parts/comment', {method: 'POST',
+        headers: {Origin: f.origin, 'Content-Type': 'application/json', 'X-Review-Capability': f.credentials.ui}, body: JSON.stringify(assembled)}));
+    expect(assembledResponse.status).toBe(200);
+    const assembledComment = (await assembledResponse.json()).comment;
+    expect(assembledComment.sourceHash).toBe(publication.source.sourceHash);
+    expect(assembledComment.nativeCrop).toBeNull();
+    expect(assembledComment.crop).toMatchObject({sha256: issue.crop.sha256, width: issue.crop.width, height: issue.crop.height});
+    expect(assembledComment.view).toEqual(assembled.view);
+    const ask = await f.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-draft'}), page = await f.display(publication);
+    const input = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
+      submissionId: '645-difference', kind: 'parts-verdict', value: {verdict: 'changes-requested', issues: [comment, assembledComment], words: ''}};
+    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) throw new Error(saved.error.code);
+    expect(saved.value.source.sourceHash).toBe(publication.source.sourceHash);
+    if (saved.value.kind !== 'parts-verdict') throw new Error('Expected Parts act');
+    expect(saved.value.value.issues[1]).toEqual(assembledComment);
+    const replay = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+    expect(replay).toEqual(saved);
+    await writeFile(join(dir, packet.sidecar.path), Buffer.from('changed'));
+    await expect(f.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-draft'})).rejects.toThrow('JOB_SOURCE_MISMATCH');
+    await writeFile(join(retained.snapshotRoot, 'standalone/painting_in_rig.json'), '{}');
+    const tamper = await route(f.session.jobId, publication.publicationId, publication.instanceKey,
+      'api/stage-parts/difference/0', new Request(f.origin + '/api/stage-parts/difference/0?threshold=16&footprints=false'));
+    expect(tamper.status).toBe(409);
+  } finally {await f.close();}
+});
+
+test('#645 generic PNG uses the existing decoded allocation bound before sidecar decoding', async () => {
+  const {f, dir, packet, files} = await job645SidecarFixture();
+  try {
+    const png = Buffer.from(await readFile(join(dir, packet.sidecar.path)));
+    png.writeUInt32BE(1_000_000, 16);
+    await writeFile(join(dir, packet.sidecar.path), png);
+    const sidecarBytes = Buffer.from(JSON.stringify({...packet.sidecar, sha256: jobHash(png)}));
+    await writeFile(join(dir, 'painting_in_rig.json'), sidecarBytes);
+    f.setContext({...f.getContext(), files: files.map(file => ({...file,
+      sha256: file.path.endsWith('.json') ? jobHash(sidecarBytes) : jobHash(png)}))});
+    const result = await (await f.call(await f.publishRequest())).json();
+    expect(result.error.code).toBe('JOB_SOURCE_UNRETAINABLE');
+    expect(result.error.message).toContain('PARTS_REFERENCE_LIMIT');
+    expect(f.session.status().publication).toBeNull();
+  } finally {await f.close();}
+});

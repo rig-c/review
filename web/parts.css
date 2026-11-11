@@ -24,7 +24,10 @@ h2{font-size:11px;letter-spacing:.06em;color:var(--muted);margin:4px 0 8px}
 .pv-badge[data-outcome="flagged"]{color:var(--flag);border-color:var(--flag)}
 .pv-count{grid-column:2;grid-row:1;font-size:10px;color:var(--muted);white-space:nowrap}
 .pv-stage{display:flex;flex-direction:column;min-width:0;min-height:0}
-.pv-toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line)}
+.pv-toolbars{display:flex;flex-direction:column;align-items:stretch;gap:0;padding:0}
+.pv-main-toolbar,.pv-toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line)}
+.pv-main-toolbar{background:var(--panel);border-bottom-width:2px}
+.pv-secondary-toolbar{background:var(--bg)}
 .pv-field{display:flex;align-items:center;gap:5px}
 .pv-group{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .pv-group button{border:0;background:var(--panel);color:inherit;padding:3px 9px;cursor:pointer;font:inherit}

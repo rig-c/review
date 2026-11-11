@@ -92,7 +92,12 @@ function mountPartsMarkup(slots: PartsWorkspaceSlots): void {
     slots.left.append(title, ul);
   }
   if (slots.toolbar) {
-    slots.toolbar.classList.add('pv-toolbar');
+    slots.toolbar.removeAttribute('role');
+    slots.toolbar.removeAttribute('aria-label');
+    slots.toolbar.classList.remove('pv-toolbar');
+    slots.toolbar.classList.add('pv-toolbars');
+    const main = doc.createElement('div'); main.id = 'pv-toolbar-main'; main.className = 'pv-main-toolbar'; main.setAttribute('role', 'toolbar'); main.setAttribute('aria-label', t('Main toolbar'));
+    const secondary = doc.createElement('div'); secondary.id = 'pv-toolbar-secondary'; secondary.className = 'pv-toolbar pv-secondary-toolbar'; secondary.setAttribute('role', 'toolbar'); secondary.setAttribute('aria-label', t('Secondary toolbar'));
     const assemble = doc.createElement('button'); assemble.type = 'button'; assemble.id = 'pv-assemble'; assemble.setAttribute('aria-pressed', 'false'); assemble.textContent = t('Assembled');
     const bgLabel = doc.createElement('label'); bgLabel.className = 'pv-field'; bgLabel.textContent = t('Background');
     const bgSelect = doc.createElement('select'); bgSelect.id = 'pv-bg'; bgSelect.setAttribute('data-pv-bg', '');
@@ -118,7 +123,7 @@ function mountPartsMarkup(slots: PartsWorkspaceSlots): void {
     const fpInput = doc.createElement('input'); fpInput.type = 'checkbox'; fpInput.id = 'pv-footprints'; fpInput.setAttribute('data-pv-footprints', '');
     fpLabel.append(fpInput, t('Footprints of parts in front'));
     const compSpan = doc.createElement('span'); compSpan.id = 'pv-comparison'; compSpan.className = 'pv-comparison'; compSpan.hidden = true;
-    const compGroupWrap = doc.createElement('span'); compGroupWrap.className = 'pv-field'; compGroupWrap.textContent = t('Painting comparison');
+    const compGroupWrap = doc.createElement('span'); compGroupWrap.className = 'pv-field';
     const compGroup = doc.createElement('span'); compGroup.className = 'pv-group'; compGroup.setAttribute('role', 'group'); compGroup.setAttribute('aria-label', t('Painting comparison'));
     for (const [mode, text] of [['part', 'Part'], ['overlay', 'Overlay'], ['difference', 'Difference']]) {
       const btn = doc.createElement('button'); btn.type = 'button'; btn.setAttribute('data-pv-comparison', mode!); btn.setAttribute('aria-pressed', String(mode === 'part')); btn.textContent = t(text!);
@@ -132,13 +137,16 @@ function mountPartsMarkup(slots: PartsWorkspaceSlots): void {
     const thLabel = doc.createElement('label'); thLabel.className = 'pv-field'; thLabel.id = 'pv-threshold-control'; thLabel.hidden = true; thLabel.textContent = t('Threshold');
     const thInput = doc.createElement('input'); thInput.type = 'number'; thInput.id = 'pv-threshold'; thInput.min = '0'; thInput.max = '255'; thInput.step = '1'; thInput.value = '0';
     thLabel.append(thInput);
-    compSpan.append(compGroupWrap, opLabel, thLabel);
+    compSpan.append(compGroupWrap);
     const atlasSwitch = doc.createElement('span'); atlasSwitch.className = 'pv-group'; atlasSwitch.setAttribute('role', 'group'); atlasSwitch.setAttribute('aria-label', t('Atlas view')); atlasSwitch.id = 'pv-atlas-switch'; atlasSwitch.hidden = true;
     for (const [view, text] of [['item', 'Region'], ['page', 'Pages']]) {
       const btn = doc.createElement('button'); btn.type = 'button'; btn.setAttribute('data-pv-view', view!); btn.setAttribute('aria-pressed', String(view === 'item')); btn.textContent = t(text!);
       atlasSwitch.append(btn);
     }
-    slots.toolbar.append(assemble, bgLabel, zoomGroup, syncLabel, commentBtn, alphaLabel, fpLabel, compSpan, atlasSwitch);
+    main.append(assemble, compSpan, zoomGroup);
+    secondary.append(bgLabel, alphaLabel, fpLabel, syncLabel, opLabel, thLabel, atlasSwitch);
+    slots.toolbar.append(main, secondary);
+    slots.side.append(commentBtn);
   }
   if (slots.stage) {
     const wrap = doc.createElement('div'); wrap.className = 'pv-canvas-wrap'; wrap.id = 'stage-layout';
@@ -371,6 +379,17 @@ function rasterFrame(data:ViewData,item:Item):{x:number;y:number;w:number;h:numb
   return {x,y,w:right-x,h:bottom-y};
 }
 
+async function differenceImage(item: Item, threshold: number, footprints: boolean) {
+  if (!source.difference) throw new Error('PARTS_DIFFERENCE_UNAVAILABLE: declared rig-space painting and a Difference route required.');
+  const response = await source.difference(item.index, threshold, footprints);
+  if (!response.ok) {
+    const out = await response.json() as {error: string};
+    throw new Error(out.error);
+  }
+  const image = await createImageBitmap(await response.blob());
+  return {response, image};
+}
+
 async function paintRaster(token:number): Promise<void> {
   const data = state.data;
   if (!data || !data.items.length) return;
@@ -382,6 +401,26 @@ async function paintRaster(token:number): Promise<void> {
   if(state.view==='assembled'&&data.mode==='parts'&&data.rigSize){
     const shown=data.items.filter(i=>!state.hidden.has(i.name));
     const layers=await Promise.all(shown.map(async box=>({box,image:await itemImage(box)})));
+    if (disposed || token !== paintToken) return;
+    if (state.comparison.mode === 'difference' && !paintingHeld) {
+      const threshold = state.comparison.threshold, footprints = state.footprints;
+      const differences: {box: Item; image: ImageBitmap}[] = [];
+      try {
+        for (const box of shown) {
+          const {image} = await differenceImage(box, threshold, footprints);
+          differences.push({box, image});
+          if (disposed || token !== paintToken) return;
+        }
+        const ctx = setCanvas(canvas, w, h);
+        paintAssembly(ctx, w, h, differences, {bg: state.bg, alpha: false});
+        drawMeshes(ctx, layers);
+        renderAssemblySelection(layers);
+        caption.textContent = t('Difference across {count} visible parts.', {count: shown.length});
+      } finally {
+        for (const {image} of differences) image.close();
+      }
+      return;
+    }
     const original=(paintingHeld||state.comparison.mode==='overlay')&&data.painting?await paintingImage():null;
     if(disposed||token!==paintToken)return;
     const ctx=setCanvas(canvas,w,h);
@@ -439,11 +478,8 @@ async function paintRaster(token:number): Promise<void> {
     return;
   }
   if(state.comparison.mode==='difference'){
-    if (!source.difference) throw new Error('PARTS_DIFFERENCE_UNAVAILABLE: declared painting_in_rig and individual part view required.');
-    const response = await source.difference(item.index, state.comparison.threshold, state.footprints);
-    if(!response.ok){const out=await response.json() as {error:string};throw new Error(out.error);}
     const meshImage=state.meshVisible&&item.mesh?await itemImage(item):null;
-    const image=await createImageBitmap(await response.blob());
+    const {response, image} = await differenceImage(item, state.comparison.threshold, state.footprints);
     try{if(disposed||token!==paintToken)return;const ctx=setCanvas(canvas,w,h);paintBackground(ctx,w,h,state.bg);ctx.drawImage(image,0,0);if(meshImage)drawMeshes(ctx,[{box:item,image:meshImage}],false);overlay.replaceChildren();
       caption.textContent=t('Difference: {count} pixels above threshold · {covered} covered pixels excluded · visual comparison, no automatic verdict.',{count:response.headers.get('X-Difference-Count')??'',covered:response.headers.get('X-Difference-Covered')??''});
     }finally{image.close();}return;
@@ -470,7 +506,7 @@ async function paintReference(token:number):Promise<void>{const data=state.data,
 
 function renderComparison():void {
  const active=state.data?.mode==='parts'&&(!!state.data.painting||!!state.data.differenceAvailable),overlay=active&&state.comparison.mode==='overlay',difference=state.comparison.mode==='difference';
- const button=query<HTMLButtonElement>('[data-pv-comparison="difference"]');if(button){button.disabled=!state.data?.differenceAvailable||!source.difference||state.view!=='item';button.title=button.disabled?t('PARTS_DIFFERENCE_UNAVAILABLE: declared painting_in_rig and individual part view required.'):'';}
+ const button=query<HTMLButtonElement>('[data-pv-comparison="difference"]');if(button){button.disabled=!state.data?.differenceAvailable||!source.difference||state.view==='page';button.title=button.disabled?t('PARTS_DIFFERENCE_UNAVAILABLE: declared rig-space painting and a Difference route required.'):'';}
  const overlayButton=query<HTMLButtonElement>('[data-pv-comparison="overlay"]');if(overlayButton)overlayButton.disabled=!state.data?.painting;
  $('pv-threshold-control').hidden=!difference;$<HTMLInputElement>('pv-threshold').value=String(state.comparison.mode==='difference'?state.comparison.threshold:state.differenceThreshold);
  $('pv-comparison').hidden=!active;for(const b of queryAll<HTMLElement>('[data-pv-comparison]'))b.setAttribute('aria-pressed',String(b.dataset.pvComparison===state.comparison.mode));
@@ -613,7 +649,7 @@ function select(index: number): void {
 function setView(view: 'item' | 'page' | 'assembled'): void {
   if(view==='assembled'&&(state.data?.mode!=='parts'||!state.data.rigSize))return;
   if((state.view!==view||paintFailure)&&viewport){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
-  if(view!=='item'&&state.comparison.mode==='difference')state.comparison={mode:'part',opacity:state.comparison.opacity};
+  if(view==='page'&&state.comparison.mode==='difference')state.comparison={mode:'part',opacity:state.comparison.opacity};
   hoverName = null;
   state.view = view;$('pv-assemble').setAttribute('aria-pressed', String(view === 'assembled'));renderMesh();renderComparison();$('rig-label').textContent=t(view==='assembled'?'Assembled':'Selected part');commentUi?.refresh();
   for (const b of queryAll<HTMLButtonElement>('[data-pv-view]')) b.setAttribute('aria-pressed', String(b.dataset.pvView === view));

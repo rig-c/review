@@ -21,7 +21,7 @@ import {preparePartsComment,validateStoredPartsComment} from './parts-comment-cr
 import {resolvedCropPath} from './comment-crops.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, open, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, open, readFile, realpath, rename, rm, stat, lstat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { PNG } from 'pngjs';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
@@ -39,7 +39,7 @@ export type LegacyVerdictStatus = 'pending' | 'approved' | 'changes-requested';
 
 /** One file the verdict rests on: `path` relative to the verdict file's directory, POSIX separators. */
 export interface HashedFile { path: string; bytes: number; sha256: string }
-interface LocalFile { abs: string; bytes: number; sha256: string }
+interface LocalFile { abs: string; bytes: number; sha256: string; declaredPath?: string }
 
 /** A part (parts mode) or a named region (atlas mode). Boxes are rig px (parts) or page px (atlas). */
 export interface PartMesh { vertices: number[]; triangles: number[]; figures: Record<string, unknown>; width: number; height: number; image: string }
@@ -341,6 +341,66 @@ async function locateMeshRasters(rig: unknown, root: string, items: ViewItem[], 
   }
 }
 
+/** Resolve the existing inline declaration, or the frozen adjacent sidecar only when absent. */
+export async function resolvePartsPaintingInRig(root: string, manifestBytes: Buffer,
+  read: (absolute: string, kind: 'sidecar' | 'painting') => Promise<Buffer> = absolute => readFile(absolute),
+): Promise<{paintingInRig?: PartsViewPackage['paintingInRig']; files: LocalFile[]; sidecar?: true}> {
+  const doc = record(JSON.parse(manifestBytes.toString('utf8')));
+  if (!doc) return refuse('PARTS_JSON_MALFORMED', 'parts.json must be an object');
+  const size = doc.rig_size;
+  const rigSize = Array.isArray(size) && size.length === 2 && size.every(n => finite(n, 1)) ? size : null;
+  const files: LocalFile[] = [];
+  let d = record(doc.painting_in_rig), sidecar: true | undefined;
+  if (Object.hasOwn(doc, 'painting_in_rig')) {
+    if (!d || Object.keys(d).length !== 3) refuse('PARTS_DIFFERENCE_PROVENANCE', 'declared path, lowercase SHA-256 and lanczos3-rgb-opaque required');
+  } else {
+    const declaredPath = join(root, 'painting_in_rig.json');
+    const info = await lstat(declaredPath).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      return refuse('PARTS_DIFFERENCE_PATH', 'sidecar must be readable inside the package');
+    });
+    if (!info) return {files};
+    const abs = await safeFile(root, 'painting_in_rig.json').catch(() => refuse('PARTS_DIFFERENCE_PATH', 'sidecar must be readable inside the package'));
+    const bytes = await read(abs, 'sidecar').catch(error => {
+      if (['ENOENT', 'EACCES', 'EPERM', 'EISDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return refuse('PARTS_DIFFERENCE_PATH', 'sidecar must be readable inside the package');
+      throw error;
+    });
+    try { d = record(JSON.parse(bytes.toString('utf8'))); }
+    catch { refuse('PARTS_DIFFERENCE_PROVENANCE', 'sidecar must be a JSON declaration'); }
+    const keys = ['schema', 'manifest_sha256', 'path', 'sha256', 'resample', 'rig_size'];
+    if (!d || Object.keys(d).length !== keys.length || !keys.every(key => Object.hasOwn(d!, key)) ||
+        d.schema !== 'rig-parts-painting-reference/1' || typeof d.manifest_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(d.manifest_sha256)) {
+      refuse('PARTS_DIFFERENCE_PROVENANCE', 'sidecar requires the six frozen painting reference fields');
+    }
+    if (d!.manifest_sha256 !== hashBytes(join(root, 'parts.json'), manifestBytes).sha256) refuse('PARTS_DIFFERENCE_HASH', 'sidecar manifest hash differs');
+    const declaredSize = d!.rig_size;
+    if (!Array.isArray(declaredSize) || declaredSize.length !== 2 || !declaredSize.every(n => Number.isSafeInteger(n) && n > 0) ||
+        !rigSize || declaredSize.some((n, i) => n !== rigSize[i])) refuse('PARTS_DIFFERENCE_SIZE', 'sidecar rig_size must equal parts.json rig_size');
+    files.push({...hashBytes(abs, bytes), declaredPath});
+    sidecar = true;
+  }
+  if (!d || typeof d.path !== 'string' || typeof d.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(d.sha256) || d.resample !== 'lanczos3-rgb-opaque') {
+    refuse('PARTS_DIFFERENCE_PROVENANCE', 'declared path, lowercase SHA-256 and lanczos3-rgb-opaque required');
+  }
+  try { packagePath(d!.path, 'painting_in_rig'); } catch { refuse('PARTS_DIFFERENCE_PATH', 'literal portable inside-package path required'); }
+  const declaredPath = join(root, d!.path as string);
+  const unreadable = () => refuse('PARTS_DIFFERENCE_PATH', 'declared painting must be readable inside the package');
+  const abs = await safeFile(root, d!.path as string).catch(unreadable);
+  const bytes = await read(abs, 'painting').catch(error => {
+    if (['ENOENT', 'EACCES', 'EPERM', 'EISDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return unreadable();
+    throw error;
+  }), sha256 = hashBytes(abs, bytes).sha256;
+  if (sha256 !== d!.sha256) refuse('PARTS_DIFFERENCE_HASH', 'declared painting hash differs');
+  let png: PNG;
+  try { png = PNG.sync.read(bytes); } catch { return refuse('PARTS_DIFFERENCE_PNG', 'declared painting must be RGBA8 PNG'); }
+  if (bytes[24] !== 8 || bytes[25] !== 6) refuse('PARTS_DIFFERENCE_PNG', 'declared painting must be RGBA8 PNG');
+  if (!rigSize || !rigSize.every(Number.isSafeInteger) || png.width !== rigSize[0] || png.height !== rigSize[1]) refuse('PARTS_DIFFERENCE_SIZE', 'declared painting dimensions must equal integer rig_size');
+  for (let i = 3; i < png.data.length; i += 4) if (png.data[i] !== 255) refuse('PARTS_DIFFERENCE_ALPHA', 'declared painting must have alpha 255');
+  const paintingInRig = {abs, declaredPath, bytes: bytes.length, sha256, width: png.width, height: png.height};
+  files.push(paintingInRig);
+  return {paintingInRig, files, ...(sidecar ? {sidecar} : {})};
+}
+
 async function loadPartsMode(root: string, options: PartsViewOptions): Promise<PartsViewPackage> {
   const partsJson = await insideRoot(root, join(root, 'parts.json'), 'PARTS_FILE_OUTSIDE', 'parts.json');
   const { bytes: partsBytes, value: partsRaw } = await readJsonBytes(partsJson, 'parts.json');
@@ -365,23 +425,8 @@ async function loadPartsMode(root: string, options: PartsViewOptions): Promise<P
     imagePaths.push(real);
     items.push({ name: part.name, index, x: part.x, y: part.y, w: part.w, h: part.h, image: true });
   }
-  let paintingInRig:PartsViewPackage['paintingInRig'];
-  if(Object.hasOwn(doc,'painting_in_rig')){
-    const d=record(doc.painting_in_rig);
-    if(!d||Object.keys(d).length!==3||typeof d.path!=='string'||typeof d.sha256!=='string'||!/^[a-f0-9]{64}$/.test(d.sha256)||d.resample!=='lanczos3-rgb-opaque')refuse('PARTS_DIFFERENCE_PROVENANCE','declared path, lowercase SHA-256 and lanczos3-rgb-opaque required');
-    try{packagePath(d!.path,'painting_in_rig');}catch{refuse('PARTS_DIFFERENCE_PATH','literal portable inside-package path required');}
-    const declaredPath=join(root,d!.path as string);
-    const unreadable=()=>refuse('PARTS_DIFFERENCE_PATH','declared painting must be readable inside the package');
-    const abs=await safeFile(root,d!.path as string).catch(unreadable);
-    const bytes=await readFile(abs).catch(unreadable);
-    const sha256=createHash('sha256').update(bytes).digest('hex');
-    if(sha256!==d!.sha256)refuse('PARTS_DIFFERENCE_HASH','declared painting hash differs');
-    let png:PNG;try{png=PNG.sync.read(bytes);}catch{refuse('PARTS_DIFFERENCE_PNG','declared painting must be RGBA8 PNG');}
-    if(bytes[24]!==8||bytes[25]!==6)refuse('PARTS_DIFFERENCE_PNG','declared painting must be RGBA8 PNG');
-    if(!rigSize||!rigSize.every(Number.isSafeInteger)||png!.width!==rigSize[0]||png!.height!==rigSize[1])refuse('PARTS_DIFFERENCE_SIZE','declared painting dimensions must equal integer rig_size');
-    for(let i=3;i<png!.data.length;i+=4)if(png!.data[i]!==255)refuse('PARTS_DIFFERENCE_ALPHA','declared painting must have alpha 255');
-    paintingInRig={abs,declaredPath,bytes:bytes.length,sha256,width:png!.width,height:png!.height};files.push(paintingInRig);
-  }
+  const {paintingInRig, files: paintingFiles} = await resolvePartsPaintingInRig(root, partsBytes);
+  files.push(...paintingFiles);
   let painting:PartsViewPackage['painting'];if(options.painting){
     // Both paths are physical: a user-designated alias to an inside file is valid,
     // while a link reaching outside is refused before any painting bytes are read.
@@ -761,6 +806,7 @@ async function decodeLegacyVerdict(
 export async function assertPartsUnchanged(pkg: Pick<PartsViewPackage, 'files' | 'flagFiles' | 'paintingInRig'>): Promise<void> {
   if(pkg.paintingInRig&&await realpath(pkg.paintingInRig.declaredPath).catch(()=>null)!==pkg.paintingInRig.abs)refuse('PARTS_VIEW_SOURCE_CHANGED','declared painting path changed');
   for (const f of [...pkg.files, ...pkg.flagFiles]) {
+    if (f.declaredPath && await realpath(f.declaredPath).catch(() => null) !== f.abs) refuse('PARTS_VIEW_SOURCE_CHANGED', 'declared input path changed');
     const now = await hashFile(f.abs).catch(() => null);
     if (!now || now.sha256 !== f.sha256) refuse('PARTS_VIEW_SOURCE_CHANGED', `${basename(f.abs)} changed after the view opened; reopen it to review what is on disk`);
   }

@@ -1,3 +1,4 @@
+import {partsDifferenceResponse} from './parts-server.ts';
 import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-checkpoint-evidence.ts';
 /** Disjoint live-job routes. The backend receives the original authenticated Request. */
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
@@ -426,6 +427,14 @@ export function retainedPublicationRoutes(session: JobSession) {
                     return json({...partsViewJson(parts, {verdict: null, stale: null}), sourceHash: retained.source.sourceHash,
                         inspectionSourceHash: retained.source.sourceHash, readOnly: true});
                 }
+                const difference = /^api\/stage-parts\/difference\/(0|[1-9]\d*)$/.exec(path);
+                if (difference && request.method === 'GET') {
+                    if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);
+                    assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals, retained.snapshotIdentity);
+                    const response = await partsDifferenceResponse(parts, Number(difference[1]), new URL(request.url).searchParams, headers);
+                    assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals, retained.snapshotIdentity);
+                    return response;
+                }
                 const part = /^api\/stage-parts\/(image|page)\/(0|[1-9]\d*)$/.exec(path);
                 if (part && parts) {
                     const file = servedImage(parts, part[1] as 'image' | 'page', Number(part[2]));
@@ -447,7 +456,7 @@ export function retainedPublicationRoutes(session: JobSession) {
                 error instanceof Error && error.message.startsWith('PARTS_COMMENT_STALE_SOURCE:')
                     ? 'PARTS_COMMENT_STALE_SOURCE' : 'JOB_SOURCE_MISMATCH';
             const message = error instanceof JobError && /^(CHECKPOINT_EVIDENCE|PLAN_TEXT)_[A-Z_]+$/.test(error.message)
-                ? error.message : undefined;
+                ? error.message : error instanceof Error && /^PARTS_(DIFFERENCE_[A-Z_]+|COMPARISON_INVALID):/.test(error.message) ? error.message : undefined;
             return failure(code, errorStatus[code as JobErrorCode] ?? 409, undefined, message);
         }
     };

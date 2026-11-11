@@ -488,3 +488,93 @@ test('#626: loadPartsView with nested rig.json containing mixed inline and gener
   expect(view.items.find(i => i.name === 'front')?.meshUnavailable).toBe('PARTS_MESH_GENERATED');
   await expect(partsDifference(pkg, 2, 0, false)).rejects.toThrow('PARTS_DIFFERENCE_UNAVAILABLE');
 });
+
+// #645 backend-only cases: also runnable through a temporary native entry without mutable web imports.
+import {write645SidecarPackage} from './helpers/645-sidecar-fixture.ts';
+import {partsDifferenceResponse} from '../src/parts-server.ts';
+import {assertPartsUnchanged, resolvePartsPaintingInRig} from '../src/parts-view.ts';
+import {PNG as PNG645} from 'pngjs';
+import {jobHash as hash645} from '../src/job-api.ts';
+
+test('#645 sidecar uses exact manifest bytes, retains JSON/PNG and shares Difference response', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'parts-645-'))); roots.push(root);
+  const packet = await write645SidecarPackage(root), pkg = await loadPartsView(root);
+  expect(pkg.paintingInRig?.sha256).toBe(packet.sidecar.sha256);
+  expect(pkg.files.find(file => file.abs === join(root, 'painting_in_rig.json'))?.sha256).toBe(hash645(packet.sidecarBytes));
+  expect(partsViewJson(pkg, {verdict: null, stale: null}).differenceAvailable).toBe(true);
+  const pixels = await partsDifference(pkg, 0, 16, false);
+  const response = await partsDifferenceResponse(pkg, 0, new URLSearchParams('threshold=16&footprints=false'), {'Cache-Control': 'no-store'});
+  expect(response.headers.get('Content-Type')).toBe('image/png');
+  expect(response.headers.get('Cache-Control')).toBe('no-store');
+  expect(response.headers.get('X-Difference-Count')).toBe(String(pixels.count));
+  expect(response.headers.get('X-Difference-Covered')).toBe(String(pixels.covered));
+  expect(response.headers.get('X-Difference-Compared')).toBe(String(pixels.compared));
+  expect([...PNG645.sync.read(Buffer.from(await response.arrayBuffer())).data]).toEqual([...pixels.data]);
+  for (const query of ['', 'threshold=256&footprints=false', 'threshold=1.5&footprints=false', 'threshold=16&footprints=yes']) {
+    await expect(partsDifferenceResponse(pkg, 0, new URLSearchParams(query), {})).rejects.toThrow('PARTS_COMPARISON_INVALID');
+  }
+  await writeFile(join(root, 'painting_in_rig.json'), Buffer.concat([packet.sidecarBytes, Buffer.from(' ')]));
+  await expect(assertPartsUnchanged(pkg)).rejects.toThrow('PARTS_VIEW_SOURCE_CHANGED');
+});
+
+test('#645 inline own key wins even when malformed; sidecar absence preserves legacy source', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'parts-645-'))); roots.push(root);
+  const packet = await write645SidecarPackage(root);
+  const inline = {path: packet.sidecar.path, sha256: packet.sidecar.sha256, resample: packet.sidecar.resample};
+  for (const value of [null, false, '', {}, {...inline, extra: true}]) {
+    await writeFile(join(root, 'parts.json'), JSON.stringify({...packet.manifest, painting_in_rig: value}));
+    await expect(loadPartsView(root)).rejects.toThrow('PARTS_DIFFERENCE_PROVENANCE');
+  }
+  await writeFile(join(root, 'parts.json'), JSON.stringify({...packet.manifest, painting_in_rig: inline}));
+  await writeFile(join(root, 'painting_in_rig.json'), '{');
+  const validInline = await loadPartsView(root);
+  expect(validInline.paintingInRig?.sha256).toBe(inline.sha256);
+  expect(validInline.files.some(file => file.abs.endsWith('painting_in_rig.json'))).toBe(false);
+  await writeFile(join(root, 'parts.json'), packet.manifestBytes);
+  await unlink(join(root, 'painting_in_rig.json'));
+  const absent = await loadPartsView(root);
+  expect(absent.paintingInRig).toBeUndefined();
+  expect((await resolvePartsPaintingInRig(root, packet.manifestBytes)).files).toEqual([]);
+  expect(verdictSource(absent).files.map(file => file.path)).toEqual(['parts.json', 'parts/body.png', 'parts/front.png']);
+});
+
+test('#645 sidecar rejects malformed/schema/manifest/size/path/hash/resample and PNG mismatches', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'parts-645-'))); roots.push(root);
+  const packet = await write645SidecarPackage(root), declaration = join(root, 'painting_in_rig.json');
+  for (const [value, code] of [
+    [null, 'PROVENANCE'], [{...packet.sidecar, extra: 1}, 'PROVENANCE'],
+    [{...packet.sidecar, schema: 'wrong'}, 'PROVENANCE'], [{...packet.sidecar, manifest_sha256: '0'.repeat(64)}, 'HASH'],
+    [{...packet.sidecar, rig_size: [32, 25]}, 'SIZE'], [{...packet.sidecar, resample: 'bilinear'}, 'PROVENANCE'],
+    [{...packet.sidecar, path: '../escape.png'}, 'PATH'], [{...packet.sidecar, path: 'a%20b.png'}, 'PATH'],
+    [{...packet.sidecar, sha256: '0'.repeat(64)}, 'HASH'],
+  ] as const) {
+    await writeFile(declaration, JSON.stringify(value));
+    await expect(loadPartsView(root)).rejects.toThrow('PARTS_DIFFERENCE_' + code);
+  }
+  await writeFile(declaration, '{');
+  await expect(loadPartsView(root)).rejects.toThrow('PARTS_DIFFERENCE_PROVENANCE');
+  const original = await readFile(join(root, packet.sidecar.path));
+  const alpha = PNG645.sync.read(original); alpha.data[3] = 254;
+  const alphaBytes = PNG645.sync.write(alpha);
+  for (const [bytes, code] of [[Buffer.from('not PNG'), 'PNG'], [PNG645.sync.write(new PNG645({width: 1, height: 1})), 'SIZE'], [alphaBytes, 'ALPHA']] as const) {
+    await writeFile(join(root, packet.sidecar.path), bytes);
+    await writeFile(declaration, JSON.stringify({...packet.sidecar, sha256: hash645(bytes)}));
+    await expect(loadPartsView(root)).rejects.toThrow('PARTS_DIFFERENCE_' + code);
+  }
+});
+
+test('#645 sidecar path replacement and escaping painting symlink cannot reuse loaded provenance', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'parts-645-'))); roots.push(root);
+  const outside = await realpath(await mkdtemp(join(tmpdir(), 'parts-645-outside-'))); roots.push(outside);
+  const packet = await write645SidecarPackage(root), pkg = await loadPartsView(root);
+  await writeFile(join(root, 'other.json'), packet.sidecarBytes);
+  await unlink(join(root, 'painting_in_rig.json'));
+  await symlink(join(root, 'other.json'), join(root, 'painting_in_rig.json'));
+  await expect(assertPartsUnchanged(pkg)).rejects.toThrow('PARTS_VIEW_SOURCE_CHANGED');
+  await unlink(join(root, 'painting_in_rig.json'));
+  await writeFile(join(root, 'painting_in_rig.json'), packet.sidecarBytes);
+  await writeFile(join(outside, 'painting.png'), await readFile(join(root, packet.sidecar.path)));
+  await unlink(join(root, packet.sidecar.path));
+  await symlink(join(outside, 'painting.png'), join(root, packet.sidecar.path));
+  await expect(loadPartsView(root)).rejects.toThrow('PARTS_DIFFERENCE_PATH');
+});

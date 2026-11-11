@@ -1149,6 +1149,45 @@ signatures and the host-owned integration example are in
 - **Create-published step IDs and hashes.** `JobPlanIdentity` holds `steps` (`id` and `hash`) published by [Create #184](https://github.com/rig-c/create/issues/184) for the displayed plan. Review retains these values without importing or recomputing Create's internal `stepHash`. Create validates them through its existing `steps` and `step_hashes` writer logic, with no separate plan revision hash or additional revision gate in this contract.
 - **C4 manifest-referenced parts PNG identity.** C4 binds the exact public `partsFileReferences(dir)` array from `@rig-c/parts/src/parts.ts`, whose contract is frozen at Parts 2.25.0. The trusted host resolves an installed version in `JOB_PARTS_ENUMERATOR_RANGE` (`>=2.25.0 <3.0.0`), supplies its actual version and official callback through `partsEnumerator`, and declares `partsEnumeratorId`. `JobPartsIdentity.enumeratorVersion` carries that actual version. Manifest paths are work-root-relative and image paths are relative to the manifest directory. Each image carries `path`, bounded-string `role` and raw-byte `sha256`. Review compares the claimed array positionally with the official array, preserving its role/order/duplicate semantics. Upstream roles include `part`, `alternate`, `depth`, `painting` and `figure_mask`. Review bounds shape and paths, refuses traversal/symlinks, decodes PNGs and hashes retained bytes. Missing references refuse with row, role and path, including a missing sibling figure mask when a render copy exists. Unreferenced extras stay outside this parts identity. Composite source hashes use `rig-review-job-source/2`. Create #184 production reader/projection and official-hook wiring remain pending.
 
+
+### Parts Difference sidecar and retained inspection (#645)
+
+The producer may publish a separate `painting_in_rig.json` beside the loaded
+`parts.json`, without rewriting that manifest. An own inline `painting_in_rig`
+key always wins, including a malformed value: it is never rescued by a sidecar.
+Only when the own inline key is absent does Review read the adjacent sidecar.
+Absent both, legacy inspection remains available with Difference unavailable.
+
+The sidecar is a closed six-field `rig-parts-painting-reference/1` declaration:
+`schema`, `manifest_sha256`, `path`, `sha256`, `resample`, and `rig_size`.
+`manifest_sha256` is the lowercase SHA-256 of the exact loaded manifest bytes,
+not reserialized JSON. `path` is a literal portable contained path relative to
+that same directory; `sha256` binds the raw PNG bytes. `rig_size` is exactly two
+positive safe integers equal to the manifest's rig_size. The existing Difference
+checks require RGBA8, alpha 255 everywhere, dimensions equal to rig_size, and
+`resample` equal to `lanczos3-rgb-opaque`. Malformed or unreadable declarations
+refuse through the existing `PARTS_DIFFERENCE_*` boundaries.
+
+The trusted publication reader includes both sidecar JSON and PNG in generic
+`JobPublishedContext.files`, with work-root-relative paths and raw SHA-256 values.
+Review validates the sidecar before admission and requires those matching generic
+identities. They are not new Parts roles or entries in `JobPartsIdentity.images`:
+the official manifest-referenced enumeration remains unchanged. Exact JSON and
+PNG bytes join the existing snapshot seals and `rig-review-job-source/2` files
+preimage. Currentness, native comment crops and finalized acts bind that composite
+sourceHash. Existing nonsidecar source objects, canonical bytes, checkpoint
+packets and historical records retain their existing grammar.
+
+Retained metadata uses the existing `differenceAvailable` boolean and publication
+sourceHash; no public sidecar identity field or arbitrary asset endpoint is added.
+`GET api/stage-parts/difference/<index>?threshold=<0..255>&footprints=<true|false>`
+uses the same original-part Difference implementation and PNG response as the
+standalone Parts server, with `X-Difference-Count`, `X-Difference-Covered` and
+`X-Difference-Compared` headers. All operands come from the sealed publication;
+source paths and the live draft are never fetched on behalf of the route. This is
+per-original-part inspection, not inferred compiled-atlas pixel correspondence.
+Sidecar export alone does not regenerate accepted manifests or producer metrics.
+
 ### Image-set publication and human comparison
 
 Before asking, agents read `next.value.capabilities.imageSetVerdict` through the

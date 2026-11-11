@@ -1953,7 +1953,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 (JSON.stringify(evidence.packet) !== JSON.stringify(declared) || evidence.packet.planStepId !== checkpoint.step.id)) {
                 throw new Error('CHECKPOINT_EVIDENCE_INVALID');
             }
-            if (evidence) {
+            if (evidence && !prepared.metadata.capabilities.preRig) {
                 const section = node('section');
                 section.dataset.jobCheckpointEvidence = subject.checkpointId;
                 section.append(node('h4', 'job.checkpointEvidence'));
@@ -2286,6 +2286,18 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 return page;
             },
             painting: () => painting?.element instanceof HTMLImageElement ? Promise.resolve(painting.element) : null,
+            async difference(index, threshold, footprints) {
+                if (current !== prepared || lifetime.signal.aborted) throw new Error('JOB_ACT_SOURCE_STALE');
+                const response = await fetch(routes.api(`stage-parts/difference/${index}?threshold=${threshold}&footprints=${footprints}`), {
+                    signal: lifetime.signal, headers: access.headers(),
+                });
+                if (current !== prepared || lifetime.signal.aborted) throw new Error('JOB_ACT_SOURCE_STALE');
+                if (!response.ok) {
+                    const value = await response.json();
+                    throw new Error(typeof value?.error === 'string' ? value.error : value?.error?.code ?? 'PARTS_DIFFERENCE_UNAVAILABLE');
+                }
+                return response;
+            },
             async crop(issue) {
                 if (current !== prepared || lifetime.signal.aborted) throw new Error('JOB_ACT_SOURCE_STALE');
                 const response = await fetch(routes.api('stage-parts/comment'), {

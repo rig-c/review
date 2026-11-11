@@ -36,6 +36,20 @@ async function bodyJson(req: Request): Promise<unknown> {
   return JSON.parse(new TextDecoder().decode(body));
 }
 
+/** Shared standalone/retained Difference query and PNG response; pixels stay in partsDifference. */
+export async function partsDifferenceResponse(pkg: PartsViewPackage, index: number,
+  query: URLSearchParams, responseHeaders: Record<string, string>,
+): Promise<Response> {
+  const t = query.get('threshold'), f = query.get('footprints');
+  if (!t || !/^\d{1,3}$/.test(t) || !['true', 'false'].includes(f ?? '')) throw new Error('PARTS_COMPARISON_INVALID: threshold and footprints required');
+  const r = await partsDifference(pkg, index, Number(t), f === 'true');
+  const png = new PNG({width: r.width, height: r.height});
+  png.data = Buffer.from(r.data);
+  return new Response(new Uint8Array(PNG.sync.write(png)), {headers: {...responseHeaders,
+    'Content-Type': 'image/png', 'X-Difference-Count': String(r.count),
+    'X-Difference-Covered': String(r.covered), 'X-Difference-Compared': String(r.compared)}});
+}
+
 export interface PartsSavedEvent extends PartsSaveReceipt { saveCount: number }
 export interface PartsServerOptions {
   port?: number; capability?: string; exitOnClose?: boolean; graceMs?: number; unopenedTimeoutMs?: number;
@@ -99,11 +113,7 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
         if(url.pathname==='/api/parts/painting'&&req.method==='GET'){if(!pkg.painting)return json({error:'PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting'},404);return serveReference(req,pkg.painting.abs,pkg.painting.sha256,headers);}
         const difference=/^\/api\/parts\/difference\/(\d+)$/.exec(url.pathname);
         if(difference&&req.method==='GET'){
-          const t=url.searchParams.get('threshold'),f=url.searchParams.get('footprints');
-          if(!t||!/^\d{1,3}$/.test(t)||!['true','false'].includes(f??''))throw new Error('PARTS_COMPARISON_INVALID: threshold and footprints required');
-          const r=await partsDifference(pkg,Number(difference[1]),Number(t),f==='true');
-          const png=new PNG({width:r.width,height:r.height});png.data=Buffer.from(r.data);
-          return new Response(new Uint8Array(PNG.sync.write(png)),{headers:{...headers,'Content-Type':'image/png','X-Difference-Count':String(r.count),'X-Difference-Covered':String(r.covered),'X-Difference-Compared':String(r.compared)}});
+          return await partsDifferenceResponse(pkg, Number(difference[1]), url.searchParams, headers);
         }
         const image = /^\/api\/parts\/(image|page)\/(\d+)$/.exec(url.pathname);
         if (image && (req.method === 'GET' || req.method === 'HEAD')) {
