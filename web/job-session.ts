@@ -1364,7 +1364,8 @@ export interface JobFormDependencies {
         const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff' || subject.kind === 'reopen';
         const note = commentOnly ? null : textArea(fields, 'interview.note');
         if(commentOnly)fields.append(node('p','job.commentsFromWorkspace'));
-        const commentWords=()=>form.commentWords?.()??'';
+        let retainedCommentWords='';
+        const commentWords=()=>form.commentWords?.()??retainedCommentWords;
         let read: () => UISubmissionV3['value'];
         let submitKey = 'Submit review';
         if (subject.kind === 'interview-picks') {
@@ -1574,6 +1575,7 @@ export interface JobFormDependencies {
                 const original = saved.forms?.find((item: {
                     askId: string;
                 }) => item.askId === ask.askId);
+                if(commentOnly&&typeof original?.value?.words==='string'&&original.value.words.length<=10000)retainedCommentWords=original.value.words;
                 for (const input of form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')) {
                     const restored = original?.controls?.find((item: {
                         name: string;

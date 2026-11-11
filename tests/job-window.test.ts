@@ -1429,6 +1429,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
         onclick?: (event?: unknown) => unknown;
         oninput?: (event?: unknown) => unknown;
         onsubmit?: (event?: unknown) => unknown;
+        commentWords?: () => string;
         private attributes = new Map<string, string>();
         private listeners = new Map<string, Set<(event: any) => void>>();
         private text = '';
@@ -1812,7 +1813,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
         const end = source.indexOf('    return () => { globalThis.removeEventListener(\'pagehide\', stop); stop(); };', start);
         expect(start).toBeGreaterThan(0);
         expect(end).toBeGreaterThan(start);
-        const closureBody = source.slice(start, end) + '\nreturn {window, workspace, stop: () => { globalThis.removeEventListener(\'pagehide\', stop); stop(); }};';
+        const closureBody = source.slice(start, end) + '\nreturn {window, workspace, forms, stop: () => { globalThis.removeEventListener(\'pagehide\', stop); stop(); }};';
         const transpiled = new Bun.Transpiler({loader: 'ts'}).transformSync(closureBody);
 
         const saved = new Map<string, PropertyDescriptor | undefined>();
@@ -2135,7 +2136,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             recordJobRigDraw,
             presentJobRigViewport, CanvasRenderer, enCatalog, koCatalog, JOB_HUB_READY, jobHubMessageMatches, advancePlayback, JOB_PLAN_TEXT_FIELDS,
             jobRigDrawState, presentJobRigStage, oldWindowRigScreen, isJobRigScreen,
-        ) as {window: ReturnType<typeof createJobWindow>; workspace: RuntimeDomNode; stop: () => void};
+        ) as {window: ReturnType<typeof createJobWindow>; workspace: RuntimeDomNode; forms:Map<string,import('../web/job-session.ts').JobForm>; stop: () => void};
 
         async function drainPreparing() {
             for (let tick = 0; tick < 12 && mounted.window.state().preparing; tick++) {
@@ -2158,6 +2159,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             host,
             workspace: mounted.workspace,
             window: mounted.window,
+            formWords(form:RuntimeDomNode){const value=mounted.forms.get(form.dataset.jobAsk!)!.read();if(!('words' in value))throw new Error('Expected words act');return value.words;},
             players,
             activePlayer: () => players.at(-1)!,
             parentWindow,
@@ -2316,9 +2318,10 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             const form = s.workspace.querySelector('form[data-job-ask="label-form"]')!;
             expect(form).not.toBeNull();
             const input = s.workspace.querySelector('#job-time')!;
-            const note = form.querySelector('textarea[name="note"]')!;
-            expect(input).not.toBeNull();expect(note).not.toBeNull();
-            const pairs = [{control:input,key:'job.time'},{control:note,key:'interview.note'}].map(({control,key}) => {
+            expect(form.querySelector('textarea[name="note"]')).toBeNull();
+            const reference = s.workspace.querySelector('#job-reference')!;
+            expect(input).not.toBeNull();expect(reference).not.toBeNull();
+            const pairs = [{control:input,key:'job.time'},{control:reference,key:'Reference'}].map(({control,key}) => {
                 const label = control.parentElement!;
                 const span = label.children[0]!;
                 expect(label.tagName).toBe('label');
@@ -2327,7 +2330,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
                 expect(label.children).toEqual([span,control]);
                 return {control,key,label,span};
             });
-            note.value = '  literal reviewer text 한글\n';
+            form.commentWords = () => '  literal reviewer text 한글\n';
             for (const language of ['en','ko'] as const) {
                 i18nModule.setLanguagePreference(language);
                 for (const {control,key,label,span} of pairs) {
@@ -2336,8 +2339,9 @@ describe('#559 continuous Rig motion transport and job forms', () => {
                     expect(label.children[1]).toBe(control);
                 }
                 expect(s.workspace.querySelector('#job-time')!).toBe(input);
-                expect(form.querySelector('textarea[name="note"]')!).toBe(note);
-                expect(note.value).toBe('  literal reviewer text 한글\n');
+                expect(s.workspace.querySelector('#job-reference')).toBe(reference);
+                expect(form.querySelector('textarea[name="note"]')).toBeNull();
+                expect(s.formWords(form)).toBe('  literal reviewer text 한글\n');
             }
         } finally {
             s.cleanup();
@@ -2811,10 +2815,10 @@ describe('#559 continuous Rig motion transport and job forms', () => {
                 expect(form.querySelector('[data-job-text="job.plan.bar"]')!.textContent).toBe(i18nModule.t('job.plan.bar'));
                 expect(form.querySelectorAll('mark')).toHaveLength(0);
             }
-            const note = form.querySelector('textarea[name="note"]')!;
+            expect(form.querySelector('textarea[name="note"]')).toBeNull();
             const outcome = form.querySelector('select[name="outcome"]')!;
             expect(outcome.value).toBe('');
-            note.value=words;outcome.value='fail';form.dispatchEvent({type:'input'});
+            form.commentWords=()=>words;outcome.value='fail';form.dispatchEvent({type:'input'});
             session.failNextTransportSubmit();await form.onsubmit?.({preventDefault(){}});
             expect(session.outgoingSubmits.at(-1)!.body.value).toEqual({checkpointId:'alias',outcome:'fail',words});
             session.cleanup();session=undefined;
@@ -2823,7 +2827,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             session.window.event(fixture.events.find(event=>event.type === 'pending')!);
             const restored=session.workspace.querySelector('form[data-job-ask="plan-text-checkpoint"]')!;
             expect(restored.querySelector('select[name="outcome"]')!.value).toBe('fail');
-            expect(restored.querySelector('textarea[name="note"]')!.value).toBe(words);
+            expect(session.formWords(restored)).toBe(words);
             const recordDisplay: DisplayPublicationV3 = {...display,publication:{...display.publication,publicationId:'record-plan-text',generation:3,
                 source:{sourceHash:'c'.repeat(64),projectHash:record.sha256,record,subject:'plan',selection:{kind:'plan'},
                     optionSet:null,optionSetFile:null,inputs:[],files:[record],plan,subjects:[{kind:'signoff',stage:'rigging-interview'}]}}};
@@ -2831,10 +2835,12 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             const signoff: PendingAskV3={askId:'plan-text-signoff',publicationId:'record-plan-text',source:recordDisplay.publication.source,
                 subject:{kind:'signoff',stage:'rigging-interview'},status:'pending'};
             fixture.pending(signoff,4);session.window.event(fixture.events.at(-1)!);
-            expect(session.workspace.querySelector('[data-job-record="plan"]')!.textContent).toContain(values.bar);
             const signform=session.workspace.querySelector('form[data-job-ask="plan-text-signoff"]')!;
+            expect(session.workspace.querySelector('[data-job-record="plan"]')).toBeNull();
+            expect(signform.textContent).toContain(values.bar);
             expect(signform.textContent).toContain(values.does);
-            signform.querySelector('textarea[name="note"]')!.value=words;
+            expect(signform.querySelector('textarea[name="note"]')).toBeNull();
+            signform.commentWords=()=>words;
             session.failNextTransportSubmit();await signform.onsubmit?.({preventDefault(){}});
             expect(session.outgoingSubmits.at(-1)!.body.value).toEqual({stage:'rigging-interview',decision:'approved',words});
         } finally {session?.cleanup();i18nModule.setLanguagePreference(preference);}
@@ -2865,15 +2871,15 @@ describe('#559 continuous Rig motion transport and job forms', () => {
                 .toEqual(evidence.table.rows.map(row => row.map(String)));
             expect(section.querySelectorAll('script')).toHaveLength(0);
             expect(section.querySelectorAll('pre').map(block => block.textContent)).toEqual([evidence.packet.routesText, evidence.packet.recommendationText]);
-            const note = form.querySelector('textarea[name="note"]')!;
+            expect(form.querySelector('textarea[name="note"]')).toBeNull();
             const outcome = form.querySelector('select[name="outcome"]')!;
-            note.value = words; outcome.value = 'fail'; form.dispatchEvent({type: 'input'});
+            form.commentWords = () => words; outcome.value = 'fail'; form.dispatchEvent({type: 'input'});
             for (const lang of ['en', 'ko'] as const) {
                 i18nModule.setLanguagePreference(lang);
                 const catalog = lang === 'ko' ? koCatalog : enCatalog;
                 expect(form.querySelector('[data-job-text="job.checkpointRouteMapping"]')!.textContent).toBe(catalog['job.checkpointRouteMapping']);
                 expect(section.querySelector('[data-job-text="job.checkpointRecommendation"]')!.textContent).toBe(catalog['job.checkpointRecommendation']);
-                expect(note.value).toBe(words);
+                expect(session.formWords(form)).toBe(words);
                 expect(section.querySelectorAll('pre').map(block => block.textContent)).toEqual([evidence.packet.routesText, evidence.packet.recommendationText]);
             }
             for (const value of ['pass', 'fail']) {
@@ -2888,7 +2894,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             await session.replayPublication(display);
             session.window.event(fixture.events.find(event => event.type === 'pending')!);
             const restored = session.workspace.querySelector('form[data-job-ask="evidence-checkpoint"]')!;
-            expect(restored.querySelector('textarea[name="note"]')!.value).toBe(words);
+            expect(session.formWords(restored)).toBe(words);
             expect(restored.querySelector('select[name="outcome"]')!.value).toBe('fail');
             expect(restored.querySelectorAll('tbody')[0]!.querySelectorAll('tr')).toHaveLength(103);
         } finally {
@@ -3018,8 +3024,8 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             expect(submitButton.textContent).toBe(t('job.reopen'));
 
             const verbatimWords = '  reopen stage with verbatim spaces\n';
-            const noteInput = form.querySelector('textarea[name="note"]')!;
-            noteInput.value = verbatimWords;
+            expect(form.querySelector('textarea[name="note"]')).toBeNull();
+            form.commentWords = () => verbatimWords;
             form.dispatchEvent({ type: 'input' });
 
             const expectedReopenAct: RecordAct = parseRecordAct({
@@ -3279,7 +3285,8 @@ describe('#559 continuous Rig motion transport and job forms', () => {
 
             // Edit draft on Rig 1:
             const form1 = s.workspace.querySelector(`form[data-job-ask="${ask1.askId}"]`)!;
-            form1.querySelector('textarea[name="note"]')!.value = '  keep rig 1 draft bound to source 1\n';
+            expect(form1.querySelector('textarea[name="note"]')).toBeNull();
+            form1.commentWords = () => '  keep rig 1 draft bound to source 1\n';
             form1.dispatchEvent({type: 'input'});
 
             // In-place update to compatible Rig 2:
@@ -3369,7 +3376,8 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             await Bun.sleep(1);
 
             const form1 = s1.workspace.querySelector(`form[data-job-ask="${ask1.askId}"]`)!;
-            form1.querySelector('textarea[name="note"]')!.value = '  draft from rig 1\n';
+            expect(form1.querySelector('textarea[name="note"]')).toBeNull();
+            form1.commentWords = () => '  draft from rig 1\n';
             form1.dispatchEvent({type: 'input'});
 
             secondDisplay = await s1.publishRig(2);
@@ -3385,7 +3393,8 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             s1.fixture.pending(ask2, 4);
             s1.window.event(s1.fixture.events.at(-1)!);
             const form2 = s1.workspace.querySelector(`form[data-job-ask="${ask2.askId}"]`)!;
-            form2.querySelector('textarea[name="note"]')!.value = '  active draft on rig 2\n';
+            expect(form2.querySelector('textarea[name="note"]')).toBeNull();
+            form2.commentWords = () => '  active draft on rig 2\n';
             form2.dispatchEvent({type: 'input'});
         } finally {
             s1.cleanup();
@@ -3423,7 +3432,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             expect(s2.workspace.querySelector('[data-job-direction]')!.hidden).toBe(false);
 
             const restoredForm2 = s2.workspace.querySelector('form[data-job-ask="ask-reconnect-2"]')!;
-            expect(restoredForm2.querySelector('textarea[name="note"]')!.value).toBe('  active draft on rig 2\n');
+            expect(s2.formWords(restoredForm2)).toBe('  active draft on rig 2\n');
             expect(s2.window.state().retainedDrafts).toEqual([{
                 publicationId: 'publication-1',
                 sourceHash: firstDisplay!.publication.source.sourceHash,
@@ -3486,7 +3495,8 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             }, 2);
             s1.window.event(s1.fixture.events.at(-1)!);
             const form1 = s1.workspace.querySelector('form[data-job-ask="ask-bounded-1"]')!;
-            form1.querySelector('textarea[name="note"]')!.value = 'valid retained draft on rig 1';
+            expect(form1.querySelector('textarea[name="note"]')).toBeNull();
+            form1.commentWords = () => 'valid retained draft on rig 1';
             form1.dispatchEvent({type: 'input'});
 
             secondDisplay = await s1.publishRig(2);
@@ -3501,7 +3511,8 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             }, 4);
             s1.window.event(s1.fixture.events.at(-1)!);
             const form2 = s1.workspace.querySelector('form[data-job-ask="ask-bounded-2"]')!;
-            form2.querySelector('textarea[name="note"]')!.value = 'valid active draft on rig 2';
+            expect(form2.querySelector('textarea[name="note"]')).toBeNull();
+            form2.commentWords = () => 'valid active draft on rig 2';
             form2.dispatchEvent({type: 'input'});
 
             // Single zoom action writes window state once (not duplicated across renderControls + render):
@@ -3619,7 +3630,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
                 }],
             }]);
             const restoredForm2 = s2.workspace.querySelector('form[data-job-ask="ask-bounded-2"]')!;
-            expect(restoredForm2.querySelector('textarea[name="note"]')!.value).toBe('valid active draft on rig 2');
+            expect(s2.formWords(restoredForm2)).toBe('valid active draft on rig 2');
         } finally {
             s2.cleanup();
         }
@@ -3800,12 +3811,13 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             expect(s.workspace.querySelector(`form[data-job-ask="${verdictAsk.askId}"]`)).toBeNull();
             expect(s.outgoingSubmits).toHaveLength(0);
 
-            // 8. Typing I/M/B in checkpoint textarea[name="note"] must NOT toggle layers, and checkpoint submits verbatim words:
+            // 8. Typing I/M/B in the remaining checkpoint select must NOT toggle layers; Comments supplies the same scalar:
             const cpForm = s.workspace.querySelector(`form[data-job-ask="${checkpointAsk.askId}"]`)!;
-            const cpNote = cpForm.querySelector('textarea[name="note"]')!;
-            s.emitGlobal('keydown', {key: 'i', target: cpNote, preventDefault() {}});
-            s.emitGlobal('keydown', {key: 'm', target: cpNote, preventDefault() {}});
-            s.emitGlobal('keydown', {key: 'b', target: cpNote, preventDefault() {}});
+            expect(cpForm.querySelector('textarea[name="note"]')).toBeNull();
+            const cpInput = cpForm.querySelector('select[name="outcome"]')!;
+            s.emitGlobal('keydown', {key: 'i', target: cpInput, preventDefault() {}});
+            s.emitGlobal('keydown', {key: 'm', target: cpInput, preventDefault() {}});
+            s.emitGlobal('keydown', {key: 'b', target: cpInput, preventDefault() {}});
             expect(layerImages.checked).toBe(false);
             expect(layerMesh.checked).toBe(true);
             expect(layerBones.checked).toBe(true);
@@ -3820,7 +3832,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
                 value: {checkpointId: 'meshes', planStepId: 'meshes', outcome: 'pass', words: '  Inspecting I M B mesh seam verbatim\n'},
             });
             cpForm.querySelector('select[name="outcome"]')!.value = 'pass';
-            cpNote.value = '  Inspecting I M B mesh seam verbatim\n';
+            cpForm.commentWords = () => '  Inspecting I M B mesh seam verbatim\n';
             cpForm.dispatchEvent({type: 'input'});
             await cpForm.onsubmit?.({preventDefault() {}});
             expect(s.outgoingSubmits).toHaveLength(1);
