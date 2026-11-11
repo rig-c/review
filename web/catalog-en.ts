@@ -3388,6 +3388,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.saveCheckpoint": "Save checkpoint outcome",
   "job.savePartsVerdict": "Save parts verdict",
   "job.saved": "Human action saved.",
+  "job.openPlanStep": "View plan step",
+  "job.openPlan": "View plan",
   "job.signoff": "Save stage approval",
   "job.reopen": "Reopen stage",
   "job.time": "Inspection time (s)",

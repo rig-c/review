@@ -3388,6 +3388,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.saveCheckpoint": "체크포인트 결과 저장",
   "job.savePartsVerdict": "파츠 판정 저장",
   "job.saved": "사용자 작업을 저장했습니다.",
+  "job.openPlanStep": "계획 단계 보기",
+  "job.openPlan": "계획 보기",
   "job.signoff": "단계 승인 저장",
   "job.reopen": "단계 다시 열기",
   "job.time": "검사 시간 (초)",

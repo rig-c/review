@@ -31,6 +31,7 @@ import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigS
 import {advancePlayback} from './playback-clock.ts';
 import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl,createViewControls} from './view-controls.ts';
+import {bindWorkspaceDrawer} from './workspace-layout.ts';
 import {SENTINELS} from './parts-render.ts';
 import {CanvasRenderer} from '@rig-c/play';
 import {JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
@@ -1843,6 +1844,33 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         section.append(list);
         return section;
     }
+    /** Compose existing review dialog styling and the shared native-modal/focus binder. */
+    function recordModal(prepared: JobPreparedInspection, key: string, content: HTMLElement): HTMLElement {
+        const host = node('div');
+        const trigger = node('button', key);
+        trigger.type = 'button';
+        trigger.dataset.jobRecordOpener = key;
+        const drawer = node('dialog');
+        drawer.id = 'job-record-' + crypto.randomUUID();
+        drawer.className = 'review-dialog';
+        const header = node('div');
+        header.className = 'review-dialog-header';
+        const title = node('h2', key);
+        title.id = drawer.id + '-title';
+        drawer.setAttribute('aria-labelledby', title.id);
+        const close = node('button', 'Close');
+        close.type = 'button';
+        header.append(title, close);
+        const body = node('div');
+        body.className = 'review-dialog-body';
+        body.append(content);
+        drawer.append(header, body);
+        host.append(trigger, drawer);
+        const unbind = bindWorkspaceDrawer({trigger, drawer, label: t(key), close});
+        const dispose = prepared.dispose;
+        prepared.dispose = () => {try {unbind();} finally {dispose();}};
+        return host;
+    }
     function formFor(ask: PendingAskV3, prepared: JobPreparedInspection): JobForm {
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
@@ -1937,7 +1965,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             fields.prepend(heading);
             const guidance = node('p');
             guidance.textContent = checkpoint.note;
-            fields.append(guidance, planTextList(ask.source.plan!, prepared.metadata.planText, checkpoint.step.id));
+            fields.append(guidance, recordModal(prepared, 'job.openPlanStep',
+                planTextList(ask.source.plan!, prepared.metadata.planText, checkpoint.step.id)));
             const evidence = prepared.checkpointEvidence?.find(item => item.packet.checkpointId === subject.checkpointId);
             const declared = ask.source.checkpointEvidence?.find(item => item.checkpointId === subject.checkpointId);
             if (Boolean(declared) !== Boolean(evidence) || evidence &&
@@ -2064,6 +2093,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         const status = node('p');
         status.setAttribute('role', 'status');
         form.append(status);
+        if (subject.kind === 'signoff' || subject.kind === 'reopen') {
+            const content = node('div');
+            content.append(fields, status);
+            form.append(recordModal(prepared, subject.kind === 'signoff' ? 'job.signoff' : 'job.reopen', content));
+        }
         const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
             submitting: false, rigSubmission: createJobRigSubmission() };
         const signoffSubmissionId = crypto.randomUUID();
@@ -2657,7 +2691,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             }
             else {
                 root.dataset.jobPlanWorkspace = '';
-                summary.append(identity, binding, planTextList(source.plan, prepared.metadata.planText));
+                summary.append(identity, binding, recordModal(prepared, 'job.openPlan',
+                    planTextList(source.plan, prepared.metadata.planText)));
             }
             stage.prepend(summary);
             controls.hidden = pair.hidden = transport.hidden = true;
