@@ -403,6 +403,7 @@ class TestTextNode {
  constructor(val:string){this.nodeValue=val;}
 }
 class TestElement {
+ declare open?:boolean;
  nodeType=1;
  tagName:string;
  id='';
@@ -1196,7 +1197,7 @@ test('scene interview warnings and historical issues render in EN/KO while origi
    expect(host.querySelectorAll('fieldset')[0]!.disabled).toBe(true);
    expect(host.querySelectorAll('[data-interview-question]')[0]!.getAttribute('aria-current')).toBe('step');
    const details = host.querySelectorAll('details');
-   expect(details.every(entry => !entry.open)).toBe(true);
+   expect(details.every((entry:TestElement) => !entry.open)).toBe(true);
   }
  } finally {
   unmount?.(); globalThis.fetch = previousFetch; setLanguagePreference(preference);

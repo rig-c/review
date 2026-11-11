@@ -751,7 +751,7 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                         matchedROI: pixels.leftROI, expectedRgba: color[0].split(',').map(Number) });
                     await writeFile(join(output, mode + '-' + sample.width + '-' + sample.phase + '-image' + index + '.png'), shot);
                     assert.ok(pixels.inBounds && pixels.leftROI.backgroundPixels > 0);
-                    const cameraInteraction = await page.evaluate(`(()=>{const art=document.querySelector('.interview-images'),view=art.querySelector('.interview-image-preview');
+                    const cameraInteraction = await page.evaluate<{native:number;zoomed:number;fitted:number}>(`(()=>{const art=document.querySelector('.interview-images'),view=art.querySelector('.interview-image-preview');
                         art.querySelector('[data-interview-view=native-one]').click();const native=Number(view.dataset.interviewZoom);
                         art.querySelector('[data-interview-view=zoom-in]').click();const zoomed=Number(view.dataset.interviewZoom);
                         art.querySelector('[data-interview-view=fit]').click();const fitted=Number(view.dataset.interviewZoom);
