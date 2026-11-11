@@ -187,6 +187,12 @@ export function createJobFront(options: {
             });
             return new Response(body, { headers: { ...headers, 'Content-Type': 'application/x-ndjson' } });
         }
+        const instance = /^publications\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/instances\/([a-f0-9]{64})\/(.*)$/.exec(route);
+        // Gate only the declared Difference query shape; the shared response validates its values.
+        const differenceQuery = Boolean(options.publication) && request.method === 'GET' && instance !== null &&
+            /^api\/stage-parts\/difference\/(0|[1-9]\d*)$/.test(instance[3]!) &&
+            [...url.searchParams.keys()].length === 2 &&
+            ['threshold', 'footprints'].every(key => url.searchParams.getAll(key).length === 1);
         const embedded = route === '' && url.searchParams.has('hub');
         if (embedded) {
             if (!options.hubIncarnation || url.searchParams.get('hub') !== options.hubIncarnation ||
@@ -194,10 +200,9 @@ export function createJobFront(options: {
                 url.searchParams.has('lang') && !['en', 'ko'].includes(url.searchParams.get('lang')!)) {
                 return failure('JOB_REQUEST_INVALID', 400);
             }
-        } else if (url.search && !(route === '' && ['?lang=en', '?lang=ko'].includes(url.search))) {
+        } else if (url.search && !differenceQuery && !(route === '' && ['?lang=en', '?lang=ko'].includes(url.search))) {
             return failure('JOB_REQUEST_INVALID', 400);
         }
-        const instance = /^publications\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/instances\/([a-f0-9]{64})\/(.*)$/.exec(route);
         if (instance && options.publication) {
             return options.publication(jobId, instance[1]!, instance[2]!, instance[3]!, request);
         }

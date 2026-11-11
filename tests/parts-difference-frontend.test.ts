@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
+import {jobPublicationRoutes} from '../web/job-session.ts';
 
 const partsSource = readFileSync(new URL('../web/parts.ts', import.meta.url), 'utf8');
 const jobSource = readFileSync(new URL('../web/job-session.ts', import.meta.url), 'utf8');
@@ -218,20 +219,27 @@ test('#645 changing from selected part to assembly preserves Difference and keep
 
 function liveDifference() {
   const prepared = {}, lifetime = new AbortController(), calls: {url: string; init: RequestInit}[] = [];
+  const key = 'a'.repeat(64), origin = 'http://127.0.0.1:4317';
+  const entry = `/jobs/parts-fixture/publications/parts-publication/instances/${key}/`;
+  const display = {publication: {publicationId: 'parts-publication', instanceKey: key},
+    routes: {entry, apiBase: entry + 'api/', assetsBase: entry + 'assets/'}} as Parameters<typeof jobPublicationRoutes>[0];
+  const routes = jobPublicationRoutes(display, origin);
   const scope: Record<string, any> = {
-    prepared, current: prepared, lifetime,
-    routes: {api: (path: string) => '/retained/pinned/' + path},
+    prepared, current: prepared, lifetime, routes,
     access: {headers: () => ({'X-Review-Capability': 'fixture'})},
     fetch: async (url: string, init: RequestInit) => {calls.push({url, init}); return new Response('png');},
   };
-  return {scope, lifetime, calls, read: productFunction('difference', scope, jobSource)};
+  return {scope, lifetime, calls, routes, display, origin, read: productFunction('difference', scope, jobSource)};
 }
 
 test('#645 live host Difference uses the publication-pinned route, capability and cancellation signal', async () => {
   const caller = liveDifference();
   const response = await caller.read(2, 17, true);
   expect(await response.text()).toBe('png');
-  expect(caller.calls[0]!.url).toBe('/retained/pinned/stage-parts/difference/2?threshold=17&footprints=true');
+  const request = new URL(caller.calls[0]!.url);
+  expect(request.href).toBe(caller.routes.api('stage-parts/difference/2') + '?threshold=17&footprints=true');
+  expect(request.origin).toBe(caller.origin);
+  expect([...request.searchParams]).toEqual([['threshold', '17'], ['footprints', 'true']]);
   expect(caller.calls[0]!.init.signal).toBe(caller.lifetime.signal);
   expect(caller.calls[0]!.init.headers).toEqual({'X-Review-Capability': 'fixture'});
 });
@@ -253,5 +261,24 @@ test('#645 a disposed live host refuses Difference before starting a request', a
   const caller = liveDifference();
   caller.lifetime.abort();
   await expect(caller.read(0, 16, false)).rejects.toThrow('JOB_ACT_SOURCE_STALE');
+  expect(caller.calls).toHaveLength(0);
+});
+
+
+test('#645 real publication routes retain literal path and global extra-query refusal', () => {
+  const caller = liveDifference();
+  expect(caller.routes.api('stage-parts/difference/2')).toBe(caller.origin + caller.display.routes.apiBase + 'stage-parts/difference/2');
+  for (const path of ['stage-parts/difference/2?threshold=17&footprints=true',
+    'stage-parts/difference/2?extra=1', 'review?lang=en', 'stage-parts?extra=1',
+    'stage-parts/difference/2#fragment', '../stage-parts/difference/2', 'stage-parts/%2e%2e/review']) {
+    expect(() => caller.routes.api(path)).toThrow('JOB_DISPLAY_MISMATCH');
+  }
+  expect(() => jobPublicationRoutes({...caller.display, routes: {...caller.display.routes,
+    apiBase: caller.display.routes.apiBase + '?extra=1'}}, caller.origin)).toThrow('JOB_DISPLAY_MISMATCH');
+});
+
+test('#645 Difference adapter cannot smuggle an extra query through its literal endpoint', async () => {
+  const caller = liveDifference();
+  await expect(caller.read('2?extra=1', 17, true)).rejects.toThrow('JOB_DISPLAY_MISMATCH');
   expect(caller.calls).toHaveLength(0);
 });

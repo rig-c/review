@@ -2288,7 +2288,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             painting: () => painting?.element instanceof HTMLImageElement ? Promise.resolve(painting.element) : null,
             async difference(index, threshold, footprints) {
                 if (current !== prepared || lifetime.signal.aborted) throw new Error('JOB_ACT_SOURCE_STALE');
-                const response = await fetch(routes.api(`stage-parts/difference/${index}?threshold=${threshold}&footprints=${footprints}`), {
+                const endpoint = routes.api(`stage-parts/difference/${index}`);
+                const query = new URLSearchParams({threshold: String(threshold), footprints: String(footprints)});
+                const response = await fetch(`${endpoint}?${query}`, {
                     signal: lifetime.signal, headers: access.headers(),
                 });
                 if (current !== prepared || lifetime.signal.aborted) throw new Error('JOB_ACT_SOURCE_STALE');

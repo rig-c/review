@@ -872,3 +872,105 @@ test('#567 retained .rig-review-still.lock produces named actionable refusal wit
     await server.stop(true);
   }
 });
+
+import {job645SidecarFixture} from './helpers/645-sidecar-fixture.ts';
+import {retainedPublicationRoutes} from '../src/job-front.ts';
+
+async function normal645OwnerHttp(withPublication = true) {
+  const packet = await job645SidecarFixture(), {f} = packet;
+  let front: ReturnType<typeof createJobFront> | undefined;
+  const server = Bun.serve({hostname: '127.0.0.1', port: 0,
+    fetch: async request => await front?.fetch(request) ?? new Response(null, {status: 404})});
+  try {
+    const origin = server.url.origin, retained = retainedPublicationRoutes(f.session);
+    const forwarded: string[] = [];
+    front = createJobFront({origin, ports: createJobHostPorts(f.session, origin), hubIncarnation: '645-hub',
+      resource: async name => name,
+      publication: withPublication ? async (...args) => {forwarded.push(args[3]); return retained(...args);} : undefined});
+    const publication = await f.publish(), display = f.session.displayPublication(publication.publicationId);
+    return {...packet, origin, publication, forwarded, api: origin + display.routes.apiBase,
+      entry: origin + `/jobs/${f.session.jobId}/`,
+      close: async () => {front!.stop(); await server.stop(true); await f.close();}};
+  } catch (error) {front?.stop(); await server.stop(true); await f.close(); throw error;}
+}
+
+test('#645 normal HTTP owner dispatcher admits only the retained Difference query shape', async () => {
+  const owner = await normal645OwnerHttp();
+  try {
+    for (const query of ['threshold=0&footprints=false', 'threshold=16&footprints=true',
+      'threshold=255&footprints=false', 'footprints=true&threshold=17']) {
+      const response = await fetch(owner.api + 'stage-parts/difference/0?' + query);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toBe('image/png');
+      const png = Buffer.from(await response.arrayBuffer());
+      expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+      expect(png.readUInt32BE(16)).toBe(20);
+      expect(response.headers.get('X-Difference-Count')).not.toBeNull();
+    }
+    expect((await fetch(owner.api + 'stage-parts')).status).toBe(200);
+    const before = owner.forwarded.length;
+    for (const path of [
+      'stage-parts/difference/0?threshold=16', 'stage-parts/difference/0?footprints=true',
+      'stage-parts/difference/0?threshold=16&threshold=17&footprints=false',
+      'stage-parts/difference/0?threshold=16&footprints=false&footprints=true',
+      'stage-parts/difference/0?threshold=16&%74hreshold=17&footprints=false',
+      'stage-parts/difference/0?threshold=16&footprints=false&extra=1',
+      'stage-parts/difference/0?threshold=16&footprints=false&lang=en',
+      'stage-parts/difference/0?threshold=16&other=false',
+      'stage-parts/difference/00?threshold=16&footprints=false',
+      'stage-parts/difference/-1?threshold=16&footprints=false',
+      'stage-parts/image/0?threshold=16&footprints=false',
+      'stage-parts?threshold=16&footprints=false', 'review?threshold=16&footprints=false',
+      'unknown?threshold=16&footprints=false',
+    ]) expect((await fetch(owner.api + path)).status).toBe(400);
+    expect(owner.forwarded.length).toBe(before);
+    expect((await fetch(owner.api + 'stage-parts/difference/0?threshold=16&footprints=false', {method: 'HEAD'})).status).toBe(400);
+    expect((await fetch(owner.api + 'stage-parts/difference/0?threshold=16&footprints=false', {method: 'POST'})).status).toBe(405);
+    // The shared response remains the sole threshold/boolean value validator.
+    for (const query of ['threshold=256&footprints=false', 'threshold=-1&footprints=false',
+      'threshold=1.5&footprints=false', 'threshold=&footprints=false',
+      'threshold=16&footprints=TRUE', 'threshold=16&footprints=0']) {
+      const response = await fetch(owner.api + 'stage-parts/difference/0?' + query);
+      expect(response.status).toBe(409);
+      expect((await response.json()).error.message).toContain('PARTS_COMPARISON_INVALID');
+    }
+    expect((await fetch(owner.entry + '?lang=en')).status).toBe(200);
+    expect((await fetch(owner.entry + '?lang=ko')).status).toBe(200);
+    expect((await fetch(owner.entry + '?hub=645-hub&lang=ko')).status).toBe(200);
+    for (const query of ['lang=fr', 'lang=en&lang=ko', 'lang=en&extra=1', 'hub=wrong&lang=en']) {
+      expect((await fetch(owner.entry + '?' + query)).status).toBe(400);
+    }
+    expect((await fetch(owner.entry + 'job.js?threshold=16&footprints=false')).status).toBe(400);
+    expect((await fetch(owner.api + 'unknown')).status).toBe(404);
+    const noPublication = await normal645OwnerHttp(false);
+    try {expect((await fetch(noPublication.api + 'stage-parts/difference/0?threshold=16&footprints=false')).status).toBe(400);}
+    finally {await noPublication.close();}
+  } finally {await owner.close();}
+});
+
+test('#645 normal HTTP Difference preserves origin capability instance and retained-source guards', async () => {
+  const owner = await normal645OwnerHttp();
+  try {
+    const endpoint = owner.api + 'stage-parts/difference/0?threshold=16&footprints=false';
+    expect((await fetch(endpoint, {headers: {Origin: 'http://example.invalid'}})).status).toBe(403);
+    expect((await fetch(endpoint, {headers: {'Sec-Fetch-Site': 'cross-site'}})).status).toBe(403);
+    expect(owner.forwarded).toHaveLength(0);
+    const wrongHost = owner.origin.replace('127.0.0.1', 'localhost');
+    expect((await fetch(wrongHost + new URL(endpoint).pathname + new URL(endpoint).search)).status).toBe(403);
+    const wrongInstance = endpoint.replace(owner.publication.instanceKey, '0'.repeat(64));
+    expect((await fetch(wrongInstance)).status).toBe(409);
+    expect((await fetch(endpoint.replace(owner.publication.publicationId, 'unknown-publication'))).status).toBe(404);
+    const displayed = owner.entry + 'ui/displayed';
+    const body = JSON.stringify({publicationId: owner.publication.publicationId, pageId: '645-normal', sourceHash: owner.publication.source.sourceHash});
+    expect((await fetch(displayed, {method: 'POST', headers: {Origin: owner.origin, 'Content-Type': 'application/json',
+      'X-Review-Capability': 'wrong'}, body})).status).toBe(403);
+    expect((await fetch(displayed, {method: 'POST', headers: {'Content-Type': 'application/json',
+      'X-Review-Capability': owner.f.credentials.ui}, body})).status).toBe(403);
+    expect((await fetch(displayed, {method: 'POST', headers: {Origin: owner.origin, 'Content-Type': 'application/json',
+      'X-Review-Capability': owner.f.credentials.ui}, body})).status).toBe(200);
+    expect((await fetch(endpoint)).status).toBe(200);
+    const retained = owner.f.session.retainedSource(owner.publication.publicationId);
+    await writeFile(join(retained.snapshotRoot, 'standalone/painting_in_rig.json'), '{}');
+    expect((await fetch(endpoint)).status).toBe(409);
+  } finally {await owner.close();}
+});
