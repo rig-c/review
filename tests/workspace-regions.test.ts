@@ -11,9 +11,9 @@ test('#678 C11 uses supplied node identities, live message semantics and ordered
   const first=doc.createElement('span'),second=doc.createElement('span'),source=doc.createElement('div');
   const bar=mountStatusBar({message:'<b>Loading inputs…</b>',readouts:[first,second],source});
   expect(bar.footer.tagName).toBe('FOOTER');expect(bar.footer.className).toBe('status-bar');
-  expect(bar.message.textContent).toBe('<b>Loading inputs…</b>');expect(bar.message.children).toEqual([]);
+  expect(bar.message.textContent).toBe('<b>Loading inputs…</b>');expect([...bar.message.children]).toEqual([]);
   expect(bar.message.getAttribute('role')).toBe('status');expect(bar.message.getAttribute('aria-live')).toBe('polite');
-  expect(bar.footer.children[0]).toBe(bar.message);expect(bar.footer.children[1].children).toEqual([first,second]);expect(bar.footer.children[2]).toBe(source);
+  expect(bar.footer.children[0]).toBe(bar.message);expect([...bar.footer.children[1]!.children]).toEqual([first,second]);expect(bar.footer.children[2]).toBe(source);
   const node=doc.createElement('span'),custom=mountStatusBar({message:node,readouts:[]});expect(custom.message).toBe(node);expect(custom.footer.children.length).toBe(2);
  }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });
