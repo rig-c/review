@@ -43,7 +43,7 @@ export interface ViewportController {
  requestFit:()=>void;
  /** Drop an owed or held Fit, for a caller that sets the camera itself (a restored bookmark). */
  cancelFit:()=>void;
- state:ViewportState;paneFrame:(target:CameraTarget,hidden?:boolean)=>CameraFrame|null;paneCamera:(target:CameraTarget)=>PaneCamera;writeCamera:(target:CameraTarget,value:PaneCamera)=>void;activateCamera:(target:CameraTarget)=>void;availableCamera:()=>CameraTarget|null;alignCameras:()=>void;renderCameraControls:()=>void;setCameraSync:(value:boolean)=>void;cameraAction:(action:()=>void)=>void;updateCamera:(target:CameraTarget,value:CameraSignature,group?:readonly CameraTarget[])=>void;zoomCamera:(factor:number,target?:CameraTarget|null,point?:CameraPoint|null)=>void;panCamera:(target:CameraTarget,dx:number,dy:number)=>void;fitActiveCamera:(target?:CameraTarget|null)=>void;fitSelection:(target?:CameraTarget|null)=>void;zoomViewport:(target:CameraTarget,deltaY:number,point?:CameraPoint|null)=>void;fitCamera:()=>void;numericView:()=>ControlView;renderNumericView:()=>void;bindControls:()=>()=>void;bindNavigation:(carryRig?:PanCarry|((target:CameraTarget)=>PanCarry|undefined),enabled?:()=>boolean)=>()=>void;observeResize:()=>ResizeObserver;
+ state:ViewportState;paneFrame:(target:CameraTarget,hidden?:boolean)=>CameraFrame|null;paneCamera:(target:CameraTarget)=>PaneCamera;writeCamera:(target:CameraTarget,value:PaneCamera)=>void;activateCamera:(target:CameraTarget)=>void;availableCamera:()=>CameraTarget|null;alignCameras:()=>void;renderCameraControls:()=>void;setCameraSync:(value:boolean)=>void;cameraAction:(action:()=>void)=>void;updateCamera:(target:CameraTarget,value:CameraSignature,group?:readonly CameraTarget[])=>void;zoomCamera:(factor:number,target?:CameraTarget|null,point?:CameraPoint|null)=>void;panCamera:(target:CameraTarget,dx:number,dy:number)=>void;fitActiveCamera:(target?:CameraTarget|null)=>void;fitSelection:(target?:CameraTarget|null)=>void;zoomViewport:(target:CameraTarget,deltaY:number,point?:CameraPoint|null)=>void;fitCamera:()=>void;numericView:()=>ControlView;renderNumericView:()=>void;bindControls:(onUnitScale?:(target:CameraTarget)=>void)=>()=>void;bindNavigation:(carryRig?:PanCarry|((target:CameraTarget)=>PanCarry|undefined),enabled?:()=>boolean)=>()=>void;observeResize:()=>ResizeObserver;
 }
 
 export function createViewportController(provider:ViewportProvider,state=createViewportState()):ViewportController {
@@ -148,8 +148,11 @@ function numericView():ControlView {
 }
 function renderNumericView():void {const node=document.getElementById('view-coordinates');if(node)node.textContent=JSON.stringify(numericView(),null,2);}
 
- function bindControls():()=>void {
+ function bindControls(onUnitScale?:(target:CameraTarget)=>void):()=>void {
   button('zoom-in').onclick=()=>cameraAction(()=>zoomCamera(1.25));button('zoom-out').onclick=()=>cameraAction(()=>zoomCamera(1/1.25));button('fit').onclick=()=>cameraAction(()=>fitActiveCamera());
+  let nativeOne:HTMLButtonElement|null=null;
+  try{nativeOne=button('native-one')??null;}catch{/* Compare and older hosts have no native-scale control. */}
+  if(nativeOne)nativeOne.onclick=()=>cameraAction(()=>{const target=availableCamera();unitScaleCamera(target);if(target)onUnitScale?.(target);});
   input('camera-sync').onchange=()=>cameraAction(()=>setCameraSync(input('camera-sync').checked));
   const disposers:(()=>void)[]=[];
   for(const {target,viewport}of panes()){
@@ -158,7 +161,7 @@ function renderNumericView():void {const node=document.getElementById('view-coor
    for(const event of ['pointerdown','focusin'] as const){viewport.addEventListener(event,activate);disposers.push(()=>viewport.removeEventListener(event,activate));}
    viewport.addEventListener('wheel',wheel,{passive:false});disposers.push(()=>viewport.removeEventListener('wheel',wheel));
   }
-  return ()=>{for(const dispose of disposers)dispose();for(const id of ['zoom-in','zoom-out','fit'])button(id).onclick=null;input('camera-sync').onchange=null;};
+  return ()=>{for(const dispose of disposers)dispose();if(nativeOne)nativeOne.onclick=null;for(const id of ['zoom-in','zoom-out','fit'])button(id).onclick=null;input('camera-sync').onchange=null;};
  }
  function bindNavigation(carryRig?:PanCarry|((target:CameraTarget)=>PanCarry|undefined),enabled:()=>boolean=()=>true):()=>void {
  const disposers:(()=>void)[]=[];disposers.push(bindStageLayout(el('stage-layout'),fitCamera));

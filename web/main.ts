@@ -152,7 +152,7 @@ let rigDifferenceFailure:string|null=null;
 const rigRaster={el,canvas:partsCanvas,message,reference:()=>null,frameSize:()=>({w:partsCanvas.width,h:partsCanvas.height}),active:()=>!!rigDifference};
 if(partsOnly){partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);el('reference-content').append(partsReference);}
 const viewport=createViewportController(partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,raster:rigRaster},viewportState),viewportState);
-const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera,unitScaleCamera}=viewport;
+const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera}=viewport;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
 if(!host)connectLiveWindow(access);
 let readOnly: string | null = null;
@@ -1065,7 +1065,7 @@ function bind(): void {
   select('animation-select').onchange = () => {chooseAnimation(select('animation-select').value);if(canRepeatIdle())void playPreview();};
   select('part-set').onchange = () => { try { if(!player)return;player.setSet(select('part-set').value || null);drawRig(()=>player!.draw());fitCamera(); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } };
   select('axis-select').onchange = chooseAxis; input('axis-value').oninput = applyAxis;
-  viewport.bindControls();
+  viewport.bindControls(unitScaleMessage);
   input('scrub').oninput = () => { pause(); seek(Number(input('scrub').value)); };
   input('frame-number').onfocus = pause;
   input('frame-number').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); const value = input('frame-number').value.trim(); seekFrame(value ? Number(value) : NaN); } };
@@ -1308,7 +1308,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   }catch(error){message(errorText(error),true);state.setSaveState({kind:'failed',text:'Save failed.'});}
   finally{saving=false;button('save').disabled=saveBlocked();renderDraftState();}
  };
- viewDisposers.push(viewport.bindControls(),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
+ viewDisposers.push(viewport.bindControls(unitScaleMessage),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message(actReadOnly??(host?.ownerActAccess?'Not submitted':'Parts ready. Source files remain unchanged.'),!!actReadOnly);referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
@@ -1481,7 +1481,8 @@ function bindInspector(partsSubject=false):void {
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
 function openReview():void {pause();if(!partsOnly)syncCorrectionStage();inspectorBlocks?.select(selectedInspector()??'rig','feedback');workspace?.revealInspector();}
-function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');button('native-one').onclick=()=>cameraAction(()=>{const target=availableCamera();unitScaleCamera(target);message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');});}
+function unitScaleMessage(target:CameraTarget):void {message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');}
+function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');}
 
 /** Rig world → rig-pane pixels for the current camera. */
 function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*viewport.state.rigScale,y:parseFloat(root.style.top||'0')-y*viewport.state.rigScale});}
