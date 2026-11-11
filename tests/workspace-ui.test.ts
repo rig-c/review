@@ -1,3 +1,4 @@
+import {composedRigMarkup} from './helpers/workspace-status-dom.ts';
 import {getLanguagePreference,getLinkLanguage,setLanguagePreference,setLinkLanguage,t} from '../web/i18n.ts';
 import {mountRigInspector,mountBottomPanel,mountActBar} from '../web/inspector-blocks.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
@@ -44,7 +45,7 @@ class Host extends EventTarget {
  setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);}
 }
 let hostDocument:{activeElement:Host|null};
-function openHost(options:{explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean;bottomPanel?:boolean;kind?:string;stored?:Record<string,string>}={}){
+function openHost(options:{nonRig?:boolean;explicitRegions?:boolean;explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean;bottomPanel?:boolean;kind?:string;stored?:Record<string,string>}={}){
  const body=new Host('body'),layout=new Host(),main=new Host('main'),left=new Host('aside'),right=new Host('aside'),stage=new Host(),inspector=new Host(),heading=new Host();layout.className='layout';left.className='left-panel';right.id='parts-explorer';stage.id='stage-layout';inspector.className='inspector';heading.clientHeight=30;
  const language=new Host('select');language.id='settings-language';const languageLabel=new Host('label');languageLabel.append(language);body.append(languageLabel);
  const tabs=options.tabs??['view','rig','playback','feedback'],panels={} as Record<string,Host>;for(const tab of tabs){const panel=new Host('section'),button=new Host('button');panel.id='inspector-'+tab;panel.dataset.inspectorPanel=tab;panel.hidden=tab!==tabs[0];panel.clientHeight=200;panel.clientWidth=500;button.dataset.inspector=tab;button.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(tab===tabs[0]));panels[tab]=panel;if(options.pressed){button.dataset.mode=tab;body.append(button);inspector.append(panel);}else inspector.append(button,panel);}
@@ -52,7 +53,7 @@ function openHost(options:{explorerLeft?:boolean;tabs?:string[];currentTheme?:()
  if(options.bottomPanel){
   const strip=new Host('nav'),bottomHeading=new Host(),act=new Host(),collapse=new Host('button');bottomBody=new Host();bottomBody.className='inspector-body';bottomHeading.clientHeight=30;
   for(const child of [...inspector.children])if(child.dataset.inspector)strip.append(child);else bottomBody.append(child);
-  const actHome=panels.feedback!;act.id='workspace-review-act';actHome.append(act);bottomHeading.append(strip,collapse);inspector.append(bottomHeading,bottomBody);bottomPanel={kind:options.kind??'rig',strip,act,actHome,collapse};
+  const actHome=panels.feedback??panels.parts!;act.id='workspace-review-act';actHome.append(act);bottomHeading.append(strip,collapse);inspector.append(bottomHeading,bottomBody);bottomPanel={kind:options.kind??'rig',strip,act,actHome,collapse};
  }
  main.append(heading,stage,inspector);
  if(options.direction){
@@ -61,12 +62,12 @@ function openHost(options:{explorerLeft?:boolean;tabs?:string[];currentTheme?:()
   direction.id='direction-panel';direction.open=true;direction.clientHeight=246;
   keys.id='direction-authored-keys';direction.append(keys);body.id='direction-authored-body';stage.before(direction);stage.before(body);body.clientHeight=0;
  }
-if(options.leftHeader){const header=new Host(),strip=new Host('details');header.className='left-header parts-header';strip.id='package-context';left.append(header,strip);}if(options.explorerLeft){left.append(right);layout.append(left,main);}else layout.append(left,main,right);body.append(layout);
+if(options.leftHeader){const header=new Host(),strip=new Host('details');header.className='left-header parts-header';strip.id='package-context';left.append(header,strip);}if(options.nonRig){stage.id='parts-stage';layout.append(left,main);}else if(options.explorerLeft){left.append(right);layout.append(left,main);}else layout.append(left,main,right);body.append(layout);
  const values=new Map<string,string>(Object.entries(options.stored??{})),events=new EventTarget(),frames=new Map<number,()=>void>();let handle=0;
  const document=Object.assign(new EventTarget(),{body,hidden:false,activeElement:null as Host|null,getElementById:(id:string)=>body.all().find(n=>n.id===id)??null,querySelector:(selector:string)=>body.querySelector(selector),createElement:(tag:string)=>new Host(tag)});hostDocument=document;
  const globals={document,window:events,localStorage:{getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value)},requestAnimationFrame:(callback:()=>void)=>{frames.set(++handle,callback);return handle;},cancelAnimationFrame:(id:number)=>frames.delete(id),ResizeObserver:class{observe(){}disconnect(){}},MutationObserver:class{constructor(_callback:()=>void){}observe(){}disconnect(){}}};
  const old=new Map<string,PropertyDescriptor|undefined>();for(const [key,value]of Object.entries(globals)){old.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});}
- let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({changed:()=>changed++,defaultTheme:value=>{currentTheme=value;},...(options.currentTheme?{currentTheme:options.currentTheme}:{}),...(bottomPanel?{bottomPanel:bottomPanel as unknown as Parameters<typeof bindWorkspaceUI>[0]['bottomPanel']}:{})});
+ let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({...(options.nonRig||options.explicitRegions?{regions:{layout,left,main,stage,bottom:inspector,...(options.explicitRegions?{columns:{left:'rightWidth',right:null}}:{})} as unknown as NonNullable<Parameters<typeof bindWorkspaceUI>[0]['regions']>}:{}),changed:()=>changed++,defaultTheme:value=>{currentTheme=value;},...(options.currentTheme?{currentTheme:options.currentTheme}:{}),...(bottomPanel?{bottomPanel:bottomPanel as unknown as Parameters<typeof bindWorkspaceUI>[0]['bottomPanel']}:{})});
  const flush=()=>{for(let i=0;i<5;i++){const pending=[...frames.values()];frames.clear();for(const run of pending)run();}};flush();
  const tabBinding=bottomPanel?bindInspectorTabs(()=>ui.afterTab(),()=>ui.beforeTab(),{
   tabs:bottomPanel.strip.children.map(button=>({id:button.dataset.inspector!,button:button as unknown as HTMLButtonElement,panels:[panels[button.dataset.inspector!] as unknown as HTMLElement],attribute:'aria-selected' as const})),
@@ -74,7 +75,7 @@ if(options.leftHeader){const header=new Host(),strip=new Host('details');header.
  }):undefined;
  const get=(id:string)=>document.getElementById(id)!;
  const choose=(id:string,value:string|boolean)=>{const node=get(id);if(typeof value==='boolean')node.checked=value;else node.value=value;(node as unknown as {onchange:()=>void}).onchange();};
- return {ui,get,choose,values,layout,panels,flush,tabBinding,bottomPanel,bottomBody,focus:()=>document.activeElement,changed:()=>changed,theme:()=>currentTheme,events,activate(tab:string){ui.beforeTab();for(const node of [...inspector.children,...body.children])if(node.dataset.inspector)node.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(node.dataset.inspector===tab));for(const [name,node]of Object.entries(panels))node.hidden=name!==tab;ui.afterTab();flush();},close(){tabBinding?.dispose();ui.dispose();for(const [key,value]of old)if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}};
+ return {ui,get,choose,values,layout,panels,flush,tabBinding,bottomPanel,bottomBody,dom:()=>body.all().map(node=>({tag:node.tagName,id:node.id,className:node.className,parent:node.parentElement?.id,text:node.textContent,hidden:node.hidden,attrs:[...node.attrs]})),focus:()=>document.activeElement,changed:()=>changed,theme:()=>currentTheme,events,activate(tab:string){ui.beforeTab();for(const node of [...inspector.children,...body.children])if(node.dataset.inspector)node.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(node.dataset.inspector===tab));for(const [name,node]of Object.entries(panels))node.hidden=name!==tab;ui.afterTab();flush();},close(){tabBinding?.dispose();ui.dispose();for(const [key,value]of old)if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}};
 }
 
 test('Settings changes future sync/idle defaults only; transient source state and Reset remain independent',()=>{
@@ -133,7 +134,7 @@ test('an explorer inside the left column makes it the parts column: no right col
  }finally{app.close();}
 });
 
-const indexHtml=async()=>rigWorkspaceMarkup+rigReviewDialogMarkup;
+const indexHtml=composedRigMarkup;
 const between=(html:string,start:string,end:string)=>{const a=html.indexOf(start),b=html.indexOf(end,a);if(a<0||b<a)throw new Error(`index.html region missing: ${start} … ${end}`);return html.slice(a,b+end.length);};
 test('canonical rig content preserves both source sections and all 18 real tool tabs; C6 mounts the Review act separately',async()=>{
  const html=await indexHtml(),inspector=between(html,'<section class="inspector"','</main>');
@@ -501,4 +502,36 @@ test('#676 parts-shaped act bar derives its label, shares state nodes and operat
   expect(saved.textContent).toBe('saved');expect(submit.parentElement).toBe(actions);
   bar.dispose();button.click();expect(menu.hidden).toBe(true);issues=0;setLanguagePreference('ko');expect(submit.textContent).toBe('Request fixes (2 issues)');
  }finally{bar?.dispose();setLinkLanguage(link);setLanguagePreference(preference);hostDocument=oldFocus;if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
+});
+
+test('#678 caller-owned parts regions without a parts explorer or right host share separators, collapse and drawers',()=>{
+ const app=openHost({nonRig:true,tabs:['parts'],bottomPanel:true,kind:'parts'});
+ try{
+  expect(app.get('parts-explorer')).toBeNull();expect(app.get('stage-layout')).toBeNull();
+  expect(app.layout.children.filter(node=>node.className.includes('workspace-separator')).map(node=>node.className)).toEqual(['workspace-separator workspace-leftWidth workspace-side-left']);
+  expect(app.get('workspace-drawer-rightWidth')).toBeNull();
+  const bottom=app.get('workspace-inspector'),body=app.bottomBody!,act=app.bottomPanel!.act;
+  expect(bottom.parentElement!.style.gridTemplateRows).toContain('4px');
+  app.bottomPanel!.collapse.click();app.flush();expect(body.hidden).toBe(true);expect(app.values.get('rig-review-bottom-collapsed/parts')).toBe('true');
+  app.bottomPanel!.collapse.click();app.flush();expect(body.hidden).toBe(false);
+  app.layout.clientWidth=300;app.layout.clientHeight=300;app.ui.refresh();app.flush();
+  expect(app.get('workspace-left').parentElement).toBe(app.get('workspace-drawer-leftWidth'));
+  expect(body.parentElement).toBe(app.get('workspace-drawer-inspectorHeight'));
+  app.tabBinding!.select('parts');app.flush();expect(app.get('workspace-drawer-inspectorHeight').open).toBe(true);expect(app.get('workspace-drawer-inspectorHeight').contains(act)).toBe(true);
+  app.layout.clientWidth=1400;app.layout.clientHeight=900;app.ui.refresh();app.flush();
+  expect(body.parentElement).toBe(bottom);expect(act.parentElement).toBe(app.bottomPanel!.actHome);expect(app.get('workspace-left').parentElement).toBe(app.layout);
+ }finally{app.close();}
+});
+
+
+test('#678 rig caller regions preserve the legacy shell DOM, labels, drawers and bottom controls in EN and KO',()=>{
+ const preference=getLanguagePreference(),link=getLinkLanguage();
+ try{
+  for(const language of ['en','ko']){
+   const legacy=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});let snapshot:ReturnType<typeof legacy.dom>;
+   try{legacy.choose('settings-language',language);legacy.flush();snapshot=legacy.dom();}finally{legacy.close();}
+   const explicit=openHost({explorerLeft:true,explicitRegions:true,tabs:['rig','playback','feedback'],bottomPanel:true});
+   try{explicit.choose('settings-language',language);explicit.flush();expect(explicit.dom()).toEqual(snapshot!);}finally{explicit.close();}
+  }
+ }finally{setLinkLanguage(link);setLanguagePreference(preference);}
 });

@@ -15,7 +15,7 @@ import {createViewportController,createViewportState,type CameraTarget} from './
 import {createRigViewportProvider,rigPanCarry} from './rig-viewport-provider.ts';
 import {mountViewportPair} from './viewport-pair.ts';
 import {rendererStatus} from './renderer-status.ts';
-import {createViewControls,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
+import {panelMake,createViewControls,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
 import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
 import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
 import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
@@ -36,7 +36,7 @@ import type {RetargetFlags} from '../src/retarget.ts';
 import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
-import {mountWorkspaceShell,bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
+import {mountWorkspaceShell,mountStatusBar,bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
 import {setSourceAttribute,setSourceText,sourceTextContent,t,tr} from './i18n.ts';
 import {holdScrubBox,releaseScrubBox,scrubBox} from './scrub-box.ts';
 import {mountRigInspector,bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
@@ -95,6 +95,28 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 // Capability is consumed before shell composition or any URL-dependent binding.
 const access = pageInstanceAccess();
 const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
+const rigStatusBar=mountStatusBar({
+ message:'Loading local review package…',
+ readouts:[
+  panelMake('span',{id:'player-state',className:'subtle',textContent:'No rig supplied'}),
+  panelMake('span',{id:'layout-state',className:'subtle',textContent:'Loading inputs…'}),
+  panelMake('span',{id:'renderer-state',className:'subtle',title:'DOM images for rigid parts; WebGL meshes when available, Canvas2D fallback.',textContent:'Not rendered'}),
+  panelMake('span',{id:'layer-state',className:'hint',textContent:'No rig supplied'}),
+  panelMake('span',{id:'idle-state',className:'hint',textContent:'Idle preview unavailable'}),
+  panelMake('span',{id:'control-state',className:'hint'}),
+  panelMake('div',{className:'draft-notice'},panelMake('span',{id:'draft-state'}),panelMake('div',{id:'draft-recovery'})),
+ ],
+ source:panelMake('div',{className:'status-source'},
+  panelMake('details',{className:'view-region'},panelMake('summary',{},'View region'),
+   panelMake('div',{className:'view-region-body'},
+    panelMake('span',{className:'hint',textContent:'Numeric source region · opening this link restores a paused inspection'}),
+    panelMake('pre',{id:'view-coordinates',className:'numeric-view'}),
+    panelMake('p',{className:'hint',textContent:'Sync cameras links fit-relative zoom and viewport-relative pan across visible panes. Turn it off to inspect each pane independently. Toolbar zoom and Fit use the last active pane. Hold Space while dragging a video to pan without taking over its native controls.'}))),
+  panelMake('span',{id:'source-hash',className:'subtle'})),
+});
+app.querySelector<HTMLElement>('[data-workspace-status]')!.replaceWith(rigStatusBar.footer);
+for(const id of ['layout-state','idle-state','control-state','draft-state'])el(id).setAttribute('role','status');
+el('layout-state').setAttribute('aria-label','Effective layout');el('renderer-state').setAttribute('aria-label','Last draw backend');el('draft-state').setAttribute('aria-live','polite');el('view-coordinates').setAttribute('aria-label','Current numeric inspection region');
 const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearchParams(location.search).has('stageEmbed')});app.prepend(shell.header);
 el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.innerHTML=rigLayerControlsMarkup;
@@ -1006,7 +1028,7 @@ function bind(): void {
   });
   viewDisposers.push(()=>directionPanel?.dispose());
   viewDisposers.push(bindStageNav({access,interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,direction:active=>directionPanel?.show(active),setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',refresh:fn=>{refreshStageParts=fn;},correction:openStageCorrection}));
-  workspace=bindWorkspaceUI({language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
+  workspace=bindWorkspaceUI({regions:{layout:document.querySelector<HTMLElement>('.layout')!,left:document.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:document.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],changed:()=>persistence?.save()});
