@@ -135,7 +135,7 @@ const setupParts=composeSetupParts(document,rigInspector);
 let stageCorrect:((request:{part:string;sourceHash:string;buildId:string;instrument:string})=>Promise<void>)|null=null;
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
-const viewport=createViewportController(createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay},viewportState),viewportState);
+const viewport=createViewportController(createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,controlsActive:()=>!document.documentElement?.hasAttribute?.('data-setup-parts')},viewportState),viewportState);
 const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera,unitScaleCamera}=viewport;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
 connectLiveWindow(access);

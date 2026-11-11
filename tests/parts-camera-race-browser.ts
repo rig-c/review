@@ -320,6 +320,60 @@ async function controls(page: InputCdpSession, url: string, rows:Record<string,u
     afterLate.selected === 'body', 'PARTS_STALE_RASTER_MOVED_CAMERA');
 }
 
+const zoomLabel = (zoom:number) => zoom===1?'100%':`${(zoom*100).toFixed(1)}%`;
+const frames = (page: InputCdpSession) => page.evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))').then(()=>Bun.sleep(120));
+async function requireLabel(page: InputCdpSession, name:string) {
+  const row = await sample(page);
+  require(row.label===zoomLabel(row.zoom), 'PARTS_ZOOM_LABEL_STALE ' + name + ' ' + JSON.stringify({label:row.label,zoom:row.zoom}));
+  return row;
+}
+async function requireOpenFit(page: InputCdpSession, dimensions:readonly [number,number], name:string, rows:Record<string,unknown>) {
+  const probe = await sample(page);
+  const row = await sample(page,fitFor(dimensions,probe.viewport));
+  await record(rows,name,row);
+  require(probe.viewport.width>0 && matchesCamera(row), 'PARTS_FIRST_PAINT_NOT_FIT ' + name + ' ' + JSON.stringify(row));
+  await requireLabel(page,name);
+}
+const bodyBoot = `(() => {const c=document.getElementById('pv-canvas');return document.body.dataset.ready==='true'&&c.width===20&&c.height===16;})()`;
+// #706: the first paint fits once the panes have a measured size, a later layout size refits a camera nobody moved,
+// a moved camera is kept, and the zoom label always reads the parts camera (a bottom-tab switch must not rewrite it).
+async function fitTiming(page: InputCdpSession, port:number, rows:Record<string,unknown>) {
+  require(sendCdp, 'PARTS_FIT_TIMING_SESSION_MISSING');
+  await sendCdp!('Page.addScriptToEvaluateOnNewDocument',{source:`if(new URLSearchParams(location.search).has('fitLate')){const add=()=>{if(document.getElementById('fit-late'))return;const s=document.createElement('style');s.id='fit-late';s.textContent='#rig-viewport,#reference-viewport{display:none!important}';(document.head??document.documentElement).appendChild(s);};if(document.documentElement)add();document.addEventListener('DOMContentLoaded',add);}`});
+  for (const lang of ['en','ko'] as const) {
+    const url = `http://127.0.0.1:${port}/?lang=${lang}`;
+    await page.setViewport(1600,1000);
+    await page.goto(url,lang);await wait(page,bodyBoot,'PARTS_FIT_OPEN_BOOT');await frames(page);
+    await requireOpenFit(page,[20,16],lang+':open',rows);
+
+    await page.setViewport(480,360);
+    await page.goto(url,lang);await wait(page,bodyBoot,'PARTS_FIT_SMALL_BOOT');await frames(page);
+    await page.setViewport(1600,1000);await frames(page);
+    await requireOpenFit(page,[20,16],lang+':window-grew',rows);
+
+    await page.goto(url+'&fitLate=1',lang);await wait(page,bodyBoot,'PARTS_FIT_HIDDEN_BOOT');await frames(page);
+    require(await page.evaluate(`(()=>{const s=document.getElementById('fit-late');if(!s)return false;s.remove();return true;})()`),'PARTS_FIT_LATE_STYLE_MISSING');await frames(page);
+    await requireOpenFit(page,[20,16],lang+':pane-measured-late',rows);
+
+    // Zoom out: a 20×16 fit can sit at the 16× cap, where Zoom in would not move the camera at all.
+    const fitted = await sample(page);await click(page,'#zoom-out');const moved = await requireLabel(page,lang+':moved');
+    require(moved.zoom<fitted.zoom, 'PARTS_ZOOM_OUT_DID_NOT_MOVE ' + JSON.stringify({fitted:fitted.zoom,moved:moved.zoom}));
+    await page.setViewport(1400,900);await frames(page);
+    const kept = await requireLabel(page,lang+':moved-resized');
+    require(kept.zoom===moved.zoom, 'PARTS_MOVED_CAMERA_REFIT ' + lang + ' ' + JSON.stringify({moved:moved.zoom,kept:kept.zoom}));
+    await page.setViewport(1600,1000);
+
+    await afterPaint(page,'[data-pv-item="front"]');await frames(page);
+    const selected = await requireLabel(page,lang+':selected');
+    for (const tab of ['setup-mesh','setup-flags','setup-comments']) {
+      await page.evaluate(`document.getElementById('workspace-tab-${tab}').click()`);await frames(page);
+      const after = await requireLabel(page,lang+':tab-'+tab);
+      require(after.zoom===selected.zoom, 'PARTS_TAB_SWITCH_MOVED_CAMERA ' + tab + ' ' + JSON.stringify({before:selected.zoom,after:after.zoom}));
+    }
+  }
+  await page.setViewport(1440,1000);
+}
+
 function requireMidpoint(row: Sample, dimensions: readonly [number, number], name: string) {
   require(equal(row.dimensions, dimensions) && matchesCamera(row),
   'PARTS_PAINTED_VIEW_MISMATCH ' + name + ' ' + JSON.stringify(row));
@@ -491,6 +545,10 @@ try {
   await save();
   report.phase = 'comparison-frames';
   await comparisonFrames(page,join(root,'comparison'),comparison);
+  await save();
+  report.phase = 'fit-timing-and-label';
+  const fit={};(report.controls as Record<string,unknown>).fit=fit;
+  await fitTiming(page,Number(server!.port),fit);
   await save();
   report.phase = 'legacy-atlas-frames';
   await legacyAtlasFrames(page,join(root,'atlas'),atlas);

@@ -233,7 +233,8 @@ function findBrowserBinary(): string {
   throw new Error('No headless Chromium/Chrome/Edge binary found');
 }
 
-export async function launchCdpSession(profileDir: string, options: {sendDeadlineMs?: number; onEvent?: CdpEventHandler} = {}): Promise<InputCdpSession> {
+/** `window` lays the page out in a real browser window of that size (no metrics override); `headed` shows it on screen. */
+export async function launchCdpSession(profileDir: string, options: {sendDeadlineMs?: number; onEvent?: CdpEventHandler; window?: {width: number; height: number; headed?: boolean}} = {}): Promise<InputCdpSession> {
   const bin = findBrowserBinary();
   const isHeadlessShell = bin.includes('headless');
   let mouseButtons = 0;
@@ -247,8 +248,8 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
   const proc = Bun.spawn(
     [
       bin,
-      isHeadlessShell ? '--headless' : '--headless=new',
-      '--ozone-platform=headless',
+      ...(options.window?.headed ? [] : [isHeadlessShell ? '--headless' : '--headless=new', '--ozone-platform=headless']),
+      ...(options.window ? [`--window-size=${options.window.width},${options.window.height}`] : []),
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--in-process-gpu',

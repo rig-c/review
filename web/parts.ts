@@ -240,8 +240,6 @@ function overlayBox(x: number, y: number, w: number, h: number): HTMLDivElement 
 let paintToken = 0;
 let paintFailure:string|null=null,paintReset=false;
 let paintBusyStatus: {token: number; text: string} | null = null;
-// A new view opens at Fit, as the rig screen does; a restored bookmark or draft camera keeps its own zoom.
-let openFit=false;
 function syncPaintState(): void {
  regions.stage.dataset.partsPaintState = disposed ? 'disposed' : painting ? 'busy' : paintFailure ? 'failed' : 'ready';
  regions.stage.setAttribute('aria-busy', String(painting));
@@ -268,7 +266,6 @@ async function paint():Promise<void>{
    paintBusyStatus=null;
   }
   syncPaintState();
-  if(openFit&&viewport&&!viewport.state.cameraRestoring&&viewport.paneFrame('rig')){openFit=false;viewport.fitActiveCamera('rig');if(state.data?.painting)viewport.fitActiveCamera('reference');}
   viewport?.fitCamera();commentUi?.refresh();settleReady();
  }catch(error){
   if(disposed||token!==paintToken)return;
@@ -606,8 +603,7 @@ function select(index: number): void {
 function resetCameraToFit():void{
   if(!viewport)return;
   viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});
-  if(viewport.paneFrame('rig'))viewport.fitActiveCamera('rig');
-  if(state.data?.painting&&viewport.paneFrame('reference'))viewport.fitActiveCamera('reference');
+  viewport.requestFit();
 }
 
 function setView(view: 'item' | 'page' | 'assembled'): void {
@@ -640,7 +636,7 @@ function renderLegacyVerdict(): void {
 
 async function boot(): Promise<void> {
   const box=$('pv-canvas-box'),layout=$('stage-layout');mountViewportPair(layout,{footer:caption});$('rig-root').append(box);const reference=doc.createElement('canvas');reference.id='pv-reference';$('reference-content').append(reference);$('rig-empty').hidden=true;$('rig-overlay').hidden=true;$('rig-label').textContent=t('Selected part');$('rig-viewport').tabIndex=0;
-  openFit=true;viewport=createPartsViewport({el:$,canvas:$<HTMLCanvasElement>('pv-canvas'),message:(msg)=>{paintBusyStatus=null;$('parts-save-status').textContent=t(msg);},reference:()=>state.data?.painting?$<HTMLCanvasElement>('pv-reference'):null,
+  viewport=createPartsViewport({el:$,canvas:$<HTMLCanvasElement>('pv-canvas'),message:(msg)=>{paintBusyStatus=null;$('parts-save-status').textContent=t(msg);},reference:()=>state.data?.painting?$<HTMLCanvasElement>('pv-reference'):null,
     frameSize:target=>{
       const data=state.data,item=data?.items[state.selected];
       if(!data||!item||paintReset)return null;
@@ -666,6 +662,8 @@ async function boot(): Promise<void> {
   if (data.error) { const status=$('pv-load');status.textContent=t(data.error);status.dataset.result='refused';painting=false;paintFailure=data.error;syncPaintState();settleReady(new Error(data.error));return; }
   if (!data.items.length) throw new Error('PARTS_PAINT_FAILED');
   $('parts-source-hash').textContent=data.sourceHash;
+  // A new view opens at Fit once its pane is measured (shared viewport); a restored camera cancels it.
+  viewport.requestFit();
   state.data = data;state.meshVisible=stageEmbedded||!data.items.some(item=>item.mesh);$<HTMLSelectElement>('pv-bg').value=state.bg;$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;
   if (data.mode !== 'parts' || !data.rigSize) state.view = 'item';
   comments.push(...structuredClone(host.initial()).map(issue => parsePartsIssue(issue, false, true, false)));regions.commentCount?.(comments.length);

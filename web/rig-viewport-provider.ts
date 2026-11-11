@@ -18,6 +18,8 @@ export interface RigViewportHost {
  cameraControls?:{zoomId?:string;targetLabel?:(target:CameraTarget|null)=>string;
   fitLabel?:(sync:boolean)=>string;coordinatesId?:string|null};
  selection?:ViewportProvider['selection'];
+ /** False while another view owns the shared camera controls (Setup step 1's parts view): the rig then leaves them alone. */
+ controlsActive?:()=>boolean;
  fitMessage?:ViewportProvider['fitMessage'];
  pinch?:ViewportProvider['pinch'];
  dimensionVisibility?:ViewportProvider['dimensionVisibility'];
@@ -83,6 +85,7 @@ function render(controller:ViewportController): void {
 }
 
 function renderControls(controller:ViewportController):void {
+ if(host.controlsActive&&!host.controlsActive())return;
  const {availableCamera,paneCamera}=controller,controls=host.cameraControls;
  input('camera-sync').checked=state.cameraSync;const target=availableCamera();
  const label=controls?.targetLabel?.(target)??(target==='reference'?'Reference':'Rig');
