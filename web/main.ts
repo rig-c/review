@@ -1,3 +1,4 @@
+import {rigWorkspaceMarkup,rigFeedbackMarkup,sharedViewToolsMarkup,sharedCommentMarkup,rigLayerControlsMarkup} from '../src/compare-html.ts';
 import {bindDirectionPanel} from './direction-panel.ts';
 import {bindWorkspaceVisibility} from './workspace-visibility.ts';
 import type {DirectionInspection} from '../src/direction-inspection.ts';
@@ -14,7 +15,7 @@ import {createViewportController,createViewportState,type CameraTarget} from './
 import {createRigViewportProvider,rigPanCarry} from './rig-viewport-provider.ts';
 import {mountViewportPair} from './viewport-pair.ts';
 import {rendererStatus} from './renderer-status.ts';
-import {actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
+import {createViewControls,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
 import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
 import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
 import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
@@ -35,10 +36,10 @@ import type {RetargetFlags} from '../src/retarget.ts';
 import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,refusedText,restoredOutcomeForJob,retargetStage,undoControl,type AppliedHistoryView,type UndoView,type AnyJobView,appliedRecord,deltaAppliedRecord,deltaOutcomeLine,MESH_DELTA_APPLIED_SOURCE,chestPartFields,chestStatusForPart,chestSeed,designatedRegions,handoffText,landmarksRequest,noContourReason,seedLandmarks,makePatch,outcomeLine,patchAppliedRecord,patchOutcomeLine,pickBustPart,pickPart,runRebuild,seedFields,stageModel,type AppliedDelta,type AppliedPatch,type AppliedRecord,type DeltaJobView,type DeltaRequestBody,type ConfigPatch,type PatchJobView,type RebuildJobView,type RebuildRefusal,type RebuildRequestBody,type RebuildStatusView} from './rebuild-client.ts';
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
-import {bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
+import {mountWorkspaceShell,bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
 import {setSourceAttribute,setSourceText,sourceTextContent,t,tr} from './i18n.ts';
 import {holdScrubBox,releaseScrubBox,scrubBox} from './scrub-box.ts';
-import {bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
+import {mountRigInspector,bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
 import {connectControl} from './control.ts';
 import {connectLiveWindow} from './live-connection.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
@@ -91,12 +92,22 @@ const titledIds = new Set(['message', 'player-state', 'layout-state', 'renderer-
 const text = (id: string, value: string) => { const node = el(id); setSourceText(node, value); if (titledIds.has(id)) setSourceAttribute(node, 'title', value); };
 const option = (value: string, label: string) => { const item = document.createElement('option'); item.value = value; item.textContent = label; return item; };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+// Capability is consumed before shell composition or any URL-dependent binding.
+const access = pageInstanceAccess();
+const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
+const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearchParams(location.search).has('stageEmbed')});app.prepend(shell.header);
+el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
+el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.innerHTML=rigLayerControlsMarkup;
+el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;
+const controls=createViewControls({layout:'rigStep1'}),cameraControls=el('app').querySelector<HTMLElement>('[data-workspace-camera]')!;cameraControls.append(controls.syncLabel,controls.zoomGroup!);
+const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.classList.add('workspace-main-toolbar');
+const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
+const rigInspector=mountRigInspector();
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
-const viewport=createViewportController(createRigViewportProvider({el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay},viewportState),viewportState);
-const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera}=viewport;
+const viewport=createViewportController(createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay},viewportState),viewportState);
+const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera,unitScaleCamera}=viewport;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
-const access = pageInstanceAccess();
 connectLiveWindow(access);
 let readOnly: string | null = null;
 let data: ReviewResponse;
@@ -992,7 +1003,7 @@ function bind(): void {
   });
   viewDisposers.push(()=>directionPanel?.dispose());
   viewDisposers.push(bindStageNav({access,interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,direction:active=>directionPanel?.show(active),setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',refresh:fn=>{refreshStageParts=fn;},correction:openStageCorrection}));
-  workspace=bindWorkspaceUI({changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
+  workspace=bindWorkspaceUI({language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],changed:()=>persistence?.save()});
@@ -1057,7 +1068,7 @@ async function start(): Promise<void> {
     let writes: { capabilityRequired: boolean; control?: boolean };
     [data, session, writes] = await Promise.all([api<ReviewResponse>('/api/review'), api<ReviewSession>('/api/session'), api<{ capabilityRequired: boolean; control?: boolean }>('/api/access')]);
     readOnly = readOnlyReason(access, writes.capabilityRequired);
-    if(data.capabilities.preRig)el('write-review').hidden=true;
+    if(data.capabilities.preRig){button('workspace-tab-feedback').hidden=true;rigInspector.act.hidden=true;rigInspector.row.tabs=rigInspector.row.tabs.filter(tab=>tab.id!=='feedback');rigInspector.row.panels=rigInspector.row.panels.filter(panel=>panel.id!=='inspector-feedback');}
     submittedBaseline=structuredClone(session);
     text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));
@@ -1086,19 +1097,17 @@ async function start(): Promise<void> {
     bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause});
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
 }
-/** `feedback` is the review dialog, not an Inspector section: a user action opens it; a restored older bookmark that saved it selects nothing. */
-function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)workspace?.revealInspector();const selector=document.querySelector<HTMLButtonElement>(`[data-inspector="${name}"]`);if(selector&&selector.getAttribute('aria-pressed')!=='true'&&selector.getAttribute('aria-selected')!=='true')selector.click();}
-function bindInspector():void {inspectorTabs?.dispose();inspectorTabs=bindInspectorTabs(()=>{workspace?.afterTab();fitCamera();},()=>workspace?.beforeTab());}
-/** Opening the review pauses playback, as selecting Feedback did. Its inputs stay in the document whether or not it is open, so the draft keeps them. */
-function openReview():void {document.querySelector<HTMLButtonElement>('[data-review-stage="3"]')?.click();const dialog=el<HTMLDialogElement>('review-dialog');for(const drawer of document.querySelectorAll<HTMLDialogElement>('dialog.workspace-drawer[open]'))drawer.close();pause();syncCorrectionStage();if(!dialog.open)dialog.showModal();}
-function bindReviewDialog():void {
- const dialog=el<HTMLDialogElement>('review-dialog');
- button('write-review').onclick=openReview;button('review-dialog-close').onclick=()=>dialog.close();
- select('correction-stage').onchange=syncCorrectionStage;
- // Escape closes the native modal; every close returns focus to the button that opens it.
- dialog.addEventListener('close',()=>{button('write-review').setAttribute('aria-expanded','false');button('write-review').focus();});
- dialog.addEventListener('toggle',()=>{if(dialog.open)button('write-review').setAttribute('aria-expanded','true');});
+/** Old feedback bookmarks keep their inspection mode; only an explicit reveal opens the act. */
+function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)inspectorTabs?.select(name);else inspectorTabs?.restore(name);}
+function bindInspector():void {
+ inspectorTabs?.dispose();
+ rigInspector.row.reveal=id=>{if(id==='feedback'){document.querySelector<HTMLButtonElement>('[data-review-stage="3"]')?.click();pause();syncCorrectionStage();}workspace?.revealInspector();};
+ inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode==='feedback'){pause();syncCorrectionStage();}if(mode==='rig'||mode==='playback')for(const button of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))button.setAttribute('aria-pressed',String(button.dataset.mode===mode));workspace?.afterTab();fitCamera();},()=>workspace?.beforeTab(),rigInspector.row);
+ for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
 }
+/** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
+function openReview():void {inspectorTabs?.select('feedback');}
+function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');button('native-one').onclick=()=>cameraAction(()=>{const target=availableCamera();unitScaleCamera(target);message(target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');});}
 
 /** Rig world → rig-pane pixels for the current camera. */
 function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*viewport.state.rigScale,y:parseFloat(root.style.top||'0')-y*viewport.state.rigScale});}
@@ -1195,7 +1204,7 @@ async function decodedControlTime(media:HTMLVideoElement,target:number,signal:Ab
 function numericView():ControlView {return viewport.numericView();}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data.sourceHash,rigs:[data.reviewedSource.rig?.sha256??null]};}
 // Persist the displayed inspection clock; the runtime clock accumulates across idle loops for physics.
-function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:selectedInspector()??'view',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
+function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode??selectedInspector()??'rig',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false):Promise<void> {
  await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal,preserveSeconds),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
 }

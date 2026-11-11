@@ -1,3 +1,5 @@
+import {createViewControls} from '../web/view-controls.ts';
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {createViewportController,createViewportState} from '../web/viewport-controller.ts';
 import {RigOverlays} from '../web/rig-overlays.ts';
 import {createRigViewportProvider,type RigViewportHost} from '../web/rig-viewport-provider.ts';
@@ -282,7 +284,7 @@ test('disabled layer toggles carry the footer reason as a tooltip; enabled ones 
 });
 
 test('the review page view bar holds the three layer toggles with matching shortcut attributes',async()=>{
- const html=await readFile(new URL('../web/index.html',import.meta.url),'utf8'),bar=html.slice(html.indexOf('<div class="viewbar">'),html.indexOf('<div id="stage-layout"'));
+ const html=(rigLayerControlsMarkup+rigWorkspaceMarkup),bar=rigLayerControlsMarkup;
  for(const item of layerShortcuts){const match=bar.match(new RegExp(`<label class="layer-toggle"[^>]*><input aria-keyshortcuts="([A-Z])" id="${item.id}"[^>]*><span>${item.label}</span>`));expect(match?.[1]).toBe(item.key.toUpperCase());}
  expect(html.match(/id="layer-(images|mesh|bones)"/g)?.length).toBe(3);
 });
@@ -646,4 +648,42 @@ test('#666 outer select, restore and disposal keep callback timing and current h
  const next=bind(()=>trace.push('next'));binding.dispose();(tabs[0]!.onclick as ()=>void)();expect(trace.at(-1)).toBe('next');
  next.dispose();expect(tabs.every(t=>t.onclick===null&&t.onkeydown===null)).toBe(true);expect(mode.onclick).toBeNull();
  next.select('playback');expect(panels.map(p=>p.hidden)).toEqual([false,true,true]);
+});
+
+
+test('#671 scoped activation reveals already-selected tabs and keyboard destinations after focus, while restore and disposal never reveal',async()=>{
+ const source=await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8'),a=source.indexOf('export function bindInspectorTabs('),trace:string[]=[];
+ const make=(id:string)=>{const attrs=new Map([['aria-selected',String(id==='rig')]]);return {id,onclick:null as unknown,onkeydown:null as unknown,tabIndex:0,setAttribute(k:string,v:string){attrs.set(k,v);},getAttribute(k:string){return attrs.get(k)??null;},focus(){trace.push('focus:'+id);}};};
+ const buttons=['rig','playback'].map(make),panels=buttons.map(button=>({hidden:button.id!=='rig'}));
+ const bind=new Function(new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a).replace('export function','function'))+';return bindInspectorTabs;')();
+ const binding=bind(()=>trace.push('changed'),()=>trace.push('before'),{tabs:buttons.map((button,index)=>({id:button.id,button,panels:[panels[index]],attribute:'aria-selected'})),panels,initialize:true,reveal:(id:string)=>trace.push('reveal:'+id)});
+ binding.restore('playback');expect(trace).toEqual(['changed']);trace.length=0;
+ (buttons[1]!.onclick as ()=>void)();expect(trace).toEqual(['reveal:playback']);
+ trace.length=0;const key=Object.assign(new Event('keydown',{cancelable:true}),{key:'ArrowLeft'});(buttons[1]!.onkeydown as (event:Event)=>void)(key);
+ expect(key.defaultPrevented).toBe(true);expect(trace).toEqual(['focus:rig','before','changed','reveal:rig']);expect(panels.map(panel=>panel.hidden)).toEqual([false,true]);
+ trace.length=0;binding.restore('rig');expect(trace).toEqual([]);binding.dispose();binding.select('rig');expect(trace).toEqual([]);
+});
+
+
+test('#671 common group composition retains each finite host tag, class, child order and shared-node identity',()=>{
+ const previous=Object.getOwnPropertyDescriptor(globalThis,'document');
+ class Element {
+  id='';className='';textContent='';dataset:Record<string,string>={};children:any[]=[];attrs=new Map<string,string>();
+  constructor(readonly tagName:string){}
+  append(...nodes:any[]){this.children.push(...nodes);}
+  setAttribute(key:string,value:string){this.attrs.set(key,value);}removeAttribute(key:string){this.attrs.delete(key);}
+ }
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Element(tag)}});
+ try{
+  for(const layout of ['legacyPartsStep2','rigStep1','legacyCompareStep3'] as const){
+   const controls=createViewControls({layout}),group=controls.zoomGroup as unknown as Element;
+   const expected=layout==='legacyPartsStep2'?['zoom-out','zoom-value','zoom-in','fit','native-one']:layout==='rigStep1'?['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']:['camera-sync','zoom-out','zoom-label','zoom-in','fit'];
+   expect(group.tagName).toBe(layout==='legacyPartsStep2'?'span':'div');expect(group.className).toBe(layout==='legacyPartsStep2'?'pv-group':layout==='rigStep1'?'zoom-controls':'row');
+   expect(group.children.map(node=>node.id||(node===controls.syncLabel?'camera-sync':null))).toEqual(expected);
+   expect(group.children).toContain(controls.value);for(const button of controls.zoomButtons)expect(group.children).toContain(button);
+   if(layout==='legacyCompareStep3'){expect(group.children[0]).toBe(controls.syncLabel);expect(controls.nativeOne).toBeNull();expect(controls.viewSwitch).toBeNull();}
+   else expect(group.children).toContain(controls.nativeOne);
+  }
+  const controls=createViewControls({layout:'legacyCompiledJobStep5',inputLabel:(_key,input)=>input});expect(controls.zoomGroup).toBeNull();expect(controls.zoomButtons.map(button=>button.id)).toEqual(['zoom-in','zoom-out','fit']);
+ }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });

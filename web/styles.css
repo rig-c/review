@@ -516,3 +516,21 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 
 .job-window .job-inspection[data-job-plan-workspace]>.job-stage .job-source,
 .job-window .job-inspection[data-job-plan-workspace]>.job-stage pre{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* Step 1 rig composition: primary camera/comment actions and auxiliary tools have distinct regions. */
+.workspace-main-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--border-strong);background:var(--rv-panel)}
+.workspace-secondary-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 12px;border-bottom:1px solid var(--border)}
+.workspace-main-toolbar [data-workspace-camera]{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.workspace-secondary-toolbar .layer-toggles{flex:none}
+.workspace-bottom-tabs{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.workspace-bottom-tabs [aria-selected=true]{background:var(--rv-pressed-bg);border-color:var(--rv-pressed-border)}
+.workspace-act-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 0;border-top:1px solid var(--border)}
+.workspace-act-bar>label{margin:0}.workspace-act-bar>select{width:auto}.workspace-act-bar .review-dialog-actions{padding:0;border:0;flex:1}
+.workspace-review-panel .review-dialog-header{padding:0 0 10px}
+.workspace-review-panel .review-dialog-header h2{flex:none}
+.workspace-review-panel .review-dialog-header .hint{font-size:11px}
+.inspector[data-collapsed=true] .inspector-heading{flex-wrap:wrap}.inspector[data-collapsed=true] .workspace-act-bar{padding:0;border:0;margin-left:auto}
+.inspector[data-collapsed=true] .workspace-act-bar .review-dialog-actions{flex:none}
+.workspace-drawer>.inspector-body{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+.workspace-drawer>.inspector-body>[data-inspector-panel]{flex:1;min-height:0;overflow:auto;padding:12px}
+.workspace-drawer>.inspector-body>#inspector-playback:not([hidden]){display:grid;grid-template-columns:minmax(0,1fr);overflow:auto}

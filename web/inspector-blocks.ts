@@ -1,4 +1,5 @@
-import {bindInspectorTabs,type InspectorTabs} from './view-controls.ts';
+import {bindInspectorTabs,panelMake,actionButton,type InspectorTabs,type InspectorTabRow} from './view-controls.ts';
+import {tr} from './i18n.ts';
 /** Inspector block row: the sticky row at the top of each Inspector section (index.html `.block-row`) is a WAI-ARIA
  * tablist. Each `role=tab` button owns the `role=tabpanel` block its `aria-controls` names; selecting it shows that
  * block alone and hides the others with `hidden`, so one block is on screen at a time and nothing scrolls between them.
@@ -68,4 +69,25 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
   restore(saved){for(const [name,id]of Object.entries(saved))rows.get(name)?.restore(resolve(name,id));},
   dispose(){disposedState=state();for(const row of rows.values())row.dispose();rows.clear();ids.clear();},
  };
+}
+
+/** Compose the real rig acts into C6; all fields, submit nodes and their listeners retain identity. */
+export function mountRigInspector(root:Document=document):{row:InspectorTabRow;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement} {
+ const inspector=root.querySelector<HTMLElement>('.inspector')!,body=inspector.querySelector<HTMLElement>('.inspector-body')!,heading=inspector.querySelector<HTMLElement>('.inspector-heading')!;
+ const feedback=root.getElementById('inspector-feedback')!,dialog=root.getElementById('review-dialog')!,actions=dialog.querySelector<HTMLElement>('.review-dialog-actions')!;
+ const status=root.getElementById('review-status')!,label=feedback.querySelector<HTMLLabelElement>('label[for="review-status"]')!;
+ const act=panelMake('div',{className:'workspace-act-bar',id:'workspace-review-act'},label,status,actions);
+ const title=dialog.querySelector<HTMLElement>('.review-dialog-header')!;title.querySelector('#review-dialog-close')?.remove();
+ feedback.dataset.inspectorPanel='feedback';feedback.className='workspace-review-panel';feedback.hidden=true;feedback.prepend(title);feedback.append(act);body.append(feedback);dialog.remove();
+ const strip=panelMake('nav',{className:'workspace-bottom-tabs'});strip.setAttribute('role','tablist');strip.setAttribute('aria-label',tr('Inspection controls'));
+ const tabs=(['rig','playback','feedback'] as const).map((id,index)=>{
+  const button=actionButton(tr(['Setup','Animate','Write review'][index]!),null);button.id='workspace-tab-'+id;button.dataset.inspector=id;button.setAttribute('role','tab');button.setAttribute('aria-controls','inspector-'+id);button.setAttribute('aria-selected',String(index===0));button.tabIndex=index===0?0:-1;
+  const panel=root.getElementById('inspector-'+id)!;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',button.id);
+  strip.append(button);return {id,button,panels:[panel],attribute:'aria-selected' as const};
+ });
+ const collapse=actionButton(tr('Collapse bottom panel'),null);collapse.id='workspace-bottom-collapse';collapse.setAttribute('aria-expanded','true');collapse.setAttribute('aria-controls','workspace-inspector');
+ heading.replaceChildren(strip,collapse);
+ // Header modes retain inspection mode while Review is revealed; the bottom row alone owns panel selection.
+ for(const mode of root.querySelectorAll<HTMLElement>('[data-mode]'))mode.removeAttribute('data-inspector');
+ return {row:{tabs,panels:tabs.flatMap(tab=>tab.panels),initialize:true},strip,act,actHome:feedback,collapse};
 }

@@ -1,3 +1,4 @@
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {readFileSync} from 'node:fs';
@@ -10,7 +11,7 @@ import {
 } from '../src/mesh-edit.ts';
 import {meshEditShortcut,meshEditSource,meshEditVisible,meshModeKeys} from '../web/mesh-editor.ts';
 
-const html=()=>readFile(new URL('../web/index.html',import.meta.url),'utf8');
+const html=()=>(rigWorkspaceMarkup.replace('<div data-workspace-view-tools></div>',sharedViewToolsMarkup)+rigReviewDialogMarkup);
 const between=(text:string,start:string,end:string)=>{const a=text.indexOf(start),b=text.indexOf(end,a);if(a<0||b<a)throw new Error(`missing ${start} … ${end}`);return text.slice(a,b+end.length);};
 /** A 10 px square with a centre vertex: hull 0-1-2-3, four interior spokes to 4. */
 const square=():MeshSource=>({slot:'panel',skin:'default',attachment:'panel',vertices:[[0,0],[10,0],[10,10],[0,10],[5,5]],triangles:[0,1,4,1,2,4,2,3,4,3,0,4],hull:4,hash:'0'.repeat(61)+'abc'});

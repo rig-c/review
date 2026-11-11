@@ -3,12 +3,111 @@ import {createViewportController,createViewportState,type ViewportProvider} from
 import {projectMark,unprojectMark} from '../src/stage-comment.ts';
 import {viewportPairMarkup,expandViewportPair,viewportPairPlaceholder} from '../web/viewport-pair.ts';
 import {createPartsViewport} from '../web/parts-viewport-provider.ts';
+import {createRigViewportProvider,type RigViewportHost} from '../web/rig-viewport-provider.ts';
 function host(){
  const nodes=new Map<string,any>();for(const target of ['rig','reference']){nodes.set(target+'-viewport',{clientWidth:640,clientHeight:480});nodes.set(target+'-pane',{hidden:false});}
  const state=createViewportState();let renders=0;
  const provider:ViewportProvider={el:(id:string)=>nodes.get(id),geometry:target=>({space:target==='rig'?'world':'image',box:{x:0,y:0,width:320,height:240},marginX:0,marginY:0}),layoutKey:()=>[...nodes.values()].map(n=>n.clientWidth??n.hidden).join(','),render:()=>{renders++;},renderControls:()=>{},selection:()=>({selected:false,bounds:null}),message:()=>{}};
- return {nodes,state,controller:createViewportController(provider,state),renders:()=>renders};
+ return {nodes,state,provider,controller:createViewportController(provider,state),renders:()=>renders};
 }
+
+test('#671 unit scale centers the active target in pane units and retains relative sync',()=>{
+ const h=host(),c=h.controller;
+ h.provider.geometry=target=>({space:target==='rig'?'world':'image',box:{x:0,y:0,width:target==='rig'?320:1280,height:target==='rig'?240:960},marginX:0,marginY:0});
+ c.panCamera('rig',64,-48);c.unitScaleCamera('rig');
+ const rig=c.numericView().cameras.rig!,reference=c.numericView().cameras.reference!;
+ expect(h.state.zoom).toBe(.5);expect(h.state.referenceZoom).toBe(.5);
+ expect(rig.center).toEqual({x:160,y:120});expect(reference.center).toEqual({x:640,y:480});
+ expect(rig.visible.width).toBe(640);expect(reference.visible.width).toBe(2560);
+ // CSS pixels, independent of backing-store pixel ratio; only the active pane is unit scale.
+ const a=projectMark({x:160,y:120},rig),b=projectMark({x:161,y:121},rig);
+ expect(b.x-a.x).toBe(1);expect(b.y-a.y).toBe(-1);
+ c.activateCamera('reference');c.unitScaleCamera();
+ expect(c.state.activeCamera).toBe('reference');expect(c.state.referenceZoom).toBe(2);
+ expect(c.numericView().cameras.reference!.visible.width).toBe(640);
+ expect(c.numericView().cameras.rig!.visible.width).toBe(160);
+ c.setCameraSync(false);const held=structuredClone(c.paneCamera('rig'));
+ c.panCamera('reference',20,30);c.unitScaleCamera('reference');
+ expect(c.paneCamera('rig')).toEqual(held);
+ expect(c.numericView().cameras.reference!.center).toEqual({x:640,y:480});
+});
+
+test('#671 exact reciprocal accepts public endpoints and refuses outside them without camera mutation',()=>{
+ for(const baseScale of [.125,4,.124,4.01]){
+  const h=host(),c=h.controller;
+  h.provider.geometry=()=>({space:'world',box:{x:0,y:0,width:640/baseScale,height:480/baseScale},marginX:0,marginY:0});
+  c.state.cameraSync=false;c.state.zoom=2;c.state.cameraCenter={x:12,y:34};
+  const before=structuredClone({rig:c.paneCamera('rig'),reference:c.paneCamera('reference'),active:c.state.activeCamera});
+  if(baseScale===.125||baseScale===4){c.unitScaleCamera('rig');expect(c.state.zoom).toBe(1/baseScale);expect(c.numericView().cameras.rig!.visible.width).toBe(640);}
+  else{
+   expect(()=>c.unitScaleCamera('rig')).toThrow('VIEW_CAMERA_RANGE');
+   expect({rig:c.paneCamera('rig'),reference:c.paneCamera('reference'),active:c.state.activeCamera}).toEqual(before);
+   expect(h.renders()).toBe(0);
+  }
+ }
+});
+
+test('#671 unavailable and cached hidden panes refuse; default may select the other visible pane',()=>{
+ const h=host(),c=h.controller;c.fitCamera();const before=structuredClone(c.paneCamera('rig'));
+ h.nodes.get('rig-pane').hidden=true;
+ expect(c.paneFrame('rig',true)).not.toBeNull();
+ expect(()=>c.unitScaleCamera('rig')).toThrow('CONTROL_CAMERA_UNAVAILABLE');
+ expect(c.paneCamera('rig')).toEqual(before);
+ c.unitScaleCamera();expect(c.state.activeCamera).toBe('reference');expect(c.state.referenceZoom).toBe(.5);
+ h.nodes.get('reference-viewport').clientWidth=0;
+ expect(()=>c.unitScaleCamera()).toThrow('CONTROL_CAMERA_UNAVAILABLE');
+ expect(()=>c.unitScaleCamera(null)).toThrow('CONTROL_CAMERA_UNAVAILABLE');
+ h.nodes.get('rig-pane').hidden=false;h.provider.geometry=()=>null;
+ expect(()=>c.unitScaleCamera('rig')).toThrow('CONTROL_CAMERA_UNAVAILABLE');
+});
+
+test('#671 synchronized invalid peer refuses atomically before active camera assignment',()=>{
+ const h=host(),c=h.controller;
+ h.nodes.get('reference-viewport').clientWidth=65537;
+ c.state.activeCamera='reference';c.state.cameraCenter={x:13,y:17};c.state.zoom=2;
+ const before=structuredClone(c.state);
+ expect(()=>c.unitScaleCamera('rig')).toThrow('VIEW_CAMERA_RANGE');
+ expect(c.paneCamera('rig')).toEqual({zoom:before.zoom,center:before.cameraCenter});
+ expect(c.paneCamera('reference')).toEqual({zoom:before.referenceZoom,center:before.referenceCenter});
+ expect(String(c.state.activeCamera)).toBe(before.activeCamera);expect(h.renders()).toBe(0);
+ c.state.cameraSync=false;c.unitScaleCamera('rig');expect(c.state.zoom).toBe(.5);
+});
+
+test('#671 native-image unit scale retains centered native-one and its existing range',()=>{
+ const h=host(),c=createViewportController({...h.provider,nativeScale:true});
+ c.updateCamera('rig',{zoom:3,pan:{x:.2,y:-.1}});c.unitScaleCamera('rig');
+ expect(c.state.zoom).toBe(1);expect(c.state.referenceZoom).toBe(1);
+ expect(c.numericView().cameras.rig!.center).toEqual({x:160,y:120});
+ expect(c.numericView().cameras.rig!.visible.width).toBe(640);
+ expect(()=>c.writeCamera('rig',{zoom:17,center:null})).toThrow('PARTS_CAMERA_RANGE');
+});
+
+test('#671 rig provider renders the same frame scale as numeric cameras for rig and reference',()=>{
+ const nodes=new Map<string,any>();
+ const el:RigViewportHost['el']=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:640,clientHeight:480,hidden:false,style:{}});return nodes.get(id);};
+ const assets={stage:{x:-160,y:0,width:320,height:240}};
+ const player={bounds:()=>assets.stage,renderer:{syncPixelRatio(){}},slots:null};
+ const state=createViewportState();
+ const provider=createRigViewportProvider({el,player:()=>player as any,assets:()=>assets as any,
+  referenceSize:()=>({width:1280,height:960}),view:()=> 'both',referenceGeneration:()=>0,parts:()=>null,
+  text:()=>{},message:()=>{},redrawOverlay:()=>{}},state);
+ const c=createViewportController(provider,state);expect(provider.nativeScale).toBeUndefined();
+ // Exercise provider transforms without mounting the optional numeric text node.
+ c.renderNumericView=()=>{};
+ c.fitCamera();expect(state.zoom).toBe(1);expect(state.referenceZoom).toBe(1);
+ for(const target of ['rig','reference'] as const){
+  c.unitScaleCamera(target);const frame=c.paneFrame(target)!,camera=c.numericView().cameras[target]!;
+  expect(c.paneCamera(target).zoom).toBe(1/frame.baseScale);
+  expect(camera.visible.width).toBeCloseTo(640,10);
+  expect(target==='rig'?state.rigScale:state.referenceScale).toBeCloseTo(1,12);
+  expect(el(target==='rig'?'rig-root':'reference-content').style.transform).toBe(`scale(${frame.baseScale*c.paneCamera(target).zoom})`);
+ }
+ // Tiny panes retain the legacy final render floor; unavailable unit scale still refuses without camera mutation.
+ c.state.cameraSync=false;nodes.get('rig-viewport').clientWidth=20;nodes.get('rig-viewport').clientHeight=20;
+ c.fitCamera();expect(state.rigScale).toBe(.001);
+ const before=c.paneCamera('rig');expect(()=>c.unitScaleCamera('rig')).toThrow('VIEW_CAMERA_RANGE');
+ expect(c.paneCamera('rig')).toEqual(before);
+});
 test('#387 provider boundary keeps cursor anchor, shared state and hidden frame behavior without a runtime model',()=>{
  const h=host(),c=h.controller;c.fitCamera();const point={x:113,y:207},before=unprojectMark(point,c.numericView().cameras.rig!);c.zoomViewport('rig',-1,point);const after=unprojectMark(point,c.numericView().cameras.rig!);expect(after.x).toBeCloseTo(before.x,12);expect(after.y).toBeCloseTo(before.y,12);expect(c.state).toBe(h.state);
  c.setCameraSync(false);const ref=structuredClone(c.paneCamera('reference'));c.panCamera('rig',64,-48);expect(c.paneCamera('reference')).toEqual(ref);const held=c.paneFrame('rig');h.nodes.get('rig-pane').hidden=true;expect(c.paneFrame('rig')).toBeNull();expect(c.paneFrame('rig',true)).toBe(held);expect(h.renders()).toBeGreaterThan(0);
@@ -141,4 +240,23 @@ test('#613 stage-only resize after first paint keeps displayed parts roots and e
   else Reflect.deleteProperty(globalThis, 'ResizeObserver');
  }
  expect(disconnected).toBe(true);
+});
+
+
+test('#671 compiled provider retains the final rendered scale floor below the raw fit floor',()=>{
+ const nodes=new Map<string,any>();
+ const el:RigViewportHost['el']=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:640,clientHeight:480,hidden:false,style:{}});return nodes.get(id);};
+ const assets={stage:{x:-612000,y:0,width:1224000,height:844000}};
+ const player={bounds:()=>assets.stage,renderer:{syncPixelRatio(){}},slots:null};
+ const state=createViewportState();state.cameraSync=false;state.zoom=.25;state.referenceZoom=.25;
+ const provider=createRigViewportProvider({el,player:()=>player as any,assets:()=>assets as any,
+  referenceSize:()=>({width:1232000,height:848000}),view:()=> 'both',referenceGeneration:()=>0,parts:()=>null,
+  text:()=>{},message:()=>{},redrawOverlay:()=>{}},state);
+ const controller=createViewportController(provider,state);controller.renderNumericView=()=>{};
+ provider.render(controller);
+ // Both panes have a positive raw fit of .0005. The actual shared provider, not a formula surrogate, renders the final floor.
+ expect(el('rig-root').style.transform).toBe('scale(0.001)');
+ expect(el('reference-content').style.transform).toBe('scale(0.001)');
+ expect(state.rigScale).toBe(.001);expect(state.referenceScale).toBe(.001);
+ expect(el('fit').textContent).toBe('Fit active');
 });

@@ -1,3 +1,4 @@
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {BUST_DEFAULTS,bustMeshEntry,deriveBust,parseBustSpec,partToRig,PART_PAD,rigToPart,type BustSpec} from '../src/chest-landmarks.ts';
@@ -113,7 +114,7 @@ test('the applied record carries the landmarks beside the derived circles; a con
 });
 
 test('the Landmarks mode sits beside Circles in the editor bar: three picks, two sliders at the producer\'s defaults, optional bones',async()=>{
- const page=await readFile(new URL('../web/index.html',import.meta.url),'utf8');
+ const page=(rigWorkspaceMarkup+rigReviewDialogMarkup);
  const a=page.indexOf('<div id="chest-editor-bar"'),bar=page.slice(a,page.indexOf('id="stage-layout"',a));
  expect(bar).toContain('<input id="bust-mode" type="hidden" value="circles">');
  for(const mode of ['circles','landmarks'])expect(bar).toContain(`data-bust-mode="${mode}"`);
@@ -130,7 +131,7 @@ test('the Landmarks mode sits beside Circles in the editor bar: three picks, two
 });
 
 test('landmarks and circles name whose side is R vs L (#306/#307), and contour.bust seeds Circles when regions are empty',async()=>{
- const page=await readFile(new URL('../web/index.html',import.meta.url),'utf8');
+ const page=(rigWorkspaceMarkup+rigReviewDialogMarkup);
  const a=page.indexOf('<div id="chest-editor-bar"'),bar=page.slice(a,page.indexOf('id="stage-layout"',a));
  expect(bar).toContain("R · character's right (image left)");
  expect(bar).toContain("L · character's left (image right)");

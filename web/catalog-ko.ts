@@ -1,4 +1,13 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+ 'rig review ': 'rig review ',
+ 'Language ': '언어 ',
+ 'View switch': '뷰 전환',
+ 'One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.': '현재 뷰 좌표 단위당 CSS 픽셀 하나입니다. 동기화된 뷰는 상대 배율을 유지합니다.',
+ '1:1 · one CSS pixel per model coordinate unit.': '1:1 · 모델 좌표 단위당 CSS 픽셀 하나입니다.',
+ '1:1 · one CSS pixel per reference grid unit.': '1:1 · 참조 격자 단위당 CSS 픽셀 하나입니다.',
+
+ 'Collapse bottom panel': '하단 패널 접기',
+ 'Expand bottom panel': '하단 패널 펼치기',
   "No mesh geometry is available for this draft.": "이 드래프트에는 표시할 메시 형상이 없습니다.",
   "PARTS_COMMENT_PART_MISMATCH: comment belongs to another part": "PARTS_COMMENT_PART_MISMATCH: 코멘트가 다른 파츠에 속합니다.",
   "Issue parts": "이슈 파츠",

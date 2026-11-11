@@ -25,6 +25,9 @@ export interface ViewportProvider {
  message:(value:string,error?:boolean)=>void;
 }
 export interface ViewportController {
+ /** Center the target at one CSS px per current pane coordinate unit, or throw before any camera changes.
+  * Synchronized peers retain the target's relative signature, not necessarily its unit scale. */
+ unitScaleCamera:(target?:CameraTarget|null)=>void;
  state:ViewportState;paneFrame:(target:CameraTarget,hidden?:boolean)=>CameraFrame|null;paneCamera:(target:CameraTarget)=>{zoom:number;center:ViewPoint|null};writeCamera:(target:CameraTarget,value:{zoom:number;center:ViewPoint|null})=>void;activateCamera:(target:CameraTarget)=>void;availableCamera:()=>CameraTarget|null;alignCameras:()=>void;renderCameraControls:()=>void;setCameraSync:(value:boolean)=>void;cameraAction:(action:()=>void)=>void;updateCamera:(target:CameraTarget,value:CameraSignature)=>void;zoomCamera:(factor:number,target?:CameraTarget|null,point?:CameraPoint|null)=>void;panCamera:(target:CameraTarget,dx:number,dy:number)=>void;fitActiveCamera:(target?:CameraTarget|null)=>void;zoomViewport:(target:CameraTarget,deltaY:number,point?:CameraPoint|null)=>void;fitCamera:()=>void;numericView:()=>ControlView;renderNumericView:()=>void;bindControls:()=>()=>void;bindNavigation:(carryRig?:PanCarry,enabled?:()=>boolean)=>()=>void;observeResize:()=>ResizeObserver;
 }
 
@@ -61,6 +64,17 @@ function updateCamera(target:CameraTarget,value:CameraSignature):void {
  fitCamera();renderCameraControls();
 }
 function zoomCamera(factor:number,target=availableCamera(),point?:CameraPoint|null):void {if(!target)return;const frame=paneFrame(target);if(frame)updateCamera(target,zoomSignature(cameraSignature(paneCamera(target),frame),factor,frame,point,provider.nativeScale?range(frame):undefined));}
+function unitScaleCamera(target=availableCamera()):void {
+ if(!target)throw new Error('CONTROL_CAMERA_UNAVAILABLE');
+ // Never use the cached frame of a hidden or zero-sized pane for this action.
+ const frame=paneFrame(target);
+ if(!frame)throw new Error('CONTROL_CAMERA_UNAVAILABLE');
+ const zoom=1/frame.baseScale;
+ // Validate the exact reciprocal, without wheel zoom's clamping. updateCamera
+ // prepares every synchronized candidate before assigning any live camera.
+ assertCameraView({zoom,center:frame.center},frame,range(frame));
+ updateCamera(target,{zoom,pan:{x:0,y:0}});
+}
 function panCamera(target:CameraTarget,dx:number,dy:number):void {const frame=paneFrame(target);if(frame)updateCamera(target,dragSignature(cameraSignature(paneCamera(target),frame),frame,dx,dy));}
 function fitActiveCamera(target=availableCamera()):void {if(!target)return;if(provider.nativeScale){const frame=paneFrame(target);if(frame)updateCamera(target,{zoom:Math.min(frame.fitScale??1,16),pan:{x:0,y:0}});return;}const part=provider.selection(target);if(target==='rig'&&part.selected){const box=part.bounds,frame=paneFrame(target);if(!box||!frame){message('PART_FIT_UNAVAILABLE: selected slot has no positive drawn bounds.',true);return;}updateCamera(target,boundsFitSignature(box,frame,28,58));message('Selected slot fitted.');}else{if(!paneFrame(target))return;updateCamera(target,{zoom:1,pan:{x:0,y:0}});message('View fitted.');}}
 function zoomViewport(target:CameraTarget,deltaY:number,point?:CameraPoint|null):void {zoomCamera(deltaY<0?1.1:1/1.1,target,point);}
@@ -98,5 +112,5 @@ function renderNumericView():void {const node=document.getElementById('view-coor
  return ()=>disposers.forEach(dispose=>dispose());
  }
  function observeResize():ResizeObserver {const resize=new ResizeObserver(fitCamera);for(const {viewport}of panes())resize.observe(viewport);return resize;}
- const api={state,paneFrame,paneCamera,writeCamera,activateCamera,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,zoomCamera,panCamera,fitActiveCamera,zoomViewport,fitCamera,numericView,renderNumericView,bindControls,bindNavigation,observeResize};return api;
+ const api={state,paneFrame,paneCamera,writeCamera,activateCamera,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,zoomCamera,unitScaleCamera,panCamera,fitActiveCamera,zoomViewport,fitCamera,numericView,renderNumericView,bindControls,bindNavigation,observeResize};return api;
 }

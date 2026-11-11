@@ -83,29 +83,34 @@ export function describeLayerToggles(root:{getElementById(id:string):unknown},re
  }
 }
 
-/** Finite compatibility composition; Parts expires at step 2 and compiled job at step 5. */
-export type ViewControlsOptions = {layout:'legacyPartsStep2'} | {
+/** Finite composition: target rig; compare/Parts/job compatibility expires at steps 3/2/5. */
+export type ViewControlsOptions = {layout:'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'} | {
  layout:'legacyCompiledJobStep5';
  inputLabel:(key:string,input:HTMLElement)=>HTMLElement;
 };
 /** One creation site for each common control; hosts retain adjacent tools and camera/event binding. */
 export function createViewControls(options:ViewControlsOptions) {
- const parts=options.layout==='legacyPartsStep2';
- const zoomIn=actionButton(parts?'+':t('job.zoomIn'),null);zoomIn.id='zoom-in';
- const zoomOut=actionButton(parts?'−':t('job.zoomOut'),null);zoomOut.id='zoom-out';
- const fit=actionButton(t('Fit'),null);fit.id='fit';
- const value=panelMake('span',{id:'zoom-value',textContent:parts?'1:1':''});
+ const parts=options.layout==='legacyPartsStep2',rig=options.layout==='rigStep1',compare=options.layout==='legacyCompareStep3';
+ const zoomIn=actionButton(parts||compare?'+':t(rig?'Zoom in':'job.zoomIn'),null);zoomIn.id='zoom-in';
+ const zoomOut=actionButton(parts||compare?'−':t(rig?'Zoom out':'job.zoomOut'),null);zoomOut.id='zoom-out';
+ const fit=actionButton(t(compare?'Fit synchronized views':'Fit'),null);fit.id='fit';
+ const value=panelMake(rig||compare?'output':'span',{id:compare?'zoom-label':'zoom-value',textContent:parts?'1:1':rig||compare?'100%':''});
  const sync=panelMake('input',{id:'camera-sync',type:'checkbox'});
- const syncLabel=parts?labelledControl(t('Sync cameras'),sync,true):options.inputLabel('job.cameraSync',sync);
+ const syncLabel=options.layout==='legacyCompiledJobStep5'?options.inputLabel('job.cameraSync',sync):labelledControl(t('Sync cameras'),sync,true);
  if(parts)syncLabel.className='pv-field';
- else {zoomIn.dataset.jobText='job.zoomIn';zoomOut.dataset.jobText='job.zoomOut';fit.dataset.jobText='Fit';}
+ else if(options.layout==='legacyCompiledJobStep5'){zoomIn.dataset.jobText='job.zoomIn';zoomOut.dataset.jobText='job.zoomOut';fit.dataset.jobText='Fit';}
+ if(rig||compare){sync.checked=true;syncLabel.className='camera-sync';zoomIn.setAttribute('aria-label',t(compare?'Zoom active view in':'Zoom in'));zoomOut.setAttribute('aria-label',t(compare?'Zoom active view out':'Zoom out'));}
+ if(compare)for(const button of [zoomIn,zoomOut,fit])button.removeAttribute('type');
  const zoomButtons=[zoomIn,zoomOut,fit];
- let zoomGroup:HTMLSpanElement|null=null;
+ const zoomGroup=parts||rig||compare?panelMake(parts?'span':'div',{className:parts?'pv-group':rig?'zoom-controls':'row'}):null;
+ const nativeOne=parts||rig?actionButton('1:1',null):null;
+ if(nativeOne)nativeOne.id='native-one';
+ let viewSwitch:HTMLDetailsElement|null=null;
  let choices:{assemble:HTMLButtonElement;comparisonGroup:HTMLSpanElement;atlasSwitch:HTMLSpanElement}|null=null;
  if(parts) {
-  const nativeOne=actionButton('1:1',null);nativeOne.id='native-one';nativeOne.setAttribute('aria-pressed','true');
-  zoomGroup=panelMake('span',{className:'pv-group'});zoomGroup.setAttribute('role','group');zoomGroup.setAttribute('aria-label',t('Zoom'));
-  zoomGroup.append(zoomOut,value,zoomIn,fit,nativeOne);
+  nativeOne!.setAttribute('aria-pressed','true');
+  zoomGroup!.setAttribute('role','group');zoomGroup!.setAttribute('aria-label',t('Zoom'));
+  zoomGroup!.append(zoomOut,value,zoomIn,fit,nativeOne!);
   const assemble=actionButton(t('Assembled'),null);assemble.id='pv-assemble';assemble.setAttribute('aria-pressed','false');
   const comparisonGroup=panelMake('span',{className:'pv-field',textContent:t('Painting comparison')});
   const group=panelMake('span',{className:'pv-group'});group.setAttribute('role','group');group.setAttribute('aria-label',t('Painting comparison'));
@@ -119,7 +124,15 @@ export function createViewControls(options:ViewControlsOptions) {
   }
   choices={assemble,comparisonGroup,atlasSwitch};
  }
- return {zoomButtons,zoomGroup,syncLabel,value,choices};
+ if(rig){
+  viewSwitch=panelMake('details',{id:'view-menu',className:'view-menu'});
+  const summary=panelMake('summary',{},t('View switch')+' ',panelMake('span',{id:'view-menu-label',textContent:t('Side by side')}));summary.setAttribute('aria-label',t('View layout'));
+  const list=panelMake('div',{className:'view-menu-list'});list.setAttribute('role','group');list.setAttribute('aria-label',t('View'));
+  for(const [view,label] of [['compare','Side by side'],['reference','Reference'],['rig','Rig']] as const){const button=actionButton(t(label),null);button.dataset.view=view;button.setAttribute('aria-pressed',String(view==='compare'));list.append(button);}
+  viewSwitch.append(summary,list);
+  zoomGroup!.append(zoomIn,zoomOut,fit,nativeOne!,viewSwitch,value);
+ }else if(compare)zoomGroup!.append(syncLabel,zoomOut,value,zoomIn,fit);
+ return {zoomButtons,zoomGroup,syncLabel,value,choices,nativeOne,viewSwitch};
 }
 
 // Nested or separately disposed pan binders must not restore another binder's override.
@@ -177,6 +190,8 @@ export interface InspectorTabRow {
  tabs:InspectorTabItem[];panels:HTMLElement[];modes?:{button:HTMLButtonElement;id:string}[];
  /** Inner rows delegate bubbling events and keep per-block offsets; outer selectors retain onclick timing. */
  root?:HTMLElement;scrollRoot?:HTMLElement;initialize?:boolean;
+ /** Explicit activation reveals an existing host panel, including an already-selected tab; restore never calls it. */
+ reveal?:(id:string)=>void;
 }
 export interface InspectorTabs {select(id:string):void;restore(id:string):void;state():string|undefined;dispose():void}
 /** beforeChange runs while the old panel is visible; changed runs after the new one is shown.
@@ -203,7 +218,8 @@ export function bindInspectorTabs(changed:()=>void,beforeChange:()=>void=()=>{},
   reflect();
  };
  const activate=(id:string,user:boolean)=>{
-  if(disposed)return;const target=tabs.find(tab=>tab.id===id);if(!target||(scoped&&active===target))return;
+  if(disposed)return;const target=tabs.find(tab=>tab.id===id);if(!target)return;
+  if(scoped&&active===target){if(user)row.reveal?.(id);return;}
   const previous=active;
   if(user){beforeChange();if(scrollRoot&&previous)scrolls.set(previous.id,scrollRoot.scrollTop);}
   render(target);
@@ -211,11 +227,12 @@ export function bindInspectorTabs(changed:()=>void,beforeChange:()=>void=()=>{},
   active=target;
   // Inner restoration has always notified draft persistence, but never swaps scroll offsets.
   if(user||scoped&&previous)changed();
+  if(user)row.reveal?.(id);
  };
  const key=(tab:InspectorTabItem,event:KeyboardEvent)=>{
   if(tab.attribute==='aria-pressed')return;const index=tabs.indexOf(tab);
   const next=event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:event.key==='Home'?0:event.key==='End'?tabs.length-1:null;
-  if(next===null)return;event.preventDefault();const target=tabs[next];if(target){activate(target.id,true);target.button.focus();}
+  if(next===null)return;event.preventDefault();const target=tabs[next];if(target){if(row.reveal)target.button.focus();activate(target.id,true);if(!row.reveal)target.button.focus();}
  };
  if(root){
   const tabOf=(event:Event)=>{const button=(event.target as Element|null)?.closest?.('button[data-block-target]');return tabs.find(tab=>tab.button===button);};

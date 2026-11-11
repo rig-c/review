@@ -1,4 +1,13 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+ 'rig review ': 'rig review ',
+ 'Language ': 'Language ',
+ 'View switch': 'View switch',
+ 'One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.': 'One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.',
+ '1:1 · one CSS pixel per model coordinate unit.': '1:1 · one CSS pixel per model coordinate unit.',
+ '1:1 · one CSS pixel per reference grid unit.': '1:1 · one CSS pixel per reference grid unit.',
+
+ 'Collapse bottom panel': 'Collapse bottom panel',
+ 'Expand bottom panel': 'Expand bottom panel',
   "No mesh geometry is available for this draft.": "No mesh geometry is available for this draft.",
   "PARTS_COMMENT_PART_MISMATCH: comment belongs to another part": "PARTS_COMMENT_PART_MISMATCH: comment belongs to another part",
   "Issue parts": "Issue parts",

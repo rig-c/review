@@ -1,3 +1,4 @@
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expandViewportPair} from '../web/viewport-pair.ts';
 import {expect,test} from 'bun:test';
 import {createHash} from 'node:crypto';
@@ -229,7 +230,7 @@ test('bars (server): the producer\'s refusals come back verbatim and leave no bu
 });
 
 test('the block in the page: one Fields button in Setup\'s row, the draft textarea the only control with an id, and the stage layer beside the idle handles',async()=>{
- const html=expandViewportPair(await readFile(new URL('../web/index.html',import.meta.url),'utf8'));
+ const html=expandViewportPair((rigWorkspaceMarkup+rigReviewDialogMarkup));
  expect(html.split('data-block-target="rig-fields">Fields</button>').length).toBe(2);
  const block=html.slice(html.indexOf('<section id="rig-fields"'),html.indexOf('</section>',html.indexOf('<section id="rig-fields"')));
  expect([...block.matchAll(/<(input|select|textarea)\b[^>]*\bid="([^"]+)"/g)].map(m=>m[2])).toEqual(['rig-fields-pending']);

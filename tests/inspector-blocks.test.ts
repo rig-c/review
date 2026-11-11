@@ -1,10 +1,11 @@
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readFile,readdir} from 'node:fs/promises';
 import {bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,parseActiveBlocks,inspectorBlocksKey} from '../web/inspector-blocks.ts';
 import {renderCompareHtml} from '../src/compare-html.ts';
 
 const webFile=(name:string)=>readFile(new URL(`../web/${name}`,import.meta.url),'utf8');
-const indexHtml=()=>webFile('index.html');
+const indexHtml=async()=>rigWorkspaceMarkup+rigReviewDialogMarkup;
 const voids=new Set(['input','br','img','meta','link','hr','source','col','area','base','embed','param','track','wbr']);
 /** Direct children of the element whose opening tag carries `id="<id>"`, as {tag, attributes}. */
 function directChildren(html:string,id:string):{tag:string;attrs:string}[] {

@@ -1,17 +1,12 @@
+import {mountWorkspaceShell} from './workspace-ui.ts';
 import {WORKSPACE_TARGET_LIMIT, WORKSPACE_READY_SCHEMA, WORKSPACE_SCHEMA, WORKSPACE_TARGET_DOMAIN, WORKSPACE_VISIBILITY_SCHEMA,
   type WorkspaceList, type WorkspaceTargetView} from '../src/open-workspace-contract.ts';
 import {getLanguage, onLanguageChange, setLanguagePreference, setLinkLanguage, tr} from './i18n.ts';
 import {connectLiveWindow} from './live-connection.ts';
 
 const root = document.getElementById('owner-workspace')!;
-const header = document.createElement('header'); header.className = 'owner-header';
-const heading = document.createElement('h1');
-const status = document.createElement('p'); status.className = 'owner-status'; status.setAttribute('role', 'status');
-const language = document.createElement('select');
-for (const value of ['en', 'ko'] as const) {
-  const option = document.createElement('option'); option.value = value; language.append(option);
-}
-header.append(heading, status, language);
+const shell = mountWorkspaceShell({compatibility: 'legacyOwnerStep6'});
+const {header} = shell, heading = shell.title, status = shell.status!, language = shell.language!;
 const list = document.createElement('nav'); list.className = 'owner-list';
 const stage = document.createElement('main'); stage.className = 'owner-stage';
 root.append(header, list, stage);

@@ -1,3 +1,4 @@
+import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {
@@ -131,7 +132,7 @@ test('the draft keeps the part and its pending entry; context.applied carries re
 });
 
 test('the Mesh panel sits in Setup with its controls, draft and readouts; its overlay colours are theme tokens',async()=>{
- const html=await readFile(new URL('../web/index.html',import.meta.url),'utf8'),css=await readFile(new URL('../web/styles.css',import.meta.url),'utf8');
+ const html=(rigWorkspaceMarkup+rigReviewDialogMarkup),css=await readFile(new URL('../web/styles.css',import.meta.url),'utf8');
  const setup=html.slice(html.indexOf('<section id="inspector-rig"'),html.indexOf('<section id="inspector-playback"'));
  for(const id of ['mesh-panel','mesh-panel-state','mesh-params','mesh-add-circle','mesh-add-polygon','mesh-regions-edit','mesh-regions','mesh-segment-bone','mesh-segment-add','mesh-segments','mesh-diff','mesh-precheck','mesh-panel-apply','mesh-panel-reset','mesh-folds','mesh-status','mesh-counts','mesh-readout','mesh-pending'])expect(setup).toContain(`id="${id}"`);
  for(const token of ['--rv-mesh-region','--rv-mesh-region-fill','--rv-mesh-handle'])expect(css.match(new RegExp(`${token}:`,'g'))?.length).toBe(2);
