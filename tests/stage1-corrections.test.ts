@@ -800,7 +800,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    sliceBetween('async function undoApply(','(window as unknown as {rigReviewEditor:unknown}).rigReviewEditor='),
    sliceBetween('async function applyRetarget(','/** The handoff line (#101):'),
    sliceBetween('async function resetRebuild(','async function swapRig('),
-   mainSource.slice(mainSource.indexOf('interface StageDraftModelTarget')),
+   sliceBetween('interface StageDraftModelTarget','return {dispose:disposeScreen};'),
    sliceBetween('parts=new PartExplorer(','animationPanel=new AnimationInspectionPanel('),
   ].join('\n');
   const transpiler=new Bun.Transpiler({loader:'ts',target:'bun'});
