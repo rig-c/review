@@ -209,6 +209,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.": "MODEL_UNAVAILABLE: 이 검사에 컴파일된 모델이 제공되지 않았습니다.",
   "Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.": "내장 아틀라스 검사는 읽기 전용입니다. 별도 승인은 parts 명령을 사용하세요.",
   "PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.": "PARTS_ATLAS_UNAVAILABLE: 검사 패키지에 사용 가능한 아틀라스가 없거나 원본이 변경되었습니다.",
+  "PARTS_ATLAS_NOT_CARRIED: atlas inspection is not available in the parts workspace; open the rig review instead.": "PARTS_ATLAS_NOT_CARRIED: 파츠 작업 공간에서는 아틀라스를 검사할 수 없어요. 리그 리뷰를 열어 주세요.",
 
   " (Apply's default pack flags)": " (적용의 기본 패킹 플래그)",
   " (No playback reference · time display only)": " (재생 레퍼런스 없음 · 시간 표시 전용)",

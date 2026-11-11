@@ -209,6 +209,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.": "MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.",
   "Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.": "Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.",
   "PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.": "PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.",
+  "PARTS_ATLAS_NOT_CARRIED: atlas inspection is not available in the parts workspace; open the rig review instead.": "PARTS_ATLAS_NOT_CARRIED: atlas inspection is not available in the parts workspace; open the rig review instead.",
 
   " (Apply's default pack flags)": " (Apply's default pack flags)",
   " (No playback reference · time display only)": " (No playback reference · time display only)",
