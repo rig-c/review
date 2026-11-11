@@ -556,15 +556,29 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .parts-explorer li:has([data-pv-visible]){display:flex;align-items:center;gap:4px}
 .parts-explorer li:has([data-pv-visible]) button{flex:1;min-width:0}
 
-/* The existing record drawer hosts the one interview form and shared image controls. */
-.interview-answer{display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden}
-.interview-answer>.interview-view{display:grid;flex:1;min-height:0;grid-template-rows:auto minmax(100px,1fr) 5px var(--interview-answer-height,262px);gap:0;margin:0}
+/* Reuse the interview panel's approved question list | image | survey layout. */
+.interview-answer.interview-grid{display:grid;flex:1;min-height:0;grid-template-columns:minmax(9rem,.5fr) minmax(0,1.5fr) minmax(24rem,1.25fr);grid-template-rows:minmax(0,1fr) auto;align-items:stretch;overflow:hidden}
+.interview-answer>.interview-questions{grid-column:1;grid-row:1;overflow:auto}
+.interview-answer>.interview-art{grid-column:2;grid-row:1;display:flex;flex-direction:column;position:static;min-height:0;padding:8px}
+.interview-art>.interview-view{display:grid;flex:1;min-height:0;grid-template-rows:auto minmax(100px,1fr) 5px var(--interview-answer-height,120px);gap:0;margin:0}
 .interview-answer .interview-viewport{height:auto;min-height:100px;grid-row:2}
 .interview-answer .zoom-controls{grid-row:1;padding-bottom:8px}
 .interview-answer .interview-bottom-resize{grid-row:3}
-.interview-answer-fields{grid-row:4;overflow:auto;min-height:0;border:0;padding:12px!important}
-.interview-answer .interview-ask{min-width:0}
-.interview-answer>p[role=status]{flex:none;margin:4px}
+.interview-image-context{grid-row:4;overflow:auto;min-height:0;padding:8px}
+.interview-answer-fields{grid-column:3;grid-row:1;min-height:0;overflow:auto;border:0;padding:0 4px!important}
+.interview-answer-fields>h3{margin:4px 0 8px}
+.interview-answer .interview-pending{margin:6px 0;line-height:1.3}
+.interview-answer .interview-ask{min-width:0;margin:6px 0!important;padding-top:4px!important}
+.interview-answer .interview-option{margin:4px 0;padding:5px 8px;gap:1px 6px;line-height:1.25}
+.interview-answer textarea:not([hidden]){min-height:3rem;height:3rem;margin:4px 0}
+.interview-answer>p[role=status]{grid-column:1 / -1;grid-row:2;margin:4px}
 .interview-delegate{justify-self:start;font-size:11px;color:var(--fg-muted)}
+@media(max-width:65rem){
+ .interview-answer.interview-grid{grid-template-columns:minmax(0,1fr);grid-template-rows:auto 320px auto auto;overflow:auto}
+ .interview-answer>.interview-questions{grid-column:1;grid-row:1}
+ .interview-answer>.interview-art{grid-column:1;grid-row:2}
+ .interview-answer-fields{grid-column:1;grid-row:3;overflow:visible}
+ .interview-answer>p[role=status]{grid-column:1;grid-row:4}
+}
 
 .workspace-act-ask:disabled{opacity:1;cursor:default}

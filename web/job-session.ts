@@ -31,7 +31,7 @@ import {advancePlayback} from './playback-clock.ts';
 import {createJobRigScreen, isJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
 import type {JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl,createViewControls} from './view-controls.ts';
-import {interviewAskGroup,interviewImageView,jobInterviewValue} from './interview-panel.ts';
+import {interviewAskGroup,interviewImageView,interviewQuestionList,jobInterviewValue} from './interview-panel.ts';
 import {SENTINELS} from './parts-render.ts';
 import {JOB_COMMENTS_ACT_SCHEMA, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
@@ -1361,7 +1361,7 @@ export interface JobFormDependencies {
         source.className = 'job-source';
         source.textContent = prepared.display.publication.label + ' · ' + ask.source.sourceHash;
         fields.append(source);
-        const note = textArea(fields, 'interview.note');
+        const note = ask.subject.kind==='interview-picks'?{value:'',parentElement:null}:textArea(fields, 'interview.note');
         let read: () => UISubmissionV3['value'];
         let submitKey = 'Submit review';
         const subject = ask.subject;
@@ -1393,27 +1393,34 @@ export interface JobFormDependencies {
             const heading = node('h3');
             heading.textContent = question.set.question;
             fields.prepend(heading);
-            form.classList.add('interview-answer');
+            form.classList.add('interview-answer','interview-grid');form.dataset.interviewAnswered=String(ask.status==='answered');
             fields.classList.add('interview-answer-fields');fields.id='interview-answer-'+ask.askId;
             const answers = question.set.asks.map(item => {
                 const answer=interviewAskGroup(item,{text:node,name:'choice.'+item.id,otherName:'other.'+item.id});
                 fields.append(answer.group);
                 return {item,answer};
             });
-            fields.append(note.parentElement!);
+            const context=node('div');context.id=fields.id+'-source';context.className='interview-image-context';context.append(source);
             const images=question.images.map(image=>{
                 const visual=prepared.interviewImages.get(image.url);
                 if(!visual)throw new Error('JOB_VISUAL_UNAVAILABLE');
                 return {name:image.name,src:visual.src};
             });
+            const art=node('aside');art.className='interview-art';form.prepend(art);
             let activeView:ReturnType<typeof interviewImageView>|undefined;
             const showImage=(index:number)=>{
                 activeView?.dispose();activeView?.element.remove();
-                activeView=interviewImageView(images,index,showImage,fields);form.prepend(activeView.element);
+                activeView=interviewImageView(images,index,showImage,context);art.append(activeView.element);
             };
-            if(images.length)showImage(0);
-            disposeInterview=()=>{activeView?.dispose();};
-            read=()=>jobInterviewValue(subject.questionId,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),note.value);
+            if(images.length)showImage(0);else art.append(context);
+            let list:HTMLElement|undefined;
+            const refreshQuestions=()=>{
+                const next=interviewQuestionList([{label:question.set.question+' · '+question.set.id,answered:form.dataset.interviewAnswered==='true'}],0,()=>{});
+                if(list)list.replaceWith(next);else form.prepend(next);list=next;
+            };
+            form.addEventListener('input',refreshQuestions);form.addEventListener('change',refreshQuestions);form.addEventListener('job-form-language',refreshQuestions);refreshQuestions();
+            disposeInterview=()=>{activeView?.dispose();form.removeEventListener('input',refreshQuestions);form.removeEventListener('change',refreshQuestions);form.removeEventListener('job-form-language',refreshQuestions);};
+            read=()=>jobInterviewValue(subject.questionId,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),'');
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
@@ -1569,6 +1576,7 @@ export interface JobFormDependencies {
                     }
                 }
                 entry.dirty = !!original;
+                if(subject.kind==='interview-picks')form.dispatchEvent(new Event('change'));
             }
         }
         catch { /* Invalid or unavailable local drafts grant no submission authority. */ }
@@ -1596,6 +1604,7 @@ export interface JobFormDependencies {
                 entry.dirty = false;
                 status.dataset.jobText = 'job.saved';
                 status.textContent = t('job.saved');
+                if(subject.kind==='interview-picks'){form.dataset.interviewAnswered='true';form.dispatchEvent(new Event('change'));}
                 saveDraft();
             }
             catch (error) {
@@ -1673,7 +1682,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     const binding=()=>({jobId:access.jobId,incarnation:hub!,publicationId:window.state().displayed?.publication.publicationId??null,sourceHash:window.state().displayed?.publication.source.sourceHash??null});
     const visibility=(event:MessageEvent)=>{if(!hub||!jobHubMessageMatches(event,location.origin,globalThis.parent,binding(),'visibility'))return;events?.visibility(event.data.visible);i18n.setLinkLanguage(null);i18n.setLanguagePreference(event.data.language);};
     if(hub)globalThis.addEventListener('message',visibility);
-    const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);});
+    const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);for(const form of host.querySelectorAll('form.interview-answer'))form.dispatchEvent(new Event('job-form-language'));});
     events=startJobWindowEvents({access,signal:abort.signal,member:!!hub,event:event=>{window.event(event);if(hub)globalThis.parent.postMessage({...binding(),schema:JOB_HUB_READY},location.origin);},refused:error=>report(error,'JOB_STREAM_FAILED')});
     const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();for(const entry of rigScreen.mounted()?.record?.forms.values()??[])entry.dispose?.();rigScreen.mounted()?.record?.inspection.dispose();localize();legacyStop?.();globalThis.removeEventListener('message',visibility);globalThis.removeEventListener('pagehide',stop);};
     globalThis.addEventListener('pagehide',stop,{once:true});return stop;

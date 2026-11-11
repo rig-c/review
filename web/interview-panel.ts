@@ -172,7 +172,7 @@ export function interviewImageView(images: readonly {name: string; src: string}[
   const fit = () => {if (!fitted && loaded && camera.paneFrame('rig')) {fitted = true; camera.fitActiveCamera('rig');} else camera.fitCamera();};
   const resize = new ResizeObserver(fit); resize.observe(viewport);
   if(bottom){
-    const preferences=new WorkspacePreferenceStore();let height=preferences.get().panels.inspectorHeight;
+    const preferences=new WorkspacePreferenceStore();let height:number=panelBounds.inspectorHeight.min;
     const separator=element('div');separator.className='workspace-separator interview-bottom-resize';
     view.append(separator,bottom);
     const range=()=>({min:panelBounds.inspectorHeight.min,max:Math.max(panelBounds.inspectorHeight.min,view.clientHeight-200),value:bottom.getBoundingClientRect().height,enabled:true});

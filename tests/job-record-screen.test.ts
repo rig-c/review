@@ -122,7 +122,7 @@ test('#750 interview publication follows a genuinely retained picture before pen
 });
 
 
-test('#722 real form saves only checked radios, restores Other and note without changing option identities',async()=>{
+test('#722 real form saves only checked radios, restores Other with empty contract note without changing option identities',async()=>{
  const f=await recordScreenFixture('interview-picks'),dom=await recordScreenDom();
  let inspection:Awaited<ReturnType<typeof prepareJobInspection>>|undefined;
  try{
@@ -138,7 +138,7 @@ test('#722 real form saves only checked radios, restores Other and note without 
   const radios=[...entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')],identities=radios.map(input=>({name:input.name,value:input.value}));
   for(const input of radios){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
   entry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='  직접 입력\n';
-  entry.form.querySelector<HTMLTextAreaElement>('textarea[name="note"]')!.value='  질문 메모\n';
+  expect(entry.form.querySelector('textarea[name="note"]')).toBeNull();
   entry.dirty=true;drafts.saveDraft();
   const saved=JSON.parse(store.get(drafts.localDraftKey(f.display))!);
   expect(saved.forms[0].controls.filter((input:{name:string})=>input.name.startsWith('choice.'))).toEqual([{name:'choice.topology',value:'topology_other'},{name:'choice.detail_level',value:'density_auto'}]);
@@ -147,7 +147,7 @@ test('#722 real form saves only checked radios, restores Other and note without 
   expect(restoredRadios.filter(input=>input.checked).map(input=>input.value)).toEqual(['topology_other','density_auto']);
   expect(restored.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.hidden).toBe(false);
   expect(restored.read()).toEqual(entry.read());
-  expect(restored.read()).toEqual({questionId:'rig_type',selections:[{itemId:'topology',optionId:'topology_other',otherText:'  직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:'  질문 메모\n'});
+  expect(restored.read()).toEqual({questionId:'rig_type',selections:[{itemId:'topology',optionId:'topology_other',otherText:'  직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:''});
   expect(restored.form.querySelectorAll('select')).toHaveLength(0);
  }finally{inspection?.dispose();dom.restore();await f.close();}
 });

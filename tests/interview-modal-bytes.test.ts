@@ -35,3 +35,12 @@ for (const item of cases) test(`interview modal keeps the picks file and job act
     expect(JSON.stringify(value)).toBe(item.job);
   } finally {fixture.dispose();}
 });
+
+
+test('#722 empty-note value bytes equal the original 60d7f17 serializer with source Other and auto IDs',async()=>{
+ const baseline=await Bun.file(new URL('./fixtures/interview-722-empty-note.json',import.meta.url)).json();
+ const expected=JSON.parse(baseline.expectedValueBytes);
+ const asks=[{id:'topology',options:[{id:'topology_other',kind:'other'}]},{id:'detail_level',options:[{id:'density_auto',kind:'auto'}]}];
+ const actual=jobInterviewValue('rig_type',asks as never,ask=>({optionId:ask.id==='topology'?'topology_other':'density_auto',otherText:ask.id==='topology'?'  Custom topology · 직접 입력\n':''}),'');
+ expect(baseline.sourceCommit).toBe('60d7f17');expect(expected.note).toBe('');expect(JSON.stringify(actual)).toBe(baseline.expectedValueBytes);
+});
