@@ -46,7 +46,7 @@ class Host extends EventTarget {
  setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);}
 }
 let hostDocument:{activeElement:Host|null};
-function openHost(options:{nonRig?:boolean;explicitRegions?:boolean;explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean;bottomPanel?:boolean;kind?:string;stored?:Record<string,string>}={}){
+function openHost(options:{ownedRoot?:boolean;nonRig?:boolean;explicitRegions?:boolean;explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean;bottomPanel?:boolean;kind?:string;stored?:Record<string,string>}={}){
  const body=new Host('body'),layout=new Host(),main=new Host('main'),left=new Host('aside'),right=new Host('aside'),stage=new Host(),inspector=new Host(),heading=new Host();layout.className='layout';left.className='left-panel';right.id='parts-explorer';stage.id='stage-layout';inspector.className='inspector';heading.clientHeight=30;
  const language=new Host('select');language.id='settings-language';const languageLabel=new Host('label');languageLabel.append(language);body.append(languageLabel);
  const tabs=options.tabs??['view','rig','playback','feedback'],panels={} as Record<string,Host>;for(const tab of tabs){const panel=new Host('section'),button=new Host('button');panel.id='inspector-'+tab;panel.dataset.inspectorPanel=tab;panel.hidden=tab!==tabs[0];panel.clientHeight=200;panel.clientWidth=500;button.dataset.inspector=tab;button.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(tab===tabs[0]));panels[tab]=panel;if(options.pressed){button.dataset.mode=tab;body.append(button);inspector.append(panel);}else inspector.append(button,panel);}
@@ -64,11 +64,12 @@ function openHost(options:{nonRig?:boolean;explicitRegions?:boolean;explorerLeft
   keys.id='direction-authored-keys';direction.append(keys);body.id='direction-authored-body';stage.before(direction);stage.before(body);body.clientHeight=0;
  }
 if(options.leftHeader){const header=new Host(),strip=new Host('details');header.className='left-header parts-header';strip.id='package-context';left.append(header,strip);}if(options.nonRig){stage.id='parts-stage';layout.append(left,main);}else if(options.explorerLeft){left.append(right);layout.append(left,main);}else layout.append(left,main,right);body.append(layout);
+ const ownedRoot=new Host();ownedRoot.id='app';if(options.ownedRoot){ownedRoot.append(...body.children);body.append(ownedRoot);}
  const values=new Map<string,string>(Object.entries(options.stored??{})),events=new EventTarget(),frames=new Map<number,()=>void>();let handle=0;
  const document=Object.assign(new EventTarget(),{body,hidden:false,activeElement:null as Host|null,getElementById:(id:string)=>body.all().find(n=>n.id===id)??null,querySelector:(selector:string)=>body.querySelector(selector),createElement:(tag:string)=>new Host(tag)});hostDocument=document;
  const globals={document,window:events,localStorage:{getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value)},requestAnimationFrame:(callback:()=>void)=>{frames.set(++handle,callback);return handle;},cancelAnimationFrame:(id:number)=>frames.delete(id),ResizeObserver:class{observe(){}disconnect(){}},MutationObserver:class{constructor(_callback:()=>void){}observe(){}disconnect(){}}};
  const old=new Map<string,PropertyDescriptor|undefined>();for(const [key,value]of Object.entries(globals)){old.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});}
- let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({...(options.nonRig||options.explicitRegions?{regions:{layout,left,main,stage,bottom:inspector,...(options.explicitRegions?{columns:{left:'rightWidth',right:null}}:{})} as unknown as NonNullable<Parameters<typeof bindWorkspaceUI>[0]['regions']>}:{}),changed:()=>changed++,defaultTheme:value=>{currentTheme=value;},...(options.currentTheme?{currentTheme:options.currentTheme}:{}),...(bottomPanel?{bottomPanel:bottomPanel as unknown as Parameters<typeof bindWorkspaceUI>[0]['bottomPanel']}:{})});
+ let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({...(options.ownedRoot?{root:ownedRoot as unknown as HTMLElement}:{}),...(options.nonRig||options.explicitRegions?{regions:{layout,left,main,stage,bottom:inspector,...(options.explicitRegions?{columns:{left:'rightWidth',right:null}}:{})} as unknown as NonNullable<Parameters<typeof bindWorkspaceUI>[0]['regions']>}:{}),changed:()=>changed++,defaultTheme:value=>{currentTheme=value;},...(options.currentTheme?{currentTheme:options.currentTheme}:{}),...(bottomPanel?{bottomPanel:bottomPanel as unknown as Parameters<typeof bindWorkspaceUI>[0]['bottomPanel']}:{})});
  const flush=()=>{for(let i=0;i<5;i++){const pending=[...frames.values()];frames.clear();for(const run of pending)run();}};flush();
  const tabBinding=bottomPanel?bindInspectorTabs(()=>ui.afterTab(),()=>ui.beforeTab(),{
   tabs:bottomPanel.strip.children.map(button=>({id:button.dataset.inspector!,button:button as unknown as HTMLButtonElement,panels:[panels[button.dataset.inspector!] as unknown as HTMLElement],attribute:'aria-selected' as const})),
@@ -76,7 +77,7 @@ if(options.leftHeader){const header=new Host(),strip=new Host('details');header.
  }):undefined;
  const get=(id:string)=>document.getElementById(id)!;
  const choose=(id:string,value:string|boolean)=>{const node=get(id);if(typeof value==='boolean')node.checked=value;else node.value=value;(node as unknown as {onchange:()=>void}).onchange();};
- return {ui,get,choose,values,layout,panels,flush,tabBinding,bottomPanel,bottomBody,dom:()=>body.all().map(node=>({tag:node.tagName,id:node.id,className:node.className,parent:node.parentElement?.id,text:node.textContent,hidden:node.hidden,attrs:[...node.attrs]})),focus:()=>document.activeElement,changed:()=>changed,theme:()=>currentTheme,events,activate(tab:string){ui.beforeTab();for(const node of [...inspector.children,...body.children])if(node.dataset.inspector)node.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(node.dataset.inspector===tab));for(const [name,node]of Object.entries(panels))node.hidden=name!==tab;ui.afterTab();flush();},close(){tabBinding?.dispose();ui.dispose();for(const [key,value]of old)if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}};
+ return {ui,get,choose,values,layout,ownedRoot,panels,flush,tabBinding,bottomPanel,bottomBody,dom:()=>body.all().map(node=>({tag:node.tagName,id:node.id,className:node.className,parent:node.parentElement?.id,text:node.textContent,hidden:node.hidden,attrs:[...node.attrs]})),focus:()=>document.activeElement,changed:()=>changed,theme:()=>currentTheme,events,activate(tab:string){ui.beforeTab();for(const node of [...inspector.children,...body.children])if(node.dataset.inspector)node.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(node.dataset.inspector===tab));for(const [name,node]of Object.entries(panels))node.hidden=name!==tab;ui.afterTab();flush();},close(){tabBinding?.dispose();ui.dispose();for(const [key,value]of old)if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}};
 }
 
 test('Settings changes future sync/idle defaults only; transient source state and Reset remain independent',()=>{
@@ -567,10 +568,24 @@ test('#678 rig caller regions preserve the legacy shell DOM, labels, drawers and
 
 test('#735 pending ask heading uses fixed subject sentences in EN/KO and stays empty without subjects',async()=>{
  const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** The rig pane',start),raw:{text:string;title:string;hidden:boolean}={text:'',title:'',hidden:false};
- const render=new Function('rigAsk','setSourceText','setSourceAttribute',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},(_:unknown,_key:string,value:string)=>{raw.title=value;});
+ let statusRefreshes=0;const render=new Function('rigAsk','setSourceText','setSourceAttribute','renderDraftState',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},(_:unknown,_key:string,value:string)=>{raw.title=value;},()=>{statusRefreshes++;});
  render([]);expect(raw.hidden).toBe(true);expect(raw.text).toBe('');
  render([{kind:'review-verdict',stage:'rig-review'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
  expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Review this checkpoint.');
  expect(t(raw.text,undefined,'ko')).toBe('리그와 모션을 확인해 주세요. · 이 체크포인트를 검토해 주세요.');
- render([]);expect(raw.hidden).toBe(true);expect(raw.title).toBe('');
+ render([]);expect(raw.hidden).toBe(true);expect(raw.title).toBe('');expect(statusRefreshes).toBe(3);
+});
+
+test('#743 workspace owns detached portal lookup, settles redocking, and disposes only its drawers',async()=>{
+ const first=openHost({ownedRoot:true,bottomPanel:true,tabs:['rig','feedback']}),fieldA=new Host('input');fieldA.id='feedback-target-name';first.panels.rig!.append(fieldA);
+ const second=openHost({ownedRoot:true,bottomPanel:true,tabs:['rig','feedback']}),fieldB=new Host('input');fieldB.id=fieldA.id;second.panels.rig!.append(fieldB);
+ try{
+  first.layout.clientWidth=0;first.layout.clientHeight=0;first.ui.refresh();second.flush();
+  expect(first.ownedRoot.contains(fieldA)).toBe(false);expect(first.ui.element(fieldA.id)).toBe(fieldA as unknown as HTMLElement);expect(second.ui.element(fieldB.id)).toBe(fieldB as unknown as HTMLElement);
+  const foreign=new Host('input');foreign.id='only-second-source';second.panels.rig!.append(foreign);expect(first.ui.element(foreign.id)).toBeNull();
+  first.layout.clientWidth=1400;first.layout.clientHeight=900;let settled=false;const ready=first.ui.settle().then(()=>{settled=true;});expect(settled).toBe(false);second.flush();await ready;
+  expect(first.ownedRoot.contains(fieldA)).toBe(true);expect(first.ui.element(fieldA.id)).toBe(fieldA as unknown as HTMLElement);
+  const ownDrawer=first.ui.element('workspace-drawer-inspectorHeight')!,otherDrawer=second.ui.element('workspace-drawer-inspectorHeight')!;
+  first.ui.dispose();expect(ownDrawer.parentElement).toBeNull();expect(otherDrawer.parentElement).not.toBeNull();expect(second.ui.element(fieldB.id)).toBe(fieldB as unknown as HTMLElement);
+ }finally{second.close();first.close();}
 });

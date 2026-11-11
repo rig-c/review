@@ -96,12 +96,12 @@ test('#750 unsupported fallback drains its first stream and starts legacy only o
  const start=source.indexOf('export async function mountJobScreen('),end=source.indexOf('/** Browser mount is explicit',start);
  let body=source.slice(start,end).replace('export async function mountJobScreen','async function mountJobScreen').replace("await import('./i18n.ts')",'i18nDouble');
  const run=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(body)};return mountJobScreen;}`);
- for(const variant of ['unsupported','supported','stop-during-fallback']){
-  const supported=variant==='supported';
-  let adapter:any,drained=false,legacy=0,streams=0,aborted=false,disposed=0,finishLegacy:(()=>void)|undefined;const document={createElement:()=>({dataset:{},setAttribute(){}})};
-  const environment={document,sessionStorage:{},localStorage:{},location:{href:'http://127.0.0.1/jobs/fixture/',origin:'http://127.0.0.1'},history:{replaceState(){}},crypto,AbortController,URL,jobWindowAccess:()=>({jobId:'fixture'}),i18nDouble:{onLanguageChange:()=>()=>{}},t:(key:string)=>key,createJobFormHelpers:()=>({}),createJobFormDrafts:()=>({saveDraft(){}}),createJobWindowTransport:()=>({}),createJobRigScreen:()=>({mounted:()=>null,prepare:async()=>supported?{}:null,changed(){},painted:async()=>{}}),createJobWindow:(options:any)=>{adapter=options.adapter;return {stop(){aborted=true;},state:()=>({}),event(){}};},startJobWindowEvents:()=>{streams++;return {done:Promise.resolve().then(()=>{drained=true;}),displayed(){}};},mountJobSession:async(_host:any,flag:boolean)=>{expect(flag).toBe(true);expect(aborted).toBe(true);expect(drained).toBe(true);legacy++;if(variant==='stop-during-fallback')await new Promise<void>(resolve=>{finishLegacy=resolve;});return ()=>{disposed++;};},assertJobAskSource(){},jobCheckpointContext,jobPublicationRoutes,jobWindowRefusal:String,globalThis:{addEventListener(){},removeEventListener(){}},JOB_HUB_READY:'ready',jobHubMessageMatches(){}};
+ for(const variant of ['unsupported','supported','mounted-supported','stop-during-fallback']){
+  const supported=variant==='supported'||variant==='mounted-supported';
+  let adapter:any,drained=false,legacy=0,streams=0,aborted=false,disposed=0,reports=0,changed=0,finishLegacy:(()=>void)|undefined;const document={createElement:()=>({dataset:{},setAttribute(){}})};
+  const environment={document,sessionStorage:{},localStorage:{},location:{href:'http://127.0.0.1/jobs/fixture/',origin:'http://127.0.0.1'},history:{replaceState(){}},crypto,AbortController,URL,jobWindowAccess:()=>({jobId:'fixture'}),i18nDouble:{onLanguageChange:()=>()=>{}},t:(key:string)=>key,createJobFormHelpers:()=>({}),createJobFormDrafts:()=>({saveDraft(){}}),createJobWindowTransport:()=>({}),createJobRigScreen:()=>({mounted:()=>variant==='mounted-supported'?{}:null,prepare:async()=>supported?{}:null,changed(){changed++;},report(){reports++;},painted:async()=>{}}),createJobWindow:(options:any)=>{adapter=options.adapter;return {stop(){aborted=true;},state:()=>({}),event(){}};},startJobWindowEvents:()=>{streams++;return {done:Promise.resolve().then(()=>{drained=true;}),displayed(){}};},mountJobSession:async(_host:any,flag:boolean)=>{expect(flag).toBe(true);expect(aborted).toBe(true);expect(drained).toBe(true);legacy++;if(variant==='stop-during-fallback')await new Promise<void>(resolve=>{finishLegacy=resolve;});return ()=>{disposed++;};},assertJobAskSource(){},jobCheckpointContext,jobPublicationRoutes,jobWindowRefusal:String,globalThis:{addEventListener(){},removeEventListener(){}},JOB_HUB_READY:'ready',jobHubMessageMatches(){}};
   const stop=await run(environment)({append(){},querySelectorAll:()=>[]});
-  if(!supported){const signal=new AbortController().signal;const pending=Promise.all([adapter.painted(null,signal),adapter.painted(null,signal)]);if(variant==='stop-during-fallback'){while(!finishLegacy)await Bun.sleep(1);stop();finishLegacy();}await pending;expect(legacy).toBe(1);}else{const prepared=await adapter.prepare({},new AbortController().signal);expect(prepared).toBeTruthy();await adapter.painted(prepared,new AbortController().signal);expect(legacy).toBe(0);}
+  if(!supported){const signal=new AbortController().signal;const pending=Promise.all([adapter.painted(null,signal),adapter.painted(null,signal)]);if(variant==='stop-during-fallback'){while(!finishLegacy)await Bun.sleep(1);stop();finishLegacy();}await pending;expect(legacy).toBe(1);}else{const prepared=await adapter.prepare({},new AbortController().signal);expect(prepared).toBeTruthy();await adapter.painted(prepared,new AbortController().signal);expect(legacy).toBe(0);if(variant==='mounted-supported'){adapter.changed({error:'fixture load failure'});expect(changed).toBe(1);expect(reports).toBe(0);}}
   expect(streams).toBe(1);stop();expect(disposed).toBe(supported?0:1);
  }
 });
@@ -122,6 +122,48 @@ test('#750 interview publication follows a genuinely retained picture before pen
  }finally{await f.close();}
 });
 
+
+for(const picture of [false,true])test('#743 record host never inherits navigation or verdict status; picture='+picture,async()=>{
+ const h=await harness(picture);try{
+  const ready=await h.screen.prepare(h.f.display,new AbortController().signal);const tx=h.screen.commit(ready!);
+  await h.screen.painted(ready!,new AbortController().signal);tx.finalize();
+  expect(rigHost()!.record?.hasPicture).toBe(picture);expect(rigHost()!.navigation).toBeUndefined();expect(rigHost()!.reviewState).toBeUndefined();
+ }finally{await h.close();}
+});
+
+test('#743 record inspection lifetime follows ack finalization; rollback retains old forms and navigation does not cross record boundary',async()=>{
+ const h=await harness(true);try{
+  h.options.load=async()=>{rigHost()!.attach({stage:()=>null,redraw(){},message(){},recordForms(){},navigation:()=>({subject:'rig',bookmark:{time:9}} as never)});rigHost()!.displayed();};
+  const first=await h.screen.prepare(h.f.display,new AbortController().signal);let oldDisposed=0;
+  const close=first!.record!.inspection.dispose.bind(first!.record!.inspection);first!.record!.inspection.dispose=()=>{oldDisposed++;close();};
+  let tx=h.screen.commit(first!);await h.screen.painted(first!,new AbortController().signal);tx.finalize();
+  const oldForms=first!.record!.forms,entry=oldForms.get(h.f.ask.askId)!;let formDisposed=0;
+  const disposeForm=entry.dispose;entry.dispose=()=>{formDisposed++;disposeForm?.();};
+  const candidate=await h.screen.prepare(h.f.display,new AbortController().signal);tx=h.screen.commit(candidate!);await h.screen.painted(candidate!,new AbortController().signal);
+  expect(oldDisposed).toBe(0);await tx.rollback();candidate!.record!.inspection.dispose();
+  expect(h.screen.mounted()).toBe(first);expect(first!.record!.forms).toBe(oldForms);expect(oldForms.get(h.f.ask.askId)).toBe(entry);expect(oldDisposed).toBe(0);expect(formDisposed).toBe(0);
+  const picture=first!.record!.picture!;tx=h.screen.commit(picture);await h.screen.painted(picture,new AbortController().signal);
+  expect(rigHost()!.navigation).toBeUndefined();expect(typeof rigHost()!.reviewState).toBe('function');expect(oldDisposed).toBe(0);
+  tx.finalize();expect(oldDisposed).toBe(1);expect(formDisposed).toBe(1);expect(h.screen.mounted()).toBe(picture);
+ }finally{await h.close();}
+});
+
+test('#743 picture modal forms survive rollback and dispose with their inspection only after finalization',async()=>{
+ const h=await harness(true);try{
+  const ready=await h.screen.prepare(h.f.display,new AbortController().signal),record=ready!.record!;
+  // Reuse real prepared forms and inspection to exercise the internal modal ownership seam.
+  const modal={...record.picture!,modals:{inspection:record.inspection,forms:record.forms}};
+  let inspectionDisposed=0,formDisposed=0;
+  const close=record.inspection.dispose.bind(record.inspection);record.inspection.dispose=()=>{inspectionDisposed++;close();};
+  const entry=record.forms.get(h.f.ask.askId)!,disposeForm=entry.dispose;entry.dispose=()=>{formDisposed++;disposeForm?.();};
+  h.screen.commit(modal).finalize();
+  let tx=h.screen.commit(record.picture!);expect(inspectionDisposed).toBe(0);expect(formDisposed).toBe(0);
+  await tx.rollback();expect(h.screen.mounted()).toBe(modal);expect(modal.modals.forms.get(h.f.ask.askId)).toBe(entry);
+  expect(inspectionDisposed).toBe(0);expect(formDisposed).toBe(0);
+  tx=h.screen.commit(record.picture!);expect(inspectionDisposed).toBe(0);tx.finalize();
+  expect(inspectionDisposed).toBe(1);expect(formDisposed).toBe(1);
+ }finally{await h.close();}
+});
 
 test('#715 a parts-backed record uses the real parts host and source binding',async()=>{
  const h=await harness('parts');try{

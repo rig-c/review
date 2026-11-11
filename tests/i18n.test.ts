@@ -17,9 +17,11 @@ import {
  classifyKoreanDomString,
  getLanguage,
  getLanguagePreference,
+ getLinkLanguage,
  languageFromSearch,
  resolveLanguage,
  setLanguagePreference,
+ setSourceAttribute,
  setLinkLanguage,
  sourceTextContent,
  t,
@@ -1219,6 +1221,63 @@ test('assembly caption reports the visible part count in both languages', async 
  expect(source).toContain("t(assembled()?'Assembled parts':'Selected part')");
  expect(enCatalog['Assembled parts']).toBe('Assembled parts');expect(koCatalog['Assembled parts']).toBe('조립된 파츠');
  expect(source).not.toContain('Selection and verdict remain per part.');
+});
+
+test('#743 live host notices and act status retain English source and render in EN/KO', async () => {
+ const sessionSource = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+ const main = await readFile(new URL('../web/main.ts', import.meta.url), 'utf8');
+ const inspector = await readFile(new URL('../web/inspector-blocks.ts', import.meta.url), 'utf8');
+ const transpiler = new Bun.Transpiler({loader: 'ts'});
+ const live = sessionSource.indexOf('export async function mountJobScreen(');
+ const start = sessionSource.indexOf('    const rigScreen=createJobRigScreen(', live);
+ const end = sessionSource.indexOf('    let bootstrapNotice:', start);
+ expect(start).toBeGreaterThan(live);
+ expect(end).toBeLessThan(sessionSource.indexOf('/** Browser mount is explicit', live));
+ // Execute the actual host wiring, rather than supplying an already corrected translator.
+ const translate = new Function('createJobRigScreen', 'host', 'pageId', 'access', 'i18n', 't', 'jobWindowRefusal', 'dependencies',
+  transpiler.transformSync(sessionSource.slice(start, end)) + ';return rigScreen.translate;')(
+   (options: {translate: typeof t}) => options, {}, 'page', {}, {t}, t, String, {});
+ const text = main.slice(main.indexOf('const text = '), main.indexOf('const option = '));
+ const message = main.slice(main.indexOf('function message('), main.indexOf('async function api<'));
+ const saveState = inspector.slice(inspector.indexOf(' const setSaveState='), inspector.indexOf(' return {element,refresh,setSaveState'));
+ const cases: {key: string; values?: (string | number)[]; missing?: boolean; status?: boolean}[] = [
+  {key: 'job.updated', values: ['A', 'B']}, {key: 'job.updated', values: ['B', 'C'], missing: true},
+  {key: 'job.failed'}, {key: 'job.closed'}, {key: 'job.saved'},
+  {key: 'job.parts.reviewing', values: [2], status: true}, {key: 'job.parts.sending', status: true},
+  {key: 'job.parts.sent', status: true}, {key: 'job.review.approved', status: true}
+ ];
+ const preference = getLanguagePreference(), link = getLinkLanguage();
+ try {
+  setLinkLanguage(null);
+  for (const lang of ['en', 'ko'] as const) {
+   setLanguagePreference(lang);
+   const {doc, root} = makeTestDoc();
+   for (const id of ['message', 'review-message', 'review-draft-state', 'status-copy']) {
+    const node = doc.createElement('span'); node.id = id; root.append(node);
+   }
+   const render = new Function('el', 'setSourceText', 'setSourceAttribute', 'titledIds',
+    transpiler.transformSync(text + message) + ';return message;')(
+     (id: string) => doc.getElementById(id), setSourceText, setSourceAttribute, new Set(['message']));
+   // Use the existing act bar renderer and its copies, through the same source-text writer.
+   const renderStatus = new Function('options', 'setSourceText', 'setSourceAttribute',
+    transpiler.transformSync('let current=null,retry=null;'+saveState) + ';return setSaveState;')({
+     saveState: doc.getElementById('review-draft-state'), saveStateCopies: [{node: doc.getElementById('status-copy'), title: true}]
+    }, setSourceText, setSourceAttribute);
+   for (const entry of cases) {
+    const english = t(entry.key, entry.values, 'en') + (entry.missing ? ' · '+t('job.incompatible', undefined, 'en') : '');
+    const expected = t(entry.key, entry.values, lang) + (entry.missing ? ' · '+t('job.incompatible', undefined, lang) : '');
+    const value = translate(entry.key, entry.values) + (entry.missing ? ' · '+translate('job.incompatible') : '');
+    render(value);
+    if (entry.status) renderStatus({kind: 'saved', text: value});
+    // Repeated observer sweeps must not reverse a rendered Korean template into a raw key.
+    applyDomI18n(doc as unknown as Document); applyDomI18n(doc as unknown as Document);
+    for (const id of ['message', 'review-message', ...(entry.status ? ['review-draft-state', 'status-copy'] : [])]) {
+     expect(doc.getElementById(id)!.textContent).toBe(expected);
+     expect(sourceTextContent(doc.getElementById(id))).toBe(english);
+    }
+   }
+  }
+ } finally { setLinkLanguage(link); setLanguagePreference(preference); }
 });
 
 test('#708 the interview modal is exempt from the page DOM translator: agent-authored option text stays verbatim in ko', () => {
