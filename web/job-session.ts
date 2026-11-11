@@ -863,7 +863,7 @@ function mediaReady(media: HTMLVideoElement, name: 'loadeddata' | 'seeked', sign
     });
 }
 /** Prepare the real published Play model, references and every form dependency off-stage. */
-export async function prepareJobInspection(display: DisplayPublicationV3, signal: AbortSignal): Promise<JobPreparedInspection> {
+export async function prepareJobInspection(display: DisplayPublicationV3, signal: AbortSignal, formsOnly=false): Promise<JobPreparedInspection> {
     const routes = jobPublicationRoutes(display, location.origin);
     const metadata = await jobJson<JobInspectionMetadataV3>(routes.api('review'), signal);
     const publishedSource = display.publication.source;
@@ -1141,7 +1141,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         const failed = preloaded.find(result => result.status === 'rejected');
         if (failed?.status === 'rejected')
             throw failed.reason;
-        if (metadata.manifest?.model) {
+        if (!formsOnly && metadata.manifest?.model) {
             const runtime = await import('@rig-c/play');
             const modelUrl = routes.asset(metadata.manifest.model);
             const modelHash = metadata.reviewedSource!.rig!.sha256;
@@ -1199,7 +1199,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
     }
 }
 export type JobForm = {
-    form: HTMLFormElement;
+    form: HTMLFormElement & {commentWords?:()=>string};
     fieldset: HTMLFieldSetElement;
     read: () => UISubmissionV3['value'];
     submissionId: string;
@@ -1351,18 +1351,22 @@ export interface JobFormDependencies {
         // Rig verdicts belong to the shared screen; unsupported combinations have no job-window form.
         if (ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review')
             throw new Error('JOB_ACT_KIND_DISABLED');
-        const form = node('form');
+        const form = node('form') as JobForm['form'];
         form.dataset.jobAsk = ask.askId;
+        form.dataset.jobPublication = ask.publicationId;
         const fields = node('fieldset');
         form.append(fields);
         const source = node('p');
         source.className = 'job-source';
         source.textContent = prepared.display.publication.label + ' · ' + ask.source.sourceHash;
         fields.append(source);
-        const note = textArea(fields, 'interview.note');
+        const subject = ask.subject;
+        const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff' || subject.kind === 'reopen';
+        const note = commentOnly ? null : textArea(fields, 'interview.note');
+        if(commentOnly)fields.append(node('p','job.commentsFromWorkspace'));
+        const commentWords=()=>form.commentWords?.()??'';
         let read: () => UISubmissionV3['value'];
         let submitKey = 'Submit review';
-        const subject = ask.subject;
         if (subject.kind === 'interview-picks') {
             const question = prepared.interview?.questions.find(item => item.set.id === subject.setId && item.set.question === subject.questionId);
             if (!question || !question.editable) throw new Error('JOB_ASK_INVALID');
@@ -1431,7 +1435,7 @@ export interface JobFormDependencies {
             }
             read = () => ({ questionId: subject.questionId,
                 selections: answers.map(({ item, pick, other }) => ({ itemId: item.id, optionId: pick.value,
-                    otherText: item.options.find(option => option.id === pick.value)?.kind === 'other' ? other.value : null })), note: note.value });
+                    otherText: item.options.find(option => option.id === pick.value)?.kind === 'other' ? other.value : null })), note: (note?.value ?? '') });
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
@@ -1496,8 +1500,8 @@ export interface JobFormDependencies {
             const outcome = selectValues(['', 'pass', 'fail'], ['Pending', 'Pass', 'job.fail']);
             outcome.required = true;
             outcome.name = 'outcome';
-            fields.append(outcome, note.parentElement!);
-            read = () => ({ checkpointId: subject.checkpointId, outcome: outcome.value as 'pass' | 'fail', words: note.value });
+            fields.append(outcome);
+            read = () => ({ checkpointId: subject.checkpointId, outcome: outcome.value as 'pass' | 'fail', words: commentWords() });
             submitKey = 'job.saveCheckpoint';
         }
         else if(subject.kind==='parts-verdict')throw new Error('JOB_PANEL_UNAVAILABLE');
@@ -1520,19 +1524,19 @@ export interface JobFormDependencies {
                 read = () => {
                     const notes = imageNotes.filter(note => note.input.value !== '')
                         .map(note => ({name: note.name, words: note.input.value}));
-                    return {stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: note.value,
+                    return {stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: (note?.value ?? ''),
                         ...(notes.length ? {imageNotes: notes} : {})};
                 };
             } else {
-                read = () => ({ stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: note.value });
+                read = () => ({ stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: (note?.value ?? '') });
             }
         }
         else if (subject.kind === 'signoff') {
             const stage = node('p');
             stage.textContent = subject.stage;
             fields.append(stage);
-            if (ask.source.plan) fields.append(planTextList(ask.source.plan, prepared.metadata.planText), note.parentElement!);
-            read = () => ({ stage: subject.stage, decision: 'approved', words: note.value });
+            if (ask.source.plan) fields.append(planTextList(ask.source.plan, prepared.metadata.planText));
+            read = () => ({ stage: subject.stage, decision: 'approved', words: commentWords() });
             submitKey = 'job.signoff';
         }
         else if (subject.kind === 'reopen') {
@@ -1548,7 +1552,7 @@ export interface JobFormDependencies {
             const stage = node('p');
             stage.textContent = subject.stage;
             fields.append(stage);
-            read = () => ({ stage: subject.stage, words: note.value });
+            read = () => ({ stage: subject.stage, words: commentWords() });
             submitKey = 'job.reopen';
         }
         else {
@@ -1586,6 +1590,7 @@ export interface JobFormDependencies {
         }
         catch { /* Invalid or unavailable local drafts grant no submission authority. */ }
         form.oninput = () => { entry.dirty = true; entry.submissionId = crypto.randomUUID(); saveDraft(); };
+        let attemptedValue:string|undefined;
         form.onsubmit = async (event) => {
             event.preventDefault();
             const state = window.state();
@@ -1593,9 +1598,12 @@ export interface JobFormDependencies {
             if (!receipt || state.preparing || state.closed || !access.capability || !form.reportValidity())
                 return;
             try {
+                const value=read(),key=JSON.stringify(value);
+                if(commentOnly&&attemptedValue!==undefined&&attemptedValue!==key)entry.submissionId=crypto.randomUUID();
+                attemptedValue=key;
                 const input = { kind: subject.kind, publicationId: ask.publicationId,
                     askId: ask.askId, pageId, displayedNonce: receipt.displayedNonce,
-                    expectedGeneration: state.generation, submissionId: entry.submissionId, value: read() } as UISubmissionV3;
+                    expectedGeneration: state.generation, submissionId: entry.submissionId, value } as UISubmissionV3;
                 const activeAsk = state.pending.find(item => item.askId === ask.askId);
                 if (!activeAsk) throw new Error('JOB_ASK_INVALID');
                 entry.submitting = true;
@@ -1663,7 +1671,8 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     const i18n=await import('./i18n.ts');if(language==='en'||language==='ko')i18n.setLanguagePreference(language);
     const node=<Tag extends keyof HTMLElementTagNameMap>(tag:Tag,key?:string)=>{const value=document.createElement(tag);if(key){value.dataset.jobText=key;value.textContent=t(key);}return value;};
     const helpers=createJobFormHelpers(node,t),emptyForms=new Map<string,JobForm>();
-    const drafts=createJobFormDrafts({jobId:access.jobId,current:()=>rigScreen.mounted()?.record?.inspection??null,forms:()=>rigScreen.mounted()?.record?.forms??emptyForms,storage:()=>localStorage});
+    const modalState=()=>{const prepared=rigScreen.mounted();return prepared?.record??prepared?.modals;};
+    const drafts=createJobFormDrafts({jobId:access.jobId,current:()=>modalState()?.inspection??null,forms:()=>modalState()?.forms??emptyForms,storage:()=>localStorage});
     const transport=createJobWindowTransport(access);
     let events:ReturnType<typeof startJobWindowEvents>|undefined,legacyStop:(()=>void)|undefined,stopped=false,fallingBack=false;
     const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource,jobCheckpointContext},draftStorage:()=>localStorage,...drafts,access,pageId,
@@ -1675,10 +1684,10 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     const report=(error:unknown,fallback?:string)=>{if(rigScreen.mounted()){rigScreen.report(error,fallback);return;}if(!bootstrapNotice){bootstrapNotice=node('p');bootstrapNotice.setAttribute('role','status');host.append(bootstrapNotice);}bootstrapNotice.textContent=jobWindowRefusal(error,fallback);};
     const window=createJobWindow<JobRigScreenPrepared|null>({jobId:access.jobId,pageId,transport,adapter:{
         async prepare(display,signal){if(rigScreen.mounted()){location.reload();return new Promise<never>(()=>{});}return rigScreen.prepare(display,signal);},
-        captureDraft(){drafts.saveDraft();const forms=rigScreen.mounted()?.record?.forms;const dirty=forms?[...forms].filter(([,entry])=>entry.dirty):[];return dirty.length?dirty.map(([askId,entry])=>({askId,value:entry.read()})):null;},
+        captureDraft(){drafts.saveDraft();const forms=modalState()?.forms;const dirty=forms?[...forms].filter(([,entry])=>entry.dirty):[];return dirty.length?dirty.map(([askId,entry])=>({askId,value:entry.read()})):null;},
         commit:prepared=>prepared?rigScreen.commit(prepared):{rollback(){},finalize(){}},
         async painted(prepared,signal){if(prepared)await rigScreen.painted(prepared,signal);else{if(stopped||fallingBack||signal.aborted)return;fallingBack=true;abort.abort();window.stop();await events?.done;if(!stopped){const dispose=await mountJobSession(host,true,access);if(stopped)dispose();else legacyStop=dispose;}}},
-        discard:prepared=>prepared?.record?.inspection.dispose(),
+        discard:prepared=>{prepared?.record?.inspection.dispose();prepared?.modals?.inspection.dispose();},
         changed(state){rigScreen.changed(state);if(state.error)report(state.error);if(state.receipt&&!state.preparing)events?.displayed();},
     }});
     const hub=new URL(location.href).searchParams.get('hub');
@@ -1687,7 +1696,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     if(hub)globalThis.addEventListener('message',visibility);
     const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);});
     events=startJobWindowEvents({access,signal:abort.signal,member:!!hub,event:event=>{window.event(event);if(hub)globalThis.parent.postMessage({...binding(),schema:JOB_HUB_READY},location.origin);},refused:error=>report(error,'JOB_STREAM_FAILED')});
-    const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();rigScreen.mounted()?.record?.inspection.dispose();localize();legacyStop?.();globalThis.removeEventListener('message',visibility);globalThis.removeEventListener('pagehide',stop);};
+    const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();rigScreen.mounted()?.record?.inspection.dispose();rigScreen.mounted()?.modals?.inspection.dispose();localize();legacyStop?.();globalThis.removeEventListener('message',visibility);globalThis.removeEventListener('pagehide',stop);};
     globalThis.addEventListener('pagehide',stop,{once:true});return stop;
 }
 

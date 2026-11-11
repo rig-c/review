@@ -3,8 +3,7 @@ import {commentPartsIssues,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
  * window. The job stays the transport: same asks, act kinds, still, displayed-ack and submission idempotency.
- * Only review-verdict (rig-review) and checkpoint asks are answered here; a publication that also waits on
- * any other ask keeps the job window, and a later such ask reloads the page into it. */
+ * Rig verdicts use the act bar; supported approval and interview asks use the shared ask dialog. */
 import type {ActV3, DisplayPublicationV3, JobResult, JobUISubmission, PendingAskV3, SourceV3, UISubmissionV3} from '../src/job-contract.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
@@ -30,7 +29,7 @@ export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readon
   const id = display.publication.publicationId;
   if('selector' in display.publication.source&&display.publication.source.selector?.kind==='draft'&&display.publication.source.parts)return true;
   return jobRigScreenSubject(display.publication.source) &&
-    pending.every(ask => ask.publicationId !== id || ask.status !== 'pending' || jobRigScreenAnswers(ask, checkpoints));
+    pending.every(ask => ask.publicationId !== id || ask.status !== 'pending' || jobRigScreenAnswers(ask, checkpoints) || ask.subject.kind === 'signoff' || ask.subject.kind === 'interview-picks');
 }
 
 export type JobRigScreenDecision =
@@ -61,7 +60,7 @@ export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'c
 
 interface ReviewJson {manifest: ReviewManifest; reviewedSource: ReviewedSource; sourceHash: string}
 export interface JobRigScreenPrepared {readonly jobRigScreen: true; readonly display: DisplayPublicationV3; readonly entry: string;
-  readonly review?: ReviewJson; readonly record?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>;picture:JobRigScreenPrepared|null}; readonly parts?:PartsSubjectData; readonly checkpoints: ReadonlySet<string>}
+  readonly modals?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>}; readonly review?: ReviewJson; readonly record?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>;picture:JobRigScreenPrepared|null}; readonly parts?:PartsSubjectData; readonly checkpoints: ReadonlySet<string>}
 export function isJobRigScreen(value: unknown): value is JobRigScreenPrepared {
   return !!value && typeof value === 'object' && (value as {jobRigScreen?: unknown}).jobRigScreen === true;
 }
@@ -129,7 +128,14 @@ export function createJobRigScreen(options: {
       parts=await response.json() as PartsSubjectData;
       if(parts.sourceHash!==source.sourceHash||parts.mode!=='parts')throw new Error('JOB_DISPLAY_MISMATCH');
     }
-    return {jobRigScreen: true, display, entry: routes.entry, review, checkpoints,...parts?{parts}:{}};
+    let modals:JobRigScreenPrepared['modals'];
+    const asks=options.window.state().pending.filter(ask=>ask.publicationId===display.publication.publicationId&&ask.subject.kind!=='parts-verdict'&&!(ask.subject.kind==='review-verdict'&&ask.subject.stage==='rig-review'));
+    if(!backdropOnly&&options.formDependencies){
+      const inspection=await prepareJobInspection(display,signal,true);
+      try{modals={inspection,forms:prepareJobForms(display,asks,ask=>formFor(ask,inspection,options.formDependencies!))};}
+      catch(error){inspection.dispose();throw error;}
+    }
+    return {jobRigScreen: true, display, entry: routes.entry, review, checkpoints,...parts?{parts}:{},...modals?{modals}:{}};
   }
   function still(ask: PendingAskV3, prepared: JobRigScreenPrepared) {
     screen?.redraw();
@@ -153,7 +159,7 @@ export function createJobRigScreen(options: {
     if (!prepared || !state.receipt || state.preparing) throw new Error('JOB_ACT_SOURCE_STALE');
     if (state.closed) throw new Error('JOB_CLOSED');
     if (!options.access.capability) throw new Error('JOB_CAPABILITY_REQUIRED');
-    const decisions = jobRigScreenDecisions(session, state.pending, prepared.display.publication.publicationId);
+    const decisions = jobRigScreenDecisions(session, state.pending.filter(ask=>!prepared.modals?.forms.has(ask.askId)), prepared.display.publication.publicationId);
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     for (const decision of decisions) {
       const key = JSON.stringify(decision.value);
@@ -225,15 +231,15 @@ export function createJobRigScreen(options: {
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },
       submit: (session, committed) => submit(session, committed).catch(error => {throw new Error(options.refusal(error, 'JOB_ACT_INVALID'));}),
-      attach: value => {screen = value;screen.pendingSubjects?.(pendingSubjects());},
+      attach: value => {screen = value;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
       displayed: () => ready.resolve(),
       failed: error => ready.reject(error)};
   }
   /** Pending and completed forms keep the same source-bound builder and receipt gates. */
   function refreshRecordForms():void {
-    const record=mounted?.record,deps=options.formDependencies;if(!record||!deps)return;
+    const record=mounted?.record??mounted?.modals,deps=options.formDependencies;if(!record||!deps)return;
     const state=options.window.state(),display=record.inspection.display;
-    const next=prepareJobForms(display,state.pending,ask=>record.forms.get(ask.askId)??formFor(ask,record.inspection,deps));
+    const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&!(ask.subject.kind==='review-verdict'&&ask.subject.stage==='rig-review')),ask=>record.forms.get(ask.askId)??formFor(ask,record.inspection,deps));
     for(const [id,entry]of next)record.forms.set(id,entry);
     for(const [id,entry]of record.forms){const ask=state.pending.find(ask=>ask.askId===id);entry.fieldset.disabled=entry.submitting||ask?.status!=='pending'||state.preparing||state.closed||!state.receipt||!options.access.capability;}
     screen?.recordForms?.([...record.forms.values()].map(entry=>entry.form));
@@ -262,6 +268,7 @@ export function createJobRigScreen(options: {
       if(mounted.record){refreshRecordForms();if(state.closed)screen?.message(options.translate('job.closed'),true);return;}
       if (!jobRigScreenRoute(mounted.display, state.pending, mounted.checkpoints)) {location.reload(); return;}
       screen?.pendingSubjects?.(pendingSubjects());
+      refreshRecordForms();
       if (state.closed) screen?.message(options.translate('job.closed'), true);
     },
   };

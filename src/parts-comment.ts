@@ -1,7 +1,7 @@
 /** Closed parts evidence. No synthetic model, frame, slot or package identity. */
 import { parsePartsComparison, type PartsComparison } from './parts-comparison.ts';
 import type { MarkRegion } from './stage-comment.ts';
-import type { JobComment } from './job-contract.ts';
+import type { JobCommentPartsAnchor, JobComment } from './job-contract.ts';
 
 export const PARTS_COMMENT_SCHEMA = 'rig-review-parts-comment/1' as const;
 export const PARTS_ISSUE_SCHEMA = 'rig-review-parts-comment/2' as const;
@@ -348,4 +348,9 @@ export function assertPartsIssueBinding(
 export function commentPartsIssues(comments: readonly JobComment[]): PartsIssue[] {
   return comments.flatMap(comment => comment.anchor && 'schema' in comment.anchor ?
     [{...structuredClone(comment.anchor), summary: comment.text} as PartsIssue] : []);
+}
+
+/** Pointed Parts issues keep their source-bound anchor; the summary becomes the comment text. */
+export function partsIssueComments(issues: readonly PartsIssue[]): {text: string; anchor: JobCommentPartsAnchor}[] {
+  return issues.map(({summary, ...anchor}) => ({text: summary, anchor: structuredClone(anchor)}));
 }
