@@ -18,6 +18,7 @@ import { canonicalStatePath } from './state-dir.ts';
 import { loadReview } from './manifest.ts';
 import { loadPartsView } from './parts-view.ts';
 import { validateStoredPartsComment } from './parts-comment-crops.ts';
+import { commentPartsIssues } from './parts-comment.ts';
 
 export type { JobDisplayPublicationV3 } from './job-contract.ts';
 
@@ -673,7 +674,9 @@ export class JobSession {
           assertJobSourceCurrent(stored.retained);
           const candidate = finalizeJobAct({jobId: this.jobId, submission: input, ask,
             retained: stored.retained, reviewer: current.data.reviewer});
-          if (candidate.schema === JOB_PARTS_VERDICT_ACT_SCHEMA && candidate.value.issues.length) {
+          const issues = candidate.kind !== 'parts-verdict' ? [] : candidate.schema === JOB_COMMENTS_ACT_SCHEMA ?
+            commentPartsIssues(candidate.value.comments) : candidate.schema === JOB_PARTS_VERDICT_ACT_SCHEMA ? candidate.value.issues : [];
+          if (issues.length) {
             await this.readPublicationResponse(input.publicationId, async retained => {
               if (isRetainedRecordSource(retained) || !retained.source.parts) throw new JobError('JOB_ACT_SOURCE_STALE');
               assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals,
@@ -685,7 +688,7 @@ export class JobSession {
                   file.path === relative(retained.snapshotRoot, painting).split(sep).join('/')) ? painting : undefined;
                 const pkg = await loadPartsView(dirname(join(retained.snapshotRoot, retained.source.parts.manifest.path)),
                   {painting: sealedPainting, paintingRoot: retained.snapshotRoot});
-                for (const issue of candidate.value.issues) {
+                for (const issue of issues) {
                   await validateStoredPartsComment(pkg, issue, false, {sourceHash: retained.source.sourceHash});
                 }
               } catch (error) {

@@ -10,7 +10,6 @@ import type {
     JobCheckpointTable,
     JobInterviewDiagnostics,
     JobResult,
-    JobUISubmission,
     PendingAskV3,
     JobPanelComposition,
     PanelComponent,
@@ -26,15 +25,14 @@ import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
 import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {JOB_HUB_READY, jobHubMessageMatches, type JobHubBinding} from './job-hub.ts';
-import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
+import {recordJobRigDraw, jobRigDrawState, presentJobRigStage,
     type JobRigDraw, type JobRigDrawState} from './job-rig-capture.ts';
 import {advancePlayback} from './playback-clock.ts';
-import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
+import {createJobRigScreen, isJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
+import type {JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl,createViewControls} from './view-controls.ts';
 import {SENTINELS} from './parts-render.ts';
-import {CanvasRenderer} from '@rig-c/play';
-import {JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
-import type {PartsSource, PartsHost} from './parts.ts';
+import {JOB_COMMENTS_ACT_SCHEMA, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 
 /** Imported runtimes may throw arbitrary prose. Only registered refusal copy reaches the window. */
@@ -373,7 +371,9 @@ export function createJobWindow<Prepared>(options: {
             ask.subject.kind !== 'parts-verdict') throw new Error('JOB_ACT_SOURCE_STALE');
         assertJobAskSource(ask, displayed);
         const previous = ask.act;
-        const value = (previous?.kind === 'parts-verdict' ? previous.value : input.value) as PartsVerdictValue;
+        // An act@6 verdict's note is its one general comment; the signoff resends it.
+        const value = (previous?.kind !== 'parts-verdict' ? input.value : previous.schema !== JOB_COMMENTS_ACT_SCHEMA ? previous.value :
+            {verdict: previous.value.verdict, words: previous.value.comments.find(comment => !comment.anchor)?.text ?? ''}) as Pick<PartsVerdictValue, 'verdict' | 'words'>;
         const signoff = [...pending.values()].find(item => item.publicationId === publicationId &&
             item.subject.kind === 'signoff' && item.subject.stage === 'parts-review' && item.status === 'pending');
         if (value.verdict === 'approved' && !signoff) throw new Error('JOB_PARTS_SIGNOFF_MISSING');
@@ -382,7 +382,7 @@ export function createJobWindow<Prepared>(options: {
             result = await submit(input);
             if (!result.ok) return result;
         } else {
-            if (!previous || previous.kind !== 'parts-verdict' || previous.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA ||
+            if (!previous || previous.kind !== 'parts-verdict' || (previous.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA && previous.schema !== JOB_COMMENTS_ACT_SCHEMA) ||
                 value.verdict !== 'approved') throw new Error('JOB_ACT_SOURCE_STALE');
             result = {ok: true, value: previous};
         }
@@ -483,6 +483,7 @@ export function jobPublicationRoutes(display: DisplayPublicationV3, origin: stri
     }
     return {
         entry: entry.href,
+        jobId: match[1]!,
         api(path: string) {
             if (!/^[A-Za-z0-9][A-Za-z0-9/._-]*$/.test(path) || path.includes('..'))
                 throw new Error('JOB_DISPLAY_MISMATCH');
@@ -690,7 +691,7 @@ type JobInterview = {
     })[];
     interview?: JobInterviewDiagnostics | null;
 };
-type JobPartsInventory = Awaited<ReturnType<PartsSource['view']>>;
+type JobPartsInventory = import('./parts-viewport-provider.ts').PartsSubjectData;
 interface JobReferenceView {
     id: string;
     label: string;
@@ -720,7 +721,7 @@ export function jobPartsReviewState(asks: readonly JobWindowAsk[], publicationId
     const bound = asks.filter(ask => ask.publicationId === publicationId);
     const verdict = bound.filter(ask => ask.subject.kind === 'parts-verdict').at(-1);
     const act = verdict?.act;
-    if (act?.kind !== 'parts-verdict' || act.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA) return 'reviewing';
+    if (act?.kind !== 'parts-verdict' || (act.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA && act.schema !== JOB_COMMENTS_ACT_SCHEMA)) return 'reviewing';
     if (act.value.verdict === 'changes-requested') return 'sent';
     const approved = bound.some(ask => ask.subject.kind === 'signoff' && ask.subject.stage === 'parts-review' &&
         ask.act?.kind === 'signoff' && ask.act.value.decision === 'approved');
@@ -1197,544 +1198,19 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         throw error;
     }
 }
-/** Browser mount is explicit so importing transaction helpers never starts an app. */
-export async function mountJobSession(host: HTMLElement): Promise<() => void> {
-    const [{ createViewportController, createViewportState }, { createRigViewportProvider }, { mountViewportPair }, { RigOverlays }, { bindLayerShortcuts, describeLayerToggles, createRigLayerControls }, i18n] = await Promise.all([
-        import('./viewport-controller.ts'), import('./rig-viewport-provider.ts'),
-        import('./viewport-pair.ts'), import('./rig-overlays.ts'), import('./view-controls.ts'), import('./i18n.ts'),
-    ]);
-    let storage: Storage | null = null;
-    try {
-        storage = sessionStorage;
-    }
-    catch { /* Capability stays in memory. */ }
-    const access = jobWindowAccess(location.href, storage, href => history.replaceState(history.state, '', href));
-    const hubIncarnation = new URL(location.href).searchParams.get('hub');
-    let hubVisible = !hubIncarnation;
-    let events: ReturnType<typeof startJobWindowEvents> | undefined;
-    const pageId = crypto.randomUUID();
-    const transport = createJobWindowTransport(access);
-    const abort = new AbortController();
-    const language = new URL(location.href).searchParams.get('lang');
-    if (language === 'en' || language === 'ko')
-        i18n.setLanguagePreference(language);
-    const t = i18n.t;
-    const node = <Tag extends keyof HTMLElementTagNameMap>(tag: Tag, key?: string) => {
-        const value = document.createElement(tag);
-        if (key) {
-            value.dataset.jobText = key;
-            value.textContent = t(key);
-        }
-        return value;
-    };
-    const shell = mountWorkspaceShell({compatibility: 'legacyJobStep5', title: t('job.title')});
-    const {header, title} = shell, languages = shell.language!;
-    languages.value = i18n.getLanguage();
-    languages.setAttribute('aria-label', t('interview.language'));
-    languages.onchange = () => { i18n.setLinkLanguage(null); i18n.setLanguagePreference(languages.value === 'ko' ? 'ko' : 'en'); };
-    const notice = node('p', 'job.waiting');
-    notice.className = 'job-notice';
-    notice.setAttribute('role', 'status');
-    const workspace = node('main');
-    host.classList.add('job-window');
-    host.replaceChildren(header, notice, workspace);
-    let current: JobPreparedInspection | null = null;
-    let currentElement: HTMLElement | null = null;
-    type SavedCameraState = Pick<
-        ReturnType<typeof createViewportState>,
-        'cameraSync' | 'activeCamera' | 'zoom' | 'cameraCenter' | 'referenceZoom' | 'referenceCenter'
-    >;
-    type SavedJobWindowState = {
-        publicationId: string;
-        label: string;
-        sourceHash: string;
-        previousLabel: string | null;
-        compatibilityNotice?: boolean;
-        animation?: string;
-        time?: number;
-        loop?: boolean;
-        selectedPart?: string;
-        partMode?: 'context' | 'solo';
-        selectedReference?: string;
-        panel?: string;
-        partIdentity?: unknown;
-        camera?: unknown;
-    };
-    const parseSavedPoint = (raw: unknown): { x: number; y: number } | null | undefined => {
-        if (raw === null) return null;
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-        const point = raw as Record<string, unknown>;
-        return typeof point.x === 'number' && Number.isFinite(point.x) &&
-            typeof point.y === 'number' && Number.isFinite(point.y)
-            ? { x: point.x, y: point.y }
-            : undefined;
-    };
-    const parseSavedCamera = (raw: unknown): SavedCameraState | null => {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-        const value = raw as Record<string, unknown>;
-        const cameraCenter = parseSavedPoint(value.cameraCenter);
-        const referenceCenter = parseSavedPoint(value.referenceCenter);
-        if (typeof value.cameraSync !== 'boolean' ||
-            (value.activeCamera !== 'rig' && value.activeCamera !== 'reference') ||
-            typeof value.zoom !== 'number' || !Number.isFinite(value.zoom) || value.zoom < 0.25 || value.zoom > 8 ||
-            typeof value.referenceZoom !== 'number' || !Number.isFinite(value.referenceZoom) || value.referenceZoom < 0.25 || value.referenceZoom > 8 ||
-            cameraCenter === undefined || referenceCenter === undefined) {
-            return null;
-        }
-        return {
-            cameraSync: value.cameraSync,
-            activeCamera: value.activeCamera,
-            zoom: value.zoom,
-            cameraCenter,
-            referenceZoom: value.referenceZoom,
-            referenceCenter,
-        };
-    };
-    const parseSavedPartIdentity = (raw: unknown): ControlPart | null => {
-        try {
-            return parseControlPart(raw);
-        }
-        catch {
-            return null;
-        }
-    };
-    const parseSavedDraftRecord = (raw: unknown): JobRetainedDraft | null => {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-        const draft = raw as Record<string, unknown>;
-        if (!Array.isArray(draft.forms) || !draft.forms.length ||
-            typeof draft.publicationId !== 'string' || !draft.publicationId ||
-            typeof draft.sourceHash !== 'string' || !draft.sourceHash ||
-            typeof draft.label !== 'string' || !draft.label ||
-            !draft.source || typeof draft.source !== 'object' || Array.isArray(draft.source) ||
-            (draft.source as { sourceHash?: unknown }).sourceHash !== draft.sourceHash) {
-            return null;
-        }
-        const forms = draft.forms.filter((item: unknown): item is { askId: string; value: unknown } =>
-            !!item && typeof item === 'object' && !Array.isArray(item) &&
-            typeof (item as { askId?: unknown }).askId === 'string' && !!(item as { askId: string }).askId);
-        if (!forms.length) return null;
-        return {
-            publicationId: draft.publicationId,
-            sourceHash: draft.sourceHash,
-            source: draft.source as SourceV3,
-            label: draft.label,
-            value: forms.map(item => ({ askId: item.askId, value: item.value })),
-        };
-    };
-    const localWindowKey = 'rig-review-job-window/1:' + access.jobId;
-    let savedWindow: SavedJobWindowState | null = null;
-    try {
-        const parsed = JSON.parse(localStorage.getItem(localWindowKey) ?? 'null');
-        if (parsed && typeof parsed.publicationId === 'string' && typeof parsed.label === 'string' &&
-            typeof parsed.sourceHash === 'string') {
-            savedWindow = parsed as SavedJobWindowState;
-        }
-    }
-    catch { /* Invalid saved window state falls back to defaults. */ }
-    const initialRetainedDrafts: JobRetainedDraft[] = [];
-    try {
-        const draftPrefix = 'rig-review-job-draft/1:' + access.jobId + ':';
-        for (let index = 0; index < localStorage.length; index++) {
-            const key = localStorage.key(index);
-            if (!key?.startsWith(draftPrefix)) continue;
-            try {
-                const parsedDraft = parseSavedDraftRecord(JSON.parse(localStorage.getItem(key) ?? 'null'));
-                if (parsedDraft) initialRetainedDrafts.push(parsedDraft);
-            }
-            catch { /* Ignore malformed draft entries without dropping sibling drafts. */ }
-        }
-    }
-    catch { /* In-memory standing state remains active when storage is unavailable. */ }
-    const previousDisplayed = savedWindow ? {
-        publicationId: savedWindow.publicationId,
-        label: savedWindow.label,
-        previousLabel: typeof savedWindow.previousLabel === 'string' ? savedWindow.previousLabel : null,
-    } : null;
-    let animation = typeof savedWindow?.animation === 'string' ? savedWindow.animation : '';
-    let time = typeof savedWindow?.time === 'number' && Number.isFinite(savedWindow.time) && savedWindow.time >= 0
-        ? savedWindow.time : 0;
-    let playing = false;
-    let loop = typeof savedWindow?.loop === 'boolean' ? savedWindow.loop : true;
-    let playbackCarry = 0;
-    let rafHandle = 0;
-    let lastFrameTime = 0;
-    let inPlaybackStep = false;
-    let lastRunningSaveMs: number | null = null;
-    let lastSavedWindowJson: string | null = null;
-    let selectedPart = typeof savedWindow?.selectedPart === 'string' ? savedWindow.selectedPart : '';
-    let partMode: 'context' | 'solo' = savedWindow?.partMode === 'solo' ? 'solo' : 'context';
-    let selectedReference = typeof savedWindow?.selectedReference === 'string' ? savedWindow.selectedReference : '';
-    let panel = typeof savedWindow?.panel === 'string' && ['1', '2', '3', '4'].includes(savedWindow.panel)
-        ? savedWindow.panel : '3';
-    let restoredPartIdentity: ControlPart | null = parseSavedPartIdentity(savedWindow?.partIdentity);
-    let restoredCamera: SavedCameraState | null = parseSavedCamera(savedWindow?.camera);
-    let compatibilityNotice = Boolean(savedWindow?.compatibilityNotice);
-    type JobForm = {
-        form: HTMLFormElement;
-        fieldset: HTMLFieldSetElement;
-        read: () => UISubmissionV3['value'];
-        submissionId: string;
-        dirty: boolean;
-        submitting: boolean;
-        rigSubmission: ReturnType<typeof createJobRigSubmission>;
-    };
-    type PreparedWindow = JobPreparedInspection & {
-        element: HTMLElement;
-        forms: Map<string, JobForm>;
-    };
-    const partsPanels = new WeakMap<JobPreparedInspection, {
-        slots: {left: HTMLElement; stage: HTMLElement; toolbar: HTMLElement; side: HTMLElement};
-        composition: JobPanelComposition;
-        output?: Parameters<PartsHost['register']>[0];
-        issues: PartsIssue[];
-        legacy: unknown;
-        dispose?: () => void;
-    }>();
-    const forms = new Map<string, JobForm>();
-    const drawn = new WeakMap<JobPreparedInspection, JobRigDraw>();
-    const overlays = new WeakMap<JobPreparedInspection, InstanceType<typeof RigOverlays>>();
-    const layers = { images: true, mesh: false, bones: false, meshOpacity: 0.65 };
-    let stageBackground = '';
-    let drawGeneration = 0;
-    const viewportState = createViewportState();
-    if (restoredCamera) {
-        Object.assign(viewportState, restoredCamera, { cameraRestoring: false });
-    }
-    function saveWindowState(nowMs?: number): void {
-        if (!current)
-            return;
-        if (inPlaybackStep && nowMs === undefined)
-            return;
-        const state = window.state();
-        if (state.displayed?.publication.publicationId !== current.display.publication.publicationId)
-            return;
-        if (nowMs !== undefined) {
-            if (lastRunningSaveMs === null) {
-                lastRunningSaveMs = nowMs;
-                return;
-            }
-            if (nowMs - lastRunningSaveMs < 1000)
-                return;
-            lastRunningSaveMs = nowMs;
-        }
-        try {
-            const serialized = JSON.stringify({
-                publicationId: current.display.publication.publicationId,
-                label: current.display.publication.label,
-                sourceHash: current.display.publication.source.sourceHash,
-                previousLabel: state.previousLabel,
-                compatibilityNotice,
-                animation,
-                time,
-                loop,
-                selectedPart,
-                partMode,
-                selectedReference,
-                panel,
-                partIdentity: current.inspection?.value() ?? null,
-                camera: {
-                    cameraSync: viewportState.cameraSync,
-                    activeCamera: viewportState.activeCamera,
-                    zoom: viewportState.zoom,
-                    cameraCenter: viewportState.cameraCenter
-                        ? { x: viewportState.cameraCenter.x, y: viewportState.cameraCenter.y } : null,
-                    referenceZoom: viewportState.referenceZoom,
-                    referenceCenter: viewportState.referenceCenter
-                        ? { x: viewportState.referenceCenter.x, y: viewportState.referenceCenter.y } : null,
-                },
-            });
-            if (serialized === lastSavedWindowJson)
-                return;
-            localStorage.setItem(localWindowKey, serialized);
-            lastSavedWindowJson = serialized;
-        }
-        catch { /* Standing state stays in memory when storage is unavailable. */ }
-    }
-    const el = <Element extends HTMLElement = HTMLElement>(id: string): Element => {
-        const element = workspace.querySelector<HTMLElement>('#' + id);
-        if (!element)
-            throw new Error('JOB_WINDOW_ELEMENT_MISSING');
-        return element as Element;
-    };
-    const reference = () => current?.references.find(item => item.id === selectedReference) ?? null;
-    const setText = (id: string, value: string) => { const element = workspace.querySelector('#' + id); if (element)
-        element.textContent = i18n.tr(value); };
-    function redrawOverlay(fresh: boolean): void {
-        const owner = current, overlay = owner ? overlays.get(owner) : undefined;
-        if (!owner || !overlay) return;
-        const root = owner.rigRoot, scale = viewportState.rigScale;
-        const left = parseFloat(root.style.left) || 0, top = parseFloat(root.style.top) || 0;
-        const project = (x: number, y: number) => ({ x: left + x * scale, y: top - y * scale });
-        const bones = (owner.metadata.feedbackCatalog.bones ?? []).map(name => ({ name }));
-        const frame = owner.inspection?.frame('single');
-        const selectedSlot = selectedPart || null;
-        const snap = fresh
-            ? overlay.refresh({ player: owner.player, bones, frame, selectedSlot, project, settings: layers })
-            : overlay.redraw({ project, settings: layers });
-        if (!fresh && snap.needsCapture && owner.player) {
-            overlay.refresh({ player: owner.player, bones, frame, selectedSlot, project, settings: layers });
-        }
-    }
-    const provider = createRigViewportProvider({
-        el, player: () => current?.player ?? null, assets: () => current?.assets ?? null,
-        referenceSize: () => reference(), view: () => 'compare', referenceGeneration: () => current?.display.publication.generation ?? 0,
-        parts: () => current?.inspection ?? null, text: setText,
-        message: value => { notice.textContent = jobWindowRefusal(value); }, redrawOverlay: fresh => redrawOverlay(fresh),
-    }, viewportState);
-    const canonicalControls = provider.renderControls;
-    provider.renderControls = controller => {
-        canonicalControls(controller);
-        const fit = el('fit');
-        fit.textContent = t(fit.textContent ?? 'Fit');
-        saveWindowState();
-    };
-    const viewport = createViewportController(provider, viewportState);
-    const renderViewport = provider.render;
-    provider.render = controller => {
-        try {renderViewport(controller); rememberDraw();}
-        catch (error) {
-            if (current) {
-                drawn.delete(current);
-                current.rigPresentation = undefined;
-            }
-            throw error;
-        }
-    };
-    function rigDrawState(): JobRigDrawState {
-        const owner = current, player = owner?.player;
-        if (!owner || !player || !hubVisible) throw new Error('JOB_STILL_CAPTURE_FAILED');
-        const pane = el('rig-viewport'), root = owner.rigRoot, rect = pane.getBoundingClientRect();
-        const ratio = globalThis.devicePixelRatio || 1;
-        const frame = viewport.paneFrame('rig'), camera = viewport.numericView().cameras.rig;
-        if (!frame || !camera || !pane.isConnected || !root.isConnected || el('rig-pane').hidden ||
-            rect.width <= 0 || rect.height <= 0) throw new Error('JOB_STILL_CAPTURE_FAILED');
-        const style = getComputedStyle(root), paneStyle = getComputedStyle(pane);
-        const plain = style.filter === 'none' && style.perspective === 'none' && style.opacity === '1' &&
-            paneStyle.filter === 'none' && paneStyle.transform === 'none' && paneStyle.perspective === 'none' && paneStyle.opacity === '1';
-        const presentation = owner.rigPresentation;
-        const canvas = presentation?.canvas;
-        const pixels = canvas?.getBoundingClientRect();
-        const canvasStyle = canvas ? getComputedStyle(canvas) : null;
-        if (canvas && (!canvas.isConnected || canvasStyle?.visibility !== 'visible' ||
-            canvasStyle.display === 'none' || canvasStyle.opacity !== '1' || canvasStyle.filter !== 'none' ||
-            canvasStyle.transform !== 'none')) throw new Error('JOB_STILL_CAPTURE_FAILED');
-        return {player, presentation, frameGeneration: owner.inspection?.frame('single')?.generation,
-            source: {pageId, publicationId: owner.display.publication.publicationId,
-                instanceKey: owner.display.publication.instanceKey, sourceHash: owner.display.publication.source.sourceHash},
-            layout: JSON.stringify([
-                pane.clientWidth, pane.clientHeight, rect.width, rect.height, ratio,
-                root.getAttribute('style'), style.transform, camera, presentation?.area, presentation?.ratio,
-                pixels ? jobRigPixelPlacement(rect, pixels, ratio) : null,
-                pixels?.width, pixels?.height, canvas?.width, canvas?.height, canvas?.getAttribute('style'),
-            ]),
-            defaultCamera: plain && camera.zoom === 1 && camera.center.x === frame.center.x && camera.center.y === frame.center.y,
-            wholeRig: !selectedPart && !owner.inspection?.value() && player.slots === null &&
-                layers.images && !layers.mesh && !layers.bones && !stageBackground,
-            playing};
-    }
-    function rememberDraw(): void {
-        const owner = current;
-        if (!owner) return;
-        try {
-            const pane = el('rig-viewport');
-            const bg = SENTINELS[stageBackground] ?? '';
-            pane.style.backgroundColor = bg;
-            pane.style.backgroundImage = bg ? 'none' : '';
-            if (!layers.images || layers.mesh || layers.bones || bg) {
-                drawn.delete(owner);
-                owner.rigPresentation = undefined;
-                delete pane.dataset.jobRigCanonical;
-                owner.rigRoot.style.visibility = layers.images ? 'visible' : 'hidden';
-                return;
-            }
-            owner.rigRoot.style.visibility = '';
-            const player = owner.player;
-            const posed = owner.inspection?.frame('single');
-            const camera = viewport.numericView().cameras.rig;
-            if (!hubVisible || !player || !owner.assets || !posed || !camera) {
-                throw new Error('JOB_STILL_CAPTURE_FAILED');
-            }
-            const renderer = player.renderer;
-            const presentation = presentJobRigViewport({pane, root: owner.rigRoot, images: true,
-                canvas: renderer instanceof CanvasRenderer ? renderer.canvas : undefined,
-                backend: renderer instanceof CanvasRenderer ? renderer.backendActive : renderer.meshBackendActive},
-                {camera, posed, assets: owner.assets});
-            pane.append(presentation.canvas);
-            owner.rigPresentation = presentation;
-            pane.dataset.jobRigCanonical = '';
-            drawn.set(owner, recordJobRigDraw(rigDrawState(), ++drawGeneration));
-        } catch {
-            drawn.delete(owner);
-            owner.rigPresentation = undefined;
-        }
-    }
-    function drawInspection(owner: JobPreparedInspection): void {
-        drawn.delete(owner);
-        owner.rigPresentation = undefined;
-        owner.player?.draw();
-        owner.inspection?.present('single');
-        if (owner === current) redrawOverlay(true);
-    }
-    function syncTransportControls(): void {
-        const playBtn = workspace.querySelector<HTMLButtonElement>('#job-play');
-        if (playBtn) {
-            const clip = current?.assets?.animations.find(item => item.name === animation);
-            playBtn.disabled = !animation || !clip || !(clip.duration > 0) || !current?.player;
-            const key = playing ? 'Pause' : 'Play';
-            playBtn.dataset.jobText = key;
-            playBtn.textContent = t(key);
-            playBtn.setAttribute('aria-pressed', String(playing));
-        }
-        const loopInput = workspace.querySelector<HTMLInputElement>('#job-loop');
-        if (loopInput) loopInput.checked = loop;
-    }
-    function stopPlayback(targetPlayer = current?.player): void {
-        if (rafHandle) {
-            cancelAnimationFrame(rafHandle);
-            rafHandle = 0;
-        }
-        playing = false;
-        playbackCarry = 0;
-        lastFrameTime = 0;
-        lastRunningSaveMs = null;
-        targetPlayer?.pause();
-        syncTransportControls();
-        saveWindowState();
-    }
-    function presentCurrentFrame(owner: JobPreparedInspection): void {
-        if (!owner.player) return;
-        drawInspection(owner);
-        owner.inspection?.select(selectedPart ? { side: 'single', slot: selectedPart, mode: partMode } : null);
-        setText('job-part-observation', selectedPart ? JSON.stringify(owner.inspection?.observation(), null, 2) : '');
-        viewport.fitCamera();
-    }
-    function armPlayback(expectedOwner: JobPreparedInspection, expectedPlayer: RigPlayer): void {
-        if (rafHandle) {
-            cancelAnimationFrame(rafHandle);
-            rafHandle = 0;
-        }
-        const handle = requestAnimationFrame(now => stepPlayback(handle, expectedOwner, expectedPlayer, now));
-        rafHandle = handle;
-    }
-    function playbackTimeLabel(duration: number, trackTime: number): string {
-        // A one-second 1/60 replay leaves six epsilons after modulo. Limit display snapping
-        // to eight duration-scaled epsilons. The public time and captured frame stay raw.
-        if (trackTime < duration) return String(time);
-        const residue = 8 * Number.EPSILON * duration;
-        if (time <= residue) return '0';
-        if (duration - time <= residue) return String(duration);
-        return String(time);
-    }
-    function stepPlayback(handle: number, expectedOwner: JobPreparedInspection, expectedPlayer: RigPlayer, now: number): void {
-        if (current !== expectedOwner || current?.player !== expectedPlayer) {
-            expectedPlayer.pause();
-            return;
-        }
-        if (handle !== rafHandle) return;
-        rafHandle = 0;
-        const clip = expectedOwner.assets?.animations.find(item => item.name === animation);
-        if (!playing || !hubVisible || !animation || !clip || !(clip.duration > 0)) {
-            stopPlayback(expectedPlayer);
-            return;
-        }
-        const dt = lastFrameTime > 0 ? Math.min(Math.max(0, (now - lastFrameTime) / 1000), 0.1) : 0;
-        lastFrameTime = now;
-        const next = advancePlayback({ time, duration: clip.duration, carry: playbackCarry, elapsed: dt, repeat: loop });
-        for (const step of next.steps) expectedPlayer.advance(step);
-        const activeEntry = expectedPlayer.entry(0);
-        if (!activeEntry || activeEntry.animation !== animation || activeEntry.loop !== loop ||
-            !Number.isFinite(activeEntry.animationTime) || activeEntry.animationTime < 0 ||
-            activeEntry.animationTime > activeEntry.duration) {
-            stopPlayback(expectedPlayer);
-            return;
-        }
-        playbackCarry = next.carry;
-        if (next.ended) {
-            playing = false;
-            playbackCarry = 0;
-            lastFrameTime = 0;
-            expectedPlayer.pause();
-            time = clip.duration;
-        } else {
-            time = activeEntry.animationTime;
-        }
-        const clock = workspace.querySelector<HTMLInputElement>('#job-time');
-        if (clock) clock.value = playbackTimeLabel(clip.duration, activeEntry.trackTime);
-        inPlaybackStep = true;
-        try {
-            syncTransportControls();
-            presentCurrentFrame(expectedOwner);
-        }
-        finally {
-            inPlaybackStep = false;
-        }
-        if (playing) {
-            saveWindowState(now);
-        } else {
-            lastRunningSaveMs = null;
-            saveWindowState();
-        }
-        if (playing && current === expectedOwner && current.player === expectedPlayer && hubVisible) {
-            armPlayback(expectedOwner, expectedPlayer);
-        }
-    }
-    function copyRigVerdict(ask: PendingAskV3, owner: JobPreparedInspection) {
-        if (owner !== current || ask.publicationId !== owner.display.publication.publicationId) {
-            throw new Error('JOB_STILL_BINDING_MISMATCH');
-        }
-        assertJobAskSource(ask, owner.display);
-        return freezeJobRigCapture(drawn.get(owner), rigDrawState(), ask.askId, () => {
-            if (!owner.rigPresentation) throw new Error('JOB_STILL_CAPTURE_FAILED');
-            return copyJobRigViewport(owner.rigPresentation);
-        });
-    }
-    const referenceSelection = createJobReferenceSelection<JobReferenceView>({
-        current: () => ({owner: current, time}),
-        present(value) {
-            const previous = selectedReference;
-            const camera = structuredClone(viewportState);
-            selectedReference = value.id;
-            try {
-                showReference();
-                el<HTMLSelectElement>('job-reference').value = value.id;
-                viewport.fitCamera();
-            } catch (error) {
-                selectedReference = previous;
-                Object.assign(viewportState, camera);
-                showReference();
-                el<HTMLSelectElement>('job-reference').value = previous;
-                viewport.fitCamera();
-                throw error;
-            }
-        },
-        refused(error) {
-            el<HTMLSelectElement>('job-reference').value = selectedReference;
-            notice.textContent = jobWindowRefusal(error, 'JOB_VISUAL_UNAVAILABLE');
-        },
-    });
-    let unbindNavigation: (() => void) | null = null;
-    let resize: ResizeObserver | null = null;
-    function localDraftKey(display: DisplayPublicationV3): string {
-        return 'rig-review-job-draft/1:' + access.jobId + ':' + display.publication.publicationId + ':' + display.publication.source.sourceHash;
-    }
-    function saveDraft(): void {
-        if (!current)
-            return;
-        try {
-            localStorage.setItem(localDraftKey(current.display), JSON.stringify({
-                publicationId: current.display.publication.publicationId,
-                sourceHash: current.display.publication.source.sourceHash,
-                source: current.display.publication.source,
-                label: current.display.publication.label,
-                forms: [...forms].filter(([, item]) => item.dirty).map(([askId, item]) => ({
-                    askId, value: item.read(),
-                    controls: [...item.form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')]
-                        .map(input => ({ name: input.name, value: input.value })),
-                })),
-            }));
-        }
-        catch { /* The in-memory retained draft remains source-bound. */ }
-    }
+export type JobForm = {
+    form: HTMLFormElement;
+    fieldset: HTMLFieldSetElement;
+    read: () => UISubmissionV3['value'];
+    submissionId: string;
+    dirty: boolean;
+    submitting: boolean;
+};
+
+type JobFormNode = <Tag extends keyof HTMLElementTagNameMap>(tag: Tag, key?: string) => HTMLElementTagNameMap[Tag];
+
+/** Existing form and inspection helpers, without a workspace mount. */
+export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n.ts').t) {
     function inputLabel(key: string, input: HTMLElement): HTMLElement {
         return labelledControl(node('span', key), input);
     }
@@ -1843,10 +1319,38 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         section.append(list);
         return section;
     }
-    function formFor(ask: PendingAskV3, prepared: JobPreparedInspection): JobForm {
+    return {inputLabel, selectValues, textArea, imageGallery, planTextList};
+}
+
+/** The answer builder owns no page shell, transport or draft collection. */
+export interface JobFormDependencies {
+    node: JobFormNode;
+    translate: typeof import('./i18n.ts').t;
+    helpers: ReturnType<typeof createJobFormHelpers> & {
+        assertJobAskSource: typeof assertJobAskSource;
+        jobCheckpointContext: typeof jobCheckpointContext;
+    };
+    draftStorage(): Pick<Storage, 'getItem'>;
+    localDraftKey(display: DisplayPublicationV3): string;
+    saveDraft(): void;
+    window: {
+        state(): Pick<JobWindowState, 'receipt' | 'preparing' | 'closed' | 'generation' | 'pending'>;
+        submit(input: UISubmissionV3): Promise<JobResult<ActV3>>;
+    };
+    access: Pick<JobWindowAccess, 'capability'>;
+    pageId: string;
+}
+
+/** Build the existing answer form with explicit host dependencies. */
+    function formFor(ask: PendingAskV3, prepared: JobPreparedInspection, deps: JobFormDependencies): JobForm {
+        const {node, translate: t, helpers: {textArea, selectValues, imageGallery, planTextList, assertJobAskSource, jobCheckpointContext},
+            draftStorage, localDraftKey, saveDraft, window, access, pageId} = deps;
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
         assertJobAskSource(ask, prepared.display);
+        // Rig verdicts belong to the shared screen; unsupported combinations have no job-window form.
+        if (ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review')
+            throw new Error('JOB_ACT_KIND_DISABLED');
         const form = node('form');
         form.dataset.jobAsk = ask.askId;
         const fields = node('fieldset');
@@ -1996,16 +1500,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             read = () => ({ checkpointId: subject.checkpointId, outcome: outcome.value as 'pass' | 'fail', words: note.value });
             submitKey = 'job.saveCheckpoint';
         }
-        else if (subject.kind === 'parts-verdict') {
-            read = () => {
-                const panel = partsPanels.get(prepared);
-                if (panel?.legacy) throw new Error('JOB_PARTS_LEGACY_DRAFT');
-                if (!panel?.output) throw new Error('JOB_PANEL_OUTPUT_MISSING');
-                return {...panel.output.value(), words: note.value};
-            };
-            submitKey = 'job.partsApprove';
-        }
-        else if (subject.kind === 'review-verdict') {
+        else if(subject.kind==='parts-verdict')throw new Error('JOB_PANEL_UNAVAILABLE');
+        else if (subject.kind === 'review-verdict' && (subject.stage === 'image-review' || subject.stage === 'direction-review')) {
             const verdict = selectValues(['pending', 'approved', 'changes-requested'], ['Pending', 'Approved', 'Changes requested']);
             verdict.name = 'verdict';
             fields.append(verdict);
@@ -2065,21 +1561,15 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         status.setAttribute('role', 'status');
         form.append(status);
         const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
-            submitting: false, rigSubmission: createJobRigSubmission() };
-        const signoffSubmissionId = crypto.randomUUID();
+            submitting: false };
         try {
-            const saved = JSON.parse(localStorage.getItem(localDraftKey(prepared.display)) ?? 'null');
+            const saved = JSON.parse(draftStorage().getItem(localDraftKey(prepared.display)) ?? 'null');
             if (saved?.publicationId === prepared.display.publication.publicationId &&
                 saved?.sourceHash === prepared.display.publication.source.sourceHash) {
                 assertJobAskSource({...ask, source: saved.source}, prepared.display);
                 const original = saved.forms?.find((item: {
                     askId: string;
                 }) => item.askId === ask.askId);
-                if (subject.kind === 'parts-verdict') {
-                    const panel = partsPanels.get(prepared);
-                    if (panel && Array.isArray(original?.value?.issues)) panel.issues = structuredClone(original.value.issues);
-                    else if (panel && original?.value?.parts) panel.legacy = original.value;
-                }
                 for (const input of form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')) {
                     const restored = original?.controls?.find((item: {
                         name: string;
@@ -2095,7 +1585,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             }
         }
         catch { /* Invalid or unavailable local drafts grant no submission authority. */ }
-        form.oninput = () => { entry.dirty = true; entry.submissionId = crypto.randomUUID(); entry.rigSubmission.reset(); saveDraft(); };
+        form.oninput = () => { entry.dirty = true; entry.submissionId = crypto.randomUUID(); saveDraft(); };
         form.onsubmit = async (event) => {
             event.preventDefault();
             const state = window.state();
@@ -2108,24 +1598,18 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     expectedGeneration: state.generation, submissionId: entry.submissionId, value: read() } as UISubmissionV3;
                 const activeAsk = state.pending.find(item => item.askId === ask.askId);
                 if (!activeAsk) throw new Error('JOB_ASK_INVALID');
-                const pending = subject.kind === 'review-verdict' && subject.stage === 'rig-review'
-                    ? entry.rigSubmission.prepare(input as JobUISubmission, () => copyRigVerdict(activeAsk, prepared)) : Promise.resolve(input);
                 entry.submitting = true;
                 fields.disabled = true;
-                const frozen = await pending;
+                const frozen = await Promise.resolve(input);
                 if (entry.submissionId !== frozen.submissionId) throw new Error('JOB_STILL_BINDING_MISMATCH');
-                if (subject.kind === 'parts-verdict') window.refresh();
-                const result = subject.kind === 'parts-verdict'
-                    ? await window.submitParts(frozen, signoffSubmissionId) : await window.submit(frozen);
+                const result = await window.submit(frozen);
                 if (!result.ok)
                     throw new Error(result.error.code);
                 entry.submitting = false;
                 entry.dirty = false;
-                entry.rigSubmission.reset();
                 status.dataset.jobText = 'job.saved';
                 status.textContent = t('job.saved');
                 saveDraft();
-                if (subject.kind === 'parts-verdict') window.refresh();
             }
             catch (error) {
                 entry.submitting = false;
@@ -2133,64 +1617,564 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     ? error.message : 'JOB_ACT_INVALID';
                 status.textContent = jobWindowRefusal(error, 'JOB_ACT_INVALID');
                 fields.disabled = false;
-                if (subject.kind === 'parts-verdict') window.refresh();
             }
         };
         return entry;
     }
+export {formFor};
+
+// Keep the form dependencies available through the existing preparation seam as well as named exports.
+prepareJobForms.formFor = formFor;
+prepareJobForms.helpers = createJobFormHelpers;
+
+/** The original source-bound draft storage, shared by the legacy and single-screen hosts. */
+export function createJobFormDrafts(options:{jobId:string;current():JobPreparedInspection|null;forms():ReadonlyMap<string,JobForm>;storage():Pick<Storage,'setItem'>}) {
+    function localDraftKey(display: DisplayPublicationV3): string {
+        return 'rig-review-job-draft/1:' + options.jobId + ':' + display.publication.publicationId + ':' + display.publication.source.sourceHash;
+    }
+    function saveDraft(): void {
+        const current=options.current(),forms=options.forms();
+        if (!current)
+            return;
+        try {
+            options.storage().setItem(localDraftKey(current.display), JSON.stringify({
+                publicationId: current.display.publication.publicationId,
+                sourceHash: current.display.publication.source.sourceHash,
+                source: current.display.publication.source,
+                label: current.display.publication.label,
+                forms: [...forms].filter(([, item]) => item.dirty).map(([askId, item]) => ({
+                    askId, value: item.read(),
+                    controls: [...item.form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')]
+                        .map(input => ({ name: input.name, value: input.value })),
+                })),
+            }));
+        }
+        catch { /* The in-memory retained draft remains source-bound. */ }
+    }
+    return {localDraftKey,saveDraft};
+}
+prepareJobForms.drafts=createJobFormDrafts;
+
+/** Host supported publications through the existing transaction/stream modules before mounting any screen. */
+export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
+    let storage:Storage|null=null;try{storage=sessionStorage;}catch{/* Keep the capability in memory. */}
+    const access=jobWindowAccess(location.href,storage,href=>history.replaceState(history.state,'',href)),pageId=crypto.randomUUID(),abort=new AbortController();
+    const language=new URL(location.href).searchParams.get('lang');
+    const i18n=await import('./i18n.ts');if(language==='en'||language==='ko')i18n.setLanguagePreference(language);
+    const node=<Tag extends keyof HTMLElementTagNameMap>(tag:Tag,key?:string)=>{const value=document.createElement(tag);if(key){value.dataset.jobText=key;value.textContent=t(key);}return value;};
+    const helpers=createJobFormHelpers(node,t),emptyForms=new Map<string,JobForm>();
+    const drafts=createJobFormDrafts({jobId:access.jobId,current:()=>rigScreen.mounted()?.record?.inspection??null,forms:()=>rigScreen.mounted()?.record?.forms??emptyForms,storage:()=>localStorage});
+    const transport=createJobWindowTransport(access);
+    let events:ReturnType<typeof startJobWindowEvents>|undefined,legacyStop:(()=>void)|undefined,stopped=false,fallingBack=false;
+    const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource,jobCheckpointContext},draftStorage:()=>localStorage,...drafts,access,pageId,
+        window:{state:()=>window.state(),submit:input=>window.submit(input)}};
+    const rigScreen=createJobRigScreen({host,pageId,access,translate:t,refusal:jobWindowRefusal,formDependencies:dependencies,
+        window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),
+        routes:display=>jobPublicationRoutes(display,location.origin),load:()=>import('./main.ts')});
+    let bootstrapNotice:HTMLElement|null=null;
+    const report=(error:unknown,fallback?:string)=>{if(rigScreen.mounted()){rigScreen.report(error,fallback);return;}if(!bootstrapNotice){bootstrapNotice=node('p');bootstrapNotice.setAttribute('role','status');host.append(bootstrapNotice);}bootstrapNotice.textContent=jobWindowRefusal(error,fallback);};
+    const window=createJobWindow<JobRigScreenPrepared|null>({jobId:access.jobId,pageId,transport,adapter:{
+        async prepare(display,signal){if(rigScreen.mounted()){location.reload();return new Promise<never>(()=>{});}return rigScreen.prepare(display,signal);},
+        captureDraft(){drafts.saveDraft();const forms=rigScreen.mounted()?.record?.forms;const dirty=forms?[...forms].filter(([,entry])=>entry.dirty):[];return dirty.length?dirty.map(([askId,entry])=>({askId,value:entry.read()})):null;},
+        commit:prepared=>prepared?rigScreen.commit(prepared):{rollback(){},finalize(){}},
+        async painted(prepared,signal){if(prepared)await rigScreen.painted(prepared,signal);else{if(stopped||fallingBack||signal.aborted)return;fallingBack=true;abort.abort();window.stop();await events?.done;if(!stopped){const dispose=await mountJobSession(host,true,access);if(stopped)dispose();else legacyStop=dispose;}}},
+        discard:prepared=>prepared?.record?.inspection.dispose(),
+        changed(state){rigScreen.changed(state);if(state.error)report(state.error);if(state.receipt&&!state.preparing)events?.displayed();},
+    }});
+    const hub=new URL(location.href).searchParams.get('hub');
+    const binding=()=>({jobId:access.jobId,incarnation:hub!,publicationId:window.state().displayed?.publication.publicationId??null,sourceHash:window.state().displayed?.publication.source.sourceHash??null});
+    const visibility=(event:MessageEvent)=>{if(!hub||!jobHubMessageMatches(event,location.origin,globalThis.parent,binding(),'visibility'))return;events?.visibility(event.data.visible);i18n.setLinkLanguage(null);i18n.setLanguagePreference(event.data.language);};
+    if(hub)globalThis.addEventListener('message',visibility);
+    const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);});
+    events=startJobWindowEvents({access,signal:abort.signal,member:!!hub,event:event=>{window.event(event);if(hub)globalThis.parent.postMessage({...binding(),schema:JOB_HUB_READY},location.origin);},refused:error=>report(error,'JOB_STREAM_FAILED')});
+    const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();rigScreen.mounted()?.record?.inspection.dispose();localize();legacyStop?.();globalThis.removeEventListener('message',visibility);globalThis.removeEventListener('pagehide',stop);};
+    globalThis.addEventListener('pagehide',stop,{once:true});return stop;
+}
+
+/** Browser mount is explicit so importing transaction helpers never starts an app. */
+/** `inherited` keeps the capability the one-screen mount already took off the URL (it may live only in memory). */
+export async function mountJobSession(host: HTMLElement, legacy=false, inherited?: JobWindowAccess): Promise<() => void> {
+    if(!legacy)return mountJobScreen(host);
+    const [{ createViewportController, createViewportState }, { createRigViewportProvider }, { mountViewportPair }, { RigOverlays }, { bindLayerShortcuts, describeLayerToggles, createRigLayerControls }, i18n] = await Promise.all([
+        import('./viewport-controller.ts'), import('./rig-viewport-provider.ts'),
+        import('./viewport-pair.ts'), import('./rig-overlays.ts'), import('./view-controls.ts'), import('./i18n.ts'),
+    ]);
+    let storage: Storage | null = null;
+    try {
+        storage = sessionStorage;
+    }
+    catch { /* Capability stays in memory. */ }
+    const access = inherited ?? jobWindowAccess(location.href, storage, href => history.replaceState(history.state, '', href));
+    const hubIncarnation = new URL(location.href).searchParams.get('hub');
+    let hubVisible = !hubIncarnation;
+    let events: ReturnType<typeof startJobWindowEvents> | undefined;
+    const pageId = crypto.randomUUID();
+    const transport = createJobWindowTransport(access);
+    const abort = new AbortController();
+    const language = new URL(location.href).searchParams.get('lang');
+    if (language === 'en' || language === 'ko')
+        i18n.setLanguagePreference(language);
+    const t = i18n.t;
+    const node = <Tag extends keyof HTMLElementTagNameMap>(tag: Tag, key?: string) => {
+        const value = document.createElement(tag);
+        if (key) {
+            value.dataset.jobText = key;
+            value.textContent = t(key);
+        }
+        return value;
+    };
+    const formHelpers = prepareJobForms.helpers(node, t);
+    const {inputLabel, selectValues, imageGallery, planTextList} = formHelpers;
+    const shell = mountWorkspaceShell({compatibility: 'legacyJobStep5', title: t('job.title')});
+    const {header, title} = shell, languages = shell.language!;
+    languages.value = i18n.getLanguage();
+    languages.setAttribute('aria-label', t('interview.language'));
+    languages.onchange = () => { i18n.setLinkLanguage(null); i18n.setLanguagePreference(languages.value === 'ko' ? 'ko' : 'en'); };
+    const notice = node('p', 'job.waiting');
+    notice.className = 'job-notice';
+    notice.setAttribute('role', 'status');
+    const workspace = node('main');
+    host.classList.add('job-window');
+    host.replaceChildren(header, notice, workspace);
+    let current: JobPreparedInspection | null = null;
+    let currentElement: HTMLElement | null = null;
+    type SavedCameraState = Pick<
+        ReturnType<typeof createViewportState>,
+        'cameraSync' | 'activeCamera' | 'zoom' | 'cameraCenter' | 'referenceZoom' | 'referenceCenter'
+    >;
+    type SavedJobWindowState = {
+        publicationId: string;
+        label: string;
+        sourceHash: string;
+        previousLabel: string | null;
+        compatibilityNotice?: boolean;
+        animation?: string;
+        time?: number;
+        loop?: boolean;
+        selectedPart?: string;
+        partMode?: 'context' | 'solo';
+        selectedReference?: string;
+        panel?: string;
+        partIdentity?: unknown;
+        camera?: unknown;
+    };
+    const parseSavedPoint = (raw: unknown): { x: number; y: number } | null | undefined => {
+        if (raw === null) return null;
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+        const point = raw as Record<string, unknown>;
+        return typeof point.x === 'number' && Number.isFinite(point.x) &&
+            typeof point.y === 'number' && Number.isFinite(point.y)
+            ? { x: point.x, y: point.y }
+            : undefined;
+    };
+    const parseSavedCamera = (raw: unknown): SavedCameraState | null => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const value = raw as Record<string, unknown>;
+        const cameraCenter = parseSavedPoint(value.cameraCenter);
+        const referenceCenter = parseSavedPoint(value.referenceCenter);
+        if (typeof value.cameraSync !== 'boolean' ||
+            (value.activeCamera !== 'rig' && value.activeCamera !== 'reference') ||
+            typeof value.zoom !== 'number' || !Number.isFinite(value.zoom) || value.zoom < 0.25 || value.zoom > 8 ||
+            typeof value.referenceZoom !== 'number' || !Number.isFinite(value.referenceZoom) || value.referenceZoom < 0.25 || value.referenceZoom > 8 ||
+            cameraCenter === undefined || referenceCenter === undefined) {
+            return null;
+        }
+        return {
+            cameraSync: value.cameraSync,
+            activeCamera: value.activeCamera,
+            zoom: value.zoom,
+            cameraCenter,
+            referenceZoom: value.referenceZoom,
+            referenceCenter,
+        };
+    };
+    const parseSavedPartIdentity = (raw: unknown): ControlPart | null => {
+        try {
+            return parseControlPart(raw);
+        }
+        catch {
+            return null;
+        }
+    };
+    const parseSavedDraftRecord = (raw: unknown): JobRetainedDraft | null => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const draft = raw as Record<string, unknown>;
+        if (!Array.isArray(draft.forms) || !draft.forms.length ||
+            typeof draft.publicationId !== 'string' || !draft.publicationId ||
+            typeof draft.sourceHash !== 'string' || !draft.sourceHash ||
+            typeof draft.label !== 'string' || !draft.label ||
+            !draft.source || typeof draft.source !== 'object' || Array.isArray(draft.source) ||
+            (draft.source as { sourceHash?: unknown }).sourceHash !== draft.sourceHash) {
+            return null;
+        }
+        const forms = draft.forms.filter((item: unknown): item is { askId: string; value: unknown } =>
+            !!item && typeof item === 'object' && !Array.isArray(item) &&
+            typeof (item as { askId?: unknown }).askId === 'string' && !!(item as { askId: string }).askId);
+        if (!forms.length) return null;
+        return {
+            publicationId: draft.publicationId,
+            sourceHash: draft.sourceHash,
+            source: draft.source as SourceV3,
+            label: draft.label,
+            value: forms.map(item => ({ askId: item.askId, value: item.value })),
+        };
+    };
+    const localWindowKey = 'rig-review-job-window/1:' + access.jobId;
+    let savedWindow: SavedJobWindowState | null = null;
+    try {
+        const parsed = JSON.parse(localStorage.getItem(localWindowKey) ?? 'null');
+        if (parsed && typeof parsed.publicationId === 'string' && typeof parsed.label === 'string' &&
+            typeof parsed.sourceHash === 'string') {
+            savedWindow = parsed as SavedJobWindowState;
+        }
+    }
+    catch { /* Invalid saved window state falls back to defaults. */ }
+    const initialRetainedDrafts: JobRetainedDraft[] = [];
+    try {
+        const draftPrefix = 'rig-review-job-draft/1:' + access.jobId + ':';
+        for (let index = 0; index < localStorage.length; index++) {
+            const key = localStorage.key(index);
+            if (!key?.startsWith(draftPrefix)) continue;
+            try {
+                const parsedDraft = parseSavedDraftRecord(JSON.parse(localStorage.getItem(key) ?? 'null'));
+                if (parsedDraft) initialRetainedDrafts.push(parsedDraft);
+            }
+            catch { /* Ignore malformed draft entries without dropping sibling drafts. */ }
+        }
+    }
+    catch { /* In-memory standing state remains active when storage is unavailable. */ }
+    const previousDisplayed = savedWindow ? {
+        publicationId: savedWindow.publicationId,
+        label: savedWindow.label,
+        previousLabel: typeof savedWindow.previousLabel === 'string' ? savedWindow.previousLabel : null,
+    } : null;
+    let animation = typeof savedWindow?.animation === 'string' ? savedWindow.animation : '';
+    let time = typeof savedWindow?.time === 'number' && Number.isFinite(savedWindow.time) && savedWindow.time >= 0
+        ? savedWindow.time : 0;
+    let playing = false;
+    let loop = typeof savedWindow?.loop === 'boolean' ? savedWindow.loop : true;
+    let playbackCarry = 0;
+    let rafHandle = 0;
+    let lastFrameTime = 0;
+    let inPlaybackStep = false;
+    let lastRunningSaveMs: number | null = null;
+    let lastSavedWindowJson: string | null = null;
+    let selectedPart = typeof savedWindow?.selectedPart === 'string' ? savedWindow.selectedPart : '';
+    let partMode: 'context' | 'solo' = savedWindow?.partMode === 'solo' ? 'solo' : 'context';
+    let selectedReference = typeof savedWindow?.selectedReference === 'string' ? savedWindow.selectedReference : '';
+    let panel = typeof savedWindow?.panel === 'string' && ['1', '2', '3', '4'].includes(savedWindow.panel)
+        ? savedWindow.panel : '3';
+    let restoredPartIdentity: ControlPart | null = parseSavedPartIdentity(savedWindow?.partIdentity);
+    let restoredCamera: SavedCameraState | null = parseSavedCamera(savedWindow?.camera);
+    let compatibilityNotice = Boolean(savedWindow?.compatibilityNotice);
+    type PreparedWindow = JobPreparedInspection & {
+        element: HTMLElement;
+        forms: Map<string, JobForm>;
+    };
+    const forms = new Map<string, JobForm>();
+    const drawn = new WeakMap<JobPreparedInspection, JobRigDraw>();
+    const overlays = new WeakMap<JobPreparedInspection, InstanceType<typeof RigOverlays>>();
+    const layers = { images: true, mesh: false, bones: false, meshOpacity: 0.65 };
+    let stageBackground = '';
+    let drawGeneration = 0;
+    const viewportState = createViewportState();
+    if (restoredCamera) {
+        Object.assign(viewportState, restoredCamera, { cameraRestoring: false });
+    }
+    function saveWindowState(nowMs?: number): void {
+        if (!current)
+            return;
+        if (inPlaybackStep && nowMs === undefined)
+            return;
+        const state = window.state();
+        if (state.displayed?.publication.publicationId !== current.display.publication.publicationId)
+            return;
+        if (nowMs !== undefined) {
+            if (lastRunningSaveMs === null) {
+                lastRunningSaveMs = nowMs;
+                return;
+            }
+            if (nowMs - lastRunningSaveMs < 1000)
+                return;
+            lastRunningSaveMs = nowMs;
+        }
+        try {
+            const serialized = JSON.stringify({
+                publicationId: current.display.publication.publicationId,
+                label: current.display.publication.label,
+                sourceHash: current.display.publication.source.sourceHash,
+                previousLabel: state.previousLabel,
+                compatibilityNotice,
+                animation,
+                time,
+                loop,
+                selectedPart,
+                partMode,
+                selectedReference,
+                panel,
+                partIdentity: current.inspection?.value() ?? null,
+                camera: {
+                    cameraSync: viewportState.cameraSync,
+                    activeCamera: viewportState.activeCamera,
+                    zoom: viewportState.zoom,
+                    cameraCenter: viewportState.cameraCenter
+                        ? { x: viewportState.cameraCenter.x, y: viewportState.cameraCenter.y } : null,
+                    referenceZoom: viewportState.referenceZoom,
+                    referenceCenter: viewportState.referenceCenter
+                        ? { x: viewportState.referenceCenter.x, y: viewportState.referenceCenter.y } : null,
+                },
+            });
+            if (serialized === lastSavedWindowJson)
+                return;
+            localStorage.setItem(localWindowKey, serialized);
+            lastSavedWindowJson = serialized;
+        }
+        catch { /* Standing state stays in memory when storage is unavailable. */ }
+    }
+    const el = <Element extends HTMLElement = HTMLElement>(id: string): Element => {
+        const element = workspace.querySelector<HTMLElement>('#' + id);
+        if (!element)
+            throw new Error('JOB_WINDOW_ELEMENT_MISSING');
+        return element as Element;
+    };
+    const reference = () => current?.references.find(item => item.id === selectedReference) ?? null;
+    const setText = (id: string, value: string) => { const element = workspace.querySelector('#' + id); if (element)
+        element.textContent = i18n.tr(value); };
+    function redrawOverlay(fresh: boolean): void {
+        const owner = current, overlay = owner ? overlays.get(owner) : undefined;
+        if (!owner || !overlay) return;
+        const root = owner.rigRoot, scale = viewportState.rigScale;
+        const left = parseFloat(root.style.left) || 0, top = parseFloat(root.style.top) || 0;
+        const project = (x: number, y: number) => ({ x: left + x * scale, y: top - y * scale });
+        const bones = (owner.metadata.feedbackCatalog.bones ?? []).map(name => ({ name }));
+        const frame = owner.inspection?.frame('single');
+        const selectedSlot = selectedPart || null;
+        const snap = fresh
+            ? overlay.refresh({ player: owner.player, bones, frame, selectedSlot, project, settings: layers })
+            : overlay.redraw({ project, settings: layers });
+        if (!fresh && snap.needsCapture && owner.player) {
+            overlay.refresh({ player: owner.player, bones, frame, selectedSlot, project, settings: layers });
+        }
+    }
+    const provider = createRigViewportProvider({
+        el, player: () => current?.player ?? null, assets: () => current?.assets ?? null,
+        referenceSize: () => reference(), view: () => 'compare', referenceGeneration: () => current?.display.publication.generation ?? 0,
+        parts: () => current?.inspection ?? null, text: setText,
+        message: value => { notice.textContent = jobWindowRefusal(value); }, redrawOverlay: fresh => redrawOverlay(fresh),
+    }, viewportState);
+    const canonicalControls = provider.renderControls;
+    provider.renderControls = controller => {
+        canonicalControls(controller);
+        const fit = el('fit');
+        fit.textContent = t(fit.textContent ?? 'Fit');
+        saveWindowState();
+    };
+    const viewport = createViewportController(provider, viewportState);
+    const renderViewport = provider.render;
+    provider.render = controller => {
+        try {renderViewport(controller); rememberDraw();}
+        catch (error) {
+            if (current) {
+                drawn.delete(current);
+                current.rigPresentation = undefined;
+            }
+            throw error;
+        }
+    };
+    function rigDrawState(): JobRigDrawState {
+        const owner = current, player = owner?.player;
+        if (!owner || !player || !hubVisible) throw new Error('JOB_STILL_CAPTURE_FAILED');
+        return jobRigDrawState({pane: el('rig-viewport'), paneHidden: el('rig-pane').hidden, root: owner.rigRoot, player,
+            presentation: owner.rigPresentation, frameGeneration: owner.inspection?.frame('single')?.generation,
+            camera: viewport.numericView().cameras.rig, frame: viewport.paneFrame('rig'),
+            source: {pageId, publicationId: owner.display.publication.publicationId,
+                instanceKey: owner.display.publication.instanceKey, sourceHash: owner.display.publication.source.sourceHash},
+            wholeRig: !selectedPart && !owner.inspection?.value() && player.slots === null &&
+                layers.images && !layers.mesh && !layers.bones && !stageBackground,
+            playing});
+    }
+    function rememberDraw(): void {
+        const owner = current;
+        if (!owner) return;
+        try {
+            const pane = el('rig-viewport');
+            const bg = SENTINELS[stageBackground] ?? '';
+            pane.style.backgroundColor = bg;
+            pane.style.backgroundImage = bg ? 'none' : '';
+            if (!layers.images || layers.mesh || layers.bones || bg) {
+                drawn.delete(owner);
+                owner.rigPresentation = undefined;
+                delete pane.dataset.jobRigCanonical;
+                owner.rigRoot.style.visibility = layers.images ? 'visible' : 'hidden';
+                return;
+            }
+            owner.rigRoot.style.visibility = '';
+            const player = owner.player;
+            const posed = owner.inspection?.frame('single');
+            const camera = viewport.numericView().cameras.rig;
+            if (!hubVisible || !player || !owner.assets || !posed || !camera) {
+                throw new Error('JOB_STILL_CAPTURE_FAILED');
+            }
+            const presentation = presentJobRigStage({pane, root: owner.rigRoot, player, camera, posed, assets: owner.assets});
+            owner.rigPresentation = presentation;
+            pane.dataset.jobRigCanonical = '';
+            drawn.set(owner, recordJobRigDraw(rigDrawState(), ++drawGeneration));
+        } catch {
+            drawn.delete(owner);
+            owner.rigPresentation = undefined;
+        }
+    }
+    function drawInspection(owner: JobPreparedInspection): void {
+        drawn.delete(owner);
+        owner.rigPresentation = undefined;
+        owner.player?.draw();
+        owner.inspection?.present('single');
+        if (owner === current) redrawOverlay(true);
+    }
+    function syncTransportControls(): void {
+        const playBtn = workspace.querySelector<HTMLButtonElement>('#job-play');
+        if (playBtn) {
+            const clip = current?.assets?.animations.find(item => item.name === animation);
+            playBtn.disabled = !animation || !clip || !(clip.duration > 0) || !current?.player;
+            const key = playing ? 'Pause' : 'Play';
+            playBtn.dataset.jobText = key;
+            playBtn.textContent = t(key);
+            playBtn.setAttribute('aria-pressed', String(playing));
+        }
+        const loopInput = workspace.querySelector<HTMLInputElement>('#job-loop');
+        if (loopInput) loopInput.checked = loop;
+    }
+    function stopPlayback(targetPlayer = current?.player): void {
+        if (rafHandle) {
+            cancelAnimationFrame(rafHandle);
+            rafHandle = 0;
+        }
+        playing = false;
+        playbackCarry = 0;
+        lastFrameTime = 0;
+        lastRunningSaveMs = null;
+        targetPlayer?.pause();
+        syncTransportControls();
+        saveWindowState();
+    }
+    function presentCurrentFrame(owner: JobPreparedInspection): void {
+        if (!owner.player) return;
+        drawInspection(owner);
+        owner.inspection?.select(selectedPart ? { side: 'single', slot: selectedPart, mode: partMode } : null);
+        setText('job-part-observation', selectedPart ? JSON.stringify(owner.inspection?.observation(), null, 2) : '');
+        viewport.fitCamera();
+    }
+    function armPlayback(expectedOwner: JobPreparedInspection, expectedPlayer: RigPlayer): void {
+        if (rafHandle) {
+            cancelAnimationFrame(rafHandle);
+            rafHandle = 0;
+        }
+        const handle = requestAnimationFrame(now => stepPlayback(handle, expectedOwner, expectedPlayer, now));
+        rafHandle = handle;
+    }
+    function playbackTimeLabel(duration: number, trackTime: number): string {
+        // A one-second 1/60 replay leaves six epsilons after modulo. Limit display snapping
+        // to eight duration-scaled epsilons. The public time and captured frame stay raw.
+        if (trackTime < duration) return String(time);
+        const residue = 8 * Number.EPSILON * duration;
+        if (time <= residue) return '0';
+        if (duration - time <= residue) return String(duration);
+        return String(time);
+    }
+    function stepPlayback(handle: number, expectedOwner: JobPreparedInspection, expectedPlayer: RigPlayer, now: number): void {
+        if (current !== expectedOwner || current?.player !== expectedPlayer) {
+            expectedPlayer.pause();
+            return;
+        }
+        if (handle !== rafHandle) return;
+        rafHandle = 0;
+        const clip = expectedOwner.assets?.animations.find(item => item.name === animation);
+        if (!playing || !hubVisible || !animation || !clip || !(clip.duration > 0)) {
+            stopPlayback(expectedPlayer);
+            return;
+        }
+        const dt = lastFrameTime > 0 ? Math.min(Math.max(0, (now - lastFrameTime) / 1000), 0.1) : 0;
+        lastFrameTime = now;
+        const next = advancePlayback({ time, duration: clip.duration, carry: playbackCarry, elapsed: dt, repeat: loop });
+        for (const step of next.steps) expectedPlayer.advance(step);
+        const activeEntry = expectedPlayer.entry(0);
+        if (!activeEntry || activeEntry.animation !== animation || activeEntry.loop !== loop ||
+            !Number.isFinite(activeEntry.animationTime) || activeEntry.animationTime < 0 ||
+            activeEntry.animationTime > activeEntry.duration) {
+            stopPlayback(expectedPlayer);
+            return;
+        }
+        playbackCarry = next.carry;
+        if (next.ended) {
+            playing = false;
+            playbackCarry = 0;
+            lastFrameTime = 0;
+            expectedPlayer.pause();
+            time = clip.duration;
+        } else {
+            time = activeEntry.animationTime;
+        }
+        const clock = workspace.querySelector<HTMLInputElement>('#job-time');
+        if (clock) clock.value = playbackTimeLabel(clip.duration, activeEntry.trackTime);
+        inPlaybackStep = true;
+        try {
+            syncTransportControls();
+            presentCurrentFrame(expectedOwner);
+        }
+        finally {
+            inPlaybackStep = false;
+        }
+        if (playing) {
+            saveWindowState(now);
+        } else {
+            lastRunningSaveMs = null;
+            saveWindowState();
+        }
+        if (playing && current === expectedOwner && current.player === expectedPlayer && hubVisible) {
+            armPlayback(expectedOwner, expectedPlayer);
+        }
+    }
+    const referenceSelection = createJobReferenceSelection<JobReferenceView>({
+        current: () => ({owner: current, time}),
+        present(value) {
+            const previous = selectedReference;
+            const camera = structuredClone(viewportState);
+            selectedReference = value.id;
+            try {
+                showReference();
+                el<HTMLSelectElement>('job-reference').value = value.id;
+                viewport.fitCamera();
+            } catch (error) {
+                selectedReference = previous;
+                Object.assign(viewportState, camera);
+                showReference();
+                el<HTMLSelectElement>('job-reference').value = previous;
+                viewport.fitCamera();
+                throw error;
+            }
+        },
+        refused(error) {
+            el<HTMLSelectElement>('job-reference').value = selectedReference;
+            notice.textContent = jobWindowRefusal(error, 'JOB_VISUAL_UNAVAILABLE');
+        },
+    });
+    let unbindNavigation: (() => void) | null = null;
+    let resize: ResizeObserver | null = null;
+    const {localDraftKey,saveDraft}=prepareJobForms.drafts({jobId:access.jobId,current:()=>current,forms:()=>forms,storage:()=>localStorage});
     function updateForms(state: JobWindowState): void {
         if (!current)
             return;
         const host = workspace.querySelector<HTMLElement>('[data-job-forms]');
         if (!host)
             return;
-        const partsPanel = partsPanels.get(current);
-        const partsState = jobPartsReviewState(state.pending, current.display.publication.publicationId);
-        const activeParts = state.pending.filter(ask => ask.publicationId === current!.display.publication.publicationId &&
-            ask.subject.kind === 'parts-verdict').at(-1);
-        for (const ask of state.pending) {
-            if (ask.publicationId !== current.display.publication.publicationId)
-                continue;
-            if (partsPanel && ask.subject.kind === 'signoff' && ask.subject.stage === 'parts-review') continue;
-            if (partsPanel && ask.subject.kind === 'parts-verdict' && ask !== activeParts) continue;
-            let entry = forms.get(ask.askId);
-            if (!entry && (ask.status === 'pending' || partsPanel && ask === activeParts)) {
-                try {
-                    entry = formFor(ask, current);
-                    forms.set(ask.askId, entry);
-                    host.append(entry.form);
-                }
-                catch (error) {
-                    const refusal = node('p');
-                    refusal.textContent = jobWindowRefusal(error, 'JOB_ASK_INVALID');
-                    host.append(refusal);
-                }
+        for(const ask of state.pending){
+            if(ask.publicationId!==current.display.publication.publicationId||ask.subject.kind==='parts-verdict')continue;
+            let entry=forms.get(ask.askId);
+            if(!entry&&ask.status==='pending'){
+                try{entry=prepareJobForms.formFor(ask,current,formDependencies);forms.set(ask.askId,entry);host.append(entry.form);}
+                catch(error){const refusal=node('p');refusal.textContent=jobWindowRefusal(error,'JOB_ASK_INVALID');host.append(refusal);}
             }
-            if (entry) {
-                const partsAsk = partsPanel && ask.subject.kind === 'parts-verdict';
-                entry.fieldset.disabled = entry.submitting || (ask.status !== 'pending' && !(partsAsk && partsState === 'retry-signoff')) ||
-                    state.preparing || state.closed || !state.receipt || !access.capability;
-                if (partsAsk) {
-                    const button = entry.form.querySelector<HTMLButtonElement>('button[type=submit]')!;
-                    const signoff = state.pending.some(item => item.publicationId === ask.publicationId && item.status === 'pending' &&
-                        item.subject.kind === 'signoff' && item.subject.stage === 'parts-review');
-                    button.dataset.jobText = partsState === 'retry-signoff' ? 'job.partsRetrySignoff' :
-                        partsPanel.issues.length ? 'job.partsRequestFixes' : 'job.partsApprove';
-                    button.textContent = t(button.dataset.jobText, [partsPanel.issues.length]);
-                    button.disabled = !partsPanel.output || !!partsPanel.legacy ||
-                        (partsState === 'retry-signoff' || !partsPanel.issues.length) && !signoff;
-                    const status = entry.form.querySelector<HTMLElement>('[role=status]')!;
-                    if (!partsPanel.output) {
-                        status.dataset.jobText = 'JOB_PANEL_OUTPUT_MISSING';
-                        status.textContent = t('JOB_PANEL_OUTPUT_MISSING') + ' · ' + ask.subject.kind;
-                    } else if (status.dataset.jobText === 'JOB_PANEL_OUTPUT_MISSING') {
-                        delete status.dataset.jobText;
-                        status.textContent = '';
-                    }
-                    const words = entry.form.querySelector<HTMLTextAreaElement>('textarea[name=note]');
-                    if (words) words.disabled = ask.status !== 'pending';
-                }
-            }
+            if(entry)entry.fieldset.disabled=entry.submitting||ask.status!=='pending'||state.preparing||state.closed||!state.receipt||!access.capability;
         }
         const hasCheckpointAsk = Boolean(current.player) && state.pending.some(
             ask => ask.publicationId === current!.display.publication.publicationId &&
@@ -2228,121 +2212,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             rememberDraw();
         }
     }
-    async function mountJobParts(prepared: JobPreparedInspection, signal: AbortSignal): Promise<void> {
-        const panel = partsPanels.get(prepared)!;
-        const [{mountPartsWorkspace}, {parsePartsIssue}] = await Promise.all([
-            import('./parts.ts'), import('../src/parts-comment.ts'),
-        ]);
-        if (signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
-        const finalized = window.state().pending.filter(ask =>
-            ask.publicationId === prepared.display.publication.publicationId && ask.subject.kind === 'parts-verdict').at(-1)?.act;
-        if (finalized?.kind === 'parts-verdict') {
-            if (finalized.schema === JOB_PARTS_VERDICT_ACT_SCHEMA) panel.issues = [...finalized.value.issues];
-            else panel.legacy = finalized.value;
-        }
-        panel.issues = panel.issues.map(issue => parsePartsIssue(issue, true, false, false));
-        const routes = jobPublicationRoutes(prepared.display, location.origin);
-        const painting = jobPartsPainting(prepared);
-        const lifetime = new AbortController();
-        let rejectPreparation!: (error: unknown) => void;
-        const preparationCancelled = new Promise<never>((_resolve, reject) => {rejectPreparation = reject;});
-        void preparationCancelled.catch(() => {});
-        let mounted: ReturnType<typeof mountPartsWorkspace> | undefined;
-        const cancelPreparation = () => {lifetime.abort(); rejectPreparation(new Error('JOB_PRELOAD_CANCELLED'));};
-        signal.addEventListener('abort', cancelPreparation, {once: true});
-        panel.dispose = () => {
-            signal.removeEventListener('abort', cancelPreparation);
-            lifetime.abort();
-            const instance = mounted;
-            mounted = undefined;
-            instance?.dispose();
-        };
-        const source: PartsSource = {
-            async view() {
-                const view = await jobJson<JobPartsInventory>(routes.api('stage-parts'), lifetime.signal);
-                if (current !== prepared || lifetime.signal.aborted ||
-                    view.sourceHash !== prepared.display.publication.source.sourceHash)
-                    throw new Error('JOB_ACT_SOURCE_STALE');
-                return {...view, readOnly: false};
-            },
-            async image(index) {
-                const item = prepared.parts?.items.find(item => item.index === index);
-                const image = item && prepared.partImages.get(item.name);
-                if (!image) throw new Error('JOB_VISUAL_UNAVAILABLE');
-                return image;
-            },
-            async page(index) {
-                const page = prepared.partPages?.get(index);
-                if (!page) throw new Error('JOB_VISUAL_UNAVAILABLE');
-                return page;
-            },
-            painting: () => painting?.element instanceof HTMLImageElement ? Promise.resolve(painting.element) : null,
-            async crop(issue) {
-                if (current !== prepared || lifetime.signal.aborted) throw new Error('JOB_ACT_SOURCE_STALE');
-                const response = await fetch(routes.api('stage-parts/comment'), {
-                    method: 'POST', signal: lifetime.signal, headers: access.headers({'Content-Type': 'application/json'}),
-                    body: JSON.stringify(issue),
-                });
-                const value = await response.json();
-                if (!response.ok) throw new Error(value?.error?.code ?? 'PARTS_COMMENT_UNAVAILABLE');
-                if (current !== prepared || lifetime.signal.aborted) throw new Error('JOB_ACT_SOURCE_STALE');
-                return parsePartsIssue(value.comment);
-            },
-        };
-        const host: PartsHost = {
-            initial: () => panel.issues,
-            changed(issues) {
-                if (current !== prepared || lifetime.signal.aborted) return;
-                panel.issues = issues;
-                for (const [askId, entry] of forms) {
-                    if (window.state().pending.find(ask => ask.askId === askId)?.subject.kind !== 'parts-verdict') continue;
-                    entry.dirty = true;
-                    entry.submissionId = crypto.randomUUID();
-                }
-                saveDraft(); window.refresh();
-            },
-            register(output) {
-                if (current !== prepared || lifetime.signal.aborted) return;
-                if (output.kind === 'parts-verdict' && panel.composition.side?.includes('parts.issues')) panel.output = output;
-                window.refresh();
-            },
-            locked() {
-                if (lifetime.signal.aborted || panel.legacy || window.state().closed) return 'sent';
-                if (current !== prepared || [...forms.values()].some(entry => entry.submitting)) return 'sent';
-                const phase = jobPartsReviewState(window.state().pending, prepared.display.publication.publicationId);
-                return phase === 'reviewing' ? 'open' : phase;
-            },
-        };
-        try {
-            mounted = mountPartsWorkspace(panel.slots, source, host, {defaultView: 'assembled'});
-            if (panel.legacy) {
-                const legacy = node('p', 'JOB_PARTS_LEGACY_DRAFT');
-                const rows = node('pre');
-                rows.className = 'job-source';
-                rows.textContent = JSON.stringify(panel.legacy, null, 2);
-                panel.slots.side.append(legacy, rows);
-            }
-            await Promise.race([mounted.ready, preparationCancelled]);
-            panel.slots.toolbar.querySelector<HTMLButtonElement>('#fit')?.click();
-            await new Promise<void>((resolve, reject) => {
-                let frame = 0;
-                const cancelled = () => {
-                    signal.removeEventListener('abort', cancelled);
-                    cancelAnimationFrame(frame);
-                    reject(new Error('JOB_PRELOAD_CANCELLED'));
-                };
-                signal.addEventListener('abort', cancelled, {once: true});
-                frame = requestAnimationFrame(() => {frame = requestAnimationFrame(() => {
-                    signal.removeEventListener('abort', cancelled);
-                    resolve();
-                });});
-                if (signal.aborted) cancelled();
-            });
-            if (signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
-        } finally {
-            signal.removeEventListener('abort', cancelPreparation);
-        }
-    }
     function build(prepared: JobPreparedInspection): HTMLElement {
         const root = node('div');
         root.className = 'job-inspection';
@@ -2359,51 +2228,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         sourceBinding.textContent = JSON.stringify(prepared.display.publication.source, null, 2);
         binding.append(bindingTitle, sourceBinding);
         sidebar.append(binding);
-        if (prepared.metadata.capabilities.preRig) {
-            const {composition, invalid} = resolveJobPanels(prepared.metadata, prepared.display.publication.source);
-            root.dataset.jobPartsWorkspace = '';
-            const stage = node('section');
-            stage.className = 'job-stage';
-            const toolbar = node('div');
-            toolbar.className = 'viewbar pv-toolbar';
-            const canvas = node('div');
-            canvas.className = 'job-parts-stage';
-            const left = node('div');
-            const side = node('div');
-            sidebar.prepend(left);
-            const formsHost = node('section');
-            formsHost.className = 'job-forms';
-            formsHost.dataset.jobForms = '';
-            formsHost.append(side);
-            const slots = {left, stage: canvas, toolbar, side};
-            stage.append(toolbar, canvas);
-            root.append(sidebar, stage, formsHost);
-            const components: Record<PanelComponent, PanelSlot | null> = {
-                'parts.list': 'left', 'parts.canvas': 'stage', 'parts.layers': 'toolbar', 'parts.issues': 'side',
-                'act.submit': 'side', 'interview.picks': null, 'plan.body': null, 'rig.playback': null,
-                'scene.composite': null, 'images.set': null,
-            };
-            for (const slot of ['left', 'stage', 'toolbar', 'side'] as const) {
-                const entries = composition[slot] ?? [];
-                slots[slot].hidden = !entries.some(id => components[id] === slot && id !== 'act.submit');
-                for (const id of entries) {
-                    if (components[id] === slot) continue;
-                    const refusal = node('p');
-                    refusal.textContent = t(Object.hasOwn(components, id) ? 'JOB_PANEL_UNAVAILABLE' : 'JOB_PANEL_UNKNOWN', [id]);
-                    slots[slot].after(refusal);
-                }
-            }
-            if (invalid) formsHost.prepend(node('p', 'JOB_PANELS_INVALID'));
-            const history = node('div');
-            history.className = 'job-history';
-            history.dataset.jobHistory = '';
-            formsHost.append(history);
-            const panel = {slots, composition, issues: [] as PartsIssue[], legacy: null, dispose: undefined as (() => void) | undefined};
-            partsPanels.set(prepared, panel);
-            const dispose = prepared.dispose;
-            prepared.dispose = () => {try {panel.dispose?.();} finally {dispose();}};
-            return root;
-        }
         const parts = node('select');
         parts.id = 'job-part';
         parts.disabled = !prepared.metadata.manifest?.model || prepared.metadata.feedbackCatalog.slots === null;
@@ -2799,16 +2623,29 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     function announceHubFrame(): void {
         if (hubIncarnation) globalThis.parent.postMessage({...hubBinding(), schema: JOB_HUB_READY}, location.origin);
     }
+    // #709: a rig publication opens the one review screen; the job window keeps every other subject.
+    const formDependencies: JobFormDependencies = {
+        node, translate: t, helpers: {...formHelpers, assertJobAskSource, jobCheckpointContext},
+        draftStorage: () => localStorage, localDraftKey, saveDraft, access, pageId,
+        window: {state: () => window.state(), submit: input => window.submit(input)},
+    };
+    const rigScreen = createJobRigScreen({host, pageId, access, translate: t, refusal: jobWindowRefusal, legacyRecords:true,
+        window: {state: () => window.state(), submit: input => window.submit(input)},
+        routes: display => jobPublicationRoutes(display, location.origin), load: () => import('./main.ts')});
     const window = createJobWindow({ jobId: access.jobId, pageId, transport,
         previousDisplayed, initialRetainedDrafts,
         adapter: {
-            async prepare(display, signal): Promise<PreparedWindow> {
+            async prepare(display, signal): Promise<PreparedWindow | JobRigScreenPrepared> {
+                // The rig composition cannot be unmounted in place: another publication reopens the page on its route.
+                if (rigScreen.mounted()) { location.reload(); return new Promise<never>(() => {}); }
+                const rig = await rigScreen.prepare(display, signal);
+                if (rig && current) { location.reload(); return new Promise<never>(() => {}); }
+                if (rig) return rig;
                 const inspection = await prepareJobInspection(display, signal);
                 try {
                     const element = build(inspection);
-                    const asks = window.state().pending.filter(ask => !(partsPanels.has(inspection) &&
-                        ask.subject.kind === 'signoff' && ask.subject.stage === 'parts-review'));
-                    const preparedForms = prepareJobForms(display, asks, ask => formFor(ask, inspection));
+                    const asks = window.state().pending;
+                    const preparedForms = prepareJobForms(display, asks, ask => prepareJobForms.formFor(ask, inspection, formDependencies));
                     return Object.assign(inspection, { element, forms: preparedForms });
                 }
                 catch (error) {
@@ -2816,13 +2653,13 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     throw error;
                 }
             },
-            captureDraft() { saveDraft(); const dirty = [...forms].filter(([, item]) => item.dirty); return dirty.length ? dirty.map(([askId, item]) => ({ askId, value: item.read() })) : null; },
+            captureDraft() { if (rigScreen.mounted()) return null; saveDraft(); const dirty = [...forms].filter(([, item]) => item.dirty); return dirty.length ? dirty.map(([askId, item]) => ({ askId, value: item.read() })) : null; },
             commit(prepared, display) {
+                if (isJobRigScreen(prepared)) { unbindLayerShortcuts(); return rigScreen.commit(prepared); }
                 // Pending asks can arrive while assets load. Finish their forms before the visible replacement.
-                const asks = window.state().pending.filter(ask => !(partsPanels.has(prepared) &&
-                    ask.subject.kind === 'signoff' && ask.subject.stage === 'parts-review'));
+                const asks = window.state().pending;
                 const nextForms = prepareJobForms(display, asks,
-                    ask => prepared.forms.get(ask.askId) ?? formFor(ask, prepared));
+                    ask => prepared.forms.get(ask.askId) ?? prepareJobForms.formFor(ask, prepared, formDependencies));
                 const root = prepared.element;
                 const formHost = root.querySelector<HTMLElement>('[data-job-forms]');
                 if (!formHost) throw new Error('JOB_WINDOW_ELEMENT_MISSING');
@@ -2873,7 +2710,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                         forms.set(id, item);
                     workspace.replaceChildren(...(previousElement ? [previousElement] : []));
                     Object.assign(viewportState, navigation.camera);
-                    if (current && !partsPanels.has(current)) {
+                    if (current) {
                         el<HTMLSelectElement>('job-reference').value = selectedReference;
                         syncTransportControls();
                         viewport.fitCamera();
@@ -2885,15 +2722,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     forms.clear();
                     for (const [id, entry] of nextForms) forms.set(id, entry);
                     workspace.replaceChildren(root);
-                    if (partsPanels.has(prepared)) {
-                        updateForms(window.state());
-                        return {rollback, finalize() {
-                            unbindNavigation?.(); resize?.disconnect();
-                            unbindNavigation = null; resize = null;
-                            previous?.dispose();
-                            title.textContent = display.publication.source.package?.id ?? display.publication.label;
-                        }};
-                    }
                     el<HTMLSelectElement>('job-part').value = selectedPart;
                     el<HTMLInputElement>('job-solo').checked = partMode === 'solo';
                     el<HTMLSelectElement>('job-reference').value = selectedReference;
@@ -2951,10 +2779,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 }
             },
             async painted(prepared, signal) {
-                if (partsPanels.has(prepared)) {
-                    await mountJobParts(prepared, signal);
-                    return;
-                }
+                if (isJobRigScreen(prepared)) return rigScreen.painted(prepared, signal);
                 for (const image of prepared.imageSetImages ?? []) {
                     if (!image.isConnected || !image.complete || !image.naturalWidth || !image.naturalHeight)
                         throw new Error('JOB_VISUAL_UNAVAILABLE');
@@ -2968,8 +2793,13 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 if (signal.aborted)
                     throw new Error('JOB_PRELOAD_CANCELLED');
             },
-            discard(prepared) { prepared.dispose(); },
+            discard(prepared) { if (!isJobRigScreen(prepared)) prepared.dispose(); },
             changed(state) {
+                if (rigScreen.mounted()) {
+                    rigScreen.changed(state); announceHubFrame();
+                    if (state.receipt && !state.preparing) events?.displayed();
+                    return;
+                }
                 notice.dataset.failed = String(!!state.error);
                 if (state.error)
                     notice.textContent = state.displayed && state.error !== 'JOB_WINDOW_CLEANUP_FAILED'
@@ -2978,13 +2808,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     notice.textContent = t('job.closed');
                 else if (state.preparing)
                     notice.textContent = t('job.preparing');
-                else if (state.displayed && current && partsPanels.has(current)) {
-                    const panel = partsPanels.get(current)!;
-                    const sending = [...forms.values()].some(entry => entry.submitting);
-                    const phase = sending ? 'sending' : jobPartsReviewState(state.pending, state.displayed.publication.publicationId);
-                    notice.dataset.jobPartsState = phase;
-                    notice.textContent = state.displayed.publication.label + ' · ' + t('job.parts.' + phase, [panel.issues.length]);
-                }
                 else if (state.displayed) {
                     delete notice.dataset.jobPartsState;
                     notice.textContent = state.previousLabel
@@ -3031,7 +2854,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         for (const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))
             element.textContent = t(element.dataset.jobText!);
         languages.setAttribute('aria-label', t('interview.language'));
-        if (current && !partsPanels.has(current)) {
+        if (current) {
             workspace.querySelector('#rig-overlay')?.setAttribute('aria-label', t('Actual rig mesh and bone overlay'));
             describeLayerToggles({ getElementById: id => workspace.querySelector('#' + id) }, t('No rig supplied'));
             for (const label of workspace.querySelectorAll<HTMLElement>('.layer-toggle')) label.title = i18n.tr(label.title);
@@ -3064,7 +2887,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         resolution?.removeEventListener('change', resolutionChanged);
         resolution = globalThis.matchMedia(`(resolution:${globalThis.devicePixelRatio || 1}dppx)`);
         resolution.addEventListener('change', resolutionChanged);
-        if (current && !partsPanels.has(current)) {
+        if (current) {
             drawn.delete(current);
             current.rigPresentation = undefined;
             viewport.fitCamera();

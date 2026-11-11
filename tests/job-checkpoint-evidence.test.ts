@@ -155,7 +155,8 @@ test('package checkpoint aliases follow admitted subject mapping and daemon deri
   const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submission));
   expect(result.ok).toBe(true);
   if (!result.ok) throw new Error(JSON.stringify(result));
-  expect(result.value.value).toEqual({...submission.value, planStepId: 'step-one'});
+  expect(result.value.value).toEqual({checkpointId: 'motion-card', planStepId: 'step-one', outcome: 'fail',
+    comments: [{text: submission.value.words, anchor: {checkpointId: 'motion-card', planStepId: 'step-one'}}]});
   expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...submission, submissionId: 'forged',
     value: {...submission.value, planStepId: 'step-one'}}))).toMatchObject({ok: false});
 });

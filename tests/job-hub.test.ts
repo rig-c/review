@@ -3,6 +3,7 @@ import {mkdir, readFile, unlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {startJobHub, startJobHost, JOB_API_SCHEMA, JOB_ACT_SCHEMA,
   type JobHubJob, type JobHubJobOptions, type JobOwnerHub, type JobPublication} from '../src/job-host.ts';
+import {JOB_COMMENTS_ACT_SCHEMA} from '../src/job-contract.ts';
 import {jobFixture, jobInputHashes} from './helpers/job-api-fixture.ts';
 import {redactCapability} from '../scripts/redact.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
@@ -69,7 +70,7 @@ test('#557 backend real hub HTTP keeps capture, raw act and PNG bound to its job
   expect(submitted.status).toBe(200);
   const saved = await submitted.json();
   expect(saved.ok).toBe(true);
-  expect(saved.value.schema).toBe('rig-review/act@3');
+  expect(saved.value.schema).toBe('rig-review/act@6');
   for (const accept of ['application/vnd.rig-review.act+json', 'image/png']) {
     const response = await fetch(job.origin + `/jobs/${job.session.jobId}/api`, {method: 'POST',
       headers: {'Content-Type': 'application/json', Accept: accept,
@@ -98,8 +99,10 @@ test('one embedded listener owns nine independent jobs, asks, generations and fi
   expect(new Set(jobs.map(job => job.session.jobId)).size).toBe(9);
   expect(new Set(grants).size).toBe(9);
   expect(new Set(jobs.flatMap(job => Object.values(job.session.hostCredentials()))).size).toBe(18);
-  expect((await list(h)).jobs.map((row: {generation: number; pendingCount: number}) => [row.generation, row.pendingCount]))
+  const rows = (await list(h)).jobs;
+  expect(rows.map((row: {generation: number; pendingCount: number}) => [row.generation, row.pendingCount]))
     .toEqual(Array.from({length: 9}, () => [2, 1]));
+  expect(Object.keys(rows[0]).sort()).toEqual(['generation', 'jobId', 'pendingCount', 'publication', 'status']);
   const acts = [];
   for (const [index, job] of jobs.entries()) {
     const publication = publications[index]!;
@@ -110,7 +113,7 @@ test('one embedded listener owns nine independent jobs, asks, generations and fi
       expectedGeneration: job.session.status().generation, submissionId: 'synthetic-save', kind: 'checkpoint',
       value: {checkpointId: 'step-one', outcome: 'pass', words: 'synthetic human UI transport fixture'}});
     const act = await response.json(); expect(act.ok).toBe(true);
-    expect(act.value.schema).toBe(JOB_ACT_SCHEMA);
+    expect(act.value.schema).toBe(JOB_COMMENTS_ACT_SCHEMA);
     expect(act.value.authority.reviewer).toEqual(reviewer);
     expect(act.value.jobId).toBe(job.session.jobId); acts.push(act.value);
     const fetched = await api(job, {verb: 'fetch-act', actId: act.value.actId}, grants[index]);
@@ -118,6 +121,7 @@ test('one embedded listener owns nine independent jobs, asks, generations and fi
   }
   expect(new Set(acts.map(act => act.actId)).size).toBe(9);
   expect(jobs.map(job => job.session.status().generation)).toEqual(Array(9).fill(3));
+  expect((await list(h)).jobs.map((row: {pendingCount: number}) => row.pendingCount)).toEqual(Array(9).fill(0));
   expect((await api(jobs[1]!, {verb: 'next', after: null, waitMs: 0}, jobs[0]!.session.hostCredentials().agent)).status).toBe(403);
   expect((await ui(jobs[1]!, 'displayed', {}, jobs[0]!.session.hostCredentials().ui)).status).toBe(403);
   expect((await api(jobs[1]!, {verb: 'fetch-act', actId: acts[1].actId}, grants[0])).status).toBe(403);
@@ -158,7 +162,12 @@ test('writer binding failure hides the candidate and retries/concurrent matching
   expect(installs).toBe(3); expect((await list(h)).jobs).toHaveLength(1);
   const response = await fetch(h.origin + '/hub/api/jobs'); expect(response.status).toBe(403);
   const ownerPage = await fetch(h.ownerUrl);
-  expect(ownerPage.status).toBe(200); expect(await ownerPage.text()).toContain('data-job-hub');
+  expect(ownerPage.status).toBe(200); expect(await ownerPage.text()).toContain('<div id="app"></div>');
+  for (const [asset, mime] of [['/hub/styles.css', 'text/css'], ['/hub/main.js', 'text/javascript']] as const) {
+    const res = await fetch(h.origin + asset);
+    expect(res.status).toBe(200); expect(res.headers.get('Content-Type')).toContain(mime);
+    expect((await res.text()).length).toBeGreaterThan(0);
+  }
   const headers = {'X-Review-Capability': new URL(h.ownerUrl).hash.slice(5)};
   expect((await fetch(h.origin + '/hub/api/jobs?unknown=1', {headers})).status).toBe(400);
   expect((await fetch(h.origin + '/hub/api/jobs', {headers: {...headers, Origin: 'http://127.0.0.1:1'}})).status).toBe(403);

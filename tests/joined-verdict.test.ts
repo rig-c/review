@@ -131,48 +131,6 @@ test('joined verdict is bound to the inspected source and saves through the stan
   }
 },15_000);
 
-
-test('joined comment and adapter boundaries name the standing job route in EN and KO',async()=>{
-  const code='PARTS_JOINED_ISSUE_UNSUPPORTED';
-  const parts=await readFile('web/parts.ts','utf8'),page=await readFile('web/parts-page.ts','utf8');
-  const expression=(source:string,name:string)=>{
-    const tree=ts.createSourceFile('boundary.ts',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
-    const found:ts.Node[]=[];
-    const visit=(node:ts.Node)=>{
-      if(ts.isPropertyAssignment(node)&&node.name.getText(tree)===name)found.push(node.initializer);
-      if(ts.isVariableDeclaration(node)&&node.name.getText(tree)===name&&node.initializer)found.push(node.initializer);
-      if(ts.isMethodDeclaration(node)&&node.name.getText(tree)===name)found.push(node);
-      ts.forEachChild(node,visit);
-    };
-    visit(tree);expect(found).toHaveLength(1);
-    const node=found[0]!,value=ts.isMethodDeclaration(node)?`({${node.getText(tree)}}).${name}`:node.getText(tree);
-    return new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(`const extracted = ${value};`);
-  };
-  const refusalCode=expression(parts,'refusal'),cropCode=expression(page,'crop'),saveCode=expression(page,'save');
-  for(const language of ['en','ko'] as const){
-    const message=(language==='en'?enCatalog:koCatalog)[code]!;
-    expect(message).toContain('/jobs/<jobId>/');
-    expect(t(code,undefined,language)).toBe(message);
-    let phase='open';
-    const scope={paintFailure:null as string|null,state:{data:{mode:'parts',legacyVerdict:null as {readOnly:boolean;code:string;flaggedCount:number}|null},view:'item'},stageEmbedded:true,host:{locked:()=>phase},t:(key:string)=>t(key,undefined,language)};
-    const refusal=new Function('scope',`with(scope){${refusalCode};return extracted;}`)(scope) as ()=>string|null;
-    expect(refusal()).toBe(code);
-    scope.state.view='assembled';expect(refusal()).toBe(code);scope.state.view='item';
-    phase='sent';expect(refusal()).toBe('Read-only view: reopen with rig-review open to edit.');phase='open';
-    scope.state.data.legacyVerdict={readOnly:true,code:'PARTS_VERDICT_LEGACY_FORMAT',flaggedCount:1};expect(refusal()).toStartWith('PARTS_VERDICT_LEGACY_FORMAT');scope.state.data.legacyVerdict=null;
-    scope.paintFailure='paint failure';expect(refusal()).toBe('paint failure');scope.paintFailure=null;
-    scope.stageEmbedded=false;expect(refusal()).toBeNull();scope.stageEmbedded=true;
-    let requests=0,outputs=0;
-    const status={textContent:'',dataset:{} as Record<string,string>},button={disabled:false};
-    const adapter={embedded:true,busy:false,disposed:false,currentView:{},host:{locked:()=>phase},output:{value:()=>{outputs++;return {verdict:'changes-requested',issues:[null]};}},required:(selector:string)=>selector==='#pv-save'?button:status,t:(key:string)=>t(key,undefined,language),fetch:async()=>{requests++;throw new Error('Unexpected joined issue request');}};
-    const crop=new Function('scope',`with(scope){${cropCode};return extracted;}`)(adapter) as (issue:unknown)=>Promise<unknown>;
-    await expect(crop({})).rejects.toThrow(code);expect(requests).toBe(0);
-    const save=new Function('scope',`with(scope){${saveCode};return extracted;}`)(adapter) as ()=>Promise<void>;
-    await save();expect(status.textContent).toBe(message);expect(status.dataset.result).toBe('refused');expect(requests).toBe(0);expect(button.disabled).toBe(false);
-    phase='sent';await save();expect(outputs).toBe(1);expect(requests).toBe(0);
-  }
-});
-
 test('checkpoint 2 exposes only the registered pending bones set, while its parts verdict stays read-only',async()=>{
   const root=await mkdtemp(join(await realpath(tmpdir()),'review-draft-interview-'));
   let server:Awaited<ReturnType<typeof startServer>>|undefined;

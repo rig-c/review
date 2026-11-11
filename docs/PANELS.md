@@ -449,11 +449,23 @@ A reference-basis comment cannot become a producer-frame strip: CLI and browser 
 
 ## Four inspection stages
 
-The same numbered navigation appears on parts, compiled and compare inspections:
+The same numbered navigation appears on compiled and compare inspections:
 1 Parts + mesh, 2 Interview, 3 Rig + animation, 4 Direction. These are navigation,
 not create pipeline stages or sign-offs. Opening or switching never submits a
-verdict, applies an edit or starts a producer job. Interview and Direction name
-their missing consumer contracts; no tools are fabricated for them.
+verdict, applies an edit or starts a producer job. Each chip opens a mode of the
+one screen or names itself unavailable; no chip loads a separate page (#726):
+
+| Chip | Opens |
+| --- | --- |
+| 1 Parts + mesh | the Setup mode |
+| 2 Interview | the interview over the screen; until that view lands it names `INTERVIEW_MODAL_UNAVAILABLE` |
+| 3 Rig + animation | the Animate mode |
+| 4 Direction | nothing: it names `DIRECTION_NOT_AVAILABLE` |
+
+Without a rig on the stage, chips 1 and 3 and the Setup, Animate and Compare
+switch name `MODEL_UNAVAILABLE` or `RIG_VERSION_UNAVAILABLE`. The standalone
+`parts` page shows only its own chip. The former Stage 1 atlas frame is deleted;
+the Stage 1 paragraphs below describe the `/api/stage-parts` data that Setup reads.
 
 Stage 1 in a single compiled inspection with a producer handoff shows the
 handoff's **separated parts and draft meshes**, labelled **Draft rig · structure
@@ -490,14 +502,10 @@ export remains unavailable pending review#369 and create#91. Existing reviewer
 requests remain verbatim in their existing feedback/comment contracts; there
 is no fake Apply for art repair.
 
-Only Stage 3 shows the legacy Setup, Animate and Compare switch; its existing
-instruments, DOM and mode IDs are retained. In Stage 1 a compare session keeps
-the A/B source picker usable and shows the selected side's cached atlas frame.
-**Open setup mesh instruments** returns from the atlas to Setup; it does not
-rebuild. Existing bookmarks, Apply/Reset provenance, selected slot, compare side,
-time, pending edits and applied build stay owned by those original tools. Stage
-changes retain the original workspace and each compare side's atlas controller.
-Single draft frames are rebound on revision changes. Language changes update retained
-frames without applying or submitting.
+Chips 1 and 3 select the existing Setup and Animate modes, so the Setup,
+Animate and Compare switch, its instruments, DOM and mode IDs are retained.
+Existing bookmarks, Apply/Reset provenance, selected slot, compare side, time,
+pending edits and applied build stay owned by those original tools. Choosing a
+chip never applies or submits.
 The parts-only entry retains its part selection, geometry and pending verdict
 while visiting unavailable stages; it needs no compiled model.

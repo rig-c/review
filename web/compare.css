@@ -281,14 +281,8 @@ main{position:relative}.viewbar,.toolbar{anchor-name:--stage-comment-bar}#stage-
 .review-stage-nav{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
 .review-stage-nav button{font:inherit;white-space:nowrap;padding:5px 8px}
 .review-stage-nav [aria-current="step"]{font-weight:700;text-decoration:underline;text-underline-offset:4px}
-.review-stage-panel{position:fixed;inset:0;z-index:90;display:flex;flex-direction:column;padding:12px;background:var(--bg);color:inherit;overflow:auto}
-.review-stage-panel[hidden]{display:none}
-.review-stage-panel iframe{width:100%;flex:1;min-height:240px;border:0;background:var(--bg)}
-.review-stage-panel iframe[hidden]{display:none}
 .topbar,.pv-top{flex-wrap:wrap}
 
-/* Setup/Animate/Compare are instruments within stage 3, never additional primary stages. */
-:root[data-inspection-stage]:not([data-inspection-stage="3"]) .mode-switch{display:none}
-:root[data-inspection-stage="1"] #mode-build-picker{display:flex!important}
-:root[data-inspection-stage="1"] #mode-build-picker>.eyebrow{display:none}
-:root[data-inspection-stage="2"] #mode-build-picker,:root[data-inspection-stage="4"] #mode-build-picker{display:none!important}
+/* Stage chips open Setup and Animate on this screen; a refused rig hides the mode switch (#726). */
+:root[data-stage-refused="true"] .mode-switch{display:none}
+:root[data-stage-refused="true"] #mode-build-picker{display:none!important}

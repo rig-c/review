@@ -24,6 +24,8 @@ export interface ViewportProvider {
  /** False retains hosts whose navigation never supplied a two-touch gesture. */
  pinch?:boolean;
  nativeScale?:boolean;
+ /** Provider frames share actual image/world coordinates, rather than relative frame signatures. */
+ absoluteSync?:boolean;
  el:<T extends HTMLElement=HTMLElement>(id:string)=>T;
  geometry:(target:CameraTarget)=>ViewportGeometry|null;
  layoutKey:()=>string;
@@ -34,14 +36,19 @@ export interface ViewportProvider {
 }
 export interface ViewportController {
  /** Center the target at one CSS px per current pane coordinate unit, or throw before any camera changes.
-  * Synchronized peers retain the target's relative signature, not necessarily its unit scale. */
+  * Relative providers retain the target's signature; absolute providers retain its physical centre and scale. */
  unitScaleCamera:(target?:CameraTarget|null)=>void;
+ /** Owe the view a Fit: it lands once the active pane has a measured size, and a later layout size fits it again
+  * until any camera is written (a person's pan, zoom or Fit, a restore). */
+ requestFit:()=>void;
+ /** Drop an owed or held Fit, for a caller that sets the camera itself (a restored bookmark). */
+ cancelFit:()=>void;
  state:ViewportState;paneFrame:(target:CameraTarget,hidden?:boolean)=>CameraFrame|null;paneCamera:(target:CameraTarget)=>PaneCamera;writeCamera:(target:CameraTarget,value:PaneCamera)=>void;activateCamera:(target:CameraTarget)=>void;availableCamera:()=>CameraTarget|null;alignCameras:()=>void;renderCameraControls:()=>void;setCameraSync:(value:boolean)=>void;cameraAction:(action:()=>void)=>void;updateCamera:(target:CameraTarget,value:CameraSignature,group?:readonly CameraTarget[])=>void;zoomCamera:(factor:number,target?:CameraTarget|null,point?:CameraPoint|null)=>void;panCamera:(target:CameraTarget,dx:number,dy:number)=>void;fitActiveCamera:(target?:CameraTarget|null)=>void;fitSelection:(target?:CameraTarget|null)=>void;zoomViewport:(target:CameraTarget,deltaY:number,point?:CameraPoint|null)=>void;fitCamera:()=>void;numericView:()=>ControlView;renderNumericView:()=>void;bindControls:()=>()=>void;bindNavigation:(carryRig?:PanCarry|((target:CameraTarget)=>PanCarry|undefined),enabled?:()=>boolean)=>()=>void;observeResize:()=>ResizeObserver;
 }
 
 export function createViewportController(provider:ViewportProvider,state=createViewportState()):ViewportController {
  const {el,message}=provider;const panes=():NonNullable<ViewportProvider['panes']>=>provider.panes??(['rig','reference'] as const).map(target=>({target,viewport:el(target+'-viewport'),pane:el(target+'-pane')}));const targets=()=>panes().map(p=>p.target);const paneNodes=(target:CameraTarget)=>panes().find(p=>p.target===target);
- const range=(frame:CameraFrame)=>provider.nativeScale?{min:Math.min(frame.fitScale??1,1),max:16}:{min:.25,max:8};const from=(value:CameraSignature,frame:CameraFrame)=>{const limits=range(frame);if(provider.nativeScale&&(!Number.isFinite(value.zoom)||value.zoom<limits.min||value.zoom>limits.max))throw new Error('PARTS_CAMERA_RANGE: native zoom outside supported range');return cameraFromSignature(value,frame,limits);};const input=(id:string)=>el<HTMLInputElement>(id),button=(id:string)=>el<HTMLButtonElement>(id);
+ const range=(frame:CameraFrame)=>provider.nativeScale?{min:Math.min(frame.fitScale??1,1,...(provider.absoluteSync&&state.cameraSync?targets().flatMap(target=>{const peer=paneFrame(target);return peer?[peer.fitScale??1]:[];}):[])),max:16}:{min:.25,max:8};const from=(value:CameraSignature,frame:CameraFrame)=>{const limits=range(frame);if(provider.nativeScale&&(!Number.isFinite(value.zoom)||value.zoom<limits.min||value.zoom>limits.max))throw new Error('PARTS_CAMERA_RANGE: native zoom outside supported range');return cameraFromSignature(value,frame,limits);};const input=(id:string)=>el<HTMLInputElement>(id),button=(id:string)=>el<HTMLButtonElement>(id);
 function paneFrame(target:CameraTarget,hidden=false):CameraFrame|null {
  const nodes=paneNodes(target);if(!nodes)return null;
  const {viewport,pane,fallback}=nodes;
@@ -59,23 +66,43 @@ function paneFrame(target:CameraTarget,hidden=false):CameraFrame|null {
  if(frame)state.cameraFrames[target]=frame;return frame;
 }
 function paneCamera(target:CameraTarget){return state.cameras?.[target]??(target==='rig'?{zoom:state.zoom,center:state.cameraCenter}:{zoom:state.referenceZoom,center:state.referenceCenter});}
-function writeCamera(target:CameraTarget,value:ReturnType<typeof cameraFromSignature>):void {if(provider.nativeScale){const frame=paneFrame(target);if(frame){const limits=range(frame);if(!Number.isFinite(value.zoom)||value.zoom<limits.min||value.zoom>limits.max)throw new Error('PARTS_CAMERA_RANGE: native zoom outside supported range');assertCameraView(value,frame,limits);}}if(state.cameras){state.cameras[target]=value;}else if(target==='rig'){state.zoom=value.zoom;state.cameraCenter=value.center;}else{state.referenceZoom=value.zoom;state.referenceCenter=value.center;}}
+// Fit owed until a pane is measured (`owed`), then held (`held`) and repeated on a new layout until another camera write.
+let fitOwed=false,fitHeld=false,fitting=false;
+/** True once the Fit landed. Relative providers fit each pane's own frame; absolute providers fit the shared region
+ * at one admissible scale. A refused Fit stays owed and never throws. */
+function settleFit():boolean {
+ if(fitting||state.cameraRestoring||(!fitOwed&&!fitHeld))return false;
+ const target=availableCamera();if(!target||!paneFrame(target))return false;
+ const updates:Partial<Record<CameraTarget,ReturnType<typeof cameraFromSignature>>>={};
+ const sharedFit=provider.absoluteSync&&state.cameraSync?Math.min(16,...targets().flatMap(other=>{const frame=paneFrame(other);return frame?[frame.fitScale??1]:[];})):null;
+ try{for(const other of targets()){const frame=paneFrame(other);if(frame)updates[other]=from({zoom:sharedFit??(provider.nativeScale?Math.min(frame.fitScale??1,16):1),pan:{x:0,y:0}},frame);}}catch{return false;}
+ fitting=true;
+ try{for(const other of targets()){const update=updates[other];if(update)writeCamera(other,update);}state.activeCamera=target;fitOwed=false;fitHeld=true;fitCamera();renderCameraControls();return true;}
+ finally{fitting=false;}
+}
+function requestFit():void {fitOwed=true;fitHeld=false;void settleFit();}
+function cancelFit():void {fitOwed=false;fitHeld=false;}
+function writeCamera(target:CameraTarget,value:ReturnType<typeof cameraFromSignature>):void {if(!fitting)cancelFit();if(provider.nativeScale){const frame=paneFrame(target);if(frame){const limits=range(frame);if(!Number.isFinite(value.zoom)||value.zoom<limits.min||value.zoom>limits.max)throw new Error('PARTS_CAMERA_RANGE: native zoom outside supported range');assertCameraView(value,frame,limits);}}if(state.cameras){state.cameras[target]=value;}else if(target==='rig'){state.zoom=value.zoom;state.cameraCenter=value.center;}else{state.referenceZoom=value.zoom;state.referenceCenter=value.center;}}
 function activateCamera(target:CameraTarget):void {if(paneFrame(target)){state.activeCamera=target;renderCameraControls();}}
 function availableCamera():CameraTarget|null {return paneFrame(state.activeCamera)?state.activeCamera:targets().find(target=>paneFrame(target))??null;}
 function alignCameras():void {
  const target=availableCamera();if(!target)return;
+ // Aligning peers to the active camera keeps an owed or held Fit: only the peers move, to the active pane's signature.
+ const wasFitting=fitting;fitting=true;try{alignPeers(target);}finally{fitting=wasFitting;}
+}
+function alignPeers(target:CameraTarget):void {
  const frame=paneFrame(target)!;assertCameraView(paneCamera(target),frame,range(frame));const signature=cameraSignature(paneCamera(target),frame);
  const updates:Partial<Record<CameraTarget,ReturnType<typeof cameraFromSignature>>>={};
- for(const other of targets()){if(other===target)continue;const next=paneFrame(other);if(next)updates[other]=from(signature,next);}
+ for(const other of targets()){if(other===target)continue;const next=paneFrame(other);if(next){const update=provider.absoluteSync?{zoom:paneCamera(target).zoom,center:{...(paneCamera(target).center??frame.center)}}:from(signature,next);assertCameraView(update,next,range(next));updates[other]=update;}}
  for(const other of targets()){const update=updates[other];if(update)writeCamera(other,update);}state.activeCamera=target;
 }
 function renderCameraControls():void {provider.renderControls(api);}
-function setCameraSync(value:boolean):void {if(value)alignCameras();state.cameraSync=value;fitCamera();renderCameraControls();}
+function setCameraSync(value:boolean):void {if(value&&provider.absoluteSync){state.cameraSync=true;requestFit();}else{if(value)alignCameras();state.cameraSync=value;}fitCamera();renderCameraControls();}
 function cameraAction(action:()=>void):void {try{action();}catch(error){renderCameraControls();message(error instanceof Error?error.message:String(error),true);}}
 function updateCamera(target:CameraTarget,value:CameraSignature,group:readonly CameraTarget[]=[]):void {
  const frame=paneFrame(target);if(!frame)return;
  const updates:Partial<Record<CameraTarget,ReturnType<typeof cameraFromSignature>>>={[target]:from(value,frame)};
- for(const other of targets()){if(other===target||!state.cameraSync&&!group.includes(other))continue;const next=paneFrame(other);if(next)updates[other]=from(value,next);}
+ for(const other of targets()){if(other===target||!state.cameraSync&&!group.includes(other))continue;const next=paneFrame(other);if(next){const update=provider.absoluteSync?{zoom:updates[target]!.zoom,center:{...updates[target]!.center!}}:from(value,next);assertCameraView(update,next,range(next));updates[other]=update;}}
  for(const other of targets()){const update=updates[other];if(update)writeCamera(other,update);}state.activeCamera=target;
  fitCamera();renderCameraControls();
 }
@@ -92,13 +119,23 @@ function unitScaleCamera(target=availableCamera()):void {
  updateCamera(target,{zoom,pan:{x:0,y:0}});
 }
 function panCamera(target:CameraTarget,dx:number,dy:number):void {const frame=paneFrame(target);if(frame)updateCamera(target,dragSignature(cameraSignature(paneCamera(target),frame),frame,dx,dy));}
-function fitActiveCamera(target=availableCamera()):void {if(!target)return;if(provider.nativeScale){const frame=paneFrame(target);if(frame)updateCamera(target,{zoom:Math.min(frame.fitScale??1,16),pan:{x:0,y:0}});return;}const part=provider.selection(target);if(target!=='reference'&&part.selected){const box=part.bounds,frame=paneFrame(target);if(!box||!frame){message('PART_FIT_UNAVAILABLE: selected slot has no positive drawn bounds.',true);return;}const margin=provider.fitMargins??{x:28,y:58};updateCamera(target,boundsFitSignature(box,frame,margin.x,margin.y));message(provider.fitMessage?.(true)??'Selected slot fitted.');}else{if(!paneFrame(target))return;updateCamera(target,{zoom:1,pan:{x:0,y:0}});message(provider.fitMessage?.(false)??'View fitted.');}}
+function fitActiveCamera(target=availableCamera()):void {if(!target)return;if(provider.nativeScale){const frame=paneFrame(target);if(frame){const peers=state.cameraSync?targets().flatMap(other=>{const peer=paneFrame(other);return peer?[peer]:[];}):[frame];const fit=provider.absoluteSync&&state.cameraSync?Math.min(...peers.map(peer=>peer.fitScale??1)):frame.fitScale??1;const minimum=Math.max(...peers.map(peer=>range(peer).min));updateCamera(target,{zoom:Math.min(16,Math.max(fit,minimum)),pan:{x:0,y:0}});}return;}const part=provider.selection(target);if(target!=='reference'&&part.selected){const box=part.bounds,frame=paneFrame(target);if(!box||!frame){message('PART_FIT_UNAVAILABLE: selected slot has no positive drawn bounds.',true);return;}const margin=provider.fitMargins??{x:28,y:58};updateCamera(target,boundsFitSignature(box,frame,margin.x,margin.y));message(provider.fitMessage?.(true)??'Selected slot fitted.');}else{if(!paneFrame(target))return;updateCamera(target,{zoom:1,pan:{x:0,y:0}});message(provider.fitMessage?.(false)??'View fitted.');}}
 function zoomViewport(target:CameraTarget,deltaY:number,point?:CameraPoint|null):void {zoomCamera(deltaY<0?1.1:1/1.1,target,point);}
 
 
  function fitCamera():void {
- const layout=provider.layoutKey();
- if(state.cameraSync&&!state.cameraRestoring&&layout!==state.cameraLayout)alignCameras();state.cameraLayout=layout;
+ const layout=provider.layoutKey(),relaid=layout!==state.cameraLayout;
+ // An owed or held Fit settles first: it fits every pane to its own frame, so there is nothing left to align.
+ if(!fitting&&(fitOwed||fitHeld&&relaid)){state.cameraLayout=layout;if(settleFit())return;}
+ if(provider.nativeScale&&state.cameraSync&&!state.cameraRestoring&&!fitting&&relaid){
+  const visible=targets().flatMap(target=>{const frame=paneFrame(target);return frame?[{target,frame}]:[];});
+  const minimum=Math.max(...visible.map(({frame})=>range(frame).min)),maximum=Math.min(...visible.map(({frame})=>range(frame).max));
+  for(const {target}of visible){
+   const camera=paneCamera(target),zoom=Math.max(minimum,Math.min(maximum,camera.zoom));
+   if(zoom!==camera.zoom)writeCamera(target,{zoom,center:camera.center});
+  }
+ }
+ if(state.cameraSync&&!state.cameraRestoring&&!fitting&&relaid)alignCameras();state.cameraLayout=layout;
  provider.render(api);
  }
 function numericView():ControlView {
@@ -129,5 +166,5 @@ function renderNumericView():void {const node=document.getElementById('view-coor
  return ()=>disposers.forEach(dispose=>dispose());
  }
  function observeResize():ResizeObserver {const resize=new ResizeObserver(fitCamera);for(const {viewport}of panes())resize.observe(viewport);return resize;}
- const api={state,paneFrame,paneCamera,writeCamera,activateCamera,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,zoomCamera,unitScaleCamera,panCamera,fitActiveCamera,fitSelection:fitActiveCamera,zoomViewport,fitCamera,numericView,renderNumericView,bindControls,bindNavigation,observeResize};return api;
+ const api={state,requestFit,cancelFit,paneFrame,paneCamera,writeCamera,activateCamera,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,zoomCamera,unitScaleCamera,panCamera,fitActiveCamera,fitSelection:fitActiveCamera,zoomViewport,fitCamera,numericView,renderNumericView,bindControls,bindNavigation,observeResize};return api;
 }

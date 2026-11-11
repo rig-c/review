@@ -28,7 +28,7 @@ export const JOB_RIG_REVIEW_ACT_SCHEMA = 'rig-review/act@3' as const;
 export const JOB_RECORD_ACT_SCHEMA = 'rig-review/act@4' as const;
 /** New parts verdicts only. Historical @2 parts-verdict acts remain readable. */
 export const JOB_PARTS_VERDICT_ACT_SCHEMA = 'rig-review/act@5' as const;
-/** Read/parse contract only until the Create comments consumer is published. */
+/** Fresh checkpoint, parts-verdict, rig/post review-verdict and signoff writers. Image-review and interview-picks stay @2; record acts stay @4. */
 export const JOB_COMMENTS_ACT_SCHEMA = 'rig-review/act@6' as const;
 /** @6 plus an optional per-comment `context`. Emitted only behind EMIT_UNPINNED_CREATE_FIELDS (#714). */
 export const JOB_COMMENT_CONTEXT_ACT_SCHEMA = 'rig-review/act@7' as const;
@@ -524,8 +524,11 @@ export interface JobActValues {
  * supplies checkpoint ID, outcome and words only. Create derives execution
  * stage from its authoritative step phase/order. Review never stamps a stage.
  */
-export type JobUIActValues = Omit<JobActValues, 'checkpoint'> & {
+export type JobUIActValues = Omit<JobActValues, 'checkpoint' | 'review-verdict'> & {
   readonly checkpoint: Omit<JobActValues['checkpoint'], 'planStepId'>;
+  readonly 'review-verdict': JobImageReviewValue
+    | (JobModelReviewValue & {readonly stage: 'direction-review'})
+    | (JobModelReviewValue & {readonly stage: 'rig-review'; readonly feedback?: readonly Feedback[]});
 };
 
 export interface JobActSources {
@@ -593,8 +596,9 @@ export type JobPartsVerdictAct = Omit<Extract<JobLegacyAct, {kind: 'parts-verdic
   readonly value: PartsVerdictValue;
 };
 
-/** Historical @2 acts remain readable without being backfilled or relabelled. */
-export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct;
+/** Historical @2 acts remain readable without being backfilled or relabelled.
+ * Fresh checkpoint, parts, rig/post verdict and signoff acts are written as act@6. */
+export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct | JobCommentsAct;
 
 /** Authenticated browser provenance. The daemon validates identity and hashes PNG bytes. */
 export interface JobRigCapture {

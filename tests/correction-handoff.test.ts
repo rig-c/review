@@ -136,3 +136,42 @@ test('checked handoff refuses missing and unknown producer check sources without
     expect(JSON.stringify(rejected)).toBe(original);
   }
 });
+
+test('#735 Made correction records from the existing UTF-8 file path on applied scratch without comment capture', async () => {
+  const {readFile}=await import('node:fs/promises');
+  const {parseFeedback}=await import('../src/session.ts');
+  const {validateFeedbackSelection,validateTimedFeedbackSelection}=await import('../src/feedback-validation.ts');
+  const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+  const record=main.slice(main.indexOf('function recordFeedback('),main.indexOf('\n\nfunction bind():',main.indexOf('function recordFeedback(')));
+  const selection=main.slice(main.indexOf('function correctionSelection('),main.indexOf('function propose('));
+  const handler=main.slice(main.indexOf("  button('add-proposal').onclick = "),main.indexOf("  button('save').onclick = "));
+  const guard=main.slice(main.indexOf('function commentCaptureRefusal():'),main.indexOf('function setupComments():'));
+  const values:Record<string,any>={
+    'feedback-start':{value:'3'},'feedback-end':{value:'9'},'feedback-target-kind':{value:'bone'},'feedback-target-name':{value:'elbow'},'feedback-category':{value:'quality'},
+    'correction-path':{value:'made'},'correction-stage':{value:'rig-review'},'correction-selector':{value:'1'},
+    'reference-select':{value:''},'axis-select':{value:''},'axis-value':{value:''},
+  };
+  const exact='Keep these precise words.  \r\n', bytes=new TextEncoder().encode(exact),saved=sessionInput().session;
+  saved.feedback=[];const errors:string[]=[],button:any={};
+  values['correction-words']={value:'request.txt',files:[{size:bytes.length,arrayBuffer:async()=>bytes.buffer}]};
+  const scope:any={input:(id:string)=>values[id],select:(id:string)=>values[id],button:()=>button,session:saved,appliedOnStage:applied,rigDifference:null,
+    data:{feedbackCatalog:{rig:'package',bones:['elbow'],slots:[],animations:null,clock:null,clockAnimation:null}},
+    tr:(value:string)=>value,t:(value:string)=>value,message:(value:string,error:boolean)=>{if(error)errors.push(value);},errorText:(error:Error)=>error.message,
+    validateFeedbackSelection,validateTimedFeedbackSelection,feedbackAnimation:()=>null,assets:null,player:null,viewport:{state:{cameraCenter:null,zoom:1}},
+    turnPad:null,parts:null,checkpoint:null,time:.25,activeFrameClock:()=>null,frameAtTime:()=>null,selectedPerson:null,sequence:null,
+    serializableView:()=>({}),numericView:()=>({}),appearance:null,layers:{},axisInspection:false,feedbackEnvironment:()=>null,feedbackSchedule:()=>null,
+    readingsContext:()=>null,requirementsPanel:null,selectedReportEvent:null,markDirty(){},renderProposals(){},
+  };
+  const js=new Bun.Transpiler({loader:'ts'}).transformSync(record+selection+guard+handler);
+  const readGuard=new Function('scope','with(scope){'+js+';return commentCaptureRefusal;}')(scope);
+  expect(readGuard()).toStartWith('COMMENT_APPLIED_BUILD_UNSUPPORTED:');
+  await button.onclick();expect(errors).toEqual([]);expect(saved.feedback).toHaveLength(1);
+  const row=saved.feedback[0]!;expect(parseFeedback(row)).toEqual(row);expect(row.summary).toBe(exact);
+  expect(row).toMatchObject({frameStart:3,frameEnd:9,target:{kind:'bone',name:'elbow'},category:'quality',context:{applied,correction:{path:'made',selector}}});
+  expect((row.context as any).comment).toBeUndefined();expect((row.context as any).applied).not.toBe(applied);
+  const projected=projectSessionCorrection({session:saved,sessionBytes:Buffer.from(JSON.stringify(saved)),source,selector,itemId:row.id,path:'made',settled});
+  expect(projected).toMatchObject({kind:'checked-patch',verbatim:exact,applied});
+  // A replaced Apply during file decoding must retain the original CORRECTION_APPLY_PENDING refusal.
+  values['correction-words'].files=[{size:bytes.length,arrayBuffer:async()=>{scope.appliedOnStage={...applied,buildId:hash('1')};return bytes.buffer;}}];
+  await button.onclick();expect(saved.feedback).toHaveLength(1);expect(errors.at(-1)).toStartWith('CORRECTION_APPLY_PENDING:');
+});

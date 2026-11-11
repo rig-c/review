@@ -419,13 +419,23 @@ test('managed front relays 8 concurrent WebSocket windows across 2 instances and
   await writeFile(join(pkgB, 'report.json'), JSON.stringify({ spec: 'rig-pose-report/1', animation: 'inspect', frameTimes: [0, 0.5, 1] }));
 
   const stateDir = join(root, 'state');
-  const frontPort = freePort();
-  const instA = await openReview({ input: pkgA, animation: 'inspect', viewOnly: true }, { stateDir, frontPort, graceMs: 600, idleMs: 5_000 });
-  const instB = await openReview({ input: pkgB, animation: 'inspect', viewOnly: true }, { stateDir, frontPort, graceMs: 600, idleMs: 5_000 });
+  // Keep a competing listener bound throughout startup without another released-port race.
+  const occupied = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('planted port owner') });
+  const releasedPort = occupied.port!;
+  activeServers.push(occupied);
+  const instA = await openReview({ input: pkgA, animation: 'inspect', viewOnly: true }, { stateDir, frontPort: 0, graceMs: 600, idleMs: 5_000 });
+  const instB = await openReview({ input: pkgB, animation: 'inspect', viewOnly: true }, { stateDir, frontPort: 0, graceMs: 600, idleMs: 5_000 });
 
   const urlA = new URL(instA.url);
   const urlB = new URL(instB.url);
   const frontOrigin = urlA.origin;
+  expect(urlB.origin).toBe(frontOrigin);
+  expect(Number(urlA.port)).toBeGreaterThan(0);
+  expect(Number(urlA.port)).not.toBe(releasedPort);
+  expect(await (await fetch(`http://127.0.0.1:${releasedPort}`)).text()).toBe('planted port owner');
+  const frontRecord = JSON.parse(await readFile(join(stateDir, 'open', 'front-0.json'), 'utf8'));
+  expect(frontRecord.origin).toBe(frontOrigin);
+  expect(frontRecord.port).toBe(Number(urlA.port));
   const baseA = frontOrigin + urlA.pathname;
   const baseB = frontOrigin + urlB.pathname;
   const capB = urlB.hash.slice(5);

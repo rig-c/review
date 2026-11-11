@@ -12,11 +12,11 @@ import {Database} from 'bun:sqlite';
 import {jobSnapshotHash} from '../src/job-source.ts';
 import {loadPartsView} from '../src/parts-view.ts';
 import {preparePartsComment,validateStoredPartsComment} from '../src/parts-comment-crops.ts';
-import {parsePartsIssue} from '../src/parts-comment.ts';
+import {commentPartsIssues, parsePartsIssue} from '../src/parts-comment.ts';
 import {jobHash} from '../src/job-api.ts';
 import {PNG} from 'pngjs';
 import {parseCommentsAct, projectComments, parseRecordAct, type JobComment} from '../src/job-host.ts';
-import {legacyFeedbackComments} from '../src/feedback-export.ts';
+import {legacyFeedbackComments, partsIssueComments} from '../src/feedback-export.ts';
 import legacyComments from './fixtures/comments-contract-legacy.json';
 
 // Deliberately untyped fixture permits planted malformed packets at the public decoder.
@@ -96,7 +96,7 @@ test('#646 closed-key-negative: mixed anchors, historical words and browser plan
   // The existing pending-checkpoint test below proves that port refuses browser planStepId.
 });
 
-test('#646 source-and-replay-negative: UI @6 remains OFF and current replay digest stays authoritative', async () => {
+test('#646 source-and-replay-negative: UI submissions keep words, the checkpoint writer emits act@6 and the replay digest stays authoritative', async () => {
   const f = await fixture(), publication = await f.publish(), ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'}),
     page = await f.display(publication);
   const base = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation, submissionId: '646-writer-off',
@@ -107,7 +107,9 @@ test('#646 source-and-replay-negative: UI @6 remains OFF and current replay dige
   const input = {...base, value: {checkpointId: 'step-one', outcome: 'pass', words: 'one\ntwo'}};
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
   if (!saved.ok) throw new Error(saved.error.code);
-  expect(saved.value.schema).toBe('rig-review/act@2');
+  expect(saved.value.schema).toBe('rig-review/act@6');
+  expect(saved.value.value).toEqual({checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass',
+    comments: [{text: 'one\ntwo', anchor: {checkpointId: 'step-one', planStepId: 'step-one'}}]});
   expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
   const changed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, value: {...input.value, words: 'two\none'}}));
   expect(changed.ok).toBe(false);
@@ -159,7 +161,9 @@ test('actual UI ports finalize exact empty/whitespace words with host-declared a
     const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
     expect(saved.ok).toBe(true);
     if (!saved.ok) throw new Error(saved.error.code);
-    expect(saved.value.value).toEqual({ checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass', words: text });
+    // A blank note has no comment form; nothing is padded.
+    expect(saved.value.value).toEqual({ checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass',
+      comments: text.trim() ? [{ text, anchor: { checkpointId: 'step-one', planStepId: 'step-one' } }] : [] });
     expect(saved.value.authority).toEqual({ actor: 'human', channel: 'review-ui', reviewer: { id: 'declared-owner', role: 'owner' } });
     expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input)))).toEqual(saved);
     const fetched = await (await f.call({ ...f.base(), verb: 'fetch-act', actId: saved.value.actId }, f.session.writerGrant().fetchCapability)).json();
@@ -297,7 +301,7 @@ test('synthetic private adapters validate ordered interview picks without exposi
   ask, retained: withQuestion, reviewer: { id: 'owner', role: 'owner' } })).toThrow('JOB_ACT_INVALID');
 });
 
-test('parts-verdict UI save finalizes rig-review/act@5 with issues[], preserves words, rejects invalid issue bindings and binds all referenced bytes', async () => {
+test('parts-verdict UI save finalizes rig-review/act@6 with pointed Parts comments plus the note, rejects invalid issue bindings and binds all referenced bytes', async () => {
   const f = await fixture(), parts = await syntheticJobParts(f, { project: true, painting: true });
   await writeFile(join(f.root,'out/parts.json'),JSON.stringify({rig_size:[30,20],parts:[
     {name:'body',x:0,y:0,w:20,h:20},{name:'head',x:10,y:0,w:20,h:20},
@@ -402,9 +406,12 @@ test('parts-verdict UI save finalizes rig-review/act@5 with issues[], preserves 
   expect(replayed).toEqual(saved);
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
-  expect(saved.value.schema).toBe('rig-review/act@5');
+  // Issues become Parts-anchored comments in order; the note is one general comment after them.
+  const expectedValue: unknown = {verdict: 'changes-requested', comments: [...partsIssueComments(input.value.issues), {text: ' \n원문 '}]};
+  expect(saved.value.schema).toBe('rig-review/act@6');
   expect(saved.value.kind).toBe('parts-verdict');
-  expect(saved.value.value).toEqual(input.value);
+  expect(saved.value.value).toEqual(expectedValue as never);
+  expect(parseCommentsAct(JSON.parse(f.session.readActExport(saved.value.actId, false).toString()))).toEqual(saved.value as never);
   expect(saved.value.source.parts).toEqual(parts);
   expect(saved.value.source.projectHash).toMatch(/^[a-f0-9]{64}$/);
   expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
@@ -415,8 +422,9 @@ test('parts-verdict UI save finalizes rig-review/act@5 with issues[], preserves 
   try {
     const restored = await reopened.execute({...f.base(), verb: 'fetch-act', actId: saved.value.actId}, new AbortController().signal);
     expect(restored).toEqual(saved.value);
-    if (saved.value.kind !== 'parts-verdict' || saved.value.schema !== 'rig-review/act@5') throw new Error('Expected parts act');
-    for (const issue of saved.value.value.issues) {
+    if (saved.value.kind !== 'parts-verdict' || saved.value.schema !== 'rig-review/act@6') throw new Error('Expected parts act');
+    expect(commentPartsIssues(saved.value.value.comments)).toEqual(input.value.issues);
+    for (const issue of commentPartsIssues(saved.value.value.comments)) {
       expect(parsePartsIssue(issue, true, false, false)).toEqual(issue);
       expect(await validateStoredPartsComment(pkg, issue, false, {sourceHash: publication.source.sourceHash})).toEqual(issue);
     }
@@ -460,7 +468,7 @@ test('parts-verdict UI save finalizes rig-review/act@5 with issues[], preserves 
   const pending=f.session.commitUIAct(mutableInput);
   mutableInput.value.issues[0]!.rigRegion.x++;
   const isolated=await pending;
-  expect(isolated.value).toEqual(input.value);
+  expect(isolated.value).toEqual(expectedValue as never);
   const secondAsk = await f.ask(publication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   await writeFile(join(f.root, 'out/parts/depth.png'), 'changed depth only');
   const stale = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, askId: secondAsk.askId,
@@ -499,13 +507,14 @@ test('parseUISubmission accepts all 5 enabled act kinds, preserves String(kind) 
   }
 });
 
-test('#557 R01 setup UI submission finalizes act@3 with a daemon-hashed top-level PNG still', async () => {
+test('#557 R01 setup UI submission finalizes act@6 with a daemon-hashed top-level PNG still', async () => {
   const f = await fixture();
   const {input, bytes, sha256} = await rigStillInput(f);
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
-  expect(saved.value).toMatchObject({schema: 'rig-review/act@3', value: input.value,
+  const {words: note, ...verdict} = input.value as {words: string; stage: string; verdict: string};
+  expect(saved.value).toMatchObject({schema: 'rig-review/act@6', value: {...verdict, comments: note.trim() ? [{text: note}] : []},
     still: {path: sha256 + '.png', sha256, camera: 'fixed', frame: 'setup'}});
   expect(saved.value).not.toHaveProperty('sha256');
   expect(saved.value).not.toHaveProperty('manifest');
@@ -526,7 +535,7 @@ for (const [frame, animation] of [[0, 'still'], [0.375, 'inspect']] as const) {
     const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
     expect(saved.ok).toBe(true);
     if (!saved.ok) throw new Error(saved.error.code);
-    expect(saved.value).toMatchObject({schema: 'rig-review/act@3',
+    expect(saved.value).toMatchObject({schema: 'rig-review/act@6',
       still: {path: sha256 + '.png', sha256, camera: 'fixed', frame, animation}});
   });
 }

@@ -103,9 +103,13 @@ export type PublicTypes = [
  JobCommentsAct, JobCommentsActValues, ReviewCommentsSession, CompareCommentsSession, PartsCommentsVerdict,
  JobCommentContext, JobContextComment, JobContextCommentsAct,
 ];
+// Review #713: JobAct admits fresh act@6 comments acts from the UI writers.
+export type JobActAdmitsComments = JobCommentsAct extends JobAct ? true : never;
+const jobActAdmitsComments: JobActAdmitsComments = true;
 function assert(ok: unknown, name: string): asserts ok {
  if (!ok) throw new Error('SMOKE_PUBLIC_HOST_' + name);
 }
+assert(jobActAdmitsComments, 'JOB_ACT_ADMITS_COMMENTS');
 const expectedExports = ['assertJobImageSetCapability', 'JOB_CAPABILITIES', 'startJobHost', 'startJobHub', 'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID', 'JOB_PARTS_ENUMERATOR_RANGE',
  'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
  'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordAct', 'prepareJobRecordSource',
@@ -272,6 +276,7 @@ try {
   method: 'POST', headers: uiHeaders, body: JSON.stringify({...displayed.value, askId: imageAsk.value.askId,
    expectedGeneration: session.status().generation, submissionId: 'installed-image-submit', kind: 'review-verdict', value: imageValue})}));
  assert(imageAct.ok && imageAct.value.kind === 'review-verdict', 'IMAGE_UI_ACT');
+ assert(imageAct.value.schema === JOB_ACT_SCHEMA, 'IMAGE_ACT_STAYS_AT_2');
  assert(JSON.stringify(imageAct.value.source) === JSON.stringify(imageSource) &&
   JSON.stringify(imageAct.value.value) === JSON.stringify(imageValue), 'IMAGE_SOURCE_WORDS_EXACT');
  const imageFetched = await call({...base, verb: 'fetch-act', requestId: 'image-fetch', actId: imageAct.value.actId}, true);
@@ -334,7 +339,7 @@ try{
  const packed=await run(['npm','pack','--json','--ignore-scripts','--dry-run=false','--pack-destination',work],root);
  if(!step('npm pack',packed.exit===0,packed.stderr.trim().split('\n').at(-1)))throw new Error('pack');
  const info=packResult(JSON.parse(packed.stdout),manifest.name);const files=info.files.map(f=>f.path);
- step('tarball carries the bin, public host, stability reference, web, demo and licence',['src/entry.ts','src/cli.ts','src/job-host.ts','src/job-front.ts','src/job-session.ts','src/job-contract.ts','src/job-image-set.ts','src/job-hub.ts','web/job-hub.ts','web/job-hub.html','web/job-hub.css','docs/STABILITY.md','web/job-session.ts','web/main.ts','web/index.html','examples/demo/review.json','LICENSE'].every(f=>files.includes(f)),`${files.length} files`);
+ step('tarball carries the bin, public host, stability reference, web, demo and licence',['src/entry.ts','src/cli.ts','src/job-host.ts','src/job-front.ts','src/job-session.ts','src/job-contract.ts','src/job-image-set.ts','src/job-hub.ts','web/job-hub.ts','docs/STABILITY.md','web/job-session.ts','web/main.ts','web/index.html','examples/demo/review.json','LICENSE'].every(f=>files.includes(f)),`${files.length} files`);
  step('tarball carries no tests or fixtures',!files.some(f=>f.startsWith('tests/')||f.startsWith('node_modules/')));
  await Bun.$`mkdir -p ${app}`;await writeFile(join(app,'package.json'),JSON.stringify({name:'rig-review-smoke',private:true})+'\n');
  const installed=await run(['npm','i','-D','--dry-run=false','--no-audit','--no-fund',join(work,info!.filename)],app);

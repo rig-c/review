@@ -78,7 +78,7 @@ test('styles.css: resize separators and scrollbars never share a colour, in eith
 
 test('parts job grid reuses shared columns while checkpoint forms fill remaining height and tiles wrap', async () => {
  const source = await readFile(new URL('../web/styles.css', import.meta.url), 'utf8');
- const parts = await readFile(new URL('../web/parts.css', import.meta.url), 'utf8');
+ const parts = await readFile(new URL('../web/styles.css', import.meta.url), 'utf8');
  const body = (css: string, selector: string) => new Map(cssRules(css)
   .filter(rule => rule.selector.trim() === selector && !rule.at.length)
   .flatMap(rule => declarations(rule.body)).map(({name, value}) => [name, value]));
@@ -96,7 +96,7 @@ test('parts job grid reuses shared columns while checkpoint forms fill remaining
   const viewport = body(css, '.job-window .job-stage #stage-layout');
   expect(viewport.get('flex')).toBe('1');
   expect(viewport.get('min-height')).toBe('0');
-  const compiled = '.job-window .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden]))';
+  const compiled = '.job-window .job-inspection .job-stage:has(>#stage-layout:not([hidden]))';
   expect(body(css, compiled + ' #stage-layout').get('min-height')).toBe('max(60%,150px)');
   const controls = body(css, compiled + '>:is(.viewbar,.job-transport)');
   expect(controls.get('height')).toBe('48px');
@@ -109,23 +109,9 @@ test('parts job grid reuses shared columns while checkpoint forms fill remaining
   const shared = body(css, '.job-window .job-stage .viewbar,.job-window .job-transport');
   expect(shared.get('flex-wrap')).toBe('wrap');
   expect(shared.get('padding')).toBe('8px');
-  const layout = body(css, root);
-  expect(layout.get('grid-template-columns')).toBe(body(parts, '.pv-layout').get('grid-template-columns'));
-  expect(layout.get('grid-template-rows')).toBe('minmax(0,1fr)');
-  expect(layout.get('flex')).toBe('1');
-  expect(layout.get('min-height')).toBe('0');
-  const side = body(css, root + '>.job-forms');
-  expect(side.get('grid-column')).toBe('3');
-  expect(side.get('grid-row')).toBe('1');
-  expect(side.get('min-height')).toBe('0');
-  expect(side.get('border-top')).toBe('0');
-  expect(body(css, '.job-window .job-parts-stage').get('flex-direction')).toBe('column');
  };
  check(source);
  for (const mutant of [
-  source.replace('grid-template-columns:240px minmax(0,1fr) 300px', 'grid-template-columns:230px minmax(0,1fr)'),
-  source.replace('[data-job-parts-workspace]{flex:1;', '[data-job-parts-workspace]{flex:0;'),
-  source.replace('>.job-forms{grid-column:3;', '>.job-forms{grid-column:2;'),
   source.replace('.job-inspection{display:grid;flex:1;', '.job-inspection{display:grid;flex:0;'),
   source.replace('grid-template-rows:250px minmax(0,1fr)', 'grid-template-rows:minmax(250px,1fr) minmax(100px,30dvh)'),
   source.replace('grid-auto-flow:row!important', 'grid-auto-flow:column!important'),
@@ -139,8 +125,6 @@ test('parts job grid reuses shared columns while checkpoint forms fill remaining
   source.replace('height:48px;flex-wrap:nowrap', 'height:48px;flex-wrap:wrap'),
   source.replace('height:48px;flex-wrap:nowrap', 'height:70px;flex-wrap:nowrap'),
   source.replace('overflow-x:auto;overflow-y:hidden;white-space:nowrap', 'overflow-x:hidden;overflow-y:hidden;white-space:nowrap'),
-  source.replace(' .job-inspection:not([data-job-parts-workspace]) .job-stage:has(>#stage-layout:not([hidden])) #stage-layout',
-   ' .job-inspection .job-stage:has(>#stage-layout:not([hidden])) #stage-layout'),
   source.replace('flex-wrap:wrap;padding:8px}', 'flex-wrap:nowrap;padding:8px}'),
  ]) {
   expect(mutant).not.toBe(source);

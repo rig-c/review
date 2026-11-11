@@ -7,7 +7,7 @@ import {createCompareRequestContext} from './compare-server.ts';
 import {createLiveLifecycle, type UpgradableServer} from './live-lifecycle.ts';
 import {prepareOpenTarget} from './open.ts';
 import {sameSecret} from './open-protocol.ts';
-import {boundedBody, frontRoute, maximumUpstreamStreams, stageFrameQuery} from './front.ts';
+import {boundedBody, frontRoute, maximumUpstreamStreams} from './front.ts';
 import {assertCompareUnchanged} from './compare.ts';
 import {assertReviewUnchanged} from './reference.ts';
 import {parseDesignation, parseRegistry, readPrivate, targetCapability, workspaceDirectory, workspaceError, writePrivate} from './open-workspace-state.ts';
@@ -185,7 +185,7 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
       if (live.connections >= WORKSPACE_SOCKET_LIMIT) return refused('WORKSPACE_BUSY', 503);
       return live.upgrade(request, server, securityHeaders);
     }
-    if (['/', '/workspace.js', '/workspace.css', '/styles.css'].includes(url.pathname)) {
+    if (['/', '/main.js', '/styles.css'].includes(url.pathname)) {
       if (!['GET', 'HEAD'].includes(request.method)) return refused('WORKSPACE_REQUEST_INVALID', 400);
       if (url.pathname === '/') {
         const keys = [...url.searchParams.keys()];
@@ -199,8 +199,8 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
       } else if (url.search && !['?lang=en', '?lang=ko'].includes(url.search)) {
         return refused('WORKSPACE_REQUEST_INVALID', 400);
       }
-      const body = url.pathname === '/workspace.js' ? await (ownerScript ??= ownerBundle())
-        : await readFile(appRoot + (url.pathname === '/' ? 'web/owner-workspace.html' : url.pathname === '/styles.css' ? 'web/styles.css' : 'web/owner-workspace.css'));
+      const body = url.pathname === '/main.js' ? await (ownerScript ??= ownerBundle())
+        : await readFile(appRoot + (url.pathname === '/' ? 'web/index.html' : 'web/styles.css'));
       return new Response(request.method === 'HEAD' ? null : body, {headers: {...securityHeaders,
         'Content-Type': url.pathname.endsWith('.js') ? 'text/javascript' : url.pathname.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8'}});
     }
@@ -212,8 +212,7 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
     const agentControl = path === '/api/control' || path === '/api/control/commands' || /^\/api\/control\/receipts\/[a-f0-9-]+$/.test(path);
     if (!frontRoute(target.view.mode, request.method, path) && !(agentControl && target.stored.controlToken)) return refused('WORKSPACE_ROUTE_REFUSED', 404);
     const landing = path === '/' || path === '/index.html';
-    const stageFrame = path === '/stage-parts.html' || path === '/stage-interview.html';
-    if (stageFrame ? !stageFrameQuery(target.view.mode, url.search) : !landing && !!url.search) return refused('FRONT_QUERY_REFUSED', 400);
+    if (!landing && !!url.search) return refused('FRONT_QUERY_REFUSED', 400);
     if (request.method !== 'GET' && request.method !== 'HEAD' && sentOrigin !== record.origin) return refused('WORKSPACE_SAME_ORIGIN_REQUIRED', 403);
     if (path === '/api/live' && live.connections >= WORKSPACE_SOCKET_LIMIT) return refused('WORKSPACE_BUSY', 503);
     if (activeStreams >= maximumUpstreamStreams) return refused('WORKSPACE_BUSY', 503);

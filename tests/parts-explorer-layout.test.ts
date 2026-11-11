@@ -105,30 +105,6 @@ test('Change 1, 2, 3, 4: compare.css and styles.css enforce fixed tool area, scr
   }
 });
 
-test('#614 shared parts load notices stay outside pane sizing and retain full refusal text', () => {
-  const css = readFileSync(new URL('../web/parts.css', import.meta.url), 'utf8');
-  const rules = cssRuleMap(css);
-  const notice = (rules.get('#pv-load') ?? []).join(';');
-  const embedded = (rules.get('#pv-load.pv-embedded-status') ?? []).join(';');
-
-  expect(notice).toContain('position:absolute');
-  expect(notice).toContain('inset:0 0 auto auto');
-  expect(notice).toContain('max-width:100%');
-  expect(notice).not.toMatch(/(?:^|;)\s*(?:width|inline-size)\s*:/);
-  expect(notice).toContain('margin:0');
-  expect(notice).toContain('overflow-wrap:anywhere');
-  expect(notice).toContain('background:var(--panel)');
-  expect(notice).toContain('z-index:25');
-  expect((rules.get('.pv-stage') ?? []).join(';')).toContain('position:relative');
-  for (const declarations of [notice, embedded]) {
-    expect(declarations).not.toMatch(/(?:^|;)\s*(?:(?:max-|min-)?(?:height|block-size)|line-clamp|-webkit-line-clamp)\s*:/);
-    expect(declarations).not.toMatch(/(?:overflow(?:-[xy])?\s*:\s*(?:hidden|clip)|text-overflow\s*:\s*ellipsis|white-space\s*:\s*nowrap|display\s*:\s*none)/);
-  }
-  expect(embedded).toContain('padding:10px 14px');
-  expect(embedded).toContain('border-bottom:1px solid var(--line)');
-  expect((rules.get('#pv-load.pv-embedded-status[data-result="refused"]') ?? []).join(';')).toContain('color:var(--flag)');
-  expect(rules.get('#pv-save-status')).toEqual(['overflow-wrap:anywhere']);
-});
 
 test('Change 2: compare.ts reuses PartThumbnails, pageRegionTable, and loadPartModel without copying, and draws per-side thumbnails', async () => {
   const compareTs = readFileSync(new URL('../web/compare.ts', import.meta.url), 'utf8');
@@ -386,4 +362,17 @@ test('Change 2: compare.ts reuses PartThumbnails, pageRegionTable, and loadPartM
     if (oldIO) Object.defineProperty(globalThis, 'IntersectionObserver', oldIO);
     else Reflect.deleteProperty(globalThis, 'IntersectionObserver');
   }
+});
+
+test('#737 original part thumbnails reuse the shared canvas fit/cache and ignore a late image after disposal',async()=>{
+ const old=Object.getOwnPropertyDescriptor(globalThis,'document'),oldObserver=Object.getOwnPropertyDescriptor(globalThis,'IntersectionObserver'),draws:unknown[][]=[];
+ class Icon {dataset:Record<string,string>={};children:Canvas[]=[];textContent='';querySelectorAll(){return this.children;}replaceChildren(...nodes:Canvas[]){this.children=nodes;}}
+ class Canvas {width=0;height=0;setAttribute(){}getContext(){return {drawImage:(...args:unknown[])=>draws.push(args),clearRect(){}};}}
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:()=>new Canvas()}});Object.defineProperty(globalThis,'IntersectionObserver',{configurable:true,value:undefined});
+ try{
+  const thumbnails=new PartThumbnails(),icon=new Icon(),image={naturalWidth:20,naturalHeight:10},item={name:'real-part',index:0,imageHash:'a'.repeat(64)};
+  thumbnails.showOriginal(icon as unknown as HTMLElement,item,async()=>image as HTMLImageElement,'◇');await Promise.resolve();await Promise.resolve();
+  expect(icon.dataset.thumbnail).toBe('image');expect(icon.children).toHaveLength(1);expect(draws[0]).toEqual([image,0,0,20,10,0,12,48,24]);
+  let resolve!:(image:HTMLImageElement)=>void;const late=new Icon();thumbnails.showOriginal(late as unknown as HTMLElement,{...item,name:'late'},()=>new Promise(r=>resolve=r),'◇');thumbnails.dispose();resolve(image as HTMLImageElement);await Promise.resolve();await Promise.resolve();expect(late.dataset.thumbnail).toBe('icon');expect(late.children).toHaveLength(0);
+ }finally{if(old)Object.defineProperty(globalThis,'document',old);else Reflect.deleteProperty(globalThis,'document');if(oldObserver)Object.defineProperty(globalThis,'IntersectionObserver',oldObserver);else Reflect.deleteProperty(globalThis,'IntersectionObserver');}
 });

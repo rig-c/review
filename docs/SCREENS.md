@@ -1,307 +1,247 @@
 # Screen specification: components and screens
 
-This is the target specification for every Review screen. It applies the core UI
-rules in [DESIGN.md](DESIGN.md#core-ui-rules-owner-2026-11-11) (R0–R5) to
-concrete components. [PANELS.md](PANELS.md) and [PARTS_VIEW.md](PARTS_VIEW.md)
-describe the current panels. Where they differ from this file, this file is the
-target, and the difference is migration work tracked in #655.
+Review extends the existing rig inspection workspace to accept parts and agent
+asks. It does not build another review tool or a screen per publication kind.
+This document applies the [core UI rules](DESIGN.md#core-ui-rules-owner-2026-11-11)
+to that workspace. [PANELS.md](PANELS.md) and [PARTS_VIEW.md](PARTS_VIEW.md)
+remain panel and data references; their historical layouts do not restore removed UI.
 
-Each screen is written as a composition of shared components. A screen supplies
-configuration and data. It does not build its own copy of a component. Where a
-screen needs behavior a component lacks, extend the component for every screen.
-
-- **MUST** is a requirement.
-- *Today* lines record the current state on main `a5419f9` and the copies to remove.
-- **Owner ruling** marks a choice the owner has not made yet. The layout ruling
-  (R0) settles each of these before implementation.
+**Shipped** below means present in main `22d824f`, not a new runtime or visual
+acceptance claim. **Planned** identifies remaining work explicitly listed in §4.
+**MUST** states the shared-component requirement, not proof every legacy host
+already meets it. Extend existing modules; do not create sibling implementations.
+The owner rules on layout before a UI change and on its working screen before
+merge (R0). This documentation update adds no UI or public contract.
 
 ## 1. Entry and routing
 
-- **E1** `web/index.html` is the only web entry. Every screen in §3 mounts inside
-  it through the app shell (C1). No screen adds an HTML page or a per-screen
-  server route for its markup (R5).
-- **E2** These public URLs keep working, as routes or redirects into the single
-  entry: `/` and `/instances/<key>/…` (rig and compare), `/stage-parts.html` and
-  `/stage-interview.html` (stage frames, `stageEmbed`, `lang`, `side`),
-  `/jobs/<jobId>/` (`lang`, `hub`), `/hub/` (`workspace`, `lang`), the owner
-  workspace root, `?lang=en|ko`, and `#cap=` / `#review=` in the hash. Capability
-  handling and the API routes stay as they are. The single entry changes markup
-  delivery, not API contracts.
-- **E3** The screen to mount is chosen from the route and the session payload,
-  not from which HTML file was served.
-- *Today*: six HTML entries (`index`, `compare`, `parts`, `interview`, `job-hub`,
-  `owner-workspace`) plus an inline job document written by `src/job-front.ts`.
-  `src/compare-html.ts` splices nine `<!-- shared:… -->` regions of `index.html`
-  into `compare.html`.
+- **E1** `web/index.html` is the shared inspection entry. Parts packages use it
+  through `setupEntryHtml` and `web/main.ts`; the old `/parts.html` URL redirects
+  to the same entry (#745). Rig and parts do not have separate review pages.
+- **E2** Preserve public rig/compare, `/instances/<key>/…`, `/jobs/<jobId>/`,
+  `/hub/`, owner, language and capability URLs. Routing does not widen grants or
+  change API contracts. See [public stability](STABILITY.md).
+- **E3** Record publications are hosted over the existing inspection screen
+  (#754). Their checkpoint, signoff, reopen and interview forms open in a dialog.
+  A record without a picture does not manufacture a model or package.
+- **Remaining:** legacy job-window owner surfaces still exist (#756); hub/owner
+  single-entry adoption is planned under F (#734). A shared component requirement
+  is not evidence that those migrations have shipped.
+- **Compare is preserved:** header Compare remains two-build A/B comparison with
+  a reference, enabled when a second build is supplied. Its existing host,
+  layouts and controls remain unchanged. Card D is **PARKED**, not planned work.
 
 ## 2. Components
 
 ### C1 App shell
 
-Owns the page frame: header, language, status line, stage navigation, and the
-workspace layout that places C2–C7.
+The existing shell owns the header, language, workspace regions and status line.
 
-- **MUST** render one header layout on every screen: product mark, screen title,
-  the screen's mode switch if it has one (rig: **Setup · Animate · Compare**),
-  stage navigation (C1a), and the language select.
-- **MUST** own the language select. A screen never builds its own.
-- **MUST** own the workspace layout. Its regions are left (C2), main (C5) with
-  the toolbars (C3, C4) above it, bottom (C6), right (C7) and status (C11). Every
-  separator is resizable. When the window is too narrow or short, regions fold
-  into drawers. Region sizes persist per screen kind.
-- **MUST** hide the header when embedded (`stageEmbed`, hub or owner iframe), and
-  keep the rest of the layout.
-- Props: `screen`, `title`, `modes?`, `stages?`, `regions` (which of C2–C7 are
-  present). Events: `mode-change`, `stage-change`, `lang-change`.
-- *Today*: `workspace-ui.ts` (separators, drawers, Settings) serves rig and
-  compare only. Parts, interview, job, hub and owner each build their own header
-  and language select.
+- **Shipped:** Setup · Animate · Compare in the header is the sole mode switch
+  (#741). The bottom panel selects content, never a second mode.
+- The existing workspace places the parts list at left, the toolbars above the
+  main view, and the resizable Inspector directly below it. The right region is
+  reserved in this workspace; it is not a new context sidebar.
+- Reuse `workspace-ui.ts`, `workspace-layout.ts` and `workspace-preferences.ts`
+  for shell composition, resizing, drawers and browser preferences. Embedded
+  inspection retains the existing header-hiding behavior.
+- Changing a mode or content tab does not apply, approve or submit anything.
 
 #### C1a Stage navigation
 
-- **MUST** show the pipeline stages (**1 Parts + mesh · 2 Interview · 3 Rig +
-  animation · 4 Direction**) with the current stage marked, on every screen that
-  belongs to a project stage, including job screens.
-- *Today*: `stage-nav.ts` is shared by rig, compare, parts and interview. Job
-  screens have none.
+**Historical, superseded by #741:** numbered step chips and `stage-nav.ts` were
+removed. This heading remains for inbound links. Pipeline stages are internal;
+never reconstruct their navigation. The current pending ask is text beside the
+act bar, not another mode switch.
 
 ### C2 Navigator (left panel)
 
-A list the person moves through. One component with item renderers, not one per
-screen.
-
-- **MUST** support: a title, search/filter, items with a state badge, a current
-  item, keyboard navigation (up/down, Enter), and an optional visibility toggle
-  per item.
-- **MUST** show progress when the list is a sequence of things to answer or
-  judge: "answered n / total", each item marked answered, current, or not yet
-  answered.
-- Item kinds: parts/slots (rig, compare, parts, job parts), questions (interview,
-  job interview-picks), jobs (hub), targets (owner workspace).
-- **MUST** keep view controls (Parts select, Solo, Reference select) out of the
-  progress list. They belong to the toolbars (C3/C4), so the list reads as one
-  thing.
-- Events: `select(itemId)`, `toggle(itemId, visible)`.
-- *Today*: `PartExplorer` (rig, compare), the `parts.ts` list, the interview
-  question picker select, the job sidebar selects, the hub list and the owner
-  list are six separate builds.
+- **Shipped:** `PartExplorer` is the parts/slots list for compiled rigs and parts
+  subjects. Reuse its search, thumbnails, selection, Whole rig, Solo and
+  subject-supported visibility controls.
+- The existing left Checkpoints list, Reference picker and Settings keep their
+  homes. Do not move them to a new list or toolbar to satisfy the superseded plan.
+- With an original painting supplied, the parts Reference pane follows the
+  selected part (#749). This is a crop of the bound original, not a guessed asset.
+- Hub/owner navigation and interview questions retain their current hosts until
+  the named work in §4 lands; they are not additional shipped parts-list variants.
 
 ### C3 Main toolbar
 
-- **MUST** sit directly above the main view on every screen that has one, and
-  hold the actions used on almost every visit: **Comment** (C8), the view
-  control set (C5b), and **Sync cameras** where there is more than one pane.
-- **MUST** visually separate it from the secondary toolbar (C4) without needing
-  visible labels such as "main" and "secondary" (R1).
-- Props: `items` (ordered, from a shared registry of toolbar items).
+- **Shipped:** the shared rig/parts workspace separates the main and secondary
+  toolbars. The main row holds Comment, camera sync and the common view controls.
+- **MUST** reuse the existing control constructors and order in C5b. Do not
+  duplicate a toolbar for a different subject.
 
 ### C4 Secondary toolbar
 
-- **MUST** hold screen-specific and less frequent controls: layer toggles
-  (Images, Mesh edges, Bone points), Background, Alpha only, Footprints, Part
-  opacity and Threshold, the chest and mesh editor bars, and the Parts, Solo and
-  Reference selects.
-- **MUST** use the same item components as C3. An item looks and behaves the
-  same on every screen it appears on.
-- *Today*: every screen has one toolbar holding everything (`index.html`
-  `.viewbar`, `compare.html`, `parts.ts:94-143`, `job-session.ts:2452-2518`).
+- **Shipped:** layers and subject tools occupy the separate secondary row.
+  Parts reuse Images and Mesh edges, with Overlay and Part opacity beside them.
+  Mesh edges includes the uncovered-art tint; per-part visibility lives in C2.
+- Unavailable tools remain disabled with a named reason. Parts have no compiled
+  rig, so bone tools and rig-only instruments do not pretend to work.
+- The existing rig precision instruments still send data to the installed
+  producer for scratch rebuilds; this screen specification adds no operations.
 
 ### C5 Main view
 
-The inspected picture. One implementation for every screen.
-
-- **MUST** be built from the shared viewport modules (`viewport-pair.ts`,
-  `viewport-controller.ts` with a provider). A screen supplies a provider. It
-  never writes its own camera, fit, zoom or pan (R3a, R4).
-- **MUST** support 1 to 3 panes (reference, rig; reference, A, B; part,
-  painting), each with a label, with camera sync on or off.
-- **MUST** keep wheel zoom at the pointer, drag to pan, fit on resize, and exact
-  numeric camera replay for saved comments. These are shared behaviors, not
-  per-screen ones.
-- Props: `panes`, `provider`, `sync`. Events: `camera-change`, `pointer-mark`
-  (for C8).
-- *Today*: rig, parts and job use `viewport-pair` + `viewport-controller`.
-  Compare has its own three-pane markup and camera stack (`compare.ts:236`,
-  `505-516`, `compare-playhead`, `camera-view`, `bindPan`). Interview has no main
-  view. Its image preview is a separate `<img>` area.
+- **Shipped:** rig and parts share `viewport-pair.ts`, `viewport-controller.ts`
+  and their existing providers. Parts show assembled images on this same screen;
+  selecting and isolating a part uses the existing list and viewport.
+- Shared modules own zoom at the pointer, pan, Fit, 1:1, resize and camera replay.
+  Parts' native image scale remains distinct from compiled-rig Fit-relative scale.
+- Setup Difference inspects original versus subject pixels in the main view.
+  It does not create a sidebar evidence panel or grant compiler acceptance.
+- Compare retains reference/A/B inspection and its existing camera/layout path;
+  the parked card D does not authorize replacing it.
 
 #### C5b View control set
 
-- **MUST** be one control group, in this order with these names on every screen:
-  **Zoom in → Zoom out → Fit → 1:1 → View switch**, followed by the zoom value.
-  It shows on every screen with a main view, including interview and job image
-  answers.
-- **MUST** have the View switch list the screen's views as modes of one control.
-  - Rig: **Side by side · Reference · Rig**.
-  - Parts: **Part · Overlay · Difference**, plus **Region · Pages** for an atlas.
-  - Compare: the pane layouts.
-  - Difference (R3) is a mode of the View switch and covers every region. There
-    is no separate per-region evidence panel.
-- *Today*: rig has −, +, Fit with no 1:1. Compare has −, +, "Fit synchronized
-  views". Parts has −, value, +, Fit, 1:1. Job has Zoom in, Zoom out, Fit. One
-  job page showed two orders at once.
+- **MUST** reuse the control order **Zoom in → Zoom out → Fit → 1:1 → View switch**,
+  followed by the zoom value, through the shared implementation (R3a/R4).
+- **Shipped:** `inspectionViewSwitch` is the single rig/parts menu definition:
+  **Side by side · Reference · Rig · Difference**. The first three names, order
+  and placement stay unchanged. Difference is the fourth item, available in
+  **Setup**, shipped for parts (#745) and rig (#752).
+- Difference stays visible but disabled by name without a usable original
+  reference. Parts additionally require the declared rig-space painting operand;
+  rig Difference requires a loaded painting aligned to the declared native canvas.
+  Rig Difference outside Setup names `RIG_DIFFERENCE_SETUP_ONLY`.
+- Overlay is a secondary-toolbar control, not another menu group. Do not restore
+  the superseded grouped Part/Overlay/Atlas menu.
+- Compare keeps its existing **Side by side · Reference · Build A · Build B**
+  menu and legacy controls. It is not a Difference mode or an approved migration.
 
 ### C6 Bottom panel
 
-- **MUST** sit directly beneath the main view on every screen that has one, with
-  a resizable separator, a collapsed state, and tabs (R3a).
-- **Step 1 working-screen proposal**: keep the tab row and act button visible
-  while the panel is collapsed. This is not approved; present it for the
-  owner's second R0 ruling before step 1 merges.
-- Tabs are per screen.
-  - Rig Setup: Part · Modeling · Chest · Mesh · Weights · Bones · Fields · Cuts · Cloth.
-  - Rig Animate: the timeline dock (C12), then Transport · Sound · Environment ·
-    Physics · Idle tracks · Readings · Requirements · Retarget · Report.
-  - Compare: View · Rig · Playback · Feedback.
-  - Parts: Issues (C8 list) and Producer flags.
-  - Interview and job: the pending acts (C9 and C10 forms) and Comments.
-- **MUST** use one tab model. `inspector-blocks.ts` and `bindInspectorTabs`
-  become one.
-- *Today*: rig and compare have resizable bottom panels with different tab
-  models. Parts, interview and job have none.
+- **Shipped:** the main workspace has a resizable bottom panel directly beneath
+  the view. Its heading keeps the current mode's content tabs, **Comments (n)**,
+  and the act bar at the right of that same row (#741). The row remains reachable
+  when the content is collapsed. Height is a saved workspace preference.
+- Setup blocks: **Part · Modeling · Chest · Mesh · Weights · Bones · Fields ·
+  Cuts · Cloth**, then **Comments (n)**.
+- Animate blocks: **Transport · Sound · Environment · Physics · Idle tracks ·
+  Readings · Requirements · Retarget · Report**, then **Comments (n)**. The
+  timeline remains Animate content, not a second mode selector.
+- Parts use that same panel; Part and Comments are usable, while rig-only
+  blocks are disabled with the missing-rig reason.
+- Reuse `mountRigInspector`, `bindInspectorBlocks` and `mountBottomPanel` in
+  `inspector-blocks.ts`. The Comments button/panel retains identity across modes.
+- **Historical:** old parts Issues/Producer flags tabs, bottom
+  Setup/Animate/Write review mode tabs and the proposed Compare tab replacement
+  are superseded. Compare's existing View/Rig/Playback/Feedback sections are retained.
 
 ### C7 Side panel (right)
 
-- **MUST** be optional per screen and resizable. It holds context that is read
-  rather than edited: package context, checkpoints, source and provenance,
-  producer flags, plan text, mesh geometry.
-- **MUST NOT** hold a second copy of a list or evidence the main view already
-  shows (R3).
-- *Today*: parts uses `.pv-side` for flags, the mesh panel and issues. Compare
-  puts the Parts explorer on the right.
+This heading remains for inbound links. The rig/parts workspace has no right
+context panel. Use the existing left Checkpoints list and main-view Difference;
+record asks use the dialog in C10.
+
+**Historical:** the old parts sidebar, producer flags and mesh-numbers panel
+were deleted (#745). Mesh edges is the visual mesh inspection surface. Geometry
+numbers remain available to agent readers; the existing rig Mesh precision
+instrument is not the removed parts numbers panel.
 
 ### C8 Comments
 
-The only feedback input (R2). Feedback says what is wrong and should be fixed.
-
-- **MUST** allow any number of comments per submission, in order.
-- **MUST** allow each comment to be general, or pinned to an image point, region,
-  part, frame or frame range, or checkpoint. Pinned comments show on the main
-  view and in the list.
-- **MUST** use one composer (text, Delete) and one list (jump to pin, edit,
-  delete) on every screen, including job rig and package screens.
-- **MUST NOT** coexist with separate memo, review-notes, summary, per-part note,
-  image note or `words` fields for feedback. Those are removed.
-- Writes the `comments[]` value of the act it belongs to.
-- *Today*: `stage-comments.ts` serves rig, compare and parts. Job rig and package
-  screens have no comments. Feedback also enters through Review notes, the
-  feedback summary field, the job per-ask Note and the image note.
+- **MUST** keep comments as the only feedback-input feature (R2), allowing any
+  number of general or pointed comments per submission. Preserve source-bound
+  capture, pins and crops in `stage-comments.ts` and `parts-comment-crops.ts`.
+- **Shipped:** rig feedback lives in Comments with its existing frame range,
+  category, typed target, correction request, provenance, downloads and warnings.
+  Parts verdicts are comments-based (#751): no issues approves; issues request
+  changes. The act remains beside the content row, not inside a separate page.
+- **Remaining:** record forms still retain their existing memo inputs. C (#715)
+  owns their move to Comments; the legacy job-window owner surfaces are removed
+  by #756. Do not claim either cleanup has shipped.
+- Preserve historical serialized text and parsing. A UI rule does not authorize
+  changing act fields or downstream consumers; see the contract references.
 
 ### C9 Survey answer
 
-The answer to a question the producer asked ("how should this be?"). It is a
-separate input kind from comments.
+Survey answers are distinct from feedback comments. Preserve interview choices,
+inline Other text and per-question notes through the existing answer contract.
 
-- **MUST** render one question as: the question text, source information
-  (folded), the options as radio cards (label, effect, **AI recommended** badge),
-  **Other** with inline text, **Delegate** where offered, and the per-question
-  **Note (optional)**.
-- **MUST** support a set of questions answered together, with "n of m answered"
-  and a **Save explicit picks** action.
-- **MUST** be the same component in the standalone interview and in job
-  interview-picks.
-- Progress across questions lives in C2.
-- *Today*: `interview-panel.ts` renders radios. `job-session.ts:1871-1940`
-  rebuilds it as a `<select>`.
+- **Shipped:** #754 hosts the existing record interview answer forms in a dialog
+  on the inspection screen. It reuses the current forms rather than replacing
+  their answer contract.
+- **Planned:** B (#722) is the remaining interview-modal work. Existing
+  `interview-panel.ts` is the component to extend; no new interview page, image
+  viewport or question renderer is authorized by this document.
 
 ### C10 Act bar
 
-The decision a person makes, and its submit action.
-
-- **MUST** be one component placed at the end of the bottom panel's act tab
-  on every screen, including embedded screens.
-- **MUST** show a decision control and a submit button whose label names the act.
-  - Review verdict: **Approved / Changes requested** → **Submit review**.
-  - Parts verdict: derived from comments; no comments gives **Approve parts and
-    sign off**, issues give **Request fixes (n issues)**.
-  - Checkpoint: **Pass / Fail** → **Save checkpoint outcome**.
-  - Signoff: **Save stage approval**.
-  - Reopen: **Reopen stage**.
-  - Interview: **Save explicit picks**.
-- **MUST** show the save state (saved, unsaved, failed with retry) the same way
-  on every screen.
-- *Today*: rig and compare use a dialog with a status select. Parts uses **Save
-  sign-off** under the side panel. Job uses one form per ask in a forms column.
+- **Shipped:** `mountActBar` places the pending ask, decision/submit and save
+  state at the right of the bottom tab row. The act follows the subject, not
+  the chosen mode. A tab change never submits it.
+- Parts submit the comments-based verdict; rig review retains its decision and
+  submit action. Failed saves and drafts remain explicit.
+- **Shipped:** record checkpoint, signoff, reopen and interview asks open the
+  existing forms in a native dialog over this screen (#754), through the existing
+  act button. No-picture records use an explicitly empty inspection workspace.
+- **Planned:** C (#715) completes record-modal feedback cleanup; #756 removes
+  the remaining job-window owner surfaces. Hosting a form on this screen is not
+  proof those follow-ups are complete.
+- Act kinds, authority, source binding, replay and recorded text remain defined
+  by [the live job contract](REVIEW_PACKAGE.md#live-job-contract) and
+  [public stability](STABILITY.md). This document changes none of them.
 
 ### C11 Status bar
 
-- **MUST** be one footer showing the save state, the source hash, and the
-  screen's short status items.
-- *Today*: `.status-bar` (rig), `<footer>` (compare), `#pv-save-status` (parts),
-  and status paragraphs (interview, job, hub, owner).
+Reuse `mountStatusBar` for the existing message, readouts, draft/save state and
+source hash. Status is not another feedback input or approval action.
 
 ### C12 Timeline and transport
 
-- **MUST** be one component for play/pause, clip select, Repeat, time and frame
-  go, and scrubbing. It lives at the top of the bottom panel on Animate and
-  playback screens.
-- *Today*: the rig timeline dock, the compare Playback tab, and `.job-transport`
-  in job rig screens.
+Animate retains its existing transport and timeline. Time navigation does not
+write motion; typed keyed edits go through the installed producer's scratch
+build path. Compare retains its existing playback controls.
 
 ### C13 Read-only context blocks
 
-Plan text, evidence tables, provenance, source binding, and direction metadata.
-
-- **MUST** render through one block component in C7 or a C6 tab, with the same
-  folding behavior everywhere.
-- **MUST NOT** duplicate a checkpoint's visual evidence that the main view's
-  Difference mode already covers (R3).
+Keep source binding, provenance, warnings and plan text in their existing blocks
+or record dialogs. Do not duplicate visual checkpoint evidence in a sidebar;
+inspect supported pixels through the main view. Historical records remain readable.
 
 ## 3. Screens
 
-Each row lists the components present and the screen's configuration. A dash
-means the component is absent.
+These are subjects and hosts of the existing tool, not designs for new screens.
 
-| Screen | C2 Navigator | C5 Main view panes | C5b View switch modes | C6 Bottom tabs | C7 Side | C8 | C9 | C10 act |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Rig review | parts/slots | reference, rig | Side by side · Reference · Rig | Setup or Animate set | package context, checkpoints | yes | — | review verdict |
-| Compare | parts/slots | reference, A, B | pane layouts | View · Rig · Playback · Feedback | sources | yes (frame range) | — | review verdict |
-| Parts review | parts/regions | part, painting | Part · Overlay · Difference (· Region · Pages) | Issues · Producer flags | mesh geometry | yes | — | parts verdict |
-| Interview | questions with progress | reference images | image tabs as modes | answers | source info | yes | yes | interview picks |
-| Job: interview-picks | questions with progress | option images | image tabs as modes | answers | source info | yes | yes | interview picks |
-| Job: parts | parts/regions | as Parts review | as Parts review | as Parts review | as Parts review | yes | — | parts verdict |
-| Job: rig or package | parts/slots | reference, rig | as Rig review | acts · transport (C12) | binding, observation | yes | — | review verdict |
-| Job: checkpoint | — | the checkpoint's views | includes Difference | acts | plan text, guidance | yes | — | checkpoint |
-| Job: image set | images | the image | image list as modes | acts | — | yes | — | review verdict |
-| Job: plan, signoff, reopen | — | — | — | acts | plan text | yes | — | signoff / reopen |
-| Job hub | jobs | the selected job in an iframe until its safety proof | — | — | — | — | — | — |
-| Owner workspace | targets | the selected target in an iframe until its safety proof | — | — | — | — | — | — |
-
-Notes:
-
-- The hub and owner workspace mount a target in place only after that target's
-  safety-proof card proves no capability widening and preservation of grants,
-  instance authority and hidden-frame pause. All other targets remain iframe
-  documents served by the single `index.html` entry. No target is proven today,
-  so step 6 starts with all targets in iframes.
-- Interview and job interview-picks get a main view (C5) for their images, with
-  the same control set, instead of a bare preview image.
-- Comments (C8) are available on every screen with an act, so feedback outside
-  the survey has one place to go.
+| Subject or host | State at `22d824f` | View and decision home |
+| --- | --- | --- |
+| Rig package, including hosted rig | Shipped | Header Setup/Animate; shared rig/reference view; mode blocks + Comments; act bar |
+| Parts package, including hosted parts | Shipped (#745, #749, #751) | Same Setup workspace and parts list; original follows selection; comments verdict |
+| Two builds and a reference | Shipped, unchanged | Header Compare; existing A/B host and controls; card D PARKED |
+| Record checkpoint, signoff, reopen, interview | Shipped hosting (#754) | Existing screen with a dialog; no model fabricated for a record without a picture |
+| Remaining interview-modal work | Planned B (#722) | Extend existing interview component |
+| Remaining record-modal feedback cleanup | Planned C (#715) | Move existing memo feedback to Comments without changing contracts |
+| Legacy job-window owner surfaces | Removal planned (#756) | Existing shared inspection and record-dialog homes |
+| Hub and owner workspace | Single-entry adoption planned F (#734) | Existing hosts remain until their migration lands |
 
 ## 4. Migration order
 
-Each step leaves a working product. Each shared-component card adopts all
-current hosts and removes the old body in the same PR, with a zero-hit search
-for the copies it replaces.
+**Historical:** the former seven-step migration list and its blanket STOP on
+steps 2–7 are superseded. It must not be used to rebuild deleted parts or stage
+UI, or to unpark Compare. The numeric references in the existing copy ratchet
+are historical tracking identifiers, not new screen instructions.
 
-1. C1 shell, C5 main view, C5b control set and C6 bottom panel inside
-   `index.html`. The rig screen mounts through them. Old rig markup is removed.
-2. Parts review and job parts move onto the shell. `parts.html` is removed.
-3. Compare moves onto C5 and the shared camera. `compare.html`,
-   `compare-html.ts` splicing and the compare camera stack are removed.
-4. C9 survey, then interview and job interview-picks move. `interview.html` and
-   the job `<select>` rebuild are removed.
-5. Job rig, package, checkpoint, image-set, plan, signoff and reopen move. The
-   inline job document in `job-front.ts` is removed.
-6. Hub and owner workspace move. `job-hub.html` and `owner-workspace.html` are
-   removed. All targets start in iframes under the single entry; in-place
-   mounting requires each target's safety proof as specified in §3.
-7. C8 replaces the remaining feedback fields (Review notes, summary, per-ask
-   Note, image note). C10 and C11 unify the act and status.
+Shipped foundations are #741 (header mode and bottom row), #745 (parts on the
+shared screen), #749 (selection-following reference), #751 (comments verdict),
+#752 (rig Setup Difference) and #754 (record-dialog hosting).
 
-Step 1 is released for implementation under the approved layout ruling. Before
-its visible merge, send a working local URL to HQ for the owner's second R0
-ruling, including the collapsed-panel proposal in C6. Steps 2–7 each need their
-own layout ruling and remain **STOP** until then. Each also needs the owner's
-working-screen ruling before merge (R0).
+Only the following work remains planned here; this list establishes no new order
+or ownership beyond the existing cards:
+
+- B (#722): remaining interview-modal work.
+- C (#715): remaining record-modal work, including memo feedback to Comments.
+- F (#734): hub/owner single-entry adoption.
+- #756: removal of remaining job-window owner surfaces.
+- #743: in-place update when the agent publishes a new result, keeping the
+  selection, camera and time, and the act bar's status text after submit.
+- #725: a joined Create project opens at its current stage, including an
+  interview-stage project with no build yet.
+
+Card D is **PARKED**. Compare remains A/B with a reference. Difference is already
+shipped in Setup; neither a Compare-to-diff conversion nor a Compare migration
+is planned. UI follow-ups still need the owner's layout and working-screen
+rulings. Public-contract changes still require the existing HQ approval boundary.

@@ -1,0 +1,57 @@
+{
+  "provenance": "Expected outputs of projectComments as Create c8382ba5 consumes it: rig-create src/review-act.ts:55 (reviewActVerbatim) calls projectComments from @rig-c/review/job-host, pinned at 2.12.0 (rig-create package.json). Computed by running src/stage-comment.ts from git archive of rig-c/review tag v2.12.0. Do not regenerate from the working tree.",
+  "cases": {
+    "empty": {
+      "comments": [],
+      "projected": ""
+    },
+    "checkpointNote": {
+      "comments": [
+        {
+          "text": "  Exact 한글\n",
+          "anchor": {
+            "checkpointId": "motion-card",
+            "planStepId": "step-one"
+          }
+        }
+      ],
+      "projected": "[[\"checkpoint\",\"motion-card\"]]\n  Exact 한글\n"
+    },
+    "generalNote": {
+      "comments": [
+        {
+          "text": " \n원문 그대로\t "
+        }
+      ],
+      "projected": "[general]\n \n원문 그대로\t "
+    },
+    "partsIssuesAndNote": {
+      "comments": [
+        {
+          "text": "Overlap between body and head",
+          "anchor": {
+            "schema": "rig-review-parts-comment/2",
+            "id": "body-edge",
+            "parts": [
+              {
+                "name": "body",
+                "imageHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+              },
+              {
+                "name": "head",
+                "imageHash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+              }
+            ],
+            "view": {
+              "mode": "assembled"
+            }
+          }
+        },
+        {
+          "text": "  부품 종합 의견 🚀\n"
+        }
+      ],
+      "projected": "[[\"rig-review-parts-comment/2\",[\"body\",\"head\"],\"assembled\"]]\nOverlap between body and head\n\n[general]\n  부품 종합 의견 🚀\n"
+    }
+  }
+}

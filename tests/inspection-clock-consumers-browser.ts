@@ -45,7 +45,7 @@ for(const lang of ['en','ko']){
   await page.setViewport(1440,1000);await page.goto(`http://127.0.0.1:${proxy.port}/?lang=${lang}#cap=${cap}`);
   await wait('window.__clockReading&&!window.__clockReading().restoring&&!document.getElementById("play").disabled');
   await wait('window.rigReviewEditor.idle.source()?.tracks?.length>0');
-  await page.evaluate(`(()=>{document.querySelector('[data-review-stage="3"]').click();document.querySelector('[data-mode="playback"]').click();const s=document.getElementById('animation-select');s.value='idle';s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  await page.evaluate(`(()=>{document.querySelector('[data-mode="playback"]').click();const s=document.getElementById('animation-select');s.value='idle';s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   const idleGate=await page.evaluate<any>('window.rigReviewEditor.animation.gate()');
   check(idleGate.code==='ANIMATION_IDLE_GOVERNED_BY_TURN_PAD','idle key editing remains refused '+JSON.stringify(idleGate));
   const paused=await loopPause();

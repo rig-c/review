@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {createViewportController,createViewportState,type ViewportProvider} from '../web/viewport-controller.ts';
 import {projectMark,unprojectMark} from '../src/stage-comment.ts';
 import {viewportPairMarkup,expandViewportPair,viewportPairPlaceholder} from '../web/viewport-pair.ts';
-import {createPartsViewport} from '../web/parts-viewport-provider.ts';
+import {createPartsViewport,createPartsViewportProvider} from '../web/parts-viewport-provider.ts';
 import {createRigViewportProvider,type RigViewportHost} from '../web/rig-viewport-provider.ts';
 function host(){
  const nodes=new Map<string,any>();for(const target of ['rig','reference']){nodes.set(target+'-viewport',{clientWidth:640,clientHeight:480});nodes.set(target+'-pane',{hidden:false});}
@@ -259,4 +259,104 @@ test('#671 compiled provider retains the final rendered scale floor below the ra
  expect(el('reference-content').style.transform).toBe('scale(0.001)');
  expect(state.rigScale).toBe(.001);expect(state.referenceScale).toBe(.001);
  expect(el('fit').textContent).toBe('Fit active');
+});
+
+test('#706 requestFit lands once the pane is measured, refits on a later layout, and yields to any camera write',()=>{
+ for(const native of [false,true]){
+  const h=host(),c=h.controller,rig=h.nodes.get('rig-viewport'),reference=h.nodes.get('reference-viewport');
+  h.provider.nativeScale=native;c.state.cameraSync=false;
+  const fit=()=>native?Math.min(16,(rig.clientWidth)/320,(rig.clientHeight)/240):1;
+  // Not measured yet: the Fit is owed, the camera is left alone (a stale 24% stays until the pane has a size).
+  rig.clientWidth=0;reference.clientWidth=0;c.state.zoom=.24;c.requestFit();
+  expect(c.paneCamera('rig').zoom).toBe(.24);
+  rig.clientWidth=640;reference.clientWidth=640;c.fitCamera();
+  expect(c.paneCamera('rig').zoom).toBe(fit());
+  // The layout settles later: the camera nobody moved is fitted again.
+  rig.clientWidth=900;rig.clientHeight=700;c.fitCamera();
+  expect(c.paneCamera('rig').zoom).toBe(fit());
+  // A person zooms: a later layout keeps their camera.
+  c.zoomCamera(1/1.25,'rig');const moved=c.paneCamera('rig').zoom;expect(moved).not.toBe(fit());
+  rig.clientWidth=700;rig.clientHeight=500;c.fitCamera();
+  expect(c.paneCamera('rig').zoom).toBe(moved);
+  // A restore that sets the camera itself cancels an owed Fit.
+  c.requestFit();rig.clientWidth=0;c.cancelFit();c.writeCamera('rig',{zoom:.5,center:null});rig.clientWidth=640;c.fitCamera();
+  expect(c.paneCamera('rig').zoom).toBe(.5);
+ }
+});
+
+test('#706 a held Fit fits each synchronized native pane to its own frame without a range refusal',()=>{
+ const h=host(),c=h.controller,rig=h.nodes.get('rig-viewport'),reference=h.nodes.get('reference-viewport');
+ h.provider.nativeScale=true;c.state.cameraSync=true;
+ // A pane one pixel shorter fits slightly smaller: aligning the other pane's Fit into it would be under its range.
+ rig.clientWidth=495;rig.clientHeight=139;reference.clientWidth=495;reference.clientHeight=138;
+ h.provider.geometry=()=>({space:'image',box:{x:0,y:0,width:846,height:862},marginX:24,marginY:24});
+ expect(()=>c.requestFit()).not.toThrow();
+ expect(c.paneCamera('rig').zoom).toBe((139-24)/862);expect(c.paneCamera('reference').zoom).toBe((138-24)/862);
+ reference.clientWidth=496;reference.clientHeight=140;expect(()=>c.fitCamera()).not.toThrow();
+ expect(c.paneCamera('reference').zoom).toBe((140-24)/862);
+});
+
+
+test('#737 pending parts Fit ignores zero-size entry canvases, settles on real art, and retains later camera actions',()=>{
+ const nodes=new Map<string,any>();const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:450,clientHeight:800,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const canvas={width:0,height:0};let drawn:{w:number;h:number}|null=null;
+ const c=createPartsViewport({el,canvas:canvas as HTMLCanvasElement,reference:()=>null,frameSize:()=>drawn,message:()=>{}});c.state.cameraSync=false;
+ c.requestFit();c.fitCamera();expect(c.paneFrame('rig')).toBeNull();expect(c.numericView().cameras.rig).toBeNull();expect(c.state.zoom).toBe(1);
+ drawn={w:1920,h:1080};Object.assign(canvas,{width:1920,height:1080});c.fitCamera();
+ expect(c.paneCamera('rig')).toEqual({zoom:(450-24)/1920,center:{x:960,y:540}});
+ c.unitScaleCamera('rig');c.zoomCamera(1.25,'rig');const actual=structuredClone(c.paneCamera('rig'));
+ // A late initial promise changes neither geometry nor explicit camera; resize delivery must retain it.
+ c.fitCamera();expect(c.paneCamera('rig')).toEqual(actual);expect(actual.zoom).toBe(1.25);
+});
+
+test('#737 explicit native Fit followed by wider Reference layout must not refuse the camera',()=>{
+ const nodes=new Map<string,any>();const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:655,clientHeight:471,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const canvas={width:1920,height:1080},reference={...canvas};
+ const c=createPartsViewport({el,canvas:canvas as HTMLCanvasElement,reference:()=>reference as HTMLCanvasElement,frameSize:()=>({w:1920,h:1080}),message:()=>{}});c.state.cameraSync=true;c.requestFit();c.fitActiveCamera('rig');
+ const before=structuredClone(c.paneCamera('reference'));expect(before.zoom).toBe((655-24)/1920);
+ el('rig-pane').hidden=true;el('rig-viewport').clientWidth=0;el('reference-viewport').clientWidth=1318;
+ console.log('U3_LAYOUT_RANGE_INPUT',JSON.stringify({before,minimumAfter:Math.min((1318-24)/1920,(471-24)/1080),cameraSync:c.state.cameraSync}));
+ expect(()=>c.fitCamera()).not.toThrow();
+ expect(c.paneCamera('reference')).toEqual({zoom:(471-24)/1080,center:before.center});
+});
+
+test('#737 sync native relayout admits a camera when visible peers have unequal fit scales',()=>{
+ const nodes=new Map<string,any>();const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:1318,clientHeight:471,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ el('rig-pane').hidden=true;el('rig-viewport').clientWidth=0;
+ const c=createPartsViewport({el,canvas:{width:1920,height:1080}as HTMLCanvasElement,reference:()=>({width:3840,height:2160})as HTMLCanvasElement,frameSize:t=>t==='rig'?{w:1920,h:1080}:{w:3840,h:2160},message:()=>{}});c.state.cameraSync=true;c.requestFit();c.fitActiveCamera('reference');
+ const before=structuredClone(c.paneCamera('reference'));expect(before.zoom).toBe((471-24)/2160);
+ el('rig-pane').hidden=false;el('rig-viewport').clientWidth=655;el('reference-viewport').clientWidth=655;
+ console.log('U3_UNEQUAL_NATIVE_RELAYOUT',JSON.stringify({before,minimumRigAfter:(655-24)/1920,minimumReferenceAfter:(655-24)/3840}));
+ expect(()=>c.fitCamera()).not.toThrow();
+ expect(c.paneCamera('reference')).toEqual({zoom:(655-24)/1920,center:before.center});expect(c.paneCamera('rig')).toEqual({zoom:(655-24)/1920,center:{x:960,y:540}});
+});
+
+
+test('#747 Reference-active native Fit accepts the synchronized peer range without loosening compiled ranges',()=>{
+ const nodes=new Map<string,any>();const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:655,clientHeight:471,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const c=createPartsViewport({el,canvas:{width:832,height:1216} as HTMLCanvasElement,reference:()=>({width:1664,height:2432} as HTMLCanvasElement),frameSize:()=>null,message(){}});
+ c.state.cameraSync=true;c.state.zoom=c.state.referenceZoom=1.25;c.activateCamera('reference');
+ expect(()=>c.fitActiveCamera('reference')).not.toThrow();
+ const minimum=(471-24)/1216;expect(c.paneCamera('rig').zoom).toBe(minimum);expect(c.paneCamera('reference').zoom).toBe(minimum);
+ c.activateCamera('rig');expect(()=>c.fitActiveCamera('rig')).not.toThrow();
+ c.setCameraSync(false);const held=structuredClone(c.paneCamera('rig'));c.fitActiveCamera('reference');expect(c.paneCamera('rig')).toEqual(held);expect(c.paneCamera('reference').zoom).toBe((471-24)/2432);
+});
+
+test('#742 physical parts sync uses the selected world box, absolute centre and source pixel scale; OFF stays independent',()=>{
+ const nodes=new Map<string,any>(),state=createViewportState();
+ const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:655,clientHeight:471,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const full={x:0,y:0,width:832,height:1216};let selected=true;
+ const region=()=>selected?{x:122,y:36,width:590,height:457}:full;
+ const frameSize=(target:'rig'|'reference'|'a'|'b')=>target==='rig'?{w:832,h:1216,world:{box:state.cameraSync?region():full,origin:{x:0,y:0},scale:{x:1,y:1}}}:selected?{w:590,h:457,world:{box:region(),origin:{x:122,y:36},scale:{x:1,y:1}}}:{w:1664,h:2432,world:{box:full,origin:{x:0,y:0},scale:{x:.5,y:.5}}};
+ const c=createViewportController(createPartsViewportProvider({el,canvas:{width:832,height:1216} as HTMLCanvasElement,reference:()=>({width:selected?590:1664,height:selected?457:2432} as HTMLCanvasElement),frameSize,message(){}},state),state);
+ c.requestFit();let view=c.numericView();expect(view.cameras.rig!.center).toEqual({x:417,y:264.5});expect(view.cameras.reference!.center).toEqual(view.cameras.rig!.center);expect(view.cameras.reference!.zoom).toBe(view.cameras.rig!.zoom);
+ // The subject remains the whole assembly raster; only its camera region changes.
+ expect(frameSize('rig').w).toBe(832);expect(el('rig-root').style.transform).toBe(el('reference-content').style.transform);
+ c.panCamera('reference',23,17);view=c.numericView();expect(view.cameras.reference!.center).toEqual(view.cameras.rig!.center);
+ c.zoomCamera(1.25,'rig');expect(c.paneCamera('reference')).toEqual(c.paneCamera('rig'));
+ c.setCameraSync(false);const before=structuredClone(c.paneCamera('rig'));c.panCamera('reference',9,7);expect(c.paneCamera('rig')).toEqual(before);expect(c.paneCamera('reference')).not.toEqual(before);
+ c.setCameraSync(true);expect(c.paneCamera('reference')).toEqual(c.paneCamera('rig'));expect(c.paneCamera('rig').center).toEqual({x:417,y:264.5});
+ selected=false;c.requestFit();view=c.numericView();expect(view.cameras.rig!.center).toEqual({x:416,y:608});expect(view.cameras.reference!.center).toEqual(view.cameras.rig!.center);
+ const zoom=view.cameras.rig!.zoom;expect(el('reference-content').style.transform).toBe(`scale(${zoom*.5},${zoom*.5})`);expect(el('rig-root').style.transform).toBe(`scale(${zoom})`);
+ for(const target of ['rig','reference']as const){c.activateCamera(target);expect(()=>c.fitActiveCamera()).not.toThrow();expect(c.paneCamera('reference')).toEqual(c.paneCamera('rig'));}
 });

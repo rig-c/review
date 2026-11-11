@@ -1,5 +1,4 @@
-import {mountWorkspaceShell} from './workspace-ui.ts';
-import {createRetainedFrameStage} from './retained-frame-stage.ts';
+import {createRetainedFrameStage, mountRetainedWorkspace} from './retained-frame-stage.ts';
 import {hashCapabilityAccess} from './instance-access.ts';
 import {WORKSPACE_TARGET_LIMIT, WORKSPACE_READY_SCHEMA, WORKSPACE_SCHEMA, WORKSPACE_TARGET_DOMAIN, WORKSPACE_VISIBILITY_SCHEMA,
   type WorkspaceList, type WorkspaceTargetView} from '../src/open-workspace-contract.ts';
@@ -7,11 +6,8 @@ import {getLanguage, onLanguageChange, setLanguagePreference, setLinkLanguage, t
 import {connectLiveWindow} from './live-connection.ts';
 
 export function mountOwnerWorkspace(root: HTMLElement): () => void {
-  const shell = mountWorkspaceShell({compatibility: 'legacyOwnerStep6'});
-  const {header} = shell, heading = shell.title, status = shell.status!, language = shell.language!;
-  const list = document.createElement('nav'); list.className = 'owner-list';
-  const stage = document.createElement('main'); stage.className = 'owner-stage';
-  root.append(header, list, stage);
+  const workspace = mountRetainedWorkspace({root, kind: 'owner'});
+  const {stage, language, message: status} = workspace;
   let current: WorkspaceList | null = null, disposed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const cancellation = new AbortController();
@@ -23,15 +19,6 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
   });
   const capability = hashCapabilityAccess(new URL(location.href), 'rig-review-owner-workspace/1:' + location.origin,
     () => sessionStorage, href => history.replaceState(history.state, '', href), {strip: 'always-after-storage', storedValue: 'preserve', fallback: ''});
-
-  function text() {
-    document.documentElement.lang = getLanguage();
-    heading.textContent = tr('Review workspace'); document.title = tr('Review workspace');
-    list.setAttribute('aria-label', tr('Review targets'));
-    language.setAttribute('aria-label', tr('Language'));
-    language.options[0]!.textContent = tr('English'); language.options[1]!.textContent = tr('Korean');
-    language.value = getLanguage();
-  }
 
   async function grant(key: string) {
     const encoder = new TextEncoder();
@@ -56,17 +43,17 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
   }
 
   function render() {
-    text(); list.replaceChildren();
-    for (const target of current?.targets ?? []) {
-      const button = document.createElement('button'); button.type = 'button';
-      button.dataset.targetKey = target.key; button.setAttribute('aria-pressed', String(target.key === retained.selected));
-      const title = document.createElement('span'); title.className = 'owner-target-title'; title.textContent = target.title;
-      const state = document.createElement('span'); state.className = 'owner-target-status';
-      state.textContent = tr(target.unavailable ?? (target.viewOnly ? 'Inspection only' : 'Review target'));
-      const animation = document.createElement('span'); animation.className = 'owner-target-animation'; animation.textContent = target.animation;
-      button.append(title, state, animation); button.onclick = () => {void select(target).catch(() => {status.textContent = tr('WORKSPACE_REQUEST_REFUSED');});};
-      list.append(button);
-    }
+    workspace.render({
+      lang: getLanguage(), heading: tr('Review workspace'), listLabel: tr('Review targets'),
+      languageLabel: tr('Language'), englishLabel: tr('English'), koreanLabel: tr('Korean'),
+      selected: retained.selected,
+      items: (current?.targets ?? []).map(target => ({
+        key: target.key, dataset: {targetKey: target.key}, label: target.title,
+        state: tr(target.unavailable ?? (target.viewOnly ? 'Inspection only' : 'Review target')),
+        detail: target.animation,
+        onSelect: () => {void select(target).catch(() => {status.textContent = tr('WORKSPACE_REQUEST_REFUSED');});},
+      })),
+    });
   }
 
   async function refresh() {
@@ -105,12 +92,12 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
     window.removeEventListener('message', ready); window.removeEventListener('pagehide', stop);
   };
   window.addEventListener('pagehide', stop, {once: true});
-  text();
+  render();
   void refresh();
   return stop;
 }
 
-if (typeof document !== 'undefined') {
-  const root = document.getElementById('owner-workspace');
-  if (root) mountOwnerWorkspace(root);
+if (typeof document !== 'undefined' && typeof location !== 'undefined' && location.pathname === '/') {
+  const root = document.getElementById('app');
+  if (root && !root.childElementCount) mountOwnerWorkspace(root);
 }

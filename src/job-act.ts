@@ -1,15 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import {
-  JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
-  type ActV3, type JobAct, type JobActValues, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
+  JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
+  type ActV3, type JobAct, type JobCommentsAct, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
   type PendingAskV3, type RecordAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
 } from './job-contract.ts';
 import { parsePartsIssue, type PartsIssue } from './parts-comment.ts';
 import {
   isRecordSource, jobHash, jobId, jobInteger, jobObject,
-  parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
+  parseCommentsAct, parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
 } from './job-api.ts';
+import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueComments } from './feedback-export.ts';
+import type { Feedback } from './session.ts';
 import { validatePicks } from './interview-picks.ts';
 import {
   isRetainedRecordSource,
@@ -25,6 +27,12 @@ import {validatePngBytes} from './comment-crops.ts';
 function words(value: unknown): string {
   if (typeof value !== 'string' || value.length > 10_000) throw new JobError('JOB_ACT_INVALID');
   return value;
+}
+
+/** The writer's output must decode through the public @6 decoder; its refusal is JOB_ACT_INVALID. */
+function commentsAct(act: JobCommentsAct): JobCommentsAct {
+  parseCommentsAct(act);
+  return act;
 }
 
 function choice<Value extends string>(value: unknown, allowed: readonly Value[]): Value {
@@ -504,6 +512,8 @@ export function finalizeJobAct(options: {
     authority: { actor: 'human' as const, channel: 'review-ui' as const, reviewer: structuredClone(reviewer) },
     at,
   };
+  // Image-review and interview-picks keep act@2: Create refuses both under act@6.
+  const comments = {...envelope, schema: JOB_COMMENTS_ACT_SCHEMA};
   if (source.subject === 'image-set') {
     if (submission.kind !== 'review-verdict' || ask.subject.kind !== 'review-verdict' ||
         ask.subject.stage !== 'image-review') throw new JobError('JOB_ACT_INVALID');
@@ -553,10 +563,12 @@ export function finalizeJobAct(options: {
       const value = jobObject(submission.value, ['checkpointId', 'outcome', 'words']);
       const subject = ask.subject;
       if (subject.kind !== 'checkpoint' || value.checkpointId !== subject.checkpointId) throw new JobError('JOB_ACT_INVALID');
-      return { ...envelope, kind: 'checkpoint', source: { ...source, plan: source.plan! }, value: {
-        checkpointId: subject.checkpointId, planStepId: subject.planStepId ?? subject.checkpointId,
-        outcome: choice(value.outcome, ['pass', 'fail'] as const), words: words(value.words),
-      } };
+      const planStepId = subject.planStepId ?? subject.checkpointId, note = words(value.words);
+      return commentsAct({ ...comments, kind: 'checkpoint', source: { ...source, plan: source.plan! }, value: {
+        checkpointId: subject.checkpointId, planStepId,
+        outcome: choice(value.outcome, ['pass', 'fail'] as const),
+        comments: note.trim() ? checkpointNoteComments({checkpointId: subject.checkpointId, planStepId, note}) : [],
+      } });
     }
     case 'parts-verdict': {
       const value = jobObject(submission.value, ['verdict', 'issues', 'words']);
@@ -590,9 +602,8 @@ export function finalizeJobAct(options: {
         }
         return structuredClone(issue);
       });
-      return {
-        ...envelope,
-        schema: JOB_PARTS_VERDICT_ACT_SCHEMA,
+      return commentsAct({
+        ...comments,
         kind: 'parts-verdict',
         source: {
           ...source,
@@ -600,31 +611,38 @@ export function finalizeJobAct(options: {
           selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, { kind: 'draft' }>,
           parts: source.parts!,
         },
-        value: { verdict, issues, words: words(value.words) },
-      };
+        value: { verdict, comments: [...partsIssueComments(issues), ...noteComments(words(value.words))] },
+      });
     }
     case 'review-verdict': {
-      const value = jobObject(submission.value, ['stage', 'verdict', 'words']);
+      const value = jobObject(submission.value, ['stage', 'verdict', 'words',
+        ...(ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ? ['feedback'] : [])]);
       if (ask.subject.kind !== 'review-verdict' || ask.subject.stage === 'image-review' || value.stage !== ask.subject.stage) throw new JobError('JOB_ACT_INVALID');
       if (ask.subject.stage === 'rig-review') {
         if (!options.still) throw new JobError('JOB_STILL_CAPTURE_FAILED');
-        return {...envelope, schema: JOB_RIG_REVIEW_ACT_SCHEMA, kind: 'review-verdict',
+        const note = words(value.words);
+        if (value.feedback !== undefined && !Array.isArray(value.feedback)) throw new JobError('JOB_ACT_INVALID');
+        let verdictComments: ReturnType<typeof noteComments>;
+        try {
+          verdictComments = value.feedback === undefined ? noteComments(note) : feedbackItemComments(value.feedback as Feedback[]);
+        } catch { throw new JobError('JOB_ACT_INVALID'); }
+        return commentsAct({...comments, kind: 'review-verdict',
           source: {...source, model: source.model!, selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, {kind: 'rig'}>},
-          value: {stage: 'rig-review', verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), words: words(value.words)},
-          still: options.still};
+          value: {stage: 'rig-review', verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), comments: verdictComments},
+          still: options.still});
       }
-      return { ...envelope, kind: 'review-verdict', source: { ...source, model: source.model!,
+      return commentsAct({ ...comments, kind: 'review-verdict', source: { ...source, model: source.model!,
         selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, { kind: 'rig' | 'post' }> }, value: {
-        stage: ask.subject.stage, verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), words: words(value.words),
-      } };
+        stage: ask.subject.stage, verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), comments: noteComments(words(value.words)),
+      } });
     }
     case 'signoff': {
       const value = jobObject(submission.value, ['stage', 'decision', 'words']);
       if (ask.subject.kind !== 'signoff' || value.stage !== ask.subject.stage || value.decision !== 'approved') {
         throw new JobError('JOB_ACT_INVALID');
       }
-      const result: JobActValues['signoff'] = { stage: ask.subject.stage, decision: 'approved', words: words(value.words) };
-      return { ...envelope, kind: 'signoff', source, value: result };
+      return commentsAct({ ...comments, kind: 'signoff', source,
+        value: { stage: ask.subject.stage, decision: 'approved', comments: noteComments(words(value.words)) } });
     }
   }
 }
