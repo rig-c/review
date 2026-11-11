@@ -6,7 +6,7 @@ import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jo
 import type {DisplayPublicationV3,PendingAskV3,UISubmissionV3} from '../src/job-contract.ts';
 import {recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 
-async function harness(picture=false){
+async function harness(picture:boolean|'parts'=false){
  const f=await recordScreenFixture('checkpoint',picture),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
  const state={pending:[f.ask] as PendingAskV3[],receipt:null as {publicationId:string;pageId:string;displayedNonce:string}|null,generation:f.display.publication.generation,preparing:false,closed:false};
  const submitted:UISubmissionV3[]=[],store=new Map<string,string>();
@@ -68,13 +68,14 @@ test('#750 no picture, receipt rearm, new ask, dirty form identity and closed su
   const ready=await h.screen.prepare(h.f.display,new AbortController().signal);expect(ready?.record?.picture).toBeNull();h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
   const entry=ready!.record!.forms.get(h.f.ask.askId)!;expect(entry.fieldset.disabled).toBe(true);
   h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'first'};h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(false);
-  const note=entry.form.querySelector('textarea')!;note.value='  retained reviewer words\n';entry.form.oninput!({} as never);
+  expect(entry.form.querySelector('textarea')).toBeNull();
+  entry.form.commentWords=()=> '[general]\nretained reviewer words';entry.form.oninput!({} as never);
   const saved=[...h.store.values()][0]!;expect(saved).toContain('retained reviewer words');
   h.state.preparing=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);
   h.state.preparing=false;h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'rearmed'};
   h.state.pending.push({...h.f.ask,askId:'later-signoff',subject:{kind:'signoff',stage:'plan-approved'}});h.screen.changed(h.state);
-  expect(ready!.record!.forms.size).toBe(2);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(note.value).toBe('  retained reviewer words\n');expect(entry.fieldset.disabled).toBe(false);
-  const restored=formFor(h.f.ask,ready!.record!.inspection,h.deps);expect(restored.read()).toEqual(entry.read());
+  expect(ready!.record!.forms.size).toBe(2);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(entry.read()).toMatchObject({words:'[general]\nretained reviewer words'});expect(entry.fieldset.disabled).toBe(false);
+  const restored=formFor(h.f.ask,ready!.record!.inspection,h.deps);restored.form.commentWords=entry.form.commentWords;expect(restored.read()).toEqual(entry.read());
   h.state.closed=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);await entry.form.onsubmit!({preventDefault(){}} as never);expect(h.submitted).toHaveLength(0);
  }finally{await h.close();}
 });
@@ -121,6 +122,17 @@ test('#750 interview publication follows a genuinely retained picture before pen
  }finally{await f.close();}
 });
 
+
+test('#715 a parts-backed record uses the real parts host and source binding',async()=>{
+ const h=await harness('parts');try{
+  const ready=await h.screen.prepare(h.f.display,new AbortController().signal);
+  expect(ready?.record?.picture?.parts?.items.map(item=>item.name)).toEqual(['body','front']);
+  h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
+  expect(rigHost()!.subject).toBe('parts');expect(rigHost()!.record?.sourceHash).toBe(h.f.display.publication.source.sourceHash);
+  const entry=ready!.record!.forms.get(h.f.ask.askId)!;expect(entry.form.querySelector('textarea')).toBeNull();
+  entry.form.commentWords=()=> '[general]\nParts record comment';expect(entry.read()).toMatchObject({words:'[general]\nParts record comment'});
+ }finally{await h.close();}
+});
 
 test('#722 real form saves only checked radios, restores Other with empty contract note without changing option identities',async()=>{
  const f=await recordScreenFixture('interview-picks'),dom=await recordScreenDom();

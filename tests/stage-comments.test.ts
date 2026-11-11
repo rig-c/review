@@ -116,7 +116,7 @@ test('B/reference hashes, viewport and bookmark are independently bound; loopbac
 
 const {bindStageComments}=await import(process.env.RIG_REVIEW_COMMENTS_ADAPTER??'../web/stage-comments.ts');
 /** Event/DOM adapter control only; this does not claim browser pixels or native capture. */
-function commentUI(feedback:any[]=[],options:{locked?:(id:string)=>boolean;cropImpl?:()=>Promise<any>;canvasFactory?:()=>any;inline?:boolean;restoreImpl?:()=>Promise<void>;codec?:import("../web/stage-comments.ts").CommentCodec<any,any>}={}) {
+function commentUI(feedback:any[]=[],options:{general?:boolean;locked?:(id:string)=>boolean;cropImpl?:()=>Promise<any>;canvasFactory?:()=>any;inline?:boolean;restoreImpl?:()=>Promise<void>;codec?:import("../web/stage-comments.ts").CommentCodec<any,any>}={}) {
  class Node {
   children:Node[]=[];parent:Node|null=null;style:any={};dataset:Record<string,string>={};className='';id='';textContent='';title='Comment · C';value='';placeholder='';type='';maxLength=0;hidden=false;disabled=false;readOnly=false;clientWidth=100;clientHeight=100;clientLeft=0;clientTop=0;captured=new Set<number>();attributes=new Map<string,string>();listeners=new Map<string,Function[]>();onclick:Function|null=null;onsubmit:Function|null=null;onkeydown:Function|null=null;
   classList={toggle:(name:string,on:boolean)=>{
@@ -135,7 +135,7 @@ function commentUI(feedback:any[]=[],options:{locked?:(id:string)=>boolean;cropI
  const prevGetComputedStyle=(globalThis as any).getComputedStyle;
  for(const [k,v]of Object.entries({document:doc,window:win,requestAnimationFrame:(f:Function)=>{next=f;return 1;},cancelAnimationFrame:()=>{},getComputedStyle:()=>({getPropertyValue:()=>'#3b82f6',backgroundColor:'rgb(20, 24, 32)',backgroundImage:'none',backgroundSize:'auto',backgroundPosition:'0% 0%',display:'block',visibility:'visible',opacity:'1',filter:'none',transformOrigin:'0px 0px',transform:'matrix(1, 0, 0, 1, 0, 0)',zIndex:'0',width:'100px',height:'100px',mixBlendMode:'normal'})})){saved.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;}
  let pose:any={mode:'animate',camera:mark({sourceHash:'a'.repeat(64)}).camera,frame:{index:0,basis:'producer'},time:0,animation:'idle',turn:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,rig:'probe'};
- const tool=bindStageComments({toolbar:toolbar as any,listHost:options.inline?side as any:undefined,viewports:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;await options.restoreImpl?.();},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;},error:(m:string)=>errors.push(m),blocked:()=>false,codec:options.codec});
+ const tool=bindStageComments({general:options.general?{create:(summary:string)=>({id:crypto.randomUUID(),summary}),matches:(row:any)=>!row.target}:undefined,toolbar:toolbar as any,listHost:options.inline?side as any:undefined,viewports:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;await options.restoreImpl?.();},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;},error:(m:string)=>errors.push(m),blocked:()=>false,codec:options.codec});
  const event=(extra:any={})=>({button:0,isPrimary:true,pointerId:7,clientX:50,clientY:50,target:new Node(),preventDefault(){},stopImmediatePropagation(){},...extra});
  const list=()=>(options.inline?side:workspace).children.find(n=>n.id==='stage-comment-list')!;
  return {toggle,pane,workspace,side,list,tool,pose,errors,restores:()=>restores,changes:()=>changes,tick:()=>next(),down:()=>{if(!tool.active())toggle.onclick?.();pane.dispatch('pointerdown',event());},up:()=>pane.emit('pointerup',event()),key:(k:string)=>doc.dispatch('keydown',event({key:k})),escape:()=>doc.dispatch('keydown',event({key:'Escape'})),blur:()=>win.dispatch('blur'),cleanup:()=>{tool.dispose();for(const [k,v]of saved)(globalThis as any)[k]=v;if(prevGetComputedStyle===undefined)delete (globalThis as any).getComputedStyle;}};
@@ -598,5 +598,25 @@ test('#614 only the latest overlapping issue restore owns pane visibility and co
   const pending=buttons[0]!.onclick!();expect(releases).toHaveLength(3);ui.tool.dispose();
   releases[2]!();await pending;
   expect(ui.pane.children.filter(node=>node.className.includes('stage-comment-composer'))).toHaveLength(0);
+ }finally{ui.cleanup();}
+});
+
+
+test('#715 native general comments use the same composer for multiple rows, editing, deleting and Escape',async()=>{
+ const rows:any[]=[],ui=commentUI(rows,{inline:true,general:true});
+ try{
+  const add=()=>ui.list().children.find(n=>n.dataset.commentGeneral==='')!;
+  const composer=()=>ui.list().children.find(n=>n.className.includes('stage-comment-composer'))!;
+  for(const text of ['first record comment','둘째 코멘트']){add().onclick!();composer().children[0]!.value=text;await composer().onsubmit!({preventDefault(){}});}
+  expect(rows.map(row=>row.summary)).toEqual(['first record comment','둘째 코멘트']);
+  expect(rows.every(row=>Object.keys(row).sort().join(',')==='id,summary')).toBe(true);
+  expect(ui.pane.children.filter(n=>n.className.includes('composer'))).toHaveLength(0);
+  const row=()=>ui.list().children.find(n=>n.className==='stage-comment-item')!;
+  await row().children[0]!.onclick!();composer().children[0]!.value='edited';await composer().onsubmit!({preventDefault(){}});
+  expect(rows[0].summary).toBe('edited');
+  await row().children[0]!.onclick!();composer().children.find(n=>n.className==='stage-comment-delete')!.onclick!();
+  expect(rows.map(row=>row.summary)).toEqual(['둘째 코멘트']);
+  add().onclick!();expect(ui.tool.draft()).toBe(true);ui.escape();expect(ui.tool.draft()).toBe(false);
+  expect(ui.errors).toEqual([]);expect(ui.restores()).toBe(0);
  }finally{ui.cleanup();}
 });

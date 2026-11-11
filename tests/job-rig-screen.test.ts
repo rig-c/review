@@ -25,7 +25,7 @@ function actBytes(act: {actId: string; askId: string; at: string}): string {
   return JSON.stringify(rest);
 }
 
-test('#709 a rig publication routes to the rig screen only while every pending ask is a rig verdict or a declared checkpoint', async () => {
+test('#715 mixed rig verdict and supported modal asks stay on the shared screen', async () => {
   const f = await fixture(), publication = await f.publish();
   const display = {publication} as unknown as DisplayPublicationV3, ids = new Set(['step-one']);
   expect(jobRigScreenSubject(publication.source as DisplayPublicationV3['publication']['source'])).toBe(true);
@@ -35,11 +35,11 @@ test('#709 a rig publication routes to the rig screen only while every pending a
   expect(jobRigScreenRoute(display, asks, ids)).toBe(true);
   expect(jobRigScreenRoute(display, asks, new Set())).toBe(false);
   const signoff = {...verdict, askId: 'signoff', subject: {kind: 'signoff', stage: 'rig-review'}} as unknown as PendingAskV3;
-  expect(jobRigScreenRoute(display, [...asks, signoff], ids)).toBe(false);
+  expect(jobRigScreenRoute(display, [...asks, signoff], ids)).toBe(true);
   expect(jobRigScreenRoute(display, [...asks, {...signoff, status: 'answered'}], ids)).toBe(true);
   expect(jobRigScreenRoute(display, [...asks, {...signoff, publicationId: 'other'}], ids)).toBe(true);
   const interview = {...signoff, subject: {kind: 'interview-picks', questionId: 'q', setId: 's'}} as unknown as PendingAskV3;
-  expect(jobRigScreenRoute(display, [interview], ids)).toBe(false);
+  expect(jobRigScreenRoute(display, [interview], ids)).toBe(true);
   for (const subject of [{kind: 'parts-verdict', draftId: 'd'}, {kind: 'reopen', stage: 'rig-review'},
     {kind: 'review-verdict', stage: 'direction-review'}, {kind: 'review-verdict', stage: 'image-review'},
     {kind: 'checkpoint', checkpointId: 'undeclared'}]) {

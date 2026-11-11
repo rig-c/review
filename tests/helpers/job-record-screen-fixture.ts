@@ -10,19 +10,20 @@ import {prepareJobRecordAct} from '../../src/job-act.ts';
 import type {JobRetainedRecordSource} from '../../src/job-source.ts';
 import {createJobFront, jobWindowResources, retainedPublicationRoutes} from '../../src/job-front.ts';
 import {JOB_API_V3_SCHEMA, type DisplayPublicationV3, type PendingAskV3, type UISubmissionV3} from '../../src/job-contract.ts';
-import {createJobWindowFixture} from './job-window-fixture.ts';
+import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixture.ts';
 import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'reopen'|'interview-picks';
-export async function recordScreenFixture(kind:RecordScreenKind,picture=false,output?:string){
+export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string){
  const scratch=await mkdtemp(join(tmpdir(),'review-750-')),root=join(scratch,'input');await mkdir(root);
  let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root):createSyntheticPlanRecordWorkspace(root,{subjects:[
   {kind:'checkpoint',checkpointId:'step_layout'},{kind:'signoff',stage:'plan-approved'},{kind:'reopen',stage:'plan-approved'},
  ]});
  const reader=createSyntheticRecordReader({onOption:()=>workspace.context as never,onPlan:()=>workspace.context as never});
+ let packageContext={selector:{kind:'rig',version:1},plan:null,parts:null,subjects:[],partIds:[],files:[]} as import('../../src/job-source.ts').JobPublishedContext;
  const session=new JobSession({root,stateDir:join(scratch,'state'),fingerprint:'7'.repeat(64),reviewer:{id:'synthetic-owner',role:'owner'},
   publicationMode:'record-and-package',readRecordPublished:reader.reader,
-  readPublished:async()=>({selector:{kind:'rig',version:1},plan:null,parts:null,subjects:[],partIds:[],files:[]})});
+  partsEnumerator:{version:'2.25.1',enumerate:()=>[{path:'parts/body.png',role:'part'},{path:'parts/front.png',role:'part'},{path:'painting.png',role:'painting'}]},readPublished:async()=>structuredClone(packageContext)});
  const fake=createJobWindowFixture(session.jobId),resources=jobWindowResources();
  let front:ReturnType<typeof createJobFront>|undefined,mode='one-screen',writeRoot=output??join(scratch,'acts'),sequence=0;
  const server=Bun.serve({hostname:'127.0.0.1',port:0,idleTimeout:0,fetch:async request=>(await front?.fetch(request))??new Response(null,{status:404})});
@@ -32,7 +33,8 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture=false,ou
  let backdrop:DisplayPublicationV3|null=null;
  if(picture){
   await cp(new URL('../fixtures/viewport-387/package/',import.meta.url),join(root,'out'),{recursive:true});
-  const publication=await call({verb:'publish',expectedGeneration:session.status().generation,idempotencyKey:'picture',result:{kind:'package',path:'out',selector:{kind:'rig',version:1}},freeze:{kind:'producer-held',holdId:'synthetic-picture',record:workspace.record}});
+  if(picture==='parts'){const builder=await scriptedJobWindowFixture({c5Parts:'mesh'});try{await builder.publish('parts');await cp(builder.packageRoot,join(root,'out'),{recursive:true});packageContext=builder.input.getContext();}finally{await builder.close();}}
+  const publication=await call({verb:'publish',expectedGeneration:session.status().generation,idempotencyKey:'picture',result:{kind:'package',path:'out',selector:packageContext.selector},freeze:{kind:'producer-held',holdId:'synthetic-picture',record:workspace.record}});
   backdrop=session.displayPublication(publication.publicationId);fake.publish(backdrop);
  }
  // The prior rig is retained before the synthetic producer advances into pending options.
