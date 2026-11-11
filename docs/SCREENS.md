@@ -43,8 +43,7 @@ workspace layout that places C2–C7.
 
 - **MUST** render one header layout on every screen: product mark, screen title,
   the screen's mode switch if it has one (rig: **Setup · Animate · Compare**),
-  stage navigation (C1a), the language select, and the screen's primary act
-  button (C10).
+  stage navigation (C1a), and the language select.
 - **MUST** own the language select. A screen never builds its own.
 - **MUST** own the workspace layout. Its regions are left (C2), main (C5) with
   the toolbars (C3, C4) above it, bottom (C6), right (C7) and status (C11). Every
@@ -131,7 +130,7 @@ The inspected picture. One implementation for every screen.
 - **MUST** be one control group, in this order with these names on every screen:
   **Zoom in → Zoom out → Fit → 1:1 → View switch**, followed by the zoom value.
   It shows on every screen with a main view, including interview and job image
-  answers. **Owner ruling**: this order.
+  answers.
 - **MUST** have the View switch list the screen's views as modes of one control.
   - Rig: **Side by side · Reference · Rig**.
   - Parts: **Part · Overlay · Difference**, plus **Region · Pages** for an atlas.
@@ -146,6 +145,9 @@ The inspected picture. One implementation for every screen.
 
 - **MUST** sit directly beneath the main view on every screen that has one, with
   a resizable separator, a collapsed state, and tabs (R3a).
+- **Step 1 working-screen proposal**: keep the tab row and act button visible
+  while the panel is collapsed. This is not approved; present it for the
+  owner's second R0 ruling before step 1 merges.
 - Tabs are per screen.
   - Rig Setup: Part · Modeling · Chest · Mesh · Weights · Bones · Fields · Cuts · Cloth.
   - Rig Animate: the timeline dock (C12), then Transport · Sound · Environment ·
@@ -206,8 +208,8 @@ separate input kind from comments.
 
 The decision a person makes, and its submit action.
 
-- **MUST** be one component placed at one spot on every screen. **Owner ruling**:
-  the header's primary button, or the end of the bottom panel's act tab.
+- **MUST** be one component placed at the end of the bottom panel's act tab
+  on every screen, including embedded screens.
 - **MUST** show a decision control and a submit button whose label names the act.
   - Review verdict: **Approved / Changes requested** → **Submit review**.
   - Parts verdict: derived from comments; no comments gives **Approve parts and
@@ -262,15 +264,16 @@ means the component is absent.
 | Job: checkpoint | — | the checkpoint's views | includes Difference | acts | plan text, guidance | yes | — | checkpoint |
 | Job: image set | images | the image | image list as modes | acts | — | yes | — | review verdict |
 | Job: plan, signoff, reopen | — | — | — | acts | plan text | yes | — | signoff / reopen |
-| Job hub | jobs | the selected job, mounted in place | — | — | — | — | — | — |
-| Owner workspace | targets | the selected target, mounted in place | — | — | — | — | — | — |
+| Job hub | jobs | the selected job in an iframe until its safety proof | — | — | — | — | — | — |
+| Owner workspace | targets | the selected target in an iframe until its safety proof | — | — | — | — | — | — |
 
 Notes:
 
-- The hub and owner workspace mount the selected screen inside the same shell.
-  An iframe stays only where the capability boundary requires a separate
-  document. **Owner ruling**: keep iframes for capability isolation, or mount
-  in place.
+- The hub and owner workspace mount a target in place only after that target's
+  safety-proof card proves no capability widening and preservation of grants,
+  instance authority and hidden-frame pause. All other targets remain iframe
+  documents served by the single `index.html` entry. No target is proven today,
+  so step 6 starts with all targets in iframes.
 - Interview and job interview-picks get a main view (C5) for their images, with
   the same control set, instead of a bare preview image.
 - Comments (C8) are available on every screen with an act, so feedback outside
@@ -278,8 +281,9 @@ Notes:
 
 ## 4. Migration order
 
-Each step leaves a working product. Each step also deletes the copies it
-replaces, and its PR shows a zero-hit search for them.
+Each step leaves a working product. Each shared-component card adopts all
+current hosts and removes the old body in the same PR, with a zero-hit search
+for the copies it replaces.
 
 1. C1 shell, C5 main view, C5b control set and C6 bottom panel inside
    `index.html`. The rig screen mounts through them. Old rig markup is removed.
@@ -291,9 +295,13 @@ replaces, and its PR shows a zero-hit search for them.
 5. Job rig, package, checkpoint, image-set, plan, signoff and reopen move. The
    inline job document in `job-front.ts` is removed.
 6. Hub and owner workspace move. `job-hub.html` and `owner-workspace.html` are
-   removed.
+   removed. All targets start in iframes under the single entry; in-place
+   mounting requires each target's safety proof as specified in §3.
 7. C8 replaces the remaining feedback fields (Review notes, summary, per-ask
    Note, image note). C10 and C11 unify the act and status.
 
-Steps 1–7 change visible layout, so each one needs the owner's layout ruling
-before work starts and a working-screen ruling before merge (R0).
+Step 1 is released for implementation under the approved layout ruling. Before
+its visible merge, send a working local URL to HQ for the owner's second R0
+ruling, including the collapsed-panel proposal in C6. Steps 2–7 each need their
+own layout ruling and remain **STOP** until then. Each also needs the owner's
+working-screen ruling before merge (R0).
