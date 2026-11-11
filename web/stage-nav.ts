@@ -1,6 +1,6 @@
 /** Four inspection stages. Existing tools remain mounted; navigation never submits or applies. */
 import {getLanguage,onLanguageChange,t} from './i18n.ts';
-import {interviewErrors} from './interview-panel.ts';
+import {interviewModal,mountInterview} from './interview-panel.ts';
 import {pageInstanceAccess,type InstanceAccess} from './instance-access.ts';
 export const reviewStages = ['1 Parts + mesh','2 Interview','3 Rig + animation','4 Direction'] as const;
 export type ReviewStage = 1|2|3|4;
@@ -25,7 +25,7 @@ export function stageReason(stage:ReviewStage,model:boolean,direction=false,inte
  if(stage===3&&!model)return 'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.';
  return null;
 }
-function stageFrameRoute(access:InstanceAccess,path:'/stage-parts.html'|'/stage-interview.html',side?:'a'|'b'):string {
+function stageFrameRoute(access:InstanceAccess,path:'/stage-parts.html',side?:'a'|'b'):string {
  const query=new URLSearchParams({stageEmbed:'1',lang:getLanguage()});
  if(side)query.set('side',side);
  // Managed paths already identify the slot and their front accepts only the closed stage query.
@@ -40,11 +40,13 @@ export function bindStageNav(options:{preRig?:boolean;interviewOnly?:boolean;int
   document.documentElement.dataset.inspectionStage='2';render();
   const language=onLanguageChange(render);return ()=>{language();button.remove();};
  }
- const embedded=new URL(location.href).searchParams.get('stageEmbed')==='1';
+ // `/stage-interview.html` is the single entry opening on the interview modal (E2), never an embedded frame.
+ const interviewEntry=new URL(location.href).pathname.endsWith('/stage-interview.html');
+ const embedded=!interviewEntry&&new URL(location.href).searchParams.get('stageEmbed')==='1';
  if(embedded){host.hidden=true;return ()=>{};}
  const access=options.access??pageInstanceAccess(),panel=document.createElement('section');panel.className='review-stage-panel';panel.hidden=true;panel.setAttribute('aria-live','polite');document.body.append(panel);
  const status=document.createElement('p');status.setAttribute('role','status');panel.append(status);
- let interview:HTMLIFrameElement|undefined,interviewError:string|null=null,entry=0;
+ let interviewOpen=false,unmountInterview:Promise<()=>void>|null=null,entry=0;
  const sourcePicker=document.getElementById('mode-build-picker');
  const attr=(el:Element,name:string)=>typeof el.getAttribute==='function'?el.getAttribute(name):null;
  const setOrRemove=(el:Element,name:string,value:string|null)=>{if(value===null)el.removeAttribute?.(name);else el.setAttribute(name,value);};
@@ -58,6 +60,11 @@ export function bindStageNav(options:{preRig?:boolean;interviewOnly?:boolean;int
  const reasonFor=(stage:ReviewStage)=>stageReason(stage,options.model,!!options.direction,!!options.interview,options.preRig);
  const activeReason=(stage:ReviewStage)=>stage===3&&correctionActive?null:reasonFor(stage);
  const buttons=reviewStages.map((label,index)=>{const button=document.createElement('button');button.type='button';button.dataset.reviewStage=String(index+1);button.onclick=()=>{if(index+1===3)correctionActive=false;show(index+1 as ReviewStage);};host.append(button);return button;});
+ // Create step 2 is a modal over this screen, not a stage panel; stage 2 keeps its refusal when no interview is attached.
+ const modal=reasonFor(2)?null:interviewModal({parent:document.body,trigger:buttons[1]!,id:'review-interview-modal',
+  onOpen:()=>{interviewOpen=true;document.documentElement.dataset.inspectionStage='2';render();if(!unmountInterview){modal!.body.textContent=t('interview.loading');unmountInterview=mountInterview(modal!.body,access);}},
+  onClose:()=>{interviewOpen=false;document.documentElement.dataset.inspectionStage=String(current);render();}});
+ if(modal)buttons[1]!.onclick=null;
  const mesh=document.createElement('button');mesh.type='button';mesh.onclick=()=>{if(reasonFor(3))return;show(3);options.setup?.();};panel.append(mesh);
  const syncRigControls=()=>{
   const rigReason=activeReason(3),refused=Boolean(activeReason(current));
@@ -77,42 +84,18 @@ export function bindStageNav(options:{preRig?:boolean;interviewOnly?:boolean;int
    if(item.selected!==null&&attr(item.button,'aria-selected')!=='false')item.button.setAttribute('aria-selected','false');
   }
  };
- const render=()=>{buttons.forEach((b,i)=>{b.textContent=t(reviewStages[i]!);b.setAttribute('aria-current',current===i+1?'step':'false');});host.setAttribute('aria-label',t('Inspection stages'));if(sourcePicker)sourcePicker.setAttribute('aria-label',t(current===1?'Atlas source build':'Picked build for Setup and Animate'));mesh.textContent=t('Open setup mesh instruments');syncRigControls();};
+ const render=()=>{buttons.forEach((b,i)=>{b.textContent=t(reviewStages[i]!);b.setAttribute('aria-current',(interviewOpen?2:current)===i+1?'step':'false');});host.setAttribute('aria-label',t('Inspection stages'));if(sourcePicker)sourcePicker.setAttribute('aria-label',t(current===1?'Atlas source build':'Picked build for Setup and Animate'));mesh.textContent=t('Open setup mesh instruments');syncRigControls();};
  const place=()=>{panel.style.top=`${(host.closest('header')??host).getBoundingClientRect().bottom}px`;};
  const setFrameLanguage=(frame:HTMLIFrameElement)=>frame.contentWindow?.postMessage({type:'review-stage-language',language:getLanguage()},location.origin);
- async function showInterview(revision:number) {
-  try {
-   const response=await fetch(access.route('/api/interview'));
-   if(!response.ok){const {error}=await response.json();throw new Error(error);}
-   if(revision!==entry)return;
-   if(!interview){
-    interview=document.createElement('iframe');
-    interview.title=t('interview.title');interview.className='review-interview-frame';
-    const url=new URL(stageFrameRoute(access,'/stage-interview.html'),location.href);
-    if(access.capability)url.hash='cap='+access.capability;
-    const frame=interview;
-    frame.src=url.href;frame.addEventListener('load',()=>setFrameLanguage(frame));
-    panel.append(frame);
-   }
-   status.textContent='';showParts();interview.hidden=false;panel.classList.add('with-interview');
-  } catch(error) {
-   if(revision!==entry)return;
-   interviewError=error instanceof Error ? (error.message==='INTERVIEW_OPTIONS_STALE' ? error.message : interviewErrors[error.message]??'interview.failed') : 'interview.failed';
-   status.textContent=t(interviewError);
-  }
- }
  function show(stage:ReviewStage):void {
   if(stage!==3)correctionActive=false;
-  current=stage;document.documentElement.dataset.inspectionStage=String(stage);render();place();const reason=activeReason(stage);const revision=++entry;interviewError=null;
+  current=stage;document.documentElement.dataset.inspectionStage=String(stage);render();place();const reason=activeReason(stage);++entry;
   options.direction?.(stage===4);
   panel.hidden=!reason&&(stage===(options.partsOnly?1:3)||stage===4)&&(!options.preRig||(stage===3&&correctionActive));
   if(workspace)workspace.inert=!panel.hidden||wasInert;
   status.textContent=reason?t(reason):stage===1&&!options.partsOnly?t(options.correction||options.preRig?'Draft rig · structure evidence only':'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.'):'';mesh.hidden=stage!==1||Boolean(reasonFor(3))||!!options.partsOnly;
   for(const frame of frames.values())frame.hidden=true;
-  if(interview)interview.hidden=true;
-  panel.classList.remove('with-interview');
   if(stage===1&&!options.partsOnly)showParts();
-  if(stage===2&&!reason){status.textContent=t('interview.loading');void showInterview(revision);}
  }
  function showParts(){
   const saved=(lastFrame?.contentWindow as StagePartsWindow|null)?.rigReviewStageParts?.snapshot()??null;const side=options.side?.(),buildId=options.draftBuild?.()??'inspected',key=(side??'single')+':'+buildId;let frame=frames.get(key);if(!frame){if(options.correction){for(const old of frames.values())old.remove();frames.clear();}frame=document.createElement('iframe');frame.title=t('Parts and atlas inspection');frame.src=stageFrameRoute(access,'/stage-parts.html',side);frame.addEventListener('load',()=>{frame!.contentWindow?.postMessage({type:'review-stage-language',language:getLanguage()},location.origin);frame!.contentWindow?.postMessage({type:'review-stage-source',buildId,state:saved},location.origin);});frames.set(key,frame);panel.append(frame);}else if(options.correction||options.preRig){frame.contentWindow?.postMessage({type:'review-stage-revalidate',buildId,state:lastFrame!==frame?saved:null},location.origin);}frame.hidden=false;lastFrame=frame;
@@ -130,7 +113,7 @@ export function bindStageNav(options:{preRig?:boolean;interviewOnly?:boolean;int
  // Legacy bookmark/control restoration writes these canonical attributes even when a mode is unchanged.
  const canonical=new MutationObserver(()=>{if(activeReason(3)){syncRigControls();return;}if(current!==3&&!options.partsOnly&&!options.preRig&&!pickingSource)show(3);});
  document.querySelectorAll('[data-inspector]').forEach(button=>canonical.observe(button,{attributes:true,attributeFilter:['aria-selected','aria-pressed']}));
- const language=onLanguageChange(()=>{render();if(!panel.hidden)status.textContent=t(activeReason(current)??(current===2?(interviewError??(interview&&!interview.hidden?'':'interview.loading')):current===1&&(options.correction||options.preRig)?'Draft rig · structure evidence only':current===1?'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.':''));for(const f of frames.values()){f.title=t('Parts and atlas inspection');setFrameLanguage(f);}if(interview){interview.title=t('interview.title');setFrameLanguage(interview);}});
- window.addEventListener('resize',place);show(current);
- return ()=>{entry++;window.removeEventListener('message',correction);language();canonical.disconnect();sourcePicker?.querySelectorAll('[data-build-side]').forEach(button=>button.removeEventListener('click',sourceChanged));delete document.documentElement.dataset.inspectionStage;delete document.documentElement.dataset.stageRefused;for(const item of modeSwitches)item.el.hidden=item.hidden;if(sourcePicker&&pickerState){sourcePicker.hidden=pickerState.hidden;setOrRemove(sourcePicker,'aria-label',pickerState.label);}if(reasonFor(3))for(const item of modeControls){item.button.disabled=item.disabled;item.button.title=item.title??'';setOrRemove(item.button,'title',item.title);setOrRemove(item.button,'aria-pressed',item.pressed);setOrRemove(item.button,'aria-selected',item.selected);}if(workspace)workspace.inert=wasInert;buttons.forEach(b=>b.remove());panel.remove();window.removeEventListener('resize',place);modeControls.forEach(({button})=>button.removeEventListener('click',legacy,true));};
+ const language=onLanguageChange(()=>{render();if(!panel.hidden)status.textContent=t(activeReason(current)??(current===1&&(options.correction||options.preRig)?'Draft rig · structure evidence only':current===1?'Atlas inspection, read only — inspected package. Applied scratch atlas, pre-rig parts, mesh sign-off and draft corrections are unavailable here.':''));for(const f of frames.values()){f.title=t('Parts and atlas inspection');setFrameLanguage(f);}modal?.localize();});
+ window.addEventListener('resize',place);show(current);if(interviewEntry)modal?.open();
+ return ()=>{entry++;modal?.dispose();void unmountInterview?.then(unmount=>unmount());window.removeEventListener('message',correction);language();canonical.disconnect();sourcePicker?.querySelectorAll('[data-build-side]').forEach(button=>button.removeEventListener('click',sourceChanged));delete document.documentElement.dataset.inspectionStage;delete document.documentElement.dataset.stageRefused;for(const item of modeSwitches)item.el.hidden=item.hidden;if(sourcePicker&&pickerState){sourcePicker.hidden=pickerState.hidden;setOrRemove(sourcePicker,'aria-label',pickerState.label);}if(reasonFor(3))for(const item of modeControls){item.button.disabled=item.disabled;item.button.title=item.title??'';setOrRemove(item.button,'title',item.title);setOrRemove(item.button,'aria-pressed',item.pressed);setOrRemove(item.button,'aria-selected',item.selected);}if(workspace)workspace.inert=wasInert;buttons.forEach(b=>b.remove());panel.remove();window.removeEventListener('resize',place);modeControls.forEach(({button})=>button.removeEventListener('click',legacy,true));};
 }

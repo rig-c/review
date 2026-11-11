@@ -364,7 +364,8 @@ export async function interviewDiagnosticsBrowserProbe(
       // Verify the active choice with INTERVIEW_OPTIONS_SCENE_LEGACY warning remains interactive and submits cleanly:
       for (const item of editableSceneQuestion.set.asks) {
         const option = item.options.find(opt => opt.kind === 'value' && opt.recommended) ?? item.options[0]!;
-        await edit(`${formSelector} select[name="choice.${item.id}"]`, option.id);
+        const radio = `${formSelector} input[type=radio][name="choice.${item.id}"][value="${option.id}"]`;
+        await send('Runtime.evaluate', {expression: `document.querySelector(${JSON.stringify(radio)}).click()`, returnByValue: true});
       }
       await edit(`${formSelector} textarea[name=note]`, EXACT_SUBMITTED_NOTE_WORDS);
       const immutableBeforeSubmit = await jobInputHashes(fixture.input.root);

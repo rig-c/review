@@ -49,14 +49,15 @@ const choices = await import(join(fixture.create, 'src/choices.ts'));
 const {collectItems} = await import(join(fixture.create, 'src/check.ts'));
 const chain = join(fixture.create, 'templates/example-chain');
 const frame = "document.querySelector('.review-stage-panel iframe:not([hidden]):not(.review-interview-frame)')";
-const interview = "document.querySelector('.review-interview-frame:not([hidden])')";
+// #708: Create step 2 is the interview modal over the review screen, in the same document.
+const interview = "document.querySelector('dialog.interview-modal[open]')";
 const interviewNote = JSON.stringify('form > fieldset > label > textarea');
 const interviewDom = `(()=>{
-  const iframe=${interview},d=iframe?.contentDocument;
+  const d=${interview};
   if(!d)return null;
   const note=d.querySelector(${interviewNote}),submit=d.querySelector('form button[type=submit]');
   return {
-    path:new URL(iframe.src).pathname,
+    path:location.pathname,
     status:d.querySelector('form [role=status]')?.textContent??null,
     note:note?{value:note.value,visible:!!note.getClientRects().length,insideAsk:!!note.closest('fieldset fieldset')}:null,
     submit:submit?{disabled:submit.matches(':disabled'),visible:!!submit.getClientRects().length}:null,
@@ -397,17 +398,13 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
       await navigate('stage2.' + item.question, opened.url);
       mark('stage2.' + item.question + '.picker');
       await choose(2);
-      await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-' + item.question);
+      await until(`!!${interview}?.querySelector('.interview-question')`, 'options-' + item.question);
       const note = lang === 'en' ? '  Keep these choices.  ' : '  이 선택을 유지해 주세요.  ';
       await evaluate(`(()=>{
         ${actionGuard}
-        const d=action(${interview},'interview iframe').contentDocument;
-        if(!d)throw Error('FOUR_STAGE_ACTION_TARGET: interview iframe document (missing)');
-        const s=action(d.querySelector('main select'),'interview set picker');
-        const index=[...s.options].findIndex(o=>o.text.includes(${JSON.stringify('chain-' + item.question)}));
-        if(index<0||s.options[index].disabled)throw Error('FOUR_STAGE_ACTION_TARGET: interview set option');
-        s.selectedIndex=index;
-        s.dispatchEvent(new Event('change'));
+        const d=action(${interview},'interview modal');
+        const set=[...d.querySelectorAll('.interview-question')].find(o=>o.textContent.includes(${JSON.stringify('chain-' + item.question)}));
+        action(set,'interview set').click();
         const keep='form input[type=radio][value=keep]';
         const asks=[...d.querySelectorAll(keep)].map(choice=>choice.name);
         for(const ask of asks){
@@ -422,7 +419,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
       const picksPath = 'gate-picks/' + sha + '.json';
       await assert.rejects(readFile(join(second.root, picksPath)), {code:'ENOENT'});
       await evaluate(`(()=>{
-        const child=${interview}?.contentWindow;
+        const child=${interview}?window:null;
         if(!child)throw Error('FOUR_STAGE_ACTION_TARGET: interview Save observer window (missing)');
         const original=child.fetch;
         child.__gatePicksExchanges=[];
@@ -442,11 +439,11 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
         child.__gateRestorePicksFetch=()=>{child.fetch=original;};
       })()`);
       const readPicksSave = () => evaluate<{dom:{status:string|null}|null; exchanges:PicksExchange[]}>(`({
-        dom:${interviewDom}, exchanges:${interview}?.contentWindow?.__gatePicksExchanges??[]
+        dom:${interviewDom}, exchanges:window.__gatePicksExchanges??[]
       })`);
       try {
         mark('stage2.' + item.question + '.save');
-        await click(page, 'form button[type=submit]', interview);
+        await click(page, 'dialog.interview-modal[open] form button[type=submit]');
         const save = await wait(readPicksSave, result => result.exchanges.some(exchange => !!exchange.error ||
           (!!exchange.response && (exchange.response.status >= 400 || result.dom?.status === picksSaved))),
         label('picks-' + item.question));
@@ -458,30 +455,29 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
         assert(payload.picks.every((pick: {option_id:string}) => pick.option_id === 'keep' && !('other_text' in pick)));
       } finally {
         await put(label('picks-' + item.question + '-save'), await readPicksSave().catch(() => null));
-        await evaluate(`${interview}?.contentWindow?.__gateRestorePicksFetch?.()`);
+        await evaluate(`window.__gateRestorePicksFetch?.()`);
       }
+      await click(page, 'dialog.interview-modal[open] .workspace-drawer-close');
       await choose(1);
       await choose(2);
-      await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-back-' + item.question);
+      await until(`!!${interview}?.querySelector('.interview-question')`, 'options-back-' + item.question);
       await reopen('stage2.' + item.question + '.reopen', (await open('stage2.' + item.question + '.reopen', secondInput)).url);
       await choose(2);
-      await until(`!!${interview}?.contentDocument?.querySelector('main select')`, 'options-reopen-' + item.question);
+      await until(`!!${interview}?.querySelector('.interview-question')`, 'options-reopen-' + item.question);
       await evaluate(`(()=>{
         ${actionGuard}
-        const d=action(${interview},'interview iframe').contentDocument;
-        const select=action(d?.querySelector('main select'),'interview set picker');
-        const index=[...select.options].findIndex(option=>option.text.includes(${JSON.stringify('chain-' + item.question)}));
-        if(index<0||select.options[index].disabled)throw Error('FOUR_STAGE_ACTION_TARGET: interview set option');
-        select.selectedIndex=index;
-        select.dispatchEvent(new Event('change'));
+        const d=action(${interview},'interview modal');
+        const set=[...d.querySelectorAll('.interview-question')].find(option=>option.textContent.includes(${JSON.stringify('chain-' + item.question)}));
+        action(set,'interview set').click();
       })()`);
       await until(`(()=>{
-        const fields=${interview}?.contentDocument?.querySelectorAll(${interviewNote})??[], field=fields[0];
+        const fields=${interview}?.querySelectorAll(${interviewNote})??[], field=fields[0];
         if(fields.length!==1||field.closest('fieldset fieldset'))return false;
         ${actionGuard}
         return action(field,${interviewNote}).value===${JSON.stringify(note)};
       })()`, 'picks-reopen-' + item.question);
       await shot('stage2-' + item.question);
+      await click(page, 'dialog.interview-modal[open] .workspace-drawer-close');
       mark('stage2.' + item.question + '.read-picks');
       const bytes = await readFile(join(second.root, picksPath), 'utf8');
       const picks = JSON.parse(bytes);

@@ -15,7 +15,7 @@ async function emittedStageFrames(access:InstanceAccess,href:string,side?:'a'|'b
   children:Element[]=[];dataset:Record<string,string>={};style={};
   classList={add(){},remove(){}};src='';onclick=()=>{};
   append(...children:Element[]){this.children.push(...children);}
-  setAttribute(){} addEventListener(){} removeEventListener(){} remove(){}
+  id='';setAttribute(){} getAttribute(){return null;} addEventListener(){} removeEventListener(){} remove(){}
   closest(){return null;} getBoundingClientRect(){return {bottom:0};}
   querySelectorAll(){return [];}
  }
@@ -33,11 +33,12 @@ async function emittedStageFrames(access:InstanceAccess,href:string,side?:'a'|'b
  try{
   for(const [key,value] of Object.entries(globals))Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});
   dispose=bindStageNav({access,preRig:true,model:false,interview:true,side:side?()=>side:undefined});
-  host.children[1]!.onclick();
-  // showInterview awaits the stub response and then mounts its frame.
   await new Promise(resolve=>setTimeout(resolve,0));
   const urls=body.children[0]!.children.filter(child=>child.src).map(child=>new URL(child.src,href));
-  expect(urls).toHaveLength(2);
+  // #708: stage 2 is the interview modal over this screen, so the parts frame is the only stage frame.
+  expect(urls).toHaveLength(1);
+  expect(body.children.some(child=>(child as unknown as {id:string}).id==='review-interview-modal')).toBe(true);
+  expect(host.children[1]!.onclick).toBeNull();
   return urls;
  }finally{
   dispose?.();
@@ -161,7 +162,7 @@ test('interview launch guidance and chrome have matching English and Korean keys
  expect(stageReason(2,true,false,true)).toBeNull();
  for(const file of ['web/interview.ts','web/interview-panel.ts']){
   const source=await readFile(file,'utf8');
-  const keys=[...new Set(source.match(/interview\.[A-Za-z]+/g))].filter(key=>!['interview.ts','interview.js','interview.html'].includes(key));
+  const keys=[...new Set(source.match(/interview\.[A-Za-z]+/g))].filter(key=>!['interview.ts'].includes(key));
   expect(keys.length).toBeGreaterThan(0);
   for(const k of keys){expect(enCatalog[k],k).toBeTruthy();expect(koCatalog[k],k).toBeTruthy();}
  }

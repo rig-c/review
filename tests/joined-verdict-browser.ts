@@ -49,7 +49,9 @@ async function main(){
   const wrapOnly=process.env.RV436_WRAP_ONLY==='1';
   const page=await launchCdpSession(join(root,'browser'));
   const frame="document.querySelector('.review-stage-panel iframe:not([hidden]):not(.review-interview-frame)')";
-  const interview="document.querySelector('.review-interview-frame:not([hidden])')";
+  // #708: Create step 2 is the interview modal over the review screen, in the same document.
+  const interview="document.querySelector('dialog.interview-modal[open]')";
+  const sameDocument="({contentDocument:document,getBoundingClientRect:()=>({left:0,top:0}),clientLeft:0,clientTop:0})";
   async function until(expression:string){
     for(let i=0;i<300;i++){
       if(await page.evaluate<boolean>(expression))return;
@@ -156,14 +158,14 @@ async function main(){
       const second=await joinedVerdictFixture(join(root,'interview-'+lang),'2-rigging-answers');
       const stage2=await openReview({input:second.input,project:second.project},launchOptions);
       await navigate(stage2.url,lang);await chooseStage(2);
-      await until(`!!${interview}?.contentDocument?.querySelector('main select')`);
+      await until(`!!${interview}?.querySelector('.interview-question')`);
       await page.evaluate(`(()=>{
-        const d=${interview}.contentDocument,s=d.querySelector('main select');
-        s.selectedIndex=[...s.options].findIndex(o=>o.text.includes('chain-bones'));s.dispatchEvent(new Event('change'));
+        const d=${interview};
+        [...d.querySelectorAll('.interview-question')].find(o=>o.textContent.includes('chain-bones')).click();
         for(const choice of d.querySelectorAll('form input[value=keep]'))choice.click();
       })()`);
-      await clickJoinedFrame(page,interview,'form button[type=submit]');
-      await until(`${interview}.contentDocument.querySelector('form [role=status]').textContent===${JSON.stringify(catalog['interview.saved'])}`);
+      await clickJoinedFrame(page,sameDocument,'dialog.interview-modal[open] form button[type=submit]');
+      await until(`${interview}.querySelector('form [role=status]').textContent===${JSON.stringify(catalog['interview.saved'])}`);
       await writeFile(join(artifacts,lang+'-picks.png'),await page.screenshot());
       const picks=join(second.project.root,second.project.picksDir);
       const picked=JSON.parse(await readFile(join(picks,(await readdir(picks))[0]!),'utf8'));

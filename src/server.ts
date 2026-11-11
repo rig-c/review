@@ -1,4 +1,4 @@
-import { interviewHeaders, interviewRequest, interviewRoutes } from './interview-routes.ts';
+import { interviewRequest, interviewRoutes } from './interview-routes.ts';
 import { directionStale, interviewUnavailable, interviewStale, type JoinedProject } from './joined-project.ts';
 import {isDeepStrictEqual} from 'node:util';
 import {appliedValue,parseCorrection,projectSessionCorrection} from './correction-handoff.ts';
@@ -66,7 +66,6 @@ export async function createReviewRequestContext(p: ReviewPackage, options: Revi
   if (joined && !options.capability) throw new Error('Joined interview requires an instance capability');
   const interview = joined && interviewRoutes(joined.opened.root, joined.designation.picksDir, options.capability!,
     {...joined, sourceHash:p.sourceHash, version:joined.designation.version,draftId:joined.designation.draftId});
-  let interviewBundle: Promise<Blob> | undefined;
   const bundle=options.bundle??await buildWeb();
   const unchanged=()=>assertReviewUnchanged(p);
   const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
@@ -113,15 +112,10 @@ export async function createReviewRequestContext(p: ReviewPackage, options: Revi
     if (interviewRequest(path)) {
       return await interview?.(req, origin) ?? json({error:interviewUnavailable},404);
     }
-    if (req.method === 'GET' && ['/stage-interview.html','/interview.js','/interview.css'].includes(path)) {
+    if (req.method === 'GET' && path === '/stage-interview.html') {
+      // The retained route opens the single entry on the interview modal (#708).
       if (!joined?.available) return json({error:interviewUnavailable},404);
-      const script = path === '/interview.js';
-      const html = path === '/stage-interview.html';
-      const body = script ? await (interviewBundle ??= buildWeb('interview')) :
-        await readFile(appRoot + 'web/' + (html ? 'interview.html' : 'interview.css'));
-      return new Response(body as BodyInit, {headers:{...interviewHeaders, 'Referrer-Policy':'no-referrer',
-        'Content-Security-Policy':interviewHeaders['Content-Security-Policy'].replace("frame-ancestors 'none'", "frame-ancestors 'self'"),
-        'Content-Type':script?'text/javascript':html?'text/html; charset=utf-8':'text/css'}});
+      return new Response(await readFile(appRoot+'web/index.html'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
     }
     if (joined && /^\/api\/stage-parts(?:\/|$)/.test(path)) {
       try {await joined.assertCurrent();}

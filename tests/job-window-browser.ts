@@ -870,10 +870,12 @@ try {
     await capturePaint('rig');
 
     const pending = await fixture.ask(rig, {kind: 'interview-picks', questionId: fixture.question.set.question, setId: fixture.question.set.id});
-    await wait(`!!document.querySelector('form[data-job-ask="${pending.askId}"]')`, 'pending interview');
+    await wait(`!!document.querySelector('form[data-job-ask="${pending.askId}"]') && document.querySelector('form[data-job-ask="${pending.askId}"]').closest('dialog.interview-modal')?.open`, 'pending interview modal');
+    assert.ok(await page!.evaluate<boolean>(`!!document.querySelector('form[data-job-ask="${pending.askId}"] label[data-recommended] .interview-recommended')`), 'job interview shows the AI recommended badge');
     for (const item of fixture.question.set.asks) {
         const option = item.options.find(option => option.kind === 'value' && option.recommended)!;
-        await edit(`form[data-job-ask="${pending.askId}"] select[name="choice.${item.id}"]`, option.id);
+        // #708: the job interview is the shared modal's radio cards, not a <select>.
+        await page!.evaluate(`document.querySelector(${JSON.stringify(`form[data-job-ask="${pending.askId}"] input[type=radio][name="choice.${item.id}"][value="${option.id}"]`)}).click()`);
     }
     await edit(`form[data-job-ask="${pending.askId}"] textarea[name=note]`, '  interview words\n');
     await submit(pending.askId);

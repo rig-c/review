@@ -32,6 +32,7 @@ import {advancePlayback} from './playback-clock.ts';
 import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl,createViewControls} from './view-controls.ts';
 import {SENTINELS} from './parts-render.ts';
+import {interviewAskGroup, interviewModal, interviewQuestionList, jobInterviewValue} from './interview-panel.ts';
 import {CanvasRenderer} from '@rig-c/play';
 import {JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsSource, PartsHost} from './parts.ts';
@@ -1377,6 +1378,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         dirty: boolean;
         submitting: boolean;
         rigSubmission: ReturnType<typeof createJobRigSubmission>;
+        /** Interview asks open in the shared interview modal: the question's label and its bound images beside the survey. */
+        interview?: {label: string; art: HTMLElement; refresh?: (answered: boolean) => void};
     };
     type PreparedWindow = JobPreparedInspection & {
         element: HTMLElement;
@@ -1729,6 +1732,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 forms: [...forms].filter(([, item]) => item.dirty).map(([askId, item]) => ({
                     askId, value: item.read(),
                     controls: [...item.form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')]
+                        .filter(input => !(input instanceof HTMLInputElement && input.type === 'radio' && !input.checked))
                         .map(input => ({ name: input.name, value: input.value })),
                 })),
             }));
@@ -1858,6 +1862,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         const note = textArea(fields, 'interview.note');
         let read: () => UISubmissionV3['value'];
         let submitKey = 'Submit review';
+        let interview: JobForm['interview'];
         const subject = ask.subject;
         if (subject.kind === 'interview-picks') {
             const question = prepared.interview?.questions.find(item => item.set.id === subject.setId && item.set.question === subject.questionId);
@@ -1887,47 +1892,21 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             heading.textContent = question.set.question;
             fields.prepend(heading);
             const answers = question.set.asks.map(item => {
-                const group = node('fieldset');
-                const legend = node('legend');
-                legend.textContent = item.prompt;
-                group.append(legend);
-                const pick = node('select');
-                pick.required = true;
-                pick.name = 'choice.' + item.id;
-                const empty = node('option', 'job.choose');
-                empty.value = '';
-                pick.append(empty);
-                for (const choice of item.options) {
-                    const option = node('option');
-                    option.value = choice.id;
-                    option.textContent = choice.label + ' · ' + choice.effect;
-                    pick.append(option);
-                }
-                const other = node('textarea');
-                other.hidden = true;
-                other.name = 'other.' + item.id;
-                const warning = node('p');
-                warning.hidden = true;
-                pick.onchange = () => {
-                    const choice = item.options.find(option => option.id === pick.value);
-                    other.hidden = choice?.kind !== 'other';
-                    other.required = choice?.kind === 'other';
-                    warning.hidden = choice?.kind === 'value';
-                    warning.textContent = t(choice?.kind === 'other' ? 'interview.otherPending' : 'interview.autoPending');
-                };
-                group.append(pick, other, warning);
-                fields.append(group);
-                return { item, pick, other };
+                const answer = interviewAskGroup(item, {text: node, name: 'choice.' + item.id, otherName: 'other.' + item.id});
+                fields.append(answer.group);
+                return {item, answer};
             });
+            fields.append(note.parentElement!);
+            const art = node('aside');
             for (const image of question.images) {
                 const visual = prepared.interviewImages.get(image.url);
                 if (!visual)
                     throw new Error('JOB_VISUAL_UNAVAILABLE');
-                fields.append(visual.cloneNode(true));
+                art.append(visual.cloneNode(true));
             }
-            read = () => ({ questionId: subject.questionId,
-                selections: answers.map(({ item, pick, other }) => ({ itemId: item.id, optionId: pick.value,
-                    otherText: item.options.find(option => option.id === pick.value)?.kind === 'other' ? other.value : null })), note: note.value });
+            interview = {label: question.set.question + ' · ' + question.set.id, art};
+            read = () => jobInterviewValue(subject.questionId, answers.map(({item}) => item),
+                ask => answers.find(({item}) => item === ask)!.answer.value(), note.value);
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
@@ -2065,7 +2044,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         status.setAttribute('role', 'status');
         form.append(status);
         const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
-            submitting: false, rigSubmission: createJobRigSubmission() };
+            submitting: false, rigSubmission: createJobRigSubmission(), ...(interview ? {interview} : {}) };
         const signoffSubmissionId = crypto.randomUUID();
         try {
             const saved = JSON.parse(localStorage.getItem(localDraftKey(prepared.display)) ?? 'null');
@@ -2086,7 +2065,11 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                         value: string;
                     }) => item.name === input.name);
                     if (restored && typeof restored.value === 'string') {
-                        input.value = restored.value;
+                        if (input instanceof HTMLInputElement && input.type === 'radio') {
+                            input.checked = input.value === restored.value;
+                            if (input.checked) input.dispatchEvent(new Event('change'));
+                        }
+                        else input.value = restored.value;
                         if (input instanceof HTMLSelectElement)
                             input.dispatchEvent(new Event('change'));
                     }
@@ -2138,6 +2121,22 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         };
         return entry;
     }
+    /** A job interview ask opens in the shared interview modal over the job screen, as Create step 2 does on the review screen. */
+    function mountInterviewModal(host: HTMLElement, ask: PendingAskV3, entry: JobForm): void {
+        const interview = entry.interview!;
+        const trigger = node('button', 'interview.open');
+        trigger.type = 'button';
+        trigger.dataset.jobInterviewOpen = ask.askId;
+        host.append(trigger);
+        const modal = interviewModal({parent: host, trigger, id: 'job-interview-' + ask.askId, text: node});
+        const grid = node('div');
+        grid.className = 'interview-grid';
+        grid.append(node('nav'), interview.art, entry.form);
+        modal.body.append(grid);
+        interview.refresh = answered => grid.firstElementChild!.replaceWith(interviewQuestionList([{label: interview.label, answered}], 0, () => {}));
+        interview.refresh(ask.status !== 'pending');
+        if (modal.dialog.isConnected) modal.open();
+    }
     function updateForms(state: JobWindowState): void {
         if (!current)
             return;
@@ -2158,7 +2157,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 try {
                     entry = formFor(ask, current);
                     forms.set(ask.askId, entry);
-                    host.append(entry.form);
+                    if (entry.interview) mountInterviewModal(host, ask, entry);
+                    else host.append(entry.form);
                 }
                 catch (error) {
                     const refusal = node('p');
@@ -2167,6 +2167,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 }
             }
             if (entry) {
+                entry.interview?.refresh?.(ask.status !== 'pending');
                 const partsAsk = partsPanel && ask.subject.kind === 'parts-verdict';
                 entry.fieldset.disabled = entry.submitting || (ask.status !== 'pending' && !(partsAsk && partsState === 'retry-signoff')) ||
                     state.preparing || state.closed || !state.receipt || !access.capability;

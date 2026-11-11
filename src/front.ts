@@ -60,7 +60,7 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  if(mode==='single'){
   if(path==='/api/stage-parts/verdict')return method==='POST'?{...get,mutation:true,limit:stageVerdictLimit}:null;
   if(path==='/api/stage-parts/export/json'||path==='/api/stage-parts/export/issue')return read?get:null;
-  if(['/stage-interview.html','/interview.js','/interview.css'].includes(path))return method==='GET'?get:null;
+  if(path==='/stage-interview.html')return method==='GET'?get:null;
   if(interviewRequest(path))return path==='/api/interview/picks'?
    method==='POST'?{...get,mutation:true,limit:picksLimit}:null:method==='GET'?get:null;
  }

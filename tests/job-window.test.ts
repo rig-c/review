@@ -1384,6 +1384,7 @@ import {RigOverlays} from '../web/rig-overlays.ts';
 import {labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls} from '../web/view-controls.ts';
 import {mountWorkspaceShell} from '../web/workspace-ui.ts';
 import {SENTINELS} from '../web/parts-render.ts';
+import {interviewAskGroup, interviewModal, interviewQuestionList, jobInterviewValue} from '../web/interview-panel.ts';
 import {JOB_PLAN_TEXT_FIELDS, type JobPlanTextProjection} from '../src/job-contract.ts';
 
 describe('#559 continuous Rig motion transport and mid-play verdict capture', () => {
@@ -1394,6 +1395,10 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         hidden = false;
         disabled = false;
         checked = false;
+        /** #708: the job interview opens in the shared `<dialog>` modal. */
+        open = false;
+        showModal() { this.open = true; }
+        close() { this.open = false; for (const listener of [...(this.listeners.get('close') ?? [])]) listener({type: 'close', target: this}); }
         required = false;
         value = '';
         type = '';
@@ -1527,6 +1532,10 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         }
         click() {
             if (this.disabled) return;
+            if (this.tagName === 'input' && this.type === 'radio' && !this.checked) {
+                this.checked = true;
+                this.onchange?.({type: 'change', target: this, preventDefault() {}});
+            }
             if (this.tagName === 'input' && this.type === 'checkbox') {
                 this.checked = !this.checked;
                 this.onchange?.({type: 'change', target: this, preventDefault() {}});
@@ -2093,7 +2102,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         const runner = new Function(
             'host', 'access', 'hubIncarnation', 'hubVisible', 'events', 'pageId', 'transport', 'abort',
             'i18n', 't', 'createViewportController', 'createViewportState', 'createRigViewportProvider', 'mountViewportPair', 'mountWorkspaceShell',
-            'RigOverlays', 'labelledControl', 'createViewControls', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'createRigLayerControls', 'SENTINELS',
+            'RigOverlays', 'labelledControl', 'createViewControls', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'createRigLayerControls', 'SENTINELS', 'interviewAskGroup', 'interviewModal', 'interviewQuestionList', 'jobInterviewValue',
             'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal', 'jobPartsReviewState',
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
             'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
@@ -2103,7 +2112,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         const mounted = runner(
             host, access, hubIncarnation, hubVisible, undefined, options?.pageId ?? 'page-one', transport, abort,
             i18nModule, i18nModule.t, createViewportController, createViewportState, createRigViewportProvider, mountViewportPair, mountWorkspaceShell,
-            RigOverlays, labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls, SENTINELS,
+            RigOverlays, labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls, SENTINELS, interviewAskGroup, interviewModal, interviewQuestionList, jobInterviewValue,
             createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal, jobPartsReviewState,
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
             recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
@@ -3313,10 +3322,13 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             const warning = form.querySelector('[data-job-interview-warning="INTERVIEW_OPTIONS_SCENE_LEGACY"]')!;
             expect(warning).not.toBeNull();
             expect(warning.dataset.record).toBe('interview.post.items[2].pending_options');
-            const pickSelect = form.querySelector('select[name="choice.framing"]')!;
+            // #708: the job interview is the shared modal's radio cards with the AI recommended badge, not a <select>.
+            expect(form.closest('dialog')?.open).toBe(true);
+            expect(form.querySelectorAll('select')).toHaveLength(0);
+            expect(form.querySelectorAll('.interview-recommended').length).toBeGreaterThan(0);
+            const pick = form.querySelectorAll('input').find(input => input.type === 'radio' && input.name === 'choice.framing' && input.value === 'keep')!;
             const noteInput = form.querySelector('textarea[name="note"]')!;
-            pickSelect.value = 'keep';
-            pickSelect.dispatchEvent({type: 'change'});
+            pick.click();
             noteInput.value = 'legacy non-blocking note';
             form.dispatchEvent({type: 'input'});
             await form.onsubmit?.({preventDefault() {}});

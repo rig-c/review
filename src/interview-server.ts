@@ -8,7 +8,8 @@ export async function startInterviewServer(root: string, output: string, port: n
   const capability = randomBytes(32).toString('hex');
   const route = interviewRoutes(root, output, capability);
   const bundle = await buildWeb('interview');
-  const [html, css] = await Promise.all(['interview.html','interview.css'].map(path => readFile(appRoot + 'web/' + path)));
+  // The single entry web/index.html and styles.css; main.js is the interview bundle, which opens the interview modal (#708).
+  const [html, css] = await Promise.all(['index.html','styles.css'].map(path => readFile(appRoot + 'web/' + path)));
   const live = createLiveLifecycle({label:'review interview', exitOnClose, stopServer:() => server.stop(true)});
   const server = Bun.serve({hostname:'127.0.0.1', port, websocket:live.websocket, async fetch(req, srv) {
     const origin = 'http://127.0.0.1:' + srv.port;
@@ -23,10 +24,11 @@ export async function startInterviewServer(root: string, output: string, port: n
       if (response) return response;
       const files = new Map([
         ['/', [html, 'text/html; charset=utf-8']],
-        ['/interview.css', [css, 'text/css']],
-        ['/interview.js', [bundle, 'text/javascript']],
+        ['/index.html', [html, 'text/html; charset=utf-8']],
+        ['/styles.css', [css, 'text/css']],
+        ['/main.js', [bundle, 'text/javascript']],
       ] as const);
-      const file = req.method === 'GET' ? files.get(pathname as '/' | '/interview.css' | '/interview.js') : undefined;
+      const file = req.method === 'GET' ? files.get(pathname as '/' | '/index.html' | '/styles.css' | '/main.js') : undefined;
       return file ? new Response(file[0] as BodyInit, {headers:{...interviewHeaders,'Content-Type':file[1]}}) :
         new Response(null, {status:404, headers:interviewHeaders});
     } finally {live.onRequestEnd(pathname);}

@@ -94,8 +94,9 @@ async function sceneContextMode(destination: string | undefined) {
         for (const language of ['en', 'ko'] as const) {
           const url = new URL(server.url); url.searchParams.set('lang', language);
           await browser.goto(url.href);
-          await waitFor('!!document.querySelector("main select")');
-          const selected: number = await browser.evaluate<number>(`(()=>{const picker=document.querySelector('main select');picker.selectedIndex=[...picker.options].findIndex(option=>option.text.includes(' · review551-scene-current'));picker.dispatchEvent(new Event('change'));return picker.selectedIndex;})()`);
+          // #708: the interview modal's question list replaces the set picker.
+          await waitFor('!!document.querySelector("dialog.interview-modal[open] .interview-question")');
+          const selected: number = await browser.evaluate<number>(`(()=>{const items=[...document.querySelectorAll('.interview-question')];const index=items.findIndex(item=>item.textContent.includes(' · review551-scene-current'));items[index]?.click();return index;})()`);
           assert(selected >= 0);
           assert.equal(await browser.evaluate('document.documentElement.lang'), language);
           assert.equal(await browser.evaluate('document.querySelector("form > fieldset").disabled'), !question.editable);
@@ -169,8 +170,8 @@ const navigate = async (launch: string, lang: string, setId: string) => {
   const url = new URL(launch); url.searchParams.set('lang',lang);
   url.searchParams.set('visit',String(++navigation));
   await browser.goto(url.href);
-  await until('!!document.querySelector("main select")');
-  await browser.evaluate(`(()=>{const s=document.querySelector('main select');s.selectedIndex=[...s.options].findIndex(o=>o.text.includes(${JSON.stringify(' · ' + setId)}));s.dispatchEvent(new Event('change'));})()`);
+  await until('!!document.querySelector("dialog.interview-modal[open] .interview-question")');
+  await browser.evaluate(`[...document.querySelectorAll('.interview-question')].find(item=>item.textContent.includes(${JSON.stringify(' · ' + setId)})).click()`);
   await until('document.querySelector("aside img")?.naturalWidth > 0');
 };
 const selectTorso = async () => {
@@ -302,7 +303,7 @@ try {
     await selectTorso();
     await browser.evaluate(`(()=>{const field=document.querySelector('header select');field.value=${JSON.stringify(lang==='en'?'ko':'en')};field.dispatchEvent(new Event('change'));})()`);
     assert.equal(await browser.evaluate(status),lang==='en'?'저장하지 않은 변경 사항이 있습니다.':'Unsaved changes.');
-    await browser.evaluate(`(()=>{const field=document.querySelector('main select');const previous=field.selectedIndex;field.selectedIndex=0;field.dispatchEvent(new Event('change'));const restored=document.querySelector('main select');restored.selectedIndex=previous;restored.dispatchEvent(new Event('change'));})()`);
+    await browser.evaluate(`(()=>{const items=()=>[...document.querySelectorAll('.interview-question')];const previous=items().findIndex(item=>item.getAttribute('aria-current')==='true');items()[previous===0?1:0].click();items()[previous].click();})()`);
     assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(noteField)}).value`),note+' edited');
     assert.equal(await browser.evaluate(status),lang==='en'?'저장하지 않은 변경 사항이 있습니다.':'Unsaved changes.');
     await browser.evaluate(`(()=>{const field=document.querySelector('header select');field.value=${JSON.stringify(lang)};field.dispatchEvent(new Event('change'));})()`);

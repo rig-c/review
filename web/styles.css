@@ -424,18 +424,46 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 #direction-panel[open]:not([hidden]):has(#direction-authored-keys[open]:not([hidden])) + #direction-authored-body ~ #stage-layout{
   display:none
 }
-.review-stage-panel.with-interview {
-  display: grid;
-  grid-template: min-content minmax(240px, 1fr) / minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
-}
-.review-stage-panel.with-interview[hidden] { display: none; }
-.review-stage-panel.with-interview > p { grid-column: 1 / -1; margin: 0; }
-.review-stage-panel.with-interview > iframe { height: 100%; grid-area: 2 / 1; }
-.review-stage-panel.with-interview > .review-interview-frame { grid-area: 2 / 2; }
-@media (max-width: 65rem) {
-  .review-stage-panel.with-interview { grid-template: min-content repeat(2, minmax(420px, 1fr)) / minmax(0, 1fr); }
-  .review-stage-panel.with-interview > .review-interview-frame { grid-area: 3 / 1; }
+/* Create step 2: the interview modal over the one review screen (#708); the workspace drawer dialog. */
+.interview-modal{width:min(96vw,1400px);height:min(92dvh,900px);max-width:96vw}
+.interview-modal-body{flex:1;min-height:0;overflow:auto;padding:0 4px 8px}
+.interview-modal h2{font-size:14px;font-weight:600;margin:0}
+.interview-modal .workspace-drawer-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.interview-grid{display:grid;grid-template-columns:minmax(11rem,.7fr) minmax(14rem,1.2fr) minmax(20rem,2fr);gap:12px;align-items:start}
+.interview-grid>*{min-width:0}
+.interview-grid>aside,.interview-grid>form{background:var(--rv-raised);border:1px solid var(--border-strong);border-radius:8px;padding:12px}
+.interview-grid>aside{position:sticky;top:0}
+.interview-grid aside img:not([hidden]){display:block;max-width:100%;max-height:60dvh;margin:10px auto;background:var(--rv-media-bg)}
+.interview-questions>p{margin:0 0 8px;color:var(--fg-muted);font-size:11px}
+.interview-questions ol{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.interview-question{width:100%;text-align:left;white-space:normal;overflow-wrap:anywhere;line-height:1.5;background:transparent;border-color:var(--border)}
+.interview-question[aria-current=true]{background:var(--rv-pressed-bg);border-color:var(--rv-pressed-border);color:var(--rv-pressed-fg)}
+.interview-question[data-answered]::before{content:"\2713  ";color:var(--pass)}
+.interview-question:disabled{opacity:1;cursor:default}
+.interview-modal fieldset{border:0;padding:0;margin:0;min-width:0}
+.interview-modal fieldset.interview-ask{border-top:1px solid var(--border-strong);padding-top:8px;margin:10px 0}
+.interview-modal legend{font-weight:600;padding:0;margin-bottom:6px}
+.interview-modal legend,.interview-option span,.interview-option strong{white-space:pre-wrap;overflow-wrap:anywhere}
+.interview-option{display:grid;grid-template-columns:min-content 1fr;gap:3px 8px;padding:8px 10px;margin:6px 0;background:var(--rv-panel);border:1px solid var(--border);border-radius:6px;cursor:pointer}
+.interview-option:has(input:checked){border-color:var(--rv-pressed-border);background:var(--rv-pressed-bg)}
+.interview-option span,.interview-option b{grid-column:2}
+.interview-option span{color:var(--fg-soft)}
+.interview-option b.interview-recommended{justify-self:start;font-size:11px;font-weight:600;color:var(--btn-fg);background:var(--link);border-radius:4px;padding:1px 6px}
+.interview-modal textarea:not([hidden]){display:block;width:100%;min-height:4rem;margin:6px 0 10px}
+.interview-modal label:not(.interview-option){display:block;margin-top:8px}
+.interview-pending{color:var(--warn);font-size:11px}
+.interview-modal code,.interview-binding{overflow-wrap:anywhere;font:11px var(--font-mono);color:var(--fg-muted)}
+.interview-modal form>code{display:block;margin-bottom:10px}
+.interview-modal pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.interview-modal details{margin-block:12px}
+.interview-modal form button[type=submit]{margin-top:10px}
+.interview-app>header{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:12px 18px;background:var(--rv-bar);border-bottom:1px solid var(--border)}
+.interview-app>header h1{margin:0}
+.interview-app>header select{width:auto;margin-inline-start:auto}
+.job-forms>[data-job-interview-open]{margin:8px 0}
+@media (max-width:65rem){
+  .interview-grid{grid-template-columns:minmax(0,1fr)}
+  .interview-grid>aside{position:static}
 }
 
 /* Persistent job inspection uses the canonical pair and camera controls. */

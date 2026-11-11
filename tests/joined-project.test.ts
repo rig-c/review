@@ -100,16 +100,18 @@ test('real Create v2 joins existing Stage 1 and 2 without changing the feedback 
     const sourceParts = JSON.parse(await readFile(join(input,'parts.json'),'utf8'));
     expect(parts.inspectionSourceHash).toBe(old.contentHash);
     expect(parts.items.map((p:{name:string})=>p.name).sort()).toEqual(sourceParts.parts.map((p:{name:string})=>p.name).sort());
-    expect((await get('/stage-interview.html?stageEmbed=1&lang=ko')).headers.get('Content-Security-Policy')).toContain("frame-ancestors 'self'");
+    // #708: the retained route serves the single entry (it opens the interview modal), never a framed page.
+    expect((await get('/stage-interview.html?stageEmbed=1&lang=ko')).headers.get('Content-Security-Policy')).toContain("frame-ancestors 'none'");
+    const index = await readFile(join(import.meta.dir,'..','web','index.html'),'utf8');
     for (const lang of ['en', 'ko']) {
       for (const hash of ['', '#cap=' + capability, '#review=' + capability]) {
         const entry = await get('/stage-interview.html?stageEmbed=1&lang=' + lang + hash);
         expect(entry.status).toBe(200);
         expect(entry.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
-        await entry.body?.cancel();
+        expect(await entry.text()).toBe(index);
       }
     }
-    expect((await get('/interview.js')).status).toBe(200);
+    for (const retired of ['/interview.js', '/interview.css']) expect((await get(retired)).status).toBe(404);
     expect((await post({Origin:origin})).status).toBe(403);
     expect((await post({Origin:'https://example.test','X-Review-Capability':capability})).status).toBe(403);
     expect((await post({Origin:origin,'X-Review-Capability':capability})).status).toBe(400);
