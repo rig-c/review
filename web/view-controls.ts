@@ -36,6 +36,10 @@ export function initialIdleAnimation(names:readonly string[],fallback:string|nul
 export function automaticIdlePreview(names:readonly string[],selected:string,checkpoint:{animation?:string;time?:number;axis?:unknown}|undefined,explicitCheckpoint:boolean):boolean {
  return idleAvailable(names,selected)&&!explicitCheckpoint&&(!checkpoint||(checkpoint.animation==='idle'&&(checkpoint.time??0)===0&&!checkpoint.axis));
 }
+/** Whether opening the page may start the idle preview. A restored inspection keeps its paused frame in the
+ * standalone review; a job rig subject (#709) keeps idle looping, because the restored frame there is only the
+ * previous visit's view, not a frame the reviewer chose for this decision. */
+export function idlePreviewOnOpen(restored:boolean,hosted:boolean):boolean {return hosted||!restored;}
 export function themePreference(value:unknown):ThemePreference {return value==='dark'||value==='light'?value:'system';}
 
 /** The inspection appearance is transient; workspace Settings owns the saved browser default. */
