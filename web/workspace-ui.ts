@@ -99,7 +99,7 @@ export interface WorkspaceUI {
  revealInspector:()=>void;refresh:()=>void;dispose:()=>void;
 }
 /** `currentTheme`, when given, is the appearance the Settings theme select shows; otherwise it shows the saved default. */
-export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
+export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{kind:string;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
  const require=<T extends HTMLElement=HTMLElement>(id:string)=>{const node=document.getElementById(id);if(!node)throw new Error('Missing workspace element: '+id);return node as T;};
  const layout=document.querySelector<HTMLElement>('.layout')!,main=layout.querySelector<HTMLElement>('main')!,stage=require('stage-layout'),inspector=document.querySelector<HTMLElement>('.inspector')!,explorer=require('parts-explorer');
  layout.classList.add('workspace-layout');
@@ -140,8 +140,9 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
   disposers.push(bindWorkspaceDrawer({trigger,drawer:dialog,label:labels[panel],close}));
  }
  const bottom=options.bottomPanel,bottomBody=bottom?inspector.querySelector<HTMLElement>('.inspector-body')!:null,bottomHeading=bottom?bottom.strip.parentElement!:null;
+ const bottomCollapseKey=bottom?`rig-review-bottom-collapsed/${bottom.kind}`:'';
  let collapsed=false;
- if(bottom){try{collapsed=localStorage.getItem('rig-review-bottom-collapsed/rig')==='true';}catch{}}
+ if(bottom){try{collapsed=localStorage.getItem(bottomCollapseKey)==='true';}catch{}}
  const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=selectedInspector() as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
  let disposed=false,frame=0,applying=false,available={width:0,height:0},effective=allocateWorkspaceLayout(available,desired,columns);
  const panelFor=(tab:InspectorTab)=>{const section=require('inspector-'+tab);return (typeof section.querySelector==='function'?section.querySelector<HTMLElement>('.animate-blocks-panel'):null)??section;};
@@ -184,13 +185,13 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
  }
  const renderSettings=()=>{const value=store.get();setLanguagePreference(value.language);settingsToggle.setAttribute('aria-expanded',String(!value.settingsCollapsed));settingsBody.hidden=value.settingsCollapsed;settings.dataset.collapsed=String(value.settingsCollapsed);theme.value=options.currentTheme?.()??value.theme;language.value=getLinkLanguage()??value.language;sync.checked=value.defaultCameraSync;idle.checked=value.defaultIdleRepeat;status.textContent=tr(store.status().detail);};
  const revealInspector=()=>{
-  if(bottom&&collapsed){collapsed=false;try{localStorage.setItem('rig-review-bottom-collapsed/rig','false');}catch{}apply();}
+  if(bottom&&collapsed){collapsed=false;try{localStorage.setItem(bottomCollapseKey,'false');}catch{}apply();}
   if(effective.inspectorMode==='drawer'&&!dialogs.inspectorHeight.open){for(const dialog of Object.values(dialogs))if(dialog.open)dialog.close();buttons.inspectorHeight.click();if(bottom)apply();}
  };
  if(bottom){
   const closed=()=>{if(disposed)return;apply();bottom.strip.querySelector<HTMLButtonElement>('[aria-selected=true]')?.focus({preventScroll:true});};
   dialogs.inspectorHeight.addEventListener('close',closed);
-  bottom.collapse.onclick=()=>{capture();collapsed=!collapsed;try{localStorage.setItem('rig-review-bottom-collapsed/rig',String(collapsed));}catch{}if(dialogs.inspectorHeight.open)dialogs.inspectorHeight.close();apply();if(!collapsed)revealInspector();};
+  bottom.collapse.onclick=()=>{capture();collapsed=!collapsed;try{localStorage.setItem(bottomCollapseKey,String(collapsed));}catch{}if(dialogs.inspectorHeight.open)dialogs.inspectorHeight.close();apply();if(!collapsed)revealInspector();};
   disposers.push(()=>{bottom.collapse.onclick=null;dialogs.inspectorHeight.removeEventListener('close',closed);});
  }
  theme.onchange=()=>{store.update({theme:theme.value as WorkspaceTheme});options.defaultTheme(store.get().theme);};language.onchange=()=>{setLinkLanguage(null);store.update({language:language.value as WorkspaceLanguage});setLanguagePreference(store.get().language);};sync.onchange=()=>{store.update({defaultCameraSync:sync.checked});};idle.onchange=()=>{store.update({defaultIdleRepeat:idle.checked});};require<HTMLButtonElement>('settings-reset').onclick=()=>store.resetLayout();settingsToggle.onclick=()=>{store.update({settingsCollapsed:!store.get().settingsCollapsed});};
