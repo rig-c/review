@@ -12,6 +12,53 @@ import { scheduleContextLine } from './environment-schedule.ts';
 import {parseCommentsSession} from './session.ts';
 import {projectComments} from './stage-comment.ts';
 import type {ReviewCommentsSession, JobCommentFeedbackAnchor} from './job-contract.ts';
+import type {JobComment, JobActValues, ActV3} from './job-contract.ts';
+import type {CompareFeedback} from './compare-session.ts';
+import {parseRecordAct} from './job-api.ts';
+
+/** Pure preparation only: the caller still decodes the complete source-bound envelope. */
+export function feedbackItemComments(items: readonly (Feedback | CompareFeedback)[]): {text: string; anchor: JobCommentFeedbackAnchor}[] {
+  return items.map(({summary, ...anchor}) => ({text: summary, anchor: structuredClone(anchor)}));
+}
+
+/** Mapping comes from the decoded plan/ask, never from an inferred checkpoint ID. */
+export function checkpointNoteComments(value: Pick<JobActValues['checkpoint'], 'checkpointId' | 'planStepId'> & {note: string}): JobComment[] {
+  return [{text: value.note, anchor: {checkpointId: value.checkpointId, planStepId: value.planStepId}}];
+}
+
+/** Per-ask feedback has no ask anchor in act@6. */
+export function feedbackWordsComments(words: string): JobComment[] {
+  return [{text: words}];
+}
+
+/** Named-image notes retain sealed image names; no region evidence is manufactured. */
+export function imageNoteComments(notes: readonly {readonly name: string; readonly words: string}[]): JobComment[] {
+  return notes.map(({name, words}) => ({text: words, anchor: {name}}));
+}
+
+/** Display only over decoded legacy sessions: historical fields are general comments. */
+export function legacySessionComments(session: Pick<ReviewSession, 'feedback'> & Partial<Pick<ReviewSession, 'checkpoints'>>): {text: string}[] {
+  return legacyFeedbackComments([
+    ...Object.values(session.checkpoints ?? {}).map(checkpoint => checkpoint.note),
+    ...session.feedback.map(item => item.summary),
+  ]);
+}
+
+/** Reuse the record decoder; survey answers must never become feedback. */
+export function legacyRecordActComments(raw: unknown): {text: string}[] {
+  return legacyActComments(parseRecordAct(raw));
+}
+
+/** Display projection of already-decoded @2–@5 acts, without upgrading their envelopes. */
+export function legacyActComments(act: ActV3): {text: string}[] {
+  if (act.kind === 'interview-picks') return [];
+  const value = act.value;
+  const fields = [value.words];
+  if ('imageNotes' in value) fields.push(...(value.imageNotes ?? []).map(note => note.words));
+  if ('issues' in value) fields.push(...value.issues.map(issue => issue.summary));
+  else if ('parts' in value) fields.push(...value.parts.flatMap(part => [part.part.note, part.mesh.note]));
+  return legacyFeedbackComments(fields);
+}
 
 /** A display view over explicitly selected legacy feedback fields, including empty strings. */
 export function legacyFeedbackComments(fields: readonly string[]): {text: string}[] {
