@@ -1216,10 +1216,6 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       scrub.dispatchEvent(new Event('input', { bubbles: true }));
       await sleep(30);
 
-      // #366: stage navigation preserves actual pending ops, picked side and held time.
-      const stagePendingBefore = JSON.stringify({ops:ed.animation.ops(),stage:ed.stage('b'),time:scrub.value});
-      for(const number of [1,2,4,3]) {document.querySelector('[data-review-stage="'+number+'"]').click();if((getComputedStyle(document.querySelector('.mode-switch')).display!=='none')!==(number===3))throw new Error('STAGE_PRIMARY_HIERARCHY_LOST');}
-      if(JSON.stringify({ops:ed.animation.ops(),stage:ed.stage('b'),time:scrub.value})!==stagePendingBefore) throw new Error('STAGE_NAV_PENDING_STATE_LOST');
       const bOpsBeforeSwitch = ed.animation.ops();
       const bPosePreviewAt05 = ed.bone('rigid', 'b');
       const aPoseDuringBPreviewAt05 = ed.bone('rigid', 'a');
@@ -1312,10 +1308,6 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
       // Click Apply · Rebuild on Build B
       await ed.animation.apply();
-      document.querySelector('[data-review-stage="1"]').click();if(!document.querySelector('.review-stage-panel [role=status]').textContent.includes('inspected package'))throw new Error('STAGE_ATLAS_PROVENANCE_UNLABELLED');document.querySelector('[data-review-stage="3"]').click();
-      const stageAppliedBefore=JSON.stringify({a:ed.stage('a'),b:ed.stage('b'),ops:ed.animation.ops(),time:scrub.value});
-      for(const number of [1,2,4,3]) {document.querySelector('[data-review-stage="'+number+'"]').click();if((getComputedStyle(document.querySelector('.mode-switch')).display!=='none')!==(number===3))throw new Error('STAGE_PRIMARY_HIERARCHY_LOST');}
-      if(JSON.stringify({a:ed.stage('a'),b:ed.stage('b'),ops:ed.animation.ops(),time:scrub.value})!==stageAppliedBefore) throw new Error('STAGE_NAV_APPLIED_STATE_LOST');
       const bStage = ed.stage('b');
       const aStage = ed.stage('a');
 

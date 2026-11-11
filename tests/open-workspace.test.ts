@@ -137,7 +137,7 @@ test('owner landing accepts compatible roots and only the current unique incarna
     }
     const stale = await fetch(host.record.origin + '/?workspace=00000000-0000-0000-0000-000000000000');
     expect(stale.status).toBe(409); expect(await stale.json()).toEqual({error: 'WORKSPACE_HOST_MISMATCH'});
-    for (const path of ['/workspace.js', '/workspace.css', '/styles.css', '/workspace/api/targets']) {
+    for (const path of ['/main.js', '/styles.css', '/workspace/api/targets']) {
       const response = await fetch(host.record.origin + path + '?workspace=' + identity, {
         headers: {'X-Review-Capability': host.record.ownerCapability},
       });

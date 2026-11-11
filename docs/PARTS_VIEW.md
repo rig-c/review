@@ -1,26 +1,38 @@
 # Parts and atlas view
 
+> **Historical UI reference:** the standalone parts page and its sidebar,
+> flags and mesh-numbers panel were removed in #745. UI instructions for those
+> surfaces below are superseded by the existing Setup workspace, Comments and
+> act bar; see the [current screen specification](https://github.com/rig-c/review/blob/main/docs/SCREENS.md).
+> Retained input formats, API details, historical verdicts and heading targets
+> remain compatibility references, not instructions to restore that UI.
+
 `rig-review parts` shows a rig's parts as images, before any rig is built, so a part with missing material, a faint
-island or a ragged rim is caught before rigging rather than in motion after it. The same view reads a built rig's atlas
-to check what ships.
+island or a ragged rim is caught before rigging rather than in motion after it. Atlas-only inputs refuse
+`PARTS_ATLAS_NOT_CARRIED` before the parts workspace opens. Use rig review for read-only atlas inspection;
+`parts --format json|issue` still reads saved atlas verdicts.
 
 ```sh
 npx rig-review parts <out>            # a rig-parts build root: opens <out>/rig/parts.json
 npx rig-review parts <out>/rig        # the same package, named directly
-npx rig-review parts <out>/check      # a built rig's atlas (any review package with a compiled model)
+npx rig-review open <out>/check       # inspect a built rig, including its read-only atlas
+npx rig-review parts <out>/check --format json # read a saved atlas verdict without opening a workspace
 ```
 
-Options: `--rig <file>` (mesh geometry), `--mesh-report <file>`, `--check <file>` (producer flags; see below), `--verdict <file>` (where the sign-off
+Options: `--rig <file>` (mesh geometry), `--mesh-report <file>`, `--check <file>` (historical producer flags; former UI removed in #745; see below), `--verdict <file>` (where the sign-off
 is written), `--painting <png>` (the original painting), `--by <name>` (launch-only reviewer declaration), `--format json|issue` (export the saved verdict), `--port <n>`. Like `review`, it serves in the foreground and exits 3 s after its last tab closes.
 
 ## Inputs
 
-| Mode | Opens on | Items |
+| Mode | Input and availability | Items |
 | --- | --- | --- |
 | parts | a directory holding `parts.json` beside `parts/<name>.png`, as `rig-parts assemble` writes it, or a build root whose `rig/` holds them | every part, in `parts.json` order (draw order, back first) |
-| atlas | a review package or build `check/` folder whose compiled model declares `pages[].regions[]` | every region, by page |
+| atlas | a review package or build `check/` folder whose compiled model declares `pages[].regions[]`; read-only within rig review or saved-verdict export, refused at parts workspace open | every region, by page |
 
 ## What it shows
+
+**Historical UI:** the following describes the former standalone parts page.
+Use the current shared Setup workspace; these controls are not a second screen.
 
 - **Every part on its own**, on a checker background by default (green, magenta, black and white are also available), at native scale with
   Fit and exact **1:1**, cursor-anchored wheel zoom, pinch and drag pan in the shared rig/reference viewport pair. Sampling stays nearest-neighbour. **Alpha only** shows the alpha channel as grey (white is opaque).
@@ -30,11 +42,14 @@ is written), `--painting <png>` (the original painting), `--by <name>` (launch-o
   occluder's shape at a glance. Nothing is measured; the tint is the front parts' own alpha.
 - **Atlas mode**: the pages as packed, with each region's box and name; the background shows through padding, and a
   region's own view keeps 4 page pixels around its box (dashed) so bleed is visible. Clicking a region opens it.
-- **Producer flags**, read from the files rig-parts writes and shown on the part they name. None is re-measured here. Each reads as one labelled line (an opening's parts, animation, frame and cells; a seam pair's pixel counts; a gate's name, status and readings), with the producer's object verbatim under a collapsed **Producer line**.
+- **Historical UI — Producer flags (removed in #745)**, read from the files rig-parts writes and shown on the part they name. None is re-measured here. Each reads as one labelled line (an opening's parts, animation, frame and cells; a seam pair's pixel counts; a gate's name, status and readings), with the producer's object verbatim under a collapsed **Producer line**.
 
 The [23-part EN/KO comparison](https://github.com/rig-c/review/tree/main/tests/fixtures/parts-approve-all-evidence) records the same 1600×1100 initial view against installed 1.8.0: row height 49.375 → 26.1875 px, with all 23 after rows on one line (`tests/parts-approve-all-browser.ts`).
 
 ### Producer row groups
+
+**Historical UI:** sidebar groups and badges below were removed in #745.
+The producer row metadata and legacy API/verdict references are preserved.
 
 The sidebar counts **only mesh-report flags and explicit part findings**. A check row counts only
 when `row_scope: "part"`, `row_kind: "finding"` and a valid `row_subjects` array names that part.
@@ -97,7 +112,7 @@ The occlusion-coverage report (rig-c/parts#998) is not read yet; the footprint t
 Standalone sign-off uses saved files. The active Create and Parts cycle uses finalized acts through the
 [standing live job workflow](WORKFLOWS.md#standing-live-job-workflow).
 
-The shared workspace keeps pointed issues in the persistent **Issues** sidebar, including an empty state.
+**Historical UI, superseded by #741/#751:** the former workspace kept pointed issues in the persistent **Issues** sidebar, including an empty state.
 **Save sign-off** saves the current issue collection. An empty collection approves the inspection, and a
 non-empty collection requests changes. The live job host submits the same issue collection through its
 review dialog. Reviewer wording stays verbatim.
@@ -148,8 +163,8 @@ Sign-off JSON requests are limited to 4 MiB (4,194,304 bytes) of UTF-8 while str
 cancelled before its remainder is read; a valid request exactly at the byte limit is accepted. Same-origin and
 write-capability requirements remain unchanged.
 
-On reopen, a saved sign-off is offered only when both `source.sha256` and `source.flags` match the files on disk. When
-only the producer flags differ, the page says the saved sign-off is for different producer flags and starts fresh.
+**Historical flag-bound sign-off UI:** on reopen, the former page offered a saved sign-off only when both `source.sha256` and `source.flags` matched the files on disk.
+**Historical UI:** when only the producer flags differed, the page said the saved sign-off was for different producer flags and started fresh.
 Consumers that gate on the sign-off (rig-c/create) check `source.sha256`.
 
 Every file the view reads from a package resolves inside it: a part PNG or `parts.json` that symlinks out is refused
@@ -235,6 +250,11 @@ Crash-proof exactly-once delivery requires an additional acknowledgment/replay p
 
 ## Mesh geometry
 
+**Historical UI:** the toggle labels and geometry/numbers panel below describe
+the removed standalone parts page (#745). Current visual inspection uses Mesh
+edges in the shared workspace. Geometry inputs and legacy wire references below
+remain compatibility information, not a request to restore the old panel.
+
 In parts mode, a `rig.json` beside `parts.json` supplies optional mesh geometry;
 `--rig <file>` selects an explicit input instead. The workspace-wide **mesh from
 rig.json UVs** toggle starts off and retains its setting across part selection, assembled view,
@@ -270,7 +290,7 @@ not an exact recovery of the producer's original unrounded positions.
 
 Mode, vertex count, triangle count, `art_coverage` and `stray_cleared` are copied
 from the part's `mesh_report.json` row without recomputing them. Absent fields
-say **not reported**; faint islands remain in Producer flags. A report count may
+say **not reported**; **historical UI:** faint islands remained in Producer flags. A report count may
 differ from the loaded geometry. These are producer readings. Historical verdicts stored
 `parts[name].mesh` as `{outcome,note}` only for a mesh-bearing part.
 `rig.json` and the loaded mesh report enter `source.files`, and the mesh report

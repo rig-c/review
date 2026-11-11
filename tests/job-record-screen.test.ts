@@ -6,7 +6,7 @@ import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jo
 import type {DisplayPublicationV3,PendingAskV3,UISubmissionV3} from '../src/job-contract.ts';
 import {recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 
-async function harness(picture=false){
+async function harness(picture:boolean|'parts'=false){
  const f=await recordScreenFixture('checkpoint',picture),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
  const state={pending:[f.ask] as PendingAskV3[],receipt:null as {publicationId:string;pageId:string;displayedNonce:string}|null,generation:f.display.publication.generation,preparing:false,closed:false};
  const submitted:UISubmissionV3[]=[],store=new Map<string,string>();
@@ -68,13 +68,14 @@ test('#750 no picture, receipt rearm, new ask, dirty form identity and closed su
   const ready=await h.screen.prepare(h.f.display,new AbortController().signal);expect(ready?.record?.picture).toBeNull();h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
   const entry=ready!.record!.forms.get(h.f.ask.askId)!;expect(entry.fieldset.disabled).toBe(true);
   h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'first'};h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(false);
-  const note=entry.form.querySelector('textarea')!;note.value='  retained reviewer words\n';entry.form.oninput!({} as never);
+  expect(entry.form.querySelector('textarea')).toBeNull();
+  entry.form.commentWords=()=> '[general]\nretained reviewer words';entry.form.oninput!({} as never);
   const saved=[...h.store.values()][0]!;expect(saved).toContain('retained reviewer words');
   h.state.preparing=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);
   h.state.preparing=false;h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'rearmed'};
   h.state.pending.push({...h.f.ask,askId:'later-signoff',subject:{kind:'signoff',stage:'plan-approved'}});h.screen.changed(h.state);
-  expect(ready!.record!.forms.size).toBe(2);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(note.value).toBe('  retained reviewer words\n');expect(entry.fieldset.disabled).toBe(false);
-  const restored=formFor(h.f.ask,ready!.record!.inspection,h.deps);expect(restored.read()).toEqual(entry.read());
+  expect(ready!.record!.forms.size).toBe(2);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(entry.read()).toMatchObject({words:'[general]\nretained reviewer words'});expect(entry.fieldset.disabled).toBe(false);
+  const restored=formFor(h.f.ask,ready!.record!.inspection,h.deps);restored.form.commentWords=entry.form.commentWords;expect(restored.read()).toEqual(entry.read());
   h.state.closed=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);await entry.form.onsubmit!({preventDefault(){}} as never);expect(h.submitted).toHaveLength(0);
  }finally{await h.close();}
 });
@@ -136,12 +137,71 @@ test('#743 record inspection lifetime follows ack finalization; rollback retains
   const first=await h.screen.prepare(h.f.display,new AbortController().signal);let oldDisposed=0;
   const close=first!.record!.inspection.dispose.bind(first!.record!.inspection);first!.record!.inspection.dispose=()=>{oldDisposed++;close();};
   let tx=h.screen.commit(first!);await h.screen.painted(first!,new AbortController().signal);tx.finalize();
-  const oldForms=first!.record!.forms,entry=oldForms.get(h.f.ask.askId)!;
+  const oldForms=first!.record!.forms,entry=oldForms.get(h.f.ask.askId)!;let formDisposed=0;
+  const disposeForm=entry.dispose;entry.dispose=()=>{formDisposed++;disposeForm?.();};
   const candidate=await h.screen.prepare(h.f.display,new AbortController().signal);tx=h.screen.commit(candidate!);await h.screen.painted(candidate!,new AbortController().signal);
   expect(oldDisposed).toBe(0);await tx.rollback();candidate!.record!.inspection.dispose();
-  expect(h.screen.mounted()).toBe(first);expect(first!.record!.forms).toBe(oldForms);expect(oldForms.get(h.f.ask.askId)).toBe(entry);expect(oldDisposed).toBe(0);
+  expect(h.screen.mounted()).toBe(first);expect(first!.record!.forms).toBe(oldForms);expect(oldForms.get(h.f.ask.askId)).toBe(entry);expect(oldDisposed).toBe(0);expect(formDisposed).toBe(0);
   const picture=first!.record!.picture!;tx=h.screen.commit(picture);await h.screen.painted(picture,new AbortController().signal);
   expect(rigHost()!.navigation).toBeUndefined();expect(typeof rigHost()!.reviewState).toBe('function');expect(oldDisposed).toBe(0);
-  tx.finalize();expect(oldDisposed).toBe(1);expect(h.screen.mounted()).toBe(picture);
+  tx.finalize();expect(oldDisposed).toBe(1);expect(formDisposed).toBe(1);expect(h.screen.mounted()).toBe(picture);
  }finally{await h.close();}
+});
+
+test('#743 picture modal forms survive rollback and dispose with their inspection only after finalization',async()=>{
+ const h=await harness(true);try{
+  const ready=await h.screen.prepare(h.f.display,new AbortController().signal),record=ready!.record!;
+  // Reuse real prepared forms and inspection to exercise the internal modal ownership seam.
+  const modal={...record.picture!,modals:{inspection:record.inspection,forms:record.forms}};
+  let inspectionDisposed=0,formDisposed=0;
+  const close=record.inspection.dispose.bind(record.inspection);record.inspection.dispose=()=>{inspectionDisposed++;close();};
+  const entry=record.forms.get(h.f.ask.askId)!,disposeForm=entry.dispose;entry.dispose=()=>{formDisposed++;disposeForm?.();};
+  h.screen.commit(modal).finalize();
+  let tx=h.screen.commit(record.picture!);expect(inspectionDisposed).toBe(0);expect(formDisposed).toBe(0);
+  await tx.rollback();expect(h.screen.mounted()).toBe(modal);expect(modal.modals.forms.get(h.f.ask.askId)).toBe(entry);
+  expect(inspectionDisposed).toBe(0);expect(formDisposed).toBe(0);
+  tx=h.screen.commit(record.picture!);expect(inspectionDisposed).toBe(0);tx.finalize();
+  expect(inspectionDisposed).toBe(1);expect(formDisposed).toBe(1);
+ }finally{await h.close();}
+});
+
+test('#715 a parts-backed record uses the real parts host and source binding',async()=>{
+ const h=await harness('parts');try{
+  const ready=await h.screen.prepare(h.f.display,new AbortController().signal);
+  expect(ready?.record?.picture?.parts?.items.map(item=>item.name)).toEqual(['body','front']);
+  h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
+  expect(rigHost()!.subject).toBe('parts');expect(rigHost()!.record?.sourceHash).toBe(h.f.display.publication.source.sourceHash);
+  const entry=ready!.record!.forms.get(h.f.ask.askId)!;expect(entry.form.querySelector('textarea')).toBeNull();
+  entry.form.commentWords=()=> '[general]\nParts record comment';expect(entry.read()).toMatchObject({words:'[general]\nParts record comment'});
+ }finally{await h.close();}
+});
+
+test('#722 real form saves only checked radios, restores Other with empty contract note without changing option identities',async()=>{
+ const f=await recordScreenFixture('interview-picks'),dom=await recordScreenDom();
+ let inspection:Awaited<ReturnType<typeof prepareJobInspection>>|undefined;
+ try{
+  dom.set('location',{origin:f.origin});
+  inspection=await prepareJobInspection(f.display,new AbortController().signal);
+  // Draft controls are the subject here; the ordinary Nova browser covers the bound-image viewport.
+  for(const question of inspection.interview!.questions)question.images=[];
+  const store=new Map<string,string>(),forms=new Map<string,ReturnType<typeof formFor>>();
+  const node=((tag:string,key?:string)=>{const value=dom.document.createElement(tag);if(key)value.textContent=key;return value;}) as JobFormDependencies['node'];
+  const drafts=createJobFormDrafts({jobId:f.session.jobId,current:()=>inspection!,forms:()=>forms,storage:()=>({setItem:(key,value)=>{store.set(key,value);}})});
+  const deps:JobFormDependencies={node,translate:key=>key,helpers:{...createJobFormHelpers(node,key=>key),jobCheckpointContext,assertJobAskSource:(ask,display)=>{prepareJobForms(display,[ask],()=>null);}},draftStorage:()=>({getItem:key=>store.get(key)??null}),...drafts,access:{capability:'fixture'},pageId:'page',window:{state:()=>({pending:[f.ask],receipt:null,preparing:false,closed:false,generation:1}),submit:async()=>{throw new Error('No submission in draft test');}}};
+  const entry=formFor(f.ask,inspection,deps);forms.set(f.ask.askId,entry);
+  const radios=[...entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')],identities=radios.map(input=>({name:input.name,value:input.value}));
+  for(const input of radios){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
+  entry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='  직접 입력\n';
+  expect(entry.form.querySelector('textarea[name="note"]')).toBeNull();
+  entry.dirty=true;drafts.saveDraft();
+  const saved=JSON.parse(store.get(drafts.localDraftKey(f.display))!);
+  expect(saved.forms[0].controls.filter((input:{name:string})=>input.name.startsWith('choice.'))).toEqual([{name:'choice.topology',value:'topology_other'},{name:'choice.detail_level',value:'density_auto'}]);
+  const restored=formFor(f.ask,inspection,deps),restoredRadios=[...restored.form.querySelectorAll<HTMLInputElement>('input[type=radio]')];
+  expect(restoredRadios.map(input=>({name:input.name,value:input.value}))).toEqual(identities);
+  expect(restoredRadios.filter(input=>input.checked).map(input=>input.value)).toEqual(['topology_other','density_auto']);
+  expect(restored.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.hidden).toBe(false);
+  expect(restored.read()).toEqual(entry.read());
+  expect(restored.read()).toEqual({questionId:'rig_type',selections:[{itemId:'topology',optionId:'topology_other',otherText:'  직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:''});
+  expect(restored.form.querySelectorAll('select')).toHaveLength(0);
+ }finally{inspection?.dispose();dom.restore();await f.close();}
 });

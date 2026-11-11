@@ -185,7 +185,7 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
       if (live.connections >= WORKSPACE_SOCKET_LIMIT) return refused('WORKSPACE_BUSY', 503);
       return live.upgrade(request, server, securityHeaders);
     }
-    if (['/', '/workspace.js', '/workspace.css', '/styles.css'].includes(url.pathname)) {
+    if (['/', '/main.js', '/styles.css'].includes(url.pathname)) {
       if (!['GET', 'HEAD'].includes(request.method)) return refused('WORKSPACE_REQUEST_INVALID', 400);
       if (url.pathname === '/') {
         const keys = [...url.searchParams.keys()];
@@ -199,8 +199,8 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
       } else if (url.search && !['?lang=en', '?lang=ko'].includes(url.search)) {
         return refused('WORKSPACE_REQUEST_INVALID', 400);
       }
-      const body = url.pathname === '/workspace.js' ? await (ownerScript ??= ownerBundle())
-        : await readFile(appRoot + (url.pathname === '/' ? 'web/owner-workspace.html' : url.pathname === '/styles.css' ? 'web/styles.css' : 'web/owner-workspace.css'));
+      const body = url.pathname === '/main.js' ? await (ownerScript ??= ownerBundle())
+        : await readFile(appRoot + (url.pathname === '/' ? 'web/index.html' : 'web/styles.css'));
       return new Response(request.method === 'HEAD' ? null : body, {headers: {...securityHeaders,
         'Content-Type': url.pathname.endsWith('.js') ? 'text/javascript' : url.pathname.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8'}});
     }

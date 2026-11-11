@@ -18,9 +18,30 @@ test('#384 overlay opacity endpoints equal original painting crop / ordinary sou
  const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'overlay-'));try{const f=await writeComparisonPackage(root),part=await loadImage(await readFile(join(root,'parts/body.png'))),painting=await loadImage(await readFile(join(root,'painting.png')));
  const render=(opacity:number)=>{const canvas=createCanvas(20,16),ctx=canvas.getContext('2d');paintOverlay(ctx as never,{...f.body,index:0},part as never,painting as never,paintingRectangle(f.body,[32,24],f.painting),opacity,'green');return ctx.getImageData(0,0,20,16).data;};
  const zero=render(0),one=render(1),half=render(.5),p=(4*20+10)*4;
- console.log('#472 overlay midpoint channels',JSON.stringify({platform:process.platform,zero:[...zero.subarray(p,p+4)],one:[...one.subarray(p,p+4)],half:[...half.subarray(p,p+4)],signedDeviations:[0,1,2].map(c=>half[p+c]!-(zero[p+c]!+one[p+c]!)/2),absoluteDeviations:[0,1,2].map(c=>Math.abs(half[p+c]!-(zero[p+c]!+one[p+c]!)/2))}));
- expect([...zero.subarray(p,p+4)]).toEqual([225,70,40,255]);expect([...one.subarray(p,p+4)]).toEqual([...f.part.data.subarray(p,p+4)]);
- for(let c=0;c<3;c++)expect(Math.abs(half[p+c]!-(zero[p+c]!+one[p+c]!)/2)).toBeLessThanOrEqual(1);
+ expect([...zero.subarray(p,p+4)]).toEqual([225,70,40,255]);expect([...one.subarray(p,p+4)]).toEqual([...f.part.data.subarray(p,p+4)]);expect(half[p+3]).toBe(255);
+ // Both sampled inputs are opaque, integral, unscaled RGBA8: decoding/PMA and
+ // endpoint readback are exact here; no low-alpha unpremultiplication bound applies.
+ // @napi-rs/canvas 1.0.11 draw_image rounds .5*255 to the paint byte A=128:
+ // https://github.com/Brooooooklyn/canvas/blob/adce718ec8ff82f9e896875752fd621c46b1c04e/src/ctx.rs#L2055
+ // Its pinned Skia 95ee33d7ec7791ab9c071675710a14fe6408ae4f has two integer routes:
+ // src/core/SkBlitRow_D32.cpp + SkColorPriv.h: alpha255To256(A)=A+1, then
+ // F=floor((S*(A+1)+D*(255-A))/256). Thus |F-(S+D)/2|<1+|S-D|/256.
+ // src/opts/SkRasterPipeline_opts.h: lowp scale_1_float and srcover each use
+ // div255(v)=(v+255)>>8 on x64, giving R=ceil(S*A/256)+ceil(D*(255-A)/256).
+ // https://github.com/google/skia/tree/95ee33d7ec7791ab9c071675710a14fe6408ae4f/src
+ // Bound this fixture by the two computed integer results, not an arbitrary RGB
+ // tolerance: macOS arm64 matches F=[152,76,70], Linux x64 R=[153,76,70].
+ // Red's mean is 153.5, so the derived interval is [152,153] (max deviation 1.5);
+ // green/blue remain exact at 76/70. Endpoints above still require byte equality.
+ const alphaByte=Math.round(.5*255),channels=[0,1,2].map(c=>{
+  const source=one[p+c]!,destination=zero[p+c]!,midpoint=(source+destination)/2;
+  const fixedPoint=Math.floor((source*(alphaByte+1)+destination*(255-alphaByte))/256);
+  const raster=Math.floor((source*alphaByte+255)/256)+Math.floor((destination*(255-alphaByte)+255)/256);
+  return {actual:half[p+c]!,midpoint,min:Math.min(fixedPoint,raster),max:Math.max(fixedPoint,raster),fixedPoint,raster};
+ });
+ console.log('#744 overlay midpoint channels',JSON.stringify({platform:process.platform,arch:process.arch,zero:[...zero.subarray(p,p+4)],one:[...one.subarray(p,p+4)],half:[...half.subarray(p,p+4)],signedDeviations:channels.map(c=>c.actual-c.midpoint),absoluteDeviations:channels.map(c=>Math.abs(c.actual-c.midpoint)),roundingIntervals:channels.map(c=>[c.min,c.max]),derivedMaxDeviations:channels.map(c=>Math.max(Math.abs(c.min-c.midpoint),Math.abs(c.max-c.midpoint)))}));
+ for(const channel of channels){expect(channel.actual).toBeGreaterThanOrEqual(channel.min);expect(channel.actual).toBeLessThanOrEqual(channel.max);}
+
  }finally{await rm(root,{recursive:true,force:true});}
 });
 

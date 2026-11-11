@@ -1,4 +1,7 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+  'job.commentsFromWorkspace': '작업 공간의 코멘트를 함께 제출해요. 코멘트를 추가하거나 고치려면 이 요청을 닫으세요.',
+  'Add general comment': '일반 코멘트 추가',
+  'General comment': '일반 코멘트',
  "Difference: {0} of {1} pixels differ, compared where the rig draws \u00b7 rest still vs original painting.": "차이: 리그가 그리는 {1}픽셀 중 {0}픽셀 다름 · 정지 셋업과 원본 그림.",
  "PARTS_PAINTING_MAPPING: declared rig_size and positive scale_rig_per_source required": "PARTS_PAINTING_MAPPING: 선언된 rig_size와 양수 scale_rig_per_source가 필요해요.",
  "RIG_DIFFERENCE_SETUP_ONLY: Difference is available in Setup.": "RIG_DIFFERENCE_SETUP_ONLY: 차이 보기는 셋업에서 사용할 수 있어요.",
@@ -133,6 +136,10 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "interview.saved": "선택 기록을 저장했습니다.",
   "interview.choose": "각 질문에서 하나씩 직접 선택한 뒤 저장하세요.",
   "interview.readOnly": "읽기 전용입니다. 선택 기록을 저장하려면 실행 시 표시된 URL을 여세요.",
+  "interview.answered": "답변 {0} / {1}",
+  "interview.delegate": "위임",
+  "interview.open": "인터뷰 열기",
+  "interview.close": "인터뷰 닫기",
   "PARTS_DIFFERENCE_PROVENANCE: declared path, lowercase SHA-256 and lanczos3-rgb-opaque required": "PARTS_DIFFERENCE_PROVENANCE: 선언된 경로, 소문자 SHA-256, lanczos3-rgb-opaque가 필요해요.",
   "PARTS_DIFFERENCE_PATH: literal portable inside-package path required": "PARTS_DIFFERENCE_PATH: 패키지 안의 이식 가능한 리터럴 경로가 필요해요.",
   "PARTS_DIFFERENCE_PATH: declared painting must be readable inside the package": "PARTS_DIFFERENCE_PATH: 선언된 원화를 패키지 안에서 읽을 수 있어야 해요.",
@@ -205,6 +212,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.": "MODEL_UNAVAILABLE: 이 검사에 컴파일된 모델이 제공되지 않았습니다.",
   "Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.": "내장 아틀라스 검사는 읽기 전용입니다. 별도 승인은 parts 명령을 사용하세요.",
   "PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.": "PARTS_ATLAS_UNAVAILABLE: 검사 패키지에 사용 가능한 아틀라스가 없거나 원본이 변경되었습니다.",
+  "PARTS_ATLAS_NOT_CARRIED: atlas inspection is not available in the parts workspace; open the rig review instead.": "PARTS_ATLAS_NOT_CARRIED: 파츠 작업 공간에서는 아틀라스를 검사할 수 없어요. 리그 리뷰를 열어 주세요.",
 
   " (Apply's default pack flags)": " (적용의 기본 패킹 플래그)",
   " (No playback reference · time display only)": " (재생 레퍼런스 없음 · 시간 표시 전용)",
@@ -3392,7 +3400,6 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Unsupported correction operation": "지원하지 않는 수정 작업",
   "job.binding": "표시된 소스 연결 정보",
   "job.cameraSync": "카메라 동기화",
-  "job.choose": "옵션 선택",
   // English source aliases for the shared inspection DOM localizer.
   "This job was explicitly closed.": "이 작업은 명시적으로 종료되었습니다.",
   "The next result could not be displayed. The previous result is still shown.": "다음 결과를 표시하지 못했습니다. 이전 결과를 계속 표시합니다.",
@@ -3414,6 +3421,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.saveCheckpoint": "체크포인트 결과 저장",
   "job.savePartsVerdict": "파츠 판정 저장",
   "job.saved": "사용자 작업을 저장했습니다.",
+  "job.openPlanStep": "계획 단계 보기",
+  "job.openPlan": "계획 보기",
   "job.signoff": "단계 승인 저장",
   "job.reopen": "단계 다시 열기",
   "job.time": "검사 시간 (초)",

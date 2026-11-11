@@ -20,9 +20,13 @@ export interface WorkspaceStatusBarOptions {
  message:HTMLElement|string;readouts:readonly HTMLElement[];source?:HTMLElement;
 }
 /** One C11 DOM constructor; screens supply their existing readout and source nodes. */
-export function mountStatusBar(options:WorkspaceStatusBarOptions):{footer:HTMLElement;message:HTMLElement} {
+export function mountStatusBar(options:{placement:'inline';message:HTMLElement|string}):{message:HTMLElement};
+export function mountStatusBar(options:WorkspaceStatusBarOptions):{footer:HTMLElement;message:HTMLElement};
+export function mountStatusBar(options:WorkspaceStatusBarOptions|{placement:'inline';message:HTMLElement|string}):{footer?:HTMLElement;message:HTMLElement} {
  const message=typeof options.message==='string'?panelMake('span',{id:'message',className:'status-message',textContent:options.message}):options.message;
  message.setAttribute('role','status');message.setAttribute('aria-live','polite');
+ // Retained hosts already place their status in the header; preserve that node and geometry.
+ if('placement' in options)return {message};
  const readouts=panelMake('div',{className:'status-readouts'},...options.readouts);readouts.setAttribute('aria-label','Status');
  const footer=panelMake('footer',{className:'status-bar'},message,readouts);
  if(options.source)footer.append(options.source);

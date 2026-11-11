@@ -1,4 +1,4 @@
-/** Serves the parts and atlas view (#348): the page, its bundle, the part and page images by index, and the sign-off. */
+/** Serves the parts workspace: the page, its bundle, indexed images, and the sign-off. */
 import { PNG } from 'pngjs';
 import { readFile } from 'node:fs/promises';
 import { appRoot, buildWeb, setupEntryHtml } from './build.ts';
@@ -6,7 +6,7 @@ import { accessGate } from './open-protocol.ts';
 import { createLiveLifecycle, LIVE_PATH, type LiveExitInfo, type UpgradableServer } from './live-lifecycle.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
 import {serveReference} from './reference.ts';
-import { partsDifference, partsViewJson, exportPartsVerdict, assertPartsUnchanged, readVerdict, saveVerdictWithReceipt, servedImage, type PartsViewPackage, type PartsSaveReceipt } from './parts-view.ts';
+import { partsDifference, partsViewJson, exportPartsVerdict, assertPartsUnchanged, assertPartsCanOpen, readVerdict, saveVerdictWithReceipt, servedImage, type PartsViewPackage, type PartsSaveReceipt } from './parts-view.ts';
 
 const headers = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" };
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers });
@@ -47,6 +47,7 @@ export interface PartsServerOptions {
 }
 
 export async function startPartsServer(pkg: PartsViewPackage, options: PartsServerOptions = {}) {
+  assertPartsCanOpen(pkg);
   const by = options.by;
   if (by !== undefined && (typeof by !== 'string' || !by.trim())) throw new Error('PARTS_VERDICT_INVALID: reviewer name must be nonblank');
   const bundle = await buildWeb();

@@ -13,6 +13,7 @@ import {PROBE_MP4_BASE64} from './compare-mode-browser.ts';
 import {parseWorkspaceRecord, readPrivate} from '../src/open-workspace-state.ts';
 
 const foreground = Bun.argv.includes('--foreground');
+const singleEntry = Bun.argv.includes('--single-entry');
 const foregroundDrains: Promise<{output: string; error?: unknown}>[] = [];
 let foregroundOwner: Bun.Subprocess<'ignore', 'pipe', 'pipe'> | undefined;
 const language = Bun.argv[Bun.argv.indexOf('--lang') + 1];
@@ -303,17 +304,17 @@ try {
     assert.equal(joined.stdout.trim(), ownerURL);
     await record('foreground-entry', {...initial, afterJoin: await foregroundInventory(), sameOwnerURL: true, joinerExits: [0, joined.exit]});
   }
-  page = await launchCdpSession(join(root, 'browser'), {onEvent(event) {
+  page = await launchCdpSession(join(root, 'browser'), {browserArgs: singleEntry ? ['--single-process', '--no-zygote', '--num-raster-threads=1', '--js-flags=--max-old-space-size=1024'] : [], onEvent(event) {
     if (event.method === 'Runtime.exceptionThrown') events.push(event);
   }});
-  await page.setViewport(1440, 1000); await page.goto(navigationURL(), language);
+  await page.setViewport(1600, 1000); await page.goto(navigationURL(), language);
   await wait(`document.querySelectorAll('.owner-list button').length===9`, 'nine rows');
   const rows = await page.evaluate<string[]>(`[...document.querySelectorAll('.owner-target-status')].map(node=>node.textContent)`);
   assert.ok(rows.every(value => value === localized('Inspection only')));
   assert.equal(await page.evaluate(`document.querySelector('.owner-header select').getAttribute('aria-label')`), localized('Language'));
   assert.equal(await page.evaluate(`document.querySelector('.owner-header h1').textContent`), localized('Review workspace'));
   await record('nine-inspection-rows', rows);
-  for (let index = 0; index < 9; index++) {
+  for (let index = 0; index < (singleEntry ? 2 : 9); index++) {
     await choose(index, index + 1); await ready(index, 'synthetic-animation-' + (index + 1));
     const rendered = await inside<any>(index, `(async()=>{const response=await fetch(new URL('api/review',window.location.href));const source=await response.json();return {animation:document.querySelector('#animation-select').value,renderer:document.querySelector('#renderer-state').textContent,canvasCount:document.querySelectorAll('#rig-root canvas').length,sourceHash:source.sourceHash,rigHash:source.reviewedSource.rig.sha256};})()`);
     const modelHash = createHash('sha256').update(await readFile(join(inputs[index]!, 'build/skeleton.model.json'))).digest('hex');
@@ -322,15 +323,36 @@ try {
     const paint = await capturePaint(index);
     await record('render-' + (index + 1), {...rendered, paint});
   }
+  if (singleEntry) {
+    const entry = await fetch(navigationURL().split('#')[0]);
+    assert.equal(await entry.text(), await readFile(new URL('../web/index.html', import.meta.url), 'utf8'));
+    const layout = await page.evaluate<any>(`(()=>{const app=document.getElementById('app'),stage=document.querySelector('.owner-stage').getBoundingClientRect();return {
+      viewport:[innerWidth,innerHeight],children:[...app.children].map(n=>n.tagName),statuses:document.querySelectorAll('.owner-header [role=status]').length,
+      footers:app.querySelectorAll('footer').length,bottom:stage.bottom,animations:[...document.querySelectorAll('.owner-target-animation')].map(n=>n.textContent)};})()`);
+    assert.deepEqual(layout.viewport, [1600, 1000]);assert.deepEqual(layout.children, ['HEADER','NAV','MAIN']);
+    assert.equal(layout.statuses, 1);assert.equal(layout.footers, 0);assert.equal(layout.bottom, 1000);
+    assert.deepEqual(layout.animations, Array.from({length:9},(_,i)=>'synthetic-animation-'+(i+1)));
+    await choose(0, 2);await clickInside(0,'#zoom-in');
+    await inside(0, 'window.__owner734Document=document');
+    const held=await inside(0, `document.querySelector('#view-coordinates').textContent`);
+    await choose(1, 2);await choose(0, 2);
+    assert.equal(await inside(0, 'window.__owner734Document===document'), true);
+    assert.equal(await inside(0, `document.querySelector('#view-coordinates').textContent`), held);
+    await writeFile(join(output,'owner-single-entry-'+language+'.png'),await page.screenshot());
+    assert.deepEqual(await Promise.all(inputs.map(jobInputHashes)),before);assert.equal(events.length,0);
+    await record('single-entry-layout',layout);
+    await record('verdict',{status:'PASS',sample:'#734 single entry',language,viewport:[1600,1000],mainRigs:2,retainedFrameIdentity:true,cameraRetained:true,inputHashesUnchanged:true,
+      boundary:'synthetic source CLI owner composition; legacy acceptance suite not run'});
+  } else {
   await choose(0, 9);
   await clickInside(0, '[data-inspector="playback"]');
   await inside(0, `(()=>{const node=document.querySelector('#scrub');node.value='0.25';node.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
   await clickInside(0, '[data-part-list] button');
   await clickInside(0, '[data-inspector="playback"]');
   await clickInside(0, '#zoom-in');
-  await clickInside(0, '#write-review');
+  await clickInside(0, '[data-inspector="feedback"]');
   await inside(0, `(()=>{const node=document.querySelector('#feedback-summary');node.value='Synthetic human unsaved note';node.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
-  await clickInside(0, '#review-dialog-close');
+  await clickInside(0, '[data-inspector="playback"]');
   const snapshotExpression = `({animation:document.querySelector('#animation-select').value,time:document.querySelector('#scrub').value,zoom:document.querySelector('#zoom-value').textContent,part:document.querySelector('#selected-part').textContent,panel:document.querySelector('[data-inspector][aria-pressed="true"], [data-inspector][aria-selected="true"]')?.getAttribute('data-inspector'),note:document.querySelector('#feedback-summary').value,source:document.querySelector('#provenance-rig').textContent})`;
   const saved = await inside(0, snapshotExpression);
   await record('retention-before', saved);
@@ -403,12 +425,12 @@ try {
     assert.ok(geometry[name].scrollHeight <= geometry[name].clientHeight + 1, name + ' has no vertical clipping');
   }
   await writeFile(join(output, 'owner-nine-' + language + '.png'), await page.screenshot());
-  await page.evaluate(`window.__ownerDocumentIdentity=document.querySelector('#owner-workspace')`);
+  await page.evaluate(`window.__ownerDocumentIdentity=document.querySelector('#app')`);
   await open([9]);
   await wait(`document.querySelectorAll('.owner-list button').length===10`, 'new tenth row');
   assert.equal(await page.evaluate(`document.querySelectorAll('.owner-list button')[0].getAttribute('aria-pressed')`), 'true');
   await choose(9, 10); await ready(9, 'synthetic-animation-10');
-  assert.ok(await page.evaluate(`window.__ownerDocumentIdentity===document.querySelector('#owner-workspace')`));
+  assert.ok(await page.evaluate(`window.__ownerDocumentIdentity===document.querySelector('#app')`));
   await record('tenth-selection', {noReload: true, noSelectionTheft: true, mounted: 10});
   await open(Array.from({length: 22}, (_, index) => index + 10));
   await wait(`document.querySelectorAll('.owner-list button').length===32`, 'admission 32');
@@ -491,7 +513,7 @@ try {
   assert.ok(pair.animation.includes('pair-inspect'));
   const pairPaint = {a: await capturePaint(0, '#a-root canvas', 'compare-a'), b: await capturePaint(0, '#b-root canvas', 'compare-b')};
   await record('compare-decoded-paint', {...pair, paint: pairPaint});
-  await record('compare-browser', await inside(0, `({title:document.title,renderers:[...document.querySelectorAll('[id*="renderer"]')].map(n=>({id:n.id,text:n.textContent})),stageButtons:[...document.querySelectorAll('[data-stage-nav] button')].map(n=>n.textContent)})`));
+  await record('compare-browser', await inside(0, `({title:document.title,renderers:[...document.querySelectorAll('[id*="renderer"]')].map(n=>({id:n.id,text:n.textContent}))})`));
   await clickInside(0, '[data-mode="rig"]');
   for (const side of ['a', 'b']) {
     await clickInside(0, '[data-review-stage="3"]');
@@ -505,6 +527,7 @@ try {
   await record('input-immutability', {unchanged: true, targets: inputs.length});
   assert.equal(events.length, 0, 'unexpected browser exceptions');
   await record('verdict', {status: 'PASS', language, boundary: 'synthetic source CLI browser sample; installed and rigc gates pending'});
+  }
 } catch (error) {
   await record('verdict', {status: 'RED', error: error instanceof Error ? error.stack : String(error)});
   if (page) await writeFile(join(output, 'failure-' + language + '.png'), await page.screenshot()).catch(() => {});

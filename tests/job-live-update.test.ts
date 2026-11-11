@@ -145,17 +145,20 @@ test('#743 no-picture record attaches owned lifecycle only after asynchronous wo
  const body=source.slice(source.indexOf('async function startRecord()'),source.indexOf('let recordDialog:'));
  const js=new Bun.Transpiler({loader:'ts'}).transformSync(body),events:string[]=[],disposers:Function[]=[];
  let settle!:()=>void,attached:any;
+ const commentButton={disabled:true},stageCommentButton={disabled:true};let commentsSetup=0;
  const document={body:{dataset:{} as Record<string,string>},querySelectorAll:()=>[]};
  const suspend=()=>{},resume=async()=>{},dispose=()=>{};
  const scope={document,host:{record:{label:'Plan',sourceHash:'a'.repeat(64),hasPicture:false},attach(screen:unknown){attached=screen;events.push('attached');},displayed(){expect(document.body.dataset.ready).toBe('true');events.push('displayed');}},
   readOnly:null,rigInput:null,referenceInput:null,parts:null,disposed:false,tr:String,
   bindWorkspace(){},bindInspector(){},renderLayout(){},text(){},message(){},el:()=>({hidden:false}),
+  setupComments(){commentsSetup++;},rigInspector:{comments:{button:commentButton}},button:()=>stageCommentButton,
   PartExplorer:class{},workspace:{settle:()=>new Promise<void>(resolve=>{settle=resolve;})},
   viewport:{observeResize:()=>({disconnect:()=>events.push('disconnected')})},viewDisposers:disposers,
   renderRecordForms(){},renderPendingSubjects(){},suspendScreen:suspend,resumeScreen:resume,disposeScreen:dispose};
  const run=new Function('scope',`with(scope){${js};return startRecord();}`);
  const pending=run(scope);expect(attached).toBeUndefined();expect(document.body.dataset.ready).toBeUndefined();
  settle();await pending;expect(events).toEqual(['attached','displayed']);
+ expect(commentsSetup).toBe(1);expect(commentButton.disabled).toBe(false);expect(stageCommentButton.disabled).toBe(false);
  expect(attached.suspend).toBe(suspend);expect(attached.resume).toBe(resume);expect(attached.dispose).toBe(dispose);
  expect(attached.navigation).toBeUndefined();expect(attached.incompatible).toBeUndefined();expect(attached.recordForms).toBe(scope.renderRecordForms);
  for(const close of disposers)close();expect(events.at(-1)).toBe('disconnected');

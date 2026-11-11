@@ -32,8 +32,37 @@ test('CLI prints a stable deep checkpoint URL without opening a browser',async()
 });
 
 test('read-only feedback CLI retrieves saved identity and otherwise reports pending without writing source',async()=>{
- const root=await mkdtemp(join(tmpdir(),'review-cli-'));await writeFile(join(root,'motion.json'),'{}');const before=await Bun.file(join(root,'motion.json')).text();
- const proc=Bun.spawn([process.execPath,'src/cli.ts','feedback',root],{stdout:'pipe',stderr:'pipe'});const output=await new Response(proc.stdout).text();expect(await proc.exited).toBe(0);const session=JSON.parse(output);expect(session.status).toBe('pending');expect(session.updatedAt).toBeNull();expect(session.reviewedSource.rig).toBeNull();expect(session.reviewedSource.motion.path).toBe('motion.json');expect(session.reviewedSource.motion.sha256).toMatch(/^[a-f0-9]{64}$/);expect(await Bun.file(join(root,'review.json')).exists()).toBe(false);expect(await Bun.file(join(root,'motion.json')).text()).toBe(before);const p=await loadReview(root);try{await saveSession(p,{...freshSession(p),status:'changes-requested'});const submitted=Bun.spawn([process.execPath,'src/cli.ts','feedback',root],{stdout:'pipe',stderr:'pipe'});const stored=JSON.parse(await new Response(submitted.stdout).text());expect(await submitted.exited).toBe(0);expect(stored.status).toBe('changes-requested');expect(stored.reviewedSource).toEqual(p.reviewedSource);expect(stored.updatedAt).toBeString();}finally{await rm(sessionFile(p),{force:true});await rm(root,{recursive:true,force:true});}
+ const work=await mkdtemp(join(tmpdir(),'review-cli-'));
+ const root=join(work,'package'),stateDir=join(work,'state');
+ const env={...process.env,RIG_REVIEW_STATE_DIR:stateDir};
+ try {
+  await mkdir(root);
+  await writeFile(join(root,'motion.json'),'{}');
+  const before=await Bun.file(join(root,'motion.json')).text();
+  const proc=Bun.spawn([process.execPath,'src/cli.ts','feedback',root],{env,stdout:'pipe',stderr:'pipe'});
+  const output=await new Response(proc.stdout).text();
+  expect(await proc.exited).toBe(0);
+  const session=JSON.parse(output);
+  expect(session.status).toBe('pending');
+  expect(session.updatedAt).toBeNull();
+  expect(session.reviewedSource.rig).toBeNull();
+  expect(session.reviewedSource.motion.path).toBe('motion.json');
+  expect(session.reviewedSource.motion.sha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(await Bun.file(join(root,'review.json')).exists()).toBe(false);
+  expect(await Bun.file(join(root,'motion.json')).text()).toBe(before);
+  const p=await loadReview(root);
+  const saved=await saveSession(p,{...freshSession(p),status:'changes-requested'},stateDir);
+  expect(saved.status).toBe('changes-requested');
+  expect(await readSession(p,stateDir)).toEqual(saved);
+  const submitted=Bun.spawn([process.execPath,'src/cli.ts','feedback',root],{env,stdout:'pipe',stderr:'pipe'});
+  const stored=JSON.parse(await new Response(submitted.stdout).text());
+  expect(await submitted.exited).toBe(0);
+  expect(stored.status).toBe('changes-requested');
+  expect(stored.reviewedSource).toEqual(p.reviewedSource);
+  expect(stored.updatedAt).toBeString();
+  expect(await Bun.file(join(root,'motion.json')).text()).toBe(before);
+  expect(await Bun.file(join(root,'review.json')).exists()).toBe(false);
+ }finally{await rm(work,{recursive:true,force:true});}
 });
 
 test('selected correction keeps exact session bytes and pending made feedback cannot save', async () => {

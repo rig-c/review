@@ -1,4 +1,7 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+  'job.commentsFromWorkspace': 'Comments from the workspace are included. Close this request to add or edit comments.',
+  'Add general comment': 'Add general comment',
+  'General comment': 'General comment',
  "Difference: {0} of {1} pixels differ, compared where the rig draws \u00b7 rest still vs original painting.": "Difference: {0} of {1} pixels differ, compared where the rig draws · rest still vs original painting.",
  "PARTS_PAINTING_MAPPING: declared rig_size and positive scale_rig_per_source required": "PARTS_PAINTING_MAPPING: declared rig_size and positive scale_rig_per_source required",
  "RIG_DIFFERENCE_SETUP_ONLY: Difference is available in Setup.": "RIG_DIFFERENCE_SETUP_ONLY: Difference is available in Setup.",
@@ -133,6 +136,10 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "interview.saved": "Picks saved.",
   "interview.choose": "Choose one option per prompt, then save.",
   "interview.readOnly": "Read-only view. Open the launch URL to save picks.",
+  "interview.answered": "Answered {0} / {1}",
+  "interview.delegate": "Delegate",
+  "interview.open": "Open interview",
+  "interview.close": "Close interview",
   "PARTS_DIFFERENCE_PROVENANCE: declared path, lowercase SHA-256 and lanczos3-rgb-opaque required": "PARTS_DIFFERENCE_PROVENANCE: declared path, lowercase SHA-256 and lanczos3-rgb-opaque required",
   "PARTS_DIFFERENCE_PATH: literal portable inside-package path required": "PARTS_DIFFERENCE_PATH: literal portable inside-package path required",
   "PARTS_DIFFERENCE_PATH: declared painting must be readable inside the package": "PARTS_DIFFERENCE_PATH: declared painting must be readable inside the package",
@@ -205,6 +212,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.": "MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.",
   "Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.": "Embedded atlas inspection is read-only. Use the parts command for a separate sign-off.",
   "PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.": "PARTS_ATLAS_UNAVAILABLE: the inspected package has no usable atlas or its source changed.",
+  "PARTS_ATLAS_NOT_CARRIED: atlas inspection is not available in the parts workspace; open the rig review instead.": "PARTS_ATLAS_NOT_CARRIED: atlas inspection is not available in the parts workspace; open the rig review instead.",
 
   " (Apply's default pack flags)": " (Apply's default pack flags)",
   " (No playback reference · time display only)": " (No playback reference · time display only)",
@@ -3392,7 +3400,6 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Unsupported correction operation": "Unsupported correction operation",
   "job.binding": "Displayed source binding",
   "job.cameraSync": "Synchronize cameras",
-  "job.choose": "Choose an option",
   // English source aliases for the shared inspection DOM localizer.
   "This job was explicitly closed.": "This job was explicitly closed.",
   "The next result could not be displayed. The previous result is still shown.": "The next result could not be displayed. The previous result is still shown.",
@@ -3414,6 +3421,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.saveCheckpoint": "Save checkpoint outcome",
   "job.savePartsVerdict": "Save parts verdict",
   "job.saved": "Human action saved.",
+  "job.openPlanStep": "View plan step",
+  "job.openPlan": "View plan",
   "job.signoff": "Save stage approval",
   "job.reopen": "Reopen stage",
   "job.time": "Inspection time (s)",
