@@ -4,7 +4,7 @@ import {createPartsViewport} from './parts-viewport-provider.ts';
 import {bindStageComments,type CommentUiPose,type CommentCodec} from './stage-comments.ts';
 import {parsePartsIssue,assertPartsIssueBinding,snapImageRegion,type PartsComment,type PartsIssue} from '../src/parts-comment.ts';
 import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
-import {textEntryFocused} from './view-controls.ts';
+import {textEntryFocused,createViewControls} from './view-controls.ts';
 import {stagePartsSelectionIndex,type StagePartsState} from './stage-nav.ts';
 import type {JobEnabledActKind,UISubmissionV3} from '../src/job-contract.ts';
 import type {LegacyPartsVerdictView} from '../src/parts-view.ts';
@@ -93,23 +93,15 @@ function mountPartsMarkup(slots: PartsWorkspaceSlots): void {
   }
   if (slots.toolbar) {
     slots.toolbar.classList.add('pv-toolbar');
-    const assemble = doc.createElement('button'); assemble.type = 'button'; assemble.id = 'pv-assemble'; assemble.setAttribute('aria-pressed', 'false'); assemble.textContent = t('Assembled');
+    const viewControls = createViewControls({layout:'legacyPartsStep2'});
+    const {assemble, comparisonGroup:compGroupWrap, atlasSwitch} = viewControls.choices!;
+    const zoomGroup = viewControls.zoomGroup!, syncLabel = viewControls.syncLabel;
     const bgLabel = doc.createElement('label'); bgLabel.className = 'pv-field'; bgLabel.textContent = t('Background');
     const bgSelect = doc.createElement('select'); bgSelect.id = 'pv-bg'; bgSelect.setAttribute('data-pv-bg', '');
     for (const [val, text] of [['green', 'Green'], ['magenta', 'Magenta'], ['black', 'Black'], ['white', 'White'], ['checker', 'Checker']]) {
       const opt = doc.createElement('option'); opt.value = val!; opt.textContent = t(text!); bgSelect.append(opt);
     }
     bgLabel.append(bgSelect);
-    const zoomGroup = doc.createElement('span'); zoomGroup.className = 'pv-group'; zoomGroup.setAttribute('role', 'group'); zoomGroup.setAttribute('aria-label', t('Zoom'));
-    for (const [id, text] of [['zoom-out', '−'], ['zoom-in', '+'], ['fit', 'Fit'], ['native-one', '1:1']]) {
-      if (id === 'zoom-in') { const zv = doc.createElement('span'); zv.id = 'zoom-value'; zv.textContent = '1:1'; zoomGroup.append(zv); }
-      const btn = doc.createElement('button'); btn.type = 'button'; btn.id = id!; btn.textContent = text === 'Fit' ? t('Fit') : text!;
-      if (id === 'native-one') btn.setAttribute('aria-pressed', 'true');
-      zoomGroup.append(btn);
-    }
-    const syncLabel = doc.createElement('label'); syncLabel.className = 'pv-field';
-    const syncInput = doc.createElement('input'); syncInput.id = 'camera-sync'; syncInput.type = 'checkbox';
-    syncLabel.append(syncInput, t('Sync cameras'));
     const commentBtn = doc.createElement('button'); commentBtn.type = 'button'; commentBtn.id = 'stage-comment'; commentBtn.setAttribute('aria-pressed', 'false'); commentBtn.setAttribute('aria-controls', 'stage-comment-list'); commentBtn.textContent = t('Comment · C ({0})', [0]);
     const alphaLabel = doc.createElement('label'); alphaLabel.className = 'pv-field';
     const alphaInput = doc.createElement('input'); alphaInput.type = 'checkbox'; alphaInput.id = 'pv-alpha'; alphaInput.setAttribute('data-pv-alpha', '');
@@ -118,13 +110,6 @@ function mountPartsMarkup(slots: PartsWorkspaceSlots): void {
     const fpInput = doc.createElement('input'); fpInput.type = 'checkbox'; fpInput.id = 'pv-footprints'; fpInput.setAttribute('data-pv-footprints', '');
     fpLabel.append(fpInput, t('Footprints of parts in front'));
     const compSpan = doc.createElement('span'); compSpan.id = 'pv-comparison'; compSpan.className = 'pv-comparison'; compSpan.hidden = true;
-    const compGroupWrap = doc.createElement('span'); compGroupWrap.className = 'pv-field'; compGroupWrap.textContent = t('Painting comparison');
-    const compGroup = doc.createElement('span'); compGroup.className = 'pv-group'; compGroup.setAttribute('role', 'group'); compGroup.setAttribute('aria-label', t('Painting comparison'));
-    for (const [mode, text] of [['part', 'Part'], ['overlay', 'Overlay'], ['difference', 'Difference']]) {
-      const btn = doc.createElement('button'); btn.type = 'button'; btn.setAttribute('data-pv-comparison', mode!); btn.setAttribute('aria-pressed', String(mode === 'part')); btn.textContent = t(text!);
-      compGroup.append(btn);
-    }
-    compGroupWrap.append(compGroup);
     const opLabel = doc.createElement('label'); opLabel.className = 'pv-field'; opLabel.id = 'pv-opacity-control'; opLabel.hidden = true; opLabel.textContent = t('Part opacity');
     const opInput = doc.createElement('input'); opInput.type = 'range'; opInput.id = 'pv-opacity'; opInput.min = '0'; opInput.max = '1'; opInput.step = '0.001'; opInput.value = '0.5';
     const opOut = doc.createElement('output'); opOut.id = 'pv-opacity-value'; opOut.textContent = '50.0%';
@@ -133,11 +118,6 @@ function mountPartsMarkup(slots: PartsWorkspaceSlots): void {
     const thInput = doc.createElement('input'); thInput.type = 'number'; thInput.id = 'pv-threshold'; thInput.min = '0'; thInput.max = '255'; thInput.step = '1'; thInput.value = '0';
     thLabel.append(thInput);
     compSpan.append(compGroupWrap, opLabel, thLabel);
-    const atlasSwitch = doc.createElement('span'); atlasSwitch.className = 'pv-group'; atlasSwitch.setAttribute('role', 'group'); atlasSwitch.setAttribute('aria-label', t('Atlas view')); atlasSwitch.id = 'pv-atlas-switch'; atlasSwitch.hidden = true;
-    for (const [view, text] of [['item', 'Region'], ['page', 'Pages']]) {
-      const btn = doc.createElement('button'); btn.type = 'button'; btn.setAttribute('data-pv-view', view!); btn.setAttribute('aria-pressed', String(view === 'item')); btn.textContent = t(text!);
-      atlasSwitch.append(btn);
-    }
     slots.toolbar.append(assemble, bgLabel, zoomGroup, syncLabel, commentBtn, alphaLabel, fpLabel, compSpan, atlasSwitch);
   }
   if (slots.stage) {

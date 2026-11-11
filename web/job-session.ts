@@ -29,7 +29,7 @@ import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigS
     type JobRigDraw, type JobRigDrawState} from './job-rig-capture.ts';
 import {advancePlayback} from './playback-clock.ts';
 import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
-import {labelledControl} from './view-controls.ts';
+import {labelledControl,createViewControls} from './view-controls.ts';
 import {SENTINELS} from './parts-render.ts';
 import {CanvasRenderer} from '@rig-c/play';
 import {JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
@@ -2501,19 +2501,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         bgField.id = 'job-background-field';
         bgField.hidden = true;
         controls.append(layerSet, bgField);
-        for (const [id, key] of [['zoom-in', 'job.zoomIn'], ['zoom-out', 'job.zoomOut'], ['fit', 'Fit']]) {
-            const button = node('button', key);
-            button.id = id!;
-            button.type = 'button';
-            controls.append(button);
-        }
-        const sync = node('input');
-        sync.id = 'camera-sync';
-        sync.type = 'checkbox';
-        controls.append(inputLabel('job.cameraSync', sync));
-        const zoom = node('span');
-        zoom.id = 'zoom-value';
-        controls.append(zoom);
+        const viewControls = createViewControls({layout:'legacyCompiledJobStep5', inputLabel});
+        controls.append(...viewControls.zoomButtons, viewControls.syncLabel, viewControls.value);
         const pair = node('div');
         pair.id = 'stage-layout';
         mountViewportPair(pair);
