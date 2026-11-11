@@ -532,3 +532,23 @@ test('#591 Stage 1 draft config_inputs binds assemble.occluders image and plate 
     await rm(root,{recursive:true,force:true});
   }
 });
+
+test('#708 a draft recorded with the default --parts (the draft directory itself) joins, as cg-miko accepted-v6 does',async()=>{
+  const root=await mkdtemp(join(await realpath(tmpdir()),'review-draft-default-parts-'));
+  try{
+    const f=await joinedVerdictFixture(root);
+    const draft=join(root,'derived/drafts/chain'),input=join(draft,'input');
+    for(const entry of await readdir(input))await Bun.$`mv ${join(input,entry)} ${join(draft,entry)}`.quiet();
+    await rm(input,{recursive:true});
+    const path=join(root,'project.json'),project=JSON.parse(await readFile(path,'utf8'));
+    project.drafts[0].parts.path='derived/drafts/chain';
+    for(const file of project.drafts[0].parts.files)file.path=file.path.replace('derived/drafts/chain/input/','derived/drafts/chain/');
+    await writeFile(path,JSON.stringify(project,null,2)+'\n');
+    const opened=await loadOpenPackage({input:f.input,project:{root,draftId:'chain',picksDir:f.project.picksDir}});
+    if(opened.mode!=='single')throw new Error('Expected a single joined package');
+    expect(opened.joined?.draft).toBeDefined();
+    project.drafts[0].parts.path='derived/drafts/chainx';
+    await writeFile(path,JSON.stringify(project,null,2)+'\n');
+    await expect(loadOpenPackage({input:f.input,project:{root,draftId:'chain',picksDir:f.project.picksDir}})).rejects.toThrow('INTERVIEW_SOURCE_MISMATCH');
+  }finally{await rm(root,{recursive:true,force:true});}
+});
