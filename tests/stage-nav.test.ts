@@ -4,107 +4,24 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {loadReview} from '../src/manifest.ts';
 import {stagePartsRoutes} from '../src/stage-parts.ts';
-import {frontRoute,stageFrameQuery} from '../src/front.ts';
+import {frontRoute} from '../src/front.ts';
 import {loadPartsAtlas,loadPartsView,verdictSource} from '../src/parts-view.ts';
-import {bindStageNav,reviewStages,stageReason} from '../web/stage-nav.ts';
-import {instanceAccess,readOnlyReason,type InstanceAccess} from '../web/instance-access.ts';
-
-/** Mount the real navigation with only its DOM plumbing stubbed; no browser or server. */
-async function emittedStageFrames(access:InstanceAccess,href:string,side?:'a'|'b') {
- class Element {
-  children:Element[]=[];dataset:Record<string,string>={};style={};
-  classList={add(){},remove(){}};src='';onclick=()=>{};
-  append(...children:Element[]){this.children.push(...children);}
-  setAttribute(){} addEventListener(){} removeEventListener(){} remove(){}
-  closest(){return null;} getBoundingClientRect(){return {bottom:0};}
-  querySelectorAll(){return [];}
- }
- const host=new Element(),body=new Element(),workspace=new Element();
- const globals={
-  document:{body,documentElement:new Element(),createElement:()=>new Element(),
-   querySelector:(selector:string)=>selector==='[data-stage-nav]'?host:workspace,
-   querySelectorAll:()=>[],getElementById:()=>null},
-  location:new URL(href),window:{addEventListener(){},removeEventListener(){}},
-  MutationObserver:class {observe(){} disconnect(){}},
-  fetch:async()=>Response.json({}),
- };
- const descriptors=new Map(Object.keys(globals).map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
- let dispose:(()=>void)|undefined;
- try{
-  for(const [key,value] of Object.entries(globals))Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});
-  dispose=bindStageNav({access,preRig:true,model:false,interview:true,side:side?()=>side:undefined});
-  host.children[1]!.onclick();
-  // showInterview awaits the stub response and then mounts its frame.
-  await new Promise(resolve=>setTimeout(resolve,0));
-  const urls=body.children[0]!.children.filter(child=>child.src).map(child=>new URL(child.src,href));
-  expect(urls).toHaveLength(2);
-  return urls;
- }finally{
-  dispose?.();
-  for(const [key,descriptor] of descriptors){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}
- }
-}
-
-test('direct embedded frames recover the parent handoff slot without capability query values',async()=>{
- const key='b'.repeat(64),capability='c'.repeat(64),values=new Map<string,string>();
- const storage={getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>{values.set(key,value);}};
- const href=`http://127.0.0.1:5000/?handoff=${key}#cap=${capability}`;
- const parent=instanceAccess(href,storage,()=>{});
- const urls=await emittedStageFrames(parent,href);
- for(const url of urls){
-  expect(url.origin).toBe(new URL(href).origin);
-  expect(url.searchParams.get('handoff')).toBe(key);
-  expect([...url.searchParams.keys()].sort()).toEqual(['handoff','lang','stageEmbed']);
-  expect(url.search).not.toContain(capability);
-  const child=instanceAccess(url.href,storage,()=>{});
-  expect(child.key).toBe(parent.key);expect(child.capability).toBe(capability);
- }
- const parts=urls.find(url=>url.pathname==='/stage-parts.html')!;
- expect(parts.hash).toBe('');
- expect(instanceAccess(parts.href,null,()=>{}).capability).toBeNull();
- expect(instanceAccess(parts.href,{getItem:()=>null,setItem(){}},()=>{}).capability).toBeNull();
- const other=new Map([['rig-review-capability/1:'+'d'.repeat(64),capability]]);
- expect(instanceAccess(parts.href,{getItem:key=>other.get(key)??null,setItem(){}},()=>{}).capability).toBeNull();
- const old=new URL(parts);old.searchParams.delete('handoff');
- const lost=instanceAccess(old.href,storage,()=>{});
- expect(lost.key).toBe('direct');expect(lost.capability).toBeNull();expect(readOnlyReason(lost,true)).toBeTruthy();
-});
-
-test('managed and foreground frame queries retain their existing authority boundaries',async()=>{
- const key='b'.repeat(64);
- for(const side of [undefined,'a','b'] as const){
-  const href=`http://127.0.0.1:4318/instances/${key}/?handoff=${'d'.repeat(64)}`;
-  const access=instanceAccess(href,null,()=>{});
-  for(const url of await emittedStageFrames(access,href,side)){
-   expect(url.pathname).toStartWith(`/instances/${key}/`);expect(url.searchParams.has('handoff')).toBe(false);
-   const compare=!!side&&url.pathname.endsWith('stage-parts.html');
-   expect(stageFrameQuery(compare?'compare':'single',url.search)).toBe(true);
-   expect(instanceAccess(url.href,null,()=>{}).key).toBe(key);
-  }
- }
- for(const handoff of ['', 'short', 'A'.repeat(64), 'b'.repeat(63), 'b'.repeat(65)]){
-  const href='http://127.0.0.1:5000/?handoff='+handoff;
-  for(const url of await emittedStageFrames(instanceAccess(href,null,()=>{}),href)){
-   expect(url.searchParams.has('handoff')).toBe(false);expect(url.hash).toBe('');
-   expect(instanceAccess(url.href,null,()=>{}).capability).toBeNull();
-  }
- }
- const values=new Map<string,string>(),capability='c'.repeat(64);
- const storage={getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>{values.set(key,value);}};
- const href=`http://127.0.0.1:5000/#cap=${capability}`;
- for(const url of await emittedStageFrames(instanceAccess(href,storage,()=>{}),href)){
-  expect(url.searchParams.has('handoff')).toBe(false);
-  expect(instanceAccess(url.href,storage,()=>{}).capability).toBe(capability);
- }
-});
+import {bindStageNav,reviewStages,stageReason,type StageNavOptions} from '../web/stage-nav.ts';
 
 test('stage inspection does not create interview/direction/model capabilities',()=>{
- expect(reviewStages).toHaveLength(4);expect(stageReason(2,true)).toStartWith('INTERVIEW_UNAVAILABLE:');expect(stageReason(4,true)).toStartWith('DIRECTION_UNAVAILABLE:');expect(stageReason(3,false)).toStartWith('MODEL_UNAVAILABLE:');expect(stageReason(1,false)).toBeNull();
+ expect(reviewStages).toHaveLength(4);expect(stageReason(2,true)).toStartWith('INTERVIEW_UNAVAILABLE:');expect(stageReason(3,false)).toStartWith('MODEL_UNAVAILABLE:');expect(stageReason(1,true)).toBeNull();expect(stageReason(3,true)).toBeNull();
+ // #726: Direction is not built; the chip names itself unavailable whatever the package carries.
+ expect(stageReason(4,true)).toStartWith('DIRECTION_NOT_AVAILABLE:');expect(stageReason(4,true,true,false,true)).toStartWith('DIRECTION_NOT_AVAILABLE:');
+ // The interview chip opens only through the modal hook (#708 seam).
+ expect(stageReason(2,true,true)).toStartWith('INTERVIEW_MODAL_UNAVAILABLE:');expect(stageReason(2,true,true,false,true)).toBeNull();
+ expect(stageReason(1,false,false,true)).toStartWith('RIG_VERSION_UNAVAILABLE:');
 });
 test('front stage routes are read-only, side-closed and index-only',()=>{
  for(const mode of ['single','compare'] as const){
   const base=mode==='single'?'/api/stage-parts':'/api/compare/a/stage-parts';
-  for(const path of [base,base+'/page/0','/stage-parts.html','/parts.js','/parts.css']){expect(frontRoute(mode,'GET',path)).not.toBeNull();expect(frontRoute(mode,'POST',path)).toBeNull();}
+  for(const path of [base,base+'/page/0']){expect(frontRoute(mode,'GET',path)).not.toBeNull();expect(frontRoute(mode,'POST',path)).toBeNull();}
+  // #726: the legacy stage frames are gone; no page route remains for them.
+  for(const path of ['/stage-parts.html','/stage-interview.html','/parts.js','/parts.css','/interview.js','/interview.css'])expect(frontRoute(mode,'GET',path)).toBeNull();
   for(const path of [base+'/verdict',base+'/page/-1',base+'/page/../0',base+'/page/1/escape','/api/compare/c/stage-parts','/api/stage-parts/page/%2e%2e'])expect(frontRoute(mode,'GET',path)).toBeNull();
  }
 });
@@ -156,126 +73,80 @@ test('a FIRST image returns original bytes; page replacement during initial load
 
 test('interview launch guidance and chrome have matching English and Korean keys',async()=>{
  const {enCatalog}=await import('../web/catalog-en.ts'),{koCatalog}=await import('../web/catalog-ko.ts');
- const key=stageReason(2,true)!;
- expect(enCatalog[key]).toContain('INTERVIEW_UNAVAILABLE:');expect(koCatalog[key]).toContain('INTERVIEW_UNAVAILABLE:');
- expect(stageReason(2,true,false,true)).toBeNull();
- for(const file of ['web/interview.ts','web/interview-panel.ts']){
+ for(const key of [stageReason(2,true)!,stageReason(2,true,true)!,stageReason(4,true)!,'{stage} · not available']){expect(enCatalog[key],key).toBeTruthy();expect(koCatalog[key],key).toBeTruthy();}
+ for(const file of ['web/interview-panel.ts']){
   const source=await readFile(file,'utf8');
-  const keys=[...new Set(source.match(/interview\.[A-Za-z]+/g))].filter(key=>!['interview.ts','interview.js','interview.html'].includes(key));
+  const keys=[...new Set(source.match(/interview\.[A-Za-z]+/g))];
   expect(keys.length).toBeGreaterThan(0);
   for(const k of keys){expect(enCatalog[k],k).toBeTruthy();expect(koCatalog[k],k).toBeTruthy();}
  }
 });
 
-test('#562(ii) preRig stage-nav keeps direct Stage 3 refused, opens Setup only on verified Stage 1 correction, and re-syncs Stage 1 draft build on return or refresh',async()=>{
- const {bindStageNav}=await import('../web/stage-nav.ts');
+/** Mount the real chips with only DOM plumbing stubbed; no browser or server. */
+function mountChips(options:StageNavOptions){
  class NodeStub {
-  tagName:string;id='';className='';textContent='';title='';hidden=false;disabled=false;inert=false;
-  dataset:Record<string,string>={};style:Record<string,string>={};children:NodeStub[]=[];
-  contentWindow:any=null;src='';
+  tagName:string;textContent='';title='';hidden=false;disabled=false;dataset:Record<string,string>={};children:NodeStub[]=[];onclick?:()=>void;
   private attrs=new Map<string,string>();
-  private listeners=new Map<string,Set<(e:any)=>void>>();
-  constructor(tag:string){this.tagName=tag.toUpperCase();if(this.tagName==='IFRAME')this.contentWindow={postMessage:(msg:unknown)=>{this.posted.push(msg);}};}
-  posted:unknown[]=[];
+  constructor(tag:string){this.tagName=tag.toUpperCase();}
   append(...nodes:NodeStub[]){this.children.push(...nodes);}
-  remove(){if(body.children.includes(this))body.children=body.children.filter(c=>c!==this);}
+  remove(){host.children=host.children.filter(c=>c!==this);}
   setAttribute(k:string,v:string){this.attrs.set(k,v);}
   getAttribute(k:string){return this.attrs.get(k)??null;}
   removeAttribute(k:string){this.attrs.delete(k);}
-  addEventListener(type:string,fn:(e:any)=>void){if(!this.listeners.has(type))this.listeners.set(type,new Set());this.listeners.get(type)!.add(fn);}
-  removeEventListener(type:string,fn:(e:any)=>void){this.listeners.get(type)?.delete(fn);}
-  dispatch(type:string,event:any={}){for(const fn of [...(this.listeners.get(type)??[])])fn(event);}
-  click(){const ev={preventDefault(){},stopImmediatePropagation(){}};this.dispatch('click',ev);this.onclick?.();}
-  onclick?:()=>void;
-  closest(){return null;}
-  getBoundingClientRect(){return {bottom:40};}
-  classList={add:()=>{},remove:()=>{},toggle:()=>{}};
-  querySelectorAll(){return [];}
+  addEventListener(){} removeEventListener(){}
  }
- const host=new NodeStub('nav'),workspace=new NodeStub('div'),inspectorRig=new NodeStub('button'),body=new NodeStub('body'),docEl=new NodeStub('html');
- inspectorRig.setAttribute('data-inspector','rig');inspectorRig.setAttribute('aria-selected','false');
- const winListeners=new Map<string,Set<(e:any)=>void>>();
- const prevDoc=(globalThis as any).document,prevWin=(globalThis as any).window,prevLoc=(globalThis as any).location,prevObs=(globalThis as any).MutationObserver;
- (globalThis as any).location={href:'http://127.0.0.1:4173/',origin:'http://127.0.0.1:4173',search:'',hash:''};
- (globalThis as any).MutationObserver=class{observe(){}disconnect(){}};
- (globalThis as any).window={
-  location:(globalThis as any).location,
-  addEventListener:(t:string,fn:(e:any)=>void)=>{if(!winListeners.has(t))winListeners.set(t,new Set());winListeners.get(t)!.add(fn);},
-  removeEventListener:(t:string,fn:(e:any)=>void)=>{winListeners.get(t)?.delete(fn);},
- };
- (globalThis as any).document={
-  documentElement:docEl,
-  body,
-  getElementById:()=>null,
-  createElement:(tag:string)=>new NodeStub(tag),
-  querySelector:(sel:string)=>sel==='[data-stage-nav]'?host:sel==='.layout'?workspace:sel==='[data-inspector="rig"]'?inspectorRig:null,
-  querySelectorAll:(sel:string)=>sel.includes('[data-inspector]')?[inspectorRig]:[],
- };
+ const host=new NodeStub('nav'),docEl=new NodeStub('html'),body=new NodeStub('body'),mode=new NodeStub('button');mode.setAttribute('data-mode','rig');
+ const previous=Object.fromEntries(['document','window','location','MutationObserver'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+ const set=(key:string,value:unknown)=>Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});
+ set('location',new URL('http://127.0.0.1:4173/'));set('MutationObserver',class{observe(){}disconnect(){}});
+ set('window',{addEventListener(){},removeEventListener(){}});
+ set('document',{documentElement:docEl,body,getElementById:()=>null,createElement:(tag:string)=>new NodeStub(tag),
+  querySelector:(sel:string)=>sel==='[data-stage-nav]'?host:null,querySelectorAll:(sel:string)=>sel.includes('[data-mode]')?[mode]:[]});
+ const dispose=bindStageNav(options);
+ return {host,docEl,body,mode,restore(){dispose();for(const [key,d] of Object.entries(previous)){if(d)Object.defineProperty(globalThis,key,d);else Reflect.deleteProperty(globalThis,key);}}};
+}
+
+test('#726 chips open modes of the one screen, the interview modal hook, or name themselves unavailable, and never mount a frame',()=>{
+ const calls:string[]=[];let current:1|3|null=3;
+ const chips=mountChips({model:true,interview:true,setup:()=>{calls.push('setup');current=1;},animate:()=>{calls.push('animate');current=3;},
+  interviewModal:()=>calls.push('interview'),current:()=>current});
  try{
-  let currentBuild='inspected';
-  let allowCorrection=true;
-  let refreshFn:(()=>void)|undefined;
-  const calls:string[]=[];
-  const dispose=bindStageNav({
-   preRig:true,
-   model:false,
-   draftBuild:()=>currentBuild,
-   refresh:(fn:()=>void)=>{refreshFn=fn;},
-   correction:async(req:{part:string;sourceHash:string;buildId:string;instrument:string})=>{
-    calls.push(`${req.part}:${req.buildId}:${req.instrument}`);
-    if(!allowCorrection)throw new Error('STAGE_DRAFT_MISMATCH');
-    inspectorRig.click();
-   },
-  } as any);
-  const panel=body.children.find(c=>c.className==='review-stage-panel')!;
-  const status=panel.children[0]!;
-  const stageButtons=host.children;
-  expect(docEl.dataset.inspectionStage).toBe('1');
-  expect(panel.hidden).toBe(false);
-  expect(workspace.inert).toBe(true);
-  expect(inspectorRig.disabled).toBe(true);
+  const [one,two,three,four]=chips.host.children;
+  expect(chips.host.children.map(b=>b.dataset.reviewStage)).toEqual(['1','2','3','4']);
+  expect(chips.docEl.dataset.inspectionStage).toBe('3');expect(three!.getAttribute('aria-current')).toBe('step');
+  one!.onclick!();expect(calls).toEqual(['setup']);expect(chips.docEl.dataset.inspectionStage).toBe('1');expect(one!.getAttribute('aria-current')).toBe('step');
+  two!.onclick!();expect(calls).toEqual(['setup','interview']);expect(one!.getAttribute('aria-current')).toBe('step');
+  three!.onclick!();expect(calls).toEqual(['setup','interview','animate']);expect(chips.docEl.dataset.inspectionStage).toBe('3');
+  four!.onclick!();expect(calls).toHaveLength(3);
+  expect(four!.getAttribute('aria-disabled')).toBe('true');expect(four!.dataset.unavailable).toBe('DIRECTION_NOT_AVAILABLE');
+  expect(four!.textContent).toContain('not available');expect(four!.title).toStartWith('DIRECTION_NOT_AVAILABLE:');
+  expect(chips.body.children).toHaveLength(0);expect(chips.mode.disabled).toBe(false);
+ }finally{chips.restore();}
+});
 
-  // Direct click on Stage 3 in preRig remains refused (`RIG_VERSION_UNAVAILABLE`).
-  stageButtons[2]!.click();
-  expect(docEl.dataset.inspectionStage).toBe('3');
-  expect(panel.hidden).toBe(false);
-  expect(status.textContent).toContain('RIG_VERSION_UNAVAILABLE');
+test('#726 without the #708 modal the interview chip names itself unavailable; a model-less package disables Setup and Animate by name',()=>{
+ const calls:string[]=[];
+ const chips=mountChips({model:false,interview:true,setup:()=>calls.push('setup'),animate:()=>calls.push('animate')});
+ try{
+  for(const chip of chips.host.children)chip.onclick!();
+  expect(calls).toEqual([]);
+  expect(chips.host.children.map(b=>b.dataset.unavailable)).toEqual(['MODEL_UNAVAILABLE','INTERVIEW_MODAL_UNAVAILABLE','MODEL_UNAVAILABLE','DIRECTION_NOT_AVAILABLE']);
+  expect(chips.mode.disabled).toBe(true);expect(chips.mode.title).toStartWith('MODEL_UNAVAILABLE:');
+  expect(chips.body.children).toHaveLength(0);
+ }finally{chips.restore();}
+ expect(chips.mode.disabled).toBe(false);
+});
 
-  // Return to Stage 1 and trigger a failed correction: stays on Stage 1 with error status and workspace inert.
-  stageButtons[0]!.click();
-  const frame1=panel.children.find(c=>c.tagName==='IFRAME')!;
-  allowCorrection=false;
-  for(const fn of winListeners.get('message')??[])await fn({origin:'http://127.0.0.1:4173',source:frame1.contentWindow,data:{type:'review-stage-correction',part:'torso',sourceHash:'h1',buildId:'inspected',instrument:'mesh'}});
-  expect(docEl.dataset.inspectionStage).toBe('1');
-  expect(panel.hidden).toBe(false);
-  expect(workspace.inert).toBe(true);
-  expect(status.textContent).toBe('STAGE_DRAFT_MISMATCH');
+test('#726 a standalone page shows only its own stage chip',()=>{
+ const chips=mountChips({only:1,model:false});
+ try{
+  expect(chips.host.children).toHaveLength(1);expect(chips.host.children[0]!.dataset.reviewStage).toBe('1');
+  expect(chips.host.children[0]!.getAttribute('aria-current')).toBe('step');expect(chips.host.children[0]!.dataset.unavailable).toBeUndefined();
+  expect(chips.mode.disabled).toBe(false);
+ }finally{chips.restore();}
+});
 
-  // Verified Stage 1 correction enables inspector controls and reveals the Setup workspace (`panel.hidden === true`, `workspace.inert === false`).
-  allowCorrection=true;
-  for(const fn of winListeners.get('message')??[])await fn({origin:'http://127.0.0.1:4173',source:frame1.contentWindow,data:{type:'review-stage-correction',part:'torso',sourceHash:'h1',buildId:'inspected',instrument:'mesh'}});
-  expect(docEl.dataset.inspectionStage).toBe('3');
-  expect(panel.hidden).toBe(true);
-  expect(workspace.inert).toBe(false);
-  expect(inspectorRig.disabled).toBe(false);
-
-  // After a scratch Apply changes `draftBuild()`, returning to Stage 1 mounts the scratch build frame; `refresh()` updates Stage 1 in place.
-  currentBuild='b'.repeat(64);
-  stageButtons[0]!.click();
-  expect(docEl.dataset.inspectionStage).toBe('1');
-  expect(panel.hidden).toBe(false);
-  expect(workspace.inert).toBe(true);
-  const frame2=panel.children.filter(c=>c.tagName==='IFRAME').at(-1)!;
-  frame2.dispatch('load');
-  expect(frame2.posted).toContainEqual({type:'review-stage-source',buildId:currentBuild,state:null});
-
-  currentBuild='inspected';
-  refreshFn?.();
-  const frame3=panel.children.filter(c=>c.tagName==='IFRAME').at(-1)!;
-  frame3.dispatch('load');
-  expect(frame3.posted).toContainEqual({type:'review-stage-source',buildId:'inspected',state:null});
-  dispose();
- }finally{
-  (globalThis as any).document=prevDoc;(globalThis as any).window=prevWin;(globalThis as any).location=prevLoc;(globalThis as any).MutationObserver=prevObs;
- }
+test('revealing feedback does not click a stage chip, so Write review stays open (#726 review)',async()=>{
+ const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+ expect(main).not.toMatch(/data-review-stage="\d"\]['"]?\)\??\.click\(\)/);
 });

@@ -1034,7 +1034,8 @@ function bind(): void {
     const picker=select('part-set');picker.value=name;picker.dispatchEvent(new Event('change',{bubbles:true}));
   });
   viewDisposers.push(()=>directionPanel?.dispose());
-  viewDisposers.push(bindStageNav({access,interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,direction:active=>directionPanel?.show(active),setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',refresh:fn=>{refreshStageParts=fn;},correction:openStageCorrection}));
+  // Chips open modes of this screen. #708 passes interviewModal; #706 gives Stage 1 its Setup home and calls openStageCorrection.
+  viewDisposers.push(bindStageNav({interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,setup:()=>showInspector('rig'),animate:()=>showInspector('playback'),current:()=>{const mode=inspectorTabs?.state();return mode==='rig'?1:mode==='playback'?3:null;}}));
   workspace=bindWorkspaceUI({regions:{layout:document.querySelector<HTMLElement>('.layout')!,left:document.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:document.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
@@ -1133,7 +1134,7 @@ async function start(): Promise<void> {
 function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)inspectorTabs?.select(name);else inspectorTabs?.restore(name);}
 function bindInspector():void {
  inspectorTabs?.dispose();
- rigInspector.row.reveal=id=>{if(id==='feedback'){document.querySelector<HTMLButtonElement>('[data-review-stage="3"]')?.click();pause();syncCorrectionStage();}workspace?.revealInspector();};
+ rigInspector.row.reveal=id=>{if(id==='feedback'){pause();syncCorrectionStage();}workspace?.revealInspector();};
  inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode==='feedback'){pause();syncCorrectionStage();}if(mode==='rig'||mode==='playback')for(const button of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))button.setAttribute('aria-pressed',String(button.dataset.mode===mode));workspace?.afterTab();fitCamera();},()=>workspace?.beforeTab(),rigInspector.row);
  for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
 }

@@ -181,7 +181,7 @@ test('changed unrelated targets become unavailable without blocking new registra
   } finally {await host.stop(); await f.close();}
 });
 
-test('workspace reuses legacy stage-frame and nonlanding query policy while preserving landing options', async () => {
+test('workspace refuses the deleted stage frames and nonlanding queries while preserving landing options', async () => {
   const f = await fixture();
   const a = await f.designation(f.a), comparison = await f.designation(f.a, f.b);
   const host = await startOpenWorkspace({stateDir: f.stateDir, fingerprint: f.fingerprint, port: 0});
@@ -191,35 +191,16 @@ test('workspace reuses legacy stage-frame and nonlanding query policy while pres
       const response = await fetch(host.record.origin + '/instances/' + key + path);
       expect(response.status).toBe(400); expect(await response.json()).toEqual({error: 'FRONT_QUERY_REFUSED'});
     };
-    for (const path of ['/api/review?debug=1', '/assets/build/skeleton.model.json?lang=ko', '/main.js?input=extra',
-      '/stage-parts.html', '/stage-parts.html?stageEmbed=1', '/stage-parts.html?stageEmbed=1&lang=en&side=a',
-      '/stage-parts.html?stageEmbed=1&lang=en&lang=ko', '/stage-interview.html?stageEmbed=1&lang=ko&extra=1']) {
+    for (const path of ['/api/review?debug=1', '/assets/build/skeleton.model.json?lang=ko', '/main.js?input=extra']) {
       await queryRefused(a.key, path);
     }
-    for (const path of ['/api/compare?debug=1', '/stage-parts.html?stageEmbed=1&lang=en',
-      '/stage-parts.html?stageEmbed=1&lang=ko&side=a&extra=1']) await queryRefused(comparison.key, path);
-    for (const [key, sides] of [[a.key, ['']], [comparison.key, ['&side=a', '&side=b']]] as const) {
-      for (const page of ['stage-parts.html', 'stage-interview.html']) {
-        for (const lang of ['en', 'ko']) for (const side of sides) {
-          for (const hash of ['', '#cap=' + 'c'.repeat(64), '#review=' + 'd'.repeat(64)]) {
-            const response = await fetch(host.record.origin + '/instances/' + key + '/' + page +
-              '?stageEmbed=1&lang=' + lang + side + hash);
-            expect(response.status).toBe(page === 'stage-interview.html' ? 404 : 200);
-            if (page === 'stage-parts.html') expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
-            await response.body?.cancel();
-          }
-        }
-        const side = key === comparison.key ? '&side=a' : '';
-        for (const query of ['', '?stageEmbed=1', '?stageEmbed=0&lang=en' + side,
-          '?stageEmbed=1&lang=fr' + side, '?stageEmbed=1&lang=en&lang=ko' + side,
-          '?stageEmbed=1&stageEmbed=1&lang=en' + side, '?stageEmbed=1&lang=en&side=c',
-          '?stageEmbed=1&lang=en&side=a&side=b', '?stageEmbed=1&lang=en&cap=secret' + side,
-          '?stageEmbed=1&lang=en&review=secret' + side,
-          key === comparison.key ? '?stageEmbed=1&lang=en' : '?stageEmbed=1&lang=en&side=a']) {
-          if (page === 'stage-interview.html' && key === comparison.key) {
-            const response = await fetch(host.record.origin + '/instances/' + key + '/' + page + query);
-            expect(response.status).toBe(404); await response.body?.cancel();
-          } else await queryRefused(key, '/' + page + query);
+    for (const path of ['/api/compare?debug=1']) await queryRefused(comparison.key, path);
+    // #726: the legacy stage frame pages are deleted for every target and query.
+    for (const key of [a.key, comparison.key]) {
+      for (const page of ['stage-parts.html', 'stage-interview.html', 'parts.js', 'parts.css', 'interview.js', 'interview.css']) {
+        for (const query of ['', '?stageEmbed=1&lang=en', '?stageEmbed=1&lang=ko&side=a']) {
+          const response = await fetch(host.record.origin + '/instances/' + key + '/' + page + query);
+          expect(response.status).toBe(404); expect(await response.json()).toEqual({error: 'WORKSPACE_ROUTE_REFUSED'});
         }
       }
     }

@@ -264,9 +264,9 @@ function buildHeaderDom() {
 /** Returns any mode/inspector control that remains usable (visible switch or enabled/pressed control) while Stage 3 is refused. */
 function exposedUsableControls(dom:ReturnType<typeof buildHeaderDom>):string[] {
  const exposed:string[]=[];
- const cssHidesSwitch=dom.root.dataset.inspectionStage!=='3'||dom.root.dataset.stageRefused==='true';
+ const cssHidesSwitch=dom.root.dataset.stageRefused==='true';
  if(!dom.modeSwitch.hidden&&!cssHidesSwitch)exposed.push('mode-switch:visible');
- if(!dom.picker.hidden&&dom.root.dataset.inspectionStage==='3'&&dom.root.dataset.stageRefused!=='true')exposed.push('mode-build-picker:visible');
+ if(!dom.picker.hidden&&!cssHidesSwitch)exposed.push('mode-build-picker:visible');
  for(const btn of [dom.setupBtn,dom.animateBtn,dom.compareBtn,dom.tabView,dom.tabRig]){
   const id=btn.dataset.mode??btn.dataset.inspector??'unknown';
   if(!btn.disabled)exposed.push(`${id}:enabled`);
@@ -312,21 +312,17 @@ test('refused Stage 3 with no recorded rig hides and disables Setup/Animate/Comp
   bindInspectorTabs(()=>{});
   const dispose=bindStageNav({preRig:true,model:false,interview:true});
   try{
-   expect(dom.root.dataset.inspectionStage).toBe('1');
-   expect(dom.root.dataset.stageRefused).toBeUndefined();
-
-   // Select Stage 3 (Rig + animation) on a pre-rig draft with no recorded rig package.
+   // #726: no stage frame; Stage 3 (Rig + animation) on a pre-rig draft names itself unavailable on its chip.
    const stage3Btn=dom.host.children[2]!;
    stage3Btn.click();
-   expect(dom.root.dataset.inspectionStage).toBe('3');
+   expect(dom.root.dataset.inspectionStage).toBeUndefined();
    expect(dom.root.dataset.stageRefused).toBe('true');
-
-   const panel=dom.body.querySelector('.review-stage-panel')!;
-   expect(panel.hidden).toBe(false);
-   expect(dom.workspace.inert).toBe(true);
-   const status=panel.children[0]!;
+   expect(dom.body.querySelector('.review-stage-panel')).toBeNull();
+   expect(dom.workspace.inert).toBe(false);
+   const status=stage3Btn;
    const enReason=enCatalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.']!;
-   expect(status.textContent).toBe(enReason);
+   expect(status.dataset.unavailable).toBe('RIG_VERSION_UNAVAILABLE');
+   expect(status.title).toBe(enReason);
 
    // Zero usable mode/inspector controls may remain exposed on refused Stage 3.
    expect(exposedUsableControls(dom)).toEqual([]);
@@ -342,7 +338,7 @@ test('refused Stage 3 with no recorded rig hides and disables Setup/Animate/Comp
    // Live language switch to Korean translates both the stage refusal status and every disabled control reason.
    setLanguagePreference('ko');
    const koReason=koCatalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.']!;
-   expect(status.textContent).toBe(koReason);
+   expect(status.title).toBe(koReason);
    for(const btn of [dom.setupBtn,dom.animateBtn,dom.compareBtn,dom.tabView,dom.tabRig]){
     expect(btn.disabled).toBe(true);
     expect(btn.getAttribute('title')).toBe(koReason);
@@ -380,7 +376,7 @@ test('teardown restores original control attributes and supported real model pat
   // 1. Mount with no compiled model (MODEL_UNAVAILABLE), then teardown.
   const disposeNoModel=bindStageNav({model:false});
   const modelReason=t(stageReason(3,false)!);
-  expect(dom.root.dataset.inspectionStage).toBe('3');
+  expect(dom.root.dataset.inspectionStage).toBeUndefined();
   expect(dom.root.dataset.stageRefused).toBe('true');
   expect(exposedUsableControls(dom)).toEqual([]);
   for(const btn of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){
@@ -412,9 +408,11 @@ test('teardown restores original control attributes and supported real model pat
   // 2. Mount supported real model path on the restored DOM and verify Stage 3 + Setup/Animate navigation works.
   let setupCalls=0;
   bindInspectorTabs(()=>{});
-  const disposeSupported=bindStageNav({model:true,setup:()=>{setupCalls++;dom.setupBtn.click();}});
+  let animateCalls=0;
+  const pressed=()=>dom.setupBtn.getAttribute('aria-pressed')==='true'?1 as const:dom.animateBtn.getAttribute('aria-pressed')==='true'?3 as const:null;
+  const disposeSupported=bindStageNav({model:true,setup:()=>{setupCalls++;dom.setupBtn.click();},animate:()=>{animateCalls++;dom.animateBtn.click();},current:pressed});
   try{
-   expect(dom.root.dataset.inspectionStage).toBe('3');
+   expect(dom.root.dataset.inspectionStage).toBe('1');
    expect(dom.root.dataset.stageRefused).toBeUndefined();
    expect(dom.modeSwitch.hidden).toBe(false);
    expect(dom.workspace.inert).toBe(false);
@@ -423,26 +421,26 @@ test('teardown restores original control attributes and supported real model pat
    expect(dom.compareBtn.disabled).toBe(true);
    expect(dom.compareBtn.getAttribute('title')).toBe(dom.compareTitle);
 
-   // Animate button switches mode in Stage 3.
+   // The Animate mode button moves the current chip to Stage 3.
    dom.animateBtn.click();
    expect(dom.animateBtn.getAttribute('aria-pressed')).toBe('true');
    expect(dom.setupBtn.getAttribute('aria-pressed')).toBe('false');
    expect(dom.panelPlayback.hidden).toBe(false);
    expect(dom.panelRig.hidden).toBe(true);
-
-   // Switching to Stage 1 hides .mode-switch, and clicking "Open setup mesh instruments" returns to Stage 3 Setup.
-   dom.host.children[0]!.click();
-   expect(dom.root.dataset.inspectionStage).toBe('1');
-   expect(dom.modeSwitch.hidden).toBe(true);
-   const panel=dom.body.querySelector('.review-stage-panel')!;
-   const meshBtn=panel.children.find(child=>child.tagName==='BUTTON')!;
-   expect(meshBtn.hidden).toBe(false);
-   meshBtn.click();
    expect(dom.root.dataset.inspectionStage).toBe('3');
-   expect(dom.modeSwitch.hidden).toBe(false);
+
+   // #726: chip 1 opens Setup on this screen, chip 3 opens Animate; no stage frame mounts.
+   dom.host.children[0]!.click();
    expect(setupCalls).toBe(1);
+   expect(dom.root.dataset.inspectionStage).toBe('1');
+   expect(dom.modeSwitch.hidden).toBe(false);
    expect(dom.setupBtn.getAttribute('aria-pressed')).toBe('true');
    expect(dom.panelRig.hidden).toBe(false);
+   dom.host.children[2]!.click();
+   expect(animateCalls).toBe(1);
+   expect(dom.root.dataset.inspectionStage).toBe('3');
+   expect(dom.panelPlayback.hidden).toBe(false);
+   expect(dom.body.querySelector('.review-stage-panel')).toBeNull();
   }finally{
    disposeSupported();
   }
@@ -472,11 +470,9 @@ test('pre-rig joined project preserves source-bound refusal and verdict output a
    });
    try{
     dom.host.children[2]!.click();
-    expect(dom.root.dataset.inspectionStage).toBe('3');
     expect(dom.root.dataset.stageRefused).toBe('true');
     expect(exposedUsableControls(dom)).toEqual([]);
-    const status=dom.body.querySelector('.review-stage-panel')!.children[0]!;
-    expect(status.textContent).toBe(enCatalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.']);
+    expect(dom.host.children[2]!.title).toBe(enCatalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.']);
    }finally{
     dispose();
    }
