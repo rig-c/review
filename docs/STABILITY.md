@@ -568,6 +568,14 @@ for twenty-eight runtime exports total. It is a read-only contract preparation;
 the existing UI finalizers and legacy type unions retain their current versions.
 See [Comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
 
+[Review #714](https://github.com/rig-c/review/issues/714) adds the act@7 decoder
+`parseContextCommentsAct` and its constant `JOB_COMMENT_CONTEXT_ACT_SCHEMA`
+(`rig-review/act@7`), for thirty runtime exports total, plus the type-only
+`JobCommentContext`, `JobContextComment` and `JobContextCommentsAct`. The change
+is additive: `parseCommentsAct`, `JobComment` and `JobCommentsAct` keep their @6
+shapes, and @2–@6 decode unchanged. Review does not emit @7 until Create pins a
+Review version that reads it. See [Comment context (act@7)](REVIEW_PACKAGE.md#comment-context-act7).
+
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
@@ -578,12 +586,14 @@ values from the frozen semantic contract.
 - `prepareJobRecordAct`
 - `prepareJobRecordSource`
 - `parseCommentsAct`
+- `parseContextCommentsAct`
 - `projectComments`
 - `parseCommentsSession`
 - `parseCommentsCompareSession`
 - `parseCommentsPartsVerdict`
 - `projectSelectedCommentsFeedback`
 - `JOB_COMMENTS_ACT_SCHEMA`
+- `JOB_COMMENT_CONTEXT_ACT_SCHEMA`
 - `REVIEW_COMMENTS_SESSION_SCHEMA`
 - `REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA`
 - `PARTS_COMMENTS_VERDICT_SCHEMA`
@@ -756,6 +766,9 @@ without aliases or copied wire shapes.
 - `JobCommentImageAnchor`
 - `JobCommentsAct`
 - `JobCommentsActValues`
+- `JobCommentContext`
+- `JobContextComment`
+- `JobContextCommentsAct`
 - `ReviewCommentsSession`
 - `CompareCommentsSession`
 - `PartsCommentsVerdict`
@@ -771,7 +784,7 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer checks the twenty-eight runtime exports and every listed type, including
+A consumer checks the thirty runtime exports and every listed type, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and

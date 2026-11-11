@@ -457,6 +457,7 @@ test('#606 literal package/record canonical, durable, replay and export compatib
   const expected = {...golden606, publicExports: [...golden606.publicExports,
     'JOB_COMMENTS_ACT_SCHEMA', 'PARTS_COMMENTS_VERDICT_SCHEMA', 'REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA', 'REVIEW_COMMENTS_SESSION_SCHEMA',
     'parseCommentsAct', 'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'parseCommentsSession', 'projectComments', 'projectSelectedCommentsFeedback',
+    'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
   ].sort()};
   expect(actual).toEqual(expected);
   for (const [name, sample] of Object.entries(actual.samples)) {

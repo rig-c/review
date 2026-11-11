@@ -1541,3 +1541,36 @@ only absent `issues[]` uses `part.note`. Literal-byte controls and all eighteen
 cross-repository oracle outcomes belong in the PR evidence. Parser-only native
 coverage does not substitute for Create's actual ingest/replay receipt or owner
 working-screen review.
+
+### Comment context (act@7)
+
+`JOB_COMMENT_CONTEXT_ACT_SCHEMA` is `rig-review/act@7` ([#714](https://github.com/rig-c/review/issues/714)).
+It is the @6 envelope, kinds, value keys and checks with one addition: each
+comment entry may carry an optional `context` object after `text` and `anchor`.
+`context` records where the comment was made so opening it can restore that
+view. It is not part of the signed projection: `projectComments` covers `text`
+and `anchor` only. `parseContextCommentsAct` decodes @7 only; `parseCommentsAct`
+still decodes @6 only and refuses `context`. @2–@6 bytes, hashes and readers do
+not change.
+
+`context` is closed and nonempty. Every key is optional and copies a value an
+existing pin or restore path already carries:
+
+| Key | Shape | Existing source |
+| --- | --- | --- |
+| `subject` | `{ask, sourceHash, selector?}` | the ask's `JobSubject`, the act source's `sourceHash` and `selector`. `ask.kind` must equal the act `kind`; `sourceHash` and `selector` must equal the act source (`JOB_ACT_INVALID`) |
+| `mode` | `setup`, `animate` or `compare` | StageComment `mode`, bookmark `selection.mode` |
+| `tab` | `view`, `rig`, `playback` or `feedback` | bookmark `selection.inspector` |
+| `part` | ControlPart `{side, slot, mode, identity?}` | bookmark `selection.part` (absent, never `null`) |
+| `region` | world-space `{x, y, width, height}` | StageComment `world`, PartsIssue `rigRegion` |
+| `viewMode` | `item` or `assembled` | PartsIssue `view.mode` |
+| `camera` | numeric camera `{space, center, zoom, viewport, visible}` | StageComment `camera` |
+| `frame` | `{index, basis}` (`producer` or `reference`) | StageComment `frame` (absent when time-only) |
+
+Each key reuses the decoder of the shape it copies. A `reopen` act has no ask
+subject, so its comments cannot carry `context.subject`.
+
+Create refuses unknown fields, so Review emits @7 only when
+`EMIT_UNPINNED_CREATE_FIELDS` (`src/create-pin-gate.ts`) is true. It is false
+until the create tower confirms Create has pinned the Review version that reads
+@7. While it is false, writers drop every `context` and emit @6.
