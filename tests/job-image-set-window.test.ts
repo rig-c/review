@@ -3,7 +3,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
 import {mountViewportPair} from '../web/viewport-pair.ts';
-import {layerShortcuts, describeLayerToggles, createViewControls, createRigLayerControls} from '../web/view-controls.ts';
+import {layerShortcuts, describeLayerToggles, inspectionViewSwitch, createViewControls, createRigLayerControls} from '../web/view-controls.ts';
 import {SENTINELS} from '../web/parts-render.ts';
 import {RigOverlays} from '../web/rig-overlays.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -163,8 +163,8 @@ class MountElement extends EventTarget {
   getContext(): null {return null;}
   get textContent(): string {return this.text + this.children.map(child => child.textContent).join('');}
   set textContent(value: string) {this.text = value; this.children = [];}
-  append(...nodes: MountElement[]) {
-    for (const node of nodes) {node.parentElement = this; this.children.push(node);}
+  append(...nodes: (MountElement|string)[]) {
+    for (const value of nodes) {const node=typeof value==='string'?new MountElement('#text'):value;if(typeof value==='string')node.textContent=value;node.parentElement=this;this.children.push(node);}
   }
   prepend(...nodes: MountElement[]) {
     for (const node of nodes) node.parentElement = this;
@@ -248,14 +248,14 @@ function mountActualBuild(body: string, prepared: JobPreparedInspection): MountE
   const javascript = new Bun.Transpiler({loader: 'ts'}).transformSync(body);
   const build = new Function('deps', `
     const {node, inputLabel, selectValues, mountViewportPair, t, layerShortcuts, createViewControls, createRigLayerControls,
-      describeLayerToggles, SENTINELS, RigOverlays} = deps;
+      describeLayerToggles, SENTINELS, RigOverlays, inspectionViewSwitch} = deps;
     let loop = true, stageBackground = '';
     const layers = {images: true, mesh: false, bones: false, meshOpacity: 0.65};
     const i18n = {tr: t}, overlays = new WeakMap();
     ${javascript}
     return build;
   `)({node, inputLabel, selectValues, mountViewportPair, t: translate, layerShortcuts, createViewControls, createRigLayerControls,
-    describeLayerToggles, SENTINELS, RigOverlays}) as (prepared: JobPreparedInspection) => MountElement;
+    describeLayerToggles, SENTINELS, RigOverlays, inspectionViewSwitch}) as (prepared: JobPreparedInspection) => MountElement;
   const host = node('main'); host.append(build(prepared));
   return host;
 }
@@ -291,48 +291,24 @@ test('#688 shared rig layer constructor preserves structure and job language bin
   }
 });
 
-test('522 production build mounts a real-null image catalog and its viewport pair; the original unguarded loop fails', async () => {
-  const f = setup(), body = await actualBuildBody();
-  expect(f.metadata.feedbackCatalog.slots).toBe(null);
-  const prepared = buildFixture(f);
-  let disposed = 0;
-  prepared.dispose = () => {disposed++;};
-  const mounted = mountActualBuild(body, prepared);
-  expect(mounted.querySelector('.job-inspection')).not.toBe(null);
-  expect(mounted.querySelector('#reference-pane')).not.toBe(null);
-  expect(mounted.querySelector('#rig-root')).not.toBe(null);
-  expect(mounted.querySelector('#stage-layout')?.hidden).toBe(true);
-  expect(mounted.querySelector('#job-part')?.disabled).toBe(true);
-  expect(mounted.querySelectorAll('figure').map(figure => figure.dataset.imageName)).toEqual(['Source', 'Candidate']);
-  expect(mounted.querySelector('#job-part')?.children.map(option => option.value)).toEqual(['']);
-  for (const item of layerShortcuts) {
-    const box = mounted.querySelector('#' + item.id);
-    expect(box?.disabled).toBe(true);
-    expect(box?.checked).toBe(item.id === 'layer-images');
-    expect(box?.closest('label')?.title).toBe(enCatalog['No rig supplied']);
-  }
-  expect(mounted.querySelector('#job-background')?.children.map(option => option.value)).toEqual(['', ...Object.keys(SENTINELS)]);
-  expect(mounted.querySelector('#rig-overlay')?.style.pointerEvents).toBe('none');
-  prepared.dispose();
-  expect(disposed).toBe(1);
-  expect(mounted.querySelector('#rig-overlay')?.style.pointerEvents).toBeUndefined();
-  const guarded = 'for (const slot of prepared.metadata.feedbackCatalog.slots ?? [])';
-  expect(body).toContain(guarded);
-  const originalLoop = body.replace(guarded, 'for (const slot of prepared.metadata.feedbackCatalog.slots)');
-  expect(() => mountActualBuild(originalLoop, buildFixture(f))).toThrow(TypeError);
+test('522 image fallback mounts a null slot catalog without legacy selector/layers/background',async()=>{
+  const f=setup(),body=await actualBuildBody(),prepared=buildFixture(f);let disposed=0;prepared.dispose=()=>{disposed++;};
+  expect(f.metadata.feedbackCatalog.slots).toBeNull();const mounted=mountActualBuild(body,prepared);
+  expect(mounted.querySelector('.job-inspection')).not.toBeNull();expect(mounted.querySelector('#reference-pane')).not.toBeNull();expect(mounted.querySelector('#rig-root')).not.toBeNull();
+  expect(mounted.querySelector('#stage-layout')?.hidden).toBe(true);expect(mounted.querySelectorAll('figure').map(figure=>figure.dataset.imageName)).toEqual(['Source','Candidate']);
+  for(const id of ['job-part','job-solo','layer-controls','job-background'])expect(mounted.querySelector('#'+id)).toBeNull();
+  prepared.dispose();expect(disposed).toBe(1);expect(mounted.querySelector('#rig-overlay')?.style.pointerEvents).toBeUndefined();
 });
 
-test('522 production build preserves populated and known-empty model slot arrays', async () => {
-  const f = setup(), body = await actualBuildBody();
-  for (const slots of [['body', 'arm'], []]) {
-    const prepared = buildFixture(f);
-    prepared.display = fixturePublication();
-    prepared.metadata = {...f.metadata, manifest: {...f.metadata.manifest, model: 'skeleton.model.json'}, feedbackCatalog: {slots}};
-    const mounted = mountActualBuild(body, prepared), parts = mounted.querySelector('#job-part');
-    expect(parts?.disabled).toBe(false);
-    expect(parts?.children.map(option => option.value)).toEqual(['', ...slots]);
-    expect(mounted.querySelectorAll('figure')).toHaveLength(0);
-    expect(mounted.querySelector('#stage-layout')?.hidden).toBe(false);
-    prepared.dispose();
+test('522 hostless direction fallback preserves known slot metadata without rebuilding a part selector',async()=>{
+  const f=setup(),body=await actualBuildBody();
+  for(const slots of [['body','arm'],[]]){
+    const prepared=buildFixture(f),display=fixturePublication(),source=display.publication.source;
+    if(source.subject==='image-set')throw new Error('Expected model fixture');
+    prepared.display={...display,publication:{...display.publication,source:{...source,selector:{kind:'post',version:1,rigVersion:1},direction:{path:'direction.json',sha256:'d'.repeat(64)}}}};
+    prepared.metadata={...f.metadata,manifest:{...f.metadata.manifest,model:'skeleton.model.json'},feedbackCatalog:{slots}};
+    const before=structuredClone(prepared.metadata.feedbackCatalog),mounted=mountActualBuild(body,prepared);
+    expect(mounted.querySelector('#job-part')).toBeNull();expect(prepared.metadata.feedbackCatalog).toEqual(before);
+    expect(mounted.querySelectorAll('figure')).toHaveLength(0);expect(mounted.querySelector('#stage-layout')?.hidden).toBe(false);prepared.dispose();
   }
 });

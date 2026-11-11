@@ -2,8 +2,6 @@ import {expect, test} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import type {LiveFrame, PosedFrame, SlotIdentitySnapshot, TrackEntry} from '@rig-c/play';
 import {PartInspection, type PartEntry} from '../web/part-selection.ts';
-import {RigOverlays} from '../web/rig-overlays.ts';
-import {SENTINELS} from '../web/parts-render.ts';
 import type {JobRigPresentation} from '../web/viewport-capture.ts';
 import {freezeJobRigCapture, recordJobRigDraw, type JobRigDrawState} from '../web/job-rig-capture.ts';
 
@@ -19,7 +17,6 @@ const resetBody = fragment('            resetToSetup = (setup = true) => {', '  
 const poseBody = fragment('    function pose(seekReference = true): void {', '    function hubBinding()')
     .replace('pose(seekReference = true): void', 'pose(seekReference = true)')
     .replace("el<HTMLInputElement>('job-time')", "el('job-time')");
-const redrawBody = fragment('    function redrawOverlay(fresh: boolean): void {', '    const provider =');
 const drawBody = fragment('    function drawInspection(owner: JobPreparedInspection): void {', '    function syncTransportControls(')
     .replace('owner: JobPreparedInspection', 'owner').replace('): void {', ') {');
 
@@ -108,19 +105,15 @@ function windowPose(visible = true) {
             constructor(root: object, assets: {animations?: readonly {name: string; duration: number}[]}) {super(root, assets, visible); players.push(this);}
         }}, rigRoot: root, loadedAssets: assets, parts: {PartInspection}, catalog: {entries},
         clearRigPresentation: () => {}, resetToSetup: (_setup = true) => {}, animation: '', time: 0, loop: true,
-        selectedPart: '', partMode: 'context', syncTransportControls: () => {},
+        syncTransportControls: () => {},
         drawn: new WeakMap(), notice: {textContent: ''}, t: (key: string) => key,
         el: () => clock, setText: () => {}, viewport: {fitCamera() {}},
     };
     const reset: (setup?: boolean) => void = new Function('scope', `with(scope){${resetBody};return resetToSetup;}`)(scope);
     const current = {assets, source: binding, rigRoot: root, metadata: {feedbackCatalog: {bones: []}},
         get player() {return scope.player;}, get inspection() {return scope.inspection;}, setupPose: reset};
-    // Exercise the actual overlay's unavailable-Canvas2D path in this public-player fixture.
-    const canvas = {style: {pointerEvents: ''}, getContext: () => null} as unknown as HTMLCanvasElement;
-    const overlays = new WeakMap<object, RigOverlays>([[current, new RigOverlays({canvas, rigRoot: root as unknown as HTMLElement})]]);
-    const context = {...scope, current, overlays, viewportState: {rigScale: 1},
-        layers: {images: true, mesh: false, bones: false, meshOpacity: 0.65}};
-    const drawScript = new Bun.Transpiler({loader: 'ts', target: 'bun'}).transformSync(redrawBody + drawBody);
+    const context = {...scope, current};
+    const drawScript = new Bun.Transpiler({loader: 'ts', target: 'bun'}).transformSync(drawBody);
     const drawInspection = new Function('scope', `with(scope){${drawScript};return drawInspection;}`)(context);
     const pose: () => void = new Function('scope', 'drawInspection', `with(scope){${poseBody};return ()=>pose(false);}`)(context, drawInspection);
     reset();
@@ -146,17 +139,15 @@ test('#557 setup initializes a fresh null-pose public player before draw/present
     expect(h.current.inspection!.frame('single')!.generation).toBe(h.current.player!.generation);
 });
 
-test('#557 setup to inspect zero and .375 to setup replaces composed players and preserves source/selection/camera', () => {
+test('#557 setup to inspect zero and .375 to setup replaces composed players and preserves source/camera with no legacy part selector', () => {
     const h = windowPose(), first = h.current.player!;
-    h.context.selectedPart = 'mesh';
-    h.context.partMode = 'solo';
     h.at('inspect', 0);
     const animated = h.current.player!;
     expect(first.disposed).toBe(true);
     expect(animated).not.toBe(first);
     expect(animated.composed).toBe(false);
     expect(animated.calls).toEqual(['play', 'seek', 'pause', 'draw']);
-    expect(h.current.inspection!.value()).toMatchObject({slot: 'mesh', mode: 'solo'});
+    expect(h.current.inspection!.value()).toBeNull();
     h.at('inspect', 0.375);
     expect(h.current.player).toBe(animated);
     expect(animated.time).toBe(0.375);
@@ -164,7 +155,7 @@ test('#557 setup to inspect zero and .375 to setup replaces composed players and
     expect(animated.disposed).toBe(true);
     expect(h.current.player!.current).toBeNull();
     expect(h.current.player!.composed).toBe(true);
-    expect(h.current.inspection!.value()).toMatchObject({slot: 'mesh', mode: 'solo'});
+    expect(h.current.inspection!.value()).toBeNull();
     expect(h.current.inspection!.frame('single')!.generation).toBe(h.current.player!.generation);
     expect(h.players).toHaveLength(3);
     expect(h.players.every(player => player.root === h.root && player.assets === h.assets)).toBe(true);
@@ -200,65 +191,21 @@ test('#557 setup initialization retains valid models with no visible attachment'
 });
 
 
-test('#557 canonical selection return commits the final public frame and render failure clears capture', () => {
-    const h = windowPose();
-    const pane = {dataset: {} as Record<string, string>, style: {} as Record<string, string>, append() {}};
-    let fail = false;
-    let compositions = 0;
-    let presentation: JobRigPresentation | undefined;
-    const owner = {player: h.current.player, assets: h.assets, rigRoot: h.root, inspection: h.current.inspection,
-        metadata: h.current.metadata,
-        get rigPresentation() {return presentation;}, set rigPresentation(value) {presentation = value;}};
-    h.context.overlays.set(owner, h.context.overlays.get(h.current)!);
-    const context = {
-        layers: h.context.layers, stageBackground: '', SENTINELS, overlays: h.context.overlays, viewportState: h.context.viewportState,
-        current: owner, selectedPart: '', partMode: 'context', hubVisible: true, drawGeneration: 0,
-        drawn: new WeakMap(), CanvasRenderer: class {}, el: () => pane, setText() {},
-        viewport: {numericView: () => ({cameras: {rig: {}}}), renderCameraControls() {}},
-        presentJobRigViewport(_capture: unknown, pose: {posed: PosedFrame}) {
-            compositions++;
-            if (fail) throw new Error('declared presentation failure');
-            const expectedFrame = owner.inspection!.frame('single');
-            expect(expectedFrame).toBeDefined();
-            expect(pose.posed).toEqual(expectedFrame!);
-            return {canvas: {} as HTMLCanvasElement, width: 1, height: 1, ratio: 1,
-                area: {x: 0, y: 0, width: 1, height: 1}};
-        },
-        rigDrawState(): JobRigDrawState {
-            return {...h.state(), presentation, wholeRig: !context.selectedPart};
-        }, recordJobRigDraw,
-        // web/job-rig-capture.ts presentJobRigStage, with the module's presentJobRigViewport replaced by the stub above.
-        presentJobRigStage(stage: {pane: typeof pane; posed: PosedFrame | undefined}): JobRigPresentation {
-            const presented = context.presentJobRigViewport(null, {posed: stage.posed!});
-            stage.pane.append();
-            return presented;
-        },
-    };
-    const remember = fragment('    function rememberDraw(): void {', '    function drawInspection(')
-        .replace('rememberDraw(): void', 'rememberDraw()');
-    const select = fragment('    function selectPart(): void {', '    function showReference()')
-        .replace('selectPart(): void', 'selectPart()');
-    const selectScript = new Bun.Transpiler({loader: 'ts', target: 'bun'}).transformSync(redrawBody + remember + select);
-    const selectPart: () => void = new Function('scope', `with(scope){${selectScript};return selectPart;}`)(context);
-    for (const mode of ['context', 'solo']) {
-        context.selectedPart = 'mesh';
-        context.partMode = mode;
-        selectPart();
-        const selected = presentation;
-        expect(selected).toBeDefined();
-        expect(owner.inspection!.value()).toMatchObject({slot: 'mesh', mode});
-        context.selectedPart = '';
-        selectPart();
-        expect(presentation).toBeDefined();
-        expect(presentation).not.toBe(selected);
-        expect(owner.inspection!.value()).toBeNull();
-        expect(context.drawn.get(owner).presentation).toBe(presentation);
+test('#557 shared inspection selection refuses partial capture and clearing it restores coherent public frames',async()=>{
+    const h=windowPose();h.at('inspect',0.375);let copies=0,generation=0;
+    for(const mode of ['context','solo'] as const){
+        h.current.inspection!.select({side:'single',slot:'mesh',mode});
+        expect(h.current.inspection!.value()).toMatchObject({slot:'mesh',mode});
+        const partial={...h.state(),wholeRig:false};
+        expect(()=>freezeJobRigCapture(recordJobRigDraw(partial,++generation),partial,'ask-1',()=>{throw new Error('partial capture must not copy');})).toThrow('JOB_STILL_VIEW_UNSUPPORTED');
+        h.current.inspection!.select(null);expect(h.current.inspection!.value()).toBeNull();
+        const state=h.state(),capture=await freezeJobRigCapture(recordJobRigDraw(state,++generation),state,'ask-1',()=>{copies++;return {width:1,height:1,encode:async()=> 'data:image/png;base64,ZmFrZQ=='};}).encode();
+        expect(capture.frame).toBe(0.375);expect(capture.binding.playerGeneration).toBe(h.current.player!.generation);
+        expect(h.current.inspection!.frame('single')).toEqual(h.current.player!.renderer.frame!);
     }
-    expect(compositions).toBe(4);
-    fail = true;
-    selectPart();
-    expect(presentation).toBeUndefined();
-    expect(context.drawn.has(owner)).toBe(false);
+    expect(copies).toBe(2);
+    expect(()=>recordJobRigDraw({...h.state(),presentation:undefined},++generation)).toThrow('JOB_STILL_CAPTURE_FAILED');
+    expect(copies).toBe(2);
 });
 
 test('#557 setup reset clears its owned presentation before replacing the public player', () => {

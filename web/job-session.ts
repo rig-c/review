@@ -1940,7 +1940,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
     const provider = createRigViewportProvider({
         el, player: () => current?.player ?? null, assets: () => current?.assets ?? null,
         referenceSize: () => reference(), view: () => view, referenceGeneration: () => current?.display.publication.generation ?? 0,
-        parts: () => null, text: setText, fitLabel: 'Fit',
+        parts: () => current?.inspection ?? null, text: setText, fitLabel: 'Fit',
         message: value => { notice.textContent = jobWindowRefusal(value); }, redrawOverlay: () => {},
     }, viewportState);
     const canonicalControls = provider.renderControls;
