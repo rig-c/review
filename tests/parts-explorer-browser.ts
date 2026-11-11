@@ -1,3 +1,4 @@
+import { launchChrome } from './helpers/software-capture.ts';
 /**
  * Browser verification for issue #233:
  * - Fixed tool area (.parts-tools / .parts-header) + scrolling [data-part-list] in both compare and single-review panels.
@@ -244,7 +245,7 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
   };
   delete childEnv.DISPLAY;
   delete childEnv.WAYLAND_DISPLAY;
-  const proc = Bun.spawn(
+  const chrome = await launchChrome(
     [
       bin,
       isHeadlessShell ? '--headless' : '--headless=new',
@@ -256,7 +257,6 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
       '--use-angle=swiftshader-webgl',
       '--enable-unsafe-swiftshader',
       '--ignore-gpu-blocklist',
-      '--remote-debugging-port=0',
       `--user-data-dir=${profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
@@ -266,59 +266,19 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
       '--disable-renderer-backgrounding',
       '--disable-backgrounding-occluded-windows',
       ...(options.browserArgs ?? []),
-      'about:blank',
     ],
     {
-      stdout: 'ignore',
-      stderr: 'pipe',
       env: childEnv,
     },
   );
 
-  const reader = proc.stderr.getReader();
-  const decoder = new TextDecoder();
-  let stderrTail = '';
+  const { endpoint: wsUrl } = chrome;
   let ws: WebSocket | undefined;
-  const close = () => {
+  const close = async () => {
     try { ws?.close(); } catch {}
-    try { proc.kill(9); } catch {}
+    await chrome.close();
   };
   try {
-    const wsUrl = await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Timed out waiting for DevTools listening URL: ' + stderrTail)), 15000);
-      (async () => {
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            stderrTail += decoder.decode(value, { stream: true });
-            if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
-            const match = stderrTail.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-            if (match) {
-              clearTimeout(timer);
-              resolve(match[1]!);
-              return;
-            }
-          }
-          clearTimeout(timer);
-          reject(new Error(`Browser exited before printing DevTools URL: ${stderrTail}`));
-        } catch (err) {
-          clearTimeout(timer);
-          reject(err);
-        }
-      })();
-    });
-    (async () => {
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          stderrTail += decoder.decode(value, { stream: true });
-          if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
-        }
-      } catch {}
-    })();
-
     const socket = ws = new WebSocket(wsUrl);
     await withDeadline('CDP.connect', 10000, () => new Promise<void>((resolve, reject) => {
       socket.onopen = () => resolve();
@@ -327,7 +287,7 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
     }));
     const requests = cdpRequests(message => socket.send(message), options.sendDeadlineMs, options.onEvent);
     socket.onmessage = event => requests.receive(JSON.parse(String(event.data)));
-    socket.onclose = socket.onerror = () => requests.disconnect(`bin=${bin}: ${stderrTail}`);
+    socket.onclose = socket.onerror = () => requests.disconnect(`bin=${bin}: ${chrome.stderrTail}`);
     const {send} = requests;
 
     const { targetInfos } = await send('Target.getTargets');
@@ -383,10 +343,10 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
         );
         return Buffer.from(res.data, 'base64');
       },
-      async close() { close(); },
+      async close() { await close(); },
     };
   } catch (error) {
-    close();
+    await close();
     throw error;
   }
 }

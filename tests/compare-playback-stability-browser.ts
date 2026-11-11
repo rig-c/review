@@ -1,3 +1,4 @@
+import { launchChrome } from './helpers/software-capture.ts';
 /**
  * Browser verification for issue #232:
  * - Samples every animation frame across one full playback loop and seeks at 1440x900
@@ -86,7 +87,7 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
   };
   delete childEnv.DISPLAY;
   delete childEnv.WAYLAND_DISPLAY;
-  const proc = Bun.spawn(
+  const chrome = await launchChrome(
     [
       bin,
       isHeadlessShell ? '--headless' : '--headless=new',
@@ -98,7 +99,6 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
       '--use-angle=swiftshader-webgl',
       '--enable-unsafe-swiftshader',
       '--ignore-gpu-blocklist',
-      '--remote-debugging-port=0',
       `--user-data-dir=${profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
@@ -107,138 +107,104 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
       '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding',
       '--disable-backgrounding-occluded-windows',
-      'about:blank',
     ],
     {
-      stdout: 'ignore',
-      stderr: 'pipe',
       env: childEnv,
     },
   );
 
-  const reader = proc.stderr.getReader();
-  const decoder = new TextDecoder();
-  let stderrTail = '';
-  const wsUrl = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Timed out waiting for DevTools listening URL: ' + stderrTail)), 15000);
-    (async () => {
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          stderrTail += decoder.decode(value, { stream: true });
-          if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
-          const match = stderrTail.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-          if (match) {
-            clearTimeout(timer);
-            resolve(match[1]!);
-            return;
-          }
-        }
-        clearTimeout(timer);
-        reject(new Error(`Browser exited before printing DevTools URL: ${stderrTail}`));
-      } catch (err) {
-        clearTimeout(timer);
-        reject(err);
-      }
-    })();
-  });
-  (async () => {
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        stderrTail += decoder.decode(value, { stream: true });
-        if (stderrTail.length > 4000) stderrTail = stderrTail.slice(-4000);
-      }
-    } catch {}
-  })();
+  try {
+    const { endpoint: wsUrl } = chrome;
 
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((resolve, reject) => {
-    ws.onopen = () => resolve();
-    ws.onerror = err => reject(err);
-  });
-
-  let nextId = 1;
-  const pending = new Map<number, { method: string; resolve: (val: any) => void; reject: (err: Error) => void }>();
-  ws.onmessage = event => {
-    const msg = JSON.parse(String(event.data));
-    if (typeof msg.id === 'number') {
-      const entry = pending.get(msg.id);
-      if (entry) {
-        pending.delete(msg.id);
-        if (msg.error) entry.reject(new Error(`${entry.method}: ${msg.error.message || JSON.stringify(msg.error)}`));
-        else entry.resolve(msg.result);
-      }
-    }
-  };
-  ws.onclose = () => {
-    for (const entry of pending.values()) {
-      entry.reject(new Error(`WebSocket closed during ${entry.method} (bin=${bin}): ${stderrTail}`));
-    }
-    pending.clear();
-  };
-
-  const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> =>
-    new Promise((resolve, reject) => {
-      const id = nextId++;
-      pending.set(id, { method, resolve, reject });
-      ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    const ws = new WebSocket(wsUrl);
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = err => reject(err);
     });
 
-  const { targetInfos } = await send('Target.getTargets');
-  const pageTarget = targetInfos.find((t: any) => t.type === 'page') ?? (await send('Target.createTarget', { url: 'about:blank' }));
-  const targetId = pageTarget.targetId;
-  const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
-  await send('Page.enable', {}, sessionId);
-  await send('Runtime.enable', {}, sessionId);
+    let nextId = 1;
+    const pending = new Map<number, { method: string; resolve: (val: any) => void; reject: (err: Error) => void }>();
+    ws.onmessage = event => {
+      const msg = JSON.parse(String(event.data));
+      if (typeof msg.id === 'number') {
+        const entry = pending.get(msg.id);
+        if (entry) {
+          pending.delete(msg.id);
+          if (msg.error) entry.reject(new Error(`${entry.method}: ${msg.error.message || JSON.stringify(msg.error)}`));
+          else entry.resolve(msg.result);
+        }
+      }
+    };
+    ws.onclose = () => {
+      for (const entry of pending.values()) {
+        entry.reject(new Error(`WebSocket closed during ${entry.method} (bin=${bin}): ${chrome.stderrTail}`));
+      }
+      pending.clear();
+    };
 
-  return {
-    async setViewport(width: number, height: number) {
-      await send(
-        'Emulation.setDeviceMetricsOverride',
-        { width, height, deviceScaleFactor: 1, mobile: false },
-        sessionId,
-      );
-    },
-    async goto(url: string) {
-      await send('Page.navigate', { url }, sessionId);
-      await Bun.sleep(100);
-      for (let i = 0; i < 100; i++) {
-        const res = await send(
-          'Runtime.evaluate',
-          { expression: 'document.readyState === "complete" && window.location.href === ' + JSON.stringify(url), returnByValue: true },
+    const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> =>
+      new Promise((resolve, reject) => {
+        const id = nextId++;
+        pending.set(id, { method, resolve, reject });
+        ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+      });
+
+    const { targetInfos } = await send('Target.getTargets');
+    const pageTarget = targetInfos.find((t: any) => t.type === 'page') ?? (await send('Target.createTarget', { url: 'about:blank' }));
+    const targetId = pageTarget.targetId;
+    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+    await send('Page.enable', {}, sessionId);
+    await send('Runtime.enable', {}, sessionId);
+
+    return {
+      async setViewport(width: number, height: number) {
+        await send(
+          'Emulation.setDeviceMetricsOverride',
+          { width, height, deviceScaleFactor: 1, mobile: false },
           sessionId,
         );
-        if (res?.result?.value === true) break;
-        await Bun.sleep(50);
-      }
-    },
-    async evaluate<T>(expression: string): Promise<T> {
-      const res = await send(
-        'Runtime.evaluate',
-        { expression, awaitPromise: true, returnByValue: true },
-        sessionId,
-      );
-      if (res?.exceptionDetails) {
-        const desc =
-          res.exceptionDetails.exception?.description ||
-          res.exceptionDetails.text ||
-          JSON.stringify(res.exceptionDetails);
-        throw new Error(`Browser evaluate error: ${desc}`);
-      }
-      return res?.result?.value as T;
-    },
-    async close() {
-      try {
-        ws.close();
-      } catch {}
-      try {
-        proc.kill(9);
-      } catch {}
-    },
-  };
+      },
+      async goto(url: string) {
+        await send('Page.navigate', { url }, sessionId);
+        await Bun.sleep(100);
+        for (let i = 0; i < 100; i++) {
+          const res = await send(
+            'Runtime.evaluate',
+            { expression: 'document.readyState === "complete" && window.location.href === ' + JSON.stringify(url), returnByValue: true },
+            sessionId,
+          );
+          if (res?.result?.value === true) break;
+          await Bun.sleep(50);
+        }
+      },
+      async evaluate<T>(expression: string): Promise<T> {
+        const res = await send(
+          'Runtime.evaluate',
+          { expression, awaitPromise: true, returnByValue: true },
+          sessionId,
+        );
+        if (res?.exceptionDetails) {
+          const desc =
+            res.exceptionDetails.exception?.description ||
+            res.exceptionDetails.text ||
+            JSON.stringify(res.exceptionDetails);
+          throw new Error(`Browser evaluate error: ${desc}`);
+        }
+        return res?.result?.value as T;
+      },
+      async close() {
+        try {
+          ws.close();
+        } catch {}
+        try {
+          await chrome.close();
+        } catch {}
+      },
+    };
+  } catch (error) {
+    await chrome.close();
+    throw error;
+  }
 }
 
 async function buildDualMeshModel(variant: 'a' | 'b' = 'a'): Promise<string> {
