@@ -10,6 +10,30 @@ compatibility: Requires Bun 1.3.0 or later on PATH. The canonical npm package is
 Use this to hand separated parts, a rig or a post to a person for inspection,
 or to read back their submitted review.
 
+### Interview-stage project without a package
+
+When the designated project is at the interview stage and has neither a
+recorded draft nor a non-null `versions[].review_package`, the approved
+single-target form is:
+
+```sh
+rig-review open /path/to/project --project /path/to/project --picks-dir scratch/review-picks
+```
+
+The picks directory must already exist and be disjoint from declared inputs.
+Both root operands must resolve to the same project. Demo/build version records
+and unrelated derived evidence are allowed; `derived/` may be absent. Explicit
+version/draft selectors stay strict and never fall back. This form takes no
+additional inspection flags and adds no `feedback` or `control` grammar.
+
+The existing Review workspace hosts the interview in its existing modal.
+Model-dependent capabilities are named unavailable (`MODEL_UNAVAILABLE`); no
+manifest, model or package session is synthesized. Project, option-set and input
+hashes bind the inspection, and changed bytes require reopening
+(`INTERVIEW_OPTIONS_STALE`). The existing picks payload is unchanged. Use the
+semantic standing cycle for active consumer ingestion; do not construct or
+carry picks files to bypass it. See [project opening stability](https://github.com/rig-c/review/blob/main/docs/STABILITY.md#interview-stage-project-opening).
+
 ## Open one owner workspace
 
 For folder inspections, use **N rigs → one invocation, one owner link**.

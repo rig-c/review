@@ -71,24 +71,25 @@ export async function startOpenWorkspace(options: OpenWorkspaceOptions) {
     }, options.fingerprint);
     const loaded = prepared.package;
     if (prepared.key !== designation.key || loaded.contentHash !== designation.contentHash) throw workspaceError('WORKSPACE_SOURCE_CHANGED');
-    let bundle = bundles.get(loaded.mode);
-    if (!bundle) {bundle = buildWeb(loaded.mode); bundles.set(loaded.mode, bundle);}
+    const bundleMode=loaded.mode==='interview'?'single':loaded.mode;
+    let bundle = bundles.get(bundleMode);
+    if (!bundle) {bundle = buildWeb(bundleMode); bundles.set(bundleMode, bundle);}
     const controlToken = loaded.inputs.control ? randomUUID() : undefined;
     const contextOptions = {stateDir: options.stateDir, cwd: designation.cwd, lifecycle: live, bundle: await bundle,
       capability: targetCapability(ownerCapability, incarnation, designation.key),
       open: {key: designation.key, contentHash: designation.contentHash, nonce: incarnation, fingerprint: options.fingerprint},
       ...(controlToken ? {control: {token: controlToken, instanceKey: designation.key}} : {}),
     };
-    const context = loaded.mode === 'single'
+    const context = loaded.mode !== 'compare'
       ? await createReviewRequestContext(loaded.p, {...contextOptions, joined: loaded.joined,
         initialAnimation: loaded.selection?.name, viewOnly: designation.viewOnly})
       : await createCompareRequestContext(loaded.p, contextOptions);
-    const check = () => loaded.mode === 'single' ? assertReviewUnchanged(loaded.p) : assertCompareUnchanged(loaded.p);
+    const check = () => loaded.mode === 'interview' ? loaded.joined.assertCurrent() : loaded.mode === 'single' ? assertReviewUnchanged(loaded.p) : assertCompareUnchanged(loaded.p);
     await check();
     return {stored: {designation, ...(controlToken ? {controlToken} : {})}, context, check,
       view: {key: designation.key, contentHash: designation.contentHash,
-        title: (loaded.mode === 'single' ? loaded.p.manifest.title : loaded.p.response.title).slice(0, 256),
-        mode: loaded.mode, animation: loaded.selection?.name ?? null, viewOnly: designation.viewOnly, unavailable: null,
+        title: (loaded.mode === 'interview' ? String(loaded.joined.opened.project.name??loaded.joined.opened.root.split('/').at(-1)) : loaded.mode === 'single' ? loaded.p.manifest.title : loaded.p.response.title).slice(0, 256),
+        mode: loaded.mode==='interview'?'single' as const:loaded.mode, animation: loaded.selection?.name ?? null, viewOnly: designation.viewOnly, unavailable: null,
         entry: `/instances/${designation.key}/?input=${designation.contentHash}&handoff=${designation.key}&workspace=${incarnation}`}};
   }
 

@@ -715,6 +715,34 @@ to the joined command. The post must explicitly name the selected
 printed feedback command, including the project, rig, post and picks arguments,
 to export from that session.
 
+### Open an interview before a draft or review package exists
+
+Create the dedicated picks output directory first, then open the same project
+root in both operand positions:
+
+```sh
+mkdir -p /path/to/project/scratch/review-picks
+rig-review open /path/to/project \
+  --project /path/to/project --picks-dir scratch/review-picks
+```
+
+This form is limited to the interview stage with no recorded draft and no
+non-null `versions[].review_package`. Versions containing only demo/build
+records are permitted, as is unrelated derived evidence. A `derived/` directory
+is not required. Explicit version/draft selectors never fall back to this form.
+Both roots must resolve to the same project; the dedicated picks directory must
+exist and not overlap an input. Other inspection flags and multiple targets
+are refused for this form. `feedback` and `control` retain their existing syntax.
+
+The interview opens and closes as a modal over the existing Review workspace.
+The workspace reports model-dependent sections as `MODEL_UNAVAILABLE` and
+creates no model, review package or package session. Reads preserve project and
+input bytes. Changed project, option or source bytes require reopening, with
+`INTERVIEW_OPTIONS_STALE`. Existing interview choices, Other text, notes and
+picks-file payloads are unchanged. The active standing live-job cycle above
+still uses semantic acts and the trusted consumer; this inspection form does
+not authorize an agent to manufacture or carry picks files.
+
 ### Open a recorded draft before rig review
 
 In the active standing live-job cycle ([Standing live job workflow](#standing-live-job-workflow), [Create #182](https://github.com/rig-c/create/issues/182), [Create #184](https://github.com/rig-c/create/issues/184)), draft parts and mesh verdicts are submitted as `parts-verdict` acts over the semantic job API and fetched directly by the Create writer. The `--picks-dir`, `--parts-verdict-dir` and `--picks-file` commands below are preserved as legacy/history one-shot handoffs and are bypass findings if used in the active cycle.
