@@ -25,3 +25,45 @@ test('direct and foreground pages route from the root and key storage by their h
  expect(direct.base).toBe('/');expect(direct.route('/api/review')).toBe('/api/review');expect(direct.key).toBe(key);expect(storage.values.get('rig-review-capability/1:'+key)).toBe(capability);
  const foreground=instanceAccess(`http://127.0.0.1:4317/?checkpoint=x#cap=${capability}`,null,()=>{});expect(foreground.key).toBe('direct');expect(foreground.capability).toBe(capability);
 });
+
+test('instance handoff strips only cap fragments before storage and preserves null fallback for invalid saved values',()=>{
+ for(const fragment of ['','#review=keep-me','#cap=short','#cap='+capability]){
+  const calls:string[]=[],url='http://127.0.0.1:4318/instances/'+key+'/?lang=ko'+fragment;
+  const storage={getItem:(slot:string)=>{calls.push('get:'+slot);return 'malformed';},setItem:(slot:string,value:string)=>{calls.push('set:'+slot+':'+value);}};
+  const access=instanceAccess(url,storage,href=>calls.push('replace:'+href));
+  const slot='rig-review-capability/1:'+key;
+  expect(access.capability).toBe(fragment==='#cap='+capability?capability:null);
+  expect(calls).toEqual(fragment.startsWith('#cap=')?[
+   'replace:http://127.0.0.1:4318/instances/'+key+'/?lang=ko',
+   fragment==='#cap='+capability?'set:'+slot+':'+capability:'get:'+slot,
+  ]:['get:'+slot]);
+  expect(access.headers().has('X-Review-Capability')).toBe(fragment==='#cap='+capability);
+ }
+});
+
+test('instance malformed cap recovers only a valid saved capability after stripping, without rewriting storage',()=>{
+ const slot='rig-review-capability/1:'+key;
+ for(const saved of [null,'','short','A'.repeat(64),capability]){
+  const calls:string[]=[],storage={getItem:(name:string)=>{calls.push('get:'+name);return saved;},setItem:()=>{throw new Error('must not rewrite saved values');}};
+  const access=instanceAccess('http://127.0.0.1:4318/instances/'+key+'/#cap=short',storage,()=>calls.push('replace'));
+  expect(access.capability).toBe(saved===capability?capability:null);
+  expect(calls).toEqual(['replace','get:'+slot]);
+ }
+});
+
+test('instance storage denial preserves valid in-memory handoff and missing storage stays read-only',()=>{
+ const denied=()=>{throw new Error('denied');},storage={getItem:denied,setItem:denied};
+ for(const available of [storage,null]){
+  const calls:string[]=[];
+  const valid=instanceAccess('http://127.0.0.1:4318/#cap='+capability,available,href=>calls.push(href));
+  expect(valid.capability).toBe(capability);expect(calls).toEqual(['http://127.0.0.1:4318/']);
+  expect(instanceAccess('http://127.0.0.1:4318/#cap=short',available,()=>{}).capability).toBeNull();
+  expect(instanceAccess('http://127.0.0.1:4318/#review=retained',available,()=>{throw new Error('unrelated fragment must survive');}).capability).toBeNull();
+ }
+});
+
+test('instance replacement failures propagate before storage is touched',()=>{
+ const calls:string[]=[],storage={getItem:()=>{calls.push('get');return capability;},setItem:()=>{calls.push('set');}};
+ expect(()=>instanceAccess('http://127.0.0.1:4318/#cap='+capability,storage,()=>{throw new Error('replace failed');})).toThrow('replace failed');
+ expect(calls).toEqual([]);
+});
