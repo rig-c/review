@@ -682,7 +682,7 @@ for (const format of ['png', 'svg', 'SvG'] as const) test(`#636: ${format} origi
   expect(body.sourcePainting.sha256).toBe(jobHash(painting));
   const original = await metadata(f.session, publication, 'review-painting');
   expect(original.status).toBe(200);
-  expect(Buffer.from(await original.arrayBuffer())).toEqual(painting);
+  expect(Buffer.from(await original.arrayBuffer())).toEqual(Buffer.from(painting));
   const view = await metadata(f.session, publication, 'api/stage-parts');
   expect(view.status).toBe(200);
   const inventory = await view.json();
@@ -701,8 +701,8 @@ for (const format of ['png', 'svg', 'SvG'] as const) test(`#636: ${format} origi
   expect(table.status).toBe(200);
   expect(jobHash(new Uint8Array(await table.arrayBuffer()))).toBe(packet.table.sha256);
   const retainedPainting = join(retained.snapshotRoot, `out/painting.${format}`);
-  expect(readFileSync(retainedPainting)).toEqual(painting);
-  expect(readFileSync(join(out, `painting.${format}`))).toEqual(painting);
+  expect(readFileSync(retainedPainting)).toEqual(Buffer.from(painting));
+  expect(readFileSync(join(out, `painting.${format}`))).toEqual(Buffer.from(painting));
   expect(JSON.stringify(f.session.retainedSource(publication.publicationId).source)).toBe(sourceBytes);
   // Omitting SVG from the optional comparison never removes its original seal.
   const changed = Buffer.from(painting); changed[changed.length - 1] ^= 1;
@@ -714,6 +714,6 @@ for (const format of ['png', 'svg', 'SvG'] as const) test(`#636: ${format} origi
       await refusal.text();
     }
   } finally { writeFileSync(retainedPainting, painting); }
-  expect(readFileSync(retainedPainting)).toEqual(painting);
-  expect(readFileSync(join(out, `painting.${format}`))).toEqual(painting);
+  expect(readFileSync(retainedPainting)).toEqual(Buffer.from(painting));
+  expect(readFileSync(join(out, `painting.${format}`))).toEqual(Buffer.from(painting));
 });
