@@ -1634,8 +1634,9 @@ export async function joinedInterviewForms(access:InstanceAccess,present:(forms:
         }
         entry.form.dispatchEvent(new Event('change'));present([entry.form]);
     };
-    const localize=()=>{const entry=forms.get(selected);if(entry)entry.form.dispatchEvent(new Event('job-form-language'));};
-    const off=onLanguageChange(localize);show(selected);
+    const localize=()=>{for(const entry of forms.values())entry.localize();};
+    try{show(selected);}catch(error){for(const entry of forms.values())entry.dispose();throw error;}
+    const off=onLanguageChange(localize);
     return ()=>{disposed=true;off();for(const entry of forms.values())entry.dispose();forms.clear();};
 }
 

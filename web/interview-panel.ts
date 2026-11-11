@@ -22,8 +22,8 @@ export const interviewErrors: Readonly<Record<string,string>> = {
   INTERVIEW_OPTIONS_STALE:'interview.stale',
   INTERVIEW_PICKS_OUTPUT:'interview.output',
 };
-function element<K extends keyof HTMLElementTagNameMap>(tag: K, content?: string): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
+function element<K extends keyof HTMLElementTagNameMap>(tag: K, content?: string, factory?:InterviewText): HTMLElementTagNameMap[K] {
+  const el = factory?factory(tag):document.createElement(tag);
   if (content !== undefined) el.textContent = content;
   return el;
 }
@@ -46,11 +46,12 @@ export function jobInterviewValue(questionId: string, asks: readonly Ask[], chos
 export function interviewAskGroup(ask: Ask, options: {text?: InterviewText; name?: string; otherName?: string; pick?: Partial<Pick>;
     pendingHidden?: boolean; onPick?: (pick: Pick) => void; onOther?: (text: string) => void}): {group: HTMLFieldSetElement; value(): {optionId: string; otherText: string}} {
   const text = options.text ?? translated;
-  const group = element('fieldset');
+  const make=<K extends keyof HTMLElementTagNameMap>(tag:K,content?:string)=>element(tag,content,options.text);
+  const group = make('fieldset');
   group.className = 'interview-ask';
-  group.append(element('legend', ask.prompt));
+  group.append(make('legend', ask.prompt));
   const pick = options.pick;
-  const other = element('textarea');
+  const other = make('textarea');
   if (options.otherName) other.name = options.otherName;
   other.setAttribute('aria-label', t('interview.other'));
   other.value = pick?.other_text ?? '';
@@ -62,8 +63,8 @@ export function interviewAskGroup(ask: Ask, options: {text?: InterviewText; name
   pending.className = 'interview-pending';
   pending.hidden = options.pendingHidden ?? !(kind === 'auto' || kind === 'other');
   const radios = ask.options.map(option => {
-    const label = element('label'); label.className = 'interview-option';
-    const radio = element('input'); radio.type = 'radio'; radio.name = options.name ?? ask.id; radio.value = option.id;
+    const label = make('label'); label.className = 'interview-option';
+    const radio = make('input'); radio.type = 'radio'; radio.name = options.name ?? ask.id; radio.value = option.id;
     radio.required = true; radio.checked = option.id === pick?.option_id;
     radio.onchange = () => {
       if (!radio.checked) return;
@@ -76,12 +77,12 @@ export function interviewAskGroup(ask: Ask, options: {text?: InterviewText; name
       const next = {ask:ask.id, option_id:option.id};
       options.onPick?.(option.kind === 'other' ? {...next, other_text:other.value} : next);
     };
-    label.append(radio, element('strong', option.label), element('span', option.effect));
+    label.append(radio, make('strong', option.label), make('span', option.effect));
     if(option.kind==='auto'){const badge=text('b','interview.delegate');badge.className='interview-delegate';label.append(badge);}
     if (option.recommended) {
       const badge = text('b', 'interview.recommended'); badge.className = 'interview-recommended';
       label.dataset.recommended = '';
-      label.append(badge, element('span', option.reason));
+      label.append(badge, make('span', option.reason));
     }
     group.append(label);
     return radio;
@@ -92,15 +93,16 @@ export function interviewAskGroup(ask: Ask, options: {text?: InterviewText; name
 
 /** The modal's question list: "Answered n / total" and one button per question. */
 export function interviewQuestionList(items: readonly {label: string; answered: boolean}[], selected: number,
-    onSelect: ((index: number) => void) | null, disabled = false): HTMLElement {
-  const nav = element('nav');
+    onSelect: ((index: number) => void) | null, disabled = false, factory?:InterviewText): HTMLElement {
+  const make=<K extends keyof HTMLElementTagNameMap>(tag:K,content?:string)=>element(tag,content,factory);
+  const nav = make('nav');
   nav.className = 'interview-questions';
   nav.setAttribute('aria-label', t('interview.question'));
-  nav.append(element('p', t('interview.answered', [items.filter(item => item.answered).length, items.length])));
-  const list = element('ol');
+  nav.append(make('p', t('interview.answered', [items.filter(item => item.answered).length, items.length])));
+  const list = make('ol');
   items.forEach((item, index) => {
-    const row = element('li');
-    const button = element('button', item.label);
+    const row = make('li');
+    const button = make('button', item.label);
     button.type = 'button';
     button.className = 'interview-question';
     if (item.answered) button.dataset.answered = '';
@@ -181,17 +183,18 @@ export function interviewImageView(images: readonly {name: string; src: string}[
 export type InterviewDisplayQuestion = Omit<InterviewQuestion,'images'> & {images:{name:string;url:string}[];saved?:Picks|null};
 
 /** Read-only diagnostics and verbatim historical records, independent of submission transport. */
-export function interviewRecords(diagnostics:readonly InterviewDiagnostic[]=[],historical:readonly HistoricalInterview[]=[]):HTMLElement {
-  const records=element('div');records.className='interview-records';
-  const notices=element('section');notices.className='interview-diagnostics';notices.setAttribute('role','status');
+export function interviewRecords(diagnostics:readonly InterviewDiagnostic[]=[],historical:readonly HistoricalInterview[]=[],factory?:InterviewText):HTMLElement {
+  const make=<K extends keyof HTMLElementTagNameMap>(tag:K,content?:string)=>element(tag,content,factory);
+  const records=make('div');records.className='interview-records';
+  const notices=make('section');notices.className='interview-diagnostics';notices.setAttribute('role','status');
   for(const diagnostic of diagnostics){
-    notices.append(element('p',t(diagnostic.code==='INTERVIEW_OPTIONS_STALE'?'interview.historicalIssue':diagnostic.code)),
-      element('code',[diagnostic.question,diagnostic.record,diagnostic.at,diagnostic.ref.path,diagnostic.ref.sha256].filter(Boolean).join(' · ')));
+    notices.append(make('p',t(diagnostic.code==='INTERVIEW_OPTIONS_STALE'?'interview.historicalIssue':diagnostic.code)),
+      make('code',[diagnostic.question,diagnostic.record,diagnostic.at,diagnostic.ref.path,diagnostic.ref.sha256].filter(Boolean).join(' · ')));
   }
   records.append(notices);
   if(historical.length){
-    const archive=element('details');archive.append(element('summary',t('interview.legacy')));
-    for(const answer of historical){const row=element('section');row.append(element('h3',answer.question),element('p',[answer.by,answer.at].filter(Boolean).join(' · ')),element('pre',answer.verbatim));if(answer.ref)row.append(element('code',answer.ref.path+' · '+answer.ref.sha256));if(answer.answer)row.append(element('pre',[answer.answer.by,answer.answer.at,answer.answer.source].filter(value=>typeof value==='string').join(' · ')));archive.append(row);}
+    const archive=make('details');archive.append(make('summary',t('interview.legacy')));
+    for(const answer of historical){const row=make('section');row.append(make('h3',answer.question),make('p',[answer.by,answer.at].filter(Boolean).join(' · ')),make('pre',answer.verbatim));if(answer.ref)row.append(make('code',answer.ref.path+' · '+answer.ref.sha256));if(answer.answer)row.append(make('pre',[answer.answer.by,answer.answer.at,answer.answer.source].filter(value=>typeof value==='string').join(' · ')));archive.append(row);}
     records.append(archive);
   }
   return records;
@@ -202,37 +205,39 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
     images:readonly {name:string;src:string}[];questions?:readonly {label:string;answered:boolean}[]|(()=>readonly {label:string;answered:boolean}[]);selected?:number;onSelect?:(index:number)=>void;answered?:boolean;
     diagnostics?:readonly InterviewDiagnostic[];historical?:readonly HistoricalInterview[]}) {
   const question=options.question,copy=new Map<HTMLElement,string>();
+  const make=<K extends keyof HTMLElementTagNameMap>(tag:K,content?:string)=>element(tag,content,options.node);
   const node:InterviewText=(tag,key)=>{const result=options.node?options.node(tag,key):element(tag,key===undefined?undefined:t(key));if(key!==undefined)copy.set(result,key);return result;};
-  const form=options.form??element('form'),fields=options.fieldset??element('fieldset');
+  const form=options.form??make('form'),fields=options.fieldset??make('fieldset');
   if(!options.fieldset)form.append(fields);
   form.className='interview-answer interview-grid';form.dataset.interviewAnswered=String(options.answered??Boolean(question.saved||question.answer));
   fields.className='interview-answer-fields';fields.id=options.id;fields.disabled=!question.editable;
-  const heading=element('h3',question.set.question);fields.append(heading);
+  const heading=make('h3',question.set.question);fields.append(heading);
   const historical=question.answer?.choice as {picks?:Picks['picks']}|undefined;
   const answers=question.set.asks.map(item=>{const pick=question.saved?.picks.find(value=>value.ask===item.id)??historical?.picks?.find(value=>value.ask===item.id);const answer=interviewAskGroup(item,{text:node,name:'choice.'+item.id,otherName:'other.'+item.id,pick});fields.append(answer.group);return {item,answer};});
-  const context=element('div');context.id=options.id+'-source';context.className='interview-image-context';
+  const context=make('div');context.id=options.id+'-source';context.className='interview-image-context';
   if(options.source)context.append(options.source);
   context.append(node('h2',question.hasParts?'interview.parts':'interview.source'));
   if(!question.hasParts)context.append(node('p','interview.noParts'));
   if(question.partsUnavailable)context.append(node('p','interview.partsUnavailable'));
-  const provenance=element('p'),binding=element('code',question.ref.path+' · '+question.ref.sha256);context.append(provenance,binding);
-  if(question.answer)context.append(element('pre',[question.answer.by,question.answer.at,question.answer.source].filter(value=>typeof value==='string').join(' · ')),element('pre',typeof question.answer.verbatim==='string'?question.answer.verbatim:''));
-  const art=element('aside');art.className='interview-art';form.prepend(art);
+  const provenance=make('p'),binding=make('code',question.ref.path+' · '+question.ref.sha256);context.append(provenance,binding);
+  if(question.answer)context.append(make('pre',[question.answer.by,question.answer.at,question.answer.source].filter(value=>typeof value==='string').join(' · ')),make('pre',typeof question.answer.verbatim==='string'?question.answer.verbatim:''));
+  const art=make('aside');art.className='interview-art';form.prepend(art);
   let view:ReturnType<typeof interviewImageView>|undefined,list:HTMLElement|undefined,records:HTMLElement|undefined;
   const showImage=(index:number)=>{view?.dispose();view?.element.remove();view=interviewImageView(options.images,index,showImage,context);art.append(view.element);};
-  if(options.images.length)showImage(0);else art.append(context);
   const refresh=()=>{
     provenance.textContent=t('interview.provenance',[question.set.drafted_by,question.set.drafted_at]);
     const questions=typeof options.questions==='function'?options.questions():options.questions;
     const items=questions?.map((item,index)=>({...item,answered:index===(options.selected??0)?form.dataset.interviewAnswered==='true':item.answered}))??[{label:question.set.question+' · '+question.set.id,answered:form.dataset.interviewAnswered==='true'}];
-    const next=interviewQuestionList(items,options.selected??0,options.onSelect??(()=>{}));list?.remove();form.prepend(next);list=next;
-    records?.remove();records=interviewRecords(options.diagnostics,options.historical);context.append(records);
+    const next=interviewQuestionList(items,options.selected??0,options.onSelect??(()=>{}),false,options.node);list?.remove();form.prepend(next);list=next;
+    records?.remove();records=interviewRecords(options.diagnostics,options.historical,options.node);context.append(records);
   };
   const submit=node('button','interview.save');submit.type='submit';submit.hidden=!question.editable;fields.append(submit);
   const status=node('p',!question.editable?'interview.history':question.saved?'interview.saved':'interview.choose');status.setAttribute('role','status');form.append(status);
   const localize=()=>{for(const [item,key]of copy)item.textContent=t(item.dataset.jobText??key);refresh();};
-  const off=onLanguageChange(localize);form.addEventListener('input',refresh);form.addEventListener('change',refresh);form.addEventListener('job-form-language',localize);refresh();
+  const dispose=()=>{view?.dispose();form.removeEventListener('input',refresh);form.removeEventListener('change',refresh);form.removeEventListener('job-form-language',localize);};
+  form.addEventListener('input',refresh);form.addEventListener('change',refresh);form.addEventListener('job-form-language',localize);
+  try{if(options.images.length)showImage(0);else art.append(context);refresh();}catch(error){dispose();throw error;}
   return {form,fieldset:fields,submit,status,
     read:()=>jobInterviewValue(question.set.question,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),''),
-    dispose(){view?.dispose();off();form.removeEventListener('input',refresh);form.removeEventListener('change',refresh);form.removeEventListener('job-form-language',localize);}};
+    localize,dispose};
 }
