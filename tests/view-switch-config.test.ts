@@ -1,7 +1,8 @@
 import {readFileSync} from 'node:fs';
 import {createRigViewControls} from './helpers/rig-view-controls.ts';
 import {expect,test} from 'bun:test';
-import {createViewControls,type ViewSwitchConfig} from '../web/view-controls.ts';
+import {createViewControls,compareViewSwitch,type ViewSwitchConfig} from '../web/view-controls.ts';
+import {pairEligibility} from '../src/comparison-eligibility.ts';
 import {getLanguagePreference,setLanguagePreference,t} from '../web/i18n.ts';
 
 /** Numeric DOM host: no browser, layout or rendering claims. */
@@ -65,6 +66,19 @@ for(const language of ['en','ko'] as const){
   expect(hidden.list.children.some(node=>(node as ControlNode).tagName==='hr')).toBe(false);
  }));
 }
+
+for(const language of ['en','ko'] as const)test(`#696 ${language}: compare eligibility renders through the shared switch with its existing reasons`,()=>withControls(()=>{
+ setLanguagePreference(language);
+ const state=pairEligibility({a:{state:'loaded'},b:{state:'failed',reason:'decode error'},reference:{state:'loaded'},domain:{end:2},requested:'b'});
+ const {buttons,label}=menu(compareViewSwitch(state));
+ expect(buttons.map(button=>button.dataset.view)).toEqual(['compare','reference','a','b']);
+ expect(buttons.map(button=>button.textContent)).toEqual(['Side by side','Reference','Build A','Build B'].map(key=>t(key)));
+ expect(buttons.map(button=>button.getAttribute('aria-pressed'))).toEqual(['false','false','true','false']);
+ expect(label.textContent).toBe(t('Build A'));
+ expect(buttons.map(button=>button.disabled)).toEqual([true,false,false,true]);
+ expect(buttons[0]!.title).toBe(state.reasons.compare!);expect(buttons[3]!.title).toBe('B_FAILED: decode error');
+ expect(buttons[3]!.getAttribute('aria-description')).toBe('B_FAILED: decode error');
+}));
 
 test('#677 mode selection notifies once, closes the switch, updates summary and preserves the other group',()=>withControls(()=>{
  const changes:string[]=[],config=partsConfig(false,id=>changes.push(id)),{root,label,buttons}=menu(config);
