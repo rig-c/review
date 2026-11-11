@@ -1,5 +1,5 @@
-import {getLanguagePreference,getLinkLanguage,setLanguagePreference,setLinkLanguage} from '../web/i18n.ts';
-import {mountRigInspector,mountBottomPanel} from '../web/inspector-blocks.ts';
+import {getLanguagePreference,getLinkLanguage,setLanguagePreference,setLinkLanguage,t} from '../web/i18n.ts';
+import {mountRigInspector,mountBottomPanel,mountActBar} from '../web/inspector-blocks.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {workspaceResizeRange,workspaceResizeTarget,bindWorkspaceUI} from '../web/workspace-ui.ts';
@@ -471,4 +471,31 @@ test('#674 shared bottom strip keeps rig labels and accessibility text in EN and
    expect(mounted.row.tabs.map(tab=>tab.button.getAttribute('aria-controls'))).toEqual(['inspector-rig','inspector-playback','inspector-feedback']);
   }
  }finally{setLinkLanguage(link);setLanguagePreference(preference);if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
+});
+
+
+test('#676 parts-shaped act bar derives its label, shares state nodes and operates the overflow with keyboard focus',()=>{
+ const previous=Object.getOwnPropertyDescriptor(globalThis,'document'),oldFocus=hostDocument,preference=getLanguagePreference(),link=getLinkLanguage();
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Host(tag)}});hostDocument={activeElement:null};
+ let bar:ReturnType<typeof mountActBar>|undefined;
+ try{
+  setLinkLanguage(null);setLanguagePreference('en');
+  const submit=new Host('button'),saved=new Host('span');saved.textContent='saved';let issues=0,json=0,issue=0;
+  bar=mountActBar({id:'parts-act',submit:submit as unknown as HTMLButtonElement,saveState:saved as unknown as HTMLElement,submitLabel:()=>issues?t('job.partsRequestFixes',[issues]):t('job.partsApprove'),overflow:[{label:'Export JSON',handler:()=>json++},{label:'Export issue',handler:()=>issue++}]});
+  const root=bar.element as unknown as Host,actions=root.children[0]!,button=actions.children[2]!,menu=actions.children[3]!,items=menu.children;
+  expect(actions.children.slice(0,2)).toEqual([saved,submit]);expect(submit.textContent).toBe('Approve parts and sign off');
+  issues=2;bar.refresh();expect(submit.textContent).toBe('Request fixes (2 issues)');
+  setLanguagePreference('ko');expect(submit.textContent).toBe('수정 요청 보내기 (이슈 2)');expect(button.getAttribute('aria-label')).toBe('추가 검토 작업');
+  setLanguagePreference('en');expect(menu.hidden).toBe(true);expect(button.getAttribute('aria-haspopup')).toBe('menu');expect(menu.getAttribute('role')).toBe('menu');
+  const key=(node:Host,value:string,target:Host=node)=>{const event=new Event('keydown',{cancelable:true});Object.defineProperties(event,{key:{value},target:{value:target}});node.dispatchEvent(event);return event;};
+  expect(key(button,'ArrowDown').defaultPrevented).toBe(true);expect(menu.hidden).toBe(false);expect(hostDocument.activeElement).toBe(items[0]!);
+  key(menu,'End',items[0]);expect(hostDocument.activeElement).toBe(items[1]!);
+  key(menu,'ArrowDown',items[1]);expect(hostDocument.activeElement).toBe(items[0]!);
+  key(menu,'Escape',items[0]);expect(menu.hidden).toBe(true);expect(hostDocument.activeElement).toBe(button);
+  key(button,'Enter');items[0]!.click();expect(json).toBe(1);expect(menu.hidden).toBe(true);expect(hostDocument.activeElement).toBe(button);
+  key(button,' ');items[1]!.click();expect(issue).toBe(1);expect(hostDocument.activeElement).toBe(button);
+  key(button,'ArrowUp');expect(hostDocument.activeElement).toBe(items[1]!);menu.dispatchEvent(new Event('focusout'));expect(menu.hidden).toBe(true);
+  expect(saved.textContent).toBe('saved');expect(submit.parentElement).toBe(actions);
+  bar.dispose();button.click();expect(menu.hidden).toBe(true);issues=0;setLanguagePreference('ko');expect(submit.textContent).toBe('Request fixes (2 issues)');
+ }finally{bar?.dispose();setLinkLanguage(link);setLanguagePreference(preference);hostDocument=oldFocus;if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });

@@ -1,6 +1,7 @@
 export const koCatalog: Readonly<Record<string, string>> = {
  'rig review ': 'rig review ',
  'Language ': '언어 ',
+ 'More act actions': '추가 검토 작업',
  'View switch': '뷰 전환',
  'One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.': '현재 뷰 좌표 단위당 CSS 픽셀 하나입니다. 동기화된 뷰는 상대 배율을 유지합니다.',
  '1:1 · one CSS pixel per model coordinate unit.': '1:1 · 모델 좌표 단위당 CSS 픽셀 하나입니다.',
