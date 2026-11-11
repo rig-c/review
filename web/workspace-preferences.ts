@@ -8,9 +8,9 @@ export type WorkspaceLanguage='system'|'en'|'ko';
  * it on the left); `leftWidth` is the compare page's sources column. */
 export interface WorkspacePanels {leftWidth:number;rightWidth:number;inspectorHeight:number}
 export const panelBounds=Object.freeze({leftWidth:Object.freeze({min:120,max:720}),rightWidth:Object.freeze({min:180,max:900}),inspectorHeight:Object.freeze({min:120,max:900})});
-export const defaultWorkspacePanels:Readonly<WorkspacePanels>=Object.freeze({leftWidth:170,rightWidth:260,inspectorHeight:120});
-/** Earlier shipped defaults (280, then 350): an unstamped stored value equal to one loads as today's default. */
-const legacyDefaultInspectorHeights:ReadonlySet<number>=new Set([280,350]);
+export const defaultWorkspacePanels:Readonly<WorkspacePanels>=Object.freeze({leftWidth:170,rightWidth:260,inspectorHeight:240});
+/** Earlier defaults (280, then 350, then 120 on the #709 branch): an unstamped stored value equal to one loads as today's default. */
+const legacyDefaultInspectorHeights:ReadonlySet<number>=new Set([280,350,120]);
 type Flag='defaultCameraSync'|'defaultIdleRepeat'|'settingsCollapsed';
 type Field='theme'|'language'|Flag|keyof WorkspacePanels;
 const fields:readonly Field[]=['theme','language','defaultCameraSync','defaultIdleRepeat','settingsCollapsed','leftWidth','rightWidth','inspectorHeight'];
