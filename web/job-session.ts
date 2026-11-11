@@ -1384,6 +1384,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     };
     const partsPanels = new WeakMap<JobPreparedInspection, {
         slots: {left: HTMLElement; stage: HTMLElement; toolbar: HTMLElement; side: HTMLElement};
+        regions: import('./parts.ts').PartsRegions;
         composition: JobPanelComposition;
         output?: Parameters<PartsHost['register']>[0];
         issues: PartsIssue[];
@@ -2314,7 +2315,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             },
         };
         try {
-            mounted = mountPartsWorkspace(panel.slots, source, host, {defaultView: 'assembled'});
+            mounted = mountPartsWorkspace(panel.regions, source, host, {defaultView: 'assembled'});
             if (panel.legacy) {
                 const legacy = node('p', 'JOB_PARTS_LEGACY_DRAFT');
                 const rows = node('pre');
@@ -2398,7 +2399,13 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             history.className = 'job-history';
             history.dataset.jobHistory = '';
             formsHost.append(history);
-            const panel = {slots, composition, issues: [] as PartsIssue[], legacy: null, dispose: undefined as (() => void) | undefined};
+            // The job window keeps its own parts columns until it opens the one review screen; parts fills these hosts.
+            const secondary = node('div');
+            secondary.className = 'workspace-secondary-toolbar';
+            toolbar.after(secondary);
+            const [comments, flags, mesh, legacyHost, status] = [0, 1, 2, 3, 4].map(() => side.appendChild(node('section')));
+            const regions = {left, stage: canvas, toolbar, secondary, flags: flags!, mesh: mesh!, comments: comments!, legacy: legacyHost!, status: status!};
+            const panel = {slots, regions, composition, issues: [] as PartsIssue[], legacy: null, dispose: undefined as (() => void) | undefined};
             partsPanels.set(prepared, panel);
             const dispose = prepared.dispose;
             prepared.dispose = () => {try {panel.dispose?.();} finally {dispose();}};

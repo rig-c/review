@@ -367,15 +367,17 @@ test('#671 actual rig selection adapter restores without explicit reveal and sen
 
 test('#671 actual source-only startup guard excludes unavailable Review from actual API and keyboard choices, preserving compiled choices',async()=>{
  const source=await mainSource(),a=source.indexOf('    let writes:',source.indexOf('async function start():')),b=source.indexOf('    submittedBaseline=',a);
- const initialize=new Function('scope','with(scope){return (async()=>{'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a,b))+'})();}');
+ const initialize=new Function('scope','with(scope){return (async()=>{'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(source.indexOf('function hideRigReview():void {'),source.indexOf('\n/**',source.indexOf('function hideRigReview():void {')))+'\n'+source.slice(a,b))+'})();}');
  for(const preRig of [false,true]){
+  const started:string[]=[];
   const buttons=['rig','playback','feedback'].map(id=>{const node=new Host('button');node.setAttribute('aria-selected',String(id==='rig'));return node;}),panels=['rig','playback','feedback'].map(id=>{const panel=new Host('section');panel.id='inspector-'+id;panel.hidden=id!=='rig';return panel;});
   const feedback=buttons[2]!,act=new Host(),row:InspectorTabRow={tabs:buttons.map((button,index)=>({id:['rig','playback','feedback'][index]!,button:button as unknown as HTMLButtonElement,panels:[panels[index] as unknown as HTMLElement],attribute:'aria-selected'})),panels:panels as unknown as HTMLElement[],initialize:true};
   const scope={data:null as unknown,session:null as unknown,readOnly:null as unknown,rigInspector:{act,row},
    api:async(path:string)=>path==='/api/review'?{capabilities:{preRig}}:path==='/api/session'?{status:'pending'}:{capabilityRequired:false},
    access:{},readOnlyReason:()=>null,button:(id:string)=>{if(id!=='workspace-tab-feedback')throw new Error('Missing real review tab');return feedback;},
+   appliedOnStage:null,stageCorrect:null,setupParts:{start:(options:{transport:{kind:string}})=>{started.push(options.transport.kind);}},
   };
-  await initialize(scope);expect(feedback.hidden).toBe(preRig);expect(act.hidden).toBe(preRig);
+  await initialize(scope);expect(feedback.hidden).toBe(preRig);expect(act.hidden).toBe(preRig);expect(started).toEqual(['stage']);
   const binding=bindInspectorTabs(()=>{},()=>{},row);
   try{
    binding.select('feedback');expect(binding.state()).toBe(preRig?'rig':'feedback');expect(panels[2]!.hidden).toBe(preRig);
@@ -416,8 +418,8 @@ test('#671 real mounted outer tab-panel relationships preserve original nodes an
   binding.restore('rig');binding.dispose();
   expect(page.all().filter(node=>node.attrs.get('aria-labelledby')?.startsWith('block-tab-')).map(node=>[node.id,node.getAttribute('role'),node.getAttribute('aria-labelledby')])).toEqual(innerBefore);
   const source=await mainSource(),a=source.indexOf('    let writes:',source.indexOf('async function start():')),b=source.indexOf('    submittedBaseline=',a);
-  const scope={data:null as unknown,session:null as unknown,readOnly:null as unknown,rigInspector:mounted,access:{},readOnlyReason:()=>null,button:(id:string)=>document.getElementById(id)!,api:async(path:string)=>path==='/api/review'?{capabilities:{preRig:true}}:path==='/api/session'?{status:'pending'}:{capabilityRequired:false}};
-  await new Function('scope','with(scope){return(async()=>{'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a,b))+'})();}')(scope);
+  const scope={data:null as unknown,session:null as unknown,readOnly:null as unknown,rigInspector:mounted,access:{},appliedOnStage:null,stageCorrect:null,setupParts:{start(){}},readOnlyReason:()=>null,button:(id:string)=>document.getElementById(id)!,api:async(path:string)=>path==='/api/review'?{capabilities:{preRig:true}}:path==='/api/session'?{status:'pending'}:{capabilityRequired:false}};
+  await new Function('scope','with(scope){return(async()=>{'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(source.indexOf('function hideRigReview():void {'),source.indexOf('\n/**',source.indexOf('function hideRigReview():void {')))+'\n'+source.slice(a,b))+'})();}')(scope);
   const preRig=bindInspectorTabs(()=>{},()=>{},row);
   try{preRig.select('feedback');expect(preRig.state()).toBe('rig');expect(originals[2]!.hidden).toBe(true);expect(document.getElementById('workspace-tab-feedback')!.hidden).toBe(true);expect(mounted.act.hidden).toBe(true);expect(row.tabs.map(tab=>tab.id)).toEqual(['rig','playback']);}
   finally{preRig.dispose();}

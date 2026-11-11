@@ -122,9 +122,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
     node.name?.text === 'stagePartsSelectionIndex').replace('export function', 'function');
   const paintSlice = src.slice(src.indexOf('const itemImage ='), src.indexOf('\nfunction renderComparison('));
   const selectSlice = src.slice(src.indexOf('function select(index: number): void {'), src.indexOf('\nfunction renderLegacyVerdict('));
-  const bootStart = src.indexOf('frameSize:target=>{');
-  const bootEnd = src.indexOf('});disposers.push(viewport.bindControls());');
-  const frameSizeSlice = src.slice(bootStart, bootEnd);
+  const frameSizeSlice=productNode(src,node=>ts.isPropertyAssignment(node)&&node.name.getText()==='frameSize');
 
   const canvas = makeCanvas(20, 16);
   const reference = makeCanvas(20, 16);
@@ -133,7 +131,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
   const overlay = { replaceChildren() {} };
   const rigRoot = { style: { left: '', top: '', transform: '' } };
   const referenceContent = { style: { left: '', top: '', transform: '' } };
-  const zoomValue = { textContent: '1:1' };
+  const zoomValue = { textContent: '100%' };
   const nativeOne = {
     attrs: {} as Record<string, string>,
     setAttribute(k: string, v: string) {
@@ -151,7 +149,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
   const nodes: Record<string, unknown> = {
     'pv-canvas': canvas,
     'pv-reference': reference,
-    'pv-save-status': saveStatus,
+    'parts-save-status': saveStatus,
     'pv-caption': caption,
     'pv-overlay': overlay,
     'rig-root': rigRoot,
@@ -262,7 +260,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
     'paintAssemblyOutline',
     'paintMesh',
     'restoreDependencies',
-    `const { fetch, access, stageHeaders, defaultPartsComparison } = restoreDependencies;const settleReady=()=>{};const slots={stage:{dataset:{},setAttribute(){}}};const disposed=false,mountActive=true,doc=document;const query=(s)=>document.querySelector(s),queryAll=(s)=>document.querySelectorAll(s);const cachedImage=(_key,read)=>read();const source={image:index=>load('/api/parts/image/'+index),page:index=>load('/api/parts/page/'+index),painting:()=>load('/api/parts/painting'),view:async()=>state.data};\nconst viewport = new Proxy({}, { get(_t, prop) { const v = getViewport(); return v ? v[prop] : undefined; }, set(_t, prop, val) { const v = getViewport(); if (v) v[prop] = val; return true; } });\n${code}`,
+    `const { fetch, access, stageHeaders, defaultPartsComparison } = restoreDependencies;const settleReady=()=>{};const issuesPanel={},regions={toolbar:{},stage:{dataset:{},setAttribute(){}}};const disposed=false,mountActive=true,doc=document;const query=(s)=>document.querySelector(s),queryAll=(s)=>document.querySelectorAll(s);const cachedImage=(_key,read)=>read();const source={image:index=>load('/api/parts/image/'+index),page:index=>load('/api/parts/page/'+index),painting:()=>load('/api/parts/painting'),view:async()=>state.data};\nconst viewport = new Proxy({}, { get(_t, prop) { const v = getViewport(); return v ? v[prop] : undefined; }, set(_t, prop, val) { const v = getViewport(); if (v) v[prop] = val; return true; } });\n${code}`,
   )(
     state,
     $,
@@ -373,7 +371,7 @@ describe('parts failed paint camera and frame safety (#474)', () => {
     expect(h.viewport.paneCamera('rig')).toEqual({ zoom: 1, center: null });
     expect(h.viewport.state.displayedCenter).toEqual({ x: 10, y: 8 });
     expect(h.rigRoot.style).toEqual({ left: '100px', top: '72px', transform: 'scale(1)' });
-    expect(h.zoomValue.textContent).toBe('1:1');
+    expect(h.zoomValue.textContent).toBe('100%');
 
     // While paintFailure is active, paneFrame is null and navigation is disabled; zoom/pan/fit are refused
     expect(h.viewport.paneFrame('rig')).toBeNull();
@@ -389,7 +387,7 @@ describe('parts failed paint camera and frame safety (#474)', () => {
     expect(h.viewport.paneCamera('rig')).toEqual({ zoom: 1, center: null });
     expect(h.viewport.state.displayedCenter).toEqual({ x: 10, y: 8 });
     expect(h.rigRoot.style).toEqual({ left: '100px', top: '72px', transform: 'scale(1)' });
-    expect(h.zoomValue.textContent).toBe('1:1');
+    expect(h.zoomValue.textContent).toBe('100%');
   });
 
   test('in-flight zoom during held paint is reset back to 1:1 on the actual canvas when the held paint fails', async () => {
@@ -425,7 +423,7 @@ describe('parts failed paint camera and frame safety (#474)', () => {
     expect(h.viewport.paneCamera('rig')).toEqual({ zoom: 1, center: null });
     expect(h.viewport.state.displayedCenter).toEqual({ x: 10, y: 8 });
     expect(h.rigRoot.style).toEqual({ left: '100px', top: '72px', transform: 'scale(1)' });
-    expect(h.zoomValue.textContent).toBe('1:1');
+    expect(h.zoomValue.textContent).toBe('100%');
 
     h.viewport.zoomCamera(1.25);
     expect(h.viewport.paneCamera('rig')).toEqual({ zoom: 1, center: null });

@@ -47,6 +47,9 @@ test('joined verdict is bound to the inspected source and saves through the stan
       return 'http://127.0.0.1:'+server.port;
     };
     const origin=await serve(f.joined),api='/api/stage-parts',path=origin+api;
+    const stagePage=await fetch(origin+'/stage-parts.html?stageEmbed=1&lang=en');expect(stagePage.status).toBe(200);const stageHtml=await stagePage.text();expect(stageHtml).toContain('href="stage-styles.css"');expect(stageHtml).toContain('data-review-screen="stage-parts"');
+    const styles=await fetch(origin+'/stage-styles.css');expect(styles.status).toBe(200);expect(styles.headers.get('content-type')).toContain('text/css');expect(await styles.text()).toBe(await readFile('web/styles.css','utf8'));
+    expect(await (await fetch(origin+'/stage-styles.css',{method:'HEAD'})).text()).toBe('');
     const get=async(suffix='')=>(await fetch(path+suffix)).json();
     const post=(body:unknown,overrides:Record<string,string>={},base=path)=>fetch(base+'/verdict',{
       method:'POST',headers:{Origin:new URL(base).origin,'X-Review-Capability':capability,'Content-Type':'application/json',...overrides},
@@ -134,7 +137,7 @@ test('joined verdict is bound to the inspected source and saves through the stan
 
 test('joined comment and adapter boundaries name the standing job route in EN and KO',async()=>{
   const code='PARTS_JOINED_ISSUE_UNSUPPORTED';
-  const parts=await readFile('web/parts.ts','utf8'),page=await readFile('web/parts-page.ts','utf8');
+  const parts=await readFile('web/parts.ts','utf8'),page=await readFile('web/setup-parts.ts','utf8');
   const expression=(source:string,name:string)=>{
     const tree=ts.createSourceFile('boundary.ts',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
     const found:ts.Node[]=[];
@@ -163,12 +166,12 @@ test('joined comment and adapter boundaries name the standing job route in EN an
     scope.paintFailure='paint failure';expect(refusal()).toBe('paint failure');scope.paintFailure=null;
     scope.stageEmbedded=false;expect(refusal()).toBeNull();scope.stageEmbedded=true;
     let requests=0,outputs=0;
-    const status={textContent:'',dataset:{} as Record<string,string>},button={disabled:false};
-    const adapter={embedded:true,busy:false,disposed:false,currentView:{},host:{locked:()=>phase},output:{value:()=>{outputs++;return {verdict:'changes-requested',issues:[null]};}},required:(selector:string)=>selector==='#pv-save'?button:status,t:(key:string)=>t(key,undefined,language),fetch:async()=>{requests++;throw new Error('Unexpected joined issue request');}};
+    const status={kind:'',text:''};let synced=0;
+    const adapter={embedded:()=>true,busy:false,disposed:false,current:{},options:{access:{route:(path:string)=>path,headers:()=>new Headers()}},host:{locked:()=>phase},output:{value:()=>{outputs++;return {verdict:'changes-requested',issues:[null]};}},syncActions:()=>{synced++;},setStatus:(kind:string,text:string)=>{status.kind=kind;status.text=text;},t:(key:string)=>t(key,undefined,language),fetch:async()=>{requests++;throw new Error('Unexpected joined issue request');}};
     const crop=new Function('scope',`with(scope){${cropCode};return extracted;}`)(adapter) as (issue:unknown)=>Promise<unknown>;
     await expect(crop({})).rejects.toThrow(code);expect(requests).toBe(0);
     const save=new Function('scope',`with(scope){${saveCode};return extracted;}`)(adapter) as ()=>Promise<void>;
-    await save();expect(status.textContent).toBe(message);expect(status.dataset.result).toBe('refused');expect(requests).toBe(0);expect(button.disabled).toBe(false);
+    await save();expect(status.text).toBe(code);expect(t(status.text,undefined,language)).toBe(message);expect(status.kind).toBe('failed');expect(requests).toBe(0);expect(adapter.busy).toBe(false);expect(synced).toBe(2);
     phase='sent';await save();expect(outputs).toBe(1);expect(requests).toBe(0);
   }
 });

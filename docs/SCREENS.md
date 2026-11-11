@@ -11,7 +11,8 @@ configuration and data. It does not build its own copy of a component. Where a
 screen needs behavior a component lacks, extend the component for every screen.
 
 - **MUST** is a requirement.
-- *Today* lines record the current state on main `a5419f9` and the copies to remove.
+- *Today* lines record the current state on main `a5419f9` and the copies to remove,
+  updated where #706 (step 2, parts) has landed.
 - **Owner ruling** marks a choice the owner has not made yet. The layout ruling
   (R0) settles each of these before implementation.
 
@@ -24,13 +25,17 @@ screen needs behavior a component lacks, extend the component for every screen.
   entry: `/` and `/instances/<key>/…` (rig and compare), `/stage-parts.html` and
   `/stage-interview.html` (stage frames, `stageEmbed`, `lang`, `side`),
   `/jobs/<jobId>/` (`lang`, `hub`), `/hub/` (`workspace`, `lang`), the owner
-  workspace root, `?lang=en|ko`, and `#cap=` / `#review=` in the hash. Capability
+  workspace root, `?lang=en|ko`, and `#cap=` / `#review=` in the hash. The
+  standalone parts server's `/parts.html` redirects to `/`, which serves the
+  single entry marked `data-review-screen="parts"`; `/stage-parts.html` serves the
+  same entry marked `stage-parts` (#706). Capability
   handling and the API routes stay as they are. The single entry changes markup
   delivery, not API contracts.
 - **E3** The screen to mount is chosen from the route and the session payload,
   not from which HTML file was served.
-- *Today*: six HTML entries (`index`, `compare`, `parts`, `interview`, `job-hub`,
+- *Today*: five HTML entries (`index`, `compare`, `interview`, `job-hub`,
   `owner-workspace`) plus an inline job document written by `src/job-front.ts`.
+  `parts.html`, `parts.css` and `parts-page.ts` were removed by #706.
   `src/compare-html.ts` splices nine `<!-- shared:… -->` regions of `index.html`
   into `compare.html`.
 
@@ -53,17 +58,18 @@ workspace layout that places C2–C7.
   keep the rest of the layout.
 - Props: `screen`, `title`, `modes?`, `stages?`, `regions` (which of C2–C7 are
   present). Events: `mode-change`, `stage-change`, `lang-change`.
-- *Today*: `workspace-ui.ts` (separators, drawers, Settings) serves rig and
-  compare only. Parts, interview, job, hub and owner each build their own header
-  and language select.
+- *Today*: `workspace-ui.ts` (separators, drawers, Settings) serves rig, compare
+  and parts (Setup step 1, #706). Interview, job, hub and owner each build their
+  own header and language select.
 
 #### C1a Stage navigation
 
 - **MUST** show the pipeline stages (**1 Parts + mesh · 2 Interview · 3 Rig +
   animation · 4 Direction**) with the current stage marked, on every screen that
   belongs to a project stage, including job screens.
-- *Today*: `stage-nav.ts` is shared by rig, compare, parts and interview. Job
-  screens have none.
+- *Today*: `stage-nav.ts` is shared by rig, compare, parts and interview. Stage 1
+  shows in place on the rig screen (Setup mode); compare still frames it per
+  side. Job screens have none.
 
 ### C2 Navigator (left panel)
 
@@ -82,9 +88,10 @@ screen.
   progress list. They belong to the toolbars (C3/C4), so the list reads as one
   thing.
 - Events: `select(itemId)`, `toggle(itemId, visible)`.
-- *Today*: `PartExplorer` (rig, compare), the `parts.ts` list, the interview
-  question picker select, the job sidebar selects, the hub list and the owner
-  list are six separate builds.
+- *Today*: `PartExplorer` (rig, compare), the `parts.ts` list (shared navigator
+  `bindPartNavigator`, with Search parts), the interview question picker select,
+  the job sidebar selects, the hub list and the owner list are six separate
+  builds.
 
 ### C3 Main toolbar
 
@@ -103,8 +110,9 @@ screen.
   Reference selects.
 - **MUST** use the same item components as C3. An item looks and behaves the
   same on every screen it appears on.
-- *Today*: every screen has one toolbar holding everything (`index.html`
-  `.viewbar`, `compare.html`, `parts.ts:94-143`, `job-session.ts:2452-2518`).
+- *Today*: rig and parts (Setup step 1) split the main and secondary toolbars.
+  Compare and job have one toolbar holding everything (`compare.html`,
+  `job-session.ts:2452-2518`).
 
 ### C5 Main view
 
@@ -137,9 +145,10 @@ The inspected picture. One implementation for every screen.
   - Compare: the pane layouts.
   - Difference (R3) is a mode of the View switch and covers every region. There
     is no separate per-region evidence panel.
-- *Today*: rig has −, +, Fit with no 1:1. Compare has −, +, "Fit synchronized
-  views". Parts has −, value, +, Fit, 1:1. Job has Zoom in, Zoom out, Fit. One
-  job page showed two orders at once.
+- *Today*: rig and parts use the C5b order (`createViewControls` layout
+  `rigStep1`; parts lists Assembled · Part · Overlay · Difference, then Region ·
+  Pages for an atlas). Compare has −, +, "Fit synchronized views". Job has Zoom
+  in, Zoom out, Fit. One job page showed two orders at once.
 
 ### C6 Bottom panel
 
@@ -153,12 +162,17 @@ The inspected picture. One implementation for every screen.
   - Rig Animate: the timeline dock (C12), then Transport · Sound · Environment ·
     Physics · Idle tracks · Readings · Requirements · Retarget · Report.
   - Compare: View · Rig · Playback · Feedback.
-  - Parts: Issues (C8 list) and Producer flags.
+  - Parts (Setup step 1, #706): the rig's own tabs (Setup · Animate · Write
+    review), with Setup and Animate disabled (`RIG_VERSION_UNAVAILABLE`) and
+    Write review hidden before a rig exists, plus Producer flags · Mesh
+    geometry · Comments (n). Producer flags and Mesh geometry follow the Parts
+    selection, so they sit here, not in a sidebar.
   - Interview and job: the pending acts (C9 and C10 forms) and Comments.
 - **MUST** use one tab model. `inspector-blocks.ts` and `bindInspectorTabs`
   become one.
-- *Today*: rig and compare have resizable bottom panels with different tab
-  models. Parts, interview and job have none.
+- *Today*: rig and parts share one bottom panel (`mountBottomPanel`,
+  `bottomPanelTab`); compare has a resizable bottom panel with a different tab
+  model. Interview and job have none.
 
 ### C7 Side panel (right)
 
@@ -167,8 +181,9 @@ The inspected picture. One implementation for every screen.
   producer flags, plan text, mesh geometry.
 - **MUST NOT** hold a second copy of a list or evidence the main view already
   shows (R3).
-- *Today*: parts uses `.pv-side` for flags, the mesh panel and issues. Compare
-  puts the Parts explorer on the right.
+- *Today*: parts has no right panel; flags, the mesh panel and comments moved to
+  C6 and the source binding to a left tab (#706). Compare puts the Parts
+  explorer on the right.
 
 ### C8 Comments
 
@@ -220,15 +235,17 @@ The decision a person makes, and its submit action.
   - Interview: **Save explicit picks**.
 - **MUST** show the save state (saved, unsaved, failed with retry) the same way
   on every screen.
-- *Today*: rig and compare use a dialog with a status select. Parts uses **Save
-  sign-off** under the side panel. Job uses one form per ask in a forms column.
+- *Today*: rig and compare use a dialog with a status select. Parts uses
+  `mountActBar` in the bottom heading (**Approve parts and sign off** / **Request
+  fixes (n issues)**, Export JSON and issue Markdown in **⋯**). Job uses one form
+  per ask in a forms column.
 
 ### C11 Status bar
 
 - **MUST** be one footer showing the save state, the source hash, and the
   screen's short status items.
-- *Today*: `.status-bar` (rig), `<footer>` (compare), `#pv-save-status` (parts),
-  and status paragraphs (interview, job, hub, owner).
+- *Today*: `.status-bar` (rig and parts), `<footer>` (compare), and status
+  paragraphs (interview, job, hub, owner).
 
 ### C12 Timeline and transport
 
@@ -256,7 +273,7 @@ means the component is absent.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Rig review | parts/slots | reference, rig | Side by side · Reference · Rig | Setup or Animate set | package context, checkpoints | yes | — | review verdict |
 | Compare | parts/slots | reference, A, B | pane layouts | View · Rig · Playback · Feedback | sources | yes (frame range) | — | review verdict |
-| Parts review | parts/regions | part, painting | Part · Overlay · Difference (· Region · Pages) | Issues · Producer flags | mesh geometry | yes | — | parts verdict |
+| Parts review (rig screen, Setup step 1) | parts/regions, with Flagged parts and Source tabs | part, painting | Assembled · Part · Overlay · Difference (· Region · Pages) | rig tabs · Producer flags · Mesh geometry · Comments | — | yes | — | parts verdict |
 | Interview | questions with progress | reference images | image tabs as modes | answers | source info | yes | yes | interview picks |
 | Job: interview-picks | questions with progress | option images | image tabs as modes | answers | source info | yes | yes | interview picks |
 | Job: parts | parts/regions | as Parts review | as Parts review | as Parts review | as Parts review | yes | — | parts verdict |
@@ -288,6 +305,8 @@ for the copies it replaces.
 1. C1 shell, C5 main view, C5b control set and C6 bottom panel inside
    `index.html`. The rig screen mounts through them. Old rig markup is removed.
 2. Parts review and job parts move onto the shell. `parts.html` is removed.
+   Parts review landed as the rig screen's Setup step 1 (#706); job parts still
+   mounts `mountPartsWorkspace` in the job page until the job host moves (step 5).
 3. Compare moves onto C5 and the shared camera. `compare.html`,
    `compare-html.ts` splicing and the compare camera stack are removed.
 4. C9 survey, then interview and job interview-picks move. `interview.html` and

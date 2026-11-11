@@ -411,7 +411,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .topbar,.pv-top{flex-wrap:wrap}
 
 /* Setup/Animate/Compare are instruments within stage 3, never additional primary stages. */
-:root[data-inspection-stage]:not([data-inspection-stage="3"]) .mode-switch,:root[data-stage-refused="true"] .mode-switch{display:none}
+:root[data-inspection-stage]:not([data-inspection-stage="3"]):not([data-setup-parts]) .mode-switch,:root[data-stage-refused="true"] .mode-switch{display:none}
 :root[data-inspection-stage="1"] #mode-build-picker{display:flex!important}
 :root[data-inspection-stage="1"] #mode-build-picker>.eyebrow{display:none}
 :root[data-inspection-stage="2"] #mode-build-picker,:root[data-inspection-stage="4"] #mode-build-picker,:root[data-stage-refused="true"] #mode-build-picker{display:none!important}
@@ -534,3 +534,60 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .workspace-drawer>.inspector-body{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
 .workspace-drawer>.inspector-body>[data-inspector-panel]{flex:1;min-height:0;overflow:auto;padding:12px}
 .workspace-drawer>.inspector-body>#inspector-playback:not([hidden]){display:grid;grid-template-columns:minmax(0,1fr);overflow:auto}
+
+/* #706: Create step 1 is the one screen's Setup mode. While Stage 1 is current the parts hosts replace the rig's
+   regions in place (left tabs, toolbars, main view, readouts); the rig's bottom panel tabs stay as they are. */
+:root:not([data-setup-parts]) :is(.setup-parts-left,.setup-parts-toolbar,.setup-parts-secondary,.setup-parts-stage,.setup-parts-act,.setup-parts-status){display:none!important}
+:root[data-setup-parts] :is(.workspace-main-toolbar>:not(.setup-parts-toolbar),.workspace-secondary-toolbar>:not(.setup-parts-secondary),.workspace-stage-stack>#stage-layout,.left-panel>.left-header,.workspace-sources>:not(.setup-parts-left,.workspace-settings),.status-readouts>:not(.setup-parts-status)){display:none!important}
+.setup-parts-toolbar,.setup-parts-secondary,.setup-parts-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.setup-parts-toolbar{flex:1}
+.setup-parts-secondary label{display:flex;align-items:center;gap:5px}
+.setup-parts-secondary select,.setup-parts-secondary input:not([type=checkbox]){width:auto}
+.setup-parts-secondary #pv-corrections{display:flex;gap:6px;align-items:center;padding:3px 6px;border:1px dashed var(--border);border-radius:6px}
+.setup-parts-stage{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
+.setup-parts-stage>.pane-footer{flex:none;margin:0;padding:5px 12px;color:var(--fg-muted);font-size:11px;overflow-wrap:anywhere}
+.setup-parts-left{display:flex;flex-direction:column;gap:8px;min-height:0}
+.setup-parts-left [role=tabpanel]{min-height:0}
+.parts-list-header{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
+.parts-list-header h2{margin:0}
+.setup-parts-panel{overflow:auto;padding:8px 12px}
+.setup-parts-panel .stage-comment-list{position:static;width:auto;max-width:none;max-height:none;border:0}
+.setup-parts-act{padding:8px 12px;border-top:1px solid var(--border)}
+.setup-parts-status #pv-load[data-result="refused"]{color:var(--fail)}
+[hidden]:is(.setup-parts-left,.setup-parts-toolbar,.setup-parts-secondary,.setup-parts-stage,.setup-parts-act,.setup-parts-status,#pv-corrections){display:none!important}
+#pv-items{list-style:none;margin:0;padding:0}
+#pv-items li{display:flex;align-items:center;flex-wrap:nowrap;gap:4px}
+#pv-items li[hidden]{display:none}
+#pv-items li>label{display:flex;flex:none;align-items:center}
+#pv-items li button{min-width:0;flex:1;white-space:nowrap;width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;text-align:left;border:0;background:none;color:inherit;padding:4px 6px;border-radius:5px;cursor:pointer;font:inherit}
+#pv-items li button[aria-current="true"]{background:color-mix(in srgb,var(--link) 18%,transparent)}
+.pv-name{grid-column:1;grid-row:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pv-badge{grid-column:3;grid-row:1;font-size:10px;padding:0 5px;border-radius:8px;border:1px solid var(--border);color:var(--fg-muted)}
+.pv-badge[hidden]{display:none}
+.pv-count{grid-column:2;grid-row:1;font-size:10px;color:var(--fg-muted);white-space:nowrap}
+.pv-canvas-box{position:relative;display:inline-block;line-height:0}
+#pv-canvas{image-rendering:pixelated;image-rendering:crisp-edges;display:block}
+.pv-overlay{position:absolute;inset:0;pointer-events:none}
+.pv-overlay canvas{position:absolute;left:0;top:0;pointer-events:none}
+.pv-box{position:absolute;border:1px solid var(--rv-region-a);outline:1px solid var(--bg);pointer-events:auto;cursor:pointer}
+.pv-box[data-flag]{border-color:var(--fail);border-style:dashed;pointer-events:none}
+.pv-box[aria-current="true"]{border-color:var(--rv-region-b);border-width:2px}
+.pv-box span{position:absolute;left:0;top:-14px;font-size:10px;line-height:12px;background:var(--rv-backdrop);color:var(--fg);padding:0 3px;white-space:nowrap}
+.pv-region-edge{position:absolute;border:1px dashed var(--rv-region-b);pointer-events:none}
+#pv-flags,#pv-flags ul{list-style:none;margin:0;padding:0}
+#pv-flags li[data-flag-id]{border-left:3px solid var(--fail);padding:4px 6px;margin-bottom:6px;background:color-mix(in srgb,var(--fail) 8%,transparent);overflow-wrap:anywhere}
+#pv-flags h3{font-size:12px;margin:8px 0 4px}
+#pv-flags details[data-pv-root]{margin-bottom:6px;overflow-wrap:anywhere}
+#pv-flags details[data-pv-root]>summary{font-size:12px;color:var(--fg);padding:5px 0}
+#pv-flags code{font-size:11px;display:block;margin-top:4px;color:var(--fg-muted)}
+#pv-flags summary{cursor:pointer;font-size:11px;color:var(--fg-muted)}
+#pv-flags li.pv-none{border-left-color:var(--border);background:none;color:var(--fg-muted)}
+#pv-mesh-panel{display:flex;flex-direction:column;gap:6px}
+#pv-mesh-panel dl{display:grid;grid-template-columns:max-content 1fr;gap:3px 12px;margin:0}
+#pv-mesh-panel dd{margin:0;overflow-wrap:anywhere}
+#pv-mesh-panel p{margin:4px 0}
+#pv-legacy-flagged{margin:0;padding-left:16px}
+#pv-reference{image-rendering:pixelated;image-rendering:crisp-edges;display:block}#pv-opacity{width:100px}.pv-field{display:flex;align-items:center;gap:5px}
+.stage-comment-list.stage-comment-list-inline{position:static;position-anchor:auto;inset:auto;z-index:auto;width:100%;max-width:none;max-height:none;margin-top:12px}.stage-comment-list-inline .stage-comment-refusal-note{white-space:normal;overflow-wrap:anywhere}
+.stage-comment-parts{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}.stage-comment-parts button{font:inherit;max-width:100%;overflow-wrap:anywhere;border:1px solid var(--border);border-radius:5px;background:var(--rv-panel);color:inherit;padding:3px 6px;cursor:pointer}.stage-comment-parts button[aria-pressed="true"]{border-color:var(--link);background:color-mix(in srgb,var(--link) 18%,var(--rv-panel))}
+.setup-parts-status #pv-load,.setup-parts-status #parts-save-status{margin:0;min-width:0;overflow-wrap:anywhere;white-space:normal}

@@ -1,7 +1,7 @@
 /** Embedded parts inspector. Only the designated joined source can save a verdict. */
 import {join} from 'node:path';
 import {lstat,readFile} from 'node:fs/promises';
-import {appRoot,buildWeb} from './build.ts';
+import {appRoot,buildWeb,setupEntryHtml} from './build.ts';
 import type {ReviewPackage} from './manifest.ts';
 import {loadPartsAtlas,loadPartsView,assertPartsUnchanged,partsViewJson,servedImage,verdictSource,readVerdict,saveVerdict,exportPartsVerdict,type PartsViewPackage} from './parts-view.ts';
 import {serveReference,assertReviewUnchanged} from './reference.ts';
@@ -38,9 +38,12 @@ export function stagePartsRoutes(packages:{single:ReviewPackage}|{a:ReviewPackag
   if(verdictRequest&&(!verdictOptions?.joined.verdictDirectory||verdictOptions.viewOnly||(req.headers.get('X-Review-Stage-Build')??'inspected')!=='inspected')){
    return Response.json({error:'PARTS_VERDICT_READ_ONLY'},{status:409,headers});
   }
-  if(['/stage-parts.html','/parts.js','/parts.css'].includes(path)){
-   if(path==='/parts.js'){bundle??=buildWeb('parts');return new Response(req.method==='HEAD'?null:await bundle,{headers:{...headers,'Content-Type':'text/javascript'}});}
-   return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/'+(path==='/stage-parts.html'?'parts.html':'parts.css')),{headers:{...headers,'Content-Type':path.endsWith('.css')?'text/css':'text/html; charset=utf-8'}});
+  // #706: compare (card D) still frames Stage 1 per side; the frame is the one entry in Setup, with its own asset
+  // names because a compare server's /main.js and /styles.css are compare's.
+  if(['/stage-parts.html','/stage-main.js','/stage-styles.css'].includes(path)){
+   if(path==='/stage-main.js'){bundle??=buildWeb();return new Response(req.method==='HEAD'?null:await bundle,{headers:{...headers,'Content-Type':'text/javascript'}});}
+   if(path==='/stage-styles.css')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/styles.css'),{headers:{...headers,'Content-Type':'text/css'}});
+   return new Response(req.method==='HEAD'?null:await setupEntryHtml('stage-parts',{script:'stage-main.js',styles:'stage-styles.css'}),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
   }
   const match=('single' in packages?/^\/api\/stage-parts(?:\/(image|page)\/(\d+))?$/:/^\/api\/compare\/(a|b)\/stage-parts(?:\/(image|page)\/(\d+))?$/).exec(verdictRequest?'/api/stage-parts':path);
   if(!match)return null;

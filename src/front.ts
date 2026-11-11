@@ -55,7 +55,7 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  const read=method==='GET'||method==='HEAD',get:Route={mutation:false,limit:0,timeoutMs:30000,control:false};
  if(path===LIVE_PATH)return method==='GET'?{...get,live:true}:null;
  if(['/','/index.html','/main.js','/styles.css','/api/access'].includes(path))return read?get:null;
- if(['/stage-parts.html','/parts.js','/parts.css'].includes(path))return read?get:null;
+ if(['/stage-parts.html','/stage-main.js','/stage-styles.css'].includes(path))return read?get:null;
  if((mode==='single'?/^\/api\/stage-parts(?:\/(?:image|page)\/\d+)?$/:/^\/api\/compare\/(?:a|b)\/stage-parts(?:\/(?:image|page)\/\d+)?$/).test(path))return read?get:null;
  if(mode==='single'){
   if(path==='/api/stage-parts/verdict')return method==='POST'?{...get,mutation:true,limit:stageVerdictLimit}:null;

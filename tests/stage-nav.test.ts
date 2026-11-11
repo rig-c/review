@@ -104,7 +104,7 @@ test('stage inspection does not create interview/direction/model capabilities',(
 test('front stage routes are read-only, side-closed and index-only',()=>{
  for(const mode of ['single','compare'] as const){
   const base=mode==='single'?'/api/stage-parts':'/api/compare/a/stage-parts';
-  for(const path of [base,base+'/page/0','/stage-parts.html','/parts.js','/parts.css']){expect(frontRoute(mode,'GET',path)).not.toBeNull();expect(frontRoute(mode,'POST',path)).toBeNull();}
+  for(const path of [base,base+'/page/0','/stage-parts.html','/stage-main.js','/stage-styles.css']){expect(frontRoute(mode,'GET',path)).not.toBeNull();expect(frontRoute(mode,'POST',path)).toBeNull();}
   for(const path of [base+'/verdict',base+'/page/-1',base+'/page/../0',base+'/page/1/escape','/api/compare/c/stage-parts','/api/stage-parts/page/%2e%2e'])expect(frontRoute(mode,'GET',path)).toBeNull();
  }
 });

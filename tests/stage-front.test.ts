@@ -25,7 +25,7 @@ test('actual managed front validates and forwards the complete trusted iframe qu
    const before=forwarded;
    const invalid=['','?stageEmbed=1','?stageEmbed=0&lang=en'+suffix,'?stageEmbed=1&lang=fr'+suffix,'?stageEmbed=1&lang=en&lang=ko'+suffix,'?stageEmbed=1&stageEmbed=1&lang=en'+suffix,'?stageEmbed=1&lang=en&path=/tmp'+suffix,'?stageEmbed=1&lang=en&cap=secret'+suffix,'?stageEmbed=1&lang=en&command=apply'+suffix,'?stageEmbed=1&lang=en&side=c',mode==='single'?'?stageEmbed=1&lang=en&side=a':'?stageEmbed=1&lang=en'];
    for(const query of invalid){const response=await fetch(base+page+query);expect(response.status).toBe(400);expect((await response.json()).error).toBe('FRONT_QUERY_REFUSED');}
-   expect((await fetch(base+'parts.js?lang=en')).status).toBe(400);expect((await fetch(base+'stage-parts.html?stageEmbed=1&lang=en'+suffix,{method:'POST',headers:{Origin:front.origin}})).status).toBe(404);expect(forwarded).toBe(before);
+   expect((await fetch(base+'stage-main.js?lang=en')).status).toBe(400);expect((await fetch(base+'stage-styles.css?lang=en')).status).toBe(400);for(const gone of ['parts.js','parts.css'])expect((await fetch(base+gone)).status).toBe(404);expect((await fetch(base+'stage-parts.html?stageEmbed=1&lang=en'+suffix,{method:'POST',headers:{Origin:front.origin}})).status).toBe(404);expect(forwarded).toBe(before);
    expect((await fetch(base+'stage-parts.html?stageEmbed=1&lang=en'+suffix,{headers:{Origin:'http://foreign.invalid'}})).status).toBe(403);
    }
   }

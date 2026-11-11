@@ -95,14 +95,16 @@ export interface BottomPanelOptions {
  act:HTMLElement;
  actHome:HTMLElement;
 }
+/** One C6 tab: the button the strip shows and the panel it controls. A screen adds a mode's tabs to an existing panel with it. */
+export function bottomPanelTab(id:string,label:string,panel:HTMLElement,selected=false):{id:string;button:HTMLButtonElement;panels:HTMLElement[];attribute:'aria-selected'} {
+ const button=actionButton(tr(label),null);button.id='workspace-tab-'+id;button.dataset.inspector=id;button.setAttribute('role','tab');button.setAttribute('aria-controls',panel.id);button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1;
+ panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',button.id);
+ return {id,button,panels:[panel],attribute:'aria-selected'};
+}
 /** Build C6 once from screen-owned tabs and act nodes, independently of the rig dialog. */
 export function mountBottomPanel(options:BottomPanelOptions):BottomPanel {
  const strip=panelMake('nav',{className:'workspace-bottom-tabs'});strip.setAttribute('role','tablist');strip.setAttribute('aria-label',tr('Inspection controls'));
- const tabs=options.tabs.map(({id,label,panel},index)=>{
-  const button=actionButton(tr(label),null);button.id='workspace-tab-'+id;button.dataset.inspector=id;button.setAttribute('role','tab');button.setAttribute('aria-controls',panel.id);button.setAttribute('aria-selected',String(index===0));button.tabIndex=index===0?0:-1;
-  panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',button.id);
-  strip.append(button);return {id,button,panels:[panel],attribute:'aria-selected' as const};
- });
+ const tabs=options.tabs.map(({id,label,panel},index)=>{const tab=bottomPanelTab(id,label,panel,index===0);strip.append(tab.button);return tab;});
  const collapse=actionButton(tr('Collapse bottom panel'),null);collapse.id='workspace-bottom-collapse';collapse.setAttribute('aria-expanded','true');collapse.setAttribute('aria-controls','workspace-inspector');
  options.heading.replaceChildren(strip,collapse);
  return {row:{tabs,panels:tabs.flatMap(tab=>tab.panels),initialize:true},strip,act:options.act,actHome:options.actHome,collapse,kind:options.kind};
@@ -120,7 +122,7 @@ export interface ActBarOptions {
  saveState:HTMLElement;
  /** Other nodes that show the same save state (the C11 footer copy); `title` repeats the text as a tooltip. */
  saveStateCopies?:{node:HTMLElement;title?:boolean}[];
- overflow?:{label:string;handler:()=>void}[];
+ overflow?:{id?:string;label:string;handler:()=>void}[];
 }
 /** C10 save state: one model for every screen. `text` and the retry label are English source text the caller owns. */
 export type ActSaveKind='saved'|'unsaved'|'saving'|'failed'|'read-only';
@@ -138,7 +140,7 @@ export function mountActBar(options:ActBarOptions):ActBar {
   menu.setAttribute('role','menu');
   const close=(focus=true)=>{menu.hidden=true;button.setAttribute('aria-expanded','false');if(focus)button.focus();};
   const items=options.overflow.map(action=>{
-   const item=actionButton(tr(action.label),null);item.setAttribute('role','menuitem');item.tabIndex=-1;
+   const item=actionButton(tr(action.label),null);if(action.id)item.id=action.id;item.setAttribute('role','menuitem');item.tabIndex=-1;
    listen(item,'click',()=>{close();action.handler();});labels.push({button:item,label:action.label});menu.append(item);return item;
   });
   const open=(last=false)=>{menu.hidden=false;button.setAttribute('aria-expanded','true');items[last?items.length-1:0]!.focus();};

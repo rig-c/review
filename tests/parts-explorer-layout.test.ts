@@ -1,10 +1,11 @@
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import { expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { setSourceAttribute, setSourceText, sourceAttribute } from '../web/i18n.ts';
 import type { PosedFrame, SlotIdentitySnapshot } from '@rig-c/play';
 import {
+  bindPartNavigator,
   PartInspection,
   orderedParts,
   partCatalog,
@@ -106,28 +107,14 @@ test('Change 1, 2, 3, 4: compare.css and styles.css enforce fixed tool area, scr
 });
 
 test('#614 shared parts load notices stay outside pane sizing and retain full refusal text', () => {
-  const css = readFileSync(new URL('../web/parts.css', import.meta.url), 'utf8');
-  const rules = cssRuleMap(css);
-  const notice = (rules.get('#pv-load') ?? []).join(';');
-  const embedded = (rules.get('#pv-load.pv-embedded-status') ?? []).join(';');
-
-  expect(notice).toContain('position:absolute');
-  expect(notice).toContain('inset:0 0 auto auto');
-  expect(notice).toContain('max-width:100%');
-  expect(notice).not.toMatch(/(?:^|;)\s*(?:width|inline-size)\s*:/);
-  expect(notice).toContain('margin:0');
-  expect(notice).toContain('overflow-wrap:anywhere');
-  expect(notice).toContain('background:var(--panel)');
-  expect(notice).toContain('z-index:25');
-  expect((rules.get('.pv-stage') ?? []).join(';')).toContain('position:relative');
-  for (const declarations of [notice, embedded]) {
-    expect(declarations).not.toMatch(/(?:^|;)\s*(?:(?:max-|min-)?(?:height|block-size)|line-clamp|-webkit-line-clamp)\s*:/);
-    expect(declarations).not.toMatch(/(?:overflow(?:-[xy])?\s*:\s*(?:hidden|clip)|text-overflow\s*:\s*ellipsis|white-space\s*:\s*nowrap|display\s*:\s*none)/);
-  }
-  expect(embedded).toContain('padding:10px 14px');
-  expect(embedded).toContain('border-bottom:1px solid var(--line)');
-  expect((rules.get('#pv-load.pv-embedded-status[data-result="refused"]') ?? []).join(';')).toContain('color:var(--flag)');
-  expect(rules.get('#pv-save-status')).toEqual(['overflow-wrap:anywhere']);
+  const css=readFileSync(new URL('../web/styles.css',import.meta.url),'utf8'),rules=cssRuleMap(css);
+  expect(existsSync(new URL('../web/parts.css',import.meta.url))).toBe(false);
+  const notice=(rules.get('.setup-parts-status #pv-load')??[]).join(';');expect(rules.get('.setup-parts-status #parts-save-status')).toEqual(rules.get('.setup-parts-status #pv-load'));
+  expect(notice).toContain('margin:0');expect(notice).toContain('overflow-wrap:anywhere');expect(notice).toContain('white-space:normal');
+  expect(notice).not.toMatch(/(?:position:absolute|overflow:hidden|text-overflow:ellipsis|(?:^|;)\s*(?:max-|min-)?height\s*:)/);
+  expect((rules.get('.setup-parts-status #pv-load[data-result="refused"]')??[]).join(';')).toContain('color:var(--fail)');
+  const parts=readFileSync(new URL('../web/parts.ts',import.meta.url),'utf8');
+  expect(parts).toContain("regions.status.append(load,saveState,sourceHash)");expect(parts).toContain('mountViewportPair(layout,{footer:caption})');
 });
 
 test('Change 2: compare.ts reuses PartThumbnails, pageRegionTable, and loadPartModel without copying, and draws per-side thumbnails', async () => {
@@ -254,8 +241,9 @@ test('Change 2: compare.ts reuses PartThumbnails, pageRegionTable, and loadPartM
     'setSourceText',
     'setSourceAttribute',
     'sourceAttribute',
+    'bindPartNavigator',
     script + ';return PartExplorer;',
-  )(PartInspection, orderedParts, partIdentity, doc, DetailNode, setSourceText, setSourceAttribute, sourceAttribute) as typeof PartExplorer;
+  )(PartInspection, orderedParts, partIdentity, doc, DetailNode, setSourceText, setSourceAttribute, sourceAttribute, bindPartNavigator) as typeof PartExplorer;
 
   const oldDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
   const oldIO = Object.getOwnPropertyDescriptor(globalThis, 'IntersectionObserver');

@@ -129,7 +129,8 @@ test('non-first part selection transfers by exact art/package/address, never by 
 
 test('#562(i) standalone partsViewJson omits STAGE_DRAFT_UNAVAILABLE and removes prior host while explicit/joined draft and refusals stay intact in EN and KO',async()=>{
  class CorrectionNode {
-  id='';type='';textContent='';title='';children:CorrectionNode[]=[];onclick?:()=>unknown;
+  id='';type='';textContent='';title='';className='';hidden=false;attrs:Record<string,string>={};children:CorrectionNode[]=[];onclick?:()=>unknown;
+  setAttribute(name:string,value:string){this.attrs[name]=value;}
   constructor(public tag:string,private onRemove?:(node:CorrectionNode)=>void){}
   append(...nodes:CorrectionNode[]){this.children.push(...nodes);}
   replaceChildren(...nodes:CorrectionNode[]){this.children=nodes;}
@@ -170,7 +171,9 @@ test('#562(i) standalone partsViewJson omits STAGE_DRAFT_UNAVAILABLE and removes
   expect(noMeshData.draftUnavailable).toBe(stageDraftRefusals.STAGE_DRAFT_NO_MESH);
 
   for(const catalog of [enCatalog,koCatalog]as const){
-   const dom:{host:CorrectionNode|null}={host:null};
+   const dom:{host:CorrectionNode|null;label:CorrectionNode|null}={host:null,label:null};
+   // #706: the draft label sits in the status bar and the instrument buttons in the secondary toolbar's editor group.
+   const shown=()=>[...(dom.label?[dom.label.textContent]:[]),...(dom.host?.children.map(c=>c.textContent)??[])];
    const posted:{data:unknown;origin:string}[]=[];
    const state:{selected:number;data:any}={selected:0,data:standaloneData};
    let stageEmbedded=false;
@@ -182,11 +185,11 @@ test('#562(i) standalone partsViewJson omits STAGE_DRAFT_UNAVAILABLE and removes
      location:{origin:'http://127.0.0.1:4173'},
      parent:{postMessage:(data:unknown,origin:string)=>{posted.push({data,origin});}},
      CustomEvent:class{constructor(public type:string,public options:any){}get detail(){return this.options.detail;}},
-     slots:{stage:{append:(node:CorrectionNode)=>{dom.host=node;},dispatchEvent:(event:any)=>{posted.push({data:event.detail,origin:'http://127.0.0.1:4173'});}}},
-     query:(selector:string)=>selector==='#pv-corrections'?dom.host:null,
+     regions:{secondary:{append:(node:CorrectionNode)=>{dom.host=node;}},status:{append:(node:CorrectionNode)=>{dom.label=node;}},correction:(request:unknown)=>{posted.push({data:{type:'review-stage-correction',...request as object},origin:'http://127.0.0.1:4173'});}},
+     query:(selector:string)=>selector==='#pv-corrections'?dom.host:selector==='#pv-draft-label'?dom.label:null,
      doc:{
       getElementById:(id:string)=>id==='pv-corrections'?dom.host:null,
-      createElement:(tag:string)=>new CorrectionNode(tag,node=>{if(dom.host===node)dom.host=null;}),
+      createElement:(tag:string)=>new CorrectionNode(tag,node=>{if(dom.host===node)dom.host=null;if(dom.label===node)dom.label=null;}),
       querySelector:(sel:string)=>sel==='.pv-toolbar'?{after:(node:CorrectionNode)=>{dom.host=node;}}:null,
      },
     };
@@ -197,50 +200,50 @@ test('#562(i) standalone partsViewJson omits STAGE_DRAFT_UNAVAILABLE and removes
    // 1. Standalone partsViewJson with no prior host omits #pv-corrections and STAGE_DRAFT_UNAVAILABLE.
    stageEmbedded=false;state.data=standaloneData;state.selected=0;
    renderCorrections();
-   expect(dom.host).toBeNull();
+   expect(dom.host).toBeNull();expect(dom.label).toBeNull();
 
    // 2. Joined / explicit request mounts #pv-corrections, then standalone partsViewJson removes prior host.
    stageEmbedded=true;state.data=unavailableData;
    renderCorrections();
    expect(dom.host).not.toBeNull();
-   expect(dom.host!.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
+   expect(shown()).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
    stageEmbedded=false;state.data=standaloneData;
    renderCorrections();
-   expect(dom.host).toBeNull();
+   expect(dom.host).toBeNull();expect(dom.label).toBeNull();
 
    // 3. Standalone with own draftUnavailable or own draft property retains named refusal.
    stageEmbedded=false;state.data={...standaloneData,draftUnavailable:stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE};
    renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
+   expect(shown()).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
    state.data={...standaloneData,draftUnavailable:stageDraftRefusals.STAGE_DRAFT_NO_MESH};
    renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_NO_MESH!]!]);
+   expect(shown()).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_NO_MESH!]!]);
    state.data={...standaloneData,draft:undefined};
    renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
+   expect(shown()).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
 
    // 4. Joined (stageEmbedded=true) preserves no-mesh, unavailable, unmapped part, mapped buttons, and inspectionOnly.
    stageEmbedded=true;state.data=standaloneData;
    renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
+   expect(shown()).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
    state.data=noMeshData;
    renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_NO_MESH!]!]);
+   expect(shown()).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_NO_MESH!]!]);
    state.data={...mappedData,items:[...mappedData.items,{name:'unmapped',index:2}]};state.selected=2;
    renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_NO_MESH!]!]);
+   expect(shown()).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_NO_MESH!]!]);
    state.data=mappedData;state.selected=0;posted.length=0;
    renderCorrections();
-   expect(dom.host?.children).toHaveLength(5);
-   expect(dom.host?.children[0]!.textContent).toBe(`${catalog['Draft rig · structure evidence only']} · gap · default/gap/gap · v 25 t 30 · inspected`);
-   expect(dom.host?.children.slice(1,4).map(c=>c.textContent)).toEqual([catalog['Chest regions']!,catalog['Mesh parameters']!,catalog['Edit Mesh']!]);
-   expect(dom.host?.children[4]!.textContent).toBe(catalog['Use Write review, choose Parts review and name the Create draft. Export the saved item with the feedback CLI. Mesh deltas retain evidence as unsupported operations.']!);
-   dom.host?.children[1]!.onclick?.();
+   expect(dom.host?.children).toHaveLength(3);expect(dom.host?.hidden).toBe(false);expect(dom.host?.attrs.role).toBe('group');expect(dom.host?.className).toBe('editor-group');
+   expect(dom.label?.textContent).toBe(`${catalog['Draft rig · structure evidence only']} · gap · default/gap/gap · v 25 t 30 · inspected`);
+   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog['Chest regions']!,catalog['Mesh parameters']!,catalog['Edit Mesh']!]);
+   expect(dom.host?.title).toBe(catalog['Use Write review, choose Parts review and name the Create draft. Export the saved item with the feedback CLI. Mesh deltas retain evidence as unsupported operations.']!);
+   dom.host?.children[0]!.onclick?.();
    expect(posted).toEqual([{data:{type:'review-stage-correction',part:'gap',sourceHash:mappedData.sourceHash,buildId:'inspected',instrument:'chest'},origin:'http://127.0.0.1:4173'}]);
    state.data={...mappedData,draft:{...mappedData.draft,inspectionOnly:true}};
    renderCorrections();
-   expect(dom.host?.children).toHaveLength(1);
-   expect(dom.host?.children[0]!.textContent).toBe(`${catalog['Draft rig · structure evidence only']} · gap · default/gap/gap · v 25 t 30 · inspected`);
+   expect(dom.host?.children).toHaveLength(0);expect(dom.host?.hidden).toBe(true);
+   expect(dom.label?.textContent).toBe(`${catalog['Draft rig · structure evidence only']} · gap · default/gap/gap · v 25 t 30 · inspected`);
   }
  }finally{await rm(root,{recursive:true,force:true});}
 });

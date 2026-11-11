@@ -1,3 +1,4 @@
+import {existsSync} from 'node:fs';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
 import {commentFixture,candidate} from './helpers/parts-comments-package.ts';
@@ -26,12 +27,13 @@ const walk=(n:Node):Node[]=>[n,...n.children.filter(c=>c instanceof Node).flatMa
 async function caller(items:any[],opts?:{legacyVerdict?:ViewData['legacyVerdict'];locked?:boolean}) {
  const source=await readFile('web/parts.ts','utf8');
  const nodes=new Map<string,Node>();const $=(id:string)=>{if(!nodes.has(id)){const n=new Node();n.id=id;nodes.set(id,n);}return nodes.get(id)!;};
- const state:any={selected:0,hidden:new Set(),data:{items,mode:'parts',flags:[],readings:[],flagMissing:[],verdictFile:'verdict.json',legacyVerdict:opts?.legacyVerdict}};
+ const state:any={view:'assembled',selected:0,hidden:new Set(),data:{items,mode:'parts',flags:[],readings:[],flagMissing:[],verdictFile:'verdict.json',legacyVerdict:opts?.legacyVerdict}};
  const comments:PartsIssue[]=[];const requests:any[]=[];let selected=-1,painted=0;
  const host:PartsHost={initial:()=>comments,register:()=>{},locked:()=>opts?.locked||opts?.legacyVerdict?.readOnly?'sent':'open',changed:()=>{}};
- const scope={
-  state,$,comments,host,options:{},stageEmbedded:false,embedded:false,disposed:false,busy:false,
-  get currentView(){return state.data;},output:{value:()=>({verdict:comments.length?'changes-requested':'approved',issues:[...comments],words:''})},required:(selector:string)=>$(selector.slice(1)),
+ const scope:any={
+  state,$,comments,host,stageEmbedded:false,embedded:()=>false,disposed:false,busy:false,search:{value:''},regions:{legacyCount(){}},syncActions(){},
+  setStatus:(kind:string,text:string)=>{const node=$('parts-act-state');node.dataset.saveState=kind;node.textContent=text;},
+  get current(){return state.data;},output:{value:()=>({verdict:comments.length?'changes-requested':'approved',issues:[...comments],words:''})},required:(selector:string)=>$(selector.slice(1)),
   t:(s:string,values:Record<string,unknown>|unknown[]={})=>Array.isArray(values)?s.replace(/\{(\d+)\}/g,(_,k)=>String(values[Number(k)]??'{'+k+'}')):s.replace(/\{(\w+)\}/g,(_,k)=>String((values as Record<string,unknown>)[k]??'{'+k+'}')),
   countedFlag,
   doc:{createElement:(tag:string)=>new Node(tag),getElementById:(id:string)=>$(id),querySelectorAll:()=>[]},
@@ -42,17 +44,18 @@ async function caller(items:any[],opts?:{legacyVerdict?:ViewData['legacyVerdict'
   renderMesh:()=>{},
   access:{capability:'cap',route:(s:string)=>s,headers:(v?:HeadersInit)=>new Headers(v)},
   stageHeaders:()=>new Headers(),
-  partsApi:'/api/parts',headers:()=>new Headers(),
+  options:{access:{capability:'cap',route:(s:string)=>s,headers:(v?:HeadersInit)=>new Headers(v)}},
+  partsApi:()=>'/api/parts',headers:()=>new Headers(),
   stageBuild:'inspected',
   fetch:async(url:string,init:any)=>{requests.push({url,...init,body:JSON.parse(init.body)});return {ok:true,json:async()=>({verdict:{source:{sha256:'a'.repeat(64)}}})};},
  };
- const adapter=await readFile('web/parts-page.ts','utf8');
- const save=adapter.slice(adapter.indexOf('  const save = async () => {'),adapter.indexOf('  const exportVerdict =')).replace('const save = async () => {','async function save() {').replace(/};\s*$/, '}');
+ const adapter=await readFile('web/setup-parts.ts','utf8');
+ const save=adapter.slice(adapter.indexOf('  const save=async()=>{'),adapter.indexOf('  submit.onclick=')).replace('const save=async()=>{','async function save() {').replace(/};\s*$/, '}');
  const blocks=[
   source.slice(source.indexOf('function renderList()'),source.indexOf('function renderMesh()')),
   source.slice(source.indexOf('function renderLegacyVerdict()'),source.indexOf('async function boot()')),save,
  ];
- const binding="$('pv-save').onclick = () => save();";
+ const binding="$('parts-submit').onclick = () => save();";
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(blocks.join('\n')+'\n'+binding);
  const api=new Function('scope',`with(scope){${code};return {renderList,renderLegacyVerdict,save};}`)(scope);
  return {state,$,comments,requests,api,get selected(){return selected;},get painted(){return painted;}};
@@ -61,7 +64,7 @@ async function caller(items:any[],opts?:{legacyVerdict?:ViewData['legacyVerdict'
 test('#612 zero-issue sign-off saves approvedrig-review-parts-verdict/4 without per-part outcome map',async()=>{
  const root=await mkdtemp(join(tmpdir(),'approve-'));try{
  await writeMeshPackage(root);const pkg=await loadPartsView(root),binding=verdictSource(pkg),c=await caller(pkg.items);
- expect(c.$('pv-save').onclick).toBeFunction();await c.$('pv-save').onclick!();
+ expect(c.$('parts-submit').onclick).toBeFunction();await c.$('parts-submit').onclick!();
  expect(c.requests).toHaveLength(1);const request=c.requests[0];
  expect(request.url).toBe('/api/parts/verdict');expect(request.method).toBe('POST');
  expect(request.body).toEqual({status:'approved',issues:[]});
@@ -70,7 +73,7 @@ test('#612 zero-issue sign-off saves approvedrig-review-parts-verdict/4 without 
  expect(verdict.status).toBe('approved');
  expect(verdict.source).toEqual(binding);
  expect(verdict.issues).toEqual([]);
- expect(c.$('pv-save-status').dataset.result).toBe('saved');
+ expect(c.$('parts-act-state').dataset.saveState).toBe('saved');
  expect(()=>buildVerdict(pkg,{status:'approved',issues:[{}]},'test')).toThrow();
  }finally{await rm(root,{recursive:true,force:true});}
 });
@@ -80,7 +83,7 @@ test('#612 pointed issue switches save payload to changes-requested and preserve
  const pkg=await commentFixture(root),comment=await preparePartsComment(pkg,candidate(pkg)),c=await caller(pkg.items);
  c.comments.push(comment);
  const before=await Promise.all(pkg.files.map(f=>readFile(f.abs)));
- await c.$('pv-save').onclick!();
+ await c.$('parts-submit').onclick!();
  expect(c.requests).toHaveLength(1);
  expect(c.requests[0].body).toEqual({status:'changes-requested',issues:[comment]});
  const verdict=buildVerdict(pkg,c.requests[0].body,'test');
@@ -108,11 +111,11 @@ test('#612 legacy read-only verdict renders flagged parts and refuses save when 
  expect(list.children).toHaveLength(1);
  expect(list.children[0].dataset.legacyFlaggedPart).toBe('gap');
  expect(list.children[0].textContent).toBe('gap: legacy seam note');
- await c.$('pv-save').onclick!();
+ await c.$('parts-submit').onclick!();
  expect(c.requests).toHaveLength(0);
 
  const lockedCaller=await caller([{name:'gap',index:0}],{locked:true});
- await lockedCaller.$('pv-save').onclick!();
+ await lockedCaller.$('parts-submit').onclick!();
  expect(lockedCaller.requests).toHaveLength(0);
 });
 
@@ -139,9 +142,9 @@ test('#612 actual list caller renders complete names, producer flag counts, issu
  expect(walk(rows[23]!).find(n=>n.className==='pv-count')!.textContent).toBe('mesh 1 · check 1');
  expect(rows[0]!.children[0].attrs['aria-current']).toBe('true');
  expect(c.painted).toBe(48);
- const css=await readFile('web/parts.css','utf8');expect(css).not.toMatch(/\.pv-count\{[^}]*grid-row:2/);
- const html=await readFile('web/parts.html','utf8');
- expect(html).toContain('id="parts-actions"');
+ const css=await readFile('web/styles.css','utf8');expect(css).not.toMatch(/\.pv-count\{[^}]*grid-row:2/);
+ expect(existsSync('web/parts.html')).toBe(false);
+ const html=await readFile('web/index.html','utf8');
  expect(html).not.toContain('id="pv-items"');
  expect(html).not.toContain('id="pv-canvas"');
  expect(html).not.toContain('id="pv-approve-all"');
@@ -350,10 +353,13 @@ function partsMountDocument(raster = false) {
  Object.defineProperty(globalThis,'Element',{value:FakeElement,configurable:true,writable:true});
   const makeSlots=(prefix:string)=>{
    const hostWrap=new FakeElement('div');hostWrap.id=`host-${prefix}`;
-   const left=new FakeElement('aside'),stage=new FakeElement('main'),toolbar=new FakeElement('div'),side=new FakeElement('aside');
-   hostWrap.append(left,stage,toolbar,side);
+   const left=new FakeElement('aside'),stage=new FakeElement('main'),toolbar=new FakeElement('div'),secondary=new FakeElement('div'),side=new FakeElement('aside');
+   const flags=new FakeElement('section'),mesh=new FakeElement('section'),comments=new FakeElement('section'),legacy=new FakeElement('section'),status=new FakeElement('div');
+   side.append(comments,flags,mesh,legacy);
+   hostWrap.append(left,stage,toolbar,secondary,side,status);
    rootDoc.append(hostWrap);
-   return {left:left as unknown as HTMLElement,stage:stage as unknown as HTMLElement,toolbar:toolbar as unknown as HTMLElement,side:side as unknown as HTMLElement,hostWrap};
+   const h=(n:FakeElement)=>n as unknown as HTMLElement;
+   return {left:h(left),stage:h(stage),toolbar:h(toolbar),secondary:h(secondary),flags:h(flags),mesh:h(mesh),comments:h(comments),legacy:h(legacy),status:h(status),side:h(side),hostWrap};
   };
  return {FakeElement, fakeDoc, fakeWin, rootDoc, makeSlots, cleanup() {
   if(savedStyle)Object.defineProperty(globalThis,'getComputedStyle',savedStyle);
@@ -467,7 +473,7 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
   void handleA.ready.then(()=>{firstPaintSettled=true;},()=>{});
   const waitReady=async(promise:Promise<void>,label:string,slots:ReturnType<typeof makeSlots>)=>{
    let timer:ReturnType<typeof setTimeout>|undefined;
-   try{return await Promise.race([promise,new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error(label+' readiness pending '+JSON.stringify({caption:slots.hostWrap.querySelector('#pv-caption')?.textContent,status:slots.hostWrap.querySelector('#pv-save-status')?.textContent,load:slots.hostWrap.querySelector('#pv-load')?.textContent}))),500);})]);}
+   try{return await Promise.race([promise,new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error(label+' readiness pending '+JSON.stringify({caption:slots.hostWrap.querySelector('#pv-caption')?.textContent,status:slots.hostWrap.querySelector('#parts-save-status')?.textContent,load:slots.hostWrap.querySelector('#pv-load')?.textContent}))),500);})]);}
    finally{clearTimeout(timer);}
   };
   await waitReady(handleB.ready,'B',slotsB);
@@ -483,15 +489,15 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
   expect(loadA.textContent).toBe('Saved sign-off loaded.');
   expect(loadB.textContent).toBe('');
   expect(loadA.getAttribute('role')).toBe('status');
-  expect(loadA.parentElement).toBe(slotsA.stage as unknown as FakeElement);
-  expect(loadA).not.toBe(slotsA.hostWrap.querySelector('#pv-save-status'));
+  expect(loadA.parentElement).toBe(slotsA.status as unknown as FakeElement);
+  expect(loadA).not.toBe(slotsA.hostWrap.querySelector('#parts-save-status'));
 
 
   const sidebarA=slotsA.side as unknown as FakeElement,sidebarB=slotsB.side as unknown as FakeElement;
   const issueListA=sidebarA.querySelector<FakeElement>('.stage-comment-list')!;
   const issueListB=sidebarB.querySelector<FakeElement>('.stage-comment-list')!;
-  expect(issueListA.parentElement).toBe(sidebarA);
-  expect(issueListB.parentElement).toBe(sidebarB);
+  expect(issueListA.parentElement).toBe(slotsA.comments as unknown as FakeElement);
+  expect(issueListB.parentElement).toBe(slotsB.comments as unknown as FakeElement);
   for(const [slots,list] of [[slotsA,issueListA],[slotsB,issueListB]] as const){
    expect(slots.hostWrap.querySelectorAll('.stage-comment-list')).toHaveLength(1);
    expect(list.classList.contains('stage-comment-list-inline')).toBe(true);
@@ -508,7 +514,7 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
   expect(issueListA.querySelector('.stage-comment-summary')?.textContent).toContain('seam gap on A');
   expect(issueListB.querySelectorAll('.stage-comment-item')).toHaveLength(0);
   expect(issueListB.querySelector('p')?.textContent).toBe('No issues yet.');
-  const partsCss=await readFile('web/parts.css','utf8');
+  const partsCss=await readFile('web/styles.css','utf8');
   expect(partsCss).toMatch(/\.stage-comment-list\.stage-comment-list-inline\{position:static;/);
 
   expect(outputs.a?.kind).toBe('parts-verdict');
@@ -528,8 +534,8 @@ test('#612 two simultaneous mountPartsWorkspace instances in one document stay i
   const badgeB=slotsB.hostWrap.querySelector<FakeElement>('button[data-pv-item="gap"] .pv-badge');
   expect(badgeA?.dataset.issues).toBe('1');
   expect(badgeB?.dataset.issues).toBe('0');
-  expect(slotsA.hostWrap.querySelector('#pv-assemble')?.getAttribute('aria-pressed')).toBe('true');
-  expect(slotsB.hostWrap.querySelector('#pv-assemble')?.getAttribute('aria-pressed')).toBe('false');
+  expect(slotsA.hostWrap.querySelector('[data-view="assembled"]')?.getAttribute('aria-pressed')).toBe('true');
+  expect(slotsB.hostWrap.querySelector('[data-view="assembled"]')?.getAttribute('aria-pressed')).toBe('false');
   const key=(key:string)=>({key,code:key,repeat:false,target:rootDoc,preventDefault(){},ctrlKey:false,metaKey:false,altKey:false});
   const toggleA=slotsA.hostWrap.querySelector<FakeElement>('#stage-comment')!;
   const toggleB=slotsB.hostWrap.querySelector<FakeElement>('#stage-comment')!;
@@ -639,15 +645,15 @@ test('#613 C during a current paint exposes busy then clears only its owned stat
   expect(node('stage-comment').disabled).toBe(true);
   expect(node('stage-comment').textContent).toContain('Rendering');
   pressC();
-  expect(node('pv-save-status').textContent).toContain('COMMENT_BUSY');
+  expect(node('parts-save-status').textContent).toContain('COMMENT_BUSY');
   releases[0]!({width:16,height:16} as HTMLImageElement);
   await handle.ready;
   expect(slots.stage.dataset.partsPaintState).toBe('ready');
   expect(node('stage-comment').disabled).toBe(false);
-  expect(node('pv-save-status').textContent).toBe('');
+  expect(node('parts-save-status').textContent).toBe('');
 
   // Assemble waits for uncached part images even after the initial item is ready.
-  node('pv-assemble').onclick!();await arrivals[1];
+  slots.hostWrap.querySelector<InstanceType<typeof fixture.FakeElement>>('[data-view="assembled"]')!.onclick!();await arrivals[1];
   expect(captureReady(fixture.fakeDoc)).toBe(false);
   expect(slots.stage.dataset.partsPaintState).toBe('busy');
   expect(node('stage-comment').disabled).toBe(true);
@@ -658,8 +664,8 @@ test('#613 C during a current paint exposes busy then clears only its owned stat
   node('stage-comment').onclick!();
   expect(node('stage-comment').getAttribute('aria-pressed')).toBe('false');
   expect(node('rig-viewport').classList.contains('stage-comment-mode')).toBe(false);
-  expect(node('pv-save-status').textContent).toContain('COMMENT_BUSY');
-  node('pv-assemble').onclick!();await flush();
+  expect(node('parts-save-status').textContent).toContain('COMMENT_BUSY');
+  slots.hostWrap.querySelector<InstanceType<typeof fixture.FakeElement>>('[data-view="part"]')!.onclick!();await flush();
   expect(captureReady(fixture.fakeDoc)).toBe(true);
   expect(slots.stage.dataset.partsPaintState).toBe('ready');
   expect(node('stage-comment').disabled).toBe(false);
@@ -677,22 +683,22 @@ test('#613 C during a current paint exposes busy then clears only its owned stat
   releases[1]!({width:16,height:16} as HTMLImageElement);await flush();
   expect(slots.stage.dataset.partsPaintState).toBe('busy');
   expect(node('stage-comment').disabled).toBe(true);
-  expect(node('pv-save-status').textContent).toContain('COMMENT_BUSY');
+  expect(node('parts-save-status').textContent).toContain('COMMENT_BUSY');
   releases[2]!({width:16,height:16} as HTMLImageElement);await flush();
   expect(slots.stage.dataset.partsPaintState).toBe('ready');
   expect(node('stage-comment').disabled).toBe(false);
-  expect(node('pv-save-status').textContent).toBe('');
+  expect(node('parts-save-status').textContent).toBe('');
 
   handle.select('part-0');pressC();
-  node('pv-save-status').textContent='Unrelated save status';await flush();
+  node('parts-save-status').textContent='Unrelated save status';await flush();
   expect(slots.stage.dataset.partsPaintState).toBe('ready');
-  expect(node('pv-save-status').textContent).toBe('Unrelated save status');
+  expect(node('parts-save-status').textContent).toBe('Unrelated save status');
 
   handle.select('part-3');await arrivals[3];pressC();
   rejects[3]!(new Error('planted-readiness-image-failure'));await flush();
   expect(slots.stage.dataset.partsPaintState).toBe('failed');
   expect(slots.stage.getAttribute('aria-busy')).toBe('false');
-  expect(node('pv-save-status').textContent).toContain('PARTS_PAINT_FAILED');
+  expect(node('parts-save-status').textContent).toContain('PARTS_PAINT_FAILED');
  }finally{handle.dispose();fixture.cleanup();}
 });
 
@@ -744,12 +750,12 @@ test('#614 shared mount creates real assembled issues, validates chip edits atom
   const canvasA=node(slotsA,'#pv-canvas'),canvasB=node(slotsB,'#pv-canvas');
   const pixels=()=>canvasA.toDataURL();const base=pixels();const otherBase=canvasB.toDataURL();
   const paneA=node(slotsA,'#rig-viewport'),paneB=node(slotsB,'#rig-viewport');
-  node(slotsA,'[data-pv-comparison="overlay"]').onclick!();await tick();
+  node(slotsA,'[data-view="overlay"]').onclick!();await tick();
   expect(node(slotsA,'#pv-mesh-control input').disabled).toBe(false);
   expect(node(slotsA,'#pv-mesh-control input').checked).toBe(true);
   const overlayWithMesh=pixels();const overlayToggle=node(slotsA,'#pv-mesh-control input');overlayToggle.checked=false;overlayToggle.onchange!();await tick();
   expect(pixels()).not.toBe(overlayWithMesh);overlayToggle.checked=true;overlayToggle.onchange!();await tick();
-  expect(pixels()).toBe(overlayWithMesh);node(slotsA,'[data-pv-comparison="part"]').onclick!();await tick();
+  expect(pixels()).toBe(overlayWithMesh);node(slotsA,'[data-view="assembled"]').onclick!();await tick();
   paneA.focus();dom.fakeDoc.emit('keydown',key('p'));await tick();
   expect(pixels()).not.toBe(base);expect(canvasB.toDataURL()).toBe(otherBase);
   expect(node(slotsA,'#stage-comment').disabled).toBe(true);
@@ -783,13 +789,13 @@ test('#614 shared mount creates real assembled issues, validates chip edits atom
   expect(slotsB.hostWrap.querySelector('[data-assembly-hover]')).toBeNull();
   paneA.emit('pointerleave',{});expect(slotsA.hostWrap.querySelector('[data-assembly-hover]')).toBeNull();
   paneA.emit('dblclick',event({x:15,y:9}));await tick();
-  expect(node(slotsA,'#pv-assemble').getAttribute('aria-pressed')).toBe('false');
+  expect(node(slotsA,'[data-view="assembled"]').getAttribute('aria-pressed')).toBe('false');
   expect(node(slotsA,'button[aria-current="true"]').dataset.pvItem).toBe('front');
   expect(node(slotsA,'#pv-mesh-control input').checked).toBe(true);
   expect(node(slotsA,'#pv-mesh-panel p').textContent).toBe('No mesh geometry is available for this part.');
   const toggle=node(slotsA,'#pv-mesh-control input');toggle.checked=false;toggle.onchange!();await tick();
   dom.fakeDoc.emit('keydown',key('Escape'));await tick();
-  expect(node(slotsA,'#pv-assemble').getAttribute('aria-pressed')).toBe('true');
+  expect(node(slotsA,'[data-view="assembled"]').getAttribute('aria-pressed')).toBe('true');
   expect(node(slotsA,'#pv-mesh-control input').checked).toBe(false);
   const drag=async(from:{x:number;y:number},to:{x:number;y:number})=>{
    paneA.emit('pointerdown',event(from,{buttons:1}));paneA.emit('pointermove',event(to,{buttons:1}));
@@ -931,7 +937,7 @@ test('#620 EN/KO stage comment drags save identical regions and native RGBA crop
 
    const ensureCapture=()=>{if(commentBtn.getAttribute('aria-pressed')!=='true')commentBtn.onclick!();};
    node(slots,'button[data-pv-item="body"]').onclick!();
-   if(node(slots,'#pv-assemble').getAttribute('aria-pressed')==='true')node(slots,'#pv-assemble').onclick!();
+   if(node(slots,'[data-view="assembled"]').getAttribute('aria-pressed')==='true')node(slots,'[data-view="part"]').onclick!();
    node(slots,'#native-one').onclick!();
    for(let i=0;i<4;i++)node(slots,'#zoom-in').onclick!();
    await tick();
@@ -947,7 +953,7 @@ test('#620 EN/KO stage comment drags save identical regions and native RGBA crop
    expect(handle.issues()[0]!.imageRegion).toEqual({x:2,y:2,width:10,height:10});
    expect(handle.issues()[0]!.rigRegion).toEqual({x:6,y:6,width:10,height:10});
 
-   node(slots,'#pv-assemble').onclick!();
+   node(slots,'[data-view="assembled"]').onclick!();
    node(slots,'#native-one').onclick!();
    for(let i=0;i<4;i++)node(slots,'#zoom-in').onclick!();
    await tick();
@@ -958,7 +964,7 @@ test('#620 EN/KO stage comment drags save identical regions and native RGBA crop
    await (composer as unknown as HTMLFormElement).onsubmit!({preventDefault(){}} as SubmitEvent);
    commentBtn.onclick!();
 
-   node(slots,'#pv-assemble').onclick!();
+   node(slots,'[data-view="part"]').onclick!();
    node(slots,'#native-one').onclick!();
    for(let i=0;i<4;i++)node(slots,'#zoom-in').onclick!();
    await tick();
@@ -1023,7 +1029,7 @@ test('#620 EN/KO stage comment drags save identical regions and native RGBA crop
   await expect(failHandle.ready).rejects.toThrow('planted-final-fit-failure');
   expect(failSlots.stage.dataset.partsPaintState).toBe('failed');
   expect(failSlots.stage.getAttribute('aria-busy')).toBe('false');
-  expect(node(failSlots,'#pv-save-status').textContent).toContain('PARTS_PAINT_FAILED');
+  expect(node(failSlots,'#parts-save-status').textContent).toContain('PARTS_PAINT_FAILED');
  }finally{
   setLinkLanguage(null);
   setLanguagePreference(savedPref);

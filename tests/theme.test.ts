@@ -78,7 +78,6 @@ test('styles.css: resize separators and scrollbars never share a colour, in eith
 
 test('parts job grid reuses shared columns while checkpoint forms fill remaining height and tiles wrap', async () => {
  const source = await readFile(new URL('../web/styles.css', import.meta.url), 'utf8');
- const parts = await readFile(new URL('../web/parts.css', import.meta.url), 'utf8');
  const body = (css: string, selector: string) => new Map(cssRules(css)
   .filter(rule => rule.selector.trim() === selector && !rule.at.length)
   .flatMap(rule => declarations(rule.body)).map(({name, value}) => [name, value]));
@@ -110,7 +109,7 @@ test('parts job grid reuses shared columns while checkpoint forms fill remaining
   expect(shared.get('flex-wrap')).toBe('wrap');
   expect(shared.get('padding')).toBe('8px');
   const layout = body(css, root);
-  expect(layout.get('grid-template-columns')).toBe(body(parts, '.pv-layout').get('grid-template-columns'));
+  expect(layout.get('grid-template-columns')).toBe('240px minmax(0,1fr) 300px');
   expect(layout.get('grid-template-rows')).toBe('minmax(0,1fr)');
   expect(layout.get('flex')).toBe('1');
   expect(layout.get('min-height')).toBe('0');

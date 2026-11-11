@@ -4199,7 +4199,7 @@ describe('C4 shared parts host', () => {
 
     test('C4 source mounts one workspace and removes duplicate parts controls', async () => {
         const source = await Bun.file(new URL('../web/job-session.ts', import.meta.url)).text();
-        expect(source.match(/mountPartsWorkspace\(panel\.slots/g)).toHaveLength(1);
+        expect(source.match(/mountPartsWorkspace\(panel\.regions/g)).toHaveLength(1);
         expect(source).not.toContain("images.className = 'job-part-images'");
         expect(source).not.toContain("partOutcome.name = 'parts.'");
         expect(source).not.toContain("panels.id = 'job-panel'");

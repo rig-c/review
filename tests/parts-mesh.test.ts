@@ -476,8 +476,8 @@ test('#626: loadPartsView on mixed inline + generator rig preserves inline mesh 
     const state = { data: { items }, selected, meshVisible: false };
     const doc = { createElement: (tag: string) => new FakeEl(tag) };
     const query = (sel: string) => (sel === '.pv-toolbar' ? toolbar : null);
-    const fn = new Function('state', 'doc', 'query', 'slots', 't', 'paint', `${compiledRenderMesh}; renderMesh();`);
-    fn(state, doc, query, { side }, (key: string, params?: unknown) => t(key, params as never, lang), async () => {});
+    const fn = new Function('state', 'doc', 'query', 'regions', 'meshPanel', 't', 'paint', `${compiledRenderMesh}; renderMesh();`);
+    fn(state, doc, query, {secondary:toolbar},side, (key: string, params?: unknown) => t(key, params as never, lang), async () => {});
     const panel = side.children.find(c => c.id === 'pv-mesh-panel')!;
     const p = panel.children.find(c => c.tag === 'p')!;
     return { controlText: toolbar.children[0]!.textContent, pText: p.textContent };

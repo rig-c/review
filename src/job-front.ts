@@ -229,9 +229,7 @@ export function jobWindowResources() {
                 '<body data-job-window><script type="module" src="job.js"></script></body></html>';
         }
         if (name === 'styles.css')
-            return (await Bun.file(new URL('../web/styles.css', import.meta.url)).text()) +
-                '\n@scope (.job-inspection[data-job-parts-workspace]) {\n' +
-                (await Bun.file(new URL('../web/parts.css', import.meta.url)).text()) + '\n}';
+            return await Bun.file(new URL('../web/styles.css', import.meta.url)).text();
         bundle ??= buildJobWindow();
         return bundle;
     };

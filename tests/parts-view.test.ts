@@ -142,7 +142,11 @@ test('#348: the server serves the view, gates the sign-off on the capability, an
     expect((await fetch(origin + '/api/parts/image/2')).headers.get('content-type')).toContain('image/png');
     expect((await fetch(origin + '/api/parts/image/9')).status).toBe(404);
     expect((await fetch(origin + '/')).status).toBe(200);
-    expect((await fetch(origin + '/parts.js')).status).toBe(200);
+    const page=await (await fetch(origin + '/')).text();expect(page).toContain('data-review-screen="parts"');expect(page).toContain('src="main.js"');
+    expect((await fetch(origin + '/main.js')).status).toBe(200);
+    for(const gone of ['/parts.js','/parts.css'])expect((await fetch(origin + gone)).status).toBe(404);
+    const redirect=await fetch(origin + '/parts.html?lang=ko',{redirect:'manual'});expect(redirect.status).toBe(302);expect(redirect.headers.get('location')).toBe('/?lang=ko');
+    const styles=await fetch(origin+'/styles.css');expect(styles.status).toBe(200);expect(await styles.text()).toBe(await readFile('web/styles.css','utf8'));
     const body = JSON.stringify({ status: 'approved', issues: [] });
     expect((await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body })).status).toBe(403);
     const saved = await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': capability }, body });

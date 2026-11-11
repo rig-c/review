@@ -38,6 +38,9 @@ async function click(page: InputCdpSession, selector: string) {
   const p = await page.evaluate<{x: number; y: number}>(`(() => {
     const target = document.querySelector(${JSON.stringify(selector)});
     if (!target || target.disabled) throw Error('CONTROL_UNAVAILABLE');
+    // The View switch is a menu: open it as a person would before pressing one of its modes.
+    const menu = target.closest('details');
+    if (menu && !menu.open) menu.open = true;
     target.scrollIntoView({block:'nearest'});
     const {left, top, width, height} = target.getBoundingClientRect();
     if (width <= 0 || height <= 0) throw Error('CONTROL_HIDDEN');
@@ -120,7 +123,7 @@ function sample(page: InputCdpSession, expected:Camera|null=null, target: 'rig' 
       lang:document.documentElement.lang,
       caption:document.getElementById('pv-caption').textContent,
       label:document.getElementById('zoom-value').textContent,
-      status:document.getElementById('pv-save-status').textContent,
+      status:document.getElementById('parts-save-status').textContent,
       gate:window.__parts464Gate?.report() ?? null
     };
   })()`);
@@ -211,6 +214,19 @@ const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b
 const midpoint = (dimensions:readonly [number,number], zoom=1.25):Camera =>
   ({x:dimensions[0]/2,y:dimensions[1]/2,zoom});
 const matchesZoom = (row:Sample,zoom:number) => row.zoom===zoom;
+// A part select or view change lands at Fit for the new frame (#706): the native image box inside the 24 px margin, capped at 16.
+const fitFor = (dimensions:readonly [number,number], viewport:{width:number;height:number}):Camera =>
+  midpoint(dimensions,Math.min(16,Math.max(.001,Math.min((viewport.width-24)/dimensions[0],(viewport.height-24)/dimensions[1]))));
+async function requireFit(page: InputCdpSession, dimensions:readonly [number,number], name:string, rows?:Record<string,unknown>) {
+  const probe = await sample(page);
+  const row = await sample(page,fitFor(dimensions,probe.viewport));
+  if (rows) await record(rows,name,row);
+  require(matchesCamera(row), 'PARTS_SELECTION_NOT_FIT ' + name + ' ' + JSON.stringify(row));
+  // 1:1 stays available on demand after the Fit reset.
+  await click(page, '#native-one');
+  const native = await sample(page,midpoint(dimensions,1));
+  require(matchesCamera(native) && native.label.startsWith('100%'), 'PARTS_NATIVE_AFTER_FIT ' + name + ' ' + JSON.stringify(native));
+}
 const matchesCamera = (row:Sample) => row.expected!==null &&
   matchesZoom(row,row.expected.zoom) && equal(row.root,row.expected.root);
 async function record(rows:Record<string,unknown>,key:string,value:unknown) {
@@ -282,11 +298,14 @@ async function controls(page: InputCdpSession, url: string, rows:Record<string,u
 
   await page.goto(url, 'en');
   await wait(page, `document.body.dataset.ready === 'true' && document.getElementById('pv-canvas').width === 20`, 'PARTS_STALE_CONTROL_BOOT');
+  // A new view opens at Fit (#706); these camera oracles are measured from the native 1:1 start.
+  await click(page, '#native-one');
   await armSourceResponse(page, url);
   await click(page, '[data-pv-item="front"]');
   await wait(page, 'window.__parts464Gate.held()', 'PARTS_STALE_CONTROL_GATE');
   await click(page, '#zoom-in');
   await afterPaint(page, '[data-pv-item="body"]');
+  await requireFit(page, [20,16], 'body-fit', rows);
   await click(page, '#zoom-in');
   const bodyCamera=midpoint([20,16]);
   const beforeLate = await sample(page,bodyCamera);
@@ -317,9 +336,9 @@ async function comparisonFrames(page: InputCdpSession, dir: string, rows:Record<
     for (const [action, dims, target] of [
       ['[data-pv-item="body"]', [20,16], 'pv-reference'],
       ['[data-pv-item="front"]', [8,10], 'pv-reference'],
-      ['[data-pv-comparison="overlay"]', [8,10], 'pv-reference'],
-      ['[data-pv-comparison="difference"]', [8,10], 'pv-reference'],
-      ['#pv-assemble', [32,24], 'pv-reference'],
+      ['[data-view="overlay"]', [8,10], 'pv-reference'],
+      ['[data-view="difference"]', [8,10], 'pv-reference'],
+      ['[data-view="assembled"]', [32,24], 'pv-reference'],
     ] as const) {
       await afterPaint(page, action, target);
       await click(page, '#native-one');
@@ -350,6 +369,8 @@ async function legacyAtlasFrames(page: InputCdpSession, dir: string, rows:Record
   try {
     await page.goto(`http://127.0.0.1:${server.port}/?lang=en`,'en');
     await wait(page,`document.body.dataset.ready === 'true' && document.getElementById('pv-canvas').width === 13`,'PARTS_ATLAS_FRAME_BOOT');
+    // A new view opens at Fit (#706); these camera oracles are measured from the native 1:1 start.
+    await click(page,'#native-one');
     await click(page,'#zoom-in');
     const fractional = await sample(page,midpoint([13,11]));
     await record(rows,'fractional',fractional);
@@ -359,8 +380,9 @@ async function legacyAtlasFrames(page: InputCdpSession, dir: string, rows:Record
     const degenerate = await sample(page);
     await record(rows,'degenerate',degenerate);
     // A zero-width crop still paints as zero-width and cannot accept a zoom.
-    require(degenerate.dimensions[0] === 0 && degenerate.label === '1:1','PARTS_DEGENERATE_FRAME_ACCEPTED_ZOOM');
-    await afterPaint(page,'[data-pv-view="page"]');
+    require(degenerate.dimensions[0] === 0 && degenerate.label === '100%','PARTS_DEGENERATE_FRAME_ACCEPTED_ZOOM');
+    await afterPaint(page,'[data-view="page"]');
+    await requireFit(page,[atlas.width,atlas.height],'page-fit',rows);
     await click(page,'#zoom-in');
     const dimensions:[number,number] = [atlas.width,atlas.height];
     const fullPage = await sample(page,midpoint(dimensions));
@@ -396,6 +418,8 @@ try {
       return document.body.dataset.ready === 'true' && c.width === 20 && c.height === 16 &&
         document.getElementById('rig-root').style.transform !== '';
     })()`, 'PARTS_BODY_PAINT_TIMEOUT');
+    // A new view opens at Fit (#706); these camera oracles are measured from the native 1:1 start.
+    await click(page, '#native-one');
     const initial = await sample(page);
     progress.initial = initial;
     await save();
@@ -411,6 +435,7 @@ try {
     await save();
     require(held.selected === 'front' && equal(held.dimensions, [20,16]), 'PARTS_HELD_FRAME');
     require(equal(held.pixel, initial.pixel), 'PARTS_HELD_PIXEL');
+    await requireFit(page, [8,10], lang + ':held-fit', progress);
 
     report.phase = lang + ':zoomed-while-held';
     await click(page, '#zoom-in');

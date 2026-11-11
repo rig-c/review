@@ -2,7 +2,8 @@ import {rigWorkspaceMarkup,rigFeedbackMarkup,sharedViewToolsMarkup,sharedComment
 import {bindDirectionPanel} from './direction-panel.ts';
 import {bindWorkspaceVisibility} from './workspace-visibility.ts';
 import type {DirectionInspection} from '../src/direction-inspection.ts';
-import {bindStageNav} from './stage-nav.ts';
+import {bindStageNav,type StagePartsState,type StagePartsWindow} from './stage-nav.ts';
+import {composeSetupParts} from './setup-parts.ts';
 import {timeOnlyBasis,feedbackTimingLabel,requireFeedbackFrames,isTimeOnlyFeedback} from '../src/stage-comment.ts';
 import {bindStageComments,type CommentPose} from './stage-comments.ts';
 import {discoverTurnDials,TurnState} from '../src/turn-pad.ts';
@@ -37,7 +38,7 @@ import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,refusedText,
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {mountWorkspaceShell,mountStatusBar,bindWorkspaceUI,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
-import {setSourceAttribute,setSourceText,sourceTextContent,t,tr} from './i18n.ts';
+import {setLanguagePreference,setLinkLanguage,setSourceAttribute,setSourceText,sourceTextContent,t,tr} from './i18n.ts';
 import {holdScrubBox,releaseScrubBox,scrubBox} from './scrub-box.ts';
 import {mountRigInspector,bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
 import {connectControl} from './control.ts';
@@ -129,6 +130,9 @@ const controls=createViewControls({layout:'rigStep1',viewSwitch:{currentMode:'co
 const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.classList.add('workspace-main-toolbar');
 const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
 const rigInspector=mountRigInspector();
+// #706: Create step 1 is this screen's Setup mode; its hosts sit beside the rig's own regions.
+const setupParts=composeSetupParts(document,rigInspector);
+let stageCorrect:((request:{part:string;sourceHash:string;buildId:string;instrument:string})=>Promise<void>)|null=null;
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
 const viewport=createViewportController(createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay},viewportState),viewportState);
@@ -1034,10 +1038,11 @@ function bind(): void {
     const picker=select('part-set');picker.value=name;picker.dispatchEvent(new Event('change',{bubbles:true}));
   });
   viewDisposers.push(()=>directionPanel?.dispose());
-  viewDisposers.push(bindStageNav({access,interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,direction:active=>directionPanel?.show(active),setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',refresh:fn=>{refreshStageParts=fn;},correction:openStageCorrection}));
-  workspace=bindWorkspaceUI({regions:{layout:document.querySelector<HTMLElement>('.layout')!,left:document.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:document.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
-  viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
-  appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
+  const stageNav=bindStageNav({access,interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,direction:active=>directionPanel?.show(active),setup:()=>showInspector('rig'),draftBuild:()=>appliedOnStage?.buildId??'inspected',refresh:fn=>{refreshStageParts=fn;},correction:openStageCorrection,parts:showSetupParts});
+  viewDisposers.push(stageNav);stageCorrect=stageNav.correct;
+  const shellUI=bindShell();
+  viewport.state.cameraSync=shellUI.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=shellUI.defaults().defaultIdleRepeat;
+  appearance=bindAppearance(select('settings-theme'),shellUI.defaults().theme);
   inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],changed:()=>persistence?.save()});
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
@@ -1095,12 +1100,57 @@ function bind(): void {
   window.addEventListener('pagehide', () => { comments?.dispose();persistence?.dispose();turnPad?.dispose();inspectorTabs?.dispose();workspace?.dispose();pause();controlDispose?.();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());overlays?.dispose(); player?.dispose(); assets?.dispose(); resize.disconnect(); });
 }
 
+/** #706: Stage 1 in place; a setup tab never stays selected while its tabs are hidden. */
+function showSetupParts(active:boolean,note:string|null):void {
+  setupParts.show(active,note);
+  if(!active&&selectedInspector()?.startsWith('setup-'))inspectorTabs?.restore('rig');
+}
+function bindShell():WorkspaceUI {
+  return workspace=bindWorkspaceUI({regions:{layout:document.querySelector<HTMLElement>('.layout')!,left:document.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:document.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
+}
+/** Pre-rig shell: no rig version, so Write review and the rig act stay hidden exactly as before (#706 keeps it). */
+function hideRigReview():void {button('workspace-tab-feedback').hidden=true;rigInspector.act.hidden=true;rigInspector.row.tabs=rigInspector.row.tabs.filter(tab=>tab.id!=='feedback');rigInspector.row.panels=rigInspector.row.panels.filter(panel=>panel.id!=='inspector-feedback');}
+/**
+ * #706: a parts-only package (the standalone parts server) or compare's per-side Stage 1 frame opens this screen
+ * in Setup with nothing but the parts mode. The server marks the entry; no rig, session or player starts.
+ */
+async function startPartsOnly(screen:string):Promise<void> {
+  const query=new URLSearchParams(location.search),side=query.get('side'),embedded=query.get('stageEmbed')==='1';
+  let build='inspected';
+  hideRigReview();
+  // No rig runs on this screen: its view and toolbar controls leave the DOM, so each shared view id names the parts host only.
+  // The empty rig #stage-layout stays as the shell's stage anchor.
+  for(const node of document.querySelectorAll('.workspace-main-toolbar>:not(.setup-parts-toolbar),.workspace-secondary-toolbar>:not(.setup-parts-secondary)'))node.remove();
+  el('stage-layout').replaceChildren();
+  setupParts.start({access,transport:screen==='parts'?{kind:'parts'}:{kind:'stage',...side==='a'||side==='b'?{side}:{},build:()=>build},
+    ...embedded?{correction:request=>parent.postMessage({type:'review-stage-correction',...request},location.origin)}:{},
+    ready:view=>{text('package-title',view.title);text('revision',tr(view.mode==='parts'?'Parts package, before rigging':'Atlas of a built rig'));document.title=view.title;text('source-hash',`source ${view.sourceHash.slice(0,12)}`);}});
+  if(embedded){
+    // Compare (card D) still frames this entry per side: language and the previous side's view come by message.
+    let restore:StagePartsState|null=null;
+    const onMessage=(event:MessageEvent)=>{
+      if(event.source!==parent||event.origin!==location.origin)return;const value=event.data;
+      if(value?.type==='review-stage-language'&&(value.language==='en'||value.language==='ko')){setLinkLanguage(null);setLanguagePreference(value.language);}
+      else if(value?.type==='review-stage-source'&&(value.buildId==='inspected'||/^[a-f0-9]{64}$/.test(value.buildId))){build=value.buildId;restore=value.state??null;if(restore)void setupParts.workspace()?.ready.then(()=>restore&&setupParts.restore(restore));}
+      else if(value?.type==='review-stage-revalidate'){if(value.buildId==='inspected'||/^[a-f0-9]{64}$/.test(value.buildId))build=value.buildId;void setupParts.workspace()?.revalidate(value.state);}
+    };
+    window.addEventListener('message',onMessage);
+    (window as StagePartsWindow).rigReviewStageParts={snapshot:()=>setupParts.snapshot()};
+    document.documentElement.toggleAttribute('data-setup-parts',true);setupParts.show(true,null);
+  }else viewDisposers.push(bindStageNav({access,partsOnly:true,preRig:true,model:false,parts:showSetupParts}));
+  const shellUI=bindShell();appearance=bindAppearance(select('settings-theme'),shellUI.defaults().theme);bindInspector();inspectorTabs?.restore('setup-comments');
+  message('');text('dirty','');
+}
+
 async function start(): Promise<void> {
+  const screen=el('app').dataset.reviewScreen;
+  if(screen==='parts'||screen==='stage-parts'){try{await startPartsOnly(screen);}catch(error){message(`Could not open review package: ${errorText(error)}`,true);}return;}
   try {
     let writes: { capabilityRequired: boolean; control?: boolean };
     [data, session, writes] = await Promise.all([api<ReviewResponse>('/api/review'), api<ReviewSession>('/api/session'), api<{ capabilityRequired: boolean; control?: boolean }>('/api/access')]);
     readOnly = readOnlyReason(access, writes.capabilityRequired);
-    if(data.capabilities.preRig){button('workspace-tab-feedback').hidden=true;rigInspector.act.hidden=true;rigInspector.row.tabs=rigInspector.row.tabs.filter(tab=>tab.id!=='feedback');rigInspector.row.panels=rigInspector.row.panels.filter(panel=>panel.id!=='inspector-feedback');}
+    if(data.capabilities.preRig)hideRigReview();
+    setupParts.start({access,transport:{kind:'stage',build:()=>appliedOnStage?.buildId??'inspected'},revision:()=>data.manifest.revision,correction:request=>{void stageCorrect?.(request);}});
     submittedBaseline=structuredClone(session);
     text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));

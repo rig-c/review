@@ -36,7 +36,7 @@ export function createPartsViewport(host:{el:ViewportProvider['el'];canvas:HTMLC
    if(target==='rig'){state.rigScale=c.zoom;state.displayedCenter={...center};}
   }
  },
- renderControls:controller=>{const zoom=controller.paneCamera(controller.availableCamera()??'rig').zoom;host.el('zoom-value').textContent=zoom===1?t('1:1'):`${(zoom*100).toFixed(1)}%`;host.el('native-one').setAttribute('aria-pressed',String(zoom===1));(host.el('camera-sync') as HTMLInputElement).checked=state.cameraSync;host.el('fit').textContent=t('Fit');}
+ renderControls:controller=>{const zoom=controller.paneCamera(controller.availableCamera()??'rig').zoom;host.el('zoom-value').textContent=zoom===1?'100%':`${(zoom*100).toFixed(1)}%`;host.el('native-one').setAttribute('aria-pressed',String(zoom===1));(host.el('camera-sync') as HTMLInputElement).checked=state.cameraSync;host.el('fit').textContent=t('Fit');}
  };
  return createViewportController(provider,state);
 }

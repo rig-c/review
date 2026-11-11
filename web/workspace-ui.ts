@@ -17,7 +17,7 @@ export function mountStatusBar(options:WorkspaceStatusBarOptions):{footer:HTMLEl
  return {footer,message};
 }
 
-export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyJobStep5'|'legacyHubStep6'|'legacyOwnerStep6';
+export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyInterviewStep4'|'legacyJobStep5'|'legacyHubStep6'|'legacyOwnerStep6';
 export interface WorkspaceHeaderOptions {
  compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;
  /** Only the stopped compare host supplies its existing domain controls and actions. */
@@ -30,26 +30,26 @@ export interface WorkspaceHeader {
 }
 /** One C1 construction path; the finite legacy choices expire at their named screen migrations. */
 export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHeader {
- const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',parts=kind==='legacyPartsStep2',interview=kind==='legacyInterviewStep4',job=kind==='legacyJobStep5',hub=kind==='legacyHubStep6',owner=kind==='legacyOwnerStep6';
- const branded=rig||compare||parts,settingsLanguage=rig||compare;
+ const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',interview=kind==='legacyInterviewStep4',job=kind==='legacyJobStep5',hub=kind==='legacyHubStep6',owner=kind==='legacyOwnerStep6';
+ const branded=rig||compare,settingsLanguage=rig||compare;
  const header=panelMake('header');
- const headerClass=rig?'topbar':parts?'pv-top':job?'job-header':hub?'hub-header':owner?'owner-header':null;
+ const headerClass=rig?'topbar':job?'job-header':hub?'hub-header':owner?'owner-header':null;
  if(headerClass)header.className=headerClass;
  if(branded){
-  const brand=panelMake('div',{className:parts?'pv-brand':'brand'});
-  const mark=panelMake('span',compare?{}:{className:parts?'pv-mark':'brand-mark'},compare?'COMPARE':'r');
+  const brand=panelMake('div',{className:'brand'});
+  const mark=panelMake('span',compare?{}:{className:'brand-mark'},compare?'COMPARE':'r');
   if(compare)brand.append('rig review ',mark);else brand.append(mark,'rig review');
   header.append(brand);
  }
- const title=panelMake(rig||parts?'strong':'h1');
- const titleId=rig?'package-title':compare?'title':parts?'pv-title':null;
+ const title=panelMake(rig?'strong':'h1');
+ const titleId=rig?'package-title':compare?'title':null;
  if(titleId)title.id=titleId;
- title.textContent=options.title??(rig?'Review package':compare?'A / B comparison':parts?'Parts review':'');
+ title.textContent=options.title??(rig?'Review package':compare?'A / B comparison':'');
  if(job)title.dataset.jobText='job.title';
  let subtitle:HTMLElement|null=null;
  if(branded){
-  subtitle=panelMake('span',{id:rig?'revision':compare?'animation':'pv-mode',className:rig?'subtle':compare?'hint':'pv-subtle',textContent:options.revision??''});
-  const identity=panelMake('div',{},title,...(parts?[' ']:[]),subtitle);header.append(identity);
+  subtitle=panelMake('span',{id:rig?'revision':'animation',className:rig?'subtle':'hint',textContent:options.revision??''});
+  const identity=panelMake('div',{},title,subtitle);header.append(identity);
  }else{if(interview)header.append('\n    ');header.append(title);}
  let modeSwitch:HTMLElement|null=null,dirty:HTMLElement|null=null;
  if(rig||compare){
@@ -75,7 +75,7 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
  }
  if(hub||owner){status=panelMake('p',{className:hub?'hub-status':'owner-status'});status.setAttribute('role','status');header.append(status);}
  let language:HTMLSelectElement|null=null,languageLabel:HTMLLabelElement|null=null;
- if(!parts){
+ {
   language=panelMake('select');
   if(settingsLanguage){language.id='settings-language';language.dataset.appPreference='';}
   for(const value of settingsLanguage?['system','en','ko']:['en','ko']){
@@ -85,7 +85,7 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
   if(settingsLanguage){languageLabel=labelledControl('Language ',language);if(rig)header.append(languageLabel);}
   else{if(interview)header.append('\n    ');header.append(language);if(interview)header.append('\n  ');}
  }
- if(options.embedded){if(rig||parts)header.hidden=true;else if(interview)language!.hidden=true;}
+ if(options.embedded){if(rig)header.hidden=true;else if(interview)language!.hidden=true;}
  return {header,title,subtitle,modeSwitch,dirty,stages,status,language,languageLabel,dispose(){header.remove();languageLabel?.remove();}};
 }
 
@@ -184,7 +184,8 @@ export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>v
   try{
    // Chrome shares the center width. It is not charged against the actual stage minimum.
    // Authored JSON can fill the same slot as the rig while Direction metadata stays above it.
-   const chrome=[...stack.children].filter(node=>node!==stage&&node.id!=='direction-authored-body'&&!((node as HTMLElement).hidden)).reduce((sum,node)=>sum+(node as HTMLElement).getBoundingClientRect().height,0);
+   // A screen's alternate stage (Setup step 1, `data-workspace-stage`) is a stage too, not chrome.
+   const chrome=[...stack.children].filter(node=>node!==stage&&!(node as HTMLElement).dataset?.hasOwnProperty('workspaceStage')&&node.id!=='direction-authored-body'&&!((node as HTMLElement).hidden)).reduce((sum,node)=>sum+(node as HTMLElement).getBoundingClientRect().height,0);
    available={width:Math.max(0,layout.clientWidth),height:Math.max(0,layout.clientHeight-chrome)};effective=allocateWorkspaceLayout(available,desired,columns);
    const mode=(panel:WorkspacePanel)=>effective[panel==='leftWidth'?'leftMode':panel==='rightWidth'?'rightMode':'inspectorMode'];
    for(const panel of present)dock(panel,mode(panel)==='drawer');
@@ -230,6 +231,6 @@ export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>v
  const observer=new ResizeObserver(schedule);observer.observe(layout);for(const node of [...stack.children])if(node!==stage)observer.observe(node);for(const tab of tabs)observer.observe(panelFor(tab));
  const resumed=()=>{if(!document.hidden)store.refresh();};document.addEventListener('visibilitychange',resumed);schedule();
  return {defaults:()=>store.get(),beforeTab:capture,afterTab:restore,scroll:()=>{capture();return JSON.stringify(memory.snapshot());},restoreScroll(value){if(typeof value!=='string')return;memory.replace(JSON.parse(value));restore();},revealInspector,refresh:schedule,
-  dispose(){if(disposed)return;capture();disposed=true;if(frame)cancelAnimationFrame(frame);observer.disconnect();document.removeEventListener('visibilitychange',resumed);unsubscribe();for(const binding of bindings)binding.dispose();for(const dispose of disposers)dispose();memory.dispose();store.dispose();}
+  dispose(){if(disposed)return;capture();disposed=true;if(frame)cancelAnimationFrame(frame);observer.disconnect();document.removeEventListener('visibilitychange',resumed);unsubscribe();for(const binding of bindings)binding.dispose();for(const dispose of disposers)dispose();for(const dialog of Object.values(dialogs))dialog.remove();memory.dispose();store.dispose();}
  };
 }

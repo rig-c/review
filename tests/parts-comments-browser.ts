@@ -25,7 +25,7 @@ const commentState=`(()=>{
  return {paint:stage.dataset.partsPaintState,ariaBusy:stage.getAttribute('aria-busy'),disabled:control.disabled,
   pressed:control.getAttribute('aria-pressed'),rigCapture:rig.classList.contains('stage-comment-mode'),
   referenceCapture:reference.classList.contains('stage-comment-mode'),status:document.getElementById('pv-save-status')?.textContent,
-  assembled:document.getElementById('pv-assemble').getAttribute('aria-pressed')};
+  assembled:document.querySelector('[data-view="assembled"]').getAttribute('aria-pressed')};
 })()`;
 const commentReady=`(()=>{const state=${commentState};
  if(state.paint==='failed'||state.paint==='disposed')throw Error('PARTS_CAPTURE_PAINT_'+state.paint.toUpperCase()+' '+state.status);
@@ -124,7 +124,7 @@ async function main(){
   const decoded=PNG.sync.read(bytes);assert(decoded.width===seam.crop.width&&decoded.height===seam.crop.height,'stored viewport crop dimensions');
   for(const format of ['json','issue']){const response=await fetch(base+'api/parts/export?format='+format),body=await response.text();assert(response.ok&&body.includes(seam.crop.sha256)&&body.includes(edited),'assembled export '+format);}
   await page.goto(base+'?lang='+lang+'&seam-reload=1#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'assembled reopen');
-  await click(page,`[data-comment-id="${row}"] .stage-comment-summary`);await wait(page,`document.getElementById('pv-assemble').getAttribute('aria-pressed')==='true'`,'assembled restore');
+  await click(page,`[data-comment-id="${row}"] .stage-comment-summary`);await wait(page,`document.querySelector('[data-view="assembled"]').getAttribute('aria-pressed')==='true'`,'assembled restore');
   assert(await page.evaluate(`['back_defect','front'].every(name=>document.querySelector('[data-assembly-outline="'+name+'"]'))`),'restored issue highlights every bound part');
   report.assembled.push({lang,issue:seam,cropBytes:bytes.length,shot:(await page.screenshot()).toString('base64')});
  }
