@@ -26,13 +26,30 @@ async function fixture() {
 }
 
 test('#557/#588 control public job-host retains its runtime exports, record-mode surface, and legacy markers', () => {
-  expect(Object.keys(publicHost).sort()).toEqual([
+  const legacyRuntimeExports = [
     'assertJobImageSetCapability', 'JOB_CAPABILITIES', 'startJobHost', 'startJobHub',
     'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID',
     'JOB_PARTS_ENUMERATOR_RANGE', 'JOB_ENABLED_ACT_KINDS',
     'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES', 'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES',
     'parseRecordAct', 'prepareJobRecordAct', 'prepareJobRecordSource',
-  ].sort());
+  ];
+  const expectedRuntimeExports = [...legacyRuntimeExports,
+    'JOB_COMMENTS_ACT_SCHEMA', 'PARTS_COMMENTS_VERDICT_SCHEMA',
+    'REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA', 'REVIEW_COMMENTS_SESSION_SCHEMA',
+    'parseCommentsAct', 'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'parseCommentsSession',
+    'projectComments', 'projectSelectedCommentsFeedback',
+  ].sort();
+  expect(legacyRuntimeExports).toHaveLength(18);
+  expect(expectedRuntimeExports).toHaveLength(28);
+  expect(Object.keys(publicHost).sort()).toEqual(expectedRuntimeExports);
+  for (const name of expectedRuntimeExports) {
+    const missing = new Set(Object.keys(publicHost));
+    missing.delete(name);
+    expect(() => expect([...missing].sort()).toEqual(expectedRuntimeExports)).toThrow();
+  }
+  const extra = new Set(Object.keys(publicHost));
+  extra.add('UNAPPROVED_PUBLIC_EXPORT');
+  expect(() => expect([...extra].sort()).toEqual(expectedRuntimeExports)).toThrow();
   expect(publicHost.JOB_API_SCHEMA).toBe('rig-review/job-api@2');
   expect(publicHost.JOB_API_V3_SCHEMA).toBe('rig-review/job-api@3');
   expect(publicHost.JOB_ACT_SCHEMA).toBe('rig-review/act@2');
