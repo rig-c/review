@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {createViewportController,createViewportState,type ViewportProvider} from '../web/viewport-controller.ts';
 import {projectMark,unprojectMark} from '../src/stage-comment.ts';
 import {viewportPairMarkup,expandViewportPair,viewportPairPlaceholder} from '../web/viewport-pair.ts';
-import {createPartsViewport} from '../web/parts-viewport-provider.ts';
+import {createPartsViewport,createPartsViewportProvider} from '../web/parts-viewport-provider.ts';
 import {createRigViewportProvider,type RigViewportHost} from '../web/rig-viewport-provider.ts';
 function host(){
  const nodes=new Map<string,any>();for(const target of ['rig','reference']){nodes.set(target+'-viewport',{clientWidth:640,clientHeight:480});nodes.set(target+'-pane',{hidden:false});}
@@ -329,4 +329,34 @@ test('#737 sync native relayout admits a camera when visible peers have unequal 
  console.log('U3_UNEQUAL_NATIVE_RELAYOUT',JSON.stringify({before,minimumRigAfter:(655-24)/1920,minimumReferenceAfter:(655-24)/3840}));
  expect(()=>c.fitCamera()).not.toThrow();
  expect(c.paneCamera('reference')).toEqual({zoom:(655-24)/1920,center:before.center});expect(c.paneCamera('rig')).toEqual({zoom:(655-24)/1920,center:{x:960,y:540}});
+});
+
+
+test('#747 Reference-active native Fit accepts the synchronized peer range without loosening compiled ranges',()=>{
+ const nodes=new Map<string,any>();const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:655,clientHeight:471,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const c=createPartsViewport({el,canvas:{width:832,height:1216} as HTMLCanvasElement,reference:()=>({width:1664,height:2432} as HTMLCanvasElement),frameSize:()=>null,message(){}});
+ c.state.cameraSync=true;c.state.zoom=c.state.referenceZoom=1.25;c.activateCamera('reference');
+ expect(()=>c.fitActiveCamera('reference')).not.toThrow();
+ const minimum=(471-24)/1216;expect(c.paneCamera('rig').zoom).toBe(minimum);expect(c.paneCamera('reference').zoom).toBe(minimum);
+ c.activateCamera('rig');expect(()=>c.fitActiveCamera('rig')).not.toThrow();
+ c.setCameraSync(false);const held=structuredClone(c.paneCamera('rig'));c.fitActiveCamera('reference');expect(c.paneCamera('rig')).toEqual(held);expect(c.paneCamera('reference').zoom).toBe((471-24)/2432);
+});
+
+test('#742 physical parts sync uses the selected world box, absolute centre and source pixel scale; OFF stays independent',()=>{
+ const nodes=new Map<string,any>(),state=createViewportState();
+ const el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:655,clientHeight:471,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const full={x:0,y:0,width:832,height:1216};let selected=true;
+ const region=()=>selected?{x:122,y:36,width:590,height:457}:full;
+ const frameSize=(target:'rig'|'reference'|'a'|'b')=>target==='rig'?{w:832,h:1216,world:{box:state.cameraSync?region():full,origin:{x:0,y:0},scale:{x:1,y:1}}}:selected?{w:590,h:457,world:{box:region(),origin:{x:122,y:36},scale:{x:1,y:1}}}:{w:1664,h:2432,world:{box:full,origin:{x:0,y:0},scale:{x:.5,y:.5}}};
+ const c=createViewportController(createPartsViewportProvider({el,canvas:{width:832,height:1216} as HTMLCanvasElement,reference:()=>({width:selected?590:1664,height:selected?457:2432} as HTMLCanvasElement),frameSize,message(){}},state),state);
+ c.requestFit();let view=c.numericView();expect(view.cameras.rig!.center).toEqual({x:417,y:264.5});expect(view.cameras.reference!.center).toEqual(view.cameras.rig!.center);expect(view.cameras.reference!.zoom).toBe(view.cameras.rig!.zoom);
+ // The subject remains the whole assembly raster; only its camera region changes.
+ expect(frameSize('rig').w).toBe(832);expect(el('rig-root').style.transform).toBe(el('reference-content').style.transform);
+ c.panCamera('reference',23,17);view=c.numericView();expect(view.cameras.reference!.center).toEqual(view.cameras.rig!.center);
+ c.zoomCamera(1.25,'rig');expect(c.paneCamera('reference')).toEqual(c.paneCamera('rig'));
+ c.setCameraSync(false);const before=structuredClone(c.paneCamera('rig'));c.panCamera('reference',9,7);expect(c.paneCamera('rig')).toEqual(before);expect(c.paneCamera('reference')).not.toEqual(before);
+ c.setCameraSync(true);expect(c.paneCamera('reference')).toEqual(c.paneCamera('rig'));expect(c.paneCamera('rig').center).toEqual({x:417,y:264.5});
+ selected=false;c.requestFit();view=c.numericView();expect(view.cameras.rig!.center).toEqual({x:416,y:608});expect(view.cameras.reference!.center).toEqual(view.cameras.rig!.center);
+ const zoom=view.cameras.rig!.zoom;expect(el('reference-content').style.transform).toBe(`scale(${zoom*.5},${zoom*.5})`);expect(el('rig-root').style.transform).toBe(`scale(${zoom})`);
+ for(const target of ['rig','reference']as const){c.activateCamera(target);expect(()=>c.fitActiveCamera()).not.toThrow();expect(c.paneCamera('reference')).toEqual(c.paneCamera('rig'));}
 });
