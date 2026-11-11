@@ -72,11 +72,12 @@ test('Settings collapsed state round-trips through storage under its own key and
  expect(()=>parseWorkspacePreferences({...old,settingsCollapsed:false})).toThrow('PREFERENCES_STAMP');expect(()=>parseWorkspacePreferences({...defaultWorkspacePreferences(),settingsCollapsed:'no'})).toThrow('settingsCollapsed');
 });
 
-test('saved preferences from earlier versions with 280px or 350px inspectorHeight still load (unstamped default upgrades, stamped user resize stays)',()=>{
- // #709 ruling (c): the shared bottom panel defaults to 120px so the main view is at least 600px tall at 1600x1000.
- expect(defaultWorkspacePanels.inspectorHeight).toBe(120);
+test('saved preferences from earlier versions with 280px, 350px or 120px inspectorHeight still load (unstamped default upgrades, stamped user resize stays)',()=>{
+ // #709 ruling (c), as corrected by HQ: the shared bottom panel defaults to 240px (main view about 490px at 1600x1000).
+ expect(defaultWorkspacePanels.inspectorHeight).toBe(240);
  expect(panelBounds.inspectorHeight.min).toBe(120);
- for(const legacy of [280,350]){
+ // 120 was the default on the #709 branch only (0a54fec); a browser that ran it may hold an unstamped 120.
+ for(const legacy of [280,350,120]){
   // 1. An earlier version saved a record where the user changed theme, leaving inspectorHeight at that version's unstamped default.
   const legacyUnstamped=JSON.parse(JSON.stringify(defaultWorkspacePreferences()));
   legacyUnstamped.theme='dark';
@@ -85,13 +86,13 @@ test('saved preferences from earlier versions with 280px or 350px inspectorHeigh
   legacyUnstamped.panels.inspectorHeight=legacy;
   legacyUnstamped.stamps.inspectorHeight={revision:0,writer:''};
   const parsedUnstamped=parseWorkspacePreferences(legacyUnstamped);
-  expect(parsedUnstamped.panels.inspectorHeight).toBe(120);
+  expect(parsedUnstamped.panels.inspectorHeight).toBe(240);
   expect(parsedUnstamped.theme).toBe('dark');
   const hubA=new PreferenceHub();
   hubA.values.set(workspacePreferenceKey,JSON.stringify(legacyUnstamped));
   const storeA=new WorkspacePreferenceStore({...hubA.endpoint(),writer:'tab-a'});
   expect(storeA.status().state).toBe('available');
-  expect(storeA.get().panels.inspectorHeight).toBe(120);
+  expect(storeA.get().panels.inspectorHeight).toBe(240);
   storeA.dispose();
 
   // 2. A user explicitly set (stamped) inspectorHeight to that same value: a saved height still wins.
