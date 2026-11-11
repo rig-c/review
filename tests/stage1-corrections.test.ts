@@ -75,6 +75,15 @@ test('stage 1 follows the explicitly drawn draft, refuses wrong bytes, and Reset
   const wrongVertexRoute=stagePartsRoutes({single:await loadReview(root)});expect((await (await wrongVertexRoute(req()))!.json()).error).toStartWith('STAGE_DRAFT_MISMATCH');await writeFile(join(root,'draft.model.json'),JSON.stringify(model));
   const weightedRaw=structuredClone(raw),weightedModel=structuredClone(model);const mesh=weightedRaw.skins.default.gap.gap;mesh.weights=Array.from({length:mesh.vertices.length/2},(_,i)=>[{bone:'root',x:mesh.vertices[2*i],y:mesh.vertices[2*i+1],weight:1}]);delete mesh.vertices;weightedModel.skins[0]!.attachments.gap.gap.vertices={weighted:true,bindings:structuredClone(mesh.weights)};
   await writeFile(join(parts,'rig/rig.json'),JSON.stringify(weightedRaw));await writeFile(join(root,'draft.model.json'),JSON.stringify(weightedModel));expect((await stagePartsRoutes({single:await loadReview(root)})(req()))!.status).toBe(200);
+  // #706: the compiler writes each vertex's bindings in bone order; the same set in another order is the same geometry (cg-miko).
+  const twoBones=structuredClone(weightedRaw),twoModel=structuredClone(weightedModel);
+  twoBones.skins.default.gap.gap.weights[0]=[{bone:'root',x:1,y:2,weight:.75},{bone:'arm',x:3.299907,y:20.888999,weight:.25}];
+  twoModel.skins[0]!.attachments.gap.gap.vertices.bindings[0]=[{bone:'arm',x:3.299907,y:20.889,weight:.25},{bone:'root',x:1,y:2,weight:.75}];
+  await writeFile(join(parts,'rig/rig.json'),JSON.stringify(twoBones));await writeFile(join(root,'draft.model.json'),JSON.stringify(twoModel));expect((await stagePartsRoutes({single:await loadReview(root)})(req()))!.status).toBe(200);
+  // Order is free, membership is not: a binding moved to another bone still refuses.
+  twoModel.skins[0]!.attachments.gap.gap.vertices.bindings[0]=[{bone:'arm',x:1,y:2,weight:.75},{bone:'root',x:3.299907,y:20.889,weight:.25}];
+  await writeFile(join(root,'draft.model.json'),JSON.stringify(twoModel));expect((await (await stagePartsRoutes({single:await loadReview(root)})(req()))!.json()).error).toStartWith('STAGE_DRAFT_MISMATCH');
+  await writeFile(join(parts,'rig/rig.json'),JSON.stringify(weightedRaw));await writeFile(join(root,'draft.model.json'),JSON.stringify(weightedModel));
   weightedModel.skins[0]!.attachments.gap.gap.vertices.bindings[0][0].x+=4;await writeFile(join(root,'draft.model.json'),JSON.stringify(weightedModel));expect((await (await stagePartsRoutes({single:await loadReview(root)})(req()))!.json()).error).toStartWith('STAGE_DRAFT_MISMATCH');
   const indexed=structuredClone(raw);indexed.skins.default.gap.gap.vertices=[1,0,0,0,1];indexed.skins.default.gap.gap.boneIndexing='raw';await writeFile(join(parts,'rig/rig.json'),JSON.stringify(indexed));await writeFile(join(root,'draft.model.json'),JSON.stringify(model));expect((await (await stagePartsRoutes({single:await loadReview(root)})(req()))!.json()).error).toStartWith('STAGE_DRAFT_GEOMETRY_UNSUPPORTED');
   await writeFile(join(parts,'rig/rig.json'),JSON.stringify(raw));await writeFile(join(root,'draft.model.json'),JSON.stringify(model));
