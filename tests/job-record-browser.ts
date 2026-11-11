@@ -478,7 +478,7 @@ try {
     stageHidden: boolean;
     rigCanvasCount: number;
     questionHeading: string | null;
-    selectNames: string[];
+    selectNames: string[]; jobSelects: number;
   }>(`(()=>{
     const sourceBinding = JSON.parse(document.querySelector('.job-inspection details pre.job-source').textContent);
     const summary = [...document.querySelectorAll('[data-job-record="option-set"] p')].map(n => n.textContent);
@@ -493,7 +493,8 @@ try {
       stageHidden: !!stage && (stage.hidden || getComputedStyle(stage).display === 'none'),
       rigCanvasCount: document.querySelectorAll('#rig-root canvas').length,
       questionHeading: form?.querySelector('h3')?.textContent ?? null,
-      selectNames: [...(form?.querySelectorAll('select[name^="choice."]') ?? [])].map(s => s.name),
+      selectNames: [...new Set([...(form?.querySelectorAll('input[type=radio][name^="choice."]') ?? [])].map(s => s.name))],
+      jobSelects: form?.querySelectorAll('select').length ?? -1,
     };
   })()`);
 
@@ -508,6 +509,7 @@ try {
   assert.equal(optionDom.rigCanvasCount, 0);
   assert.equal(optionDom.questionHeading, 'bones');
   assert.deepEqual(optionDom.selectNames, ['choice.chains', 'choice.placement', 'choice.length']);
+  assert.equal(optionDom.jobSelects, 0);
   assert.equal(optionDom.recordSummary.length, 2);
   assert.ok(optionDom.recordSummary[0]?.includes(`project.json · ${projectSha}`));
   assert.ok(optionDom.recordSummary[1]?.includes('bones · chain-bones · evidence/interview/bones.json'));

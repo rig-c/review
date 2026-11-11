@@ -176,7 +176,8 @@ function joinDraft(p:ReviewPackage,designation:Extract<ProjectDesignation,{draft
   const producer=object(record?.producer);
   if(matches.length!==1||record?.kind!=='draft-rig'||typeof record.at!=='string'||!Number.isFinite(Date.parse(record.at))||
      producer.name!=='@rig-c/parts'||typeof producer.version!=='string'||!producer.version.trim()||
-     !literalPath(parts.path)||!parts.path.startsWith(path+'/')||
+     // Create's draft-rig records the draft directory itself when --parts is omitted (rig-create src/drafts.ts `opts['--parts'] ?? from`).
+     !literalPath(parts.path)||!(parts.path===path||parts.path.startsWith(path+'/'))||
      !Array.isArray(parts.files)||!Array.isArray(record.files)||
      (record.config_inputs!==undefined&&!Array.isArray(record.config_inputs)))return fail();
   const files=new Map<string,string>();

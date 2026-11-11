@@ -10,7 +10,6 @@ import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {rigStillBrowserProbe} from './helpers/job-rig-still-browser.ts';
-import {interviewDiagnosticsBrowserProbe} from './helpers/job-interview-browser.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 import {readPngCrop} from '../src/comment-crops.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
@@ -20,19 +19,17 @@ const language = argument('--lang') ?? 'en';
 assert.ok(language === 'en' || language === 'ko');
 const observeStill = Bun.argv.includes('--rig-still-observe');
 const onlyStill = Bun.argv.includes('--rig-still-only');
-const onlyInterviewDiagnostics = Bun.argv.includes('--interview-diagnostics-only');
 const onlyParts = Bun.argv.includes('--parts-only');
 const onlyIssueFlow = Bun.argv.includes('--parts-issue-only');
 const onlyC5Parts = Bun.argv.includes('--c5-parts-only');
 const c5Parts = argument('--parts-fixture') ?? 'mesh';
 assert.ok(c5Parts === 'mesh' || c5Parts === 'no-mesh');
-assert.ok([observeStill, onlyStill, onlyInterviewDiagnostics, onlyParts, onlyIssueFlow, onlyC5Parts].filter(Boolean).length <= 1);
+assert.ok([observeStill, onlyStill, onlyParts, onlyIssueFlow, onlyC5Parts].filter(Boolean).length <= 1);
 assert.ok(!observeStill || language === 'en', 'the diagnostic observation mode is EN only');
 const output = argument('--out') ?? 'evidence/job-window-' + language;
 await mkdir(output, {recursive: true});
 const fixture = await scriptedJobWindowFixture(onlyC5Parts ? {c5Parts} : {});
 const stillProbe = onlyStill || observeStill ? rigStillBrowserProbe(fixture, output, language, observeStill) : null;
-const interviewProbe = onlyInterviewDiagnostics ? await interviewDiagnosticsBrowserProbe(fixture, output, language) : null;
 const profile = await mkdtemp(join(tmpdir(), 'review-job-window-'));
 const observations: Record<string, unknown> = {};
 const navigation: {url: string; loaderId?: string}[] = [];
@@ -725,10 +722,6 @@ try {
         await stillProbe.run(page, {wait, show, edit, send: control!});
         assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
         assert.equal(navigation.length, 1);
-    } else if (interviewProbe) {
-        await interviewProbe.run(page, {wait, show, edit, submit, checkpoints, send: control!});
-        assert.equal(await page.evaluate('globalThis.__jobWindowDocument'), sentinel);
-        assert.equal(navigation.length, 1);
     } else if (onlyC5Parts) {
         await c5PartsFlow(owner);
     } else if (onlyIssueFlow) {
@@ -869,14 +862,7 @@ try {
     await checkpoints('rig-update', {before, after, publication: rig, verdict: verdict.act, navigation});
     await capturePaint('rig');
 
-    const pending = await fixture.ask(rig, {kind: 'interview-picks', questionId: fixture.question.set.question, setId: fixture.question.set.id});
-    await wait(`!!document.querySelector('form[data-job-ask="${pending.askId}"]')`, 'pending interview');
-    for (const item of fixture.question.set.asks) {
-        const option = item.options.find(option => option.kind === 'value' && option.recommended)!;
-        await edit(`form[data-job-ask="${pending.askId}"] select[name="choice.${item.id}"]`, option.id);
-    }
-    await edit(`form[data-job-ask="${pending.askId}"] textarea[name=note]`, '  interview words\n');
-    await submit(pending.askId);
+    // Interview answers now belong to the single-screen record modal (#722).
     const checkpoint = await fixture.ask(rig, {kind: 'checkpoint', checkpointId: 'step-one'});
     await wait(`!!document.querySelector('form[data-job-ask="${checkpoint.askId}"]')`, 'plan checkpoint');
     await edit(`form[data-job-ask="${checkpoint.askId}"] select[name=outcome]`, 'pass');
@@ -886,7 +872,7 @@ try {
     await submit(signoff.askId);
     events = await fixture.next();
     const finalized = events.events.flatMap(event => event.type === 'act' ? [event.act] : []);
-    assert.deepEqual(finalized.map(act => act.kind).sort(), ['checkpoint', 'interview-picks', 'parts-verdict', 'review-verdict', 'signoff', 'signoff']);
+    assert.deepEqual(finalized.map(act => act.kind).sort(), ['checkpoint', 'parts-verdict', 'review-verdict', 'signoff', 'signoff']);
     assert.ok(finalized.every(act => act.authority.actor === 'human' && act.authority.channel === 'review-ui'));
     const checkpointAct = finalized.find(act => act.kind === 'checkpoint')!;
     assert.ok(checkpointAct.kind === 'checkpoint');

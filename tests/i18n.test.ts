@@ -1120,16 +1120,16 @@ test('scene interview warnings and historical issues render in EN/KO while origi
   unmount = await mountInterview(host as unknown as HTMLElement, {base: '/', key: 'synthetic', capability: 'a'.repeat(64), route: path => path, headers: init => new Headers(init)});
   for (const language of ['en', 'ko'] as const) {
    setLanguagePreference(language);
-   const picker = host.querySelectorAll('select')[0]!;
-   picker.value = '0'; (picker as any).onchange();
+   // #708: the modal's question list replaces the set picker.
+   expect(host.textContent).toContain(t('interview.answered', [1, 2], language));
+   (host.querySelectorAll('.interview-question')[0] as any).onclick();
    expect(host.textContent).toContain(t('INTERVIEW_OPTIONS_SCENE_LEGACY', undefined, language));
    expect(host.textContent).toContain(t('interview.historicalIssue', undefined, language));
    expect(host.textContent).toContain('history[0].agent_decision');
    expect(host.querySelectorAll('pre').some((node: TestElement) => node.textContent === words)).toBe(true);
    expect(host.textContent).toContain('user · 2026-11-08T00:00:02Z · Check');
    expect(host.querySelectorAll('fieldset')[0]!.disabled).toBe(true);
-   const currentPicker = host.querySelectorAll('select')[0]!;
-   currentPicker.value = '1'; (currentPicker as any).onchange();
+   (host.querySelectorAll('.interview-question')[1] as any).onclick();
    expect(host.querySelectorAll('fieldset')[0]!.disabled).toBe(false);
    expect(host.textContent).toContain(t('interview.save', undefined, language));
   }
@@ -1219,6 +1219,21 @@ test('assembly caption reports the visible part count in both languages', async 
  expect(source).toContain("t(assembled()?'Assembled parts':'Selected part')");
  expect(enCatalog['Assembled parts']).toBe('Assembled parts');expect(koCatalog['Assembled parts']).toBe('조립된 파츠');
  expect(source).not.toContain('Selection and verdict remain per part.');
+});
+
+test('#708 the interview modal is exempt from the page DOM translator: agent-authored option text stays verbatim in ko', () => {
+ const preference = getLanguagePreference();
+ try {
+  setLanguagePreference('ko');
+  const {doc, root} = makeTestDoc();
+  const modal = doc.createElement('dialog'); modal.className = 'workspace-drawer interview-modal';
+  const option = doc.createElement('strong'); option.textContent = 'Not drawn at current pose';
+  const outside = doc.createElement('strong'); outside.textContent = 'Not drawn at current pose';
+  modal.append(option); root.append(modal, outside);
+  applyDomI18n(doc as unknown as Document);
+  expect(option.textContent).toBe('Not drawn at current pose');
+  expect(outside.textContent).toBe('현재 포즈에서 그려지지 않음');
+ } finally {setLanguagePreference(preference);}
 });
 
 
