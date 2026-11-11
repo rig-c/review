@@ -3564,4 +3564,5 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Parts raster drawn · Canvas2D": "Parts raster drawn · Canvas2D",
   "Parts images · no compiled rig loaded": "Parts images · no compiled rig loaded",
   "Parts ready. Source files remain unchanged.": "Parts ready. Source files remain unchanged.",
+  "This request has no picture.": "This request has no picture.",
 };

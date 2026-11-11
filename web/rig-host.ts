@@ -19,6 +19,7 @@ export interface RigHostScreen {
   redraw(): void;
   message(text: string, error?: boolean): void;
   pendingSubjects?(subjects:readonly PendingAskV3['subject'][]):void;
+  recordForms?(forms:readonly HTMLFormElement[]):void;
 }
 /** Only the content carried by an act the host has actually committed. This is local UI state, not an act field. */
 export interface RigHostCommit {
@@ -28,6 +29,7 @@ export interface RigHostCommit {
 }
 export interface RigHost {
   readonly subject?:'parts';
+  readonly record?:{readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean};
   submitParts?(issues:readonly PartsIssue[]):Promise<string>;
   readonly access: InstanceAccess;
   /** Existing pending subjects, for the local act heading only; no wire field. */

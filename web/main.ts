@@ -1,3 +1,4 @@
+import {bindWorkspaceDrawer} from './workspace-layout.ts';
 import {captureRigRestStill,rigRestCanvas} from './job-rig-capture.ts';
 import {createPartsViewportProvider,bindPartsSubject,paintRigDifference,type PartsSubjectEntry,type PartsSubjectSession} from './parts-viewport-provider.ts';
 import {rigWorkspaceMarkup,rigFeedbackMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
@@ -1187,6 +1188,7 @@ function bindWorkspace():void {
 }
 async function start(): Promise<void> {
   try {
+    if(host?.record&&!host.record.hasPicture){startRecord();return;}
     let writes: { capabilityRequired: boolean; control?: boolean };
     const [opened,saved,accessState]=await Promise.all([api<ReviewResponse|PartsSubjectEntry>('/api/review'),api<ReviewSession|PartsSubjectSession>('/api/session'),api<{capabilityRequired:boolean;control?:boolean}>('/api/access')]);
     if('subject' in opened&&opened.subject==='parts'){await startParts(opened,saved as PartsSubjectSession,accessState);return;}
@@ -1221,7 +1223,7 @@ async function start(): Promise<void> {
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
     bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause});
-    if(host){host.attach({pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message});showInspector('playback');host.displayed();}
+    if(host){host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message});showInspector('playback');host.displayed();}
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
 }
 /** Parts have a verdict and image-space pixels, never fabricated model/session fields. */
@@ -1283,9 +1285,38 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message('Parts ready. Source files remain unchanged.');referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
- if(host){host.attach({stage:()=>null,redraw:()=>partsSubject?.redraw(),message,pendingSubjects:renderPendingSubjects});host.displayed();}
+ if(host){host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message,pendingSubjects:renderPendingSubjects});host.displayed();}
  window.addEventListener('pagehide',()=>{partsSubject?.dispose();inspectorTabs?.dispose();workspace?.dispose();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());});
  document.body.dataset.ready='true';
+}
+/** Record-only publications reuse the empty main view; no package or model is manufactured. */
+function startRecord():void {
+ if(!host?.record)throw new Error('JOB_DISPLAY_MISMATCH');
+ readOnly=tr('JOB_REVIEW_READ_ONLY');
+ bindWorkspace();bindInspector(true);rigInput={state:'absent'};referenceInput={state:'absent'};renderLayout();
+ parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');message('This request has no picture.');
+ text('package-title',host.record.label);text('revision','');text('source-hash',`source ${host.record.sourceHash.slice(0,12)}`);
+ el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty','This request has no picture.');
+ for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')){control.disabled=true;setSourceAttribute(control,'title','This request has no picture.');}
+ host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message});host.displayed();
+ const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
+ window.addEventListener('pagehide',()=>{inspectorTabs?.dispose();workspace?.dispose();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());});
+ document.body.dataset.ready='true';
+}
+let recordDialog:HTMLDialogElement|null=null;
+/** The imported answer forms sit in a native modal over the existing read-only workspace. */
+function renderRecordForms(forms:readonly HTMLFormElement[]):void {
+ if(!host?.record)return;
+ if(!recordDialog){
+  recordDialog=panelMake('dialog',{id:'job-record-asks',className:'workspace-drawer'});recordDialog.setAttribute('aria-label',tr('job.pending'));
+  const close=panelMake('button',{className:'workspace-drawer-close',type:'button'},tr('Close'));recordDialog.append(close);app.append(recordDialog);
+  viewDisposers.push(bindWorkspaceDrawer({trigger:button('save'),drawer:recordDialog,label:tr('job.pending'),close}));
+  viewDisposers.push(()=>{recordDialog?.close();recordDialog?.remove();recordDialog=null;});
+ }
+ const added=forms.filter(form=>!recordDialog!.contains(form));
+ for(const form of added){form.style.overflow='auto';form.style.minHeight='0';recordDialog.append(form);}
+ button('save').disabled=!forms.length;button('save').onclick=null;
+ if(added.length&&!recordDialog.open)button('save').click();
 }
 /** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {
