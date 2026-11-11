@@ -4,6 +4,19 @@ import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defau
 import {bindDomI18n,getLinkLanguage,setLanguagePreference,setLinkLanguage,tr} from './i18n.ts';
 import {panelMake,actionButton,labelledControl} from './view-controls.ts';
 
+export interface WorkspaceStatusBarOptions {
+ message:HTMLElement|string;readouts:readonly HTMLElement[];source?:HTMLElement;
+}
+/** One C11 DOM constructor; screens supply their existing readout and source nodes. */
+export function mountStatusBar(options:WorkspaceStatusBarOptions):{footer:HTMLElement;message:HTMLElement} {
+ const message=typeof options.message==='string'?panelMake('span',{id:'message',className:'status-message',textContent:options.message}):options.message;
+ message.setAttribute('role','status');message.setAttribute('aria-live','polite');
+ const readouts=panelMake('div',{className:'status-readouts'},...options.readouts);readouts.setAttribute('aria-label','Status');
+ const footer=panelMake('footer',{className:'status-bar'},message,readouts);
+ if(options.source)footer.append(options.source);
+ return {footer,message};
+}
+
 export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyJobStep5'|'legacyHubStep6'|'legacyOwnerStep6';
 export interface WorkspaceHeaderOptions {
  compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;

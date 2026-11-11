@@ -1,3 +1,4 @@
+import {composedRigMarkup} from './helpers/workspace-status-dom.ts';
 import {getLanguagePreference,getLinkLanguage,setLanguagePreference,setLinkLanguage,t} from '../web/i18n.ts';
 import {mountRigInspector,mountBottomPanel,mountActBar} from '../web/inspector-blocks.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
@@ -133,7 +134,7 @@ test('an explorer inside the left column makes it the parts column: no right col
  }finally{app.close();}
 });
 
-const indexHtml=async()=>rigWorkspaceMarkup+rigReviewDialogMarkup;
+const indexHtml=composedRigMarkup;
 const between=(html:string,start:string,end:string)=>{const a=html.indexOf(start),b=html.indexOf(end,a);if(a<0||b<a)throw new Error(`index.html region missing: ${start} … ${end}`);return html.slice(a,b+end.length);};
 test('canonical rig content preserves both source sections and all 18 real tool tabs; C6 mounts the Review act separately',async()=>{
  const html=await indexHtml(),inspector=between(html,'<section class="inspector"','</main>');
