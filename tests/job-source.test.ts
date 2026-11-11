@@ -423,7 +423,6 @@ test('#606 literal package/record canonical, durable, replay and export compatib
 
 import {retainedPublicationRoutes} from '../src/job-front.ts';
 import {planTextMetadata, projectRetainedPlanText, isRetainedRecordSource} from '../src/job-source.ts';
-import {jobHash} from '../src/job-api.ts';
 import {parseJobPlanTextProjection, JOB_RECORD_READER_ID, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {jobCheckpointContext, jobPlanTextForSource} from '../web/job-session.ts';
 import {createSyntheticPlanRecordWorkspace} from './helpers/job-record-fixture.ts';
