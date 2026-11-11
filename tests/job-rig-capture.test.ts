@@ -347,7 +347,7 @@ function canonicalLayout(ratio: number, run: (fixture: {
 }) => void) {
   const source = readFileSync(new URL('../web/main.ts', import.meta.url), 'utf8');
   const start = source.indexOf('function hostStage():RigHostStage|null {');
-  const end = source.indexOf('/** Old feedback bookmarks', start);
+  const end = source.indexOf('\n}', start) + 2;
   expect(start).toBeGreaterThanOrEqual(0);expect(end).toBeGreaterThan(start);
   const body = new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end));
   const keys = ['getComputedStyle', 'devicePixelRatio'] as const;

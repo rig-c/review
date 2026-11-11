@@ -8,7 +8,7 @@ import {realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {JobCheckpointEvidence, JobCheckpointTable, NextValueV3, PlanContext} from '../src/job-contract.ts';
-import {projectComments} from '../src/stage-comment.ts';
+import {checkpointNoteComments,projectComments} from '../src/stage-comment.ts';
 import {JOB_RECORD_READER_ID} from '../src/job-contract.ts';
 import {startJobHost} from '../src/job-front.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -306,7 +306,11 @@ async function run() {
             const fetched = await call(host, schema, {verb: 'fetch-act', actId: act.actId}, fetchCapability);
             assert.equal(fetched.source.sourceHash, publication.source.sourceHash);
             assert.equal(fetched.value.checkpointId,packet.checkpointId);assert.equal(fetched.value.planStepId,packet.planStepId);assert.equal(fetched.value.outcome,outcome);
-            assert.equal('comments' in fetched.value?projectComments(fetched.value.comments):fetched.value.words,projected);
+            if ('comments' in fetched.value) {
+                const comments = checkpointNoteComments({checkpointId: packet.checkpointId, planStepId: packet.planStepId, note: projected});
+                assert.deepEqual(fetched.value.comments, comments);
+                assert.equal(projectComments(fetched.value.comments), projectComments(comments));
+            } else assert.equal(fetched.value.words, projected);
             observations[prefix + '-' + outcome] = {actId: fetched.actId, sourceHash: fetched.source.sourceHash, value: fetched.value};
             activeDecision = undefined;
         }
