@@ -483,6 +483,7 @@ export function jobPublicationRoutes(display: DisplayPublicationV3, origin: stri
     }
     return {
         entry: entry.href,
+        jobId: match[1]!,
         api(path: string) {
             if (!/^[A-Za-z0-9][A-Za-z0-9/._-]*$/.test(path) || path.includes('..'))
                 throw new Error('JOB_DISPLAY_MISMATCH');
@@ -1626,8 +1627,73 @@ export {formFor};
 prepareJobForms.formFor = formFor;
 prepareJobForms.helpers = createJobFormHelpers;
 
+/** The original source-bound draft storage, shared by the legacy and single-screen hosts. */
+export function createJobFormDrafts(options:{jobId:string;current():JobPreparedInspection|null;forms():ReadonlyMap<string,JobForm>;storage():Pick<Storage,'setItem'>}) {
+    function localDraftKey(display: DisplayPublicationV3): string {
+        return 'rig-review-job-draft/1:' + options.jobId + ':' + display.publication.publicationId + ':' + display.publication.source.sourceHash;
+    }
+    function saveDraft(): void {
+        const current=options.current(),forms=options.forms();
+        if (!current)
+            return;
+        try {
+            options.storage().setItem(localDraftKey(current.display), JSON.stringify({
+                publicationId: current.display.publication.publicationId,
+                sourceHash: current.display.publication.source.sourceHash,
+                source: current.display.publication.source,
+                label: current.display.publication.label,
+                forms: [...forms].filter(([, item]) => item.dirty).map(([askId, item]) => ({
+                    askId, value: item.read(),
+                    controls: [...item.form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')]
+                        .map(input => ({ name: input.name, value: input.value })),
+                })),
+            }));
+        }
+        catch { /* The in-memory retained draft remains source-bound. */ }
+    }
+    return {localDraftKey,saveDraft};
+}
+prepareJobForms.drafts=createJobFormDrafts;
+
+/** Host supported publications through the existing transaction/stream modules before mounting any screen. */
+export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
+    let storage:Storage|null=null;try{storage=sessionStorage;}catch{/* Keep the capability in memory. */}
+    const access=jobWindowAccess(location.href,storage,href=>history.replaceState(history.state,'',href)),pageId=crypto.randomUUID(),abort=new AbortController();
+    const language=new URL(location.href).searchParams.get('lang');
+    const i18n=await import('./i18n.ts');if(language==='en'||language==='ko')i18n.setLanguagePreference(language);
+    const node=<Tag extends keyof HTMLElementTagNameMap>(tag:Tag,key?:string)=>{const value=document.createElement(tag);if(key){value.dataset.jobText=key;value.textContent=t(key);}return value;};
+    const helpers=createJobFormHelpers(node,t),emptyForms=new Map<string,JobForm>();
+    const drafts=createJobFormDrafts({jobId:access.jobId,current:()=>rigScreen.mounted()?.record?.inspection??null,forms:()=>rigScreen.mounted()?.record?.forms??emptyForms,storage:()=>localStorage});
+    const transport=createJobWindowTransport(access);
+    let events:ReturnType<typeof startJobWindowEvents>|undefined,legacyStop:(()=>void)|undefined,stopped=false,fallingBack=false;
+    const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource,jobCheckpointContext},draftStorage:()=>localStorage,...drafts,access,pageId,
+        window:{state:()=>window.state(),submit:input=>window.submit(input)}};
+    const rigScreen=createJobRigScreen({host,pageId,access,translate:t,refusal:jobWindowRefusal,formDependencies:dependencies,
+        window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),
+        routes:display=>jobPublicationRoutes(display,location.origin),load:()=>import('./main.ts')});
+    let bootstrapNotice:HTMLElement|null=null;
+    const report=(error:unknown,fallback?:string)=>{if(rigScreen.mounted()){rigScreen.report(error,fallback);return;}if(!bootstrapNotice){bootstrapNotice=node('p');bootstrapNotice.setAttribute('role','status');host.append(bootstrapNotice);}bootstrapNotice.textContent=jobWindowRefusal(error,fallback);};
+    const window=createJobWindow<JobRigScreenPrepared|null>({jobId:access.jobId,pageId,transport,adapter:{
+        async prepare(display,signal){if(rigScreen.mounted()){location.reload();return new Promise<never>(()=>{});}return rigScreen.prepare(display,signal);},
+        captureDraft(){drafts.saveDraft();const forms=rigScreen.mounted()?.record?.forms;const dirty=forms?[...forms].filter(([,entry])=>entry.dirty):[];return dirty.length?dirty.map(([askId,entry])=>({askId,value:entry.read()})):null;},
+        commit:prepared=>prepared?rigScreen.commit(prepared):{rollback(){},finalize(){}},
+        async painted(prepared,signal){if(prepared)await rigScreen.painted(prepared,signal);else{if(stopped||fallingBack||signal.aborted)return;fallingBack=true;abort.abort();window.stop();await events?.done;if(!stopped){const dispose=await mountJobSession(host,true);if(stopped)dispose();else legacyStop=dispose;}}},
+        discard:prepared=>prepared?.record?.inspection.dispose(),
+        changed(state){rigScreen.changed(state);if(state.error)report(state.error);if(state.receipt&&!state.preparing)events?.displayed();},
+    }});
+    const hub=new URL(location.href).searchParams.get('hub');
+    const binding=()=>({jobId:access.jobId,incarnation:hub!,publicationId:window.state().displayed?.publication.publicationId??null,sourceHash:window.state().displayed?.publication.source.sourceHash??null});
+    const visibility=(event:MessageEvent)=>{if(!hub||!jobHubMessageMatches(event,location.origin,globalThis.parent,binding(),'visibility'))return;events?.visibility(event.data.visible);i18n.setLinkLanguage(null);i18n.setLanguagePreference(event.data.language);};
+    if(hub)globalThis.addEventListener('message',visibility);
+    const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);});
+    events=startJobWindowEvents({access,signal:abort.signal,member:!!hub,event:event=>{window.event(event);if(hub)globalThis.parent.postMessage({...binding(),schema:JOB_HUB_READY},location.origin);},refused:error=>report(error,'JOB_STREAM_FAILED')});
+    const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();rigScreen.mounted()?.record?.inspection.dispose();localize();legacyStop?.();globalThis.removeEventListener('message',visibility);globalThis.removeEventListener('pagehide',stop);};
+    globalThis.addEventListener('pagehide',stop,{once:true});return stop;
+}
+
 /** Browser mount is explicit so importing transaction helpers never starts an app. */
-export async function mountJobSession(host: HTMLElement): Promise<() => void> {
+export async function mountJobSession(host: HTMLElement, legacy=false): Promise<() => void> {
+    if(!legacy)return mountJobScreen(host);
     const [{ createViewportController, createViewportState }, { createRigViewportProvider }, { mountViewportPair }, { RigOverlays }, { bindLayerShortcuts, describeLayerToggles, createRigLayerControls }, i18n] = await Promise.all([
         import('./viewport-controller.ts'), import('./rig-viewport-provider.ts'),
         import('./viewport-pair.ts'), import('./rig-overlays.ts'), import('./view-controls.ts'), import('./i18n.ts'),
@@ -2093,27 +2159,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     });
     let unbindNavigation: (() => void) | null = null;
     let resize: ResizeObserver | null = null;
-    function localDraftKey(display: DisplayPublicationV3): string {
-        return 'rig-review-job-draft/1:' + access.jobId + ':' + display.publication.publicationId + ':' + display.publication.source.sourceHash;
-    }
-    function saveDraft(): void {
-        if (!current)
-            return;
-        try {
-            localStorage.setItem(localDraftKey(current.display), JSON.stringify({
-                publicationId: current.display.publication.publicationId,
-                sourceHash: current.display.publication.source.sourceHash,
-                source: current.display.publication.source,
-                label: current.display.publication.label,
-                forms: [...forms].filter(([, item]) => item.dirty).map(([askId, item]) => ({
-                    askId, value: item.read(),
-                    controls: [...item.form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')]
-                        .map(input => ({ name: input.name, value: input.value })),
-                })),
-            }));
-        }
-        catch { /* The in-memory retained draft remains source-bound. */ }
-    }
+    const {localDraftKey,saveDraft}=prepareJobForms.drafts({jobId:access.jobId,current:()=>current,forms:()=>forms,storage:()=>localStorage});
     function updateForms(state: JobWindowState): void {
         if (!current)
             return;
@@ -2582,7 +2628,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         draftStorage: () => localStorage, localDraftKey, saveDraft, access, pageId,
         window: {state: () => window.state(), submit: input => window.submit(input)},
     };
-    const rigScreen = createJobRigScreen({host, pageId, access, translate: t, refusal: jobWindowRefusal,
+    const rigScreen = createJobRigScreen({host, pageId, access, translate: t, refusal: jobWindowRefusal, legacyRecords:true,
         window: {state: () => window.state(), submit: input => window.submit(input)},
         routes: display => jobPublicationRoutes(display, location.origin), load: () => import('./main.ts')});
     const window = createJobWindow({ jobId: access.jobId, pageId, transport,

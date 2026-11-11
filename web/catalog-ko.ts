@@ -3557,4 +3557,5 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Parts raster drawn · Canvas2D": "파츠 래스터 그려짐 · Canvas2D",
   "Parts images · no compiled rig loaded": "파츠 이미지 · 컴파일된 리그 로드 안 됨",
   "Parts ready. Source files remain unchanged.": "파츠 준비 완료. 원본 파일은 변경되지 않습니다.",
+  "This request has no picture.": "이 요청에는 그림이 없습니다.",
 };
