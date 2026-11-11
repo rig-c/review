@@ -10,7 +10,8 @@ import {
   isRecordSource, jobHash, jobId, jobInteger, jobObject,
   parseCommentsAct, parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
 } from './job-api.ts';
-import { checkpointNoteComments, noteComments, partsIssueComments } from './feedback-export.ts';
+import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueComments } from './feedback-export.ts';
+import type { Feedback } from './session.ts';
 import { validatePicks } from './interview-picks.ts';
 import {
   isRetainedRecordSource,
@@ -614,13 +615,20 @@ export function finalizeJobAct(options: {
       });
     }
     case 'review-verdict': {
-      const value = jobObject(submission.value, ['stage', 'verdict', 'words']);
+      const value = jobObject(submission.value, ['stage', 'verdict', 'words',
+        ...(ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ? ['feedback'] : [])]);
       if (ask.subject.kind !== 'review-verdict' || ask.subject.stage === 'image-review' || value.stage !== ask.subject.stage) throw new JobError('JOB_ACT_INVALID');
       if (ask.subject.stage === 'rig-review') {
         if (!options.still) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+        const note = words(value.words);
+        if (value.feedback !== undefined && !Array.isArray(value.feedback)) throw new JobError('JOB_ACT_INVALID');
+        let verdictComments: ReturnType<typeof noteComments>;
+        try {
+          verdictComments = value.feedback === undefined ? noteComments(note) : feedbackItemComments(value.feedback as Feedback[]);
+        } catch { throw new JobError('JOB_ACT_INVALID'); }
         return commentsAct({...comments, kind: 'review-verdict',
           source: {...source, model: source.model!, selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, {kind: 'rig'}>},
-          value: {stage: 'rig-review', verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), comments: noteComments(words(value.words))},
+          value: {stage: 'rig-review', verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), comments: verdictComments},
           still: options.still});
       }
       return commentsAct({ ...comments, kind: 'review-verdict', source: { ...source, model: source.model!,
