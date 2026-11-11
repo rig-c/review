@@ -1191,7 +1191,10 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   if(!response.ok){const body=await response.json();throw new Error(typeof body.error==='string'?body.error:body.error?.code??'PARTS_PAINT_FAILED');}return response;
  };
  const changed=()=>{dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});setSourceText(rigInspector.comments.button,`Comments (${issues.length})`);};
- partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),issues,request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,images:()=>layers.images,changed,selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
+ // A parts verdict is saved only over a drawn subject: until the first paint, or after a failed one, Save stays off.
+ const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded';
+ text('rig-empty','Loading package…');
+ partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),issues,request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,changed,selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
  parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>openReview());
  const thumbnails=new PartThumbnails();viewDisposers.push(()=>thumbnails.dispose());
  parts.registerImages({thumbnail:(icon,item,glyph)=>thumbnails.showOriginal(icon,item,()=>partsSubject!.image(item.index),glyph),items:subject.items,selected:partsSubject.selected,solo:partsSubject.solo,visible:partsSubject.visible,select:partsSubject.select,isolate:partsSubject.isolate,show:partsSubject.show});
@@ -1218,9 +1221,9 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  el('package-context').removeAttribute('open');el('reference-empty').hidden=!!subject.painting;el('rig-overlay').hidden=true;
  const state=rigInspector.actBar;state.setSaveState({kind:readOnly?'read-only':'unsaved',text:readOnly??'Not submitted'});
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
- button('save').disabled=!!readOnly||!!subject.legacyVerdict?.readOnly;
+ button('save').disabled=saveBlocked();
  button('save').onclick=async()=>{
-  if(saving||readOnly)return;saving=true;button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});
+  if(saving||saveBlocked())return;saving=true;button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});
   const frozen=structuredClone(issues);
   try{
    if(host?.submitParts)message(await host.submitParts(frozen));
@@ -1228,7 +1231,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
    if(host)for(const issue of frozen)submittedIssues.add(issue.id);
    dirty=JSON.stringify(issues)!==JSON.stringify(frozen);state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
   }catch(error){message(errorText(error),true);state.setSaveState({kind:'failed',text:'Save failed.'});}
-  finally{saving=false;button('save').disabled=!!readOnly;}
+  finally{saving=false;button('save').disabled=saveBlocked();}
  };
  viewDisposers.push(viewport.bindControls(),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
