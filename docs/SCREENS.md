@@ -236,6 +236,10 @@ or ownership beyond the existing cards:
 - C (#715): remaining record-modal work, including memo feedback to Comments.
 - F (#734): hub/owner single-entry adoption.
 - #756: removal of remaining job-window owner surfaces.
+- #743: in-place update when the agent publishes a new result, keeping the
+  selection, camera and time, and the act bar's status text after submit.
+- #725: a joined Create project opens at its current stage, including an
+  interview-stage project with no build yet.
 
 Card D is **PARKED**. Compare remains A/B with a reference. Difference is already
 shipped in Setup; neither a Compare-to-diff conversion nor a Compare migration
