@@ -8,13 +8,15 @@
 > remain compatibility references, not instructions to restore that UI.
 
 `rig-review parts` shows a rig's parts as images, before any rig is built, so a part with missing material, a faint
-island or a ragged rim is caught before rigging rather than in motion after it. The same view reads a built rig's atlas
-to check what ships.
+island or a ragged rim is caught before rigging rather than in motion after it. Atlas-only inputs refuse
+`PARTS_ATLAS_NOT_CARRIED` before the parts workspace opens. Use rig review for read-only atlas inspection;
+`parts --format json|issue` still reads saved atlas verdicts.
 
 ```sh
 npx rig-review parts <out>            # a rig-parts build root: opens <out>/rig/parts.json
 npx rig-review parts <out>/rig        # the same package, named directly
-npx rig-review parts <out>/check      # a built rig's atlas (any review package with a compiled model)
+npx rig-review open <out>/check       # inspect a built rig, including its read-only atlas
+npx rig-review parts <out>/check --format json # read a saved atlas verdict without opening a workspace
 ```
 
 Options: `--rig <file>` (mesh geometry), `--mesh-report <file>`, `--check <file>` (historical producer flags; former UI removed in #745; see below), `--verdict <file>` (where the sign-off
@@ -22,10 +24,10 @@ is written), `--painting <png>` (the original painting), `--by <name>` (launch-o
 
 ## Inputs
 
-| Mode | Opens on | Items |
+| Mode | Input and availability | Items |
 | --- | --- | --- |
 | parts | a directory holding `parts.json` beside `parts/<name>.png`, as `rig-parts assemble` writes it, or a build root whose `rig/` holds them | every part, in `parts.json` order (draw order, back first) |
-| atlas | a review package or build `check/` folder whose compiled model declares `pages[].regions[]` | every region, by page |
+| atlas | a review package or build `check/` folder whose compiled model declares `pages[].regions[]`; read-only within rig review or saved-verdict export, refused at parts workspace open | every region, by page |
 
 ## What it shows
 
