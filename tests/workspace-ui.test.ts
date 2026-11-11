@@ -297,3 +297,18 @@ test('authored keys take the stage slot while the Inspector stays docked in at m
   }
  }finally{app.close();}
 });
+
+
+test('#666 actual compare bookmark restoration delegates selection between the existing workspace hooks',async()=>{
+ const source=await readFile(new URL('../web/compare.ts',import.meta.url),'utf8'),a=source.indexOf('async function applyInspection('),b=source.indexOf('async function setupPersistence(',a);
+ const trace:string[]=[],inputs=new Map<string,{checked:boolean}>(),layers={},cameras={};
+ const scope={cameraRestoring:false,turnPad:null,parts:{select(){},assertIdentity(){}},idleHeld:false,stop(){},appearance:null,layers,
+  input:(id:string)=>{if(!inputs.has(id))inputs.set(id,{checked:false});return inputs.get(id);},
+  workspace:{beforeTab:()=>trace.push('before'),afterTab:()=>trace.push('after')},inspectorTabs:{restore:(id:string)=>trace.push('restore:'+id)},
+  pickedTools:{setPickedSide:(id:string)=>trace.push('side:'+id),setMode:(id:string,options:unknown)=>trace.push('mode:'+id+':'+JSON.stringify(options))},
+  syncStageLayout(){},el(){return {};},fit(){},paneFrame(){return null;},cameras,cameraSync:false,activeCamera:'a',redrawOverlays(){},
+ };
+ const apply=new Function('scope','with(scope){'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a,b))+';return applyInspection;}')(scope);
+ await apply({selection:{inspector:'playback',side:'b',mode:'animate'},time:null,theme:'dark',layers:{images:true,meshes:false,bones:true},view:{cameras:{}}},new AbortController().signal);
+ expect(trace).toEqual(['before','restore:playback','after','side:b','mode:animate:{"fromTab":true}']);expect(scope.cameraRestoring).toBe(false);
+});

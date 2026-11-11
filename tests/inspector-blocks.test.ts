@@ -317,3 +317,19 @@ test('the review page and the comparison tools bind both Inspector sections and 
   expect(css).toContain('[data-block-hidden]{display:none!important}');
  }
 });
+
+
+test('#666 restore leaves remembered user offsets intact and dispose/rebind removes delegated listeners',async()=>{
+ const app=await openPage(),rig=app.section('inspector-rig');
+ app.tab('mesh-panel').click();rig.scrollTop=140;app.tab('chest-regions').click();rig.scrollTop=60;
+ const before=app.changed();Node.log=[];app.ui.restore({rig:'mesh-panel'});
+ expect(rig.scrollTop).toBe(60);expect(app.changed()).toBe(before+1);
+ expect(Node.log.filter(w=>['scrollTop','focus'].includes(w.what))).toEqual([]);
+ app.ui.restore({rig:'chest-regions'});app.tab('mesh-panel').click();expect(rig.scrollTop).toBe(140);
+ const frozen=app.ui.state();app.ui.dispose();expect(app.ui.state()).toEqual(frozen);const count=app.changed();app.tab('chest-regions').click();expect(app.changed()).toBe(count);
+ app.ui.restore({rig:'chest-regions'});app.ui.select('rig','chest-regions');expect(app.ui.state()).toEqual(frozen);
+ expect([...rig.children[0]!.listeners.values()].flatMap(set=>[...set])).toEqual([]);
+ const rebound=bindInspectorBlocks({sections:[rig as unknown as HTMLElement]});
+ app.tab('chest-regions').click();expect(rebound.state()).toEqual({rig:'chest-regions'});expect(app.changed()).toBe(count);
+ rebound.dispose();
+});

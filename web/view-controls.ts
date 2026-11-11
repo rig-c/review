@@ -128,16 +128,68 @@ export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,en
  return ()=>{blur();window.removeEventListener('blur',blur);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);viewport.removeEventListener('pointerdown',start);viewport.removeEventListener('pointermove',drag);viewport.removeEventListener('pointerup',end);viewport.removeEventListener('pointercancel',end);viewport.removeEventListener('lostpointercapture',end);viewport.removeEventListener('dragstart',native);};
 }
 
-/** beforeChange runs while the old panel is still visible; changed runs after the new one is shown.
- * The selected section is the one source of the mode. A `[data-inspector]` element is a section selector:
- * a `role=tab` in an Inspector tab row (aria-selected, roving tabindex, arrow keys) or a header `[data-mode]`
- * toggle that is itself the selector (aria-pressed). Mode buttons without `data-inspector` select the matching
- * tab and only reflect it; a tab with no mode button (compare's Feedback) leaves every mode button unpressed. */
-export function bindInspectorTabs(changed:()=>void,beforeChange:()=>void=()=>{}):void {
- const tabs=[...document.querySelectorAll<HTMLButtonElement>('[data-inspector]')],modes=[...document.querySelectorAll<HTMLButtonElement>('[data-mode]')].filter(mode=>!tabs.includes(mode));
- const toggle=(item:HTMLButtonElement)=>item.dataset.mode!==undefined,state=(item:HTMLButtonElement)=>toggle(item)?'aria-pressed':'aria-selected';
- const reflect=()=>{if(!modes.length)return;const selected=tabs.find(item=>item.getAttribute(state(item))==='true')?.dataset.inspector;for(const mode of modes)mode.setAttribute('aria-pressed',String(mode.dataset.mode===selected));};
- const activate=(tab:HTMLButtonElement)=>{beforeChange();for(const item of tabs){const active=item===tab;item.setAttribute(state(item),String(active));if(!toggle(item))item.tabIndex=active?0:-1;}for(const panel of document.querySelectorAll<HTMLElement>('[data-inspector-panel]'))panel.hidden=panel.dataset.inspectorPanel!==tab.dataset.inspector;reflect();changed();};
- for(const mode of modes)mode.onclick=()=>{const tab=tabs.find(item=>item.dataset.inspector===mode.dataset.mode);if(tab)activate(tab);};reflect();
- for(const [index,tab] of tabs.entries()){tab.onclick=()=>activate(tab);if(toggle(tab))continue;tab.onkeydown=event=>{const next=event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:event.key==='Home'?0:event.key==='End'?tabs.length-1:null;if(next===null)return;event.preventDefault();const target=tabs[next];if(target){activate(target);target.focus();}};}
+/** A discovered row; the block adapter supplies nodes, never another activation implementation. */
+export interface InspectorTabItem {
+ id:string;button:HTMLButtonElement;panels:HTMLElement[];attribute:'aria-selected'|'aria-pressed';included?:HTMLElement[];
+}
+export interface InspectorTabRow {
+ tabs:InspectorTabItem[];panels:HTMLElement[];modes?:{button:HTMLButtonElement;id:string}[];
+ /** Inner rows delegate bubbling events and keep per-block offsets; outer selectors retain onclick timing. */
+ root?:HTMLElement;scrollRoot?:HTMLElement;initialize?:boolean;
+}
+export interface InspectorTabs {select(id:string):void;restore(id:string):void;state():string|undefined;dispose():void}
+/** beforeChange runs while the old panel is visible; changed runs after the new one is shown.
+ * Omitted row discovers the existing outer selectors. Restore changes selection without user hooks or scrolling. */
+export function bindInspectorTabs(changed:()=>void,beforeChange:()=>void=()=>{},row?:InspectorTabRow):InspectorTabs {
+ const scoped=!!row;
+ if(!row){
+  const buttons=[...document.querySelectorAll<HTMLButtonElement>('[data-inspector]')],panels=[...document.querySelectorAll<HTMLElement>('[data-inspector-panel]')];
+  row={tabs:buttons.map(button=>({id:button.dataset.inspector!,button,panels:panels.filter(panel=>panel.dataset.inspectorPanel===button.dataset.inspector),attribute:button.dataset.mode!==undefined?'aria-pressed':'aria-selected'})),panels,
+   modes:[...document.querySelectorAll<HTMLButtonElement>('[data-mode]')].filter(button=>!buttons.includes(button)).map(button=>({button,id:button.dataset.mode!}))};
+ }
+ const {tabs,panels,modes=[],root,scrollRoot}=row,disposers:(()=>void)[]=[],scrolls=new Map<string,number>();
+ let active=tabs.find(tab=>tab.button.getAttribute?.(tab.attribute)==='true'),disposed=false;
+ const reflect=()=>{const selected=tabs.find(tab=>tab.button.getAttribute?.(tab.attribute)==='true')?.id;for(const mode of modes)mode.button.setAttribute('aria-pressed',String(mode.id===selected));};
+ const render=(target:InspectorTabItem)=>{
+  for(const tab of tabs){
+   const on=tab===target,value=String(on);
+   if(!scoped||tab.button.getAttribute(tab.attribute)!==value)tab.button.setAttribute(tab.attribute,value);
+   if(tab.attribute==='aria-selected'&&(!scoped||tab.button.tabIndex!==(on?0:-1)))tab.button.tabIndex=on?0:-1;
+   if(scoped)for(const panel of tab.panels)if(panel.hidden===on)panel.hidden=!on;
+   for(const node of tab.included??[])if(node.hasAttribute('data-block-hidden')===on)node.toggleAttribute('data-block-hidden',!on);
+  }
+  if(!scoped)for(const panel of panels)panel.hidden=!target.panels.includes(panel);
+  reflect();
+ };
+ const activate=(id:string,user:boolean)=>{
+  if(disposed)return;const target=tabs.find(tab=>tab.id===id);if(!target||(scoped&&active===target))return;
+  const previous=active;
+  if(user){beforeChange();if(scrollRoot&&previous)scrolls.set(previous.id,scrollRoot.scrollTop);}
+  render(target);
+  if(user&&scrollRoot&&previous){const next=scrolls.get(id)??0;if(scrollRoot.scrollTop!==next)scrollRoot.scrollTop=next;}
+  active=target;
+  // Inner restoration has always notified draft persistence, but never swaps scroll offsets.
+  if(user||scoped&&previous)changed();
+ };
+ const key=(tab:InspectorTabItem,event:KeyboardEvent)=>{
+  if(tab.attribute==='aria-pressed')return;const index=tabs.indexOf(tab);
+  const next=event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:event.key==='Home'?0:event.key==='End'?tabs.length-1:null;
+  if(next===null)return;event.preventDefault();const target=tabs[next];if(target){activate(target.id,true);target.button.focus();}
+ };
+ if(root){
+  const tabOf=(event:Event)=>{const button=(event.target as Element|null)?.closest?.('button[data-block-target]');return tabs.find(tab=>tab.button===button);};
+  const click=(event:Event)=>{const tab=tabOf(event);if(tab)activate(tab.id,true);};
+  const keydown=(event:KeyboardEvent)=>{const tab=tabOf(event);if(tab)key(tab,event);};
+  root.addEventListener('click',click);root.addEventListener('keydown',keydown);
+  disposers.push(()=>{root.removeEventListener('click',click);root.removeEventListener('keydown',keydown);});
+ }else{
+  for(const tab of tabs){
+   const click=()=>activate(tab.id,true),keydown=(event:KeyboardEvent)=>key(tab,event);
+   tab.button.onclick=click;if(tab.attribute==='aria-selected')tab.button.onkeydown=keydown;
+   disposers.push(()=>{if(tab.button.onclick===click)tab.button.onclick=null;if(tab.button.onkeydown===keydown)tab.button.onkeydown=null;});
+  }
+ }
+ for(const mode of modes){const click=()=>activate(mode.id,true);mode.button.onclick=click;disposers.push(()=>{if(mode.button.onclick===click)mode.button.onclick=null;});}
+ if(row.initialize){active??=tabs[0];if(active)render(active);}else reflect();
+ return {select:id=>activate(id,true),restore:id=>activate(id,false),state:()=>active?.id,dispose(){disposed=true;for(const dispose of disposers)dispose();scrolls.clear();}};
 }
