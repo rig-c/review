@@ -3,7 +3,7 @@ export const panelNode=<T extends HTMLElement>(id:string)=>{const found=document
 export const panelMake=<K extends keyof HTMLElementTagNameMap>(tag:K,props:Record<string,unknown>={},...children:(Node|string)[]):HTMLElementTagNameMap[K]=>{const item=document.createElement(tag);Object.assign(item,props);item.append(...children);return item;};
 export const actionButton=(
  label:string,
- click:(e?:MouseEvent)=>void,
+ click:((e?:MouseEvent)=>void)|null,
  disabled?:boolean,
 )=>panelMake('button',{
  type:'button',
@@ -21,6 +21,8 @@ export const labelledControl=(
  ...(controlFirst?[control,label]:[label,control]),
 );
 export type ThemePreference = 'system' | 'dark' | 'light';
+import {t} from './i18n.ts';
+
 export interface ViewPoint { x:number; y:number }
 export function stageOrientation(width:number,height:number):'horizontal'|'vertical' {return width>=height?'horizontal':'vertical';}
 export function panCenter(center:ViewPoint,dx:number,dy:number,scale:number,space:'world'|'image'):ViewPoint {
@@ -79,6 +81,45 @@ export function describeLayerToggles(root:{getElementById(id:string):unknown},re
   const input=root.getElementById(item.id) as (ShortcutInput&{closest(selector:string):{title:string}|null})|null;const label=input?.closest('label');
   if(input&&label)label.title=input.disabled?reason:`${item.label} · key ${item.key.toUpperCase()}`;
  }
+}
+
+/** Finite compatibility composition; Parts expires at step 2 and compiled job at step 5. */
+export type ViewControlsOptions = {layout:'legacyPartsStep2'} | {
+ layout:'legacyCompiledJobStep5';
+ inputLabel:(key:string,input:HTMLElement)=>HTMLElement;
+};
+/** One creation site for each common control; hosts retain adjacent tools and camera/event binding. */
+export function createViewControls(options:ViewControlsOptions) {
+ const parts=options.layout==='legacyPartsStep2';
+ const zoomIn=actionButton(parts?'+':t('job.zoomIn'),null);zoomIn.id='zoom-in';
+ const zoomOut=actionButton(parts?'−':t('job.zoomOut'),null);zoomOut.id='zoom-out';
+ const fit=actionButton(t('Fit'),null);fit.id='fit';
+ const value=panelMake('span',{id:'zoom-value',textContent:parts?'1:1':''});
+ const sync=panelMake('input',{id:'camera-sync',type:'checkbox'});
+ const syncLabel=parts?labelledControl(t('Sync cameras'),sync,true):options.inputLabel('job.cameraSync',sync);
+ if(parts)syncLabel.className='pv-field';
+ else {zoomIn.dataset.jobText='job.zoomIn';zoomOut.dataset.jobText='job.zoomOut';fit.dataset.jobText='Fit';}
+ const zoomButtons=[zoomIn,zoomOut,fit];
+ let zoomGroup:HTMLSpanElement|null=null;
+ let choices:{assemble:HTMLButtonElement;comparisonGroup:HTMLSpanElement;atlasSwitch:HTMLSpanElement}|null=null;
+ if(parts) {
+  const nativeOne=actionButton('1:1',null);nativeOne.id='native-one';nativeOne.setAttribute('aria-pressed','true');
+  zoomGroup=panelMake('span',{className:'pv-group'});zoomGroup.setAttribute('role','group');zoomGroup.setAttribute('aria-label',t('Zoom'));
+  zoomGroup.append(zoomOut,value,zoomIn,fit,nativeOne);
+  const assemble=actionButton(t('Assembled'),null);assemble.id='pv-assemble';assemble.setAttribute('aria-pressed','false');
+  const comparisonGroup=panelMake('span',{className:'pv-field',textContent:t('Painting comparison')});
+  const group=panelMake('span',{className:'pv-group'});group.setAttribute('role','group');group.setAttribute('aria-label',t('Painting comparison'));
+  for(const [mode,text] of [['part','Part'],['overlay','Overlay'],['difference','Difference']]) {
+   const button=actionButton(t(text!),null);button.setAttribute('data-pv-comparison',mode!);button.setAttribute('aria-pressed',String(mode==='part'));group.append(button);
+  }
+  comparisonGroup.append(group);
+  const atlasSwitch=panelMake('span',{className:'pv-group',id:'pv-atlas-switch',hidden:true});atlasSwitch.setAttribute('role','group');atlasSwitch.setAttribute('aria-label',t('Atlas view'));
+  for(const [view,text] of [['item','Region'],['page','Pages']]) {
+   const button=actionButton(t(text!),null);button.setAttribute('data-pv-view',view!);button.setAttribute('aria-pressed',String(view==='item'));atlasSwitch.append(button);
+  }
+  choices={assemble,comparisonGroup,atlasSwitch};
+ }
+ return {zoomButtons,zoomGroup,syncLabel,value,choices};
 }
 
 // Nested or separately disposed pan binders must not restore another binder's override.
