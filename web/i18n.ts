@@ -180,6 +180,14 @@ function ensureMaps(): { enToKo: Map<string, string>; koToEn: Map<string, string
       koToEnMap.set(ko, en);
     }
   }
+  // Semantic keys have display values too; already rendered refusals must round-trip without expanding the key again.
+  for (const [key, english] of Object.entries(enCatalog)) {
+    if (english === key) continue;
+    const korean = koCatalog[key];
+    if (korean === undefined) continue;
+    enToKoMap.set(english, korean);
+    koToEnMap.set(korean, english);
+  }
   for (const [en, ko] of Object.entries(koCatalog)) {
     if (en.startsWith(' · ') && ko.startsWith(' · ')) {
       const enSub = en.slice(3);
@@ -413,6 +421,7 @@ function shouldTranslateCapturedArg(arg: string, lang: ResolvedLanguage): boolea
 function translateCore(text: string, lang: ResolvedLanguage, depth: number): string {
   if (!text || depth > 4) return text;
   if (lang === 'ko') {
+    if (getKoToEnMap().has(text)) return text;
     const exact = getEnToKoMap().get(text);
     if (exact !== undefined) return exact;
   } else {

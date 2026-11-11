@@ -1257,3 +1257,20 @@ test('#756 translate=no ancestors preserve producer prose, table values and iden
   raw.removeAttribute('translate');setLanguagePreference('ko');applyDomI18n(doc);expect(column.textContent).toBe(t('Frame'));expect(heading.title).toBe(t('Zoom out'));
  }finally{setLanguagePreference(preference);}
 });
+
+
+test('#756 rendered semantic refusals remain idempotent across repeated translation and DOM refresh',()=>{
+ const preference=getLanguagePreference();const {doc,root}=makeTestDoc();
+ const note=doc.createElement('small');root.append(note);
+ try{
+  for(const key of ['JOB_REVIEW_READ_ONLY','JOB_STILL_UNAVAILABLE']){
+   const english=enCatalog[key]!,korean=koCatalog[key]!;
+   expect(tr(english,'ko')).toBe(korean);expect(tr(korean,'en')).toBe(english);
+   for(const language of ['ko','en','ko','en'] as const){
+    const expected=language==='ko'?korean:english;setLanguagePreference(language);
+    note.textContent=t(key);note.title=t(key);
+    for(let n=0;n<3;n++){expect(t(note.textContent)).toBe(expected);applyDomI18n(doc);expect(note.textContent).toBe(expected);expect(note.title).toBe(expected);}
+   }
+  }
+ }finally{setLanguagePreference(preference);}
+});

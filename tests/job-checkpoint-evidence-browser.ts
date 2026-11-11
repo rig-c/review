@@ -60,6 +60,7 @@ async function run() {
     let page: InputCdpSession | undefined;
     let control: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
     let corruptTiles = false;
+    let expectedDeparture: URL | undefined;
     let activeDecision: {host: Awaited<ReturnType<typeof startJobHost>>; schema: string;
         askId: string; publicationId: string; sourceHash: string; outcome: string; words: string; prefix: string} | undefined;
     let latestNext: ReturnType<typeof summarizeNext> | undefined;
@@ -255,6 +256,7 @@ async function run() {
         await page!.evaluate(`document.querySelector('[data-job-text="job.checkpointRecommendation"]').scrollIntoView()`);
         await writeFile(join(output, prefix + '-recommendation.png'), await page!.screenshot());
         for (const outcome of ['pass', 'fail']) {
+            console.log('CHECKPOINT_DECISION ' + prefix + ' ' + outcome);
             const asked = await call(host, schema, {verb: 'ask', expectedGeneration: host.session.status().generation,
                 idempotencyKey: randomUUID(), publicationId: publication.publicationId,
                 subject: {kind: 'checkpoint', checkpointId: packet.checkpointId,
@@ -272,6 +274,7 @@ async function run() {
                 await control!('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
                 await control!('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
             }
+            console.log('CHECKPOINT_COMMENT_REQUESTED ' + prefix + ' ' + outcome);
             await until(()=>page!.evaluate(`!!document.querySelector('.stage-comment-composer input')`),'existing comment composer');
             await page!.evaluate(`(()=>{const composer=document.querySelector('.stage-comment-composer');composer.querySelector('input').value=${JSON.stringify(words)};composer.requestSubmit();})()`);
             await until(()=>page!.evaluate(`!document.querySelector('.stage-comment-composer')`),'existing comment saved');
@@ -279,7 +282,8 @@ async function run() {
             activeDecision.words=projected;
             await page!.evaluate(`(()=>{const f=document.querySelector('form[data-job-ask="${asked.askId}"]');f.querySelector('select[name=outcome]').value=${JSON.stringify(outcome)};f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
             // Reconnect preserves the source-bound owner draft before its ordinary UI submission.
-            await page!.goto('about:blank');
+            expectedDeparture = owner;
+            try {await page!.goto('about:blank');} finally {expectedDeparture = undefined;}
             await page!.goto(owner.href);
             // updateForms enables this fieldset only after display acknowledgment and pending-ask readiness.
             await until(async () => (await checkpointForm(asked.askId)).ready, prefix + ' ' + outcome + ' reconnect ready');
@@ -308,7 +312,8 @@ async function run() {
         }
         corruptTiles = true;
         await control!('Fetch.enable', {patterns: [{urlPattern: '*checkpoint-evidence/*/tiles/0', requestStage: 'Request'}]});
-        await page!.goto('about:blank');
+        expectedDeparture = owner;
+        try {await page!.goto('about:blank');} finally {expectedDeparture = undefined;}
         await page!.goto(owner.href);
         await until(() => page!.evaluate(`document.body.textContent.includes('CHECKPOINT_EVIDENCE_HASH_MISMATCH')`), 'named hash refusal');
         assert.equal(await page!.evaluate(`document.querySelectorAll('[data-job-checkpoint-evidence]').length`), 0);
@@ -327,9 +332,16 @@ async function run() {
         await call(planHost, 'rig-review/job-api@3', {verb: 'ask', expectedGeneration: 1,
             idempotencyKey: randomUUID(), publicationId: publication.publicationId,
             subject: {kind: 'checkpoint', checkpointId: evidence.packet.checkpointId}});
-        page = await launchCdpSession(join(scratch, 'profile'), {onEvent: async (event, send) => {
+        page = await launchCdpSession(join(scratch, 'profile'), {sendDeadlineMs: 15_000, onEvent: async (event, send) => {
             if (event.sessionId) control = send;
             const params = event.params ?? {};
+            if (event.method === 'Page.javascriptDialogOpening') {
+                const url = new URL(String(params.url));
+                assert.equal(params.type, 'beforeunload', 'only the dirty-comment reconnect departure is expected');
+                assert.ok(expectedDeparture && url.origin === expectedDeparture.origin && url.pathname === expectedDeparture.pathname);
+                console.log('CHECKPOINT_RECONNECT_DEPARTURE ' + url.pathname);
+                await send('Page.handleJavaScriptDialog', {accept: true});
+            }
             if (event.method === 'Runtime.exceptionThrown') {
                 const details = params.exceptionDetails as {text?: string; exception?: {description?: string}};
                 browserErrors.push({method: event.method, text: redact(details.text ?? ''),
