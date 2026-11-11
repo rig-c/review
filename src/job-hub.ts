@@ -154,20 +154,20 @@ export async function startJobHub(options: JobHubOptions): Promise<JobOwnerHub> 
         try {
           const url = new URL(request.url);
           if (url.origin !== origin) return refused('JOB_LOOPBACK_REQUIRED', 403);
-          const resource = url.pathname === '/hub/' ? 'job-hub.html' : url.pathname === '/hub/job-hub.js' ? 'job-hub.js'
-            : url.pathname === '/hub/job-hub.css' ? 'job-hub.css' : url.pathname === '/hub/styles.css' ? 'styles.css' : null;
+          const resource = url.pathname === '/hub/' ? 'index.html' : url.pathname === '/hub/main.js' ? 'main.js'
+            : url.pathname === '/hub/styles.css' ? 'styles.css' : null;
           if (resource) {
             if (!['GET', 'HEAD'].includes(request.method)) return refused('JOB_REQUEST_INVALID', 405);
             if (request.headers.get('sec-fetch-site') === 'cross-site' ||
                 request.headers.get('origin') !== null && request.headers.get('origin') !== origin) return refused('JOB_SAME_ORIGIN_REQUIRED', 403);
-            if (resource === 'job-hub.html') {
+            if (resource === 'index.html') {
               if (url.searchParams.get('workspace') !== incarnation ||
                   [...url.searchParams.keys()].some(key => !['workspace', 'lang'].includes(key) || url.searchParams.getAll(key).length !== 1) ||
                   url.searchParams.has('lang') && !['en', 'ko'].includes(url.searchParams.get('lang')!)) return refused('JOB_REQUEST_INVALID', 400);
             } else if (url.search) return refused('JOB_REQUEST_INVALID', 400);
             let body: BodyInit | null = null;
             if (request.method !== 'HEAD') {
-              if (resource === 'job-hub.js') body = await (hubBundle ??= buildWeb('job-hub'));
+              if (resource === 'main.js') body = await (hubBundle ??= buildWeb('job-hub'));
               else body = Bun.file(new URL('../web/' + resource, import.meta.url));
             }
             return new Response(body, {headers: {...responseHeaders,

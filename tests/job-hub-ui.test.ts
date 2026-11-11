@@ -54,9 +54,9 @@ test('every admitted row is selectable under the same advertised frame bound and
 });
 
 test('retained frame geometry and child visibility integration preserve inspection ownership', async () => {
-  const css = await readFile(new URL('../web/job-hub.css', import.meta.url), 'utf8');
-  expect(css).toMatch(/\.hub-stage iframe\[hidden\]\s*\{[^}]*display:\s*block\s*!important;[^}]*visibility:\s*hidden/);
-  expect(css).toMatch(/\.hub-header select\s*\{[^}]*width:\s*auto;[^}]*min-width:\s*6rem;[^}]*max-width:\s*12rem/);
+  const css = await readFile(new URL('../web/styles.css', import.meta.url), 'utf8');
+  expect(css).toMatch(/\.hub-stage iframe\[hidden\][^{]*\{[^}]*display:\s*block\s*!important;[^}]*visibility:\s*hidden/);
+  expect(css).toMatch(/\.hub-header select[^{]*\{[^}]*width:\s*auto;[^}]*min-width:\s*6rem;[^}]*max-width:\s*12rem/);
   const owner = await readFile(new URL('../web/job-hub.ts', import.meta.url), 'utf8');
   expect(owner).toContain('limit: () => current!.limit');
   expect(owner).toContain('!current || retained.atLimit()');
