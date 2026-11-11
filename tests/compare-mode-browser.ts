@@ -1,3 +1,4 @@
+import { launchChrome } from './helpers/software-capture.ts';
 /**
  * Browser verification for issue #234:
  * - One shell: top switch reads Setup · Animate · Compare.
@@ -97,7 +98,7 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
   };
   delete childEnv.DISPLAY;
   delete childEnv.WAYLAND_DISPLAY;
-  const proc = Bun.spawn(
+  const chrome = await launchChrome(
     [
       bin,
       isHeadlessShell ? '--headless' : '--headless=new',
@@ -109,7 +110,6 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
       '--use-angle=swiftshader-webgl',
       '--enable-unsafe-swiftshader',
       '--ignore-gpu-blocklist',
-      '--remote-debugging-port=0',
       `--user-data-dir=${profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
@@ -118,134 +118,114 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
       '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding',
       '--disable-backgrounding-occluded-windows',
-      'about:blank',
     ],
-    { stdout: 'ignore', stderr: 'pipe', env: childEnv },
+    { env: childEnv },
   );
 
-  const reader = proc.stderr.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let wsEndpoint: string | null = null;
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline && !wsEndpoint) {
-    const readResult = await Promise.race([
-      reader.read(),
-      new Promise<{ done: true; value: undefined }>(resolve => setTimeout(() => resolve({ done: true, value: undefined }), 1000)),
-    ]);
-    if (readResult.value) {
-      buffer += decoder.decode(readResult.value, { stream: true });
-      const match = /DevTools listening on (ws:\/\/[^\s]+)/.exec(buffer);
-      if (match) {
-        wsEndpoint = match[1]!;
-        break;
-      }
+  try {
+    const wsUrl = new URL(chrome.endpoint);
+    const listRes = await fetch(`http://${wsUrl.host}/json/list`);
+    const targets = (await listRes.json()) as Array<{ type: string; webSocketDebuggerUrl?: string }>;
+    const pageTarget = targets.find(t => t.type === 'page' && t.webSocketDebuggerUrl);
+    if (!pageTarget?.webSocketDebuggerUrl) {
+      await chrome.close();
+      throw new Error('No page target found in DevTools JSON list');
     }
-  }
-  if (!wsEndpoint) {
-    try { proc.kill(); } catch {}
-    throw new Error(`Failed to obtain DevTools WebSocket from ${bin}. stderr=${buffer}`);
-  }
 
-  const wsUrl = new URL(wsEndpoint);
-  const listRes = await fetch(`http://${wsUrl.host}/json/list`);
-  const targets = (await listRes.json()) as Array<{ type: string; webSocketDebuggerUrl?: string }>;
-  const pageTarget = targets.find(t => t.type === 'page' && t.webSocketDebuggerUrl);
-  if (!pageTarget?.webSocketDebuggerUrl) {
-    try { proc.kill(); } catch {}
-    throw new Error('No page target found in DevTools JSON list');
-  }
-
-  const ws = new WebSocket(pageTarget.webSocketDebuggerUrl);
-  await new Promise<void>((resolve, reject) => {
-    ws.onopen = () => resolve();
-    ws.onerror = err => reject(err);
-  });
-
-  let nextId = 0;
-  const pending = new Map<number, { resolve: (val: any) => void; reject: (err: Error) => void }>();
-  ws.onmessage = event => {
-    const msg = JSON.parse(String(event.data));
-    if (typeof msg.id === 'number' && pending.has(msg.id)) {
-      const entry = pending.get(msg.id)!;
-      pending.delete(msg.id);
-      if (msg.error) entry.reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-      else entry.resolve(msg.result);
-    }
-  };
-
-  const send = (method: string, params: Record<string, unknown> = {}): Promise<any> => {
-    const id = ++nextId;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (pending.delete(id)) {
-          reject(new Error(`CDP ${method} timed out after 60s`));
-        }
-      }, 60_000);
-      pending.set(id, {
-        resolve: val => { clearTimeout(timer); resolve(val); },
-        reject: err => { clearTimeout(timer); reject(err); },
-      });
-      ws.send(JSON.stringify({ id, method, params }));
+    const ws = new WebSocket(pageTarget.webSocketDebuggerUrl);
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = err => reject(err);
     });
-  };
 
-  await send('Page.enable');
-  await send('Runtime.enable');
+    let nextId = 0;
+    const pending = new Map<number, { resolve: (val: any) => void; reject: (err: Error) => void }>();
+    ws.onmessage = event => {
+      const msg = JSON.parse(String(event.data));
+      if (typeof msg.id === 'number' && pending.has(msg.id)) {
+        const entry = pending.get(msg.id)!;
+        pending.delete(msg.id);
+        if (msg.error) entry.reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+        else entry.resolve(msg.result);
+      }
+    };
 
-  return {
-    async setViewport(width: number, height: number) {
-      await send('Emulation.setDeviceMetricsOverride', {
-        width,
-        height,
-        deviceScaleFactor: 1,
-        mobile: false,
+    const send = (method: string, params: Record<string, unknown> = {}): Promise<any> => {
+      const id = ++nextId;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          if (pending.delete(id)) {
+            reject(new Error(`CDP ${method} timed out after 60s`));
+          }
+        }, 60_000);
+        pending.set(id, {
+          resolve: val => { clearTimeout(timer); resolve(val); },
+          reject: err => { clearTimeout(timer); reject(err); },
+        });
+        ws.send(JSON.stringify({ id, method, params }));
       });
-    },
-    async goto(url: string) {
-      await send('Page.navigate', { url });
-      for (let i = 0; i < 100; i++) {
+    };
+
+    await send('Page.enable');
+    await send('Runtime.enable');
+
+    return {
+      async setViewport(width: number, height: number) {
+        await send('Emulation.setDeviceMetricsOverride', {
+          width,
+          height,
+          deviceScaleFactor: 1,
+          mobile: false,
+        });
+      },
+      async goto(url: string) {
+        await send('Page.navigate', { url });
+        for (let i = 0; i < 100; i++) {
+          const res = await send('Runtime.evaluate', {
+            expression: 'document.readyState',
+            returnByValue: true,
+          });
+          if (res?.result?.value === 'complete') break;
+          await new Promise(r => setTimeout(r, 50));
+        }
+      },
+      async evaluate<T>(expression: string): Promise<T> {
         const res = await send('Runtime.evaluate', {
-          expression: 'document.readyState',
+          expression,
+          awaitPromise: true,
           returnByValue: true,
         });
-        if (res?.result?.value === 'complete') break;
-        await new Promise(r => setTimeout(r, 50));
-      }
-    },
-    async evaluate<T>(expression: string): Promise<T> {
-      const res = await send('Runtime.evaluate', {
-        expression,
-        awaitPromise: true,
-        returnByValue: true,
-      });
-      if (res?.exceptionDetails) {
-        throw new Error(
-          `Runtime.evaluate exception: ${res.exceptionDetails.text} ${res.exceptionDetails.exception?.description || ''}`,
-        );
-      }
-      return res?.result?.value as T;
-    },
-    async dispatchMouseEvent(params) {
-      await send('Input.dispatchMouseEvent', {
-        type: params.type,
-        x: params.x,
-        y: params.y,
-        button: params.button ?? 'left',
-        buttons: params.buttons ?? (params.type === 'mouseReleased' ? 0 : 1),
-        clickCount: params.clickCount ?? 1,
-        modifiers: params.modifiers ?? 0,
-      });
-    },
-    async screenshot(): Promise<Buffer> {
-      const res = await send('Page.captureScreenshot', { format: 'png' });
-      return Buffer.from(res.data, 'base64');
-    },
-    async close() {
-      try { ws.close(); } catch {}
-      try { proc.kill(); } catch {}
-    },
-  };
+        if (res?.exceptionDetails) {
+          throw new Error(
+            `Runtime.evaluate exception: ${res.exceptionDetails.text} ${res.exceptionDetails.exception?.description || ''}`,
+          );
+        }
+        return res?.result?.value as T;
+      },
+      async dispatchMouseEvent(params) {
+        await send('Input.dispatchMouseEvent', {
+          type: params.type,
+          x: params.x,
+          y: params.y,
+          button: params.button ?? 'left',
+          buttons: params.buttons ?? (params.type === 'mouseReleased' ? 0 : 1),
+          clickCount: params.clickCount ?? 1,
+          modifiers: params.modifiers ?? 0,
+        });
+      },
+      async screenshot(): Promise<Buffer> {
+        const res = await send('Page.captureScreenshot', { format: 'png' });
+        return Buffer.from(res.data, 'base64');
+      },
+      async close() {
+        try { ws.close(); } catch {}
+        await chrome.close();
+      },
+    };
+  } catch (error) {
+    await chrome.close();
+    throw error;
+  }
 }
 
 async function treeHash(dir: string): Promise<string> {
