@@ -219,11 +219,11 @@ export const partsViewShotStateExpression = `(() => {
     };
   });
   const envelope = unionRects([canvasRect, ...regions.flatMap(r => [r.outlinedBoxRect, r.labelRect])]);
-  const selected = document.querySelector('[data-pv-view][aria-pressed="true"]');
+  const selected = document.querySelector('[data-view][aria-pressed="true"]');
   return {
-    mode: required('pv-atlas-switch').hidden ? 'parts' : 'atlas',
-    view: required('pv-assemble').getAttribute('aria-pressed') === 'true'
-      ? 'assembled' : selected?.dataset.pvView ?? null,
+    mode: document.querySelector('[data-view=item]').hidden ? 'parts' : 'atlas',
+    view: document.querySelector('[data-view=assembled]').getAttribute('aria-pressed') === 'true'
+      ? 'assembled' : selected?.dataset.view ?? null,
     language: document.documentElement.lang,
     zoomX: matrix.a,
     zoomY: matrix.d,
@@ -546,6 +546,11 @@ export async function centerPartsViewShot(
 }
 
 export async function clickPartsViewControl(page: InputCdpSession, selector: string): Promise<void> {
+  const reveal=await page.evaluate<string|null>(`(()=>{const selector=${JSON.stringify(selector)},node=document.querySelector(selector);if(!node||typeof node.closest!=='function')return null;
+    const tab=node.closest('[role=tabpanel]');if(tab?.hidden)return '[aria-controls="'+tab.id+'"]';
+    const details=node.closest('details');if(details&&!details.open&&!node.matches('summary'))return '#'+details.id+' summary';
+    const menu=node.closest('[role=menu]');if(menu?.hidden)return '[aria-controls="'+menu.id+'"]';return null;})()`);
+  if(reveal)await clickPartsViewControl(page,reveal);
   const point = await page.evaluate<{ x: number; y: number }>(`(() => {
     const selector = ${JSON.stringify(selector)};
     const node = document.querySelector(selector);
@@ -564,7 +569,7 @@ export async function clickPartsViewControl(page: InputCdpSession, selector: str
 }
 
 export async function selectPartsViewPage(page: InputCdpSession): Promise<void> {
-  await clickPartsViewControl(page, '[data-pv-view="page"]');
+  await clickPartsViewControl(page, '[data-view="page"]');
   for (let i = 0; i < 200; i++) {
     if (await page.evaluate<boolean>(`!!document.querySelector('.pv-box[data-region]')`)) return;
     await Bun.sleep(25);

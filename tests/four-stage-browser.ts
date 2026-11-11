@@ -322,12 +322,12 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
       const d=${frame}?.contentDocument;
       if(!d?.body)throw Error('FOUR_STAGE_ACTION_TARGET: parts Save observer document body (missing)');
       d.addEventListener('click',event=>{
-        if(event.target?.id==='pv-save'&&d.body)d.body.dataset.trustedSave=String(event.isTrusted);
+        if(event.target?.id==='parts-submit'&&d.body)d.body.dataset.trustedSave=String(event.isTrusted);
       },true);
     })()`);
     mark('stage1.save');
-    await click(page, '#pv-save', frame);
-    await until(`${frame}?.contentDocument?.querySelector('#pv-save-status')?.dataset.result==='saved'`, 'verdict-save');
+    await click(page, '#parts-submit', frame);
+    await until(`${frame}?.contentDocument?.querySelector('#parts-save-status')?.dataset.result==='saved'`, 'verdict-save');
     assert.equal(await evaluate(`${frame}?.contentDocument?.body?.dataset.trustedSave`), 'true');
     const files = await readdir(verdictDirectory);
     assert.equal(files.length, 1);
@@ -1176,7 +1176,7 @@ async function runLanguage(lang: Language, page: InputCdpSession, dialogs: Retur
     const iframeDiagnostics = await evaluate(`(()=>{
       const frame=${frame};
       const doc=frame?.contentDocument;
-      const save=doc?.querySelector('#pv-save');
+      const save=doc?.querySelector('#parts-submit');
       const status=doc?.querySelector('#pv-load');
       return {
         pagePath:location.pathname,

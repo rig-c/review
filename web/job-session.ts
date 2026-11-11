@@ -1,4 +1,5 @@
-import {mountWorkspaceShell} from './workspace-ui.ts';
+import {mountActBar} from './inspector-blocks.ts';
+import {mountWorkspaceShell,mountWorkspaceRegions,type WorkspaceScreenRegions} from './workspace-ui.ts';
 /** Live job window transactions. Every form remains bound to its displayed publication. */
 import { parseControlPart, type ControlPart } from '../src/control.ts';
 import type {
@@ -1372,6 +1373,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     type JobForm = {
         form: HTMLFormElement;
         fieldset: HTMLFieldSetElement;
+        status: HTMLElement;
         read: () => UISubmissionV3['value'];
         submissionId: string;
         dirty: boolean;
@@ -1383,7 +1385,10 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         forms: Map<string, JobForm>;
     };
     const partsPanels = new WeakMap<JobPreparedInspection, {
-        slots: {left: HTMLElement; stage: HTMLElement; toolbar: HTMLElement; side: HTMLElement};
+        regions: WorkspaceScreenRegions;
+        binding: HTMLElement;
+        history: HTMLElement;
+        formsHost: HTMLElement;
         composition: JobPanelComposition;
         output?: Parameters<PartsHost['register']>[0];
         issues: PartsIssue[];
@@ -2064,7 +2069,14 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         const status = node('p');
         status.setAttribute('role', 'status');
         form.append(status);
-        const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
+        if(subject.kind==='parts-verdict'){
+            const actions=node('div');actions.append(submit);
+            const act=mountActBar({id:'job-parts-act-'+ask.askId,submit,saveState:status,actions});fields.append(act.element);
+            const panel=partsPanels.get(prepared)!;
+            status.id='parts-save-status';panel.regions.status.querySelector('#parts-save-status')!.replaceWith(status);
+           const dispose=panel.dispose;panel.dispose=()=>{act.dispose();dispose?.();};
+        }
+        const entry: JobForm = { form, fieldset: fields, status, read, submissionId: crypto.randomUUID(), dirty: false,
             submitting: false, rigSubmission: createJobRigSubmission() };
         const signoffSubmissionId = crypto.randomUUID();
         try {
@@ -2171,6 +2183,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 entry.fieldset.disabled = entry.submitting || (ask.status !== 'pending' && !(partsAsk && partsState === 'retry-signoff')) ||
                     state.preparing || state.closed || !state.receipt || !access.capability;
                 if (partsAsk) {
+                    entry.form.hidden=!partsPanel.composition.side?.includes('act.submit');
                     const button = entry.form.querySelector<HTMLButtonElement>('button[type=submit]')!;
                     const signoff = state.pending.some(item => item.publicationId === ask.publicationId && item.status === 'pending' &&
                         item.subject.kind === 'signoff' && item.subject.stage === 'parts-review');
@@ -2179,7 +2192,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     button.textContent = t(button.dataset.jobText, [partsPanel.issues.length]);
                     button.disabled = !partsPanel.output || !!partsPanel.legacy ||
                         (partsState === 'retry-signoff' || !partsPanel.issues.length) && !signoff;
-                    const status = entry.form.querySelector<HTMLElement>('[role=status]')!;
+                    const status = entry.status;
                     if (!partsPanel.output) {
                         status.dataset.jobText = 'JOB_PANEL_OUTPUT_MISSING';
                         status.textContent = t('JOB_PANEL_OUTPUT_MISSING') + ' · ' + ask.subject.kind;
@@ -2307,23 +2320,34 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 window.refresh();
             },
             locked() {
-                if (lifetime.signal.aborted || panel.legacy || window.state().closed) return 'sent';
+                if (lifetime.signal.aborted || panel.legacy || window.state().closed||!panel.composition.side?.includes('parts.issues')) return 'sent';
                 if (current !== prepared || [...forms.values()].some(entry => entry.submitting)) return 'sent';
                 const phase = jobPartsReviewState(window.state().pending, prepared.display.publication.publicationId);
                 return phase === 'reviewing' ? 'open' : phase;
             },
         };
         try {
-            mounted = mountPartsWorkspace(panel.slots, source, host, {defaultView: 'assembled'});
+            mounted = mountPartsWorkspace(panel.regions,source,host,{defaultView:'assembled',kind:'job-parts',language:languages,tabs:[{id:'parts-binding',label:'Source binding',panel:panel.binding},{id:'parts-history',label:'History',panel:panel.history}]});
             if (panel.legacy) {
                 const legacy = node('p', 'JOB_PARTS_LEGACY_DRAFT');
                 const rows = node('pre');
                 rows.className = 'job-source';
                 rows.textContent = JSON.stringify(panel.legacy, null, 2);
-                panel.slots.side.append(legacy, rows);
+                panel.regions.body.querySelector('#parts-legacy')!.append(legacy,rows);
             }
             await Promise.race([mounted.ready, preparationCancelled]);
-            panel.slots.toolbar.querySelector<HTMLButtonElement>('#fit')?.click();
+            if(panel.legacy)panel.regions.heading.querySelector<HTMLElement>('#workspace-tab-parts-legacy')!.hidden=false;
+            const composition=panel.composition;
+            panel.regions.left.querySelector('#pv-items')?.toggleAttribute('hidden',!composition.left?.includes('parts.list'));
+            panel.regions.left.querySelector<HTMLElement>('.left-header')!.hidden=!composition.left?.includes('parts.list');
+            panel.regions.stage.hidden=!composition.stage?.includes('parts.canvas');
+            panel.regions.toolbar.hidden=panel.regions.secondary.hidden=!composition.toolbar?.includes('parts.layers');
+            panel.regions.main.querySelector<HTMLElement>('.zoom-controls')!.hidden=!composition.toolbar?.includes('parts.layers');
+            if(!composition.side?.includes('parts.issues')){
+                const list=panel.regions.body.querySelector<HTMLElement>('.stage-comment-list')!,unavailable=node('div');
+                unavailable.hidden=true;list.before(unavailable);unavailable.append(list);
+            }
+            panel.regions.main.querySelector<HTMLButtonElement>('#fit')?.click();
             await new Promise<void>((resolve, reject) => {
                 let frame = 0;
                 const cancelled = () => {
@@ -2362,43 +2386,25 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         if (prepared.metadata.capabilities.preRig) {
             const {composition, invalid} = resolveJobPanels(prepared.metadata, prepared.display.publication.source);
             root.dataset.jobPartsWorkspace = '';
-            const stage = node('section');
-            stage.className = 'job-stage';
-            const toolbar = node('div');
-            toolbar.className = 'viewbar pv-toolbar';
-            const canvas = node('div');
-            canvas.className = 'job-parts-stage';
-            const left = node('div');
-            const side = node('div');
-            sidebar.prepend(left);
-            const formsHost = node('section');
-            formsHost.className = 'job-forms';
-            formsHost.dataset.jobForms = '';
-            formsHost.append(side);
-            const slots = {left, stage: canvas, toolbar, side};
-            stage.append(toolbar, canvas);
-            root.append(sidebar, stage, formsHost);
+            root.classList.add('parts-workspace');
+            const regions=mountWorkspaceRegions(root);regions.layout.dataset.partsWorkspace='';
+            const formsHost=regions.act;formsHost.dataset.jobForms='';
+            binding.id='parts-source-binding';
+            const history=node('div');history.id='parts-history';history.className='job-history';history.dataset.jobHistory='';
+            const panel={regions,binding,history,formsHost,composition,issues:[] as PartsIssue[],legacy:null,dispose:undefined as (()=>void)|undefined};
             const components: Record<PanelComponent, PanelSlot | null> = {
                 'parts.list': 'left', 'parts.canvas': 'stage', 'parts.layers': 'toolbar', 'parts.issues': 'side',
                 'act.submit': 'side', 'interview.picks': null, 'plan.body': null, 'rig.playback': null,
                 'scene.composite': null, 'images.set': null,
             };
-            for (const slot of ['left', 'stage', 'toolbar', 'side'] as const) {
-                const entries = composition[slot] ?? [];
-                slots[slot].hidden = !entries.some(id => components[id] === slot && id !== 'act.submit');
-                for (const id of entries) {
-                    if (components[id] === slot) continue;
-                    const refusal = node('p');
-                    refusal.textContent = t(Object.hasOwn(components, id) ? 'JOB_PANEL_UNAVAILABLE' : 'JOB_PANEL_UNKNOWN', [id]);
-                    slots[slot].after(refusal);
+            const destinations={left:regions.left,stage:regions.stage,toolbar:regions.secondary,side:regions.act};
+            for(const slot of ['left','stage','toolbar','side'] as const){
+                for(const id of composition[slot]??[]){
+                    if(components[id]===slot)continue;
+                    const refusal=node('p');refusal.textContent=t(Object.hasOwn(components,id)?'JOB_PANEL_UNAVAILABLE':'JOB_PANEL_UNKNOWN',[id]);if(slot==='stage')regions.stage.before(refusal);else destinations[slot].append(refusal);
                 }
             }
-            if (invalid) formsHost.prepend(node('p', 'JOB_PANELS_INVALID'));
-            const history = node('div');
-            history.className = 'job-history';
-            history.dataset.jobHistory = '';
-            formsHost.append(history);
-            const panel = {slots, composition, issues: [] as PartsIssue[], legacy: null, dispose: undefined as (() => void) | undefined};
+            if(invalid)regions.act.prepend(node('p','JOB_PANELS_INVALID'));
             partsPanels.set(prepared, panel);
             const dispose = prepared.dispose;
             prepared.dispose = () => {try {panel.dispose?.();} finally {dispose();}};

@@ -1,4 +1,9 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+  "History": "History",
+  "Source binding": "Source binding",
+  "Legacy flagged": "Legacy flagged",
+  "Producer flags": "Producer flags",
+  "Search parts": "Search parts",
  'rig review ': 'rig review ',
  'Language ': 'Language ',
  'More act actions': 'More act actions',

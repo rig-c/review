@@ -1,3 +1,4 @@
+import {clickPartsViewControl} from './helpers/parts-view-shots.ts';
 import {cp, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
@@ -34,19 +35,7 @@ async function wait(page: InputCdpSession, predicate: string, name: string) {
   throw Error(name);
 }
 
-async function click(page: InputCdpSession, selector: string) {
-  const p = await page.evaluate<{x: number; y: number}>(`(() => {
-    const target = document.querySelector(${JSON.stringify(selector)});
-    if (!target || target.disabled) throw Error('CONTROL_UNAVAILABLE');
-    target.scrollIntoView({block:'nearest'});
-    const {left, top, width, height} = target.getBoundingClientRect();
-    if (width <= 0 || height <= 0) throw Error('CONTROL_HIDDEN');
-    return {x:left + width/2, y:top + height/2};
-  })()`);
-  await page.mouse('mouseMoved', p.x, p.y);
-  await page.mouse('mousePressed', p.x, p.y);
-  await page.mouse('mouseReleased', p.x, p.y);
-}
+async function click(page: InputCdpSession, selector: string) {await clickPartsViewControl(page,selector);}
 
 interface Camera {x:number;y:number;zoom:number}
 interface RootStyle {left:string;top:string;transform:string}
@@ -120,7 +109,7 @@ function sample(page: InputCdpSession, expected:Camera|null=null, target: 'rig' 
       lang:document.documentElement.lang,
       caption:document.getElementById('pv-caption').textContent,
       label:document.getElementById('zoom-value').textContent,
-      status:document.getElementById('pv-save-status').textContent,
+      status:document.getElementById('parts-save-status').textContent,
       gate:window.__parts464Gate?.report() ?? null
     };
   })()`);
@@ -317,9 +306,9 @@ async function comparisonFrames(page: InputCdpSession, dir: string, rows:Record<
     for (const [action, dims, target] of [
       ['[data-pv-item="body"]', [20,16], 'pv-reference'],
       ['[data-pv-item="front"]', [8,10], 'pv-reference'],
-      ['[data-pv-comparison="overlay"]', [8,10], 'pv-reference'],
-      ['[data-pv-comparison="difference"]', [8,10], 'pv-reference'],
-      ['#pv-assemble', [32,24], 'pv-reference'],
+      ['[data-view="overlay"]', [8,10], 'pv-reference'],
+      ['[data-view="difference"]', [8,10], 'pv-reference'],
+      ['[data-view=assembled]', [32,24], 'pv-reference'],
     ] as const) {
       await afterPaint(page, action, target);
       await click(page, '#native-one');
@@ -360,7 +349,7 @@ async function legacyAtlasFrames(page: InputCdpSession, dir: string, rows:Record
     await record(rows,'degenerate',degenerate);
     // A zero-width crop still paints as zero-width and cannot accept a zoom.
     require(degenerate.dimensions[0] === 0 && degenerate.label === '1:1','PARTS_DEGENERATE_FRAME_ACCEPTED_ZOOM');
-    await afterPaint(page,'[data-pv-view="page"]');
+    await afterPaint(page,'[data-view="page"]');
     await click(page,'#zoom-in');
     const dimensions:[number,number] = [atlas.width,atlas.height];
     const fullPage = await sample(page,midpoint(dimensions));

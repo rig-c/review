@@ -47,7 +47,7 @@ async function hashes(root: string): Promise<Record<string, string>> {
 }
 async function wait(page: InputCdpSession, expression: string, label: string) {
   for (let i = 0; i < 240; i++) { if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(25); }
-  throw Error('BROWSER_WAIT: ' + label + ' / ' + await page.evaluate(`document.getElementById('pv-save-status')?.textContent`));
+  throw Error('BROWSER_WAIT: ' + label + ' / ' + await page.evaluate(`document.getElementById('parts-save-status')?.textContent`));
 }
 async function click(page: InputCdpSession, selector: string) {
   const p = await page.evaluate<{ x: number; y: number }>(`(()=>{
@@ -71,18 +71,18 @@ async function open(page: InputCdpSession, server: Server, lang: string) {
   await page.evaluate(`document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))`);
   // Passive observation: forwards the original request and response, never substitutes a save.
   await page.evaluate(`(()=>{window.__rv395wire=[];window.__rv395clicks=[];
-    document.addEventListener('click',e=>{const n=e.target.closest?.('#pv-save');if(n)window.__rv395clicks.push({id:n.id,trusted:e.isTrusted});},true);
+    document.addEventListener('click',e=>{const n=e.target.closest?.('#parts-submit');if(n)window.__rv395clicks.push({id:n.id,trusted:e.isTrusted});},true);
     const original=window.fetch;window.fetch=async(...args)=>{const path=new URL(typeof args[0]==='string'?args[0]:args[0].url,location.href).pathname;
       const init=args[1]??{};let row;if(path==='/api/parts/verdict'&&init.method==='POST'){
         row={path,method:init.method,contentType:new Headers(init.headers).get('Content-Type'),body:JSON.parse(init.body)};window.__rv395wire.push(row);
       }const response=await original(...args);if(row)row.status=response.status;return response;};})()`);
 }
 const wire = (page: InputCdpSession) => page.evaluate<Wire[]>('window.__rv395wire');
-async function save(page: InputCdpSession, button = '#pv-save') {
-  await page.evaluate(`document.getElementById('pv-save-status').dataset.result=''`);
+async function save(page: InputCdpSession, button = '#parts-submit') {
+  await page.evaluate(`document.getElementById('parts-save-status').dataset.result=''`);
   await click(page, button);
-  await wait(page, `['saved','refused'].includes(document.getElementById('pv-save-status').dataset.result)`, button);
-  return page.evaluate<{ result: string; text: string }>(`(()=>{const n=document.getElementById('pv-save-status');return {result:n.dataset.result,text:n.textContent};})()`);
+  await wait(page, `['saved','refused'].includes(document.getElementById('parts-save-status').dataset.result)`, button);
+  return page.evaluate<{ result: string; text: string }>(`(()=>{const n=document.getElementById('parts-save-status');return {result:n.dataset.result,text:n.textContent};})()`);
 }
 async function ui(page: InputCdpSession) {
   return page.evaluate<{ noLegacyVerdictControls: boolean; issueCounts: Record<string, number> }>(`(()=>{
@@ -136,7 +136,7 @@ async function fixture(root: string) {
 }
 type Layout = { rows: Array<{ name: string; display: string; wrap: string; oneLine: boolean; contained: boolean; checkbox: boolean; accessible: boolean; caption: string; height: number }>; viewport: { width: number; height: number }; language: string; approveText: string | null };
 async function layout(page: InputCdpSession): Promise<Layout> {
-  return page.evaluate<Layout>(`(()=>{const list=document.querySelector('.pv-list'),lr=list.getBoundingClientRect();list.scrollTop=0;
+  return page.evaluate<Layout>(`(()=>{const list=document.querySelector('.workspace-sources'),lr=list.getBoundingClientRect();list.scrollTop=0;
     const rows=[...document.querySelectorAll('#pv-items>li')].map(li=>{const button=li.querySelector('[data-pv-item]'),label=li.querySelector('.pv-name'),input=li.querySelector('input[type=checkbox]'),s=getComputedStyle(li),r=li.getBoundingClientRect(),b=button.getBoundingClientRect(),c=input?.getBoundingClientRect();
       const range=document.createRange();range.selectNodeContents(label);const textRows=[...range.getClientRects()];
       const inline=[...button.querySelectorAll('.pv-name,.pv-count,.pv-badge')].filter(n=>n.textContent.trim()).map(n=>n.getBoundingClientRect());
@@ -183,10 +183,11 @@ async function main() {
       check(initialUi.noLegacyVerdictControls, 'per-part outcome radios, note, overall select, approve-all and mesh outcome fields removed');
       check(Object.values(initialUi.issueCounts).every(c => c === 0), 'fresh UI has zero issues');
       check((await readVerdict(pkg)).verdict === null, 'opening never saves approval');
+      await page.evaluate(`document.querySelector('[data-view=assembled]').click()`);
       const measured = await layout(page); assertLayout(measured, pkg.items.map(i => i.name));
       await writeFile(join(out, `synthetic-before-${lang}.png`), await page.screenshot());
       const approved: Submission = { status: 'approved', issues: [] };
-      check((await save(page, '#pv-save')).result === 'saved', 'zero-issue save succeeds as approved');
+      check((await save(page, '#parts-submit')).result === 'saved', 'zero-issue save succeeds as approved');
       check((await wire(page)).length === 1, 'one click makes exactly one save');
       await assertSaved(page, pkg, approved);
       await writeFile(join(out, `synthetic-after-${lang}.png`), await page.screenshot());
@@ -221,7 +222,7 @@ async function main() {
       const legacyState = await page.evaluate<{ loadText: string; saveDisabled: boolean; items: string[] }>(`(()=>{
         return {
           loadText: document.getElementById('pv-load')?.textContent ?? '',
-          saveDisabled: Boolean(document.getElementById('pv-save')?.disabled),
+          saveDisabled: Boolean(document.getElementById('parts-submit')?.disabled),
           items: [...document.querySelectorAll('#pv-legacy-flagged li')].map(li => li.textContent ?? ''),
         };
       })()`);
@@ -250,10 +251,10 @@ async function main() {
       report.visuals = visuals;
       const capture = async (served: Server, side: 'baseline' | 'after') => {
         for (const lang of ['en', 'ko']) {
-          await open(page!, served, lang); const measurement = await layout(page!);
+          await open(page!, served, lang);if(side==='after')await page!.evaluate(`document.querySelector('[data-view=assembled]').click()`); const measurement = await layout(page!);
           if (side === 'after') assertLayout(measurement, publicPkg.items.map(i => i.name));
           check((await wire(page!)).length === 0, 'visual capture never submits a verdict');
-          const assets = await page!.evaluate<Record<string, string>>(`Promise.all(['/', '/parts.js', '/parts.css'].map(async p=>{const r=await fetch(p);if(!r.ok)throw Error('asset '+p);const b=await r.arrayBuffer();return [p,[...new Uint8Array(await crypto.subtle.digest('SHA-256',b))].map(v=>v.toString(16).padStart(2,'0')).join('')];})).then(Object.fromEntries)`);
+          const assets = await page!.evaluate<Record<string, string>>(`Promise.all(['/', '/parts.js', '/parts.css',...(document.getElementById('parts-root')?['/styles.css']:[])].map(async p=>{const r=await fetch(p);if(!r.ok)throw Error('asset '+p);const b=await r.arrayBuffer();return [p,[...new Uint8Array(await crypto.subtle.digest('SHA-256',b))].map(v=>v.toString(16).padStart(2,'0')).join('')];})).then(Object.fromEntries)`);
           const file = `${side}-${lang}.png`; await writeFile(join(out, file), await page!.screenshot());
           visuals[`${side}-${lang}`] = { screenshot: file, measurement, servedAssets: assets, noSave: true };
         }

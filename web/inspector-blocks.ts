@@ -118,7 +118,7 @@ export interface ActBarOptions {
  /** Omit for an existing button whose text is owned by the screen. */
  submitLabel?:string|(()=>string);
  saveState:HTMLElement;
- overflow?:{label:string;handler:()=>void}[];
+ overflow?:{id?:string;label:string;handler:()=>void}[];
 }
 export interface ActBar {element:HTMLElement;refresh():void;dispose():void}
 /** C10: screen-owned decision, submit and save state, with an optional shared action menu. */
@@ -133,7 +133,7 @@ export function mountActBar(options:ActBarOptions):ActBar {
   menu.setAttribute('role','menu');
   const close=(focus=true)=>{menu.hidden=true;button.setAttribute('aria-expanded','false');if(focus)button.focus();};
   const items=options.overflow.map(action=>{
-   const item=actionButton(tr(action.label),null);item.setAttribute('role','menuitem');item.tabIndex=-1;
+   const item=actionButton(tr(action.label),null);if(action.id)item.id=action.id;item.setAttribute('role','menuitem');item.tabIndex=-1;
    listen(item,'click',()=>{close();action.handler();});labels.push({button:item,label:action.label});menu.append(item);return item;
   });
   const open=(last=false)=>{menu.hidden=false;button.setAttribute('aria-expanded','true');items[last?items.length-1:0]!.focus();};

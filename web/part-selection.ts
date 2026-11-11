@@ -98,6 +98,14 @@ export class PartInspection {
 }
 /** Draws a row's thumbnail into its icon element, or leaves the type glyph; returns the tooltip note naming which and why. */
 export interface PartThumbnailSource {show(icon:HTMLElement,entry:PartEntry,identity:ControlPartIdentity|null,glyph:string):string}
+/** Shared navigator keys for slot and package lists; Enter uses the row's native button action. */
+export function bindPartNavigator(search:HTMLInputElement,list:HTMLElement,render:()=>void):()=>void {
+ const input=()=>render();
+ const searchKey=(event:KeyboardEvent)=>{if(event.key==='ArrowDown'){event.preventDefault();list.querySelector<HTMLButtonElement>('button')?.focus();}if(event.key==='Escape'){search.value='';render();}};
+ const listKey=(event:KeyboardEvent)=>{const buttons=[...list.querySelectorAll<HTMLButtonElement>('button')],index=buttons.indexOf(list.ownerDocument.activeElement as HTMLButtonElement);const next=event.key==='ArrowDown'?Math.min(index+1,buttons.length-1):event.key==='ArrowUp'?Math.max(0,index-1):event.key==='Home'?0:event.key==='End'?buttons.length-1:null;if(next!==null){event.preventDefault();buttons[next]?.focus();}if(event.key==='Escape')search.focus();};
+ search.addEventListener('input',input);search.addEventListener('keydown',searchKey);list.addEventListener('keydown',listKey);
+ return ()=>{search.removeEventListener('input',input);search.removeEventListener('keydown',searchKey);list.removeEventListener('keydown',listKey);};
+}
 export class PartExplorer extends PartInspection {
  private highlightedBone:string|null=null;
  /** Page-local bone relation highlight; it never invents a selected slot or changes held identity. */
@@ -108,8 +116,7 @@ export class PartExplorer extends PartInspection {
  private detailNodes:{title:HTMLHeadingElement;info:HTMLParagraphElement;declarations:HTMLParagraphElement;bounds:HTMLParagraphElement;unavailable:HTMLParagraphElement;feedback:HTMLButtonElement;status:HTMLParagraphElement}|null=null;
  constructor(private host:HTMLElement,private detail:HTMLElement,private changed:(previous:ControlPart|null)=>void,private target:(part:ControlPart)=>void){
   super();
-  this.search.addEventListener('input',()=>this.renderList());this.search.addEventListener('keydown',event=>{if(event.key==='ArrowDown'){event.preventDefault();this.list.querySelector<HTMLButtonElement>('button')?.focus();}if(event.key==='Escape'){this.search.value='';this.renderList();}});
-  this.list.addEventListener('keydown',event=>{const buttons=[...this.list.querySelectorAll<HTMLButtonElement>('button')],index=buttons.indexOf(document.activeElement as HTMLButtonElement);const next=event.key==='ArrowDown'?Math.min(index+1,buttons.length-1):event.key==='ArrowUp'?Math.max(0,index-1):event.key==='Home'?0:event.key==='End'?buttons.length-1:null;if(next!==null){event.preventDefault();buttons[next]?.focus();}if(event.key==='Escape')this.search.focus();});
+  bindPartNavigator(this.search,this.list,()=>this.renderList());
   this.whole.onclick=()=>this.action(()=>this.select(null));this.solo.onchange=()=>this.action(()=>{if(this.selected)this.select({...this.selected,mode:this.solo.checked?'solo':'context'});});this.renderList();this.renderDetail();
  }
  private get search(){return this.host.querySelector<HTMLInputElement>('[data-part-search]')!;}private get list(){return this.host.querySelector<HTMLElement>('[data-part-list]')!;}private get solo(){return this.host.querySelector<HTMLInputElement>('[data-part-solo]')!;}private get whole(){return this.host.querySelector<HTMLButtonElement>('[data-part-whole]')!;}

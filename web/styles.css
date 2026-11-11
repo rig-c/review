@@ -408,7 +408,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .review-stage-panel[hidden]{display:none}
 .review-stage-panel iframe{width:100%;flex:1;min-height:240px;border:0;background:var(--bg)}
 .review-stage-panel iframe[hidden]{display:none}
-.topbar,.pv-top{flex-wrap:wrap}
+.topbar{flex-wrap:wrap}
 
 /* Setup/Animate/Compare are instruments within stage 3, never additional primary stages. */
 :root[data-inspection-stage]:not([data-inspection-stage="3"]) .mode-switch,:root[data-stage-refused="true"] .mode-switch{display:none}
@@ -482,13 +482,9 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 }
 
 /* Parts publications reuse the shared parts columns and fill the job workspace. */
-.job-window .job-inspection[data-job-parts-workspace]{flex:1;grid-template-columns:240px minmax(0,1fr) 300px;grid-template-rows:minmax(0,1fr);min-height:0;min-width:0}
-.job-window .job-inspection[data-job-parts-workspace]>.job-forms{grid-column:3;grid-row:1;min-height:0;min-width:0;border-top:0;border-left:1px solid var(--border)}
 
 /* Both job and standalone hosts use the existing parts workspace presentation. */
 .job-window [data-job-parts-workspace]{--panel:var(--rv-panel);--line:var(--border);--text:var(--fg);--muted:var(--fg-muted);--accent:var(--link);--flag:var(--warn);--clean:var(--pass)}
-.job-window .job-parts-stage{display:flex;flex-direction:column;flex:1;min-height:180px;min-width:0;position:relative}
-.job-window .job-parts-stage>main{display:flex;flex:1;min-height:0;min-width:0}
 .job-window [data-job-parts-workspace] [hidden]{display:none!important}
 
 .job-window [data-job-checkpoint-evidence]{min-width:0;margin:12px 0}
@@ -534,3 +530,59 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .workspace-drawer>.inspector-body{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
 .workspace-drawer>.inspector-body>[data-inspector-panel]{flex:1;min-height:0;overflow:auto;padding:12px}
 .workspace-drawer>.inspector-body>#inspector-playback:not([hidden]){display:grid;grid-template-columns:minmax(0,1fr);overflow:auto}
+
+/* Parts composes the shared shell regions; its compatibility stylesheet owns no layout. */
+.parts-workspace{display:flex;flex-direction:column;min-height:0;height:100dvh}
+.job-inspection.parts-workspace{display:flex;flex-direction:column;height:100%;min-height:0}
+.parts-workspace [hidden]{display:none!important}
+.parts-workspace>.layout{flex:1;min-height:0}
+.parts-workspace .secondary-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:6px 14px;border-bottom:1px solid var(--border);background:var(--bg)}
+.parts-workspace .secondary-toolbar label{display:flex;align-items:center;gap:5px}
+.parts-workspace .secondary-toolbar select,.parts-workspace .secondary-toolbar input{width:auto}
+.parts-workspace .pane-footer{flex:none;margin:0;padding:5px 12px;color:var(--fg-muted);font-size:11px;overflow-wrap:anywhere}
+.parts-workspace .inspector-body>section{height:100%;overflow:auto;padding:8px 12px}
+.parts-workspace .stage-comment-list{position:static;width:auto;max-width:none;max-height:none;border:0}
+.parts-workspace .workspace-act-bar{position:sticky;bottom:0;background:var(--rv-panel)}
+.parts-workspace #pv-corrections{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.parts-workspace #pv-corrections p{font-size:11px;margin:0}
+.parts-workspace #pv-items{list-style:none;margin:0;padding:0}
+.parts-workspace #pv-items li{display:flex;align-items:center;flex-wrap:nowrap;gap:4px}
+.parts-workspace #pv-items li>label{display:flex;flex:none;align-items:center}
+.parts-workspace #pv-items li button{min-width:0;flex:1;white-space:nowrap;width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;text-align:left;border:0;background:none;color:inherit;padding:4px 6px;border-radius:5px;cursor:pointer;font:inherit}
+.parts-workspace #pv-items li button[aria-current="true"]{background:color-mix(in srgb,var(--link) 18%,transparent)}
+.parts-workspace .pv-name{grid-column:1;grid-row:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.parts-workspace .pv-badge{grid-column:3;grid-row:1;font-size:10px;padding:0 5px;border-radius:8px;border:1px solid var(--border);color:var(--fg-muted)}
+.parts-workspace .pv-badge[data-outcome="clean"]{color:var(--pass);border-color:var(--pass)}
+.parts-workspace .pv-badge[data-outcome="flagged"]{color:var(--fail);border-color:var(--fail)}
+.parts-workspace .pv-count{grid-column:2;grid-row:1;font-size:10px;color:var(--fg-muted);white-space:nowrap}
+.parts-workspace .pv-field{display:flex;align-items:center;gap:5px}
+.parts-workspace .pv-canvas-box{position:relative;display:inline-block;line-height:0}
+.parts-workspace #pv-canvas{image-rendering:pixelated;image-rendering:crisp-edges;display:block}
+.parts-workspace .pv-overlay{position:absolute;inset:0;pointer-events:none}
+.parts-workspace .pv-box{position:absolute;border:1px solid var(--rv-region-a);outline:1px solid var(--bg);pointer-events:auto;cursor:pointer}
+.parts-workspace .pv-box[data-flag]{border-color:var(--fail);border-style:dashed;pointer-events:none}
+.parts-workspace .pv-box[aria-current="true"]{border-color:var(--rv-region-b);border-width:2px}
+.parts-workspace .pv-box span{position:absolute;left:0;top:-14px;font-size:10px;line-height:12px;background:var(--rv-backdrop);color:var(--fg);padding:0 3px;white-space:nowrap}
+.parts-workspace .pv-region-edge{position:absolute;border:1px dashed var(--rv-region-b);pointer-events:none}
+.parts-workspace #pv-caption{padding:0 12px 8px;margin:0}
+.parts-workspace #pv-flags,.parts-workspace #pv-flags ul{list-style:none;margin:0;padding:0}
+.parts-workspace #pv-flags li[data-flag-id]{border-left:3px solid var(--fail);padding:4px 6px;margin-bottom:6px;background:color-mix(in srgb,var(--fail) 8%,transparent);overflow-wrap:anywhere}
+.parts-workspace #pv-flags h3{font-size:12px;margin:8px 0 4px}
+.parts-workspace #pv-flags details[data-pv-root]{margin-bottom:6px;overflow-wrap:anywhere}
+.parts-workspace #pv-flags details[data-pv-root]>summary{font-size:12px;color:var(--fg);padding:5px 0}
+.parts-workspace #pv-flags details[data-pv-root]>ul{padding-top:4px}
+.parts-workspace #pv-flags code{font-size:11px;display:block;margin-top:4px;color:var(--fg-muted)}
+.parts-workspace #pv-flags details{margin-top:3px}
+.parts-workspace #pv-flags summary{cursor:pointer;font-size:11px;color:var(--fg-muted)}
+.parts-workspace #pv-flags li.pv-none{border-left-color:var(--border);background:none;color:var(--fg-muted)}
+.parts-workspace #pv-mesh-panel{margin-top:16px;display:flex;flex-direction:column;gap:6px}
+.parts-workspace #pv-mesh-panel dl{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;margin:0}
+.parts-workspace #pv-mesh-panel dd{margin:0;overflow-wrap:anywhere}
+.parts-workspace #pv-mesh-panel p{margin:4px 0}
+.parts-workspace #pv-mesh-panel label{display:flex;flex-direction:column;gap:4px}
+.parts-workspace #pv-mesh-panel textarea{height:48px;resize:vertical}
+.parts-workspace .pv-overlay canvas{position:absolute;left:0;top:0;pointer-events:none}
+
+.parts-workspace .status-bar{height:auto;min-height:40px;overflow:visible;flex-wrap:wrap}
+.parts-workspace #pv-load,.parts-workspace #parts-save-status{margin:0;overflow-wrap:anywhere;white-space:normal}
+.parts-workspace #pv-load[data-result="refused"]{color:var(--fail)}

@@ -54,7 +54,7 @@ export function bindStageNav(options:{preRig?:boolean;interviewOnly?:boolean;int
  }));
  const pickerState=sourcePicker?{hidden:Boolean(sourcePicker.hidden),label:attr(sourcePicker,'aria-label')}:null;
  const frames=new Map<string,HTMLIFrameElement>();let lastFrame:HTMLIFrameElement|null=null;let current:ReviewStage=(options.partsOnly||options.preRig)?1:3;let correctionActive=false;
- const workspace=document.querySelector<HTMLElement>(options.partsOnly?'.pv-layout':'.layout');const wasInert=workspace?.inert??false;
+ const workspace=document.querySelector<HTMLElement>(options.partsOnly?'[data-parts-workspace]':'.layout');const wasInert=workspace?.inert??false;
  const reasonFor=(stage:ReviewStage)=>stageReason(stage,options.model,!!options.direction,!!options.interview,options.preRig);
  const activeReason=(stage:ReviewStage)=>stage===3&&correctionActive?null:reasonFor(stage);
  const buttons=reviewStages.map((label,index)=>{const button=document.createElement('button');button.type='button';button.dataset.reviewStage=String(index+1);button.onclick=()=>{if(index+1===3)correctionActive=false;show(index+1 as ReviewStage);};host.append(button);return button;});

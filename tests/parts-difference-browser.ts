@@ -1,3 +1,4 @@
+import {clickPartsViewControl} from './helpers/parts-view-shots.ts';
 /** Trusted-input #384 evidence through the existing launcher. CI guards live in parts-comparison.test.ts. */
 import {mkdir,mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
@@ -12,9 +13,9 @@ import {launchCdpSession,type InputCdpSession as Page} from './parts-explorer-br
 import {paintingRectangle} from '../src/parts-comparison.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 const assert=(v:unknown,m:string)=>{if(!v)throw new Error(m);},hash=(v:Uint8Array)=>createHash('sha256').update(v).digest('hex');
-async function wait(page:Page,condition:string,label:string){for(let i=0;i<200;i++){if(await page.evaluate(condition))return;await Bun.sleep(25);}throw new Error('BROWSER_WAIT '+label+' '+await page.evaluate(`document.getElementById('pv-save-status')?.textContent`));}
+async function wait(page:Page,condition:string,label:string){for(let i=0;i<200;i++){if(await page.evaluate(condition))return;await Bun.sleep(25);}throw new Error('BROWSER_WAIT '+label+' '+await page.evaluate(`document.getElementById('parts-save-status')?.textContent`));}
 async function rect(page:Page,selector:string){return page.evaluate<{x:number;y:number;width:number;height:number}>(`(()=>{const n=document.querySelector(${JSON.stringify(selector)}),r=n?.getBoundingClientRect();if(!r||r.width<=0||r.height<=0)throw Error('Hidden target '+${JSON.stringify(selector)});return {x:r.x,y:r.y,width:r.width,height:r.height};})()`);}
-async function click(page:Page,selector:string){const r=await rect(page,selector),x=r.x+r.width/2,y=r.y+r.height/2;await page.mouse('mouseMoved',x,y);await page.mouse('mousePressed',x,y);await page.mouse('mouseReleased',x,y);}
+async function click(page:Page,selector:string){await clickPartsViewControl(page,selector);}
 const view=`(()=>{const root=document.getElementById('rig-root'),pane=document.getElementById('rig-viewport'),r=root.getBoundingClientRect(),p=pane.getBoundingClientRect();const scale=new DOMMatrix(root.style.transform).a,ref=document.getElementById('reference-content'),rp=document.getElementById('reference-viewport'),rs=new DOMMatrix(ref.style.transform).a;return {logical:{zoom:scale,x:(pane.clientWidth/2-parseFloat(root.style.left))/scale,y:(pane.clientHeight/2-parseFloat(root.style.top))/scale,reference:{zoom:rs,x:(rp.clientWidth/2-parseFloat(ref.style.left))/rs,y:(rp.clientHeight/2-parseFloat(ref.style.top))/rs}},left:r.left,top:r.top,scale,pane:{left:p.left,top:p.top,width:p.width,height:p.height},style:{left:root.style.left,top:root.style.top,transform:root.style.transform,reference:document.getElementById('reference-content').getAttribute('style')}};})()`;
 function sameCamera(a:any,b:any){return ['zoom','x','y'].every(k=>Math.abs(a[k]-b[k])<1e-9)&&['zoom','x','y'].every(k=>Math.abs(a.reference[k]-b.reference[k])<1e-9);}
 const pixels=(id:string)=>`document.getElementById(${JSON.stringify(id)}).toDataURL('image/png')`;
@@ -26,14 +27,14 @@ async function invalidThresholds(page:Page,lang:string,out:string){
  const before=await page.evaluate<string>(pixels('pv-canvas')),rows=[];
  for(const value of ['', '1.5', '256']){
   await page.evaluate(`(()=>{const input=document.getElementById('pv-threshold');input.value=${JSON.stringify(value)};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);await settled(page);
-  const actual=await page.evaluate<{value:string;message:string}>(`({value:document.getElementById('pv-threshold').value,message:document.getElementById('pv-save-status').textContent})`);
+  const actual=await page.evaluate<{value:string;message:string}>(`({value:document.getElementById('pv-threshold').value,message:document.getElementById('parts-save-status').textContent})`);
   rows.push({entered:value,...actual});
   if(actual.value!=='16'||actual.message!==(lang==='ko'?koCatalog[invalidThresholdMessage]:invalidThresholdMessage)){await writeFile(join(out,'invalid-'+lang+'.png'),await page.screenshot());throw new Error('INVALID_THRESHOLD_NOT_RESTORED '+JSON.stringify(rows));}
   assert(await page.evaluate(pixels('pv-canvas'))===before,'invalid value cannot change metric behind restored valid display');
  }
  await writeFile(join(out,'invalid-'+lang+'.png'),await page.screenshot());
  await page.evaluate(`(()=>{const input=document.getElementById('pv-threshold');input.value='16';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);await settled(page);
- assert(await page.evaluate(`document.getElementById('pv-save-status').textContent`)==='','valid input clears refusal');return rows;
+ assert(await page.evaluate(`document.getElementById('parts-save-status').textContent`)==='','valid input clears refusal');return rows;
 }
 async function main(){
  const out=resolve(process.env.RIG_REVIEW_DIFFERENCE_EVIDENCE??'cache/parts-difference-browser');await mkdir(out,{recursive:true});const root=await mkdtemp(join(tmpdir(),'difference-'));process.env.RIG_REVIEW_STATE_DIR=join(out,'state');
@@ -44,7 +45,7 @@ async function main(){
  await navigate('en');report.browser=await page.evaluate('navigator.userAgent');report.browserVersion=await page.evaluate(`navigator.userAgentData.getHighEntropyValues(['fullVersionList','uaFullVersion'])`);
  await page.evaluate(`(()=>{window.__inputs=[];for(const n of ['pointerdown','pointerup','input','click'])document.addEventListener(n,e=>window.__inputs.push({type:n,target:e.target.id||e.target.dataset.pvComparison,x:e.clientX,y:e.clientY,trusted:e.isTrusted}),true);})()`);
  await click(page,'#native-one');for(let i=0;i<7;i++)await click(page,'#zoom-in');await settled(page);
- await click(page,'[data-pv-comparison="difference"]');await wait(page,`document.getElementById('pv-caption').textContent.includes('81')`,'covered off81');
+ await click(page,'[data-view="difference"]');await wait(page,`document.getElementById('pv-caption').textContent.includes('81')`,'covered off81');
  await click(page,'#pv-footprints');await wait(page,`document.getElementById('pv-caption').textContent.startsWith('Difference: 1 pixels')`,'covered on1');
  const rawPixel=await page.evaluate<number[]>(`Array.from(document.getElementById('pv-canvas').getContext('2d').getImageData(2,2,1,1).data)`);assert(JSON.stringify(rawPixel)==='[17,0,0,255]','literal planted cell');
  const grey=await page.evaluate<number[]>(`Array.from(document.getElementById('pv-canvas').getContext('2d').getImageData(10,4,1,1).data)`);assert(JSON.stringify(grey)==='[128,128,128,255]','literal covered cell');
@@ -52,7 +53,7 @@ async function main(){
  await page.evaluate(`(()=>{const input=document.getElementById('pv-threshold');input.value='16';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);await wait(page,`document.getElementById('pv-caption').textContent.startsWith('Difference: 1 pixels')`,'strict boundary1');
  report.invalidEn=await invalidThresholds(page,'en',out);
  const displayed=await page.evaluate<string>(pixels('pv-canvas'));await writeFile(join(out,'difference-en.png'),await page.screenshot());
- await click(page,'#stage-comment');report.mark=await mark(page,'Declared grid difference');await click(page,'#pv-save');await wait(page,`document.getElementById('pv-save-status').dataset.result==='saved'`,'save');
+ await click(page,'#stage-comment');report.mark=await mark(page,'Declared grid difference');await click(page,'#parts-submit');await wait(page,`document.getElementById('parts-save-status').dataset.result==='saved'`,'save');
  const saved=(await readVerdict(pkg)).verdict!,comment=saved.issues[0]!;assert(comment.view.comparison?.mode==='difference'&&comment.view.comparison.threshold===16&&comment.view.footprints,'saved comparison and footprints');
  if(!comment.imageRegion)throw new Error('Expected item region');
  const original=PNG.sync.read(await readFile(pkg.imagePaths[0]!)),native=PNG.sync.read(await readFile(resolvedCropPath(comment.nativeCrop!.path))),r=comment.imageRegion;
@@ -63,9 +64,9 @@ async function main(){
  for(const kind of ['crop','nativeCrop'] as const)await writeFile(join(out,kind+'.png'),await readFile(resolvedCropPath(comment[kind]!.path)));
  for(const format of ['json','issue']){const response=await fetch(base+'api/parts/export?format='+format),text=await response.text();assert(response.ok&&text.includes('difference')&&text.includes('16')&&text.includes(comment.crop.sha256),'export comparison state');await writeFile(join(out,'export.'+(format==='json'?'json':'md')),text);}
  for(const lang of ['en','ko']){
- await navigate(lang);await click(page,'#stage-comment');await wait(page,`document.querySelectorAll('.stage-comment-item').length===1`,'reload');await click(page,'.stage-comment-summary');await wait(page,`document.querySelector('[data-pv-comparison="difference"]').getAttribute('aria-pressed')==='true'`,'restore');await settled(page);
+ await navigate(lang);await click(page,'#stage-comment');await wait(page,`document.querySelectorAll('.stage-comment-item').length===1`,'reload');await click(page,'.stage-comment-summary');await wait(page,`document.querySelector('[data-view="difference"]').getAttribute('aria-pressed')==='true'`,'restore');await settled(page);
  assert(await page.evaluate(pixels('pv-canvas'))===displayed,'restored comparison pixels '+lang);assert(await page.evaluate(`document.getElementById('pv-threshold').value`)==='16','threshold restored');
- if(lang==='ko')assert(await page.evaluate(`document.querySelector('[data-pv-comparison="difference"]').textContent`)===koCatalog.Difference,'Korean Difference label');await click(page,'#stage-comment');await writeFile(join(out,'restored-'+lang+'.png'),await page.screenshot());report['invalid'+lang]=await invalidThresholds(page,lang,out);
+ if(lang==='ko')assert(await page.evaluate(`document.querySelector('[data-view="difference"]').textContent`)===koCatalog.Difference,'Korean Difference label');await click(page,'#stage-comment');await writeFile(join(out,'restored-'+lang+'.png'),await page.screenshot());report['invalid'+lang]=await invalidThresholds(page,lang,out);
  }
  assert((await Promise.all(before.map(async f=>hash(await readFile(f.path))===f.sha256))).every(Boolean),'inspected sources immutable');report.status='passed';report.thresholdInput='DOM input events; comparison/footprint/capture/save are trusted CDP mouse';await writeFile(join(out,'report.json'),JSON.stringify(report,null,2));console.log('PARTS_DIFFERENCE_BROWSER '+JSON.stringify(report));
  }catch(error){if(page)await writeFile(join(out,'failure.png'),await page.screenshot());await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error),report},null,2));throw error;}

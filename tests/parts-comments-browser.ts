@@ -15,7 +15,7 @@ import {launchCdpSession,type InputCdpSession as CdpSession} from './parts-explo
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 const assert=(v:unknown,why:string)=>{if(!v)throw new Error(why);};
 const hash=(b:Buffer)=>createHash('sha256').update(b).digest('hex');
-async function wait(page:CdpSession,expression:string,label:string){for(let i=0;i<160;i++){if(await page.evaluate(expression))return;await Bun.sleep(25);}throw new Error('BROWSER_WAIT: '+label+' '+await page.evaluate(`document.getElementById('pv-save-status')?.textContent+' / '+document.querySelector('[role=alert]')?.textContent`));}
+async function wait(page:CdpSession,expression:string,label:string){for(let i=0;i<160;i++){if(await page.evaluate(expression))return;await Bun.sleep(25);}throw new Error('BROWSER_WAIT: '+label+' '+await page.evaluate(`document.getElementById('parts-save-status')?.textContent+' / '+document.querySelector('[role=alert]')?.textContent`));}
 const rendered=`(()=>{const rect=n=>{const r=n.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};return {panes:['rig','reference'].map(t=>({target:t,pane:rect(document.getElementById(t+'-pane')),viewport:rect(document.getElementById(t+'-viewport')),root:rect(document.getElementById(t==='rig'?'rig-root':'reference-content')),transform:document.getElementById(t==='rig'?'rig-root':'reference-content').style.transform})),sync:document.getElementById('camera-sync').checked};})()`;
 const camera=`(()=>{const pane=document.getElementById('rig-viewport').getBoundingClientRect(),root=document.getElementById('rig-root').getBoundingClientRect(),s=new DOMMatrix(document.getElementById('rig-root').style.transform).a;return {x:root.left-pane.left,y:root.top-pane.top,scale:s,width:pane.width,height:pane.height,left:pane.left,top:pane.top};})()`;
 const commentState=`(()=>{
@@ -24,8 +24,8 @@ const commentState=`(()=>{
  if(!stage||!control||!rig||!reference)throw Error('PARTS_CAPTURE_STATE_MISSING');
  return {paint:stage.dataset.partsPaintState,ariaBusy:stage.getAttribute('aria-busy'),disabled:control.disabled,
   pressed:control.getAttribute('aria-pressed'),rigCapture:rig.classList.contains('stage-comment-mode'),
-  referenceCapture:reference.classList.contains('stage-comment-mode'),status:document.getElementById('pv-save-status')?.textContent,
-  assembled:document.getElementById('pv-assemble').getAttribute('aria-pressed')};
+  referenceCapture:reference.classList.contains('stage-comment-mode'),status:document.getElementById('parts-save-status')?.textContent,
+  assembled:document.querySelector('[data-view=assembled]').getAttribute('aria-pressed')};
 })()`;
 const commentReady=`(()=>{const state=${commentState};
  if(state.paint==='failed'||state.paint==='disposed')throw Error('PARTS_CAPTURE_PAINT_'+state.paint.toUpperCase()+' '+state.status);
@@ -51,11 +51,11 @@ async function mark(page:CdpSession,from:{x:number;y:number},to:{x:number;y:numb
 }
 async function atlasClick(page:CdpSession,embedded=false){
  const doc=embedded?`document.querySelector('.review-stage-panel iframe').contentDocument`:'document';
- await page.evaluate(`(()=>{const d=${doc};d.querySelector('[data-pv-view="page"]').click();})()`);
+ await page.evaluate(`(()=>{const d=${doc};d.querySelector('[data-view="page"]').click();})()`);
  await wait(page,`!!(${doc}).querySelector('.pv-box[data-region]')`,'atlas page boxes');await page.evaluate(`(()=>{const d=${doc};d.getElementById('fit').click();})()`);
  const box=await page.evaluate<{x:number;y:number;name:string}>(`(()=>{const d=${doc},frame=${embedded?"document.querySelector('.review-stage-panel iframe')":"null"},r=d.querySelectorAll('.pv-box[data-region]'),b=r[r.length-1],a=b.getBoundingClientRect(),f=frame?.getBoundingClientRect()??{left:0,top:0};if(a.width<=0||a.height<=0)throw Error('Atlas box hidden');return {x:f.left+a.left+a.width/2,y:f.top+a.top+a.height/2,name:b.dataset.region};})()`);
  await page.mouse('mouseMoved',box.x,box.y);await page.mouse('mousePressed',box.x,box.y);await page.mouse('mouseReleased',box.x,box.y);
- await wait(page,`(${doc}).querySelector('[data-pv-view="item"]').getAttribute('aria-pressed')==='true'`,'atlas box opens region');
+ await wait(page,`(${doc}).querySelector('[data-view="item"]').getAttribute('aria-pressed')==='true'`,'atlas box opens region');
  const selected=await page.evaluate<string>(`(${doc}).querySelector('#pv-items button[aria-current="true"]').dataset.pvItem`);assert(selected===box.name,'atlas selects intended region');return {expected:box.name,selected};
 }
 async function main(){
@@ -70,13 +70,13 @@ async function main(){
  // Native touch input; compare source under old centre with source under moved centre.
  c=await page.evaluate<any>(camera);const centre={x:c.width*.5,y:c.height*.55},pin=source(c,centre);const a={x:c.left+centre.x-40,y:c.top+centre.y,id:1},b={x:c.left+centre.x+40,y:c.top+centre.y,id:2};await page.touch('touchStart',[a,b]);await page.touch('touchMove',[{...a,x:a.x-20},{...b,x:b.x+40}]);await page.touch('touchEnd',[]);await Bun.sleep(80);const pc=await page.evaluate<any>(camera),pina=source(pc,{x:centre.x+10,y:centre.y});report.pinch={ratio:pc.scale/c.scale,error:Math.max(Math.abs(pin.x-pina.x),Math.abs(pin.y-pina.y))};assert(report.pinch.ratio>1.5&&report.pinch.error<.01,'two-pointer centre anchor');
  await click(page,'#native-one');for(let i=0;i<7;i++)await click(page,'#zoom-in');report.preMarkRendered=await page.evaluate(rendered);await page.evaluate(`(()=>{window.__partsEvidence=[];const original=window.fetch;window.fetch=async(...args)=>{const res=await original(...args);if(String(args[0]).endsWith('/api/parts/comment')&&res.ok)window.__partsEvidence.push((await res.clone().json()).comment);return res;};})()`);await click(page,'#stage-comment');await mark(page,{x:3.2,y:4.2},{x:11.4,y:15.6},'Alpha edge one');await mark(page,{x:18.2,y:18.2},{x:25.6,y:27.6},'Alpha edge two');await wait(page,`document.querySelectorAll('.stage-comment-pin').length===2`,'two pins');
- report.shots={en:(await page.screenshot()).toString('base64')};await click(page,'#pv-save');await wait(page,`document.getElementById('pv-save-status').dataset.result==='saved'`,'save verdict');
+ report.shots={en:(await page.screenshot()).toString('base64')};await click(page,'#parts-submit');await wait(page,`document.getElementById('parts-save-status').dataset.result==='saved'`,'save verdict');
  const saved=(await readVerdict(pkg)).verdict!,accepted=await page.evaluate<any[]>('window.__partsEvidence');report.persistedNumericViews=saved.issues.map(c=>c.view);assert(JSON.stringify(saved.issues.map(c=>c.view))===JSON.stringify(accepted.map(c=>c.view)),'accepted numeric cameras persist exactly');assert(saved?.issues.length===2,'two saved comments');report.regions=saved.issues.map(c=>({image:c.imageRegion,rig:c.rigRegion}));report.rgbaEqual=[];for(const comment of saved.issues){const crop=PNG.sync.read(await readFile(resolvedCropPath(comment.nativeCrop!.path))),original=PNG.sync.read(await readFile(pkg.imagePaths[0]!)),r=comment.imageRegion!,expected=Buffer.alloc(r.width*r.height*4);for(let y=0;y<r.height;y++)original.data.copy(expected,y*r.width*4,((r.y+y)*original.width+r.x)*4,((r.y+y)*original.width+r.x+r.width)*4);report.rgbaEqual.push(crop.data.equals(expected));}assert(report.rgbaEqual.every(Boolean),'native RGBA alpha parity');
- for(const format of ['json','issue']){await click(page,'#pv-export-'+format);const res=await fetch(base+'api/parts/export?format='+format),out=await res.text();assert(res.ok&&saved.issues.every(c=>out.includes(c.nativeCrop!.sha256)&&out.includes(c.crop.sha256)),'export '+format);report[format+'ExportBytes']=out.length;}
+ for(const format of ['json','issue']){await click(page,'#parts-export-'+format);const res=await fetch(base+'api/parts/export?format='+format),out=await res.text();assert(res.ok&&saved.issues.every(c=>out.includes(c.nativeCrop!.sha256)&&out.includes(c.crop.sha256)),'export '+format);report[format+'ExportBytes']=out.length;}
  await page.goto(base+'?lang=en&reload=1#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'reload en');
  report.shots.savedVerdictBootEn=(await page.screenshot()).toString('base64');
  await click(page,'#stage-comment');await wait(page,`document.querySelectorAll('.stage-comment-item').length===2`,'reloaded rows');await click(page,'.stage-comment-summary');await wait(page,`!!document.querySelector('.stage-comment-composer')`,'restore view');report.postRestoreRendered=await page.evaluate(rendered);assert(JSON.stringify(report.preMarkRendered)===JSON.stringify(report.postRestoreRendered),'rendered rig/reference transforms and rects restore exactly');const reloaded=await page.evaluate<any>(`fetch('/api/parts').then(r=>r.json())`);assert(JSON.stringify(reloaded.verdict.issues.map((c:any)=>c.view))===JSON.stringify(report.persistedNumericViews),'reloaded numeric cameras round-trip exactly');
- await page.goto(base+'?lang=ko#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'reload ko');await click(page,'#stage-comment');await click(page,'.stage-comment-summary');await wait(page,`!!document.querySelector('.stage-comment-composer')`,'restore ko view');await click(page,'#stage-comment');await click(page,'#stage-comment');report.shots.ko=(await page.screenshot()).toString('base64');report.koLabels=await page.evaluate(`({selected:document.getElementById('rig-label').textContent,export:document.getElementById('pv-export-issue').textContent,comments:document.getElementById('stage-comment').textContent})`);assert(report.koLabels.selected===koCatalog['Selected part']&&report.koLabels.export===koCatalog['Export issue'],'ko visible UI');
+ await page.goto(base+'?lang=ko#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'reload ko');await click(page,'#stage-comment');await click(page,'.stage-comment-summary');await wait(page,`!!document.querySelector('.stage-comment-composer')`,'restore ko view');await click(page,'#stage-comment');await click(page,'#stage-comment');report.shots.ko=(await page.screenshot()).toString('base64');report.koLabels=await page.evaluate(`({selected:document.getElementById('rig-label').textContent,export:document.getElementById('parts-export-issue').textContent,comments:document.getElementById('stage-comment').textContent})`);assert(report.koLabels.selected===koCatalog['Selected part']&&report.koLabels.export===koCatalog['Export issue'],'ko visible UI');
  // The painting crop uses the same real pair. On an integer-placed part, compare decoded pixel bytes.
  await click(page,'#stage-comment');await click(page,'[data-pv-item="front"]');await Bun.sleep(180);report.paintingEqual=await page.evaluate(`(()=>{const c=document.getElementById('pv-reference'),d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++){let i=(y*c.width+x)*4;if(d[i]!==3*(14+x)||d[i+1]!==3*(14+y)||d[i+2]!==90||d[i+3]!==255)return false;}return true;})()`);assert(report.paintingEqual,'painting original subrect');
  // The same gesture, composer and crop path now bind a seam across two parts.
@@ -86,7 +86,7 @@ async function main(){
   const activation:{lang:string;states:unknown[]}={lang,states:[]};report.assembledActivation.push(activation);
   const record=async(phase:string)=>{const state=await page!.evaluate<any>(commentState);activation.states.push({phase,...state});return state;};
   await record('boot-ready');
-  await click(page,'#pv-assemble');await record('assemble-clicked');
+  await click(page,'[data-view=assembled]');await record('assemble-clicked');
   await wait(page,commentReady,'C5_ASSEMBLED_PAINT_READY '+lang);await record('assemble-ready');
   await click(page,'#fit');await record('fit-clicked');
   await wait(page,commentReady,'C5_FITTED_PAINT_READY '+lang);
@@ -115,7 +115,7 @@ async function main(){
   const edited='Edited seam '+lang;
   await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value=${JSON.stringify(edited)};form.requestSubmit();})()`);
   await wait(page,`!document.querySelector('.stage-comment-composer')`,'validated seam edit accepted');
-  await click(page,'#pv-save');await wait(page,`document.getElementById('pv-save-status').dataset.result==='saved'`,'assembled save');
+  await click(page,'#parts-submit');await wait(page,`document.getElementById('parts-save-status').dataset.result==='saved'`,'assembled save');
   const verdict=(await readVerdict(pkg)).verdict!,seam=verdict.issues.find(issue=>issue.id===row)!;
   if(lang==='ko'){const english=report.assembled[0].issue;assert(JSON.stringify(verdict.issues.find(issue=>issue.id===english.id))===JSON.stringify(english),'saved EN issue remains unchanged');}
   assert(seam?.view.mode==='assembled'&&seam.imageRegion===null&&seam.nativeCrop===null&&seam.summary===edited,'saved assembled evidence');
@@ -124,7 +124,7 @@ async function main(){
   const decoded=PNG.sync.read(bytes);assert(decoded.width===seam.crop.width&&decoded.height===seam.crop.height,'stored viewport crop dimensions');
   for(const format of ['json','issue']){const response=await fetch(base+'api/parts/export?format='+format),body=await response.text();assert(response.ok&&body.includes(seam.crop.sha256)&&body.includes(edited),'assembled export '+format);}
   await page.goto(base+'?lang='+lang+'&seam-reload=1#cap='+'d'.repeat(64));await wait(page,`document.body.dataset.ready==='true'`,'assembled reopen');
-  await click(page,`[data-comment-id="${row}"] .stage-comment-summary`);await wait(page,`document.getElementById('pv-assemble').getAttribute('aria-pressed')==='true'`,'assembled restore');
+  await click(page,`[data-comment-id="${row}"] .stage-comment-summary`);await wait(page,`document.querySelector('[data-view=assembled]').getAttribute('aria-pressed')==='true'`,'assembled restore');
   assert(await page.evaluate(`['back_defect','front'].every(name=>document.querySelector('[data-assembly-outline="'+name+'"]'))`),'restored issue highlights every bound part');
   report.assembled.push({lang,issue:seam,cropBytes:bytes.length,shot:(await page.screenshot()).toString('base64')});
  }

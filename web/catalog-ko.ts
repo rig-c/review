@@ -1,4 +1,9 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+  "History": "이력",
+  "Source binding": "원본 연결",
+  "Legacy flagged": "이전 플래그",
+  "Producer flags": "프로듀서 플래그",
+  "Search parts": "파츠 검색",
  'rig review ': 'rig review ',
  'Language ': '언어 ',
  'More act actions': '작업 더 보기',

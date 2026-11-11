@@ -47,6 +47,9 @@ test('joined verdict is bound to the inspected source and saves through the stan
       return 'http://127.0.0.1:'+server.port;
     };
     const origin=await serve(f.joined),api='/api/stage-parts',path=origin+api;
+    const stagePage=await fetch(origin+'/stage-parts.html?stageEmbed=1&lang=en');expect(stagePage.status).toBe(200);expect(await stagePage.text()).toContain('href="styles.css"');
+    const styles=await fetch(origin+'/styles.css');expect(styles.status).toBe(200);expect(styles.headers.get('content-type')).toContain('text/css');expect(await styles.text()).toBe(await readFile('web/styles.css','utf8'));
+    expect(await (await fetch(origin+'/styles.css',{method:'HEAD'})).text()).toBe('');
     const get=async(suffix='')=>(await fetch(path+suffix)).json();
     const post=(body:unknown,overrides:Record<string,string>={},base=path)=>fetch(base+'/verdict',{
       method:'POST',headers:{Origin:new URL(base).origin,'X-Review-Capability':capability,'Content-Type':'application/json',...overrides},
@@ -164,7 +167,7 @@ test('joined comment and adapter boundaries name the standing job route in EN an
     scope.stageEmbedded=false;expect(refusal()).toBeNull();scope.stageEmbedded=true;
     let requests=0,outputs=0;
     const status={textContent:'',dataset:{} as Record<string,string>},button={disabled:false};
-    const adapter={embedded:true,busy:false,disposed:false,currentView:{},host:{locked:()=>phase},output:{value:()=>{outputs++;return {verdict:'changes-requested',issues:[null]};}},required:(selector:string)=>selector==='#pv-save'?button:status,t:(key:string)=>t(key,undefined,language),fetch:async()=>{requests++;throw new Error('Unexpected joined issue request');}};
+    const adapter={embedded:true,busy:false,disposed:false,currentView:{},host:{locked:()=>phase},output:{value:()=>{outputs++;return {verdict:'changes-requested',issues:[null]};}},required:(selector:string)=>selector==='#parts-submit'?button:status,t:(key:string)=>t(key,undefined,language),fetch:async()=>{requests++;throw new Error('Unexpected joined issue request');}};
     const crop=new Function('scope',`with(scope){${cropCode};return extracted;}`)(adapter) as (issue:unknown)=>Promise<unknown>;
     await expect(crop({})).rejects.toThrow(code);expect(requests).toBe(0);
     const save=new Function('scope',`with(scope){${saveCode};return extracted;}`)(adapter) as ()=>Promise<void>;

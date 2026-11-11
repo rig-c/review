@@ -190,7 +190,7 @@ async function assertPartsLayout(checkpoint: string, expectedFrame = {width: 80,
         referenceAbsence: string | null;
     }>(`(()=>{
         const selectors={header:'.job-header',notice:'.job-notice',workspace:'body.job-window > main',
-            grid:'[data-job-parts-workspace]',stage:'.job-stage',forms:'.job-forms',toolbar:'.pv-toolbar',
+            grid:'.workspace-layout',stage:'.workspace-stage-stack',forms:'.inspector',toolbar:'.viewbar',status:'.parts-workspace .status-bar',
             pair:'#stage-layout',rigPane:'#rig-pane',referencePane:'#reference-pane',
             rigViewport:'#rig-viewport',referenceViewport:'#reference-viewport',rigRoot:'#rig-root'};
         const boxes=Object.fromEntries(Object.entries(selectors).map(([name,selector])=>[name,document.querySelector(selector).getBoundingClientRect().toJSON()]));
@@ -200,15 +200,12 @@ async function assertPartsLayout(checkpoint: string, expectedFrame = {width: 80,
             referenceAbsence:absence&&!absence.hidden?absence.textContent:null};})()`);
     await checkpoints(checkpoint, geometry);
     const {viewport, boxes, canvas} = geometry;
-    assert.ok(boxes.forms!.left >= boxes.stage!.right - 1 && boxes.forms!.right <= viewport.width + 1,
-        'JOB_PARTS_RIGHT_COLUMN: forms occupy the right column');
-    assert.ok(Math.abs(boxes.workspace!.bottom - viewport.height) <= 2 &&
-        Math.abs(boxes.grid!.bottom - viewport.height) <= 2 &&
-        Math.abs(boxes.grid!.top - boxes.workspace!.top) <= 2,
-        'JOB_PARTS_VIEWPORT_FILL: workspace and grid consume available viewport height');
-    assert.ok(Math.abs(boxes.stage!.height - boxes.grid!.height) <= 2 &&
-        boxes.pair!.height >= boxes.stage!.height * 0.65,
-        'JOB_PARTS_STAGE_ALLOCATION: the stage and pair receive the freed height');
+    assert.ok(boxes.forms!.top>=boxes.stage!.bottom-1&&boxes.forms!.left>=boxes.stage!.left-1&&boxes.forms!.right<=boxes.stage!.right+1,
+        'JOB_PARTS_BOTTOM_PANEL: acts occupy C6 directly below the main view');
+    assert.ok(Math.abs(boxes.workspace!.bottom-viewport.height)<=2&&Math.abs(boxes.status!.bottom-viewport.height)<=2&&Math.abs(boxes.grid!.top-boxes.workspace!.top)<=2,
+        'JOB_PARTS_VIEWPORT_FILL: shell regions and C11 consume available viewport height');
+    assert.ok(boxes.stage!.height+boxes.forms!.height<=boxes.grid!.height+2&&boxes.pair!.height>=boxes.stage!.height*0.50,
+        'JOB_PARTS_STAGE_ALLOCATION: stage and bottom panel divide the available height');
     for (const name of ['rigViewport', 'referenceViewport']) {
         assert.ok(boxes[name]!.height >= boxes.pair!.height - 24 && boxes[name]!.width >= boxes.pair!.width * 0.35,
             'JOB_PARTS_PANE_ALLOCATION: ' + name + ' receives the available pair area');
@@ -309,7 +306,7 @@ async function captureCropRequest(prefix: string, requestId: string, request: {u
 async function waitForPartsPaint(phase: string) {
     const state = await page!.evaluate<{paint: string; ariaBusy: string; disabled: boolean; status: string; controlText: string; referenceAbsence: string | null}>(`new Promise((resolve,reject)=>{
         const stage=document.querySelector('[data-job-parts-workspace] [data-parts-paint-state]');
-        const control=document.querySelector('#stage-comment'),status=document.querySelector('#pv-save-status');
+        const control=document.querySelector('#stage-comment'),status=document.querySelector('#parts-save-status');
         if(!stage||!control||!status)throw new Error('PARTS_PAINT_READINESS_SIGNAL_MISSING');
         const inspect=()=>{
             const paint=stage.dataset.partsPaintState;
@@ -339,13 +336,13 @@ async function partsIssueFlow(owner: URL) {
             syntheticReader: 'job-window-fixture-reader/1', partsEnumerator: 'synthetic-job-window-parts/1', files: issueInputs});
         // Wait on the same mount state that disables the owner's visible C control.
         await browser.evaluate(`(()=>{document.querySelector('[data-pv-item="mesh"]').click();
-            const assembled=document.querySelector('#pv-assemble');if(assembled.getAttribute('aria-pressed')==='true')assembled.click();
+            const assembled=document.querySelector('[data-view=assembled]');if(assembled.getAttribute('aria-pressed')==='true')document.querySelector('[data-view=part]').click();
             document.querySelector('#native-one').click();for(let i=0;i<4;i++)document.querySelector('#zoom-in').click();})()`);
         await waitForPartsPaint('issue-item-and-zoom');
         await browser.evaluate(`document.querySelector('#stage-comment').click()`);
         assert.equal(await browser.evaluate(`document.querySelector('#stage-comment').getAttribute('aria-pressed')`), 'true',
             'PARTS_CAPTURE_AFTER_READY_PRODUCT_FAILURE: C remains inactive after owner-visible readiness');
-        assert.equal(await browser.evaluate(`document.querySelector('#pv-save-status').textContent.includes('COMMENT_BUSY')`), false,
+        assert.equal(await browser.evaluate(`document.querySelector('#parts-save-status').textContent.includes('COMMENT_BUSY')`), false,
             'PARTS_CAPTURE_AFTER_READY_PRODUCT_FAILURE: COMMENT_BUSY after owner-visible readiness');
         const drag = await browser.evaluate<{x: number; y: number; endX: number; endY: number}>(`(()=>{
             const canvas=document.getElementById('pv-canvas'),rect=canvas.getBoundingClientRect();
@@ -435,7 +432,7 @@ async function c5Capture(name: string) {
     const data = await page!.evaluate<{png: string; selected: string | null; assembled: string | null; mesh: boolean}>(`({
         png:document.querySelector('#pv-canvas').toDataURL(),
         selected:document.querySelector('#pv-items [aria-current="true"]')?.dataset.pvItem??null,
-        assembled:document.querySelector('#pv-assemble').getAttribute('aria-pressed'),
+        assembled:document.querySelector('[data-view=assembled]').getAttribute('aria-pressed'),
         mesh:document.querySelector('#pv-mesh-control input').checked})`);
     const bytes = Buffer.from(data.png.split(',')[1]!, 'base64'), decoded = PNG.sync.read(bytes);
     const {png: _inlinePng, ...view} = data;
@@ -461,6 +458,13 @@ async function c5PartsFlow(owner: URL) {
         sourceHash: publication.source.sourceHash, files: inputs, retainedFiles: snapshotInputs,
         fixture: c5Parts, reader: 'job-window-fixture-reader/1', enumerator: 'synthetic-job-window-parts/1'});
     await assertPartsLayout('c5-initial-layout', {width: 32, height: 24});
+    await page.evaluate(`document.querySelector('#parts-search').focus()`);await control!('Input.insertText',{text:'front'});
+    await wait(`document.querySelectorAll('[data-pv-item]').length===1`,'C2 job search');
+    for(const [key,code]of [['ArrowDown',40],['Enter',13]] as const){await control!('Input.dispatchKeyEvent',{type:'keyDown',key,windowsVirtualKeyCode:code});await control!('Input.dispatchKeyEvent',{type:'keyUp',key,windowsVirtualKeyCode:code});}
+    await wait(`document.querySelector('[data-pv-item=front]').getAttribute('aria-current')==='true'`,'C2 job keyboard selection');
+    await page.evaluate(`(()=>{const s=document.querySelector('#parts-search');s.value='';s.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-pv-item=body]').click();})()`);
+    assert.equal(await page.evaluate(`document.querySelector('[data-view=difference]').disabled&&document.querySelector('#parts-difference-reason').textContent.includes('PARTS_DIFFERENCE_UNAVAILABLE')`),true,'job Difference names its missing callback');
+
     await assertPersistentIssues(0, 'c5-inline-empty');
     assert.equal(await page.evaluate(`document.querySelector('#pv-bg').value`), 'checker');
     assert.equal(await page.evaluate(`document.querySelector('#pv-mesh-control input').disabled`), false);
@@ -481,7 +485,7 @@ async function c5PartsFlow(owner: URL) {
     if (c5Parts === 'mesh') assert.notEqual(afterToggle.rgbaSha256, beforeToggle.rgbaSha256);
     else assert.equal(afterToggle.rgbaSha256, beforeToggle.rgbaSha256);
     await c5Click('#pv-mesh-control input');await waitForPartsPaint('c5-mesh-restored');
-    await c5Click('[data-pv-comparison="overlay"]');await waitForPartsPaint('c5-overlay');
+    await c5Click('[data-view="overlay"]');await waitForPartsPaint('c5-overlay');
     assert.equal(await page.evaluate(`document.querySelector('#pv-mesh-control input').disabled`), false);
     assert.equal(await page.evaluate(`document.querySelector('#pv-mesh-control input').checked`), true);
     const overlay = await c5Capture('c5-overlay-mesh');
@@ -491,13 +495,13 @@ async function c5PartsFlow(owner: URL) {
     else assert.equal(overlayOff.rgbaSha256, overlay.rgbaSha256);
     await c5Click('#pv-mesh-control input');await waitForPartsPaint('c5-overlay-mesh-restored');
     assert.equal((await c5Capture('c5-overlay-restored')).rgbaSha256, overlay.rgbaSha256);
-    await c5Click('[data-pv-comparison="part"]');await waitForPartsPaint('c5-overlay-exit');
+    await c5Click('[data-view="part"]');await waitForPartsPaint('c5-overlay-exit');
     const hover = await c5Point(15, 9);await page.mouse('mouseMoved', hover.x, hover.y);
     await wait(`document.querySelector('[data-assembly-hover="front"] span')?.textContent==='front'`, 'C5 frontmost hover');
     await c5Capture('c5-hover');
     await control('Input.dispatchMouseEvent', {type: 'mousePressed', button: 'left', buttons: 1, clickCount: 2, ...hover});
     await control('Input.dispatchMouseEvent', {type: 'mouseReleased', button: 'left', buttons: 0, clickCount: 2, ...hover});
-    await wait(`document.querySelector('#pv-assemble').getAttribute('aria-pressed')==='false'`, 'C5 native double-click');
+    await wait(`document.querySelector('[data-view=assembled]').getAttribute('aria-pressed')==='false'`, 'C5 native double-click');
     await waitForPartsPaint('c5-item');
     assert.equal(await page.evaluate(`document.querySelector('#pv-items [aria-current="true"]').dataset.pvItem`), 'front');
     assert.equal(await page.evaluate(`document.querySelector('#pv-mesh-control input').checked`), true);
@@ -510,7 +514,7 @@ async function c5PartsFlow(owner: URL) {
         document.addEventListener('visibilitychange',record);
         window.addEventListener('blur',record);window.addEventListener('focus',record);})()`);
     await c5Key('Escape');await c5Key('Escape', 'keyUp');
-    await wait(`document.querySelector('#pv-assemble').getAttribute('aria-pressed')==='true'`, 'C5 Escape with persistent list');
+    await wait(`document.querySelector('[data-view=assembled]').getAttribute('aria-pressed')==='true'`, 'C5 Escape with persistent list');
     await waitForPartsPaint('c5-assembled');
     await assertPersistentIssues(0, 'c5-inline-after-escape');
     const retainedView = await c5Capture('c5-retained-view');
@@ -738,7 +742,7 @@ try {
     await show(first);
     const firstPaint = await page.evaluate<{width: number; height: number; assembled: string}>(`(()=>{
         const canvas=document.querySelector('[data-job-parts-workspace] #pv-canvas');
-        return {width:canvas.width,height:canvas.height,assembled:document.querySelector('#pv-assemble').getAttribute('aria-pressed')};})()`);
+        return {width:canvas.width,height:canvas.height,assembled:document.querySelector('[data-view=assembled]').getAttribute('aria-pressed')};})()`);
     assert.ok(firstPaint.width > 1 && firstPaint.height > 1, 'the acknowledged shared mount has painted its initial image');
     assert.equal(firstPaint.assembled, 'true');
     await checkpoints('parts-initial-paint', {publicationId: first.publicationId, sourceHash: first.source.sourceHash,
@@ -757,14 +761,14 @@ try {
         syntheticReader: 'job-window-fixture-reader/1', partsEnumerator: 'synthetic-job-window-parts/1', files: partsInputs});
     await assertPartsLayout('parts-initial-layout');
     assert.equal((await assertPersistentIssues(0, 'parts-right-issues-zero')).capture, 'false');
-    await page.evaluate(`document.querySelector('#pv-assemble').click()`);
-    await wait(`document.querySelector('#pv-assemble').getAttribute('aria-pressed')==='false' && document.querySelector('#stage-comment-refusal').hidden`, 'item view available for C capture');
+    await page.evaluate(`document.querySelector('[data-view=part]').click()`);
+    await wait(`document.querySelector('[data-view=assembled]').getAttribute('aria-pressed')==='false' && document.querySelector('#stage-comment-refusal').hidden`, 'item view available for C capture');
     await page.evaluate(`document.querySelector('#stage-comment').click()`);
     assert.equal((await assertPersistentIssues(0, 'parts-right-issues-zero-capture-on')).capture, 'true');
     await page.evaluate(`document.querySelector('#stage-comment').click()`);
     assert.equal((await assertPersistentIssues(0, 'parts-right-issues-zero-capture-off')).capture, 'false');
-    await page.evaluate(`document.querySelector('#pv-assemble').click()`);
-    await wait(`document.querySelector('#pv-assemble').getAttribute('aria-pressed')==='true' && document.querySelector('#pv-canvas').width===80 && document.querySelector('#pv-canvas').height===64`, 'assembled default restored for approval');
+    await page.evaluate(`document.querySelector('[data-view=assembled]').click()`);
+    await wait(`document.querySelector('[data-view=assembled]').getAttribute('aria-pressed')==='true' && document.querySelector('#pv-canvas').width===80 && document.querySelector('#pv-canvas').height===64`, 'assembled default restored for approval');
     await page.evaluate(`document.querySelector('#fit').click()`);
     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
     await assertPartsLayout('parts-approval-layout');
@@ -797,7 +801,7 @@ try {
         await wait(`!!document.querySelector(${JSON.stringify(retrySelector)}) && !document.querySelector(${JSON.stringify(retrySelector)}).disabled`, 'retry form');
         partsFailure = 'parts-verdict';
         await page.evaluate(`document.querySelector(${JSON.stringify(retrySelector)}).click()`);
-        await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='reviewing' && document.querySelector('form[data-job-ask="${retryVerdict.askId}"] [role=status]').textContent.includes('JOB_ACT_INVALID')`, 'first-write refusal');
+        await wait(`document.querySelector('.job-notice').dataset.jobPartsState==='reviewing' && document.querySelector('#parts-save-status').textContent.includes('JOB_ACT_INVALID')`, 'first-write refusal');
         assert.equal((await fixture.next()).events.filter(event => event.type === 'act' && event.act.askId === retryVerdict.askId).length, 0);
         partsFailure = 'signoff';
         await page.evaluate(`document.querySelector(${JSON.stringify(retrySelector)}).click()`);

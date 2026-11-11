@@ -183,7 +183,7 @@ export async function runPartsViewBrowser(shotDir?: string, partsDir?: string) {
       }>(`(() => {
         const verdict = document.querySelector('.pv-verdict');
         const vr = verdict?.getBoundingClientRect();
-        const save = document.getElementById('pv-save');
+        const save = document.getElementById('parts-submit');
         const approveAll = document.getElementById('pv-approve-all');
         const canvas = document.getElementById('pv-canvas');
         const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;

@@ -17,10 +17,11 @@ export function mountStatusBar(options:WorkspaceStatusBarOptions):{footer:HTMLEl
  return {footer,message};
 }
 
-export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyJobStep5'|'legacyHubStep6'|'legacyOwnerStep6';
+export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyInterviewStep4'|'legacyJobStep5'|'legacyHubStep6'|'legacyOwnerStep6';
 export interface WorkspaceHeaderOptions {
  compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;
  /** Only the stopped compare host supplies its existing domain controls and actions. */
+ inspection?:'parts';
  compare?:{modeSwitch:HTMLElement;buildPicker:HTMLElement;actions:HTMLElement};
 }
 export interface WorkspaceHeader {
@@ -30,29 +31,29 @@ export interface WorkspaceHeader {
 }
 /** One C1 construction path; the finite legacy choices expire at their named screen migrations. */
 export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHeader {
- const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',parts=kind==='legacyPartsStep2',interview=kind==='legacyInterviewStep4',job=kind==='legacyJobStep5',hub=kind==='legacyHubStep6',owner=kind==='legacyOwnerStep6';
- const branded=rig||compare||parts,settingsLanguage=rig||compare;
+ const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',interview=kind==='legacyInterviewStep4',job=kind==='legacyJobStep5',hub=kind==='legacyHubStep6',owner=kind==='legacyOwnerStep6';
+ const branded=rig||compare,settingsLanguage=rig||compare;
  const header=panelMake('header');
- const headerClass=rig?'topbar':parts?'pv-top':job?'job-header':hub?'hub-header':owner?'owner-header':null;
+ const headerClass=rig?'topbar':job?'job-header':hub?'hub-header':owner?'owner-header':null;
  if(headerClass)header.className=headerClass;
  if(branded){
-  const brand=panelMake('div',{className:parts?'pv-brand':'brand'});
-  const mark=panelMake('span',compare?{}:{className:parts?'pv-mark':'brand-mark'},compare?'COMPARE':'r');
+  const brand=panelMake('div',{className:'brand'});
+  const mark=panelMake('span',compare?{}:{className:'brand-mark'},compare?'COMPARE':'r');
   if(compare)brand.append('rig review ',mark);else brand.append(mark,'rig review');
   header.append(brand);
  }
- const title=panelMake(rig||parts?'strong':'h1');
- const titleId=rig?'package-title':compare?'title':parts?'pv-title':null;
+ const title=panelMake(rig?'strong':'h1');
+ const titleId=rig?'package-title':compare?'title':null;
  if(titleId)title.id=titleId;
- title.textContent=options.title??(rig?'Review package':compare?'A / B comparison':parts?'Parts review':'');
+ title.textContent=options.title??(rig?'Review package':compare?'A / B comparison':'');
  if(job)title.dataset.jobText='job.title';
  let subtitle:HTMLElement|null=null;
  if(branded){
-  subtitle=panelMake('span',{id:rig?'revision':compare?'animation':'pv-mode',className:rig?'subtle':compare?'hint':'pv-subtle',textContent:options.revision??''});
-  const identity=panelMake('div',{},title,...(parts?[' ']:[]),subtitle);header.append(identity);
+  subtitle=panelMake('span',{id:rig?'revision':'animation',className:rig?'subtle':'hint',textContent:options.revision??''});
+  const identity=panelMake('div',{},title,subtitle);header.append(identity);
  }else{if(interview)header.append('\n    ');header.append(title);}
  let modeSwitch:HTMLElement|null=null,dirty:HTMLElement|null=null;
- if(rig||compare){
+ if((rig&&!options.inspection)||compare){
   modeSwitch=compare?options.compare!.modeSwitch:panelMake('div',{className:'mode-switch'});
   if(rig){
    modeSwitch.setAttribute('role','group');modeSwitch.setAttribute('aria-label','Mode');
@@ -75,17 +76,17 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
  }
  if(hub||owner){status=panelMake('p',{className:hub?'hub-status':'owner-status'});status.setAttribute('role','status');header.append(status);}
  let language:HTMLSelectElement|null=null,languageLabel:HTMLLabelElement|null=null;
- if(!parts){
+ {
   language=panelMake('select');
   if(settingsLanguage){language.id='settings-language';language.dataset.appPreference='';}
   for(const value of settingsLanguage?['system','en','ko']:['en','ko']){
    const text=settingsLanguage?(value==='system'?'System':value==='en'?'English':'한국어'):interview?(value==='en'?'English':'한국어'):job?value:'';
    language.append(panelMake('option',{value,textContent:text}));
   }
-  if(settingsLanguage){languageLabel=labelledControl('Language ',language);if(rig)header.append(languageLabel);}
+  if(settingsLanguage){languageLabel=labelledControl('Language ',language);if(rig&&!options.inspection)header.append(languageLabel);}
   else{if(interview)header.append('\n    ');header.append(language);if(interview)header.append('\n  ');}
  }
- if(options.embedded){if(rig||parts)header.hidden=true;else if(interview)language!.hidden=true;}
+ if(options.embedded){if(rig)header.hidden=true;else if(interview)language!.hidden=true;}
  return {header,title,subtitle,modeSwitch,dirty,stages,status,language,languageLabel,dispose(){header.remove();languageLabel?.remove();}};
 }
 
@@ -116,9 +117,22 @@ export interface WorkspaceRegions {
  layout:HTMLElement;left:HTMLElement;main:HTMLElement;stage:HTMLElement;bottom:HTMLElement;right?:HTMLElement;
  columns?:WorkspaceColumns;
 }
+export interface WorkspaceScreenRegions extends WorkspaceRegions {
+ toolbar:HTMLElement;secondary:HTMLElement;body:HTMLElement;heading:HTMLElement;act:HTMLElement;status:HTMLElement;
+}
+/** Compose caller-owned C2–C6/C10/C11 hosts in the shared shell, without domain markup. */
+export function mountWorkspaceRegions(host:HTMLElement):WorkspaceScreenRegions {
+ const left=panelMake('aside',{className:'left-panel'}),main=panelMake('main'),stage=panelMake('div',{id:'stage-layout',className:'stage-layout'});
+ const toolbar=panelMake('div',{className:'viewbar'}),secondary=panelMake('div',{className:'secondary-toolbar'});
+ const heading=panelMake('div',{className:'inspector-heading'}),body=panelMake('div',{className:'inspector-body'}),act=panelMake('div');
+ const bottom=panelMake('aside',{className:'inspector'},heading,body),status=panelMake('div');
+ main.append(toolbar,secondary,stage,bottom);const layout=panelMake('div',{className:'layout'},left,main);host.append(layout,status);
+ return {layout,left,main,stage,bottom,toolbar,secondary,heading,body,act,status,columns:{left:'rightWidth',right:null}};
+}
 /** `currentTheme`, when given, is the appearance the Settings theme select shows; otherwise it shows the saved default. */
 export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{kind:string;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
- const require=<T extends HTMLElement=HTMLElement>(id:string)=>{const node=document.getElementById(id);if(!node)throw new Error('Missing workspace element: '+id);return node as T;};
+ const scopedNodes=new Map<string,HTMLElement>();
+ const require=<T extends HTMLElement=HTMLElement>(id:string)=>{const node=scopedNodes.get(id)??(options.regions?options.regions.layout.querySelector<HTMLElement>('#'+id):document.getElementById(id));if(node)scopedNodes.set(id,node);if(!node)throw new Error('Missing workspace element: '+id);return node as T;};
  const regions=options.regions,layout=regions?.layout??document.querySelector<HTMLElement>('.layout')!,main=regions?.main??layout.querySelector<HTMLElement>('main')!,stage=regions?.stage??require('stage-layout'),inspector=regions?.bottom??document.querySelector<HTMLElement>('.inspector')!,explorer=regions?regions.right:document.getElementById('parts-explorer');
  layout.classList.add('workspace-layout');
  let left=regions?.left??layout.querySelector<HTMLElement>('.left-panel');if(!left){left=document.createElement('aside');left.className='left-panel';left.innerHTML='<h2>INPUTS</h2><p class="hint">A and B retain their fixed source bindings. The reference video and shared animation are named above the stage.</p>';layout.prepend(left);}left.id='workspace-left';inspector.id='workspace-inspector';
@@ -127,7 +141,7 @@ export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>v
  const explorerLeft=regions?regions.columns?.left==='rightWidth'&&!regions.right:!!explorer&&left.contains(explorer),columns:WorkspaceColumns=regions?.columns??(explorerLeft?{left:'rightWidth',right:null}:explorer?defaultWorkspaceColumns:{left:'leftWidth',right:null});
  // A section is an Inspector panel only while it carries data-inspector-panel; the review page's Feedback
  // section lives in the review dialog instead and keeps its id without being a panel.
- const tabs=inspectorTabs.filter(tab=>document.getElementById('inspector-'+tab)?.dataset.inspectorPanel===tab);if(!tabs.length&&!regions)throw new Error('Missing workspace element: inspector-'+inspectorTabs.join('|inspector-'));
+ const tabs=inspectorTabs.filter(tab=>(regions?regions.bottom.querySelector<HTMLElement>('#inspector-'+tab):document.getElementById('inspector-'+tab))?.dataset.inspectorPanel===tab);if(!tabs.length&&!regions)throw new Error('Missing workspace element: inspector-'+inspectorTabs.join('|inspector-'));
  // The left column is a fixed header row (a leading `.left-header`, when the page has one) and one scrolling
  // body holding everything else, Settings included: the body is the column's only scroll container.
  const header=[...left.children].find(node=>node.className.split(' ').includes('left-header'))??null;
@@ -136,7 +150,7 @@ export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>v
  // The header holds the expand/collapse control; the body is hidden while collapsed (a workspace preference, default collapsed).
  const settingsHeader=document.createElement('h2'),settingsToggle=document.createElement('button'),settingsBody=document.createElement('div');settingsHeader.className='sticky-header settings-header';settingsToggle.type='button';settingsToggle.id='settings-toggle';settingsToggle.className='settings-toggle';settingsToggle.textContent='Settings';settingsToggle.setAttribute('aria-controls','settings-body');settingsBody.id='settings-body';settingsBody.className='settings-body';settingsHeader.append(settingsToggle);settings.append(settingsHeader,settingsBody);
  settingsBody.innerHTML='<label>Theme <select id="settings-theme" data-app-preference><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><label><input id="settings-sync" data-app-preference type="checkbox">Sync cameras by default</label><label><input id="settings-idle" data-app-preference type="checkbox">Repeat idle by default</label><button id="settings-reset" type="button">Reset layout</button><p class="hint">Defaults apply to new inspections. Links and source drafts retain their explicit view.</p><p id="settings-state" class="hint" role="status"></p>';
- const sharedLanguage=options.language??require<HTMLSelectElement>('settings-language');
+ const sharedLanguage=options.language??document.getElementById('settings-language') as HTMLSelectElement;
  if(!sharedLanguage.closest('header'))settingsBody.firstElementChild!.after(sharedLanguage.parentElement!);
  sourceList.append(settings);
  const theme=require<HTMLSelectElement>('settings-theme'),language=sharedLanguage,sync=require<HTMLInputElement>('settings-sync'),idle=require<HTMLInputElement>('settings-idle'),status=require('settings-state');
@@ -230,6 +244,6 @@ export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>v
  const observer=new ResizeObserver(schedule);observer.observe(layout);for(const node of [...stack.children])if(node!==stage)observer.observe(node);for(const tab of tabs)observer.observe(panelFor(tab));
  const resumed=()=>{if(!document.hidden)store.refresh();};document.addEventListener('visibilitychange',resumed);schedule();
  return {defaults:()=>store.get(),beforeTab:capture,afterTab:restore,scroll:()=>{capture();return JSON.stringify(memory.snapshot());},restoreScroll(value){if(typeof value!=='string')return;memory.replace(JSON.parse(value));restore();},revealInspector,refresh:schedule,
-  dispose(){if(disposed)return;capture();disposed=true;if(frame)cancelAnimationFrame(frame);observer.disconnect();document.removeEventListener('visibilitychange',resumed);unsubscribe();for(const binding of bindings)binding.dispose();for(const dispose of disposers)dispose();memory.dispose();store.dispose();}
+  dispose(){if(disposed)return;capture();disposed=true;if(frame)cancelAnimationFrame(frame);observer.disconnect();document.removeEventListener('visibilitychange',resumed);unsubscribe();for(const binding of bindings)binding.dispose();for(const dispose of disposers)dispose();for(const dialog of Object.values(dialogs))dialog.remove();memory.dispose();store.dispose();}
  };
 }

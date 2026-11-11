@@ -114,6 +114,7 @@ export async function startPartsServer(pkg: PartsViewPackage, options: PartsServ
         }
         if (url.pathname === '/parts.js') return new Response(req.method === 'HEAD' ? null : bundle, { headers: { ...headers, 'Content-Type': 'text/javascript' } });
         if (url.pathname === '/' || url.pathname === '/parts.html') return new Response(req.method === 'HEAD' ? null : await readFile(appRoot + 'web/parts.html'), { headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' } });
+        if (url.pathname === '/styles.css') return new Response(req.method === 'HEAD' ? null : await readFile(appRoot + 'web/styles.css'), { headers: { ...headers, 'Content-Type': 'text/css' } });
         if (url.pathname === '/parts.css') return new Response(req.method === 'HEAD' ? null : await readFile(appRoot + 'web/parts.css'), { headers: { ...headers, 'Content-Type': 'text/css' } });
         return json({ error: 'Not found' }, 404);
       } finally { live.onRequestEnd(url.pathname); }

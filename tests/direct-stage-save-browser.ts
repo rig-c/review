@@ -82,7 +82,7 @@ async function navigate(page:InputCdpSession,url:URL,language:'en'|'ko') {
 }
 async function trustedSave(page:InputCdpSession) {
  const point=await page.evaluate<{x:number;y:number}>(`(()=>{
-  const f=${frame},d=f?.contentDocument,button=d?.getElementById('pv-save');
+  const f=${frame},d=f?.contentDocument,button=d?.getElementById('parts-submit');
   if(!button||button.disabled||button.closest('[hidden],[inert]'))throw Error('DIRECT_SAVE_DISABLED');
   button.scrollIntoView({block:'nearest'});
   const r=button.getBoundingClientRect(),b=f.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
@@ -94,9 +94,9 @@ async function trustedSave(page:InputCdpSession) {
  await page.mouse('mousePressed',point.x,point.y);
  await page.mouse('mouseReleased',point.x,point.y);
  await withDeadline('trusted-save',15000,async signal=>{
-  while(!await page.evaluate<boolean>(`${frame}.contentDocument.getElementById('pv-save-status').dataset.result==='saved'`)){
+  while(!await page.evaluate<boolean>(`${frame}.contentDocument.getElementById('parts-save-status').dataset.result==='saved'`)){
    signal.throwIfAborted();
-   assert.notEqual(await page.evaluate(`${frame}.contentDocument.getElementById('pv-save-status').dataset.result`),'refused');
+   assert.notEqual(await page.evaluate(`${frame}.contentDocument.getElementById('parts-save-status').dataset.result`),'refused');
    await Bun.sleep(30);
   }
  });
@@ -152,8 +152,8 @@ try{
   const payload={binding:parts.joinedVerdictBinding,status:'approved',issues:[]};
   const page=await browser('owner-'+language);
   mark(language+'.direct-open');await navigate(page,url,language);
-  assert.equal(await page.evaluate(`${frame}.contentDocument.getElementById('pv-save').disabled`),false,'DIRECT_SAVE_DISABLED');
-  assert.equal(await page.evaluate(`${frame}.contentDocument.getElementById('pv-save').textContent`),t('Save sign-off',undefined,language));
+  assert.equal(await page.evaluate(`${frame}.contentDocument.getElementById('parts-submit').disabled`),false,'DIRECT_SAVE_DISABLED');
+  assert.equal(await page.evaluate(`${frame}.contentDocument.getElementById('parts-submit').textContent`),t('Save sign-off',undefined,language));
   await page.evaluate(`sessionStorage.setItem('review443-isolation','owner');localStorage.setItem('review443-isolation','owner')`);
   assert.deepEqual(await readdir(fixture.output),[]);
 
@@ -166,8 +166,8 @@ try{
     session:sessionStorage.getItem('review443-isolation'),local:localStorage.getItem('review443-isolation'),
     capabilitySlots:Object.keys(sessionStorage).filter(key=>key.startsWith('rig-review-capability/1:')).length})`);
    assert.deepEqual(isolated,{opener:true,session:null,local:null,capabilitySlots:0});
-   assert.equal(await fresh.evaluate(`${frame}.contentDocument.getElementById('pv-save').disabled`),true);
-   assert.equal(await fresh.evaluate(`${frame}.contentDocument.getElementById('pv-save').title`),
+   assert.equal(await fresh.evaluate(`${frame}.contentDocument.getElementById('parts-submit').disabled`),true);
+   assert.equal(await fresh.evaluate(`${frame}.contentDocument.getElementById('parts-submit').title`),
     t('Read-only view: reopen with rig-review open to edit.',undefined,language));
    const denied=await rejectedPost(fresh,payload);
    assert.deepEqual(denied,{status:403,error:'REVIEW_CAPABILITY_REQUIRED: reopen with rig-review open to edit'});
@@ -178,7 +178,7 @@ try{
 
   await page.evaluate(`(()=>{
    const d=${frame}.contentDocument;
-   d.addEventListener('click',event=>{if(event.target.id==='pv-save')d.body.dataset.trustedSave=String(event.isTrusted);},true);
+   d.addEventListener('click',event=>{if(event.target.id==='parts-submit')d.body.dataset.trustedSave=String(event.isTrusted);},true);
    const original=d.defaultView.fetch.bind(d.defaultView);d.defaultView.review443Posts=[];
    d.defaultView.fetch=async(...args)=>{
     const response=await original(...args);

@@ -1179,7 +1179,7 @@ test('parts save provenance and notification refusals translate in EN/KO while p
 
   const {doc, root} = makeTestDoc();
   const statusEl = doc.createElement('span');
-  statusEl.id = 'pv-save-status';
+  statusEl.id = 'parts-save-status';
   statusEl.textContent = 'PARTS_VERDICT_WRITE_FAILED: directory fsync (ENOSPC)';
   const reviewerNoteInput = doc.createElement('textarea');
   reviewerNoteInput.id = 'pv-note';

@@ -31,8 +31,8 @@ try{
   await writeFile(join(out,'expanded-'+lang+'.png'),await page.screenshot());
   await page.evaluate(`document.querySelector('[data-pv-item="back_defect"]').click()`);
   check(lang+' pair shown on second explicit subject',await page.evaluate(`document.querySelector('[data-pv-category="pair"] [data-flag-id]')?.dataset.flagId==='check:UNKNOWN_ROOT.rows[2]'`));
-  await page.evaluate(`document.querySelector('[data-pv-item="front"]').click();document.getElementById('pv-save').click()`);
-  await wait(`document.getElementById('pv-save-status').dataset.result==='saved'`);
+  await page.evaluate(`document.querySelector('[data-pv-item="front"]').click();document.getElementById('parts-submit').click()`);
+  await wait(`document.getElementById('parts-save-status').dataset.result==='saved'`);
   const verdict=(await readVerdict(pkg)).verdict;check(lang+' zero-issue /4 save keeps producer identity',verdict?.schema==='rig-review-parts-verdict/4'&&verdict.status==='approved'&&verdict.issues.length===0&&JSON.stringify(verdict.source.flags)===JSON.stringify(verdictSource(pkg).flags),verdict);
  }
  // Pre-field legacy package: rows stay available but never count as classified findings.

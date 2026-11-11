@@ -75,15 +75,15 @@ async function main(){
       await navigate(opened.url,lang);
       assert.equal(await page.evaluate(`document.documentElement.dataset.inspectionStage`),'1');
       assert.deepEqual(await readdir(fixture.output),[]);
-      await page.evaluate(`(()=>{const d=${frame}.contentDocument;d.addEventListener('click',e=>{if(e.target.id==='pv-save')d.body.dataset.trustedSave=String(e.isTrusted);},true);})()`);
+      await page.evaluate(`(()=>{const d=${frame}.contentDocument;d.addEventListener('click',e=>{if(e.target.id==='parts-submit')d.body.dataset.trustedSave=String(e.isTrusted);},true);})()`);
       await assertJoinedIssueUnsupported(page,frame,catalog['PARTS_JOINED_ISSUE_UNSUPPORTED']!);
       assert.deepEqual(await readdir(fixture.output),[]);
       const mesh=await page.evaluate<string>(`${frame}.contentDocument.querySelector('#pv-corrections').textContent`);
       assert.match(mesh,/torso.*v 30 t 40/);
-      const saveLabel=await page.evaluate<string>(`${frame}.contentDocument.querySelector('#pv-save').textContent`);
+      const saveLabel=await page.evaluate<string>(`${frame}.contentDocument.querySelector('#parts-submit').textContent`);
       assert.equal(saveLabel,catalog['Save sign-off']);
-      await clickJoinedFrame(page,frame,'#pv-save');
-      await until(`${frame}.contentDocument.querySelector('#pv-save-status').dataset.result==='saved'`);
+      await clickJoinedFrame(page,frame,'#parts-submit');
+      await until(`${frame}.contentDocument.querySelector('#parts-save-status').dataset.result==='saved'`);
       assert.equal(await page.evaluate(`${frame}.contentDocument.body.dataset.trustedSave`),'true');
       const names=await readdir(fixture.output);assert.equal(names.length,1);
       const filename=names[0]!,bytes=await readFile(join(fixture.output,filename));
@@ -101,7 +101,7 @@ async function main(){
         text:string;rule:string;current:{statusClientWidth:number;statusScrollWidth:number;workspaceClientWidth:number;workspaceScrollWidth:number;lines:number};
         withoutWrap:{statusClientWidth:number;statusScrollWidth:number;workspaceClientWidth:number;workspaceScrollWidth:number;lines:number};
       }>(`(()=>{
-        const d=${frame}.contentDocument,status=d.getElementById('pv-save-status'),side=status.closest('[data-parts-stage]');
+        const d=${frame}.contentDocument,status=d.getElementById('parts-save-status'),side=status.closest('[data-parts-stage]');
         const read=()=>{
           const range=d.createRange();range.selectNodeContents(status);
           const lines=new Set([...range.getClientRects()].map(rect=>rect.top)).size;

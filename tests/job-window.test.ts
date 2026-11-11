@@ -4197,7 +4197,7 @@ describe('C4 shared parts host', () => {
 
     test('C4 source mounts one workspace and removes duplicate parts controls', async () => {
         const source = await Bun.file(new URL('../web/job-session.ts', import.meta.url)).text();
-        expect(source.match(/mountPartsWorkspace\(panel\.slots/g)).toHaveLength(1);
+        expect(source.match(/mountPartsWorkspace\(panel\.regions/g)).toHaveLength(1);
         expect(source).not.toContain("images.className = 'job-part-images'");
         expect(source).not.toContain("partOutcome.name = 'parts.'");
         expect(source).not.toContain("panels.id = 'job-panel'");
@@ -4483,7 +4483,7 @@ describe('C4 async source and host ownership', () => {
         const text = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
         expect(text).toContain('await Promise.race([mounted.ready, preparationCancelled]);');
         const readyIndex = text.indexOf('await Promise.race([mounted.ready, preparationCancelled]);');
-        const fitIndex = text.indexOf("panel.slots.toolbar.querySelector<HTMLButtonElement>('#fit')?.click();", readyIndex);
+        const fitIndex = text.indexOf("panel.regions.main.querySelector<HTMLButtonElement>('#fit')?.click();", readyIndex);
         const paintIndex = text.indexOf('await new Promise<void>((resolve, reject)', readyIndex);
         expect(fitIndex).toBeGreaterThan(readyIndex);
         expect(fitIndex).toBeLessThan(paintIndex);

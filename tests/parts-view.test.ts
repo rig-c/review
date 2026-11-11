@@ -143,6 +143,9 @@ test('#348: the server serves the view, gates the sign-off on the capability, an
     expect((await fetch(origin + '/api/parts/image/9')).status).toBe(404);
     expect((await fetch(origin + '/')).status).toBe(200);
     expect((await fetch(origin + '/parts.js')).status).toBe(200);
+    const styles=await fetch(origin+'/styles.css');expect(styles.status).toBe(200);expect(styles.headers.get('content-type')).toBe('text/css');
+    expect(await styles.text()).toBe(await readFile('web/styles.css','utf8'));
+    const stylesHead=await fetch(origin+'/styles.css',{method:'HEAD'});expect(stylesHead.status).toBe(200);expect(stylesHead.headers.get('content-type')).toBe('text/css');expect(await stylesHead.text()).toBe('');
     const body = JSON.stringify({ status: 'approved', issues: [] });
     expect((await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body })).status).toBe(403);
     const saved = await fetch(origin + '/api/parts/verdict', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': capability }, body });

@@ -182,7 +182,7 @@ test('#562(i) standalone partsViewJson omits STAGE_DRAFT_UNAVAILABLE and removes
      location:{origin:'http://127.0.0.1:4173'},
      parent:{postMessage:(data:unknown,origin:string)=>{posted.push({data,origin});}},
      CustomEvent:class{constructor(public type:string,public options:any){}get detail(){return this.options.detail;}},
-     slots:{stage:{append:(node:CorrectionNode)=>{dom.host=node;},dispatchEvent:(event:any)=>{posted.push({data:event.detail,origin:'http://127.0.0.1:4173'});}}},
+     regions:{secondary:{append:(node:CorrectionNode)=>{dom.host=node;}},stage:{append:(node:CorrectionNode)=>{dom.host=node;},dispatchEvent:(event:any)=>{posted.push({data:event.detail,origin:'http://127.0.0.1:4173'});}}},
      query:(selector:string)=>selector==='#pv-corrections'?dom.host:null,
      doc:{
       getElementById:(id:string)=>id==='pv-corrections'?dom.host:null,

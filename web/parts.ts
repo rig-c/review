@@ -1,10 +1,13 @@
+import {bindWorkspaceUI,mountStatusBar,type WorkspaceScreenRegions} from './workspace-ui.ts';
+import {mountBottomPanel} from './inspector-blocks.ts';
+import {bindPartNavigator} from './part-selection.ts';
 import {defaultPartsComparison,paintingRectangle,type PartsComparison} from '../src/parts-comparison.ts';
 import {mountViewportPair} from './viewport-pair.ts';
 import {createPartsViewport} from './parts-viewport-provider.ts';
 import {bindStageComments,type CommentUiPose,type CommentCodec} from './stage-comments.ts';
 import {parsePartsIssue,assertPartsIssueBinding,snapImageRegion,type PartsComment,type PartsIssue} from '../src/parts-comment.ts';
 import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
-import {textEntryFocused,createViewControls} from './view-controls.ts';
+import {textEntryFocused,createViewControls,bindInspectorTabs,panelMake,labelledControl,actionButton} from './view-controls.ts';
 import {stagePartsSelectionIndex,type StagePartsState} from './stage-nav.ts';
 import type {JobEnabledActKind,UISubmissionV3} from '../src/job-contract.ts';
 import type {LegacyPartsVerdictView} from '../src/parts-view.ts';
@@ -19,7 +22,7 @@ import type {LegacyPartsVerdictView} from '../src/parts-view.ts';
  */
 import { applyDomI18n, onLanguageChange, t } from './i18n.ts';
 import { flagLabel, readingGroup, countedFlag } from './parts-flags.ts';
-import { paintAssembly, pickAssembly, paintAssemblyOutline, frontParts, paintAlphaOnly, paintBackground, paintPart, paintMesh, paintOverlay, paintPaintingCrop, paintFootprints } from './parts-render.ts';
+import { BACKGROUNDS, paintAssembly, pickAssembly, paintAssemblyOutline, frontParts, paintAlphaOnly, paintBackground, paintPart, paintMesh, paintOverlay, paintPaintingCrop, paintFootprints } from './parts-render.ts';
 
 export interface Mesh { vertices: number[]; triangles: number[]; figures: Record<string, unknown> }
 export interface Item { mesh?: Mesh; meshUnavailable?: 'PARTS_MESH_GENERATED'; name: string; index: number; x: number; y: number; w: number; h: number; page?: string; degrees?: number; image?: boolean;imageHash?:string }
@@ -59,16 +62,12 @@ export interface PartsHost {
   locked(): 'open' | 'sent' | 'approved' | 'retry-signoff';
 }
 
-export interface PartsWorkspaceSlots {
-  left: HTMLElement;
-  stage: HTMLElement;
-  toolbar: HTMLElement;
-  side: HTMLElement;
-}
-
 export interface MountPartsWorkspaceOptions {
   defaultView: 'item' | 'assembled';
   embedded?: boolean;
+  language?: HTMLSelectElement;
+  kind?: 'parts'|'job-parts';
+  tabs?: {id:string;label:string;panel:HTMLElement}[];
 }
 
 export interface PartsWorkspaceHandle {
@@ -84,78 +83,60 @@ export interface PartsWorkspaceHandle {
 /** Page pixels shown around a region in its own view, so the packer's bleed and padding are visible. */
 export const REGION_MARGIN = 4;
 
-function mountPartsMarkup(slots: PartsWorkspaceSlots): void {
-  const doc = slots.stage.ownerDocument;
-  if (slots.left) {
-    const title = doc.createElement('h2'); title.id = 'pv-list-title'; title.textContent = t('PARTS');
-    const ul = doc.createElement('ul'); ul.id = 'pv-items'; ul.setAttribute('data-pv-items', '');
-    slots.left.append(title, ul);
-  }
-  if (slots.toolbar) {
-    slots.toolbar.classList.add('pv-toolbar');
-    const viewControls = createViewControls({layout:'legacyPartsStep2'});
-    const {assemble, comparisonGroup:compGroupWrap, atlasSwitch} = viewControls.choices!;
-    const zoomGroup = viewControls.zoomGroup!, syncLabel = viewControls.syncLabel;
-    const bgLabel = doc.createElement('label'); bgLabel.className = 'pv-field'; bgLabel.textContent = t('Background');
-    const bgSelect = doc.createElement('select'); bgSelect.id = 'pv-bg'; bgSelect.setAttribute('data-pv-bg', '');
-    for (const [val, text] of [['green', 'Green'], ['magenta', 'Magenta'], ['black', 'Black'], ['white', 'White'], ['checker', 'Checker']]) {
-      const opt = doc.createElement('option'); opt.value = val!; opt.textContent = t(text!); bgSelect.append(opt);
-    }
-    bgLabel.append(bgSelect);
-    const commentBtn = doc.createElement('button'); commentBtn.type = 'button'; commentBtn.id = 'stage-comment'; commentBtn.setAttribute('aria-pressed', 'false'); commentBtn.setAttribute('aria-controls', 'stage-comment-list'); commentBtn.textContent = t('Comment · C ({0})', [0]);
-    const alphaLabel = doc.createElement('label'); alphaLabel.className = 'pv-field';
-    const alphaInput = doc.createElement('input'); alphaInput.type = 'checkbox'; alphaInput.id = 'pv-alpha'; alphaInput.setAttribute('data-pv-alpha', '');
-    alphaLabel.append(alphaInput, t('Alpha only'));
-    const fpLabel = doc.createElement('label'); fpLabel.className = 'pv-field'; fpLabel.id = 'pv-footprint-control';
-    const fpInput = doc.createElement('input'); fpInput.type = 'checkbox'; fpInput.id = 'pv-footprints'; fpInput.setAttribute('data-pv-footprints', '');
-    fpLabel.append(fpInput, t('Footprints of parts in front'));
-    const compSpan = doc.createElement('span'); compSpan.id = 'pv-comparison'; compSpan.className = 'pv-comparison'; compSpan.hidden = true;
-    const opLabel = doc.createElement('label'); opLabel.className = 'pv-field'; opLabel.id = 'pv-opacity-control'; opLabel.hidden = true; opLabel.textContent = t('Part opacity');
-    const opInput = doc.createElement('input'); opInput.type = 'range'; opInput.id = 'pv-opacity'; opInput.min = '0'; opInput.max = '1'; opInput.step = '0.001'; opInput.value = '0.5';
-    const opOut = doc.createElement('output'); opOut.id = 'pv-opacity-value'; opOut.textContent = '50.0%';
-    opLabel.append(opInput, opOut);
-    const thLabel = doc.createElement('label'); thLabel.className = 'pv-field'; thLabel.id = 'pv-threshold-control'; thLabel.hidden = true; thLabel.textContent = t('Threshold');
-    const thInput = doc.createElement('input'); thInput.type = 'number'; thInput.id = 'pv-threshold'; thInput.min = '0'; thInput.max = '255'; thInput.step = '1'; thInput.value = '0';
-    thLabel.append(thInput);
-    compSpan.append(compGroupWrap, opLabel, thLabel);
-    slots.toolbar.append(assemble, bgLabel, zoomGroup, syncLabel, commentBtn, alphaLabel, fpLabel, compSpan, atlasSwitch);
-  }
-  if (slots.stage) {
-    const wrap = doc.createElement('div'); wrap.className = 'pv-canvas-wrap'; wrap.id = 'stage-layout';
-    const box = doc.createElement('div'); box.className = 'pv-canvas-box'; box.id = 'pv-canvas-box';
-    const canvas = doc.createElement('canvas'); canvas.id = 'pv-canvas'; canvas.setAttribute('data-pv-canvas', ''); canvas.width = 1; canvas.height = 1;
-    const overlay = doc.createElement('div'); overlay.id = 'pv-overlay'; overlay.className = 'pv-overlay';
-    box.append(canvas, overlay); wrap.append(box);
-    const caption = doc.createElement('p'); caption.id = 'pv-caption'; caption.className = 'pv-subtle';
-    const status = doc.createElement('p'); status.id = 'pv-load'; status.className = 'pv-subtle'; status.setAttribute('role', 'status');
-    const message = doc.createElement('p'); message.id = 'pv-save-status'; message.className = 'pv-subtle'; message.setAttribute('role', 'status');
-    slots.stage.append(status, wrap, caption, message);
-  }
-  if (slots.side) {
-    const flagsSec = doc.createElement('section');
-    const flagsH2 = doc.createElement('h2'); flagsH2.id = 'pv-flags-title'; flagsH2.textContent = t('PRODUCER FLAGS');
-    const flagsUl = doc.createElement('ul'); flagsUl.id = 'pv-flags'; flagsUl.setAttribute('data-pv-flags', '');
-    const flagsSources = doc.createElement('p'); flagsSources.id = 'pv-flag-sources'; flagsSources.className = 'pv-subtle';
-    flagsSec.append(flagsH2, flagsUl, flagsSources);
-    const legacyUl = doc.createElement('ul'); legacyUl.id = 'pv-legacy-flagged'; legacyUl.className = 'pv-legacy-flagged'; legacyUl.hidden = true;
-    slots.side.append(flagsSec, legacyUl);
-  }
+/** Shared Background item; step 5 can adopt it without another list of sentinel choices. */
+export function createPartsBackground() {
+ const select=panelMake('select',{id:'pv-bg'});select.dataset.pvBg='';
+ for(const value of BACKGROUNDS)select.append(panelMake('option',{value,textContent:t(value[0]!.toUpperCase()+value.slice(1))}));
+ return labelledControl(t('Background'),select);
 }
 
 export function mountPartsWorkspace(
-  slots: PartsWorkspaceSlots,
+  regions: WorkspaceScreenRegions,
   source: PartsSource,
   host: PartsHost,
   options: MountPartsWorkspaceOptions,
 ): PartsWorkspaceHandle {
-  const roots = [slots.left, slots.stage, slots.toolbar, slots.side];
-  if (roots.some(root => !root)) throw new Error('PARTS_WORKSPACE_SLOT_REQUIRED');
-  const doc = slots.stage.ownerDocument;
+  const roots = [regions.left, regions.stage, regions.toolbar, regions.secondary, regions.bottom, regions.status];
+  if (roots.some(root => !root)) throw new Error('PARTS_WORKSPACE_REGION_REQUIRED');
+  const doc = regions.stage.ownerDocument;
   const win = doc.defaultView;
   if (!win || roots.some(root => root.ownerDocument !== doc)) throw new Error('PARTS_WORKSPACE_DOCUMENT_REQUIRED');
   const eventWindow: EventTarget = win;
-  for (const root of roots) root.replaceChildren();
-  mountPartsMarkup(slots);
+  const title=panelMake('h2',{id:'parts-list-title',textContent:t('PARTS')}),search=panelMake('input',{id:'parts-search',type:'search'});
+  search.setAttribute('aria-label',t('Search parts'));search.placeholder=t('Search parts');
+  const list=panelMake('ul',{id:'pv-items'});list.dataset.pvItems='';const leftHeader=panelMake('div',{className:'left-header'},title,search);leftHeader.classList.add('parts-header');regions.left.prepend(leftHeader,list);
+  const viewControls=createViewControls({layout:'rigStep1',viewSwitch:{groups:[{modes:[
+   {id:'assembled',labelKey:'Assembled',pressed:options.defaultView==='assembled'},
+   {id:'part',labelKey:'Part',pressed:options.defaultView==='item'},
+   {id:'overlay',labelKey:'Overlay',pressed:false},{id:'difference',labelKey:'Difference',pressed:false},
+  ]},{modes:[{id:'item',labelKey:'Region',pressed:false},{id:'page',labelKey:'Pages',pressed:false}]}],currentMode:options.defaultView==='assembled'?'assembled':'part',onChange:changeMode}});
+  const comment=actionButton(t('Comment · C ({0})',[0]),null);comment.id='stage-comment';comment.setAttribute('aria-pressed','false');comment.setAttribute('aria-controls','stage-comment-list');
+  regions.toolbar.append(comment,viewControls.syncLabel,viewControls.zoomGroup!);
+  const alpha=panelMake('input',{id:'pv-alpha',type:'checkbox'}),footprints=panelMake('input',{id:'pv-footprints',type:'checkbox'});
+  alpha.dataset.pvAlpha='';footprints.dataset.pvFootprints='';
+  const footprintControl=labelledControl(t('Footprints of parts in front'),footprints);footprintControl.id='pv-footprint-control';
+  const opacity=panelMake('input',{id:'pv-opacity',type:'range',min:'0',max:'1',step:'0.001',value:'0.5'}),opacityValue=panelMake('output',{id:'pv-opacity-value',textContent:'50.0%'});
+  const opacityControl=labelledControl(t('Part opacity'),opacity);opacityControl.id='pv-opacity-control';opacityControl.hidden=true;opacityControl.append(opacityValue);
+  const threshold=panelMake('input',{id:'pv-threshold',type:'number',min:'0',max:'255',step:'1',value:'0'}),thresholdControl=labelledControl(t('Threshold'),threshold);thresholdControl.id='pv-threshold-control';thresholdControl.hidden=true;
+  regions.secondary.append(createPartsBackground(),labelledControl(t('Alpha only'),alpha,true),footprintControl,opacityControl,thresholdControl);
+  const box=panelMake('div',{id:'pv-canvas-box',className:'pv-canvas-box'}),canvas=panelMake('canvas',{id:'pv-canvas',width:1,height:1}),overlay=panelMake('div',{id:'pv-overlay',className:'pv-overlay'});
+  canvas.dataset.pvCanvas='';box.append(canvas,overlay);regions.stage.append(box);
+  const caption=panelMake('p',{id:'pv-caption',className:'pane-footer'});
+  const load=panelMake('span',{id:'pv-load'}),saveState=panelMake('span',{id:'parts-save-status'});
+  regions.status.append(mountStatusBar({message:load,readouts:[saveState],source:panelMake('span',{id:'parts-source-hash'})}).footer);
+  const issuesPanel=panelMake('section',{id:'parts-issues'}),flagsPanel=panelMake('section',{id:'parts-producer-flags'}),meshPanel=panelMake('section',{id:'parts-mesh-geometry'}),legacyPanel=panelMake('section',{id:'parts-legacy',className:'context-block'});
+  const flags=panelMake('ul',{id:'pv-flags'});flags.dataset.pvFlags='';
+  flagsPanel.append(panelMake('h2',{id:'pv-flags-title',textContent:t('PRODUCER FLAGS')}),flags,panelMake('p',{id:'pv-flag-sources',className:'subtle'}));
+  legacyPanel.append(panelMake('ul',{id:'pv-legacy-flagged',hidden:true}));
+  const extraTabs=options.tabs??[];
+  regions.body.append(issuesPanel,flagsPanel,meshPanel,legacyPanel,...extraTabs.map(tab=>tab.panel));issuesPanel.append(regions.act);
+  const bottom=mountBottomPanel({kind:options.kind??'parts',heading:regions.heading,act:regions.act,actHome:issuesPanel,tabs:[
+   {id:'parts-issues',label:'Issues',panel:issuesPanel},{id:'parts-flags',label:'Producer flags',panel:flagsPanel},
+   {id:'parts-mesh',label:'Mesh geometry',panel:meshPanel},{id:'parts-legacy',label:'Legacy flagged',panel:legacyPanel},...extraTabs,
+  ]});
+  const tabs=bindInspectorTabs(()=>{},()=>{},{...bottom.row,reveal:()=>workspaceUI?.revealInspector()});
+  let workspaceUI:ReturnType<typeof bindWorkspaceUI>|undefined;
+  roots.push(viewControls.zoomGroup!,caption,issuesPanel,flagsPanel,meshPanel,legacyPanel);
   const query = <T extends Element = HTMLElement>(selector: string): T | null => {
     for (const root of roots) {
       if (root.matches(selector)) return root as unknown as T;
@@ -172,6 +153,8 @@ export function mountPartsWorkspace(
     return found;
   };
   const disposers: (() => void)[] = [];
+  disposers.push(()=>tabs.dispose());
+  disposers.push(bindPartNavigator(search,list,()=>{if(state.data)renderList();}));
   let disposed = false;
   let resolveReady!: () => void;
   let rejectReady!: (error: unknown) => void;
@@ -192,7 +175,7 @@ export function mountPartsWorkspace(
     disposers.push(() => doc.removeEventListener(event, activate, true));
   }
   const stageEmbedded = Boolean(options.embedded);
-  const state = { data: null as ViewData | null, selected: 0, zoom: 1, bg: 'checker', alpha: false, footprints: false, comparison:defaultPartsComparison(), differenceThreshold:0, hidden: new Set<string>(), view: options.defaultView as 'item' | 'page' | 'assembled', page: 0, meshVisible: false };
+  const state = { data: null as ViewData | null, selected: 0, bg: 'checker', alpha: false, footprints: false, comparison:defaultPartsComparison(), differenceThreshold:0, hidden: new Set<string>(), view: options.defaultView as 'item' | 'page' | 'assembled', page: 0, meshVisible: false };
   const comments:PartsIssue[]=[];let commentUi:ReturnType<typeof bindStageComments>|null=null;let viewport:ReturnType<typeof createPartsViewport>|null=null;let painting=true;
   let paintingHeld = false;
   let hoverName: string | null = null;
@@ -227,7 +210,7 @@ export function mountPartsWorkspace(
 
 function setCanvas(canvas: HTMLCanvasElement, w: number, h: number): CanvasRenderingContext2D {
   canvas.width = w; canvas.height = h;
-  canvas.style.width = `${w * state.zoom}px`; canvas.style.height = `${h * state.zoom}px`;
+  canvas.style.width = `${w}px`; canvas.style.height = `${h}px`;
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   ctx.imageSmoothingEnabled = false;
   return ctx;
@@ -236,8 +219,8 @@ function setCanvas(canvas: HTMLCanvasElement, w: number, h: number): CanvasRende
 function overlayBox(x: number, y: number, w: number, h: number): HTMLDivElement {
   const div = doc.createElement('div');
   div.className = 'pv-box';
-  div.style.left = `${x * state.zoom}px`; div.style.top = `${y * state.zoom}px`;
-  div.style.width = `${w * state.zoom}px`; div.style.height = `${h * state.zoom}px`;
+  div.style.left = `${x}px`; div.style.top = `${y}px`;
+  div.style.width = `${w}px`; div.style.height = `${h}px`;
   return div;
 }
 
@@ -245,8 +228,8 @@ let paintToken = 0;
 let paintFailure:string|null=null,paintReset=false;
 let paintBusyStatus: {token: number; text: string} | null = null;
 function syncPaintState(): void {
- slots.stage.dataset.partsPaintState = disposed ? 'disposed' : painting ? 'busy' : paintFailure ? 'failed' : 'ready';
- slots.stage.setAttribute('aria-busy', String(painting));
+ regions.stage.dataset.partsPaintState = disposed ? 'disposed' : painting ? 'busy' : paintFailure ? 'failed' : 'ready';
+ regions.stage.setAttribute('aria-busy', String(painting));
  const toggle = $<HTMLButtonElement>('stage-comment');
  toggle.disabled = painting || paintingHeld;
  toggle.setAttribute('aria-busy', String(painting));
@@ -257,16 +240,16 @@ function syncPaintState(): void {
 async function paint():Promise<void>{
  const token=++paintToken;painting=true;
  if (paintBusyStatus) {
-  if ($('pv-save-status').textContent === paintBusyStatus.text) paintBusyStatus.token = token;
+  if ($('parts-save-status').textContent === paintBusyStatus.text) paintBusyStatus.token = token;
   else paintBusyStatus = null;
  }
  syncPaintState();
  try{
   await paintRaster(token);if(disposed||token!==paintToken)return;
   await paintReference(token);if(disposed||token!==paintToken)return;
-  if(paintFailure&&$('pv-save-status').textContent===t(paintFailure))$('pv-save-status').textContent='';paintFailure=null;painting=false;
+  if(paintFailure&&$('parts-save-status').textContent===t(paintFailure))$('parts-save-status').textContent='';paintFailure=null;painting=false;
   if(paintBusyStatus?.token===token){
-   if($('pv-save-status').textContent===paintBusyStatus.text)$('pv-save-status').textContent='';
+   if($('parts-save-status').textContent===paintBusyStatus.text)$('parts-save-status').textContent='';
    paintBusyStatus=null;
   }
   syncPaintState();viewport?.fitCamera();commentUi?.refresh();settleReady();
@@ -276,7 +259,7 @@ async function paint():Promise<void>{
   const failure=error instanceof Error&&error.message.startsWith('PARTS_DIFFERENCE_')?error.message:'PARTS_PAINT_FAILED: view could not be rendered; select the part to retry';
   const canvas=$<HTMLCanvasElement>('pv-canvas');canvas.getContext('2d')?.clearRect(0,0,canvas.width,canvas.height);
   const ref=$<HTMLCanvasElement>('pv-reference') as HTMLCanvasElement|null;if(ref){if(canvas.width>0&&canvas.height>0){ref.width=canvas.width;ref.height=canvas.height;}ref.getContext('2d')?.clearRect(0,0,ref.width,ref.height);}
-  $('pv-overlay').replaceChildren();$('pv-caption').textContent=t(failure);$('pv-save-status').textContent=t(failure);
+  $('pv-overlay').replaceChildren();$('pv-caption').textContent=t(failure);$('parts-save-status').textContent=t(failure);
   painting=false;paintFailure=null;paintReset=true;
   try{viewport?.writeCamera?.('rig',{zoom:1,center:null});viewport?.writeCamera?.('reference',{zoom:1,center:null});viewport?.fitCamera();}
   finally{paintReset=false;paintFailure=failure;}
@@ -285,7 +268,7 @@ async function paint():Promise<void>{
   if(!disposed&&token===paintToken){
    painting=false;
    if(paintBusyStatus?.token===token){
-    if(!paintFailure&&$('pv-save-status').textContent===paintBusyStatus.text)$('pv-save-status').textContent='';
+    if(!paintFailure&&$('parts-save-status').textContent===paintBusyStatus.text)$('parts-save-status').textContent='';
     paintBusyStatus=null;
    }
    syncPaintState();
@@ -448,12 +431,24 @@ async function paintRaster(token:number): Promise<void> {
 
 async function paintReference(token:number):Promise<void>{const data=state.data,item=data?.items[state.selected];if(!data?.painting||!item)return;const img=await paintingImage();if(disposed||token!==paintToken||data!==state.data||item!==state.data?.items[state.selected])return;const box=partFrame(data,item);const canvas=$<HTMLCanvasElement>('pv-reference');canvas.width=box.w;canvas.height=box.h;const ctx=canvas.getContext('2d')!;paintPaintingCrop(ctx,img,paintingRectangle(box,data.rigSize!,data.painting),box.w,box.h,state.bg);}
 
+function changeMode(mode:string):void {
+ if(mode==='assembled'||mode==='item'||mode==='page'){state.comparison={mode:'part',opacity:state.comparison.opacity};setView(mode);return;}
+ if(mode==='part')setView('item');
+ state.comparison=mode==='difference'?{mode,opacity:state.comparison.opacity,threshold:state.differenceThreshold}:{mode:mode as 'part'|'overlay',opacity:state.comparison.opacity};
+ if(mode!=='part'){state.alpha=false;$<HTMLInputElement>('pv-alpha').checked=false;renderMesh();}
+ renderComparison();void paint();
+}
+
 function renderComparison():void {
- const active=state.data?.mode==='parts'&&(!!state.data.painting||!!state.data.differenceAvailable),overlay=active&&state.comparison.mode==='overlay',difference=state.comparison.mode==='difference';
- const button=query<HTMLButtonElement>('[data-pv-comparison="difference"]');if(button){button.disabled=!state.data?.differenceAvailable||!source.difference||state.view!=='item';button.title=button.disabled?t('PARTS_DIFFERENCE_UNAVAILABLE: declared painting_in_rig and individual part view required.'):'';}
- const overlayButton=query<HTMLButtonElement>('[data-pv-comparison="overlay"]');if(overlayButton)overlayButton.disabled=!state.data?.painting;
+ const overlay=!!state.data?.painting&&state.comparison.mode==='overlay',difference=state.comparison.mode==='difference';
+ const differenceReason=!state.data?.differenceAvailable||!source.difference||state.view!=='item'?t('PARTS_DIFFERENCE_UNAVAILABLE: declared painting_in_rig and individual part view required.'):null;
+ viewControls.setDisabled('difference',differenceReason);viewControls.setDisabled('overlay',state.data?.painting?null:t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting'));
+ viewControls.setDisabled('assembled',state.data?.mode==='parts'&&state.data.rigSize?null:t(state.data?.mode==='atlas'?'Assembly unavailable: atlas regions carry no rig placement.':'Assembly unavailable: rig_size is not declared.'));
+ for(const id of ['item','page']){const button=query<HTMLButtonElement>(`[data-view="${id}"]`);if(button)button.hidden=state.data?.mode!=='atlas';}for(const separator of viewControls.viewSwitch!.querySelectorAll<HTMLElement>('hr'))separator.hidden=state.data?.mode!=='atlas';
+ let differenceNotice=query('#parts-difference-reason');if(!differenceNotice){differenceNotice=panelMake('span',{id:'parts-difference-reason',className:'subtle'});regions.secondary.append(differenceNotice);}differenceNotice.textContent=!source.difference?differenceReason??'':'';
+ const mode=state.view==='page'?'page':state.comparison.mode!=='part'?state.comparison.mode:state.view==='assembled'?'assembled':state.data?.mode==='atlas'?'item':'part';
+ viewControls.setMode(null);viewControls.setMode(mode);
  $('pv-threshold-control').hidden=!difference;$<HTMLInputElement>('pv-threshold').value=String(state.comparison.mode==='difference'?state.comparison.threshold:state.differenceThreshold);
- $('pv-comparison').hidden=!active;for(const b of queryAll<HTMLElement>('[data-pv-comparison]'))b.setAttribute('aria-pressed',String(b.dataset.pvComparison===state.comparison.mode));
  $('pv-opacity-control').hidden=!overlay;$<HTMLInputElement>('pv-opacity').value=String(state.comparison.opacity);$('pv-opacity-value').textContent=(state.comparison.opacity*100).toFixed(1)+'%';
  $<HTMLInputElement>('pv-alpha').disabled=overlay||difference;
 
@@ -523,7 +518,7 @@ function renderList(): void {
   const data = state.data!, list = $('pv-items');
   const seen = new Set<string>();
   const issueList = comments;
-  list.replaceChildren(...data.items.filter(i => !seen.has(i.name) && seen.add(i.name)).map(item => {
+  list.replaceChildren(...data.items.filter(i => !seen.has(i.name) && seen.add(i.name)).filter(item=>item.name.toLowerCase().includes(search.value.toLowerCase())).map(item => {
     const li = doc.createElement('li'), button = doc.createElement('button');
     button.type = 'button'; button.dataset.pvItem = item.name; button.title = item.name;
     if (data.items[state.selected]?.name === item.name) button.setAttribute('aria-current', 'true');
@@ -543,7 +538,7 @@ function renderList(): void {
     button.append(name, flags, badge);
     button.onclick = () => { select(item.index); if (data.mode === 'atlas') setView('item'); };
     li.append(button);
-    if(data.mode==='parts'){
+    if(data.mode==='parts'&&state.view==='assembled'){
       const label=doc.createElement('label'),visible=doc.createElement('input');visible.type='checkbox';visible.checked=!state.hidden.has(item.name);visible.dataset.pvVisible=item.name;visible.setAttribute('aria-label',t('Show {name} in assembly',{name:item.name}));
       visible.onchange=()=>{if(visible.checked)state.hidden.delete(item.name);else state.hidden.add(item.name);void paint();};label.append(visible);li.append(label);
     }
@@ -559,13 +554,13 @@ function renderMesh(): void {
   const control = doc.createElement('label'); control.id = 'pv-mesh-control'; control.className = 'pv-field';
   const toggle = doc.createElement('input'); toggle.type = 'checkbox'; toggle.checked = state.meshVisible;
   toggle.onchange = () => { state.meshVisible = toggle.checked; void paint(); };
-  control.append(toggle, meshCount ? t('mesh from rig.json UVs') : t('Mesh (none 0/{0})', [state.data!.items.length])); query('.pv-toolbar')?.append(control);
+  control.append(toggle, meshCount ? t('mesh from rig.json UVs') : t('Mesh (none 0/{0})', [state.data!.items.length])); regions.secondary.append(control);
   const panel = doc.createElement('section'); panel.id = 'pv-mesh-panel';
   const heading = doc.createElement('h2'); heading.textContent = t('Mesh geometry'); panel.append(heading);
   if (!item.mesh) {
     const unavailable = doc.createElement('p');
     unavailable.textContent = t(item.meshUnavailable === 'PARTS_MESH_GENERATED' ? 'PARTS_MESH_GENERATED: No mesh geometry is available for this part.' : meshCount ? 'No mesh geometry is available for this part.' : 'No mesh geometry is available for this draft.');
-    panel.append(unavailable);slots.side.append(panel);return;
+    panel.append(unavailable);meshPanel.append(panel);return;
   }
   const figures = doc.createElement('dl');
   for (const key of ['mode', 'vertices', 'triangles', 'art_coverage', 'stray_cleared']) {
@@ -575,7 +570,7 @@ function renderMesh(): void {
   }
   panel.append(figures);
   const help = doc.createElement('p'); help.textContent = t('Pink: art pixels outside every triangle.'); panel.append(help);
-  slots.side.append(panel);
+  meshPanel.append(panel);
 }
 
 function select(index: number): void {
@@ -595,8 +590,7 @@ function setView(view: 'item' | 'page' | 'assembled'): void {
   if((state.view!==view||paintFailure)&&viewport){viewport.writeCamera('rig',{zoom:1,center:null});viewport.writeCamera('reference',{zoom:1,center:null});}
   if(view!=='item'&&state.comparison.mode==='difference')state.comparison={mode:'part',opacity:state.comparison.opacity};
   hoverName = null;
-  state.view = view;$('pv-assemble').setAttribute('aria-pressed', String(view === 'assembled'));renderMesh();renderComparison();$('rig-label').textContent=t(view==='assembled'?'Assembled':'Selected part');commentUi?.refresh();
-  for (const b of queryAll<HTMLButtonElement>('[data-pv-view]')) b.setAttribute('aria-pressed', String(b.dataset.pvView === view));
+  state.view = view;renderList();renderMesh();renderComparison();$('rig-label').textContent=t(view==='assembled'?'Assembled':'Selected part');commentUi?.refresh();
   void paint();
 }
 
@@ -604,6 +598,7 @@ function renderLegacyVerdict(): void {
   const legacy = state.data?.legacyVerdict;
   const list = query('#pv-legacy-flagged') as HTMLElement | null;
   if (!list) return;
+  bottom.row.tabs.find(tab=>tab.id==='parts-legacy')!.button.hidden=!legacy?.flaggedParts.length;
   if (!legacy) {
     list.hidden = true;
     list.replaceChildren();
@@ -619,16 +614,20 @@ function renderLegacyVerdict(): void {
 }
 
 async function boot(): Promise<void> {
-  const box=$('pv-canvas-box'),layout=$('stage-layout');mountViewportPair(layout);$('rig-root').append(box);const reference=doc.createElement('canvas');reference.id='pv-reference';$('reference-content').append(reference);$('rig-empty').hidden=true;$('rig-overlay').hidden=true;$('rig-label').textContent=t('Selected part');$('rig-viewport').tabIndex=0;
-  viewport=createPartsViewport({el:$,canvas:$<HTMLCanvasElement>('pv-canvas'),message:(msg)=>{paintBusyStatus=null;$('pv-save-status').textContent=t(msg);},reference:()=>state.data?.painting?$<HTMLCanvasElement>('pv-reference'):null,
+  const box=$('pv-canvas-box'),layout=$('stage-layout');mountViewportPair(layout,{footer:caption});$('rig-root').append(box);const reference=doc.createElement('canvas');reference.id='pv-reference';$('reference-content').append(reference);$('rig-empty').hidden=true;$('rig-overlay').hidden=true;$('rig-label').textContent=t('Selected part');$('rig-viewport').tabIndex=0;
+  viewport=createPartsViewport({el:$,canvas:$<HTMLCanvasElement>('pv-canvas'),message:(msg)=>{paintBusyStatus=null;$('parts-save-status').textContent=t(msg);},reference:()=>state.data?.painting?$<HTMLCanvasElement>('pv-reference'):null,
     frameSize:target=>{
       const data=state.data,item=data?.items[state.selected];
       if(!data||!item||paintReset)return null;
       if(paintFailure)return {w:0,h:0};
       return target==='rig'?rasterFrame(data,item)??{w:0,h:0}:data.painting?partFrame(data,item):null;
     },
-  });disposers.push(viewport.bindControls());
+  });viewport.state.cameraSync=true;disposers.push(viewport.bindControls());
   $('native-one').onclick=()=>viewport!.cameraAction(()=>viewport!.updateCamera(viewport!.availableCamera()??'rig',{zoom:1,pan:{x:0,y:0}}));
+  const language=options.language??panelMake('select',{id:'settings-language'});
+  if(!options.language)regions.left.append(labelledControl(t('Language'),language));
+  workspaceUI=bindWorkspaceUI({regions,language,bottomPanel:bottom,changed:()=>viewport?.fitCamera(),defaultTheme:theme=>{doc.documentElement.dataset.theme=theme;}});
+  disposers.push(()=>workspaceUI?.dispose());
   if (disposed) return;
   let data: ViewData & { error?: string };
   try {
@@ -645,6 +644,7 @@ async function boot(): Promise<void> {
   if (disposed) return;
   if (data.error) { const status=$('pv-load');status.textContent=t(data.error);status.dataset.result='refused';painting=false;paintFailure=data.error;syncPaintState();settleReady(new Error(data.error));return; }
   if (!data.items.length) throw new Error('PARTS_PAINT_FAILED');
+  $('parts-source-hash').textContent=data.sourceHash;
   state.data = data;state.meshVisible=stageEmbedded||!data.items.some(item=>item.mesh);$<HTMLSelectElement>('pv-bg').value=state.bg;$('reference-empty').textContent=data.painting?'':t('PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');$('reference-empty').hidden=!!data.painting;if(data.painting)viewport.state.cameraSync=true;
   if (data.mode !== 'parts' || !data.rigSize) state.view = 'item';
   comments.push(...structuredClone(host.initial()).map(issue => parsePartsIssue(issue, false, true, false)));
@@ -655,17 +655,13 @@ async function boot(): Promise<void> {
   setupPartsComments();const ro=viewport.observeResize();disposers.push(viewport.bindNavigation(undefined,()=>mountActive&&!disposed&&!commentUi?.active()&&!paintFailure),()=>ro.disconnect());
   renderLegacyVerdict();
   const legacyBanner = data.legacyVerdict ? data.legacyVerdict.code + ': ' + t('parts.legacyVerdictBanner', [data.legacyVerdict.flaggedCount]) : '';
-  $('pv-list-title').textContent = data.mode === 'parts' ? t('PARTS') : t('REGIONS');
+  $('parts-list-title').textContent = data.mode === 'parts' ? t('PARTS') : t('REGIONS');
   $('pv-load').textContent = data.verdictStale === 'files' ? t('A saved sign-off was made on other files; this review starts fresh.') : data.verdictStale === 'flags' ? t('The saved sign-off is for different producer flags; this review starts fresh.') : legacyBanner ? legacyBanner : data.verdict ? t('Saved sign-off loaded.') : data.verdictReadOnlyReason?t(data.verdictReadOnlyReason):'';
   if (legacyBanner) $('pv-load').dataset.result = 'readonly';
-  $('pv-atlas-switch').hidden = data.mode !== 'atlas';
-  const assemble=$<HTMLButtonElement>('pv-assemble');assemble.disabled=data.mode!=='parts'||!data.rigSize;assemble.title=assemble.disabled?t(data.mode==='atlas'?'Assembly unavailable: atlas regions carry no rig placement.':'Assembly unavailable: rig_size is not declared.'):'';
-  assemble.onclick=()=>{setView(state.view==='assembled'?'item':'assembled');assemble.setAttribute('aria-pressed',String(state.view==='assembled'));};
   bindAssemblyPicking();
-  for(const button of queryAll<HTMLElement>('[data-pv-comparison]'))button.onclick=()=>{const mode=button.dataset.pvComparison as PartsComparison['mode'];state.comparison=mode==='difference'?{mode,opacity:state.comparison.opacity,threshold:state.differenceThreshold}:{mode,opacity:state.comparison.opacity};if(state.comparison.mode!=='part'){state.alpha=false;$<HTMLInputElement>('pv-alpha').checked=false;renderMesh();}renderComparison();void paint();};
   $<HTMLInputElement>('pv-opacity').oninput=e=>{state.comparison.opacity=Number((e.target as HTMLInputElement).value);renderComparison();void paint();};
   $<HTMLInputElement>('pv-threshold').oninput=e=>{
-    const input=e.target as HTMLInputElement,threshold=input.valueAsNumber,status=$('pv-save-status');
+    const input=e.target as HTMLInputElement,threshold=input.valueAsNumber,status=$('parts-save-status');
     if(!Number.isInteger(threshold)||threshold<0||threshold>255){
       input.value=String(state.differenceThreshold);
       status.dataset.thresholdRefused='true';
@@ -683,26 +679,24 @@ async function boot(): Promise<void> {
   $<HTMLInputElement>('pv-alpha').onchange = e => { state.alpha = (e.target as HTMLInputElement).checked; void paint(); };
   footprints.onchange = e => { state.footprints = (e.target as HTMLInputElement).checked; void paint(); };
 
-  for (const b of queryAll<HTMLButtonElement>('[data-pv-view]')) b.onclick = () => setView(b.dataset.pvView as 'item' | 'page');
   const offLang = onLanguageChange(() => { if (!disposed && state.data) { localizeWorkspace(); select(state.selected); } });
   disposers.push(offLang);
   if(data.items.length){
     const index = pendingSelectPart ? data.items.findIndex(item => item.name === pendingSelectPart) : 0;
     select(index >= 0 ? index : 0);
     $('rig-label').textContent = t(state.view === 'assembled' ? 'Assembled' : 'Selected part');
-    assemble.setAttribute('aria-pressed', String(state.view === 'assembled'));
   }
   localizeWorkspace();
   renderCorrections();
 }
 
 function localizeWorkspace(): void {
-  applyDomI18n(slots.toolbar);
+  for(const root of roots)applyDomI18n(root);
   $('reference-pane').setAttribute('aria-label', t('Reference'));
   $('rig-pane').setAttribute('aria-label', t('Rig'));
   $('reference-label').textContent = t('Reference');
   $('rig-label').textContent = t(state.view === 'assembled' ? 'Assembled' : 'Selected part');
-  $('pv-list-title').textContent = t(state.data?.mode === 'atlas' ? 'REGIONS' : 'PARTS');
+  $('parts-list-title').textContent = t(state.data?.mode === 'atlas' ? 'REGIONS' : 'PARTS');
   $('pv-flags-title').textContent = t('PRODUCER FLAGS');
   viewport?.renderCameraControls();
 }
@@ -839,7 +833,7 @@ function setupPartsComments():void {
    parts:existing.view.mode==='assembled'?issueParts(parts??[]):existing.parts}),
  };
  const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||paintingHeld||(state.view!=='item'&&state.view!=='assembled'))return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{mode:state.view,camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshVisible,comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
- commentUi=bindStageComments({toolbar:slots.toolbar,listHost:slots.side,toggle:$<HTMLButtonElement>('stage-comment'),viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
+ commentUi=bindStageComments({toolbar:regions.toolbar,listHost:issuesPanel,toggle:$<HTMLButtonElement>('stage-comment'),viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
   restore:async(raw)=>{
     const data = state.data!, navigation = paintToken, current = await source.view();
     if (disposed) return;
@@ -865,7 +859,7 @@ function setupPartsComments():void {
       viewport!.state.cameraSync = bookmark.view.cameraSync;viewport!.fitCamera();
     } finally {if (!disposed) viewport!.state.cameraRestoring = false;}
   },
-  feedback:()=>comments,locked:()=>Boolean(state.data?.legacyVerdict?.readOnly)||host.locked() !== 'open',add:c=>comments.push(c),changed:()=>{renderList();host.changed(structuredClone(comments));},error:m=>{paintBusyStatus=null;$('pv-save-status').textContent=t(m);},blocked:()=>painting||paintingHeld,busy:()=>painting||paintingHeld,busyError:message=>{paintBusyStatus={token:paintToken,text:t(message)};$('pv-save-status').textContent=paintBusyStatus.text;},shortcutActive:()=>mountActive&&!disposed,refusal:()=>paintFailure??(state.data?.legacyVerdict?.readOnly?state.data.legacyVerdict.code+': '+t('parts.legacyVerdictBanner',[state.data.legacyVerdict.flaggedCount]):null)??(host.locked() !== 'open'?'Read-only view: reopen with rig-review open to edit.':null)??(stageEmbedded&&state.data?.mode==='parts'?'PARTS_JOINED_ISSUE_UNSUPPORTED':null)??(state.data?.mode!=='parts'?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
+  feedback:()=>comments,locked:()=>Boolean(state.data?.legacyVerdict?.readOnly)||host.locked() !== 'open',add:c=>comments.push(c),changed:()=>{renderList();host.changed(structuredClone(comments));},error:m=>{paintBusyStatus=null;$('parts-save-status').textContent=t(m);},blocked:()=>painting||paintingHeld,busy:()=>painting||paintingHeld,busyError:message=>{paintBusyStatus={token:paintToken,text:t(message)};$('parts-save-status').textContent=paintBusyStatus.text;},shortcutActive:()=>mountActive&&!disposed,refusal:()=>paintFailure??(state.data?.legacyVerdict?.readOnly?state.data.legacyVerdict.code+': '+t('parts.legacyVerdictBanner',[state.data.legacyVerdict.flaggedCount]):null)??(host.locked() !== 'open'?'Read-only view: reopen with rig-review open to edit.':null)??(stageEmbedded&&state.data?.mode==='parts'?'PARTS_JOINED_ISSUE_UNSUPPORTED':null)??(state.data?.mode!=='parts'?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
 }
 
 function renderCorrections():void {
@@ -874,14 +868,14 @@ function renderCorrections():void {
   query('#pv-corrections')?.remove();
   return;
  }
- let host=query('#pv-corrections');if(!host){host=doc.createElement('section');host.id='pv-corrections';slots.stage.append(host);}
+ let host=query('#pv-corrections');if(!host){host=doc.createElement('section');host.id='pv-corrections';regions.secondary.append(host);}
  host.replaceChildren();const item=data?.items[state.selected],mapping=data?.draft?.mappings.find(m=>m.part===item?.name);
  const label=doc.createElement('p');label.textContent=t(data?.draft&&!mapping?'STAGE_DRAFT_NO_MESH: this part has no mesh attachment; direct correction is unavailable.':data?.draft?.label??data?.draftUnavailable??'STAGE_DRAFT_UNAVAILABLE: no producer-compatible draft is supplied.');host.append(label);
  if(!mapping||!data?.draft)return;
  label.textContent+=` · ${mapping.part} · ${mapping.skin}/${mapping.slot}/${mapping.attachment} · v ${mapping.vertices} t ${mapping.triangles} · ${data.draft.buildId}`;
  if(data.draft.inspectionOnly)return;
  for(const [instrument,title,operation]of [['chest','Chest regions',t('rig-parts remesh --mesh')],['mesh','Mesh parameters',t('rig-parts remesh --mesh')],['delta','Edit Mesh',t('rig-parts remesh --delta')]]){
-  const button=doc.createElement('button');button.type='button';button.textContent=t(title!);button.title=`${mapping.part} · ${operation}`;button.onclick=()=>slots.stage.dispatchEvent(new CustomEvent('parts-correction',{detail:{type:'review-stage-correction',part:mapping.part,sourceHash:data.sourceHash,buildId:data.draft!.buildId,instrument}}));host.append(button);
+  const button=doc.createElement('button');button.type='button';button.textContent=t(title!);button.title=`${mapping.part} · ${operation}`;button.onclick=()=>regions.stage.dispatchEvent(new CustomEvent('parts-correction',{detail:{type:'review-stage-correction',part:mapping.part,sourceHash:data.sourceHash,buildId:data.draft!.buildId,instrument}}));host.append(button);
  }
  const guidance=doc.createElement('p');guidance.textContent=t('Use Write review, choose Parts review and name the Create draft. Export the saved item with the feedback CLI. Mesh deltas retain evidence as unsupported operations.');host.append(guidance);
 }
@@ -922,7 +916,7 @@ async function revalidateStageParts(savedState?: StagePartsState | null): Promis
     const status = $('pv-load');
     status.hidden = false; status.dataset.result = 'refused';
     status.textContent = t(error instanceof Error ? error.message : String(error));
-    for (const root of roots) if (root !== slots.stage) root.hidden = true;
+    for (const root of roots) if (root !== regions.stage&&root!==regions.status) root.hidden = true;
     $('stage-layout').hidden = true;
   }
 }

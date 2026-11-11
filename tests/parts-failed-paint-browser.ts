@@ -88,7 +88,7 @@ async function sample(p: Page) {
         x: Number(((vp.clientWidth / 2 - leftNum) / scale).toFixed(4)),
         y: Number(((vp.clientHeight / 2 - topNum) / scale).toFixed(4)),
       },
-      status: document.getElementById('pv-save-status').textContent || '',
+      status: document.getElementById('parts-save-status').textContent || '',
       caption: document.getElementById('pv-caption').textContent || '',
       refusal: document.getElementById('stage-comment-refusal')?.textContent || '',
     };

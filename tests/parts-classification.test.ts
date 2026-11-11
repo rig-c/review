@@ -79,7 +79,7 @@ test('#385 actual renderFlags/renderList callers collapse nonflags and count onl
  state.selected=state.data.items.findIndex((i:any)=>i.name==='front');
  const nodes=new Map<string,Node>(),$=(id:string)=>{if(!nodes.has(id))nodes.set(id,new Node('ul'));return nodes.get(id)!;};
  const {t}=await import('../web/i18n.ts');
- const run=new Function('scope',`with(scope){${code};return ()=>{renderFlags();renderList();};}`)({state,$,comments:[],doc:{createElement:(tag:string)=>new Node(tag)},...labels,t});
+ const run=new Function('scope',`with(scope){${code};return ()=>{renderFlags();renderList();};}`)({search:{value:''},state,$,comments:[],doc:{createElement:(tag:string)=>new Node(tag)},...labels,t});
  run();
  expect(descend($('pv-flags')).filter(n=>n.dataset.pvCategory).map(n=>[n.dataset.pvCategory,n.open])).toEqual([['part',false],['pair',false],['evidence',false]]);
  const badges=()=>descend($('pv-items')).filter(n=>n.className==='pv-count').map(n=>n.textContent);

@@ -383,8 +383,10 @@ function pageFixture(target: PartsViewShotTarget, pinchScale = 1, options?: {
     body: {},
     getElementById: (id: string) => nodes[id],
     querySelector: (selector: string) => {
-      if (selector === '[data-pv-view][aria-pressed="true"]') return { dataset: { pvView: view } };
-      if (selector === '[data-pv-view="page"]') return nodes.page;
+      if (selector === '[data-view][aria-pressed="true"]') return { dataset: { view } };
+      if (selector === '[data-view=item]') return nodes['pv-atlas-switch'];
+      if (selector === '[data-view=assembled]') return nodes['pv-assemble'];
+      if (selector === '[data-view="page"]') return nodes.page;
       if (selector === '.pv-box[data-region]') return view === 'page' ? regionBoxNode : null;
       return nodes[selector.slice(1)];
     },

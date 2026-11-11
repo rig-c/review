@@ -28,9 +28,9 @@ if (configured) await writeFile(join(shots, 'capture-browser.json'), JSON.string
 const capability = 'e'.repeat(64);
 async function ready(url: string) { await page.goto('about:blank'); await page.goto(url); for (let i = 0; i < 200; i++) { if (await page.evaluate<boolean>(`document.body.dataset.ready === 'true' && document.getElementById('pv-canvas').width>1`)) { await Bun.sleep(250); return; } await Bun.sleep(25); } throw new Error('page not ready'); }
 async function saved(): Promise<{ result: string; text: string }> {
-  await page.evaluate(`document.getElementById('pv-save-status').dataset.result='';document.getElementById('pv-save').click()`);
+  await page.evaluate(`document.getElementById('parts-save-status').dataset.result='';document.getElementById('parts-submit').click()`);
   for (let i = 0; i < 200; i++) {
-    const result = await page.evaluate<{ result: string; text: string }>(`(()=>{const e=document.getElementById('pv-save-status');return {result:e.dataset.result||'',text:e.textContent}})()`);
+    const result = await page.evaluate<{ result: string; text: string }>(`(()=>{const e=document.getElementById('parts-save-status');return {result:e.dataset.result||'',text:e.textContent}})()`);
     if (result.result) return result; await Bun.sleep(25);
   }
   throw new Error('save result timeout');
@@ -62,10 +62,10 @@ try {
       await writeFile(join(shots, `mesh-overlay-${lang}.png`), await page.screenshot());
       report[lang] = { figures, differences: 0, hiddenByDefault: before, gapCentre };
       if(c5){
-        await page.evaluate(`document.getElementById('pv-assemble').click()`);await Bun.sleep(150);
+        await page.evaluate(`document.querySelector('[data-view=assembled]').click()`);await Bun.sleep(150);
         if(!await page.evaluate(`(()=>{const t=document.querySelector('#pv-mesh-control input');return !t.disabled&&t.checked&&document.getElementById('pv-canvas').width===128;})()`))throw Error('global mesh enabled in assembly');
         await writeFile(join(shots,'mesh-assembled-'+lang+'.png'),await page.screenshot());
-        await page.evaluate(`document.querySelector('#pv-mesh-control input').click();document.getElementById('pv-assemble').click();document.querySelector('[data-pv-item="covered"]').click()`);await Bun.sleep(150);
+        await page.evaluate(`document.querySelector('#pv-mesh-control input').click();document.querySelector('[data-view=part]').click();document.querySelector('[data-pv-item="covered"]').click()`);await Bun.sleep(150);
         if(!await page.evaluate(`!document.querySelector('#pv-mesh-control input').checked`))throw Error('global mesh off survives view and selection changes');
       }
 
