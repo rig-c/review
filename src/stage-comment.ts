@@ -1,7 +1,9 @@
 /** Stage marks are optional inspection evidence on an ordinary feedback row. */
 import type {PosedFrame} from '@rig-c/play';
 import type {ControlNumericCamera} from './control.ts';
-import type {JobComment, JobCommentAnchor} from './job-contract.ts';
+import type {JobActValues, JobComment, JobCommentAnchor, JobCommentFeedbackAnchor} from './job-contract.ts';
+import type {Feedback} from './session.ts';
+import type {CompareFeedback} from './compare-session.ts';
 export interface MarkPoint {x:number;y:number}
 export interface MarkRegion {x:number;y:number;width:number;height:number}
 
@@ -31,6 +33,14 @@ export function projectComments(comments: readonly JobComment[]): string {
  const text = blocks.join('\n\n');
  if (text.length > 10000) throw new Error('JOB_ACT_INVALID');
  return text;
+}
+/** Pure preparation only: the caller still decodes the complete source-bound envelope. */
+export function feedbackItemComments(items: readonly (Feedback | CompareFeedback)[]): {text: string; anchor: JobCommentFeedbackAnchor}[] {
+  return items.map(({summary, ...anchor}) => ({text: summary, anchor: structuredClone(anchor)}));
+}
+/** Mapping comes from the decoded plan/ask, never from an inferred checkpoint ID. */
+export function checkpointNoteComments(value: Pick<JobActValues['checkpoint'], 'checkpointId' | 'planStepId'> & {note: string}): JobComment[] {
+  return [{text: value.note, anchor: {checkpointId: value.checkpointId, planStepId: value.planStepId}}];
 }
 export const commentModes=['setup','animate','compare'] as const;
 export type CommentMode=typeof commentModes[number];

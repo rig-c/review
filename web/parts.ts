@@ -6,7 +6,6 @@ import {bindStageComments,type CommentUiPose,type CommentCodec} from './stage-co
 import {parsePartsIssue,assertPartsIssueBinding,snapImageRegion,type PartsComment,type PartsIssue} from '../src/parts-comment.ts';
 import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
 import {textEntryFocused,createViewControls} from './view-controls.ts';
-import {stagePartsSelectionIndex,type StagePartsState} from './stage-nav.ts';
 import type {JobEnabledActKind,UISubmissionV3} from '../src/job-contract.ts';
 import type {LegacyPartsVerdictView} from '../src/parts-view.ts';
 /**
@@ -21,6 +20,19 @@ import type {LegacyPartsVerdictView} from '../src/parts-view.ts';
 import { applyDomI18n, onLanguageChange, t } from './i18n.ts';
 import { flagLabel, readingGroup, countedFlag } from './parts-flags.ts';
 import { paintAssembly, pickAssembly, paintAssemblyOutline, frontParts, paintAlphaOnly, paintBackground, paintPart, paintMesh, paintOverlay, paintPaintingCrop, paintFootprints } from './parts-render.ts';
+
+export interface StagePartsState {
+ inspectionSourceHash:string;part:string;imageHash:string;box:{x:number;y:number;w:number;h:number};mapping:{skin:string;slot:string;attachment:string};
+ rig:{zoom:number;center:{x:number;y:number}|null};reference:{zoom:number;center:{x:number;y:number}|null};cameraSync:boolean;
+ bg:string;alpha:boolean;footprints:boolean;view:'item'|'page'|'assembled';mesh:boolean;
+}
+/** Navigation state transfers only over exact original-art/package identity and the same draft address. */
+export function stagePartsSelectionIndex(data:{inspectionSourceHash?:string;items:{name:string;imageHash?:string;x:number;y:number;w:number;h:number}[];draft?:{mappings:{part:string;skin:string;slot:string;attachment:string}[]}},saved:StagePartsState):number {
+ const i=data.items.findIndex(item=>item.name===saved.part&&item.imageHash===saved.imageHash&&(['x','y','w','h']as const).every(k=>item[k]===saved.box[k]));
+ const m=data.draft?.mappings.find(m=>m.part===saved.part);
+ if(i<0||data.inspectionSourceHash!==saved.inspectionSourceHash||!m||(['skin','slot','attachment']as const).some(k=>m[k]!==saved.mapping[k]))throw new Error('STAGE_DRAFT_MISMATCH');
+ return i;
+}
 
 export interface Mesh { vertices: number[]; triangles: number[]; figures: Record<string, unknown> }
 export interface Item { mesh?: Mesh; meshUnavailable?: 'PARTS_MESH_GENERATED'; name: string; index: number; x: number; y: number; w: number; h: number; page?: string; degrees?: number; image?: boolean;imageHash?:string }

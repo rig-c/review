@@ -101,7 +101,7 @@ class Node {
  get classList(){return {contains:(name:string)=>this.classes.has(name)};}
  get ownerDocument(){return this.root().doc!;}
  root():Node{return this.parent?this.parent.root():this;}
- append(...nodes:Node[]){for(const node of nodes){node.parent=this;this.children.push(node);}}
+ append(...nodes:Node[]){for(const node of nodes){if(node.parent)node.parent.children=node.parent.children.filter(child=>child!==node);node.parent=this;this.children.push(node);}}
  all():Node[]{return this.children.flatMap(n=>[n,...n.all()]);}
  contains(node:unknown):boolean{return node===this||this.children.some(n=>n.contains(node));}
  querySelectorAll(selector:string){if(selector!=='button[data-block-target]')throw new Error(selector);return this.all().filter(n=>n.tag==='button'&&'blockTarget'in n.dataset);}
@@ -120,7 +120,7 @@ class Node {
 interface FakeEvent {type:string;target:Node;key:string;defaultPrevented:boolean;preventDefault():void}
 
 /** The fake page built from the real index.html: the two Inspector sections, every element in them, attributes and all. */
-async function openPage(changedFn?:()=>void){
+async function openPage(changedFn?:()=>void,bottomMode=false){
  const html=await indexHtml(),page=new Node('body'),doc={getElementById:(id:string)=>page.all().find(n=>n.id===id)??null,activeElement:null as Node|null};page.doc=doc;
  for(const id of ['inspector-rig','inspector-playback']){
   const at=html.indexOf(` id="${id}"`),open=html.lastIndexOf('<',at);const stack:Node[]=[page];
@@ -134,12 +134,13 @@ async function openPage(changedFn?:()=>void){
   }
  }
  const section=(id:string)=>doc.getElementById(id)!;let changed=0;
+ const strip=new Node('nav'),comment=new Node('button'),panel=new Node('section');comment.setAttribute('id','workspace-tab-feedback');panel.setAttribute('id','inspector-feedback');page.append(strip,panel);
  Node.log=[];
- const ui=bindInspectorBlocks({sections:[section('inspector-rig') as unknown as HTMLElement,section('inspector-playback') as unknown as HTMLElement],changed:()=>{changed++;changedFn?.();}});
+ const ui=bindInspectorBlocks({sections:[section('inspector-rig') as unknown as HTMLElement,section('inspector-playback') as unknown as HTMLElement],...(bottomMode?{bottom:{strip:strip as unknown as HTMLElement,comment:comment as unknown as HTMLButtonElement,panel:panel as unknown as HTMLElement}}:{}),changed:()=>{changed++;changedFn?.();}});
  const tab=(target:string)=>doc.getElementById(`block-tab-${target}`)!;
  const shown=(container:string)=>section(container).children.filter(n=>n.attrs.get('role')==='tabpanel'&&!n.hidden).map(n=>n.id);
  const selected=(container:string)=>section(container).all().filter(n=>n.attrs.get('role')==='tab'&&n.attrs.get('aria-selected')==='true').map(n=>n.dataset.blockTarget);
- return {page,doc,ui,section,tab,shown,selected,changed:()=>changed};
+ return {page,doc,ui,section,tab,shown,selected,strip,comment,panel,changed:()=>changed};
 }
 
 test('selecting a tab shows its panel alone, moves aria-selected and the roving tabindex, and scrolls nothing',async()=>{
@@ -333,4 +334,17 @@ test('#666 restore leaves remembered user offsets intact and dispose/rebind remo
  const rebound=bindInspectorBlocks({sections:[rig as unknown as HTMLElement]});
  app.tab('chest-regions').click();expect(rebound.state()).toEqual({rig:'chest-regions'});expect(app.changed()).toBe(count);
  rebound.dispose();
+});
+
+
+test('#735 header mode swaps existing block rows and one Comments tab, preserving mode selections and input nodes',async()=>{
+ const app=await openPage(undefined,true),meshInput=app.doc.getElementById('mesh-density')??app.section('mesh-panel').all().find(n=>n.tag==='input')!;
+ const rows=app.strip.children.slice();expect(rows).toHaveLength(2);expect(rows.map(row=>row.hidden)).toEqual([false,true]);
+ app.tab('mesh-panel').click();meshInput.value='preserve draft';app.comment.click();expect(app.ui.state()).toEqual({rig:'feedback',playback:'motion-tools'});expect(app.panel.hidden).toBe(false);expect(app.section('inspector-rig').dataset.comments).toBe('true');
+ app.ui.activate('playback');expect(rows.map(row=>row.hidden)).toEqual([true,false]);expect(app.panel.hidden).toBe(true);expect(app.comment.parent).toBe(rows[1]!);expect(rows[0]!.all()).not.toContain(app.comment);
+ app.comment.key('End');expect(app.ui.state().playback).toBe('feedback');expect(app.panel.hidden).toBe(false);app.tab('physics-panel').click();
+ app.ui.activate('rig');expect(app.panel.hidden).toBe(false);expect(app.comment.parent).toBe(rows[0]!);expect(app.comment.getAttribute('aria-selected')).toBe('true');app.tab('mesh-panel').click();expect(app.panel.hidden).toBe(true);expect(meshInput.value).toBe('preserve draft');
+ app.ui.activate('playback');expect(app.ui.state().playback).toBe('physics-panel');
+ app.ui.restore({rig:'feedback',playback:'report-panel'});expect(app.ui.state()).toEqual({rig:'feedback',playback:'report-panel'});app.ui.activate('rig');expect(app.panel.hidden).toBe(false);
+ expect(app.page.all().filter(n=>n.id==='workspace-tab-feedback')).toHaveLength(1);app.ui.dispose();
 });

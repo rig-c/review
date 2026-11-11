@@ -10,7 +10,6 @@ import type {
     JobCheckpointTable,
     JobInterviewDiagnostics,
     JobResult,
-    JobUISubmission,
     PendingAskV3,
     JobPanelComposition,
     PanelComponent,
@@ -26,13 +25,13 @@ import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
 import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {JOB_HUB_READY, jobHubMessageMatches, type JobHubBinding} from './job-hub.ts';
-import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
+import {recordJobRigDraw, jobRigDrawState, presentJobRigStage,
     type JobRigDraw, type JobRigDrawState} from './job-rig-capture.ts';
 import {advancePlayback} from './playback-clock.ts';
-import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
+import {createJobRigScreen, isJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
+import type {JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl,createViewControls} from './view-controls.ts';
 import {SENTINELS} from './parts-render.ts';
-import {CanvasRenderer} from '@rig-c/play';
 import {JOB_COMMENTS_ACT_SCHEMA, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsSource, PartsHost} from './parts.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
@@ -1378,7 +1377,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         submissionId: string;
         dirty: boolean;
         submitting: boolean;
-        rigSubmission: ReturnType<typeof createJobRigSubmission>;
     };
     type PreparedWindow = JobPreparedInspection & {
         element: HTMLElement;
@@ -1505,34 +1503,14 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     function rigDrawState(): JobRigDrawState {
         const owner = current, player = owner?.player;
         if (!owner || !player || !hubVisible) throw new Error('JOB_STILL_CAPTURE_FAILED');
-        const pane = el('rig-viewport'), root = owner.rigRoot, rect = pane.getBoundingClientRect();
-        const ratio = globalThis.devicePixelRatio || 1;
-        const frame = viewport.paneFrame('rig'), camera = viewport.numericView().cameras.rig;
-        if (!frame || !camera || !pane.isConnected || !root.isConnected || el('rig-pane').hidden ||
-            rect.width <= 0 || rect.height <= 0) throw new Error('JOB_STILL_CAPTURE_FAILED');
-        const style = getComputedStyle(root), paneStyle = getComputedStyle(pane);
-        const plain = style.filter === 'none' && style.perspective === 'none' && style.opacity === '1' &&
-            paneStyle.filter === 'none' && paneStyle.transform === 'none' && paneStyle.perspective === 'none' && paneStyle.opacity === '1';
-        const presentation = owner.rigPresentation;
-        const canvas = presentation?.canvas;
-        const pixels = canvas?.getBoundingClientRect();
-        const canvasStyle = canvas ? getComputedStyle(canvas) : null;
-        if (canvas && (!canvas.isConnected || canvasStyle?.visibility !== 'visible' ||
-            canvasStyle.display === 'none' || canvasStyle.opacity !== '1' || canvasStyle.filter !== 'none' ||
-            canvasStyle.transform !== 'none')) throw new Error('JOB_STILL_CAPTURE_FAILED');
-        return {player, presentation, frameGeneration: owner.inspection?.frame('single')?.generation,
+        return jobRigDrawState({pane: el('rig-viewport'), paneHidden: el('rig-pane').hidden, root: owner.rigRoot, player,
+            presentation: owner.rigPresentation, frameGeneration: owner.inspection?.frame('single')?.generation,
+            camera: viewport.numericView().cameras.rig, frame: viewport.paneFrame('rig'),
             source: {pageId, publicationId: owner.display.publication.publicationId,
                 instanceKey: owner.display.publication.instanceKey, sourceHash: owner.display.publication.source.sourceHash},
-            layout: JSON.stringify([
-                pane.clientWidth, pane.clientHeight, rect.width, rect.height, ratio,
-                root.getAttribute('style'), style.transform, camera, presentation?.area, presentation?.ratio,
-                pixels ? jobRigPixelPlacement(rect, pixels, ratio) : null,
-                pixels?.width, pixels?.height, canvas?.width, canvas?.height, canvas?.getAttribute('style'),
-            ]),
-            defaultCamera: plain && camera.zoom === 1 && camera.center.x === frame.center.x && camera.center.y === frame.center.y,
             wholeRig: !selectedPart && !owner.inspection?.value() && player.slots === null &&
                 layers.images && !layers.mesh && !layers.bones && !stageBackground,
-            playing};
+            playing});
     }
     function rememberDraw(): void {
         const owner = current;
@@ -1556,12 +1534,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             if (!hubVisible || !player || !owner.assets || !posed || !camera) {
                 throw new Error('JOB_STILL_CAPTURE_FAILED');
             }
-            const renderer = player.renderer;
-            const presentation = presentJobRigViewport({pane, root: owner.rigRoot, images: true,
-                canvas: renderer instanceof CanvasRenderer ? renderer.canvas : undefined,
-                backend: renderer instanceof CanvasRenderer ? renderer.backendActive : renderer.meshBackendActive},
-                {camera, posed, assets: owner.assets});
-            pane.append(presentation.canvas);
+            const presentation = presentJobRigStage({pane, root: owner.rigRoot, player, camera, posed, assets: owner.assets});
             owner.rigPresentation = presentation;
             pane.dataset.jobRigCanonical = '';
             drawn.set(owner, recordJobRigDraw(rigDrawState(), ++drawGeneration));
@@ -1679,16 +1652,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         if (playing && current === expectedOwner && current.player === expectedPlayer && hubVisible) {
             armPlayback(expectedOwner, expectedPlayer);
         }
-    }
-    function copyRigVerdict(ask: PendingAskV3, owner: JobPreparedInspection) {
-        if (owner !== current || ask.publicationId !== owner.display.publication.publicationId) {
-            throw new Error('JOB_STILL_BINDING_MISMATCH');
-        }
-        assertJobAskSource(ask, owner.display);
-        return freezeJobRigCapture(drawn.get(owner), rigDrawState(), ask.askId, () => {
-            if (!owner.rigPresentation) throw new Error('JOB_STILL_CAPTURE_FAILED');
-            return copyJobRigViewport(owner.rigPresentation);
-        });
     }
     const referenceSelection = createJobReferenceSelection<JobReferenceView>({
         current: () => ({owner: current, time}),
@@ -1849,6 +1812,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
         assertJobAskSource(ask, prepared.display);
+        // Rig verdicts belong to the shared screen; unsupported combinations have no job-window form.
+        if (ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review')
+            throw new Error('JOB_ACT_KIND_DISABLED');
         const form = node('form');
         form.dataset.jobAsk = ask.askId;
         const fields = node('fieldset');
@@ -2007,7 +1973,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             };
             submitKey = 'job.partsApprove';
         }
-        else if (subject.kind === 'review-verdict') {
+        else if (subject.kind === 'review-verdict' && (subject.stage === 'image-review' || subject.stage === 'direction-review')) {
             const verdict = selectValues(['pending', 'approved', 'changes-requested'], ['Pending', 'Approved', 'Changes requested']);
             verdict.name = 'verdict';
             fields.append(verdict);
@@ -2067,7 +2033,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         status.setAttribute('role', 'status');
         form.append(status);
         const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
-            submitting: false, rigSubmission: createJobRigSubmission() };
+            submitting: false };
         const signoffSubmissionId = crypto.randomUUID();
         try {
             const saved = JSON.parse(localStorage.getItem(localDraftKey(prepared.display)) ?? 'null');
@@ -2097,7 +2063,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             }
         }
         catch { /* Invalid or unavailable local drafts grant no submission authority. */ }
-        form.oninput = () => { entry.dirty = true; entry.submissionId = crypto.randomUUID(); entry.rigSubmission.reset(); saveDraft(); };
+        form.oninput = () => { entry.dirty = true; entry.submissionId = crypto.randomUUID(); saveDraft(); };
         form.onsubmit = async (event) => {
             event.preventDefault();
             const state = window.state();
@@ -2110,11 +2076,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     expectedGeneration: state.generation, submissionId: entry.submissionId, value: read() } as UISubmissionV3;
                 const activeAsk = state.pending.find(item => item.askId === ask.askId);
                 if (!activeAsk) throw new Error('JOB_ASK_INVALID');
-                const pending = subject.kind === 'review-verdict' && subject.stage === 'rig-review'
-                    ? entry.rigSubmission.prepare(input as JobUISubmission, () => copyRigVerdict(activeAsk, prepared)) : Promise.resolve(input);
                 entry.submitting = true;
                 fields.disabled = true;
-                const frozen = await pending;
+                const frozen = await Promise.resolve(input);
                 if (entry.submissionId !== frozen.submissionId) throw new Error('JOB_STILL_BINDING_MISMATCH');
                 if (subject.kind === 'parts-verdict') window.refresh();
                 const result = subject.kind === 'parts-verdict'
@@ -2123,7 +2087,6 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     throw new Error(result.error.code);
                 entry.submitting = false;
                 entry.dirty = false;
-                entry.rigSubmission.reset();
                 status.dataset.jobText = 'job.saved';
                 status.textContent = t('job.saved');
                 saveDraft();
@@ -2802,10 +2765,19 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
     function announceHubFrame(): void {
         if (hubIncarnation) globalThis.parent.postMessage({...hubBinding(), schema: JOB_HUB_READY}, location.origin);
     }
+    // #709: a rig publication opens the one review screen; the job window keeps every other subject.
+    const rigScreen = createJobRigScreen({host, pageId, access, translate: t, refusal: jobWindowRefusal,
+        window: {state: () => window.state(), submit: input => window.submit(input)},
+        routes: display => jobPublicationRoutes(display, location.origin), load: () => import('./main.ts')});
     const window = createJobWindow({ jobId: access.jobId, pageId, transport,
         previousDisplayed, initialRetainedDrafts,
         adapter: {
-            async prepare(display, signal): Promise<PreparedWindow> {
+            async prepare(display, signal): Promise<PreparedWindow | JobRigScreenPrepared> {
+                // The rig composition cannot be unmounted in place: another publication reopens the page on its route.
+                if (rigScreen.mounted()) { location.reload(); return new Promise<never>(() => {}); }
+                const rig = await rigScreen.prepare(display, signal);
+                if (rig && current) { location.reload(); return new Promise<never>(() => {}); }
+                if (rig) return rig;
                 const inspection = await prepareJobInspection(display, signal);
                 try {
                     const element = build(inspection);
@@ -2819,8 +2791,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                     throw error;
                 }
             },
-            captureDraft() { saveDraft(); const dirty = [...forms].filter(([, item]) => item.dirty); return dirty.length ? dirty.map(([askId, item]) => ({ askId, value: item.read() })) : null; },
+            captureDraft() { if (rigScreen.mounted()) return null; saveDraft(); const dirty = [...forms].filter(([, item]) => item.dirty); return dirty.length ? dirty.map(([askId, item]) => ({ askId, value: item.read() })) : null; },
             commit(prepared, display) {
+                if (isJobRigScreen(prepared)) { unbindLayerShortcuts(); return rigScreen.commit(prepared); }
                 // Pending asks can arrive while assets load. Finish their forms before the visible replacement.
                 const asks = window.state().pending.filter(ask => !(partsPanels.has(prepared) &&
                     ask.subject.kind === 'signoff' && ask.subject.stage === 'parts-review'));
@@ -2954,6 +2927,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 }
             },
             async painted(prepared, signal) {
+                if (isJobRigScreen(prepared)) return rigScreen.painted(prepared, signal);
                 if (partsPanels.has(prepared)) {
                     await mountJobParts(prepared, signal);
                     return;
@@ -2971,8 +2945,13 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 if (signal.aborted)
                     throw new Error('JOB_PRELOAD_CANCELLED');
             },
-            discard(prepared) { prepared.dispose(); },
+            discard(prepared) { if (!isJobRigScreen(prepared)) prepared.dispose(); },
             changed(state) {
+                if (rigScreen.mounted()) {
+                    rigScreen.changed(state); announceHubFrame();
+                    if (state.receipt && !state.preparing) events?.displayed();
+                    return;
+                }
                 notice.dataset.failed = String(!!state.error);
                 if (state.error)
                     notice.textContent = state.displayed && state.error !== 'JOB_WINDOW_CLEANUP_FAILED'

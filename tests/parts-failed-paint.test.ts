@@ -5,7 +5,7 @@ import ts from 'typescript';
 import { createPartsViewport } from '../web/parts-viewport-provider.ts';
 import { t } from '../web/i18n.ts';
 import { defaultPartsComparison } from '../src/parts-comparison.ts';
-import type { StagePartsState } from '../web/stage-nav.ts';
+import type { StagePartsState } from '../web/parts.ts';
 
 const productSource = readFileSync(new URL('../web/parts.ts', import.meta.url), 'utf8');
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -117,7 +117,7 @@ function makeHarness(options?: { painting?: boolean; mode?: 'parts' | 'atlas' })
     node.name.getText() === 'restore' && ts.isArrowFunction(node.initializer));
   const restoreCallback = restoreProperty.slice(restoreProperty.indexOf(':') + 1);
   const stageRestore = productNode(src, node => ts.isFunctionDeclaration(node) && node.name?.text === 'restoreStageParts');
-  const selectionSource = readFileSync(new URL('../web/stage-nav.ts', import.meta.url), 'utf8');
+  const selectionSource = readFileSync(new URL('../web/parts.ts', import.meta.url), 'utf8');
   const selection = productNode(selectionSource, node => ts.isFunctionDeclaration(node) &&
     node.name?.text === 'stagePartsSelectionIndex').replace('export function', 'function');
   const paintSlice = src.slice(src.indexOf('const itemImage ='), src.indexOf('\nfunction renderComparison('));
