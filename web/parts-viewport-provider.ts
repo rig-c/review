@@ -2,7 +2,8 @@
 import {createViewportController,createViewportState,type ViewportState,type ViewportController,type CameraTarget,type ViewportProvider} from './viewport-controller.ts';
 import {t} from './i18n.ts';
 
-export interface PartsViewportHost {el:ViewportProvider['el'];canvas:HTMLCanvasElement;message:ViewportProvider['message'];reference:()=>HTMLCanvasElement|null;frameSize:(target:CameraTarget)=>{w:number;h:number}|null}
+interface PartsFrame {w:number;h:number;world?:{box:{x:number;y:number;width:number;height:number};origin:{x:number;y:number};scale:{x:number;y:number}}}
+export interface PartsViewportHost {el:ViewportProvider['el'];canvas:HTMLCanvasElement;message:ViewportProvider['message'];reference:()=>HTMLCanvasElement|null;frameSize:(target:CameraTarget)=>PartsFrame|null}
 export function createPartsViewportProvider(host:PartsViewportHost,state:ViewportState):ViewportProvider {
  let dimensionProbe:HTMLCanvasElement|undefined;
  const ordinaryExtent=(value:number)=>Number.isInteger(value)&&value>=0&&value<=0x7fffffff;
@@ -14,15 +15,16 @@ export function createPartsViewportProvider(host:PartsViewportHost,state:Viewpor
   return {width:probe.width,height:probe.height};
  };
  const provider:ViewportProvider={el:host.el,message:host.message,nativeScale:true,
+ get absoluteSync(){return !!host.frameSize('rig')?.world;},
  panes:(['rig','reference'] as const).map(target=>({target,viewport:host.el(target+'-viewport'),pane:host.el(target+'-pane')})),
  geometry:target=>{
   const declared=host.frameSize(target);
   const size=declared?canvasSize(declared):target==='rig'?host.canvas:host.reference();
   if(!size)return null;
   const {width,height}=size;
-  return {space:'image',box:{x:0,y:0,width,height},marginX:24,marginY:24};
+  return {space:'image',box:declared?.world?.box??{x:0,y:0,width,height},marginX:24,marginY:24};
  },
- layoutKey:()=>[host.canvas.width,host.canvas.height,host.reference()?.width??0,host.reference()?.height??0,host.el('rig-viewport').clientWidth,host.el('rig-viewport').clientHeight].join(':'),selection:()=>({selected:false,bounds:null}),
+ layoutKey:()=>JSON.stringify([host.frameSize('rig'),host.frameSize('reference'),state.cameraSync,host.canvas.width,host.canvas.height,host.reference()?.width??0,host.reference()?.height??0,host.el('rig-viewport').clientWidth,host.el('rig-viewport').clientHeight]),selection:()=>({selected:false,bounds:null}),
  render:controller=>{
   // Translated controls can wrap the toolbar and resize its sibling panes.
   controller.renderCameraControls();
@@ -30,9 +32,10 @@ export function createPartsViewportProvider(host:PartsViewportHost,state:Viewpor
    const frame=controller.paneFrame(target);if(!frame)continue;
    const c=controller.paneCamera(target),center=c.center??frame.center;
    const root=host.el(target==='rig'?'rig-root':'reference-content');
-   root.style.left=`${frame.width/2-center.x*c.zoom}px`;
-   root.style.top=`${frame.height/2-center.y*c.zoom}px`;
-   root.style.transform=`scale(${c.zoom})`;
+   const world=host.frameSize(target)?.world,origin=world?.origin??{x:0,y:0},scale=world?.scale??{x:1,y:1};
+   root.style.left=`${frame.width/2+(origin.x-center.x)*c.zoom}px`;
+   root.style.top=`${frame.height/2+(origin.y-center.y)*c.zoom}px`;
+   root.style.transform=scale.x===1&&scale.y===1?`scale(${c.zoom})`:`scale(${c.zoom*scale.x},${c.zoom*scale.y})`;
    if(target==='rig'){state.rigScale=c.zoom;state.displayedCenter={...center};}
   }
  },
@@ -66,6 +69,7 @@ export function bindPartsSubject(host:{
  const data=host.data,hidden=new Set<string>(),images=new Map<number,Promise<HTMLImageElement>>();
  let selected:string|null=null,solo=false,comparison:PartsComparison=defaultPartsComparison(),token=0,disposed=false,busy=false,failed=false;
  let drawnFrame:{w:number;h:number}|null=null,drawnReferenceFrame:{w:number;h:number}|null=null;
+ let drawnRegion:Box|null=null,drawnSolo=false;
  let original:Promise<HTMLImageElement>|null=null,comments:ReturnType<typeof bindStageComments<PartsIssue,PartsPose>>|null=null;
  const makeCanvas=(w:number,h:number)=>Object.assign(document.createElement('canvas'),{width:w,height:h});
  const item=()=>data.items.find(item=>item.name===selected)??data.items[0]!;
@@ -117,8 +121,11 @@ export function bindPartsSubject(host:{
    if(host.mesh())for(const layer of layers){if(!layer.box.mesh)continue;ctx.save();if(assembled())ctx.translate(layer.box.x,layer.box.y);paintMesh(ctx,layer.image,layer.box.w,layer.box.h,layer.box.mesh,makeCanvas,{tint:selected===null||selected===layer.box.name});ctx.restore();}
    if(disposed||navigation!==token)return;
    host.canvas.width=frame.w;host.canvas.height=frame.h;host.canvas.getContext('2d')!.drawImage(raster,0,0);
+   const selectionChanged=drawnRegion?.name!==referenceBox?.name||drawnSolo!==!assembled();
+   drawnRegion=referenceBox;drawnSolo=!assembled();
    if(reference){host.referenceCanvas.width=reference.width;host.referenceCanvas.height=reference.height;host.referenceCanvas.getContext('2d')!.drawImage(reference,0,0);drawnReferenceFrame={w:reference.width,h:reference.height};}
    drawnFrame={w:frame.w,h:frame.h};failed=false;host.drawn({state:'loaded'});host.el('rig-empty').hidden=true;host.el('rig-label').textContent=t(assembled()?'Assembled parts':'Selected part');
+   if(data.painting&&host.viewport.state.cameraSync&&selectionChanged)host.viewport.requestFit();
    host.viewport.fitCamera();comments?.refresh();
   }catch(error){if(!disposed&&navigation===token){failed=true;drawnFrame=null;drawnReferenceFrame=null;host.drawn({state:'failed',reason:error instanceof Error?error.message:'PARTS_PAINT_FAILED'});host.canvas.getContext('2d')?.clearRect(0,0,host.canvas.width,host.canvas.height);host.referenceCanvas.getContext('2d')?.clearRect(0,0,host.referenceCanvas.width,host.referenceCanvas.height);host.message(error instanceof Error?error.message:'PARTS_PAINT_FAILED',true);throw error;}}
   finally{for(const bitmap of bitmaps)bitmap.close();if(navigation===token){busy=false;host.el('stage-layout').setAttribute('aria-busy','false');comments?.refresh();}}
@@ -137,14 +144,22 @@ export function bindPartsSubject(host:{
   update:(existing,summary,parts)=>prepare({...existing,summary,parts:existing.view.mode==='assembled'?partsBinding(parts??[]):existing.parts}),
  };
  const pose=():PartsPose|null=>{
-  const camera=host.viewport.numericView().cameras.rig,entry=item();if(!camera||!entry||busy||failed||disposed)return null;
+  let camera=host.viewport.numericView().cameras.rig;const entry=item();if(!camera||!entry||busy||failed||disposed)return null;
+  if(data.painting&&!assembled())camera={...camera,center:{x:camera.center.x-entry.x,y:camera.center.y-entry.y},visible:{...camera.visible,x:camera.visible.x-entry.x,y:camera.visible.y-entry.y}};
   return {mode:'parts',item:entry,sourceHash:data.sourceHash,camera,view:{mode:assembled()?'assembled':'item',camera:{zoom:camera.zoom,center:camera.center,viewport:camera.viewport},cameraSync:host.viewport.state.cameraSync,referenceCamera:null,background:'checker',alpha:false,footprints:false,mesh:host.mesh(),comparison:{...comparison},...(assembled()&&EMIT_UNPINNED_CREATE_FIELDS?{visibleLayers:partsBinding(data.items.filter(item=>!hidden.has(item.name)).map(item=>item.name))}:{})},capture:{pane:host.el('rig-viewport'),root:host.el('rig-root'),images:true,canvas:host.canvas,backend:'canvas2d',nearest:true}};
  };
  comments=bindStageComments({toolbar:host.toolbar,listHost:host.commentsHost,toggle:host.el<HTMLButtonElement>('stage-comment'),viewports:{rig:host.el('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
-  restore:async raw=>{const issue=parsePartsIssue(raw,false,true,false);assertPartsIssueBinding(issue,sourceItems(),data.sourceHash);selected=issue.parts[0]!.name;solo=issue.view.mode==='item';comparison=issue.view.comparison??defaultPartsComparison();host.restoreMesh(issue.view.mesh);if(issue.view.visibleLayers){const visible=new Set(issue.view.visibleLayers.map(part=>part.name));hidden.clear();for(const item of data.items)if(!visible.has(item.name))hidden.add(item.name);}await paint();host.viewport.writeCamera('rig',issue.view.camera);host.viewport.fitCamera();host.selectionChanged();},
+  restore:async raw=>{const issue=parsePartsIssue(raw,false,true,false);assertPartsIssueBinding(issue,sourceItems(),data.sourceHash);selected=issue.parts[0]!.name;solo=issue.view.mode==='item';comparison=issue.view.comparison??defaultPartsComparison();host.restoreMesh(issue.view.mesh);if(issue.view.visibleLayers){const visible=new Set(issue.view.visibleLayers.map(part=>part.name));hidden.clear();for(const item of data.items)if(!visible.has(item.name))hidden.add(item.name);}await paint();host.viewport.writeCamera('rig',data.painting&&solo?{...issue.view.camera,center:{x:issue.view.camera.center.x+item().x,y:issue.view.camera.center.y+item().y}}:issue.view.camera);host.viewport.activateCamera('rig');if(host.viewport.state.cameraSync)host.viewport.alignCameras();host.viewport.fitCamera();host.selectionChanged();},
   feedback:()=>host.issues,locked:host.locked,refusal:host.refusal,add:issue=>host.issues.push(issue),changed:host.changed,error:host.message,blocked:()=>busy||failed||disposed,busy:()=>busy,codec});
  return {
-  frameSize:(target:CameraTarget)=>target==='rig'?drawnFrame:drawnReferenceFrame,
+  frameSize:(target:CameraTarget):PartsFrame|null=>{
+   const frame=target==='rig'?drawnFrame:drawnReferenceFrame;if(!frame||!data.painting||!data.rigSize)return frame;
+   const full={x:0,y:0,w:data.rigSize[0],h:data.rigSize[1]},region=drawnRegion??full;
+   const bounds=target==='reference'||host.viewport.state.cameraSync||drawnSolo?region:full;
+   const origin=target==='reference'||drawnSolo?{x:region.x,y:region.y}:{x:0,y:0};
+   const scale=target==='reference'&&!drawnRegion?{x:region.w/frame.w,y:region.h/frame.h}:{x:1,y:1};
+   return {...frame,world:{box:{x:bounds.x,y:bounds.y,width:bounds.w,height:bounds.h},origin,scale}};
+  },
   image:(index:number)=>{const entry=data.items.find(item=>item.index===index);if(!entry)return Promise.reject(new Error('PARTS_IMAGE_UNAVAILABLE'));return image(entry);},
   selected:()=>selected,solo:()=>solo,visible:(name:string)=>!hidden.has(name),issues:()=>host.issues,
   select:(name:string|null)=>{selected=name;if(name===null)solo=false;redraw();host.selectionChanged();},isolate:(value:boolean)=>{solo=value;redraw();host.selectionChanged();},

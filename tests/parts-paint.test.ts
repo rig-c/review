@@ -4,28 +4,39 @@ import {createCanvas} from '@napi-rs/canvas';
 import {readFile} from 'node:fs/promises';
 import {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop} from '../web/parts-render.ts';
 import {paintingRectangle,defaultPartsComparison} from '../src/parts-comparison.ts';
+import {createViewportController,createViewportState,type ViewportController} from '../web/viewport-controller.ts';
+import {createPartsViewportProvider} from '../web/parts-viewport-provider.ts';
+import {parsePartsIssue,assertPartsIssueBinding,type PartsIssue} from '../src/parts-comment.ts';
+import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(reason:Error)=>void;const promise=new Promise<T>((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};}
 const raster=(color:string)=>{const canvas=createCanvas(8,8),ctx=canvas.getContext('2d');ctx.fillStyle=color;ctx.fillRect(0,0,8,8);return canvas;};
 async function harness(withPainting=false){
  const source=await readFile(new URL('../web/parts-viewport-provider.ts',import.meta.url),'utf8'),start=source.indexOf(' async function paint():Promise<void>{'),end=source.indexOf(' const redraw=',start);
  const body=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end));
+ const frameStart=source.indexOf('  frameSize:(target:CameraTarget):PartsFrame|null=>{'),frameEnd=source.indexOf('  image:',frameStart),frameBody=new Bun.Transpiler({loader:'ts'}).transformSync('const frameSize='+source.slice(frameStart+'  frameSize:'.length,frameEnd).trim().replace(/,$/,''));
+ const poseStart=source.indexOf(' const pose=():PartsPose|null=>{'),poseEnd=source.indexOf(' comments=bindStageComments',poseStart),poseBody=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(poseStart,poseEnd));
+ const restoreStart=source.indexOf('  restore:async raw=>'),restoreEnd=source.indexOf(',\n  feedback:',restoreStart),restoreBody=new Bun.Transpiler({loader:'ts'}).transformSync('const restore='+source.slice(restoreStart+'  restore:'.length,restoreEnd));
  const canvas=raster('#123456'),referenceCanvas=raster('#123456'),frames:unknown[]=[],messages:string[]=[],closed:number[]=[];
  const original=createCanvas(32,16),originalContext=original.getContext('2d');originalContext.fillStyle='#ff0000';originalContext.fillRect(0,0,16,16);originalContext.fillStyle='#00ff00';originalContext.fillRect(16,0,16,16);
  const paintingImage=Object.assign(original,{naturalWidth:32,naturalHeight:16});
- const data={mode:'parts',rigSize:[16,8],painting:withPainting?{width:32,height:16}:undefined,items:[{name:'a',index:0,x:0,y:0,w:8,h:8},{name:'b',index:1,x:8,y:0,w:8,h:8}]};
+ const data={sourceHash:'1'.repeat(64),mode:'parts',rigSize:[16,8],painting:withPainting?{width:32,height:16}:undefined,items:[{name:'a',imageHash:'2'.repeat(64),index:0,x:0,y:0,w:8,h:8},{name:'b',imageHash:'3'.repeat(64),index:1,x:8,y:0,w:8,h:8}]};
  let loader=(entry:{name:string})=>Promise.resolve(raster(entry.name==='a'?'#ff0000':'#00ff00'));
  let paintingLoader=()=>Promise.resolve(paintingImage);
  let request=async()=>new Response('pixels'),mesh=false;
  const nodes=new Map<string,{hidden:boolean;textContent:string;setAttribute():void}>();
- const host={data,canvas,referenceCanvas,images:()=>true,mesh:()=>mesh,el:(id:string)=>{if(!nodes.has(id))nodes.set(id,{hidden:false,textContent:'',setAttribute(){}});return nodes.get(id)!;},drawn:(state:unknown)=>frames.push(state),viewport:{fitCamera(){}},message:(value:string)=>messages.push(value),request:(path:string)=>request()};
+ const host={data,canvas,referenceCanvas,restoreMesh:(value:boolean)=>{mesh=value;},selectionChanged(){},images:()=>true,mesh:()=>mesh,el:(id:string)=>{if(!nodes.has(id))nodes.set(id,{hidden:false,textContent:'',setAttribute(){}});return nodes.get(id)!;},drawn:(state:unknown)=>frames.push(state),viewport:{state:{cameraSync:true},requestFit(){},fitCamera(){}},message:(value:string)=>messages.push(value),request:(path:string)=>request()};
  const api=new Function('host','data','image','painting','makeCanvas','deps',`
- let selected='a',solo=true,token=0,disposed=false,busy=false,failed=false,drawnFrame=null,drawnReferenceFrame=null,comparison={mode:'part',opacity:.5},comments=null;
- const {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,paintingRectangle,t,createImageBitmap}=deps;
+ let selected='a',solo=true,token=0,disposed=false,busy=false,failed=false,drawnFrame=null,drawnReferenceFrame=null,drawnRegion=null,drawnSolo=false,comparison={mode:'part',opacity:.5},comments=null;
+ const {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,paintingRectangle,defaultPartsComparison,t,createImageBitmap,parsePartsIssue,assertPartsIssueBinding,EMIT_UNPINNED_CREATE_FIELDS}=deps;
+ const sourceItems=()=>new Map(data.items.map(item=>[item.name,item]));
  const hidden=new Set(),item=()=>data.items.find(entry=>entry.name===selected),assembled=()=>!solo,box=()=>assembled()?{x:0,y:0,w:16,h:8}:item();
  ${body}
- return {paint,select(name){selected=name},assemble(){solo=false},difference(){comparison={mode:'difference',opacity:.5,threshold:0}},dispose(){disposed=true;++token},referenceFrame:()=>drawnReferenceFrame,state:()=>({busy,failed,drawnFrame})};
- `)(host,data,(entry:{name:string})=>loader(entry),()=>paintingLoader(),(w:number,h:number)=>createCanvas(w,h),{paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,paintingRectangle,t:(key:string)=>key,createImageBitmap:async()=>{const bitmap=raster('#ff0000') as ReturnType<typeof raster>&{close:()=>void};const id=closed.length;bitmap.close=()=>closed.push(id);return bitmap;}}) as {paint():Promise<void>;select(name:string|null):void;assemble():void;difference():void;dispose():void;referenceFrame():{w:number;h:number}|null;state():{busy:boolean;failed:boolean;drawnFrame:{w:number;h:number}|null}};
- return {api,canvas,referenceCanvas,paintingImage,frames,messages,closed,data,setLoader(value:typeof loader){loader=value;},setPaintingLoader(value:typeof paintingLoader){paintingLoader=value;},setRequest(value:typeof request){request=value;},mesh(value:boolean){mesh=value;},pixel:()=>[...canvas.getContext('2d').getImageData(3,3,1,1).data],referencePixel:()=>[...referenceCanvas.getContext('2d').getImageData(3,3,1,1).data]};
+ ${frameBody}
+ ${poseBody}
+ ${restoreBody}
+ return {restore,pose,frameSize,paint,select(name){selected=name},assemble(){solo=false},difference(){comparison={mode:'difference',opacity:.5,threshold:0}},dispose(){disposed=true;++token},referenceFrame:()=>drawnReferenceFrame,state:()=>({busy,failed,drawnFrame})};
+ `)(host,data,(entry:{name:string})=>loader(entry),()=>paintingLoader(),(w:number,h:number)=>createCanvas(w,h),{paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,paintingRectangle,defaultPartsComparison,parsePartsIssue,assertPartsIssueBinding,EMIT_UNPINNED_CREATE_FIELDS,t:(key:string)=>key,createImageBitmap:async()=>{const bitmap=raster('#ff0000') as ReturnType<typeof raster>&{close:()=>void};const id=closed.length;bitmap.close=()=>closed.push(id);return bitmap;}}) as {restore(raw:unknown):Promise<void>;pose():any;frameSize(target:'rig'|'reference'):{w:number;h:number;world?:{box:{x:number;y:number;width:number;height:number};origin:{x:number;y:number};scale:{x:number;y:number}}}|null;paint():Promise<void>;select(name:string|null):void;assemble():void;difference():void;dispose():void;referenceFrame():{w:number;h:number}|null;state():{busy:boolean;failed:boolean;drawnFrame:{w:number;h:number}|null}};
+ return {api,canvas,referenceCanvas,paintingImage,setViewport(value:ViewportController){host.viewport=value;},frames,messages,closed,data,setLoader(value:typeof loader){loader=value;},setPaintingLoader(value:typeof paintingLoader){paintingLoader=value;},setRequest(value:typeof request){request=value;},mesh(value:boolean){mesh=value;},pixel:()=>[...canvas.getContext('2d').getImageData(3,3,1,1).data],referencePixel:()=>[...referenceCanvas.getContext('2d').getImageData(3,3,1,1).data]};
 }
 test('#737 failed image clears old pixels and geometry; only a later successful draw restores loaded eligibility',async()=>{
  const h=await harness();await h.api.paint();expect(h.pixel()).toEqual([255,0,0,255]);const held=deferred<ReturnType<typeof raster>>();h.setLoader(()=>held.promise);const failed=h.api.paint();expect(h.api.state().busy).toBe(true);held.reject(new Error('source failed'));await expect(failed).rejects.toThrow('source failed');expect(h.pixel()).toEqual([0,0,0,0]);expect(h.api.state()).toEqual({busy:false,failed:true,drawnFrame:null});expect(h.frames.at(-1)).toEqual({state:'failed',reason:'source failed'});
@@ -47,12 +58,12 @@ test('#737 Mesh edges tint comes from real art alpha and disappears completely w
 test('#742 selected reference follows the producer box even in assembled mode; Whole restores original dimensions and pixels',async()=>{
  const h=await harness(true);h.api.assemble();await h.api.paint();expect(h.api.state().drawnFrame).toEqual({w:16,h:8});expect(h.api.referenceFrame()).toEqual({w:8,h:8});expect(h.referencePixel()).toEqual([255,0,0,255]);
  h.api.select('b');await h.api.paint();expect(h.referencePixel()).toEqual([0,255,0,255]);expect(h.api.state().drawnFrame).toEqual({w:16,h:8});
- h.api.select(null);await h.api.paint();expect(h.api.referenceFrame()).toEqual({w:32,h:16});expect(h.referenceCanvas.toBuffer('image/png')).toEqual(h.paintingImage.toBuffer('image/png'));
+ h.api.select(null);await h.api.paint();expect(h.api.referenceFrame()).toEqual({w:32,h:16});expect(h.api.frameSize('reference')!.world).toEqual({box:{x:0,y:0,width:16,height:8},origin:{x:0,y:0},scale:{x:.5,y:.5}});expect(h.referenceCanvas.toBuffer('image/png')).toEqual(h.paintingImage.toBuffer('image/png'));
 });
 test('#742 fractional crop uses continuous whole-canvas geometry and actual truncated canvas dimensions',async()=>{
  const h=await harness(true);Object.assign(h.data.items[0]!,{x:7.125,y:.375,w:5.75,h:6.5});await h.api.paint();
  const expected=createCanvas(5,6);paintPaintingCrop(expected.getContext('2d') as never,h.paintingImage as never,{x:14.25,y:.75,width:11.5,height:13},5.75,6.5,'checker');
- expect(h.api.referenceFrame()).toEqual({w:5,h:6});expect(h.referenceCanvas.toBuffer('image/png')).toEqual(expected.toBuffer('image/png'));
+ expect(h.api.referenceFrame()).toEqual({w:5,h:6});expect(h.api.frameSize('reference')!.world).toEqual({box:{x:7.125,y:.375,width:5.75,height:6.5},origin:{x:7.125,y:.375},scale:{x:1,y:1}});expect(h.referenceCanvas.toBuffer('image/png')).toEqual(expected.toBuffer('image/png'));
 });
 for(const late of ['resolve','reject','dispose']as const)test(`#742 delayed original ${late} never publishes stale reference pixels or geometry`,async()=>{
  const h=await harness(true),held=deferred<typeof h.paintingImage>(),entered=deferred<void>();h.setPaintingLoader(()=>{entered.resolve();return held.promise;});const old=h.api.paint();await entered.promise;
@@ -63,4 +74,23 @@ for(const late of ['resolve','reject','dispose']as const)test(`#742 delayed orig
 test('#742 original failure clears both old panes and their frames',async()=>{
  const h=await harness(true);await h.api.paint();h.setPaintingLoader(()=>Promise.reject(new Error('original failed')));await expect(h.api.paint()).rejects.toThrow('original failed');
  expect(h.pixel()).toEqual([0,0,0,0]);expect(h.referencePixel()).toEqual([0,0,0,0]);expect(h.api.referenceFrame()).toBeNull();expect(h.api.state().drawnFrame).toBeNull();
+});
+
+
+for(const mode of ['item','assembled']as const)test(`#742 restores ${mode} comment from Reference-active navigation and preserves local/world camera round trip`,async()=>{
+ const h=await harness(true),entry=h.data.items[0]!;Object.assign(entry,{name:'topwear',x:788,y:290,w:408,h:563});h.data.rigSize=[1920,1080];
+ const nodes=new Map<string,any>(),el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:655,clientHeight:471,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const state=createViewportState(),c=createViewportController(createPartsViewportProvider({el,canvas:h.canvas as never,reference:()=>h.referenceCanvas as never,frameSize:target=>h.api.frameSize(target==='rig'?'rig':'reference'),message(){}},state),state);
+ h.setViewport(c);h.api.select(entry.name);if(mode==='assembled')h.api.assemble();await h.api.paint();
+ const local={zoom:2,center:mode==='item'?{x:204,y:281.5}:{x:992,y:571.5},viewport:{width:655,height:471}},cropHash='4'.repeat(64);
+ const issue:PartsIssue={schema:'rig-review-parts-comment/2',id:'restore-roundtrip',summary:'Saved pointed inspection',parts:[{name:entry.name,imageHash:entry.imageHash}],sourceHash:h.data.sourceHash,imageRegion:mode==='item'?{x:2,y:3,width:8,height:9}:null,rigRegion:{x:790,y:293,width:8,height:9},view:{mode,camera:local,cameraSync:true,referenceCamera:null,background:'checker',alpha:false,footprints:false,mesh:false},crop:{path:`comment-crops/${cropHash}.png`,sha256:cropHash,width:4,height:5},nativeCrop:null};
+ c.panCamera('reference',23,17);expect(c.state.activeCamera).toBe('reference');const navigated=structuredClone(c.paneCamera('reference'));
+ await h.api.restore(issue);const expected={zoom:2,center:{x:992,y:571.5}};
+ expect(c.paneCamera('rig')).toEqual(expected);expect(c.paneCamera('reference')).toEqual(expected);expect(c.paneCamera('reference')).not.toEqual(navigated);expect(c.state.activeCamera).toBe('rig');
+ const pose=h.api.pose();expect(pose.view.camera).toEqual(local);expect(pose.camera.center).toEqual(local.center);expect(pose.view.mode).toBe(mode);
+ // Round-trip the actual production pose's camera through the actual restore callback while Reference is active again.
+ c.panCamera('reference',-11,9);await h.api.restore({...issue,view:{...issue.view,camera:pose.view.camera}});expect(c.paneCamera('rig')).toEqual(expected);expect(h.api.pose().view.camera).toEqual(local);
+ // OFF retains the independent peer even when restoring a Solo-local camera into rig-world coordinates.
+ c.setCameraSync(false);c.panCamera('reference',7,5);const independent=structuredClone(c.paneCamera('reference'));await h.api.restore(issue);expect(c.paneCamera('rig')).toEqual(expected);expect(c.paneCamera('reference')).toEqual(independent);expect(h.api.pose().view.camera).toEqual(local);
+ expect(issue.imageRegion).toEqual(mode==='item'?{x:2,y:3,width:8,height:9}:null);expect(issue.rigRegion).toEqual({x:790,y:293,width:8,height:9});
 });
