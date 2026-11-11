@@ -84,7 +84,7 @@ test('Settings changes future sync/idle defaults only; transient source state an
   app.choose('settings-theme','light');expect(app.theme()).toBe('light');
   app.choose('settings-language','ko');expect(app.ui.defaults().language).toBe('ko');expect(held).toEqual(before);
   const other=new WorkspacePreferenceStore({storage:{getItem:key=>app.values.get(key)??null,setItem:(key,value)=>app.values.set(key,value)},events:null,writer:'other'});other.update({panels:{leftWidth:400,rightWidth:500}});const event=new Event('storage');Object.assign(event,{key:workspacePreferenceKey,newValue:app.values.get(workspacePreferenceKey)});app.events.dispatchEvent(event);app.flush();expect(app.ui.defaults().panels.leftWidth).toBe(400);expect(held).toEqual(before);
-  app.get('settings-reset').click();expect(app.ui.defaults()).toMatchObject({theme:'light',language:'ko',defaultCameraSync:false,defaultIdleRepeat:false,panels:{leftWidth:170,rightWidth:260,inspectorHeight:350}});expect(held).toEqual(before);
+  app.get('settings-reset').click();expect(app.ui.defaults()).toMatchObject({theme:'light',language:'ko',defaultCameraSync:false,defaultIdleRepeat:false,panels:{leftWidth:170,rightWidth:260,inspectorHeight:120}});expect(held).toEqual(before);
   app.choose('settings-language','system');expect(app.ui.defaults().language).toBe('system');
   other.dispose();
  }finally{app.close();}
@@ -94,7 +94,7 @@ test('actual tab hooks retain independent x/y through resize and responsive draw
  const app=openHost();try{
   app.panels.view!.scrollLeft=33;app.panels.view!.scrollTop=420;app.activate('rig');app.panels.rig!.scrollLeft=11;app.panels.rig!.scrollTop=80;app.activate('view');expect(app.panels.view!.scrollLeft).toBe(33);expect(app.panels.view!.scrollTop).toBe(420);app.activate('rig');expect(app.panels.rig!.scrollTop).toBe(80);expect(JSON.parse(app.ui.scroll())).toMatchObject({view:{x:33,y:420},rig:{x:11,y:80}});
   app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();const right=app.get('parts-explorer');expect(right.parentElement?.id).toBe('workspace-drawer-rightWidth');app.ui.revealInspector();expect(app.get('workspace-drawer-inspectorHeight').open).toBe(true);
-  app.layout.clientWidth=1400;app.layout.clientHeight=900;app.ui.refresh();app.flush();expect(app.get('parts-explorer')).toBe(right);expect(right.parentElement).toBe(app.layout);expect(app.get('workspace-drawer-inspectorHeight').open).toBe(false);expect(app.ui.defaults().panels).toEqual({leftWidth:170,rightWidth:260,inspectorHeight:350});
+  app.layout.clientWidth=1400;app.layout.clientHeight=900;app.ui.refresh();app.flush();expect(app.get('parts-explorer')).toBe(right);expect(right.parentElement).toBe(app.layout);expect(app.get('workspace-drawer-inspectorHeight').open).toBe(false);expect(app.ui.defaults().panels).toEqual({leftWidth:170,rightWidth:260,inspectorHeight:120});
   expect(()=>app.ui.restoreScroll('{"unknown":{"x":1,"y":1}}')).toThrow('INSPECTOR_SCROLL');
  }finally{app.close();}
 });
