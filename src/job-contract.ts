@@ -524,8 +524,11 @@ export interface JobActValues {
  * supplies checkpoint ID, outcome and words only. Create derives execution
  * stage from its authoritative step phase/order. Review never stamps a stage.
  */
-export type JobUIActValues = Omit<JobActValues, 'checkpoint'> & {
+export type JobUIActValues = Omit<JobActValues, 'checkpoint' | 'review-verdict'> & {
   readonly checkpoint: Omit<JobActValues['checkpoint'], 'planStepId'>;
+  readonly 'review-verdict': JobImageReviewValue
+    | (JobModelReviewValue & {readonly stage: 'direction-review'})
+    | (JobModelReviewValue & {readonly stage: 'rig-review'; readonly feedback?: readonly Feedback[]});
 };
 
 export interface JobActSources {

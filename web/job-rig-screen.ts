@@ -5,7 +5,7 @@ import type {PartsSubjectData} from './parts-viewport-provider.ts';
  * Only review-verdict (rig-review) and checkpoint asks are answered here; a publication that also waits on
  * any other ask keeps the job window, and a later such ask reloads the page into it. */
 import type {ActV3, DisplayPublicationV3, JobResult, JobUISubmission, PendingAskV3, SourceV3, UISubmissionV3} from '../src/job-contract.ts';
-import type {ReviewSession} from '../src/session.ts';
+import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
 import {checkpointNoteComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
 import {copyJobRigViewport, createJobRigSubmission, freezeJobRigCapture, jobRigDrawState, presentJobRigStage, recordJobRigDraw} from './job-rig-capture.ts';
@@ -34,7 +34,7 @@ export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readon
 
 export type JobRigScreenDecision =
   | {readonly ask: PendingAskV3; readonly kind: 'checkpoint'; readonly value: Extract<JobUISubmission, {kind: 'checkpoint'}>['value']}
-  | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review'; verdict: 'approved' | 'changes-requested'; words: string}};
+  | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]}};
 /** The act bar's decisions as the pending asks' values. `words` is the comments' projection (act@6's), or empty;
  * a decision still pending is not sent, so a pending ask is never answered with "pending". Checkpoints go first. */
 export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'checkpoints' | 'feedback'>,
@@ -52,7 +52,8 @@ export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'c
   const verdict = open.find(ask => ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review');
   if (verdict && session.status !== 'pending') {
     decisions.push({ask: verdict, kind: 'review-verdict', value: {stage: 'rig-review', verdict: session.status,
-      words: session.feedback.length ? projectComments(feedbackItemComments(session.feedback)) : ''}});
+      words: session.feedback.length ? projectComments(feedbackItemComments(session.feedback)) : '',
+      ...(session.feedback.length ? {feedback: structuredClone(session.feedback)} : {})}});
   }
   return decisions;
 }
