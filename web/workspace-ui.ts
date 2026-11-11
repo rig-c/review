@@ -98,18 +98,23 @@ export interface WorkspaceUI {
  defaults:()=>WorkspacePreferences;beforeTab:()=>void;afterTab:()=>void;scroll:()=>string;restoreScroll:(value:unknown)=>void;
  revealInspector:()=>void;refresh:()=>void;dispose:()=>void;
 }
+/** Caller-owned shell regions. The left preference may retain a migrated screen's saved width. */
+export interface WorkspaceRegions {
+ layout:HTMLElement;left:HTMLElement;main:HTMLElement;stage:HTMLElement;bottom:HTMLElement;right?:HTMLElement;
+ columns?:WorkspaceColumns;
+}
 /** `currentTheme`, when given, is the appearance the Settings theme select shows; otherwise it shows the saved default. */
-export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{kind:string;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
+export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{kind:string;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
  const require=<T extends HTMLElement=HTMLElement>(id:string)=>{const node=document.getElementById(id);if(!node)throw new Error('Missing workspace element: '+id);return node as T;};
- const layout=document.querySelector<HTMLElement>('.layout')!,main=layout.querySelector<HTMLElement>('main')!,stage=require('stage-layout'),inspector=document.querySelector<HTMLElement>('.inspector')!,explorer=require('parts-explorer');
+ const regions=options.regions,layout=regions?.layout??document.querySelector<HTMLElement>('.layout')!,main=regions?.main??layout.querySelector<HTMLElement>('main')!,stage=regions?.stage??require('stage-layout'),inspector=regions?.bottom??document.querySelector<HTMLElement>('.inspector')!,explorer=regions?regions.right:document.getElementById('parts-explorer');
  layout.classList.add('workspace-layout');
- let left=layout.querySelector<HTMLElement>('.left-panel');if(!left){left=document.createElement('aside');left.className='left-panel';left.innerHTML='<h2>INPUTS</h2><p class="hint">A and B retain their fixed source bindings. The reference video and shared animation are named above the stage.</p>';layout.prepend(left);}left.id='workspace-left';inspector.id='workspace-inspector';
+ let left=regions?.left??layout.querySelector<HTMLElement>('.left-panel');if(!left){left=document.createElement('aside');left.className='left-panel';left.innerHTML='<h2>INPUTS</h2><p class="hint">A and B retain their fixed source bindings. The reference video and shared animation are named above the stage.</p>';layout.prepend(left);}left.id='workspace-left';inspector.id='workspace-inspector';
  // A parts explorer placed inside the left column makes that column the explorer: it keeps the explorer's
  // saved width and the page has no right column. Otherwise sources stay left and the explorer stays right.
- const explorerLeft=left.contains(explorer),columns:WorkspaceColumns=explorerLeft?{left:'rightWidth',right:null}:defaultWorkspaceColumns;
+ const explorerLeft=regions?regions.columns?.left==='rightWidth'&&!regions.right:!!explorer&&left.contains(explorer),columns:WorkspaceColumns=regions?.columns??(explorerLeft?{left:'rightWidth',right:null}:explorer?defaultWorkspaceColumns:{left:'leftWidth',right:null});
  // A section is an Inspector panel only while it carries data-inspector-panel; the review page's Feedback
  // section lives in the review dialog instead and keeps its id without being a panel.
- const tabs=inspectorTabs.filter(tab=>document.getElementById('inspector-'+tab)?.dataset.inspectorPanel===tab);if(!tabs.length)throw new Error('Missing workspace element: inspector-'+inspectorTabs.join('|inspector-'));
+ const tabs=inspectorTabs.filter(tab=>document.getElementById('inspector-'+tab)?.dataset.inspectorPanel===tab);if(!tabs.length&&!regions)throw new Error('Missing workspace element: inspector-'+inspectorTabs.join('|inspector-'));
  // The left column is a fixed header row (a leading `.left-header`, when the page has one) and one scrolling
  // body holding everything else, Settings included: the body is the column's only scroll container.
  const header=[...left.children].find(node=>node.className.split(' ').includes('left-header'))??null;
@@ -125,8 +130,8 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
  const store=new WorkspacePreferenceStore({onStatus:value=>{status.textContent=tr(value.detail);}});let desired={...store.get().panels};
  const stack=document.createElement('div');stack.className='workspace-stage-stack';for(const child of [...main.children])if(child!==inspector)stack.append(child);main.prepend(stack);
  const triggers=document.createElement('div');triggers.className='workspace-drawer-triggers';triggers.setAttribute('aria-label','Workspace panels');stack.prepend(triggers);
- const panels:Partial<Record<WorkspacePanel,HTMLElement>>=explorerLeft?{rightWidth:left,inspectorHeight:inspector}:{leftWidth:left,rightWidth:explorer,inspectorHeight:inspector};
- const sides:Partial<Record<WorkspacePanel,'left'|'right'>>=explorerLeft?{rightWidth:'left'}:{leftWidth:'left',rightWidth:'right'};
+ const panels:Partial<Record<WorkspacePanel,HTMLElement>>={};if(columns.left)panels[columns.left]=left;if(columns.right&&explorer)panels[columns.right]=explorer;panels.inspectorHeight=inspector;
+ const sides:Partial<Record<WorkspacePanel,'left'|'right'>>={};if(columns.left)sides[columns.left]='left';if(columns.right&&explorer)sides[columns.right]='right';
  const labels:Record<WorkspacePanel,string>=explorerLeft?{leftWidth:'Sources and settings',rightWidth:'Parts and settings',inspectorHeight:'Inspector'}:{leftWidth:'Sources and settings',rightWidth:'Parts explorer',inspectorHeight:'Inspector'};
  const handles={} as Record<WorkspacePanel,HTMLElement>,dialogs={} as Record<WorkspacePanel,HTMLDialogElement>,buttons={} as Record<WorkspacePanel,HTMLButtonElement>,disposers:(()=>void)[]=[];
  const present=Object.keys(panels) as WorkspacePanel[],node=(panel:WorkspacePanel)=>panels[panel]!;
@@ -147,8 +152,8 @@ export function bindWorkspaceUI(options:{changed:()=>void;defaultTheme:(theme:Wo
  let disposed=false,frame=0,applying=false,available={width:0,height:0},effective=allocateWorkspaceLayout(available,desired,columns);
  const panelFor=(tab:InspectorTab)=>{const section=require('inspector-'+tab);return (typeof section.querySelector==='function'?section.querySelector<HTMLElement>('.animate-blocks-panel'):null)??section;};
  const userByTab=new Map<InspectorTab,boolean>(),extentByTab=new Map<InspectorTab,string>(),extentOf=(panel:HTMLElement)=>`${panel.scrollWidth}:${panel.scrollHeight}:${panel.clientWidth}:${panel.clientHeight}`;
- const capture=()=>{const tab=active(),section=require('inspector-'+tab),panel=panelFor(tab),saved=memory.snapshot()[tab];if(!section.hidden&&(!saved||saved.x<=Math.max(0,panel.scrollWidth-panel.clientWidth)&&saved.y<=Math.max(0,panel.scrollHeight-panel.clientHeight)))memory.capture(tab,panel,false);};
- const restore=()=>{if(disposed)return;const tab=active(),panel=panelFor(tab);if(panel.clientWidth>0||panel.clientHeight>0)extentByTab.set(tab,extentOf(panel));memory.restore(tab,panel);};
+ const capture=()=>{if(!tabs.length)return;const tab=active(),section=require('inspector-'+tab),panel=panelFor(tab),saved=memory.snapshot()[tab];if(!section.hidden&&(!saved||saved.x<=Math.max(0,panel.scrollWidth-panel.clientWidth)&&saved.y<=Math.max(0,panel.scrollHeight-panel.clientHeight)))memory.capture(tab,panel,false);};
+ const restore=()=>{if(disposed||!tabs.length)return;const tab=active(),panel=panelFor(tab);if(panel.clientWidth>0||panel.clientHeight>0)extentByTab.set(tab,extentOf(panel));memory.restore(tab,panel);};
  const schedule=()=>{if(!disposed&&!frame)frame=requestAnimationFrame(()=>{frame=0;apply();});};
  const dock=(panel:WorkspacePanel,drawer:boolean)=>{
   const element=node(panel),dialog=dialogs[panel],trigger=buttons[panel];trigger.hidden=!drawer;handles[panel].hidden=drawer;
