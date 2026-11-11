@@ -56,7 +56,7 @@ export interface JobWindowTransport {
 }
 export interface JobPreparedCommit {
     /** Restore the previous view, including its original forms and route bindings. */
-    rollback(): void;
+    rollback(): void | Promise<void>;
     /** Dispose the old view only after the new displayed nonce is acknowledged. */
     finalize(): void;
 }
@@ -306,7 +306,7 @@ export function createJobWindow<Prepared>(options: {
                     error = failure instanceof Error ? failure.message : 'JOB_DISPLAY_MISMATCH';
             }
             finally {
-                committed?.rollback();
+                await committed?.rollback();
                 if (prepared !== undefined)
                     adapter.discard(prepared);
                 if (revision === intent) {
@@ -1676,18 +1676,18 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     let events:ReturnType<typeof startJobWindowEvents>|undefined,legacyStop:(()=>void)|undefined,stopped=false,fallingBack=false;
     const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource,jobCheckpointContext},draftStorage:()=>localStorage,...drafts,access,pageId,
         window:{state:()=>window.state(),submit:input=>window.submit(input)}};
-    const rigScreen=createJobRigScreen({host,pageId,access,translate:t,refusal:jobWindowRefusal,formDependencies:dependencies,
+    const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),refusal:jobWindowRefusal,formDependencies:dependencies,
         window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),
-        routes:display=>jobPublicationRoutes(display,location.origin),load:()=>import('./main.ts')});
+        routes:display=>jobPublicationRoutes(display,location.origin),load:async()=>(await import('./main.ts')).mountRigScreen()});
     let bootstrapNotice:HTMLElement|null=null;
     const report=(error:unknown,fallback?:string)=>{if(rigScreen.mounted()){rigScreen.report(error,fallback);return;}if(!bootstrapNotice){bootstrapNotice=node('p');bootstrapNotice.setAttribute('role','status');host.append(bootstrapNotice);}bootstrapNotice.textContent=jobWindowRefusal(error,fallback);};
     const window=createJobWindow<JobRigScreenPrepared|null>({jobId:access.jobId,pageId,transport,adapter:{
-        async prepare(display,signal){if(rigScreen.mounted()){location.reload();return new Promise<never>(()=>{});}return rigScreen.prepare(display,signal);},
+        async prepare(display,signal){const prepared=await rigScreen.prepare(display,signal);if(!prepared&&rigScreen.mounted()){location.reload();return new Promise<never>(()=>{});}return prepared;},
         captureDraft(){drafts.saveDraft();const forms=modalState()?.forms;const dirty=forms?[...forms].filter(([,entry])=>entry.dirty):[];return dirty.length?dirty.map(([askId,entry])=>({askId,value:entry.read()})):null;},
         commit:prepared=>prepared?rigScreen.commit(prepared):{rollback(){},finalize(){}},
         async painted(prepared,signal){if(prepared)await rigScreen.painted(prepared,signal);else{if(stopped||fallingBack||signal.aborted)return;fallingBack=true;abort.abort();window.stop();await events?.done;if(!stopped){const dispose=await mountJobSession(host,true,access);if(stopped)dispose();else legacyStop=dispose;}}},
         discard:prepared=>{const modal=prepared?.record??prepared?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();},
-        changed(state){rigScreen.changed(state);if(state.error)report(state.error);if(state.receipt&&!state.preparing)events?.displayed();},
+        changed(state){rigScreen.changed(state);if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.error);if(state.receipt&&!state.preparing)events?.displayed();},
     }});
     const hub=new URL(location.href).searchParams.get('hub');
     const binding=()=>({jobId:access.jobId,incarnation:hub!,publicationId:window.state().displayed?.publication.publicationId??null,sourceHash:window.state().displayed?.publication.source.sourceHash??null});
@@ -2613,16 +2613,15 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         draftStorage: () => localStorage, localDraftKey, saveDraft, access, pageId,
         window: {state: () => window.state(), submit: input => window.submit(input)},
     };
-    const rigScreen = createJobRigScreen({host, pageId, access, translate: t, refusal: jobWindowRefusal, legacyRecords:true,
+    const rigScreen = createJobRigScreen({host, pageId, access, translate: (key, values) => i18n.t(key, values, 'en'), refusal: jobWindowRefusal, legacyRecords:true,
         window: {state: () => window.state(), submit: input => window.submit(input)},
-        routes: display => jobPublicationRoutes(display, location.origin), load: () => import('./main.ts')});
+        routes: display => jobPublicationRoutes(display, location.origin), load: async () => (await import('./main.ts')).mountRigScreen()});
     const window = createJobWindow({ jobId: access.jobId, pageId, transport,
         previousDisplayed, initialRetainedDrafts,
         adapter: {
             async prepare(display, signal): Promise<PreparedWindow | JobRigScreenPrepared> {
-                // The rig composition cannot be unmounted in place: another publication reopens the page on its route.
-                if (rigScreen.mounted()) { location.reload(); return new Promise<never>(() => {}); }
                 const rig = await rigScreen.prepare(display, signal);
+                if (!rig && rigScreen.mounted()) { location.reload(); return new Promise<never>(() => {}); }
                 if (rig && current) { location.reload(); return new Promise<never>(() => {}); }
                 if (rig) return rig;
                 const inspection = await prepareJobInspection(display, signal);

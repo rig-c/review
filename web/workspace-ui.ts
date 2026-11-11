@@ -121,7 +121,7 @@ export function selectedInspector(root:Pick<Document,'querySelector'>=document):
 }
 export interface WorkspaceUI {
  defaults:()=>WorkspacePreferences;beforeTab:()=>void;afterTab:()=>void;scroll:()=>string;restoreScroll:(value:unknown)=>void;
- revealInspector:()=>void;refresh:()=>void;dispose:()=>void;
+ revealInspector:()=>void;refresh:()=>void;element:(id:string)=>HTMLElement|null;settle:()=>Promise<void>;dispose:()=>void;
 }
 /** Caller-owned shell regions. The left preference may retain a migrated screen's saved width. */
 export interface WorkspaceRegions {
@@ -129,8 +129,9 @@ export interface WorkspaceRegions {
  columns?:WorkspaceColumns;
 }
 /** `currentTheme`, when given, is the appearance the Settings theme select shows; otherwise it shows the saved default. */
-export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{kind:string;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
- const require=<T extends HTMLElement=HTMLElement>(id:string)=>{const node=document.getElementById(id);if(!node)throw new Error('Missing workspace element: '+id);return node as T;};
+export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceRegions;changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{kind:string;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
+ const scope=options.root??document,dialogs={} as Record<WorkspacePanel,HTMLDialogElement>;
+ const require=<T extends HTMLElement=HTMLElement>(id:string,optional=false)=>{const selector='#'+id,node=(options.root?.id===id?options.root:scope.querySelector<HTMLElement>(selector))??Object.values(dialogs).map(dialog=>dialog.id===id?dialog:dialog.querySelector<HTMLElement>(selector)).find(Boolean)??null;if(!node&&!optional)throw new Error('Missing workspace element: '+id);return node as T;};
  const regions=options.regions,layout=regions?.layout??document.querySelector<HTMLElement>('.layout')!,main=regions?.main??layout.querySelector<HTMLElement>('main')!,stage=regions?.stage??require('stage-layout'),inspector=regions?.bottom??document.querySelector<HTMLElement>('.inspector')!,explorer=regions?regions.right:document.getElementById('parts-explorer');
  layout.classList.add('workspace-layout');
  let left=regions?.left??layout.querySelector<HTMLElement>('.left-panel');if(!left){left=document.createElement('aside');left.className='left-panel';left.innerHTML='<h2>INPUTS</h2><p class="hint">A and B retain their fixed source bindings. The reference video and shared animation are named above the stage.</p>';layout.prepend(left);}left.id='workspace-left';inspector.id='workspace-inspector';
@@ -139,7 +140,7 @@ export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>v
  const explorerLeft=regions?regions.columns?.left==='rightWidth'&&!regions.right:!!explorer&&left.contains(explorer),columns:WorkspaceColumns=regions?.columns??(explorerLeft?{left:'rightWidth',right:null}:explorer?defaultWorkspaceColumns:{left:'leftWidth',right:null});
  // A section is an Inspector panel only while it carries data-inspector-panel; the review page's Feedback
  // section lives in the review dialog instead and keeps its id without being a panel.
- const tabs=inspectorTabs.filter(tab=>document.getElementById('inspector-'+tab)?.dataset.inspectorPanel===tab);if(!tabs.length&&!regions)throw new Error('Missing workspace element: inspector-'+inspectorTabs.join('|inspector-'));
+ const tabs=inspectorTabs.filter(tab=>require('inspector-'+tab,true)?.dataset.inspectorPanel===tab);if(!tabs.length&&!regions)throw new Error('Missing workspace element: inspector-'+inspectorTabs.join('|inspector-'));
  // The left column is a fixed header row (a leading `.left-header`, when the page has one) and one scrolling
  // body holding everything else, Settings included: the body is the column's only scroll container.
  const header=[...left.children].find(node=>node.className.split(' ').includes('left-header'))??null;
@@ -158,7 +159,7 @@ export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>v
  const panels:Partial<Record<WorkspacePanel,HTMLElement>>={};if(columns.left)panels[columns.left]=left;if(columns.right&&explorer)panels[columns.right]=explorer;panels.inspectorHeight=inspector;
  const sides:Partial<Record<WorkspacePanel,'left'|'right'>>={};if(columns.left)sides[columns.left]='left';if(columns.right&&explorer)sides[columns.right]='right';
  const labels:Record<WorkspacePanel,string>=explorerLeft?{leftWidth:'Sources and settings',rightWidth:'Parts and settings',inspectorHeight:'Inspector'}:{leftWidth:'Sources and settings',rightWidth:'Parts explorer',inspectorHeight:'Inspector'};
- const handles={} as Record<WorkspacePanel,HTMLElement>,dialogs={} as Record<WorkspacePanel,HTMLDialogElement>,buttons={} as Record<WorkspacePanel,HTMLButtonElement>,disposers:(()=>void)[]=[];
+ const handles={} as Record<WorkspacePanel,HTMLElement>,buttons={} as Record<WorkspacePanel,HTMLButtonElement>,disposers:(()=>void)[]=[];
  const present=Object.keys(panels) as WorkspacePanel[],node=(panel:WorkspacePanel)=>panels[panel]!;
  for(const panel of present){
   const handle=document.createElement('div');handle.className='workspace-separator workspace-'+panel+(sides[panel]?' workspace-side-'+sides[panel]:'');handles[panel]=handle;
@@ -173,7 +174,7 @@ export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>v
  const bottomCollapseKey=bottom?`rig-review-bottom-collapsed/${bottom.kind}`:'';
  let collapsed=false;
  if(bottom){try{collapsed=localStorage.getItem(bottomCollapseKey)==='true';}catch{}}
- const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=selectedInspector() as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
+ const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=selectedInspector(scope) as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
  let disposed=false,frame=0,applying=false,available={width:0,height:0},effective=allocateWorkspaceLayout(available,desired,columns);
  const panelFor=(tab:InspectorTab)=>{const section=require('inspector-'+tab);return (typeof section.querySelector==='function'?section.querySelector<HTMLElement>('.animate-blocks-panel'):null)??section;};
  const userByTab=new Map<InspectorTab,boolean>(),extentByTab=new Map<InspectorTab,string>(),extentOf=(panel:HTMLElement)=>`${panel.scrollWidth}:${panel.scrollHeight}:${panel.clientWidth}:${panel.clientHeight}`;
@@ -241,7 +242,8 @@ export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>v
  }
  const observer=new ResizeObserver(schedule);observer.observe(layout);for(const node of [...stack.children])if(node!==stage)observer.observe(node);for(const tab of tabs)observer.observe(panelFor(tab));
  const resumed=()=>{if(!document.hidden)store.refresh();};document.addEventListener('visibilitychange',resumed);schedule();
- return {defaults:()=>store.get(),beforeTab:capture,afterTab:restore,scroll:()=>{capture();return JSON.stringify(memory.snapshot());},restoreScroll(value){if(typeof value!=='string')return;memory.replace(JSON.parse(value));restore();},revealInspector,refresh:schedule,
-  dispose(){if(disposed)return;capture();disposed=true;if(frame)cancelAnimationFrame(frame);observer.disconnect();document.removeEventListener('visibilitychange',resumed);unsubscribe();for(const binding of bindings)binding.dispose();for(const dispose of disposers)dispose();memory.dispose();store.dispose();}
+ return {defaults:()=>store.get(),beforeTab:capture,afterTab:restore,scroll:()=>{capture();return JSON.stringify(memory.snapshot());},restoreScroll(value){if(typeof value!=='string')return;memory.replace(JSON.parse(value));restore();},revealInspector,refresh:schedule,element:id=>require(id,true)??null,
+  async settle(){if(disposed)return;if(frame){cancelAnimationFrame(frame);frame=0;}apply();await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));if(!disposed)apply();},
+  dispose(){if(disposed)return;capture();disposed=true;if(frame)cancelAnimationFrame(frame);observer.disconnect();document.removeEventListener('visibilitychange',resumed);unsubscribe();for(const binding of bindings)binding.dispose();for(const dispose of disposers)dispose();for(const dialog of Object.values(dialogs)){if(dialog.open)dialog.close();dialog.remove();}memory.dispose();store.dispose();}
  };
 }

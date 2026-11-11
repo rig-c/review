@@ -4,6 +4,8 @@ import type {ModelAssets, PosedFrame} from '@rig-c/play';
 import type {PartsIssue} from '../src/parts-comment.ts';
 import type {PendingAskV3} from '../src/job-contract.ts';
 import type {ReviewSession} from '../src/session.ts';
+import type {InspectionBookmark} from './inspection-persistence.ts';
+import type {ControlView} from '../src/control.ts';
 import type {InstanceAccess} from './instance-access.ts';
 import type {JobRigStage} from './job-rig-capture.ts';
 
@@ -12,7 +14,14 @@ export type RigHostStage = Omit<JobRigStage, 'source' | 'presentation'> & {
   readonly posed: PosedFrame | undefined;
   readonly assets: ModelAssets | null;
 };
+export type RigHostNavigation = {subject:'rig';bookmark:InspectionBookmark} |
+  {subject:'parts';part:string|null;solo:boolean;view:string;camera:ControlView};
 export interface RigHostScreen {
+  navigation?():RigHostNavigation;
+  incompatible?():boolean;
+  suspend?():void;
+  resume?():void|Promise<void>;
+  dispose?():void;
   /** Null while no rig is drawn. */
   stage(): RigHostStage | null;
   /** Draw the held frame again so the posed frame and the player share one generation. */
@@ -29,6 +38,9 @@ export interface RigHostCommit {
 }
 export interface RigHost {
   readonly subject?:'parts';
+  readonly navigation?:RigHostNavigation;
+  /** Derived from the displayed subject's finalized verdict; never a mode or another subject's act. */
+  reviewState?(issues:number,sending:boolean):string;
   readonly record?:{readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean};
   submitParts?(issues:readonly PartsIssue[]):Promise<string>;
   readonly access: InstanceAccess;
