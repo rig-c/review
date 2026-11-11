@@ -5,12 +5,12 @@ import { mkdir, open, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { PNG } from 'pngjs';
 import {
-  JOB_API_V3_SCHEMA,
+  JOB_API_V3_SCHEMA, JOB_PLAN_TEXT_FIELDS, JOB_PLAN_TEXT_SCHEMA,
   JOB_PARTS_ENUMERATOR_RANGE,
 } from './job-contract.ts';
 import type {
   JobCheckpointEvidence, JobFileIdentity, JobImageSetInput, JobInterviewDiagnostics, JobInterviewRecord, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
-  JobSelector, JobSourceBinding, JobSubject,
+  JobSelector, JobSourceBinding, JobSubject, JobPlanTextProjection, JobPlanTextStep,
   OptionContext, OptionSource, PackageResultV3, PlanContext, PlanSource, ProjectRecord, PublishRequestV3,
   RecordFreeze, RecordOptionResult, RecordPlanResult, RecordPublicationReader, RecordPublishedContext,
   RecordReaderInput, RecordResult, RecordSource, RecordSubject,
@@ -655,7 +655,7 @@ async function readRecordPublishedPhase(
   return parseRecordPublishedContext(raw, input.result, input.record);
 }
 
-function readProjectRecordBytes(root: string, record: ProjectRecord): {
+function readProjectRecordBytes(root: string, record: ProjectRecord, allowLegacySchema = false): {
   readonly bytes: Buffer;
   readonly project: Record<string, unknown>;
 } {
@@ -663,15 +663,15 @@ function readProjectRecordBytes(root: string, record: ProjectRecord): {
   try {
     stat = lstatSync(join(root, record.path));
   } catch {
-    throw new JobError('JOB_RECORD_MOVED');
+    throw new JobError(allowLegacySchema ? 'JOB_SOURCE_UNRETAINABLE' : 'JOB_RECORD_MOVED');
   }
-  if (!stat.isFile()) throw new JobError('JOB_RECORD_MOVED');
+  if (!stat.isFile()) throw new JobError(allowLegacySchema ? 'JOB_SOURCE_UNRETAINABLE' : 'JOB_RECORD_MOVED');
   if (stat.size > maxProjectBytes) throw new JobError('JOB_SOURCE_UNRETAINABLE');
   let bytes: Buffer;
   try {
     bytes = sourceBytes(root, record.path);
   } catch {
-    throw new JobError('JOB_RECORD_MOVED');
+    throw new JobError(allowLegacySchema ? 'JOB_SOURCE_UNRETAINABLE' : 'JOB_RECORD_MOVED');
   }
   if (jobHash(bytes) !== record.sha256) throw new JobError('JOB_RECORD_MOVED');
   let project: Record<string, unknown>;
@@ -680,7 +680,7 @@ function readProjectRecordBytes(root: string, record: ProjectRecord): {
   } catch {
     throw new JobError('JOB_RECORD_INCOMPLETE');
   }
-  if (project.schema !== 'rig-create/project@0') throw new JobError('JOB_RECORD_INCOMPLETE');
+  if (!allowLegacySchema && project.schema !== 'rig-create/project@0') throw new JobError('JOB_RECORD_INCOMPLETE');
   return { bytes, project };
 }
 
@@ -710,6 +710,83 @@ function readClosureFileBytes(root: string, file: JobFileIdentity): Buffer {
   }
   if (jobHash(bytes) !== file.sha256) throw new JobError('JOB_SOURCE_MISMATCH');
   return bytes;
+}
+
+/** Delivery-only projection through the existing retained record reader. */
+export function projectRetainedPlanText(retained: JobRetainedSourceV3): JobPlanTextProjection | undefined {
+  const {source, record} = retained;
+  const plan = source.plan;
+  if (!plan) return undefined;
+  let identity: {path: 'project.json'; sha256: string} | null = null;
+  const unavailable = (reason: Extract<JobPlanTextProjection, {status:'unavailable'}>['reason']): JobPlanTextProjection =>
+    ({schema:JOB_PLAN_TEXT_SCHEMA, record:identity, status:'unavailable', reason});
+  if (!record || !source.projectHash) return unavailable('PLAN_TEXT_RECORD_UNAVAILABLE');
+  if (record.path !== 'project.json') return unavailable('PLAN_TEXT_RECORD_UNSUPPORTED');
+  const seals = retained.seals.filter(file => file.path === record.path);
+  if (record.sha256 !== source.projectHash || seals.length !== 1 || seals[0]!.sha256 !== record.sha256 ||
+      isRetainedRecordSource(retained) && (!retained.source.files.some(file => file.path === record.path && file.sha256 === record.sha256) ||
+        retained.source.record.path !== record.path || retained.source.record.sha256 !== record.sha256)) {
+    throw new JobError('JOB_SOURCE_MISMATCH', 'PLAN_TEXT_RECORD_MISMATCH');
+  }
+  identity = {path:'project.json', sha256:record.sha256};
+  let project: Record<string, unknown>;
+  try {project = readProjectRecordBytes(retained.snapshotRoot, identity, true).project;}
+  catch (error) {
+    if (error instanceof JobError && error.code === 'JOB_RECORD_MOVED')
+      throw new JobError('JOB_SOURCE_MISMATCH', 'PLAN_TEXT_RECORD_HASH_MISMATCH');
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PLAN_TEXT_RECORD_UNAVAILABLE');
+  }
+  if (project.schema !== 'rig-create/project@0') return unavailable('PLAN_TEXT_RECORD_UNSUPPORTED');
+  if (!Object.hasOwn(project, 'plan')) return unavailable('PLAN_TEXT_STEPS_ABSENT');
+  const rawPlan = asPlainObject(project.plan);
+  if (!rawPlan) return unavailable('PLAN_TEXT_STEPS_INVALID');
+  if (!Object.hasOwn(rawPlan, 'steps')) return unavailable('PLAN_TEXT_STEPS_ABSENT');
+  const rawSteps = rawPlan.steps;
+  if (!Array.isArray(rawSteps)) return unavailable('PLAN_TEXT_STEPS_INVALID');
+  if (plan.steps.length > 4096) return unavailable('PLAN_TEXT_LIMIT');
+  if (isRetainedRecordSource(retained) && (rawSteps.length !== plan.steps.length ||
+      rawSteps.some((raw, index) => asPlainObject(raw)?.id !== plan.steps[index]?.id)))
+    return unavailable('PLAN_TEXT_MAPPING_UNAVAILABLE');
+  const wanted = new Set(plan.steps.map(step => step.id));
+  const matched = new Map<string, Record<string, unknown> | null>();
+  for (const raw of rawSteps) {
+    const step = asPlainObject(raw);
+    if (typeof step?.id === 'string' && wanted.has(step.id))
+      matched.set(step.id, matched.has(step.id) ? null : step);
+  }
+  if (plan.steps.some(step => !matched.get(step.id))) return unavailable('PLAN_TEXT_MAPPING_UNAVAILABLE');
+  const steps = plan.steps.map<JobPlanTextStep>(step => {
+    const raw = matched.get(step.id)!;
+    const fields: Omit<JobPlanTextStep, 'id' | 'hash' | 'issues'> = {};
+    const issues: JobPlanTextStep['issues'] = [];
+    for (const field of JOB_PLAN_TEXT_FIELDS) {
+      const value = raw[field];
+      if (!Object.hasOwn(raw, field)) issues.push({field, reason:'absent'});
+      else if (field === 'rests_on') {
+        if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) issues.push({field, reason:'invalid'});
+        else if (value.length > 4096) issues.push({field, reason:'limit'});
+        else fields.rests_on = value;
+      } else if (typeof value === 'string') fields[field] = value;
+      else issues.push({field, reason:'invalid'});
+    }
+    return {id:step.id, hash:step.hash, ...fields, issues};
+  });
+  const projection: JobPlanTextProjection = {schema:JOB_PLAN_TEXT_SCHEMA, record:identity, status:'projected', steps};
+  return Buffer.byteLength(JSON.stringify(projection)) > 512 * 1024 ? unavailable('PLAN_TEXT_LIMIT') : projection;
+}
+
+/** Keep the normal owner metadata budget, including the small fallback itself. */
+export function planTextMetadata(retained: JobRetainedSourceV3, metadata: Record<string, unknown>): Record<string, unknown> {
+  const projection = projectRetainedPlanText(retained);
+  if (!projection) return metadata;
+  let result = {...metadata, planText:projection};
+  if (Buffer.byteLength(JSON.stringify(result)) > 2 * 1024 * 1024) {
+    result = {...metadata, planText:{schema:JOB_PLAN_TEXT_SCHEMA, record:projection.record,
+      status:'unavailable', reason:'PLAN_TEXT_LIMIT'}};
+    if (Buffer.byteLength(JSON.stringify(result)) > 2 * 1024 * 1024)
+      throw new JobError('JOB_BODY_LIMIT', 'PLAN_TEXT_LIMIT');
+  }
+  return result;
 }
 
 function decodeRetainedRecordProject(

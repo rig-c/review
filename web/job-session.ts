@@ -23,6 +23,7 @@ import type {
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
+import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {JOB_HUB_READY, jobHubMessageMatches, type JobHubBinding} from './job-hub.ts';
 import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
     type JobRigDraw, type JobRigDrawState} from './job-rig-capture.ts';
@@ -130,6 +131,23 @@ export function prepareJobForms<Form>(
         prepared.set(ask.askId, prepare(ask));
     }
     return prepared;
+}
+
+/** Association checks for normal daemon-authoritative plan text metadata. */
+export function jobPlanTextForSource(value: unknown, source: SourceV3): JobPlanTextProjection | undefined {
+    if (value === undefined) return undefined;
+    const projection = parseJobPlanTextProjection(value);
+    const mismatch = () => {throw new Error('PLAN_TEXT_SOURCE_MISMATCH');};
+    if (!source.plan) return mismatch();
+    if (projection.record && (projection.record.sha256 !== source.projectHash ||
+        isRecordSource(source) && (source.record.path !== projection.record.path ||
+            source.record.sha256 !== projection.record.sha256 ||
+            !source.files.some(file => file.path === projection.record!.path && file.sha256 === projection.record!.sha256))))
+        return mismatch();
+    if (projection.status === 'projected' && (projection.steps.length !== source.plan.steps.length ||
+        projection.steps.some((row, index) => row.id !== source.plan!.steps[index]?.id || row.hash !== source.plan!.steps[index]?.hash)))
+        return mismatch();
+    return projection;
 }
 
 /** C2 publishes the plan mapping in the ask. Legacy checkpoint metadata is optional guidance. */
@@ -619,6 +637,7 @@ type JobCheckpointEvidenceMetadata = Omit<JobCheckpointEvidence, 'tiles' | 'tabl
 };
 export interface JobInspectionMetadata {
     checkpointEvidence?: readonly JobCheckpointEvidenceMetadata[];
+    planText?: JobPlanTextProjection;
     manifest: ReviewManifest;
     recordSource?: undefined;
     sourceHash: string;
@@ -642,6 +661,7 @@ export interface JobInspectionMetadata {
 }
 export interface JobRecordInspectionMetadata {
     checkpointEvidence?: readonly JobCheckpointEvidenceMetadata[];
+    planText?: JobPlanTextProjection;
     manifest?: undefined;
     recordSource: RecordSource;
     sourceHash: string;
@@ -859,6 +879,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
     }
     const objectUrls: string[] = [];
     const media: HTMLVideoElement[] = [];
+    if (metadata.planText !== undefined) metadata.planText = jobPlanTextForSource(metadata.planText, publishedSource);
     const rigRoot = document.createElement('div');
     rigRoot.id = 'rig-root';
     let assets: ModelAssets | null = null;
@@ -1778,6 +1799,59 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         }
         return gallery;
     }
+    function planTextList(plan: NonNullable<SourceV3['plan']>, projection: JobPlanTextProjection | undefined,
+        selectedId?: string): HTMLElement {
+        const section = node('section');
+        section.className = 'job-plan-text';
+        if (!projection || projection.status === 'unavailable') {
+            section.append(node('p', 'job.plan.noText'));
+            if (projection) section.append(node('p', projection.reason));
+        }
+        const list = node('ol');
+        list.className = 'job-plan-steps';
+        for (const step of plan.steps) {
+            if (selectedId !== undefined && step.id !== selectedId) continue;
+            const item = node('li');
+            item.dataset.jobPlanStep = step.id;
+            const details = node('details');
+            details.open = true;
+            const title = node('summary');
+            title.textContent = step.id;
+            const hash = node('code');
+            hash.className = 'job-source';
+            hash.textContent = step.hash;
+            details.append(title, hash);
+            const row = projection?.status === 'projected' ? projection.steps.find(row => row.id === step.id && row.hash === step.hash) : undefined;
+            if (row) {
+                const fields = node('dl');
+                for (const field of JOB_PLAN_TEXT_FIELDS) {
+                    const term = node('dt', 'job.plan.' + field);
+                    const value = node('dd');
+                    value.dataset.jobPlanField = field;
+                    const issue = row.issues.find(issue => issue.field === field);
+                    if (issue) value.append(node('span', 'job.plan.field.' + issue.reason));
+                    else if (field === 'rests_on') {
+                        const rests = node('ul');
+                        for (const text of row.rests_on!) {const rest = node('li'); rest.textContent = text; rests.append(rest);}
+                        value.append(rests);
+                    } else value.textContent = row[field]!;
+                    fields.append(term, value);
+                }
+                details.append(fields);
+            }
+            item.append(details); list.append(item);
+        }
+        list.addEventListener('keydown', event => {
+            const key = event as KeyboardEvent;
+            if (!['ArrowUp', 'ArrowDown'].includes(key.key) || !(key.target instanceof HTMLElement) || key.target.tagName !== 'SUMMARY') return;
+            const summaries = [...list.querySelectorAll<HTMLElement>('summary')];
+            const index = summaries.indexOf(key.target);
+            const next = summaries[index + (key.key === 'ArrowDown' ? 1 : -1)];
+            if (next) {key.preventDefault(); next.focus();}
+        });
+        section.append(list);
+        return section;
+    }
     function formFor(ask: PendingAskV3, prepared: JobPreparedInspection): JobForm {
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
@@ -1872,10 +1946,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             fields.prepend(heading);
             const guidance = node('p');
             guidance.textContent = checkpoint.note;
-            const planStep = node('p');
-            planStep.className = 'job-source';
-            planStep.textContent = checkpoint.step.id + ' · ' + checkpoint.step.hash;
-            fields.append(planStep, guidance);
+            fields.append(guidance, planTextList(ask.source.plan!, prepared.metadata.planText, checkpoint.step.id));
             const evidence = prepared.checkpointEvidence?.find(item => item.packet.checkpointId === subject.checkpointId);
             const declared = ask.source.checkpointEvidence?.find(item => item.checkpointId === subject.checkpointId);
             if (Boolean(declared) !== Boolean(evidence) || evidence &&
@@ -1930,7 +2001,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             const outcome = selectValues(['', 'pass', 'fail'], ['Pending', 'Pass', 'job.fail']);
             outcome.required = true;
             outcome.name = 'outcome';
-            fields.append(outcome);
+            fields.append(outcome, note.parentElement!);
             read = () => ({ checkpointId: subject.checkpointId, outcome: outcome.value as 'pass' | 'fail', words: note.value });
             submitKey = 'job.saveCheckpoint';
         }
@@ -1973,6 +2044,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             const stage = node('p');
             stage.textContent = subject.stage;
             fields.append(stage);
+            if (ask.source.plan) fields.append(planTextList(ask.source.plan, prepared.metadata.planText), note.parentElement!);
             read = () => ({ stage: subject.stage, decision: 'approved', words: note.value });
             submitKey = 'job.signoff';
         }
@@ -2620,14 +2692,8 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 summary.append(optionLine);
             }
             else {
-                const list = node('ol');
-                list.className = 'job-source';
-                for (const step of source.plan.steps) {
-                    const item = node('li');
-                    item.textContent = step.id + ' · ' + step.hash;
-                    list.append(item);
-                }
-                summary.append(list);
+                root.dataset.jobPlanWorkspace = '';
+                summary.append(identity, binding, planTextList(source.plan, prepared.metadata.planText));
             }
             stage.prepend(summary);
             controls.hidden = pair.hidden = transport.hidden = true;
