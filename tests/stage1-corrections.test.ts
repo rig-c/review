@@ -116,7 +116,7 @@ test('new chest/delta records require successful checks; historical absence rema
 });
 
 test('non-first part selection transfers by exact art/package/address, never by list position or name alone',async()=>{
- const {stagePartsSelectionIndex}=await import('../web/stage-nav.ts');
+ const {stagePartsSelectionIndex}=await import('../web/parts-viewport-provider.ts');
  const item=(name:string,hash:string)=>({name,imageHash:hash,x:10,y:20,w:64,h:64});
  const mappings=['first','second'].map(part=>({part,skin:'default',slot:part,attachment:part}));
  const saved={inspectionSourceHash:'package-a',part:'second',imageHash:'image-b',box:{x:10,y:20,w:64,h:64},mapping:{skin:'default',slot:'second',attachment:'second'},rig:{zoom:2,center:{x:22,y:28}},reference:{zoom:1,center:null},cameraSync:false,bg:'green',alpha:false,footprints:false,view:'item' as const,mesh:true};
@@ -125,124 +125,6 @@ test('non-first part selection transfers by exact art/package/address, never by 
  expect(stagePartsSelectionIndex({...data,items:[...data.items].reverse()},saved)).toBe(0);
  for(const wrong of [{...data,inspectionSourceHash:'package-b'},{...data,items:[data.items[0]!]},{...data,items:[data.items[0]!,item('second','wrong-bytes')]},{...data,draft:{mappings:[mappings[0]!,{...mappings[1]!,slot:'wrong-address'}]}}])expect(()=>stagePartsSelectionIndex(wrong,saved)).toThrow('STAGE_DRAFT_MISMATCH');
  expect(saved.rig).toEqual({zoom:2,center:{x:22,y:28}});
-});
-
-test('#562(i) standalone partsViewJson omits STAGE_DRAFT_UNAVAILABLE and removes prior host while explicit/joined draft and refusals stay intact in EN and KO',async()=>{
- class CorrectionNode {
-  id='';type='';textContent='';title='';children:CorrectionNode[]=[];onclick?:()=>unknown;
-  constructor(public tag:string,private onRemove?:(node:CorrectionNode)=>void){}
-  append(...nodes:CorrectionNode[]){this.children.push(...nodes);}
-  replaceChildren(...nodes:CorrectionNode[]){this.children=nodes;}
-  remove(){this.onRemove?.(this);}
- }
- const source=await readFile('web/parts.ts','utf8');
- const slice=source.slice(source.indexOf('function renderCorrections():void {'),source.indexOf('\nfunction stagePartsSnapshot('));
- const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(slice);
- const root=await mkdtemp(join(tmpdir(),'stage1-562-'));
- try{
-  await cp('examples/demo',root,{recursive:true});
-  const atlasRoute=stagePartsRoutes({single:await loadReview(join(root,'review.json'))});
-  const unavailableData=await (await atlasRoute(new Request('http://127.0.0.1/api/stage-parts')))!.json();
-  expect(unavailableData.draftUnavailable).toBe(stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE);
-  const parts=join(root,'out');await mkdir(parts);await writeMeshPackage(parts);
-  await mkdir(join(parts,'rig'));for(const n of ['rig.json','mesh_report.json'])await cp(join(parts,n),join(parts,'rig',n));await cp(join(parts,'images'),join(parts,'rig/images'),{recursive:true});await writeFile(join(parts,'rig/motion.json'),'{}');
-  await writeFile(join(root,'config.json'),JSON.stringify({meshes:{gap:{grid:16},covered:{grid:16}}}));
-  const raw=JSON.parse(await readFile(join(parts,'rig/rig.json'),'utf8'));
-  for(const attachments of Object.values(raw.skins.default)as any[])for(const mesh of Object.values(attachments)as any[])mesh.vertices=mesh.uvs.map((v:number)=>v*64);
-  await writeFile(join(parts,'rig/rig.json'),JSON.stringify(raw));
-  const model={spec:'rigc-compiled/3',bones:[],slots:[],skins:[{name:'default',attachments:Object.fromEntries(Object.entries(raw.skins.default).map(([slot,atts])=>[slot,Object.fromEntries(Object.entries(atts as object).map(([name,a]:[string,any])=>[name,{...a,kind:'mesh',uvs:[...a.uvs],vertices:{weighted:false,xy:a.vertices.map(Math.fround)}}]))]))}],pages:[]};
-  await writeFile(join(root,'draft.model.json'),JSON.stringify(model));
-  const standalonePkg=await loadPartsView(parts,{rig:join(parts,'rig/rig.json'),meshReport:join(parts,'rig/mesh_report.json')});
-  const standaloneData=partsViewJson(standalonePkg,await readVerdict(standalonePkg));
-  expect(Object.hasOwn(standaloneData,'draft')).toBe(false);
-  expect(Object.hasOwn(standaloneData,'draftUnavailable')).toBe(false);
-  await writeFile(join(root,'review.json'),JSON.stringify({schema:'rig-review/1',id:'draft',title:'Generated draft',revision:'1',model:'draft.model.json',producer:{config:'config.json',parts:'out'}}));
-  const mappedRoute=stagePartsRoutes({single:await loadReview(root)});
-  const mappedData=await (await mappedRoute(new Request('http://127.0.0.1/api/stage-parts',{headers:{'X-Review-Stage-Build':'inspected'}})))!.json();
-  expect(mappedData.draft?.label).toBe('Draft rig · structure evidence only');
-  const regionRoot=join(root,'region-only');await mkdir(regionRoot);const regionParts=join(regionRoot,'out');await mkdir(regionParts);await writeMeshPackage(regionParts);await mkdir(join(regionParts,'rig'));await cp(join(regionParts,'images'),join(regionParts,'rig/images'),{recursive:true});
-  const regionAttachments=Object.fromEntries(['gap','covered'].map(name=>[name,{[name]:{type:'region',image:name+'.png',width:64,height:64}}]));
-  await writeFile(join(regionParts,'rig/rig.json'),JSON.stringify({images:'images',skins:{default:regionAttachments}}));await writeFile(join(regionParts,'rig/motion.json'),'{}');await writeFile(join(regionParts,'rig/mesh_report.json'),'[]');
-  await writeFile(join(regionRoot,'config.json'),JSON.stringify({regions:{gap:'root',covered:'root'}}));
-  await writeFile(join(regionRoot,'draft.model.json'),JSON.stringify({spec:'rigc-compiled/3',bones:[],slots:[],skins:[{name:'default',attachments:regionAttachments}],pages:[]}));
-  await writeFile(join(regionRoot,'review.json'),JSON.stringify({schema:'rig-review/1',id:'regions',title:'Region draft',revision:'1',model:'draft.model.json',producer:{config:'config.json',parts:'out'}}));
-  const noMeshData=await (await stagePartsRoutes({single:await loadReview(regionRoot)})(new Request('http://127.0.0.1/api/stage-parts')))!.json();
-  expect(noMeshData.draftUnavailable).toBe(stageDraftRefusals.STAGE_DRAFT_NO_MESH);
-
-  for(const catalog of [enCatalog,koCatalog]as const){
-   const dom:{host:CorrectionNode|null}={host:null};
-   const posted:{data:unknown;origin:string}[]=[];
-   const state:{selected:number;data:any}={selected:0,data:standaloneData};
-   let stageEmbedded=false;
-   const makeRunner=()=>{
-    const scope={
-     get stageEmbedded(){return stageEmbedded;},
-     state,
-     t:(key:string)=>catalog[key]??key,
-     location:{origin:'http://127.0.0.1:4173'},
-     parent:{postMessage:(data:unknown,origin:string)=>{posted.push({data,origin});}},
-     CustomEvent:class{constructor(public type:string,public options:any){}get detail(){return this.options.detail;}},
-     slots:{stage:{append:(node:CorrectionNode)=>{dom.host=node;},dispatchEvent:(event:any)=>{posted.push({data:event.detail,origin:'http://127.0.0.1:4173'});}}},
-     query:(selector:string)=>selector==='#pv-corrections'?dom.host:null,
-     doc:{
-      getElementById:(id:string)=>id==='pv-corrections'?dom.host:null,
-      createElement:(tag:string)=>new CorrectionNode(tag,node=>{if(dom.host===node)dom.host=null;}),
-      querySelector:(sel:string)=>sel==='.pv-toolbar'?{after:(node:CorrectionNode)=>{dom.host=node;}}:null,
-     },
-    };
-    return new Function('scope',`with(scope){${code};return renderCorrections;}`)(scope) as ()=>void;
-   };
-   const renderCorrections=makeRunner();
-
-   // 1. Standalone partsViewJson with no prior host omits #pv-corrections and STAGE_DRAFT_UNAVAILABLE.
-   stageEmbedded=false;state.data=standaloneData;state.selected=0;
-   renderCorrections();
-   expect(dom.host).toBeNull();
-
-   // 2. Joined / explicit request mounts #pv-corrections, then standalone partsViewJson removes prior host.
-   stageEmbedded=true;state.data=unavailableData;
-   renderCorrections();
-   expect(dom.host).not.toBeNull();
-   expect(dom.host!.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
-   stageEmbedded=false;state.data=standaloneData;
-   renderCorrections();
-   expect(dom.host).toBeNull();
-
-   // 3. Standalone with own draftUnavailable or own draft property retains named refusal.
-   stageEmbedded=false;state.data={...standaloneData,draftUnavailable:stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE};
-   renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
-   state.data={...standaloneData,draftUnavailable:stageDraftRefusals.STAGE_DRAFT_NO_MESH};
-   renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_NO_MESH!]!]);
-   state.data={...standaloneData,draft:undefined};
-   renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
-
-   // 4. Joined (stageEmbedded=true) preserves no-mesh, unavailable, unmapped part, mapped buttons, and inspectionOnly.
-   stageEmbedded=true;state.data=standaloneData;
-   renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_UNAVAILABLE!]!]);
-   state.data=noMeshData;
-   renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_NO_MESH!]!]);
-   state.data={...mappedData,items:[...mappedData.items,{name:'unmapped',index:2}]};state.selected=2;
-   renderCorrections();
-   expect(dom.host?.children.map(c=>c.textContent)).toEqual([catalog[stageDraftRefusals.STAGE_DRAFT_NO_MESH!]!]);
-   state.data=mappedData;state.selected=0;posted.length=0;
-   renderCorrections();
-   expect(dom.host?.children).toHaveLength(5);
-   expect(dom.host?.children[0]!.textContent).toBe(`${catalog['Draft rig · structure evidence only']} · gap · default/gap/gap · v 25 t 30 · inspected`);
-   expect(dom.host?.children.slice(1,4).map(c=>c.textContent)).toEqual([catalog['Chest regions']!,catalog['Mesh parameters']!,catalog['Edit Mesh']!]);
-   expect(dom.host?.children[4]!.textContent).toBe(catalog['Use Write review, choose Parts review and name the Create draft. Export the saved item with the feedback CLI. Mesh deltas retain evidence as unsupported operations.']!);
-   dom.host?.children[1]!.onclick?.();
-   expect(posted).toEqual([{data:{type:'review-stage-correction',part:'gap',sourceHash:mappedData.sourceHash,buildId:'inspected',instrument:'chest'},origin:'http://127.0.0.1:4173'}]);
-   state.data={...mappedData,draft:{...mappedData.draft,inspectionOnly:true}};
-   renderCorrections();
-   expect(dom.host?.children).toHaveLength(1);
-   expect(dom.host?.children[0]!.textContent).toBe(`${catalog['Draft rig · structure evidence only']} · gap · default/gap/gap · v 25 t 30 · inspected`);
-  }
- }finally{await rm(root,{recursive:true,force:true});}
 });
 
 test('#562B joined stage 1 routes original vs scratch builds, enforces eligibility/cache/stale checks, and Reset restores original geometry',async()=>{
@@ -907,7 +789,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   };
   let fitCameraHook:(()=>void)|null=null;
   const mainSlice=[
-   sliceBetween('const viewportState=createViewportState();','connectLiveWindow(access);').replace('const {fitCamera,','const {')+'\nconst fitCamera=()=>{viewport.fitCamera();onFitCamera?.();};',
+   sliceBetween('const viewportState=createViewportState();','if(!host)connectLiveWindow(access);').replace('const {fitCamera,','const {')+'\nconst fitCamera=()=>{viewport.fitCamera();onFitCamera?.();};',
    sliceBetween('let partModel:unknown=null;','let referenceSize:').replace('let inspectorTabs:ReturnType<typeof bindInspectorTabs>|null=null;','let inspectorTabs=stageInspectorTabs;'),
    sliceBetween('function setView(','function setReferenceInput('),
    sliceBetween('function drawRig(','function chooseAnimation('),
@@ -999,6 +881,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
 
   inspectorBinding=bindInspectorTabs(()=>{},()=>{}, {tabs:inspectorTabs.map(button=>({id:button.dataset.inspector!,button:button as unknown as HTMLButtonElement,panels:[],attribute:'aria-selected' as const})),panels:[],initialize:true,reveal:()=>mainScope.workspace.revealInspector()});
   const mainScope:any={
+   partsOnly:false,
    controls:createRigViewControls(),
    refreshedBuilds,
    HTMLInputElement:FakeHTMLInputElement,

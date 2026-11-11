@@ -5,7 +5,7 @@ import {PNG} from 'pngjs';
 import {readFileSync} from 'node:fs';
 import {restoreStillOracle} from './helpers/job-still-observation.ts';
 import type {JobRigPresentation} from '../web/viewport-capture.ts';
-import {recordJobRigDraw, freezeJobRigCapture, createJobRigSubmission, copyJobRigViewport, jobRigPixelPlacement, type JobRigDrawState} from '../web/job-rig-capture.ts';
+import {recordJobRigDraw, freezeJobRigCapture, createJobRigSubmission, copyJobRigViewport, jobRigPixelPlacement, jobRigDrawState, type JobRigDrawState} from '../web/job-rig-capture.ts';
 
 const firstPng = 'data:image/png;base64,Zmlyc3Q=';
 const laterPng = 'data:image/png;base64,bGF0ZXI=';
@@ -372,7 +372,7 @@ function canonicalLayout(ratio: number, run: (fixture: {
   const context = {current: owner, hubVisible: true, selectedPart: '', pageId: v.state.source.pageId,
     playing: false, layers: {images: true, mesh: false, bones: false, meshOpacity: 0.65}, stageBackground: '',
     viewport: {paneFrame: () => ({center}), numericView: () => ({cameras: {rig: camera}})},
-    el: (id: string) => id === 'rig-viewport' ? viewportPane : {hidden: false}, jobRigPixelPlacement};
+    el: (id: string) => id === 'rig-viewport' ? viewportPane : {hidden: false}, jobRigPixelPlacement, jobRigDrawState};
   const read: () => JobRigDrawState = new Function('scope', `with(scope){${body};return rigDrawState;}`)(context);
   const changeRatio = (value: number) => Object.defineProperty(globalThis, 'devicePixelRatio', {configurable: true, value});
   Object.defineProperty(globalThis, 'getComputedStyle', {configurable: true, value: (node: unknown) => ({
@@ -630,4 +630,15 @@ test('#559 UI reply-loss retry preserves byte-exact first submission across moti
   });
   expect(copies).toBe(2);
   expect(fresh.capture).toMatchObject({png: laterPng, frame: 0.375, animation: 'inspect', playing: true});
+});
+
+test('#739 standalone rest canvas uses the declared native stage and refuses inferred or rescaled geometry', async () => {
+  const {rigRestCanvas} = await import('../web/job-rig-capture.ts');
+  const stage = {x: -960, y: 0, width: 1920, height: 1080};
+  expect(rigRestCanvas({stage}, {width: 1920, height: 1080})).toEqual({x: -960, y: 0, width: 1920, height: 1080});
+  expect(rigRestCanvas({stage: {...stage, x: 12, y: -7}}, {width: 1920, height: 1080})).toEqual({x: 12, y: -7, width: 1920, height: 1080});
+  expect(() => rigRestCanvas({stage}, {width: 960, height: 540})).toThrow('PARTS_PAINTING_SIZE');
+  expect(() => rigRestCanvas({stage: null}, {width: 1920, height: 1080})).toThrow('PARTS_PAINTING_MAPPING');
+  expect(() => rigRestCanvas({stage: {...stage, x: .5}}, {width: 1920, height: 1080})).toThrow('PARTS_PAINTING_MAPPING');
+  expect(() => rigRestCanvas({stage: {...stage, width: 16385}}, {width: 16385, height: 1080})).toThrow('PARTS_PAINTING_MAPPING');
 });

@@ -8,7 +8,7 @@ import {writeDifferencePackage} from './helpers/parts-difference-package.ts';
 import {launchCdpSession, type CdpPageEvent, type InputCdpSession} from './parts-explorer-browser.ts';
 
 const TARGET_ROUTE = '/api/parts/image/1';
-const EXPECTED = {x: 4, y: 5, zoom: 1.25};
+const EXPECTED = {x: 10, y: 8, zoom: 1.25};
 const GATE_BOUNDARY = 'pending-source-response-delivery';
 const report: {
   status: string;
@@ -72,7 +72,7 @@ function sample(page: InputCdpSession, expected:Camera|null=null, target: 'rig' 
     options:{wheel?:boolean;plants?:boolean}={}) {
   const isRig = target === 'rig';
   return page.evaluate<Sample>(`(() => {
-    const canvas = document.getElementById(${JSON.stringify(isRig ? 'pv-canvas' : 'pv-reference')});
+    const canvas = ${isRig ? "document.getElementById('parts-canvas')" : "document.querySelector('#reference-content canvas')"};
     const view = document.getElementById(${JSON.stringify(target + '-viewport')});
     const root = document.getElementById(${JSON.stringify(isRig ? 'rig-root' : 'reference-content')});
     const viewport = {width:view.clientWidth,height:view.clientHeight};
@@ -116,11 +116,11 @@ function sample(page: InputCdpSession, expected:Camera|null=null, target: 'rig' 
       expected:expectedRoot ? {camera:expectedCamera,root:expectedRoot,zoom:new DOMMatrix(expectedRoot.transform).a} : null,
       plants,
       wheelInput,
-      zoom, selected:document.querySelector('[data-pv-item][aria-current=true]')?.dataset.pvItem ?? null,
+      zoom, selected:document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot ?? null,
       lang:document.documentElement.lang,
-      caption:document.getElementById('pv-caption').textContent,
+      caption:document.getElementById('rig-label').textContent,
       label:document.getElementById('zoom-value').textContent,
-      status:document.getElementById('pv-save-status').textContent,
+      status:document.getElementById('dirty').textContent,
       gate:window.__parts464Gate?.report() ?? null
     };
   })()`);
@@ -139,8 +139,8 @@ const INSTALL_GATE_OBSERVERS = `(() => {
   window.addEventListener('error', event => errors.push(String(event.message ?? event.type)));
   window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
   document.addEventListener('click', event => {
-    const node = event.target.closest('[data-pv-item],#zoom-in');
-    if (node) inputs.push({control:node.dataset.pvItem || node.id,trusted:event.isTrusted});
+    const node = event.target.closest('[data-part-list] button,#zoom-in');
+    if (node) inputs.push({control:node.dataset.slot || node.id,trusted:event.isTrusted});
   }, true);
   Object.defineProperty(HTMLImageElement.prototype,'src',{
     ...descriptor,
@@ -222,7 +222,7 @@ const pixelAt3 = (png: {width: number; data: Uint8Array}) => {
   return Array.from(png.data.subarray(i, i + 4));
 };
 
-async function afterPaint(page: InputCdpSession, action: string, canvas = 'pv-canvas') {
+async function afterPaint(page: InputCdpSession, action: string, canvas = 'parts-canvas') {
   // The native canvas dimension setter runs synchronously with the actual draw.
   await page.evaluate(`(() => {
     const node = document.getElementById(${JSON.stringify(canvas)});
@@ -237,252 +237,53 @@ async function afterPaint(page: InputCdpSession, action: string, canvas = 'pv-ca
   await wait(page, 'window.__parts464Painted', 'PARTS_CONTROL_PAINT_TIMEOUT ' + action);
 }
 
-async function controls(page: InputCdpSession, url: string, rows:Record<string,unknown>) {
-  const painted = await sample(page,EXPECTED);
-  await record(rows,'painted',painted);
-  requireMidpoint(painted,[8,10],'painted-control-start');
-  const at = await page.evaluate<{x:number;y:number}>(`(() => {
-    const view = document.getElementById('rig-viewport');
-    const box = view.getBoundingClientRect();
-    view.addEventListener('wheel',event=>{
-      const rect = view.getBoundingClientRect();
-      window.__parts464Wheel = {x:event.clientX-rect.left,y:event.clientY-rect.top,
-        deltaY:event.deltaY,trusted:event.isTrusted};
-    },{capture:true,once:true});
-    return {x:box.left+80,y:box.top+80};
-  })()`);
-  await page.mouse('mouseMoved', at.x, at.y);
-  await page.mouse('mousePressed', at.x, at.y);
-  await page.mouse('mouseMoved', at.x + 10, at.y - 5);
-  await page.mouse('mouseReleased', at.x + 10, at.y - 5);
-  const pan = {x:EXPECTED.x-10/EXPECTED.zoom,y:EXPECTED.y+5/EXPECTED.zoom,zoom:EXPECTED.zoom};
-  const panned = await sample(page,pan);
-  await record(rows,'panned',panned);
-  require(matchesCamera(panned), 'PARTS_PAINTED_PAN');
-  await click(page, '#zoom-in');
-  const buttonCamera = {...pan,zoom:pan.zoom*1.25};
-  const button = await sample(page,buttonCamera,'rig',{plants:true});
-  await record(rows,'button',button);
-  require(matchesCamera(button), 'PARTS_PAINTED_BUTTON_ZOOM');
-  const plants = button.plants!;
-  require(plants.centre.left===button.root.left &&
-    plants.centre.transform===button.root.transform &&
-    !matchesCamera({...button,expected:{...button.expected!,root:plants.centre}}) &&
-    !matchesZoom(button,plants.zoom),
-  'PARTS_CSS_ORACLE_PLANT_NOT_REJECTED');
-  await page.mouse('mouseWheel', at.x, at.y, -100);
-  const wheel = await sample(page,buttonCamera,'rig',{wheel:true});
-  await record(rows,'wheel',wheel);
-  require(wheel.wheelInput?.trusted && wheel.wheelInput.deltaY===-100 && matchesCamera(wheel),
-    'PARTS_PAINTED_CURSOR_ZOOM');
-  await afterPaint(page, '[data-pv-item="front"]');
-  const repainted = await sample(page,wheel.expected!.camera);
-  await record(rows,'repainted',repainted);
-  require(matchesCamera(repainted) && equal(repainted.root,wheel.root), 'PARTS_SAME_SELECTION_CAMERA_LOST');
 
-  await page.goto(url, 'en');
-  await wait(page, `document.body.dataset.ready === 'true' && document.getElementById('pv-canvas').width === 20`, 'PARTS_STALE_CONTROL_BOOT');
-  await armSourceResponse(page, url);
-  await click(page, '[data-pv-item="front"]');
-  await wait(page, 'window.__parts464Gate.held()', 'PARTS_STALE_CONTROL_GATE');
-  await click(page, '#zoom-in');
-  await afterPaint(page, '[data-pv-item="body"]');
-  await click(page, '#zoom-in');
-  const bodyCamera=midpoint([20,16]);
-  const beforeLate = await sample(page,bodyCamera);
-  await record(rows,'beforeLate',beforeLate);
+// Atlas Region/Pages and automatic per-item reference cropping were not picked for U3.
+// Preserve pending-source, stale-raster, source-binding, exact camera and planted CSS oracles here.
+await mkdir(out,{recursive:true});
+const root=await mkdtemp(join(tmpdir(),'camera737-'));
+let server:Awaited<ReturnType<typeof startPartsServer>>|undefined;
+let page:InputCdpSession|undefined;
+try{
+ const fixture=await writeComparisonPackage(root),pkg=await loadPartsView(root);
+ server=await startPartsServer(pkg,{port:0,exitOnClose:false,graceMs:600000,unopenedTimeoutMs:600000});
+ page=await launchCdpSession(join(root,'profile'),{sendDeadlineMs:10000,onEvent:sourceResponseEvent});await page.setViewport(1600,1000);
+ for(const lang of ['en','ko']as const){
+  report.phase=lang+':pending-source';const progress:Record<string,unknown>={};report.observations.push({lang,progress});
+  await page.goto('about:blank');await armSourceResponse(page,`http://127.0.0.1:${server.port}/`);
+  const installed=await sendCdp!('Page.addScriptToEvaluateOnNewDocument',{source:INSTALL_GATE_OBSERVERS}) as {identifier:string};
+  await page.goto(`http://127.0.0.1:${server.port}/?lang=${lang}`,lang);
+  await wait(page,'window.__parts464Gate?.held()','PARTS_SOURCE_PENDING');
+  await click(page,'[data-part-list] button[data-slot="body"]');await click(page,'#part-solo');
+  await wait(page,`document.getElementById('parts-canvas').width===20&&document.getElementById('stage-layout').getAttribute('aria-busy')==='false'`,'PARTS_BODY_WHILE_FRONT_PENDING');
+  await click(page,'#native-one');await click(page,'#zoom-in');
+  const expected=midpoint([20,16]),body=await sample(page,expected);require(matchesCamera(body),'PARTS_NATIVE_BODY_CAMERA');require(equal(body.pixel,pixelAt3(fixture.part)),'PARTS_BODY_PIXEL');
+  await click(page,'[data-part-list] button[data-slot="front"]');
+  const held=await sample(page,expected);require(equal(held.pixel,body.pixel)&&matchesCamera(held),'PARTS_HELD_PIXEL_CAMERA');
+  await click(page,'#zoom-in');
+  await afterPaint(page,'[data-part-list] button[data-slot="body"]');
+  const before=await sample(page,{...expected,zoom:expected.zoom*1.25});require(matchesCamera(before),'PARTS_PENDING_INPUT_CAMERA');
+  Object.assign(progress,{body,held,before});await save();
   await releaseSourceResponse(page);
-  await wait(page, `window.__parts464Gate.report().events.some(event => event.phase === 'loaded')`, 'PARTS_STALE_CONTROL_RELEASE');
-  const afterLate = await sample(page,bodyCamera);
-  await record(rows,'afterLate',afterLate);
-  require(equal(beforeLate.dimensions, [20,16]) && matchesCamera(beforeLate) &&
-    equal(afterLate.dimensions, beforeLate.dimensions) && equal(afterLate.pixel, beforeLate.pixel) &&
-    matchesCamera(afterLate) && equal(afterLate.root,beforeLate.root) &&
-    afterLate.selected === 'body', 'PARTS_STALE_RASTER_MOVED_CAMERA');
-}
-
-function requireMidpoint(row: Sample, dimensions: readonly [number, number], name: string) {
-  require(equal(row.dimensions, dimensions) && matchesCamera(row),
-  'PARTS_PAINTED_VIEW_MISMATCH ' + name + ' ' + JSON.stringify(row));
-}
-
-async function comparisonFrames(page: InputCdpSession, dir: string, rows:Record<string,unknown>) {
-  await mkdir(dir);
-  await writeDifferencePackage(dir);
-  const pkg = await loadPartsView(dir, {painting:join(dir,'painting.png')});
-  const server = await startPartsServer(pkg, {port:0, exitOnClose:false});
-  try {
-    await page.goto(`http://127.0.0.1:${server.port}/?lang=en`, 'en');
-    await wait(page, `document.body.dataset.ready === 'true' && document.getElementById('pv-reference').width === 20`, 'PARTS_REFERENCE_FRAME_BOOT');
-    for (const [action, dims, target] of [
-      ['[data-pv-item="body"]', [20,16], 'pv-reference'],
-      ['[data-pv-item="front"]', [8,10], 'pv-reference'],
-      ['[data-pv-comparison="overlay"]', [8,10], 'pv-reference'],
-      ['[data-pv-comparison="difference"]', [8,10], 'pv-reference'],
-      ['#pv-assemble', [32,24], 'pv-reference'],
-    ] as const) {
-      await afterPaint(page, action, target);
-      await click(page, '#native-one');
-      await click(page, '#zoom-in');
-      const camera = midpoint(dims);
-      const rig = await sample(page,camera), reference = await sample(page,camera,'reference');
-      await record(rows,action,{rig,reference});
-      requireMidpoint(rig,dims,action);
-      requireMidpoint(reference,dims,action + ':reference');
-    }
-    await assertPartsUnchanged(pkg);
-  } finally { server.stop(true); }
-}
-
-async function legacyAtlasFrames(page: InputCdpSession, dir: string, rows:Record<string,unknown>) {
-  await cp('examples/demo', dir, {recursive:true});
-  const modelPath = join(dir,'skeleton.model.json');
-  const model = JSON.parse(await readFile(modelPath,'utf8'));
-  const atlas = model.pages[0];
-  const original = atlas.regions[0];
-  atlas.regions = [
-    {...original,name:'fractional',x:0.5,y:1.25,width:8.75,height:6.5},
-    {...original,name:'degenerate',x:atlas.width+4,y:0,width:8,height:5},
-  ];
-  await writeFile(modelPath,JSON.stringify(model));
-  const pkg = await loadPartsView(dir);
-  const server = await startPartsServer(pkg, {port:0, exitOnClose:false});
-  try {
-    await page.goto(`http://127.0.0.1:${server.port}/?lang=en`,'en');
-    await wait(page,`document.body.dataset.ready === 'true' && document.getElementById('pv-canvas').width === 13`,'PARTS_ATLAS_FRAME_BOOT');
-    await click(page,'#zoom-in');
-    const fractional = await sample(page,midpoint([13,11]));
-    await record(rows,'fractional',fractional);
-    requireMidpoint(fractional,[13,11],'fractional-region');
-    await afterPaint(page,'[data-pv-item="degenerate"]');
-    await click(page,'#zoom-in');
-    const degenerate = await sample(page);
-    await record(rows,'degenerate',degenerate);
-    // A zero-width crop still paints as zero-width and cannot accept a zoom.
-    require(degenerate.dimensions[0] === 0 && degenerate.label === '1:1','PARTS_DEGENERATE_FRAME_ACCEPTED_ZOOM');
-    await afterPaint(page,'[data-pv-view="page"]');
-    await click(page,'#zoom-in');
-    const dimensions:[number,number] = [atlas.width,atlas.height];
-    const fullPage = await sample(page,midpoint(dimensions));
-    await record(rows,'fullPage',fullPage);
-    requireMidpoint(fullPage,dimensions,'full-page');
-    await assertPartsUnchanged(pkg);
-  } finally { server.stop(true); }
-}
-
-await mkdir(out, {recursive: true});
-const root = await mkdtemp(join(tmpdir(), 'camera464-'));
-let server: Awaited<ReturnType<typeof startPartsServer>> | undefined;
-let page: InputCdpSession | undefined;
-const settled: Sample[] = [];
-
-try {
-  const fixture = await writeComparisonPackage(root);
-  const pkg = await loadPartsView(root);
-  server = await startPartsServer(pkg, {
-    port: 0, capability: 'a'.repeat(64), exitOnClose: false,
-    graceMs: 600_000, unopenedTimeoutMs: 600_000,
-  });
-  page = await launchCdpSession(join(root, 'profile'), {sendDeadlineMs: 10_000, onEvent: sourceResponseEvent});
-  await page.setViewport(1440, 1000);
-  for (const lang of ['en', 'ko'] as const) {
-    report.phase = lang + ':boot';
-    const progress: Record<string, unknown> = {};
-    report.observations.push({lang, progress});
-    await save();
-    await page.goto(`http://127.0.0.1:${server.port}/?lang=${lang}`, lang);
-    await wait(page, `(() => {
-      const c = document.getElementById('pv-canvas');
-      return document.body.dataset.ready === 'true' && c.width === 20 && c.height === 16 &&
-        document.getElementById('rig-root').style.transform !== '';
-    })()`, 'PARTS_BODY_PAINT_TIMEOUT');
-    const initial = await sample(page);
-    progress.initial = initial;
-    await save();
-    require(initial.selected === 'body' && initial.lang === lang, 'PARTS_BOOT_IDENTITY');
-    require(equal(initial.pixel, pixelAt3(fixture.part)), 'PARTS_BODY_PIXEL');
-
-    report.phase = lang + ':held';
-    await armSourceResponse(page, `http://127.0.0.1:${server.port}/`);
-    await click(page, '[data-pv-item="front"]');
-    await wait(page, 'window.__parts464Gate.held()', 'PARTS_IMAGE_GATE_TIMEOUT');
-    const held = await sample(page);
-    progress.held = held;
-    await save();
-    require(held.selected === 'front' && equal(held.dimensions, [20,16]), 'PARTS_HELD_FRAME');
-    require(equal(held.pixel, initial.pixel), 'PARTS_HELD_PIXEL');
-
-    report.phase = lang + ':zoomed-while-held';
-    await click(page, '#zoom-in');
-    const zoomed = await sample(page,EXPECTED);
-    progress.zoomed = zoomed;
-    await save();
-    require(equal(zoomed.dimensions, [20,16]) && equal(zoomed.pixel, initial.pixel), 'PARTS_ZOOM_GATE_LOST');
-    await writeFile(join(out, lang + '-held.png'), await page.screenshot());
-
-    report.phase = lang + ':released';
-    await releaseSourceResponse(page);
-    progress.released = await page.evaluate('window.__parts464Gate.report()');
-    await save();
-    await wait(page, `(() => {
-      const c = document.getElementById('pv-canvas');
-      return c.width === 8 && c.height === 10 &&
-        window.__parts464Gate.report().events.some(e => e.phase === 'loaded');
-    })()`, 'PARTS_FRONT_PAINT_TIMEOUT');
-    const final = await sample(page,EXPECTED);
-    progress.settled = final;
-    await save();
-    require(final.selected === 'front' && final.lang === lang && final.status === '', 'PARTS_SETTLED_IDENTITY');
-    require(equal(final.pixel, pixelAt3(fixture.cover)), 'PARTS_FRONT_PIXEL');
-    require(equal(final.gate, {
-      boundary:GATE_BOUNDARY,
-      events:[
-        {phase:'held',route:TARGET_ROUTE,status:200},
-        {phase:'released',route:TARGET_ROUTE},
-        {phase:'loaded',width:8,height:10},
-      ],
-      inputs:[{control:'front',trusted:true},{control:'zoom-in',trusted:true}],
-      errors:[], pending:false,
-    }), 'PARTS_GATE_EVIDENCE');
-    require(matchesZoom(final,EXPECTED.zoom), 'PARTS_PENDING_ZOOM_SCALE');
-    settled.push(final);
-    await writeFile(join(out, lang + '-settled.png'), await page.screenshot());
-    progress.screenshot = lang + '-settled.png';
-    await save();
-  }
-  report.phase = 'aggregate';
-  require(settled.every(matchesCamera),
-    'PARTS_PENDING_ZOOM_CENTER ' + JSON.stringify(settled.map(({lang, root, expected}) => ({lang, root, expected}))));
-  for (const {lang,progress} of report.observations) {
-    const zoomed = progress.zoomed as Sample, final = progress.settled as Sample;
-    requireMidpoint(final,[8,10],lang);
-    require(matchesCamera(zoomed) && equal(zoomed.root,final.root),
-      'PARTS_HELD_CAMERA_MISMATCH ' + lang + ':held-to-settled');
-  }
-  const camera={},comparison={},atlas={};
-  report.controls = {camera,comparison,atlas};
-  report.phase = 'painted-and-stale-controls';
-  await controls(page,`http://127.0.0.1:${server.port}/?lang=en`,camera);
-  await save();
-  report.phase = 'comparison-frames';
-  await comparisonFrames(page,join(root,'comparison'),comparison);
-  await save();
-  report.phase = 'legacy-atlas-frames';
-  await legacyAtlasFrames(page,join(root,'atlas'),atlas);
-  await assertPartsUnchanged(pkg);
-  report.status = 'passed';
-  await save();
-} catch (error) {
-  report.status = 'failed';
-  report.failure = {message:error instanceof Error ? error.message : String(error)};
-  if (page) {
-    try { report.failure.sample = await sample(page); }
-    catch (captureError) { report.failure.captureError = String(captureError); }
-  }
-  await save();
-  throw error;
-} finally {
-  await page?.close();
-  server?.stop(true);
-  await rm(root, {recursive:true,force:true});
-}
+  await wait(page,`document.body.dataset.ready==='true'&&window.__parts464Gate.report().events.some(e=>e.phase==='loaded')`,'PARTS_STALE_SOURCE_RELEASE');
+  const after=await sample(page,before.expected!.camera);progress.after=after;await save();require(matchesCamera(after)&&equal(after.root,before.root)&&equal(after.pixel,before.pixel)&&after.selected==='body','PARTS_STALE_RASTER_CAMERA');
+  require((after.gate as {errors:unknown[]}).errors.length===0,'PARTS_ASYNC_ERRORS');
+  await afterPaint(page,'[data-part-list] button[data-slot="front"]');
+  const front=await sample(page,after.expected!.camera);require(equal(front.dimensions,[8,10])&&equal(front.pixel,pixelAt3(fixture.cover))&&matchesCamera(front),'PARTS_CURRENT_FRONT_CAMERA');
+  const at=await page.evaluate<{x:number;y:number}>(`(()=>{const view=document.getElementById('rig-viewport'),r=view.getBoundingClientRect();view.addEventListener('wheel',event=>{const q=view.getBoundingClientRect();window.__parts464Wheel={x:event.clientX-q.left,y:event.clientY-q.top,deltaY:event.deltaY,trusted:event.isTrusted}},{capture:true,once:true});return {x:r.left+80,y:r.top+80}})()`);
+  await page.mouse('mouseMoved',at.x,at.y);await page.mouse('mousePressed',at.x,at.y);await page.mouse('mouseMoved',at.x+10,at.y-5);await page.mouse('mouseReleased',at.x+10,at.y-5);
+  const camera=front.expected!.camera,pan={x:camera.x-10/camera.zoom,y:camera.y+5/camera.zoom,zoom:camera.zoom};const panned=await sample(page,pan);require(matchesCamera(panned),'PARTS_PAN');
+  await click(page,'#zoom-in');const buttonCamera={...pan,zoom:pan.zoom*1.25},button=await sample(page,buttonCamera,'rig',{plants:true});require(matchesCamera(button),'PARTS_BUTTON_ZOOM');require(!matchesCamera({...button,expected:{...button.expected!,root:button.plants!.centre}})&&!matchesZoom(button,button.plants!.zoom),'PARTS_CSS_PLANT');
+  await page.mouse('mouseWheel',at.x,at.y,-100);const wheel=await sample(page,buttonCamera,'rig',{wheel:true});require(wheel.wheelInput?.trusted&&matchesCamera(wheel),'PARTS_CURSOR_WHEEL');
+  Object.assign(progress,{body,held,before,after,front,panned,button,wheel});await writeFile(join(out,lang+'-settled.png'),await page.screenshot());await save();
+  await sendCdp!('Page.removeScriptToEvaluateOnNewDocument',{identifier:installed.identifier});
+ }
+ report.phase='comparison-frames';const dir=join(root,'comparison');await mkdir(dir);await writeDifferencePackage(dir,true);const comparison=await loadPartsView(dir,{painting:join(dir,'painting.png')}),pair=await startPartsServer(comparison,{port:0,exitOnClose:false});
+ try{
+  await page.goto(`http://127.0.0.1:${pair.port}/?lang=en`);await wait(page,`document.body.dataset.ready==='true'`,'PARTS_COMPARISON_READY');
+  const states=[];for(const mode of ['rig','reference','difference','compare']){await click(page,'#view-menu summary');await click(page,'[data-view="'+mode+'"]');await wait(page,`document.getElementById('stage-layout').getAttribute('aria-busy')==='false'`,'PARTS_VIEW_PAINT');await click(page,'#native-one');const active=mode==='reference'?'reference':'rig';const row=await sample(page,null,active);require(row.zoom===1,'PARTS_NATIVE_COMPARISON');states.push({mode,row});}
+  report.controls={states,retired:['Atlas Region/Pages','per-item reference auto-follow/crop']};await assertPartsUnchanged(comparison);
+ }finally{pair.stop(true);}
+ await assertPartsUnchanged(pkg);report.status='passed';await save();
+}catch(error){report.status='failed';report.failure={message:String(error)};if(page)try{report.failure.sample=await sample(page);}catch(e){report.failure.captureError=String(e);}await save();throw error;}
+finally{await releaseSourceResponse(page!).catch(()=>{});await page?.close();server?.stop(true);await rm(root,{recursive:true,force:true});}

@@ -10,7 +10,7 @@ import {loadCompare} from '../src/compare.ts';
 import {freshCompareSession,saveCompareSession} from '../src/compare-session.ts';
 const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
 function singleHost(patch:Record<string,any>={}){
- let host:any;const scope:any={comments:null,bindStageComments:(h:any)=>{host=h;return {};},el:()=>({parentElement:{},hidden:true,childElementCount:0}),document:{getElementById:()=>null},saving:false,persistence:null,seekingControl:false,video:null,rebuildBusy:false,appliedOnStage:null,stripPending:null,idleAdjust:null,dialAdjust:null,physicsPreview:{read:()=>[]},meshEditor:null,bonesPanel:null,cutsPanel:null,clothPanel:null,meshPanel:null,rigFieldsPanel:null,idlePanel:null,chestRegions:()=>[],chestCircles:()=>[],chestMarkers:()=>[],inspectionBookmark:()=>({}),session:{feedback:[]},submittedBaseline:null,markDirty(){},renderProposals(){},message(){},restoreInspection(){},parseBookmark(){},inspectionBinding(){},playing:false,player:{held:false,paused:true,pause(){this.paused=true;},hold(on:boolean){this.held=on;},resume(){this.paused=false;}},turnPad:null,playbackIntent:0,desiredPlay:false,suspendedPreview:false,idleHeld:false,heldPhysicsFailed:false,lastFrame:0,playbackCarry:0,stopAudio(){},button:()=>({setAttribute(){}}),...patch};
+ let host:any;const scope:any={isSubmittedFeedback:()=>false,comments:null,bindStageComments:(h:any)=>{host=h;return {};},el:()=>({parentElement:{},hidden:true,childElementCount:0}),document:{getElementById:()=>null},saving:false,persistence:null,seekingControl:false,video:null,rebuildBusy:false,appliedOnStage:null,rigDifference:null,stripPending:null,idleAdjust:null,dialAdjust:null,physicsPreview:{read:()=>[]},meshEditor:null,bonesPanel:null,cutsPanel:null,clothPanel:null,meshPanel:null,rigFieldsPanel:null,idlePanel:null,chestRegions:()=>[],chestCircles:()=>[],chestMarkers:()=>[],inspectionBookmark:()=>({}),session:{feedback:[]},submittedBaseline:null,markDirty(){},renderProposals(){},message(){},restoreInspection(){},parseBookmark(){},inspectionBinding(){},playing:false,player:{held:false,paused:true,pause(){this.paused=true;},hold(on:boolean){this.held=on;},resume(){this.paused=false;}},turnPad:null,playbackIntent:0,desiredPlay:false,suspendedPreview:false,idleHeld:false,heldPhysicsFailed:false,lastFrame:0,playbackCarry:0,stopAudio(){},button:()=>({setAttribute(){}}),...patch};
  const pauseLine=source.slice(source.indexOf('function pause():')).split('\n')[0];const start=source.includes('function commentCaptureRefusal(')?source.indexOf('function commentCaptureRefusal('):source.indexOf('function setupComments():');
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(pauseLine+'\n'+source.slice(start));new Function('scope',`with(scope){${code};setupComments();}`)(scope);return {host,scope};
 }
@@ -199,4 +199,16 @@ test('#276 refusal layout & read-only controls: one-line button without bar shif
  expect(oldBehaviour.fitsInsideStage).toBe(false);
  expect(oldBehaviour.bottomPx).toBeGreaterThan(200);
  expect(oldBehaviour.hintText).toBe('Enter saves · Escape cancels');
+});
+
+
+test('#739 diagnostic comment refusal precedes applied/source/preview refusals and prevents crop',async()=>{
+ const {host,scope}=singleHost({rigDifference:{},appliedOnStage:{schema:'scratch'},rebuildBusy:true,idleAdjust:()=>{}});
+ const refusal=host.refusal();expect(refusal).toBe('RIG_DIFFERENCE_COMMENT_UNAVAILABLE: return to Rig or Reference before adding a comment.');
+ const ui=commentController();try{
+  ui.setReason(refusal);ui.enable();await ui.down();await ui.up();expect(ui.crops()).toBe(0);expect(ui.rows()).toHaveLength(0);expect(ui.tool.active()).toBe(false);
+ }finally{ui.tool.dispose();}
+ scope.rigDifference=null;expect(host.refusal()).toStartWith('COMMENT_APPLIED_BUILD_UNSUPPORTED:');
+ scope.appliedOnStage=null;expect(host.refusal()).toStartWith('COMMENT_SOURCE_BUSY:');
+ scope.rebuildBusy=false;expect(host.refusal()).toContain('COMMENT_UNAPPLIED_PREVIEW: Idle tracks');
 });

@@ -2,7 +2,7 @@
 import type {Json} from '../src/manifest.ts';
 import type {PosedFrame,RigPlayer,PoseBounds,SlotIdentitySnapshot} from '@rig-c/play';
 import {parseControlPart,parsePartIdentity,type ControlPart,type ControlPartIdentity,type PartIdentityReason} from '../src/control.ts';
-import {setSourceAttribute,setSourceText,sourceAttribute} from './i18n.ts';
+import {t,setSourceAttribute,setSourceText,sourceAttribute} from './i18n.ts';
 export interface PartDeclaration {skin:string;attachment:string;kind:string;path:string|null}
 export interface PartEntry {slot:string;bone:string;setup:string|null;declarations:PartDeclaration[]}
 export interface PartObservation {side:ControlPart['side'];slot:string;mode:ControlPart['mode'];identity:ControlPartIdentity|null;generation:number|null;reason:PartIdentityReason|null;drawn:boolean;kind:string|null;page:string|null;region:string|null;sequence:number|null;vertices:number|null;triangles:number|null;z:number|null;skin:string|null;set:string|null;activeAttachment:{skin:string;attachment:string}|null;identityUnavailable:string|null;bounds:PoseBounds|null;declarations:PartDeclaration[]}
@@ -98,7 +98,17 @@ export class PartInspection {
 }
 /** Draws a row's thumbnail into its icon element, or leaves the type glyph; returns the tooltip note naming which and why. */
 export interface PartThumbnailSource {show(icon:HTMLElement,entry:PartEntry,identity:ControlPartIdentity|null,glyph:string):string}
+export interface PartsListItem {name:string;index:number;imageHash?:string;mesh?:unknown}
+export interface PartsListSource {
+ items:readonly PartsListItem[];selected:()=>string|null;solo:()=>boolean;visible:(name:string)=>boolean;
+ thumbnail?:(icon:HTMLElement,item:PartsListItem,glyph:string)=>void;
+ select:(name:string|null)=>void;isolate:(solo:boolean)=>void;show:(name:string,visible:boolean)=>void;
+}
 export class PartExplorer extends PartInspection {
+ private images:PartsListSource|null=null;
+ /** Parts-only subjects use these same rows; they carry no slot, bone or runtime identity. */
+ registerImages(source:PartsListSource):void {this.images=source;this.whole.onclick=()=>source.select(null);this.solo.onchange=()=>source.isolate(this.solo.checked);this.renderList();this.renderDetail();}
+ refreshImages():void {if(this.images){this.renderSelection(true);this.renderDetail();}}
  private highlightedBone:string|null=null;
  /** Page-local bone relation highlight; it never invents a selected slot or changes held identity. */
  highlightBone(name:string|null):void {this.highlightedBone=name;for(const [row,entry]of this.rowEntries)row.dataset.boneSelected=String(name!==null&&entry.bone===name);}
@@ -125,15 +135,37 @@ export class PartExplorer extends PartInspection {
  /** Everything the rows and Solo control display: selection, per-side drawn slots in order, and identity. Generation is excluded. */
  private viewKey():string {let key=JSON.stringify([this.selected,this.visibleSide,[...this.refused]]);for(const [side,state]of this.shownSides()){key+='\u0001'+side+'\u0002'+(state.frame?state.frame.order.map(row=>row.slot).join('\u0000'):'\u0003');for(const row of state.identity?.slots??[])key+='\u0002'+row.slot+'\u0000'+row.z+'\u0000'+row.skin+'\u0000'+row.attachment+'\u0000'+row.reason;}return key;}
  private action(run:()=>void){try{run();}catch(error){this.renderSelection(true);this.host.querySelector<HTMLElement>('[data-part-status]')!.textContent=`Part selection refused: ${error instanceof Error?error.message:String(error)}`;}}
- private renderList(){this.rows.clear();this.rowEntries.clear();this.rowParts.clear();this.list.replaceChildren();const query=this.search.value;for(const [side,state]of this.shownSides())for(const entry of orderedParts(state.entries,state.frame,state.identity)){if(!entry.slot.includes(query))continue;const row=document.createElement('button');row.type='button';row.dataset.side=side;row.dataset.slot=entry.slot;row.title=`${entry.slot} · bone ${entry.bone}`;const icon=document.createElement('span'),label=document.createElement('span');icon.className='part-thumb';icon.setAttribute('aria-hidden','true');icon.textContent=entry.declarations.some(d=>d.kind==='mesh')?'◈':'◇';label.className='part-label';label.textContent=`${side==='single'?'':side.toUpperCase()+' · '}${entry.slot}`;row.append(icon,label);this.rowParts.set(row,{icon,label});
-   // Selecting the selected slot again (click, or Space/Enter on the focused row) returns to Whole rig.
-   row.onclick=()=>this.action(()=>{const live=this.live();this.select(live?.side===side&&live.slot===entry.slot?null:{side,slot:entry.slot,mode:this.selected?.mode??'context'});});const item=document.createElement('li');item.append(row);this.list.append(item);this.rows.set(JSON.stringify([side,entry.slot]),row);this.rowEntries.set(row,entry);}this.orderKey='';this.reorder();this.renderSelection(true);this.highlightBone(this.highlightedBone);}
+ private renderList(){
+  this.rows.clear();this.rowEntries.clear();this.rowParts.clear();this.list.replaceChildren();
+  const query=this.search.value;
+  const entries=this.images?this.images.items.map(image=>({side:'single' as const,name:image.name,image,entry:null as PartEntry|null})):
+   this.shownSides().flatMap(([side,state])=>orderedParts(state.entries,state.frame,state.identity).map(entry=>({side,name:entry.slot,image:null,entry})));
+  for(const {side,name,image,entry}of entries){
+   if(!name.includes(query))continue;
+   const row=document.createElement('button');row.type='button';row.dataset.side=side;row.dataset.slot=name;row.title=entry?`${name} · bone ${entry.bone}`:name;
+   const icon=document.createElement('span'),label=document.createElement('span');icon.className='part-thumb';icon.setAttribute('aria-hidden','true');
+   icon.textContent=(entry?.declarations.some(d=>d.kind==='mesh')||image?.mesh)?'◈':'◇';label.className='part-label';label.textContent=`${side==='single'?'':side.toUpperCase()+' · '}${name}`;row.append(icon,label);this.rowParts.set(row,{icon,label});if(image)this.images?.thumbnail?.(icon,image,icon.textContent??'◇');
+   row.onclick=()=>this.action(()=>{if(this.images){this.images.select(this.images.selected()===name?null:name);this.renderSelection(true);return;}const live=this.live();this.select(live?.side===side&&live.slot===name?null:{side,slot:name,mode:this.selected?.mode??'context'});});
+   const item=document.createElement('li');item.append(row);this.list.append(item);this.rows.set(JSON.stringify([side,name]),row);if(entry)this.rowEntries.set(row,entry);
+   if(image&&this.images){
+    const visible=document.createElement('input');visible.type='checkbox';visible.checked=this.images.visible(name);visible.dataset.pvVisible=name;setSourceAttribute(visible,'aria-label',t('Show {name} in assembly',{name}));
+    visible.onchange=()=>this.images?.show(name,visible.checked);const label=document.createElement('label');label.append(visible);item.append(label);
+   }
+  }
+  this.orderKey='';if(!this.images)this.reorder();this.renderSelection(true);this.highlightBone(this.highlightedBone);
+ }
  private statusText():string {const refused=[...this.refused].filter(([side])=>this.visibleSide===null||side===this.visibleSide).map(([side,r])=>`${side==='single'?'':side.toUpperCase()+' '}${r.code}`);if(refused.length)return `Parts unavailable · ${refused.join(' · ')}. The rig keeps drawing whole; selection, Solo and feedback targeting are off ${[...this.refused.values()].some(r=>r.catalog)?'until the package reloads with a matching catalog':'until a frame with a valid identity snapshot'}.`;const shown=this.shownSides();return shown.length?`${shown.reduce((n,[,s])=>n+s.entries.length,0)} declared slots · ${this.rows.size} results`:'No compiled rig catalog available';}
  private reorder(){const keys=this.shownSides().flatMap(([side,state])=>orderedParts(state.entries,state.frame,state.identity).map(entry=>JSON.stringify([side,entry.slot]))).filter(key=>this.rows.has(key)),key=JSON.stringify(keys);if(key===this.orderKey)return;this.orderKey=key;const active=document.activeElement;for(const item of keys){const row=this.rows.get(item)!;this.list.append(row.parentElement!);}if(active instanceof HTMLElement&&this.list.contains(active)&&document.activeElement!==active)active.focus({preventScroll:true});}
- private renderSelection(force=false){const key=this.viewKey();if(!force&&key===this.selectionKey)return;this.selectionKey=key;const status=this.host.querySelector<HTMLElement>('[data-part-status]')!;setSourceText(status,this.statusText());if(this.refused.size)this.host.dataset.parts='unavailable';else delete this.host.dataset.parts;const drawnBySide=new Map([...this.sides].map(([side,state])=>[side,new Set(state.frame?.order.map(row=>row.slot)??[])]));this.whole.setAttribute('aria-pressed',String(!this.selected));this.solo.disabled=!this.live();this.solo.checked=this.live()?.mode==='solo';for(const [key,row]of this.rows){row.setAttribute('aria-pressed',String(key===JSON.stringify([this.live()?.side,this.live()?.slot])));const refusal=this.refused.get(row.dataset.side as ControlPart['side']);row.disabled=!!refusal;const parts=this.rowParts.get(row)!;if(refusal){const label=`${row.dataset.side==='single'?'':row.dataset.side!.toUpperCase()+' · '}${row.dataset.slot} · parts unavailable · ${refusal.code}`;if(parts.label.textContent!==label){parts.label.textContent=label;parts.icon.textContent='';delete parts.icon.dataset.thumbnailPlan;}row.title=label;row.setAttribute('aria-label',label);row.dataset.drawn='false';continue;}const state=this.sides.get(row.dataset.side as ControlPart['side']);const drawn=drawnBySide.get(row.dataset.side as ControlPart['side'])?.has(row.dataset.slot!);row.dataset.drawn=String(!!drawn);const entry=this.rowEntries.get(row),identity=entry?partIdentity(state?.identity??null,row.dataset.slot!):null;const glyph=entry?.declarations.some(d=>d.kind==='mesh')?'◈':'◇',source=this.thumbnails.get(row.dataset.side as ControlPart['side']),note=entry&&source?source.show(parts.icon,entry,identity,glyph):null;if(!note&&parts.icon.textContent!==glyph){parts.icon.textContent=glyph;delete parts.icon.dataset.thumbnailPlan;}
+ private renderSelection(force=false){
+  if(this.images){
+   const name=this.images.selected();this.whole.setAttribute('aria-pressed',String(name===null));this.solo.disabled=name===null;this.solo.checked=this.images.solo();
+   for(const row of this.rows.values())row.setAttribute('aria-pressed',String(row.dataset.slot===name));
+   setSourceText(this.host.querySelector<HTMLElement>('[data-part-status]')!,t('{count} parts',{count:this.images.items.length}));return;
+  }
+const key=this.viewKey();if(!force&&key===this.selectionKey)return;this.selectionKey=key;const status=this.host.querySelector<HTMLElement>('[data-part-status]')!;setSourceText(status,this.statusText());if(this.refused.size)this.host.dataset.parts='unavailable';else delete this.host.dataset.parts;const drawnBySide=new Map([...this.sides].map(([side,state])=>[side,new Set(state.frame?.order.map(row=>row.slot)??[])]));this.whole.setAttribute('aria-pressed',String(!this.selected));this.solo.disabled=!this.live();this.solo.checked=this.live()?.mode==='solo';for(const [key,row]of this.rows){row.setAttribute('aria-pressed',String(key===JSON.stringify([this.live()?.side,this.live()?.slot])));const refusal=this.refused.get(row.dataset.side as ControlPart['side']);row.disabled=!!refusal;const parts=this.rowParts.get(row)!;if(refusal){const label=`${row.dataset.side==='single'?'':row.dataset.side!.toUpperCase()+' · '}${row.dataset.slot} · parts unavailable · ${refusal.code}`;if(parts.label.textContent!==label){parts.label.textContent=label;parts.icon.textContent='';delete parts.icon.dataset.thumbnailPlan;}row.title=label;row.setAttribute('aria-label',label);row.dataset.drawn='false';continue;}const state=this.sides.get(row.dataset.side as ControlPart['side']);const drawn=drawnBySide.get(row.dataset.side as ControlPart['side'])?.has(row.dataset.slot!);row.dataset.drawn=String(!!drawn);const entry=this.rowEntries.get(row),identity=entry?partIdentity(state?.identity??null,row.dataset.slot!):null;const glyph=entry?.declarations.some(d=>d.kind==='mesh')?'◈':'◇',source=this.thumbnails.get(row.dataset.side as ControlPart['side']),note=entry&&source?source.show(parts.icon,entry,identity,glyph):null;if(!note&&parts.icon.textContent!==glyph){parts.icon.textContent=glyph;delete parts.icon.dataset.thumbnailPlan;}
    const title=`${row.dataset.slot} · ${state?.frame?drawn?'drawn':'not drawn':'awaiting draw'}${identity?identity.reason?' · '+identity.reason:' · '+identity.skin+' / '+identity.attachment:' · awaiting identity snapshot'}${note?' · '+note:''}`;if(sourceAttribute(row,'title')!==title)row.title=title;const label=`${row.dataset.side==='single'?'':row.dataset.side!.toUpperCase()+' · '}${row.dataset.slot} · ${state?.frame?drawn?'drawn':'not drawn':'awaiting draw'} · ${identity?identity.reason?'no active attachment · '+identity.reason:identity.skin+' / '+identity.attachment:'awaiting identity snapshot'}`;setSourceText(parts.label,label);setSourceAttribute(row,'aria-label',`${glyph} ${label} · ${state?.frame?drawn?'drawn':'not drawn':'awaiting draw'}`);}}
  private renderDetail(){
-  const observation=this.observation(),refusal=this.selected?this.refused.get(this.selected.side):[...this.refused.values()][0],key=JSON.stringify([observation,refusal??null,this.statusHint]);if(key===this.detailKey)return;this.detailKey=key;
+  const observation=this.observation(),refusal=this.selected?this.refused.get(this.selected.side):[...this.refused.values()][0],key=JSON.stringify([observation,refusal??null,this.statusHint,!!this.images,this.images?.selected()]);if(key===this.detailKey)return;this.detailKey=key;
   // Keep focused controls connected while the selected pose's bounds animate.
   const nodes=this.detailNodes??=(()=>{
    const title=document.createElement('h3'),info=document.createElement('p'),declarations=document.createElement('p'),bounds=document.createElement('p'),unavailable=document.createElement('p'),feedback=document.createElement('button'),status=document.createElement('p');
@@ -144,6 +176,15 @@ export class PartExplorer extends PartInspection {
    this.detail.replaceChildren(title,info,declarations,bounds,unavailable,feedback,status);
    return {title,info,declarations,bounds,unavailable,feedback,status};
   })();
+  if(this.images){
+   const selected=this.images.items.find(item=>item.name===this.images!.selected());
+   setSourceText(nodes.title,selected?.name??'Assembled parts');
+   setSourceText(nodes.info,selected?t('Original part image · {name}',{name:selected.name}):'Select a part to inspect its original image source.');
+   setSourceText(nodes.declarations,selected?.imageHash?t('Source image SHA-256 · {hash}',{hash:selected.imageHash}):'');
+   nodes.declarations.hidden=!selected?.imageHash;
+   for(const node of [nodes.bounds,nodes.unavailable,nodes.feedback,nodes.status])node.hidden=true;
+   return;
+  }
   nodes.status.textContent=this.statusHint??'Mesh optimization requires an eligible producer handoff. This inspection changes no source art, geometry or motion.';
   nodes.title.textContent=observation?`${observation.side==='single'?'':observation.side.toUpperCase()+' · '}${observation.slot}`:'Whole rig';
   nodes.info.textContent=observation?`${observation.mode==='solo'?'Solo':'In context'} · ${observation.drawn?observation.kind==='mesh'?`${observation.vertices} posed vertices · ${observation.triangles} triangles`:'Region · four posed corners':'Not drawn at current pose'} · Skin: ${observation.skin??'not set'} · Set: ${observation.set??'not set'}`:refusal?`Parts unavailable · ${refusal.message}. The whole rig stays drawn; no slot is selected, soloed or targeted from stale data.`:'Select an actual slot in the parts explorer. Selection preserves animation, time and physics history.';

@@ -211,10 +211,23 @@ function matchingVertexGeometry(a:Record<string,any>,b:Record<string,any>):boole
  const equalNumbers=(a:unknown,b:unknown)=>Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((v,i)=>typeof v==='number'&&typeof b[i]==='number'&&Math.fround(v)===Math.fround(b[i]));
  if(Array.isArray(a.weights)){
   if(a.weights.length!==a.uvs.length/2||b.vertices?.weighted!==true||!Array.isArray(b.vertices.bindings)||a.weights.length!==b.vertices.bindings.length)return false;
-  return a.weights.every((row:unknown,i:number)=>Array.isArray(row)&&Array.isArray(b.vertices.bindings[i])&&row.length>0&&row.length===b.vertices.bindings[i].length&&row.every((v:unknown,j:number)=>{
-   const x=v as Record<string,unknown>,y=b.vertices.bindings[i][j];
-   return x&&y&&x.bone===y.bone&&equalNumbers([x.x,x.y,x.weight],[y.x,y.y,y.weight]);
-  }));
+  // A vertex's bindings are a set: the compiler writes them in bone order (rigc canonical), the producer in its own order.
+  // Compare them sorted by bone, then by the float32 values, so order alone never refuses and every value still must agree.
+  const sorted=(row:unknown[])=>[...row].sort((p,q)=>{
+   const x=p as Record<string,unknown>,y=q as Record<string,unknown>;
+   if(x?.bone!==y?.bone)return String(x?.bone)<String(y?.bone)?-1:1;
+   for(const key of ['x','y','weight'] as const){const u=Math.fround(Number(x?.[key])),v=Math.fround(Number(y?.[key]));if(u!==v)return u<v?-1:1;}
+   return 0;
+  });
+  return a.weights.every((row:unknown,i:number)=>{
+   const other=b.vertices.bindings[i];
+   if(!Array.isArray(row)||!Array.isArray(other)||row.length===0||row.length!==other.length)return false;
+   const left=sorted(row),right=sorted(other);
+   return left.every((v:unknown,j:number)=>{
+    const x=v as Record<string,unknown>,y=right[j] as Record<string,unknown>;
+    return x&&y&&typeof x.bone==='string'&&x.bone===y.bone&&equalNumbers([x.x,x.y,x.weight],[y.x,y.y,y.weight]);
+   });
+  });
  }
  if(Array.isArray(a.vertices)&&a.vertices.length===a.uvs.length)return b.vertices?.weighted===false&&equalNumbers(a.vertices,b.vertices.xy);
  throw new Error('STAGE_DRAFT_GEOMETRY_UNSUPPORTED');

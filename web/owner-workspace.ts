@@ -7,8 +7,8 @@ import {connectLiveWindow} from './live-connection.ts';
 
 export function mountOwnerWorkspace(root: HTMLElement): () => void {
   const workspace = mountRetainedWorkspace({root, kind: 'owner'});
-  const {stage, language} = workspace;
-  let current: WorkspaceList | null = null, disposed = false, statusKey = '';
+  const {stage, language, message: status} = workspace;
+  let current: WorkspaceList | null = null, disposed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const cancellation = new AbortController();
   const retained = createRetainedFrameStage<{frame: HTMLIFrameElement; target: WorkspaceTargetView}>({
@@ -20,11 +20,6 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
   const capability = hashCapabilityAccess(new URL(location.href), 'rig-review-owner-workspace/1:' + location.origin,
     () => sessionStorage, href => history.replaceState(history.state, '', href), {strip: 'always-after-storage', storedValue: 'preserve', fallback: ''});
 
-  function showStatus(key: string) {
-    statusKey = key;
-    workspace.setStatus(key ? tr(key) : '');
-  }
-
   async function grant(key: string) {
     const encoder = new TextEncoder();
     const secret = await crypto.subtle.importKey('raw', encoder.encode(capability), {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']);
@@ -34,59 +29,49 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
 
   async function select(target: WorkspaceTargetView) {
     const intent = retained.beginSelection();
-    if (target.unavailable) {showStatus(target.unavailable); return;}
+    if (target.unavailable) {status.textContent = tr(target.unavailable); return;}
     let entry = retained.get(target.key);
     if (!entry) {
-      if (retained.atLimit()) {showStatus('WORKSPACE_TARGET_LIMIT'); return;}
+      if (retained.atLimit()) {status.textContent = tr('WORKSPACE_TARGET_LIMIT'); return;}
       const token = await grant(target.key);
       if (!retained.isCurrent(intent)) return;
       const frame = retained.createFrame(target.title, target.entry + '&lang=' + getLanguage() + '#cap=' + token);
       entry = {frame, target}; retained.retain(entry);
     }
-    statusKey = 'Select a target. Drafts stay with their original source.';
     retained.select(target.key);
     render();
   }
 
   function render() {
-    const selectedTarget = current?.targets.find(target => target.key === retained.selected) ?? null;
     workspace.render({
-      lang: getLanguage(),
-      heading: tr('Review workspace'),
-      listLabel: tr('Review targets'),
-      languageLabel: tr('Language'),
-      englishLabel: tr('English'),
-      koreanLabel: tr('Korean'),
-      message: statusKey ? tr(statusKey) : '',
+      lang: getLanguage(), heading: tr('Review workspace'), listLabel: tr('Review targets'),
+      languageLabel: tr('Language'), englishLabel: tr('English'), koreanLabel: tr('Korean'),
       selected: retained.selected,
-      selectedHash: selectedTarget?.contentHash ?? null,
       items: (current?.targets ?? []).map(target => ({
-        key: target.key,
-        dataset: {targetKey: target.key, subjectState: target.unavailable ? 'unavailable' : 'waiting'},
-        kindLabel: tr(target.unavailable ?? (target.viewOnly ? 'Inspection only' : target.mode === 'compare' ? 'A / B comparison' : 'Review target')),
-        label: target.title,
-        hash: target.contentHash,
-        onSelect: () => {void select(target).catch(() => {showStatus('WORKSPACE_REQUEST_REFUSED');});},
+        key: target.key, dataset: {targetKey: target.key}, label: target.title,
+        state: tr(target.unavailable ?? (target.viewOnly ? 'Inspection only' : 'Review target')),
+        detail: target.animation,
+        onSelect: () => {void select(target).catch(() => {status.textContent = tr('WORKSPACE_REQUEST_REFUSED');});},
       })),
     });
   }
 
   async function refresh() {
     try {
-      if (!capability) {showStatus('WORKSPACE_CAPABILITY_REQUIRED'); return;}
+      if (!capability) {status.textContent = tr('WORKSPACE_CAPABILITY_REQUIRED'); return;}
       const response = await fetch('/workspace/api/targets', {
         headers: {'X-Review-Capability': capability}, signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(5000)]),
       });
       const value = await response.json() as WorkspaceList & {error?: string};
-      if (!response.ok) {showStatus(value.error ?? 'WORKSPACE_REQUEST_REFUSED'); return;}
+      if (!response.ok) {status.textContent = tr(value.error ?? 'WORKSPACE_REQUEST_REFUSED'); return;}
       if (value.schema !== WORKSPACE_SCHEMA || !Array.isArray(value.targets) || value.targets.length > WORKSPACE_TARGET_LIMIT ||
-          current && current.incarnation !== value.incarnation) {showStatus('WORKSPACE_HOST_MISMATCH'); return;}
+          current && current.incarnation !== value.incarnation) {status.textContent = tr('WORKSPACE_HOST_MISMATCH'); return;}
       const changed = JSON.stringify(value) !== JSON.stringify(current);
-      if (!current) showStatus('Select a target. Drafts stay with their original source.');
+      if (!current) status.textContent = tr('Select a target. Drafts stay with their original source.');
       current = value;
       if (changed) render();
       if (!retained.selected && value.targets[0]) await select(value.targets[0]);
-    } catch {if (!disposed) showStatus('WORKSPACE_REQUEST_REFUSED');}
+    } catch {if (!disposed) status.textContent = tr('WORKSPACE_REQUEST_REFUSED');}
     finally {if (!disposed) timer = setTimeout(() => {void refresh();}, 1000);}
   }
 

@@ -11,7 +11,6 @@ import { verifyCompiledModel } from '../src/strip-render.ts';
 import { directionRows } from '../web/direction-panel.ts';
 import { t } from '../web/i18n.ts';
 import { formatTurnValue, TurnState } from '../src/turn-pad.ts';
-import { stageReason } from '../web/stage-nav.ts';
 
 const fixture = 'tests/fixtures/direction-inspection';
 const expected = {
@@ -23,8 +22,6 @@ const expected = {
 test('pinned Create output loads in published Play and reports only its actual direction capabilities', async () => {
   const pkg = await loadReview(fixture);
   await verifyCompiledModel(pkg.root, pkg.manifest.model, 'turn');
-  // #726: Direction is not built; chip 4 names itself unavailable even with an installed contract.
-  expect(stageReason(4, true, true)).toStartWith('DIRECTION_NOT_AVAILABLE:');
   expect(pkg.feedbackCatalog.turnDials?.map(d => d.axis)).toEqual(['yaw']);
   const rig = pkg.reviewedSource.rig!;
   expect(rig.sha256).toBe(expected['derived/review/v1/out/check/build/skeleton.model.json']);
@@ -46,7 +43,6 @@ test('pinned Create output loads in published Play and reports only its actual d
   }
   expect(directionRows({ ...view, model: { ...view.model, inspected: false } }).map(row => row.key))
     .toContain('direction.authoredUnavailable');
-  expect(stageReason(4, false, true)).toStartWith('DIRECTION_NOT_AVAILABLE:');
   const referenceOnly = directionRows({ ...view, model: null, dials: [], sets: [], authored: undefined });
   expect(referenceOnly.map(row => row.key)).toEqual([
     'direction.modelUnavailable', 'direction.package', 'direction.turnUnavailable',

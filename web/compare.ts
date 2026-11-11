@@ -1,5 +1,4 @@
 import {sharedViewToolsMarkup,sharedCommentMarkup,legacyCompareLayerControlsMarkup,legacyCompareHeaderContent} from '../src/compare-html.ts';
-import {bindStageNav} from './stage-nav.ts';
 import {bindWorkspaceVisibility} from './workspace-visibility.ts';
 import {requireFeedbackFrames} from '../src/stage-comment.ts';
 import {bindStageComments,type CommentPose} from './stage-comments.ts';
@@ -445,7 +444,6 @@ function bind(): void {
   bindInspector();
   const transportBlock=document.querySelector<HTMLElement>('#animate-blocks [data-block-target="motion-tools"]');if(transportBlock)transportBlock.dataset.blockIncludes=[transportBlock.dataset.blockIncludes,'compare-transport-context'].filter(Boolean).join(' ');
   pickedTools=mountComparePickedTools({data:()=>data,readOnly:()=>readOnly,players,assets,rigScales,layers,parts:()=>parts,time:()=>trace?.reference??presentation.snapshot().lastDrawn?.reference??0,duration:()=>domain?.end??0,playing:()=>!video.paused,pause:()=>{idleHeld=true;stop();},seekTo:seconds=>seekTo(seconds),api,route:access.route,swapSideRig,redrawOverlays,fit,syncLayout:()=>{renderPairLayout();const mode=pickedTools?.mode()??'compare',picked=pickedTools?.pickedSide()??'a';if(mode!=='compare'&&activeCamera!=='reference'&&activeCamera!==picked)activeCamera=picked;fit();},saveDraft:()=>{persistence?.save();},message,download,turnAdjustFor:side=>turnAdjusts[side]??null,syncFeedbackSide:side=>{if(select('side').value!==side&&!input('summary').value.trim()){select('side').value=side;renderFeedbackSelection();}}});
-  viewDisposers.push(bindStageNav({model:true,setup:()=>pickedTools?.setMode('setup'),animate:()=>pickedTools?.setMode('animate'),current:()=>{const mode=pickedTools?.mode();return mode==='setup'?1:mode==='animate'?3:null;}}));
   document.addEventListener('visibilitychange',()=>{if(document.hidden){suspendedPreview=!video.paused;stop();}else if(suspendedPreview&&!idleHeld){suspendedPreview=false;void playComparison().catch(error=>message(describe(error),true));}});
   const observer = new ResizeObserver(fit); observer.observe(el('a-viewport')); observer.observe(el('b-viewport'));observer.observe(el('reference-viewport'));
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });

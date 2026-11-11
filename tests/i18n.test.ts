@@ -1,3 +1,4 @@
+import {setSourceText} from '../web/i18n.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readdir,readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
@@ -581,6 +582,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
    const run=new Function('scope',`with(scope){${jsSource}; renderProposals();}`);
    run({
     comments:null,
+    rigInspector:{comments:{button:doc.createElement('button')}},setSourceText,
     el:(id:string)=>doc.getElementById(id),
     text:(id:string,v:string)=>{const n=doc.getElementById(id);if(n)n.textContent=v;},
     session,
@@ -1213,7 +1215,17 @@ test('assembly caption reports the visible part count in both languages', async 
  expect(koCatalog[key]).toBe('조립 패키지 · 파츠 {count}개 표시.');
  expect(enCatalog['Comment · C ({0}) · Rendering']).toBe('Comment · C ({0}) · Rendering');
  expect(koCatalog['Comment · C ({0}) · Rendering']).toBe('코멘트 · C ({0}) · 렌더링 중');
- const source = await readFile(new URL('../web/parts.ts', import.meta.url), 'utf8');
- expect(source).toContain("t('" + key + "',{count:shown.length})");
+ const source = await readFile(new URL('../web/parts-viewport-provider.ts', import.meta.url), 'utf8');
+ expect(source).toContain("t(assembled()?'Assembled parts':'Selected part')");
+ expect(enCatalog['Assembled parts']).toBe('Assembled parts');expect(koCatalog['Assembled parts']).toBe('조립된 파츠');
  expect(source).not.toContain('Selection and verdict remain per part.');
+});
+
+
+test('#739 rig Difference pixel count translates and round-trips in the existing dynamic DOM path',()=>{
+ const key='Difference: {0} of {1} pixels differ, compared where the rig draws · rest still vs original painting.';
+ const english=t(key,[64,100],'en'),korean=t(key,[64,100],'ko');
+ expect(english).toBe('Difference: 64 of 100 pixels differ, compared where the rig draws · rest still vs original painting.');
+ expect(korean).toBe('차이: 리그가 그리는 100픽셀 중 64픽셀 다름 · 정지 셋업과 원본 그림.');
+ expect(tr(english,'ko')).toBe(korean);expect(tr(korean,'en')).toBe(english);
 });

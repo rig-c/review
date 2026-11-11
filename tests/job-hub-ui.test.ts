@@ -48,9 +48,7 @@ test('every admitted row is selectable under the same advertised frame bound and
   const list: JobHubList = {schema: 'rig-review-job-hub/1', incarnation, limit: 32, jobs};
   expect(checkedJobHubList(list, incarnation).jobs).toHaveLength(32);
   for (const value of [{...list, incarnation: 'other'}, {...list, limit: 9}, {...list, limit: 33},
-    {...list, jobs: [...jobs, {...jobs[0]!, jobId: 'synthetic-33'}]}, {...list, jobs: [jobs[0]!, jobs[0]!]},
-    {...list, jobs: [{...jobs[0]!, subjectKind: 'unknown' as never}]},
-    {...list, jobs: [{...jobs[0]!, answered: 'yes' as never}]}]) {
+    {...list, jobs: [...jobs, {...jobs[0]!, jobId: 'synthetic-33'}]}, {...list, jobs: [jobs[0]!, jobs[0]!]}]) {
     expect(() => checkedJobHubList(value, incarnation)).toThrow('JOB_HUB_STATE_INVALID');
   }
 });

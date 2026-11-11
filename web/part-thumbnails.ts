@@ -49,28 +49,42 @@ export function thumbnailPlan(table:PageRegionTable,entry:PartEntry,identity:Con
 export function thumbnailFit(sw:number,sh:number,size=thumbnailBox*thumbnailScale):{dx:number;dy:number;dw:number;dh:number} {
  const scale=Math.min(size/sw,size/sh),dw=sw*scale,dh=sh*scale;return {dx:(size-dw)/2,dy:(size-dh)/2,dw,dh};
 }
-type PageImage=CanvasImageSource&{complete?:boolean;naturalWidth?:number};
+type PageImage=CanvasImageSource&{complete?:boolean;naturalWidth?:number;naturalHeight?:number};
 /** Lazy (IntersectionObserver) drawing, one cached bitmap per attachment key. */
 export class PartThumbnails implements PartThumbnailSource {
- private cache=new Map<string,HTMLCanvasElement>();private pending=new Map<Element,ThumbnailCrop>();private observer:IntersectionObserver|null=null;
- constructor(private table:PageRegionTable,private images:ReadonlyMap<string,PageImage>){
+ private cache=new Map<string,HTMLCanvasElement>();private pending=new Map<Element,ThumbnailCrop>();private observer:IntersectionObserver|null=null;private disposed=false;private originals=new Map<string,PageImage>();
+ constructor(private table:PageRegionTable={pages:new Map(),regions:new Map(),absent:null},private images:ReadonlyMap<string,PageImage>=new Map()){
   if(typeof IntersectionObserver==='function')this.observer=new IntersectionObserver(items=>{for(const item of items)if(item.isIntersecting){const plan=this.pending.get(item.target);this.observer?.unobserve(item.target);this.pending.delete(item.target);if(plan)this.paint(item.target as HTMLCanvasElement,plan);}});
  }
  show(icon:HTMLElement,entry:PartEntry,identity:ControlPartIdentity|null,glyph:string):string {
   const plan=thumbnailPlan(this.table,entry,identity),image=plan.kind==='crop'?this.images.get(plan.page):undefined;
   const shown:ThumbnailPlan=plan.kind==='crop'&&!image?{kind:'icon',key:plan.key,reason:`THUMBNAIL_PAGE_UNAVAILABLE: page ${plan.page} is not loaded`}:plan;
+  this.showPlan(icon,shown,glyph);
+  return shown.kind==='crop'?`thumbnail: region ${shown.region} on ${shown.page}`:`type icon: ${shown.reason}`;
+ }
+ /** Whole original part rasters use the same fit, cache, lazy canvas and disposal as compiled regions. */
+ showOriginal(icon:HTMLElement,item:{name:string;index:number;imageHash?:string},load:()=>Promise<HTMLImageElement>,glyph:string):void {
+  const key=JSON.stringify(['original',item.name,item.imageHash]);if(icon.dataset.originalThumbnail===key)return;
+  icon.dataset.originalThumbnail=key;
+  this.showPlan(icon,{kind:'icon',key,reason:'awaiting original image'},glyph);
+  void load().then(image=>{
+   if(this.disposed||icon.dataset.originalThumbnail!==key)return;
+   this.originals.set(key,image);
+   this.showPlan(icon,{kind:'crop',key,page:key,region:item.name,u0:0,v0:0,u1:1,v1:1,sx:0,sy:0,sw:image.naturalWidth,sh:image.naturalHeight},glyph);
+  }).catch(()=>{if(!this.disposed&&icon.dataset.originalThumbnail===key)this.showPlan(icon,{kind:'icon',key,reason:'original image unavailable'},glyph);});
+ }
+ private showPlan(icon:HTMLElement,shown:ThumbnailPlan,glyph:string):void {
   const stamp=JSON.stringify(shown);
   if(icon.dataset.thumbnailPlan!==stamp){
    icon.dataset.thumbnailPlan=stamp;for(const child of icon.querySelectorAll('canvas')){this.observer?.unobserve(child);this.pending.delete(child);}
    if(shown.kind==='crop'){const canvas=document.createElement('canvas');canvas.width=canvas.height=thumbnailBox*thumbnailScale;canvas.setAttribute('aria-hidden','true');icon.replaceChildren(canvas);icon.dataset.thumbnail='image';if(this.observer){this.pending.set(canvas,shown);this.observer.observe(canvas);}else this.paint(canvas,shown);}
    else{icon.textContent=glyph;icon.dataset.thumbnail='icon';}
   }
-  return shown.kind==='crop'?`thumbnail: region ${shown.region} on ${shown.page}`:`type icon: ${shown.reason}`;
  }
  private paint(canvas:HTMLCanvasElement,plan:ThumbnailCrop):void {
   let source=this.cache.get(plan.key);
-  if(!source){const image=this.images.get(plan.page);if(!image)return;source=document.createElement('canvas');source.width=source.height=thumbnailBox*thumbnailScale;const fit=thumbnailFit(plan.sw,plan.sh);source.getContext('2d')?.drawImage(image,plan.sx,plan.sy,plan.sw,plan.sh,fit.dx,fit.dy,fit.dw,fit.dh);this.cache.set(plan.key,source);}
+  if(!source){const image=this.images.get(plan.page)??this.originals.get(plan.page);if(!image)return;source=document.createElement('canvas');source.width=source.height=thumbnailBox*thumbnailScale;const fit=thumbnailFit(plan.sw,plan.sh);source.getContext('2d')?.drawImage(image,plan.sx,plan.sy,plan.sw,plan.sh,fit.dx,fit.dy,fit.dw,fit.dh);this.cache.set(plan.key,source);}
   const context=canvas.getContext('2d');if(!context)return;context.clearRect(0,0,canvas.width,canvas.height);context.drawImage(source,0,0);
  }
- dispose():void {this.observer?.disconnect();this.pending.clear();this.cache.clear();}
+ dispose():void {this.disposed=true;this.observer?.disconnect();this.pending.clear();this.cache.clear();this.originals.clear();}
 }

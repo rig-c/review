@@ -1,6 +1,8 @@
-import type {RigPlayer} from '@rig-c/play';
+import {CanvasRenderer, RigPlayer, type ModelAssets, type PosedFrame} from '@rig-c/play';
+import {assertOriginalPaintingSize} from '../src/parts-comparison.ts';
 import {jobStillByteLimit, type JobRigCapture, type JobUISubmission} from '../src/job-contract.ts';
-import type {JobRigPresentation} from './viewport-capture.ts';
+import type {ControlNumericCamera} from '../src/control.ts';
+import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
 
 type DrawSource = Pick<JobRigCapture['binding'], 'publicationId' | 'instanceKey' | 'sourceHash' | 'pageId'>;
 export interface JobRigDrawState {
@@ -39,6 +41,36 @@ export interface FrozenJobRigCapture {
 const sourceKey = (source: DrawSource) => JSON.stringify([
   source.publicationId, source.instanceKey, source.sourceHash, source.pageId,
 ]);
+
+/** Native original-art comparison needs the declared canvas, never a fitted viewport or inferred bounds. */
+export function rigRestCanvas(assets: Pick<ModelAssets, 'stage'>, painting: {width: number; height: number}) {
+  const stage = assets.stage;
+  assertOriginalPaintingSize(painting.width, painting.height, stage ? [stage.width, stage.height] : null, 1);
+  if (!stage || !Number.isSafeInteger(stage.x) || !Number.isSafeInteger(stage.y) ||
+      stage.width > 16384 || stage.height > 16384 || stage.width * stage.height > 16777216) {
+    throw new Error('PARTS_PAINTING_MAPPING: declared rig_size and positive scale_rig_per_source required');
+  }
+  return {x: stage.x, y: stage.y, width: stage.width, height: stage.height};
+}
+
+/** Standalone Setup operand. A fresh public player has no animation, slot filter, previews or environment history.
+ * This is deliberately separate from freezing the displayed job bitmap: its fixed-camera and binding guards stay intact. */
+export function captureRigRestStill(assets: ModelAssets, painting: {width: number; height: number}): HTMLCanvasElement {
+  const viewport = rigRestCanvas(assets, painting), root = document.createElement('div');
+  const player = new RigPlayer(root, assets, {mode: 'canvas'});
+  try {
+    const renderer = player.renderer;
+    if (!(renderer instanceof CanvasRenderer)) throw new Error('JOB_STILL_CAPTURE_FAILED');
+    // Public clear(0) holds Setup even on a model without animations or sets. No clip is played.
+    renderer.viewport = viewport; renderer.pixelRatio = 1;
+    player.clear(0); player.draw();
+    const frame = player.posedFrame();
+    if (renderer.backendActive === 'canvas2d' && frame.order.some(row => row.tint.slice(0, 3).some(c => c !== 1) || row.dark?.some(c => c !== 0))) {
+      throw new Error('COMMENT_CAPTURE_UNAVAILABLE: Canvas2D cannot reproduce active RGB/dark tint');
+    }
+    return copyRigBitmap(renderer.canvas, viewport.width, viewport.height);
+  } finally {player.dispose();}
+}
 
 /** Bind local placement and physical-pixel phase while allowing whole-pixel page movement. */
 export function jobRigPixelPlacement(pane: Pick<DOMRect, 'left' | 'top'>,
@@ -153,14 +185,8 @@ export function freezeJobRigCapture(draw: JobRigDraw | undefined, state: JobRigD
   }};
 }
 
-/** Copy the committed display bitmap synchronously, before asynchronous PNG encoding. */
-export function copyJobRigViewport(presentation: JobRigPresentation): JobRigPixels {
-  const {canvas: displayed, width, height, ratio} = presentation;
-  if (!displayed.isConnected || displayed.width !== width || displayed.height !== height ||
-      ratio !== (globalThis.devicePixelRatio || 1) || width < 1 || height < 1 ||
-      width > 16384 || height > 16384 || width * height > 16777216) {
-    throw new Error('JOB_STILL_CAPTURE_FAILED');
-  }
+/** One lossless bitmap-copy implementation for job evidence and standalone native rest inspection. */
+function copyRigBitmap(displayed: HTMLCanvasElement, width: number, height: number): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -170,6 +196,18 @@ export function copyJobRigViewport(presentation: JobRigPresentation): JobRigPixe
     if (!source || !context) throw new Error('JOB_STILL_CAPTURE_FAILED');
     context.putImageData(source.getImageData(0, 0, width, height), 0, 0);
   } catch { throw new Error('JOB_STILL_CAPTURE_FAILED'); }
+  return canvas;
+}
+
+/** Copy the committed display bitmap synchronously, before asynchronous PNG encoding. */
+export function copyJobRigViewport(presentation: JobRigPresentation): JobRigPixels {
+  const {canvas: displayed, width, height, ratio} = presentation;
+  if (!displayed.isConnected || displayed.width !== width || displayed.height !== height ||
+      ratio !== (globalThis.devicePixelRatio || 1) || width < 1 || height < 1 ||
+      width > 16384 || height > 16384 || width * height > 16777216) {
+    throw new Error('JOB_STILL_CAPTURE_FAILED');
+  }
+  const canvas = copyRigBitmap(displayed, width, height);
   return {width, height, encode: () => new Promise<string>((resolve, reject) => {
     canvas.toBlob(blob => {
       if (!blob || blob.size > jobStillByteLimit) {reject(new Error('JOB_STILL_CAPTURE_FAILED')); return;}
@@ -208,4 +246,59 @@ export function createJobRigSubmission() {
       return saved.pending;
     },
   };
+}
+
+/** One screen's rig pane as the still reads it: the job window's and the one review screen's share this. */
+export interface JobRigStage {
+  readonly pane: HTMLElement;
+  readonly paneHidden: boolean;
+  readonly root: HTMLElement;
+  readonly player: RigPlayer;
+  readonly presentation: JobRigPresentation | undefined;
+  readonly frameGeneration: number | undefined;
+  readonly camera: ControlNumericCamera | null | undefined;
+  readonly frame: {readonly center: {readonly x: number; readonly y: number}} | null;
+  readonly source: DrawSource;
+  /** No part selected or solo, images only, no mesh, bones or background sentinel. */
+  readonly wholeRig: boolean;
+  readonly playing: boolean;
+}
+
+/** The draw state a still is bound to: pane geometry, camera, canonical pixels and the posed frame. */
+export function jobRigDrawState(stage: JobRigStage): JobRigDrawState {
+  const {pane, root, player, presentation, frame, camera} = stage;
+  const rect = pane.getBoundingClientRect(), ratio = globalThis.devicePixelRatio || 1;
+  if (!frame || !camera || !pane.isConnected || !root.isConnected || stage.paneHidden ||
+      rect.width <= 0 || rect.height <= 0) throw new Error('JOB_STILL_CAPTURE_FAILED');
+  const style = getComputedStyle(root), paneStyle = getComputedStyle(pane);
+  const plain = style.filter === 'none' && style.perspective === 'none' && style.opacity === '1' &&
+    paneStyle.filter === 'none' && paneStyle.transform === 'none' && paneStyle.perspective === 'none' && paneStyle.opacity === '1';
+  const canvas = presentation?.canvas;
+  const pixels = canvas?.getBoundingClientRect();
+  const canvasStyle = canvas ? getComputedStyle(canvas) : null;
+  if (canvas && (!canvas.isConnected || canvasStyle?.visibility !== 'visible' ||
+      canvasStyle.display === 'none' || canvasStyle.opacity !== '1' || canvasStyle.filter !== 'none' ||
+      canvasStyle.transform !== 'none')) throw new Error('JOB_STILL_CAPTURE_FAILED');
+  return {player, presentation, frameGeneration: stage.frameGeneration, source: stage.source,
+    layout: JSON.stringify([
+      pane.clientWidth, pane.clientHeight, rect.width, rect.height, ratio,
+      root.getAttribute('style'), style.transform, camera, presentation?.area, presentation?.ratio,
+      pixels ? jobRigPixelPlacement(rect, pixels, ratio) : null,
+      pixels?.width, pixels?.height, canvas?.width, canvas?.height, canvas?.getAttribute('style'),
+    ]),
+    defaultCamera: plain && camera.zoom === 1 && camera.center.x === frame.center.x && camera.center.y === frame.center.y,
+    wholeRig: stage.wholeRig, playing: stage.playing};
+}
+
+/** Paint the pane's actual pixels into one canonical canvas and put it on the pane. */
+export function presentJobRigStage(stage: Pick<JobRigStage, 'pane' | 'root' | 'player' | 'camera'> &
+  {readonly posed: PosedFrame | undefined; readonly assets: ModelAssets | null}): JobRigPresentation {
+  const renderer = stage.player.renderer;
+  if (!stage.posed || !stage.assets || !stage.camera) throw new Error('JOB_STILL_CAPTURE_FAILED');
+  const presentation = presentJobRigViewport({pane: stage.pane, root: stage.root, images: true,
+    canvas: renderer instanceof CanvasRenderer ? renderer.canvas : undefined,
+    backend: renderer instanceof CanvasRenderer ? renderer.backendActive : renderer.meshBackendActive},
+  {camera: stage.camera, posed: stage.posed, assets: stage.assets});
+  stage.pane.append(presentation.canvas);
+  return presentation;
 }

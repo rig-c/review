@@ -99,8 +99,10 @@ test('one embedded listener owns nine independent jobs, asks, generations and fi
   expect(new Set(jobs.map(job => job.session.jobId)).size).toBe(9);
   expect(new Set(grants).size).toBe(9);
   expect(new Set(jobs.flatMap(job => Object.values(job.session.hostCredentials()))).size).toBe(18);
-  expect((await list(h)).jobs.map((row: {generation: number; pendingCount: number; subjectKind?: string; answered?: boolean}) => [row.generation, row.pendingCount, row.subjectKind, row.answered]))
-    .toEqual(Array.from({length: 9}, () => [2, 1, 'checkpoint', false]));
+  const rows = (await list(h)).jobs;
+  expect(rows.map((row: {generation: number; pendingCount: number}) => [row.generation, row.pendingCount]))
+    .toEqual(Array.from({length: 9}, () => [2, 1]));
+  expect(Object.keys(rows[0]).sort()).toEqual(['generation', 'jobId', 'pendingCount', 'publication', 'status']);
   const acts = [];
   for (const [index, job] of jobs.entries()) {
     const publication = publications[index]!;
@@ -119,7 +121,7 @@ test('one embedded listener owns nine independent jobs, asks, generations and fi
   }
   expect(new Set(acts.map(act => act.actId)).size).toBe(9);
   expect(jobs.map(job => job.session.status().generation)).toEqual(Array(9).fill(3));
-  expect((await list(h)).jobs.map((row: {answered?: boolean}) => row.answered)).toEqual(Array(9).fill(true));
+  expect((await list(h)).jobs.map((row: {pendingCount: number}) => row.pendingCount)).toEqual(Array(9).fill(0));
   expect((await api(jobs[1]!, {verb: 'next', after: null, waitMs: 0}, jobs[0]!.session.hostCredentials().agent)).status).toBe(403);
   expect((await ui(jobs[1]!, 'displayed', {}, jobs[0]!.session.hostCredentials().ui)).status).toBe(403);
   expect((await api(jobs[1]!, {verb: 'fetch-act', actId: acts[1].actId}, grants[0])).status).toBe(403);

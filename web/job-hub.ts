@@ -1,12 +1,7 @@
 import {createRetainedFrameStage, mountRetainedWorkspace} from './retained-frame-stage.ts';
 import {hashCapabilityAccess} from './instance-access.ts';
-/** Owner-only subject selection. Each retained frame owns its existing review window and draft. */
-import type {JobHubList, JobHubRow, JobHubSubjectKind} from '../src/job-hub.ts';
-
-const subjectKindSet: Readonly<Record<JobHubSubjectKind, true>> = {
-  parts: true, interview: true, rig: true, direction: true, 'image-set': true,
-  checkpoint: true, signoff: true, reopen: true, plan: true, package: true,
-};
+/** Owner-only job selection. Each retained frame owns its existing job window and draft. */
+import type {JobHubList, JobHubRow} from '../src/job-hub.ts';
 
 export const JOB_HUB_READY = 'rig-review-job-hub-ready/1';
 export const JOB_HUB_VISIBILITY = 'rig-review-job-hub-visibility/1';
@@ -46,9 +41,7 @@ export function checkedJobHubList(value: JobHubList, incarnation: string): JobHu
   for (const job of value.jobs) {
     if (!job || typeof job.jobId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(job.jobId) || ids.has(job.jobId) ||
         !['active', 'closed'].includes(job.status) || !Number.isSafeInteger(job.generation) || job.generation < 0 ||
-        !Number.isSafeInteger(job.pendingCount) || job.pendingCount < 0 ||
-        job.subjectKind !== undefined && !Object.hasOwn(subjectKindSet, job.subjectKind) ||
-        job.answered !== undefined && typeof job.answered !== 'boolean' || job.publication !== null &&
+        !Number.isSafeInteger(job.pendingCount) || job.pendingCount < 0 || job.publication !== null &&
         (!job.publication || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(job.publication.publicationId) ||
           !/^[a-f0-9]{64}$/.test(job.publication.instanceKey) || !/^[a-f0-9]{64}$/.test(job.publication.sourceHash) ||
           typeof job.publication.label !== 'string' || job.publication.label.length > 512)) throw new Error('JOB_HUB_STATE_INVALID');
@@ -80,34 +73,16 @@ export async function mountJobHub(root: HTMLElement): Promise<() => void> {
     message: entry => ({...entry.binding, schema: JOB_HUB_VISIBILITY}), language: getLanguage, origin: location.origin,
     visibilityOrder: 'after-state', languageChange: 'selection'});
   function render() {
-    const selectedRow = current?.jobs.find(row => row.jobId === retained.selected) ?? null;
     workspace.render({
-      lang: getLanguage(),
-      heading: t('job.hubTitle'),
-      listLabel: t('job.hubJobs'),
-      languageLabel: t('interview.language'),
-      englishLabel: t('English'),
-      koreanLabel: t('Korean'),
-      message: t(status),
-      selected: retained.selected,
-      selectedHash: selectedRow?.publication?.sourceHash ?? null,
-      answeredLabel: count => t('hub.answeredGroup', [count]),
-      items: (current?.jobs ?? []).map(row => {
-        const kindKey: JobHubSubjectKind = row.subjectKind ?? 'package';
-        return {
-          key: row.jobId,
-          dataset: {
-            jobId: row.jobId,
-            subjectKind: kindKey,
-            subjectState: row.status === 'closed' ? 'closed' : row.answered ? 'answered' : 'waiting',
-          },
-          kindLabel: t('hub.kind.' + kindKey),
-          label: row.publication?.label || t('hub.unpublished'),
-          hash: row.publication?.sourceHash ?? null,
-          answered: row.status === 'closed' || Boolean(row.answered),
-          onSelect: () => {void select(row).catch(() => {status = 'JOB_HUB_REQUEST_REFUSED'; render();});},
-        };
-      }),
+      lang: getLanguage(), heading: t('job.hubTitle'), listLabel: t('job.hubJobs'),
+      languageLabel: t('interview.language'), englishLabel: t('English'), koreanLabel: t('Korean'),
+      message: t(status), selected: retained.selected,
+      items: (current?.jobs ?? []).map(row => ({
+        key: row.jobId, dataset: {jobId: row.jobId}, label: row.publication?.label || row.jobId,
+        state: row.status === 'closed' ? t('job.hubClosed') : t('job.hubPending', [row.pendingCount]),
+        detail: row.publication?.sourceHash ?? '',
+        onSelect: () => {void select(row).catch(() => {status = 'JOB_HUB_REQUEST_REFUSED'; render();});},
+      })),
     });
   }
   async function select(row: JobHubRow) {
@@ -128,7 +103,7 @@ export async function mountJobHub(root: HTMLElement): Promise<() => void> {
       if (grant.schema !== 'rig-review-job-hub/1' || grant.incarnation !== access.incarnation || grant.jobId !== row.jobId ||
           grant.entry !== '/jobs/' + row.jobId + '/?hub=' + access.incarnation || !/^[a-f0-9]{64}$/.test(grant.capability)) throw new Error('JOB_HUB_STATE_INVALID');
       const url = new URL(grant.entry, location.origin); url.searchParams.set('lang', getLanguage()); url.hash = 'cap=' + grant.capability;
-      const frame = retained.createFrame(row.publication?.label || t('hub.unpublished'), url.href);
+      const frame = retained.createFrame(row.publication?.label || row.jobId, url.href);
       entry = {frame, row, binding: {...binding(row), publicationId: null, sourceHash: null}};
       retained.retain(entry);
     }
@@ -159,10 +134,7 @@ export async function mountJobHub(root: HTMLElement): Promise<() => void> {
         retained.visibility(entry);
       }
       render();
-      if (!retained.selected && current.jobs.length) {
-        const initial = current.jobs.find(row => row.status === 'active' && !row.answered) ?? current.jobs[0]!;
-        await select(initial);
-      }
+      if (!retained.selected && current.jobs[0]) await select(current.jobs[0]);
     } catch {if (!disposed) {status = 'JOB_HUB_REQUEST_REFUSED'; render();}}
     finally {if (!disposed) timer = setTimeout(() => {void refresh();}, 1000);}
   }

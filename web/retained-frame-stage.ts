@@ -51,50 +51,22 @@ export function createRetainedFrameStage<Entry extends {frame: HTMLIFrameElement
 export interface RetainedSubjectItem {
   key: string;
   dataset: Readonly<Record<string, string>>;
-  kindLabel: string;
   label: string;
-  hash: string | null;
-  answered?: boolean;
+  state: string;
+  detail: string | null;
   onSelect(): void;
 }
 
-/** Shared shell, subject list (waiting + collapsed answered group), retained stage and C11 status bar. */
+/** Shared composition preserves each host's original header status, rows and retained stage. */
 export function mountRetainedWorkspace(options: {root: HTMLElement; kind: 'hub' | 'owner'}) {
   const {root, kind} = options;
   root.dataset.retainedWorkspace = kind;
   const shell = mountWorkspaceShell({compatibility: kind === 'hub' ? 'legacyHubStep6' : 'legacyOwnerStep6'});
-  const {header, title} = shell, notice = shell.status!, language = shell.language!;
+  const {header, title} = shell, language = shell.language!;
+  const {message} = mountStatusBar({placement: 'inline', message: shell.status!});
   const list = panelMake('nav', {className: kind === 'hub' ? 'hub-list' : 'owner-list'});
   const stage = panelMake('main', {className: kind === 'hub' ? 'hub-stage' : 'owner-stage'});
-  const source = panelMake('span', {className: ['status-source', 'retained-source-hash'].join(' ')});
-  const statusBar = mountStatusBar({message: '', readouts: [], source});
-  root.replaceChildren(header, list, stage, statusBar.footer);
-  let answeredOpen = false;
-  function setStatus(message: string, selectedHash?: string | null) {
-    notice.textContent = message;
-    statusBar.message.textContent = message;
-    if (selectedHash !== undefined) source.textContent = selectedHash ?? '';
-  }
-  function makeButton(item: RetainedSubjectItem, selected: string | null) {
-    const button = panelMake('button', {type: 'button'});
-    for (const [name, value] of Object.entries(item.dataset)) button.dataset[name] = value;
-    button.setAttribute('aria-pressed', String(item.key === selected));
-    const kindNode = panelMake('span', {
-      className: ['subject-row-kind', ...(kind === 'owner' ? ['owner-target-status'] : [])].join(' '),
-      textContent: item.kindLabel,
-    });
-    const hashNode = panelMake('span', {
-      className: 'subject-row-hash',
-      textContent: item.hash ? item.hash.slice(0, 8) : '',
-    });
-    const labelNode = panelMake('span', {
-      className: ['subject-row-label', ...(kind === 'owner' ? ['owner-target-title'] : [])].join(' '),
-      textContent: item.label,
-    });
-    button.append(kindNode, hashNode, labelNode);
-    button.onclick = item.onSelect;
-    return button;
-  }
+  root.replaceChildren(header, list, stage);
   function render(view: {
     lang: string;
     heading: string;
@@ -102,10 +74,8 @@ export function mountRetainedWorkspace(options: {root: HTMLElement; kind: 'hub' 
     languageLabel: string;
     englishLabel: string;
     koreanLabel: string;
-    message: string;
+    message?: string;
     selected: string | null;
-    selectedHash: string | null;
-    answeredLabel?: (count: number) => string;
     items: readonly RetainedSubjectItem[];
   }) {
     document.documentElement.lang = view.lang;
@@ -116,22 +86,20 @@ export function mountRetainedWorkspace(options: {root: HTMLElement; kind: 'hub' 
     language.options[0]!.textContent = view.englishLabel;
     language.options[1]!.textContent = view.koreanLabel;
     language.value = view.lang;
-    setStatus(view.message, view.selectedHash);
-    const waiting = view.items.filter(item => !item.answered);
-    const answered = view.items.filter(item => item.answered);
-    list.replaceChildren(...waiting.map(item => makeButton(item, view.selected)));
-    if (answered.length > 0 && view.answeredLabel) {
-      const details = panelMake('details', {className: 'subject-answered-group'}) as HTMLDetailsElement;
-      details.open = answeredOpen;
-      if (answeredOpen) details.setAttribute('open', '');
-      const summary = panelMake('summary', {
-        className: 'subject-answered-summary',
-        textContent: view.answeredLabel(answered.length),
-      });
-      details.append(summary, ...answered.map(item => makeButton(item, view.selected)));
-      details.addEventListener?.('toggle', () => {answeredOpen = details.open;});
-      list.append(details);
+    if (view.message !== undefined) message.textContent = view.message;
+    list.replaceChildren();
+    for (const item of view.items) {
+      const button = panelMake('button', {type: 'button'});
+      for (const [name, value] of Object.entries(item.dataset)) button.dataset[name] = value;
+      button.setAttribute('aria-pressed', String(item.key === view.selected));
+      const label = panelMake('span', {textContent: item.label});
+      if (kind === 'owner') label.className = 'owner-target-title';
+      const state = panelMake('span', {className: kind === 'hub' ? 'hub-job-state' : 'owner-target-status', textContent: item.state});
+      const detail = panelMake('span', {className: kind === 'hub' ? 'hub-job-source' : 'owner-target-animation', textContent: item.detail ?? ''});
+      button.append(label, state, detail);
+      button.onclick = item.onSelect;
+      list.append(button);
     }
   }
-  return {header, list, stage, footer: statusBar.footer, message: statusBar.message, source, language, setStatus, render};
+  return {list, stage, language, message, render};
 }
