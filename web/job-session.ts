@@ -2539,7 +2539,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         if (hubIncarnation) globalThis.parent.postMessage({...hubBinding(), schema: JOB_HUB_READY}, location.origin);
     }
     // #709: a rig publication opens the one review screen; the job window keeps every other subject.
-    const rigScreen = createJobRigScreen({host, pageId, access, translate: t, refusal: jobWindowRefusal,
+    const rigScreen = createJobRigScreen({host, pageId, access, translate: (key, values) => i18n.t(key, values, 'en'), refusal: jobWindowRefusal,
         window: {state: () => window.state(), submit: input => window.submit(input)},
         routes: display => jobPublicationRoutes(display, location.origin), load: async () => (await import('./main.ts')).mountRigScreen()});
     const window = createJobWindow({ jobId: access.jobId, pageId, transport,
