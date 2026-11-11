@@ -1,5 +1,5 @@
 export const enCatalog: Readonly<Record<string, string>> = {
- "Difference: {0} of {1} compared pixels \u00b7 rest still vs original painting.": "Difference: {0} of {1} compared pixels · rest still vs original painting.",
+ "Difference: {0} of {1} pixels differ, compared where the rig draws \u00b7 rest still vs original painting.": "Difference: {0} of {1} pixels differ, compared where the rig draws · rest still vs original painting.",
  "PARTS_PAINTING_MAPPING: declared rig_size and positive scale_rig_per_source required": "PARTS_PAINTING_MAPPING: declared rig_size and positive scale_rig_per_source required",
  "RIG_DIFFERENCE_SETUP_ONLY: Difference is available in Setup.": "RIG_DIFFERENCE_SETUP_ONLY: Difference is available in Setup.",
  "RIG_DIFFERENCE_MODEL_UNAVAILABLE: no compiled rig is loaded.": "RIG_DIFFERENCE_MODEL_UNAVAILABLE: no compiled rig is loaded.",

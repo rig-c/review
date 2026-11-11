@@ -354,7 +354,7 @@ function chooseInspectionView(id:string):void {
     for(const node of [...el('rig-root').children,...el('rig-viewport').children])if(node instanceof HTMLElement&&node!==partsCanvas&&node!==el('rig-root')&&node!==el('rig-label')&&node!==el('rig-empty')){if(!rigDifference.hidden.has(node))rigDifference.hidden.set(node,node.hidden);node.hidden=true;}
     viewport.cancelFit();viewport.state.cameraFrames={};viewport.state.cameraCenter=null;viewport.state.referenceCenter=null;viewport.state.activeCamera='rig';
     text('rig-label','Difference');setView('rig');viewport.fitActiveCamera('rig');
-    message(t('Difference: {0} of {1} compared pixels · rest still vs original painting.',[result.count,result.compared],'en'),false,true);
+    message(t('Difference: {0} of {1} pixels differ, compared where the rig draws · rest still vs original painting.',[result.count,result.compared],'en'),false,true);
    }catch(error){leaveRigDifference();rigDifferenceFailure=errorText(error);message(rigDifferenceFailure,true);renderLayout();}
   }else{leaveRigDifference();setView(id as SingleLayout);}
   return;
