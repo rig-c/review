@@ -31,11 +31,11 @@ import type {AnimationSourceView} from './rebuild-client.ts';
 import {bindStagePick,domHoverPainter,type StagePick} from './stage-pick.ts';
 import {InspectionSelection} from './inspection-selection.ts';
 import {animationPreviewAdjust} from './preview.ts';
+import {actionButton as button} from './view-controls.ts';
 
 const NS='http://www.w3.org/2000/svg';
 const svg=(tag:string,attrs:Record<string,string|number>)=>{const n=document.createElementNS(NS,tag);for(const [k,v]of Object.entries(attrs))n.setAttribute(k,String(v));return n;};
 const numeric=(value:number)=>Object.is(value,-0)?'-0':String(value);
-const button=(label:string,click:(e?:MouseEvent)=>void)=>{const b=document.createElement('button');b.type='button';b.textContent=label;b.onclick=click;return b;};
 
 /** Clean human-readable seconds without Float32 noise (e.g. 1.6 instead of 1.600000023841858). */
 export function formatSeconds(value:number):string {

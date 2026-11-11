@@ -532,6 +532,7 @@ function makeTestDoc(){
 test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comments, checkpoint notes, and finding inputs keep catalogue-matching reviewer text byte-identical in ko while old-code controls fail',async()=>{
  const mainSource=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
  const compareSource=await readFile(new URL('../web/compare.ts',import.meta.url),'utf8');
+ const controls=(await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8')).split('export type ThemePreference')[0]!.replaceAll('export const','const');
 
  // Extract the real renderProposals() from web/main.ts and renderFeedback() from web/compare.ts.
  const rpStart=mainSource.indexOf('function renderProposals(): void {');
@@ -575,7 +576,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
     context:{note:compoundCatalogSummary,...(timed?{comment:{frame:null,time:.25,timeBasis:timeOnlyBasis}}:{})},
    };
    const session={feedback:[feedbackEntry],feedbackWarnings:[]};
-   const jsSource=new Bun.Transpiler({loader:'ts'}).transformSync(fnSource);
+   const jsSource=new Bun.Transpiler({loader:'ts'}).transformSync(`${controls}\n${fnSource}`);
    const run=new Function('scope',`with(scope){${jsSource}; renderProposals();}`);
    run({
     comments:null,
@@ -652,7 +653,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
     context:{note:compoundCatalogSummary},
    };
    const session={feedback:[feedbackEntry],feedbackWarnings:[]};
-   const jsSource=new Bun.Transpiler({loader:'ts'}).transformSync(fnSource);
+   const jsSource=new Bun.Transpiler({loader:'ts'}).transformSync(`${controls}\n${fnSource}`);
    const run=new Function('scope',`with(scope){${jsSource}; renderFeedback();}`);
    run({
     comments:null,

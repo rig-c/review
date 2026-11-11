@@ -1,3 +1,4 @@
+import {actionButton} from './view-controls.ts';
 import {isTimeOnlyFeedback,hasStageComment,parseStageComment} from '../src/stage-comment.ts';
 import {parseTurnSnapshot,type TurnSnapshot} from '../src/turn-pad.ts';
 /** Versioned local drafts and public numeric view links. No capability or review decision is put in a URL. */
@@ -220,7 +221,7 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
  let draft=store.read(session=>recoverSession(session,adapter.baseline)!==null);
  const notices=[document.getElementById('draft-recovery'),document.getElementById('review-draft-recovery')].filter((node):node is HTMLElement=>node!==null);
  const clearNotices=()=>{for(const node of notices)node.replaceChildren();};
- const appendAction=(label:string,onclick:()=>void)=>{for(const node of notices){const button=document.createElement('button');button.type='button';button.textContent=label;button.onclick=onclick;node.append(button);}};
+ const appendAction=(label:string,onclick:()=>void)=>{for(const node of notices){const button=actionButton(label,onclick);node.append(button);}};
  clearNotices();
  const download=(raw:string)=>{const url=URL.createObjectURL(new Blob([raw],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='review-local-draft.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
  let explicit:InspectionBookmark|null=null;

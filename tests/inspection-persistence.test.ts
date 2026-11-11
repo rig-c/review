@@ -77,6 +77,7 @@ test('actual single restore adapter rejects unavailable selections before mutati
 
 async function openFormCoordinator(saved:LocalInspectionDraft,explicit:InspectionBookmark|null){
  const source=await readFile(new URL('../web/inspection-persistence.ts',import.meta.url),'utf8'),compare=await readFile(new URL('../web/compare.ts',import.meta.url),'utf8');
+ const controls=(await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8')).split('export type ThemePreference')[0]!.replaceAll('export const','const');
  const inputs=source.slice(source.indexOf('export function captureInputs('),source.indexOf('function parseInputs(')).replaceAll('export function','function');
  const connect=source.slice(source.indexOf('export async function connectInspectionPersistence')).replace('export async function','async function');
  const ids=source.slice(source.indexOf('const viewInputIds='),source.indexOf('/** Restore once'));
@@ -85,13 +86,13 @@ async function openFormCoordinator(saved:LocalInspectionDraft,explicit:Inspectio
  const script=`async function open(deps){const {InspectionDraftStore:Base,storage,saved,explicit,baseline,binding,bookmark,sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction}=deps;
  class HTMLInputElement{hasAttribute(name){return name==='data-app-preference'&&this.id.startsWith('settings-');}constructor(id,type,value,checked=false){Object.assign(this,{id,type,value,checked,name:''});}}class HTMLSelectElement{hasAttribute(name){return name==='data-app-preference'&&this.id.startsWith('settings-');}constructor(id,value,values){this.id=id;this.value=value;this.options=values.map(value=>({value}));}}class HTMLTextAreaElement{}
  const nodes=[new HTMLInputElement('settings-sync','checkbox','on',false),new HTMLInputElement('camera-sync','checkbox','on',false),new HTMLInputElement('reference-audio','checkbox','on',false),new HTMLSelectElement('part-set','','alternate old'.split(' ')),new HTMLInputElement('target-name','text','server target'),new HTMLSelectElement('status','pending',['pending','approved'])],video={muted:true},CSS={escape:value=>value};
- const notice={children:[],replaceChildren(){this.children=[];},append(button){this.children.push(button);}},document={hidden:false,body:{inert:false},getElementById:id=>id==='draft-recovery'?notice:null,querySelectorAll:()=>nodes,querySelector:selector=>nodes.find(n=>'#'+n.id===selector),createElement:()=>({type:'',textContent:'',onclick:null})};
+ const notice={children:[],replaceChildren(){this.children=[];},append(button){this.children.push(button);}},document={hidden:false,body:{inert:false},getElementById:id=>id==='draft-recovery'?notice:null,querySelectorAll:()=>nodes,querySelector:selector=>nodes.find(n=>'#'+n.id===selector),createElement:()=>({type:'',textContent:'',onclick:null,append(){}})};
  const window=new EventTarget(),location={href:'http://127.0.0.1:1234/',hash:explicit?encodeBookmark(explicit):''},history={replaceState(_state,_unused,value){const url=new URL(value);location.href=url.href;location.hash=url.hash;}},navigator={clipboard:{writeText:async()=>{}}};
  const InspectionDraftStore=class extends Base{constructor(scope,binding,warn){super(scope,binding,warn,storage);}};
  new InspectionDraftStore('single:rig',binding,()=>{}).write(saved);
  let current=structuredClone(baseline),dirty=false,conflict=false,restores=0,preset='',displayedTime=null;const held=new Map(),calls=[];const messages=[],input=id=>nodes.find(n=>n.id===id),renderFeedbackSelection=()=>{};
  const afterInputs=${action};
- ${ids}\n${inputs}\n${connect}
+ ${controls}\n${ids}\n${inputs}\n${connect}
  const connection=await connectInspectionPersistence({scope:'single:rig',binding,baseline,session:()=>current,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{current=value;dirty=isDirty;restores++;},bookmark:()=>{const value=explicit??bookmark;return {...value,time:displayedTime??value.time,selection:{...value.selection,partSet:preset}};},restoreBookmark:async(value,signal)=>{await restoreTransaction(async()=>{},()=>({preset,displayedTime}),async()=>{calls.push(value.time);preset=value.selection.partSet??'';input('part-set').value=preset;input('camera-sync').checked=value.view.cameraSync??false;const gate=held.get(value.time);if(gate)await gate.promise;if(signal.aborted)throw new Error('RESTORE_SUPERSEDED');displayedTime=value.time;},async previous=>{preset=previous.preset;displayedTime=previous.displayedTime;input('part-set').value=preset;});},ui:()=>({}),restoreUI:()=>{},afterInputs,onConflict:value=>{conflict=value;},onStatus:value=>messages.push(value)});
  return {connection,savedFields:()=>Object.keys(JSON.parse(storage.getItem('rig-review-draft/1:single:rig:'+binding.sourceHash)).inputs),url:()=>location.href,state:()=>({current,dirty,conflict,restores,preset,presetWidget:input('part-set').value,settingsSync:input('settings-sync').checked,syncWidget:input('camera-sync').checked,muted:video.muted,audioChecked:input('reference-audio').checked,displayedTime,inert:document.body.inert,calls:[...calls],target:input('target-name').value}),hold:time=>{let release;const promise=new Promise(resolve=>release=resolve);held.set(time,{promise,release});},release:time=>held.get(time).release(),navigate:(value,event='hashchange')=>{location.hash=typeof value==='string'?value:encodeBookmark(value);location.href='http://127.0.0.1:1234/'+location.hash;window.dispatchEvent(new Event(event));},buttons:()=>notice.children.map(b=>b.textContent),click:label=>{const b=notice.children.find(b=>b.textContent===label);if(!b)throw new Error('missing recovery action');b.onclick();},messages};}`;
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script),storage=new MemoryStorage();
@@ -202,6 +203,7 @@ async function openDraftReopenScenario(opts:{
  legacyMain?:boolean;
 }){
  const source=await readFile(new URL('../web/inspection-persistence.ts',import.meta.url),'utf8');
+ const controls=(await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8')).split('export type ThemePreference')[0]!.replaceAll('export const','const');
  const inputs=source.slice(source.indexOf('export function captureInputs('),source.indexOf('function parseInputs(')).replaceAll('export function','function');
  let connect=source.slice(source.indexOf('export async function connectInspectionPersistence')).replace('export async function','async function');
  const ids=source.slice(source.indexOf('const viewInputIds='),source.indexOf('/** Restore once'));
@@ -227,17 +229,18 @@ async function openDraftReopenScenario(opts:{
  const dialogNotice={children:[],replaceChildren(){this.children=[];},append(button){this.children.push(button);}};
  const downloads=[];const blobs=new Map();
  const URL=class extends globalThis.URL{static createObjectURL(blob){const u='blob:draft-'+blobs.size;blobs.set(u,blob);return u;}static revokeObjectURL(){}};
- const document={hidden:false,body:{inert:false},getElementById:id=>id==='draft-recovery'?statusNotice:id==='review-draft-recovery'&&mode==='single'?dialogNotice:null,querySelectorAll:()=>nodes,querySelector:selector=>nodes.find(n=>'#'+n.id===selector),createElement:tag=>tag==='a'?{href:'',download:'',click(){downloads.push({download:this.download,blob:blobs.get(this.href)});}}:{type:'',textContent:'',onclick:null}};
+ const document={hidden:false,body:{inert:false},getElementById:id=>id==='draft-recovery'?statusNotice:id==='review-draft-recovery'&&mode==='single'?dialogNotice:null,querySelectorAll:()=>nodes,querySelector:selector=>nodes.find(n=>'#'+n.id===selector),createElement:tag=>tag==='a'?{href:'',download:'',click(){downloads.push({download:this.download,blob:blobs.get(this.href)});}}:{type:'',textContent:'',onclick:null,append(){}}};
  const window=new EventTarget(),location={href:'http://127.0.0.1:1234/',hash:''},history={replaceState(_state,_unused,value){const url=new globalThis.URL(value);location.href=url.href;location.hash=url.hash;}},navigator={clipboard:{writeText:async()=>{}}},CSS={escape:v=>v};
  const InspectionDraftStore=class extends Base{constructor(s,b,warn){super(s,b,warn,storage);}};
  let current=structuredClone(currentBaseline),dirty=false,conflict=false,restores=0,statusText='',dialogStatusText='';const messages=[];
  const statusSelect=()=>nodes.find(n=>n.id===(mode==='single'?'review-status':'status'));
- ${ids}\n${inputs}\n${connect}
+ ${controls}\n${ids}\n${inputs}\n${connect}
  const connection=await connectInspectionPersistence({scope,binding:currentBinding,baseline:currentBaseline,session:()=>current,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{current=value;dirty=isDirty;statusSelect().value=current.status;restores++;},bookmark:()=>({...bookmark,binding:currentBinding}),restoreBookmark:async()=>{},ui:()=>({}),restoreUI:()=>{},afterInputs:()=>{},onConflict:value=>{conflict=value;},onStatus:value=>{statusText=value;dialogStatusText=value;messages.push(value);}});
  return {
   connection,storage,
   state:()=>({current,dirty,conflict,restores,statusWidget:statusSelect().value,statusText,dialogStatusText,messages:[...messages],draftKeys:[...storage.values.keys()].filter(k=>k.startsWith('rig-review-draft/1:'))}),
   statusButtons:()=>statusNotice.children.map(b=>b.textContent),
+  actionNodes:()=>({status:statusNotice.children,dialog:dialogNotice.children}),
   dialogButtons:()=>mode==='single'?dialogNotice.children.map(b=>b.textContent):statusNotice.children.map(b=>b.textContent),
   clickInDialog:label=>{const list=mode==='single'?dialogNotice.children:statusNotice.children,b=list.find(x=>x.textContent===label);if(!b)throw new Error('missing dialog recovery action: '+label);b.onclick();},
   downloads:async()=>Promise.all(downloads.map(async d=>({download:d.download,text:await d.blob.text()}))),
@@ -251,6 +254,7 @@ async function openDraftReopenScenario(opts:{
   connection:{dispose():void;save():void};
   storage:MemoryStorage;
   state():{current:Record<string,any>;dirty:boolean;conflict:boolean;restores:number;statusWidget:string;statusText:string;dialogStatusText:string;messages:string[];draftKeys:string[]};
+  actionNodes():{status:HTMLButtonElement[];dialog:HTMLButtonElement[]};
   statusButtons():string[];
   dialogButtons():string[];
   clickInDialog(label:string):void;
@@ -331,6 +335,8 @@ test('#301 Bar 3 & Bar 4: real conflict refuses submit, exposes download/recover
   expect(recoverApp.state().conflict).toBe(true);
   await expect(recoverApp.submit()).rejects.toThrow('Resolve the saved local draft conflict before submitting.');
   expect(recoverApp.dialogButtons()).toEqual(['Download saved local draft','Recover local draft as pending','Discard conflicting local draft']);
+  const actions=recoverApp.actionNodes();expect(actions.status).toHaveLength(3);expect(actions.dialog).toHaveLength(3);
+  for(let i=0;i<actions.status.length;i++){expect(actions.status[i]).not.toBe(actions.dialog[i]);expect(actions.status[i]!.type).toBe('button');expect(actions.dialog[i]!.type).toBe('button');expect(actions.status[i]!.onclick).toBe(actions.dialog[i]!.onclick);}
   expect(recoverApp.statusButtons()).toEqual(['Download saved local draft','Recover local draft as pending','Discard conflicting local draft']);
   expect(recoverApp.state().dialogStatusText).toBe('Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.');
   recoverApp.clickInDialog('Download saved local draft');
