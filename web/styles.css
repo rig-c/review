@@ -511,13 +511,12 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .workspace-drawer>.inspector-body>#inspector-playback:not([hidden]){display:grid;grid-template-columns:minmax(0,1fr);overflow:auto}
 
 /* The header owns mode; its existing block row and one Comments tab fill the heading. */
-.workspace-bottom-tabs{min-width:0;flex:1;flex-wrap:nowrap;overflow:hidden}
-.workspace-bottom-tabs>.block-row{position:static;min-width:0;margin:0;padding:0;border:0;flex:1}
+/* The heading's block row wraps rather than scrolls, so no scrollbar shows at any width; below
+   the tabs' 380px basis the act bar moves to its own line instead of squeezing the tabs (#735). */
+.workspace-bottom-tabs{min-width:0;flex:1 1 380px;flex-wrap:nowrap}
+.workspace-bottom-tabs>.block-row{position:static;min-width:0;margin:0;padding:0;border:0;flex:1;flex-wrap:wrap;row-gap:4px;overflow:visible}
 .inspector-body>[data-comments=true]{display:none!important}
 .inspector-heading .workspace-act-bar{flex:none;flex-wrap:nowrap;gap:6px}
 .inspector-heading .workspace-act-bar .review-draft-state{max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .workspace-act-ask{max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #comments-list-host .stage-comment-list-inline{position:static;width:auto;max-width:none;max-height:none;border:0;padding:0}
-/* Keep the shared Comments tab reachable while the mode's existing blocks scroll. */
-.workspace-bottom-tabs>.block-row #workspace-tab-feedback{position:sticky;right:2px;z-index:4;background:var(--rv-panel);box-shadow:-4px 0 0 var(--rv-panel)}
-.workspace-bottom-tabs>.block-row #workspace-tab-feedback[aria-selected=true]{background:var(--rv-pressed-bg)}
