@@ -60,3 +60,58 @@ test('selection routes are page-local and reentrant-safe; primitive picking resp
  const row={kind:'region',slot:'back',corners:[0,0,10,0,10,10,0,10]},front={...row,slot:'front',clip:{polygon:[0,0,5,0,5,5,0,5],inverse:false}};
  expect(pickedSlot({order:[row,front]} as never,2,2)).toBe('front');expect(pickedSlot({order:[row,front]} as never,8,8)).toBe('back');expect(pickedSlot({order:[row]} as never,20,20)).toBeNull();
 });
+
+
+// Native Bun EventTarget drives the real production callers; this is not a browser-layout test.
+class AnimationActionNode extends EventTarget {
+ children:AnimationActionNode[]=[];dataset:Record<string,string>={};type='';textContent='';className='';
+ private handler:((event:Event)=>void)|null=null;
+ constructor(readonly tagName:string){super();}
+ get onclick(){return this.handler;}
+ set onclick(value:((event:Event)=>void)|null){if(this.handler)this.removeEventListener('click',this.handler);this.handler=value;if(value)this.addEventListener('click',value);}
+ append(...children:AnimationActionNode[]){this.children.push(...children);}
+ prepend(...children:AnimationActionNode[]){this.children.unshift(...children);}
+ replaceChildren(){this.children=[];}
+}
+async function actualAnimationActions(document:{createElement(tag:string):AnimationActionNode}){
+ const source=await Bun.file(new URL('../web/animation-inspection.ts',import.meta.url)).text();
+ const controls=(await Bun.file(new URL('../web/view-controls.ts',import.meta.url)).text()).split('export type ThemePreference')[0]!.replaceAll('export const','const');
+ const tree=source.slice(source.indexOf(' private renderTree(){'),source.indexOf(' /**',source.indexOf(' private renderTree(){'))).replace('private renderTree()','function renderTree()');
+ const start=source.indexOf("     const mark=button('◆',e=>{");
+ const marker=source.slice(start,source.indexOf("     mark.className='animation-key';",start));
+ expect(start).toBeGreaterThan(0);expect(tree).toContain('boneHierarchy(this.inspection)');
+ const script=`${controls}\nconst button=actionButton;${tree}\nfunction makeMark(track,index,isEditable,cls,readonlyReason){const trackPointer=track.pointer,key=track.keys[index];${marker}return mark;}`;
+ const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script);
+ return new Function('document','boneHierarchy',code+';return {renderTree,makeMark};')(document,boneHierarchy);
+}
+
+test('#658 animation tree actions preserve order, literal labels and captured bone/slot selections',async()=>{
+ const document={createElement:(tag:string)=>new AnimationActionNode(tag)},pane=new AnimationActionNode('div');
+ const actions=await actualAnimationActions(document),seen:unknown[]=[];
+ const inspection=readAnimationInspection(await inspectionControl(),'control');
+ inspection.slots.push({name:'sleeve',bone:'probe'} as never);
+ const host={panes:new Map([['tree',pane]]),inspection,select:(value:unknown)=>seen.push(value)};
+ actions.renderTree.call(host);
+ const buttons:AnimationActionNode[]=[];
+ const visit=(node:AnimationActionNode)=>{if(node.tagName==='button')buttons.push(node);for(const child of node.children)visit(child);};visit(pane);
+ expect(buttons.map(value=>[value.type,value.textContent])).toEqual([['button','Whole rig'],['button','root'],['button','probe'],['button','◇ sleeve']]);
+ expect(buttons.map(value=>value.dataset)).toEqual([{}, {treeKind:'bone',treeName:'root'}, {treeKind:'bone',treeName:'probe'}, {treeKind:'slot',treeName:'sleeve'}]);
+ for(const value of buttons)value.dispatchEvent(new Event('click'));
+ expect(seen).toEqual([null,{kind:'bone',name:'root'},{kind:'bone',name:'probe'},{kind:'slot',name:'sleeve'}]);
+});
+
+test('#658 actual timeline key action receives native Events, keeps shift/detail suppression and uses live key indexes',async()=>{
+ const actions=await actualAnimationActions({createElement:(tag:string)=>new AnimationActionNode(tag)}),calls:unknown[]=[];
+ const track={pointer:'/track',keys:[{time:.25}]},liveTrack={pointer:'/track',keys:[{time:.5},{time:1.5}]};
+ const host={inspection:{tracks:[liveTrack]},animation:'idle',runtimeDuration:2,suppressNextKeyClick:false,track:null,channel:1,selectedKey:null,selectedKeys:[],
+  renderChannels:()=>calls.push('channels'),toggleKeySelection:(...args:unknown[])=>calls.push(['toggle',...args]),autoSyncPoseModeFromProperty:(value:string)=>calls.push(['pose',value]),syncTimelineKeysInPlace:()=>calls.push('timeline'),syncKeyInspectorInPlace:()=>calls.push('inspector'),setEditorStatus:(...args:unknown[])=>calls.push(['status',...args]),options:{seek:(value:number)=>calls.push(['seek',value])}};
+ const mark=actions.makeMark.call(host,track,0,true,{trackIndex:7,property:'rotate'},'read-only') as AnimationActionNode;
+ mark.dataset.keyIndex='1';
+ mark.dispatchEvent(Object.assign(new Event('click'),{detail:1,shiftKey:false}));expect(calls).toEqual([]);
+ mark.dispatchEvent(Object.assign(new Event('click'),{detail:0,shiftKey:true}));
+ expect(calls).toEqual(['channels',['toggle',7,1,'/track'],['seek',1.5]]);expect(host.track).toBe(liveTrack);
+ calls.length=0;mark.dispatchEvent(new Event('click'));
+ expect(host.selectedKey).toEqual({animation:'idle',trackIndex:7,keyIndex:1,pointer:'/track'});
+ expect(host.selectedKeys).toEqual([host.selectedKey]);expect(calls).toEqual(['channels',['pose','rotate'],'timeline','inspector',['seek',1.5]]);
+ calls.length=0;host.suppressNextKeyClick=true;mark.dispatchEvent(new Event('click'));expect(calls).toEqual([]);expect(host.suppressNextKeyClick).toBe(false);
+});

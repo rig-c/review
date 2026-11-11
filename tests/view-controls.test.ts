@@ -6,7 +6,7 @@ import {singleCameraWiring} from './helpers/viewport-387-wiring.ts';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature} from '../web/camera-view.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import {test,expect} from 'bun:test';
-import {stageOrientation,syncStageLayout,panCenter,idleAvailable,initialIdleAnimation,themePreference,automaticIdlePreview} from '../web/view-controls.ts';
+import {actionButton,stageOrientation,syncStageLayout,panCenter,idleAvailable,initialIdleAnimation,themePreference,automaticIdlePreview} from '../web/view-controls.ts';
 test('orientation follows available center rectangle, with stable square tie',()=>{expect(stageOrientation(900,600)).toBe('horizontal');expect(stageOrientation(600,900)).toBe('vertical');expect(stageOrientation(600,600)).toBe('horizontal');});
 test('pan preserves coordinate signs and scales independently of pose time',()=>{expect(panCenter({x:10,y:20},40,20,2,'world')).toEqual({x:-10,y:30});expect(panCenter({x:10,y:20},40,20,2,'image')).toEqual({x:-10,y:10});expect(panCenter({x:10,y:20},40,20,4,'world')).toEqual({x:0,y:25});expect(()=>panCenter({x:0,y:0},1,1,0,'world')).toThrow('positive scale');});
 test('only actual exact idle can preview; explicit inspection wins startup',()=>{expect(idleAvailable(['idle','walk'],'walk')).toBe(false);expect(idleAvailable(['idle_variant'],'idle')).toBe(false);expect(idleAvailable(['idle'],'idle')).toBe(true);expect(initialIdleAnimation(['walk','idle'],'walk',false)).toBe('idle');expect(initialIdleAnimation(['walk','idle'],'walk',true)).toBe('walk');expect(initialIdleAnimation(['walk'],'walk',false)).toBe('walk');expect(initialIdleAnimation([],null,false)).toBe(null);});
@@ -567,4 +567,39 @@ test('#496 semantic window uses the shared stable frame through pose changes and
  expect(h.provider.geometry('rig')?.box).toEqual(box);
  expect(h.controller.numericView()).toEqual(view);
  expect(overlayReads).toBeGreaterThan(0);
+});
+
+
+test('#658 literal actions preserve properties, handler identity, native Event/this and optional disabled setter order',()=>{
+ const descriptor=Object.getOwnPropertyDescriptor(globalThis,'document');
+ class Action extends EventTarget {
+  writes:string[]=[];values:Record<string,unknown>={disabled:false};
+  get type(){return this.values.type;}set type(value){this.writes.push('type');this.values.type=value;}
+  get textContent(){return this.values.textContent;}set textContent(value){this.writes.push('textContent');this.values.textContent=value;}
+  get disabled(){return this.values.disabled;}set disabled(value){this.writes.push('disabled');this.values.disabled=value;}
+  get onclick(){return this.values.onclick;}set onclick(value){this.writes.push('onclick');this.values.onclick=value;this.addEventListener('click',value as EventListener);}
+  append(..._children:unknown[]){}
+ }
+ const created:Action[]=[];
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement(tag:string){expect(tag).toBe('button');const value=new Action();created.push(value);return value;}}});
+ try{
+  const seen:{receiver:unknown;event:unknown}[]=[];
+  function click(this:HTMLButtonElement,event?:MouseEvent){seen.push({receiver:this,event});event?.preventDefault();}
+  const actions=[actionButton('<literal> & action',click),actionButton('undefined',click,undefined),actionButton('enabled',click,false),actionButton('disabled',click,true)];
+  expect(actions).toEqual(created as unknown as HTMLButtonElement[]);
+  expect(actions.map(value=>value.type)).toEqual(['button','button','button','button']);
+  expect(actions.map(value=>value.textContent)).toEqual(['<literal> & action','undefined','enabled','disabled']);
+  expect(actions.map(value=>value.disabled)).toEqual([false,false,false,true]);
+  expect(created.map(value=>value.writes)).toEqual([
+   ['type','textContent','onclick'],['type','textContent','onclick'],
+   ['type','textContent','disabled','onclick'],['type','textContent','disabled','onclick'],
+  ]);
+  for(const value of actions)expect(value.onclick).toBe(click);
+  const event=new Event('click',{cancelable:true});
+  expect(actions[0]!.dispatchEvent(event)).toBe(false);
+  expect(seen).toEqual([{receiver:actions[0],event}]);
+  expect(event.defaultPrevented).toBe(true);
+  actions[1]!.onclick!.call(actions[1]!,undefined as unknown as MouseEvent);
+  expect(seen[1]).toEqual({receiver:actions[1],event:undefined});
+ }finally{if(descriptor)Object.defineProperty(globalThis,'document',descriptor);else Reflect.deleteProperty(globalThis,'document');}
 });

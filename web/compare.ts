@@ -15,7 +15,7 @@ import { commonDomain, drawSynchronizedPair, compareSeekStep, feedbackTrace, ins
 import { feedbackLastFrame, feedbackTargetNames, validateFeedbackSelection } from '../src/feedback-validation.ts';
 import type { StripInterval, StripRequest } from '../src/strip.ts';
 
-import {bindAppearance,bindPan,bindStageLayout,bindInspectorTabs,syncStageLayout,idleAvailable} from './view-controls.ts';
+import {actionButton,bindAppearance,bindPan,bindStageLayout,bindInspectorTabs,syncStageLayout,idleAvailable} from './view-controls.ts';
 import {CLICK_SLOP_PX} from './stage-pick.ts';
 import {dragImpulse} from '../src/environment.ts';
 import {RigOverlays} from './rig-overlays.ts';
@@ -331,7 +331,7 @@ function renderFeedback(): void {
     row.append(title, summary);
     for (const warning of session.feedbackWarnings.filter(value => value.id === feedback.id)) { const note = document.createElement('p'); note.className = 'hint'; note.textContent = `Validation warning · ${warning.error}`; row.append(note); }
     const details = document.createElement('details'), heading = document.createElement('summary'), source = document.createElement('pre'); heading.textContent = 'Saved feedback and inspection context'; source.className = 'feedback-json'; source.textContent = JSON.stringify(feedback, null, 2); details.append(heading, source);
-    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Delete'; remove.onclick = () => { session.feedback = session.feedback.filter(value => value.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); renderFeedback(); markDirty(); };
+    const remove = actionButton('Delete', () => { session.feedback = session.feedback.filter(value => value.id !== feedback.id); session.feedbackWarnings = session.feedbackWarnings.filter(warning => warning.id !== feedback.id); renderFeedback(); markDirty(); });
     row.append(details);if((feedback.context as any)?.comment?.schema!=='rig-review-comment/1'||!submittedBaseline?.feedback.some(f=>f.id===feedback.id))row.append(remove); list.append(row);
   }
   savedState();

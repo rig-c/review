@@ -1,6 +1,16 @@
 /** Local inspection controls; these never write source or review state. */
 export const panelNode=<T extends HTMLElement>(id:string)=>{const found=document.getElementById(id);if(!found)throw new Error(`Missing UI element: ${id}`);return found as T;};
 export const panelMake=<K extends keyof HTMLElementTagNameMap>(tag:K,props:Record<string,unknown>={},...children:(Node|string)[]):HTMLElementTagNameMap[K]=>{const item=document.createElement(tag);Object.assign(item,props);item.append(...children);return item;};
+export const actionButton=(
+ label:string,
+ click:(e?:MouseEvent)=>void,
+ disabled?:boolean,
+)=>panelMake('button',{
+ type:'button',
+ textContent:label,
+ ...(disabled===undefined?{}:{disabled}),
+ onclick:click,
+});
 export type ThemePreference = 'system' | 'dark' | 'light';
 export interface ViewPoint { x:number; y:number }
 export function stageOrientation(width:number,height:number):'horizontal'|'vertical' {return width>=height?'horizontal':'vertical';}
