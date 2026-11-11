@@ -1137,7 +1137,7 @@ async function start(): Promise<void> {
 function hostStage():RigHostStage|null {
  if(!player)return null;const frame=parts?.frame('single');
  return {pane:el('rig-viewport'),paneHidden:el('rig-pane').hidden,root:el('rig-root'),player,frameGeneration:frame?.generation,camera:numericView().cameras.rig,frame:paneFrame('rig'),
-  wholeRig:!parts?.value()&&player.slots===null&&layers.images&&!layers.mesh&&!layers.bones,playing,posed:frame,assets};
+  wholeRig:!parts?.value()&&player.slots===null&&layers.images,playing,posed:frame,assets};
 }
 /** Old feedback bookmarks keep their inspection mode; only an explicit reveal opens the act. */
 function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)inspectorTabs?.select(name);else inspectorTabs?.restore(name);}

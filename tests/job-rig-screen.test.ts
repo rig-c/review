@@ -129,3 +129,13 @@ test('#709 act@6 accepts comments [] for a rig verdict and a checkpoint, and ref
     expect(() => parseCommentsAct({...act, value: {...act.value, comments: [{text: ' '}]}})).toThrow('JOB_ACT_INVALID');
   }
 });
+
+test('#709 the rig screen still does not depend on the mesh or bone overlay toggles', async () => {
+  // The still is rendered from the posed model with tool overlays excluded (docs/REVIEW_PACKAGE.md, "Rig verdict
+  // still backend"); mesh edges and bone points are overlays, so they no longer make the whole rig ineligible.
+  const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
+  const stage = main.slice(main.indexOf('function hostStage():RigHostStage|null {'), main.indexOf('/** Old feedback bookmarks keep'));
+  expect(stage).toContain('wholeRig:!parts?.value()&&player.slots===null&&layers.images,');
+  expect(stage).not.toContain('layers.mesh');
+  expect(stage).not.toContain('layers.bones');
+});
