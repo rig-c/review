@@ -438,7 +438,8 @@ describe('disjoint job front', () => {
     test('owner HTML permits only the default or one exact English/Korean language query', async () => {
         const h = frontHarness();
         for (const method of ['GET', 'HEAD']) {
-            for (const query of ['', '?lang=en', '?lang=ko']) {
+            for (const query of ['', '?lang=en', '?lang=ko', '#cap=' + 'c'.repeat(64),
+                '?lang=en#review=' + 'd'.repeat(64), '?lang=ko#cap=' + 'c'.repeat(64)]) {
                 const response = await h.front.fetch(h.request(query, {method}));
                 expect(response?.status).toBe(200);
                 expect(response?.headers.get('content-type')).toBe('text/html; charset=utf-8');

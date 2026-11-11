@@ -101,6 +101,14 @@ test('real Create v2 joins existing Stage 1 and 2 without changing the feedback 
     expect(parts.inspectionSourceHash).toBe(old.contentHash);
     expect(parts.items.map((p:{name:string})=>p.name).sort()).toEqual(sourceParts.parts.map((p:{name:string})=>p.name).sort());
     expect((await get('/stage-interview.html?stageEmbed=1&lang=ko')).headers.get('Content-Security-Policy')).toContain("frame-ancestors 'self'");
+    for (const lang of ['en', 'ko']) {
+      for (const hash of ['', '#cap=' + capability, '#review=' + capability]) {
+        const entry = await get('/stage-interview.html?stageEmbed=1&lang=' + lang + hash);
+        expect(entry.status).toBe(200);
+        expect(entry.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+        await entry.body?.cancel();
+      }
+    }
     expect((await get('/interview.js')).status).toBe(200);
     expect((await post({Origin:origin})).status).toBe(403);
     expect((await post({Origin:'https://example.test','X-Review-Capability':capability})).status).toBe(403);
