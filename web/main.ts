@@ -15,7 +15,7 @@ import {createViewportController,createViewportState,type CameraTarget} from './
 import {createRigViewportProvider,rigPanCarry} from './rig-viewport-provider.ts';
 import {mountViewportPair} from './viewport-pair.ts';
 import {rendererStatus} from './renderer-status.ts';
-import {panelMake,createRigLayerControls,createViewControls,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,idlePreviewOnOpen,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
+import {panelMake,createRigLayerControls,createViewControls,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,idlePreviewOnOpen,bookmarkCameraKept,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
 import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
 import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
 import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
@@ -1252,8 +1252,8 @@ function numericView():ControlView {return viewport.numericView();}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data.sourceHash,rigs:[data.reviewedSource.rig?.sha256??null]};}
 // Persist the displayed inspection clock; the runtime clock accumulates across idle loops for physics.
 function inspectionBookmark():InspectionBookmark {return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode??selectedInspector()??'rig',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
-async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false):Promise<void> {
- await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal,preserveSeconds),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
+async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false,keepCamera=true):Promise<void> {
+ await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal,preserveSeconds,keepCamera),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
 }
 /** Read the SELECTED reference without replacing the currently inspected DOM/player. */
 async function inspectionReferenceInfo(id:string|null,signal:AbortSignal):Promise<{width:number;height:number;duration:number|null;people:string[]}> {
@@ -1287,7 +1287,7 @@ async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal)
  // Range fitting belongs to the transactional apply after that layout is measured.
  if(signal.aborted)throw new Error('Inspection restore superseded');
 }
-async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false):Promise<void> {
+async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false,keepCamera=true):Promise<void> {
  viewport.state.cameraRestoring=true;try{
  const selection=bookmark.selection;
  if(turnPad){if(selection.turn)turnPad.restore(selection.turn);else{turnPad.state.reset();turnPad.restore(turnPad.snapshot());}}
@@ -1310,17 +1310,22 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,pr
  const camera=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference,rigViewport=el('rig-viewport'),referenceViewport=el('reference-viewport');
  const nextZoom=camera&&player&&rigViewport.clientWidth&&rigViewport.clientHeight?restoredZoom(camera,viewport.state.rigScale/viewport.state.zoom,rigViewport.clientWidth,rigViewport.clientHeight):camera?.zoom??null;
  const nextReferenceZoom=ref&&referenceSize&&referenceViewport.clientWidth&&referenceViewport.clientHeight?restoredZoom(ref,viewport.state.referenceScale/viewport.state.referenceZoom,referenceViewport.clientWidth,referenceViewport.clientHeight):ref?.zoom??null;
- viewport.cancelFit();
+ // A job rig subject opens at Fit (#709): the bookmark camera was saved at another window size, so opening requests the Fit instead.
+ if(keepCamera){viewport.cancelFit();
  if(nextZoom!==null&&camera){viewport.state.zoom=nextZoom;viewport.state.cameraCenter={...camera.center};}
- if(nextReferenceZoom!==null&&ref){viewport.state.referenceZoom=nextReferenceZoom;viewport.state.referenceCenter={...ref.center};}
+ if(nextReferenceZoom!==null&&ref){viewport.state.referenceZoom=nextReferenceZoom;viewport.state.referenceCenter={...ref.center};}}
  viewport.state.cameraSync=bookmark.view.cameraSync??false;viewport.state.activeCamera=bookmark.view.activeCamera==='reference'?'reference':'rig';
  if(player)drawRig(()=>player!.draw());if(selection.part)parts?.assertIdentity(selection.part);fitCamera();redrawOverlay(false);pause();renderTransport();renderCameraControls();
  }finally{viewport.state.cameraRestoring=false;}
+ if(!keepCamera){viewport.requestFit();fitCamera();}
 }
 async function waitReferenceMetadata(media:HTMLVideoElement,signal:AbortSignal):Promise<void> {if(media.readyState>=1)return;await new Promise<void>((resolve,reject)=>{const clean=()=>{clearTimeout(timer);media.removeEventListener('loadedmetadata',ready);media.removeEventListener('error',fail);signal.removeEventListener('abort',fail);};const ready=()=>{clean();resolve();},fail=()=>{clean();reject(new Error('Saved reference metadata unavailable'));};const timer=setTimeout(fail,10000);media.addEventListener('loadedmetadata',ready,{once:true});media.addEventListener('error',fail,{once:true});signal.addEventListener('abort',fail,{once:true});});}
+let inspectionOpening=false;
 async function setupPersistence():Promise<boolean> {
- persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();renderProvenance();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b))),
+ inspectionOpening=true;try{
+ persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();renderProvenance();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b)),bookmarkCameraKept(inspectionOpening,!!host)),
  ui:()=>({inspectorScroll:workspace?.scroll()??'{}',...(inspectorBlocks?activeBlocksUI(inspectorBlocks.state()):{}),reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();inspectorBlocks?.restore(restoreActiveBlocksUI(value));workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{const target=input('feedback-target-name').value;renderFeedbackTargets(true);if(select('feedback-target-kind').value!=='rig')input('feedback-target-name').value=target;renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{draftStatus=value;renderDraftState();}});
+ }finally{inspectionOpening=false;}
  return persistence.restored;
 }
 /** Setup's Chest regions tool: designation values, an overlay and a two-file client download. Nothing reaches the session's feedback or the package. */
