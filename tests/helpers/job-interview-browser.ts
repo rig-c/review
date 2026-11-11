@@ -364,7 +364,7 @@ export async function interviewDiagnosticsBrowserProbe(
       // Verify the active choice with INTERVIEW_OPTIONS_SCENE_LEGACY warning remains interactive and submits cleanly:
       for (const item of editableSceneQuestion.set.asks) {
         const option = item.options.find(opt => opt.kind === 'value' && opt.recommended) ?? item.options[0]!;
-        await edit(`${formSelector} select[name="choice.${item.id}"]`, option.id);
+        await page.evaluate(`document.querySelector(${JSON.stringify(formSelector + ' input[name="choice.' + item.id + '"][value="' + option.id + '"]')}).click()`);
       }
       await edit(`${formSelector} textarea[name=note]`, EXACT_SUBMITTED_NOTE_WORDS);
       const immutableBeforeSubmit = await jobInputHashes(fixture.input.root);
@@ -493,4 +493,207 @@ export async function verifyInterviewDiagnosticsFixtureDryRun(): Promise<void> {
     await fixture.close();
     await rm(tempOut, {recursive: true, force: true});
   }
+}
+
+/** Screen A uses the existing sealed fixtures, host, CDP and PNG oracle. No owner state is injected. */
+export async function screenABrowser(output: string, language: 'en' | 'ko') {
+    const { mkdir } = await import('node:fs/promises');
+    const { randomUUID } = await import('node:crypto');
+    const { startJobHost } = await import('../../src/job-front.ts');
+    const { JOB_RECORD_READER_ID } = await import('../../src/job-contract.ts');
+    const { createSyntheticOptionRecordWorkspace, createSyntheticRecordReader, writeWorkspaceFile, makeSyntheticPngBytes } = await import('./job-record-fixture.ts');
+    const { launchCdpSession } = await import('../parts-explorer-browser.ts');
+    const { inspectPartsViewportPng } = await import('./job-window-paint.ts');
+    const { PNG } = await import('pngjs');
+    await mkdir(output, { recursive: true });
+    const scratch = await mkdtemp(join(tmpdir(), 'review605-browser-'));
+    let control: Send | undefined;
+    const browserErrors: unknown[] = [];
+    const page = await launchCdpSession(join(scratch, 'profile'), { onEvent(event, send) {
+            if (event.sessionId)
+                control = send;
+            if (event.method === 'Runtime.exceptionThrown')
+                browserErrors.push(event.params);
+        } });
+    const observations: Record<string, unknown> = { provenance: 'SYNTHETIC_REVIEW_SCREEN_A, no Create consumer receipt' };
+    const stops: (() => Promise<void>)[] = [];
+    async function wait(expression: string) {
+        const deadline = Date.now() + 20000;
+        while (Date.now() < deadline) {
+            if (await page.evaluate(expression))
+                return;
+            await Bun.sleep(25);
+        }
+        throw new Error('SCREEN_A_WAIT ' + expression);
+    }
+    async function call(host: any, schema: string, body: object) {
+        const response = await fetch(host.origin + '/jobs/' + host.session.jobId + '/api', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + host.session.hostCredentials().agent }, body: JSON.stringify({ schema, jobId: host.session.jobId, requestId: randomUUID(), ...body }) });
+        const result = await response.json();
+        assert.equal(result.ok, true, JSON.stringify(result));
+        return result.value;
+    }
+    try {
+        for (const mode of ['record-images', 'record-unavailable', 'package'] as const) {
+            let host: any, publication: any, question: any, schema: string, root: string, fetchCapability = '';
+            if (mode === 'package') {
+                const fixture = await scriptedJobWindowFixture();
+                stops.push(() => fixture.close());
+                host = fixture.host;
+                root = fixture.input.root;
+                schema = 'rig-review/job-api@2';
+                // Existing package fixture already has its retained editable question and reader.
+                question = fixture.question;
+                publication = await fixture.publish('rig', 'Synthetic Screen A package');
+                fetchCapability = host.session.writerGrant().fetchCapability;
+            }
+            else {
+                root = join(scratch, mode);
+                await mkdir(root);
+                const input = createSyntheticOptionRecordWorkspace(root, { stage: 'rigging-interview' });
+                const set = JSON.parse(await readFile(join(root, input.optionSetFile.path), 'utf8'));
+                const second = writeWorkspaceFile(root, 'inputs/second.png', makeSyntheticPngBytes(220, 80, 40));
+                set.context.files = mode === 'record-images' ? [input.inputImage, second, input.inputSpec] : [input.inputSpec];
+                const optionSetFile = writeWorkspaceFile(root, input.optionSetFile.path, JSON.stringify(set, null, 2) + '\n');
+                const project = JSON.parse(await readFile(join(root, 'project.json'), 'utf8'));
+                project.interview.waypoints[0].pending_options = optionSetFile;
+                const record = writeWorkspaceFile(root, 'project.json', JSON.stringify(project, null, 2) + '\n');
+                const files = [...input.files.filter(file => file.path !== record.path && file.path !== optionSetFile.path), second, optionSetFile, record].sort((a, b) => a.path < b.path ? -1 : 1);
+                const context = { ...input.context, files };
+                const { reader } = createSyntheticRecordReader({ onOption: () => structuredClone(context) });
+                host = await startJobHost({ root, stateDir: join(scratch, mode + '-state'), fingerprint: 'a'.repeat(64), reviewer: { id: 'synthetic-owner', role: 'owner' }, publicationMode: 'record-and-package', readRecordPublished: reader, recordReaderId: JOB_RECORD_READER_ID, bindingId: 'synthetic-screen-a/1', installWriterBinding: binding => { fetchCapability = binding.fetchCapability; } });
+                stops.push(async () => host.stop());
+                schema = 'rig-review/job-api@3';
+                question = { set, ref: optionSetFile };
+                publication = await call(host, schema, { verb: 'publish', expectedGeneration: 0, idempotencyKey: randomUUID(), freeze: { kind: 'producer-held', holdId: 'synthetic', record }, result: input.result });
+            }
+            const before = await jobInputHashes(root);
+            const asked = await call(host, schema, { verb: 'ask', expectedGeneration: host.session.status().generation, idempotencyKey: randomUUID(), publicationId: publication.publicationId, subject: { kind: 'interview-picks', questionId: question.set.question, setId: question.set.id } });
+            const owner = new URL(host.ownerUrl);
+            owner.searchParams.set('lang', language);
+            const selector = 'form[data-job-ask="' + asked.askId + '"]';
+            const phases: any[] = [];
+            observations[mode] = { sourceHash: publication.source.sourceHash, publicationId: publication.publicationId, askId: asked.askId, phases };
+            for (const sample of [{ width: 1440, height: 900, phase: 'initial' }, { width: 1024, height: 768, phase: 'resize' }, { width: 1024, height: 768, phase: 'initial' }, { width: 1440, height: 900, phase: 'resize' }]) {
+                await page.setViewport(sample.width, sample.height);
+                if (sample.phase === 'initial')
+                    await page.goto(owner.href);
+                await wait(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector + ' fieldset')}).disabled`);
+                assert.equal(await page.evaluate(`document.querySelectorAll(${JSON.stringify(selector + ' input[type=radio]:checked')}).length`), 0);
+                const geometry = await page.evaluate<any>(`(()=>{const form=document.querySelector(${JSON.stringify(selector)}),workspace=document.querySelector('.job-inspection');const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};return {forms:rect(form.closest('[data-job-forms]')),workspace:rect(workspace),reason:[...form.querySelectorAll('.interview-option b')].map(n=>n.textContent),tabs:[...workspace.querySelectorAll('.interview-image-tabs button')].map(n=>n.textContent),radios:[...form.querySelectorAll('input[type=radio]')].map(n=>({name:n.name,value:n.value,checked:n.checked})),source:form.querySelector('.job-source').textContent};})()`);
+                assert.ok(geometry.source.includes(publication.source.sourceHash));
+                assert.ok(geometry.reason.length > 0);
+                const phase: any = { ...sample, sourceHash: publication.source.sourceHash, geometry, images: [] };
+                phases.push(phase);
+                if (mode === 'record-unavailable') {
+                    assert.equal(geometry.tabs.length, 0);
+                    assert.equal(await page.evaluate(`document.querySelector('[data-job-interview-empty]').textContent`), (language === 'ko' ? koCatalog : enCatalog)['job.picks.noImages'].replace('{0}', 'inputs'));
+                }
+                for (let index = 0; index < geometry.tabs.length; index++) {
+                    await page.evaluate(`document.querySelectorAll('.interview-image-tabs button')[${index}].click()`);
+                    await wait(`document.querySelector('.interview-image-preview img')?.complete && document.querySelector('.interview-image-preview img').naturalWidth>0`);
+                    const image = await page.evaluate<any>(`(()=>{const art=document.querySelector('.interview-images'),img=art.querySelector('img');art.scrollIntoView({block:'center'});const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};return {src:img.src,naturalWidth:img.naturalWidth,naturalHeight:img.naturalHeight,image:rect(img),preview:rect(img.parentElement),selected:art.querySelectorAll('button')[${index}].getAttribute('aria-pressed')};})()`);
+                    const response = await fetch(image.src);
+                    const raw = Buffer.from(await response.arrayBuffer());
+                    const png = PNG.sync.read(raw);
+                    const colors = new Map<string, number>();
+                    for (let at = 0; at < png.data.length; at += 4) {
+                        if (png.data[at + 3] !== 255)
+                            continue;
+                        const color = [...png.data.subarray(at, at + 4)].join(',');
+                        colors.set(color, (colors.get(color) ?? 0) + 1);
+                    }
+                    const color = [...colors].sort((a, b) => b[1] - a[1])[0];
+                    assert.ok(color, 'fixture has opaque context pixels');
+                    const box: [
+                        number,
+                        number,
+                        number,
+                        number
+                    ] = [Math.ceil(image.image.left), Math.ceil(image.image.top), Math.floor(image.image.right), Math.floor(image.image.bottom)];
+                    const shot = await page.screenshot();
+                    const pixels = inspectPartsViewportPng(shot, { viewport: sample, backgroundRgba: color[0].split(',').map(Number) as [
+                            number,
+                            number,
+                            number,
+                            number
+                        ], leftROI: box, rightAdjacent: box });
+                    assert.ok(pixels.inBounds && pixels.leftROI.backgroundPixels > 0);
+                    assert.equal(image.selected, 'true');
+                    assert.ok(image.image.left >= image.preview.left - 1 && image.image.right <= image.preview.right + 1 && image.image.top >= image.preview.top - 1 && image.image.bottom <= image.preview.bottom + 1);
+                    phase.images.push({ ...image, rawSha256: digest(raw), matchedPixels: pixels.leftROI.backgroundPixels });
+                    await writeFile(join(output, mode + '-' + sample.width + '-' + sample.phase + '-image' + index + '.png'), shot);
+                }
+                await writeFile(join(output, mode + '-' + sample.width + '-' + sample.phase + '-layout.png'), await page.screenshot());
+            }
+            // Real CDP keys exercise native radio grouping, Tab movement, and image shortcuts.
+            assert.ok(control);
+            const key = async (key: string, code: string, virtual: number) => {
+                await control!('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: virtual });
+                await control!('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: virtual });
+            };
+            await page.evaluate(`document.querySelector(${JSON.stringify(selector + ' input[type=radio]')}).focus()`);
+            await key('ArrowDown', 'ArrowDown', 40);
+            assert.equal(await page.evaluate(`document.querySelectorAll(${JSON.stringify(selector + ' input[type=radio]:checked')}).length`), 1);
+            await key('Tab', 'Tab', 9);
+            assert.ok(await page.evaluate(`document.activeElement!==document.body`));
+            if (mode === 'record-images') {
+                await page.evaluate(`document.querySelector('.interview-images').focus()`);
+                await key('1', 'Digit1', 49);
+                assert.equal(await page.evaluate(`document.querySelector('.interview-image-tabs button').getAttribute('aria-pressed')`), 'true');
+                await page.evaluate(`document.querySelector(${JSON.stringify(selector + ' textarea[name=note]')}).focus()`);
+                await key('2', 'Digit2', 50);
+                assert.equal(await page.evaluate(`document.querySelector('.interview-image-tabs button').getAttribute('aria-pressed')`), 'true');
+            }
+            const exactNote = '  owner <literal> 한글\nEND ', exactOther = '  Other 한글\n ';
+            const first = question.set.asks[0];
+            const expected = { questionId: question.set.question, selections: question.set.asks.map((ask: any, index: number) => { const option = ask.options.find((item: any) => index === 0 ? item.kind === 'other' : item.kind === 'auto'); assert.ok(option); return { itemId: ask.id, optionId: option.id, otherText: index === 0 ? exactOther : null }; }), note: exactNote };
+            await page.evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(selector)});for(const pick of ${JSON.stringify(expected.selections)}){[...f.querySelectorAll('input[type=radio]')].find(n=>n.name==='choice.'+pick.itemId&&n.value===pick.optionId).click();}f.querySelector(${JSON.stringify('textarea[name="other.' + first.id + '"]')}).value=${JSON.stringify(exactOther)};f.querySelector('textarea[name=note]').value=${JSON.stringify(exactNote)};f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+            const alternate = language === 'en' ? 'ko' : 'en';
+            await page.evaluate(`(()=>{const language=document.querySelector('.job-header select');language.value=${JSON.stringify(alternate)};language.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+            assert.equal(await page.evaluate(`document.querySelector('.interview-option b').textContent`), (alternate === 'ko' ? koCatalog : enCatalog)['interview.recommended']);
+            assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector + ' textarea[name=note]')}).value`), exactNote);
+            await page.goto('about:blank');
+            await page.goto(owner.href);
+            await wait(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector + ' fieldset')}).disabled`);
+            assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector + ' textarea[name=note]')}).value`), exactNote);
+            await page.evaluate(`document.querySelector(${JSON.stringify(selector)}).requestSubmit()`);
+            let act: any;
+            for (let tick = 0; tick < 200; tick++) {
+                const next = await call(host, schema, { verb: 'next', after: null, waitMs: 0 });
+                act = next.events.find((event: any) => event.type === 'act' && event.act.askId === asked.askId)?.act;
+                if (act)
+                    break;
+                await Bun.sleep(25);
+            }
+            assert.ok(act);
+            const fetchedResponse = await fetch(host.origin + '/jobs/' + host.session.jobId + '/api', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + fetchCapability }, body: JSON.stringify({ schema, jobId: host.session.jobId, requestId: randomUUID(), verb: 'fetch-act', actId: act.actId }) });
+            const fetched = await fetchedResponse.json();
+            assert.equal(fetched.ok, true);
+            assert.deepEqual(fetched.value.value, expected);
+            assert.deepEqual(await jobInputHashes(root), before);
+            Object.assign(observations[mode] as object, { actId: act.actId, expected, sourceFiles: before });
+            await call(host, schema, { verb: 'close', expectedGeneration: host.session.status().generation, idempotencyKey: randomUUID(), reason: 'Synthetic Screen A browser complete' });
+        }
+        observations.browserErrors = browserErrors;
+        assert.deepEqual(browserErrors, []);
+        await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2) + '\n');
+    }
+    catch (error) {
+        observations.failure = String(error);
+        await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2) + '\n');
+        await writeFile(join(output, 'failure.png'), await page.screenshot());
+        throw error;
+    }
+    finally {
+        await page.close();
+        for (const stop of stops.reverse())
+            await stop();
+        await rm(scratch, { recursive: true, force: true });
+    }
+}
+if (import.meta.main) {
+    const value = (key: string) => { const at = Bun.argv.indexOf(key); return at < 0 ? undefined : Bun.argv[at + 1]; };
+    const language = value('--lang') ?? 'en';
+    assert.ok(language === 'en' || language === 'ko');
+    await screenABrowser(value('--out') ?? 'evidence/review605-' + language, language);
 }

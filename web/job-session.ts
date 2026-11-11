@@ -23,7 +23,7 @@ import type {
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t} from './i18n.ts';
-import {renderAskGroup, renderQuestionImages, refreshInterviewConstraints} from './interview-panel.ts';
+import {renderAskGroup, renderQuestionImages, refreshInterviewConstraints, localizeQuestionImages} from './interview-panel.ts';
 import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {JOB_HUB_READY, jobHubMessageMatches, type JobHubBinding} from './job-hub.ts';
 import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
@@ -1381,6 +1381,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         form: HTMLFormElement;
         fieldset: HTMLFieldSetElement;
         read: () => UISubmissionV3['value'];
+        localizeInterview?: () => void;
         submissionId: string;
         dirty: boolean;
         submitting: boolean;
@@ -1912,11 +1913,21 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
             answered.setAttribute('role', 'status');
             fields.append(answered);
             refreshInterview = () => {
+                heading.textContent = t('job.picks.title', [question.set.question, question.set.stage]);
+                provenance.textContent = t('interview.provenance', [question.set.drafted_by, question.set.drafted_at]);
                 answers.forEach(answer => answer.sync());
                 refreshInterviewConstraints(question.set, answers);
                 answered.textContent = t('job.picks.answered', [answers.filter(answer => answer.read().option_id).length, answers.length]);
             };
             refreshInterview();
+            if (prepared.display.publication.source.subject !== 'option-set') {
+                const images = question.images.map(image => {
+                    const preview = prepared.interviewImages.get(image.url);
+                    if (!preview) throw new Error('JOB_VISUAL_UNAVAILABLE');
+                    return {name:image.name, preview};
+                });
+                fields.append(renderQuestionImages(images, {image:0}, question));
+            }
             read = () => ({ questionId: subject.questionId,
                 selections: answers.map(answer => {
                     const pick = answer.read();
@@ -2058,7 +2069,7 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         const status = node('p');
         status.setAttribute('role', 'status');
         form.append(status);
-        const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
+        const entry: JobForm = { form, fieldset: fields, read, localizeInterview:refreshInterview, submissionId: crypto.randomUUID(), dirty: false,
             submitting: false, rigSubmission: createJobRigSubmission() };
         const signoffSubmissionId = crypto.randomUUID();
         try {
@@ -2748,9 +2759,10 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
                 if (!preview) throw new Error('JOB_VISUAL_UNAVAILABLE');
                 return {name:image.name, preview};
             });
-            context.append(renderQuestionImages(images, {image:0}, t('job.picks.noImages', [source.subject])));
+            context.append(renderQuestionImages(images, {image:0}, question));
             const summary = stage.querySelector<HTMLElement>('[data-job-record]');
-            bindingTitle.textContent = t(question?.hasParts ? 'interview.parts' : 'interview.source');
+            bindingTitle.dataset.jobText = question?.hasParts ? 'interview.parts' : 'interview.source';
+            bindingTitle.textContent = t(bindingTitle.dataset.jobText);
             if (question?.partsUnavailable) binding.append(node('p', 'interview.partsUnavailable'));
             if (summary) binding.append(summary);
             context.append(identity, binding);
@@ -3075,6 +3087,9 @@ export async function mountJobSession(host: HTMLElement): Promise<() => void> {
         for (const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))
             element.textContent = t(element.dataset.jobText!);
         languages.setAttribute('aria-label', t('interview.language'));
+        for (const entry of forms.values()) entry.localizeInterview?.();
+        for (const images of host.querySelectorAll<HTMLElement>('[data-job-interview-images]'))
+            localizeQuestionImages(images);
         if (current && !partsPanels.has(current) && current.display.publication.source.subject !== 'option-set') {
             workspace.querySelector('#rig-overlay')?.setAttribute('aria-label', t('Actual rig mesh and bone overlay'));
             describeLayerToggles({ getElementById: id => workspace.querySelector('#' + id) }, t('No rig supplied'));

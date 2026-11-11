@@ -92,6 +92,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.picks.title": "{0} — {1}",
   "job.picks.answered": "{1}개 중 {0}개 답함",
   "job.picks.noImages": "이 질문에는 연결된 이미지가 없습니다 ({0} 컨텍스트).",
+  "job.picks.noImagesUnknown": "이 질문에는 제공된 이미지가 없습니다. 컨텍스트 종류는 확인할 수 없습니다.",
   "job.picks.notAllowed": "현재 선택과 함께 고를 수 없습니다.",
   "job.picks.context": "컨텍스트",
   "job.plan.does": "할 일",

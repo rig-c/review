@@ -5,6 +5,7 @@ import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRe
 import {createJobRigSubmission} from '../web/job-rig-capture.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
 import {t} from '../web/i18n.ts';
+import {renderAskGroup,renderQuestionImages,refreshInterviewConstraints,localizeQuestionImages} from '../web/interview-panel.ts';
 import {jobHubMessageMatches, JOB_HUB_VISIBILITY, type JobHubBinding} from '../web/job-hub.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 
@@ -652,7 +653,7 @@ test('a route descriptor with changed plan or referenced parts refuses despite e
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {syntheticCheckpointEvidence} from './job-checkpoint-evidence-browser.ts';
-import {createSyntheticPlanRecordWorkspace} from './helpers/job-record-fixture.ts';
+import {createSyntheticPlanRecordWorkspace,createSyntheticOptionRecordWorkspace} from './helpers/job-record-fixture.ts';
 import { checkWebHardcodedStrings } from '../web/i18n.ts';
 test('the new job web module passes the existing i18n scanner without exemptions', async () => {
     const content = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
@@ -1525,6 +1526,13 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         }
         click() {
             if (this.disabled) return;
+            if (this.tagName === 'input' && this.type === 'radio') {
+                let root: RuntimeDomNode = this.closest('form') ?? this;
+                if (root === this) while (root.parentElement) root = root.parentElement;
+                for (const radio of root.querySelectorAll('input'))
+                    if (radio.type === 'radio' && radio.name === this.name) radio.checked = radio === this;
+                this.onchange?.({type:'change',target:this,preventDefault() {}});
+            }
             if (this.tagName === 'input' && this.type === 'checkbox') {
                 this.checked = !this.checked;
                 this.onchange?.({type: 'change', target: this, preventDefault() {}});
@@ -2018,7 +2026,8 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
                 parts: null,
                 partImages: new Map(),
                 partPages: new Map(),
-                interviewImages: new Map(),
+                interviewImages: new Map((options?.interview?.questions ?? []).flatMap(question =>
+                    question.images.map(image => [image.url,new RuntimeDomNode('img') as unknown as HTMLImageElement] as const))),
                 imageSetImages: [],
                 ...(options?.evidence ? {checkpointEvidence: [{packet: options.evidence.packet, table: options.evidence.table,
                     images: options.evidence.packet.tiles.map(() => new RuntimeDomNode('img') as unknown as HTMLImageElement)}]} : {}),
@@ -2095,6 +2104,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
             'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
             'presentJobRigViewport', 'CanvasRenderer', 'enCatalog', 'koCatalog', 'JOB_HUB_READY', 'jobHubMessageMatches', 'advancePlayback', 'JOB_PLAN_TEXT_FIELDS',
+            'renderAskGroup', 'renderQuestionImages', 'refreshInterviewConstraints', 'localizeQuestionImages',
             transpiled,
         );
         const mounted = runner(
@@ -2105,6 +2115,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
             recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
             presentJobRigViewport, CanvasRenderer, enCatalog, koCatalog, JOB_HUB_READY, jobHubMessageMatches, advancePlayback, JOB_PLAN_TEXT_FIELDS,
+            renderAskGroup, renderQuestionImages, refreshInterviewConstraints, localizeQuestionImages,
         ) as {window: ReturnType<typeof createJobWindow>; workspace: RuntimeDomNode; stop: () => void};
 
         async function drainPreparing() {
@@ -2861,6 +2872,121 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
         }
     });
 
+    test('#605 literal old SELECT draft restores radios and resubmits exact values and verbatim words in EN/KO', async () => {
+        const question = {ref:{path:'options.json',sha256:'a'.repeat(64)},editable:true,hasParts:false,
+            images:[{name:'first painting',url:'first.png'},{name:'second painting',url:'second.png'}],
+            set:{id:'legacy-set',question:'bones',stage:'rigging-interview',drafted_by:'original agent',drafted_at:'2026-11-01T00:00:00Z',
+                assembly:{rule:'concat' as const},asks:['shape','detail'].map(id=>({id,prompt:id,options:[
+                    {id:'recommended',kind:'value' as const,label:'Original label',effect:'Original effect',recommended:true,reason:'Original reason'},
+                    {id:'alternative',kind:'value' as const,label:'Alternative',effect:'Alternate effect',recommended:false},
+                    {id:'other',kind:'other' as const,label:'Other',effect:'Custom',recommended:false},
+                    {id:'auto',kind:'auto' as const,label:'Auto',effect:'Agent',recommended:false},
+                ]})),constraints:[{asks:['shape','detail'],allowed:[['recommended','recommended']]}]}};
+        const store = new Map<string,string>();
+        const s = await mountRuntimeSession({localStore:store,interview:{questions:[question]} as any});
+        const preference=i18nModule.getLanguagePreference();
+        try {
+            const display=await s.publishRig(1,{optionSet:{id:'legacy-set',sha256:question.ref.sha256}});
+            const ask:PendingAskV3={askId:'old-select-draft',publicationId:display.publication.publicationId,
+                source:display.publication.source,subject:{kind:'interview-picks',questionId:'bones',setId:'legacy-set'},status:'pending'};
+            // Literal controls use the exact pre-radio SELECT persistence shape. No current serializer creates this fixture.
+            const oldControls=[{name:'choice.shape',value:'other'},{name:'other.shape',value:'  한글 <owner>\r\n '},
+                {name:'choice.detail',value:'auto'},{name:'other.detail',value:''},{name:'note',value:'  exact note 한글\nEND ' }];
+            const expected={questionId:'bones',selections:[{itemId:'shape',optionId:'other',otherText:'  한글 <owner>\r\n '},
+                {itemId:'detail',optionId:'auto',otherText:null}],note:'  exact note 한글\nEND '};
+            const key='rig-review-job-draft/1:'+s.fixture.jobId+':'+display.publication.publicationId+':'+display.publication.source.sourceHash;
+            store.set(key,JSON.stringify({publicationId:display.publication.publicationId,sourceHash:display.publication.source.sourceHash,
+                source:display.publication.source,forms:[{askId:ask.askId,value:expected,controls:oldControls}]}));
+            s.fixture.pending(ask,2);s.window.event(s.fixture.events.at(-1)!);
+            const form=s.workspace.querySelector('form[data-job-ask="old-select-draft"]')!;
+            const groups=form.querySelectorAll('.interview-ask');
+            expect(groups).toHaveLength(2);
+            expect(form.querySelectorAll('select[name]')).toHaveLength(0);
+            expect(groups.map(group=>group.querySelectorAll('input').filter(radio=>radio.checked).map(radio=>radio.value))).toEqual([['other'],['auto']]);
+            expect(groups[0]!.querySelector('textarea')!.value).toBe(expected.selections[0]!.otherText!);
+            expect(groups[0]!.querySelector('textarea')!.required).toBe(true);
+            expect(groups[0]!.querySelector('textarea')!.hidden).toBe(false);
+            const values=groups.map(group=>group.querySelectorAll('input').map(radio=>radio.value));
+            const images=form.querySelector('[data-job-interview-images]')!;
+            images.querySelectorAll('button')[1]!.click();
+            const keydown=(key:string,target:RuntimeDomNode,extra:object={})=>(images as any).onkeydown({key,target,preventDefault(){},...extra});
+            keydown('1',images);
+            expect(images.querySelectorAll('button')[0]!.getAttribute('aria-pressed')).toBe('true');
+            keydown('2',form.querySelector('textarea[name="note"]')!);
+            keydown('2',images,{ctrlKey:true});
+            keydown('2',images,{repeat:true});
+            expect(images.querySelectorAll('button')[0]!.getAttribute('aria-pressed')).toBe('true');
+            keydown('2',images);
+
+            for(const language of ['ko','en'] as const){
+                i18nModule.setLanguagePreference(language);
+                expect(form.querySelector('[data-job-interview-answered]')!.textContent).toBe(i18nModule.t('job.picks.answered',[2,2]));
+                expect(groups[0]!.querySelector('b')!.textContent).toBe(i18nModule.t('interview.recommended'));
+                expect(groups[0]!.querySelector('[role=status]')!.textContent).toBe(i18nModule.t('interview.otherPending'));
+                expect(groups[1]!.querySelector('[role=status]')!.textContent).toBe(i18nModule.t('interview.autoPending'));
+                expect(groups[0]!.querySelector('textarea')!.getAttribute('aria-label')).toBe(i18nModule.t('interview.other'));
+                expect(images.querySelectorAll('button')[1]!.getAttribute('aria-pressed')).toBe('true');
+                expect(form.querySelector('textarea[name="note"]')!.value).toBe(expected.note);
+            }
+            expect(groups.map(group=>group.querySelectorAll('input').map(radio=>radio.value))).toEqual(values);
+            const act=fixtureAct('interview-picks',expected.note);
+            s.fixture.returnAct({...act,source:display.publication.source,value:expected} as any);
+            form.dispatchEvent({type:'input'});
+            const persisted=JSON.parse(store.get(key)!);
+            expect(persisted.forms[0].controls.filter((input:any)=>input.name.startsWith('choice.'))).toEqual([oldControls[0],oldControls[2]]);
+            await form.onsubmit?.({preventDefault(){}});
+            expect(JSON.stringify(s.outgoingSubmits[0]!.body.value)).toBe(JSON.stringify(expected));
+            // A fresh ask is unselected, even for the recommended option.
+            const fresh={...ask,askId:'unselected'};s.fixture.pending(fresh,4);s.window.event(s.fixture.events.at(-1)!);
+            const freshForm=s.workspace.querySelector('form[data-job-ask="unselected"]')!;
+            expect(freshForm.querySelectorAll('input').filter(radio=>radio.checked)).toHaveLength(0);
+            const freshGroups=freshForm.querySelectorAll('.interview-ask');
+            freshGroups[0]!.querySelectorAll('input')[0]!.click();
+            const disallowed=freshGroups[1]!.querySelectorAll('input')[1]!;
+            expect(disallowed.disabled).toBe(true);
+            expect(disallowed.title).toBe(i18nModule.t('job.picks.notAllowed'));
+            expect(freshGroups[1]!.querySelectorAll('input')[2]!.disabled).toBe(false);
+            expect(freshGroups[1]!.querySelectorAll('input')[3]!.disabled).toBe(false);
+        } finally {s.cleanup();i18nModule.setLanguagePreference(preference);}
+    });
+
+    test('#605 record option-set omits model controls, names unavailable context honestly, and refuses stale select cache', async () => {
+        const root=await mkdtemp(join(tmpdir(),'review605-option-runtime-'));
+        const input=createSyntheticOptionRecordWorkspace(root);
+        const source=buildRecordSource({record:input.record,selection:input.result,context:input.context,optionSetFile:input.optionSetFile});
+        const store=new Map<string,string>();
+        const question={ref:input.optionSetFile,set:JSON.parse(await readFile(join(root,input.optionSetFile.path),'utf8')),editable:true,hasParts:false,images:[]};
+        const s=await mountRuntimeSession({localStore:store,interview:{questions:[question]} as any});
+        const preference=i18nModule.getLanguagePreference();
+        try {
+            const display:DisplayPublicationV3={publication:{publicationId:'record-option',instanceKey:recordInstanceKey('synthetic-605',source.sourceHash),generation:1,
+                source,label:'Synthetic option context',previousPublicationId:null,visual:{status:'unavailable',code:'JOB_VISUAL_UNAVAILABLE'}},
+                routes:{entry:'/jobs/window-fixture/record/',apiBase:'/jobs/window-fixture/record/api/',assetsBase:'/jobs/window-fixture/record/assets/'}};
+            await s.publishDisplay(display);
+            expect(s.workspace.querySelector('[data-job-interview-workspace]')).not.toBeNull();
+            expect(s.workspace.querySelector('#stage-layout')).toBeNull();
+            expect(s.workspace.querySelector('#job-play')).toBeNull();
+            const key='rig-review-job-draft/1:'+s.fixture.jobId+':record-option:'+source.sourceHash;
+            store.set(key,JSON.stringify({publicationId:'record-option',sourceHash:'f'.repeat(64),source,
+                forms:[{askId:'stale-select',controls:[{name:'choice.topology',value:'biped_std'}]}]}));
+            const ask:PendingAskV3={askId:'stale-select',publicationId:'record-option',source,
+                subject:{kind:'interview-picks',questionId:input.result.questionId,setId:input.result.setId},status:'pending'};
+            s.fixture.pending(ask,2);s.window.event(s.fixture.events.at(-1)!);
+            const form=s.workspace.querySelector('form[data-job-ask="stale-select"]')!;
+            expect(form.querySelectorAll('input').filter(radio=>radio.checked)).toHaveLength(0);
+            for(const language of ['en','ko'] as const){
+                i18nModule.setLanguagePreference(language);
+                const fallback=s.workspace.querySelector('[data-job-interview-empty]')!;
+                expect(fallback.textContent).toBe(i18nModule.t('job.picks.noImages',['inputs']));
+                expect(fallback.textContent).not.toContain('option-set');
+                const art=s.workspace.querySelector('[data-job-interview-images]')!;
+                delete art.dataset.jobInterviewContextKind;localizeQuestionImages(art as unknown as HTMLElement);
+                expect(fallback.textContent).toBe(i18nModule.t('job.picks.noImagesUnknown'));
+                art.dataset.jobInterviewContextKind='inputs';
+            }
+        } finally {s.cleanup();i18nModule.setLanguagePreference(preference);await rm(root,{recursive:true,force:true});}
+    });
+
     test('#606 shared plan text renders in checkpoint and record signoff forms with unchanged selects/drafts/words in EN/KO', async () => {
         const values = {does:'  <mark>literal</mark> 한글 e\u0301\r\n',produces:'',bar:' exact bar\n ',rests_on:['bones','bones','']};
         const record = {path:'project.json' as const,sha256:'a'.repeat(64)};
@@ -3269,9 +3395,9 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             const warning = form.querySelector('[data-job-interview-warning="INTERVIEW_OPTIONS_SCENE_LEGACY"]')!;
             expect(warning).not.toBeNull();
             expect(warning.dataset.record).toBe('interview.post.items[2].pending_options');
-            const pickSelect = form.querySelector('select[name="choice.framing"]')!;
+            const pickSelect = form.querySelector('input[name="choice.framing"]')!;
             const noteInput = form.querySelector('textarea[name="note"]')!;
-            pickSelect.value = 'keep';
+            pickSelect.checked = true;
             pickSelect.dispatchEvent({type: 'change'});
             noteInput.value = 'legacy non-blocking note';
             form.dispatchEvent({type: 'input'});

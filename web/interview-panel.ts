@@ -1,6 +1,7 @@
 import type { HistoricalInterview, InterviewQuestion, InterviewDiagnostic } from '../src/interview-project.ts';
 import type { Picks } from '../src/interview-picks.ts';
 import { onLanguageChange, t } from './i18n.ts';
+import {textEntryFocused} from './view-controls.ts';
 import type { InstanceAccess } from './instance-access.ts';
 
 type Question = Omit<InterviewQuestion,'images'> & {images:{name:string;url:string}[]; saved:Picks|null};
@@ -55,7 +56,11 @@ export function renderAskGroup(ask: InterviewAsk, pick: InterviewPick | undefine
     radio.type = 'radio'; radio.name = settings.name ?? ask.id; radio.value = option.id;
     radio.required = true; radio.checked = option.id === pick?.option_id;
     label.append(radio, element('strong', option.label), element('span', option.effect));
-    if (option.recommended) label.append(element('b', t('interview.recommended')), element('span', option.reason));
+    if (option.recommended) {
+      const badge = element('b', t('interview.recommended'));
+      badge.dataset.jobText = 'interview.recommended';
+      label.append(badge, element('span', option.reason));
+    }
     group.append(label);
     if (option.kind === 'other') group.append(other, pending);
     return radio;
@@ -66,6 +71,7 @@ export function renderAskGroup(ask: InterviewAsk, pick: InterviewPick | undefine
       ...(option?.kind === 'other' ? {other_text:other.value} : {})};
   };
   const sync = () => {
+    other.setAttribute('aria-label', t('interview.other'));
     const selected = read();
     const kind = ask.options.find(option => option.id === selected.option_id)?.kind;
     other.hidden = kind !== 'other'; other.required = kind === 'other';
@@ -100,13 +106,18 @@ export function refreshInterviewConstraints(set: InterviewQuestion['set'], group
 
 /** Image selection reuses supplied previews or the standalone caller's routed URL. */
 export function renderQuestionImages(images: {name:string; url?:string; preview?:HTMLImageElement}[],
-  state: {image:number}, emptyText?:string) {
+  state: {image:number}, question?: Pick<InterviewQuestion,'set'>) {
   const art = element('section'); art.className = 'interview-images';
   art.tabIndex = 0;
-  art.setAttribute('aria-label', t('job.picks.context'));
+  art.dataset.jobInterviewImages = '';
+  const context = (question?.set as {context?:unknown} | undefined)?.context;
+  const kind = context && typeof context === 'object' && !Array.isArray(context)
+    ? (context as {kind?:unknown}).kind : undefined;
+  if (typeof kind === 'string' && kind.trim()) art.dataset.jobInterviewContextKind = kind;
   const tabs = element('div'); tabs.className = 'interview-image-tabs';
   const viewport = element('div'); viewport.className = 'interview-image-preview';
   const unavailable = element('p', t('interview.imageUnavailable'));
+  unavailable.dataset.jobText = 'interview.imageUnavailable';
   unavailable.setAttribute('role', 'status'); unavailable.hidden = true;
   const show = (index:number) => {
     const asset = images[index];
@@ -125,14 +136,28 @@ export function renderQuestionImages(images: {name:string; url?:string; preview?
     button.onclick = () => show(index); tabs.append(button); return button;
   });
   art.onkeydown = event => {
+    if (event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey || event.altKey || textEntryFocused(event.target)) return;
     if (/^[1-9]$/.test(event.key) && images[Number(event.key) - 1]) {
       event.preventDefault(); show(Number(event.key) - 1);
     }
   };
   art.append(tabs, viewport, unavailable);
   if (images.length) show(Math.min(state.image, images.length - 1));
-  else if (emptyText) art.append(element('p', emptyText));
+  else {
+    const empty = element('p');
+    empty.dataset.jobInterviewEmpty = '';
+    art.append(empty);
+  }
+  localizeQuestionImages(art);
   return art;
+}
+
+/** Refresh only shared image labels, preserving the selected preview and owner state. */
+export function localizeQuestionImages(art: HTMLElement) {
+  art.setAttribute('aria-label', t('job.picks.context'));
+  const empty = art.querySelector<HTMLElement>('[data-job-interview-empty]');
+  const kind = art.dataset.jobInterviewContextKind;
+  if (empty) empty.textContent = kind ? t('job.picks.noImages', [kind]) : t('job.picks.noImagesUnknown');
 }
 
 export async function mountInterview(host: HTMLElement, access: InstanceAccess) {
@@ -200,7 +225,7 @@ export async function mountInterview(host: HTMLElement, access: InstanceAccess) 
     art.append(element('h2', t(question.hasParts ? 'interview.parts' : 'interview.source')));
     if (!question.hasParts) art.append(element('p', t('interview.noParts')));
     if (question.partsUnavailable) art.append(element('p', t('interview.partsUnavailable')));
-    art.append(renderQuestionImages(question.images.map(image => ({name:image.name, url:access.route(image.url)})), state));
+    art.append(renderQuestionImages(question.images.map(image => ({name:image.name, url:access.route(image.url)})), state, question));
 
     const form = element('form');
     const fields = element('fieldset'); fields.disabled = !question.editable || !access.capability || busy;

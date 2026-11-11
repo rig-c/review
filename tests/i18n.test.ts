@@ -487,11 +487,14 @@ class TestElement {
   }
   return null;
  }
+ querySelector(sel:string):TestElement|null{return this.querySelectorAll(sel)[0]??null;}
  querySelectorAll(sel:string):TestElement[]{
   const out:TestElement[]=[];
   const walk=(el:TestElement)=>{
    for(const c of el.children){
-    if(sel==='*'||c.classList.contains(sel.replace(/^\./,''))||c.tagName===sel.toUpperCase())out.push(c);
+    const data=sel.match(/^\[data-([a-z-]+)\]$/);
+    const dataKey=data?.[1]?.replace(/-([a-z])/g,(_,letter:string)=>letter.toUpperCase());
+    if(sel==='*'||(dataKey!==undefined&&dataKey in c.dataset)||c.classList.contains(sel.replace(/^\./,''))||c.tagName===sel.toUpperCase())out.push(c);
     walk(c);
    }
   };

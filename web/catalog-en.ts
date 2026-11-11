@@ -92,6 +92,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.picks.title": "{0} — {1}",
   "job.picks.answered": "{0} of {1} answered",
   "job.picks.noImages": "This question carries no images ({0} context).",
+  "job.picks.noImagesUnknown": "This question carries no admitted images. Its context kind is unavailable.",
   "job.picks.notAllowed": "Not allowed with the current picks.",
   "job.picks.context": "Context",
   "job.plan.does": "Does",
