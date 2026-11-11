@@ -172,6 +172,7 @@ function partsMountDocument(raster = false) {
   oninput:((e?:any)=>unknown)|null=null;
   classList={
    add:(...tokens:string[])=>{const s=new Set(this.className.split(/\s+/).filter(Boolean));for(const t of tokens)s.add(t);this.className=[...s].join(' ');},
+   remove:(...tokens:string[])=>{const s=new Set(this.className.split(/\s+/).filter(Boolean));for(const t of tokens)s.delete(t);this.className=[...s].join(' ');},
    toggle:(cls:string,force?:boolean)=>{const s=new Set(this.className.split(/\s+/).filter(Boolean));const on=force===undefined?!s.has(cls):force;if(on)s.add(cls);else s.delete(cls);this.className=[...s].join(' ');},
    contains:(cls:string)=>this.className.split(/\s+/).includes(cls),
   };
