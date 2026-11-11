@@ -611,6 +611,7 @@ test('#606 closed metadata grammar rejects malformed value/issue entries while r
 
 // #645 backend-only cases: actual source/session/front paths, without changes to shared harnesses.
 import {job645SidecarFixture} from './helpers/645-sidecar-fixture.ts';
+import {JOB_PARTS_VERDICT_ACT_SCHEMA} from '../src/job-contract.ts';
 import {loadPartsView as load645Parts} from '../src/parts-view.ts';
 import {candidate as candidate645} from './helpers/parts-comments-package.ts';
 import {PNG as JobPNG645} from 'pngjs';
@@ -708,7 +709,8 @@ test('#645 item and assembled Difference comments reach native crop and final ac
     expect(saved.ok).toBe(true);
     if (!saved.ok) throw new Error(saved.error.code);
     expect(saved.value.source.sourceHash).toBe(publication.source.sourceHash);
-    if (saved.value.kind !== 'parts-verdict') throw new Error('Expected Parts act');
+    expect(saved.value.schema).toBe(JOB_PARTS_VERDICT_ACT_SCHEMA);
+    if (saved.value.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA) throw new Error('Expected current Parts act schema');
     expect(saved.value.value.issues[1]).toEqual(assembledComment);
     const replay = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
     expect(replay).toEqual(saved);
