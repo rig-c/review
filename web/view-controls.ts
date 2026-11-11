@@ -40,6 +40,10 @@ export function automaticIdlePreview(names:readonly string[],selected:string,che
  * standalone review; a job rig subject (#709) keeps idle looping, because the restored frame there is only the
  * previous visit's view, not a frame the reviewer chose for this decision. */
 export function idlePreviewOnOpen(restored:boolean,hosted:boolean):boolean {return hosted||!restored;}
+/** Whether a restored inspection keeps its saved camera. The standalone review restores it always; a job rig subject
+ * (#709) opens at Fit, because the saved camera belongs to the previous visit's window size. A view link followed after
+ * opening still restores its camera in both. */
+export function bookmarkCameraKept(opening:boolean,hosted:boolean):boolean {return !(opening&&hosted);}
 export function themePreference(value:unknown):ThemePreference {return value==='dark'||value==='light'?value:'system';}
 
 /** The inspection appearance is transient; workspace Settings owns the saved browser default. */

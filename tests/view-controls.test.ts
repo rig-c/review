@@ -10,7 +10,7 @@ import {singleCameraWiring} from './helpers/viewport-387-wiring.ts';
 import {cameraFrame,cameraSignature,cameraFromSignature,assertCameraView,boundsFitSignature,dragSignature,zoomSignature} from '../web/camera-view.ts';
 import {initialReviewSelection} from '../src/open-selection.ts';
 import {test,expect} from 'bun:test';
-import {labelledControl,actionButton,stageOrientation,syncStageLayout,panCenter,idleAvailable,initialIdleAnimation,themePreference,automaticIdlePreview,idlePreviewOnOpen} from '../web/view-controls.ts';
+import {labelledControl,actionButton,stageOrientation,syncStageLayout,panCenter,idleAvailable,initialIdleAnimation,themePreference,automaticIdlePreview,idlePreviewOnOpen,bookmarkCameraKept} from '../web/view-controls.ts';
 test('orientation follows available center rectangle, with stable square tie',()=>{expect(stageOrientation(900,600)).toBe('horizontal');expect(stageOrientation(600,900)).toBe('vertical');expect(stageOrientation(600,600)).toBe('horizontal');});
 test('pan preserves coordinate signs and scales independently of pose time',()=>{expect(panCenter({x:10,y:20},40,20,2,'world')).toEqual({x:-10,y:30});expect(panCenter({x:10,y:20},40,20,2,'image')).toEqual({x:-10,y:10});expect(panCenter({x:10,y:20},40,20,4,'world')).toEqual({x:0,y:25});expect(()=>panCenter({x:0,y:0},1,1,0,'world')).toThrow('positive scale');});
 test('only actual exact idle can preview; explicit inspection wins startup',()=>{expect(idleAvailable(['idle','walk'],'walk')).toBe(false);expect(idleAvailable(['idle_variant'],'idle')).toBe(false);expect(idleAvailable(['idle'],'idle')).toBe(true);expect(initialIdleAnimation(['walk','idle'],'walk',false)).toBe('idle');expect(initialIdleAnimation(['walk','idle'],'walk',true)).toBe('walk');expect(initialIdleAnimation(['walk'],'walk',false)).toBe('walk');expect(initialIdleAnimation([],null,false)).toBe(null);});
@@ -691,4 +691,17 @@ test('#709 a job rig subject keeps idle looping after a restored inspection; the
   const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
   expect(main.match(/if\(idlePreviewOnOpen\(restored,!!host\)&&canRepeatIdle\(\)&&automaticIdlePreview\(/g)?.length).toBe(1);
   expect(main).not.toContain('if(!restored&&canRepeatIdle()');
+});
+
+test('#709 a job rig subject opens at Fit over a restored bookmark camera; the standalone review and later view links keep it', async () => {
+  expect(bookmarkCameraKept(true, false)).toBe(true);
+  expect(bookmarkCameraKept(false, false)).toBe(true);
+  expect(bookmarkCameraKept(false, true)).toBe(true);
+  expect(bookmarkCameraKept(true, true)).toBe(false);
+  const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
+  // The open-time restore passes the decision, the camera writes sit behind it, and a dropped camera requests the Fit after restoring.
+  expect(main.match(/bookmarkCameraKept\(inspectionOpening,!!host\)/g)?.length).toBe(1);
+  expect(main).toContain('if(keepCamera){viewport.cancelFit();');
+  expect(main).toContain('}finally{viewport.state.cameraRestoring=false;}\n if(!keepCamera){viewport.requestFit();fitCamera();}');
+  expect(main).toContain('inspectionOpening=true;try{');
 });
