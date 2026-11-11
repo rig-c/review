@@ -1433,7 +1433,10 @@ to one comment: anchored to the checkpoint for a checkpoint, general otherwise.
 It maps each Parts issue to a Parts-anchored comment, before the note. A blank
 or whitespace-only note writes no comment (`comments: []`). Nothing is padded.
 A note whose projection exceeds the 10,000-unit scalar bound refuses
-`JOB_ACT_INVALID`. Each written act must decode through `parseCommentsAct`.
+`JOB_ACT_INVALID`. The bound counts the stored `words`, and the `[label]\n`
+prefix is part of them, so a general note longer than 9,990 units refuses even
+though act@5 accepted it. Feedback is many comments, not one long note.
+Each written act must decode through `parseCommentsAct`.
 Image-review verdicts and interview picks stay at act@2, because Create refuses
 both under act@6. Record acts stay at act@4, because Create maps only a record
 checkpoint under act@6. Standalone save paths keep their existing versions.
