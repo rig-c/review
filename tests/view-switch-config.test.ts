@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import {createRigViewControls} from './helpers/rig-view-controls.ts';
 import {expect,test} from 'bun:test';
-import {createViewControls,compareViewSwitch,type ViewSwitchConfig} from '../web/view-controls.ts';
+import {createViewControls,compareViewModes,eligibilityViewSwitch,type ViewSwitchConfig} from '../web/view-controls.ts';
 import {pairEligibility} from '../src/comparison-eligibility.ts';
 import {getLanguagePreference,setLanguagePreference,t} from '../web/i18n.ts';
 
@@ -70,7 +70,7 @@ for(const language of ['en','ko'] as const){
 for(const language of ['en','ko'] as const)test(`#696 ${language}: compare eligibility renders through the shared switch with its existing reasons`,()=>withControls(()=>{
  setLanguagePreference(language);
  const state=pairEligibility({a:{state:'loaded'},b:{state:'failed',reason:'decode error'},reference:{state:'loaded'},domain:{end:2},requested:'b'});
- const {buttons,label}=menu(compareViewSwitch(state));
+ const {buttons,label}=menu(eligibilityViewSwitch(state,compareViewModes));
  expect(buttons.map(button=>button.dataset.view)).toEqual(['compare','reference','a','b']);
  expect(buttons.map(button=>button.textContent)).toEqual(['Side by side','Reference','Build A','Build B'].map(key=>t(key)));
  expect(buttons.map(button=>button.getAttribute('aria-pressed'))).toEqual(['false','false','true','false']);
@@ -119,6 +119,26 @@ test('#677 runtime Difference refusal can be cleared, re-enabled and selected wi
  expect(difference.disabled).toBe(true);expect(difference.title).toBe(reason);expect(difference.getAttribute('aria-description')).toBe(reason);
  difference.onclick!();expect(changes).toEqual(['difference']);controls.setDisabled('missing',reason);
  controls.setMode('part');expect(label.textContent).toBe(t('Part'));expect(changes).toEqual(['difference']);
+}));
+
+for(const language of ['en','ko'] as const)test(`#736 Amendment 1 ${language}: actual rig refresh keeps original names, legacy ids and named layout refusals`,()=>withControls(()=>{
+ setLanguagePreference(language);
+ const source=readFileSync(new URL('../web/main.ts',import.meta.url),'utf8');
+ const start=source.indexOf('function renderLayout():void {'),end=source.indexOf('function setReferenceInput(',start);
+ const {controls,buttons,label}=menu(),panes=new Map<string,{hidden:boolean}>();
+ let state:{requested:string;effective:string|null;reasons:Record<string,string>}={requested:'compare',effective:'rig',reasons:{compare:'REFERENCE_ABSENT: not supplied',reference:'REFERENCE_ABSENT: not supplied'}};
+ const call=new Bun.Transpiler({loader:'ts'}).transformSync('let effectiveView;'+source.slice(start,end)+';return renderLayout;');
+ const render=new Function('layoutEligibility','controls','el','text','fitCamera',call)(()=>state,controls,(id:string)=>{if(!panes.has(id))panes.set(id,{hidden:false});return panes.get(id);},()=>{},()=>{}) as ()=>void;
+ render();expect(label.textContent).toBe(t('Rig'));expect(controls.viewModeIds).toEqual(['compare','reference','rig']);
+ expect(buttons.map(button=>button.disabled)).toEqual([true,true,false]);
+ expect(buttons[1]!.title).toBe(state.reasons.reference!);expect(buttons[1]!.getAttribute('aria-description')).toBe(state.reasons.reference!);
+ expect(panes.get('reference-pane')!.hidden).toBe(true);expect(panes.get('rig-pane')!.hidden).toBe(false);
+ state={requested:'compare',effective:'compare',reasons:{}};render();
+ expect(buttons.every(button=>!button.disabled)).toBe(true);expect(label.textContent).toBe(t('Side by side'));
+ expect(buttons.map(button=>button.textContent)).toEqual(['Side by side','Reference','Rig'].map(key=>t(key)));
+ const changes:string[]=[],live=createRigViewControls(id=>changes.push(id));
+ const root=live.viewSwitch as unknown as ControlNode,list=root.children[1] as ControlNode;
+ root.open=true;(list.children[2] as ControlNode).onclick!();expect(changes).toEqual(['rig']);expect(root.open).toBe(false);
 }));
 
 test('#677 production view-state writes stay in the shared constructor and rig configuration is required',()=>{

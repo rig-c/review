@@ -15,7 +15,7 @@ import {createViewportController,createViewportState,type CameraTarget} from './
 import {createRigViewportProvider,rigPanCarry} from './rig-viewport-provider.ts';
 import {mountViewportPair} from './viewport-pair.ts';
 import {rendererStatus} from './renderer-status.ts';
-import {panelMake,createRigLayerControls,createViewControls,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
+import {panelMake,createRigLayerControls,createViewControls,inspectionViewSwitch,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
 import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
 import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
 import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
@@ -121,11 +121,7 @@ const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearch
 el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.append(createRigLayerControls());
 el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;
-const controls=createViewControls({layout:'rigStep1',viewSwitch:{currentMode:'compare',groups:[{modes:[
- {id:'compare',labelKey:'Side by side',pressed:true},
- {id:'reference',labelKey:'Reference',pressed:false},
- {id:'rig',labelKey:'Rig',pressed:false},
-]}],onChange:id=>setView(id as SingleLayout)}}),cameraControls=el('app').querySelector<HTMLElement>('[data-workspace-camera]')!;cameraControls.append(controls.syncLabel,controls.zoomGroup!);
+const controls=createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(id=>setView(id as SingleLayout))}),cameraControls=el('app').querySelector<HTMLElement>('[data-workspace-camera]')!;cameraControls.append(controls.syncLabel,controls.zoomGroup!);
 const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.classList.add('workspace-main-toolbar');
 const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
 const rigInspector=mountRigInspector();

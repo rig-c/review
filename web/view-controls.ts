@@ -22,7 +22,7 @@ export const labelledControl=(
 );
 export type ThemePreference = 'system' | 'dark' | 'light';
 import {t,setSourceText} from './i18n.ts';
-import type {PairEligibility,PairLayout} from '../src/comparison-eligibility.ts';
+import type {PairLayout} from '../src/comparison-eligibility.ts';
 
 export interface ViewPoint { x:number; y:number }
 export function stageOrientation(width:number,height:number):'horizontal'|'vertical' {return width>=height?'horizontal':'vertical';}
@@ -117,7 +117,14 @@ export function eligibilityViewSwitch<L extends string>(state:{requested:L;effec
 }
 /** Compare's View switch: Side by side · Reference · A · B, labelled with existing catalog keys. */
 export const compareViewModes:readonly (readonly [PairLayout,string])[]=Object.freeze([['compare','Side by side'],['reference','Reference'],['a','Build A'],['b','Build B']]);
-export function compareViewSwitch(state:Pick<PairEligibility,'requested'|'effective'|'reasons'>,onChange?:(id:PairLayout)=>void):ViewSwitchConfig {return eligibilityViewSwitch(state,compareViewModes,onChange);}
+/** The existing rig menu's single definition; layout ids and visible labels remain unchanged. */
+export function inspectionViewSwitch(onChange?:(id:string)=>void):ViewSwitchConfig {
+ return {currentMode:'compare',onChange,groups:[{modes:[
+  {id:'compare',labelKey:'Side by side',pressed:true},
+  {id:'reference',labelKey:'Reference',pressed:false},
+  {id:'rig',labelKey:'Rig',pressed:false},
+ ]}]};
+}
 export type ViewControlsOptions = {layout:'rigStep1';viewSwitch:ViewSwitchConfig} | {
  layout:'legacyCompareStep3'|'legacyPartsStep2';
 } | {
