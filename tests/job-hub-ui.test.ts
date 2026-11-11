@@ -48,15 +48,17 @@ test('every admitted row is selectable under the same advertised frame bound and
   const list: JobHubList = {schema: 'rig-review-job-hub/1', incarnation, limit: 32, jobs};
   expect(checkedJobHubList(list, incarnation).jobs).toHaveLength(32);
   for (const value of [{...list, incarnation: 'other'}, {...list, limit: 9}, {...list, limit: 33},
-    {...list, jobs: [...jobs, {...jobs[0]!, jobId: 'synthetic-33'}]}, {...list, jobs: [jobs[0]!, jobs[0]!]}]) {
+    {...list, jobs: [...jobs, {...jobs[0]!, jobId: 'synthetic-33'}]}, {...list, jobs: [jobs[0]!, jobs[0]!]},
+    {...list, jobs: [{...jobs[0]!, subjectKind: 'unknown' as never}]},
+    {...list, jobs: [{...jobs[0]!, answered: 'yes' as never}]}]) {
     expect(() => checkedJobHubList(value, incarnation)).toThrow('JOB_HUB_STATE_INVALID');
   }
 });
 
 test('retained frame geometry and child visibility integration preserve inspection ownership', async () => {
-  const css = await readFile(new URL('../web/job-hub.css', import.meta.url), 'utf8');
-  expect(css).toMatch(/\.hub-stage iframe\[hidden\]\s*\{[^}]*display:\s*block\s*!important;[^}]*visibility:\s*hidden/);
-  expect(css).toMatch(/\.hub-header select\s*\{[^}]*width:\s*auto;[^}]*min-width:\s*6rem;[^}]*max-width:\s*12rem/);
+  const css = await readFile(new URL('../web/styles.css', import.meta.url), 'utf8');
+  expect(css).toMatch(/\.hub-stage iframe\[hidden\][^{]*\{[^}]*display:\s*block\s*!important;[^}]*visibility:\s*hidden/);
+  expect(css).toMatch(/\.hub-header select[^{]*\{[^}]*width:\s*auto;[^}]*min-width:\s*6rem;[^}]*max-width:\s*12rem/);
   const owner = await readFile(new URL('../web/job-hub.ts', import.meta.url), 'utf8');
   expect(owner).toContain('limit: () => current!.limit');
   expect(owner).toContain('!current || retained.atLimit()');

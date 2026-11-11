@@ -35,12 +35,19 @@ export interface JobOwnerHub {
   stop(): Promise<void>;
 }
 
+export const JOB_HUB_SUBJECT_KINDS = [
+  'parts', 'interview', 'rig', 'direction', 'image-set', 'checkpoint', 'signoff', 'reopen', 'plan', 'package',
+] as const;
+export type JobHubSubjectKind = (typeof JOB_HUB_SUBJECT_KINDS)[number];
+
 export interface JobHubRow {
   jobId: string;
   generation: number;
   status: 'active' | 'closed';
   publication: {publicationId: string; instanceKey: string; sourceHash: string; label: string} | null;
   pendingCount: number;
+  subjectKind?: JobHubSubjectKind;
+  answered?: boolean;
 }
 export interface JobHubList {
   schema: 'rig-review-job-hub/1';
@@ -48,6 +55,27 @@ export interface JobHubList {
   incarnation: string;
   limit: number;
   jobs: JobHubRow[];
+}
+
+function hubSubjectKind(status: ReturnType<JobSession['status']>): JobHubSubjectKind {
+  const ask = status.pending[0]?.subject;
+  if (ask) {
+    if (ask.kind === 'parts-verdict') return 'parts';
+    if (ask.kind === 'interview-picks') return 'interview';
+    if (ask.kind === 'checkpoint' || ask.kind === 'signoff' || ask.kind === 'reopen') return ask.kind;
+    return ask.stage === 'image-review' ? 'image-set' : ask.stage === 'direction-review' ? 'direction' : 'rig';
+  }
+  const source = status.publication?.source;
+  if (!source) return 'package';
+  if ('subject' in source && source.subject === 'image-set') return 'image-set';
+  if ('subject' in source && source.subject === 'option-set') return 'interview';
+  if ('subject' in source && source.subject === 'plan') return source.subjects[0]?.kind ?? 'plan';
+  if (source.direction || source.selector?.kind === 'post') return 'direction';
+  if (source.selector?.kind === 'draft' || source.parts && !source.model) return 'parts';
+  if (source.optionSet && !source.model) return 'interview';
+  if (source.plan && !source.model) return 'plan';
+  if (source.model || source.selector?.kind === 'rig') return 'rig';
+  return 'package';
 }
 
 const schema = 'rig-review-job-hub/1';
@@ -154,20 +182,20 @@ export async function startJobHub(options: JobHubOptions): Promise<JobOwnerHub> 
         try {
           const url = new URL(request.url);
           if (url.origin !== origin) return refused('JOB_LOOPBACK_REQUIRED', 403);
-          const resource = url.pathname === '/hub/' ? 'job-hub.html' : url.pathname === '/hub/job-hub.js' ? 'job-hub.js'
-            : url.pathname === '/hub/job-hub.css' ? 'job-hub.css' : url.pathname === '/hub/styles.css' ? 'styles.css' : null;
+          const resource = url.pathname === '/hub/' ? 'index.html' : url.pathname === '/hub/main.js' ? 'main.js'
+            : url.pathname === '/hub/styles.css' ? 'styles.css' : null;
           if (resource) {
             if (!['GET', 'HEAD'].includes(request.method)) return refused('JOB_REQUEST_INVALID', 405);
             if (request.headers.get('sec-fetch-site') === 'cross-site' ||
                 request.headers.get('origin') !== null && request.headers.get('origin') !== origin) return refused('JOB_SAME_ORIGIN_REQUIRED', 403);
-            if (resource === 'job-hub.html') {
+            if (resource === 'index.html') {
               if (url.searchParams.get('workspace') !== incarnation ||
                   [...url.searchParams.keys()].some(key => !['workspace', 'lang'].includes(key) || url.searchParams.getAll(key).length !== 1) ||
                   url.searchParams.has('lang') && !['en', 'ko'].includes(url.searchParams.get('lang')!)) return refused('JOB_REQUEST_INVALID', 400);
             } else if (url.search) return refused('JOB_REQUEST_INVALID', 400);
             let body: BodyInit | null = null;
             if (request.method !== 'HEAD') {
-              if (resource === 'job-hub.js') body = await (hubBundle ??= buildWeb('job-hub'));
+              if (resource === 'main.js') body = await (hubBundle ??= buildWeb('job-hub'));
               else body = Bun.file(new URL('../web/' + resource, import.meta.url));
             }
             return new Response(body, {headers: {...responseHeaders,
@@ -204,7 +232,9 @@ export async function startJobHub(options: JobHubOptions): Promise<JobOwnerHub> 
               return {jobId: status.jobId, generation: status.generation, status: status.status,
                 publication: status.publication && {publicationId: status.publication.publicationId,
                   instanceKey: status.publication.instanceKey, sourceHash: status.publication.source.sourceHash,
-                  label: status.publication.label.slice(0, 512)}, pendingCount: status.pending.length};
+                  label: status.publication.label.slice(0, 512)}, pendingCount: status.pending.length,
+                subjectKind: hubSubjectKind(status),
+                answered: status.publication !== null && status.pending.length === 0 && status.generation > status.publication.generation};
             })}, {headers: responseHeaders});
           }
           const match = /^\/jobs\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\//.exec(url.pathname);

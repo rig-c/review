@@ -328,9 +328,9 @@ try {
   await clickInside(0, '[data-part-list] button');
   await clickInside(0, '[data-inspector="playback"]');
   await clickInside(0, '#zoom-in');
-  await clickInside(0, '#write-review');
+  await clickInside(0, '[data-inspector="feedback"]');
   await inside(0, `(()=>{const node=document.querySelector('#feedback-summary');node.value='Synthetic human unsaved note';node.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
-  await clickInside(0, '#review-dialog-close');
+  await clickInside(0, '[data-inspector="playback"]');
   const snapshotExpression = `({animation:document.querySelector('#animation-select').value,time:document.querySelector('#scrub').value,zoom:document.querySelector('#zoom-value').textContent,part:document.querySelector('#selected-part').textContent,panel:document.querySelector('[data-inspector][aria-pressed="true"], [data-inspector][aria-selected="true"]')?.getAttribute('data-inspector'),note:document.querySelector('#feedback-summary').value,source:document.querySelector('#provenance-rig').textContent})`;
   const saved = await inside(0, snapshotExpression);
   await record('retention-before', saved);
@@ -403,12 +403,12 @@ try {
     assert.ok(geometry[name].scrollHeight <= geometry[name].clientHeight + 1, name + ' has no vertical clipping');
   }
   await writeFile(join(output, 'owner-nine-' + language + '.png'), await page.screenshot());
-  await page.evaluate(`window.__ownerDocumentIdentity=document.querySelector('#owner-workspace')`);
+  await page.evaluate(`window.__ownerDocumentIdentity=document.querySelector('#app')`);
   await open([9]);
   await wait(`document.querySelectorAll('.owner-list button').length===10`, 'new tenth row');
   assert.equal(await page.evaluate(`document.querySelectorAll('.owner-list button')[0].getAttribute('aria-pressed')`), 'true');
   await choose(9, 10); await ready(9, 'synthetic-animation-10');
-  assert.ok(await page.evaluate(`window.__ownerDocumentIdentity===document.querySelector('#owner-workspace')`));
+  assert.ok(await page.evaluate(`window.__ownerDocumentIdentity===document.querySelector('#app')`));
   await record('tenth-selection', {noReload: true, noSelectionTheft: true, mounted: 10});
   await open(Array.from({length: 22}, (_, index) => index + 10));
   await wait(`document.querySelectorAll('.owner-list button').length===32`, 'admission 32');

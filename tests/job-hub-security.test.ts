@@ -102,7 +102,7 @@ test('member embedding grants frame ancestors only to its validated landing quer
       await response.body?.cancel();
     }
   }
-  const owner = await fetch(f.h.ownerUrl); expect(owner.status).toBe(200); const html = await owner.text(); expect(html).toContain('data-job-hub');
+  const owner = await fetch(f.h.ownerUrl); expect(owner.status).toBe(200); const html = await owner.text(); expect(html).toContain('<div id="app"></div>');
   expect(html).not.toContain(grant.capability);
   for (const query of ['', '?lang=en', '?lang=ko', '?workspace=',
     '?workspace=' + f.incarnation + '&lang=', '?workspace=' + f.incarnation + '&lang=EN',
@@ -110,7 +110,8 @@ test('member embedding grants frame ancestors only to its validated landing quer
     '?workspace=' + f.incarnation + '&review=secret', '?workspace=other', '?workspace=' + f.incarnation + '&workspace=' + f.incarnation, '?workspace=' + f.incarnation + '&extra=1']) {
     expect((await fetch(f.h.origin + '/hub/' + query)).status).toBe(400);
   }
-  expect((await fetch(f.h.origin + '/hub/job-hub.css?debug=1')).status).toBe(400);
+  expect((await fetch(f.h.origin + '/hub/styles.css?debug=1')).status).toBe(400);
+  expect((await fetch(f.h.origin + '/hub/main.js?debug=1')).status).toBe(400);
 });
 
 test('closed jobs remain factual list entries and restart changes the owner document/grant incarnation', async () => {

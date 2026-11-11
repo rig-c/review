@@ -1,5 +1,4 @@
-import {mountWorkspaceShell} from './workspace-ui.ts';
-import {createRetainedFrameStage} from './retained-frame-stage.ts';
+import {createRetainedFrameStage, mountRetainedWorkspace} from './retained-frame-stage.ts';
 import {hashCapabilityAccess} from './instance-access.ts';
 import {WORKSPACE_TARGET_LIMIT, WORKSPACE_READY_SCHEMA, WORKSPACE_SCHEMA, WORKSPACE_TARGET_DOMAIN, WORKSPACE_VISIBILITY_SCHEMA,
   type WorkspaceList, type WorkspaceTargetView} from '../src/open-workspace-contract.ts';
@@ -7,12 +6,9 @@ import {getLanguage, onLanguageChange, setLanguagePreference, setLinkLanguage, t
 import {connectLiveWindow} from './live-connection.ts';
 
 export function mountOwnerWorkspace(root: HTMLElement): () => void {
-  const shell = mountWorkspaceShell({compatibility: 'legacyOwnerStep6'});
-  const {header} = shell, heading = shell.title, status = shell.status!, language = shell.language!;
-  const list = document.createElement('nav'); list.className = 'owner-list';
-  const stage = document.createElement('main'); stage.className = 'owner-stage';
-  root.append(header, list, stage);
-  let current: WorkspaceList | null = null, disposed = false;
+  const workspace = mountRetainedWorkspace({root, kind: 'owner'});
+  const {stage, language} = workspace;
+  let current: WorkspaceList | null = null, disposed = false, statusKey = '';
   let timer: ReturnType<typeof setTimeout> | undefined;
   const cancellation = new AbortController();
   const retained = createRetainedFrameStage<{frame: HTMLIFrameElement; target: WorkspaceTargetView}>({
@@ -24,13 +20,9 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
   const capability = hashCapabilityAccess(new URL(location.href), 'rig-review-owner-workspace/1:' + location.origin,
     () => sessionStorage, href => history.replaceState(history.state, '', href), {strip: 'always-after-storage', storedValue: 'preserve', fallback: ''});
 
-  function text() {
-    document.documentElement.lang = getLanguage();
-    heading.textContent = tr('Review workspace'); document.title = tr('Review workspace');
-    list.setAttribute('aria-label', tr('Review targets'));
-    language.setAttribute('aria-label', tr('Language'));
-    language.options[0]!.textContent = tr('English'); language.options[1]!.textContent = tr('Korean');
-    language.value = getLanguage();
+  function showStatus(key: string) {
+    statusKey = key;
+    workspace.setStatus(key ? tr(key) : '');
   }
 
   async function grant(key: string) {
@@ -42,49 +34,59 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
 
   async function select(target: WorkspaceTargetView) {
     const intent = retained.beginSelection();
-    if (target.unavailable) {status.textContent = tr(target.unavailable); return;}
+    if (target.unavailable) {showStatus(target.unavailable); return;}
     let entry = retained.get(target.key);
     if (!entry) {
-      if (retained.atLimit()) {status.textContent = tr('WORKSPACE_TARGET_LIMIT'); return;}
+      if (retained.atLimit()) {showStatus('WORKSPACE_TARGET_LIMIT'); return;}
       const token = await grant(target.key);
       if (!retained.isCurrent(intent)) return;
       const frame = retained.createFrame(target.title, target.entry + '&lang=' + getLanguage() + '#cap=' + token);
       entry = {frame, target}; retained.retain(entry);
     }
+    statusKey = 'Select a target. Drafts stay with their original source.';
     retained.select(target.key);
     render();
   }
 
   function render() {
-    text(); list.replaceChildren();
-    for (const target of current?.targets ?? []) {
-      const button = document.createElement('button'); button.type = 'button';
-      button.dataset.targetKey = target.key; button.setAttribute('aria-pressed', String(target.key === retained.selected));
-      const title = document.createElement('span'); title.className = 'owner-target-title'; title.textContent = target.title;
-      const state = document.createElement('span'); state.className = 'owner-target-status';
-      state.textContent = tr(target.unavailable ?? (target.viewOnly ? 'Inspection only' : 'Review target'));
-      const animation = document.createElement('span'); animation.className = 'owner-target-animation'; animation.textContent = target.animation;
-      button.append(title, state, animation); button.onclick = () => {void select(target).catch(() => {status.textContent = tr('WORKSPACE_REQUEST_REFUSED');});};
-      list.append(button);
-    }
+    const selectedTarget = current?.targets.find(target => target.key === retained.selected) ?? null;
+    workspace.render({
+      lang: getLanguage(),
+      heading: tr('Review workspace'),
+      listLabel: tr('Review targets'),
+      languageLabel: tr('Language'),
+      englishLabel: tr('English'),
+      koreanLabel: tr('Korean'),
+      message: statusKey ? tr(statusKey) : '',
+      selected: retained.selected,
+      selectedHash: selectedTarget?.contentHash ?? null,
+      items: (current?.targets ?? []).map(target => ({
+        key: target.key,
+        dataset: {targetKey: target.key, subjectState: target.unavailable ? 'unavailable' : 'waiting'},
+        kindLabel: tr(target.unavailable ?? (target.viewOnly ? 'Inspection only' : target.mode === 'compare' ? 'A / B comparison' : 'Review target')),
+        label: target.title,
+        hash: target.contentHash,
+        onSelect: () => {void select(target).catch(() => {showStatus('WORKSPACE_REQUEST_REFUSED');});},
+      })),
+    });
   }
 
   async function refresh() {
     try {
-      if (!capability) {status.textContent = tr('WORKSPACE_CAPABILITY_REQUIRED'); return;}
+      if (!capability) {showStatus('WORKSPACE_CAPABILITY_REQUIRED'); return;}
       const response = await fetch('/workspace/api/targets', {
         headers: {'X-Review-Capability': capability}, signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(5000)]),
       });
       const value = await response.json() as WorkspaceList & {error?: string};
-      if (!response.ok) {status.textContent = tr(value.error ?? 'WORKSPACE_REQUEST_REFUSED'); return;}
+      if (!response.ok) {showStatus(value.error ?? 'WORKSPACE_REQUEST_REFUSED'); return;}
       if (value.schema !== WORKSPACE_SCHEMA || !Array.isArray(value.targets) || value.targets.length > WORKSPACE_TARGET_LIMIT ||
-          current && current.incarnation !== value.incarnation) {status.textContent = tr('WORKSPACE_HOST_MISMATCH'); return;}
+          current && current.incarnation !== value.incarnation) {showStatus('WORKSPACE_HOST_MISMATCH'); return;}
       const changed = JSON.stringify(value) !== JSON.stringify(current);
-      if (!current) status.textContent = tr('Select a target. Drafts stay with their original source.');
+      if (!current) showStatus('Select a target. Drafts stay with their original source.');
       current = value;
       if (changed) render();
       if (!retained.selected && value.targets[0]) await select(value.targets[0]);
-    } catch {if (!disposed) status.textContent = tr('WORKSPACE_REQUEST_REFUSED');}
+    } catch {if (!disposed) showStatus('WORKSPACE_REQUEST_REFUSED');}
     finally {if (!disposed) timer = setTimeout(() => {void refresh();}, 1000);}
   }
 
@@ -105,12 +107,12 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
     window.removeEventListener('message', ready); window.removeEventListener('pagehide', stop);
   };
   window.addEventListener('pagehide', stop, {once: true});
-  text();
+  render();
   void refresh();
   return stop;
 }
 
-if (typeof document !== 'undefined') {
-  const root = document.getElementById('owner-workspace');
-  if (root) mountOwnerWorkspace(root);
+if (typeof document !== 'undefined' && typeof location !== 'undefined' && location.pathname === '/') {
+  const root = document.getElementById('app');
+  if (root && !root.childElementCount) mountOwnerWorkspace(root);
 }

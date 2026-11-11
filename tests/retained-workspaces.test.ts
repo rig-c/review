@@ -89,7 +89,10 @@ for (const kind of ['hub', 'owner'] as const) {
     try {
       await h.mount(); await h.waitForFrame();
       expect(h.root.children.map((node: any) => [node.tagName, node.className])).toEqual([
-        ['HEADER', kind === 'hub' ? 'hub-header' : 'owner-header'], ['NAV', kind === 'hub' ? 'hub-list' : 'owner-list'], ['MAIN', kind === 'hub' ? 'hub-stage' : 'owner-stage'],
+        ['HEADER', kind === 'hub' ? 'hub-header' : 'owner-header'],
+        ['NAV', kind === 'hub' ? 'hub-list' : 'owner-list'],
+        ['MAIN', kind === 'hub' ? 'hub-stage' : 'owner-stage'],
+        ['FOOTER', 'status-bar'],
       ]);
       expect(h.location.hash).toBe(''); expect(h.frames).toHaveLength(1);
       expect(h.requests[0]!.init?.headers).toEqual({'X-Review-Capability': capability});
@@ -167,11 +170,66 @@ for (const kind of ['hub', 'owner'] as const) {
       expect(h.frames).toEqual([first, second]); expect(first.hidden).toBe(false); expect(second.hidden).toBe(true);
     } finally {h.close();}
     const refused = await host(kind);
-    if (kind === 'hub') refused.jobs[0]!.status = 'closed';
+    if (kind === 'hub') for (const job of refused.jobs) job.status = 'closed';
     else refused.targets[0]!.unavailable = 'WORKSPACE_REQUEST_REFUSED' as never;
     try {
       await refused.mount(); expect(refused.frames).toHaveLength(0);
-      expect(refused.root.children[1].children[0].getAttribute('aria-pressed')).toBe(kind === 'hub' ? 'true' : 'false');
+      if (kind === 'hub') {
+        const group = refused.root.children[1].children[0];
+        expect(group.tagName).toBe('DETAILS');
+        expect(group.open).toBe(false);
+        expect(group.children[1].getAttribute('aria-pressed')).toBe('true');
+      } else {
+        expect(refused.root.children[1].children[0].getAttribute('aria-pressed')).toBe('false');
+      }
     } finally {refused.close();}
   });
 }
+
+test('hub and owner rows render kind, label and 8-char hash while the C11 status bar holds the full 64-char hash and answered items collapse', async () => {
+  const hashA = 'a1b2c3d4' + 'e'.repeat(56), hashB = 'f0e1d2c3' + '9'.repeat(56), hashC = '11223344' + '8'.repeat(56);
+  const hubHost = await host('hub');
+  hubHost.jobs.splice(0, hubHost.jobs.length,
+    {jobId: 'job_internal_answered', generation: 3, status: 'active', pendingCount: 0, subjectKind: 'parts', answered: true,
+      publication: {publicationId: 'pub-a', instanceKey: '1'.repeat(64), sourceHash: hashA, label: 'Soldier parts draft'}} as any,
+    {jobId: 'job_internal_waiting', generation: 2, status: 'active', pendingCount: 1, subjectKind: 'rig', answered: false,
+      publication: {publicationId: 'pub-b', instanceKey: '2'.repeat(64), sourceHash: hashB, label: 'Soldier rig v15'}} as any,
+    {jobId: 'job_internal_closed', generation: 4, status: 'closed', pendingCount: 0, subjectKind: 'checkpoint', answered: false,
+      publication: {publicationId: 'pub-c', instanceKey: '3'.repeat(64), sourceHash: hashC, label: 'Step 3 gate'}} as any,
+  );
+  try {
+    await hubHost.mount(); await hubHost.waitForFrame();
+    const list = hubHost.root.children[1], footer = hubHost.root.children[3];
+    // Waiting subject comes first and is auto-selected; answered + closed subjects sit in one collapsed <details> group at the end.
+    expect(list.children.map((node: any) => node.tagName)).toEqual(['BUTTON', 'DETAILS']);
+    const waitingRow = list.children[0], details = list.children[1];
+    expect(waitingRow.getAttribute('aria-pressed')).toBe('true');
+    expect(waitingRow.children.map((node: any) => node.textContent)).toEqual(['Rig', 'f0e1d2c3', 'Soldier rig v15']);
+    expect(waitingRow.textContent).not.toContain('job_internal');
+    expect(waitingRow.textContent).not.toContain(hashB);
+    expect(footer.children[2].textContent).toBe(hashB);
+    expect(details.open).toBe(false);
+    expect(details.getAttribute('open')).toBeNull();
+    expect(details.children[0].tagName).toBe('SUMMARY');
+    expect(details.children[0].textContent).toBe('Answered (2)');
+    expect(details.children[1].children.map((node: any) => node.textContent)).toEqual(['Parts', 'a1b2c3d4', 'Soldier parts draft']);
+    expect(details.children[2].children.map((node: any) => node.textContent)).toEqual(['Checkpoint', '11223344', 'Step 3 gate']);
+    setLanguagePreference('ko');
+    const koDetails = list.children[1];
+    expect(list.children[0].children.map((node: any) => node.textContent)).toEqual(['리그', 'f0e1d2c3', 'Soldier rig v15']);
+    expect(koDetails.children[0].textContent).toBe('완료됨 (2)');
+    expect(koDetails.children[1].children[0].textContent).toBe('파츠');
+    expect(koDetails.children[2].children[0].textContent).toBe('체크포인트');
+    expect(footer.children[2].textContent).toBe(hashB);
+  } finally {hubHost.close();}
+
+  const ownerHost = await host('owner');
+  ownerHost.targets[0]!.contentHash = hashA;
+  ownerHost.targets[0]!.title = 'Hero package';
+  try {
+    await ownerHost.mount(); await ownerHost.waitForFrame();
+    const row = ownerHost.root.children[1].children[0], footer = ownerHost.root.children[3];
+    expect(row.children.map((node: any) => node.textContent)).toEqual(['Review target', 'a1b2c3d4', 'Hero package']);
+    expect(footer.children[2].textContent).toBe(hashA);
+  } finally {ownerHost.close();}
+});
