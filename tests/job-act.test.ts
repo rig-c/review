@@ -28,6 +28,25 @@ function commentsAct(): any {
 const feedbackAnchor = (id = 'feedback-one') => ({id, frameStart: 3, frameEnd: 3,
   target: {kind: 'slot' as const, name: 'sleeve'}, category: 'defect' as const});
 
+test('#653 P1 checkpoint comment and top-level checkpoint share declared evidence mapping validation', () => {
+  const act = commentsAct();
+  act.source.plan.steps.push({id: 'step-two', hash: '2'.repeat(64)});
+  act.source.checkpointEvidence = [{schema: 'rig-review-checkpoint-evidence/1', checkpointId: 'checkpoint-c', planStepId: 'step-one',
+    tiles: [{id: 'tile', label: 'Declared tile', path: 'evidence/tile.png', sha256: 'a'.repeat(64)}],
+    table: {path: 'evidence/table.json', sha256: 'b'.repeat(64)}, routesText: 'Pass or fail', recommendationText: 'Inspect this'}];
+  act.value = {checkpointId: 'checkpoint-c', planStepId: 'step-one', outcome: 'pass',
+    comments: [{text: 'Inspect checkpoint', anchor: {checkpointId: 'checkpoint-c', planStepId: 'step-one'}}]};
+  expect(parseCommentsAct(act).value.comments).toEqual(act.value.comments);
+  const contradictory = structuredClone(act);
+  contradictory.value.comments[0].anchor.planStepId = 'step-two';
+  expect(() => parseCommentsAct(contradictory)).toThrow('JOB_ACT_INVALID');
+  const wrongTopLevel = structuredClone(act); wrongTopLevel.value.planStepId = 'step-two';
+  expect(() => parseCommentsAct(wrongTopLevel)).toThrow('JOB_ACT_INVALID');
+  const absent = structuredClone(act); delete absent.source.checkpointEvidence;
+  absent.value.planStepId = 'step-two'; absent.value.comments[0].anchor.planStepId = 'step-two';
+  expect(parseCommentsAct(absent).schema).toBe('rig-review/act@6');
+});
+
 test('#646 ordered-general-and-image: exact whitespace and stored order use existing image names', () => {
   const act = commentsAct(), old = act.source;
   const images = [{name: 'original', role: 'source', path: 'original.png', sha256: 'a'.repeat(64)},

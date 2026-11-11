@@ -1202,6 +1202,14 @@ function commentCrop(value: unknown): void {
   if (Object.hasOwn(crop, 'png')) validatePngCrop(crop as unknown as Parameters<typeof validatePngCrop>[0]);
 }
 
+/** Both checkpoint values and pins obey the source's declared checkpoint mapping. */
+function assertCommentsCheckpointBinding(source: SourceV3, checkpointId: string, planStepId: string): void {
+  if (!source.plan?.steps.some(step => step.id === planStepId) ||
+      'record' in source && checkpointId !== planStepId) throw new JobError('JOB_ACT_INVALID');
+  const evidence = source.checkpointEvidence?.find(packet => packet.checkpointId === checkpointId);
+  if (evidence && evidence.planStepId !== planStepId) throw new JobError('JOB_ACT_INVALID');
+}
+
 function parseCommentAnchor(raw: unknown, text: string, source?: SourceV3 | string): JobCommentAnchor {
   const item = commentsObject(raw, [], Object.keys(raw && typeof raw === 'object' ? raw : {}));
   const sourceHash = typeof source === 'string' ? source : source?.sourceHash;
@@ -1237,8 +1245,7 @@ function parseCommentAnchor(raw: unknown, text: string, source?: SourceV3 | stri
   if ('checkpointId' in item) {
     commentsObject(item, ['checkpointId', 'planStepId']);
     const checkpointId = jobId(item.checkpointId), planStepId = jobId(item.planStepId);
-    if (source && typeof source !== 'string' && (!source.plan?.steps.some(step => step.id === planStepId) ||
-        'record' in source && checkpointId !== planStepId)) throw new JobError('JOB_ACT_SOURCE_STALE');
+    if (source && typeof source !== 'string') assertCommentsCheckpointBinding(source, checkpointId, planStepId);
     return {checkpointId, planStepId};
   }
   if ('name' in item) {
@@ -1343,11 +1350,9 @@ export function parseCommentsAct(raw: unknown): JobCommentsAct {
     const comments = parseComments(value.comments, source);
     if (comments.some(comment => comment.anchor && 'side' in comment.anchor)) throw new JobError('JOB_ACT_INVALID');
     if (item.kind === 'checkpoint') {
-      jobId(value.checkpointId); jobId(value.planStepId);
-      if (typeof value.outcome !== 'string' || !['pass', 'fail'].includes(value.outcome) || !source.plan?.steps.some(step => step.id === value.planStepId) ||
-          'record' in source && value.checkpointId !== value.planStepId) throw new JobError('JOB_ACT_INVALID');
-      const evidence = source.checkpointEvidence?.find(packet => packet.checkpointId === value.checkpointId);
-      if (evidence && evidence.planStepId !== value.planStepId) throw new JobError('JOB_ACT_INVALID');
+      const checkpointId = jobId(value.checkpointId), planStepId = jobId(value.planStepId);
+      if (typeof value.outcome !== 'string' || !['pass', 'fail'].includes(value.outcome)) throw new JobError('JOB_ACT_INVALID');
+      assertCommentsCheckpointBinding(source, checkpointId, planStepId);
     } else if (item.kind === 'parts-verdict') {
       if ('record' in source || source.subject === 'image-set' || source.selector?.kind !== 'draft' || !source.parts || !source.projectHash ||
           typeof value.verdict !== 'string' || !['approved', 'changes-requested'].includes(value.verdict)) throw new JobError('JOB_ACT_INVALID');

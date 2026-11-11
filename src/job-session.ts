@@ -604,19 +604,20 @@ export class JobSession {
     if (!current.active) throw new JobError('JOB_CLOSED');
     const storedAct = current.data.acts[actId];
     if (!storedAct) throw new JobError('JOB_ACT_UNKNOWN');
-    // Reader preparation only: no current finalizer or stored legacy act is upgraded.
-    const act = (storedAct as {schema: string}).schema === JOB_COMMENTS_ACT_SCHEMA ? parseCommentsAct(storedAct) : storedAct;
-    const still = 'still' in act ? act.still : undefined;
-    if (act.schema !== JOB_RIG_REVIEW_ACT_SCHEMA && !still) {
+    // Validation must not replace the stored representation or reorder its keys.
+    if ((storedAct as {schema: string}).schema === JOB_COMMENTS_ACT_SCHEMA) parseCommentsAct(storedAct);
+    const still = 'still' in storedAct ? storedAct.still : undefined;
+    const actBytes = Buffer.from(JSON.stringify(storedAct));
+    if (storedAct.schema !== JOB_RIG_REVIEW_ACT_SCHEMA && !still) {
       if (png) throw new JobError('JOB_STILL_UNAVAILABLE');
-      return Buffer.from(JSON.stringify(act));
+      return actBytes;
     }
     if (!still) throw new JobError('JOB_STILL_CAPTURE_FAILED');
     const stored = this.store.readStill(this.jobId, actId);
     if (!stored || stored.png.byteLength > jobStillByteLimit || stored.actBytes.byteLength > maximumEventBytes ||
         stored.sha256 !== still.sha256 || jobHash(stored.png) !== still.sha256 ||
         still.path !== still.sha256 + '.png' ||
-        !Buffer.from(stored.actBytes).equals(Buffer.from(JSON.stringify(act)))) {
+        !Buffer.from(stored.actBytes).equals(actBytes)) {
       throw new JobError('JOB_STILL_CAPTURE_FAILED');
     }
     return Buffer.from(png ? stored.png : stored.actBytes);

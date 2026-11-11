@@ -11,14 +11,14 @@ import { freshCompareSession, compareSessionFile, type CompareSession } from '..
 import { readFeedbackSession, readFeedbackCompareSession, type FeedbackHistory } from '../src/session-history.ts';
 import { formatCorrectionIssue, formatFeedbackIssues, groupFeedbackIssues, feedbackMarkdownText } from '../src/feedback-export.ts';
 import { feedbackFormat } from '../src/cli.ts';
-import {parseCommentsSession, parseCommentsCompareSession, parseCommentsPartsVerdict, projectSelectedCommentsFeedback} from '../src/job-host.ts';
+import {parseCommentsSession, parseCommentsCompareSession, parseCommentsPartsVerdict, projectSelectedCommentsFeedback, type JobCommentFeedbackAnchor} from '../src/job-host.ts';
 import {parseSession} from '../src/session.ts';
 import {parseCompareSession} from '../src/compare-session.ts';
 import commentsLegacy from './fixtures/comments-contract-legacy.json';
 
 test('#646 standalone-new-comment-reader: public session, compare and Parts decoders retain exact comments and selected correction', () => {
   const old = JSON.parse(commentsLegacy.records.session.raw), {feedback: _feedback, ...header} = old;
-  const anchor = {id: 'existing-feedback-id', frameStart: 3, frameEnd: 3, target: {kind: 'slot', name: 'sleeve'}, category: 'defect'};
+  const anchor = {id: 'existing-feedback-id', frameStart: 3, frameEnd: 3, target: {kind: 'slot', name: 'sleeve'}, category: 'defect'} satisfies JobCommentFeedbackAnchor;
   const raw = {...header, schema: 'rig-review-session/2', comments: [{text: 'general'}, {text: 'Fix this', anchor}]};
   const bytes = JSON.stringify(raw), session = parseCommentsSession(JSON.parse(bytes));
   expect(projectSelectedCommentsFeedback(session, 'existing-feedback-id')).toEqual({anchor, summary: '[["slot","sleeve",3,3,null]]\nFix this'});
