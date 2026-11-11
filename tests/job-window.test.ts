@@ -26,8 +26,11 @@ test('C4 job browser runtime graph excludes the server manifest and Node imports
     const entry = new URL('../web/job-session.ts', import.meta.url);
     const manifest = new URL('../src/manifest.ts', import.meta.url).href;
     const transpiler = new Bun.Transpiler({loader: 'ts', target: 'browser'});
-    async function runtimeGraph(extraEntryImport = '') {
-        const pending = [entry];
+    // The rig composition (web/main.ts) is the one review screen; job-session.ts loads it lazily for rig
+    // publications (#709). It is walked as its own graph below, so the job-only graph stays node-free.
+    const rigComposition = new URL('../web/main.ts', import.meta.url).href;
+    async function runtimeGraph(extraEntryImport = '', start = entry, skip = rigComposition) {
+        const pending = [start];
         const files = new Set<string>();
         const imports = new Set<string>();
         while (pending.length) {
@@ -36,8 +39,9 @@ test('C4 job browser runtime graph excludes the server manifest and Node imports
             files.add(file.href);
             if (!file.pathname.endsWith('.ts') && !file.pathname.endsWith('.js')) continue;
             const source = await Bun.file(file).text();
-            const javascript = transpiler.transformSync(source + (file.href === entry.href ? extraEntryImport : ''));
+            const javascript = transpiler.transformSync(source + (file.href === start.href ? extraEntryImport : ''));
             for (const dependency of transpiler.scan(javascript).imports) {
+                if (dependency.path.startsWith('.') && new URL(dependency.path, file).href === skip) continue;
                 imports.add(dependency.path);
                 if (dependency.path.startsWith('.')) pending.push(new URL(dependency.path, file));
             }
@@ -58,6 +62,11 @@ test('C4 job browser runtime graph excludes the server manifest and Node imports
     expect(mutant.files.has(manifest)).toBe(true);
     expect([...mutant.imports]).toContain('node:fs/promises');
     expect(() => assertBrowserBoundary(mutant)).toThrow();
+    expect(await Bun.file(entry).text()).toContain("import('./main.ts')");
+    const rig = await runtimeGraph('', new URL(rigComposition), '');
+    expect(rig.files.has(manifest)).toBe(false);
+    // Pinned: the standalone rig screen's existing value imports (config-patch, producer, retarget). A new one fails.
+    expect([...rig.imports].filter(path => path.startsWith('node:')).sort()).toEqual(['node:crypto', 'node:fs', 'node:path']);
 });
 
 test('window refusals retain registered codes and bound arbitrary runtime prose', () => {
@@ -1374,7 +1383,8 @@ import {createViewportController, createViewportState} from '../web/viewport-con
 import {createRigViewportProvider} from '../web/rig-viewport-provider.ts';
 import {mountViewportPair} from '../web/viewport-pair.ts';
 import * as i18nModule from '../web/i18n.ts';
-import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, jobRigPixelPlacement} from '../web/job-rig-capture.ts';
+import {recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, jobRigPixelPlacement, jobRigDrawState} from '../web/job-rig-capture.ts';
+import {isJobRigScreen} from '../web/job-rig-screen.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {JOB_HUB_READY} from '../web/job-hub.ts';
@@ -2091,6 +2101,14 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             if (ask.source.sourceHash !== display.publication.source.sourceHash) throw new Error('JOB_ACT_SOURCE_STALE');
         };
         const startEvents = () => ({displayed() {}, visibility() {}, done: Promise.resolve()});
+        // These runtime tests drive the old job window's rig form (still used for signoff and interview asks);
+        // a rig publication answerable by the one review screen is covered in tests/job-rig-screen.test.ts (#709).
+        const oldWindowRigScreen = () => ({mounted: () => false, prepare: async () => null});
+        const presentJobRigStage = (stage: {pane: RuntimeDomNode}) => {
+            const presentation = presentJobRigViewport();
+            stage.pane.append(presentation.canvas as unknown as RuntimeDomNode);
+            return presentation;
+        };
 
         const runner = new Function(
             'host', 'access', 'hubIncarnation', 'hubVisible', 'events', 'pageId', 'transport', 'abort',
@@ -2100,6 +2118,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
             'recordJobRigDraw', 'freezeJobRigCapture', 'copyJobRigViewport', 'createJobRigSubmission', 'jobRigPixelPlacement',
             'presentJobRigViewport', 'CanvasRenderer', 'enCatalog', 'koCatalog', 'JOB_HUB_READY', 'jobHubMessageMatches', 'advancePlayback', 'JOB_PLAN_TEXT_FIELDS',
+            'jobRigDrawState', 'presentJobRigStage', 'createJobRigScreen', 'isJobRigScreen',
             transpiled,
         );
         const mounted = runner(
@@ -2110,6 +2129,7 @@ describe('#559 continuous Rig motion transport and mid-play verdict capture', ()
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
             recordJobRigDraw, freezeJobRigCapture, copyJobRigViewport, createJobRigSubmission, jobRigPixelPlacement,
             presentJobRigViewport, CanvasRenderer, enCatalog, koCatalog, JOB_HUB_READY, jobHubMessageMatches, advancePlayback, JOB_PLAN_TEXT_FIELDS,
+            jobRigDrawState, presentJobRigStage, oldWindowRigScreen, isJobRigScreen,
         ) as {window: ReturnType<typeof createJobWindow>; workspace: RuntimeDomNode; stop: () => void};
 
         async function drainPreparing() {
