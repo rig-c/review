@@ -227,6 +227,12 @@ test('#557 canonical selection return commits the final public frame and render 
         rigDrawState(): JobRigDrawState {
             return {...h.state(), presentation, wholeRig: !context.selectedPart};
         }, recordJobRigDraw,
+        // web/job-rig-capture.ts presentJobRigStage, with the module's presentJobRigViewport replaced by the stub above.
+        presentJobRigStage(stage: {pane: typeof pane; posed: PosedFrame | undefined}): JobRigPresentation {
+            const presented = context.presentJobRigViewport(null, {posed: stage.posed!});
+            stage.pane.append();
+            return presented;
+        },
     };
     const remember = fragment('    function rememberDraw(): void {', '    function drawInspection(')
         .replace('rememberDraw(): void', 'rememberDraw()');

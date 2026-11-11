@@ -43,6 +43,7 @@ import {mountRigInspector,bindInspectorBlocks,activeBlocksUI,restoreActiveBlocks
 import {connectControl} from './control.ts';
 import {connectLiveWindow} from './live-connection.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
+import {rigHost,type RigHostStage} from './rig-host.ts';
 import {controlComparison,type ControlCommand,type ControlInspection,type ControlView} from '../src/control.ts';
 import {singleEligibility,videoReferenceAt,type InputState,type SingleLayout} from '../src/comparison-eligibility.ts';
 import {parseBookmark,connectInspectionPersistence,serializableView,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
@@ -93,7 +94,8 @@ const text = (id: string, value: string) => { const node = el(id); setSourceText
 const option = (value: string, label: string) => { const item = document.createElement('option'); item.value = value; item.textContent = label; return item; };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 // Capability is consumed before shell composition or any URL-dependent binding.
-const access = pageInstanceAccess();
+// A live job (#709) hosts this screen for a rig subject: its routes, its session and its submit.
+const host=rigHost(),access=host?.access??pageInstanceAccess();
 const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
 const rigStatusBar=mountStatusBar({
  message:'Loading local review package…',
@@ -130,7 +132,7 @@ const viewportState=createViewportState();
 const viewport=createViewportController(createRigViewportProvider({fitLabel:'Fit',el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay},viewportState),viewportState);
 const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera,unitScaleCamera}=viewport;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
-connectLiveWindow(access);
+if(!host)connectLiveWindow(access);
 let readOnly: string | null = null;
 let data: ReviewResponse;
 let directionPanel:ReturnType<typeof bindDirectionPanel>|undefined;
@@ -235,6 +237,7 @@ function message(value: string, error = false): void {
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase();
+  const hosted = host?.read(path, method); if (hosted) return await hosted as T;
   const response = await fetch(access.route(path), method === 'GET' || method === 'HEAD' ? init : { ...init, headers: access.headers(init?.headers) });
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
   return await response.json() as T;
@@ -296,7 +299,7 @@ function renderCheckpoints(): void {
 
 async function chooseCheckpoint(point: Checkpoint,initial?:{referenceId?:string;updateUrl:boolean}): Promise<void> {
   pause(); checkpoint = point; axisInspection = false;
-  if(initial?.updateUrl!==false){const url = new URL(location.href); url.searchParams.set('checkpoint', point.id); window.history.replaceState(null, '', url);}
+  if(!host&&initial?.updateUrl!==false){const url = new URL(location.href); url.searchParams.set('checkpoint', point.id); window.history.replaceState(null, '', url);}
   if (point.animation) chooseAnimation(point.animation);
   time = point.time ?? 0;
   const referenceId=initial?.referenceId??point.reference;
@@ -1014,6 +1017,7 @@ function bind(): void {
     if(draftConflict){message('Resolve the saved local draft conflict before submitting.',true);return;}
     if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; }
     saving = true; updateSavedState(); const savedPayload = JSON.stringify(session);
+    if (host) { try { const sent = await host.submit(structuredClone(session)); if (JSON.stringify(session) === savedPayload) dirty = false; session.updatedAt = new Date().toISOString(); submittedBaseline = structuredClone(session); comments?.refresh(); renderProposals(); message(sent); } catch (error) { message(errorText(error), true); } finally { saving = false; updateSavedState(); } return; }
     try { const saved = await api<ReviewSession>('/api/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: savedPayload });
       if (JSON.stringify(session) === savedPayload) { session = saved; dirty = false; } else session.updatedAt = saved.updatedAt;
       submittedBaseline=structuredClone(saved);comments?.refresh();await persistence?.submitted(saved);renderProvenance();renderProposals();
@@ -1031,7 +1035,7 @@ function bind(): void {
   });
   viewDisposers.push(()=>directionPanel?.dispose());
   // Chips open modes of this screen. #708 passes interviewModal; #706 gives Stage 1 its Setup home and calls openStageCorrection.
-  viewDisposers.push(bindStageNav({interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,setup:()=>showInspector('rig'),animate:()=>showInspector('playback'),current:()=>{const mode=inspectorTabs?.state();return mode==='rig'?1:mode==='playback'?3:null;}}));
+  if(!host)viewDisposers.push(bindStageNav({interview:data.capabilities.interview,preRig:data.capabilities.preRig,model:!!data.manifest.model,setup:()=>showInspector('rig'),animate:()=>showInspector('playback'),current:()=>{const mode=inspectorTabs?.state();return mode==='rig'?1:mode==='playback'?3:null;}}));
   workspace=bindWorkspaceUI({regions:{layout:document.querySelector<HTMLElement>('.layout')!,left:document.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:document.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
@@ -1124,7 +1128,14 @@ async function start(): Promise<void> {
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
     bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause});
-  } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); }
+    if(host){host.attach({stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message});showInspector('playback');host.displayed();}
+  } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
+}
+/** The rig pane for a live job's still (#709): the job binds and copies it, this screen keeps its view. */
+function hostStage():RigHostStage|null {
+ if(!player)return null;const frame=parts?.frame('single');
+ return {pane:el('rig-viewport'),paneHidden:el('rig-pane').hidden,root:el('rig-root'),player,frameGeneration:frame?.generation,camera:numericView().cameras.rig,frame:paneFrame('rig'),
+  wholeRig:!parts?.value()&&player.slots===null&&layers.images&&!layers.mesh&&!layers.bones,playing,posed:frame,assets};
 }
 /** Old feedback bookmarks keep their inspection mode; only an explicit reveal opens the act. */
 function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)inspectorTabs?.select(name);else inspectorTabs?.restore(name);}
