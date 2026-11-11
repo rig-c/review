@@ -193,7 +193,7 @@ export function bindWorkspaceUI(options:{regions?:WorkspaceRegions;changed:()=>v
    let bottomHeight=effective.inspectorHeight;
    if(bottom){
     const compact=collapsed||effective.inspectorMode==='drawer';bottomBody!.hidden=collapsed;
-    const actTarget=compact&&!dialogs.inspectorHeight.open?bottomHeading!:bottom.actHome;if(bottom.act.parentElement!==actTarget)actTarget.append(bottom.act);
+    const actTarget=dialogs.inspectorHeight.open?bottom.actHome:bottomHeading!;if(bottom.act.parentElement!==actTarget)actTarget.append(bottom.act);
     inspector.dataset.collapsed=String(compact);bottom.collapse.setAttribute('aria-expanded',String(!collapsed));bottom.collapse.textContent=tr(collapsed?'Expand bottom panel':'Collapse bottom panel');
     if(compact)bottomHeight=bottomHeading!.getBoundingClientRect().height;
    }

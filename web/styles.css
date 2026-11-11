@@ -529,8 +529,10 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 .workspace-review-panel .review-dialog-header{padding:0 0 10px}
 .workspace-review-panel .review-dialog-header h2{flex:none}
 .workspace-review-panel .review-dialog-header .hint{font-size:11px}
-.inspector[data-collapsed=true] .inspector-heading{flex-wrap:wrap}.inspector[data-collapsed=true] .workspace-act-bar{padding:0;border:0;margin-left:auto}
-.inspector[data-collapsed=true] .workspace-act-bar .review-dialog-actions{flex:none}
+/* The act bar lives in the bottom panel heading in every state (#709); only the drawer holds it in its body. */
+.inspector-heading .workspace-act-bar{padding:0;border:0;margin-left:auto}
+.inspector-heading .workspace-act-bar .review-dialog-actions{flex:none;flex-wrap:nowrap}
+.inspector-heading .workspace-act-bar .review-message{flex:0 1 auto;max-width:36ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .workspace-drawer>.inspector-body{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
 .workspace-drawer>.inspector-body>[data-inspector-panel]{flex:1;min-height:0;overflow:auto;padding:12px}
 .workspace-drawer>.inspector-body>#inspector-playback:not([hidden]){display:grid;grid-template-columns:minmax(0,1fr);overflow:auto}
