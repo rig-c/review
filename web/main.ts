@@ -1134,7 +1134,7 @@ async function start(): Promise<void> {
 function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(reveal)openReview();return;}if(reveal)inspectorTabs?.select(name);else inspectorTabs?.restore(name);}
 function bindInspector():void {
  inspectorTabs?.dispose();
- rigInspector.row.reveal=id=>{if(id==='feedback'){document.querySelector<HTMLButtonElement>('[data-review-stage="3"]')?.click();pause();syncCorrectionStage();}workspace?.revealInspector();};
+ rigInspector.row.reveal=id=>{if(id==='feedback'){pause();syncCorrectionStage();}workspace?.revealInspector();};
  inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode==='feedback'){pause();syncCorrectionStage();}if(mode==='rig'||mode==='playback')for(const button of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))button.setAttribute('aria-pressed',String(button.dataset.mode===mode));workspace?.afterTab();fitCamera();},()=>workspace?.beforeTab(),rigInspector.row);
  for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
 }

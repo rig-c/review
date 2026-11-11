@@ -145,3 +145,8 @@ test('#726 a standalone page shows only its own stage chip',()=>{
   expect(chips.mode.disabled).toBe(false);
  }finally{chips.restore();}
 });
+
+test('revealing feedback does not click a stage chip, so Write review stays open (#726 review)',async()=>{
+ const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+ expect(main).not.toMatch(/data-review-stage="\d"\]['"]?\)\??\.click\(\)/);
+});
