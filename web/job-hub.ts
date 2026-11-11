@@ -1,6 +1,6 @@
 import {mountWorkspaceShell} from './workspace-ui.ts';
 import {createRetainedFrameStage} from './retained-frame-stage.ts';
-import {hashCapabilityAccess} from './hash-capability.ts';
+import {hashCapabilityAccess} from './instance-access.ts';
 /** Owner-only job selection. Each retained frame owns its existing job window and draft. */
 import type {JobHubList, JobHubRow} from '../src/job-hub.ts';
 
@@ -58,7 +58,7 @@ export async function mountJobHub(root: HTMLElement): Promise<() => void> {
   try {storage = sessionStorage;} catch { /* Memory-only access. */ }
   const {url: locationURL, incarnation} = checkedJobHubLocation(location.href);
   const capability = hashCapabilityAccess(locationURL, 'rig-review-job-hub/1:' + locationURL.origin + ':' + incarnation,
-    () => storage, href => history.replaceState(history.state, '', href), 'validate');
+    () => storage, href => history.replaceState(history.state, '', href), {strip: 'always-after-storage', storedValue: 'validate', fallback: ''});
   const access = {incarnation, capability};
   const requestedLanguage = new URL(location.href).searchParams.get('lang');
   if (requestedLanguage === 'en' || requestedLanguage === 'ko') i18n.setLanguagePreference(requestedLanguage);

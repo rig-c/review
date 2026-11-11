@@ -1,6 +1,6 @@
 import {mountWorkspaceShell} from './workspace-ui.ts';
 import {createRetainedFrameStage} from './retained-frame-stage.ts';
-import {hashCapabilityAccess} from './hash-capability.ts';
+import {hashCapabilityAccess} from './instance-access.ts';
 import {WORKSPACE_TARGET_LIMIT, WORKSPACE_READY_SCHEMA, WORKSPACE_SCHEMA, WORKSPACE_TARGET_DOMAIN, WORKSPACE_VISIBILITY_SCHEMA,
   type WorkspaceList, type WorkspaceTargetView} from '../src/open-workspace-contract.ts';
 import {getLanguage, onLanguageChange, setLanguagePreference, setLinkLanguage, tr} from './i18n.ts';
@@ -22,7 +22,7 @@ export function mountOwnerWorkspace(root: HTMLElement): () => void {
     language: getLanguage, origin: location.origin, visibilityOrder: 'before-state', languageChange: 'visibility',
   });
   const capability = hashCapabilityAccess(new URL(location.href), 'rig-review-owner-workspace/1:' + location.origin,
-    () => sessionStorage, href => history.replaceState(history.state, '', href), 'preserve');
+    () => sessionStorage, href => history.replaceState(history.state, '', href), {strip: 'always-after-storage', storedValue: 'preserve', fallback: ''});
 
   function text() {
     document.documentElement.lang = getLanguage();

@@ -2,7 +2,7 @@ import {expect, test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {checkedJobHubLocation, checkedJobHubList, jobHubMessageMatches, JOB_HUB_READY, JOB_HUB_VISIBILITY,
   type JobHubBinding} from '../web/job-hub.ts';
-import {hashCapabilityAccess} from '../web/hash-capability.ts';
+import {hashCapabilityAccess} from '../web/instance-access.ts';
 import type {JobHubList} from '../src/job-hub.ts';
 
 const incarnation = '12345678-1234-1234-1234-123456789abc';
@@ -16,7 +16,7 @@ test('hub owner access is incarnation-scoped and strips the grant before subsequ
   const access = (href: string, storage: Parameters<typeof hashCapabilityAccess>[2], replace: (href: string) => void) => {
     const {url, incarnation} = checkedJobHubLocation(href);
     return {incarnation, capability: hashCapabilityAccess(url, 'rig-review-job-hub/1:' + url.origin + ':' + incarnation,
-      storage, replace, 'validate')};
+      storage, replace, {strip: 'always-after-storage', storedValue: 'validate', fallback: ''})};
   };
   let address = '';
   const url = origin + '/hub/?workspace=' + incarnation;
