@@ -12,7 +12,7 @@ import { serveReference, assertReviewUnchanged } from './reference.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
 import { loadPartsView, partsViewJson, partsDifference, servedImage, type PartsViewPackage } from './parts-view.ts';
 import { destinationDirectory, DestinationDirectoryError } from './destination-directory.ts';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
 import { constants, openSync, closeSync, readSync, fstatSync, lstatSync, statSync, type Stats } from 'node:fs';
 import { lstat, mkdir, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -331,7 +331,10 @@ export function retainedPublicationRoutes(session: JobSession) {
                         const parts = partsRoot ? await loadPartsView(partsRoot, {
                             rig: rigRoot ? retainedFile(join(rigRoot, 'rig.json')) : undefined,
                             meshReport: rigRoot ? retainedFile(join(rigRoot, 'mesh_report.json')) : undefined,
-                            painting: review.handoff?.source ? retainedFile(review.handoff.source) : undefined,
+                            // The original SVG stays a sealed Review reference; Parts' optional
+                            // native-pixel comparison accepts PNG bytes, not vector artwork.
+                            painting: review.handoff?.source && extname(review.handoff.source).toLowerCase() !== '.svg'
+                                ? retainedFile(review.handoff.source) : undefined,
                             paintingRoot: retained.snapshotRoot,
                         }) : null;
                         if (parts) {

@@ -1400,6 +1400,7 @@ import {RigOverlays} from '../web/rig-overlays.ts';
 import {labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls} from '../web/view-controls.ts';
 import {mountWorkspaceShell} from '../web/workspace-ui.ts';
 import {SENTINELS} from '../web/parts-render.ts';
+import {interviewAskGroup, interviewImageView, interviewQuestionList, jobInterviewValue} from '../web/interview-panel.ts';
 import {JOB_PLAN_TEXT_FIELDS, type JobPlanTextProjection} from '../src/job-contract.ts';
 
 describe('#559 continuous Rig motion transport and job forms', () => {
@@ -1410,6 +1411,10 @@ describe('#559 continuous Rig motion transport and job forms', () => {
         hidden = false;
         disabled = false;
         checked = false;
+        /** #708: the job interview opens in the shared `<dialog>` modal. */
+        open = false;
+        showModal() { this.open = true; }
+        close() { this.open = false; for (const listener of [...(this.listeners.get('close') ?? [])]) listener({type: 'close', target: this}); }
         required = false;
         value = '';
         type = '';
@@ -1543,6 +1548,10 @@ describe('#559 continuous Rig motion transport and job forms', () => {
         }
         click() {
             if (this.disabled) return;
+            if (this.tagName === 'input' && this.type === 'radio' && !this.checked) {
+                this.checked = true;
+                this.onchange?.({type: 'change', target: this, preventDefault() {}});
+            }
             if (this.tagName === 'input' && this.type === 'checkbox') {
                 this.checked = !this.checked;
                 this.onchange?.({type: 'change', target: this, preventDefault() {}});
@@ -2118,7 +2127,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
         const runner = new Function(
             'host', 'access', 'hubIncarnation', 'hubVisible', 'events', 'pageId', 'transport', 'abort',
             'i18n', 't', 'createViewportController', 'createViewportState', 'createRigViewportProvider', 'mountViewportPair', 'mountWorkspaceShell',
-            'RigOverlays', 'labelledControl', 'createViewControls', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'createRigLayerControls', 'SENTINELS',
+            'RigOverlays', 'labelledControl', 'createViewControls', 'bindLayerShortcuts', 'describeLayerToggles', 'layerShortcuts', 'createRigLayerControls', 'SENTINELS', 'interviewAskGroup', 'interviewImageView', 'interviewQuestionList', 'jobInterviewValue',
             'createJobWindow', 'createJobReferenceSelection', 'prepareJobForms', 'jobCheckpointContext', 'jobWindowRefusal', 'jobPartsReviewState',
             'prepareJobInspection', 'startJobWindowEvents', 'assertJobAskSource', 'parseControlPart',
             'recordJobRigDraw',
@@ -2129,7 +2138,7 @@ describe('#559 continuous Rig motion transport and job forms', () => {
         const mounted = runner(
             host, access, hubIncarnation, hubVisible, undefined, options?.pageId ?? 'page-one', transport, abort,
             i18nModule, i18nModule.t, createViewportController, createViewportState, createRigViewportProvider, mountViewportPair, mountWorkspaceShell,
-            RigOverlays, labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls, SENTINELS,
+            RigOverlays, labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls, SENTINELS, interviewAskGroup, interviewImageView, interviewQuestionList, jobInterviewValue,
             createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobWindowRefusal, jobPartsReviewState,
             prepareJobInspection, startEvents, assertJobAskSource, parseControlPart,
             recordJobRigDraw,
@@ -3068,156 +3077,6 @@ describe('#559 continuous Rig motion transport and job forms', () => {
             s.fixture.pending(undeclaredAsk, 5);
             s.window.event(s.fixture.events.at(-1)!);
             expect(s.workspace.querySelector('form[data-job-ask="ask-reopen-undeclared"]')).toBeNull();
-        } finally {
-            s.cleanup();
-        }
-    });
-
-    test('#555 runtime standing interview diagnostics render read-only history/issues, show non-blocking INTERVIEW_OPTIONS_SCENE_LEGACY on editable picks, and refuse mismatched publication.interview', async () => {
-        const setSha = 'b'.repeat(64);
-        const histSha = 'd'.repeat(64);
-        const interviewEnvelope = {
-            schema: 'rig-review/job-interview@1' as const,
-            project: {path: 'project.json', sha256: 'e'.repeat(64)},
-            evaluatedAt: '2026-11-08T12:00:10.000Z',
-            records: [
-                {
-                    questionId: 'post_composition',
-                    record: 'interview.post.items[2].pending_options',
-                    setId: 'review551-scene-current',
-                    ref: {path: 'evidence/interview/review551-scene-current.json', sha256: setSha},
-                    observedSet: {path: 'evidence/interview/review551-scene-current.json', sha256: setSha},
-                    timeKind: 'inspection' as const,
-                    at: '2026-11-08T12:00:10.000Z',
-                    original: null,
-                },
-                {
-                    questionId: 'post_composition',
-                    record: 'interview.post.items[2].history[0]',
-                    setId: 'review551-scene-old',
-                    ref: {path: 'evidence/interview/old.json', sha256: histSha},
-                    observedSet: {path: 'evidence/interview/old.json', sha256: histSha},
-                    timeKind: 'answer' as const,
-                    at: '2026-11-06T01:00:00.000Z',
-                    original: {
-                        by: 'human',
-                        at: '2026-11-06T01:00:00.000Z',
-                        source: 'review',
-                        verbatim: '이전 장면 답변 원문\nsecond line',
-                    },
-                },
-            ],
-            diagnostics: [
-                {
-                    record: 'interview.post.items[2].pending_options',
-                    at: '2026-11-08T12:00:10.000Z',
-                    code: 'INTERVIEW_OPTIONS_SCENE_LEGACY' as const,
-                    severity: 'warning' as const,
-                },
-                {
-                    record: 'interview.post.items[2].history[0]',
-                    at: '2026-11-06T01:00:00.000Z',
-                    code: 'INTERVIEW_OPTIONS_STALE' as const,
-                    severity: 'error' as const,
-                },
-            ],
-        };
-        const s = await mountRuntimeSession({
-            interview: {
-                questions: [
-                    {
-                        ref: {path: 'evidence/interview/review551-scene-current.json', sha256: setSha},
-                        editable: true,
-                        hasParts: false,
-                        images: [],
-                        set: {
-                            id: 'review551-scene-current',
-                            stage: 'post-interview',
-                            question: 'post_composition',
-                            drafted_by: 'agent',
-                            drafted_at: '2026-11-07T23:59:59.000Z',
-                            assembly: {rule: 'single'},
-                            asks: [
-                                {
-                                    id: 'framing',
-                                    prompt: 'Choose composition',
-                                    options: [
-                                        {id: 'keep', kind: 'value', label: 'Keep', effect: 'Retain composition', recommended: true},
-                                        {id: 'other', kind: 'other', label: 'Other', effect: 'Custom note', recommended: false},
-                                    ],
-                                },
-                            ],
-                        },
-                    },
-                ],
-                interview: interviewEnvelope,
-            },
-        });
-        try {
-            const display = await s.publishRig(1, {
-                optionSet: {id: 'review551-scene-current', sha256: setSha},
-                interview: interviewEnvelope,
-            });
-            const diagSection = s.workspace.querySelector('[data-job-interview-diagnostics]')!;
-            expect(diagSection).not.toBeNull();
-            expect(diagSection.hidden).toBe(false);
-            expect(diagSection.querySelectorAll('[data-job-interview-diagnostic]')).toHaveLength(2);
-            expect(diagSection.querySelectorAll('[data-job-interview-record]')).toHaveLength(1);
-            expect(diagSection.textContent).toContain('이전 장면 답변 원문');
-            expect(diagSection.querySelectorAll('input,select,textarea,button,form')).toHaveLength(0);
-
-            const source = display.publication.source;
-            if (source.subject === 'image-set') throw new Error('Expected model source');
-            const ask = {
-                askId: 'ask-scene-legacy-picks',
-                publicationId: display.publication.publicationId,
-                subject: {kind: 'interview-picks' as const, questionId: 'post_composition', setId: 'review551-scene-current'},
-                source,
-                status: 'pending' as const,
-            };
-            s.fixture.pending(ask, 2);
-            s.window.event(s.fixture.events.at(-1)!);
-            const act = fixtureAct('interview-picks', 'legacy non-blocking note');
-            if (act.kind !== 'interview-picks') throw new Error('Expected interview-picks act');
-            s.fixture.returnAct({
-                ...act,
-                askId: ask.askId,
-                publicationId: display.publication.publicationId,
-                source: {...source, optionSet: {id: 'review551-scene-current', sha256: setSha}},
-            });
-            const form = s.workspace.querySelector(`form[data-job-ask="${ask.askId}"]`)!;
-            expect(form).not.toBeNull();
-            const warning = form.querySelector('[data-job-interview-warning="INTERVIEW_OPTIONS_SCENE_LEGACY"]')!;
-            expect(warning).not.toBeNull();
-            expect(warning.dataset.record).toBe('interview.post.items[2].pending_options');
-            const pickSelect = form.querySelector('select[name="choice.framing"]')!;
-            const noteInput = form.querySelector('textarea[name="note"]')!;
-            pickSelect.value = 'keep';
-            pickSelect.dispatchEvent({type: 'change'});
-            noteInput.value = 'legacy non-blocking note';
-            form.dispatchEvent({type: 'input'});
-            await form.onsubmit?.({preventDefault() {}});
-            expect(s.outgoingSubmits).toHaveLength(1);
-            expect(s.outgoingSubmits[0]!.body.kind).toBe('interview-picks');
-            expect(s.outgoingSubmits[0]!.body.value).toEqual({
-                questionId: 'post_composition',
-                selections: [{itemId: 'framing', optionId: 'keep', otherText: null}],
-                note: 'legacy non-blocking note',
-            });
-
-            // Mismatched publication.interview between event and readPublication refuses with JOB_DISPLAY_MISMATCH:
-            const mismatched = fixturePublication(2);
-            s.fixture.publish({...mismatched, publication: {...mismatched.publication, interview: null}});
-            s.window.event({
-                type: 'published',
-                jobId: s.fixture.jobId,
-                cursor: 'mismatch-cursor',
-                generation: 3,
-                publication: {...mismatched.publication, interview: interviewEnvelope},
-            });
-            await s.window.settled();
-            expect(s.window.state().error).toBe('JOB_DISPLAY_MISMATCH');
-            expect(s.window.state().displayed?.publication.publicationId).toBe(display.publication.publicationId);
         } finally {
             s.cleanup();
         }

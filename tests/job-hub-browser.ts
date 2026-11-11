@@ -11,12 +11,16 @@ import {startJobHub, JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobOwnerHub, type JobH
 import {jobFixture, jobInputHashes} from './helpers/job-api-fixture.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {JOB_HUB_VISIBILITY} from '../web/job-hub.ts';
+import {createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './helpers/job-record-fixture.ts';
+import {JOB_API_V3_SCHEMA} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
 const argument = (key: string) => {const index = Bun.argv.indexOf(key); return index < 0 ? undefined : Bun.argv[index + 1];};
-const language = argument('--lang') ?? 'en';
-assert.ok(language === 'en' || language === 'ko', 'declared paired sample language');
+const singleEntry = Bun.argv.includes('--single-entry');
+const languageArgument = argument('--lang') ?? 'en';
+assert.ok(languageArgument === 'en' || languageArgument === 'ko', 'declared paired sample language');
+const language: 'en' | 'ko' = languageArgument;
 const catalog = language === 'ko' ? koCatalog : enCatalog;
 const output = argument('--out') ?? 'evidence/job-hub-' + language;
 await mkdir(output, {recursive: true});
@@ -264,6 +268,8 @@ async function choose(index: number) {
   await wait(`document.querySelector('.hub-list button[data-job-id="${id}"]')?.getAttribute('aria-pressed')==='true' &&
     [...document.querySelectorAll('.hub-stage>iframe')].some(frame=>new URL(frame.src).pathname==='/jobs/${id}/'&&!frame.hidden)`, 'select-' + index);
 }
+const RIG_PRESENTATION_SELECTOR = '#rig-viewport[data-job-rig-canonical] > canvas[data-job-rig-presentation], #rig-root img, #rig-root canvas';
+const RIG_PAINT_TARGET_EXPR = `document.querySelector('#rig-viewport[data-job-rig-canonical] > canvas[data-job-rig-presentation]') ?? document.querySelector('#rig-root')`;
 async function ready(index: number) {
   const form = 'form[data-job-ask="' + asks[index]!.askId + '"]';
   await wait(frameExpression(index, `!!document.querySelector('#job-animation option[value=inspect]') &&
@@ -293,7 +299,7 @@ async function ready(index: number) {
     breakpoints.delete(observer.scriptId);
   }
   await wait(frameExpression(index, `!!window.__jobHubProbePlayer && window.__jobHubProbePlayer.current==='inspect' &&
-    window.__jobHubProbePlayer.paused===true && [...document.querySelectorAll('#rig-root img,#rig-root canvas')].some(element=>{
+    window.__jobHubProbePlayer.paused===true && [...document.querySelectorAll(${JSON.stringify(RIG_PRESENTATION_SELECTOR)})].some(element=>{
       const rect=element.getBoundingClientRect(),style=window.getComputedStyle(element);
       return rect.width>0&&rect.height>0&&style.display!=='none'&&style.visibility==='visible'&&Number(style.opacity)>0&&
         (element.tagName==='IMG'?element.complete&&element.naturalWidth>0:element.width>0&&element.height>0);
@@ -303,14 +309,14 @@ async function snapshot(index: number) {
   return inside<any>(index, `(()=>{const view=JSON.parse(document.querySelector('#view-coordinates').textContent),p=window.__jobHubProbePlayer;
     return {cameras:{rig:{center:view.cameras.rig.center,zoom:view.cameras.rig.zoom},reference:{center:view.cameras.reference.center,zoom:view.cameras.reference.zoom}},
       sync:view.cameraSync,time:document.querySelector('#job-time').value,part:document.querySelector('#job-part').value,
-      panel:document.querySelector('#job-panel').value,partObservation:JSON.parse(document.querySelector('#job-part-observation').textContent||'null'),
+      partObservation:JSON.parse(document.querySelector('#job-part-observation').textContent||'null'),
       current:p?.current,playerTime:p?.time,pausedDiagnostic:p?.paused,renderer:p?.renderer.constructor.name,mode:p?.mode,backend:p?.renderer.meshBackendActive??p?.renderer.backendActive??null};})()`);
 }
 async function paint(index: number, name: string) {
   const clip = await evaluateSync<{x: number; y: number; width: number; height: number}>(`(()=>{
     const frame=[...document.querySelectorAll('.hub-stage>iframe')].find(frame=>new URL(frame.src).pathname==='/jobs/${jobs[index]!.session.jobId}/');
     const f=frame.getBoundingClientRect(),d=frame.contentDocument,w=frame.contentWindow,v=d.querySelector('#rig-viewport').getBoundingClientRect();
-    const views=[...d.querySelectorAll('#rig-root img,#rig-root canvas')].filter(element=>{
+    const views=[...d.querySelectorAll(${JSON.stringify(RIG_PRESENTATION_SELECTOR)})].filter(element=>{
       const r=element.getBoundingClientRect(),style=w.getComputedStyle(element);
       return r.width>0&&r.height>0&&style.display!=='none'&&style.visibility==='visible'&&Number(style.opacity)>0;
     }).map(element=>element.getBoundingClientRect());
@@ -322,19 +328,19 @@ async function paint(index: number, name: string) {
   await record(name + '-clip', clip); assert.ok(clip.width > 0 && clip.height > 0);
   await evaluateAsync('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))', 'paint-compositor');
   const shownBytes = await page!.screenshot(clip), shown = PNG.sync.read(shownBytes);
-  const previous = await inside<string>(index, `(()=>{const c=document.querySelector('#rig-root'),old=c.style.visibility;c.style.visibility='hidden';return old;})()`);
+  const previous = await inside<string>(index, `(()=>{const c=${RIG_PAINT_TARGET_EXPR},old=c.style.visibility;c.style.visibility='hidden';return old;})()`);
   let hidden: PNG;
   try {
     await evaluateAsync('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))', 'paint-compositor');
     hidden = PNG.sync.read(await page!.screenshot(clip));
-  } finally {await inside(index, `document.querySelector('#rig-root').style.visibility=${JSON.stringify(previous)}`);}
+  } finally {await inside(index, `(${RIG_PAINT_TARGET_EXPR}).style.visibility=${JSON.stringify(previous)}`);}
   let changedPixels = 0;
   for (let offset = 0; offset < shown.data.length; offset += 4) if (!shown.data.subarray(offset, offset + 4).equals(hidden!.data.subarray(offset, offset + 4))) changedPixels++;
   const runtime = await snapshot(index);
   const renderer = await inside(index, `(()=>{const r=window.__jobHubProbePlayer.renderer;return {
     mode:window.__jobHubProbePlayer.mode,kind:r.constructor.name,meshBackendActive:r.meshBackendActive??null,
     backendActive:r.backendActive??null,meshCount:r.meshCount??null,meshReuseCount:r.meshReuseCount??null,
-    framesReused:r.framesReused??null,views:[...document.querySelectorAll('#rig-root img,#rig-root canvas')].map(element=>{
+    framesReused:r.framesReused??null,views:[...document.querySelectorAll(${JSON.stringify(RIG_PRESENTATION_SELECTOR)})].map(element=>{
       const rect=element.getBoundingClientRect();return {tag:element.tagName,width:rect.width,height:rect.height};})};})()`);
   await record(name, {clip, changedPixels, runtime, renderer});
   assert.ok(changedPixels > 0, 'the actual rig renderer subtree contributes visible paint');
@@ -406,7 +412,90 @@ async function visibilityNegatives() {
     cases: ['incarnation', 'job', 'publication', 'source hash', 'actual sibling sender window', 'synthetic wrong-origin envelope']});
   assert.deepEqual(violations, []); assert.deepEqual(await snapshot(0), before);
 }
+/** #734: exercise the shipped entry and main-screen/record composition, without the legacy job-window acceptance suite. */
+async function singleEntrySample() {
+  for (let index = 0; index < 2; index++) inputs.push(await jobFixture());
+  const recordRoot = join(scratch, 'record-input'); await mkdir(recordRoot);
+  const plan = createSyntheticPlanRecordWorkspace(recordRoot);
+  const reader = createSyntheticRecordReader({onPlan: () => plan.context});
+  const recordBefore = await jobInputHashes(recordRoot);
+  before = await Promise.all(inputs.map(input => jobInputHashes(input.root)));
+  hub = await startJobHub({stateDir, reviewer: {id: 'declared-owner', role: 'owner'}});
+  secrets.add(new URL(hub.ownerUrl).hash.slice(5));
+  for (let index = 0; index < 2; index++) {
+    await register(index); await publish(index);
+    await agent(index, 'ask', {publicationId: publications[index]!.publicationId,
+      subject: {kind: 'review-verdict', stage: 'rig-review'}});
+  }
+  const recordJob = await hub.openJob({root: recordRoot, fingerprint: '7'.repeat(64),
+    publicationMode: 'record-and-package', readRecordPublished: reader.reader, recordReaderId: 'synthetic-734-record/1'});
+  jobs.push(recordJob);
+  for (const token of Object.values(recordJob.session.hostCredentials())) secrets.add(token);
+  let generation = 0;
+  async function recordCall(body: Record<string, unknown>) {
+    const response = await recordJob.ports.handleJobApi(new Request(hub!.origin + '/jobs/' + recordJob.session.jobId + '/api', {
+      method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + recordJob.session.hostCredentials().agent},
+      body: JSON.stringify({schema: JOB_API_V3_SCHEMA, jobId: recordJob.session.jobId, requestId: randomUUID(),
+        expectedGeneration: generation, idempotencyKey: randomUUID(), ...body}),
+    }));
+    const result = await response.json(); assert.equal(result.ok, true, safe(result)); generation = result.generation; return result.value;
+  }
+  const published = await recordCall({verb: 'publish', result: plan.result,
+    freeze: {kind: 'producer-held', holdId: 'synthetic-734-record', record: plan.record}});
+  const pending = await recordCall({verb: 'ask', publicationId: published.publicationId, subject: plan.context.subjects[0]});
+  page = await launchCdpSession(profile, {browserArgs: ['--single-process', '--no-zygote', '--num-raster-threads=1', '--js-flags=--max-old-space-size=1024'],
+    onEvent(event, request) {if (event.sessionId) send = request; if (event.method === 'Runtime.exceptionThrown') exceptions.push(event.params);}});
+  await until(() => !!send, 'CDP-session');
+  await page.setViewport(1600, 1000); await page.goto(ownerURL(), language);
+  await wait(`document.querySelectorAll('.hub-list button').length===3`, 'single-entry-rows');
+  const entry = await fetch(ownerURL().split('#')[0]);
+  assert.equal(await entry.text(), await readFile(new URL('../web/index.html', import.meta.url), 'utf8'));
+  const layout = await page.evaluate<any>(`(()=>{const app=document.getElementById('app'),header=document.querySelector('.hub-header'),stage=document.querySelector('.hub-stage'),r=stage.getBoundingClientRect();return {
+    viewport:[innerWidth,innerHeight],language:document.documentElement.lang,children:[...app.children].map(n=>n.tagName),
+    statusCount:header.querySelectorAll('[role=status]').length,footerCount:app.querySelectorAll('footer').length,
+    stage:{x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom},rows:[...document.querySelectorAll('.hub-list button')].map(n=>[...n.children].map(s=>s.textContent))};})()`);
+  assert.deepEqual(layout.viewport, [1600, 1000]); assert.equal(layout.language, language);
+  assert.deepEqual(layout.children, ['HEADER', 'NAV', 'MAIN']); assert.equal(layout.statusCount, 1); assert.equal(layout.footerCount, 0);
+  assert.equal(layout.stage.bottom, 1000);
+  assert.deepEqual(layout.rows.map((row: string[]) => row[2]), [...publications.map(p => p.source.sourceHash), published.source.sourceHash]);
+  await record('single-entry-layout', layout);
+  for (let index = 0; index < 2; index++) {
+    await choose(index);
+    await wait(frameExpression(index, `document.documentElement.lang===${JSON.stringify(language)} && !!document.querySelector('#rig-root canvas,#rig-root img') && !!document.querySelector('#save:not(:disabled)')`), 'main-rig-' + index);
+    const screen = await inside<any>(index, `({topbars:document.querySelectorAll('.topbar').length,legacy:document.querySelectorAll('.job-header,[data-job-forms]').length,
+      viewports:document.querySelectorAll('#rig-viewport').length,controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(n=>n.id)})`);
+    assert.equal(screen.topbars, 1); assert.equal(screen.legacy, 0); assert.equal(screen.viewports, 1);
+    assert.deepEqual(screen.controls, ['zoom-in', 'zoom-out', 'fit', 'native-one', 'view-menu']);
+    await record('main-rig-' + index, screen);
+  }
+  await choose(0);
+  await inside(0, `(()=>{window.__hub734Document=document;document.querySelector('#zoom-in').click();})()`);
+  const held = await inside(0, `document.querySelector('#view-coordinates').textContent`);
+  await choose(1); await choose(0);
+  assert.equal(await inside(0, 'window.__hub734Document===document'), true);
+  assert.equal(await inside(0, `document.querySelector('#view-coordinates').textContent`), held);
+  await writeFile(join(output, 'hub-rig-' + language + '.png'), await page.screenshot());
+  await choose(2);
+  const form = 'form[data-job-ask="' + pending.askId + '"]';
+  await wait(frameExpression(2, `!!document.querySelector(${JSON.stringify('dialog[open] ' + form + ' fieldset:not(:disabled)')})`), 'record-native-dialog');
+  const recordScreen = await inside<any>(2, `({language:document.documentElement.lang,topbars:document.querySelectorAll('.topbar').length,
+    legacy:document.querySelectorAll('[data-job-forms],.job-header').length,dialogs:document.querySelectorAll('dialog[open]').length})`);
+  assert.equal(recordScreen.language, language); assert.equal(recordScreen.topbars, 1); assert.equal(recordScreen.legacy, 0); assert.equal(recordScreen.dialogs, 1);
+  await record('record-host', recordScreen);
+  await writeFile(join(output, 'hub-record-' + language + '.png'), await page.screenshot());
+  await choose(0); await agent(1, 'close', {reason: 'synthetic row visibility control'});
+  await wait(`document.querySelector('.hub-list button[data-job-id="${jobs[1]!.session.jobId}"] .hub-job-state')?.textContent===${JSON.stringify(catalog['job.hubClosed'])}`, 'closed-row-stays');
+  assert.equal(await page.evaluate(`document.querySelectorAll('.hub-list>button').length`), 3);
+  assert.deepEqual(await jobInputHashes(recordRoot), recordBefore);
+  assert.deepEqual(await Promise.all(inputs.map(input => jobInputHashes(input.root))), before);
+  assert.deepEqual(exceptions, []);
+  await record('verdict', {status: 'PASS', sample: '#734 single entry', language, viewport: [1600, 1000],
+    mainRigs: 2, recordDialogs: 1, retainedFrameIdentity: true, cameraRetained: true, closedRowVisible: true,
+    inputHashesUnchanged: true, boundary: 'synthetic hub source and main/record screen integration; legacy acceptance suite not run'});
+}
 try {
+  if (singleEntry) await singleEntrySample();
+  else {
   for (let index = 0; index < 10; index++) {
     const input = await jobFixture(); inputs.push(input);
     const packageRoot = join(input.root, 'out'), manifestPath = join(packageRoot, 'review.json');
@@ -444,7 +533,8 @@ try {
           const lines = result.scriptSource.split('\n');
           const locations = lines.flatMap((line, lineNumber) => {
             const value = /\b(\w+)\.player\.pause\(\)/.exec(line);
-            return value ? [{line: lineNumber, variable: value[1]!}] : [];
+            return value && new RegExp(`^\\s*drawInspection\\(${value[1]}\\);\\s*$`).test(lines[lineNumber + 1] ?? '')
+              ? [{line: lineNumber, variable: value[1]!}] : [];
           });
           assert.equal(locations.length, 1, 'one frozen job pose pause boundary');
           const location = locations[0]!;
@@ -479,7 +569,7 @@ try {
   }});
   await until(() => !!send, 'CDP-session');
   await command('Debugger.enable', {}, 'enable-observation'); await command('Network.enable', {}, 'enable-network');
-  await page.setViewport(1440, 960); await page.goto(ownerURL(), language);
+  await page.setViewport(1600, 1000); await page.goto(ownerURL(), language);
   await wait(`document.querySelectorAll('.hub-list button').length===9`, 'nine-owner-rows');
   await header();
   await evaluateSync('globalThis.__hubProbeOwnerDocument=document');
@@ -504,7 +594,7 @@ try {
     request.responseMs === undefined || request.protocol === 'http/1.1'), 'event streams are measured HTTP/1.1');
   await inventory('nine-render-process-listener');
   await choose(0);
-  await edit(0, '#job-part', 'mesh'); await edit(0, '#job-animation', 'inspect'); await edit(0, '#job-time', '0.25'); await edit(0, '#job-panel', '4');
+  await edit(0, '#job-part', 'mesh'); await edit(0, '#job-animation', 'inspect'); await edit(0, '#job-time', '0.25');
   const fitted = await snapshot(0);
   await inside(0, `(()=>{const sync=document.querySelector('#camera-sync');sync.checked=false;sync.dispatchEvent(new window.Event('change'));
     document.querySelector('#zoom-out').click();})()`);
@@ -515,7 +605,7 @@ try {
   const retained = await snapshot(0);
   await record('retention-before', {fitted, retained, words});
   assert.notDeepEqual(retained.cameras, fitted.cameras); assert.equal(retained.time, '0.25'); assert.equal(retained.playerTime, 0.25);
-  assert.equal(retained.part, 'mesh'); assert.equal(retained.panel, '4'); assert.ok(retained.partObservation?.drawn);
+  assert.equal(retained.part, 'mesh'); assert.ok(retained.partObservation?.drawn);
   assert.ok(retained.partObservation.activeAttachment); assert.equal(retained.pausedDiagnostic, true);
   await choose(1);
   await wait(frameExpression(0, `document.body.dataset.hubVisible==='false'`), 'inactive-pause');
@@ -673,6 +763,7 @@ try {
     actualPaints: 11, independentUIActsFetched: acts.length, inputHashesUnchanged: true,
     pausedBoundary: 'read-only pinned Play instance diagnostic, paused is an internal field; renderer/backend/time are public observations',
     capacityBoundary: '10 mounted frames inspected; application32/+1 belongs to prior backend proof; no hardware capacity claim'});
+  }
 } catch (error) {
   await telemetry('failure').catch(() => {});
   if (page) await writeFile(join(output, 'failure.png'), await page.screenshot()).catch(() => {});

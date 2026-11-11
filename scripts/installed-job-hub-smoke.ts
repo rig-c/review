@@ -66,12 +66,12 @@ async function inventory(name: string) {
 }
 async function resources() {
  const owner = new URL(hub!.ownerUrl), rows = [];
- for (const [path, type] of [[owner.pathname + owner.search, 'text/html'], ['/hub/job-hub.css', 'text/css'],
-  ['/hub/styles.css', 'text/css'], ['/hub/job-hub.js', 'text/javascript']]) {
+ for (const [path, type] of [[owner.pathname + owner.search, 'text/html'],
+  ['/hub/styles.css', 'text/css'], ['/hub/main.js', 'text/javascript']]) {
   const response = await fetch(hub!.origin + path), body = await response.text();
   rows.push({path, status: response.status, type: response.headers.get('content-type'), bytes: body.length});
   assert.ok(response.ok && response.headers.get('content-type')?.includes(type!) && body.length > 0);
-  if (type === 'text/html') assert.ok(body.includes('data-job-hub'));
+  if (type === 'text/html') assert.ok(body.includes('<div id="app"></div>'));
  }
  const selected = await fetch(hub!.origin + '/hub/api/jobs/' + jobs[0]!.session.jobId + '/open', {method: 'POST',
   headers: {Origin: hub!.origin, 'Content-Type': 'application/json', 'X-Review-Capability': owner.hash.slice(5)},

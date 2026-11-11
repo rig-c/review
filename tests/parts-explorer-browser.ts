@@ -233,7 +233,7 @@ function findBrowserBinary(): string {
   throw new Error('No headless Chromium/Chrome/Edge binary found');
 }
 
-export async function launchCdpSession(profileDir: string, options: {sendDeadlineMs?: number; onEvent?: CdpEventHandler} = {}): Promise<InputCdpSession> {
+export async function launchCdpSession(profileDir: string, options: {sendDeadlineMs?: number; onEvent?: CdpEventHandler; browserArgs?: readonly string[]} = {}): Promise<InputCdpSession> {
   const bin = findBrowserBinary();
   const isHeadlessShell = bin.includes('headless');
   let mouseButtons = 0;
@@ -265,6 +265,7 @@ export async function launchCdpSession(profileDir: string, options: {sendDeadlin
       '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding',
       '--disable-backgrounding-occluded-windows',
+      ...(options.browserArgs ?? []),
       'about:blank',
     ],
     {
