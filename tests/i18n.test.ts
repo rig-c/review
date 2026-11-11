@@ -1141,7 +1141,7 @@ test('#764 joined interview submits retained notes byte-exact, omits absent note
     expect(posted!.note).toBe(item.expected);
     if(item.expected!==undefined)expect(Buffer.from(posted!.note as string)).toEqual(Buffer.from(item.expected));
     dispose();dispose=await mount();
-    expect(dialog.querySelectorAll('.interview-note').map(node=>node.textContent)).toEqual(item.expected===undefined?[]:[item.expected]);
+    expect(dialog.querySelectorAll('.interview-note').map((node:TestElement)=>node.textContent)).toEqual(item.expected===undefined?[]:[item.expected]);
    }finally{dispose?.();}
   }
  }finally{globalThis.fetch=previousFetch;setLanguagePreference(preference);if(previousDocument)Object.defineProperty(globalThis,'document',previousDocument);else delete (globalThis as any).document;}
@@ -1194,7 +1194,7 @@ test('#764 joined UI preserves planted notes through the real route, picks file 
     if(note!==undefined){expect(Buffer.from(stored.note)).toEqual(Buffer.from(note));expect(Buffer.from(reloaded.note)).toEqual(Buffer.from(note));}
     else expect(file).not.toContain('"note":');
     dispose();dispose=await mount();
-    expect(dialog.querySelectorAll('.interview-note').map(node=>node.textContent)).toEqual(note===undefined?[]:[note]);
+    expect(dialog.querySelectorAll('.interview-note').map((node:TestElement)=>node.textContent)).toEqual(note===undefined?[]:[note]);
     expect(await Promise.all(inputs.map(path=>readFile(join(fixture.root,path))))).toEqual(baseline);
    }finally{dispose?.();context?.stop();await fixture.close();}
   }
