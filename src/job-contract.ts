@@ -13,6 +13,10 @@
 
 import type { JobPublicationReader } from './job-source.ts';
 import type { PartsIssue } from './parts-comment.ts';
+import type { Feedback, ReviewSession } from './session.ts';
+import type { CompareFeedback, CompareSession } from './compare-session.ts';
+import type { MarkRegion } from './stage-comment.ts';
+import type { PartsVerdict } from './parts-view.ts';
 
 export const JOB_API_SCHEMA = 'rig-review/job-api@2' as const;
 export const JOB_API_V3_SCHEMA = 'rig-review/job-api@3' as const;
@@ -23,6 +27,50 @@ export const JOB_RIG_REVIEW_ACT_SCHEMA = 'rig-review/act@3' as const;
 export const JOB_RECORD_ACT_SCHEMA = 'rig-review/act@4' as const;
 /** New parts verdicts only. Historical @2 parts-verdict acts remain readable. */
 export const JOB_PARTS_VERDICT_ACT_SCHEMA = 'rig-review/act@5' as const;
+/** Read/parse contract only until the Create comments consumer is published. */
+export const JOB_COMMENTS_ACT_SCHEMA = 'rig-review/act@6' as const;
+export const REVIEW_COMMENTS_SESSION_SCHEMA = 'rig-review-session/2' as const;
+export const REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA = 'rig-review-compare-session/2' as const;
+export const PARTS_COMMENTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/5' as const;
+
+export type JobCommentFeedbackAnchor = Omit<Feedback, 'summary'> | Omit<CompareFeedback, 'summary'>;
+export type JobCommentPartsAnchor = Omit<PartsIssue, 'summary'>;
+export type JobCommentImageAnchor = { readonly name: string } | {
+  readonly name: string;
+  readonly imageRegion: MarkRegion;
+  readonly crop: PartsIssue['crop'];
+  readonly nativeCrop: NonNullable<PartsIssue['nativeCrop']>;
+};
+export type JobCommentAnchor = JobCommentFeedbackAnchor | JobCommentPartsAnchor | JobCommentImageAnchor
+  | { readonly checkpointId: string; readonly planStepId: string };
+export interface JobComment { readonly text: string; readonly anchor?: JobCommentAnchor }
+export interface JobCommentsActValues {
+  readonly checkpoint: { readonly checkpointId: string; readonly planStepId: string;
+    readonly outcome: 'pass' | 'fail'; readonly comments: readonly JobComment[] };
+  readonly 'parts-verdict': { readonly verdict: 'approved' | 'changes-requested'; readonly comments: readonly JobComment[] };
+  readonly 'review-verdict': { readonly stage: JobReviewStage; readonly verdict: JobVerdict; readonly comments: readonly JobComment[] };
+  readonly signoff: { readonly stage: string; readonly decision: 'approved'; readonly comments: readonly JobComment[] };
+  readonly reopen: { readonly stage: string; readonly comments: readonly JobComment[] };
+}
+export type JobCommentsAct = {
+  [Kind in keyof JobCommentsActValues]: {
+    readonly schema: typeof JOB_COMMENTS_ACT_SCHEMA;
+    readonly actId: string; readonly jobId: string; readonly askId: string; readonly publicationId: string;
+    readonly kind: Kind; readonly authority: JobHumanAuthority; readonly at: string;
+    readonly source: Exclude<SourceV3, OptionSource>; readonly value: JobCommentsActValues[Kind]; readonly still?: JobRigStill;
+  }
+}[keyof JobCommentsActValues];
+export type ReviewCommentsSession = Omit<ReviewSession, 'schema' | 'feedback' | 'checkpoints'> & {
+  schema: typeof REVIEW_COMMENTS_SESSION_SCHEMA;
+  checkpoints: Record<string, { outcome: 'pending' | 'pass' | 'fail' }>;
+  comments: JobComment[];
+};
+export type CompareCommentsSession = Omit<CompareSession, 'schema' | 'feedback'> & {
+  schema: typeof REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA; comments: JobComment[];
+};
+export type PartsCommentsVerdict = Omit<PartsVerdict, 'schema' | 'issues'> & {
+  schema: typeof PARTS_COMMENTS_VERDICT_SCHEMA; comments: JobComment[];
+};
 export const JOB_PANEL_COMPOSITION_SCHEMA = 'rig-review/panels@1' as const;
 
 export type PanelSlot = 'left' | 'stage' | 'toolbar' | 'side';

@@ -17,6 +17,14 @@ import {
 } from './job-contract.ts';
 import { JobError } from './job-store.ts';
 import type { JobSession } from './job-session.ts';
+import { JOB_COMMENTS_ACT_SCHEMA, type JobComment, type JobCommentAnchor, type JobCommentsAct,
+  type SourceV3, type JobRigStill } from './job-contract.ts';
+import { parseFeedback } from './session.ts';
+import { parsePartsIssue } from './parts-comment.ts';
+import { parseStageComment, hasStageComment, projectComments } from './stage-comment.ts';
+import { validatePngCrop, validatePngCropMetadata } from './comment-crops.ts';
+import {parseJobImageSetBinding} from './job-image-set.ts';
+import {parseJobPartsIdentity} from './job-source.ts';
 
 export type {
   JobInterviewJson,
@@ -1179,6 +1187,193 @@ export function parseRecordAct(value: unknown): RecordAct {
     }
   }
   throw new JobError('JOB_ACT_INVALID');
+}
+
+/** Shared closed object reader for the comments contract; legacy readers retain their rules. */
+export function commentsObject(value: unknown, keys: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) throw new JobError('JOB_ACT_INVALID');
+  return exactObject(value, keys, 'JOB_ACT_INVALID', optional);
+}
+
+function commentCrop(value: unknown): void {
+  const crop = commentsObject(value, ['path', 'sha256', 'width', 'height'], ['png']);
+  jobSha(crop.sha256);
+  validatePngCropMetadata(crop as unknown as Parameters<typeof validatePngCropMetadata>[0]);
+  if (Object.hasOwn(crop, 'png')) validatePngCrop(crop as unknown as Parameters<typeof validatePngCrop>[0]);
+}
+
+function parseCommentAnchor(raw: unknown, text: string, source?: SourceV3 | string): JobCommentAnchor {
+  const item = commentsObject(raw, [], Object.keys(raw && typeof raw === 'object' ? raw : {}));
+  const sourceHash = typeof source === 'string' ? source : source?.sourceHash;
+  if ('schema' in item) {
+    commentsObject(item, ['schema', 'id', 'parts', 'sourceHash', 'rigRegion', 'imageRegion', 'view', 'crop', 'nativeCrop']);
+    const issue = parsePartsIssue({...item, summary: text}, true, false, false);
+    if (issue.crop.png !== undefined) validatePngCrop(issue.crop as Parameters<typeof validatePngCrop>[0]);
+    if (sourceHash && issue.sourceHash !== sourceHash) throw new JobError('JOB_ACT_SOURCE_STALE');
+    if (source && typeof source !== 'string' && !('record' in source)) {
+      if (!source.parts || issue.parts.some(part => !source.parts!.images.some(image =>
+        image.role === 'part' && image.path === `parts/${part.name}.png` && image.sha256 === part.imageHash))) throw new JobError('JOB_ACT_SOURCE_STALE');
+    }
+    const {summary: _summary, ...anchor} = issue;
+    return anchor;
+  }
+  if ('frameStart' in item) {
+    commentsObject(item, ['id', 'frameStart', 'frameEnd', 'target', 'category'], ['context', 'side']);
+    commentsObject(item.target, ['kind', 'name']);
+    jobId(item.id);
+    if ('side' in item && item.side !== 'a' && item.side !== 'b') throw new JobError('JOB_ACT_INVALID');
+    const feedback = parseFeedback({...item, summary: text});
+    const context = feedback.context as Record<string, unknown> | undefined;
+    if (hasStageComment(context?.comment)) {
+      const mark = parseStageComment(context!.comment);
+      validatePngCrop(mark.crop);
+      if (sourceHash && mark.sourceHash !== sourceHash) throw new JobError('JOB_ACT_SOURCE_STALE');
+      if (source && typeof source !== 'string' && !('record' in source) &&
+          mark.viewport !== 'reference' && mark.modelHash !== source.model?.sha256) throw new JobError('JOB_ACT_SOURCE_STALE');
+    }
+    const {summary: _summary, ...anchor} = feedback;
+    return {...anchor, ...('side' in item ? {side: item.side as 'a' | 'b'} : {})};
+  }
+  if ('checkpointId' in item) {
+    commentsObject(item, ['checkpointId', 'planStepId']);
+    const checkpointId = jobId(item.checkpointId), planStepId = jobId(item.planStepId);
+    if (source && typeof source !== 'string' && (!source.plan?.steps.some(step => step.id === planStepId) ||
+        'record' in source && checkpointId !== planStepId)) throw new JobError('JOB_ACT_SOURCE_STALE');
+    return {checkpointId, planStepId};
+  }
+  if ('name' in item) {
+    commentsObject(item, ['name'], ['imageRegion', 'crop', 'nativeCrop']);
+    const name = jobText(item.name);
+    if (source && (typeof source === 'string' || source.subject !== 'image-set' ||
+        !source.imageSet.images.some(image => image.name === name))) throw new JobError('JOB_ACT_SOURCE_STALE');
+    if (Object.keys(item).length === 1) return {name};
+    commentsObject(item, ['name', 'imageRegion', 'crop', 'nativeCrop']);
+    const region = commentsObject(item.imageRegion, ['x', 'y', 'width', 'height']);
+    for (const axis of ['x', 'y', 'width', 'height']) jobInteger(region[axis]);
+    if (!region.width || !region.height || Number(region.width) * Number(region.height) > 16777216) throw new JobError('JOB_ACT_INVALID');
+    commentsObject(item.nativeCrop, ['path', 'sha256', 'width', 'height']);
+    commentCrop(item.crop); commentCrop(item.nativeCrop);
+    if ((item.nativeCrop as {width: number}).width !== region.width ||
+        (item.nativeCrop as {height: number}).height !== region.height) throw new JobError('JOB_ACT_INVALID');
+    return structuredClone(item) as unknown as JobCommentAnchor;
+  }
+  throw new JobError('JOB_ACT_INVALID');
+}
+
+/** Structural/source-identity decoding only. Original asset freshness remains with the retained-source owner. */
+export function parseComments(value: unknown, source?: SourceV3 | string): JobComment[] {
+  return asCode(() => {
+    if (!Array.isArray(value) || value.length > 1000) throw new JobError('JOB_ACT_INVALID');
+    const ids = new Set<string>();
+    const comments = value.map(raw => {
+      const item = commentsObject(raw, ['text'], ['anchor']);
+      const text = parseActWords(item.text, 'JOB_ACT_INVALID');
+      if (!text.trim()) throw new JobError('JOB_ACT_INVALID');
+      if (!Object.hasOwn(item, 'anchor')) return {text};
+      const anchor = parseCommentAnchor(item.anchor, text, source);
+      if ('id' in anchor) {
+        if (ids.has(anchor.id)) throw new JobError('JOB_ACT_INVALID');
+        ids.add(anchor.id);
+      }
+      return {text, anchor};
+    });
+    projectComments(comments);
+    return comments;
+  }, 'JOB_ACT_INVALID');
+}
+
+function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
+  if (isRecordSource(raw)) {
+    const record = parseRecordSource(raw);
+    if (record.subject !== 'plan') throw new JobError('JOB_ACT_INVALID');
+    return record;
+  }
+  const image = !!raw && typeof raw === 'object' && (raw as {subject?: unknown}).subject === 'image-set';
+  const common = ['sourceHash', 'projectHash', 'package', 'direction', 'optionSet', 'appliedResult', 'plan', 'parts'];
+  const item = commentsObject(raw, image ? [...common, 'subject', 'imageSet', 'imageSetDigest', 'duplicateHashes'] :
+    [...common, 'selector', 'model'], image ? [] : ['checkpointEvidence']);
+  jobSha(item.sourceHash); if (item.projectHash !== null) jobSha(item.projectHash);
+  const pkg = commentsObject(item.package, ['id', 'revision']); jobText(pkg.id); jobText(pkg.revision);
+  for (const key of image ? ['direction'] : ['direction', 'model']) if (item[key] !== null) parseFileRow(item[key], 'JOB_ACT_INVALID');
+  if (!image) parseJobSelector(item.selector);
+  if (item.optionSet !== null) {
+    const set = commentsObject(item.optionSet, ['id', 'sha256']); jobId(set.id); jobSha(set.sha256);
+  }
+  if (item.appliedResult !== null) {
+    const applied = commentsObject(item.appliedResult, ['id', 'modelHash']); jobId(applied.id); jobSha(applied.modelHash);
+  }
+  if (item.plan !== null) parsePlanIdentity(item.plan, 'JOB_ACT_INVALID');
+  if (item.parts !== null) parseJobPartsIdentity(item.parts);
+  if ('checkpointEvidence' in item) {
+    if (!Array.isArray(item.checkpointEvidence)) throw new JobError('JOB_ACT_INVALID');
+    // Validate the declared packet with the existing codec. Actual closure seals remain
+    // with the retained-source owner; a decoder has neither files nor source authority.
+    const declarations = item.checkpointEvidence.map(raw => commentsObject(raw,
+      ['schema', 'checkpointId', 'planStepId', 'tiles', 'table', 'routesText', 'recommendationText']));
+    const subjects = declarations.map(row => ({kind: 'checkpoint' as const, checkpointId: jobId(row.checkpointId), planStepId: jobId(row.planStepId)}));
+    const files = declarations.flatMap(row => {
+      if (!Array.isArray(row.tiles)) throw new JobError('JOB_ACT_INVALID');
+      return [...row.tiles, row.table].map(file => parseFileRow(
+        {path: (file as JobFileIdentity)?.path, sha256: (file as JobFileIdentity)?.sha256}, 'JOB_ACT_INVALID'));
+    });
+    checkpointEvidenceFields(item, item.plan as JobPlanIdentity | null, subjects, files);
+  }
+  if (image) parseJobImageSetBinding({imageSet: item.imageSet, imageSetDigest: item.imageSetDigest, duplicateHashes: item.duplicateHashes});
+  return structuredClone(item) as unknown as Exclude<SourceV3, OptionSource>;
+}
+
+/** Public @6 decoder. Current UI finalizers continue to emit their existing versions. */
+export function parseCommentsAct(raw: unknown): JobCommentsAct {
+  return asCode(() => {
+    const item = commentsObject(raw, ['schema', 'actId', 'jobId', 'askId', 'publicationId', 'kind', 'authority', 'at', 'source', 'value'], ['still']);
+    if (item.schema !== JOB_COMMENTS_ACT_SCHEMA) throw new JobError('JOB_ACT_INVALID');
+    for (const key of ['actId', 'jobId', 'askId', 'publicationId']) jobId(item[key]);
+    parseHumanAuthority(item.authority, 'JOB_ACT_INVALID');
+    if (typeof item.at !== 'string' || !Number.isFinite(Date.parse(item.at))) throw new JobError('JOB_ACT_INVALID');
+    const source = commentsSource(item.source);
+    const fields: Record<string, readonly string[]> = {
+      checkpoint: ['checkpointId', 'planStepId', 'outcome', 'comments'],
+      'parts-verdict': ['verdict', 'comments'], 'review-verdict': ['stage', 'verdict', 'comments'],
+      signoff: ['stage', 'decision', 'comments'], reopen: ['stage', 'comments'],
+    };
+    const keys = typeof item.kind === 'string' && Object.hasOwn(fields, item.kind) ? fields[item.kind] : undefined;
+    if (!keys) throw new JobError('JOB_ACT_INVALID');
+    if (source.subject === 'image-set' && item.kind !== 'review-verdict') throw new JobError('JOB_ACT_INVALID');
+    const value = commentsObject(item.value, keys);
+    const comments = parseComments(value.comments, source);
+    if (comments.some(comment => comment.anchor && 'side' in comment.anchor)) throw new JobError('JOB_ACT_INVALID');
+    if (item.kind === 'checkpoint') {
+      jobId(value.checkpointId); jobId(value.planStepId);
+      if (typeof value.outcome !== 'string' || !['pass', 'fail'].includes(value.outcome) || !source.plan?.steps.some(step => step.id === value.planStepId) ||
+          'record' in source && value.checkpointId !== value.planStepId) throw new JobError('JOB_ACT_INVALID');
+      const evidence = source.checkpointEvidence?.find(packet => packet.checkpointId === value.checkpointId);
+      if (evidence && evidence.planStepId !== value.planStepId) throw new JobError('JOB_ACT_INVALID');
+    } else if (item.kind === 'parts-verdict') {
+      if ('record' in source || source.subject === 'image-set' || source.selector?.kind !== 'draft' || !source.parts || !source.projectHash ||
+          typeof value.verdict !== 'string' || !['approved', 'changes-requested'].includes(value.verdict)) throw new JobError('JOB_ACT_INVALID');
+      const issues = comments.filter(comment => comment.anchor && 'schema' in comment.anchor).length;
+      if ((value.verdict === 'approved') !== (issues === 0)) throw new JobError('JOB_ACT_INVALID');
+    } else if (item.kind === 'review-verdict') {
+      if ('record' in source || typeof value.verdict !== 'string' || !['pending', 'approved', 'changes-requested'].includes(value.verdict)) throw new JobError('JOB_ACT_INVALID');
+      if (source.subject === 'image-set' ? value.stage !== 'image-review' :
+          !source.model || (value.stage === 'rig-review' ? source.selector?.kind !== 'rig' : value.stage !== 'direction-review' || source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ACT_INVALID');
+    } else {
+      const stage = jobId(value.stage);
+      if (item.kind === 'signoff' && value.decision !== 'approved') throw new JobError('JOB_ACT_INVALID');
+      if (item.kind === 'reopen' && !('record' in source)) throw new JobError('JOB_ACT_INVALID');
+      if (item.kind === 'signoff' && JOB_PLAN_BOUND_SIGNOFF_STAGES.includes(stage as RecordSignoffStage) && !source.plan?.steps.length) throw new JobError('JOB_ACT_INVALID');
+    }
+    if ('record' in source) validateRecordAskSubject(item.kind === 'checkpoint' ? {kind: item.kind, checkpointId: value.checkpointId} :
+      {kind: item.kind, stage: value.stage}, source);
+    const rig = item.kind === 'review-verdict' && value.stage === 'rig-review';
+    if (rig) {
+      const still = commentsObject(item.still, ['path', 'sha256', 'camera', 'frame'], ['animation']);
+      if (still.path !== jobSha(still.sha256) + '.png' || still.camera !== 'fixed' ||
+          (still.frame === 'setup' ? 'animation' in still : typeof still.frame !== 'number' || !Number.isFinite(still.frame) ||
+            still.frame < 0 || typeof still.animation !== 'string' || !still.animation)) throw new JobError('JOB_ACT_INVALID');
+    } else if ('still' in item) throw new JobError('JOB_ACT_INVALID');
+    return {...structuredClone(item), source, value: {...value, comments}} as unknown as JobCommentsAct;
+  }, 'JOB_ACT_INVALID');
 }
 
 export async function jobBody(request: Request, maximum = jobBodyLimit): Promise<unknown> {

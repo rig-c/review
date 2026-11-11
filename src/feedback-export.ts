@@ -9,6 +9,25 @@ import { environmentSummary, parseEnvironmentContext } from './environment.ts';
 import { appliedSummary } from './applied-context.ts';
 import { requirementsSummaryLine } from './requirements.ts';
 import { scheduleContextLine } from './environment-schedule.ts';
+import {parseCommentsSession} from './session.ts';
+import {projectComments} from './stage-comment.ts';
+import type {ReviewCommentsSession, JobCommentFeedbackAnchor} from './job-contract.ts';
+
+/** A display view over explicitly selected legacy feedback fields, including empty strings. */
+export function legacyFeedbackComments(fields: readonly string[]): {text: string}[] {
+  if (!Array.isArray(fields) || fields.some(value => typeof value !== 'string')) throw new Error('JOB_ACT_INVALID');
+  return fields.map(text => ({text}));
+}
+
+/** Pure adapter arguments. The source session/2 bytes stay in the consumer's receipt. */
+export function projectSelectedCommentsFeedback(session: ReviewCommentsSession, itemId: string): {
+  anchor: JobCommentFeedbackAnchor; summary: string;
+} {
+  const parsed = parseCommentsSession(session);
+  const matches = parsed.comments.filter(comment => comment.anchor && 'frameStart' in comment.anchor && comment.anchor.id === itemId);
+  if (matches.length !== 1) throw new Error('JOB_ACT_INVALID');
+  return {anchor: matches[0]!.anchor as JobCommentFeedbackAnchor, summary: projectComments(matches)};
+}
 type Category = Feedback['category'];
 type Side = 'single' | 'a' | 'b';
 type ParsedFeedbackSession = FeedbackHistory<ReviewSession | CompareSession>;

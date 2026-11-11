@@ -1,5 +1,5 @@
 import type {JobImageSetInput, JobImageSourceBinding} from './job-contract.ts';
-import {jobHash, jobObject, jobPath, jobSha, jobText} from './job-api.ts';
+import {exactObject, jobHash, jobObject, jobPath, jobSha, jobText, requestDigest} from './job-api.ts';
 import {JobError} from './job-store.ts';
 
 /** Check discovery before sending an image ask, including against older hubs. */
@@ -10,9 +10,11 @@ export function assertJobImageSetCapability(capabilities: unknown): void {
   }
 }
 
-/** Hash the actual bytes. Array order and exact Unicode strings are significant. */
-export function prepareJobImageSet(input: JobImageSetInput,
-  readBytes: (path: string) => Uint8Array): Pick<JobImageSourceBinding, 'imageSet' | 'imageSetDigest' | 'duplicateHashes'> {
+type ImageSetBinding = Pick<JobImageSourceBinding, 'imageSet' | 'imageSetDigest' | 'duplicateHashes'>;
+type ImageSetRead = {kind: 'bytes'; readBytes: (path: string) => Uint8Array} | {kind: 'sealed'};
+
+/** One declared-shape/digest codec; only byte preparation reads and hashes assets. */
+function imageSetBinding(input: JobImageSetInput, read: ImageSetRead): ImageSetBinding {
   try { jobObject(input, ['purpose', 'images']); }
   catch { throw new JobError('JOB_IMAGE_SET_INVALID'); }
   if (input.purpose !== 'plate-adoption' || !Array.isArray(input.images) ||
@@ -33,11 +35,17 @@ export function prepareJobImageSet(input: JobImageSetInput,
     if (names.has(name)) throw new JobError('JOB_IMAGE_SET_DUPLICATE_NAME');
     if (paths.has(path)) throw new JobError('JOB_IMAGE_SET_DUPLICATE_PATH');
     names.add(name); paths.add(path);
-    let bytes: Uint8Array;
-    try { bytes = readBytes(path); }
-    catch { throw new JobError('JOB_IMAGE_SET_PATH_REFUSED'); }
-    const sha256 = jobHash(bytes);
-    if (raw.sha256 !== undefined && raw.sha256 !== sha256) throw new JobError('JOB_SOURCE_MISMATCH');
+    let sha256: string;
+    if (read.kind === 'bytes') {
+      let bytes: Uint8Array;
+      try { bytes = read.readBytes(path); }
+      catch { throw new JobError('JOB_IMAGE_SET_PATH_REFUSED'); }
+      sha256 = jobHash(bytes);
+      if (raw.sha256 !== undefined && raw.sha256 !== sha256) throw new JobError('JOB_SOURCE_MISMATCH');
+    } else {
+      try { sha256 = jobSha(raw.sha256); }
+      catch { throw new JobError('JOB_IMAGE_SET_INVALID'); }
+    }
     const group = hashes.get(sha256) ?? [];
     group.push(name); hashes.set(sha256, group);
     return {role: raw.role, name, path, sha256};
@@ -47,4 +55,19 @@ export function prepareJobImageSet(input: JobImageSetInput,
   const canonical = images.map(({role, name, sha256}) => ({role, name, sha256}));
   return {imageSet: {purpose: input.purpose, images}, imageSetDigest: jobHash(JSON.stringify(canonical)),
     duplicateHashes: [...hashes].filter(([, names]) => names.length > 1).map(([sha256, names]) => ({names, sha256}))};
+}
+
+/** Hash the actual bytes. Array order and exact Unicode strings are significant. */
+export function prepareJobImageSet(input: JobImageSetInput,
+  readBytes: (path: string) => Uint8Array): ImageSetBinding {
+  return imageSetBinding(input, {kind: 'bytes', readBytes});
+}
+
+/** Decode declared sealed identities without a byte reader or a native freshness claim. */
+export function parseJobImageSetBinding(value: unknown): ImageSetBinding {
+  const raw = exactObject(value, ['imageSet', 'imageSetDigest', 'duplicateHashes'], 'JOB_IMAGE_SET_INVALID');
+  const binding = imageSetBinding(raw.imageSet as JobImageSetInput, {kind: 'sealed'});
+  if (jobSha(raw.imageSetDigest) !== binding.imageSetDigest ||
+      requestDigest(raw.duplicateHashes) !== requestDigest(binding.duplicateHashes)) throw new JobError('JOB_IMAGE_SET_INVALID');
+  return binding;
 }

@@ -1,14 +1,14 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
-  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
+  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
   type ActV3, type AgentRequestV3, type EventV3, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayPublicationV3, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest, type JobFetchActRequestV3,
   type JobNextValue, type JobPendingAsk, type JobPublication, type JobPublicationMode, type JobReviewerBinding,
   type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
 } from './job-contract.ts';
 import { bindJobAsk, bindJobRecordAsk, finalizeJobAct, parseUISubmission, prepareJobRecordAct, prepareJobStill } from './job-act.ts';
-import { isRecordSource, parseRecordSource, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
+import { isRecordSource, parseRecordSource, parseCommentsAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
   assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
   type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
@@ -602,16 +602,20 @@ export class JobSession {
   readActExport(actId: string, png: boolean): Buffer {
     const current = this.current();
     if (!current.active) throw new JobError('JOB_CLOSED');
-    const act = current.data.acts[actId];
-    if (!act) throw new JobError('JOB_ACT_UNKNOWN');
-    if (act.schema !== JOB_RIG_REVIEW_ACT_SCHEMA) {
+    const storedAct = current.data.acts[actId];
+    if (!storedAct) throw new JobError('JOB_ACT_UNKNOWN');
+    // Reader preparation only: no current finalizer or stored legacy act is upgraded.
+    const act = (storedAct as {schema: string}).schema === JOB_COMMENTS_ACT_SCHEMA ? parseCommentsAct(storedAct) : storedAct;
+    const still = 'still' in act ? act.still : undefined;
+    if (act.schema !== JOB_RIG_REVIEW_ACT_SCHEMA && !still) {
       if (png) throw new JobError('JOB_STILL_UNAVAILABLE');
       return Buffer.from(JSON.stringify(act));
     }
+    if (!still) throw new JobError('JOB_STILL_CAPTURE_FAILED');
     const stored = this.store.readStill(this.jobId, actId);
     if (!stored || stored.png.byteLength > jobStillByteLimit || stored.actBytes.byteLength > maximumEventBytes ||
-        stored.sha256 !== act.still.sha256 || jobHash(stored.png) !== act.still.sha256 ||
-        act.still.path !== act.still.sha256 + '.png' ||
+        stored.sha256 !== still.sha256 || jobHash(stored.png) !== still.sha256 ||
+        still.path !== still.sha256 + '.png' ||
         !Buffer.from(stored.actBytes).equals(Buffer.from(JSON.stringify(act)))) {
       throw new JobError('JOB_STILL_CAPTURE_FAILED');
     }

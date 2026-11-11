@@ -75,6 +75,8 @@ import {
  type JobDisplayPublication, type JobHostPorts, type JobConsumerGrant,
  type JobRecordAct, type JobActV3, type JobPlanSource, type JobFetchActRequestV3, type JobRecordHostHooks,
  type JobRecordReopenSubject, type JobRecordReopenValue, type JobUISubmissionV3,
+ type JobComment, type JobCommentAnchor, type JobCommentFeedbackAnchor, type JobCommentPartsAnchor, type JobCommentImageAnchor,
+ type JobCommentsAct, type JobCommentsActValues, type ReviewCommentsSession, type CompareCommentsSession, type PartsCommentsVerdict,
 } from '@rig-c/review/job-host';
 import * as publicHost from '@rig-c/review/job-host';
 
@@ -96,13 +98,18 @@ export type PublicTypes = [
  JobHostPorts, JobConsumerGrant,
  JobRecordAct, JobActV3, JobPlanSource, JobFetchActRequestV3, JobRecordHostHooks,
  JobRecordReopenSubject, JobRecordReopenValue, JobUISubmissionV3,
+ JobComment, JobCommentAnchor, JobCommentFeedbackAnchor, JobCommentPartsAnchor, JobCommentImageAnchor,
+ JobCommentsAct, JobCommentsActValues, ReviewCommentsSession, CompareCommentsSession, PartsCommentsVerdict,
 ];
 function assert(ok: unknown, name: string): asserts ok {
  if (!ok) throw new Error('SMOKE_PUBLIC_HOST_' + name);
 }
 const expectedExports = ['assertJobImageSetCapability', 'JOB_CAPABILITIES', 'startJobHost', 'startJobHub', 'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID', 'JOB_PARTS_ENUMERATOR_RANGE',
  'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
- 'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordAct', 'prepareJobRecordSource'];
+ 'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordAct', 'prepareJobRecordSource',
+ 'JOB_COMMENTS_ACT_SCHEMA', 'REVIEW_COMMENTS_SESSION_SCHEMA', 'REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA',
+ 'PARTS_COMMENTS_VERDICT_SCHEMA', 'parseCommentsAct', 'projectComments', 'parseCommentsSession',
+ 'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'projectSelectedCommentsFeedback'];
 assert(JSON.stringify(Object.keys(publicHost).sort()) === JSON.stringify(expectedExports.sort()), 'EXPORTS');
 assert(JOB_API_SCHEMA === 'rig-review/job-api@2' && JOB_ACT_SCHEMA === 'rig-review/act@2' &&
  JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <3.0.0', 'SCHEMAS');
