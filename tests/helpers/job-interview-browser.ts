@@ -495,6 +495,16 @@ export async function verifyInterviewDiagnosticsFixtureDryRun(): Promise<void> {
   }
 }
 
+/** Compare natural-resolution displayed pixels with the independently decoded normal-route PNG. */
+export function assertScreenADisplayedPixels(png:{width:number;height:number;data:Uint8Array},
+    displayed:{width:number;height:number;rgba:number[]}) {
+    assert.equal(displayed.width,png.width,'displayed natural width matches source PNG');
+    assert.equal(displayed.height,png.height,'displayed natural height matches source PNG');
+    const expected=Buffer.from(png.data),actual=Buffer.from(displayed.rgba);
+    assert.deepEqual(actual,expected,'displayed natural-resolution RGBA matches decoded normal-route PNG byte-for-byte');
+    return {rgbaBytes:actual.length,decodedRgbaSha256:digest(expected),displayedRgbaSha256:digest(actual),matches:true};
+}
+
 /** Screen A uses the existing sealed fixtures, host, CDP and PNG oracle. No owner state is injected. */
 export async function screenABrowser(output: string, language: 'en' | 'ko') {
     const { mkdir } = await import('node:fs/promises');
@@ -521,9 +531,13 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
         mode: string;
         host: any;
         schema: string;
+        root: string;
+        beforeInputs?: Record<string, string>;
+        inputReadbackDone?: boolean;
         stop: () => Promise<void>;
     }[] = [];
     const semanticClosures: unknown[] = [];
+    const inputReadbacks: unknown[] = [];
     const cleanupErrors: string[] = [];
     let failure: unknown;
     function recordCleanupError(stage: string, error: unknown) {
@@ -546,6 +560,21 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
         assert.equal(result.ok, true, JSON.stringify(result));
         return result.value;
     }
+    async function readbackInputs(entry: typeof managedHosts[number]) {
+        if (entry.inputReadbackDone)
+            return;
+        if (!entry.beforeInputs) {
+            inputReadbacks.push({ mode: entry.mode, status: 'unavailable', reason: 'Source baseline was not captured before failure' });
+            entry.inputReadbackDone = true;
+            return;
+        }
+        const after = await jobInputHashes(entry.root);
+        const matches = Object.keys(after).length === Object.keys(entry.beforeInputs).length &&
+            Object.entries(entry.beforeInputs).every(([path,sha256])=>after[path]===sha256);
+        inputReadbacks.push({ mode: entry.mode, status: 'read', before: entry.beforeInputs, after, matches });
+        entry.inputReadbackDone = true;
+        assert.deepEqual(after, entry.beforeInputs, 'fixture input bytes remain immutable before disposal');
+    }
     async function closeManaged(entry: typeof managedHosts[number]) {
         const before = entry.host.session.status();
         let result: unknown;
@@ -565,7 +594,7 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
             if (mode === 'package') {
                 const fixture = await scriptedJobWindowFixture();
                 host = fixture.host;
-                managedHosts.push({ mode, host, schema: 'rig-review/job-api@2', stop: () => fixture.close() });
+                managedHosts.push({ mode, host, root: fixture.input.root, schema: 'rig-review/job-api@2', stop: () => fixture.close() });
                 root = fixture.input.root;
                 schema = 'rig-review/job-api@2';
                 // Existing package fixture already has its retained editable question and reader.
@@ -588,11 +617,15 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                 const context = { ...input.context, files };
                 const { reader } = createSyntheticRecordReader({ onOption: () => structuredClone(context) });
                 host = await startJobHost({ root, stateDir: join(scratch, mode + '-state'), fingerprint: 'a'.repeat(64), reviewer: { id: 'synthetic-owner', role: 'owner' }, publicationMode: 'record-and-package', readRecordPublished: reader, recordReaderId: JOB_RECORD_READER_ID, bindingId: 'synthetic-screen-a/1', installWriterBinding: binding => { fetchCapability = binding.fetchCapability; } });
-                managedHosts.push({ mode, host, schema: 'rig-review/job-api@3', stop: async () => host.stop() });
+                managedHosts.push({ mode, host, root, schema: 'rig-review/job-api@3', stop: async () => host.stop() });
                 schema = 'rig-review/job-api@3';
                 question = { set, ref: optionSetFile };
                 publication = await call(host, schema, { verb: 'publish', expectedGeneration: 0, idempotencyKey: randomUUID(), freeze: { kind: 'producer-held', holdId: 'synthetic', record }, result: input.result });
             }
+            const managed = managedHosts[managedHosts.length - 1]!;
+            const before = await jobInputHashes(root);
+            managed.beforeInputs = before;
+            const decodedImages = new Map<number, ReturnType<typeof PNG.sync.read>>();
             const routes = jobPublicationRoutes(host.session.displayPublication(publication.publicationId), host.origin);
             const interviewResponse = await fetch(routes.api('interview'));
             assert.equal(interviewResponse.ok, true);
@@ -613,10 +646,10 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                 assert.equal(digest(sourceBytes), source.ref.sha256, 'immutable source image seal');
                 assert.equal(digest(raw), source.ref.sha256, 'normal image route bytes match source seal');
                 const png = PNG.sync.read(raw);
+                decodedImages.set(index, png);
                 return { index, name: image.name, normalUrl, source: source.ref, rawSha256: digest(raw),
                     decodedWidth: png.width, decodedHeight: png.height };
             }));
-            const before = await jobInputHashes(root);
             const asked = await call(host, schema, { verb: 'ask', expectedGeneration: host.session.status().generation, idempotencyKey: randomUUID(), publicationId: publication.publicationId, subject: { kind: 'interview-picks', questionId: question.set.question, setId: question.set.id } });
             const owner = new URL(host.ownerUrl);
             owner.searchParams.set('lang', language);
@@ -643,23 +676,27 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                     await page.evaluate(`document.querySelectorAll('.interview-image-tabs button')[${index}].click()`);
                     await wait(`document.querySelector('.interview-image-preview img')?.complete && document.querySelector('.interview-image-preview img').naturalWidth>0`);
                     const image = await page.evaluate<any>(`(()=>{const art=document.querySelector('.interview-images'),img=art.querySelector('img');art.scrollIntoView({block:'center'});const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};return {src:img.src,naturalWidth:img.naturalWidth,naturalHeight:img.naturalHeight,image:rect(img),preview:rect(img.parentElement),selected:art.querySelectorAll('button')[${index}].getAttribute('aria-pressed')};})()`);
-                    // The existing CDP evaluate seam reads browser-owned object URLs in their owning context.
-                    const blobBytes = await page.evaluate<number[]>(`(async()=>{
-                        const image=document.querySelector('.interview-image-preview img');
-                        const response=await fetch(image.src);
-                        if(!response.ok)throw new Error('SCREEN_A_IMAGE_BYTES_UNAVAILABLE');
-                        return Array.from(new Uint8Array(await response.arrayBuffer()));
-                    })()`);
-                    const raw = Buffer.from(blobBytes);
                     const mapping = imageMapping[index];
-                    assert.ok(mapping);
-                    assert.equal(digest(raw), mapping.source.sha256, 'rendered blob matches declared source image');
-                    assert.equal(digest(raw), mapping.rawSha256, 'rendered blob matches declared normal image route');
-                    const png = PNG.sync.read(raw);
-                    assert.equal(png.width, mapping.decodedWidth);
-                    assert.equal(png.height, mapping.decodedHeight);
-                    assert.equal(image.naturalWidth, png.width, 'natural width matches exact source PNG');
-                    assert.equal(image.naturalHeight, png.height, 'natural height matches exact source PNG');
+                    const png = decodedImages.get(index);
+                    assert.ok(mapping && png);
+                    assert.equal(image.naturalWidth, png.width, 'natural width matches source PNG');
+                    assert.equal(image.naturalHeight, png.height, 'natural height matches source PNG');
+                    // The displayed IMG is read at natural resolution without fetching its object URL.
+                    const displayed = await page.evaluate<{
+                        width: number;
+                        height: number;
+                        rgba: number[];
+                    }>(`(()=>{
+                        const image=document.querySelector('.interview-image-preview img');
+                        const canvas=document.createElement('canvas');
+                        canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
+                        const context=canvas.getContext('2d');
+                        if(!context)throw new Error('SCREEN_A_CANVAS_READBACK_UNAVAILABLE');
+                        context.drawImage(image,0,0);
+                        return {width:canvas.width,height:canvas.height,
+                            rgba:Array.from(context.getImageData(0,0,canvas.width,canvas.height).data)};
+                    })()`);
+                    const decodedDisplay = assertScreenADisplayedPixels(png, displayed);
                     const colors = new Map<string, number>();
                     for (let at = 0; at < png.data.length; at += 4) {
                         if (png.data[at + 3] !== 255)
@@ -685,7 +722,7 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
                     assert.ok(pixels.inBounds && pixels.leftROI.backgroundPixels > 0);
                     assert.equal(image.selected, 'true');
                     assert.ok(image.image.left >= image.preview.left - 1 && image.image.right <= image.preview.right + 1 && image.image.top >= image.preview.top - 1 && image.image.bottom <= image.preview.bottom + 1);
-                    phase.images.push({ ...image, mapping, rawSha256: digest(raw), decodedWidth: png.width, decodedHeight: png.height,
+                    phase.images.push({ ...image, mapping, normalRouteRawSha256: mapping.rawSha256, decodedDisplay, decodedWidth: png.width, decodedHeight: png.height,
                         matchedPixels: pixels.leftROI.backgroundPixels, matchedROI: pixels.leftROI, expectedRgba: color[0].split(',').map(Number) });
                     await writeFile(join(output, mode + '-' + sample.width + '-' + sample.phase + '-image' + index + '.png'), shot);
                 }
@@ -755,7 +792,7 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
             const fetched = await fetchedResponse.json();
             assert.equal(fetched.ok, true);
             assert.deepEqual(fetched.value.value, expected);
-            assert.deepEqual(await jobInputHashes(root), before);
+            await readbackInputs(managed);
             Object.assign(observations[mode] as object, { actId: act.actId, expected, sourceFiles: before });
             await closeManaged(managedHosts[managedHosts.length - 1]!);
         }
@@ -774,6 +811,12 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
     }
     finally {
         for (const entry of managedHosts) {
+            try {
+                await readbackInputs(entry);
+            }
+            catch (error) {
+                recordCleanupError('input readback ' + entry.mode, error);
+            }
             if (semanticClosures.some((item: any) => item.jobId === entry.host.session.jobId))
                 continue;
             try {
@@ -804,6 +847,7 @@ export async function screenABrowser(output: string, language: 'en' | 'ko') {
             recordCleanupError('scratch removal', error);
         }
     }
+    observations.inputReadbacks = inputReadbacks;
     observations.semanticClosures = semanticClosures;
     observations.cleanupErrors = cleanupErrors;
     if (failure !== undefined)
