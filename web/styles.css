@@ -511,5 +511,8 @@ body.job-window{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:1
 
 .job-window .job-inspection[data-job-plan-workspace]{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .job-window .job-inspection[data-job-plan-workspace]>.job-sidebar{display:none}
-.job-window .job-inspection[data-job-plan-workspace]>.job-stage{grid-column:1;grid-row:1;overflow:auto;padding:12px}
+.job-window .job-inspection[data-job-plan-workspace]>.job-stage{grid-column:1;grid-row:1;min-width:0;overflow:auto;padding:12px}
 .job-window .job-inspection[data-job-plan-workspace]>.job-forms{grid-column:2;grid-row:1;min-width:0;min-height:0;border-top:0;border-left:1px solid var(--border)}
+
+.job-window .job-inspection[data-job-plan-workspace]>.job-stage .job-source,
+.job-window .job-inspection[data-job-plan-workspace]>.job-stage pre{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}

@@ -201,6 +201,39 @@ async function run() {
                     rect.top >= layout.clip.top - 1 && rect.bottom <= layout.clip.bottom + 1,
                     prefix + ' complete fourth-tile title must be accessible at ' + viewport.width);
             }
+            if (prefix.startsWith('plan-')) {
+                const sourceReachability = await page!.evaluate<any>(`(()=>{
+                    const stage=document.querySelector('[data-job-plan-workspace]>.job-stage');
+                    const record=stage.querySelector('[data-job-record="plan"]');
+                    const disclosure=record.querySelector('details');
+                    disclosure.open=true;
+                    const pre=disclosure.querySelector('pre');
+                    const source=JSON.parse(pre.textContent);
+                    const lines=[...record.querySelectorAll('.job-source')].map(element=>{
+                        element.scrollIntoView({block:'center',inline:'nearest'});
+                        const range=document.createRange();range.selectNodeContents(element);
+                        return {text:element.textContent,rects:[...range.getClientRects()].map(r=>({left:r.left,right:r.right})),
+                            clientWidth:element.clientWidth,scrollWidth:element.scrollWidth};
+                    });
+                    const bounds=stage.getBoundingClientRect();
+                    const result={sourceHash:source.sourceHash,lines,left:bounds.left,right:bounds.right,
+                        clientWidth:stage.clientWidth,scrollWidth:stage.scrollWidth,opened:disclosure.open};
+                    disclosure.open=false;
+                    result.closed=!disclosure.open;
+                    return result;
+                })()`);
+                assert.equal(sourceReachability.sourceHash,publication.source.sourceHash);
+                assert.ok(sourceReachability.opened && sourceReachability.closed,prefix+' source disclosure opens and closes');
+                assert.ok(sourceReachability.scrollWidth<=sourceReachability.clientWidth+1,prefix+' stage has no horizontal overflow');
+                assert.ok(sourceReachability.lines.some((line:any)=>line.text.includes(publication.source.sourceHash)),
+                    prefix+' complete source hash remains available');
+                for (const line of sourceReachability.lines) {
+                    assert.ok(line.scrollWidth<=line.clientWidth+1,prefix+' complete identity text wraps');
+                    assert.ok(line.rects.every((rect:any)=>rect.left>=sourceReachability.left-1 && rect.right<=sourceReachability.right+1),
+                        prefix+' complete identity text stays within stage');
+                }
+                layout.sourceReachability=sourceReachability;
+            }
             let screenshot: Buffer | undefined;
             if (prefix.startsWith('package-')) {
                 await until(async () => {
@@ -415,7 +448,8 @@ async function run() {
         await inspect(planHost, 'rig-review/job-api@3', publication, evidence.packet, 'plan-' + language, grant.fetchCapability);
         let packageGrant: {fetchCapability: string} | undefined;
         pkg = await realJobWindowFixture({installWriterBinding: binding => {packageGrant = binding;}});
-        const packagePlan = createSyntheticPlanRecordWorkspace(pkg.input.root,{steps:[{id:'step-one',hash:'1'.repeat(64)}],text});
+        const packagePlan = createSyntheticPlanRecordWorkspace(pkg.input.root,{steps:[{id:'step-one',hash:'1'.repeat(64)}],
+            subjects:[{kind:'checkpoint',checkpointId:'step-one'}],text});
         pkg.input.setRecordPath('project.json');
         const packageEvidence = syntheticCheckpointEvidence(pkg.input.root, 'motion-card', 'step-one');
         const beforePackageHashes = await jobInputHashes(pkg.input.root);
