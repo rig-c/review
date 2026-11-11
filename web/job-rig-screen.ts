@@ -7,7 +7,7 @@ import type {ReviewSession} from '../src/session.ts';
 import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
 import {checkpointNoteComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
 import {copyJobRigViewport, createJobRigSubmission, freezeJobRigCapture, jobRigDrawState, presentJobRigStage, recordJobRigDraw} from './job-rig-capture.ts';
-import {setRigHost, type RigHost, type RigHostScreen} from './rig-host.ts';
+import {setRigHost, type RigHost, type RigHostScreen, type RigHostCommit} from './rig-host.ts';
 import type {InstanceAccess} from './instance-access.ts';
 
 /** A model publication of a rig version or a package: not a draft, direction, image set or record. */
@@ -73,7 +73,7 @@ export function createJobRigScreen(options: {
   load(): Promise<unknown>;
 }) {
   let mounted: JobRigScreenPrepared | null = null, screen: RigHostScreen | null = null, drawGeneration = 0;
-  const attempts = new Map<string, {key: string; submissionId: string; rig: ReturnType<typeof createJobRigSubmission>}>();
+  const attempts = new Map<string, {key: string; submissionId: string; rig: ReturnType<typeof createJobRigSubmission>; commit: Omit<RigHostCommit, 'at'>}>();
   async function prepare(display: DisplayPublicationV3, signal: AbortSignal): Promise<JobRigScreenPrepared | null> {
     const source = display.publication.source;
     if (!jobRigScreenSubject(source) || 'record' in source || source.subject === 'image-set') return null;
@@ -105,7 +105,7 @@ export function createJobRigScreen(options: {
       return freezeJobRigCapture(draw, jobRigDrawState(bound), ask.askId, () => copyJobRigViewport(presentation));
     } finally {presentation.canvas.remove();}
   }
-  async function submit(session: ReviewSession): Promise<string> {
+  async function submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>): Promise<string> {
     const prepared = mounted, state = options.window.state();
     if (!prepared || !state.receipt || state.preparing) throw new Error('JOB_ACT_SOURCE_STALE');
     if (state.closed) throw new Error('JOB_CLOSED');
@@ -115,7 +115,9 @@ export function createJobRigScreen(options: {
     for (const decision of decisions) {
       const key = JSON.stringify(decision.value);
       let attempt = attempts.get(decision.ask.askId);
-      if (!attempt || attempt.key !== key) attempts.set(decision.ask.askId, attempt = {key, submissionId: crypto.randomUUID(), rig: createJobRigSubmission()});
+      if (!attempt || attempt.key !== key) attempts.set(decision.ask.askId, attempt = {key, submissionId: crypto.randomUUID(), rig: createJobRigSubmission(),
+        commit: decision.kind === 'checkpoint' ? {checkpoints: {[decision.value.checkpointId]: structuredClone(session.checkpoints[decision.value.checkpointId]!)}} :
+          {review: {status: decision.value.verdict, feedback: structuredClone(session.feedback)}}});
       const latest = options.window.state();
       if (!latest.receipt) throw new Error('JOB_ACT_SOURCE_STALE');
       const input = {kind: decision.kind, publicationId: decision.ask.publicationId, askId: decision.ask.askId, pageId: options.pageId,
@@ -126,6 +128,7 @@ export function createJobRigScreen(options: {
       const result = await options.window.submit(frozen);
       if (!result.ok) throw new Error(result.error.code);
       attempts.delete(ask.askId);
+      await committed({...current.commit, at: result.value.at});
     }
     return options.translate('job.saved');
   }
@@ -145,7 +148,7 @@ export function createJobRigScreen(options: {
           feedbackWarnings: [], updatedAt: null} satisfies ReviewSession);
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },
-      submit: session => submit(session).catch(error => {throw new Error(options.refusal(error, 'JOB_ACT_INVALID'));}),
+      submit: (session, committed) => submit(session, committed).catch(error => {throw new Error(options.refusal(error, 'JOB_ACT_INVALID'));}),
       attach: value => {screen = value;},
       displayed: () => ready.resolve(),
       failed: error => ready.reject(error)};
