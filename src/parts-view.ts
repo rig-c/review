@@ -26,6 +26,8 @@ import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } fr
 import { PNG } from 'pngjs';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 import { destinationDirectory } from './destination-directory.ts';
+import {commentsObject, jobSha, jobInteger, parseComments} from './job-api.ts';
+import {PARTS_COMMENTS_VERDICT_SCHEMA, type PartsCommentsVerdict} from './job-contract.ts';
 
 export const PARTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/4';
 const LEGACY_VERDICT_SCHEMAS = ['rig-review-parts-verdict/1', 'rig-review-parts-verdict/2', 'rig-review-parts-verdict/3'] as const;
@@ -554,6 +556,36 @@ export interface PartsVerdict {
   issues: PartsIssue[];
   updatedAt: string;
   by?: string;
+}
+
+/** The standalone comments envelope is a decoder until the consumer activation receipt. */
+export function parseCommentsPartsVerdict(value: unknown): PartsCommentsVerdict {
+  const raw = commentsObject(value, ['schema', 'mode', 'tool', 'source', 'status', 'comments', 'updatedAt'], ['by']);
+  if (raw.schema !== PARTS_COMMENTS_VERDICT_SCHEMA || typeof raw.mode !== 'string' || !['parts', 'atlas'].includes(raw.mode) ||
+      typeof raw.status !== 'string' || !['approved', 'changes-requested'].includes(raw.status)) throw new Error('JOB_ACT_INVALID');
+  const tool = commentsObject(raw.tool, ['name', 'version']);
+  if (tool.name !== '@rig-c/review' || typeof tool.version !== 'string' || !tool.version) throw new Error('JOB_ACT_INVALID');
+  const source = commentsObject(raw.source, ['sha256', 'files', 'flags']);
+  jobSha(source.sha256);
+  if (!Array.isArray(source.files) || !source.files.length || !Array.isArray(source.flags)) throw new Error('JOB_ACT_INVALID');
+  for (const file of source.files) {
+    const row = commentsObject(file, ['path', 'sha256', 'bytes']);
+    if (typeof row.path !== 'string' || !row.path) throw new Error('JOB_ACT_INVALID');
+    jobSha(row.sha256); jobInteger(row.bytes);
+  }
+  for (const file of source.flags) {
+    const row = commentsObject(file, ['path', 'sha256']);
+    if (typeof row.path !== 'string' || !row.path) throw new Error('JOB_ACT_INVALID');
+    jobSha(row.sha256);
+  }
+  if (sourceSha256(source.files as HashedFile[]) !== source.sha256) throw new Error('JOB_ACT_INVALID');
+  if (typeof raw.updatedAt !== 'string' || !Number.isFinite(Date.parse(raw.updatedAt)) ||
+      'by' in raw && (typeof raw.by !== 'string' || !raw.by)) throw new Error('JOB_ACT_INVALID');
+  const comments = parseComments(raw.comments, source.sha256 as string);
+  const issues = comments.filter(comment => comment.anchor && 'schema' in comment.anchor).length;
+  if (comments.some(comment => comment.anchor && !('schema' in comment.anchor)) ||
+      (raw.status === 'approved') !== (issues === 0)) throw new Error('JOB_ACT_INVALID');
+  return {...structuredClone(raw), comments} as unknown as PartsCommentsVerdict;
 }
 
 export interface LegacyPartsVerdictView {

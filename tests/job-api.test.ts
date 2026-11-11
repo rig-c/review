@@ -11,6 +11,97 @@ import {readFile, readdir, mkdir, writeFile, symlink, rm} from 'node:fs/promises
 import {rigStillInput} from './helpers/job-rig-still.ts';
 import {createJobFront} from '../src/job-front.ts';
 import {jobHash} from '../src/job-api.ts';
+import {parseCommentsAct, projectComments, type JobComment} from '../src/job-host.ts';
+import commentsLegacy from './fixtures/comments-contract-legacy.json';
+
+const permutedFeedbackComment = (): JobComment => ({
+  anchor: {category: 'defect', target: {name: 'sleeve', kind: 'slot'}, frameEnd: 3, frameStart: 3, id: 'permuted-feedback'},
+  text: 'Inspect this',
+});
+
+test('#653 P1 raw non-still export validates comments but retains original entry and Feedback anchor key order', async () => {
+  const f = await fixture(), publication = await f.publish(), ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'}),
+    page = await f.display(publication);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
+    expectedGeneration: f.session.status().generation, submissionId: '653-order', kind: 'checkpoint',
+    value: {checkpointId: 'step-one', outcome: 'pass', words: 'old checkpoint'}}));
+  if (!saved.ok) throw new Error(saved.error.code);
+  const fresh = {...saved.value, schema: 'rig-review/act@6', value: {
+    checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass', comments: [permutedFeedbackComment()],
+  }};
+  const raw = JSON.stringify(fresh), db = new Database(join(f.state, 'jobs.sqlite'));
+  try {
+    const row = db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!;
+    const document = JSON.parse(row.document); document.acts[fresh.actId] = fresh;
+    const storedDocument = JSON.stringify(document);
+    db.query('UPDATE jobs SET document=? WHERE job_id=?').run(storedDocument, f.session.jobId);
+    expect(f.session.readActExport(fresh.actId, false).toString()).toBe(raw);
+    expect(() => f.session.readActExport(fresh.actId, true)).toThrow('JOB_STILL_UNAVAILABLE');
+    const chunks: Buffer[] = [];
+    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', fresh.actId], {
+      consumerCapability: f.session.writerGrant().fetchCapability,
+      fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+      writeBytes(chunk) {chunks.push(Buffer.from(chunk)); return chunk.length;}});
+    expect(Buffer.concat(chunks).toString()).toBe(raw);
+    expect(db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!.document).toBe(storedDocument);
+    document.acts[fresh.actId].value.words = 'forged extra field';
+    db.query('UPDATE jobs SET document=? WHERE job_id=?').run(JSON.stringify(document), f.session.jobId);
+    expect(() => f.session.readActExport(fresh.actId, false)).toThrow('JOB_ACT_INVALID');
+  } finally {db.close();}
+});
+
+test('#646 new-raw-replay: consumer CLI keeps exact @6 and old @2/@3/@5 bytes, without synthetic downgrade', async () => {
+  const f = await fixture(), directory = join(f.scratch, '646-consumer');
+  await mkdir(directory);
+  const old = JSON.parse(commentsLegacy.records['@2'].raw), {words, ...outcome} = old.value;
+  const fresh = {...old, schema: 'rig-review/act@6', value: {...outcome, comments: [{text: words}, {text: 'second'}]}};
+  const raw = JSON.stringify(fresh, null, 3) + '\n';
+  for (const bytes of [raw, commentsLegacy.records['@2'].raw, commentsLegacy.records['@3'].raw, commentsLegacy.records['@5'].raw]) {
+    const value = JSON.parse(bytes), chunks: Buffer[] = [], png = Buffer.from(commentsLegacy.stillPng, 'base64');
+    await jobCommand(['fetch-act', f.origin + '/jobs/' + value.jobId, '--act', value.actId,
+      ...(value.still ? ['--still-out', directory] : [])], {consumerCapability: 'c'.repeat(64),
+      fetch: (async (_url, init) => {
+        const accept = new Headers(init?.headers).get('accept');
+        return new Response(accept === 'image/png' ? png : bytes, {headers: {'content-type': accept!}});
+      }) as typeof fetch,
+      writeBytes(chunk) {chunks.push(Buffer.from(chunk)); return chunk.length;}});
+    expect(Buffer.concat(chunks).toString()).toBe(bytes);
+  }
+  expect(projectComments(parseCommentsAct(JSON.parse(raw)).value.comments)).toBe('[general]\n  old\n\n\n[general]\nsecond');
+  expect(projectComments(parseCommentsAct(JSON.parse(raw)).value.comments)).toBe(projectComments(fresh.value.comments));
+});
+
+test('#646 rig-still-new-version: prepared raw reader/CLI reuse existing still byte and hash checks', async () => {
+  const f = await fixture(), {input, bytes, sha256} = await rigStillInput(f);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  if (!saved.ok) throw new Error(saved.error.code);
+  const {words: _words, ...value} = saved.value.value as {words: string; stage: string; verdict: string};
+  const fresh = {...saved.value, schema: 'rig-review/act@6', value: {...value, comments: [permutedFeedbackComment()]}};
+  const raw = JSON.stringify(fresh), db = new Database(join(f.state, 'jobs.sqlite'));
+  try {
+    // Test-only finalized-reader fixture. Production finalizers stay on their old versions.
+    const row = db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(f.session.jobId)!;
+    const document = JSON.parse(row.document);
+    document.acts[fresh.actId] = fresh;
+    db.query('UPDATE jobs SET document=? WHERE job_id=?').run(JSON.stringify(document), f.session.jobId);
+    db.query('UPDATE job_act_stills SET act_bytes=? WHERE job_id=? AND act_id=?').run(Buffer.from(raw), f.session.jobId, fresh.actId);
+    expect(f.session.readActExport(fresh.actId, false).toString()).toBe(raw);
+    expect(f.session.readActExport(fresh.actId, true)).toEqual(bytes);
+    const directory = join(f.scratch, '646-rig'); await mkdir(directory);
+    const chunks: Buffer[] = [];
+    await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', fresh.actId, '--still-out', directory], {
+      consumerCapability: f.session.writerGrant().fetchCapability,
+      fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+      writeBytes(chunk) {chunks.push(Buffer.from(chunk)); return chunk.length;}});
+    expect(Buffer.concat(chunks).toString()).toBe(raw);
+    expect((await readFile(join(directory, sha256 + '.png'))).equals(bytes)).toBe(true);
+    db.query('UPDATE job_act_stills SET act_bytes=? WHERE job_id=? AND act_id=?').run(Buffer.from(JSON.stringify(fresh, null, 2)), f.session.jobId, fresh.actId);
+    expect(() => f.session.readActExport(fresh.actId, false)).toThrow('JOB_STILL_CAPTURE_FAILED');
+    db.query('UPDATE job_act_stills SET act_bytes=? WHERE job_id=? AND act_id=?').run(Buffer.from(raw), f.session.jobId, fresh.actId);
+    db.query('UPDATE job_act_stills SET png=? WHERE job_id=? AND act_id=?').run(Buffer.from('forged'), f.session.jobId, fresh.actId);
+    expect(() => f.session.readActExport(fresh.actId, true)).toThrow('JOB_STILL_CAPTURE_FAILED');
+  } finally {db.close();}
+});
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });

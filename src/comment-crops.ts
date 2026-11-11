@@ -9,9 +9,14 @@ import {parseStageComment,hasStageComment} from './stage-comment.ts';
 import type {Feedback} from './session.ts';
 export interface PngCrop {path:string;sha256:string;png:string;width:number;height:number}
 export function validateCommentCrop(value:unknown):Buffer {return validatePngCrop(parseStageComment(value).crop);}
+/** Shared metadata boundary for sealed records with no inline PNG bytes. Callers own closed keys. */
+export function validatePngCropMetadata(crop:Omit<PngCrop,'png'>):void {
+ if(!crop||!Number.isSafeInteger(crop.width)||!Number.isSafeInteger(crop.height)||crop.width<1||crop.height<1||crop.width>16384||crop.height>16384||crop.width*crop.height>16777216||!/^[a-f0-9]{64}$/.test(crop.sha256)||crop.path!==`comment-crops/${crop.sha256}.png`)throw new Error('COMMENT_CROP_INVALID: bounded content-addressed PNG required');
+}
 /** Shared bounded PNG validator; callers own their closed comment codecs. */
 export function validatePngCrop(crop:PngCrop):Buffer {
- if(!crop||!Number.isSafeInteger(crop.width)||!Number.isSafeInteger(crop.height)||crop.width<1||crop.height<1||crop.width>16384||crop.height>16384||crop.width*crop.height>16777216||typeof crop.png!=='string'||crop.png.length>90*1024*1024||!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(crop.png)||!/^[a-f0-9]{64}$/.test(crop.sha256)||crop.path!==`comment-crops/${crop.sha256}.png`)throw new Error('COMMENT_CROP_INVALID: bounded content-addressed PNG required');
+ validatePngCropMetadata(crop);
+ if(typeof crop.png!=='string'||crop.png.length>90*1024*1024||!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(crop.png))throw new Error('COMMENT_CROP_INVALID: bounded content-addressed PNG required');
   const bytes=Buffer.from(crop.png.slice('data:image/png;base64,'.length),'base64');
   if(createHash('sha256').update(bytes).digest('hex')!==crop.sha256)throw new Error('COMMENT_CROP_INVALID: PNG signature, dimensions or SHA-256 differ');
   return validatePngBytes(bytes,crop.width,crop.height);

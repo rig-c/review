@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeSync} from 'node:fs';
 import {join} from 'node:path';
-import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit,
-  type JobAct, type JobAgentRequest, type JobNextRequest, type JobNextValue } from './job-contract.ts';
-import { assertJobApiSchema, jobFailure, jobHash, jobId, jobInteger, jobObject, jobWaitLimitMs, parseJobRequest } from './job-api.ts';
+import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit,
+  type JobAct, type JobCommentsAct, type JobAgentRequest, type JobNextRequest, type JobNextValue } from './job-contract.ts';
+import { assertJobApiSchema, jobFailure, jobHash, jobId, jobInteger, jobObject, jobWaitLimitMs, parseJobRequest, parseCommentsAct } from './job-api.ts';
 import { JobError } from './job-store.ts';
 import {validatePngBytes} from './comment-crops.ts';
 import {destinationDirectory} from './destination-directory.ts';
@@ -145,11 +145,18 @@ async function consumerBytes(stream: ReadableStream<Uint8Array> | null, maximum:
   }
 }
 
-function parseConsumerAct(bytes: Buffer, job: string, actId: string): JobAct {
+type ConsumerAct = JobAct | JobCommentsAct;
+
+function parseConsumerAct(bytes: Buffer, job: string, actId: string): ConsumerAct {
   let value: unknown;
   try { value = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes)); }
   catch { throw new JobError('JOB_REQUEST_INVALID'); }
   const act = jobObject(value, ['schema', 'actId', 'jobId', 'askId', 'publicationId', 'kind', 'authority', 'at', 'source', 'value', 'still']);
+  if (act.schema === JOB_COMMENTS_ACT_SCHEMA) {
+    const comments = parseCommentsAct(act);
+    if (comments.jobId !== job || comments.actId !== actId) throw new JobError('JOB_ACT_INVALID');
+    return comments;
+  }
   if (act.jobId !== job || act.actId !== actId ||
       (act.schema !== JOB_ACT_SCHEMA && act.schema !== JOB_RIG_REVIEW_ACT_SCHEMA && act.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA)) {
     throw new JobError('JOB_ACT_INVALID');
@@ -178,7 +185,8 @@ function unlinkOwned(path: string, identity: {dev: number; ino: number}): void {
   }
 }
 
-function outputConsumerAct(actBytes: Buffer, png: Buffer | undefined, act: JobAct, destination: string | undefined, options: JobCLIOptions): void {
+function outputConsumerAct(actBytes: Buffer, png: Buffer | undefined, act: ConsumerAct, destination: string | undefined, options: JobCLIOptions): void {
+  const still = 'still' in act ? act.still : undefined;
   let temporary: string | undefined;
   let temporaryIdentity: {dev: number; ino: number} | undefined;
   let installed: string | undefined;
@@ -188,7 +196,7 @@ function outputConsumerAct(actBytes: Buffer, png: Buffer | undefined, act: JobAc
   let lockDescriptor: number | undefined;
   let emitted = 0;
   try {
-    if (png && destination && act.schema === JOB_RIG_REVIEW_ACT_SCHEMA) {
+    if (png && destination && still) {
       const directory = destinationDirectory(destination, 'JOB_STILL_OUTPUT_FAILED', false);
       const directoryDescriptor = openSync(directory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | constants.O_NOFOLLOW);
       try {
@@ -204,13 +212,13 @@ function outputConsumerAct(actBytes: Buffer, png: Buffer | undefined, act: JobAc
           }
           throw error;
         }
-        const target = join(directory, act.still.path);
+        const target = join(directory, still.path);
         let existing = false;
         try {
           const descriptor = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
           try {
             const info = fstatSync(descriptor);
-            if (!info.isFile() || info.size > jobStillByteLimit || jobHash(readFileSync(descriptor)) !== act.still.sha256) {
+            if (!info.isFile() || info.size > jobStillByteLimit || jobHash(readFileSync(descriptor)) !== still.sha256) {
               throw new JobError('JOB_STILL_OUTPUT_FAILED');
             }
             existing = true;
@@ -307,14 +315,15 @@ async function fetchActCommand(args: readonly string[], options: JobCLIOptions):
   }
   const bytes = await read(jobRawActMediaType, 512 * 1024);
   const act = parseConsumerAct(bytes, job, actId);
+  const still = 'still' in act ? act.still : undefined;
   const destination = values.get('still-out');
-  if (act.schema === JOB_RIG_REVIEW_ACT_SCHEMA && destination === undefined) throw new JobError('JOB_STILL_OUTPUT_FAILED');
+  if (still && destination === undefined) throw new JobError('JOB_STILL_OUTPUT_FAILED');
   let png: Buffer | undefined;
   if (destination !== undefined) {
-    if (act.schema !== JOB_RIG_REVIEW_ACT_SCHEMA) throw new JobError('JOB_STILL_UNAVAILABLE');
+    if (!still) throw new JobError('JOB_STILL_UNAVAILABLE');
     png = await read('image/png', jobStillByteLimit);
     try {
-      if (png.length < 33 || jobHash(png) !== act.still.sha256) throw new Error('hash');
+      if (png.length < 33 || jobHash(png) !== still.sha256) throw new Error('hash');
       validatePngBytes(png, png.readUInt32BE(16), png.readUInt32BE(20));
     } catch { throw new JobError('JOB_STILL_CAPTURE_FAILED'); }
   }

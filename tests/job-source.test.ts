@@ -5,6 +5,48 @@ import { JobSession } from '../src/job-session.ts';
 import { jobFixture, jobInputHashes, syntheticJobParts } from './helpers/job-api-fixture.ts';
 import { joinedVerdictFixture } from './helpers/joined-verdict-fixture.ts';
 import { readProject } from '../src/interview-project.ts';
+import {parseJobPartsIdentity} from '../src/job-source.ts';
+import {parseCommentsAct} from '../src/job-host.ts';
+import commentsLegacy from './fixtures/comments-contract-legacy.json';
+
+test('#646 Parts pure identity decoder reuses the native manifest and reference grammar without an enumerator', () => {
+  const old = JSON.parse(commentsLegacy.records['@5'].raw), original = old.source.parts;
+  const parts = {...original, images: [
+    {path: 'parts/e\u0301.png', role: 'depth', sha256: 'a'.repeat(64)},
+    {path: 'parts/e\u0301.png', role: 'part', sha256: 'a'.repeat(64)},
+    {path: 'parts/é.png', role: 'figure_mask', sha256: 'b'.repeat(64)},
+  ]};
+  expect(parseJobPartsIdentity(parts)).toEqual(parts);
+  const act = {...old, schema: 'rig-review/act@6', source: {...old.source, parts}, value: {verdict: 'approved', comments: []}};
+  expect(parseCommentsAct(act).source).toEqual(act.source);
+  for (const bad of [
+    {...parts, manifest: {...parts.manifest, path: 'parts/not-parts.json'}},
+    {...parts, images: [{...parts.images[0], path: '../escape.png'}]},
+    {...parts, images: [{...parts.images[0], role: 'x'.repeat(129)}]},
+    {...parts, images: [{...parts.images[0], sha256: 'wrong'}]},
+    {...parts, images: Array(4097).fill(parts.images[0])},
+  ]) expect(() => parseCommentsAct({...act, source: {...act.source, parts: bad}})).toThrow('JOB_ACT_INVALID');
+});
+
+test('#646 Parts extraction preserves native version/manifest/row validation precedence', async () => {
+  const f = await fixture(), parts = await syntheticJobParts(f), context = f.getContext();
+  const cases: [JobPartsIdentity, string, string][] = [
+    [{...parts, enumeratorVersion: '2.25.2', manifest: {...parts.manifest, path: 'wrong.json'}},
+      'JOB_SOURCE_UNRETAINABLE', 'PARTS_ENUMERATOR_VERSION_MISMATCH'],
+    [{...parts, manifest: {...parts.manifest, path: 'wrong.json'}, images: []},
+      'JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_PATH_REFUSED manifest'],
+    [{...parts, manifest: {...parts.manifest, sha256: '0'.repeat(64)}, images: [{path: '../escape', role: 'part', sha256: 'bad'}]},
+      'JOB_SOURCE_MISMATCH', 'PARTS_REFERENCE_HASH_MISMATCH manifest'],
+  ];
+  for (const [value, code, message] of cases) {
+    f.setContext({...context, parts: value});
+    const before = f.session.status();
+    const result = await (await f.call(await f.publishRequest())).json();
+    expect(result.error.code).toBe(code);
+    expect(result.error.message).toStartWith(message);
+    expect(f.session.status()).toEqual(before);
+  }
+});
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
@@ -410,14 +452,20 @@ const golden606 = {
 test('#606 literal package/record canonical, durable, replay and export compatibility in evidence/absence cases', async () => {
   const {collect606Canonical} = await import('./helpers/job-api-fixture.ts');
   const actual = await collect606Canonical();
-  expect(actual).toEqual(golden606);
+  // Preserve every historical literal sample and the old export inventory; only
+  // the explicitly signed additive facade surface changes the current oracle.
+  const expected = {...golden606, publicExports: [...golden606.publicExports,
+    'JOB_COMMENTS_ACT_SCHEMA', 'PARTS_COMMENTS_VERDICT_SCHEMA', 'REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA', 'REVIEW_COMMENTS_SESSION_SCHEMA',
+    'parseCommentsAct', 'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'parseCommentsSession', 'projectComments', 'projectSelectedCommentsFeedback',
+  ].sort()};
+  expect(actual).toEqual(expected);
   for (const [name, sample] of Object.entries(actual.samples)) {
     expect(sample.durableSourceBytes).toBe(sample.sourceBytes);
     expect(sample.replayActBytes).toBe(sample.durableActBytes);
     expect(sample.reopenedActBytes).toBe(sample.durableActBytes);
     const changed = structuredClone(actual);
     changed.samples[name]!.sourceHash = '0'.repeat(64);
-    expect(() => expect(changed).toEqual(golden606)).toThrow();
+    expect(() => expect(changed).toEqual(expected)).toThrow();
   }
 });
 

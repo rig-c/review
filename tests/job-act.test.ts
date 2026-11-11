@@ -15,6 +15,135 @@ import {preparePartsComment,validateStoredPartsComment} from '../src/parts-comme
 import {parsePartsIssue} from '../src/parts-comment.ts';
 import {jobHash} from '../src/job-api.ts';
 import {PNG} from 'pngjs';
+import {parseCommentsAct, projectComments, parseRecordAct, type JobComment} from '../src/job-host.ts';
+import {legacyFeedbackComments} from '../src/feedback-export.ts';
+import legacyComments from './fixtures/comments-contract-legacy.json';
+
+// Deliberately untyped fixture permits planted malformed packets at the public decoder.
+function commentsAct(): any {
+  const old = JSON.parse(legacyComments.records['@2'].raw);
+  const {words: _words, ...value} = old.value;
+  return {...old, schema: 'rig-review/act@6', value: {...value, comments: [] as JobComment[]}};
+}
+const feedbackAnchor = (id = 'feedback-one') => ({id, frameStart: 3, frameEnd: 3,
+  target: {kind: 'slot' as const, name: 'sleeve'}, category: 'defect' as const});
+
+test('#653 P1 checkpoint comment and top-level checkpoint share declared evidence mapping validation', () => {
+  const act = commentsAct();
+  act.source.plan.steps.push({id: 'step-two', hash: '2'.repeat(64)});
+  act.source.checkpointEvidence = [{schema: 'rig-review-checkpoint-evidence/1', checkpointId: 'checkpoint-c', planStepId: 'step-one',
+    tiles: [{id: 'tile', label: 'Declared tile', path: 'evidence/tile.png', sha256: 'a'.repeat(64)}],
+    table: {path: 'evidence/table.json', sha256: 'b'.repeat(64)}, routesText: 'Pass or fail', recommendationText: 'Inspect this'}];
+  act.value = {checkpointId: 'checkpoint-c', planStepId: 'step-one', outcome: 'pass',
+    comments: [{text: 'Inspect checkpoint', anchor: {checkpointId: 'checkpoint-c', planStepId: 'step-one'}}]};
+  expect(parseCommentsAct(act).value.comments).toEqual(act.value.comments);
+  const contradictory = structuredClone(act);
+  contradictory.value.comments[0].anchor.planStepId = 'step-two';
+  expect(() => parseCommentsAct(contradictory)).toThrow('JOB_ACT_INVALID');
+  const wrongTopLevel = structuredClone(act); wrongTopLevel.value.planStepId = 'step-two';
+  expect(() => parseCommentsAct(wrongTopLevel)).toThrow('JOB_ACT_INVALID');
+  const absent = structuredClone(act); delete absent.source.checkpointEvidence;
+  absent.value.planStepId = 'step-two'; absent.value.comments[0].anchor.planStepId = 'step-two';
+  expect(parseCommentsAct(absent).schema).toBe('rig-review/act@6');
+});
+
+test('#646 ordered-general-and-image: exact whitespace and stored order use existing image names', () => {
+  const act = commentsAct(), old = act.source;
+  const images = [{name: 'original', role: 'source', path: 'original.png', sha256: 'a'.repeat(64)},
+    {name: 'candidate', role: 'candidate', path: 'candidate.png', sha256: 'b'.repeat(64)}];
+  const {selector: _selector, model: _model, ...common} = old;
+  act.source = {...common, subject: 'image-set', imageSet: {purpose: 'plate-adoption', images},
+    imageSetDigest: jobHash(JSON.stringify(images.map(({name, role, sha256}) => ({role, name, sha256})))), duplicateHashes: []};
+  act.kind = 'review-verdict';
+  act.value = {stage: 'image-review', verdict: 'approved', comments: [{text: '  First\nline  '}, {text: 'Second', anchor: {name: 'candidate'}}]};
+  const parsed = parseCommentsAct(act);
+  expect(projectComments(parsed.value.comments)).toBe('[general]\n  First\nline  \n\n[["candidate"]]\nSecond');
+  const bad = structuredClone(act); bad.value.comments[1].anchor.name = 'unbound';
+  expect(() => parseCommentsAct(bad)).toThrow('JOB_ACT_INVALID');
+});
+
+test('#646 empty-comments: fresh blank refuses, historical empty/whitespace fields remain display-only', () => {
+  expect(projectComments(parseCommentsAct(commentsAct()).value.comments)).toBe('');
+  expect(() => parseCommentsAct({...commentsAct(), value: {...commentsAct().value, comments: [{text: ' \n'}]}})).toThrow('JOB_ACT_INVALID');
+});
+
+test('#646 parts-same-action: verdict and signoff retain separate identities and identical comments', () => {
+  const old = JSON.parse(legacyComments.records['@5'].raw), comments = [{text: 'Approve overall'}];
+  const verdict = parseCommentsAct({...old, schema: 'rig-review/act@6', value: {verdict: 'approved', comments}});
+  const signoff = parseCommentsAct({...old, schema: 'rig-review/act@6', actId: 'separate-signoff', kind: 'signoff',
+    value: {stage: 'parts-approved', decision: 'approved', comments}});
+  expect(signoff.actId).not.toBe(verdict.actId);
+  expect(projectComments(signoff.value.comments)).toBe('[general]\nApprove overall');
+  expect(projectComments(signoff.value.comments)).toBe(projectComments(verdict.value.comments));
+});
+
+test('#646 legacy-fields-display: each old field yields one unmodified general display entry', () => {
+  expect(legacyFeedbackComments(['  old\n', '', 'mesh'])).toEqual([{text: '  old\n'}, {text: ''}, {text: 'mesh'}]);
+  for (const record of Object.values(legacyComments.records)) expect(jobHash(record.raw)).toBe(record.sha256);
+  expect(parseRecordAct(JSON.parse(legacyComments.records['@4'].raw)).schema).toBe('rig-review/act@4');
+});
+
+test('#646 closed-key-negative: mixed anchors, historical words and browser plan mapping refuse', () => {
+  const act = commentsAct();
+  for (const value of [{...act.value, words: ''}, {...act.value, comments: [{text: 'x', note: ''}]},
+    {...act.value, outcome: ['pass']},
+    {...act.value, comments: [{summary: 'x'}]}, {...act.value, comments: [{text: 'x', anchor: {kind: 'region'}}]},
+    {...act.value, comments: [{text: 'x', anchor: {...feedbackAnchor(), checkpointId: 'step-one', planStepId: 'step-one'}}]}]) {
+    expect(() => parseCommentsAct({...act, value})).toThrow('JOB_ACT_INVALID');
+  }
+  expect(() => parseCommentsAct({...act, kind: ['checkpoint']})).toThrow('JOB_ACT_INVALID');
+  // The request wrapper defers value validation to the ordinary finalizer/commit port.
+  // The existing pending-checkpoint test below proves that port refuses browser planStepId.
+});
+
+test('#646 source-and-replay-negative: UI @6 remains OFF and current replay digest stays authoritative', async () => {
+  const f = await fixture(), publication = await f.publish(), ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'}),
+    page = await f.display(publication);
+  const base = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation, submissionId: '646-writer-off',
+    kind: 'checkpoint', value: {checkpointId: 'step-one', outcome: 'pass', comments: [{text: 'one'}, {text: 'two'}]}};
+  const generation = f.session.status().generation;
+  expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest(base))).ok).toBe(false);
+  expect(f.session.status().generation).toBe(generation);
+  const input = {...base, value: {checkpointId: 'step-one', outcome: 'pass', words: 'one\ntwo'}};
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+  if (!saved.ok) throw new Error(saved.error.code);
+  expect(saved.value.schema).toBe('rig-review/act@2');
+  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
+  const changed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, value: {...input.value, words: 'two\none'}}));
+  expect(changed.ok).toBe(false);
+  if (!changed.ok) expect(changed.error.code).toBe('JOB_IDEMPOTENCY_CONFLICT');
+  expect(f.session.readActExport(saved.value.actId, false).toString()).toBe(JSON.stringify(saved.value));
+});
+
+test('#646 parts-and-feedback-text-limits: reuse existing feedback and scalar limits', () => {
+  const act = commentsAct();
+  const withText = (text: string) => ({...act, value: {...act.value, comments: [{text, anchor: feedbackAnchor()}]}});
+  expect(parseCommentsAct(withText('x'.repeat(1000))).value.comments[0]!.text).toHaveLength(1000);
+  for (const text of ['x'.repeat(1001), 'line\nline']) expect(() => parseCommentsAct(withText(text))).toThrow('JOB_ACT_INVALID');
+  expect(() => projectComments([{text: 'x'.repeat(10000)}])).toThrow('JOB_ACT_INVALID');
+});
+
+test('#646 later-Apply-stable-wording: changing capture identity preserves logical target label', () => {
+  const before = {text: 'Fix this', anchor: feedbackAnchor('old')}, after = {text: 'Fix this', anchor: feedbackAnchor('new')};
+  expect(projectComments([before])).toBe('[["slot","sleeve",3,3,null]]\nFix this');
+  expect(projectComments([after])).toBe(projectComments([before]));
+});
+
+test('#646 interview-excluded-from-act6: survey bytes and existing answer inputs remain unchanged', () => {
+  const act = commentsAct();
+  expect(() => parseCommentsAct({...act, kind: 'interview-picks', value: {comments: []}})).toThrow('JOB_ACT_INVALID');
+  expect(jobHash(legacyComments.records.survey.raw)).toBe(legacyComments.records.survey.sha256);
+  const survey = JSON.parse(legacyComments.records.survey.raw);
+  expect(survey.picks[0].other_text).toBe('한글\r\nKeep spaces  \ne\u0301');
+  expect(survey.note).toBe('  \n');
+});
+
+test('#646 question-answer-anchor-excluded: no question/ask feedback arm is invented', () => {
+  const act = commentsAct();
+  for (const anchor of [{questionId: 'framing', itemId: 'palette'}, {ask: 'palette'}]) {
+    expect(() => parseCommentsAct({...act, value: {...act.value, comments: [{text: 'Answer text', anchor}]}})).toThrow('JOB_ACT_INVALID');
+  }
+});
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });

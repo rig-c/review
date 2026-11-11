@@ -1455,3 +1455,128 @@ record-checkpoint flow following Create #395 integration. Create owns the actual
 producer receipt. Review's plan-signoff rendering has synthetic UI coverage.
 Normal CLI plan-signoff bootstrap and `plan-approved` act@4 ingestion are a
 separate Create follow-up. (Naru, 2026-11-11)
+
+## Comments decoder contract
+
+The comments feature accepts multiple ordered entries, each general or pinned to
+an existing inspection target. Surveys remain separate answer inputs: interview
+selections, inline Other text and per-question notes keep their existing formats,
+strings and readers. There is no interview-picks arm or question/ask anchor in
+this extension. Technical configuration and search controls are outside it.
+
+This change prepares read-only decoders and consumer projections. Current UI
+finalizers, standalone save paths and legacy act unions keep their existing
+versions. Fresh comments writers stay off until Create #422 is merged to main,
+its actual runner receipt records source SHA, installation, imports from the
+Review facade, normal @6 ingest/replay and command exits, and HQ reads that
+receipt. Create consumes private source; registry publication and Create
+version/workflow changes are not part of this gate. Owner review of the working
+screen remains required before UI merge.
+
+The existing `@rig-c/review/job-host` facade exports:
+
+| Function | Input → output |
+| --- | --- |
+| `parseCommentsAct` | `unknown` → `JobCommentsAct` |
+| `projectComments` | `readonly JobComment[]` → `string` |
+| `parseCommentsSession` | `unknown` → `ReviewCommentsSession` |
+| `parseCommentsCompareSession` | `unknown` → `CompareCommentsSession` |
+| `parseCommentsPartsVerdict` | `unknown` → `PartsCommentsVerdict` |
+| `projectSelectedCommentsFeedback` | `ReviewCommentsSession, itemId: string` → `{anchor: JobCommentFeedbackAnchor; summary: string}` |
+
+Use a decoder before projecting untrusted input. These functions perform no
+filesystem writes. Decode success validates declared identities and syntax; it
+does not grant producer/source-kind admission or prove retained asset freshness,
+source-native pixels, clock availability or owner authority. Those checks stay
+with the existing retained-source, package feedback and crop pipeline. The
+native-image region preparation adapter is still required before image-region
+writers activate.
+
+`JOB_COMMENTS_ACT_SCHEMA` is `rig-review/act@6`. Its exact envelope keys are
+`schema, actId, jobId, askId, publicationId, kind, authority, at, source, value`.
+The existing top-level `still` is required only for a model `rig-review` verdict
+and forbidden otherwise. It retains fixed camera, content-addressed PNG path,
+SHA-256 and setup-or-numeric-animation-time validation. The raw export and CLI
+reuse their existing PNG byte checks and preserve original act stdout bytes.
+The authority remains daemon-owned human `review-ui` authority. Model/image
+bindings and record plan sources retain their existing definitions; record
+option-set sources are excluded. Source capabilities remain consumer-owned.
+
+| Kind | Exact value keys |
+| --- | --- |
+| `checkpoint` | `checkpointId, planStepId, outcome, comments` (`pass` or `fail`) |
+| `parts-verdict` | `verdict, comments` (`approved` or `changes-requested`) |
+| `review-verdict` | `stage, verdict, comments` (existing rig/direction/image stages and verdicts) |
+| `signoff` | `stage, decision, comments` (`approved`) |
+| `reopen` | `stage, comments` (existing declared record plan subject) |
+
+The declared plan/source/selector and ask eligibility checks remain applicable.
+The browser never supplies authoritative checkpoint-to-plan mapping. A Parts
+verdict is approved exactly when it has no pointed Parts issue anchors; general
+comments do not create issues. Verdict and signoff remain distinct immutable
+acts even when one user action will submit the same comments to both.
+
+A `comments` array has at most 1,000 entries. Each entry has exactly `text` and
+optional `anchor`. Fresh text is a nonblank string of at most 10,000 UTF-16 units;
+trimming is a validation predicate and never changes the stored text. Reusing a
+Feedback or Parts codec preserves its stricter existing text limit. Existing
+evidence IDs stay unique. Intentional duplicate text and stored order remain.
+Unknown fields and mixed anchor arms refuse.
+
+Anchors use existing source-bound fields without a new kind discriminator:
+
+- Feedback without `summary`: `id, frameStart, frameEnd, target, category`, with
+  optional `context` and compare-only `side`. StageComment remains inside
+  `context.comment`; existing codecs and inline PNG validation are reused.
+- PartsIssue without `summary`: `schema, id, parts, sourceHash, rigRegion,
+  imageRegion, view, crop, nativeCrop`. Finalized item anchors require prepared
+  native crop metadata. Assembled anchors retain null native crop.
+- Named image: `name`, optionally the complete existing-field composition
+  `imageRegion, crop, nativeCrop`. Names resolve in the sealed image set. Regions
+  use nonnegative native-pixel integer origins, positive extents and at most
+  16,777,216 pixels. Actual image bounds and crop-to-original equality remain
+  native preparation checks.
+- Checkpoint: `checkpointId, planStepId`, resolved through the existing source
+  plan and any declared evidence mapping.
+
+`projectComments` traverses stored order. Each scalar block is
+`[label]\n` followed by exact `text`, with `\n\n` between blocks; the empty array
+projects to the empty string. The complete scalar is bounded to 10,000 UTF-16
+units. Lists retain individual entries. A general label is `general`; other
+labels are `JSON.stringify` of these logical target tuples:
+
+| Anchor | Label tuple |
+| --- | --- |
+| Checkpoint | `["checkpoint", checkpointId]` |
+| Parts | `[schema, parts.map(part => part.name), view.mode]` |
+| Image | `[name]` |
+| StageComment-backed Feedback | `[mark.schema, mark.mode, mark.viewport, target.kind, target.name, frameStart, frameEnd]` |
+| Other Feedback | `[target.kind, target.name, frameStart, frameEnd, side ?? null]` |
+
+Capture IDs, hashes and crop bytes stay in the raw anchor and do not enter the
+logical label. This keeps wording stable when a later Apply recaptures the same
+target. Consumer projection never serializes a synthetic historical act/session.
+
+The standalone schema constants are `REVIEW_COMMENTS_SESSION_SCHEMA` =
+`rig-review-session/2`, `REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA` =
+`rig-review-compare-session/2`, and `PARTS_COMMENTS_VERDICT_SCHEMA` =
+`rig-review-parts-verdict/5`. Session/2 replaces `feedback` with `comments` and
+checkpoint note entries with outcome-only entries. Compare/2 replaces `feedback`
+with `comments`, requires an explicit side on Feedback anchors and checks its
+existing binding hash. Parts/5 replaces `issues` with `comments`, deriving the
+issue relation from Parts anchors. Other existing envelope/provenance fields
+remain. `projectSelectedCommentsFeedback` selects exactly one Feedback
+`anchor.id` and returns that anchor plus the scalar projection of its entry for
+existing correction-writer arguments. The original new-session stdout remains
+the immutable evidence.
+
+Historical @2–@5 acts, session/1, compare-session/1, Parts/4 and survey records
+stay on their original readers, raw bytes, hashes, stills and replay paths.
+Display adaptation of old user feedback creates one general comment per existing
+summary/note/words field, including empty strings; it never rewrites history or
+reclassifies survey answers. Legacy correction summaries remain literal. Create's
+old Parts names projection gives a present `issues[]` precedence even for /1-/2;
+only absent `issues[]` uses `part.note`. Literal-byte controls and all eighteen
+cross-repository oracle outcomes belong in the PR evidence. Parser-only native
+coverage does not substitute for Create's actual ingest/replay receipt or owner
+working-screen review.

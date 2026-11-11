@@ -3,7 +3,9 @@ import {readFile, symlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {assertJobImageSetCapability, type JobImageSetInput, type JobImageReviewValue} from '../src/job-host.ts';
 import {jobHash} from '../src/job-api.ts';
-import {prepareJobImageSet} from '../src/job-image-set.ts';
+import {prepareJobImageSet, parseJobImageSetBinding} from '../src/job-image-set.ts';
+import {parseCommentsAct} from '../src/job-host.ts';
+import commentsLegacy from './fixtures/comments-contract-legacy.json';
 import {jobFixture} from './helpers/job-api-fixture.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {parseJobSubject as oldParseJobSubject} from './fixtures/job-image-set/old-subject-parser.ts';
@@ -35,6 +37,52 @@ async function submission(f: Awaited<ReturnType<typeof fixture>>) {
   return {publication, ask, input: {...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
     submissionId: 'image-verdict', kind: 'review-verdict', value}};
 }
+
+test('#646 shared image codec: pure sealed decoding matches actual bytes, Unicode/order and duplicate groups', async () => {
+  const f = await fixture(3), original = f.getContext().imageSet!;
+  const input = {...original, images: original.images.map((image, i) => ({...image, name: i === 0 ? 'e\u0301' : i === 1 ? 'é' : image.name}))};
+  const actualBytes = new Map(await Promise.all(input.images.map(async image => [image.path, await readFile(join(f.root, image.path))] as const)));
+  const reads: string[] = [];
+  const prepared = prepareJobImageSet(input, path => {reads.push(path); return actualBytes.get(path)!;});
+  const literal = JSON.stringify(prepared), decoded = parseJobImageSetBinding(JSON.parse(literal));
+  expect(decoded).toEqual(prepared);
+  expect(reads).toEqual(input.images.map(image => image.path));
+  expect(JSON.stringify(prepared)).toBe(literal);
+  expect(decoded.duplicateHashes).toEqual([{names: ['e\u0301', 'é', 'Image 2'], sha256: input.images[0]!.sha256!}]);
+  const relocated = {...input, images: input.images.map((image, i) => ({...image, path: `moved-${i}.png`}))};
+  const relocatedBytes = new Map(relocated.images.map((image, i) => [image.path, actualBytes.get(input.images[i]!.path)!]));
+  const moved = prepareJobImageSet(relocated, path => relocatedBytes.get(path)!);
+  expect(parseJobImageSetBinding(moved).imageSetDigest).toBe(decoded.imageSetDigest);
+  const reversed = prepareJobImageSet({...input, images: [...input.images].reverse()}, path => actualBytes.get(path)!);
+  expect(parseJobImageSetBinding(reversed).imageSetDigest).not.toBe(decoded.imageSetDigest);
+  const old = JSON.parse(commentsLegacy.records['@2'].raw), {model: _model, selector: _selector, ...common} = old.source;
+  const source = {...common, subject: 'image-set', ...decoded};
+  const act = {...old, schema: 'rig-review/act@6', kind: 'review-verdict', source,
+    value: {stage: 'image-review', verdict: 'approved', comments: [{text: 'Inspect this', anchor: {name: 'é'}}]}};
+  expect(parseCommentsAct(act).source).toEqual(source);
+  for (const change of [
+    {imageSetDigest: '0'.repeat(64)}, {duplicateHashes: []},
+    {imageSet: {...decoded.imageSet, images: [...decoded.imageSet.images].reverse()}},
+    {imageSet: {...decoded.imageSet, images: decoded.imageSet.images.map(({sha256: _sha, ...row}) => row)}},
+    {imageSet: {...decoded.imageSet, images: decoded.imageSet.images.map(row => ({...row, extra: true}))}},
+  ]) expect(() => parseCommentsAct({...act, source: {...source, ...change}})).toThrow('JOB_ACT_INVALID');
+});
+
+test('#646 shared image codec preserves existing preparation refusal codes and read order', async () => {
+  const f = await fixture(), input = f.getContext().imageSet!, images = input.images;
+  const bytes = new Map(await Promise.all(images.map(async image => [image.path, await readFile(join(f.root, image.path))] as const)));
+  const cases: [JobImageSetInput, string, number][] = [
+    [{...input, images: [images[0]!, {...images[1]!, name: images[0]!.name}]}, 'JOB_IMAGE_SET_DUPLICATE_NAME', 1],
+    [{...input, images: [images[0]!, {...images[1]!, path: images[0]!.path}]}, 'JOB_IMAGE_SET_DUPLICATE_PATH', 1],
+    [{...input, images: images.map(row => ({...row, role: 'candidate' as const}))}, 'JOB_IMAGE_SET_ROLE_INVALID', 2],
+    [{...input, images: [images[0]!, {...images[1]!, sha256: '0'.repeat(64)}]}, 'JOB_SOURCE_MISMATCH', 2],
+  ];
+  for (const [value, code, count] of cases) {
+    const reads: string[] = [];
+    expect(() => prepareJobImageSet(value, path => {reads.push(path); return bytes.get(path)!;})).toThrow(code);
+    expect(reads).toEqual(images.slice(0, count).map(row => row.path));
+  }
+});
 
 test('522 two-image model-free ask and human verdict roundtrip preserve source, digest, duplicates and optional notes', async () => {
   const f = await fixture(), {publication, ask, input} = await submission(f);

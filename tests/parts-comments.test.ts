@@ -6,12 +6,58 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {PNG} from 'pngjs';
 import {writePartsPackage} from './helpers/parts-package.ts';
-import {loadPartsView,saveVerdict,saveVerdictWithReceipt,readVerdict,readPartsVerdictJson,verdictSource,exportPartsVerdict,partsViewJson} from '../src/parts-view.ts';
+import {loadPartsView,saveVerdict,saveVerdictWithReceipt,readVerdict,readPartsVerdictJson,verdictSource,exportPartsVerdict,partsViewJson,type PartsViewPackage} from '../src/parts-view.ts';
 import {preparePartsComment,validateStoredPartsComment} from '../src/parts-comment-crops.ts';
-import {resolvedCropPath,storePngCrop} from '../src/comment-crops.ts';
+import {resolvedCropPath,storePngCrop,validatePngCrop,validatePngCropMetadata} from '../src/comment-crops.ts';
 import {parsePartsComment,parsePartsIssue,snapImageRegion} from '../src/parts-comment.ts';
 import {parseStageComment} from '../src/stage-comment.ts';
 import {commentFixture,candidate,legacyCandidate} from './helpers/parts-comments-package.ts';
+import {parseCommentsAct,parseCommentsPartsVerdict} from '../src/job-host.ts';
+import commentsLegacy from './fixtures/comments-contract-legacy.json';
+
+test('#646 crop metadata and actual PNG validation share the existing bounded identity rules', () => {
+ const png=PNG.sync.write(new PNG({width:2,height:3})),sha256=createHash('sha256').update(png).digest('hex');
+ const metadata={path:`comment-crops/${sha256}.png`,sha256,width:2,height:3};
+ expect(()=>validatePngCropMetadata(metadata)).not.toThrow();
+ expect(validatePngCrop({...metadata,png:'data:image/png;base64,'+png.toString('base64')})).toEqual(png);
+ for(const change of [{width:0},{height:16385},{width:4097,height:4097},{path:'other.png'},{sha256:'bad'}]) {
+  expect(()=>validatePngCropMetadata({...metadata,...change})).toThrow('COMMENT_CROP_INVALID: bounded content-addressed PNG required');
+  expect(()=>validatePngCrop({...metadata,...change,png:'data:image/png;base64,'+png.toString('base64')})).toThrow('COMMENT_CROP_INVALID: bounded content-addressed PNG required');
+ }
+});
+
+test('#646 literal Parts/4 normal reader retains original saved-file hash and never rewrites history', async () => {
+ const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'646-literal-parts-'));
+ try {
+  const literal=commentsLegacy.records.parts,raw=JSON.parse(literal.raw),file=raw.source.files[0],verdictPath=join(root,'parts-review.json');
+  await writeFile(join(root,'parts.json'),'{}');await writeFile(verdictPath,literal.raw);
+  // Metadata-only control: exercises the actual file reader/exporter, with no image/render claim.
+  const pkg={mode:'parts',items:[],flags:[],files:[{abs:join(root,'parts.json'),bytes:file.bytes,sha256:file.sha256}],flagFiles:[],verdictPath,imagePaths:[]} as unknown as PartsViewPackage;
+  expect((await readVerdict(pkg)).verdict!.schema).toBe('rig-review-parts-verdict/4');
+  expect(JSON.parse(await readPartsVerdictJson(pkg)).savedFileSha256).toBe(literal.sha256);
+  expect(await readFile(verdictPath,'utf8')).toBe(literal.raw);
+  expect(await readFile(join(root,'parts.json'),'utf8')).toBe('{}');
+ } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test('#646 Parts anchor reuses native crop codec, declared source and exact text limits', async () => {
+ const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'646-parts-'));
+ try {
+  const pkg=await commentFixture(root),one=await preparePartsComment(pkg,candidate(pkg)),{summary,...anchor}=one;
+  const old=JSON.parse(commentsLegacy.records['@5'].raw);
+  const source={...old.source,sourceHash:one.sourceHash,parts:{...old.source.parts,images:one.parts.map(part=>({role:'part',path:`parts/${part.name}.png`,sha256:part.imageHash}))}};
+  const act={...old,schema:'rig-review/act@6',source,value:{verdict:'changes-requested',comments:[{text:summary,anchor}]}};
+  expect(parseCommentsAct(act).value.comments[0]!.anchor).toEqual(anchor);
+  expect(()=>parseCommentsAct({...act,value:{...act.value,comments:[{text:'x'.repeat(1001),anchor}]}})).toThrow('JOB_ACT_INVALID');
+  expect(()=>parseCommentsAct({...act,value:{verdict:'approved',comments:act.value.comments}})).toThrow('JOB_ACT_INVALID');
+  expect(()=>parseCommentsAct({...act,source:{...source,sourceHash:'0'.repeat(64)}})).toThrow('JOB_ACT_INVALID');
+  expect(()=>parseCommentsAct({...act,source:{...source,parts:{...source.parts,images:[]}}})).toThrow('JOB_ACT_INVALID');
+  expect(()=>parseCommentsAct({...act,value:{...act.value,comments:[{text:summary,anchor:{...anchor,crop:{...anchor.crop,sha256:'0'.repeat(64)}}}]}})).toThrow('JOB_ACT_INVALID');
+  const sourceIdentity=verdictSource(pkg);
+  const verdict={schema:'rig-review-parts-verdict/5',mode:'parts',tool:{name:'@rig-c/review',version:'2.11.0'},source:sourceIdentity,status:'changes-requested',comments:[{text:summary,anchor}],updatedAt:'2020-01-03T00:00:00.000Z'};
+  expect(parseCommentsPartsVerdict(verdict).comments).toEqual(verdict.comments);
+ } finally {await rm(root,{recursive:true,force:true});}
+});
 // Prime the implicit spawn environment before any per-test state exists; children must get explicit state.
 beforeAll(async()=>{const warmup=Bun.spawn([process.execPath,'-e','void 0'],{stdout:'ignore',stderr:'pipe'});expect(await warmup.exited).toBe(0);});
 test('parts issues (/2): item and assembled multi-part records round-trip in verdict/4 and both exports; decoded server native RGBA equals original subrect including alpha',async()=>{
