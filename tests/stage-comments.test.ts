@@ -115,7 +115,7 @@ test('B/reference hashes, viewport and bookmark are independently bound; loopbac
 
 const {bindStageComments}=await import(process.env.RIG_REVIEW_COMMENTS_ADAPTER??'../web/stage-comments.ts');
 /** Event/DOM adapter control only; this does not claim browser pixels or native capture. */
-function commentUI(feedback:any[]=[],options:{locked?:(id:string)=>boolean;cropImpl?:()=>Promise<any>;canvasFactory?:()=>any;inline?:boolean;restoreImpl?:()=>Promise<void>;codec?:import("../web/stage-comments.ts").CommentCodec<any,any>}={}) {
+function commentUI(feedback:any[]=[],options:{locked?:(id:string)=>boolean;cropImpl?:()=>Promise<any>;canvasFactory?:()=>any;inline?:boolean;restoreImpl?:()=>Promise<void>;refusal?:()=>string|null;inspectionRefusal?:()=>string|null;blocked?:()=>boolean;busy?:()=>boolean;codec?:import("../web/stage-comments.ts").CommentCodec<any,any>}={}) {
  class Node {
   children:Node[]=[];parent:Node|null=null;style:any={};dataset:Record<string,string>={};className='';id='';textContent='';title='Comment · C';value='';placeholder='';type='';maxLength=0;hidden=false;disabled=false;readOnly=false;clientWidth=100;clientHeight=100;clientLeft=0;clientTop=0;captured=new Set<number>();attributes=new Map<string,string>();listeners=new Map<string,Function[]>();onclick:Function|null=null;onsubmit:Function|null=null;onkeydown:Function|null=null;
   classList={toggle:(name:string,on:boolean)=>{
@@ -134,7 +134,7 @@ function commentUI(feedback:any[]=[],options:{locked?:(id:string)=>boolean;cropI
  const prevGetComputedStyle=(globalThis as any).getComputedStyle;
  for(const [k,v]of Object.entries({document:doc,window:win,requestAnimationFrame:(f:Function)=>{next=f;return 1;},cancelAnimationFrame:()=>{},getComputedStyle:()=>({getPropertyValue:()=>'#3b82f6',backgroundColor:'rgb(20, 24, 32)',backgroundImage:'none',backgroundSize:'auto',backgroundPosition:'0% 0%',display:'block',visibility:'visible',opacity:'1',filter:'none',transformOrigin:'0px 0px',transform:'matrix(1, 0, 0, 1, 0, 0)',zIndex:'0',width:'100px',height:'100px',mixBlendMode:'normal'})})){saved.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;}
  let pose:any={mode:'animate',camera:mark({sourceHash:'a'.repeat(64)}).camera,frame:{index:0,basis:'producer'},time:0,animation:'idle',turn:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,rig:'probe'};
- const tool=bindStageComments({toolbar:toolbar as any,listHost:options.inline?side as any:undefined,viewports:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;await options.restoreImpl?.();},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;},error:(m:string)=>errors.push(m),blocked:()=>false,codec:options.codec});
+ const tool=bindStageComments({toolbar:toolbar as any,listHost:options.inline?side as any:undefined,viewports:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;await options.restoreImpl?.();},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;},error:(m:string)=>errors.push(m),blocked:options.blocked??(()=>false),refusal:options.refusal,inspectionRefusal:options.inspectionRefusal,busy:options.busy,codec:options.codec});
  const event=(extra:any={})=>({button:0,isPrimary:true,pointerId:7,clientX:50,clientY:50,target:new Node(),preventDefault(){},stopImmediatePropagation(){},...extra});
  const list=()=>(options.inline?side:workspace).children.find(n=>n.id==='stage-comment-list')!;
  return {toggle,pane,workspace,side,list,tool,pose,errors,restores:()=>restores,changes:()=>changes,tick:()=>next(),down:()=>{if(!tool.active())toggle.onclick?.();pane.dispatch('pointerdown',event());},up:()=>pane.emit('pointerup',event()),key:(k:string)=>doc.dispatch('keydown',event({key:k})),escape:()=>doc.dispatch('keydown',event({key:'Escape'})),blur:()=>win.dispatch('blur'),cleanup:()=>{tool.dispose();for(const [k,v]of saved)(globalThis as any)[k]=v;if(prevGetComputedStyle===undefined)delete (globalThis as any).getComputedStyle;}};
@@ -597,5 +597,82 @@ test('#614 only the latest overlapping issue restore owns pane visibility and co
   const pending=buttons[0]!.onclick!();expect(releases).toHaveLength(3);ui.tool.dispose();
   releases[2]!();await pending;
   expect(ui.pane.children.filter(node=>node.className.includes('stage-comment-composer'))).toHaveLength(0);
+ }finally{ui.cleanup();}
+});
+
+
+function readonlyInspectionRow() {
+ const comment=mark({sourceHash:'a'.repeat(64)});comment.animation='idle';
+ return {id:'readonly-inspection',summary:'Bound readonly evidence',context:{comment}};
+}
+function inspectionPins(ui:ReturnType<typeof commentUI>) {
+ return ui.pane.children.filter(node=>node.className==='stage-comment-layer')
+  .flatMap(node=>node.children).filter(node=>node.className.includes('stage-comment-pin'));
+}
+test('#645 readonly valid inspection retains existing pin and readonly composer while capture/edit/delete stay locked',async()=>{
+ const rows=[readonlyInspectionRow()],before=JSON.stringify(rows),reason='Read-only view: reopen with rig-review open to edit.';
+ const ui=commentUI(rows,{inline:true,locked:()=>true,refusal:()=>reason,inspectionRefusal:()=>null});
+ try{
+  ui.tick();expect(inspectionPins(ui)).toHaveLength(1);
+  await inspectionPins(ui)[0]!.onclick!();ui.tick();
+  const composer=ui.pane.children.find(node=>node.className.includes('stage-comment-composer'))!;
+  expect(composer).toBeDefined();expect(composer.children[0]!.readOnly).toBe(true);
+  expect(composer.children[1]!.textContent).toBe('Read only · Escape closes');
+  expect(composer.children.filter(node=>node.className==='stage-comment-delete'||node.type==='submit')).toHaveLength(0);
+  expect(ui.tool.active()).toBe(false);expect(ui.tool.draft()).toBe(false);
+  composer.children[0]!.value='forged edit';await composer.onsubmit!({preventDefault(){}});
+  expect(JSON.stringify(rows)).toBe(before);expect(ui.changes()).toBe(0);
+  ui.escape();ui.down();await ui.up();ui.tick();
+  expect(ui.pane.children.filter(node=>node.className.includes('stage-comment-composer'))).toHaveLength(0);
+  expect(inspectionPins(ui)).toHaveLength(1);expect(ui.tool.active()).toBe(false);
+  expect(JSON.stringify(rows)).toBe(before);expect(ui.changes()).toBe(0);
+  expect(ui.errors.some(error=>error.includes('Read-only'))).toBe(true);
+ }finally{ui.cleanup();}
+});
+test('#645 inspection source/paint/busy refusals suppress readonly saved pins and recover only when valid',()=>{
+ let inspection:string|null=null;
+ const ui=commentUI([readonlyInspectionRow()],{inline:true,locked:()=>true,
+  refusal:()=>'Read-only view: reopen with rig-review open to edit.',inspectionRefusal:()=>inspection});
+ try{
+  ui.tick();expect(inspectionPins(ui)).toHaveLength(1);
+  for(const reason of ['PARTS_COMMENT_STALE_SOURCE','PARTS_PAINT_FAILED','COMMENT_BUSY: wait for inspection','PARTS_COMMENT_UNAVAILABLE: original part image required']){
+   inspection=reason;ui.tick();expect(inspectionPins(ui)).toHaveLength(0);
+   inspection=null;ui.tick();expect(inspectionPins(ui)).toHaveLength(1);
+  }
+  ui.pose.sourceHash='b'.repeat(64);ui.tool.refresh();ui.tick();expect(inspectionPins(ui)).toHaveLength(0);
+  ui.pose.sourceHash='a'.repeat(64);ui.tool.refresh();ui.tick();expect(inspectionPins(ui)).toHaveLength(1);
+ }finally{ui.cleanup();}
+});
+test('#645 absent inspection extension preserves generic caller refusal and readonly-row behavior',async()=>{
+ let refusal:string|null='Read-only view: reopen with rig-review open to edit.';
+ const ui=commentUI([readonlyInspectionRow()],{inline:true,locked:()=>true,refusal:()=>refusal});
+ try{
+  ui.tick();expect(inspectionPins(ui)).toHaveLength(0);
+  await ui.list().children.find(node=>node.className==='stage-comment-item')!.children[0]!.onclick!();
+  const composer=ui.pane.children.find(node=>node.className.includes('stage-comment-composer'))!;
+  expect(composer.children[0]!.readOnly).toBe(true);
+  ui.escape();refusal=null;ui.tick();expect(inspectionPins(ui)).toHaveLength(1);
+  refusal='PARTS_PAINT_FAILED';ui.tick();expect(inspectionPins(ui)).toHaveLength(0);
+ }finally{ui.cleanup();}
+});
+
+
+test('#645 inspection busy does not replace the existing blocked mutation guard or cancel a valid owned restore',async()=>{
+ let blocked=false;
+ const rows=[readonlyInspectionRow()],before=JSON.stringify(rows);
+ const ui=commentUI(rows,{inline:true,blocked:()=>blocked,refusal:()=>null,
+  inspectionRefusal:()=>blocked?'COMMENT_BUSY: wait for inspection':null,
+  restoreImpl:async()=>{blocked=true;ui.tick();blocked=false;}});
+ try{
+  ui.tick();expect(inspectionPins(ui)).toHaveLength(1);
+  await inspectionPins(ui)[0]!.onclick!();ui.tick();
+  const composer=ui.pane.children.find(node=>node.className.includes('stage-comment-composer'))!;
+  expect(composer).toBeDefined();expect(composer.children[0]!.readOnly).toBe(false);
+  blocked=true;ui.tick();expect(inspectionPins(ui)).toHaveLength(0);
+  composer.children[0]!.value='blocked edit';await composer.onsubmit!({preventDefault(){}});
+  expect(JSON.stringify(rows)).toBe(before);expect(ui.changes()).toBe(0);
+  ui.escape();ui.down();await ui.up();expect(ui.tool.active()).toBe(false);
+  expect(ui.pane.children.filter(node=>node.className.includes('stage-comment-composer'))).toHaveLength(0);
+  blocked=false;ui.tick();expect(inspectionPins(ui)).toHaveLength(1);
  }finally{ui.cleanup();}
 });

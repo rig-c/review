@@ -894,6 +894,14 @@ function setupPartsComments():void {
  update:async(existing,summary,parts)=>prepareIssue({...existing,summary,
    parts:existing.view.mode==='assembled'?issueParts(parts??[]):existing.parts}),
  };
+ function partsCommentRefusal(inspection=false):string|null {
+  if(inspection&&disposed)return 'PARTS_COMMENT_UNAVAILABLE: original part image required';
+  return paintFailure??(inspection&&(painting||paintingHeld)?'COMMENT_BUSY: wait for inspection':null)
+   ??(state.data?.legacyVerdict?.readOnly?state.data.legacyVerdict.code+': '+t('parts.legacyVerdictBanner',[state.data.legacyVerdict.flaggedCount]):null)
+   ??(!inspection&&host.locked()!=='open'?'Read-only view: reopen with rig-review open to edit.':null)
+   ??(stageEmbedded&&state.data?.mode==='parts'?'PARTS_JOINED_ISSUE_UNSUPPORTED':null)
+   ??(state.data?.mode!=='parts'?'PARTS_COMMENT_UNAVAILABLE: original part image required':null);
+ }
  const pose=():PartsPose|null=>{const data=state.data,item=data?.items[state.selected],camera=viewport?.numericView().cameras.rig;if(!data||!item||!camera||data.mode!=='parts'||paintingHeld||(state.view!=='item'&&state.view!=='assembled'))return null;return {mode:'parts',camera,item:{...item},sourceHash:data.sourceHash,view:{mode:state.view,camera:{zoom:camera.zoom,center:{...camera.center},viewport:{...camera.viewport}},cameraSync:viewport!.state.cameraSync,referenceCamera:(()=>{const c=viewport!.numericView().cameras.reference;return c?{zoom:c.zoom,center:{...c.center},viewport:{...c.viewport}}:null;})(),background:state.bg,alpha:state.alpha,footprints:state.footprints,mesh:state.meshVisible,comparison:{...state.comparison}},capture:{pane:$('rig-viewport'),root:$('rig-root'),images:true,canvas:$<HTMLCanvasElement>('pv-canvas'),backend:'canvas2d',nearest:true}};};
  commentUi=bindStageComments({toolbar:slots.toolbar,listHost:slots.side,toggle:$<HTMLButtonElement>('stage-comment'),viewports:{rig:$('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
   restore:async(raw)=>{
@@ -921,7 +929,7 @@ function setupPartsComments():void {
       viewport!.state.cameraSync = bookmark.view.cameraSync;viewport!.fitCamera();
     } finally {if (!disposed) viewport!.state.cameraRestoring = false;}
   },
-  feedback:()=>comments,locked:()=>Boolean(state.data?.legacyVerdict?.readOnly)||host.locked() !== 'open',add:c=>comments.push(c),changed:()=>{renderList();host.changed(structuredClone(comments));},error:m=>{paintBusyStatus=null;$('pv-save-status').textContent=t(m);},blocked:()=>painting||paintingHeld,busy:()=>painting||paintingHeld,busyError:message=>{paintBusyStatus={token:paintToken,text:t(message)};$('pv-save-status').textContent=paintBusyStatus.text;},shortcutActive:()=>mountActive&&!disposed,refusal:()=>paintFailure??(state.data?.legacyVerdict?.readOnly?state.data.legacyVerdict.code+': '+t('parts.legacyVerdictBanner',[state.data.legacyVerdict.flaggedCount]):null)??(host.locked() !== 'open'?'Read-only view: reopen with rig-review open to edit.':null)??(stageEmbedded&&state.data?.mode==='parts'?'PARTS_JOINED_ISSUE_UNSUPPORTED':null)??(state.data?.mode!=='parts'?'PARTS_COMMENT_UNAVAILABLE: original part image required':null),codec});
+  feedback:()=>comments,locked:()=>Boolean(state.data?.legacyVerdict?.readOnly)||host.locked() !== 'open',add:c=>comments.push(c),changed:()=>{renderList();host.changed(structuredClone(comments));},error:m=>{paintBusyStatus=null;$('pv-save-status').textContent=t(m);},blocked:()=>painting||paintingHeld,busy:()=>painting||paintingHeld,busyError:message=>{paintBusyStatus={token:paintToken,text:t(message)};$('pv-save-status').textContent=paintBusyStatus.text;},shortcutActive:()=>mountActive&&!disposed,refusal:()=>partsCommentRefusal(),inspectionRefusal:()=>partsCommentRefusal(true),codec});
 }
 
 function renderCorrections():void {

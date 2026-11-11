@@ -282,3 +282,32 @@ test('#645 Difference adapter cannot smuggle an extra query through its literal 
   await expect(caller.read('2?extra=1', 17, true)).rejects.toThrow('JOB_DISPLAY_MISMATCH');
   expect(caller.calls).toHaveLength(0);
 });
+
+
+test('#645 Parts inspection refusal excludes only the current mutation lock while preserving all unsafe display states',()=>{
+  let phase='sent',binding:Record<string,any>|undefined;
+  const scope:Record<string,any>={disposed:false,paintFailure:null,painting:false,paintingHeld:false,stageEmbedded:false,
+    state:{data:{mode:'parts'}},host:{locked:()=>phase},slots:{toolbar:new Element(),side:new Element()},
+    $:()=>new Element(),t:(key:string)=>key,commentUi:null,
+    bindStageComments:(host:Record<string,any>)=>{binding=host;return {};}};
+  productFunction('setupPartsComments',scope)();
+  expect(binding).toBeDefined();const bound=binding!;
+  for(const locked of ['sent','approved','retry-signoff']){
+    phase=locked;expect(bound.locked()).toBe(true);expect(bound.refusal()).toContain('Read-only');
+    expect(bound.inspectionRefusal()).toBeNull();
+  }
+  phase='open';expect(bound.refusal()).toBeNull();expect(bound.inspectionRefusal()).toBeNull();
+  for(const failure of ['PARTS_PAINT_FAILED','PARTS_COMMENT_STALE_SOURCE']){
+    scope.paintFailure=failure;expect(bound.refusal()).toBe(failure);expect(bound.inspectionRefusal()).toBe(failure);
+  }
+  scope.paintFailure=null;
+  for(const key of ['painting','paintingHeld']){
+    scope[key]=true;expect(bound.blocked()).toBe(true);expect(bound.busy()).toBe(true);
+    expect(bound.refusal()).toBeNull();expect(bound.inspectionRefusal()).toContain('COMMENT_BUSY');scope[key]=false;
+  }
+  scope.stageEmbedded=true;expect(bound.inspectionRefusal()).toBe('PARTS_JOINED_ISSUE_UNSUPPORTED');scope.stageEmbedded=false;
+  scope.state.data.mode='atlas';expect(bound.inspectionRefusal()).toContain('PARTS_COMMENT_UNAVAILABLE');scope.state.data.mode='parts';
+  scope.state.data.legacyVerdict={readOnly:true,code:'legacy-boundary',flaggedCount:1};
+  expect(bound.locked()).toBe(true);expect(bound.refusal()).toContain('legacy-boundary');expect(bound.inspectionRefusal()).toContain('legacy-boundary');
+  delete scope.state.data.legacyVerdict;scope.disposed=true;expect(bound.inspectionRefusal()).toContain('PARTS_COMMENT_UNAVAILABLE');
+});
