@@ -461,6 +461,9 @@ test('pre-rig joined project preserves source-bound refusal and verdict output a
   const review=await (await fetch(origin+'/api/review')).json();
   expect(review.manifest.model).toBeUndefined();
   expect(review.capabilities).toMatchObject({preRig:true,interview:true,playback:false});
+  // #706: the joined draft names its project and draft, not the package folder and its adapter revision.
+  expect(review.subject).toEqual({project:'project',draft:'chain'});
+  expect(review.manifest.revision).toBe('folder-adapter/1');
 
   // Bind stage navigation using the exact server capabilities for this pre-rig draft.
   const dom=buildHeaderDom();
