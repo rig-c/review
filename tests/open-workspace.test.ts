@@ -119,12 +119,19 @@ test('owner landing accepts compatible roots and only the current unique incarna
   try {
     const identity = host.record.incarnation;
     for (const query of ['', '?lang=en', '?lang=ko', '?workspace=' + identity,
-      '?workspace=' + identity + '&lang=en', '?lang=ko&workspace=' + identity]) {
-      const response = await fetch(host.record.origin + '/' + query);
-      expect(response.status).toBe(200); await response.body?.cancel();
+      '?workspace=' + identity + '&lang=en', '?lang=ko&workspace=' + identity,
+      '?%77orkspace=' + identity + '&lang=%65n', '?workspace=' + identity + '&']) {
+      // Fragments are client-side; fetching these forms pins document delivery only.
+      for (const hash of ['', '#cap=' + 'c'.repeat(64), '#review=' + 'd'.repeat(64)]) {
+        const response = await fetch(host.record.origin + '/' + query + hash);
+        expect(response.status).toBe(200);
+        expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+        await response.body?.cancel();
+      }
     }
     for (const query of ['?workspace=' + identity + '&workspace=' + identity, '?lang=en&lang=en',
-      '?workspace=' + identity + '&extra=1', '?workspace=' + identity + '&lang=fr']) {
+      '?workspace=' + identity + '&extra=1', '?workspace=' + identity + '&lang=fr',
+      '?lang=', '?lang=EN', '?lang=en&lang=ko', '?cap=secret', '?review=secret']) {
       const response = await fetch(host.record.origin + '/' + query);
       expect(response.status).toBe(400); expect(await response.json()).toEqual({error: 'WORKSPACE_REQUEST_INVALID'});
     }
@@ -191,9 +198,30 @@ test('workspace reuses legacy stage-frame and nonlanding query policy while pres
     }
     for (const path of ['/api/compare?debug=1', '/stage-parts.html?stageEmbed=1&lang=en',
       '/stage-parts.html?stageEmbed=1&lang=ko&side=a&extra=1']) await queryRefused(comparison.key, path);
-    for (const [key, query] of [[a.key, '?stageEmbed=1&lang=ko'], [comparison.key, '?stageEmbed=1&lang=en&side=b']]) {
-      const response = await fetch(host.record.origin + '/instances/' + key + '/stage-parts.html' + query);
-      expect(response.status).toBe(200); await response.body?.cancel();
+    for (const [key, sides] of [[a.key, ['']], [comparison.key, ['&side=a', '&side=b']]] as const) {
+      for (const page of ['stage-parts.html', 'stage-interview.html']) {
+        for (const lang of ['en', 'ko']) for (const side of sides) {
+          for (const hash of ['', '#cap=' + 'c'.repeat(64), '#review=' + 'd'.repeat(64)]) {
+            const response = await fetch(host.record.origin + '/instances/' + key + '/' + page +
+              '?stageEmbed=1&lang=' + lang + side + hash);
+            expect(response.status).toBe(page === 'stage-interview.html' ? 404 : 200);
+            if (page === 'stage-parts.html') expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+            await response.body?.cancel();
+          }
+        }
+        const side = key === comparison.key ? '&side=a' : '';
+        for (const query of ['', '?stageEmbed=1', '?stageEmbed=0&lang=en' + side,
+          '?stageEmbed=1&lang=fr' + side, '?stageEmbed=1&lang=en&lang=ko' + side,
+          '?stageEmbed=1&stageEmbed=1&lang=en' + side, '?stageEmbed=1&lang=en&side=c',
+          '?stageEmbed=1&lang=en&side=a&side=b', '?stageEmbed=1&lang=en&cap=secret' + side,
+          '?stageEmbed=1&lang=en&review=secret' + side,
+          key === comparison.key ? '?stageEmbed=1&lang=en' : '?stageEmbed=1&lang=en&side=a']) {
+          if (page === 'stage-interview.html' && key === comparison.key) {
+            const response = await fetch(host.record.origin + '/instances/' + key + '/' + page + query);
+            expect(response.status).toBe(404); await response.body?.cancel();
+          } else await queryRefused(key, '/' + page + query);
+        }
+      }
     }
     for (const target of (await ownerList(host)).targets) {
       const url = new URL(target.entry, host.record.origin);

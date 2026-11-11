@@ -64,10 +64,12 @@ test('member embedding grants frame ancestors only to its validated landing quer
   const f = await setup(), grant = await (await f.open()).json(), base = f.h.origin + '/jobs/' + f.a.session.jobId + '/';
   for (const query of ['', '?lang=en', '?lang=ko']) {
     const response = await fetch(base + query); expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
     expect(response.headers.get('Content-Security-Policy')).toContain("frame-ancestors 'none'"); await response.body?.cancel();
   }
   for (const query of ['?hub=' + f.incarnation, '?hub=' + f.incarnation + '&lang=ko', '?lang=en&hub=' + f.incarnation]) {
     const response = await fetch(base + query); expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
     expect(response.headers.get('Content-Security-Policy')).toContain("frame-ancestors 'self'"); await response.body?.cancel();
   }
   for (const suffix of ['?hub=other', '?hub=' + f.incarnation + '&hub=' + f.incarnation,
@@ -80,9 +82,32 @@ test('member embedding grants frame ancestors only to its validated landing quer
   const direct = await startJobHost({...f.options(directInput), stateDir: directInput.state, reviewer});
   try {expect((await fetch(direct.origin + '/jobs/' + direct.session.jobId + '/?hub=' + f.incarnation)).status).toBe(400);}
   finally {direct.stop();}
+  // Hash credentials are not sent over HTTP and cannot grant API authority.
+  for (const query of ['?workspace=' + f.incarnation, '?workspace=' + f.incarnation + '&lang=en',
+    '?lang=ko&workspace=' + f.incarnation, '?%77orkspace=' + f.incarnation + '&lang=%65n',
+    '?workspace=' + f.incarnation + '&']) {
+    for (const hash of ['', '#cap=' + f.capability, '#review=' + f.capability]) {
+      const response = await fetch(f.h.origin + '/hub/' + query + hash);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+      await response.body?.cancel();
+    }
+  }
+  for (const hash of ['#cap=' + f.capability, '#review=' + f.capability]) {
+    expect((await fetch(f.h.origin + '/hub/api/jobs' + hash)).status).toBe(403);
+    for (const query of ['', '?lang=en', '?hub=' + f.incarnation + '&lang=ko']) {
+      const response = await fetch(base + query + hash);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+      await response.body?.cancel();
+    }
+  }
   const owner = await fetch(f.h.ownerUrl); expect(owner.status).toBe(200); const html = await owner.text(); expect(html).toContain('data-job-hub');
   expect(html).not.toContain(grant.capability);
-  for (const query of ['?workspace=other', '?workspace=' + f.incarnation + '&workspace=' + f.incarnation, '?workspace=' + f.incarnation + '&extra=1']) {
+  for (const query of ['', '?lang=en', '?lang=ko', '?workspace=',
+    '?workspace=' + f.incarnation + '&lang=', '?workspace=' + f.incarnation + '&lang=EN',
+    '?workspace=' + f.incarnation + '&lang=en&lang=ko', '?workspace=' + f.incarnation + '&cap=secret',
+    '?workspace=' + f.incarnation + '&review=secret', '?workspace=other', '?workspace=' + f.incarnation + '&workspace=' + f.incarnation, '?workspace=' + f.incarnation + '&extra=1']) {
     expect((await fetch(f.h.origin + '/hub/' + query)).status).toBe(400);
   }
   expect((await fetch(f.h.origin + '/hub/job-hub.css?debug=1')).status).toBe(400);
