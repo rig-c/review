@@ -380,7 +380,7 @@ test('#735 source-only startup disables Comments without changing its preserved 
  const initialize=new Function('scope','with(scope){return '+new Bun.Transpiler({loader:'ts'}).transformSync('(async()=>{'+source.slice(a,b)+'})()')+';}');
  for(const preRig of [false,true]){
   const comment=new Host('button'),act=new Host();
-  const scope={data:null,session:null,readOnly:null,rigInspector:{act,comments:{button:comment}},access:{},readOnlyReason:()=>null,
+  const scope={data:null,session:null,readOnly:null,actReadOnly:null,host:null,rigInspector:{act,comments:{button:comment}},access:{},readOnlyReason:()=>null,
    api:async(path:string)=>path==='/api/review'?{capabilities:{preRig}}:path==='/api/session'?{status:'pending'}:{capabilityRequired:false}};
   await initialize(scope);expect((comment as any).disabled??false).toBe(preRig);expect(act.hidden).toBe(preRig);
  }
@@ -413,7 +413,7 @@ test('#671 real mounted outer tab-panel relationships preserve original nodes an
   binding.restore('rig');binding.dispose();
   expect(page.all().filter(node=>node.attrs.get('aria-labelledby')?.startsWith('block-tab-')).map(node=>[node.id,node.getAttribute('role'),node.getAttribute('aria-labelledby')])).toEqual(innerBefore);
   const source=await mainSource(),a=source.indexOf('    let writes:',source.indexOf('async function start():')),b=source.indexOf('    submittedBaseline=',a);
-  const scope={data:null as unknown,session:null as unknown,readOnly:null as unknown,rigInspector:mounted,access:{},readOnlyReason:()=>null,button:(id:string)=>document.getElementById(id)!,api:async(path:string)=>path==='/api/review'?{capabilities:{preRig:true}}:path==='/api/session'?{status:'pending'}:{capabilityRequired:false}};
+  const scope={data:null as unknown,session:null as unknown,readOnly:null as unknown,actReadOnly:null as unknown,host:null,rigInspector:mounted,access:{},readOnlyReason:()=>null,button:(id:string)=>document.getElementById(id)!,api:async(path:string)=>path==='/api/review'?{capabilities:{preRig:true}}:path==='/api/session'?{status:'pending'}:{capabilityRequired:false}};
   await new Function('scope','with(scope){return '+new Bun.Transpiler({loader:'ts'}).transformSync('(async()=>{'+source.slice(a,b)+'})()')+';}')(scope);
   const preRig=bindInspectorTabs(()=>{},()=>{},row);
   try{preRig.select('feedback');expect(preRig.state()).toBe('rig');expect(originals[2]!.hidden).toBe(true);expect((mounted.comments.button as any).disabled).toBe(true);expect(mounted.act.hidden).toBe(true);expect(row.tabs.map(tab=>tab.id)).toEqual(['rig','playback']);}
@@ -525,7 +525,7 @@ test('#695 act bar save state: one model renders saved, unsaved, saving, failed 
   const snapshot=bar.saveState()!;snapshot.text='changed';expect(bar.saveState()?.text).toBe('Save failed.');
   const source=await mainSource(),start=source.indexOf(' const state=rigInspector.actBar;',source.indexOf('async function startParts(')),end=source.indexOf(" select('review-status')",start);
   expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
-  const initializeParts=new Function('rigInspector','readOnly',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end)));
+  const initializeParts=new Function('rigInspector','actReadOnly',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end)));
   for(const readOnly of [null,'Read-only view: reopen with rig-review open to edit.']){
    initializeParts({actBar:bar},readOnly);shown(readOnly?'read-only':'unsaved',readOnly??'Not submitted');
   }

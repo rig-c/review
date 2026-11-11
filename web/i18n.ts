@@ -573,6 +573,7 @@ const CONTEXT_LOWER_KEYS = new Set([
 function isExemptElement(el: Element | null): boolean {
   let cur: Element | null = el;
   while (cur) {
+    if (cur.getAttribute?.('translate') === 'no') return true;
     const id = cur.id;
     if (
       id === 'target-names' ||

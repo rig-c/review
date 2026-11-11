@@ -6,16 +6,16 @@ import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jo
 import type {DisplayPublicationV3,PendingAskV3,UISubmissionV3} from '../src/job-contract.ts';
 import {recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 
-async function harness(picture:boolean|'parts'=false){
+async function harness(picture:boolean|'parts'=false,capability:string|null='fixture'){
  const f=await recordScreenFixture('checkpoint',picture),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
  const state={pending:[f.ask] as PendingAskV3[],receipt:null as {publicationId:string;pageId:string;displayedNonce:string}|null,generation:f.display.publication.generation,preparing:false,closed:false};
  const submitted:UISubmissionV3[]=[],store=new Map<string,string>();
  const node=((tag:string,key?:string)=>{const value=dom.document.createElement(tag);if(key)value.textContent=key;return value;}) as JobFormDependencies['node'];
  let screen:ReturnType<typeof createJobRigScreen>;
  const drafts=createJobFormDrafts({jobId:f.session.jobId,current:()=>screen.mounted()?.record?.inspection??null,forms:()=>screen.mounted()?.record?.forms??new Map(),storage:()=>({setItem:(k,v)=>{store.set(k,v);}})});
- const deps:JobFormDependencies={node,translate:key=>key,helpers:{...createJobFormHelpers(node,key=>key),jobCheckpointContext,assertJobAskSource:(ask,display)=>{prepareJobForms(display,[ask],()=>null);}},draftStorage:()=>({getItem:k=>store.get(k)??null}),...drafts,access:{capability:'fixture'},pageId:'fixture-page',window:{state:()=>state,submit:async input=>{submitted.push(input);return {ok:false,error:{code:'JOB_ACT_INVALID',message:'fixture refusal'}};}}};
+ const deps:JobFormDependencies={node,translate:key=>key,helpers:{...createJobFormHelpers(node,key=>key),jobCheckpointContext,assertJobAskSource:(ask,display)=>{prepareJobForms(display,[ask],()=>null);}},draftStorage:()=>({getItem:k=>store.get(k)??null}),...drafts,access:{capability},pageId:'fixture-page',window:{state:()=>state,submit:async input=>{submitted.push(input);return {ok:false,error:{code:'JOB_ACT_INVALID',message:'fixture refusal'}};}}};
  const reads:string[]=[];
- const options:Parameters<typeof createJobRigScreen>[0]={host:{classList:{remove(){}},replaceChildren(){}} as unknown as HTMLElement,pageId:deps.pageId,access:{capability:'fixture',headers:()=>new Headers({'X-Review-Capability':'fixture'})},window:deps.window,formDependencies:deps,
+ const options:Parameters<typeof createJobRigScreen>[0]={host:{classList:{remove(){}},replaceChildren(){}} as unknown as HTMLElement,pageId:deps.pageId,access:{capability,headers:()=>new Headers(capability?{'X-Review-Capability':capability}:{})},window:deps.window,formDependencies:deps,
   readPublication:async id=>{reads.push(id);const value=f.fake.publications.get(id);return value?{ok:true,value}:{ok:false,error:{code:'JOB_PUBLICATION_UNKNOWN',message:'unknown'}};},
   routes:display=>jobPublicationRoutes(display,f.origin),translate:key=>key,refusal:error=>error instanceof Error?error.message:String(error),
   async load(){rigHost()!.attach({stage:()=>null,redraw(){},message(){},recordForms(){}});rigHost()!.displayed();}};screen=createJobRigScreen(options);
@@ -227,4 +227,20 @@ for(const absence of ['absent','invalid','limit','no-issue','no-projection'] as 
   }
   inspection.dispose();
  }finally{unbind?.();await h.close();i18n.setLinkLanguage(link);i18n.setLanguagePreference(preference);}
+});
+
+for(const picture of [true,'parts'] as const)for(const capability of ['fixture',null])test(`#756 ${picture} backdrop keeps source denial separate from ${capability?'owner':'copied-link'} act authority`,async()=>{
+ const {readOnlyReason,readOnlyMessage}=await import('../web/instance-access.ts');const h=await harness(picture,capability);
+ try{
+  const prepared=await h.screen.prepare(h.f.display,new AbortController().signal);h.screen.commit(prepared!);await h.screen.painted(prepared!,new AbortController().signal);
+  const host=rigHost()!;expect(host.access.capability).toBeNull();expect(host.access.headers().has('X-Review-Capability')).toBe(false);
+  expect(host.ownerActAccess?.capability).toBe(capability);expect(readOnlyReason(host.access,null,host.ownerActAccess)).toBeNull();
+  expect(readOnlyReason(host.access,true,host.ownerActAccess)).toBe(capability?null:readOnlyMessage);
+  h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'ready'};h.screen.changed(h.state);
+  const entry=prepared!.record!.forms.get(h.f.ask.askId)!;expect(entry.fieldset.disabled).toBe(!capability);
+  entry.form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='pass';await entry.form.onsubmit!({preventDefault(){}} as never);
+  expect(h.submitted).toHaveLength(capability?1:0);
+  for(const method of ['POST','PUT','PATCH','DELETE'])await expect(host.read('/api/stage-parts/verdict',method)).rejects.toThrow('JOB_REVIEW_READ_ONLY');
+  expect(host.access.headers().has('X-Review-Capability')).toBe(false);
+ }finally{await h.close();}
 });

@@ -1244,3 +1244,16 @@ test('#739 rig Difference pixel count translates and round-trips in the existing
  expect(korean).toBe('차이: 리그가 그리는 100픽셀 중 64픽셀 다름 · 정지 셋업과 원본 그림.');
  expect(tr(english,'ko')).toBe(korean);expect(tr(korean,'en')).toBe(english);
 });
+
+test('#756 translate=no ancestors preserve producer prose, table values and identities while chrome translates',()=>{
+ const preference=getLanguagePreference();const {doc,root}=makeTestDoc();
+ const raw=new TestElement('section',doc);raw.setAttribute('translate','no');
+ const heading=new TestElement('summary',doc);heading.textContent='Frame';heading.title='Zoom out';
+ const table=new TestElement('table',doc),head=new TestElement('thead',doc),column=new TestElement('th',doc),body=new TestElement('tbody',doc),cell=new TestElement('td',doc);
+ column.textContent='Frame';cell.textContent='Pass';head.append(column);body.append(cell);table.append(head,body);raw.append(heading,table);
+ const chrome=new TestElement('button',doc);chrome.textContent='Close';chrome.title='Zoom out';root.append(raw,chrome);
+ try{
+  for(const language of ['ko','en'] as const){setLanguagePreference(language);applyDomI18n(doc);expect(heading.textContent).toBe('Frame');expect(heading.title).toBe('Zoom out');expect(column.textContent).toBe('Frame');expect(cell.textContent).toBe('Pass');expect(chrome.textContent).toBe(t('Close'));expect(chrome.title).toBe(t('Zoom out'));}
+  raw.removeAttribute('translate');setLanguagePreference('ko');applyDomI18n(doc);expect(column.textContent).toBe(t('Frame'));expect(heading.title).toBe(t('Zoom out'));
+ }finally{setLanguagePreference(preference);}
+});

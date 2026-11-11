@@ -36,7 +36,7 @@ export function instanceAccess(href:string,storage:Pick<Storage,'getItem'|'setIt
   route:path=>{if(!path.startsWith('/')||path.startsWith('//'))throw new Error('Instance route must be app-absolute');return base+path.slice(1);},
   headers:init=>{const headers=new Headers(init);if(capability)headers.set(capabilityHeader,capability);return headers;}};
 }
-/** A server that requires a capability, reached without one, is read-only with this reason. */
-export function readOnlyReason(access:Pick<InstanceAccess,'capability'>,capabilityRequired:boolean):string|null {return capabilityRequired&&!access.capability?readOnlyMessage:null;}
+/** Unresolved access has no verdict. UI act status may use its own authority without changing source access. */
+export function readOnlyReason(access:Pick<InstanceAccess,'capability'>,capabilityRequired:boolean|null,authority:Pick<InstanceAccess,'capability'>=access):string|null {return capabilityRequired===true&&!authority.capability?readOnlyMessage:null;}
 /** Browser glue: tolerate storage denial; the page then keeps the capability in memory only. */
 export function pageInstanceAccess():InstanceAccess {let storage:Storage|null=null;try{storage=sessionStorage;}catch{}return instanceAccess(location.href,storage,href=>history.replaceState(history.state,'',href));}

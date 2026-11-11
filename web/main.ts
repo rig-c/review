@@ -147,6 +147,7 @@ const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,set
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
 if(!host)connectLiveWindow(access);
 let readOnly: string | null = null;
+let actReadOnly: string | null = null;
 let data: ReviewResponse;
 let directionPanel:ReturnType<typeof bindDirectionPanel>|undefined;
 let session: ReviewSession;
@@ -276,14 +277,14 @@ function updateSavedState(): void {
   text('dirty', dirty ? 'Unsubmitted changes' : session.updatedAt ? 'Submitted' : 'Not submitted');
   el('dirty').classList.toggle('dirty', dirty);
   button('save').disabled = saving || draftConflict || !!readOnly || session.feedbackWarnings.length > 0;
-  button('save').title = readOnly ? readOnly : session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : '';
+  button('save').title = actReadOnly ? actReadOnly : session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : '';
   renderDraftState();
 }
 
 /** C10: the act bar renders the latest local draft status; rig only classifies it. Nothing renders before the first status. */
 function renderDraftState(): void {
   if (draftStatus === null) return;
-  rigInspector.actBar.setSaveState({ kind: readOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftStatus });
+  rigInspector.actBar.setSaveState({ kind: actReadOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftStatus });
 }
 
 function renderProvenance(): void {
@@ -1197,7 +1198,8 @@ async function start(): Promise<void> {
     const [opened,saved,accessState]=await Promise.all([api<ReviewResponse|PartsSubjectEntry>('/api/review'),api<ReviewSession|PartsSubjectSession>('/api/session'),api<{capabilityRequired:boolean;control?:boolean}>('/api/access')]);
     if('subject' in opened&&opened.subject==='parts'){await startParts(opened,saved as PartsSubjectSession,accessState);return;}
     data=opened as ReviewResponse;session=saved as ReviewSession;writes=accessState;
-    readOnly = readOnlyReason(access, writes.capabilityRequired);
+    readOnly = host?.record ? tr('JOB_REVIEW_READ_ONLY') : readOnlyReason(access, writes.capabilityRequired);
+    actReadOnly = readOnlyReason(access, writes.capabilityRequired, host?.ownerActAccess);
     if(data.capabilities.preRig){rigInspector.comments.button.disabled=true;rigInspector.act.hidden=true;}
     submittedBaseline=structuredClone(session);
     text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
@@ -1220,7 +1222,8 @@ async function start(): Promise<void> {
     if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
     viewport.state.activeCamera=player?'rig':'reference';if(viewport.state.cameraSync)alignCameras();renderTransport();fitCamera();
     if (requestedId && !first) message(`Checkpoint "${requestedId}" is not in this package. Select one from the list.`, true);
-    else if (readOnly) message(readOnly, true);
+    else if (actReadOnly) message(actReadOnly, true);
+    else if (host?.ownerActAccess) message('Not submitted');
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     requestAnimationFrame(tick);
     const restored=await setupPersistence();setupComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
@@ -1234,7 +1237,8 @@ async function start(): Promise<void> {
 async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,writes:{capabilityRequired:boolean}):Promise<void>{
  const subject=opened.parts,issues=saved.issues,submittedIssues=new Set(host? saved.issues.map(issue=>issue.id):[]);
  if(!partsOnly)throw new Error('PARTS_SUBJECT_ENTRY_REQUIRED');
- readOnly=readOnlyReason(access,writes.capabilityRequired);
+ readOnly=host?.record?tr('JOB_REVIEW_READ_ONLY'):readOnlyReason(access,writes.capabilityRequired);
+ actReadOnly=readOnlyReason(access,writes.capabilityRequired,host?.ownerActAccess);
  text('package-title',subject.title);text('revision','Parts package, before rigging');text('source-hash',`source ${subject.sourceHash.slice(0,12)}`);document.title=subject.title;
  bindWorkspace();bindInspector(true);
  const base=host?'/api/stage-parts':'/api/parts';
@@ -1271,7 +1275,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  controls.setDisabled('difference',subject.differenceAvailable&&subject.painting?null:tr('PARTS_DIFFERENCE_UNAVAILABLE: missing painting_in_rig declaration or painting_in_rig.json sidecar and its bound operand.'));
  const reference=select('reference-select');reference.replaceChildren(option('',subject.painting?'Original painting':'No references supplied'));reference.disabled=true;
  el('package-context').removeAttribute('open');el('reference-empty').hidden=!!subject.painting;el('rig-overlay').hidden=true;
- const state=rigInspector.actBar;state.setSaveState({kind:readOnly?'read-only':'unsaved',text:readOnly??'Not submitted'});
+ const state=rigInspector.actBar;state.setSaveState({kind:actReadOnly?'read-only':'unsaved',text:actReadOnly??'Not submitted'});
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
  button('save').disabled=saveBlocked();
  button('save').onclick=async()=>{
@@ -1287,7 +1291,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  };
  viewDisposers.push(viewport.bindControls(),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
- viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message('Parts ready. Source files remain unchanged.');referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
+ viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message(actReadOnly??(host?.ownerActAccess?'Not submitted':'Parts ready. Source files remain unchanged.'),!!actReadOnly);referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
  if(host){host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message,pendingSubjects:renderPendingSubjects});host.displayed();}
  window.addEventListener('pagehide',()=>{partsSubject?.dispose();inspectorTabs?.dispose();workspace?.dispose();appearance?.dispose();viewDisposers.forEach(dispose=>dispose());});
@@ -1297,8 +1301,9 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
 function startRecord():void {
  if(!host?.record)throw new Error('JOB_DISPLAY_MISMATCH');
  readOnly=tr('JOB_REVIEW_READ_ONLY');
+ actReadOnly=readOnlyReason(access,true,host.ownerActAccess);
  bindWorkspace();bindInspector(true);rigInput={state:'absent'};referenceInput={state:'absent'};renderLayout();
- parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');message('This request has no picture.');
+ parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');message(actReadOnly??'This request has no picture.',!!actReadOnly);
  text('package-title',host.record.label);text('revision','');text('source-hash',`source ${host.record.sourceHash.slice(0,12)}`);
  el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty','This request has no picture.');
  for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')){control.disabled=true;setSourceAttribute(control,'title','This request has no picture.');}

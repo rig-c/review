@@ -1246,6 +1246,7 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
             figure.dataset.imageName = image.name;
             const name = node('h3');
             name.textContent = image.name;
+            if (titleOnly) name.setAttribute('translate', 'no');
             name.style.overflowWrap = 'anywhere';
             const role = image.role ? node('p', 'job.imageRole.' + image.role) : node('p');
             const hash = node('code');
@@ -1269,6 +1270,8 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
         projection: JobPlanTextProjection | undefined): void {
         const row = projection?.status === 'projected' ? projection.steps.find(row => row.id === step.id && row.hash === step.hash) : undefined;
         const key = row?.does === undefined ? 'job.plan.field.' + (row?.issues.find(issue => issue.field === 'does')?.reason ?? 'absent') : undefined;
+        // Producer identities stay raw; absence keys still follow the job form's own language binding.
+        element.setAttribute('translate', 'no');
         if (key) element.dataset.jobText = key;
         else delete element.dataset.jobText;
         element.textContent = key ? t(key) : row!.does!;
@@ -1308,11 +1311,11 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
                         for (const text of row.rests_on!) {
                             const rest = node('li'), dependency = plan.steps.find(step => step.id === text);
                             if (dependency) {planStepText(rest, dependency, projection); rest.title = text;}
-                            else rest.textContent = text;
+                            else {rest.textContent = text; rest.setAttribute('translate', 'no');}
                             rests.append(rest);
                         }
                         value.append(rests);
-                    } else value.textContent = row[field]!;
+                    } else {value.textContent = row[field]!; value.setAttribute('translate', 'no');}
                     fields.append(term, value);
                 }
                 details.append(fields);
@@ -1371,7 +1374,7 @@ export interface JobFormDependencies {
         source.className = 'job-source';
         source.textContent = ask.subject.kind === 'review-verdict'
             ? prepared.display.publication.label + ' · ' + ask.source.sourceHash : prepared.display.publication.label;
-        if (ask.subject.kind !== 'review-verdict') source.title = ask.source.sourceHash;
+        if (ask.subject.kind !== 'review-verdict') {source.title = ask.source.sourceHash; source.setAttribute('translate', 'no');}
         fields.append(source);
         const subject = ask.subject;
         const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff' || subject.kind === 'reopen';
@@ -1444,11 +1447,13 @@ export interface JobFormDependencies {
             const heading = node('h3');
             heading.textContent = checkpoint.title;
             heading.title = subject.checkpointId;
+            heading.setAttribute('translate', 'no');
             if (prepared.metadata.manifest?.checkpoints.find(item => item.id === subject.checkpointId)?.title == null)
                 planStepText(heading, checkpoint.step, prepared.metadata.planText);
             fields.prepend(heading);
             const guidance = node('p');
             guidance.textContent = checkpoint.note;
+            guidance.setAttribute('translate', 'no');
             fields.append(guidance, planTextList(ask.source.plan!, prepared.metadata.planText, checkpoint.step.id));
             const evidence = prepared.checkpointEvidence?.find(item => item.packet.checkpointId === subject.checkpointId);
             const declared = ask.source.checkpointEvidence?.find(item => item.checkpointId === subject.checkpointId);
@@ -1471,8 +1476,10 @@ export interface JobFormDependencies {
                 if (evidence.packet.table.label !== undefined) {
                     delete caption.dataset.jobText;
                     caption.textContent = evidence.packet.table.label;
+                    caption.setAttribute('translate', 'no');
                 }
                 const head = node('thead');
+                head.setAttribute('translate', 'no');
                 const columns = node('tr');
                 for (const column of evidence.table.columns) {
                     const cell = node('th');
@@ -1482,6 +1489,7 @@ export interface JobFormDependencies {
                 }
                 head.append(columns);
                 const body = node('tbody');
+                body.setAttribute('translate', 'no');
                 for (const row of evidence.table.rows) {
                     const cells = node('tr');
                     for (const value of row) {
@@ -1495,8 +1503,10 @@ export interface JobFormDependencies {
                 tableHost.append(table);
                 const routes = node('pre');
                 routes.textContent = evidence.packet.routesText;
+                routes.setAttribute('translate', 'no');
                 const recommendation = node('pre');
                 recommendation.textContent = evidence.packet.recommendationText;
+                recommendation.setAttribute('translate', 'no');
                 section.append(tableHost, node('h4', 'job.checkpointRoutes'), routes,
                     node('h4', 'job.checkpointRecommendation'), recommendation);
                 fields.append(section, node('p', 'job.checkpointRouteMapping'));

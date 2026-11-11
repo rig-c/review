@@ -264,10 +264,17 @@ async function run() {
                 sourceHash: publication.source.sourceHash, outcome, words, prefix};
             latestNext = undefined;
             await until(async () => (await checkpointForm(asked.askId)).ready, prefix + ' ' + outcome + ' decision ready');
-            await page!.evaluate(`(()=>{document.querySelector('#job-record-asks').close();const comments=[...document.querySelectorAll('.inspector-heading button')].find(n=>n.textContent.includes(${JSON.stringify(language==='en'?'Comments':'코멘트')}));comments.click();document.querySelector('[data-comment-general]').click();})()`);
-            await until(()=>page!.evaluate(`!!document.querySelector('.stage-comment-composer input')`),'general comment composer');
+            await page!.evaluate(`(()=>{document.querySelector('#job-record-asks').close();const comments=[...document.querySelectorAll('.inspector-heading button')].find(n=>n.textContent.includes(${JSON.stringify(language==='en'?'Comments':'코멘트')}));comments.click();})()`);
+            if(await page!.evaluate(`!!document.querySelector('[data-comment-general]')`))await page!.evaluate(`document.querySelector('[data-comment-general]').click()`);
+            else {
+                await page!.evaluate(`(()=>{const button=document.querySelector('#stage-comment');if(button.getAttribute('aria-pressed')!=='true')button.click();})()`);
+                const point=await page!.evaluate<{x:number;y:number}>(`(()=>{const r=document.querySelector('#rig-viewport').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+                await control!('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
+                await control!('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
+            }
+            await until(()=>page!.evaluate(`!!document.querySelector('.stage-comment-composer input')`),'existing comment composer');
             await page!.evaluate(`(()=>{const composer=document.querySelector('.stage-comment-composer');composer.querySelector('input').value=${JSON.stringify(words)};composer.requestSubmit();})()`);
-            await until(()=>page!.evaluate(`!document.querySelector('.stage-comment-composer')`),'general comment saved');
+            await until(()=>page!.evaluate(`!document.querySelector('.stage-comment-composer')`),'existing comment saved');
             const projected=await page!.evaluate<string>(`document.querySelector('form[data-job-ask="${asked.askId}"]').commentWords()`);
             activeDecision.words=projected;
             await page!.evaluate(`(()=>{const f=document.querySelector('form[data-job-ask="${asked.askId}"]');f.querySelector('select[name=outcome]').value=${JSON.stringify(outcome)};f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
