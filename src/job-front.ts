@@ -1,3 +1,4 @@
+import {PNG} from 'pngjs';
 import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-checkpoint-evidence.ts';
 /** Disjoint live-job routes. The backend receives the original authenticated Request. */
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
@@ -9,7 +10,7 @@ import { JobError, JobStore } from './job-store.ts';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 import { serveReference, assertReviewUnchanged } from './reference.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
-import { loadPartsView, partsViewJson, servedImage, type PartsViewPackage } from './parts-view.ts';
+import { loadPartsView, partsViewJson, partsDifference, servedImage, type PartsViewPackage } from './parts-view.ts';
 import { destinationDirectory, DestinationDirectoryError } from './destination-directory.ts';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { constants, openSync, closeSync, readSync, fstatSync, lstatSync, statSync, type Stats } from 'node:fs';
@@ -228,10 +229,7 @@ export function jobWindowResources() {
                 '<title>rig-review</title><link rel="stylesheet" href="styles.css"></head>' +
                 '<body data-job-window><script type="module" src="job.js"></script></body></html>';
         }
-        if (name === 'styles.css')
-            return (await Bun.file(new URL('../web/styles.css', import.meta.url)).text()) +
-                '\n@scope (.job-inspection[data-job-parts-workspace]) {\n' +
-                (await Bun.file(new URL('../web/parts.css', import.meta.url)).text()) + '\n}';
+        if (name === 'styles.css')return await Bun.file(new URL('../web/styles.css', import.meta.url)).text();
         bundle ??= buildJobWindow();
         return bundle;
     };
@@ -425,6 +423,13 @@ export function retainedPublicationRoutes(session: JobSession) {
                     if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);
                     return json({...partsViewJson(parts, {verdict: null, stale: null}), sourceHash: retained.source.sourceHash,
                         inspectionSourceHash: retained.source.sourceHash, readOnly: true});
+                }
+                const difference=/^api\/stage-parts\/difference\/(0|[1-9]\d*)$/.exec(path);
+                if(difference&&parts){
+                    const url=new URL(request.url),threshold=url.searchParams.get('threshold'),footprints=url.searchParams.get('footprints');
+                    if(!threshold||!/^\d{1,3}$/.test(threshold)||!['true','false'].includes(footprints??''))return failure('JOB_REQUEST_INVALID',400);
+                    const raster=await partsDifference(parts,Number(difference[1]),Number(threshold),footprints==='true'),png=new PNG({width:raster.width,height:raster.height});png.data=Buffer.from(raster.data);
+                    return new Response(request.method==='HEAD'?null:new Uint8Array(PNG.sync.write(png)),{headers:{...headers,'Content-Type':'image/png','X-Difference-Count':String(raster.count),'X-Difference-Covered':String(raster.covered),'X-Difference-Compared':String(raster.compared)}});
                 }
                 const part = /^api\/stage-parts\/(image|page)\/(0|[1-9]\d*)$/.exec(path);
                 if (part && parts) {

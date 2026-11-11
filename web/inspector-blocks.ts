@@ -30,14 +30,18 @@ export interface InspectorBlocksOptions {
  sections:HTMLElement[];
  /** Called when a click or a key changes a section's active tab. */
  changed?:()=>void;
+ /** The rig reuses its block rows in the heading, with one shared Comments tab. */
+ bottom?:{strip:HTMLElement;comment:HTMLButtonElement;panel:HTMLElement};
 }
-export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlocks):void;select(section:string,id:string):void;dispose():void}
+export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlocks):void;select(section:string,id:string):void;activate(section:string):void;dispose():void}
 
 interface Tab {button:HTMLButtonElement;id:string;panel:HTMLElement;included:HTMLElement[]}
 const isRow=(node:Element)=>node.classList.contains('block-row');
 
 export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlocks {
  const rows=new Map<string,InspectorTabs>(),ids=new Map<string,Set<string>>();
+ const definitions=new Map<string,{section:HTMLElement;row:HTMLElement;scrollRoot:HTMLElement;tabs:Tab[]}>(),saved:ActiveBlocks={};
+ let active:string|undefined;
  let disposedState:ActiveBlocks|undefined;
  const state=()=>disposedState??Object.fromEntries([...rows].map(([name,row])=>[name,row.state()!]));
  // A saved id from before #258 named the Transport block by its old id.
@@ -56,32 +60,56 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
    tabs.push({button,id,panel,included});
   }
   if(!tabs.length)continue;
+  if(options.bottom){
+   definitions.set(name,{section,row,scrollRoot,tabs});saved[name]=tabs.find(tab=>tab.button.getAttribute('aria-selected')==='true')?.id??tabs[0]!.id;
+   row.hidden=true;options.bottom.strip.append(row);continue;
+  }
   ids.set(name,new Set(tabs.map(tab=>tab.id)));
   rows.set(name,bindInspectorTabs(()=>options.changed?.(),()=>{},{
    tabs:tabs.map(tab=>({id:tab.id,button:tab.button,panels:[tab.panel],included:tab.included,attribute:'aria-selected'})),
    panels:tabs.map(tab=>tab.panel),root:row,scrollRoot,initialize:true,
   }));
  }
+ // Rebind the existing tab controller when the header mode changes. The shared Comments
+ // button/panel retain identity; each mode retains its own last selected block.
+ const activate=(name:string)=>{
+  if(!options.bottom||!definitions.has(name))return;
+  if(active===name)return;
+  if(active){saved[active]=rows.get(active)?.state()??saved[active]!;rows.get(active)?.dispose();rows.delete(active);definitions.get(active)!.row.hidden=true;}
+  active=name;const {section,row,scrollRoot,tabs}=definitions.get(name)!,bottom=options.bottom;
+  bottom.comment.dataset.blockTarget='feedback';row.append(bottom.comment);row.hidden=false;
+  const all=[...tabs,{button:bottom.comment,id:'feedback',panel:bottom.panel,included:[]}];
+  ids.set(name,new Set(all.map(tab=>tab.id)));
+  const sync=()=>{section.dataset.comments=String(rows.get(name)?.state()==='feedback');options.changed?.();};
+  for(const tab of all)tab.button.setAttribute('aria-selected',String(tab.id===saved[name]));
+  rows.set(name,bindInspectorTabs(sync,()=>{},{tabs:all.map(tab=>({id:tab.id,button:tab.button,panels:[tab.panel],included:tab.included,attribute:'aria-selected'})),panels:all.map(tab=>tab.panel),root:row,scrollRoot,initialize:true}));
+  section.dataset.comments=String(saved[name]==='feedback');
+ };
+ if(options.bottom)activate(options.sections[0]?.dataset.inspectorPanel??'');
  return {
-  state:()=>({...state()}),
+  state:()=>({...saved,...state()}),activate,
   select:(name,id)=>{rows.get(name)?.select(resolve(name,id));},
   /** Restore saved tabs without touching the workspace's section scroll offset. */
-  restore(saved){for(const [name,id]of Object.entries(saved))rows.get(name)?.restore(resolve(name,id));},
+  restore(value){for(const [name,id]of Object.entries(value)){if(options.bottom){const definition=definitions.get(name);if(id==='feedback'||definition?.tabs.some(tab=>tab.id===resolve(name,id)))saved[name]=resolve(name,id);}rows.get(name)?.restore(resolve(name,id));}},
   dispose(){disposedState=state();for(const row of rows.values())row.dispose();rows.clear();ids.clear();},
  };
 }
 
 /** Compose the real rig acts into C6; all fields, submit nodes and their listeners retain identity. */
-export function mountRigInspector(root:Document=document):BottomPanel&{actBar:ActBar} {
+export function mountRigInspector(root:Document=document):BottomPanel&{actBar:ActBar;comments:{button:HTMLButtonElement;panel:HTMLElement}} {
  const inspector=root.querySelector<HTMLElement>('.inspector')!,body=inspector.querySelector<HTMLElement>('.inspector-body')!,heading=inspector.querySelector<HTMLElement>('.inspector-heading')!;
  const feedback=root.getElementById('inspector-feedback')!,dialog=root.getElementById('review-dialog')!;
  const [label,status,actions]=[feedback.querySelector<HTMLLabelElement>('label[for="review-status"]')!,root.getElementById('review-status')!,dialog.querySelector<HTMLElement>('.review-dialog-actions')!];
  const actBar=mountActBar({id:'workspace-review-act',decision:[label,status],actions,submit:root.getElementById('save') as HTMLButtonElement,saveState:root.getElementById('review-draft-state')!,saveStateCopies:[root.getElementById('draft-state')].flatMap(node=>node?[{node,title:true}]:[])}),act=actBar.element;
  const title=dialog.querySelector<HTMLElement>('.review-dialog-header')!;title.querySelector('#review-dialog-close')?.remove();
- feedback.dataset.inspectorPanel='feedback';feedback.className='workspace-review-panel';feedback.hidden=true;feedback.prepend(title);feedback.append(act);body.append(feedback);dialog.remove();
- // Header modes retain inspection mode while Review is revealed; the bottom row alone owns panel selection.
- for(const mode of root.querySelectorAll<HTMLElement>('[data-mode]'))mode.removeAttribute('data-inspector');
- return {...mountBottomPanel({kind:'rig',heading,act,actHome:feedback,tabs:([{id:'rig',label:'Setup'},{id:'playback',label:'Animate'},{id:'feedback',label:'Write review'}]).map(tab=>({...tab,panel:root.getElementById('inspector-'+tab.id)!}))}),actBar};
+ feedback.className='workspace-review-panel';feedback.hidden=true;feedback.prepend(title);body.append(feedback);dialog.remove();
+ feedback.removeAttribute('data-inspector-panel');
+ const bottom=mountBottomPanel({kind:'rig',heading,act,actHome:heading,tabs:[{id:'feedback',label:'Comments (0)',panel:feedback}]}),comment=bottom.row.tabs[0]!.button;
+ delete comment.dataset.inspector;bottom.strip.removeAttribute('role');
+ for(const button of root.querySelectorAll<HTMLButtonElement>('[data-mode][data-inspector]')){button.id||='mode-'+button.dataset.mode;const panel=root.getElementById('inspector-'+button.dataset.mode)!;panel.setAttribute('role','region');panel.setAttribute('aria-labelledby',button.id);}
+ bottom.row={tabs:[...root.querySelectorAll<HTMLButtonElement>('[data-mode][data-inspector]')].map(button=>({id:button.dataset.mode!,button,attribute:'aria-pressed',panels:[root.getElementById('inspector-'+button.dataset.mode)!]})),panels:[root.getElementById('inspector-rig')!,root.getElementById('inspector-playback')!],initialize:true};
+ heading.append(act);
+ return {...bottom,actBar,comments:{button:comment,panel:feedback}};
 }
 
 export interface BottomPanel {

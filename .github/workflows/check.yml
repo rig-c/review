@@ -64,24 +64,37 @@ jobs:
           name: parts-explorer-measurements
           path: ${{ runner.temp }}/parts-explorer.json
           if-no-files-found: error
-      - name: Install CJK fonts for Parts camera
+      - name: Restore CJK font for Parts camera
+        id: cjk-font-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/fonts/noto-cjk
+          key: noto-cjk-Sans2.004-NotoSansCJK-Regular.ttc-b76b0433203017ca80401b2ee0dd69350349871c4b19d504c34dbdd80541690a
+      - name: Install CJK font for Parts camera
         timeout-minutes: 3
         shell: bash
+        env:
+          # Pinned to the Sans2.004 tag of notofonts/noto-cjk; the Ubuntu apt mirrors failed DNS on the runners.
+          CJK_FONT_URL: https://github.com/notofonts/noto-cjk/raw/Sans2.004/Sans/OTC/NotoSansCJK-Regular.ttc
+          CJK_FONT_SHA256: b76b0433203017ca80401b2ee0dd69350349871c4b19d504c34dbdd80541690a
         run: |
-          # Keep the runner's Ubuntu HTTPS fallbacks instead of the stalled Azure HTTP mirror.
-          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
-          apt_options=(-o Acquire::Retries=0 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
-          sudo DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends fonts-noto-cjk
+          font_dir="$HOME/.local/share/fonts/noto-cjk"
+          font_file="$font_dir/NotoSansCJK-Regular.ttc"
+          mkdir -p "$font_dir"
+          if [ ! -f "$font_file" ]; then
+            curl --retry 5 --retry-all-errors --fail -sSL -o "$font_file" "$CJK_FONT_URL"
+          fi
+          printf '%s  %s\n' "$CJK_FONT_SHA256" "$font_file" | sha256sum -c -
           fc-cache -f
+          fc-list | grep -q "Noto Sans CJK"
       - name: Verify Parts camera in Chrome
         timeout-minutes: 2
         shell: bash
         run: |
-          pkg_info="$(dpkg-query -W -f='${Package}=${Version} (${db:Status-Abbrev})' fonts-noto-cjk)"
+          pkg_info="NotoSansCJK-Regular.ttc Sans2.004 sha256 $(sha256sum "$HOME/.local/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc" | cut -d' ' -f1)"
           ko_font="$(fc-match :lang=ko)"
           mkdir -p "$RUNNER_TEMP/parts-camera-race"
-          printf 'dpkg-query: %s\nfc-match :lang=ko: %s\n' "$pkg_info" "$ko_font" | tee "$RUNNER_TEMP/parts-camera-race/cjk-font.txt"
+          printf 'font: %s\nfc-match :lang=ko: %s\n' "$pkg_info" "$ko_font" | tee "$RUNNER_TEMP/parts-camera-race/cjk-font.txt"
           chrome_bin="$(command -v google-chrome)"
           printf 'Chrome path: %s\n' "$chrome_bin"
           "$chrome_bin" --version

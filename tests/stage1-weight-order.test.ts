@@ -1,0 +1,11 @@
+import {expect,test} from 'bun:test';
+import {readFileSync} from 'node:fs';
+const source=readFileSync(new URL('../src/stage-parts.ts',import.meta.url),'utf8');
+const code=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(source.indexOf('function matchingVertexGeometry(')));
+const matches=new Function(code+';return matchingVertexGeometry;')() as (a:unknown,b:unknown)=>boolean;
+const row=[{bone:'z',x:.1,y:.2,weight:.25},{bone:'a',x:2,y:3,weight:.75}];
+const input=()=>({uvs:[0,0],weights:[structuredClone(row)]});
+const compiled=(bindings=structuredClone(row).reverse())=>({vertices:{weighted:true,bindings:[bindings]}});
+test('#737 A weight-row carry accepts order alone and exact represented float32 equality',()=>{expect(matches(input(),compiled())).toBe(true);const b=compiled();b.vertices.bindings[0]![0]!.x=Math.fround(b.vertices.bindings[0]![0]!.x);expect(matches(input(),b)).toBe(true);});
+for(const field of ['bone','x','y','weight']as const)test(`#737 A weight-row carry refuses a changed ${field}`,()=>{const b=compiled();if(field==='bone')b.vertices.bindings[0]![0]!.bone='other';else b.vertices.bindings[0]![0]![field]+=1;expect(matches(input(),b)).toBe(false);});
+test('#737 A weight-row carry preserves per-row and per-vertex cardinality and duplicate bindings',()=>{const a=input();expect(matches(a,{vertices:{weighted:true,bindings:[]}})).toBe(false);expect(matches(a,compiled([row[0]!]))).toBe(false);expect(matches(a,compiled([row[0]!,row[0]!]))).toBe(false);expect(matches(a,{vertices:{weighted:true,bindings:[[]]}})).toBe(false);});

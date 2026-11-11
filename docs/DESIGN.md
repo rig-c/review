@@ -294,22 +294,18 @@ export remains unavailable pending review#369 and create#91. Existing reviewer
 requests remain verbatim in their existing feedback/comment contracts; there
 is no fake Apply for art repair.
 
-Only Stage 3 shows the legacy Setup, Animate and Compare switch; its existing
-instruments, DOM and mode IDs are retained. In Stage 1 a compare session keeps
-the A/B source picker usable and shows the selected side's cached atlas frame.
-**Open setup mesh instruments** returns from the atlas to Setup; it does not
-rebuild. Existing bookmarks, Apply/Reset provenance, selected slot, compare side,
-time, pending edits and applied build stay owned by those original tools. Stage
-changes retain the original workspace and each compare side's atlas controller.
-Single draft frames are rebound on revision changes. Language changes update retained
-frames without applying or submitting.
+Chips 1 and 3 select the existing Setup and Animate modes, so the Setup,
+Animate and Compare switch, its instruments, DOM and mode IDs are retained.
+Existing bookmarks, Apply/Reset provenance, selected slot, compare side, time,
+pending edits and applied build stay owned by those original tools. Choosing a
+chip never applies or submits.
 The parts-only entry retains its part selection, geometry and pending verdict
 while visiting unavailable stages; it needs no compiled model.
 
 
 ## Shared parts viewport and comments
 
-Standalone pre-rig parts and the compiled Stage 1 atlas frame mount `viewport-pair.ts`'s actual
+Standalone pre-rig parts mount `viewport-pair.ts`'s actual
 rig/reference DOM. `parts-viewport-provider.ts` supplies raster geometry and painting-crop pixels;
 `viewport-controller.ts` and `view-controls.ts` own camera writes, cursor zoom, pan, fit, resize
 and the common two-pointer pinch. Parts' native scale policy is separate from the unchanged

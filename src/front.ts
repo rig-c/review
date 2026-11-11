@@ -24,11 +24,12 @@ const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/,hex6
 const frontName=(port:number)=>`front-${port}`;
 const noStore={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'};
 const refuse=(error:string,status:number)=>Response.json({error},{status,headers:noStore});
-export function frontPort(value?:number):number{const raw=value??(process.env.RIG_REVIEW_FRONT_PORT===undefined?defaultFrontPort:Number(process.env.RIG_REVIEW_FRONT_PORT));if(!Number.isSafeInteger(raw)||raw<1||raw>65535)throw new Error('FRONT_PORT: RIG_REVIEW_FRONT_PORT expects an integer 1..65535');return raw;}
-function frontValue(value:unknown,port:number):FrontRecord|null{if(!value||typeof value!=='object'||Array.isArray(value))return null;const v=value as Partial<FrontRecord>;return v.schema==='rig-review-front/1'&&v.port===port&&v.origin===`http://127.0.0.1:${port}`&&uuid.test(v.nonce??'')&&hex64.test(v.fingerprint??'')&&Number.isSafeInteger(v.pid)&&v.pid!>0?v as FrontRecord:null;}
+export function frontPort(value?:number):number{const raw=value??(process.env.RIG_REVIEW_FRONT_PORT===undefined?defaultFrontPort:Number(process.env.RIG_REVIEW_FRONT_PORT));if(!Number.isSafeInteger(raw)||raw<(value===0?0:1)||raw>65535)throw new Error('FRONT_PORT: RIG_REVIEW_FRONT_PORT expects an integer 1..65535');return raw;}
+function frontValue(value:unknown,port:number):FrontRecord|null{if(!value||typeof value!=='object'||Array.isArray(value))return null;const v=value as Partial<FrontRecord>;return v.schema==='rig-review-front/1'&&Number.isSafeInteger(v.port)&&v.port!>=1&&v.port!<=65535&&(port===0||v.port===port)&&v.origin===`http://127.0.0.1:${v.port}`&&uuid.test(v.nonce??'')&&hex64.test(v.fingerprint??'')&&Number.isSafeInteger(v.pid)&&v.pid!>0?v as FrontRecord:null;}
 async function readFront(file:string,port:number):Promise<FrontRecord|null>{try{return frontValue(await smallJson(file),port);}catch(e){if(['ENOENT','ELOOP'].includes((e as NodeJS.ErrnoException).code??'')||e instanceof SyntaxError)return null;throw e;}}
 async function frontAlive(row:FrontRecord):Promise<boolean>{try{const response=await fetch(row.origin+'/api/front-status',{headers:{authorization:'Bearer '+row.nonce},redirect:'error',signal:AbortSignal.timeout(1500)});if(!response.ok){void response.body?.cancel();return false;}const v=await response.json() as {schema?:string;nonce?:string;fingerprint?:string};return v.schema==='rig-review-front-status/1'&&v.nonce===row.nonce&&v.fingerprint===row.fingerprint;}catch{return false;}}
-/** Ensure this state directory's front on `port`; reuse a verified live one. A front from another tool
+/** Ensure this state directory's front on `port`; reuse a verified live one.
+ * Port 0 binds an OS-assigned port and stores its actual origin in front-0.json. A front from another tool
  * build is ours (verified nonce) and is replaced. Any other listener is FRONT_PORT_BUSY, never a fallback. */
 export async function ensureFront(options:{control:string;port:number;fingerprint:string;idleMs?:number}):Promise<string>{
  const {control,port,fingerprint}=options,name=frontName(port),recordPath=join(control,name+'.json'),nonce=randomUUID(),deadline=performance.now()+20000,idleMs=options.idleMs??DEFAULT_CLOSE_GRACE_MS;
@@ -55,12 +56,10 @@ export function frontRoute(mode:'single'|'compare',method:string,path:string):Ro
  const read=method==='GET'||method==='HEAD',get:Route={mutation:false,limit:0,timeoutMs:30000,control:false};
  if(path===LIVE_PATH)return method==='GET'?{...get,live:true}:null;
  if(['/','/index.html','/main.js','/styles.css','/api/access'].includes(path))return read?get:null;
- if(['/stage-parts.html','/parts.js','/parts.css'].includes(path))return read?get:null;
  if((mode==='single'?/^\/api\/stage-parts(?:\/(?:image|page)\/\d+)?$/:/^\/api\/compare\/(?:a|b)\/stage-parts(?:\/(?:image|page)\/\d+)?$/).test(path))return read?get:null;
  if(mode==='single'){
   if(path==='/api/stage-parts/verdict')return method==='POST'?{...get,mutation:true,limit:stageVerdictLimit}:null;
   if(path==='/api/stage-parts/export/json'||path==='/api/stage-parts/export/issue')return read?get:null;
-  if(path==='/stage-interview.html')return method==='GET'?get:null;
   if(interviewRequest(path))return path==='/api/interview/picks'?
    method==='POST'?{...get,mutation:true,limit:picksLimit}:null:method==='GET'?get:null;
  }
@@ -103,12 +102,6 @@ async function instanceRecord(control:string,key:string):Promise<RecordFile|null
 /** Worker errors default to front codes unless an inspection refusal is allowlisted. */
 const upstreamFailure:Record<number,string>={400:'FRONT_UPSTREAM_REJECTED',403:'FRONT_UPSTREAM_FORBIDDEN',404:'FRONT_UPSTREAM_NOT_FOUND',405:'FRONT_UPSTREAM_METHOD',409:'FRONT_UPSTREAM_CONFLICT'};
 const responseHeaders=['content-type','content-length','content-range','accept-ranges','content-disposition','cache-control','content-security-policy','x-content-type-options','referrer-policy'];
-/** The trusted atlas frame alone may carry this closed navigation query. */
-export function stageFrameQuery(mode:'single'|'compare',search:string):boolean {
- const params=new URLSearchParams(search),keys=[...params.keys()];
- const allowed=mode==='single'?['stageEmbed','lang']:['stageEmbed','lang','side'];
- return keys.length===allowed.length&&new Set(keys).size===keys.length&&keys.every(k=>allowed.includes(k))&&params.get('stageEmbed')==='1'&&['en','ko'].includes(params.get('lang')??'')&&(mode==='single'||['a','b'].includes(params.get('side')??''));
-}
 // The submitted Apply can supply the check line. Accept the producer's structured
 // summary fields, never an arbitrary suffix after the failed-check code.
 const submitCheckPrefix = 'EDIT_SUBMIT_UNCHECKED: applied build failed check — ';
@@ -156,7 +149,7 @@ async function inspectionRefusal(mode:'single'|'compare',method:string,path:stri
 export const maximumUpstreamStreams=32;
 interface FrontLiveRelay {upstream:WebSocket;client:ServerWebSocket<FrontLiveRelay>|null}
 export function startFront(options:{control:string;port:number;nonce:string;fingerprint:string}){
- const origin=`http://127.0.0.1:${options.port}`;let active=0,last=performance.now();
+ let origin:string;let active=0,last=performance.now();
  const server=Bun.serve<FrontLiveRelay>({hostname:'127.0.0.1',port:options.port,websocket:{
   idleTimeout:0,
   open(ws){last=performance.now();ws.data.client=ws;if(ws.data.upstream.readyState!==WebSocket.OPEN){try{ws.close();}catch{}return;}try{ws.send('live');}catch{}},
@@ -172,7 +165,7 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    if(req.headers.get('sec-fetch-site')==='cross-site'||sentOrigin!==null&&sentOrigin!==origin)return refuse('FRONT_SAME_ORIGIN_REQUIRED',403);
    const record=await instanceRecord(options.control,key);if(!record)return refuse('FRONT_INSTANCE_UNKNOWN: reopen with rig-review open',404);
    const route=frontRoute(record.mode,req.method,path);if(!route)return refuse('FRONT_ROUTE_REFUSED',404);
-   const landing=path==='/'||path==='/index.html',stageFrame=path==='/stage-parts.html'||path==='/stage-interview.html';if(stageFrame?!stageFrameQuery(record.mode,url.search):!landing&&!!url.search)return refuse('FRONT_QUERY_REFUSED',400);
+   const landing=path==='/'||path==='/index.html';if(!landing&&!!url.search)return refuse('FRONT_QUERY_REFUSED',400);
    if(route.live){
     if(sentOrigin!==origin)return refuse('FRONT_SAME_ORIGIN_REQUIRED',403);
     if(req.headers.get('upgrade')?.toLowerCase()!=='websocket')return refuse('FRONT_UPGRADE_REQUIRED',426);
@@ -217,7 +210,7 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    active++;let released=false;const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),route.timeoutMs);const release=()=>{if(released)return;released=true;active--;clearTimeout(timer);};
    req.signal.addEventListener('abort',()=>abort.abort(),{once:true});
    let upstream:Response;
-   try{upstream=await fetch(record.origin+path+(landing||stageFrame?url.search:''),{method:req.method,headers,...(body?{body}:{}),redirect:'manual',signal:abort.signal});}
+   try{upstream=await fetch(record.origin+path+(landing?url.search:''),{method:req.method,headers,...(body?{body}:{}),redirect:'manual',signal:abort.signal});}
    catch{release();return abort.signal.aborted&&!req.signal.aborted?refuse('FRONT_UPSTREAM_TIMEOUT',504):refuse('FRONT_INSTANCE_EXPIRED: reopen with rig-review open',410);}
    if(upstream.headers.get(openKeyHeader)!==key){void upstream.body?.cancel().catch(()=>{});release();return refuse('FRONT_INSTANCE_REPLACED: reopen with rig-review open',410);}
    if(upstream.status>=400&&upstream.status!==416){const named=await inspectionRefusal(record.mode,req.method,path,upstream,record.fingerprint===options.fingerprint);void upstream.body?.cancel().catch(()=>{});release();if(named)return refuse(named,upstream.status);const code=upstreamFailure[upstream.status];return refuse(code??'FRONT_UPSTREAM_FAILED',code?upstream.status:502);}
@@ -229,18 +222,19 @@ export function startFront(options:{control:string;port:number;nonce:string;fing
    return new Response(stream,{status:upstream.status,headers:out});
   }catch(error){const message=error instanceof Error?error.message:'';return refuse(message.startsWith('FRONT_')?message:'FRONT_REQUEST_FAILED',message==='FRONT_BODY_LIMIT'?413:message==='FRONT_BODY_TIMEOUT'?408:400);}
  }});
+ origin=`http://127.0.0.1:${server.port}`;
  return {origin,stop:()=>server.stop(true),idleMs:()=>performance.now()-last,active:()=>active};
 }
 /** A missing directory or record means gone; any other read error (readdir or a record) throws, and the caller keeps
  * the front up. A record read that failed with EACCES or ENOTDIR used to count as gone and stopped the front (#354). */
 async function liveInstances(control:string):Promise<boolean>{let names:string[];try{names=await readdir(control);}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return false;throw e;}for(const name of names){if(/^[a-f0-9]{64}\.claim$/.test(name))return true;if(/^[a-f0-9]{64}\.json$/.test(name)){const row=await readRecord(join(control,name),name.slice(0,64));if(row&&running(row.pid))return true;}}return false;}
 export async function runFront(requestPath:string):Promise<void>{
- const spec=await smallJson(requestPath) as FrontRequest;if(spec?.schema!=='rig-review-front-request/1'||!uuid.test(spec.nonce??'')||!hex64.test(spec.fingerprint??'')||!Number.isSafeInteger(spec.port)||spec.port<1||spec.port>65535||!Number.isSafeInteger(spec.idleMs)||spec.idleMs<100)throw new Error('front: invalid request');
+ const spec=await smallJson(requestPath) as FrontRequest;if(spec?.schema!=='rig-review-front-request/1'||!uuid.test(spec.nonce??'')||!hex64.test(spec.fingerprint??'')||!Number.isSafeInteger(spec.port)||spec.port<0||spec.port>65535||!Number.isSafeInteger(spec.idleMs)||spec.idleMs<100)throw new Error('front: invalid request');
  const control=await realpath(spec.control);if(dirname(await realpath(requestPath))!==control||spec.request!==requestPath||spec.record!==join(control,frontName(spec.port)+'.json'))throw new Error('front: invalid state locations');
  if(await openFingerprint()!==spec.fingerprint)throw new Error('front: tool changed before startup');
  let front:ReturnType<typeof startFront>;
  try{front=startFront({control,port:spec.port,nonce:spec.nonce,fingerprint:spec.fingerprint});}catch(error){if((error as NodeJS.ErrnoException).code==='EADDRINUSE'||/in use/i.test(error instanceof Error?error.message:''))throw new Error(`FRONT_PORT_BUSY: 127.0.0.1:${spec.port}`);throw error;}
- const record:FrontRecord={schema:'rig-review-front/1',origin:front.origin,port:spec.port,nonce:spec.nonce,fingerprint:spec.fingerprint,pid:process.pid},tmp=spec.record+'.'+spec.nonce+'.tmp';await writeFile(tmp,JSON.stringify(record),{mode:0o600,flag:'wx'});await rename(tmp,spec.record);
+ const record:FrontRecord={schema:'rig-review-front/1',origin:front.origin,port:Number(new URL(front.origin).port),nonce:spec.nonce,fingerprint:spec.fingerprint,pid:process.pid},tmp=spec.record+'.'+spec.nonce+'.tmp';await writeFile(tmp,JSON.stringify(record),{mode:0o600,flag:'wx'});await rename(tmp,spec.record);
  await unlink(requestPath).catch(e=>{if(e.code!=='ENOENT')throw e;});
  let stopped=false;const stop=async(reason:string)=>{if(stopped)return;stopped=true;clearInterval(timer);front.stop();const current=await readFront(spec.record,spec.port).catch(()=>null);if(current?.nonce===spec.nonce)await unlink(spec.record).catch(()=>{});console.log(`review front: exiting — ${reason}.`);process.exit(0);};
  // Idle exit only once no request arrived for idleMs and no live worker record remains.

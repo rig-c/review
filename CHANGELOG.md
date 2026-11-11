@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### ⚠ BREAKING CHANGES
+
+* Remove the standalone `rig-review interview <create-root> --picks-dir <dir> [--port <n>]` command, with `src/interview-server.ts`, `web/interview.ts`, `web/interview.html` and `web/interview.css` (#726). The interview opens over the review screen of a joined workspace (`rig-review open … --project … --picks-dir …`); `rig-review/interview-picks@1` records are unchanged.
+* Remove the legacy stage frames `/stage-parts.html` and `/stage-interview.html` (and their `/parts.js`, `/parts.css`, `/interview.js`, `/interview.css` instance routes) (#726). The stage chips open modes of the one screen instead: 1 Setup, 2 the interview modal, 3 Animate; 4 Direction names itself not available. `/api/stage-parts` data routes, the parts verdict and the job API are unchanged.
+
 ## 2.12.0
 
 * Document the owner's R0–R4 Review rules: owner layout and working-screen rulings, separate main and secondary toolbars, general or pointed comments as the only feedback-input feature, main-view Difference coverage and shared viewport controls (#647). [Core UI rules](docs/DESIGN.md#core-ui-rules-owner-2026-11-11), [Code Review Rules](AGENTS.md#code-review-rules)

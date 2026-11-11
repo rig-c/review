@@ -112,11 +112,6 @@ export async function createReviewRequestContext(p: ReviewPackage, options: Revi
     if (interviewRequest(path)) {
       return await interview?.(req, origin) ?? json({error:interviewUnavailable},404);
     }
-    if (req.method === 'GET' && path === '/stage-interview.html') {
-      // The retained route opens the single entry on the interview modal (#708).
-      if (!joined?.available) return json({error:interviewUnavailable},404);
-      return new Response(await readFile(appRoot+'web/index.html'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
-    }
     if (joined && /^\/api\/stage-parts(?:\/|$)/.test(path)) {
       try {await joined.assertCurrent();}
       catch {return json({error:interviewStale},409);}

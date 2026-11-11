@@ -1,3 +1,4 @@
+import {setSourceText} from '../web/i18n.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readdir,readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
@@ -581,6 +582,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
    const run=new Function('scope',`with(scope){${jsSource}; renderProposals();}`);
    run({
     comments:null,
+    rigInspector:{comments:{button:doc.createElement('button')}},setSourceText,
     el:(id:string)=>doc.getElementById(id),
     text:(id:string,v:string)=>{const n=doc.getElementById(id);if(n)n.textContent=v;},
     session,
@@ -1213,8 +1215,9 @@ test('assembly caption reports the visible part count in both languages', async 
  expect(koCatalog[key]).toBe('조립 패키지 · 파츠 {count}개 표시.');
  expect(enCatalog['Comment · C ({0}) · Rendering']).toBe('Comment · C ({0}) · Rendering');
  expect(koCatalog['Comment · C ({0}) · Rendering']).toBe('코멘트 · C ({0}) · 렌더링 중');
- const source = await readFile(new URL('../web/parts.ts', import.meta.url), 'utf8');
- expect(source).toContain("t('" + key + "',{count:shown.length})");
+ const source = await readFile(new URL('../web/parts-viewport-provider.ts', import.meta.url), 'utf8');
+ expect(source).toContain("t(assembled()?'Assembled parts':'Selected part')");
+ expect(enCatalog['Assembled parts']).toBe('Assembled parts');expect(koCatalog['Assembled parts']).toBe('조립된 파츠');
  expect(source).not.toContain('Selection and verdict remain per part.');
 });
 

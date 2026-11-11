@@ -1425,14 +1425,21 @@ selections, inline Other text and per-question notes keep their existing formats
 strings and readers. There is no interview-picks arm or question/ask anchor in
 this extension. Technical configuration and search controls are outside it.
 
-This change prepares read-only decoders and consumer projections. Current UI
-finalizers, standalone save paths and legacy act unions keep their existing
-versions. Fresh comments writers stay off until Create #422 is merged to main,
-its actual runner receipt records source SHA, installation, imports from the
-Review facade, normal @6 ingest/replay and command exits, and HQ reads that
-receipt. Create consumes private source; registry publication and Create
-version/workflow changes are not part of this gate. Owner review of the working
-screen remains required before UI merge.
+The decoders and consumer projections are read-only. Since [Review #713](https://github.com/rig-c/review/issues/713)
+(HQ contract ruling), the UI finalizers write fresh checkpoint, parts-verdict,
+rig and direction review-verdict and signoff acts as act@6. The UI submission
+keeps its existing `words` and `issues` fields. The daemon maps a nonblank note
+to one comment: anchored to the checkpoint for a checkpoint, general otherwise.
+It maps each Parts issue to a Parts-anchored comment, before the note. A blank
+or whitespace-only note writes no comment (`comments: []`). Nothing is padded.
+A note whose projection exceeds the 10,000-unit scalar bound refuses
+`JOB_ACT_INVALID`. The bound counts the stored `words`, and the `[label]\n`
+prefix is part of them, so a general note longer than 9,990 units refuses even
+though act@5 accepted it. Feedback is many comments, not one long note.
+Each written act must decode through `parseCommentsAct`.
+Image-review verdicts and interview picks stay at act@2, because Create refuses
+both under act@6. Record acts stay at act@4, because Create maps only a record
+checkpoint under act@6. Standalone save paths keep their existing versions.
 
 The existing `@rig-c/review/job-host` facade exports:
 
@@ -1491,7 +1498,13 @@ Anchors use existing source-bound fields without a new kind discriminator:
   `context.comment`; existing codecs and inline PNG validation are reused.
 - PartsIssue without `summary`: `schema, id, parts, sourceHash, rigRegion,
   imageRegion, view, crop, nativeCrop`. Finalized item anchors require prepared
-  native crop metadata. Assembled anchors retain null native crop.
+  native crop metadata. Assembled anchors retain null native crop. Optional assembled-only
+  `view.visibleLayers: {name, imageHash}[]` retains the complete visible set in
+  source item order, bound to `sourceHash` and each loaded source image. Entries
+  must be unique and source-bound before restoration replaces the hidden set.
+  Absent fields retain the historical restore branch and recorded bytes. Readers
+  accept both forms; fresh capture writes this field only when the shared
+  `EMIT_UNPINNED_CREATE_FIELDS` gate is enabled after Create confirms its parser pin.
 - Named image: `name`, optionally the complete existing-field composition
   `imageRegion, crop, nativeCrop`. Names resolve in the sealed image set. Regions
   use nonnegative native-pixel integer origins, positive extents and at most

@@ -126,7 +126,8 @@ test.skipIf(agentUid === undefined && !requiredInCI)(
     expect(received.actId).toBeTruthy();
     expect(received.sourceHash).toMatch(/^[a-f0-9]{64}$/);
     const completed = result.messages.find(message => message.completed);
-    expect(completed.words).toBe('isolated exact words');
+    expect(completed.schema).toBe('rig-review/act@6');
+    expect(completed.texts).toEqual(['isolated exact words']);
     expect(completed.firstPublication).not.toBe(completed.secondPublication);
     expect(result.status).toBe('closed');
   }, 30_000,

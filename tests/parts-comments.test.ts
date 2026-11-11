@@ -9,7 +9,7 @@ import {writePartsPackage} from './helpers/parts-package.ts';
 import {loadPartsView,saveVerdict,saveVerdictWithReceipt,readVerdict,readPartsVerdictJson,verdictSource,exportPartsVerdict,partsViewJson,type PartsViewPackage} from '../src/parts-view.ts';
 import {preparePartsComment,validateStoredPartsComment} from '../src/parts-comment-crops.ts';
 import {resolvedCropPath,storePngCrop,validatePngCrop,validatePngCropMetadata} from '../src/comment-crops.ts';
-import {parsePartsComment,parsePartsIssue,snapImageRegion} from '../src/parts-comment.ts';
+import {parsePartsComment,parsePartsIssue,assertPartsIssueBinding,snapImageRegion} from '../src/parts-comment.ts';
 import {parseStageComment} from '../src/stage-comment.ts';
 import {commentFixture,candidate,legacyCandidate} from './helpers/parts-comments-package.ts';
 import {parseCommentsAct,parseCommentsPartsVerdict} from '../src/job-host.ts';
@@ -196,5 +196,34 @@ test('preparePartsComment and validateStoredPartsComment default to verdictSourc
   await expect(preparePartsComment(pkg,c,false,{sourceHash:retainedHash})).rejects.toThrow('PARTS_COMMENT_STALE_SOURCE');
   await expect(validateStoredPartsComment(pkg,standaloneReady,false,{sourceHash:retainedHash})).rejects.toThrow('PARTS_COMMENT_STALE_SOURCE');
   await expect(validateStoredPartsComment(pkg,jobReady)).rejects.toThrow('PARTS_COMMENT_STALE_SOURCE');
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+
+test('#652 visible layer grammar, binding refusals and absent-field bytes',async()=>{
+ const root=await mkdtemp(join(process.env.RIG_REVIEW_STATE_DIR!,'visible-layers-'));
+ try{
+  const {writeComparisonPackage}=await import('./helpers/parts-comparison-package.ts');
+  await writeComparisonPackage(root);
+  const pkg=await loadPartsView(root),issue=candidate(pkg),item=pkg.items[0]!;
+  issue.parts=[{name:item.name,imageHash:pkg.files.find(file=>file.abs===pkg.imagePaths[item.index])!.sha256}];
+  issue.view.mode='assembled';issue.imageRegion=null;issue.rigRegion={x:15,y:9,width:3,height:3};
+  const bytes=JSON.stringify(issue);
+  expect(JSON.stringify(parsePartsIssue(JSON.parse(bytes),false))).toBe(bytes);
+  const layers=issue.parts.map(part=>({...part}));
+  const current={...issue,view:{...issue.view,visibleLayers:layers}};
+  const items=new Map(pkg.items.map(item=>[item.name,{...item,imageHash:pkg.files.find(file=>file.abs===pkg.imagePaths[item.index])!.sha256}]));
+  expect(parsePartsIssue(current,false)).toBe(current);
+  expect(()=>assertPartsIssueBinding(current,items,issue.sourceHash)).not.toThrow();
+  for(const visibleLayers of [null,{},[...layers,...layers],[{...layers[0],imageHash:'invalid'}],[{...layers[0],extra:true}]]){
+   expect(()=>parsePartsIssue({...issue,view:{...issue.view,visibleLayers}},false)).toThrow('PARTS_COMMENT_INVALID');
+  }
+  expect(()=>parsePartsIssue({...current,view:{...current.view,mode:'item'}},false)).toThrow('PARTS_COMMENT_INVALID');
+  for(const layer of [{name:'missing',imageHash:layers[0]!.imageHash},{...layers[0]!,imageHash:'f'.repeat(64)}]){
+   expect(()=>assertPartsIssueBinding({...current,view:{...current.view,visibleLayers:[layer]}},items,issue.sourceHash)).toThrow();
+  }
+  expect(()=>assertPartsIssueBinding(current,items,'f'.repeat(64))).toThrow('PARTS_COMMENT_STALE_SOURCE');
+  const empty={...current,view:{...current.view,visibleLayers:[]}};
+  expect(parsePartsIssue(empty,false)).toBe(empty);
  }finally{await rm(root,{recursive:true,force:true});}
 });

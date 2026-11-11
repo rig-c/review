@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {WorkspacePreferenceStore,defaultWorkspacePreferences,defaultWorkspacePanels,legacyAppearanceKey,mergeWorkspacePreferences,parseWorkspacePreferences,workspacePreferenceKey,type PreferenceStorage,type WorkspacePreferencePatch} from '../web/workspace-preferences.ts';
+import {WorkspacePreferenceStore,defaultWorkspacePreferences,defaultWorkspacePanels,panelBounds,legacyAppearanceKey,mergeWorkspacePreferences,parseWorkspacePreferences,workspacePreferenceKey,type PreferenceStorage,type WorkspacePreferencePatch} from '../web/workspace-preferences.ts';
 class PreferenceHub {
  values=new Map<string,string>();queue:Array<()=>void>=[];writes=0;endpoints:Array<{storage:PreferenceStorage;events:EventTarget;stale:string|null|undefined;denyRead:boolean;denyWrite:boolean}>=[];
  endpoint(){
@@ -72,38 +72,43 @@ test('Settings collapsed state round-trips through storage under its own key and
  expect(()=>parseWorkspacePreferences({...old,settingsCollapsed:false})).toThrow('PREFERENCES_STAMP');expect(()=>parseWorkspacePreferences({...defaultWorkspacePreferences(),settingsCollapsed:'no'})).toThrow('settingsCollapsed');
 });
 
-test('saved preferences from earlier versions with 280px inspectorHeight still load (both unstamped default and stamped user resize)',()=>{
- expect(defaultWorkspacePanels.inspectorHeight).toBe(350);
- // 1. Earlier version saved record where user changed theme, leaving inspectorHeight at the earlier unstamped default 280.
- const legacyUnstamped=JSON.parse(JSON.stringify(defaultWorkspacePreferences()));
- legacyUnstamped.theme='dark';
- legacyUnstamped.stamps.theme={revision:2,writer:'legacy'};
- legacyUnstamped.revision=2;
- legacyUnstamped.panels.inspectorHeight=280;
- legacyUnstamped.stamps.inspectorHeight={revision:0,writer:''};
- const parsedUnstamped=parseWorkspacePreferences(legacyUnstamped);
- expect(parsedUnstamped.panels.inspectorHeight).toBe(350);
- expect(parsedUnstamped.theme).toBe('dark');
- const hubA=new PreferenceHub();
- hubA.values.set(workspacePreferenceKey,JSON.stringify(legacyUnstamped));
- const storeA=new WorkspacePreferenceStore({...hubA.endpoint(),writer:'tab-a'});
- expect(storeA.status().state).toBe('available');
- expect(storeA.get().panels.inspectorHeight).toBe(350);
- storeA.dispose();
+test('saved preferences from earlier versions with 280px, 350px, 120px or 240px inspectorHeight still load (unstamped default upgrades, stamped user resize stays)',()=>{
+ // #709 ruling (c), as corrected by HQ: the shared bottom panel defaults to 262px (act bar in the heading plus three timeline rows in Animate at 1600x1000).
+ expect(defaultWorkspacePanels.inspectorHeight).toBe(262);
+ expect(panelBounds.inspectorHeight.min).toBe(120);
+ // 120 and 240 were defaults on the #709 branch only (0a54fec, 47b584b); a browser that ran them may hold an unstamped value.
+ for(const legacy of [280,350,120,240]){
+  // 1. An earlier version saved a record where the user changed theme, leaving inspectorHeight at that version's unstamped default.
+  const legacyUnstamped=JSON.parse(JSON.stringify(defaultWorkspacePreferences()));
+  legacyUnstamped.theme='dark';
+  legacyUnstamped.stamps.theme={revision:2,writer:'legacy'};
+  legacyUnstamped.revision=2;
+  legacyUnstamped.panels.inspectorHeight=legacy;
+  legacyUnstamped.stamps.inspectorHeight={revision:0,writer:''};
+  const parsedUnstamped=parseWorkspacePreferences(legacyUnstamped);
+  expect(parsedUnstamped.panels.inspectorHeight).toBe(262);
+  expect(parsedUnstamped.theme).toBe('dark');
+  const hubA=new PreferenceHub();
+  hubA.values.set(workspacePreferenceKey,JSON.stringify(legacyUnstamped));
+  const storeA=new WorkspacePreferenceStore({...hubA.endpoint(),writer:'tab-a'});
+  expect(storeA.status().state).toBe('available');
+  expect(storeA.get().panels.inspectorHeight).toBe(262);
+  storeA.dispose();
 
- // 2. Earlier version saved record where user explicitly set/stamped inspectorHeight to 280.
- const legacyStamped=JSON.parse(JSON.stringify(defaultWorkspacePreferences()));
- legacyStamped.panels.inspectorHeight=280;
- legacyStamped.stamps.inspectorHeight={revision:3,writer:'legacy'};
- legacyStamped.revision=3;
- const parsedStamped=parseWorkspacePreferences(legacyStamped);
- expect(parsedStamped.panels.inspectorHeight).toBe(280);
- const hubB=new PreferenceHub();
- hubB.values.set(workspacePreferenceKey,JSON.stringify(legacyStamped));
- const storeB=new WorkspacePreferenceStore({...hubB.endpoint(),writer:'tab-b'});
- expect(storeB.status().state).toBe('available');
- expect(storeB.get().panels.inspectorHeight).toBe(280);
- storeB.dispose();
+  // 2. A user explicitly set (stamped) inspectorHeight to that same value: a saved height still wins.
+  const legacyStamped=JSON.parse(JSON.stringify(defaultWorkspacePreferences()));
+  legacyStamped.panels.inspectorHeight=legacy;
+  legacyStamped.stamps.inspectorHeight={revision:3,writer:'legacy'};
+  legacyStamped.revision=3;
+  const parsedStamped=parseWorkspacePreferences(legacyStamped);
+  expect(parsedStamped.panels.inspectorHeight).toBe(legacy);
+  const hubB=new PreferenceHub();
+  hubB.values.set(workspacePreferenceKey,JSON.stringify(legacyStamped));
+  const storeB=new WorkspacePreferenceStore({...hubB.endpoint(),writer:'tab-b'});
+  expect(storeB.status().state).toBe('available');
+  expect(storeB.get().panels.inspectorHeight).toBe(legacy);
+  storeB.dispose();
+ }
 
  // 3. Arbitrary unstamped non-default inspectorHeight (e.g. 250) is still refused.
  const tampered=JSON.parse(JSON.stringify(defaultWorkspacePreferences()));
