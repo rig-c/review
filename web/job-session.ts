@@ -55,7 +55,7 @@ export interface JobWindowTransport {
 }
 export interface JobPreparedCommit {
     /** Restore the previous view, including its original forms and route bindings. */
-    rollback(): void;
+    rollback(): void | Promise<void>;
     /** Dispose the old view only after the new displayed nonce is acknowledged. */
     finalize(): void;
 }
@@ -305,7 +305,7 @@ export function createJobWindow<Prepared>(options: {
                     error = failure instanceof Error ? failure.message : 'JOB_DISPLAY_MISMATCH';
             }
             finally {
-                committed?.rollback();
+                await committed?.rollback();
                 if (prepared !== undefined)
                     adapter.discard(prepared);
                 if (revision === intent) {

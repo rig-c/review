@@ -77,7 +77,7 @@ export function createJobRigScreen(options: {
   load(): Promise<unknown>;
 }) {
   let mounted: JobRigScreenPrepared | null = null, screen: RigHostScreen | null = null, drawGeneration = 0;
-  let transition:{rollback():void;finalize():void}|null=null;
+  let transition:{rollback():Promise<void>;finalize():void}|null=null;
   const attempts = new Map<string, {key: string; submissionId: string; rig: ReturnType<typeof createJobRigSubmission>; commit: Omit<RigHostCommit, 'at'>}>();
   async function prepare(display: DisplayPublicationV3, signal: AbortSignal): Promise<JobRigScreenPrepared | null> {
     const source = display.publication.source;
@@ -200,7 +200,7 @@ export function createJobRigScreen(options: {
     mounted: () => mounted,
     commit(prepared: JobRigScreenPrepared) {
       const previous=mounted;mounted=prepared;
-      return {rollback(){transition?.rollback();transition=null;mounted=previous;},finalize(){transition?.finalize();transition=null;}};
+      return {async rollback(){try{await transition?.rollback();}finally{transition=null;mounted=previous;}},finalize(){transition?.finalize();transition=null;}};
     },
     /** The rig composition draws first; the job acknowledges the display after. */
     async painted(prepared: JobRigScreenPrepared, signal: AbortSignal): Promise<void> {
@@ -210,14 +210,14 @@ export function createJobRigScreen(options: {
       const navigation=previous?.navigation?.();previous?.suspend?.();
       const previousTitle=document.title,previousUrl=typeof location==='undefined'?null:location.href;
       const previousReady=document.body?.getAttribute('data-ready')??null,previousInert=document.body?.inert;
-      let candidate:{dispose?():void}|undefined,finished=false;
-      const rollback=()=>{
-        if(finished)return;finished=true;
+      let candidate:{dispose?():void}|undefined,finished=false,recovery:Promise<void>|null=null;
+      const rollback=():Promise<void>=>{
+        if(finished)return recovery??Promise.resolve();finished=true;
         if(candidate?.dispose)candidate.dispose();else if(screen!==previous)screen?.dispose?.();screen=previous;
         options.host.replaceChildren(...previousNodes);setRigHost(previousHost);document.title=previousTitle;
         if(previousUrl)history.replaceState(null,'',previousUrl);
         if(document.body){if(previousReady===null)document.body.removeAttribute('data-ready');else document.body.setAttribute('data-ready',previousReady);document.body.inert=previousInert??false;}
-        previous?.resume?.();
+        recovery=Promise.resolve(previous?.resume?.());return recovery;
       };
       transition={rollback,finalize(){if(finished)return;finished=true;previous?.dispose?.();}};
       try {
@@ -228,7 +228,7 @@ export function createJobRigScreen(options: {
         if(loaded&&typeof loaded==='object')candidate=loaded as {dispose?():void};
         await shown;
         if (signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
-      }catch(error){rollback();throw error;}
+      }catch(error){await rollback();throw error;}
     },
     /** A newly pending ask the screen cannot answer, or a later publication, reloads into the job window's route. */
     changed(state: {readonly pending: readonly PendingAskV3[]; readonly closed: boolean; readonly preparing?:boolean; readonly error?:string|null; readonly previousLabel?:string|null; readonly displayed?:DisplayPublicationV3|null}): void {

@@ -82,12 +82,13 @@ const screenRoot=document.getElementById('app')!;
 const lifecycle=new AbortController();
 let suspended=false,disposed=false,frameHandle=0,navigationMissing=false;
 let publicEditor:unknown;
+let workspace:WorkspaceUI|null=null;
 interface ReviewResponse { direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; initialAnimation?:string|null; manifest: ReviewManifest; referenceBinding?:ReferenceBinding; explicitReference?:{id:string;name:string;sha256:string;url:string}; sourcePainting?:{id:string;path:string;sha256:string;url:string}; sourceHash: string; reviewedSource: ReviewedSource; report: ReportSeeds | null; feedbackCatalog: FeedbackCatalog; assetsBase: string; capabilities: { interview?:true; preRig?:true; playback: boolean; modeling: false; motion: false; feedback: boolean; audio: boolean } }
 interface PoseReference { schema: 'rig-review-pose/1'; coordinateSystem: 'image-pixels-y-down'; width: number; height: number; joints: { id: string; x: number; y: number; parent?: string }[] }
 interface SequenceJoint { state: 'observed' | 'occluded' | 'missing' | 'inferred'; at?: [number, number]; score?: number }
 interface PoseSequence { spec: 'rig-pose-sequence/1'; space: { units: 'picture-px'; origin: 'top-left'; y: 'down' }; width: number; height: number; source?: string; frames: { t: number; people: { id: string; joints: Record<string, SequenceJoint> }[] }[]; camera?: { s: number; tx: number; ty: number; inliers: number }[]; cameraSource?: unknown }
 const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
-  const node = id==='app'?screenRoot:screenRoot.querySelector<HTMLElement>('#'+id);
+  const node = id==='app'?screenRoot:screenRoot.querySelector<HTMLElement>('#'+id)??workspace?.element(id);
   if (!node) throw new Error(`Missing UI element: ${id}`);
   return node as T;
 };
@@ -102,7 +103,7 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 // Capability is consumed before shell composition or any URL-dependent binding.
 // A live job (#709) hosts this screen for a rig subject: its routes, its session and its submit.
 const host=rigHost(),access=host?.access??pageInstanceAccess();
-const partsOnly=host?.subject==='parts'||document.getElementById('app')?.dataset.reviewScreen==='parts';
+const partsOnly=host?.subject==='parts'||screenRoot.dataset.reviewScreen==='parts';
 const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
 const rigStatusBar=mountStatusBar({
  message:'Loading local review package…',
@@ -191,7 +192,7 @@ function hasStageModel():boolean{return Boolean(data.manifest.model||(data?.capa
 /** Apply · Rebuild (#99): the inspected model's URL, the producer status, and the applied record while its scratch build is on the stage. */
 let inspectedModel:{url:string;prefix:string;sha256:string}|null=null,rebuildStatus:RebuildStatusView|null=null,appliedOnStage:AppliedRecord|AppliedPatch|AppliedDelta|AppliedRetarget|AppliedAnimation|null=null,rebuildBusy=false,stageModelHash:string|null=null;
 let appearance:ReturnType<typeof bindAppearance>|null=null;
-let workspace:WorkspaceUI|null=null;
+
 let inspectorTabs:ReturnType<typeof bindInspectorTabs>|null=null;
 let inspectorBlocks:InspectorBlocks|null=null;
 let idleHeld=false;
@@ -1142,7 +1143,7 @@ function bind(): void {
 
 /** The one shell and block binding, for either subject. */
 function bindWorkspace():void {
-  workspace=bindWorkspaceUI({regions:{layout:document.querySelector<HTMLElement>('.layout')!,left:document.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:document.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
+  workspace=bindWorkspaceUI({root:screenRoot,regions:{layout:screenRoot.querySelector<HTMLElement>('.layout')!,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   bindReviewDialog();
@@ -1306,10 +1307,16 @@ function suspendScreen():void {
  if(!partsOnly)pause();
  persistence?.dispose();persistence=null;suspended=true;cancelAnimationFrame(frameHandle);
 }
-function resumeScreen():void {
- if(disposed)return;suspended=false;
+async function resumeScreen():Promise<void> {
+ if(disposed)return;
  (window as unknown as {rigReviewEditor:unknown}).rigReviewEditor=publicEditor;
- if(!partsOnly){frameHandle=requestAnimationFrame(tick);void setupPersistence(true);}
+ const wasInert=screenRoot.inert;let ready=false;screenRoot.inert=true;document.body.removeAttribute('data-ready');
+ try{
+  await workspace?.settle();
+  if(disposed)return;
+  if(!partsOnly)await setupPersistence(true);
+  suspended=false;if(!partsOnly)frameHandle=requestAnimationFrame(tick);ready=true;
+ }finally{screenRoot.inert=ready?wasInert:true;if(ready&&!disposed)document.body.dataset.ready='true';}
 }
 function disposeScreen():void {
  if(disposed)return;suspendScreen();disposed=true;lifecycle.abort();

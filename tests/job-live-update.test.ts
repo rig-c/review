@@ -3,6 +3,7 @@ import {createJobRigScreen,type JobRigScreenPrepared} from '../web/job-rig-scree
 import {rigHost,setRigHost,type RigHost,type RigHostScreen} from '../web/rig-host.ts';
 import {fixturePublication,fixtureAct} from './helpers/job-window-fixture.ts';
 import {parseManifest} from '../src/manifest.ts';
+import {createJobWindow} from '../web/job-session.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import type {PendingAskV3,ActV3} from '../src/job-contract.ts';
 
@@ -15,7 +16,7 @@ function prepared(index:number,parts=false):JobRigScreenPrepared {
    reviewedSource:{packageRevision:source.package.revision,viewerVersion:'test',runtimeVersion:'test',rig:source.model??null,motion:null}},
   ...(parts?{parts:{sourceHash:source.sourceHash,mode:'parts',items:[]} as never}:{})};
 }
-function harness(){
+function harness(onResume?:()=>void|Promise<void>){
  let nodes:unknown[]=[{id:'old-root'}],fail=false,incompatible=false;
  const events:string[]=[],screens:RigHostScreen[]=[],hosts:RigHost[]=[];
  const bookmark={binding:{sourceHash:'a'.repeat(64)},time:.625,selection:{part:{slot:'sleeve',mode:'solo'},reference:'painting'},view:{cameras:{rig:{zoom:2,center:{x:12,y:34}}}}};
@@ -29,7 +30,7 @@ function harness(){
    const host=rigHost()!;hosts.push(host);const name=String(hosts.length);
    const screen:RigHostScreen={stage:()=>null,redraw(){},message:text=>events.push(text),pendingSubjects(){},
     navigation:()=>({subject:'rig',bookmark:structuredClone(bookmark) as never}),incompatible:()=>incompatible,
-    suspend:()=>events.push('suspend '+name),resume:()=>events.push('resume '+name),dispose:()=>events.push('dispose '+name)};
+    suspend:()=>events.push('suspend '+name),resume:()=>{events.push('resume '+name);return onResume?.();},dispose:()=>events.push('dispose '+name)};
    if(fail){host.failed(new Error('candidate load failed'));return {dispose:()=>events.push('dispose candidate')};}
    screens.push(screen);host.attach(screen);host.displayed();return {dispose:screen.dispose};
   }});
@@ -43,13 +44,13 @@ test('#743 publication swaps in place and transports navigation only; ack failur
  expect(h.hosts[1]!.access.key).toBe(b.display.publication.instanceKey);
  const fresh=await h.hosts[1]!.read('/api/session','GET') as any;
  expect(fresh.sourceHash).toBe(b.review.sourceHash);expect(fresh.status).toBe('pending');expect(fresh.feedback).toEqual([]);expect(fresh.checkpoints).toEqual({});
- swap.rollback();expect(h.nodes()).toEqual(oldNodes);expect(rigHost()).toBe(oldHost);expect(h.view.mounted()).toBe(a);
+ await swap.rollback();expect(h.nodes()).toEqual(oldNodes);expect(rigHost()).toBe(oldHost);expect(h.view.mounted()).toBe(a);
  expect(h.events).toContain('resume 1');expect(h.events).not.toContain('dispose 1');
 });
 test('#743 failed candidate retains old result, routes, source, session and inspection bookmark',async()=>{
  const h=harness(),a=prepared(1);h.view.commit(a);await h.view.painted(a,new AbortController().signal);
  const oldNodes=h.nodes(),oldHost=rigHost(),before=await oldHost!.read('/api/session','GET');h.fail();const swap=h.view.commit(prepared(2));
- await expect(h.view.painted(prepared(2),new AbortController().signal)).rejects.toThrow('candidate load failed');swap.rollback();
+ await expect(h.view.painted(prepared(2),new AbortController().signal)).rejects.toThrow('candidate load failed');await swap.rollback();
  expect(h.nodes()).toEqual(oldNodes);expect(rigHost()).toBe(oldHost);expect(await rigHost()!.read('/api/session','GET')).toEqual(before);
  expect(h.hosts[0]!.access.key).toBe(a.display.publication.instanceKey);expect(h.events).toContain('resume 1');expect(h.events).not.toContain('dispose 1');
  h.view.changed({pending:[],closed:false,error:'candidate load failed'});expect(h.events.at(-1)).toContain(enCatalog['job.failed']);
@@ -99,4 +100,39 @@ test('#743 parts caller keeps named selection, Solo, both numeric cameras and la
    {cancelFit(){},state:{},writeCamera:(target:any,value:any)=>writes.push([target,value])},()=>{},()=>{},()=>{},String);
   expect(selected).toEqual([missing?null:'sleeve']);expect(solo).toEqual([!missing]);expect(writes).toEqual([['rig',camera.cameras.rig],['reference',camera.cameras.reference]]);expect(paints).toBe(1);expect(result).toEqual({view:'compare',navigationMissing:missing});
  }
+});
+
+test('#743 rollback resume waits for workspace redocking and persistence before reporting ready',async()=>{
+ const source=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();const body=source.slice(source.indexOf('async function resumeScreen()'),source.indexOf('function disposeScreen()'));
+ const {Transpiler}=await import('bun');const js=new Transpiler({loader:'ts'}).transformSync(body);
+ const queue:Function[]=[],events:string[]=[],screenRoot={inert:false},document={body:{dataset:{ready:'true'} as Record<string,string>,removeAttribute(name:string){if(name==='data-ready')delete this.dataset.ready;}}};let docked=false;
+ const resume=new Function('window','document','screenRoot','workspace','setupPersistence','requestAnimationFrame','tick',`let disposed=false,suspended=true,partsOnly=false,frameHandle=0;const publicEditor={};${js};return resumeScreen;`)(
+  {},document,screenRoot,{settle(){return new Promise<void>(resolve=>queue.push(()=>{docked=true;events.push('docked');resolve();}));}},async()=>{if(!docked)throw Error('Missing UI element: feedback-target-name');events.push('persistence');},(fn:Function)=>{queue.push(fn);return queue.length;},()=>{});
+ const done=resume();let complete=false;const completed=Promise.resolve(done).then(()=>{complete=true;});
+ expect(document.body.dataset.ready).toBeUndefined();expect(screenRoot.inert).toBe(true);
+ for(let i=0;i<6&&!complete;i++){for(const task of queue.splice(0))task();await Promise.resolve();}
+ await completed;expect(events).toEqual(['docked','persistence']);expect(document.body.dataset.ready).toBe('true');expect(screenRoot.inert).toBe(false);
+});
+
+test('#743 scoped element lookup resolves only the mount root or its owned workspace portals',async()=>{
+ const source=await Bun.file(new URL('../web/main.ts',import.meta.url)).text(),body=source.slice(source.indexOf('const el = <'),source.indexOf('const input ='));
+ const {Transpiler}=await import('bun');const js=new Transpiler({loader:'ts'}).transformSync(body),own={id:'feedback-target-name'},other={id:'other-source-only'};
+ const lookup=new Function('screenRoot','workspace','document',js+';return el;')({querySelector:()=>null},{element:(id:string)=>id===own.id?own:null},{getElementById:()=>other});
+ expect(lookup(own.id)).toBe(own);expect(()=>lookup(other.id)).toThrow('Missing UI element: other-source-only');
+});
+
+test('#743 failed candidate painting awaits prior source resume before returning the load failure',async()=>{
+ let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),h=harness(()=>gate),a=prepared(1);
+ const first=h.view.commit(a);await h.view.painted(a,new AbortController().signal);first.finalize();
+ h.fail();const transaction=h.view.commit(prepared(2));let complete=false;
+ const failed=h.view.painted(prepared(2),new AbortController().signal).then(()=>{throw Error('expected refusal');},error=>{complete=true;return String(error);});
+ for(let i=0;i<6;i++)await Promise.resolve();expect(h.events).toContain('resume 1');expect(complete).toBe(false);
+ release();expect(await failed).toContain('candidate load failed');await transaction.rollback();expect(h.events.filter(value=>value==='resume 1')).toHaveLength(1);expect(h.view.mounted()).toBe(a);
+});
+
+test('#743 window replacement keeps preparing until asynchronous rollback restoration completes',async()=>{
+ let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;}),started=new Promise<void>(resolve=>{entered=resolve;}),display=fixturePublication();
+ const window=createJobWindow({jobId:'window-fixture',pageId:'page',transport:{readPublication:async()=>({ok:true,value:display}),acknowledge:async()=>({ok:false,error:{code:'JOB_DISPLAY_MISMATCH',message:'planted acknowledgment refusal'}}),submit:async()=>{throw Error('not used');}},
+  adapter:{prepare:async()=>display,captureDraft:()=>null,commit:()=>({async rollback(){entered();await gate;},finalize(){}}),painted:async()=>{},discard(){},changed(){}}});
+ const pending=window.replace(display.publication);await started;expect(window.state().preparing).toBe(true);release();await pending;expect(window.state().preparing).toBe(false);expect(window.state().error).toBe('JOB_DISPLAY_MISMATCH');window.stop();
 });

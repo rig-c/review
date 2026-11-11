@@ -20,7 +20,7 @@ export interface RigHostScreen {
   navigation?():RigHostNavigation;
   incompatible?():boolean;
   suspend?():void;
-  resume?():void;
+  resume?():void|Promise<void>;
   dispose?():void;
   /** Null while no rig is drawn. */
   stage(): RigHostStage | null;
