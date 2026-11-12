@@ -46,8 +46,8 @@ test('#715 mixed rig verdict and supported modal asks stay on the shared screen'
     expect(jobRigScreenRoute(display, [...asks, {...signoff, subject} as PendingAskV3], ids)).toBe(false);
   }
   const image = {...publication, source: {...publication.source, subject: 'image-set'}};
-  expect(jobRigScreenSubject(image.source as unknown as DisplayPublicationV3['publication']['source'])).toBe(false);
-  expect(jobRigScreenRoute({publication: image} as unknown as DisplayPublicationV3, [], ids)).toBe(false);
+  expect(jobRigScreenSubject(image.source as unknown as DisplayPublicationV3['publication']['source'])).toBe(true);
+  expect(jobRigScreenRoute({publication: image} as unknown as DisplayPublicationV3, [], ids)).toBe(true);
   const draft = {...publication, source: {...publication.source, selector: {kind: 'draft', id: 'd'}}};
   expect(jobRigScreenRoute({publication: draft} as unknown as DisplayPublicationV3, [], ids)).toBe(false);
 });
@@ -153,13 +153,15 @@ test('#709 the rig screen still does not depend on the mesh or bone overlay togg
   expect(stage).not.toContain('layers.bones');
 });
 
-// The job window retains only the image and direction verdict owners; rig capture belongs to this shared screen.
+// The job window retains only the direction verdict owner; rig capture belongs to this shared screen.
 test('#709 job-window rig verdict mount and capture path are deleted, not hidden by a test override', async () => {
   const source = await Bun.file(new URL('../web/job-session.ts', import.meta.url)).text();
   const form = source.slice(source.indexOf('    function formFor('), source.indexOf('    function updateForms('));
-  expect(form).toContain("else if (subject.kind === 'review-verdict' && (subject.stage === 'image-review' || subject.stage === 'direction-review'))");
+  expect(form).toContain("else if (subject.kind === 'review-verdict' && subject.stage === 'direction-review')");
   expect(form).not.toContain("else if (subject.kind === 'review-verdict')");
   expect(form).not.toContain('rigSubmission');
+  expect(form).not.toContain('image-note-');
+  expect(source).not.toContain('gallery.dataset.jobImageSet');
   expect(source).not.toContain('copyRigVerdict');
   expect(source).not.toContain('createJobRigSubmission');
   expect(source).not.toContain('freezeJobRigCapture');

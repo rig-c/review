@@ -380,13 +380,13 @@ test('#756 shared button keeps available-camera fallback and the actual main cal
  const source=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
  const begin=source.indexOf('function unitScaleMessage('),end=source.indexOf('\nfunction bindReviewDialog(',begin);
  const callbackSource=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(begin,end));
- for(const language of ['en','ko'] as const)for(const mode of ['rig','reference','parts'] as const){
-  const h=host(),c=createViewportController({...h.provider,nativeScale:mode==='parts'},h.state);c.state.cameraSync=false;
+ for(const language of ['en','ko'] as const)for(const mode of ['rig','reference','parts','images'] as const){
+  const h=host(),c=createViewportController({...h.provider,nativeScale:mode==='parts'||mode==='images'},h.state);c.state.cameraSync=false;
   if(mode==='reference')h.nodes.get('rig-pane').hidden=true;
-  const messages:string[]=[],callback=new Function('partsOnly','message',callbackSource+';return unitScaleMessage;')(mode==='parts',(value:string)=>messages.push(t(value,undefined,language)));
+  const messages:string[]=[],callback=new Function('partsOnly','host','message',callbackSource+';return unitScaleMessage;')(mode==='parts',mode==='images'?{imageSet:{}}:null,(value:string)=>messages.push(t(value,undefined,language)));
   const dispose=c.bindControls(callback);h.nodes.get('native-one').click();const target=mode==='reference'?'reference':'rig';
   expect(c.state.activeCamera).toBe(target);expect(c.numericView().cameras[target]!.visible.width).toBe(640);
-  const key=mode==='parts'?'1:1':mode==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.';
+  const key=mode==='parts'||mode==='images'?'1:1':mode==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.';
   expect(messages).toEqual([t(key,undefined,language)]);dispose();
  }
 });

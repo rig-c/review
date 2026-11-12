@@ -7,6 +7,8 @@ import {prepareJobImageSet, parseJobImageSetBinding} from '../src/job-image-set.
 import {parseCommentsAct} from '../src/job-host.ts';
 import commentsLegacy from './fixtures/comments-contract-legacy.json';
 import {jobFixture} from './helpers/job-api-fixture.ts';
+import {imageReviewValue,projectComments} from '../src/stage-comment.ts';
+import {imageCommentCodec,type ImageCommentPose} from '../web/stage-comments.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {parseJobSubject as oldParseJobSubject} from './fixtures/job-image-set/old-subject-parser.ts';
 
@@ -194,6 +196,7 @@ test('522 notes reject extra fields, duplicate/nonmember names and browser-suppl
     {...input.value, imageNotes: [{name: 'unknown', words: ''}]},
     {...input.value, imageNotes: [{name: 'Image 0', words: ''}, {name: 'Image 0', words: ''}]},
     {...input.value, imageNotes: [{name: 'Image 0', words: '', unknown: true}]},
+    {...input.value, comments: [{text:'extra field is forbidden under @2'}]},
     {...input.value, imageSetDigest: '0'.repeat(64)},
   ]) {
     const before = f.session.status();
@@ -229,4 +232,33 @@ test('522 original model publication, ask, act source and value serialize byte-i
     source: saved.value.source, value: saved.value.value});
   const before = await readFile(new URL('./fixtures/job-image-set/model-branch.json', import.meta.url), 'utf8');
   expect(actual).toBe(before);
+});
+
+
+test('#772 signed image projection preserves global and member order, refusing unknown names',async()=>{
+ const f=await fixture(),{publication,input}=await submission(f),source=publication.source;
+ if(source.subject!=='image-set')throw new Error('Expected image source');
+ const comments=[{text:'  first candidate\n',anchor:{name:'Image 1'}},{text:'General'},
+  {text:'source',anchor:{name:'Image 0'}},{text:'second candidate',anchor:{name:'Image 1'}}];
+ const value=imageReviewValue(source,'approved',comments);
+ expect(value.words).toBe(projectComments(comments));
+ expect(value.imageNotes).toEqual([{name:'Image 0',words:projectComments([comments[2]!])},
+  {name:'Image 1',words:projectComments([comments[0]!,comments[3]!])}]);
+ expect(imageReviewValue(source,'approved',[])).toEqual({stage:'image-review',verdict:'approved',words:''});
+ expect(()=>imageReviewValue(source,'approved',[{text:'bad',anchor:{name:'missing'}}])).toThrow('JOB_ACT_INVALID');
+ const result=await f.ports.commitUIAct(f.session.jobId,f.uiRequest({...input,value}));
+ expect(result.ok).toBe(true);if(!result.ok)throw new Error(result.error.code);
+ expect(result.value.schema).toBe('rig-review/act@2');expect(result.value.value).toEqual(value);
+});
+
+test('#772 image codec pins to one sealed image and retains local crop and camera evidence',async()=>{
+ const codec=imageCommentCodec(),camera={space:'image' as const,zoom:1,center:{x:100,y:50},viewport:{width:200,height:100},visible:{x:0,y:0,width:200,height:100}};
+ const pose:ImageCommentPose={mode:'setup',camera,sourceHash:'a'.repeat(64),boxes:[{name:'Source',x:0,y:0,width:80,height:100},{name:'Candidate',x:100,y:0,width:80,height:100}]};
+ const crop={path:'comment-crops/test.png',sha256:'b'.repeat(64),png:'data:image/png;base64,AAAA',width:8,height:8};
+ const row=await codec.create(pose,'rig',{x:110,y:20,width:10,height:10},crop,{zoom:1},'  spot  ');
+ expect(row.image?.name).toBe('Candidate');expect(row.image?.mark.crop).toEqual(crop);expect(row.image?.mark.world).toEqual({x:110,y:20,width:10,height:10});
+ expect(codec.signature({...pose,camera:{...camera,zoom:2}})).not.toEqual(codec.signature(pose));
+ expect(codec.matches(row.image!.mark,pose,row)).toBe(true);
+ expect(codec.matches(row.image!.mark,{...pose,sourceHash:'c'.repeat(64)},row)).toBe(false);
+ await expect(codec.create(pose,'rig',{x:75,y:20,width:30,height:10},crop,{},'cross images')).rejects.toThrow('Mark a point or region inside one image.');
 });

@@ -15,7 +15,7 @@ export function pixelAlignedCrop(area:CaptureRect,origin:{x:number;y:number},rat
 }
 export interface BackgroundLayer {rect:CaptureRect;color:string;image:string;size:string;position:string;clip?:CaptureRect}
 export interface PixelLayer {image:CanvasImageSource;rect:CaptureRect;opacity:number}
-export interface ViewportCapture {pane:HTMLElement;root?:HTMLElement;images:boolean;canvas?:HTMLCanvasElement;backend:CanvasBackend;nearest?:boolean;strictActualPixels?:boolean;includeOverlays?:boolean}
+export interface ViewportCapture {pane:HTMLElement;root?:HTMLElement;images:boolean;rasters?:readonly HTMLImageElement[];canvas?:HTMLCanvasElement;backend:CanvasBackend;nearest?:boolean;strictActualPixels?:boolean;includeOverlays?:boolean}
 const transparent=(color:string)=>color==='transparent'||/^rgba\([^)]*,\s*0\s*\)$/.test(color);
 const cssMatrix=(transform:string)=>transform==='none'?new DOMMatrix():new DOMMatrix(transform);
 /** Read only this app's computed backgrounds, in their actual viewport coordinates. */
@@ -90,7 +90,7 @@ export function paintViewportLayers(ctx:CanvasRenderingContext2D,area:CaptureRec
  ctx.save();ctx.beginPath();ctx.rect(area.x,area.y,area.width,area.height);ctx.clip();paintBackground(ctx,background,area,strict);if(images)drawImages();
  for(const layer of overlays){ctx.save();ctx.globalAlpha=layer.opacity;ctx.drawImage(layer.image,layer.rect.x,layer.rect.y,layer.rect.width,layer.rect.height);ctx.restore();}ctx.restore();
 }
-function displayedPixels(canvas:HTMLCanvasElement,pane:HTMLElement,snap=true):PixelLayer|null {
+function displayedPixels(canvas:HTMLCanvasElement|HTMLImageElement,pane:HTMLElement,snap=true):PixelLayer|null {
  const style=getComputedStyle(canvas);if(style.display==='none'||style.visibility==='hidden'||Number(style.opacity)===0)return null;const a=canvas.getBoundingClientRect(),b=pane.getBoundingClientRect(),origin={x:b.left+pane.clientLeft,y:b.top+pane.clientTop};return {image:canvas,rect:snap&&style.transform==='none'?displayedCanvasRect({x:a.left,y:a.top,width:a.width,height:a.height},origin,globalThis.devicePixelRatio||1):{x:a.left-origin.x,y:a.top-origin.y,width:a.width,height:a.height},opacity:Number(style.opacity)};
 }
 /** Copy only unambiguous, normal-filter DOM rasters whose z matches the public held frame.
@@ -124,6 +124,7 @@ export function paintInspectionViewport(ctx:CanvasRenderingContext2D,area:MarkRe
  if(capture.nearest)ctx.imageSmoothingEnabled=false;
   const overlays=capture.includeOverlays===false?[]:[...capture.pane.querySelectorAll<HTMLCanvasElement>('canvas')].filter(node=>!capture.root?.contains(node)&&node!==capture.canvas).map(node=>displayedPixels(node,capture.pane)).filter((v):v is PixelLayer=>v!==null);
  paintViewportLayers(ctx,area,viewportBackground(capture.pane,capture.strictActualPixels),capture.images,()=>{
+   if(capture.rasters){for(const image of capture.rasters){if(!image.complete||!image.naturalWidth||!image.naturalHeight)throw new Error('COMMENT_CROP_UNAVAILABLE: this viewport has no rendered pixels');const pixels=displayedPixels(image,capture.pane,false);if(pixels){ctx.save();ctx.globalAlpha=pixels.opacity;ctx.drawImage(pixels.image,pixels.rect.x,pixels.rect.y,pixels.rect.width,pixels.rect.height);ctx.restore();}}return;}
    if(capture.canvas){if(capture.strictActualPixels&&getComputedStyle(capture.canvas).filter!=='none')throw new Error('JOB_STILL_CAPTURE_FAILED');const pixels=displayedPixels(capture.canvas,capture.pane,!capture.root?.contains(capture.canvas));if(pixels){ctx.save();ctx.globalAlpha=pixels.opacity;ctx.drawImage(pixels.image,pixels.rect.x,pixels.rect.y,pixels.rect.width,pixels.rect.height);ctx.restore();return;}}
   if(pose.posed&&pose.assets){if(displayedRig(ctx,capture,pose.posed,pose.camera))return;
    if(capture.strictActualPixels)throw new Error('JOB_STILL_CAPTURE_FAILED');

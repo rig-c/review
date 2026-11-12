@@ -1,4 +1,5 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+  'JOB_IMAGE_COMMENT_OUTSIDE': 'Mark a point or region inside one image.',
   "project.json": "project.json",
   'job.commentsFromWorkspace': 'Comments from the workspace are included. Close this request to add or edit comments.',
   'Add general comment': 'Add general comment',

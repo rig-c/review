@@ -2239,18 +2239,13 @@ describe('#559 continuous Rig motion transport and job forms', () => {
         };
     }
 
-    test('#709 retained image and direction verdict forms submit their unchanged values through the synthetic transport', async () => {
-        for (const stage of ['image-review', 'direction-review'] as const) {
+    test('#709 retained direction verdict form submits its unchanged value through the synthetic transport', async () => {
+        for (const stage of ['direction-review'] as const) {
             const s = await mountRuntimeSession();
             try {
                 const base = fixturePublication();
                 if (base.publication.source.subject === 'image-set') throw new Error('Expected model fixture');
-                const {model, selector, checkpointEvidence, ...common} = base.publication.source;
-                const {prepareJobImageSet} = await import('../src/job-image-set.ts');
-                const imageSet = prepareJobImageSet({purpose: 'plate-adoption', images: [
-                    {role: 'source', name: 'Source', path: 'source.png'},
-                    {role: 'candidate', name: 'Candidate', path: 'candidate.png'}]}, () => new Uint8Array([1, 2, 3]));
-                const source = stage === 'image-review' ? {...common, subject: 'image-set' as const, ...imageSet} :
+                const source =
                     {...base.publication.source, selector: {kind: 'post' as const, version: 1, rigVersion: 1},
                         direction: {path: 'direction.json', sha256: 'd'.repeat(64)}};
                 const display = {...base, publication: {...base.publication, source}};
@@ -2263,9 +2258,8 @@ describe('#559 continuous Rig motion transport and job forms', () => {
                 expect(form).not.toBeNull();
                 form.querySelector('select[name="verdict"]')!.value = 'approved';
                 form.querySelector('textarea[name="note"]')!.value = '  preserve 원문\n';
-                if (stage === 'image-review') form.querySelector('textarea[name="image-note-1"]')!.value = 'candidate note';
                 const value = {stage, verdict: 'approved', words: '  preserve 원문\n',
-                    ...(stage === 'image-review' ? {imageNotes: [{name: 'Candidate', words: 'candidate note'}]} : {})};
+                    };
                 s.fixture.returnAct({...fixtureAct('review-verdict'), askId: ask.askId, source, value} as ActV3);
                 form.dispatchEvent({type: 'input'});
                 await form.onsubmit?.({preventDefault() {}});

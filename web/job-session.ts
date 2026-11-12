@@ -1229,7 +1229,7 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
         return input;
     }
     function imageGallery(images: readonly {name: string; sha256: string; element?: HTMLImageElement;
-        role?: string; duplicate?: boolean}[], titleOnly = false): HTMLElement {
+        role?: string; duplicate?: boolean}[], titleOnly = false, native = false): HTMLElement {
         const gallery = node('section');
         gallery.style.display = 'grid';
         gallery.style.gridAutoFlow = 'column';
@@ -1238,6 +1238,7 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
         gallery.style.overflow = 'auto';
         gallery.style.minHeight = '0';
         gallery.style.flex = '1';
+        if(native){gallery.style.gridAutoColumns='max-content';gallery.style.overflow='visible';gallery.style.width='max-content';gallery.style.color='var(--rv-stage-fg)';}
         for (const image of images) {
             const element = image.element;
             if (!element) throw new Error('JOB_VISUAL_UNAVAILABLE');
@@ -1247,7 +1248,7 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
             figure.dataset.imageName = image.name;
             const name = node('h3');
             name.textContent = image.name;
-            if (titleOnly) name.setAttribute('translate', 'no');
+            name.setAttribute('translate', 'no');
             name.style.overflowWrap = 'anywhere';
             const role = image.role ? node('p', 'job.imageRole.' + image.role) : node('p');
             const hash = node('code');
@@ -1260,6 +1261,7 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
             element.style.height = 'auto';
             element.style.maxHeight = '70vh';
             element.style.objectFit = 'contain';
+            if(native){element.style.width=element.naturalWidth+'px';element.style.maxHeight='none';figure.style.width=element.naturalWidth+'px';}
             figure.append(name, role, element, hash);
             if (image.duplicate)
                 figure.append(node('p', 'job.identicalImages'));
@@ -1378,6 +1380,7 @@ export interface JobFormDependencies {
         if (ask.subject.kind !== 'review-verdict') {source.title = ask.source.sourceHash; source.setAttribute('translate', 'no');}
         fields.append(source);
         const subject = ask.subject;
+        if(subject.kind==='review-verdict'&&subject.stage==='image-review')throw new Error('JOB_PANEL_UNAVAILABLE');
         const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff' || subject.kind === 'reopen';
         const note = commentOnly || subject.kind === 'interview-picks' ? null : textArea(fields, 'interview.note');
         if(commentOnly)fields.append(node('p','job.commentsFromWorkspace'));
@@ -1493,31 +1496,12 @@ export interface JobFormDependencies {
             submitKey = 'job.saveCheckpoint';
         }
         else if(subject.kind==='parts-verdict')throw new Error('JOB_PANEL_UNAVAILABLE');
-        else if (subject.kind === 'review-verdict' && (subject.stage === 'image-review' || subject.stage === 'direction-review')) {
+        else if (subject.kind === 'review-verdict' && subject.stage === 'direction-review') {
             const verdict = selectValues(['pending', 'approved', 'changes-requested'], ['Pending', 'Approved', 'Changes requested']);
             verdict.name = 'verdict';
             fields.append(verdict);
             const stage = subject.stage;
-            if (stage === 'image-review') {
-                const source = ask.source;
-                if (source.subject !== 'image-set') throw new Error('JOB_ACT_SOURCE_STALE');
-                const imageNotes = source.imageSet.images.map((image, index) => {
-                    const group = node('fieldset');
-                    const name = node('legend');
-                    name.textContent = image.name;
-                    group.append(name);
-                    fields.append(group);
-                    return {name: image.name, input: textArea(group, 'job.imageNote', 'image-note-' + index)};
-                });
-                read = () => {
-                    const notes = imageNotes.filter(note => note.input.value !== '')
-                        .map(note => ({name: note.name, words: note.input.value}));
-                    return {stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: (note?.value ?? ''),
-                        ...(notes.length ? {imageNotes: notes} : {})};
-                };
-            } else {
-                read = () => ({ stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: (note?.value ?? '') });
-            }
+            read = () => ({ stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: (note?.value ?? '') });
         }
         else if (subject.kind === 'signoff') {
             fields.title = subject.stage;
@@ -1723,7 +1707,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
         captureDraft(){drafts.saveDraft();const forms=modalState()?.forms;const dirty=forms?[...forms].filter(([,entry])=>entry.dirty):[];return dirty.length?dirty.map(([askId,entry])=>({askId,value:entry.read()})):null;},
         commit:prepared=>prepared?rigScreen.commit(prepared):{rollback(){},finalize(){}},
         async painted(prepared,signal){if(prepared)await rigScreen.painted(prepared,signal);else{if(stopped||fallingBack||signal.aborted)return;fallingBack=true;abort.abort();window.stop();await events?.done;if(!stopped){const dispose=await mountJobSession(host,true,access);if(stopped)dispose();else legacyStop=dispose;}}},
-        discard:prepared=>{const modal=prepared?.record??prepared?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();},
+        discard:prepared=>{prepared?.images?.dispose();const modal=prepared?.record??prepared?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();},
         changed(state){rigScreen.changed(state);if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.error);if(state.receipt&&!state.preparing)events?.displayed();},
     }});
     const hub=new URL(location.href).searchParams.get('hub');
@@ -1732,7 +1716,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     if(hub)globalThis.addEventListener('message',visibility);
     const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);for(const form of host.querySelectorAll('form.interview-answer'))form.dispatchEvent(new Event('job-form-language'));});
     events=startJobWindowEvents({access,signal:abort.signal,member:!!hub,event:event=>{window.event(event);if(hub)globalThis.parent.postMessage({...binding(),schema:JOB_HUB_READY},location.origin);},refused:error=>report(error,'JOB_STREAM_FAILED')});
-    const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();const modal=modalState();for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();localize();legacyStop?.();globalThis.removeEventListener('message',visibility);globalThis.removeEventListener('pagehide',stop);};
+    const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();rigScreen.mounted()?.images?.dispose();const modal=modalState();for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();localize();legacyStop?.();globalThis.removeEventListener('message',visibility);globalThis.removeEventListener('pagehide',stop);};
     globalThis.addEventListener('pagehide',stop,{once:true});return stop;
 }
 
@@ -2302,26 +2286,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         coordinates.hidden = true;
         stage.append(controls, pair, transport, numeric, coordinates);
         const source = prepared.display.publication.source;
-        if (source.subject === 'image-set') {
-            const heading = node('h2', 'job.imageSetTitle');
-            const digest = node('p');
-            digest.className = 'job-source';
-            digest.style.overflowWrap = 'anywhere';
-            const digestLabel = node('span', 'job.imageSetDigest');
-            const digestValue = node('code');
-            digestValue.textContent = source.imageSetDigest;
-            digest.append(digestLabel, document.createTextNode(' '), digestValue);
-            const gallery = imageGallery(source.imageSet.images.map((image, index) => ({...image,
-                element: prepared.imageSetImages?.[index],
-                duplicate: source.duplicateHashes.some(group => group.names.includes(image.name))})));
-            gallery.dataset.jobImageSet = '';
-            stage.prepend(heading, digest, gallery);
-            controls.hidden = pair.hidden = transport.hidden = true;
-            controls.style.display = pair.style.display = transport.style.display = 'none';
-            for (const child of sidebar.children) {
-                if (child instanceof HTMLElement && child !== identity && child !== binding) child.hidden = true;
-            }
-        }
+        if(source.subject==='image-set')throw new Error('JOB_PANEL_UNAVAILABLE');
         const formsHost = node('section');
         formsHost.className = 'job-forms';
         formsHost.dataset.jobForms = '';
@@ -2578,7 +2543,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
                 if (signal.aborted)
                     throw new Error('JOB_PRELOAD_CANCELLED');
             },
-            discard(prepared) { if (!isJobRigScreen(prepared)) prepared.dispose(); },
+            discard(prepared) { if (!isJobRigScreen(prepared)) prepared.dispose();else prepared.images?.dispose(); },
             changed(state) {
                 if (rigScreen.mounted()) {
                     rigScreen.changed(state); announceHubFrame();

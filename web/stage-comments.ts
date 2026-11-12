@@ -22,6 +22,23 @@ export interface CommentCodec<Row extends CommentRow,Pose extends CommentUiPose>
  update?:(row:Row,summary:string,parts?:string[])=>Promise<Row>|Row;
  create:(pose:Pose,view:StageComment['viewport'],screen:MarkRegion,crop:StageComment['crop'],bookmark:unknown,summary:string,parts?:string[])=>Promise<Row>;
 }
+/** Image-set evidence is local while image-review@2 carries only the signed text projection. */
+export interface ImageCommentRow extends CommentRow {image?:{name:string;sourceHash:string;mark:CommentUiMark}}
+export interface ImageCommentPose extends CommentUiPose {sourceHash:string;boxes:readonly {name:string;x:number;y:number;width:number;height:number}[]}
+/** The image source supplies geometry; the existing composer, cropper and pin layer do all UI work. */
+export function imageCommentCodec():CommentCodec<ImageCommentRow,ImageCommentPose> {
+ return {
+  read:row=>row.image?.mark??null,signature:pose=>[pose.sourceHash,pose.boxes,pose.camera],
+  matches:(_mark,pose,row)=>row.image?.sourceHash===pose.sourceHash&&pose.boxes.some(box=>box.name===row.image?.name),
+  label:row=>row.image!.name+' · '+row.summary,
+  create:async(pose,viewport,screen,crop,bookmark,summary)=>{
+   const world=region(unprojectMark(screen,pose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},pose.camera));
+   const image=pose.boxes.find(box=>world.x>=box.x&&world.y>=box.y&&world.x+world.width<=box.x+box.width&&world.y+world.height<=box.y+box.height);
+   if(!image)throw new Error(t('JOB_IMAGE_COMMENT_OUTSIDE'));
+   return {id:crypto.randomUUID(),summary,image:{name:image.name,sourceHash:pose.sourceHash,mark:{mode:'setup',viewport,screen,world,crop,bookmark}}};
+  },
+ };
+}
 interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose> {
  toolbar:HTMLElement;toggle?:HTMLButtonElement;listHost?:HTMLElement;viewports:Partial<Record<StageComment['viewport'],HTMLElement>>;
  pose:(view:StageComment['viewport'])=>Pose|null;pause:()=>Promise<void>;
@@ -220,15 +237,15 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const key=(e:KeyboardEvent)=>{if(host.shortcutActive&&!host.shortcutActive())return;if(e.key==='Escape'&&(pending||composer||(enabled||!inline&&!list.hidden)&&!host.shortcutBlocked?.()&&!textEntryFocused(e.target))){e.preventDefault();setOpen(false);return;}if(e.defaultPrevented||e.repeat||e.ctrlKey||e.metaKey||e.altKey||textEntryFocused(e.target)||host.shortcutBlocked?.())return;if(e.key.toLowerCase()==='c'){e.preventDefault();setOpen(inline?!enabled:list.hidden);}};
  window.addEventListener('blur',cancel);window.addEventListener('resize',placeList);document.addEventListener('keydown',key);toggle.onclick=()=>setOpen(inline?!enabled:list.hidden);
  const ro=typeof ResizeObserver==='function'?new ResizeObserver(()=>{if(!disposed&&!list.hidden)placeList();}):null;if(ro){try{ro.observe(host.toolbar);if(workspace)ro.observe(workspace);}catch{}}
- const renderPins=()=>{if(disposed)return;if(!list.hidden)placeList();const refusal=updateRefusal();if(refusal&&(enabled||pending||composer&&!composerReadOnly&&!composerGeneral)){cancel();setCapture(false);host.error(refusal);}const all=host.feedback().map(f=>({f,mark:readMark(f)})).filter(x=>x.mark);
+ const renderPins=()=>{if(disposed)return;if(!list.hidden)placeList();const refusal=updateRefusal();if(refusal&&(enabled||pending||composer&&!composerReadOnly&&!composerGeneral)){cancel();setCapture(false);host.error(refusal);}const all=host.feedback().filter(f=>readMark(f)||host.general?.matches(f)).map((f,index)=>({f,mark:readMark(f),number:index+1})).filter(x=>x.mark);
  // #356: a pose reads the pane's size (a forced layout after the played frame's writes); with no mark, draft or pending
  // capture there is nothing to place, so this per-frame loop skips it.
  const poses=new Map(all.length||draftMark||pending?[...layers.keys()].map(view=>[view,host.pose(view)]):[]);
  if(draftMark&&poses.get(draftMark.view)?.mode!==draftMark.mode||pending&&poses.get(pending.view)?.mode!==pending.mode)cancel();
  const signature=JSON.stringify([curLang(),refusal,all.map(({f,mark})=>[f.id,f.summary,mark!.mode,mark!.world]),[...poses].map(([view,p])=>[view,host.codec&&p?host.codec.signature(p):[p?.mode,p?.animation,p?.frame,p?.timeBasis,p?.time,p?.turn,p?.camera,p?.referenceId,p?.referenceHash]]),draftMark]);
- if(signature!==last){last=signature;for(const layer of layers.values())layer.replaceChildren();for(const [i,{f,mark:m}]of all.entries()){
+ if(signature!==last){last=signature;for(const layer of layers.values())layer.replaceChildren();for(const {f,mark:m,number}of all){
   const mark=m!,pose=poses.get(mark.viewport),layer=layers.get(mark.viewport);if(refusal||!pose||!layer||(host.codec?!host.codec.matches(mark,pose,f):pose.mode!==mark.mode||pose.animation!==mark.animation||pose.sourceHash!==mark.sourceHash||pose.modelHash!==mark.modelHash||pose.referenceId!==mark.referenceId||pose.referenceHash!==mark.referenceHash||JSON.stringify(pose.frame)!==JSON.stringify(mark.frame)||JSON.stringify(pose.timeBasis??null)!==JSON.stringify(mark.timeBasis??null)||Math.abs((pose.time??0)-(mark.time??0))>1e-7||JSON.stringify(pose.turn)!==JSON.stringify((f.context as any)?.turn??null)))continue;
-  const a=projectMark(mark.world,pose.camera),b=projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera),r=region(a,b),box=rectElement(r),pin=document.createElement('button');pin.type='button';pin.className='stage-comment-pin stage-comment-ui';pin.textContent=String(i+1);pin.setAttribute('aria-label',`${t('Comment {0}:').replace('{0}',String(i+1))} ${f.summary}`);pin.title=f.summary;Object.assign(pin.style,{left:r.x+'px',top:r.y+'px'});pin.onclick=()=>openComment(f);layer.append(box,pin);
+  const a=projectMark(mark.world,pose.camera),b=projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera),r=region(a,b),box=rectElement(r),pin=document.createElement('button');pin.type='button';pin.className='stage-comment-pin stage-comment-ui';pin.textContent=String(number);pin.setAttribute('aria-label',`${t('Comment {0}:').replace('{0}',String(number))} ${f.summary}`);pin.title=f.summary;Object.assign(pin.style,{left:r.x+'px',top:r.y+'px'});pin.onclick=()=>openComment(f);layer.append(box,pin);
  }if(draftMark)layers.get(draftMark.view)?.append(rectElement(draftMark.screen));}};
  const paint=()=>{if(disposed)return;renderPins();raf=requestAnimationFrame(paint);};
  const offLang=onLang(()=>{if(disposed)return;updateRefusal();renderList();syncComposerLang?.();last='';renderPins();});

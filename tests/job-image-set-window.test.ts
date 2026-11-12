@@ -2,6 +2,7 @@
 import {afterEach, expect, test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
+import {createJobRigScreen,jobRigScreenRoute} from '../web/job-rig-screen.ts';
 import {mountViewportPair} from '../web/viewport-pair.ts';
 import {layerShortcuts, describeLayerToggles, inspectionViewSwitch, createViewControls, createRigLayerControls} from '../web/view-controls.ts';
 import {SENTINELS} from '../web/parts-render.ts';
@@ -271,7 +272,8 @@ function buildFixture(f: ReturnType<typeof setup>): JobPreparedInspection {
 
 test('#688 shared rig layer constructor preserves structure and job language bindings in EN and KO', async () => {
   const f = setup();
-  mountActualBuild(await actualBuildBody(), buildFixture(f));
+  const prepared=buildFixture(f);prepared.display=fixturePublication();
+  mountActualBuild(await actualBuildBody(), prepared);
   const rig = createRigLayerControls();
   expect(rig.id).toBe('layer-controls');
   expect(rig.className).toBe('layer-toggles');
@@ -291,13 +293,10 @@ test('#688 shared rig layer constructor preserves structure and job language bin
   }
 });
 
-test('522 image fallback mounts a null slot catalog without legacy selector/layers/background',async()=>{
-  const f=setup(),body=await actualBuildBody(),prepared=buildFixture(f);let disposed=0;prepared.dispose=()=>{disposed++;};
-  expect(f.metadata.feedbackCatalog.slots).toBeNull();const mounted=mountActualBuild(body,prepared);
-  expect(mounted.querySelector('.job-inspection')).not.toBeNull();expect(mounted.querySelector('#reference-pane')).not.toBeNull();expect(mounted.querySelector('#rig-root')).not.toBeNull();
-  expect(mounted.querySelector('#stage-layout')?.hidden).toBe(true);expect(mounted.querySelectorAll('figure').map(figure=>figure.dataset.imageName)).toEqual(['Source','Candidate']);
-  for(const id of ['job-part','job-solo','layer-controls','job-background'])expect(mounted.querySelector('#'+id)).toBeNull();
-  prepared.dispose();expect(disposed).toBe(1);expect(mounted.querySelector('#rig-overlay')?.style.pointerEvents).toBeUndefined();
+test('#772 the legacy image screen refuses instead of building a second gallery',async()=>{
+  const f=setup(),body=await actualBuildBody(),prepared=buildFixture(f);
+  expect(f.metadata.feedbackCatalog.slots).toBeNull();
+  expect(()=>mountActualBuild(body,prepared)).toThrow('JOB_PANEL_UNAVAILABLE');
 });
 
 test('522 hostless direction fallback preserves known slot metadata without rebuilding a part selector',async()=>{
@@ -311,4 +310,17 @@ test('522 hostless direction fallback preserves known slot metadata without rebu
     expect(mounted.querySelector('#job-part')).toBeNull();expect(prepared.metadata.feedbackCatalog).toEqual(before);
     expect(mounted.querySelectorAll('figure')).toHaveLength(0);expect(mounted.querySelector('#stage-layout')?.hidden).toBe(false);prepared.dispose();
   }
+});
+
+
+test('#772 shared image preparation waits for every sealed member and routes image verdicts only',async()=>{
+ const f=setup(),ask={askId:'image',publicationId:f.display.publication.publicationId,source:f.source,status:'pending' as const,subject:{kind:'review-verdict' as const,stage:'image-review' as const}};
+ expect(jobRigScreenRoute(f.display,[ask],new Set())).toBe(true);
+ expect(jobRigScreenRoute(f.display,[{...ask,subject:{kind:'review-verdict',stage:'rig-review'}}],new Set())).toBe(false);
+ const screen=createJobRigScreen({host:{} as HTMLElement,pageId:'image-page',access:{capability:'synthetic',headers:()=>new Headers()},
+  window:{state:()=>({pending:[ask],receipt:null,generation:1,preparing:true,closed:false}),submit:async()=>({ok:false,error:{code:'JOB_ACT_INVALID',message:'JOB_ACT_INVALID'}})},
+  routes:()=>({entry:'http://127.0.0.1:19484/',api:path=>path}),refusal:()=>'',translate:key=>key,load:async()=>{}});
+ let returned=false;const preparing=screen.prepare(f.display,new AbortController().signal).then(result=>{returned=true;return result;});
+ await until(()=>f.images.length===2);f.images[0]!.resolve();await Bun.sleep(1);expect(returned).toBe(false);f.images[1]!.resolve();
+ const result=await preparing;expect(result?.images?.imageSetImages?.map(image=>image.alt)).toEqual(['Source','Candidate']);expect(result?.record).toBeUndefined();expect(result?.modals).toBeUndefined();result!.images!.dispose();
 });

@@ -1,7 +1,7 @@
 /** Stage marks are optional inspection evidence on an ordinary feedback row. */
 import type {PosedFrame} from '@rig-c/play';
 import type {ControlNumericCamera} from './control.ts';
-import type {JobActValues, JobComment, JobCommentAnchor, JobCommentFeedbackAnchor} from './job-contract.ts';
+import type {JobActValues, JobComment, JobCommentAnchor, JobCommentFeedbackAnchor, JobImageSourceBinding, JobImageReviewValue} from './job-contract.ts';
 import type {Feedback} from './session.ts';
 import type {CompareFeedback} from './compare-session.ts';
 export interface MarkPoint {x:number;y:number}
@@ -33,6 +33,17 @@ export function projectComments(comments: readonly JobComment[]): string {
  const text = blocks.join('\n\n');
  if (text.length > 10000) throw new Error('JOB_ACT_INVALID');
  return text;
+}
+/** Image acts stay @2: signed text projection only, never a new structured wire field. */
+export function imageReviewValue(source: JobImageSourceBinding, verdict: JobImageReviewValue['verdict'], comments: readonly JobComment[]): JobImageReviewValue {
+ const names = new Set(source.imageSet.images.map(image => image.name));
+ for (const comment of comments) if (comment.anchor !== undefined &&
+  (!('name' in comment.anchor) || !names.has(comment.anchor.name))) throw new Error('JOB_ACT_INVALID');
+ const imageNotes = source.imageSet.images.flatMap(image => {
+  const rows = comments.filter(comment => comment.anchor && 'name' in comment.anchor && comment.anchor.name === image.name);
+  return rows.length ? [{name: image.name, words: projectComments(rows)}] : [];
+ });
+ return {stage: 'image-review', verdict, words: projectComments(comments), ...(imageNotes.length ? {imageNotes} : {})};
 }
 /** Pure preparation only: the caller still decodes the complete source-bound envelope. */
 export function feedbackItemComments(items: readonly (Feedback | CompareFeedback)[]): {text: string; anchor: JobCommentFeedbackAnchor}[] {

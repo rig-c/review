@@ -250,3 +250,15 @@ for (const ratio of [1, 2]) {
   }
  });
 }
+
+test('#772 gallery crop copies displayed DOM rasters through the shared compositor and refuses undecoded members',()=>{
+ copiedViewport((capture,render)=>{
+  const image=capture.canvas! as unknown as HTMLImageElement;
+  Object.assign(image,{complete:true,naturalWidth:20,naturalHeight:20});
+  capture.rasters=[image];delete capture.canvas;
+  expect(rgba(render(false).getContext('2d'),5,5)).toEqual([240,20,10,255]);
+  expect(rgba(render(false).getContext('2d'),60,60)).toEqual([233,237,246,255]);
+  Object.assign(image,{complete:false});
+  expect(()=>render(false)).toThrow('COMMENT_CROP_UNAVAILABLE: this viewport has no rendered pixels');
+ });
+});
