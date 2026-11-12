@@ -1,11 +1,34 @@
 # Changelog
 
-## Unreleased
+## 2.13.0
 
-### ⚠ BREAKING CHANGES
+Every Create ask now opens on the one review screen. The header owns the inspection mode, and parts packages, record publications, the interview, the plan step, sign-off and reopen all open there as modes or modals. The job window keeps only publications that have no host on that screen yet.
 
-* Remove the standalone `rig-review interview <create-root> --picks-dir <dir> [--port <n>]` command, with `src/interview-server.ts`, `web/interview.ts`, `web/interview.html` and `web/interview.css` (#726). The interview opens over the review screen of a joined workspace (`rig-review open … --project … --picks-dir …`); `rig-review/interview-picks@1` records are unchanged.
-* Remove the legacy stage frames `/stage-parts.html` and `/stage-interview.html` (and their `/parts.js`, `/parts.css`, `/interview.js`, `/interview.css` instance routes) (#726). The stage chips open modes of the one screen instead: 1 Setup, 2 the interview modal, 3 Animate; 4 Direction names itself not available. `/api/stage-parts` data routes, the parts verdict and the job API are unchanged.
+### Removed
+
+* `rig-review interview <create-root> --picks-dir <dir> [--port <n>]` command (#726, #731). Replacement: `rig-review open <create-root> --project <create-root> --picks-dir <dir>` opens the interview as a modal over the review screen; `rig-review/interview-picks@1` records are unchanged.
+* Stage-frame URLs `/stage-parts.html` and `/stage-interview.html`, with their `/parts.js`, `/parts.css`, `/interview.js` and `/interview.css` instance routes (#726, #731). Replacement: the one review screen, where the header mode switch (Setup · Animate · Compare) chooses the inspection mode and the act-bar ask opens the interview modal. `/api/stage-parts/*` data routes are unchanged.
+* Parts screen assets `/parts.js` and `/parts.css` on `rig-review parts` (#737, #745). Replacement: the parts package opens on the one review screen at `/`; `/parts.html` remains and redirects there with its query.
+* Atlas-only inputs to `rig-review parts` (a review package or `check/` folder without `parts.json`) as a way to open a workspace (#748, #761). No replacement in `parts`: they refuse with `PARTS_ATLAS_NOT_CARRIED`; open the rig review for atlas inspection. `--format json|issue` still reads saved parts and atlas verdicts.
+* Hub assets `/hub/job-hub.js` and `/hub/job-hub.css` (#712, #734). Replacement: `/hub/` serves the single entry with `/hub/main.js` and `/hub/styles.css`; the `/hub/` URL and its `#cap=` link are unchanged.
+* Owner workspace assets `/workspace.js` and `/workspace.css` (#712, #734). Replacement: `/` serves the single entry with `/main.js` and `/styles.css`; the owner workspace URL is unchanged.
+* Job window owner surface for steps that now open on the review screen (#756, #768). Replacement: the review screen's plan step, sign-off and reopen modals; job URLs and the job API are unchanged.
+
+No package `bin` entry, `exports` entry or other CLI flag was removed since 2.12.0.
+
+These removals ship as a minor release, following the 2.x release policy; Create was the only consumer of the removed paths.
+
+### Changed
+
+* The interview opens as a modal over the review screen, using one shared form with list, image and survey questions (#708, #722). A joined Create project opens there at its current stage (#725, #764). Existing per-question notes are kept and shown read-only; there is no note input.
+* The plan step, sign-off and reopen open in modals over the review screen (#710, #715). Record publications are hosted on the one screen (#750, #754). The remaining job-window owner surface and the `legacyCompiledJobStep5` layout are deleted (#756, #768).
+* A live publication updates in place: selection, camera, reference and time carry over, and the act bar shows review status beside Submit (#743, #759). A carried time outside a shortened clip resets to 0, with the incompatibility notice.
+* Parts packages open on the one review screen, and the old parts screen is deleted (#737, #745). Reference follows the selected part (#742, #749). Atlas-only parts packages are refused by name with `PARTS_ATLAS_NOT_CARRIED` (#748, #761).
+* The header owns the inspection mode; Write review becomes Comments (n) (#735, #741). The rig subject gets a Setup Difference view (#739, #752). The hub lists subjects that are waiting and opens the review screen (#712, #734).
+* Create's review comments: Review job acts write act@6 comments (#713, #720), with act@7's optional comment context still behind `EMIT_UNPINNED_CREATE_FIELDS` (#714, #717). The rig verdict act keeps its structured comment list (`feedback`) beside `words` (#746, #751). **Create now projects each comment under its own label**, instead of one `[general]` comment whose text was the whole projection. Each comment keeps its id, frames, target, category and anchor context. Without `feedback`, act bytes are unchanged, and historical words-only acts still parse. The act stays act@6 with no schema change. Evidence: the installed Create reader and projector accepted 9 of 9 fixtures; this is not Create ingest/replay acceptance.
+* An SVG original painting stays the sealed reference in job metadata (#636, #730). The full visible-layer set is restored on parts comment pins (#652, #718). The managed lifecycle front binds an ephemeral port (#729).
+* Shared components replace per-screen copies: the act bar and its save-state model, the view switch, view controls, bottom panel, shell regions and status bar, inspector tabs, compare camera and rig provider, and the retained frame stage (#668, #670, #673, #675, #679, #680, #681, #689, #698, #700, #701, #702, #703, #740). The screen guidance and shell-layout rulings are documented (#649, #656, #665, #757).
+* Tests: one shared Chrome launcher for the browser entries, with a start limit that tolerates a cold hosted runner (#765, #767). Feedback CLI session storage is isolated (#762, #763). Overlay midpoint bounds are derived from native rounding (#744, #760). The screen copy ratchet fails on any stale ceiling (#686, #690, #704, #705). Public URL forms are locked before the single-entry move (#693, #697). Obsolete browser scripts and stage navigation are retired (#758). CI installs the CJK font from a pinned download (#728).
 
 ## 2.12.0
 
