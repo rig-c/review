@@ -22,6 +22,8 @@ import {freshWalkReopen} from './helpers/walk-reopen.ts';
 import {fullyVisible, visibilityGeometry} from './helpers/walk-visibility.ts';
 
 const argument = (key: string) => {const at = Bun.argv.indexOf(key); return at < 0 ? undefined : Bun.argv[at + 1];};
+const autoStill=Bun.argv.includes('--auto-still');
+const verdict=(argument('--verdict')??'approved') as 'approved'|'changes-requested';
 const language = argument('--lang') ?? 'both';
 assert.ok(language === 'both' || language === 'en' || language === 'ko');
 const output = resolve(argument('--out') ?? 'artifacts/job-rig-screen-709');
@@ -162,6 +164,7 @@ async function run(lang: 'en' | 'ko') {
       await send('Page.handleJavaScriptDialog', {accept: false});
     }});
     await page.setViewport(1440, 1000);
+    if(autoStill&&pageCommand)await pageCommand('Emulation.setDeviceMetricsOverride',{width:1920,height:1080,deviceScaleFactor:2,mobile:false});
     const owner = new URL(fixture.host.ownerUrl);
     owner.searchParams.set('lang', lang);
     await page.goto(owner.href, lang);
@@ -217,12 +220,28 @@ async function run(lang: 'en' | 'ko') {
     const afterReopen = await screen('reopened-screen');
     assert.equal(afterReopen.status, 'pending');
     assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'reopen does not submit');
+    let beforeSubmit:unknown;
+    const inspectionExpression=`({camera:JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig,
+      selected:[...document.querySelectorAll('[data-part-list] button[aria-pressed="true"]')].map(n=>({slot:n.dataset.slot,side:n.dataset.side})),
+      time:document.getElementById('scrub')?.value,mode:document.querySelector('[data-mode][aria-pressed="true"]')?.dataset.mode})`;
+    if(autoStill){
+      await page.evaluate(`(()=>{document.querySelector('[data-mode="playback"]').click();
+        document.querySelector('[data-part-list] button[data-slot]').click();
+        const scrub=document.getElementById('scrub');scrub.value='0.375';scrub.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await click(page,'#zoom-in');
+      beforeSubmit=await page.evaluate(inspectionExpression);
+      assert.equal((beforeSubmit as any).mode,'playback');
+      assert.equal((beforeSubmit as any).selected.length,1);
+      assert.ok((beforeSubmit as any).camera.zoom>1);
+      assert.equal(Number((beforeSubmit as any).time),0.375);
+      await record('788-before-submit',beforeSubmit);
+    }
     // Use the screen's actual select, change handler and trusted pointer submit. No /ui/acts call here.
     await click(page, '#review-status');
-    await page.evaluate(`(()=>{const select=document.getElementById('review-status');select.value='approved';
+    await page.evaluate(`(()=>{const select=document.getElementById('review-status');select.value=${JSON.stringify(verdict)};
       select.dispatchEvent(new Event('input',{bubbles:true}));select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await page.evaluate('document.activeElement?.blur()');
-    await wait(`document.getElementById('review-status').value==='approved'&&!document.getElementById('save').disabled`, 'decision-ready');
+    await wait(`document.getElementById('review-status').value===${JSON.stringify(verdict)}&&!document.getElementById('save').disabled`, 'decision-ready');
     await screen('decision-screen');
     await click(page, '#save');
     let finalized: JobNextValue | undefined;
@@ -248,13 +267,18 @@ async function run(lang: 'en' | 'ko') {
     assert.equal(act.authority.actor, 'human');
     assert.equal(act.authority.channel, 'review-ui');
     assert.equal(act.value.stage, 'rig-review');
-    assert.equal(act.value.verdict, 'approved');
+    assert.equal(act.value.verdict, verdict);
     assert.deepEqual(act.value.comments, []);
     assert.equal(act.still.camera, 'fixed');
     assert.match(act.still.sha256, /^[a-f0-9]{64}$/);
     assert.equal(act.still.path, act.still.sha256 + '.png');
     await wait(`document.getElementById('dirty')?.classList.contains('dirty')===false`, 'submitted-clean');
     await screen('submitted-screen');
+    if(autoStill){
+      const after=await page.evaluate(inspectionExpression);
+      assert.deepEqual(after,beforeSubmit,'Submit preserves camera, selection, time and mode');
+      await record('788-after-submit',{after,still:act.still});
+    }
     assert.deepEqual(await jobInputHashes(fixture.input.root), before);
     assert.deepEqual(await jobInputHashes(retained.snapshotRoot), retainedBefore);
     assert.equal(unexpectedDialog, undefined);

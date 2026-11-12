@@ -40,8 +40,11 @@ import {commentCropPaths} from '../src/comment-crops.ts';
 import {feedbackWithCommentGroups,formatFeedbackIssues} from '../src/feedback-export.ts';
 import {bindStageComments} from '../web/stage-comments.ts';
 
-test('#557 six Rig still refusals have paired visible EN/KO messages without exemptions',()=>{
- for(const code of ['JOB_STILL_CAPTURE_FAILED','JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED',
+test('#788 active Rig still refusals have paired visible EN/KO messages without exemptions',()=>{
+ for(const code of ['JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED'])for(const catalog of [enCatalog,koCatalog]) {
+  expect(catalog[code]).toBeUndefined();expect(catalog['job.submit.'+code]).toBeUndefined();
+ }
+ for(const code of ['JOB_STILL_CAPTURE_FAILED',
   'JOB_STILL_BINDING_MISMATCH','JOB_STILL_UNAVAILABLE','JOB_STILL_OUTPUT_FAILED']) {
   expect(enCatalog[code]).toBeDefined();expect(koCatalog[code]).toBeDefined();
   expect(enCatalog[code]!.startsWith(code+' · ')).toBe(true);

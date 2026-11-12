@@ -8,7 +8,7 @@ import type {ActV3, DisplayPublicationV3, JobResult, JobUISubmission, PendingAsk
 import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
 import {checkpointNoteComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
-import {copyJobRigViewport, createJobRigSubmission, freezeJobRigCapture, jobRigDrawState, presentJobRigStage, recordJobRigDraw} from './job-rig-capture.ts';
+import {createJobRigSubmission, freezeJobRigStage} from './job-rig-capture.ts';
 import {setRigHost, rigHost, type RigHost, type RigHostScreen, type RigHostCommit, type RigHostNavigation} from './rig-host.ts';
 import type {InstanceAccess} from './instance-access.ts';
 
@@ -146,22 +146,14 @@ export function createJobRigScreen(options: {
     return {jobRigScreen: true, display, entry: routes.entry, review, checkpoints,...parts?{parts}:{},...modals?{modals}:{}};
   }
   function still(ask: PendingAskV3, prepared: JobRigScreenPrepared) {
-    screen?.redraw();
     const stage = screen?.stage();
     if (!stage) throw new Error('JOB_STILL_CAPTURE_FAILED');
     const publication = prepared.display.publication;
     const source = {pageId: options.pageId, publicationId: publication.publicationId, instanceKey: publication.instanceKey,
       sourceHash: publication.source.sourceHash};
-    // The canonical pixels are on the pane only while the still is bound and copied, then the screen's own view returns.
-    const presentation = presentJobRigStage(stage);
-    try {
-      presentation.canvas.style.position = 'absolute';
-      presentation.canvas.style.pointerEvents = 'none';
-      const bound = {...stage, source, presentation};
-      const draw = recordJobRigDraw(jobRigDrawState(bound), ++drawGeneration);
-      return freezeJobRigCapture(draw, jobRigDrawState(bound), ask.askId, () => copyJobRigViewport(presentation));
-    } finally {presentation.canvas.remove();}
+    return freezeJobRigStage({...stage,source},ask.askId,++drawGeneration);
   }
+
   async function submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>): Promise<string> {
     const prepared = mounted, state = options.window.state();
     if (!prepared || !state.receipt || state.preparing) throw new Error('JOB_ACT_SOURCE_STALE');
