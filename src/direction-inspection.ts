@@ -5,6 +5,8 @@ export const DIRECTION_MAX_BYTES = 256 * 1024;
 type Binding = { path: string; sha256: string };
 export interface DirectionInspection {
   file: Binding;
+  model: Binding;
+  scene?: Binding & { n: number };
   joined?: {
     postVersion: number;
     projectHash: string;
@@ -12,6 +14,7 @@ export interface DirectionInspection {
     packageRoot: string;
     projectModel: Binding;
   };
+  postVersion?: number;
   rigVersion: number;
   camera: { space: 'rig-world-y-up'; keys: { time: number; easing: string; box: { x: number; y: number; width: number; height: number } }[] };
   take: { duration: number; loop: boolean };
@@ -20,7 +23,7 @@ export interface DirectionInspection {
 
 /**
  * Read the inspection subset of Create's rig-create/direction@1 or rig-create/direction@2.
- * A direction@2 scene reference is accepted but not inspected.
+ * Scene bytes are inspected separately when the manifest declares them.
  * Create validates scene, project history and citations.
  */
 export function readDirectionInspection(value: unknown, file: Binding, model: Binding | null): DirectionInspection {
@@ -73,5 +76,6 @@ export function readDirectionInspection(value: unknown, file: Binding, model: Bi
     return { source_time };
   });
   if (timingKeys.at(-1)?.time !== duration) throw new Error('DIRECTION_SCHEMA: timing must end at take duration');
-  return { file, rigVersion, camera: { space: camera.space, keys: cameraKeys }, take: { duration, loop: take.loop }, timing: timingKeys };
+  const scene = doc.schema === 'rig-create/direction@2' ? object(doc.scene, 'direction.scene') : undefined;
+  return { file, model, ...(scene ? { scene: { n: numberField(scene.n, 'direction.scene.n', 1), path: packagePath(scene.path, 'direction.scene.path'), sha256: String(scene.sha256) } } : {}), rigVersion, camera: { space: camera.space, keys: cameraKeys }, take: { duration, loop: take.loop }, timing: timingKeys };
 }

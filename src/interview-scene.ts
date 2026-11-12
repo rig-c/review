@@ -1,4 +1,4 @@
-/** Private scene option gate, from Create PROJECT rule 4. */
+/** Shared closed scene shape and private option-context gate, from Create PROJECT rule 4. */
 import {createHash} from 'node:crypto';
 import {isDeepStrictEqual as equal} from 'node:util';
 import type {SetRef} from './interview-project.ts';
@@ -40,7 +40,7 @@ function plate(value: unknown): boolean {
     closed(p.registered, ['kind', 'ref']) && ['input', 'derived'].includes(String(registered.kind)) && text(registered.ref) &&
     (!('citation' in p) || citation(p.citation));
 }
-function document(value: Data, n: unknown): boolean {
+export function sceneDocumentShape(value: Data, n: unknown): boolean {
   const rig = object(value.rig), animation = object(rig.animation), acceptance = object(rig.acceptance);
   const signoff = object(acceptance.signoff), reviewPackage = object(acceptance.review_package), frame = object(value.frame);
   return closed(value, ['schema', 'n', 'rig', 'frame', 'plates', 'layers']) && value.schema === 'rig-create/scene@1' && count(value.n) && value.n === n &&
@@ -104,6 +104,6 @@ export function sceneAt(project: Data, at: number, read: (ref: SetRef) => Data) 
   const reference = {n: candidate.n, path: candidate.path as string, sha256: candidate.sha256 as string};
   let scene: Data;
   try {scene = read(reference);} catch {return stale();}
-  if (!document(scene, candidate.n)) return stale();
+  if (!sceneDocumentShape(scene, candidate.n)) return stale();
   return {context: {kind: 'scene', scene: reference}, current: current(project, scene, at), document: scene};
 }

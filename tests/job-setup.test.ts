@@ -22,6 +22,7 @@ async function screen(visible=true){
  const scope={player,assets:loaded.assets,source,camera,parts,RigPlayer,ModelAssets:undefined,partModel:doc,inspectionSourceState:'ready',data:{feedbackCatalog:{slots:doc.slots.map((s:{name:string})=>s.name)}},partCatalog,PartThumbnails:class{},pageRegionTable:()=>({}),readSetupChest:()=>null,setupChestWorld:null,animation:'',time:0,duration:0,axisInspection:false,rigDifference:null,video:null,repeat:true,
   pause(){player.pause();},clipMoved(){},leaveRigDifference(){},renderLayout(){},
   el(id:string){if(id==='rig-root')return root as never;if(!nodes.has(id))nodes.set(id,{hidden:false,value:''});return nodes.get(id)!;},select(id:string){return this.el(id);},
+  activeScene:()=>undefined,
   clipDuration(name:string){return loaded.assets.animations.find(a=>a.name===name)?.duration??0;},canRepeatIdle(){return scope.repeat;},
   drawRig(action:()=>void){action();parts.present('single');},refreshAnimationInspection(){},renderTransport(){clock.value=String(scope.time);},renderCues(){},renderIdle(){},renderSequenceFrame(){},text(){},message(){},rendererStatus(){return {label:''};},errorText:String};
  const code=new Bun.Transpiler({loader:'ts'}).transformSync(lifecycle+'\n'+controls+'\n'+fragment('async function inspectControlTime(', 'async function decodedControlTime('));

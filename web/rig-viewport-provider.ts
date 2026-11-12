@@ -13,6 +13,7 @@ export interface RigViewportHost {
  /** Additional compiled panes share the renderer while retaining their declared framing basis. */
  panes?:{target:CameraTarget;viewport:HTMLElement;pane:HTMLElement;root:HTMLElement;fallback?:CameraTarget;
   box:()=>PoseBounds|null;player:()=>RigPlayer|null;scale:(value:number)=>void}[];
+ framingBox?:()=>PoseBounds|null;
  rigMargins?:{x:number;y:number};
  referenceTransform?:{content:HTMLElement;mode:'relative'};
  layoutKey?:ViewportProvider['layoutKey'];
@@ -35,6 +36,7 @@ export function createRigViewportProvider(host:RigViewportHost,state:ViewportSta
  }
  function rigFramingBox():PoseBounds|null {
   const player=host.player(),assets=host.assets();if(!player)return null;
+  const authored=host.framingBox?.();if(authored)return authored;
   const declared=assets?.stage;
   // A model without a positive declared stage keeps its existing live pose/filter basis.
   if(!positiveBounds(declared))return player.bounds();

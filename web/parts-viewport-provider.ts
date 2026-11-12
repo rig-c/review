@@ -3,6 +3,12 @@ import {createViewportController,createViewportState,type ViewportState,type Vie
 import {t} from './i18n.ts';
 
 interface PartsFrame {w:number;h:number;world?:{box:{x:number;y:number;width:number;height:number};origin:{x:number;y:number};scale:{x:number;y:number}}}
+/** Decode the response already checked by the caller, without retaining an object URL. */
+export async function loadViewportImage(response:Response):Promise<HTMLImageElement>{
+ const url=URL.createObjectURL(await response.blob());
+ try{const image=new Image();image.src=url;await image.decode();return image;}
+ finally{URL.revokeObjectURL(url);}
+}
 export interface PartsViewportHost {el:ViewportProvider['el'];canvas:HTMLCanvasElement;message:ViewportProvider['message'];reference:()=>HTMLCanvasElement|null;frameSize:(target:CameraTarget)=>PartsFrame|null}
 export function createPartsViewportProvider(host:PartsViewportHost,state:ViewportState):ViewportProvider {
  let dimensionProbe:HTMLCanvasElement|undefined;
@@ -89,9 +95,8 @@ export function bindPartsSubject(host:{
  const assembled=()=>!solo||selected===null;
  const box=():Box=>assembled()&&data.rigSize?{name:'',index:0,x:0,y:0,w:data.rigSize[0],h:data.rigSize[1]}:item();
  const loadImage=async(path:string):Promise<HTMLImageElement>=>{
-  const response=await host.request(path),url=URL.createObjectURL(await response.blob());
-  try{const image=new Image();image.src=url;await image.decode();if(disposed)throw new Error('PARTS_PAINT_FAILED');return image;}
-  finally{URL.revokeObjectURL(url);}
+  const image=await loadViewportImage(await host.request(path));
+  if(disposed)throw new Error('PARTS_PAINT_FAILED');return image;
  };
  const image=(entry:Item)=>{let pending=images.get(entry.index);if(!pending){pending=loadImage(`${host.base}/image/${entry.index}`);images.set(entry.index,pending);}return pending;};
  const painting=()=>original??=loadImage(host.paintingPath);

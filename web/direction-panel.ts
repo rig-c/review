@@ -1,3 +1,4 @@
+import type {SceneInspection} from '../src/scene-inspection.ts';
 import type { DirectionInspection } from '../src/direction-inspection.ts';
 import type { TurnDial } from '../src/turn-pad.ts';
 import { onLanguageChange, t } from './i18n.ts';
@@ -11,6 +12,7 @@ export interface DirectionView {
   sets: readonly string[];
   activeSet?: string;
   authored?: DirectionInspection;
+  scene?: SceneInspection;
 }
 
 export function directionRows(view: DirectionView): { key: string; values?: string[] }[] {
@@ -29,7 +31,7 @@ export function directionRows(view: DirectionView): { key: string; values?: stri
       : { key: 'direction.authoredUnavailable' },
     ...(joined ? [{ key: 'direction.joined', values: [String(joined.postVersion), joined.projectModel.path,
       joined.packageRoot, joined.projectHash, joined.packageSourceHash] }] : []),
-    { key: 'direction.runtimeCameraUnavailable' },
+    ...(model?.inspected&&view.scene?[{key:'direction.planes',values:[t(view.scene.plates.length===2?'direction.threePlanes':'direction.twoPlanes')]}]:[{ key: 'direction.runtimeCameraUnavailable' }]),
     { key: 'direction.cameraApplyUnavailable' },
   ];
 }
@@ -41,7 +43,8 @@ export function directionSummary(view: DirectionView, language?: 'en' | 'ko'): s
   const first = authored.camera.keys[0]!.box;
   const fixed = authored.camera.keys.every(({ box }) =>
     box.x === first.x && box.y === first.y && box.width === first.width && box.height === first.height);
-  const version = authored.joined ? ` v${authored.joined.postVersion}` : '';
+  const post=authored.joined?.postVersion??authored.postVersion;
+  const version = post ? ` v${post}` : '';
   return t('direction.summary', [version, String(authored.take.duration),
     t(authored.take.loop ? 'direction.loop' : 'direction.once', undefined, language),
     t(fixed ? 'direction.fixedCamera' : 'direction.movingCamera', undefined, language)], language);
@@ -71,7 +74,7 @@ export function bindDirectionPanel(before: HTMLElement, read: () => DirectionVie
     if (host.hidden) return;
     const view = read();
     title.textContent = directionSummary(view);
-    const rows = directionRows(view).map(({ key, values }) => {
+    const rows = [...directionRows(view),...(!view.scene&&view.authored?[{key:view.authored.scene?'direction.noScene':'direction.legacyTake'}]:[])].map(({ key, values }) => {
       const row = document.createElement('li');
       row.textContent = t(key, values);
       return row;
@@ -97,8 +100,8 @@ export function bindDirectionPanel(before: HTMLElement, read: () => DirectionVie
     if (view.model?.inspected && view.authored) {
       const { camera, timing, take } = view.authored;
       summary.textContent = t('direction.keys');
-      keys.textContent = JSON.stringify({ camera, timing, take }, null, 2);
-      details.hidden = false;
+      keys.textContent = directionSummary(view);
+      details.hidden = true;
     } else {
       details.hidden = true;
       keys.textContent = '';
