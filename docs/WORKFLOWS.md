@@ -281,11 +281,6 @@ options refuse with `OPEN_OPTION_INVALID`; existing single options retain their
 behavior. Flags and their literal values are consumed before counting operands.
 Core's `rigc review` continues forwarding to `open`; Review owns this grammar.
 
-Embedded semantic jobs share one owner list through `startJobHub` and
-`hub.openJob`. Their trusted callbacks stay in the host process. Follow
-[Embedded semantic jobs](#embedded-semantic-jobs) and the
-[public hub contract](STABILITY.md#embedded-semantic-job-hub).
-
 ### Launcher contract
 
 A launcher may start `rig-review open` as a child process and rely on its stdout,
@@ -502,108 +497,6 @@ On the view you are inspecting, choose **Comment · C (n)**, drag over the detai
 The four-stage navigator preserves this entry and its explicit save behavior. Compiled sessions reuse the atlas surface read-only; see [Four inspection stages](PANELS.md#four-inspection-stages).
 
 The managed front forwards a query only to the landing page; every other route refuses one. Stage navigation never changes CLI arguments or package bindings.
-
-## Embedded semantic jobs
-
-Use **N reviews → one invocation, one owner URL** for both CLI folder inspection
-and embedded semantic jobs. External consumer-owned adoption remains
-pending in [Review #512](https://github.com/rig-c/review/issues/512).
-
-In an embedded consumer, start one hub and register each job from that same
-process. Give the human `hub.ownerUrl` and one what-to-look-at line. The hub
-owns one PID/listener and a list that selects each job's standing Review UI.
-The bootstrap reviewer binding applies to all registered jobs. Each job retains
-its separate generation, source, asks, acts, replay cursor and grants under
-job-api@2/act@2. View-only CLI folder entries retain their inspection workflow.
-
-This minimal Bun integration uses public imports. Its `host` argument is an
-explicit trusted-hook placeholder supplied by the consumer application. The
-consumer implements the publication reader, imports the official installed
-Parts enumerator, and installs the writer's private binding through its own
-adapter. The example defines their required public types and leaves those
-consumer-owned implementations to the host.
-
-```ts
-import {startJobHub} from '@rig-c/review/job-host';
-import type {
-  JobHubJob, JobHubJobOptions, JobOwnerHub, JobReviewerBinding,
-} from '@rig-c/review/job-host';
-
-type TrustedHostHooks = Required<Pick<JobHubJobOptions,
-  'readPublished' | 'readerId' | 'partsEnumerator' | 'partsEnumeratorId' |
-  'installWriterBinding' | 'bindingId'>>;
-
-async function openReviews(host: {
-  stateDir: string;
-  reviewer: JobReviewerBinding;
-  jobs: readonly {
-    root: string;
-    fingerprint: string;
-    hooks: TrustedHostHooks;
-  }[];
-}): Promise<{hub: JobOwnerHub; jobs: JobHubJob[]}> {
-  const hub = await startJobHub({
-    stateDir: host.stateDir,
-    reviewer: host.reviewer,
-  });
-  const jobs: JobHubJob[] = [];
-  try {
-    for (const job of host.jobs) {
-      jobs.push(await hub.openJob({
-        root: job.root,
-        fingerprint: job.fingerprint,
-        ...job.hooks,
-      }));
-    }
-    return {hub, jobs};
-  } catch (error) {
-    await hub.stop();
-    throw error;
-  }
-}
-```
-
-The consumer calls `openReviews` once with its designated jobs and retains the
-returned `{hub, jobs}`. Privately hand `hub.ownerUrl` to the person. `stateDir`
-is outside all job roots. Keep the host alive until its explicit transport
-shutdown and await `hub.stop()` then. The public types and complete lifecycle are in
-[Public API stability](STABILITY.md#embedded-semantic-job-hub).
-
-For each handle in the returned `jobs`, trusted bootstrap uses
-`job.session.hostCredentials()` to
-deliver only that job's agent credential through a private agent channel.
-Use `<origin>/jobs/<jobId>` as the CLI job address. `jobUrl` carries an owner UI
-capability and belongs to the owner channel. The hub's private capability
-allows owner-list selection. Bootstrap-declared reviewer provenance is distinct
-from authenticating the person at the keyboard.
-
-1. Freeze the producer's designated record and result through publication
-   acknowledgment, then `publish` with the job's current generation and an
-   idempotency key.
-2. `ask` for the exact publication and supported semantic subject. The person
-   inspects and submits in that job's Review UI.
-3. Use `next` to replay events and their cursor. The trusted writer directly
-   uses read-only `fetch-act` with its separately installed grant to consume a
-   finalized act. Check API@2/act@2 and the exact source binding.
-4. Use semantic `close` for that job when its cycle ends. Other jobs and the
-   owner list continue. The closed entry stays visible in the list.
-
-Agents use the semantic commands. Supplied sources and compiled assets stay
-immutable, and agents never construct internal Review state, human acts or
-binding files. Trusted callbacks remain process-local. Compatible active
-root/fingerprint registrations reuse the job after hook-ID validation. Legacy
-`startJobHost` can attach to a matching hub-owned job. A hub registration that
-finds an active standalone owner refuses `JOB_HUB_EXTERNAL_HOST`, while a live
-unresponsive descriptor refuses `JOB_HUB_HOST_UNRESPONSIVE`. General
-cross-process callback registration is deferred.
-
-Transport stop preserves active durable jobs and their grants. After restart,
-register every required job's callbacks again, refresh the writer binding's
-origin, and obtain the new hub owner URL. The hub capability and `workspace`
-incarnation query rotate. Each retained active job keeps its identity and grants
-until explicit close. The current hub admits at most 32 entries, including
-closed retained entries, and lazily retains selected frames. This application
-bound has no hardware performance guarantee. Hidden hub members suspend their event subscription after bootstrap and resume from the last delivered cursor when selected.
 
 ## Standing live job workflow
 

@@ -27,7 +27,7 @@ async function fixture() {
 
 test('#557/#588 control public job-host retains its runtime exports, record-mode surface, and legacy markers', () => {
   const legacyRuntimeExports = [
-    'JOB_CAPABILITIES', 'startJobHost', 'startJobHub',
+    'JOB_CAPABILITIES', 'startJobHost',
     'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID',
     'JOB_PARTS_ENUMERATOR_RANGE', 'JOB_ENABLED_ACT_KINDS',
     'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES', 'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES',
@@ -41,8 +41,8 @@ test('#557/#588 control public job-host retains its runtime exports, record-mode
     // #714: the act@7 decoder and its schema constant.
     'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
   ].sort();
-  expect(legacyRuntimeExports).toHaveLength(17);
-  expect(expectedRuntimeExports).toHaveLength(29);
+  expect(legacyRuntimeExports).toHaveLength(16);
+  expect(expectedRuntimeExports).toHaveLength(28);
   expect(Object.keys(publicHost).sort()).toEqual(expectedRuntimeExports);
   for (const name of expectedRuntimeExports) {
     const missing = new Set(Object.keys(publicHost));

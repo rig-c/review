@@ -77,9 +77,9 @@ export const ROWS: readonly CopyRow[] = [
     paths: /^web\/.*\.html$/u, expected: ['web/index.html', 'web/compare.html'],
     plantIn: 'web/planted.html', plant: '<!doctype html>',
   }},
-  {name: 'Bun.serve files exact set', step: '801', ceiling: 6, exactSet: {
+  {name: 'Bun.serve files exact set', step: '801', ceiling: 5, exactSet: {
     paths: /^src\/.*\.ts$/u, pattern: /\bBun\.serve\s*(?:<[^;{}]*>)?\s*\(/gu,
-    expected: ['src/server.ts', 'src/compare-server.ts', 'src/parts-server.ts', 'src/open-workspace.ts', 'src/job-front.ts', 'src/job-hub.ts'],
+    expected: ['src/server.ts', 'src/compare-server.ts', 'src/parts-server.ts', 'src/open-workspace.ts', 'src/job-front.ts'],
     plantIn: 'src/planted.ts', plant: 'Bun.serve({});',
   }},
   {name: 'import.meta.main scripts exact set', step: '801', ceiling: 10, exactSet: {
@@ -88,15 +88,14 @@ export const ROWS: readonly CopyRow[] = [
       'scripts/alias_tarball.ts', 'scripts/confirm-alias.ts', 'scripts/check-readme.ts', 'scripts/screen-copies.ts'],
     plantIn: 'scripts/planted.ts', plant: 'if (import.meta.main) {}',
   }},
-  {name: 'buildWeb entries exact set', step: '801', ceiling: 4, exactSet: {
+  {name: 'buildWeb entries exact set', step: '801', ceiling: 3, exactSet: {
     paths: /^src\/build\.ts$/u, pattern: /['"](web\/[^'"]+\.ts)['"]/gu,
-    expected: ['web/main.ts', 'web/compare.ts', 'web/owner-workspace.ts', 'web/job-hub.ts'],
+    expected: ['web/main.ts', 'web/compare.ts', 'web/owner-workspace.ts'],
     plantIn: 'src/build.ts', plant: "const plantedEntry = 'web/planted.ts';",
   }},
   {name: 'entry HTML web/parts.html', step: '2', ceiling: 0, files: ['web/parts.html']},
   {name: 'entry HTML web/compare.html', step: '3', ceiling: 1, files: ['web/compare.html']},
   {name: 'entry HTML web/interview.html', step: '4', ceiling: 0, files: ['web/interview.html']},
-  {name: 'entry HTML web/job-hub.html', step: '6', ceiling: 0, files: ['web/job-hub.html']},
   {name: 'entry HTML web/owner-workspace.html', step: '6', ceiling: 0, files: ['web/owner-workspace.html']},
   {name: 'entry HTML files besides web/index.html', step: '2-6', ceiling: 1, fileGlob: {pattern: /^web\/[^/]+\.html$/u, except: ['web/index.html']}},
   {name: 'inline HTML document in src/job-front.ts', step: '5', ceiling: 0, matchers: [
@@ -118,7 +117,6 @@ export const ROWS: readonly CopyRow[] = [
   {name: 'per-screen CSS web/parts.css', step: '2', ceiling: 0, files: ['web/parts.css']},
   {name: 'per-screen CSS web/compare.css', step: '3', ceiling: 1, files: ['web/compare.css']},
   {name: 'per-screen CSS web/interview.css', step: '4', ceiling: 0, files: ['web/interview.css']},
-  {name: 'per-screen CSS web/job-hub.css', step: '6', ceiling: 0, files: ['web/job-hub.css']},
   {name: 'per-screen CSS web/owner-workspace.css', step: '6', ceiling: 0, files: ['web/owner-workspace.css']},
   {name: 'CSS files besides web/styles.css', step: '2-6', ceiling: 1, fileGlob: {pattern: /^web\/[^/]+\.css$/u, except: ['web/styles.css']}},
   {name: 'job fixed row grid-template-rows:250px in .job-inspection', step: '5', ceiling: 0, matchers: [

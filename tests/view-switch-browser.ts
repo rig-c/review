@@ -20,7 +20,7 @@ await mkdir(output,{recursive:true});
 const scratch=await mkdtemp(join(tmpdir(),'review-736-amendment-1-'));
 const pkg=await loadReview(resolve(import.meta.dir,'../examples/demo/review.json'));
 const server=await startServer(pkg,{port:0,stateDir:join(scratch,'state'),viewOnly:true});
-const expectedIds=['compare','reference','rig'];
+const expectedIds=['compare','reference','rig','difference'];
 const toolbarIds=['stage-comment','camera-sync','zoom-in','zoom-out','fit','native-one','view-menu','zoom-value'];
 type LayoutObservation={id:string;label:string;closed:boolean;disabled:string[];referenceHidden:boolean;rigHidden:boolean};
 type MenuObservation={language:string;mode:string;viewport:{width:number;height:number};open:boolean;toolbar:string[];cameraTarget:string;zoomValue:string;
@@ -45,6 +45,10 @@ try{
   await page.goto(`http://127.0.0.1:${server.port}/?lang=${language}`,language);
   await wait(`!document.body.inert && !!document.querySelector('#stage-comment-list') &&
    !!document.querySelector('#view-menu [data-view="compare"]:not(:disabled)')`,language+'.loaded');
+  // #806: preserve the standalone assertion formerly carried by the removed embedded-host probe.
+  const languageSelectCount=await page.evaluate<number>(`[...document.querySelectorAll('#settings-language')].filter(node=>node.getClientRects().length>0).length`);
+  assert.equal(languageSelectCount,1);
+  observations.push({language,standaloneLanguageSelectCount:languageSelectCount});
   for(const mode of ['rig','playback'] as const){
    const name=language+'-'+(mode==='rig'?'setup':'animate');
    await click(page,`.topbar [data-mode="${mode}"]`);
@@ -73,8 +77,9 @@ try{
    assert.deepEqual(menu.toolbar,toolbarIds);assert.equal(menu.headings,0);assert.equal(menu.cameraTarget,'rig');
    assert.equal(menu.zoomValue,catalog['100% · Rig']??('100% · '+catalog['Rig']));
    assert.deepEqual(menu.choices.map(choice=>choice.id),expectedIds);
-   assert.deepEqual(menu.choices.map(choice=>choice.label),['Side by side','Reference','Rig'].map(key=>catalog[key]));
-   assert(menu.choices.every(choice=>choice.visible&&!choice.disabled));
+   assert.deepEqual(menu.choices.map(choice=>choice.label),['Side by side','Reference','Rig','Difference'].map(key=>catalog[key]));
+   assert(menu.choices.every(choice=>choice.visible));
+   assert.deepEqual(menu.choices.filter(choice=>choice.disabled).map(choice=>choice.id),['difference']);
    assert.equal(menu.placement.parent,'zoom-controls');assert.equal(menu.placement.previous,'native-one');
    assert.equal(menu.placement.next,'zoom-value');assert.equal(menu.placement.cameraSeam,true);
    if(mode==='rig')setupPlacement=menu.placement;else assert.deepEqual(menu.placement,setupPlacement,'menu position must stay unchanged between Setup and Animate');
@@ -91,7 +96,7 @@ try{
     })`);
     transitions.push(state);
     await writeFile(join(output,'transitions-'+name+'.json'),JSON.stringify(transitions,null,2)+'\n');
-    assert.equal(state.closed,true);assert.deepEqual(state.disabled,[]);
+    assert.equal(state.closed,true);assert.deepEqual(state.disabled,['difference']);
     assert.equal(state.label,catalog[id==='rig'?'Rig':id==='reference'?'Reference':'Side by side']);
     assert.equal(state.referenceHidden,id==='rig');assert.equal(state.rigHidden,id==='reference');
    }
@@ -101,8 +106,8 @@ try{
   }
   await page.close();page=undefined;
  }
- await writeFile(join(output,'result.json'),JSON.stringify({status:'passed',amendment:1,screens:4,languages:2,modes:2,choicesPerScreen:3,groupHeadings:0,layoutTransitions:12,placementChecks:2,source:'bundled synthetic lantern demo; no upstream compiler acceptance claim',observations},null,2)+'\n');
- console.log('PASS #736 Amendment 1: EN/KO Setup/Animate 1600x1000, original 3 choices, unchanged toolbar and menu placement, 12 legacy-id layout transitions');
+ await writeFile(join(output,'result.json'),JSON.stringify({status:'passed',amendment:1,screens:4,languages:2,modes:2,choicesPerScreen:4,groupHeadings:0,layoutTransitions:12,placementChecks:2,source:'bundled synthetic lantern demo; no upstream compiler acceptance claim',observations},null,2)+'\n');
+ console.log('PASS #736 Amendment 1: EN/KO Setup/Animate 1600x1000, 3 original choices plus unavailable Difference, unchanged toolbar and menu placement, 12 legacy-id layout transitions');
 }finally{
  await page?.close();await server.stop(true);await rm(scratch,{recursive:true,force:true});
 }

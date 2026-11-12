@@ -1,7 +1,5 @@
 /** Stable installed managed owner host and semantic A/B contract. See docs/STABILITY.md. */
 export {startJobHost} from './job-front.ts';
-export {startJobHub} from './job-hub.ts';
-export type {JobHubOptions, JobHubJobOptions, JobHubJob, JobOwnerHub} from './job-hub.ts';
 export type {
   JobHostOptions,
   JobOwnerHost,

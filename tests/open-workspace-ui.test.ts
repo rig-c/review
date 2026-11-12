@@ -7,7 +7,7 @@ import {koCatalog} from '../web/catalog-ko.ts';
 test('retained iframe CSS declares a scoped important override for the shared hidden rule', async () => {
   const base = await readFile(new URL('../web/styles.css', import.meta.url), 'utf8');
   const sharedRule = /\[hidden\]\s*\{([^}]+)\}/.exec(base)![1]!;
-  const retainedRule = /\.hub-stage iframe\[hidden\],\s*\.owner-stage iframe\[hidden\]\s*\{([^}]+)\}/.exec(base)![1]!;
+  const retainedRule = /\.owner-stage iframe\[hidden\]\s*\{([^}]+)\}/.exec(base)![1]!;
   expect(sharedRule).toMatch(/display:\s*none\s*!important/);
   expect(retainedRule).toMatch(/display:\s*block\s*!important/);
   expect(retainedRule).toMatch(/visibility:\s*hidden/);
@@ -16,7 +16,7 @@ test('retained iframe CSS declares a scoped important override for the shared hi
 
 test('owner language control declares scoped compact width constraints', async () => {
   const base = await readFile(new URL('../web/styles.css', import.meta.url), 'utf8');
-  const rule = /\.hub-header select,\s*\.owner-header select\s*\{([^}]+)\}/.exec(base)![1]!;
+  const rule = /\.owner-header select\s*\{([^}]+)\}/.exec(base)![1]!;
   expect(rule).toMatch(/width:\s*auto/); expect(rule).toMatch(/max-width:\s*12rem/);
   expect(rule).toMatch(/flex:\s*0\s+0\s+auto/);
 });

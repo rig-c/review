@@ -100,7 +100,6 @@ function result<Value>(value: JobResult<Value>): Response {
 export function createJobFront(options: {
     origin: string;
     ports: JobHostPorts;
-    hubIncarnation?: string;
     resource: (name: 'index.html' | 'main.js' | 'styles.css') => Promise<BodyInit>;
     publication?: (jobId: string, publicationId: string, instanceKey: string, path: string, request: Request) => Promise<Response>;
 }) {
@@ -189,14 +188,7 @@ export function createJobFront(options: {
             });
             return new Response(body, { headers: { ...headers, 'Content-Type': 'application/x-ndjson' } });
         }
-        const embedded = route === '' && url.searchParams.has('hub');
-        if (embedded) {
-            if (!options.hubIncarnation || url.searchParams.get('hub') !== options.hubIncarnation ||
-                [...url.searchParams.keys()].some(key => !['hub', 'lang'].includes(key) || url.searchParams.getAll(key).length !== 1) ||
-                url.searchParams.has('lang') && !['en', 'ko'].includes(url.searchParams.get('lang')!)) {
-                return failure('JOB_REQUEST_INVALID', 400);
-            }
-        } else if (url.search && !(route === '' && ['?lang=en', '?lang=ko'].includes(url.search))) {
+        if (url.search && !(route === '' && ['?lang=en', '?lang=ko'].includes(url.search))) {
             return failure('JOB_REQUEST_INVALID', 400);
         }
         const instance = /^publications\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/instances\/([a-f0-9]{64})\/(.*)$/.exec(route);
@@ -211,9 +203,7 @@ export function createJobFront(options: {
             return failure('JOB_REQUEST_INVALID', 404);
         const type = name === 'index.html' ? 'text/html; charset=utf-8' : name === 'main.js' ? 'text/javascript' : 'text/css';
         return new Response(request.method === 'HEAD' ? null : await options.resource(name), {
-            headers: { ...headers, 'Content-Type': type, ...(embedded ? {
-                'Content-Security-Policy': headers['Content-Security-Policy'].replace("frame-ancestors 'none'", "frame-ancestors 'self'"),
-            } : {}) },
+            headers: { ...headers, 'Content-Type': type },
         });
     }
     return {
@@ -795,8 +785,8 @@ function attachFailure(error: unknown): Response {
 
 /** One live job request context. Its caller publishes it only after descriptor installation. */
 export function createJobRequestContext(session: JobSession, startup: JobHostOptions, origin: string,
-    identity: ReturnType<typeof jobHostIdentity>, resource = jobWindowResources(), hubIncarnation?: string,
-    listenerIncarnation: string = hubIncarnation ?? randomUUID(), accepting: () => boolean = () => true) {
+    identity: ReturnType<typeof jobHostIdentity>, resource = jobWindowResources(),
+    listenerIncarnation: string = randomUUID(), accepting: () => boolean = () => true) {
     const ports = createJobHostPorts(session, new URL(origin).origin);
     // This legacy GET projection and its property order are deliberately unchanged.
     const record: JobHostRecord = {
@@ -816,7 +806,7 @@ export function createJobRequestContext(session: JobSession, startup: JobHostOpt
         fingerprint: startup.fingerprint,
         pid: process.pid,
     };
-    const front = createJobFront({origin, ports, resource, hubIncarnation, publication: retainedPublicationRoutes(session)});
+    const front = createJobFront({origin, ports, resource, publication: retainedPublicationRoutes(session)});
     let requests = 0, stopped = false, published = false;
     let captured: ObservedFiles;
     let descriptorBytes: string;
