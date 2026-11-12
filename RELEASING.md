@@ -55,6 +55,19 @@ After publishing, confirmation waits for both names at the release version,
 then installs `rig-review@<version>` into an empty project, checks its manifest's
 name and version, and runs the installed `rig-review --help`.
 
+Confirm the scoped cut manually with the same installed-bin smoke used before publication:
+
+```sh
+bun scripts/install-smoke.ts --spec @rig-c/review@2.13.0
+```
+
+Replace the version with the published cut. Registry mode installs that package
+into an empty project without packing the checkout and prints every smoke step.
+Working-tree help comparisons print `SKIP` with `SMOKE_REGISTRY_TREE_UNBOUND`;
+they do not claim parity with the published tag. Installation failures name the
+registry spec. With no `--spec`, the existing local-pack smoke remains the default.
+This manual confirmation does not change the release workflow.
+
 ## First alias publish: completed 2026-10-29
 
 The owner completed the one-time `rig-review` bootstrap on 2026-10-29 at

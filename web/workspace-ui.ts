@@ -35,7 +35,7 @@ export function mountStatusBar(options:WorkspaceStatusBarOptions|{placement:'inl
 
 export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyJobStep5'|'legacyHubStep6'|'legacyOwnerStep6';
 export interface WorkspaceHeaderOptions {
- compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;
+ compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;hideLanguage?:boolean;title?:string;revision?:string;
  /** Only the stopped compare host supplies its existing domain controls and actions. */
  compare?:{modeSwitch:HTMLElement;buildPicker:HTMLElement;actions:HTMLElement};
 }
@@ -97,7 +97,8 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
   if(settingsLanguage){languageLabel=labelledControl('Language ',language);if(rig)header.append(languageLabel);}
   else{if(interview)header.append('\n    ');header.append(language);if(interview)header.append('\n  ');}
  }
- if(options.embedded){if(rig||parts)header.hidden=true;else if(interview)language!.hidden=true;}
+ if(options.embedded){if(rig||parts)header.hidden=true;else if(interview||job)language!.hidden=true;}
+ if(options.hideLanguage){if(languageLabel)languageLabel.hidden=true;else if(language)language.hidden=true;}
  return {header,title,subtitle,modeSwitch,dirty,stages,status,language,languageLabel,dispose(){header.remove();languageLabel?.remove();}};
 }
 

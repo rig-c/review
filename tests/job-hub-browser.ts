@@ -8,6 +8,9 @@ import {join} from 'node:path';
 import {PNG} from 'pngjs';
 import {startJobHub, JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobOwnerHub, type JobHubJob,
   type JobPublication, type JobPendingAsk, type JobAct, type JobResult} from '@rig-c/review/job-host';
+import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {loadReview} from '../src/manifest.ts';
+import {startServer} from '../src/server.ts';
 import {jobFixture, jobInputHashes} from './helpers/job-api-fixture.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {JOB_HUB_VISIBILITY} from '../web/job-hub.ts';
@@ -245,10 +248,10 @@ async function ask(index: number) {
     subject: {kind: 'checkpoint', checkpointId: 'step-one'}}) as JobPendingAsk;
   asks[index] = value; return value;
 }
-async function register(index: number) {
+async function register(index: number, preserveSelector = false) {
   const input = inputs[index]!;
   const job = await hub!.openJob({root: input.root, fingerprint: 'f'.repeat(64),
-    readPublished: async request => ({...input.getContext(), selector: request.result.path === 'out-next'
+    readPublished: async request => ({...input.getContext(), selector: preserveSelector ? input.getContext().selector : request.result.path === 'out-next'
       ? {kind: 'rig' as const, version: 2} : {kind: 'rig' as const, version: 1}}), readerId: 'synthetic-hub-browser-reader/1',
     partsEnumerator: input.partsEnumerator, partsEnumeratorId: 'synthetic-hub-browser-parts/1',
     installWriterBinding: binding => {writerGrants.set(binding.jobId, binding.fetchCapability); secrets.add(binding.fetchCapability);},
@@ -412,6 +415,52 @@ async function visibilityNegatives() {
     cases: ['incarnation', 'job', 'publication', 'source hash', 'actual sibling sender window', 'synthetic wrong-origin envelope']});
   assert.deepEqual(violations, []); assert.deepEqual(await snapshot(0), before);
 }
+/** #770: count actual rendered controls in the hub and its active child, and exercise language propagation. */
+async function languageSelectSample() {
+  inputs.push(await jobFixture());
+  const direction = await scriptedJobWindowFixture();
+  try {await direction.publish('direction');} finally {direction.host.stop();}
+  direction.input.setRecordPath('project.json'); inputs.push(direction.input);
+  before = await Promise.all(inputs.map(input => jobInputHashes(input.root)));
+  hub = await startJobHub({stateDir, reviewer: {id: 'declared-owner', role: 'owner'}});
+  secrets.add(new URL(hub.ownerUrl).hash.slice(5));
+  for (let index = 0; index < 2; index++) {await register(index, true); await publish(index);}
+  page = await launchCdpSession(profile, {browserArgs: ['--single-process', '--no-zygote', '--num-raster-threads=1', '--js-flags=--max-old-space-size=1024'],
+    onEvent(event, request) {if (event.sessionId) send = request; if (event.method === 'Runtime.exceptionThrown') exceptions.push(event.params);}});
+  await until(() => !!send, 'CDP-session');
+  await page.setViewport(1600, 1000); await page.goto(ownerURL(), language);
+  await wait(`document.querySelectorAll('.hub-list button').length===2`, 'language-rows');
+  for (let index = 0; index < 2; index++) {
+    await choose(index);
+    await wait(frameExpression(index, index === 0 ? `!!document.querySelector('#rig-root canvas,#rig-root img')` : `!!document.querySelector('.job-header') && !!document.querySelector('#job-animation option') && document.querySelector('.job-notice')?.dataset.failed==='false'`), 'language-screen-' + index);
+    await inside(index, `(()=>{window.__language770Document=document;window.__language770Dialogs=document.querySelectorAll('dialog[open]').length;})()`);
+    for (const selected of [language, language === 'en' ? 'ko' : 'en', language]) {
+      await evaluateSync(`(()=>{const select=document.querySelector('.hub-header select');select.value=${JSON.stringify(selected)};select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+      await wait(frameExpression(index, `document.documentElement.lang===${JSON.stringify(selected)}`), 'language-propagation-' + index + selected);
+      const measurement: {outer:number;inner:number;total:number;language:string;headerVisible:boolean;modeVisible:boolean} = await page.evaluate<any>(`(()=>{const frame=[...document.querySelectorAll('.hub-stage>iframe')].find(n=>!n.hidden),child=frame.contentDocument;
+        const shown=n=>n.getClientRects().length>0&&getComputedStyle(n).visibility!=='hidden';
+        const outer=[...document.querySelectorAll('.hub-header select')].filter(shown).length;
+        const inner=[...child.querySelectorAll('.topbar #settings-language,.job-header select')].filter(n=>n.getClientRects().length>0&&frame.contentWindow.getComputedStyle(n).visibility!=='hidden').length;
+        return {outer,inner,total:outer+inner,language:child.documentElement.lang,headerVisible:!!child.querySelector('.topbar,.job-header')?.getClientRects().length,
+          modeVisible:!!child.querySelector('.mode-switch')?.getClientRects().length};})()`);
+      assert.equal(measurement.total, Bun.argv.includes('--baseline-main') ? 2 : 1); assert.equal(measurement.inner, Bun.argv.includes('--baseline-main') ? 1 : 0); assert.equal(measurement.language, selected); assert.equal(measurement.headerVisible, true);
+      if (index === 0) assert.equal(measurement.modeVisible, true);
+      assert.equal(await inside(index, `window.__language770Document===document && window.__language770Dialogs===document.querySelectorAll('dialog[open]').length`), true);
+      await record('language-' + index + '-' + selected, measurement);
+      await writeFile(join(output, 'language-' + index + '-' + selected + '.png'), await page.screenshot());
+    }
+  }
+  const standalone = await startServer(await loadReview(join(inputs[0]!.root, 'out')), {port: 0, stateDir: join(scratch, 'standalone'), viewOnly: true});
+  try {
+    await page.goto('http://127.0.0.1:' + standalone.port + '/?lang=' + language, language);
+    await wait(`!!document.querySelector('#settings-language')`, 'standalone-language');
+    const count = await page.evaluate<number>(`[...document.querySelectorAll('#settings-language')].filter(n=>n.getClientRects().length>0).length`);
+    assert.equal(count, 1); await record('standalone-language', {visible: count, language});
+  } finally {standalone.stop(true);}
+  assert.deepEqual(exceptions, []);
+  assert.deepEqual(await Promise.all(inputs.map(input => jobInputHashes(input.root))), before);
+  await record('verdict', {status: 'PASS', sample: '#770 language selects', language, inputHashesUnchanged: true, subjects: ['rig', 'direction fallback']});
+}
 /** #734: exercise the shipped entry and main-screen/record composition, without the legacy job-window acceptance suite. */
 async function singleEntrySample() {
   for (let index = 0; index < 2; index++) inputs.push(await jobFixture());
@@ -494,7 +543,8 @@ async function singleEntrySample() {
     inputHashesUnchanged: true, boundary: 'synthetic hub source and main/record screen integration; legacy acceptance suite not run'});
 }
 try {
-  if (singleEntry) await singleEntrySample();
+  if (Bun.argv.includes('--language-select')) await languageSelectSample();
+  else if (singleEntry) await singleEntrySample();
   else {
   for (let index = 0; index < 10; index++) {
     const input = await jobFixture(); inputs.push(input);

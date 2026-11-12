@@ -1708,7 +1708,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
         commit:prepared=>prepared?rigScreen.commit(prepared):{rollback(){},finalize(){}},
         async painted(prepared,signal){if(prepared)await rigScreen.painted(prepared,signal);else{if(stopped||fallingBack||signal.aborted)return;fallingBack=true;abort.abort();window.stop();await events?.done;if(!stopped){const dispose=await mountJobSession(host,true,access);if(stopped)dispose();else legacyStop=dispose;}}},
         discard:prepared=>{prepared?.images?.dispose();const modal=prepared?.record??prepared?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();},
-        changed(state){rigScreen.changed(state);if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.error);if(state.receipt&&!state.preparing)events?.displayed();},
+        changed(state){rigScreen.changed(state);if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.error);if(state.receipt&&!state.preparing){events?.displayed();if(hub)globalThis.parent.postMessage({...binding(),schema:JOB_HUB_READY},location.origin);}},
     }});
     const hub=new URL(location.href).searchParams.get('hub');
     const binding=()=>({jobId:access.jobId,incarnation:hub!,publicationId:window.state().displayed?.publication.publicationId??null,sourceHash:window.state().displayed?.publication.source.sourceHash??null});
@@ -1754,7 +1754,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
     };
     const formHelpers = prepareJobForms.helpers(node, t);
     const {inputLabel, imageGallery} = formHelpers;
-    const shell = mountWorkspaceShell({compatibility: 'legacyJobStep5', title: t('job.title')});
+    const shell = mountWorkspaceShell({compatibility: 'legacyJobStep5', embedded: !!hubIncarnation, title: t('job.title')});
     const {header, title} = shell, languages = shell.language!;
     languages.value = i18n.getLanguage();
     languages.setAttribute('aria-label', t('interview.language'));
