@@ -9,8 +9,8 @@ import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jo
 import type {DisplayPublicationV3,PendingAskV3,UISubmissionV3} from '../src/job-contract.ts';
 import {recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 
-async function harness(picture:boolean|'parts'=false,capability:string|null='fixture'){
- const f=await recordScreenFixture('checkpoint',picture),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
+async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'='checkpoint'){
+ const f=await recordScreenFixture(kind,picture),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
  const state={pending:[f.ask] as PendingAskV3[],receipt:null as {publicationId:string;pageId:string;displayedNonce:string}|null,generation:f.display.publication.generation,preparing:false,closed:false};
  const submitted:UISubmissionV3[]=[],store=new Map<string,string>();
  const node=((tag:string,key?:string)=>{const value=dom.document.createElement(tag);if(key)value.textContent=key;return value;}) as JobFormDependencies['node'];
@@ -313,5 +313,29 @@ test('#784 model-less reference checkpoint survives preparation, receipt rearm a
   h.state.pending.push({...ask,askId:'later-photo-check'});h.screen.changed(h.state);expect(ready!.record!.forms.has('later-photo-check')).toBe(true);expect(ready!.record!.forms.get(ask.askId)).toBe(entry);
   entry.form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='pass';entry.form.commentWords=()=> '[general]\nreference comment';await entry.form.onsubmit!({preventDefault(){}} as never);
   expect(h.submitted).toHaveLength(1);expect(h.submitted[0]).toMatchObject({kind:'checkpoint',askId:ask.askId,value:{checkpointId:'photo-check',outcome:'pass',words:'[general]\nreference comment'}});
+ }finally{await h.close();}
+});
+
+test('#805 record option-set with a parts picture reaches the existing inspector gate without rig data',async()=>{
+ const h=await harness('parts','fixture','interview-picks'),f=h.f;try{
+  h.dom.set('ResizeObserver',class{observe(){}disconnect(){}});h.dom.set('MutationObserver',class{observe(){}disconnect(){}});h.dom.set('window',new EventTarget());h.dom.set('requestAnimationFrame',()=>1);h.dom.set('cancelAnimationFrame',()=>{});
+  Object.assign(h.dom.document,{addEventListener(){},removeEventListener(){}});
+  const create=h.dom.document.createElement;h.dom.document.createElement=(tag:string)=>{const node=create(tag);node.style.setProperty=()=>{};return node;};
+  const ready=await h.screen.prepare(f.display,new AbortController().signal);h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
+  const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+  const gate=source.slice(source.indexOf('function bindWorkspace('),source.indexOf('\nasync function start():'));
+  const parts=source.slice(source.indexOf('async function startParts('),source.indexOf(" const base=host?'/api/stage-parts'"))+'\n}';
+  const opened=await rigHost()!.read('/api/review','GET') as {subject:string};
+  expect(opened.subject).toBe('parts');expect(f.workspace.result.kind).toBe('option-set');
+  let available:unknown='not-bound',inspector=false;
+  const element={querySelector:()=>({}),parentElement:{},checked:false},defaults={defaultCameraSync:false,defaultIdleRepeat:false,theme:'system'};
+  const environment={host:{record:{hasPicture:true},ownerActAccess:null},partsOnly:true,data:undefined,screenRoot:element,shell:{language:{}},rigInspector:{strip:{},comments:{button:{},panel:{}}},viewport:{state:{}},appearance:null,workspace:null,inspectorBlocks:null,liveIssueCount:null,readOnly:null,actReadOnly:null,
+   el:()=>element,input:()=>element,select:()=>element,text(){},document:{},tr:(key:string)=>key,readOnlyReason:()=>null,access:{},fitCamera(){},bindAppearance:()=>({}),bindReviewDialog(){},bindInspector(){inspector=true;},
+   bindWorkspaceUI:()=>({defaults:()=>defaults}),bindInspectorBlocks:(options:{available:unknown})=>{available=options.available;return {};}};
+  const run=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(gate+'\n'+parts)};return startParts;}`)(environment);
+  await run(opened,{issues:[]},{capabilityRequired:true});expect(available).toEqual(['feedback']);expect(inspector).toBe(true);
+  // The same gate retains the existing rig and picture-free record decisions.
+  const bind=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(gate)};return bindWorkspace;}`)(environment);
+  bind(true);expect(available).toBeUndefined();environment.host.record.hasPicture=false;bind(false);expect(available).toEqual(['feedback']);
  }finally{await h.close();}
 });
