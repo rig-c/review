@@ -14,7 +14,6 @@ import type {Readable} from 'node:stream';
 import {leaksCapability,redactCapability} from './redact.ts';
 import {createHash} from 'node:crypto';
 import {installedWorkspaceSmoke} from './installed-workspace-smoke.ts';
-import {installedJobHubSmoke} from './installed-job-hub-smoke.ts';
 const args=process.argv.slice(2);
 if(args.length && (args.length!==2 || args[0]!=='--spec' || !/^@rig-c\/review@[^\s/:]+$/.test(args[1]!))) {
  console.error('SMOKE_SPEC_INVALID: expected --spec @rig-c/review@<version-or-tag>');process.exit(1);
@@ -117,7 +116,7 @@ function assert(ok: unknown, name: string): asserts ok {
  if (!ok) throw new Error('SMOKE_PUBLIC_HOST_' + name);
 }
 assert(jobActAdmitsComments, 'JOB_ACT_ADMITS_COMMENTS');
-const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'startJobHub', 'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID', 'JOB_PARTS_ENUMERATOR_RANGE',
+const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID', 'JOB_PARTS_ENUMERATOR_RANGE',
  'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
  'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordAct', 'prepareJobRecordSource',
  'JOB_COMMENTS_ACT_SCHEMA', 'REVIEW_COMMENTS_SESSION_SCHEMA', 'REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA',
@@ -316,12 +315,11 @@ try{
  const installed=await run(['npm','i','-D','--dry-run=false','--no-audit','--no-fund',target!],app);
  if(!step(spec?'npm i -D '+spec+' from registry':'npm i -D <tarball> into an empty project',installed.exit===0,installed.stderr.trim()))throw new Error(spec?'SMOKE_REGISTRY_INSTALL: '+spec:'install');
  if(spec)files=[...new Bun.Glob('**/*').scanSync({cwd:join(app,'node_modules/@rig-c/review'),onlyFiles:true,dot:true})].map(f=>f.replaceAll('\\','/'));
- step('tarball carries the bin, public host, stability reference, web, demo and licence',['src/entry.ts','src/cli.ts','src/job-host.ts','src/job-front.ts','src/job-session.ts','src/job-contract.ts','src/job-hub.ts','web/job-hub.ts','docs/STABILITY.md','web/job-session.ts','web/main.ts','web/index.html','examples/demo/review.json','LICENSE'].every(f=>files.includes(f)),`${files.length} files`);
+ step('tarball carries the bin, public host, stability reference, web, demo and licence',['src/entry.ts','src/cli.ts','src/job-host.ts','src/job-front.ts','src/job-session.ts','src/job-contract.ts','docs/STABILITY.md','web/job-session.ts','web/main.ts','web/index.html','examples/demo/review.json','LICENSE'].every(f=>files.includes(f)),`${files.length} files`);
  step('tarball carries no tests or fixtures',!files.some(f=>f.startsWith('tests/')||f.startsWith('node_modules/')));
  await writeFile(join(app,'node_modules/.metadata_never_index'),'');
  await installedWorkspaceSmoke({app, work, fixtureRoot:join(root,'tests/fixtures/strip-probe'), foreground:true, log});
  await publicHostSmoke();
- await installedJobHubSmoke({app, work, log});
  const help=await run(['npx','--no-install','rig-review','--help'],app);step('npx rig-review --help',help.exit===0&&help.stdout.includes('Usage'));
  if(!spec){
  const development=await run([process.execPath,'src/entry.ts','--help'],root);

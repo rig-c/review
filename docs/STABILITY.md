@@ -339,8 +339,7 @@ Failed or aborted reads cancel and release their readers. The server enforces a
 
 After body parsing, the owner executes a synchronous acceptance section inside a
 deferred SQLite read transaction (`db.transaction(...).deferred()`). It checks
-published, stopped and accepting flags (including standalone `stopped` and hub
-`closing`) and request abort, verifies UI capability, active job status and full
+published, stopped and accepting flags and request abort, verifies UI capability, active job status and full
 binding, checks `listenerIncarnation` and captured, current and observed `{dev, ino}`
 identities (`root`, `stateDir`, `store`, `record`) plus exact descriptor bytes,
 rechecks accepting and abort flags, freezes `{ok: true, attachment, pid}` and
@@ -349,7 +348,7 @@ read snapshot while `sealClose` commits with `BEGIN IMMEDIATE`, acceptance and c
 execute in a single serial order. A prior committed close returns HTTP 409 with
 `reason: 'closed'` and `phase: 'acceptance'`. A concurrent close waits for the read
 snapshot, and a close or stop after acceptance is an ordinary subsequent lifecycle
-event. Standalone or hub stop initiated before or during body parsing returns HTTP
+event. Owner stop initiated before or during body parsing returns HTTP
 503 with `reason: 'stopped'` and `phase: 'acceptance'`. `JobHostAttachFailure` is a
 closed two-member union of `{code: 'JOB_HOST_ATTACH_REFUSED', reason, phase}`
 (`reason` in `'missing' | 'closed' | 'incarnation-missing' | 'replaced' | 'read' | 'probe' | 'stopped' | 'race'`
@@ -411,102 +410,9 @@ The runtime entry starts the full owner host with retained publication routes
 and shipped HTML, JavaScript and CSS. Raw Requests and the existing A/B ports
 preserve capability, origin, size, cancellation and replay checks.
 
-## Embedded semantic-job hub
+## Changelog
 
-`startJobHub` adds an embedded N-job owner to the same public
-`@rig-c/review/job-host` facade. One host process owns one loopback listener and
-one human owner list at `ownerUrl`. Each `openJob` registers its trusted hooks
-in that process and returns the existing session and semantic ports. The jobs
-use `rig-review/job-api@2` and `rig-review/act@2`.
-
-```ts
-import {startJobHub} from '@rig-c/review/job-host';
-import type {
-  JobHubOptions, JobHubJobOptions, JobHubJob, JobOwnerHub,
-  JobHostReuseExpectation,
-} from '@rig-c/review/job-host';
-
-function startJobHub(options: JobHubOptions): Promise<JobOwnerHub>;
-
-interface JobHubOptions {
-  readonly stateDir: string;
-  readonly reviewer: JobReviewerBinding;
-  readonly port?: number;
-}
-
-type JobHubJobOptions = Omit<JobHostOptions, 'stateDir' | 'port' | 'reviewer' | 'reuseOnly'>;
-
-interface JobHubJob {
-  readonly session: JobSession;
-  readonly ports: JobHostPorts;
-  readonly origin: string;
-  readonly jobUrl: string;
-  readonly reused: boolean;
-  readonly attachment: JobHostReuseExpectation;
-}
-
-interface JobOwnerHub {
-  readonly origin: string;
-  readonly ownerUrl: string;
-  openJob(options: JobHubJobOptions): Promise<JobHubJob>;
-  stop(): Promise<void>;
-}
-```
-
-`stateDir` stays outside every registered work root. `port` accepts 0..65535 and
-defaults to an available port. The bootstrap `reviewer` is common to every job,
-with the same trusted provenance and role checks as `startJobHost`. A retained
-active job with a different reviewer refuses `JOB_AUTHORITY_REFUSED`.
-`ownerUrl` has the form `/hub/?workspace=<incarnation>#cap=<private-capability>`.
-`jobUrl` is the per-job owner URL, including its private UI capability.
-The human receives the hub owner URL once. Agents receive their own per-job
-bootstrap credentials privately and address `/jobs/<jobId>/api`.
-
-Each `startJobHub` listener start mints one canonical lowercase UUIDv4
-`listenerIncarnation` shared across all jobs registered on that hub. Opening
-additional jobs on the same hub preserves that incarnation. Each `openJob` call
-returns a required non-null detached deeply frozen `job.attachment: JobHostReuseExpectation`
-derived directly from the owning hub context, including when a compact on-disk
-`job-ui/<jobId>.json` descriptor omits `listenerIncarnation` at the 65,536-byte
-limit. Passing a runtime `reuseOnly` property to `hub.openJob` rejects with
-`JOB_REQUEST_INVALID`.
-
-Each job keeps its own identity, source bindings, generation CAS, idempotency
-keys, cursors, asks, acts, display receipts and agent/UI/writer grants. Hook IDs
-follow the existing `JobHostOptions` rules. Reopening an active root and
-fingerprint with compatible hook identities returns the same session with
-`reused` true and invokes the writer-binding callback again. General
-cross-process callback registration is deferred. The hub refuses an active
-standalone owner with `JOB_HUB_EXTERNAL_HOST`, and a live unresponsive owner
-with `JOB_HUB_HOST_UNRESPONSIVE`, preserving that owner. A second live hub for
-the state directory refuses `JOB_HUB_ALREADY_RUNNING`. Existing `startJobHost`
-callers can still attach to a compatible hub-owned job by ordinary authenticated
-reuse or strict `reuseOnly: {expected}` attachment (which skips
-`installWriterBinding` during strict bootstrap). Such attachment keeps the
-registered process-local hooks under hub ownership.
-
-Semantic `close` ends only the addressed job and revokes its writer grant.
-Closed entries remain in the current hub list. `await hub.stop()` drains work,
-stops the shared transport and disposes local sessions. Active jobs retain their
-durable identity, grants, publications, asks, acts and replay history across
-that transport stop. Restart requires `startJobHub` and `openJob` for each
-required job, registering callbacks again and refreshing the writer adapter's
-origin. The hub capability, `listenerIncarnation` and `workspace` incarnation
-query rotate, forcing a fresh owner document and invalidating prior strict
-`reuseOnly` expectations. Obtain the new owner URL and `job.attachment` from the
-new handle. The retained active job's grants keep their identity until
-semantic close. A later new job receives new grants.
-
-Admission is an application bound of 32 registered entries, including closed
-entries retained in that hub incarnation. `JOB_HUB_LIMIT` refuses a new entry
-at the bound. Compatible reuse of an active entry still succeeds. Selected
-frames are retained lazily under this bound. Hidden hub members suspend their event subscription after bootstrap and resume from the last delivered cursor when selected. Hardware performance requires its
-own measurement.
-
-Consumer-owned adoption remains external and pending in
-[Review #512](https://github.com/rig-c/review/issues/512). See the
-[embedded consumer example](WORKFLOWS.md#embedded-semantic-jobs) for trusted-hook
-ownership and the ordinary semantic cycle.
+- Breaking, next cut 3.0.0 (#806): remove `startJobHub` and its `JobHubOptions`, `JobHubJobOptions`, `JobHubJob` and `JobOwnerHub` types; the uncalled semantic-job hub is deleted.
 
 ## Named export inventory
 
@@ -553,7 +459,6 @@ The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
 - `startJobHost`
-- `startJobHub`
 - `parseRecordAct`
 - `prepareJobRecordAct`
 - `prepareJobRecordSource`
@@ -584,13 +489,9 @@ values from the frozen semantic contract.
 
 The exact type-only exports follow. Their existing definitions in
 `src/job-contract.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-session.ts`,
-`src/job-worker.ts`, `src/job-front.ts` and `src/job-hub.ts` are reexported
+`src/job-worker.ts` and `src/job-front.ts` are reexported
 without aliases or copied wire shapes.
 
-- `JobHubOptions`
-- `JobHubJobOptions`
-- `JobHubJob`
-- `JobOwnerHub`
 - `JobHostOptions`
 - `JobOwnerHost`
 - `JobHostListenerIncarnation`

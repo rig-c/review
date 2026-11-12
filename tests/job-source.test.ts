@@ -459,13 +459,13 @@ test('#606 literal package/record canonical, durable, replay and export compatib
   const {collect606Canonical} = await import('./helpers/job-api-fixture.ts');
   const actual = await collect606Canonical();
   // Preserve every historical literal sample and the old export inventory; only
-  // the explicitly signed additive facade surface changes the current oracle.
+  // the explicitly signed facade additions and #806 removal change the current oracle.
   // #713: the package checkpoint writer now emits act@6. The frozen @2 literals stay above;
   // the expected package bytes are derived from them. Record samples keep act@4.
   const samples = Object.fromEntries(Object.entries(golden606.samples).map(([name, sample]) => [name,
     name.startsWith('package-') ? Object.fromEntries(Object.entries(sample).map(([key, bytes]) =>
       [key, /actbytes$/i.test(key) ? act6From606(bytes) : bytes])) as typeof sample : sample]));
-  const expected = {...golden606, samples, publicExports: [...golden606.publicExports,
+  const expected = {...golden606, samples, publicExports: [...golden606.publicExports.filter(name => name !== 'startJobHub'),
     'JOB_COMMENTS_ACT_SCHEMA', 'PARTS_COMMENTS_VERDICT_SCHEMA', 'REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA', 'REVIEW_COMMENTS_SESSION_SCHEMA',
     'parseCommentsAct', 'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'parseCommentsSession', 'projectComments', 'projectSelectedCommentsFeedback',
     'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',

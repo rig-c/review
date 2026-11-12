@@ -6,7 +6,6 @@ import {lstatSync, readFileSync, writeFileSync, renameSync, mkdirSync} from 'nod
 import {JobSession} from '../src/job-session.ts';
 import {JobStore, JobError} from '../src/job-store.ts';
 import {createJobRequestContext, jobHostIdentity} from '../src/job-front.ts';
-import {startJobHub} from '../src/job-host.ts';
 import {
   JOB_ACT_SCHEMA,
   JOB_API_SCHEMA,
@@ -734,7 +733,7 @@ test('CP1 item 3: stop wins after a paused body parse', async () => {
   const owner = await startJobHost(options); hosts.push(owner);
   const expected = owner.attachment!;
   const context = createJobRequestContext(owner.session, options, owner.origin, jobHostIdentity(options),
-    undefined, undefined, expected.listenerIncarnation);
+    undefined, expected.listenerIncarnation);
   (context as typeof context & {publish?: () => void}).publish?.();
   let release!: () => void, entered!: () => void;
   const paused = new Promise<void>(r => entered = r), barrier = new Promise<void>(r => release = r);
@@ -763,29 +762,6 @@ test('CP1 item 4: exact readonly session is staged before the final network prob
   finally {JobSession.openReadOnly = original;}
 });
 
-test('CP1 item 5: hub exposes canonical shared listener incarnation', async () => {
-  const f = await createFixture(), options = baseOptions(f);
-  const hub = await startJobHub({stateDir: options.stateDir, reviewer: options.reviewer});
-  let originalBinding: JobHostReuseExpectation;
-  try {
-    const first = await hub.openJob(options);
-    const value = (first as typeof first & {attachment?: JobHostReuseExpectation}).attachment;
-    expect(value).toBeDefined();
-    originalBinding = value!;
-    expect(value!.listenerIncarnation).toMatch(/^[0-9a-f-]{36}$/);
-    const secondRoot = join(f.scratch, 'second-root'); await mkdir(secondRoot);
-    const second = await hub.openJob({...options, root: secondRoot});
-    expect((second as typeof second & {attachment?: JobHostReuseExpectation}).attachment!.listenerIncarnation)
-      .toBe(value!.listenerIncarnation);
-  } finally {await hub.stop();}
-  const restarted = await startJobHub({stateDir: options.stateDir, reviewer: options.reviewer, port: Number(new URL(hub.origin).port)});
-  try {
-    const job = await restarted.openJob(options);
-    expect(job.attachment.jobId).toBe(originalBinding!.jobId);
-    expect(job.attachment.origin).toBe(originalBinding!.origin);
-    expect(job.attachment.listenerIncarnation).not.toBe(originalBinding!.listenerIncarnation);
-  } finally {await restarted.stop();}
-});
 
 test('CP1 item 6: missing incarnation has the named record refusal', async () => {
   const f = await createFixture(), options = baseOptions(f);
@@ -909,7 +885,7 @@ test('CP1 owner detects actual root state store and descriptor replacement at ac
   for (const target of ['root', 'stateDir', 'store', 'record'] as const) {
     const f = await createFixture(), options = baseOptions(f), owner = await startJobHost(options); hosts.push(owner);
     const expected = owner.attachment!;
-    const context = createJobRequestContext(owner.session, options, owner.origin, jobHostIdentity(options), undefined, undefined, expected.listenerIncarnation);
+    const context = createJobRequestContext(owner.session, options, owner.origin, jobHostIdentity(options), undefined, expected.listenerIncarnation);
     context.publish();
     const originalFiles = observed(expected), paths = {root: expected.binding.root, stateDir: expected.binding.stateDir,
       store: join(expected.binding.stateDir, 'jobs.sqlite'), record: join(expected.binding.stateDir, 'job-ui', expected.jobId + '.json')};
@@ -1076,35 +1052,6 @@ test('CP1 cross-process managed starter shares exact tuple with concurrent attac
   }
 });
 
-test('CP1 real hub closing flag wins while incoming HTTP body parser is paused', async () => {
-  const f = await createFixture(), options = baseOptions(f);
-  const hub = await startJobHub({stateDir: options.stateDir, reviewer: options.reviewer});
-  const originalReader = ReadableStream.prototype.getReader;
-  let resume!: () => void, parsing!: () => void;
-  const entered = new Promise<void>(r => parsing = r), barrier = new Promise<void>(r => resume = r);
-  let pending: Promise<Response> | undefined;
-  try {
-    const job = await hub.openJob(options), expected = job.attachment;
-    const bytes = Buffer.from(JSON.stringify({expected, observed: observed(expected)}));
-    const hostPath = `/jobs/${job.session.jobId}/host`;
-    const stream = new ReadableStream<Uint8Array>({start(c) {c.enqueue(bytes.subarray(0, 12));}, async pull(c) {
-      await barrier; c.enqueue(bytes.subarray(12)); c.close();
-    }});
-    ReadableStream.prototype.getReader = function(this: ReadableStream, ...args: any[]) {
-      const reader = Reflect.apply(originalReader, this, args);
-      if (this !== stream) parsing();
-      return reader;
-    } as typeof originalReader;
-    pending = originalFetch(hub.origin + hostPath, {method: 'POST', headers: {'Content-Type': 'application/json', Origin: hub.origin,
-      'X-Review-Capability': job.session.hostCredentials().ui}, body: stream});
-    await entered;
-    const stopping = hub.stop(); resume();
-    const response = await pending;
-    expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ok: false, error: {code: 'JOB_HOST_ATTACH_REFUSED', reason: 'stopped', phase: 'acceptance'}});
-    await stopping;
-  } finally {ReadableStream.prototype.getReader = originalReader; resume?.(); await pending?.catch(() => {}); await hub.stop();}
-});
 
 test('CP1 cancelled and stalled request or response bodies are bounded and released', async () => {
   const f = await createFixture(), options = baseOptions(f), owner = await startJobHost(options); hosts.push(owner);
@@ -1118,7 +1065,7 @@ test('CP1 cancelled and stalled request or response bodies are bounded and relea
   })) as typeof fetch;
   await expect(startJobHost({...options, reuseOnly: {expected}})).rejects.toMatchObject({code: 'JOB_HOST_ATTACH_REFUSED', reason: 'probe', phase: 'probe'});
   globalThis.fetch = originalFetch;
-  const context = createJobRequestContext(owner.session, options, owner.origin, jobHostIdentity(options), undefined, undefined, expected.listenerIncarnation); context.publish();
+  const context = createJobRequestContext(owner.session, options, owner.origin, jobHostIdentity(options), undefined, expected.listenerIncarnation); context.publish();
   const abort = new AbortController(); let bodyCancelled = false;
   const stalled = new ReadableStream<Uint8Array>({start(c) {c.enqueue(Buffer.from('{'));}, cancel() {bodyCancelled = true;}});
   const pending = context.fetch(new Request(probeRequest(owner, {}), {body: stalled, signal: abort.signal}));
@@ -1303,7 +1250,7 @@ test('CP1 request and response envelopes accept exactly 65536 bytes and refuse 6
 test('CP1 explicit port 80 uses normalized HTTP Origin while preserving the tuple spelling', async () => {
   const f = await createFixture(), options = baseOptions(f), owner = await startJobHost(options); hosts.push(owner);
   const incarnation = owner.attachment!.listenerIncarnation;
-  const context = createJobRequestContext(owner.session, options, 'http://127.0.0.1:80', jobHostIdentity(options), undefined, undefined, incarnation);
+  const context = createJobRequestContext(owner.session, options, 'http://127.0.0.1:80', jobHostIdentity(options), undefined, incarnation);
   const path = join(options.stateDir, 'job-ui', owner.session.jobId + '.json'), bytes = await readFile(path);
   await writeFile(path, JSON.stringify(context.descriptor().record)); context.publish();
   try {
@@ -1332,7 +1279,7 @@ test('CP1 standalone disposed stop and an independent close each win during body
   for (const event of ['stop', 'close']) {
     const f = await createFixture(), options = baseOptions(f), owner = await startJobHost(options); hosts.push(owner);
     const expected = owner.attachment!, context = createJobRequestContext(owner.session, options, owner.origin,
-      jobHostIdentity(options), undefined, undefined, expected.listenerIncarnation); context.publish();
+      jobHostIdentity(options), undefined, expected.listenerIncarnation); context.publish();
     const payload = Buffer.from(JSON.stringify({expected, observed: observed(expected)}));
     let resume!: () => void, entered!: () => void;
     const barrier = new Promise<void>(r => resume = r), parsing = new Promise<void>(r => entered = r);
@@ -1580,7 +1527,7 @@ test('CP1 standalone attachment checks serialized strict request budget while pr
   expect(ordinaryOver.reused).toBe(true);
   expect(ordinaryOver.attachment).toBeNull();
   await expect(startJobHost({...overOptions, reuseOnly: {expected: unadvertised}})).rejects.toMatchObject({code: 'JOB_BODY_LIMIT'});
-  const overContext = createJobRequestContext(over.session, overOptions, over.origin, jobHostIdentity(overOptions), undefined, undefined, overDescriptor.listenerIncarnation!);
+  const overContext = createJobRequestContext(over.session, overOptions, over.origin, jobHostIdentity(overOptions), undefined, overDescriptor.listenerIncarnation!);
   overContext.publish();
   expect(overContext.ownerAttachment()).toEqual(unadvertised);
   expect(overContext.attachment()).toBeNull();
