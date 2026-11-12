@@ -594,16 +594,25 @@ export async function* jobWindowEvents(access: JobWindowAccess, after: string | 
                 }
                 delete packed._jobCommentCrops;
                 for (const [reference, refs] of crops) {
-                    const crop = await fetcher(access.route('comment-crops/' + reference.slice(9) + '.png'),
-                        {signal, headers: access.headers()});
-                    if (!crop.ok) throw new Error('JOB_STREAM_FAILED');
-                    const bytes = new Uint8Array(await crop.arrayBuffer());
-                    const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
-                        byte => byte.toString(16).padStart(2, '0')).join('');
-                    if (digest !== reference.slice(9)) throw new Error('JOB_STREAM_FAILED');
-                    let binary = '';
-                    for (const byte of bytes) binary += String.fromCharCode(byte);
-                    for (const ref of refs) ref.owner[ref.key] = 'data:image/png;base64,' + btoa(binary);
+                    try {
+                        const crop = await fetcher(access.route('comment-crops/' + reference.slice(9) + '.png'),
+                            {signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]), headers: access.headers()});
+                        if (!crop.ok) throw new Error('JOB_STREAM_FAILED');
+                        const bytes = new Uint8Array(await crop.arrayBuffer());
+                        const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
+                            byte => byte.toString(16).padStart(2, '0')).join('');
+                        if (digest !== reference.slice(9)) throw new Error('JOB_STREAM_FAILED');
+                        let binary = '';
+                        for (const byte of bytes) binary += String.fromCharCode(byte);
+                        for (const ref of refs) ref.owner[ref.key] = 'data:image/png;base64,' + btoa(binary);
+                    } catch {
+                        if (signal.aborted) return;
+                        // A missing image is local presentation state, never a reason to replay an immutable act forever.
+                        for (const ref of refs) {
+                            ref.owner[ref.key] = null;
+                            ref.owner.unavailable = 'COMMENT_CROP_STATE_UNAVAILABLE: stored crop cannot be read';
+                        }
+                    }
                 }
                 yield event;
                 newline = buffered.indexOf('\n');
