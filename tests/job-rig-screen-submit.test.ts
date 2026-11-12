@@ -57,7 +57,7 @@ async function mainSave(session: ReviewSession, submittedBaseline: ReviewSession
   };
 }
 
-for (const code of ['JOB_ACT_NOTHING_TO_SUBMIT', 'JOB_STILL_CAMERA_NOT_FIXED', 'JOB_STILL_VIEW_UNSUPPORTED', 'JOB_BODY_LIMIT'])
+for (const code of ['JOB_ACT_NOTHING_TO_SUBMIT', 'JOB_STILL_CAPTURE_FAILED', 'JOB_STILL_BINDING_MISMATCH', 'JOB_BODY_LIMIT'])
 for (const language of ['en', 'ko'] as const) test(`#785 ${code} says NOT submitted and preserves unsent state (${language})`, async () => {
   const f = await jobFixture();
   const front = createJobFront({origin: f.origin, ports: f.ports, resource: async () => ''});

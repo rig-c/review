@@ -197,7 +197,7 @@ test('#557 shared inspection selection refuses partial capture and clearing it r
         h.current.inspection!.select({side:'single',slot:'mesh',mode});
         expect(h.current.inspection!.value()).toMatchObject({slot:'mesh',mode});
         const partial={...h.state(),wholeRig:false};
-        expect(()=>freezeJobRigCapture(recordJobRigDraw(partial,++generation),partial,'ask-1',()=>{throw new Error('partial capture must not copy');})).toThrow('JOB_STILL_VIEW_UNSUPPORTED');
+        expect(()=>freezeJobRigCapture(recordJobRigDraw(partial,++generation),partial,'ask-1',()=>{throw new Error('partial capture must not copy');})).toThrow('JOB_STILL_CAPTURE_FAILED');
         h.current.inspection!.select(null);expect(h.current.inspection!.value()).toBeNull();
         const state=h.state(),capture=await freezeJobRigCapture(recordJobRigDraw(state,++generation),state,'ask-1',()=>{copies++;return {width:1,height:1,encode:async()=> 'data:image/png;base64,ZmFrZQ=='};}).encode();
         expect(capture.frame).toBe(0.375);expect(capture.binding.playerGeneration).toBe(h.current.player!.generation);

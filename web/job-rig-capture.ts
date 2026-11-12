@@ -1,8 +1,10 @@
 import {CanvasRenderer, RigPlayer, type ModelAssets, type PosedFrame} from '@rig-c/play';
 import {assertOriginalPaintingSize} from '../src/parts-comparison.ts';
 import {jobStillByteLimit, type JobRigCapture, type JobUISubmission} from '../src/job-contract.ts';
+import {cameraFrame} from './camera-view.ts';
+import {partBounds} from './part-selection.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
-import {presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
+import {paintPosedViewport, presentJobRigViewport, type JobRigPresentation} from './viewport-capture.ts';
 
 type DrawSource = Pick<JobRigCapture['binding'], 'publicationId' | 'instanceKey' | 'sourceHash' | 'pageId'>;
 export interface JobRigDrawState {
@@ -155,8 +157,8 @@ export function recordJobRigDraw(state: JobRigDrawState, drawGeneration: number)
 /** copy() runs synchronously. The returned encoder owns an already copied bitmap. */
 export function freezeJobRigCapture(draw: JobRigDraw | undefined, state: JobRigDrawState, askId: string,
   copy: () => JobRigPixels): FrozenJobRigCapture {
-  if (!state.defaultCamera) throw new Error('JOB_STILL_CAMERA_NOT_FIXED');
-  if (!state.wholeRig || state.player.slots !== null) throw new Error('JOB_STILL_VIEW_UNSUPPORTED');
+  if (!state.defaultCamera) throw new Error('JOB_STILL_CAPTURE_FAILED');
+  if (!state.wholeRig) throw new Error('JOB_STILL_CAPTURE_FAILED');
   if (!draw || typeof state.player.entry !== 'function') throw new Error('JOB_STILL_CAPTURE_FAILED');
   if (draw.animation !== null && !draw.animation) throw new Error('JOB_STILL_CAPTURE_FAILED');
   if (!matchesDrawState(draw, state)) {
@@ -185,6 +187,62 @@ export function freezeJobRigCapture(draw: JobRigDraw | undefined, state: JobRigD
   }};
 }
 
+/** Conservative PNG budget includes raw RGBA, row filters and deflate overhead. */
+export function jobRigStillSize(requestedWidth:number,requestedHeight:number) {
+ if(![requestedWidth,requestedHeight].every(n=>Number.isFinite(n)&&n>0))throw new Error('JOB_STILL_CAPTURE_FAILED');
+ const scale=Math.min(1,16384/requestedWidth,16384/requestedHeight,
+  Math.sqrt((jobStillByteLimit-65536)/5/(requestedWidth*requestedHeight)));
+ return {width:Math.max(1,Math.floor(requestedWidth*scale)),height:Math.max(1,Math.floor(requestedHeight*scale)),scale};
+}
+
+/** Fixed whole-rig evidence from the held public pose; never mutates the inspection player or DOM. */
+export function freezeJobRigStage(stage: Pick<JobRigStage, 'pane'|'player'|'playing'|'source'> &
+ {readonly assets:ModelAssets|null}, askId:string, drawGeneration:number):FrozenJobRigCapture {
+ const {player,assets}=stage;
+ if(!assets)throw new Error('JOB_STILL_CAPTURE_FAILED');
+ const posed=player.posedFrame(null),bounds=posed.order.map(row=>partBounds(posed,row.slot)).filter(box=>box!==null);
+ const declared=assets.stage;
+ if(declared&&declared.width>0&&declared.height>0)bounds.push(declared);
+ if(!bounds.length)throw new Error('JOB_STILL_CAPTURE_FAILED');
+ const x=Math.min(...bounds.map(b=>b.x)),y=Math.min(...bounds.map(b=>b.y));
+ const box={x,y,width:Math.max(...bounds.map(b=>b.x+b.width))-x,height:Math.max(...bounds.map(b=>b.y+b.height))-y};
+ const ratio=globalThis.devicePixelRatio||1;
+ const requestedWidth=Math.max(1,stage.pane.clientWidth||stage.pane.parentElement?.clientWidth||800)*ratio;
+ const requestedHeight=Math.max(1,stage.pane.clientHeight||stage.pane.parentElement?.clientHeight||800)*ratio;
+ // RGBA plus PNG scanline/deflate overhead fits the unchanged byte cap even for incompressible pixels.
+ const {width,height,scale}=jobRigStillSize(requestedWidth,requestedHeight);
+ const frame=cameraFrame('world',box,width,height,28*ratio*scale,58*ratio*scale);
+ if(!frame)throw new Error('JOB_STILL_CAPTURE_FAILED');
+ const visible={x:frame.center.x-width/frame.baseScale/2,y:frame.center.y-height/frame.baseScale/2,
+  width:width/frame.baseScale,height:height/frame.baseScale};
+ const camera:ControlNumericCamera={space:'world',center:frame.center,zoom:1,viewport:{width,height},visible};
+ const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
+ const context=canvas.getContext('2d');if(!context)throw new Error('JOB_STILL_CAPTURE_FAILED');
+ const renderer=player.renderer;
+ const backend=renderer instanceof CanvasRenderer?renderer.backendActive:renderer.meshBackendActive;
+ const presentation={canvas,width,height,ratio:1,area:{x:0,y:0,width,height}};
+ const state:JobRigDrawState={player,presentation,frameGeneration:posed.generation,source:stage.source,
+  layout:JSON.stringify(camera),defaultCamera:true,wholeRig:true,playing:stage.playing};
+ const draw=recordJobRigDraw(state,drawGeneration);
+ return freezeJobRigCapture(draw,state,askId,()=>{
+  paintPosedViewport(context,posed,assets,camera,backend);
+  if(scale<1)console.info({evidenceStillScale:scale,width,height});
+  return encodeJobRigBitmap(canvas);
+ });
+}
+
+/** The owned bitmap is encoded after the synchronous pose and binding checks. */
+function encodeJobRigBitmap(canvas:HTMLCanvasElement):JobRigPixels {
+ return {width:canvas.width,height:canvas.height,encode:()=>new Promise<string>((resolve,reject)=>{
+  canvas.toBlob(blob=>{
+   if(!blob||blob.size>jobStillByteLimit){reject(new Error('JOB_STILL_CAPTURE_FAILED'));return;}
+   const reader=new FileReader();
+   reader.onload=()=>typeof reader.result==='string'?resolve(reader.result):reject(new Error('JOB_STILL_CAPTURE_FAILED'));
+   reader.onerror=()=>reject(new Error('JOB_STILL_CAPTURE_FAILED'));reader.readAsDataURL(blob);
+  },'image/png');
+ })};
+}
+
 /** One lossless bitmap-copy implementation for job evidence and standalone native rest inspection. */
 function copyRigBitmap(displayed: HTMLCanvasElement, width: number, height: number): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
@@ -208,15 +266,7 @@ export function copyJobRigViewport(presentation: JobRigPresentation): JobRigPixe
     throw new Error('JOB_STILL_CAPTURE_FAILED');
   }
   const canvas = copyRigBitmap(displayed, width, height);
-  return {width, height, encode: () => new Promise<string>((resolve, reject) => {
-    canvas.toBlob(blob => {
-      if (!blob || blob.size > jobStillByteLimit) {reject(new Error('JOB_STILL_CAPTURE_FAILED')); return;}
-      const reader = new FileReader();
-      reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('JOB_STILL_CAPTURE_FAILED'));
-      reader.onerror = () => reject(new Error('JOB_STILL_CAPTURE_FAILED'));
-      reader.readAsDataURL(blob);
-    }, 'image/png');
-  }).catch(() => {throw new Error('JOB_STILL_CAPTURE_FAILED');})};
+  return encodeJobRigBitmap(canvas);
 }
 
 /** Per-form first attempt, including human words and observed generation, survives a lost reply. */

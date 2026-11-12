@@ -120,6 +120,17 @@ function displayedRig(ctx:CanvasRenderingContext2D,capture:ViewportCapture,frame
   ctx.restore();
  }return true;
 }
+/** Shared off-screen rendering for inspection crops and fixed job evidence. */
+export function paintPosedViewport(ctx:CanvasRenderingContext2D,posed:PosedFrame,assets:ModelAssets,
+ camera:ControlNumericCamera,backend:CanvasBackend):void {
+ if(backend==='canvas2d'&&posed.order.some(row=>row.tint.slice(0,3).some(c=>c!==1)||row.dark?.some(c=>c!==0)))throw new Error('COMMENT_CAPTURE_UNAVAILABLE: Canvas2D cannot reproduce active RGB/dark tint');
+ const root=document.createElement('div'),renderer=new CanvasRenderer(root,assets.pageImages);
+ try {
+  renderer.backend=backend;renderer.viewport={...camera.visible};
+  renderer.pixelRatio=camera.viewport.width/camera.visible.width;
+  renderer.render(posed);ctx.drawImage(renderer.canvas,0,0,camera.viewport.width,camera.viewport.height);
+ }finally{renderer.dispose();}
+}
 export function paintInspectionViewport(ctx:CanvasRenderingContext2D,area:MarkRegion,capture:ViewportCapture,pose:{camera:ControlNumericCamera;posed?:PosedFrame;assets?:ModelAssets;media?:HTMLVideoElement|HTMLImageElement}):void {
  if(capture.nearest)ctx.imageSmoothingEnabled=false;
   const overlays=capture.includeOverlays===false?[]:[...capture.pane.querySelectorAll<HTMLCanvasElement>('canvas')].filter(node=>!capture.root?.contains(node)&&node!==capture.canvas).map(node=>displayedPixels(node,capture.pane)).filter((v):v is PixelLayer=>v!==null);
@@ -127,8 +138,7 @@ export function paintInspectionViewport(ctx:CanvasRenderingContext2D,area:MarkRe
    if(capture.canvas){if(capture.strictActualPixels&&getComputedStyle(capture.canvas).filter!=='none')throw new Error('JOB_STILL_CAPTURE_FAILED');const pixels=displayedPixels(capture.canvas,capture.pane,!capture.root?.contains(capture.canvas));if(pixels){ctx.save();ctx.globalAlpha=pixels.opacity;ctx.drawImage(pixels.image,pixels.rect.x,pixels.rect.y,pixels.rect.width,pixels.rect.height);ctx.restore();return;}}
   if(pose.posed&&pose.assets){if(displayedRig(ctx,capture,pose.posed,pose.camera))return;
    if(capture.strictActualPixels)throw new Error('JOB_STILL_CAPTURE_FAILED');
-   if(capture.backend==='canvas2d'&&pose.posed.order.some(row=>row.tint.slice(0,3).some(c=>c!==1)||row.dark?.some(c=>c!==0)))throw new Error('COMMENT_CAPTURE_UNAVAILABLE: Canvas2D cannot reproduce active RGB/dark tint');
-   const root=document.createElement('div'),renderer=new CanvasRenderer(root,pose.assets.pageImages);try{renderer.backend=capture.backend;renderer.viewport={...pose.camera.visible};renderer.pixelRatio=pose.camera.viewport.width/pose.camera.visible.width;renderer.render(pose.posed);ctx.drawImage(renderer.canvas,0,0,pose.camera.viewport.width,pose.camera.viewport.height);}finally{renderer.dispose();}
+   paintPosedViewport(ctx,pose.posed,pose.assets,pose.camera,capture.backend);
    }else if(capture.strictActualPixels){throw new Error('JOB_STILL_CAPTURE_FAILED');
    }else if(pose.media){const media=pose.media,style=getComputedStyle(media),a=media.getBoundingClientRect(),b=capture.pane.getBoundingClientRect();if(!transparent(style.backgroundColor)){ctx.fillStyle=style.backgroundColor;ctx.fillRect(a.left-b.left-capture.pane.clientLeft,a.top-b.top-capture.pane.clientTop,a.width,a.height);}const w=media instanceof HTMLVideoElement?media.videoWidth:media.naturalWidth,h=media instanceof HTMLVideoElement?media.videoHeight:media.naturalHeight,first=projectMark({x:0,y:0},pose.camera),last=projectMark({x:w,y:h},pose.camera);ctx.drawImage(media,first.x,first.y,last.x-first.x,last.y-first.y);
   }else throw new Error('COMMENT_CROP_UNAVAILABLE: this viewport has no rendered pixels');

@@ -5,7 +5,7 @@ import {PNG} from 'pngjs';
 import {readFileSync} from 'node:fs';
 import {restoreStillOracle} from './helpers/job-still-observation.ts';
 import type {JobRigPresentation} from '../web/viewport-capture.ts';
-import {recordJobRigDraw, freezeJobRigCapture, createJobRigSubmission, copyJobRigViewport, jobRigPixelPlacement, jobRigDrawState, type JobRigDrawState} from '../web/job-rig-capture.ts';
+import {jobRigStillSize, recordJobRigDraw, freezeJobRigCapture, createJobRigSubmission, copyJobRigViewport, jobRigPixelPlacement, jobRigDrawState, type JobRigDrawState} from '../web/job-rig-capture.ts';
 
 const firstPng = 'data:image/png;base64,Zmlyc3Q=';
 const laterPng = 'data:image/png;base64,bGF0ZXI=';
@@ -137,11 +137,11 @@ for (const mode of ['pan', 'zoom', 'solo', 'highlight', 'comparison'] as const) 
     else v.state.wholeRig = false;
     expect(() => freezeJobRigCapture(draw, v.state, 'ask-1', () => {
       throw new Error('must not copy');
-    })).toThrow(camera ? 'JOB_STILL_CAMERA_NOT_FIXED' : 'JOB_STILL_VIEW_UNSUPPORTED');
+    })).toThrow('JOB_STILL_CAPTURE_FAILED');
   });
 }
 
-test('#557 UI missing successful draw, unseen pose and active slot filter refuse', () => {
+test('#788 missing draw or unseen pose refuses; slot filter does not mutate during fixed capture', () => {
   const v = view();
   const pixels = () => ({width: 2, height: 2, encode: async () => firstPng});
   expect(() => freezeJobRigCapture(undefined, v.state, 'ask-1', pixels)).toThrow('JOB_STILL_CAPTURE_FAILED');
@@ -150,7 +150,8 @@ test('#557 UI missing successful draw, unseen pose and active slot filter refuse
   v.state.frameGeneration = 7;
   const draw = recordJobRigDraw(v.state, 1);
   v.player.slots = ['body'];
-  expect(() => freezeJobRigCapture(draw, v.state, 'ask-1', pixels)).toThrow('JOB_STILL_VIEW_UNSUPPORTED');
+  expect(() => freezeJobRigCapture(draw, v.state, 'ask-1', pixels)).not.toThrow();
+  expect(v.player.slots).toEqual(['body']);
 });
 
 test('#557 UI draw mutation during synchronous copy refuses', () => {
@@ -555,7 +556,7 @@ test('#559 UI refuses capture before and after synchronous pixel copy when playi
 test('#630 shared screen refuses hidden images and Difference while capture excludes mesh/bone overlays', () => {
   canonicalLayout(1, fixture => {
     const draw=recordJobRigDraw(fixture.read(),1);
-    const refuse=()=>{expect(fixture.read().wholeRig).toBe(false);expect(()=>freezeJobRigCapture(draw,fixture.read(),'ask-1',()=>{throw new Error('must refuse before pixel copy');})).toThrow('JOB_STILL_VIEW_UNSUPPORTED');};
+    const refuse=()=>{expect(fixture.read().wholeRig).toBe(false);expect(()=>freezeJobRigCapture(draw,fixture.read(),'ask-1',()=>{throw new Error('must refuse before pixel copy');})).toThrow('JOB_STILL_CAPTURE_FAILED');};
     fixture.layers.images=false;refuse();fixture.layers.images=true;
     for(const key of ['mesh','bones'] as const){fixture.layers[key]=true;expect(fixture.read().wholeRig).toBe(true);fixture.layers[key]=false;}
     fixture.setDifference(true);refuse();fixture.setDifference(false);expect(fixture.read().wholeRig).toBe(true);
@@ -631,3 +632,12 @@ test('#739 standalone rest canvas uses the declared native stage and refuses inf
   expect(() => rigRestCanvas({stage: {...stage, x: .5}}, {width: 1920, height: 1080})).toThrow('PARTS_PAINTING_MAPPING');
   expect(() => rigRestCanvas({stage: {...stage, width: 16385}}, {width: 16385, height: 1080})).toThrow('PARTS_PAINTING_MAPPING');
 });
+
+for(const [requestedWidth,requestedHeight] of [[1534,1540],[7680,4320],[20000,1],[1,20000]]) {
+ test(`#788 ${requestedWidth}x${requestedHeight} evidence downscales below the existing byte and dimension bounds`,()=>{
+  const size=jobRigStillSize(requestedWidth,requestedHeight);
+  expect(size.width*size.height*5+65536).toBeLessThanOrEqual(8*1024*1024);
+  expect(size.width).toBeLessThanOrEqual(16384);expect(size.height).toBeLessThanOrEqual(16384);
+  expect(size.scale).toBeLessThanOrEqual(1);expect(size.width).toBeGreaterThan(0);expect(size.height).toBeGreaterThan(0);
+ });
+}
