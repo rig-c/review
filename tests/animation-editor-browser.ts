@@ -740,6 +740,21 @@ async function captureDockEvidence(session: CdpSession, directory: string, phase
   await session.evaluate(`(async () => { const select = document.getElementById('settings-language'); select.value = 'en'; select.dispatchEvent(new Event('change')); await new Promise(resolve => setTimeout(resolve, 100)); })()`);
 }
 
+// Read geometry only: resizing is driven through the shared separator's pointer handlers.
+async function measureBottomPanel(session: CdpSession) {
+  return session.evaluate<{ height: number; visibleRows: number }>(`(() => {
+    const dock = document.querySelector('.inspector').getBoundingClientRect();
+    const lanes = document.querySelector('.animation-lanes').getBoundingClientRect();
+    const ruler = document.querySelector('[data-animation-ruler]').getBoundingClientRect();
+    const rows = [...document.querySelectorAll('.animation-lanes .animation-lane, .animation-lanes .animation-readonly-lane')];
+    return { height: dock.height, visibleRows: rows.filter(el => {
+      const r = el.getBoundingClientRect();
+      return r.height > 0 && r.top >= Math.max(ruler.bottom, lanes.top, dock.top) - 1.5 &&
+        r.bottom <= Math.min(lanes.bottom, dock.bottom, innerHeight) + 1.5;
+    }).length };
+  })()`);
+}
+
 async function main() {
   const root = await mkdtemp(join(tmpdir(), 'review-anim-browser-'));
   const profileDir = join(root, 'chrome-profile');
@@ -753,7 +768,7 @@ async function main() {
   const session = await launchCdpSession(profileDir);
 
   try {
-    // #741 rules on the shared 262px default at 1600x1000; measure that viewport.
+    // #781 measures the existing shared panel at 1600x1000 before user resizing.
     await session.setViewport(1600, 1000);
     await session.goto(`http://127.0.0.1:${server.port}`);
 
@@ -794,6 +809,36 @@ async function main() {
     }
 
     if (screenshotDir) await captureDockEvidence(session, screenshotDir, 'default');
+    const defaultPanel = await measureBottomPanel(session);
+    const separator = await session.evaluate<{ x: number; y: number }>(`(() => {
+      const r = document.querySelector('.workspace-inspectorHeight[role="separator"]').getBoundingClientRect();
+      if (!r.width || !r.height) throw new Error('Bottom-panel separator is not visible');
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`);
+    await session.dispatchMouseEvent({ type: 'mouseMoved', ...separator });
+    await session.dispatchMouseEvent({ type: 'mousePressed', ...separator, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseMoved', x: separator.x, y: separator.y - 100, button: 'left', buttons: 1 });
+    await session.dispatchMouseEvent({ type: 'mouseReleased', x: separator.x, y: separator.y - 100, button: 'left', buttons: 0 });
+    await Bun.sleep(100);
+    const resizedPanel = await measureBottomPanel(session);
+    if (resizedPanel.height <= defaultPanel.height || resizedPanel.visibleRows < 3) {
+      throw new Error(`User resize failed: ${JSON.stringify({ defaultPanel, resizedPanel })}`);
+    }
+    if (screenshotDir) await captureDockEvidence(session, screenshotDir, 'user-resized');
+
+    // The shared workspace already persists the committed size; verify a real navigation reload.
+    await session.goto(`http://127.0.0.1:${server.port}`);
+    await session.evaluate(`(async () => {
+      for (let i = 0; i < 400; i++) {
+        if (window.rigReviewEditor?.animation?.source()?.available && document.querySelector('[data-animation-ruler]')) return;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      throw new Error('Animation editor did not become ready after reload');
+    })()`);
+    const reloadedPanel = await measureBottomPanel(session);
+    if (Math.abs(reloadedPanel.height - resizedPanel.height) > 1) {
+      throw new Error(`Reload changed user panel height: ${JSON.stringify({ resizedPanel, reloadedPanel })}`);
+    }
 
     // Slice 3b Bar 1, Bar 2, Bar 7: Verify at 1600x1000 with zero page/inspector scroll:
     // - stage is visible above the dock
@@ -807,7 +852,7 @@ async function main() {
       inspectorScrollTop: number;
       stageRect: { top: number; bottom: number; height: number };
       dockRect: { top: number; bottom: number; height: number };
-      visibleLanesAtDefaultHeight: number;
+      visibleLanesAfterUserResize: number;
       totalLanesOnTilt: number;
       allInViewport: boolean;
       rects: Record<string, { left: number; top: number; right: number; bottom: number; width: number; height: number } | null>;
@@ -859,7 +904,7 @@ async function main() {
       const dockBox = document.querySelector('.inspector').getBoundingClientRect();
       const rulerBox = document.querySelector('[data-animation-ruler]').getBoundingClientRect();
       const allLaneEls = [...document.querySelectorAll('.animation-lanes .animation-lane, .animation-lanes .animation-readonly-lane')];
-      const visibleLanesAtDefaultHeight = allLaneEls.filter((el) => {
+      const visibleLanesAfterUserResize = allLaneEls.filter((el) => {
         const lr = el.getBoundingClientRect();
         return lr.height > 0 && lr.top >= rulerBox.bottom - 1.5 && lr.bottom <= Math.min(lanesBox.bottom, dockBox.bottom) + 1.5;
       }).length;
@@ -876,7 +921,7 @@ async function main() {
         inspectorScrollTop: inspPanel?.scrollTop ?? -1,
         stageRect: rects.stage,
         dockRect: rects.dock,
-        visibleLanesAtDefaultHeight,
+        visibleLanesAfterUserResize,
         totalLanesOnTilt: allLaneEls.length,
         allInViewport,
         rects,
@@ -887,8 +932,7 @@ async function main() {
       };
     })()`);
 
-    // #741 supersedes #258's 350px default: the shared 262px panel shows three rows.
-    // Keep the stage, controls and unscrolled-page checks; do not enlarge the product for this fixture.
+    // #781: preserve stage/control checks after the user enlarges the existing bottom panel.
     if (
       slice3bDockCheck.viewportWidth !== 1600 ||
       slice3bDockCheck.viewportHeight !== 1000 ||
@@ -1451,6 +1495,11 @@ async function main() {
       await writeFile(join(screenshotDir, 'slice3-applied-cumulative.png'), await session.screenshot());
     }
 
+    const postApplyPanel = await measureBottomPanel(session);
+    if (Math.abs(postApplyPanel.height - resizedPanel.height) > 1) {
+      throw new Error(`Apply changed user panel height: ${JSON.stringify({ resizedPanel, postApplyPanel })}`);
+    }
+
     // Bar 8 + Slice 3c Bar 4: Producer/compiler refusal verbatim (t > duration -> CE_COMPILE_KEY_AFTER_DURATION),
     // readable in full without hovering, and 0 px shift of stage and lanes!
     const bar8Result = await session.evaluate<{
@@ -1678,12 +1727,12 @@ async function main() {
     }
 
     // Bar 7 + Slice 3c Bar 3 & Bar 4 on 'hello': U2 measurement (MAX_ANIMATION_OPS = 200 on 'hello': 16 tracks × 115 keys = 1,840 keys),
-    // visible lanes >= 3 at the shared 262px default height (#741), and ANIMATION_OPS_TOO_MANY + dense-track refusal readable in full with 0 px shift!
+    // visible lanes >= 3 after user resizing (#781), and ANIMATION_OPS_TOO_MANY + dense-track refusal readable in full with 0 px shift!
     const bar7Result = await session.evaluate<{
       totalTracks: number;
       editableTracks: number;
       readOnlyTracks: number;
-      visibleHelloLanesAtDefaultHeight: number;
+      visibleHelloLanesAfterUserResize: number;
       layout: { dock: unknown; lanes: unknown; ruler: unknown; laneRects: unknown[] };
       move115Ok: boolean;
       move115OpsCount: number;
@@ -1730,7 +1779,7 @@ async function main() {
       const rulerBox = document.querySelector('[data-animation-ruler]').getBoundingClientRect();
       const visibleBottom = Math.min(lanesBox.bottom, dockBox.bottom);
       const allHelloLanes = [...document.querySelectorAll('.animation-lanes .animation-lane, .animation-lanes .animation-readonly-lane')];
-      const visibleHelloLanesAtDefaultHeight = allHelloLanes.filter((el) => {
+      const visibleHelloLanesAfterUserResize = allHelloLanes.filter((el) => {
         const lr = el.getBoundingClientRect();
         return lr.height > 0 && lr.top >= rulerBox.bottom - 1.5 && lr.bottom <= visibleBottom + 1.5;
       }).length;
@@ -1792,7 +1841,7 @@ async function main() {
         totalTracks: clss.length,
         editableTracks: editable.length,
         readOnlyTracks: readOnly.length,
-        visibleHelloLanesAtDefaultHeight,
+        visibleHelloLanesAfterUserResize,
         layout: { dock: rectOf('.inspector'), lanes: lanesBefore, ruler: rectOf('[data-animation-ruler]'), laneRects: allHelloLanes.slice(0, 4).map((el) => ({top: el.getBoundingClientRect().top, bottom: el.getBoundingClientRect().bottom})) },
         move115Ok: res115.ok,
         move115OpsCount,
@@ -1818,12 +1867,12 @@ async function main() {
     }
 
     if (
-      // Defer the default row-count failure until the post-Apply evidence is recorded.
-      slice3bDockCheck.visibleLanesAtDefaultHeight < 3 ||
+      // Keep row visibility checks on the user-sized panel, including the post-Apply clip.
+      slice3bDockCheck.visibleLanesAfterUserResize < 3 ||
       bar7Result.totalTracks !== 16 ||
       bar7Result.editableTracks !== 14 ||
       bar7Result.readOnlyTracks !== 2 ||
-      bar7Result.visibleHelloLanesAtDefaultHeight < 3 ||
+      bar7Result.visibleHelloLanesAfterUserResize < 3 ||
       !bar7Result.move115Ok ||
       bar7Result.move115OpsCount !== 115 ||
       !bar7Result.move196Ok ||
@@ -1840,7 +1889,7 @@ async function main() {
       bar7Result.stageShiftPxOnCapRefusal !== 0 ||
       bar7Result.lanesShiftPxOnCapRefusal !== 0
     ) {
-      throw new Error(`Bar 7 / Slice 3c Bar 3/4 verification failed (default visible rows: ${slice3bDockCheck.visibleLanesAtDefaultHeight}): ${JSON.stringify(bar7Result, null, 2)}`);
+      throw new Error(`Bar 7 / Slice 3c Bar 3/4 verification failed (user-resized visible rows: ${slice3bDockCheck.visibleLanesAfterUserResize}): ${JSON.stringify(bar7Result, null, 2)}`);
     }
 
     // Slice 3b Bar 3, Bar 4, Bar 9 on 'hello' (16 lanes × 115 keys):
@@ -3228,6 +3277,7 @@ async function main() {
       JSON.stringify(
         {
           ok: true,
+          userPanelSize: { defaultPanel, resizedPanel, postApplyPanel, reloadedPanel },
           slice4c: {
             shiftHoldCountAfterAdd,
             shiftHoldCountAfterThird,
@@ -3291,7 +3341,7 @@ async function main() {
             allInViewport: slice3bDockCheck.allInViewport,
             stageRect: slice3bDockCheck.stageRect,
             dockRect: slice3bDockCheck.dockRect,
-            visibleLanesAtDefaultHeight: slice3bDockCheck.visibleLanesAtDefaultHeight,
+            visibleLanesAfterUserResize: slice3bDockCheck.visibleLanesAfterUserResize,
             totalLanesOnTilt: slice3bDockCheck.totalLanesOnTilt,
             axisText: slice3bDockCheck.axisText,
             hasFloat32Noise: slice3bDockCheck.hasFloat32Noise,
