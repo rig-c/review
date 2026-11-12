@@ -1,4 +1,9 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+  "job.imageNoParts": "Image sets have no parts or compiled rig editing tools.",
+  "job.imageWaiting": "Wait for a pending image review request and for the images to finish loading before submitting.",
+  "job.imageSubmitting": "The image review is being submitted.",
+  "Comment · C": "Comment · C",
+
   'JOB_IMAGE_COMMENT_OUTSIDE': 'Mark a point or region inside one image.',
   "project.json": "project.json",
   'job.commentsFromWorkspace': 'Comments from the workspace are included. Close this request to add or edit comments.',

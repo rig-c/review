@@ -1,4 +1,9 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+  "job.imageNoParts": "이미지 세트에는 파츠나 컴파일된 리그 편집 도구가 없습니다.",
+  "job.imageWaiting": "대기 중인 이미지 검토 요청이 있고 이미지 로딩이 끝나야 제출할 수 있습니다.",
+  "job.imageSubmitting": "이미지 검토를 제출하고 있습니다.",
+  "Comment · C": "코멘트 · C",
+
   'JOB_IMAGE_COMMENT_OUTSIDE': '이미지 하나 안에서 점이나 영역을 지정해 주세요.',
   "project.json": "project.json",
   'job.commentsFromWorkspace': '작업 공간의 코멘트를 함께 제출해요. 코멘트를 추가하거나 고치려면 이 요청을 닫으세요.',

@@ -28,6 +28,8 @@ export function restoreActiveBlocksUI(ui:DraftUI):ActiveBlocks {return parseActi
 export interface InspectorBlocksOptions {
  /** Sections carrying `data-inspector-panel`, each with a `.block-row` first child (or a child panel that has one). */
  sections:HTMLElement[];
+ /** Subject capabilities hide inapplicable existing tabs before binding keyboard navigation. */
+ available?:readonly string[];
  /** Called when a click or a key changes a section's active tab. */
  changed?:()=>void;
  /** The rig reuses its block rows in the heading, with one shared Comments tab. */
@@ -57,11 +59,12 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
   for(const button of row.querySelectorAll<HTMLButtonElement>('button[data-block-target]')){
    const id=button.dataset.blockTarget??'',panel=inside(id);if(!panel)continue;
    const included=(button.dataset.blockIncludes??'').split(' ').map(inside).filter((node):node is HTMLElement=>!!node);
+   if(options.available&&!options.available.includes(id)){button.hidden=true;button.disabled=true;panel.hidden=true;for(const node of included)node.toggleAttribute('data-block-hidden',true);continue;}
    tabs.push({button,id,panel,included});
   }
-  if(!tabs.length)continue;
+  if(!tabs.length&&!options.bottom)continue;
   if(options.bottom){
-   definitions.set(name,{section,row,scrollRoot,tabs});saved[name]=tabs.find(tab=>tab.button.getAttribute('aria-selected')==='true')?.id??tabs[0]!.id;
+   definitions.set(name,{section,row,scrollRoot,tabs});saved[name]=tabs.find(tab=>tab.button.getAttribute('aria-selected')==='true')?.id??tabs[0]?.id??'feedback';
    row.hidden=true;options.bottom.strip.append(row);continue;
   }
   ids.set(name,new Set(tabs.map(tab=>tab.id)));

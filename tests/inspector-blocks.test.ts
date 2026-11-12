@@ -88,6 +88,7 @@ class Node {
  children:Node[]=[];parent:Node|null=null;dataset:Record<string,string>={};classes=new Set<string>();attrs=new Map<string,string>();tag:string;
  doc:{getElementById(id:string):Node|null;activeElement:Node|null}|null=null;textContent='';
  /** Form state the page's modules keep in the DOM: a value, a checked box, an open details. Writes are logged. */
+ disabled=false;
  #value='';#checked=false;#open=false;#hidden=false;#tabIndex=-1;#scrollTop=0;
  get value(){return this.#value;}set value(v:string){Node.log.push({node:this,what:'value'});this.#value=v;}
  get checked(){return this.#checked;}set checked(v:boolean){Node.log.push({node:this,what:'checked'});this.#checked=v;}
@@ -120,7 +121,7 @@ class Node {
 interface FakeEvent {type:string;target:Node;key:string;defaultPrevented:boolean;preventDefault():void}
 
 /** The fake page built from the real index.html: the two Inspector sections, every element in them, attributes and all. */
-async function openPage(changedFn?:()=>void,bottomMode=false){
+async function openPage(changedFn?:()=>void,bottomMode=false,available?:readonly string[]){
  const html=await indexHtml(),page=new Node('body'),doc={getElementById:(id:string)=>page.all().find(n=>n.id===id)??null,activeElement:null as Node|null};page.doc=doc;
  for(const id of ['inspector-rig','inspector-playback']){
   const at=html.indexOf(` id="${id}"`),open=html.lastIndexOf('<',at);const stack:Node[]=[page];
@@ -136,7 +137,7 @@ async function openPage(changedFn?:()=>void,bottomMode=false){
  const section=(id:string)=>doc.getElementById(id)!;let changed=0;
  const strip=new Node('nav'),comment=new Node('button'),panel=new Node('section');comment.setAttribute('id','workspace-tab-feedback');panel.setAttribute('id','inspector-feedback');page.append(strip,panel);
  Node.log=[];
- const ui=bindInspectorBlocks({sections:[section('inspector-rig') as unknown as HTMLElement,section('inspector-playback') as unknown as HTMLElement],...(bottomMode?{bottom:{strip:strip as unknown as HTMLElement,comment:comment as unknown as HTMLButtonElement,panel:panel as unknown as HTMLElement}}:{}),changed:()=>{changed++;changedFn?.();}});
+ const ui=bindInspectorBlocks({available,sections:[section('inspector-rig') as unknown as HTMLElement,section('inspector-playback') as unknown as HTMLElement],...(bottomMode?{bottom:{strip:strip as unknown as HTMLElement,comment:comment as unknown as HTMLButtonElement,panel:panel as unknown as HTMLElement}}:{}),changed:()=>{changed++;changedFn?.();}});
  const tab=(target:string)=>doc.getElementById(`block-tab-${target}`)!;
  const shown=(container:string)=>section(container).children.filter(n=>n.attrs.get('role')==='tabpanel'&&!n.hidden).map(n=>n.id);
  const selected=(container:string)=>section(container).all().filter(n=>n.attrs.get('role')==='tab'&&n.attrs.get('aria-selected')==='true').map(n=>n.dataset.blockTarget);
@@ -321,4 +322,14 @@ test('#735 header mode swaps existing block rows and one Comments tab, preservin
  app.ui.activate('playback');expect(app.ui.state().playback).toBe('physics-panel');
  app.ui.restore({rig:'feedback',playback:'report-panel'});expect(app.ui.state()).toEqual({rig:'feedback',playback:'report-panel'});app.ui.activate('rig');expect(app.panel.hidden).toBe(false);
  expect(app.page.all().filter(n=>n.id==='workspace-tab-feedback')).toHaveLength(1);app.ui.dispose();
+});
+
+
+test('#772 image subjects retain only the shared Comments tab and its keyboard path',async()=>{
+ const app=await openPage(undefined,true,['feedback']);
+ expect(app.ui.state()['rig']).toBe('feedback');expect(app.shown('inspector-rig')).toEqual([]);
+ for(const target of app.page.all().filter(node=>node.dataset.blockTarget&&node.dataset.blockTarget!=='feedback')){expect(target.hidden).toBe(true);expect(target.disabled).toBe(true);}
+ app.comment.key('Home');app.comment.key('End');app.comment.key('ArrowRight');
+ expect(app.ui.state()['rig']).toBe('feedback');expect(app.panel.hidden).toBe(false);
+ app.ui.dispose();
 });

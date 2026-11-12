@@ -335,6 +335,7 @@ test('stage comments (#276) switch live between en and ko including hints, refus
  doc.documentElement=new Node();
  for(const [k,v]of Object.entries({document:doc,window:win,requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{}})){saved.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;}
  setLanguagePreference('en');
+ let meshShortcutActive=false;
  const tool=bindStageComments({
   toolbar:toolbar as any,
   viewports:{rig:pane as any},
@@ -348,13 +349,15 @@ test('stage comments (#276) switch live between en and ko including hints, refus
   changed:()=>{},
   error:()=>{},
   refusal:()=>refusalReason,
-  blocked:()=>false,
+  blocked:()=>false,shortcutBlocked:()=>meshShortcutActive,
  });
  try{
   const list=workspace.children.find(n=>n.id==='stage-comment-list')!;
   const refusalNote=toolbar.children.find(n=>n.id==='stage-comment-refusal')!;
   expect(toggle.textContent).toBe('Comment · C (1)');
-  expect(toggle.title).toBe('Comment · C (active mesh editor keeps C)');
+  expect(toggle.title).toBe('Comment · C');
+  meshShortcutActive=true;tool.refresh();expect(toggle.title).toBe('Comment · C (active mesh editor keeps C)');
+  meshShortcutActive=false;tool.refresh();expect(toggle.title).toBe('Comment · C');
 
   // Open existing comment in composer and type an in-progress draft edit.
   const rowBtn=list.children.find(n=>n.className==='stage-comment-item')!.children[0]!;
@@ -368,7 +371,9 @@ test('stage comments (#276) switch live between en and ko including hints, refus
   // Switch live to Korean: composer stays open, draft text is untouched, UI chrome and pin aria-label translate, while reviewer summary "Reset" stays untouched.
   setLanguagePreference('ko');
   expect(toggle.textContent).toBe('코멘트 · C (1)');
-  expect(toggle.title).toBe('코멘트 · C (활성 메시 편집기가 C 키를 사용함)');
+  expect(toggle.title).toBe('코멘트 · C');
+  meshShortcutActive=true;tool.refresh();expect(toggle.title).toBe('코멘트 · C (활성 메시 편집기가 C 키를 사용함)');
+  meshShortcutActive=false;tool.refresh();expect(toggle.title).toBe('코멘트 · C');
   expect(list.getAttribute('aria-label')).toBe('스테이지 코멘트');
   expect(list.children[0]!.textContent).toBe('코멘트 목록');
   expect(composer.getAttribute('aria-label')).toBe('코멘트 작성기');
