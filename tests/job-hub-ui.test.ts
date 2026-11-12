@@ -66,10 +66,10 @@ test('retained frame geometry and child visibility integration preserve inspecti
   expect(owner).toContain('createRetainedFrameStage<Frame>');
   expect(owner).not.toContain('connectLiveWindow');
   const child = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
-  const start = child.indexOf('    const hubVisibility =');
-  const handler = child.slice(start, child.indexOf('    };', start) + '    };'.length);
-  expect(handler).toContain("globalThis.parent, hubBinding(), 'visibility'");
-  expect(handler).toContain('pauseHiddenHubFrame()');
+  const start = child.indexOf('    const visibility=');
+  const handler = child.slice(start, child.indexOf('\n', start));
+  expect(handler).toContain("globalThis.parent,binding(),'visibility'");
+  expect(handler).toContain('events?.visibility(event.data.visible)');
   for (const forbidden of ['saveDraft(', 'fitCamera(', 'window.stop(', 'pose(', 'time =', 'panel =', 'selectedPart =']) {
     expect(handler).not.toContain(forbidden);
   }

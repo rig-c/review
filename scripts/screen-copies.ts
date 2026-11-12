@@ -71,7 +71,7 @@ export const ROWS: readonly CopyRow[] = [
   {name: 'entry HTML web/job-hub.html', step: '6', ceiling: 0, files: ['web/job-hub.html']},
   {name: 'entry HTML web/owner-workspace.html', step: '6', ceiling: 0, files: ['web/owner-workspace.html']},
   {name: 'entry HTML files besides web/index.html', step: '2-6', ceiling: 1, fileGlob: {pattern: /^web\/[^/]+\.html$/u, except: ['web/index.html']}},
-  {name: 'inline HTML document in src/job-front.ts', step: '5', ceiling: 1, matchers: [
+  {name: 'inline HTML document in src/job-front.ts', step: '5', ceiling: 0, matchers: [
     {pattern: /<!doctype html/giu, files: ['src/job-front.ts'], plant: "\nconst planted = '<!doctype html>';\n", plantIn: 'src/job-front.ts'},
   ]},
   layoutRow('legacyPartsStep2', '2', 0),
@@ -93,10 +93,10 @@ export const ROWS: readonly CopyRow[] = [
   {name: 'per-screen CSS web/job-hub.css', step: '6', ceiling: 0, files: ['web/job-hub.css']},
   {name: 'per-screen CSS web/owner-workspace.css', step: '6', ceiling: 0, files: ['web/owner-workspace.css']},
   {name: 'CSS files besides web/styles.css', step: '2-6', ceiling: 1, fileGlob: {pattern: /^web\/[^/]+\.css$/u, except: ['web/styles.css']}},
-  {name: 'job fixed row grid-template-rows:250px in .job-inspection', step: '5', ceiling: 1, matchers: [
+  {name: 'job fixed row grid-template-rows:250px in .job-inspection', step: '5', ceiling: 0, matchers: [
     {pattern: /grid-template-rows\s*:\s*250px\b/gu, files: ['web/styles.css'], cssSelector: /\.job-inspection\b/u, plant: '\n.job-window .job-inspection{grid-template-rows:250px}\n', plantIn: 'web/styles.css'},
   ]},
-  {name: 'job parts and plan fixed columns in web/styles.css', step: '5', ceiling: 1, matchers: [
+  {name: 'job parts and plan fixed columns in web/styles.css', step: '5', ceiling: 0, matchers: [
     {pattern: /grid-template-columns\s*:/gu, files: ['web/styles.css'], cssSelector: /\.job-inspection\[data-job-(?:parts|plan)-workspace\]/u, plant: '\n.job-window .job-inspection[data-job-plan-workspace]{grid-template-columns:1fr 1fr}\n', plantIn: 'web/styles.css'},
   ]},
   {name: 'job inline layer toggles (layerShortcuts loop)', step: '5', ceiling: 0, matchers: [

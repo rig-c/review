@@ -21,7 +21,6 @@ import {
 } from './job-source.ts';
 import { JobError } from './job-store.ts';
 import { checkedPath, readRegular } from './interview-project.ts';
-import { prepareJobImageSet } from './job-image-set.ts';
 import {validatePngBytes} from './comment-crops.ts';
 
 function words(value: unknown): string {
@@ -101,16 +100,6 @@ export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRet
     return bindJobRecordAsk(subject, retained);
   }
   const source = structuredClone(retained.source);
-  if (source.subject === 'image-set') {
-    if (subject.kind !== 'review-verdict' || subject.stage !== 'image-review') throw new JobError('JOB_ASK_INVALID');
-    const identity = prepareJobImageSet(source.imageSet,
-      path => readRegular(checkedPath(retained.root.path, path), 64 * 1024 * 1024));
-    if (requestDigest(identity) !== requestDigest({imageSet: source.imageSet,
-      imageSetDigest: source.imageSetDigest, duplicateHashes: source.duplicateHashes})) {
-      throw new JobError('JOB_SOURCE_MISMATCH');
-    }
-    return {...source, ...identity};
-  }
   const declared = retained.subjects.some(candidate => requestDigest(candidate) === requestDigest(subject));
   switch (subject.kind) {
     case 'interview-picks': {
@@ -198,7 +187,7 @@ export function prepareJobStill(input: UISubmissionV3, ask: JobPendingAsk, retai
   } else {
     if (typeof frame !== 'number' || !Number.isFinite(frame) || frame < 0 ||
         typeof capture.animation !== 'string' || !capture.animation || capture.animation.length > 512 ||
-        retained.source.subject === 'image-set' || !retained.source.model) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+        !retained.source.model) throw new JobError('JOB_STILL_CAPTURE_FAILED');
     const model = JSON.parse(readRegular(checkedPath(retained.snapshotRoot, retained.source.model.path), 64 * 1024 * 1024).toString('utf8'));
     const clip = model.animations?.find((item: {name: string; duration: number}) => item.name === capture.animation);
     if (!clip || !Number.isFinite(clip.duration) || frame > clip.duration) throw new JobError('JOB_STILL_CAPTURE_FAILED');
@@ -514,29 +503,6 @@ export function finalizeJobAct(options: {
   };
   // Image-review and interview-picks keep act@2: Create refuses both under act@6.
   const comments = {...envelope, schema: JOB_COMMENTS_ACT_SCHEMA};
-  if (source.subject === 'image-set') {
-    if (submission.kind !== 'review-verdict' || ask.subject.kind !== 'review-verdict' ||
-        ask.subject.stage !== 'image-review') throw new JobError('JOB_ACT_INVALID');
-    const value = jobObject(submission.value, ['stage', 'verdict', 'words', 'imageNotes']);
-    if (value.stage !== 'image-review') throw new JobError('JOB_ACT_INVALID');
-    let imageNotes: {name: string; words: string}[] | undefined;
-    if (value.imageNotes !== undefined) {
-      if (!Array.isArray(value.imageNotes) || value.imageNotes.length > source.imageSet.images.length) {
-        throw new JobError('JOB_ACT_INVALID');
-      }
-      const names = new Set<string>();
-      imageNotes = value.imageNotes.map(raw => {
-        const note = jobObject(raw, ['name', 'words']);
-        if (typeof note.name !== 'string' || names.has(note.name) ||
-            !source.imageSet.images.some(image => image.name === note.name)) throw new JobError('JOB_ACT_INVALID');
-        names.add(note.name);
-        return {name: note.name, words: words(note.words)};
-      });
-    }
-    return {...envelope, kind: 'review-verdict', source, value: {stage: 'image-review',
-      verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), words: words(value.words),
-      ...(imageNotes === undefined ? {} : {imageNotes})}};
-  }
   switch (submission.kind) {
     case 'interview-picks': {
       const value = jobObject(submission.value, ['questionId', 'selections', 'note']);

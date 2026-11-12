@@ -101,3 +101,25 @@ test('held physics steps at 60 Hz across refresh rates and at the clip end witho
   expect(count).toBe(60);
  }
 });
+
+// #774: retired text-input precision stays at the published player boundary.
+test('#559 successor preserves full-precision seek and paused samples at the player level',async()=>{
+ const loaded=await loadSetupAssets(await model());
+ const p=new RigPlayer(setupRoot(),loaded.assets,{mode:'canvas'});
+ try{
+  p.play('inspect',{loop:true});
+  for(const value of [0.123456789012345,1.3322676295501878e-15,0.999999999999999]){
+   p.seek(value);expect(p.entry(0)!.animationTime).toBe(value);
+   p.hold(true);const held=p.entry(0)!.animationTime;p.draw();p.draw();expect(p.entry(0)!.animationTime).toBe(held);
+  }
+ }finally{p.dispose();loaded.dispose();}
+});
+
+test('#559 successor uses the shared immediate-seek input binding without a deferred change handler',async()=>{
+ const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+ const binding=main.match(/input\('scrub'\)\.oninput = \(\) => \{[^}]+\};/)![0];
+ const calls:string[]=[],scrub={value:'0.375',oninput:null as null|(()=>void)};
+ new Function('input','pause','seek',binding)(()=>scrub,()=>calls.push('pause'),(value:number)=>calls.push('seek:'+value));
+ scrub.oninput!();expect(calls).toEqual(['pause','seek:0.375']);expect(scrub.value).toBe('0.375');
+ expect(main).not.toContain("input('scrub').onchange");
+});

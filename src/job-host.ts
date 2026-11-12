@@ -221,7 +221,6 @@ export type {
   UISubmissionV3,
 } from './job-contract.ts';
 
-export {assertJobImageSetCapability} from './job-image-set.ts';
-export type {JobCapabilities, JobImageSetInput, JobImageSet, JobImageSourceBinding, JobModelSourceBinding, JobModelReviewValue, JobImageReviewValue} from './job-contract.ts';
+export type {JobCapabilities, JobModelSourceBinding, JobModelReviewValue} from './job-contract.ts';
 
 export type {JobCheckpointEvidence, JobCheckpointTable} from './job-contract.ts';

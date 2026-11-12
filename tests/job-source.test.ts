@@ -440,7 +440,6 @@ const golden606 = {
     "JOB_RECORD_ACT_SCHEMA",
     "JOB_RECORD_READER_ID",
     "JOB_RESERVED_ACT_KINDS",
-    "assertJobImageSetCapability",
     "parseRecordAct",
     "prepareJobRecordAct",
     "prepareJobRecordSource",
