@@ -42,6 +42,17 @@ export function jobWindowRefusal(error: unknown, fallback = 'JOB_WINDOW_FAILED')
     }
     return t(fallback);
 }
+/** Submission copy and its diagnostic title share the existing catalog refusal registry. */
+export function jobSubmissionRefusal(error: unknown): {code: string; text: string; title: string} {
+    const message = error instanceof Error ? error.message : error;
+    const code = typeof message === 'string' && /^JOB_[A-Z_]+$/.test(message) ? message : 'JOB_ACT_INVALID';
+    const key = 'job.submit.' + code;
+    const reason = Object.hasOwn(enCatalog, key) && Object.hasOwn(koCatalog, key) ? key : 'job.submit.refused';
+    const origin = error instanceof Error && typeof error.cause === 'string' ? error.cause : 'client: submission';
+    const title = code + ' · ' + origin;
+    if (code === 'JOB_BODY_LIMIT' || reason === 'job.submit.refused') console.warn(title);
+    return {code, title, text: t('Review was not submitted: {0}', [t(reason)])};
+}
 export interface JobWindowTransport {
     readPublication(publicationId: string, signal?: AbortSignal): Promise<JobResult<DisplayPublicationV3>>;
     acknowledge(input: {
@@ -82,13 +93,14 @@ export interface JobWindowState {
     readonly preparing: boolean;
     readonly closed: boolean;
     readonly error: string | null;
+    readonly errorOrigin?: string;
     readonly previousLabel: string | null;
     readonly pending: readonly JobWindowAsk[];
     readonly retainedDrafts: readonly JobRetainedDraft[];
 }
 function unwrap<Value>(result: JobResult<Value>): Value {
     if (!result.ok)
-        throw new Error(result.error.code);
+        throw new Error(result.error.code, {cause: (result.error as {cause?: unknown}).cause});
     return result.value;
 }
 function isRecordSource(source: SourceV3): source is RecordSource {
@@ -191,6 +203,7 @@ export function createJobWindow<Prepared>(options: {
     let preparing = false;
     let closed = false;
     let error: string | null;
+    let errorOrigin: string | undefined;
     error = null;
     let previousLabel: string | null = null;
     let intent = 0;
@@ -199,7 +212,7 @@ export function createJobWindow<Prepared>(options: {
     let queue = Promise.resolve();
     function state(): JobWindowState {
         return {
-            generation, displayed, receipt, preparing, closed, error, previousLabel,
+            generation, displayed, receipt, preparing, closed, error, previousLabel, ...(errorOrigin ? {errorOrigin} : {}),
             pending: [...pending.values()], retainedDrafts: [...retainedDrafts],
         };
     }
@@ -213,6 +226,7 @@ export function createJobWindow<Prepared>(options: {
         controller = abort;
         preparing = true;
         error = null;
+        errorOrigin = undefined;
         changed();
         queue = queue.then(async () => {
             if (revision !== intent || stopped)
@@ -299,8 +313,10 @@ export function createJobWindow<Prepared>(options: {
                 }
             }
             catch (failure) {
-                if (revision === intent && !stopped)
+                if (revision === intent && !stopped) {
                     error = failure instanceof Error ? failure.message : 'JOB_DISPLAY_MISMATCH';
+                    errorOrigin = failure instanceof Error && typeof failure.cause === 'string' ? failure.cause : undefined;
+                }
             }
             finally {
                 await committed?.rollback();
@@ -518,6 +534,8 @@ export function createJobWindowTransport(access: JobWindowAccess, fetcher: typeo
             throw new Error('JOB_REQUEST_INVALID');
         if (!response.ok && value.ok)
             throw new Error('JOB_REQUEST_INVALID');
+        if (!value.ok) Object.defineProperty(value.error, 'cause', {value:
+            `${init?.method ?? 'GET'} ${new URL(access.route(path), 'http://127.0.0.1').pathname} · ${typeof init?.body === 'string' ? new TextEncoder().encode(init.body).byteLength : 0} bytes · HTTP ${response.status}`});
         return value;
     }
     function post<Value>(path: string, body: unknown, signal?: AbortSignal) {
@@ -552,7 +570,7 @@ export async function* jobWindowEvents(access: JobWindowAccess, after: string | 
             let newline = buffered.indexOf('\n');
             while (newline >= 0) {
                 if (newline > limit)
-                    throw new Error('JOB_BODY_LIMIT');
+                    throw new Error('JOB_BODY_LIMIT', {cause: 'client: event stream'});
                 const event = JSON.parse(buffered.slice(0, newline)) as EventV3;
                 if (!event || event.jobId !== access.jobId || typeof event.cursor !== 'string' ||
                     !Number.isSafeInteger(event.generation) || event.generation < 0 ||
@@ -563,7 +581,7 @@ export async function* jobWindowEvents(access: JobWindowAccess, after: string | 
                 newline = buffered.indexOf('\n');
             }
             if (buffered.length > limit)
-                throw new Error('JOB_BODY_LIMIT');
+                throw new Error('JOB_BODY_LIMIT', {cause: 'client: event stream'});
         }
     }
     finally {
@@ -814,7 +832,7 @@ async function jobBytes(url: string, signal: AbortSignal, maximum: number): Prom
                 break;
             size += next.value.length;
             if (size > maximum)
-                throw new Error('JOB_BODY_LIMIT');
+                throw new Error('JOB_BODY_LIMIT', {cause: 'client: preload'});
             chunks.push(next.value);
         }
     }

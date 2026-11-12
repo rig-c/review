@@ -6,6 +6,7 @@ import { JOB_API_SCHEMA, type JobAgentRequest, type JobPartsEnumerator, type Job
 import { createJobHostPorts, jobHash } from '../../src/job-api.ts';
 import { JobSession } from '../../src/job-session.ts';
 import type { JobPublishedContext } from '../../src/job-source.ts';
+import {PNG} from 'pngjs';
 
 /** All metadata here is explicitly synthetic trusted-host fixture data. It
  * establishes no Create #184 producer path or Parts #1163 acceptance evidence.
@@ -16,8 +17,9 @@ export async function jobFixture(options: {
   afterDirectorySync?: (path: string) => void;
   plain?: boolean;
   partsEnumerator?: JobPartsEnumerator;
+  scratchParent?: string;
 } = {}) {
-  const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-job-'));
+  const scratch = await mkdtemp(join(realpathSync(options.scratchParent ?? tmpdir()), 'review-job-'));
   const root = join(scratch, 'input'), state = join(scratch, 'state');
   await mkdir(root);
   await cp(new URL('../fixtures/viewport-387/package', import.meta.url), join(root, 'out'), { recursive: true });
@@ -146,6 +148,34 @@ export async function jobInputHashes(root: string): Promise<Record<string, strin
   }
   await visit('');
   return hashes;
+}
+
+/** A 24-slot synthetic rig with an idle clip and a local original-painting reference. */
+export async function growJobRigFixture(f: Awaited<ReturnType<typeof jobFixture>>, width = 512, height = 512) {
+  const modelPath = join(f.root, 'out/skeleton.model.json');
+  const model = JSON.parse(await readFile(modelPath, 'utf8'));
+  const slot = model.slots[0], attachment = model.skins[0].attachments[slot.name];
+  model.slots = Array.from({length: 24}, (_, index) => ({...slot, name: `slot-${index}`}));
+  model.skins[0].attachments = Object.fromEntries(model.slots.map((row: {name: string}) => [row.name, structuredClone(attachment)]));
+  model.animations[0].name = 'idle';
+  if (model.editorOrder?.animations) model.editorOrder.animations = model.editorOrder.animations.map((name: string) => name === 'inspect' ? 'idle' : name);
+  await writeFile(modelPath, JSON.stringify(model));
+  const manifestPath = join(f.root, 'out/review.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.animations = [{id: 'idle', label: 'Idle'}];
+  manifest.references.push({id: 'original-painting', type: 'image', label: 'Original painting', path: 'painting.png'});
+  const painting = new PNG({width, height});
+  let state = 785;
+  for (let index = 0; index < painting.data.length; index++) {
+    state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+    painting.data[index] = index % 4 === 3 ? 255 : state & 255;
+  }
+  const bytes = PNG.sync.write(painting);
+  await writeFile(join(f.root, 'out/painting.png'), bytes);
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const context = f.getContext();
+  f.setContext({...context, subjects: [...context.subjects, {kind: 'signoff', stage: 'rig-review'}]});
+  return {bytes, slots: model.slots.length};
 }
 
 /** Fixed-input canonical regression sample. Expected bytes were captured at release 8e1e3387. */

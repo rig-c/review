@@ -1,4 +1,4 @@
-import {formFor, jobCheckpointContext, jobPublicationRoutes, prepareJobForms, prepareJobInspection, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
+import {formFor, jobCheckpointContext, jobPublicationRoutes, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
 import {commentPartsIssues,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
@@ -183,7 +183,7 @@ export function createJobRigScreen(options: {
       const ask = decision.ask, current = attempt;
       const frozen = decision.kind === 'review-verdict' ? await current.rig.prepare(input, () => still(ask, prepared)) : input;
       const result = await options.window.submit(frozen);
-      if (!result.ok) throw new Error(result.error.code);
+      if (!result.ok) throw new Error(result.error.code, {cause: (result.error as {cause?: unknown}).cause});
       attempts.delete(ask.askId);
       await committed({...current.commit, at: result.value.at});
     }
@@ -249,7 +249,7 @@ export function createJobRigScreen(options: {
           feedbackWarnings: [], updatedAt: null} satisfies ReviewSession);
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },
-      submit: (session, committed) => submit(session, committed).catch(error => {throw new Error(options.refusal(error, 'JOB_ACT_INVALID'));}),
+      submit,
       attach: value => {screen = value;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
       displayed: () => ready.resolve(),
       failed: error => ready.reject(error)};
@@ -266,7 +266,7 @@ export function createJobRigScreen(options: {
   return {
     prepare,
     mounted: () => mounted,
-    report:(error:unknown,fallback?:string)=>screen?.message(options.refusal(error,fallback),true),
+    report(error:unknown,_fallback?:string) {const refusal=jobSubmissionRefusal(error);screen?.message(refusal.text,true,refusal.title);},
     commit(prepared: JobRigScreenPrepared) {
       const previous=mounted;mounted=prepared;
       return {async rollback(){try{await transition?.rollback();}finally{transition=null;mounted=previous;}},finalize(){try{transition?.finalize();}finally{transition=null;if(previous!==prepared){const modal=previous?.record??previous?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();}}}};
@@ -300,13 +300,13 @@ export function createJobRigScreen(options: {
       }catch(error){await rollback();throw error;}
     },
     /** A newly pending ask the screen cannot answer, or a later publication, reloads into the job window's route. */
-    changed(state: {readonly pending: readonly PendingAskV3[]; readonly closed: boolean; readonly preparing?:boolean; readonly error?:string|null; readonly previousLabel?:string|null; readonly displayed?:DisplayPublicationV3|null}): void {
+    changed(state: {readonly pending: readonly PendingAskV3[]; readonly closed: boolean; readonly preparing?:boolean; readonly error?:string|null; readonly errorOrigin?:string; readonly previousLabel?:string|null; readonly displayed?:DisplayPublicationV3|null}): void {
       if (!mounted) return;
       if(mounted.record){refreshRecordForms();if(state.closed)screen?.message(options.translate('job.closed'),true);return;}
       if (!jobRigScreenRoute(mounted.display, state.pending, mounted.checkpoints)) {location.reload(); return;}
       screen?.pendingSubjects?.(pendingSubjects());
       refreshRecordForms();
-      if(state.error)screen?.message(options.translate('job.failed')+' · '+options.refusal(state.error),true);
+      if(state.error){const refusal=jobSubmissionRefusal(new Error(state.error,{cause:state.errorOrigin}));screen?.message(refusal.text,true,refusal.title);}
       else if (state.closed) screen?.message(options.translate('job.closed'), true);
       else if(!state.preparing&&state.displayed?.publication.publicationId===mounted.display.publication.publicationId){
         const label=state.previousLabel?options.translate('job.updated',[state.previousLabel,mounted.display.publication.label]):mounted.display.publication.label;

@@ -26,7 +26,7 @@ export interface RigHostScreen {
   stage(): RigHostStage | null;
   /** Draw the held frame again so the posed frame and the player share one generation. */
   redraw(): void;
-  message(text: string, error?: boolean): void;
+  message(text: string, error?: boolean, diagnostic?: string): void;
   pendingSubjects?(subjects:readonly PendingAskV3['subject'][]):void;
   recordForms?(forms:readonly HTMLFormElement[]):void;
 }
