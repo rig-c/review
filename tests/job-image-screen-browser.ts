@@ -1,4 +1,4 @@
-/** #772/#773 ordinary Nova: image asks on the one shell, EN/KO, real pointer comments and writer fetch. */
+/** #772/#773 functional browser entry (execution host is recorded by the invoking receipt): image and direction asks on the one shell, EN/KO, real pointer comments and writer fetch. */
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
 import {mkdir,readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
@@ -57,6 +57,12 @@ try{
   await wait(`document.querySelector('#rig-label').textContent===${JSON.stringify((language==='en'?enCatalog:koCatalog)['job.imageSetTitle'])}`);
   assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('[data-job-image-set] h3')].map(node=>node.textContent)`),images.map(image=>image.name));
   const layout:any=await page.evaluate(`(()=>{const r=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height,bottom:b.bottom};};return {entries:document.querySelectorAll('#app').length,galleries:document.querySelectorAll('[data-job-image-set]').length,notes:[...document.querySelectorAll('textarea')].filter(n=>!n.closest('[hidden]')&&n.getBoundingClientRect().height>0).length,forms:document.querySelectorAll('form[data-job-ask]').length,stage:r(document.querySelector('#rig-viewport')),bottom:r(document.querySelector('.inspector')),bars:document.querySelectorAll('.workspace-main-toolbar').length,secondary:document.querySelectorAll('.workspace-secondary-toolbar').length,controls:['zoom-in','zoom-out','fit','native-one'].map(id=>({id,count:document.querySelectorAll('#'+id).length,x:r(document.getElementById(id)).x})),rows:[...document.querySelectorAll('[data-job-image-set] figure')].map(f=>({name:f.dataset.imageName,image:r(f.querySelector('img')),complete:f.querySelector('img').complete}))};})()`);
+  const presentation:any=await page.evaluate(`(()=>({tabs:[...document.querySelectorAll('[data-block-target]')].filter(n=>n.dataset.blockTarget!=='feedback').map(n=>({hidden:n.hidden,disabled:n.disabled})),collapseDisabled:document.querySelector('#workspace-bottom-collapse').disabled,commentTitle:document.querySelector('#stage-comment').title,figures:[...document.querySelectorAll('[data-job-image-set] figure')].map(f=>({title:f.title,text:f.innerText,headings:f.querySelectorAll('h3').length,roles:f.querySelectorAll('[data-job-text^="job.imageRole."]').length}))}))()`);
+  assert.ok(presentation.tabs.length>0);assert.ok(presentation.tabs.every((tab:any)=>tab.hidden&&tab.disabled),'inapplicable tabs are hidden through the shared binding');
+  assert.equal(presentation.collapseDisabled,false);await click('#workspace-bottom-collapse');await wait(`document.querySelector('#workspace-bottom-collapse').getAttribute('aria-expanded')==='false'`);await click('#workspace-bottom-collapse');await wait(`document.querySelector('#workspace-bottom-collapse').getAttribute('aria-expanded')==='true'`);
+  const catalog=language==='en'?enCatalog:koCatalog;
+  assert.equal(presentation.commentTitle,catalog['Comment · C']);assert.notEqual(presentation.commentTitle,catalog['Comment · C (active mesh editor keeps C)']);
+  for(const [index,figure]of presentation.figures.entries()){assert.equal(figure.title,images[index]!.sha256);assert.equal(/[a-f0-9]{64}/.test(figure.text),false);assert.equal(figure.headings,1);assert.equal(figure.roles,0);}
   assert.equal(layout.entries,1);assert.equal(layout.galleries,1);assert.equal(layout.notes,0);assert.equal(layout.forms,0);assert.equal(layout.bars,1);assert.equal(layout.secondary,1);
   assert.ok(layout.bottom.y>=layout.stage.bottom);assert.ok(layout.rows.every((r:any)=>r.complete&&r.image.width>0));assert.ok(layout.controls.every((c:any,i:number)=>c.count===1&&(!i||c.x>layout.controls[i-1].x)));
   const zoom=()=>page!.evaluate<string>(`document.querySelector('#rig-root').style.transform`);
@@ -76,7 +82,9 @@ try{
   const comments=[{text:'General · 전체'},{text:'Candidate spot · 후보',anchor:{name:images[1]!.name}}];
   assert.deepEqual(act.value,{stage:'image-review',verdict:'approved',words:projectComments(comments),imageNotes:[{name:images[1]!.name,words:projectComments([comments[1]!])}]});
   assert.deepEqual(await api('fetch-act',{actId:act.actId},true),act);
-  observations.push({language,layout,resize,act,commentScreenshot:language+'-comments.png',pinTransport:'text projection only; structured position/crop follow-up #776'});
+  await wait(`document.querySelector('#save').disabled&&document.querySelector('#save').title===${JSON.stringify(catalog['job.imageWaiting'])}`);
+  const disabledReason=await page.evaluate<string>(`document.querySelector('#save').title`);assert.notEqual(disabledReason,catalog['job.imageSetTitle']);
+  observations.push({language,layout,presentation,disabledReason,resize,act,commentScreenshot:language+'-comments.png',pinTransport:'text projection only; structured position/crop follow-up #776'});
  }
  const directionFixture=await scriptedJobWindowFixture();
  try{

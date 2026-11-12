@@ -1255,14 +1255,14 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
             hash.className = 'job-source';
             hash.style.display = 'block';
             hash.style.overflowWrap = 'anywhere';
-            if (titleOnly) hash.title = image.sha256;
+            if (titleOnly || native) hash.title = image.sha256;
             else hash.textContent = image.sha256;
             element.style.width = '100%';
             element.style.height = 'auto';
             element.style.maxHeight = '70vh';
             element.style.objectFit = 'contain';
             if(native){element.style.width=element.naturalWidth+'px';element.style.maxHeight='none';figure.style.width=element.naturalWidth+'px';}
-            figure.append(name, role, element, hash);
+            if(native){figure.title=image.sha256;figure.append(name,element);}else figure.append(name, role, element, hash);
             if (image.duplicate)
                 figure.append(node('p', 'job.identicalImages'));
             gallery.append(figure);

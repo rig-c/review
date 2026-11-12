@@ -179,6 +179,7 @@ let lastFrame = 0;
 let playbackCarry = 0;
 let comments:ReturnType<typeof bindStageComments>|null=null;
 const recordComments:CommentRow[]=[];
+let refreshImageAct:(()=>void)|null=null;
 let recordCommentKey='';
 const submittedDirectionComments=new Set<string>();
 let view: 'compare' | 'reference' | 'rig' = 'compare';
@@ -1205,7 +1206,7 @@ function bindWorkspace():void {
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   bindReviewDialog();
-  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
+  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.imageSet?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
 }
 async function start(): Promise<void> {
   try {
@@ -1325,7 +1326,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
 async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  const imageSet=host?.imageSet;
  if(!host?.record&&!interview&&!imageSet)throw new Error('JOB_DISPLAY_MISMATCH');
- const unavailable=imageSet?t('job.imageSetTitle',undefined,'en'):interview?'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.':'This request has no picture.';
+ const unavailable=imageSet?t('job.imageNoParts',undefined,'en'):interview?'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.':'This request has no picture.';
  readOnly=tr(interview?'MODEL_UNAVAILABLE':'JOB_REVIEW_READ_ONLY');
  if(!interview)actReadOnly=readOnlyReason(access,true,host?.ownerActAccess);
  bindWorkspace();bindInspector(true);rigInput={state:'absent'};referenceInput={state:'absent'};renderLayout();
@@ -1343,7 +1344,7 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  await workspace?.settle();if(disposed)return;
  document.body.dataset.ready='true';
- if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:subjects=>{renderPendingSubjects(subjects);if(imageSet)button('save').disabled=!!actReadOnly||saving||!host!.canSubmit?.();},stage:()=>null,redraw:()=>{if(imageSet)fitCamera();},message,suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
+ if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:subjects=>{renderPendingSubjects(subjects);if(imageSet)refreshImageAct?.();},stage:()=>null,redraw:()=>{if(imageSet)fitCamera();},message,suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
 /** Image publications use the existing gallery, raster camera and comment codec in the one shell. */
 async function bindImageReview():Promise<void> {
@@ -1376,13 +1377,15 @@ async function bindImageReview():Promise<void> {
  comments=bindStageComments<ImageCommentRow,ImageCommentPose>({codec,listHost:el('comments-list-host'),toolbar:primaryToolbar,viewports:{rig:el('rig-viewport')},pose:()=>pose(),pause:async function(){},bookmark,restore:async value=>{viewport.writeCamera('rig',value as ReturnType<typeof bookmark>);fitCamera();},
   feedback:()=>rows,locked:id=>submitted.has(id),general:{create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!row.image},add:row=>rows.push(row),changed,error:value=>message(value,true),blocked:()=>saving||!!actReadOnly});
  const verdict=select('review-status');verdict.disabled=!!actReadOnly;verdict.onchange=changed;
- const save=button('save');save.disabled=!!actReadOnly||!host!.canSubmit?.();
- save.onclick=async()=>{if(saving||actReadOnly||!host!.canSubmit?.())return;saving=true;save.disabled=true;verdict.disabled=true;renderDraftState();
+ const save=button('save');
+ refreshImageAct=()=>{save.disabled=!!actReadOnly||saving||!host!.canSubmit?.();setSourceAttribute(save,'title',save.disabled?actReadOnly??t(saving?'job.imageSubmitting':'job.imageWaiting',undefined,'en'):'');};
+ refreshImageAct();
+ rigInspector.collapse.disabled=false;setSourceAttribute(rigInspector.collapse,'title','');
+ save.onclick=async()=>{if(saving||actReadOnly||!host!.canSubmit?.())return;saving=true;refreshImageAct!();verdict.disabled=true;renderDraftState();
   try{const frozen=structuredClone(projection());message(await host!.submitImages!(verdict.value as import('../src/job-contract.ts').JobImageReviewValue['verdict'],frozen));for(const row of rows)submitted.add(row.id);dirty=false;try{localStorage.removeItem(recordCommentKey);}catch{}rigInspector.actBar.setSaveState({kind:'saved',text:'Submitted'});comments?.refresh();}
-  catch(error){message(errorText(error),true);}finally{saving=false;verdict.disabled=!!actReadOnly;save.disabled=!!actReadOnly||!host!.canSubmit?.();renderDraftState();}
+  catch(error){message(errorText(error),true);}finally{saving=false;verdict.disabled=!!actReadOnly;refreshImageAct!();renderDraftState();}
  };
  rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;rigInspector.comments.button.click();
- for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-block-target]'))if(tab.dataset.blockTarget!=='feedback')tab.disabled=true;
  liveIssueCount=()=>rows.length;viewDisposers.push(viewport.bindControls(unitScaleMessage),viewport.bindNavigation(undefined,()=>!comments?.active()));
  renderLayout();viewport.requestFit();await workspace?.settle();measure();
 }
