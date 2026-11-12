@@ -1,5 +1,5 @@
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
-import {joinedInterviewForms} from './job-session.ts';
+import {joinedInterviewForms,jobSubmissionRefusal} from './job-session.ts';
 import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding} from '../src/parts-comment.ts';
 import type {JobForm} from './job-session.ts';
 import {bindWorkspaceDrawer} from './workspace-layout.ts';
@@ -252,7 +252,7 @@ let readingsPanel:ReadingsPanel|null=null,readingsJob:ReadingsJobView|null=null,
 /** The world an Apply's reload resumes: wind (clock and active pulse), pending jolts, whether the controls are engaged, gravity. */
 interface StageWorld {wind:WindState;jolts:JoltStep[];applied:boolean;gravity:number}
 
-function message(value: string, error = false, footerOnly = false): void {
+function message(value: string, error = false, footerOnly = false, diagnostic?: string): void {
   text('message', value);
   el('message').title = value; // the footer truncates long messages
   el('message').classList.toggle('error', error);
@@ -260,6 +260,8 @@ function message(value: string, error = false, footerOnly = false): void {
   if (footerOnly) return;
   // The modal makes the footer inert; the review dialog repeats the latest message for its reader.
   text('review-message', value); el('review-message').classList.toggle('error', error);
+  // A background refusal names its code and origin on hover; only Submit's own catch changes the act bar.
+  if (diagnostic) el('message').title = diagnostic;
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1105,6 +1107,7 @@ function bind(): void {
     if (session.feedbackWarnings.length) { message('Resolve validation warnings in existing feedback before submitting. Delete the marked entries and add valid replacements.', true); return; }
     saving = true; updateSavedState(); const savedPayload = JSON.stringify(session);
     if (host) {
+      let submissionFailure: ReturnType<typeof jobSubmissionRefusal> | null = null;
       try {
         const sent = await host.submit(structuredClone(session), async committed => {
           submittedBaseline = {...submittedBaseline!, ...committed.review,
@@ -1118,8 +1121,17 @@ function bind(): void {
           comments?.refresh(); renderProposals();
         });
         message(sent);
-      } catch (error) { message(errorText(error), true); }
-      finally { saving = false; updateSavedState(); }
+      } catch (error) {
+        submissionFailure = jobSubmissionRefusal(error);
+        message(submissionFailure.text, true);
+      }
+      finally {
+        saving = false; updateSavedState();
+        if (submissionFailure) {
+          rigInspector.actBar.setSaveState({kind: 'failed', text: submissionFailure.text, title: submissionFailure.title});
+          el('message').title = submissionFailure.title;
+        }
+      }
       return;
     }
     try { const saved = await api<ReviewSession>('/api/session', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: savedPayload });
@@ -1247,7 +1259,7 @@ async function start(): Promise<void> {
     if(host){
       if(!player)throw new Error('JOB_VISUAL_UNAVAILABLE');
       await restorePublicationNavigation();document.body.dataset.ready='true';
-      host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});showInspector('playback');host.displayed();
+      host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});showInspector('playback');host.displayed();
     }
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
 }
@@ -1312,7 +1324,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message(actReadOnly??(host?.ownerActAccess?'Not submitted':'Parts ready. Source files remain unchanged.'),!!actReadOnly);referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
- if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message,pendingSubjects:renderPendingSubjects,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
+ if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),pendingSubjects:renderPendingSubjects,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
 
  document.body.dataset.ready='true';
 }
@@ -1337,7 +1349,7 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  await workspace?.settle();if(disposed)return;
  document.body.dataset.ready='true';
- if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message,suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
+ if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
 let recordDialog:HTMLDialogElement|null=null;
 /** Reuse the form's publication binding for native record comments, without a package session. */

@@ -1,4 +1,4 @@
-import {expect, test} from 'bun:test';
+import {expect, test, spyOn} from 'bun:test';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
 import {fixturePublication} from './helpers/job-window-fixture.ts';
@@ -7,6 +7,10 @@ import {rigHost, setRigHost, type RigHost, type RigHostCommit} from '../web/rig-
 import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ActV3, DisplayPublicationV3, PendingAskV3, UISubmissionV3} from '../src/job-contract.ts';
 import {parseManifest} from '../src/manifest.ts';
+import {setLanguagePreference} from '../web/i18n.ts';
+import {createJobFront} from '../src/job-front.ts';
+import {jobBodyLimit} from '../src/job-api.ts';
+import {jobSubmissionRefusal,createJobWindowTransport,jobWindowAccess,jobWindowEvents} from '../web/job-session.ts';
 
 useTemporaryReviewState();
 const at = '2026-11-12T00:00:00.000Z';
@@ -35,22 +39,84 @@ async function mainSave(session: ReviewSession, submittedBaseline: ReviewSession
     source.slice(lockStart, lockEnd);
   const javascript = new Bun.Transpiler({loader: 'ts'}).transformSync(source.slice(stateStart, stateEnd) + lock + '\nconst save = ' + save);
   return new Function('deps', `
-    let {session, submittedBaseline, host} = deps;
+    let {session, submittedBaseline, host, jobSubmissionRefusal} = deps;
     let dirty = true, saving = false, draftConflict = false, readOnly = null, actReadOnly = null;
-    const readouts = {}, messages = [], saved = [];
+    const readouts = {}, messages = [], saved = [], saveStates = [];
+    const rigInspector = {actBar: {setSaveState: value => saveStates.push(value)}};
     const node = {classList: {toggle() {}}, disabled: false, title: ''};
     const el = () => node, button = el, text = (id, value) => {readouts[id] = value;};
     const errorText = error => error.message, message = value => messages.push(value);
     const comments = {refresh() {}}, persistence = {async submitted(value) {saved.push(structuredClone(value));}};
     function renderProposals() {} function renderDraftState() {}
     ${javascript}
-    return {save, locked: isSubmittedFeedback, state: () => ({dirty, saving, session, submittedBaseline, readouts, messages, saved})};
-  `)({session, submittedBaseline, host}) as {
+    return {save, locked: isSubmittedFeedback, state: () => ({dirty, saving, session, submittedBaseline, readouts, messages, saved, saveStates, title: node.title})};
+  `)({session, submittedBaseline, host, jobSubmissionRefusal}) as {
     save(): Promise<void>; locked(id: string): boolean;
     state(): {dirty: boolean; saving: boolean; session: ReviewSession; submittedBaseline: ReviewSession;
-      readouts: Record<string, string>; messages: string[]; saved: ReviewSession[]};
+      readouts: Record<string, string>; messages: string[]; saved: ReviewSession[]; title: string; saveStates: {kind: string; text: string; title?: string}[]};
   };
 }
+
+for (const code of ['JOB_ACT_NOTHING_TO_SUBMIT', 'JOB_STILL_CAMERA_NOT_FIXED', 'JOB_STILL_VIEW_UNSUPPORTED', 'JOB_BODY_LIMIT'])
+for (const language of ['en', 'ko'] as const) test(`#785 ${code} says NOT submitted and preserves unsent state (${language})`, async () => {
+  const f = await jobFixture();
+  const front = createJobFront({origin: f.origin, ports: f.ports, resource: async () => ''});
+  setLanguagePreference(language);
+  try {
+    const publication = await f.publish(), ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+    const page = await f.display(publication), current = baseline(), original = structuredClone(current);
+    current.status = 'approved';
+    const app = await mainSave(current, original, {async submit() {
+      if (code !== 'JOB_BODY_LIMIT') throw new Error(code);
+      const access = jobWindowAccess(f.origin + '/jobs/' + f.session.jobId + '/#cap=' + f.credentials.ui, null, () => {});
+      const transport = createJobWindowTransport(access, (async (url, init) => front.fetch(new Request(new URL(String(url), f.origin), {...init, headers: {...Object.fromEntries(new Headers(init?.headers)), Origin: f.origin}}))) as typeof fetch);
+      const result = await transport.submit({...page, askId: ask.askId,
+        expectedGeneration: f.session.status().generation, submissionId: 'oversized', kind: 'checkpoint',
+        value: {checkpointId: 'step-one', outcome: 'pass', words: 'x'.repeat(jobBodyLimit)}});
+      expect(result.ok).toBe(false);
+      if (result.ok) throw Error('EXPECTED_REFUSAL');
+      expect(result.error.code).toBe('JOB_BODY_LIMIT');
+      throw new Error(result.error.code, {cause: (result.error as {cause?: unknown}).cause});
+    }});
+    await app.save();
+    const sentence = jobSubmissionRefusal(new Error(code)).text;
+    expect(sentence).toContain(language === 'en' ? 'NOT submitted' : '제출되지 않았어요');
+    expect(sentence).toContain('—');
+    expect(sentence).not.toContain('JOB_');
+    expect(app.state().title).toStartWith(code);
+    if (code === 'JOB_BODY_LIMIT') {
+      expect(app.state().title).toContain('POST /jobs/' + f.session.jobId + '/ui/acts');
+      expect(app.state().title).toMatch(/ · \d+ bytes · HTTP 413$/);
+    }
+    expect(app.state().saveStates.at(-1)).toEqual({kind: 'failed', text: sentence, title: app.state().title});
+    expect(app.state().messages.at(-1)).toBe(sentence);
+    expect(app.state().readouts.dirty).toBe('Unsubmitted changes');
+    expect(app.state().submittedBaseline.updatedAt).toBeNull();
+    expect(app.state().saved).toEqual([]);
+    expect(f.session.status().pending.map(item => item.askId)).toEqual([ask.askId]);
+  } finally {setLanguagePreference('en'); front.stop(); await f.close();}
+});
+
+for (const language of ['en', 'ko'] as const) test(`#785 stream refusal retains its client origin (${language})`, async () => {
+  setLanguagePreference(language);
+  const warning = spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const access = jobWindowAccess('http://127.0.0.1:19484/jobs/stream-fixture/', null, () => {});
+    const events = jobWindowEvents(access, null, new AbortController().signal,
+      (async () => new Response('x'.repeat(1024 * 1024 + 1))) as unknown as typeof fetch);
+    let refusal: unknown;
+    try {await events.next();} catch (error) {refusal = error;}
+    expect(refusal).toBeInstanceOf(Error);
+    const current = baseline(); current.status = 'approved';
+    const app = await mainSave(current, baseline(), {async submit() {throw refusal;}});
+    await app.save();
+    expect(app.state().title).toBe('JOB_BODY_LIMIT · client: event stream');
+    expect(app.state().saveStates.at(-1)?.text).toContain(language === 'en' ? 'NOT submitted' : '제출되지 않았어요');
+    expect(app.state().saveStates.at(-1)?.text).not.toContain('JOB_');
+    expect(app.state().readouts.dirty).toBe('Unsubmitted changes');
+    expect(warning).toHaveBeenCalledWith(app.state().title);
+  } finally {warning.mockRestore();setLanguagePreference('en');}
+});
 
 for (const rigPending of [false, true]) test(`#721 checkpoint commit leaves comments editable (${rigPending ? 'rig pending' : 'checkpoint only'})`, async () => {
   const f = await jobFixture(), originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
@@ -163,7 +229,7 @@ test('#721 a later rig failure preserves the checkpoint receipt without submitti
   expect(app.state().submittedBaseline.feedback).toEqual([]);
   expect(app.state().dirty).toBe(true); expect(app.state().saving).toBe(false);
   expect(app.locked(comment.id)).toBe(false);
-  expect(app.state().messages.at(-1)).toBe('JOB_STILL_CAPTURE_FAILED');
+  expect(app.state().messages.at(-1)).toBe(jobSubmissionRefusal(new Error('JOB_STILL_CAPTURE_FAILED')).text);
 });
 
 test('#721 a committed verdict locks only the submitted snapshot, preserving edits and new comments made during submission', async () => {
