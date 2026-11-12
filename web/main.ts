@@ -133,7 +133,7 @@ const rigStatusBar=mountStatusBar({
 app.querySelector<HTMLElement>('[data-workspace-status]')!.replaceWith(rigStatusBar.footer);
 for(const id of ['layout-state','idle-state','control-state','draft-state'])el(id).setAttribute('role','status');
 el('layout-state').setAttribute('aria-label','Effective layout');el('renderer-state').setAttribute('aria-label','Last draw backend');el('draft-state').setAttribute('aria-live','polite');el('view-coordinates').setAttribute('aria-label','Current numeric inspection region');
-const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearchParams(location.search).has('stageEmbed')&&!location.pathname.endsWith('/stage-interview.html')});app.prepend(shell.header);
+const shell=mountWorkspaceShell({compatibility:'rigStep1',hideLanguage:new URLSearchParams(location.search).has('hub'),embedded:new URLSearchParams(location.search).has('stageEmbed')&&!location.pathname.endsWith('/stage-interview.html')});app.prepend(shell.header);
 el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.append(createRigLayerControls());
 el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;

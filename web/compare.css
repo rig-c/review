@@ -277,10 +277,6 @@ main{position:relative}.viewbar,.toolbar{anchor-name:--stage-comment-bar}#stage-
 .settings-toggle[aria-expanded=true]::before{content:"▴"}
 :root:lang(ko){word-break:keep-all;overflow-wrap:break-word}
 
-/* Stage navigation retains mounted inspection tools and their state. */
-.review-stage-nav{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
-.review-stage-nav button{font:inherit;white-space:nowrap;padding:5px 8px}
-.review-stage-nav [aria-current="step"]{font-weight:700;text-decoration:underline;text-underline-offset:4px}
 .topbar,.pv-top{flex-wrap:wrap}
 
 /* Stage chips open Setup and Animate on this screen; a refused rig hides the mode switch (#726). */
