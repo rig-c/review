@@ -25,31 +25,35 @@ export function jobRigScreenAnswers(ask: Pick<PendingAskV3, 'subject'>, checkpoi
   return subject.kind === 'review-verdict' ? (subject.stage === 'rig-review' || subject.stage === 'direction-review') :
     subject.kind === 'checkpoint' && checkpoints.has(subject.checkpointId);
 }
+/** One ask-availability check for both the route and its retained modal forms. */
+export function jobRigScreenAsk(display:DisplayPublicationV3,ask:PendingAskV3,checkpoints:ReadonlySet<string>):boolean {
+  const source=display.publication.source;
+  if(ask.subject.kind==='checkpoint'){
+    try {prepareJobForms(display,[ask],()=>jobCheckpointContext(ask,[]));return true;}catch{return false;}
+  }
+  if(ask.subject.kind==='signoff'||ask.subject.kind==='interview-picks')return true;
+  if('record' in source)return ask.subject.kind==='reopen';
+  return source.subject!=='image-set'&&!!source.model&&jobRigScreenAnswers(ask,checkpoints)&&
+    (ask.subject.kind!=='review-verdict'||ask.subject.stage===(source.direction?'direction-review':'rig-review'));
+}
 export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readonly PendingAskV3[],
   checkpoints: ReadonlySet<string>): boolean {
-  const id = display.publication.publicationId;
-  if('selector' in display.publication.source&&display.publication.source.selector?.kind==='draft'&&display.publication.source.parts)return true;
-  if(display.publication.source.subject==='image-set')return pending.every(ask=>ask.publicationId!==id||ask.status!=='pending'||ask.subject.kind==='review-verdict'&&ask.subject.stage==='image-review');
-  return jobRigScreenSubject(display.publication.source) && pending.every(ask => {
-    if (ask.publicationId !== id || ask.status !== 'pending') return true;
-    if (ask.subject.kind === 'checkpoint') {
-      try {
-        prepareJobForms(display, [ask], () => jobCheckpointContext(ask, []));
-        return true;
-      } catch {return false;}
-    }
-    return (jobRigScreenAnswers(ask, checkpoints) && (ask.subject.kind !== 'review-verdict' || ask.subject.stage === (display.publication.source.subject !== 'image-set' && display.publication.source.direction ? 'direction-review' : 'rig-review'))) || ask.subject.kind === 'signoff' || ask.subject.kind === 'interview-picks';
-  });
+  const source=display.publication.source,id=display.publication.publicationId;
+  if('record' in source)return false;
+  if(source.selector?.kind==='draft'&&source.parts)return true;
+  if(source.subject==='image-set')return pending.every(ask=>ask.publicationId!==id||ask.status!=='pending'||ask.subject.kind==='review-verdict'&&ask.subject.stage==='image-review');
+  return (jobRigScreenSubject(source)||!source.model&&!source.parts)&&pending.every(ask=>
+    ask.publicationId!==id||ask.status!=='pending'||jobRigScreenAsk(display,ask,checkpoints));
 }
 
 /** Refusals describe missing producer inputs without granting a new act authority. */
-export function jobRigScreenRefusal(display:DisplayPublicationV3,pending:readonly PendingAskV3[],checkpoints:ReadonlySet<string>):string|null {
+export function jobRigScreenRefusal(display:DisplayPublicationV3,pending:readonly PendingAskV3[],checkpoints:ReadonlySet<string>,hasPicture=false):string|null {
   const source=display.publication.source;
   if('record' in source)return null;
   if(source.subject!=='image-set'){
     if(source.selector?.kind==='post'&&!source.direction)return 'JOB_DIRECTION_MISSING';
     if(source.selector?.kind==='draft'&&!source.parts)return 'JOB_PARTS_MISSING';
-    if(!source.model&&!source.parts)return 'JOB_MODEL_MISSING';
+    if(!source.model&&!source.parts&&!hasPicture&&!pending.some(ask=>ask.publicationId===display.publication.publicationId&&ask.status==='pending'&&ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,checkpoints)))return 'JOB_MODEL_MISSING';
   }
   return jobRigScreenRoute(display,pending,checkpoints)?null:'JOB_ASK_UNSUPPORTED';
 }
@@ -143,8 +147,10 @@ export function createJobRigScreen(options: {
       if(!options.formDependencies)throw new Error('JOB_ACT_KIND_DISABLED');
       const inspection=await prepareJobInspection(display,signal,true);
       try {
-        const forms=prepareJobForms(display,options.window.state().pending.filter(ask=>ask.subject.kind==='signoff'||ask.subject.kind==='interview-picks'),ask=>formFor(ask,inspection,options.formDependencies!));
-        return {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints:new Set(),record:{inspection,forms,picture:null},refusal:jobRigScreenRefusal(display,options.window.state().pending,new Set())??undefined};
+        const pending=options.window.state().pending,checkpoints=new Set(inspection.metadata.manifest?.checkpoints.map(item=>item.id)??[]);
+        const forms=prepareJobForms(display,pending.filter(ask=>ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,checkpoints)),ask=>formFor(ask,inspection,options.formDependencies!));
+        const picture:JobRigScreenPrepared|null=!source.model&&inspection.references.length?{jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints,review:inspection.metadata as ReviewJson}:null;
+        return {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints,record:{inspection,forms,picture},refusal:jobRigScreenRefusal(display,pending,checkpoints,!!picture)??undefined};
       }catch(error){inspection.dispose();throw error;}
     }
     const routes = options.routes(display);
@@ -163,7 +169,7 @@ export function createJobRigScreen(options: {
       if(parts.sourceHash!==source.sourceHash||parts.mode!=='parts')throw new Error('JOB_DISPLAY_MISMATCH');
     }
     let modals:JobRigScreenPrepared['modals'];
-    const asks=options.window.state().pending.filter(ask=>ask.publicationId===display.publication.publicationId&&(ask.subject.kind==='signoff'||ask.subject.kind==='interview-picks'||ask.subject.kind==='checkpoint'&&!refusal));
+    const asks=options.window.state().pending.filter(ask=>ask.publicationId===display.publication.publicationId&&ask.subject.kind!=='review-verdict'&&ask.subject.kind!=='parts-verdict'&&jobRigScreenAsk(display,ask,checkpoints));
     if(!backdropOnly&&options.formDependencies){
       const inspection=await prepareJobInspection(display,signal,true);
       try{modals={inspection,forms:prepareJobForms(display,asks,ask=>formFor(ask,inspection,options.formDependencies!))};}
@@ -300,7 +306,7 @@ export function createJobRigScreen(options: {
   function refreshRecordForms():void {
     const record=mounted?.record??mounted?.modals,deps=options.formDependencies;if(!record||!deps)return;
     const state=options.window.state(),display=record.inspection.display;
-    const next=prepareJobForms(display,state.pending.filter(ask=>(!mounted?.refusal||ask.subject.kind==='signoff'||ask.subject.kind==='interview-picks')&&ask.subject.kind!=='parts-verdict'&&!(ask.subject.kind==='review-verdict'&&(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review'))),ask=>record.forms.get(ask.askId)??formFor(ask,record.inspection,deps));
+    const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,mounted!.checkpoints)),ask=>record.forms.get(ask.askId)??formFor(ask,record.inspection,deps));
     for(const [id,entry]of next)record.forms.set(id,entry);
     for(const [id,entry]of record.forms){const ask=state.pending.find(ask=>ask.askId===id);entry.fieldset.disabled=entry.submitting||ask?.status!=='pending'||state.preparing||state.closed||!state.receipt||!options.access.capability;}
     screen?.recordForms?.([...record.forms.values()].map(entry=>entry.form));

@@ -207,3 +207,23 @@ test('#743 no-picture record attaches owned lifecycle only after asynchronous wo
  expect(attached.navigation).toBeUndefined();expect(attached.incompatible).toBeUndefined();expect(attached.recordForms).toBe(scope.renderRecordForms);
  for(const close of disposers)close();expect(events.at(-1)).toBe('disconnected');
 });
+
+test('#784 record comment restoration does not arm the unrelated package beforeunload gate',async()=>{
+ const main=await Bun.file(new URL('../web/main.ts',import.meta.url)).text(),start=main.indexOf('function setupComments():void {');
+ const prefix=main.slice(start+'function setupComments():void {'.length,main.indexOf(' comments=bindStageComments',start));
+ for(const kind of ['record','direction'] as const){
+  const rows:unknown[]=[],scope={host:{[kind]:{}},recordComments:rows,dirty:false,liveIssueCount:null as null|(()=>number),restoreRecordComments(){rows.push({summary:'retained point'});}};
+  new Function('scope',`with(scope){${prefix}}`)(scope);
+  expect(scope.liveIssueCount!()).toBe(1);expect(scope.dirty).toBe(kind==='direction');
+ }
+});
+
+test('#784 reference video startup reuses media readiness without forcing a new control frame callback',async()=>{
+ const main=await Bun.file(new URL('../web/main.ts',import.meta.url)).text(),start=main.indexOf('      if(!player&&video){');
+ const body=main.slice(start,main.indexOf("      if(!player&&(data.manifest.model",start));
+ const run=new Function('scope',`with(scope){return (async()=>{${new Bun.Transpiler({loader:'ts'}).transformSync(body)}})();}`);
+ for(const ready of [0,2]){
+  const calls:string[]=[],video={readyState:ready,seeking:ready===0,currentTime:0},scope={player:null,video,time:0,lifecycle:new AbortController(),referenceInput:{state:'pending'},waitReferenceMetadata:async()=>{calls.push('metadata');video.readyState=Math.max(1,video.readyState);},mediaReady:async(_video:unknown,event:string)=>{calls.push(event);if(event==='loadeddata')video.readyState=2;else video.seeking=false;},setReferenceInput(value:{state:string}){scope.referenceInput=value;}};
+  await run(scope);expect(scope.referenceInput.state).toBe('loaded');expect(video.currentTime).toBe(0);expect(calls).toEqual(ready===0?['metadata','loadeddata','seeked']:['metadata']);
+ }
+});

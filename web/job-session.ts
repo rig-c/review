@@ -837,7 +837,7 @@ async function jobJson<Value>(url: string, signal: AbortSignal): Promise<Value> 
     const bytes = await jobBytes(url, signal, 2 * 1024 * 1024);
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as Value;
 }
-function mediaReady(media: HTMLVideoElement, name: 'loadeddata' | 'seeked', signal: AbortSignal): Promise<void> {
+export function mediaReady(media: HTMLVideoElement, name: 'loadeddata' | 'seeked', signal: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
         const finish = (error?: Error) => {
             clearTimeout(timer);

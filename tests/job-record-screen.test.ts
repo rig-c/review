@@ -1,3 +1,6 @@
+import {fixturePublication} from './helpers/job-window-fixture.ts';
+import {parseManifest} from '../src/manifest.ts';
+import {jobHash} from '../src/job-api.ts';
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {createJobRigScreen} from '../web/job-rig-screen.ts';
@@ -289,5 +292,26 @@ for(const picture of [true,'parts'] as const)for(const capability of ['fixture',
   expect(h.submitted).toHaveLength(capability?1:0);
   for(const method of ['POST','PUT','PATCH','DELETE'])await expect(host.read('/api/stage-parts/verdict',method)).rejects.toThrow('JOB_REVIEW_READ_ONLY');
   expect(host.access.headers().has('X-Review-Capability')).toBe(false);
+ }finally{await h.close();}
+});
+
+test('#784 model-less reference checkpoint survives preparation, receipt rearm and later ask refresh',async()=>{
+ const h=await harness();
+ try{
+  const base=fixturePublication(),original=base.publication.source;if(original.subject==='image-set')throw Error('Expected package');
+  const source={...original,model:null,selector:null,plan:{steps:[{id:'step-one',hash:'1'.repeat(64)}]}};
+  const display={...base,publication:{...base.publication,source}} as DisplayPublicationV3,bytes=new Uint8Array([1,2,3]);
+  const manifest=parseManifest({schema:'rig-review/1',...source.package,title:'Reference-only',references:[{id:'photo',type:'image',label:'Photo',path:'photo.png'}],checkpoints:[{id:'photo-check',title:'Check photo',reference:'photo'}]});
+  const ask={askId:'photo-check',publicationId:base.publication.publicationId,status:'pending',source,subject:{kind:'checkpoint',checkpointId:'photo-check',planStepId:'step-one'}} as PendingAskV3;
+  h.state.pending.splice(0,h.state.pending.length,ask);
+  h.dom.set('fetch',async(input:RequestInfo|URL)=>String(input).endsWith('/review')?Response.json({manifest,sourceHash:source.sourceHash,reviewedSource:{packageRevision:'1',viewerVersion:'synthetic',runtimeVersion:'synthetic',rig:null,motion:null},referenceHashes:{photo:jobHash(bytes)},capabilities:{playback:false},feedbackCatalog:{slots:null}}):new Response(bytes));
+  const ready=await h.screen.prepare(display,new AbortController().signal);
+  expect(ready!.record!.inspection.references).toHaveLength(1);expect(ready!.record!.picture!.review!.manifest.references[0]!.id).toBe('photo');expect(ready!.refusal).toBeUndefined();
+  h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);expect(rigHost()!.record!.hasPicture).toBe(true);
+  const entry=ready!.record!.forms.get(ask.askId)!;expect(entry).toBeDefined();expect(entry.fieldset.disabled).toBe(true);
+  h.state.receipt={publicationId:ask.publicationId,pageId:h.deps.pageId,displayedNonce:'reference-ready'};h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(false);
+  h.state.pending.push({...ask,askId:'later-photo-check'});h.screen.changed(h.state);expect(ready!.record!.forms.has('later-photo-check')).toBe(true);expect(ready!.record!.forms.get(ask.askId)).toBe(entry);
+  entry.form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='pass';entry.form.commentWords=()=> '[general]\nreference comment';await entry.form.onsubmit!({preventDefault(){}} as never);
+  expect(h.submitted).toHaveLength(1);expect(h.submitted[0]).toMatchObject({kind:'checkpoint',askId:ask.askId,value:{checkpointId:'photo-check',outcome:'pass',words:'[general]\nreference comment'}});
  }finally{await h.close();}
 });

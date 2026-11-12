@@ -3,7 +3,7 @@ useTemporaryReviewState();
 import {afterEach, expect, test} from 'bun:test';
 import {jobFixture} from './helpers/job-api-fixture.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
-import {jobRigScreenDecisions, jobRigScreenRoute, jobRigScreenSubject} from '../web/job-rig-screen.ts';
+import {jobRigScreenDecisions, jobRigScreenRoute, jobRigScreenSubject, jobRigScreenAsk, jobRigScreenRefusal} from '../web/job-rig-screen.ts';
 import {checkpointNoteComments, feedbackItemComments} from '../src/stage-comment.ts';
 // The projector Create applies to act@6 comments: the public job-host export (Create c8382ba5 pins @rig-c/review 2.12.0).
 import {parseCommentsAct, projectComments} from '../src/job-host.ts';
@@ -204,4 +204,19 @@ test('#773 direction publications use the shared rig screen and act bar with ord
   expect(jobRigScreenDecisions(session({}), [ask], publication.publicationId)).toEqual([]);
   const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
   expect(main).toContain('directionPanel.show(!!data.direction)');
+});
+
+test('#784 model-less checkpoint routing uses its declared plan mapping independently of a model',async()=>{
+ const f=await fixture(),publication=await f.publish();
+ if(publication.source.subject==='image-set')throw Error('Expected package');
+ const source={...publication.source,model:null,selector:null},display={publication:{...publication,source}} as unknown as DisplayPublicationV3;
+ const ask={askId:'reference-check',publicationId:publication.publicationId,status:'pending',source,subject:{kind:'checkpoint',checkpointId:'photo-check',planStepId:'step-one'}} as PendingAskV3;
+ expect(jobRigScreenAsk(display,ask,new Set(['photo-check']))).toBe(true);
+ expect(jobRigScreenRoute(display,[ask],new Set(['photo-check']))).toBe(true);
+ expect(jobRigScreenRefusal(display,[ask],new Set(['photo-check']),true)).toBeNull();
+ expect(jobRigScreenRefusal(display,[],new Set(),true)).toBeNull();
+ const invalid={...ask,subject:{...ask.subject,planStepId:'missing'}} as PendingAskV3;
+ expect(jobRigScreenAsk(display,invalid,new Set(['photo-check']))).toBe(false);
+ expect(jobRigScreenRoute(display,[invalid],new Set(['photo-check']))).toBe(false);
+ expect(jobRigScreenRoute(display,[{...ask,subject:{kind:'review-verdict',stage:'rig-review'}} as PendingAskV3],new Set())).toBe(false);
 });

@@ -1,5 +1,5 @@
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
-import {mountJobScreen,joinedInterviewForms} from './job-session.ts';
+import {mountJobScreen,joinedInterviewForms,mediaReady} from './job-session.ts';
 import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding} from '../src/parts-comment.ts';
 import type {JobForm} from './job-session.ts';
 import {bindWorkspaceDrawer} from './workspace-layout.ts';
@@ -1206,7 +1206,7 @@ function bindWorkspace():void {
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   bindReviewDialog();
-  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.imageSet||host?.record&&!host.record.hasPicture?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
+  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.imageSet||host?.record&&(!host.record.hasPicture||!data.manifest.model)?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
 }
 async function start(): Promise<void> {
   try {
@@ -1220,7 +1220,7 @@ async function start(): Promise<void> {
     data=opened as ReviewResponse;session=saved as ReviewSession;writes=accessState;
     readOnly = host?.unavailable?t('job.refusal.'+host.unavailable):host?.record ? tr('JOB_REVIEW_READ_ONLY') : readOnlyReason(access, writes.capabilityRequired);
     actReadOnly = readOnlyReason(access, writes.capabilityRequired, host?.ownerActAccess);
-    if(data.capabilities.preRig){rigInspector.comments.button.disabled=true;rigInspector.act.hidden=true;}
+    if(data.capabilities.preRig&&!host?.record){rigInspector.comments.button.disabled=true;rigInspector.act.hidden=true;}
     submittedBaseline=structuredClone(session);
     text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));
@@ -1233,7 +1233,7 @@ async function start(): Promise<void> {
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     // A job rig subject lands in Animate before the model finishes loading (#709).
-    if(host)showInspector('playback');
+    if(host)showInspector(data.manifest.model?'playback':'rig');
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
     await initPlayer(first);
     // initPlayer keeps `player` only after its first draw succeeded; a declared model path alone never counts.
@@ -1246,14 +1246,20 @@ async function start(): Promise<void> {
     else if (host?.ownerActAccess) message('Not submitted');
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     frameHandle=requestAnimationFrame(tick);
-    const restored=await setupPersistence();setupComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();setupComments();if(host?.record&&!data.manifest.model)showRecordComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
     bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause});
     if(host){
-      if(!player)throw new Error('JOB_VISUAL_UNAVAILABLE');
+      if(!player&&video){
+        await waitReferenceMetadata(video,lifecycle.signal);
+        if(video.readyState<2)await mediaReady(video,'loadeddata',lifecycle.signal);
+        if(video.seeking)await mediaReady(video,'seeked',lifecycle.signal);
+        if(!video.seeking&&video.readyState>=2&&video.currentTime===time)setReferenceInput({state:'loaded'});
+      }
+      if(!player&&(data.manifest.model||referenceInput.state!=='loaded'))throw new Error('JOB_VISUAL_UNAVAILABLE');
       await restorePublicationNavigation();document.body.dataset.ready='true';
-      host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});showInspector('playback');host.displayed();
+      host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});showInspector(data.manifest.model?'playback':'rig');host.displayed();
     }
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
 }
@@ -1535,7 +1541,7 @@ function bindInspector(partsSubject=false):void {
  inspectorTabs?.dispose();
  rigInspector.row.reveal=()=>workspace?.revealInspector();
  inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode)inspectorBlocks?.activate(mode);workspace?.afterTab();renderLayout();},()=>workspace?.beforeTab(),rigInspector.row);
- viewDisposers.push(bindHeaderModeAvailability(partsSubject?{model:false,parts:true}:{model:!!data.manifest.model,preRig:data.capabilities.preRig}));
+ viewDisposers.push(bindHeaderModeAvailability(partsSubject?{model:false,parts:true}:{model:!!data.manifest.model,preRig:data.capabilities.preRig,parts:!!host?.record&&!data.manifest.model}));
  for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
@@ -2917,7 +2923,7 @@ function commentCaptureRefusal():string|null {
  return preview?`COMMENT_UNAPPLIED_PREVIEW: ${preview} is active; leave or disable that preview before commenting (nothing is cleared or applied automatically)`:null;
 }
 function setupComments():void {
- if(host?.direction){restoreRecordComments();liveIssueCount=()=>recordComments.length;dirty=dirty||recordComments.length>0;}
+ if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.length;if(host?.direction)dirty=dirty||recordComments.length>0;}
  comments=bindStageComments<CommentRow,CommentPose>({general:host?.record||host?.direction?{create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row)}:undefined,listHost:el('comments-list-host'),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?{}:{rig:el('rig-viewport'),reference:el('reference-viewport')},
   pose:view=>{
    if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;

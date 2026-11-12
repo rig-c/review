@@ -48,7 +48,7 @@ async function click(selector:string){await page!.evaluate(`document.querySelect
 async function composer(text:string){await wait(`!!document.querySelector('.stage-comment-composer input')`);await page!.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value=${JSON.stringify(text)};form.requestSubmit();})()`);await wait(`!document.querySelector('.stage-comment-composer')`);}
 try{
  const publication=await api('publish',{result:{path:'out',selector:null},freeze:{kind:'producer-held',holdId:'image-screen-held',record:{path:'record.json',sha256:hash(await readFile(join(fixture.root,'record.json')))}}}) as JobPublication;
- page=await launchCdpSession(join(scratch,'chrome'),{onEvent(event){if(event.method==='Runtime.exceptionThrown')errors.push(event.params);}});await page.setViewport(1600,1000);
+ page=await launchCdpSession(join(scratch,'chrome'),{sendDeadlineMs:10000,onEvent(event){if(event.method==='Runtime.exceptionThrown'||event.method==='Page.javascriptDialogOpening')errors.push(event.params);}});await page.setViewport(1600,1000);
  for(const language of ['en','ko'] as const){
   const ask=await api('ask',{publicationId:publication.publicationId,subject:{kind:'review-verdict',stage:'image-review'}}) as JobPendingAsk;
   const url=new URL(job.jobUrl);url.searchParams.set('lang',language);await page.goto(url.href,language);
@@ -180,8 +180,67 @@ try{
    assert.deepEqual(await jobInputHashes(input.root),frozen);
   }finally{await input.close();}
  }
+ // #784: retain the existing package reference viewport and model-independent checkpoint act.
+ for(const mediaKind of ['image','video'] as const){
+  console.log('REFERENCE_CASE_START',mediaKind);
+  const input=await jobFixture();
+  try{
+   const path=mediaKind==='image'?'reference.png':'reference.webm';
+   if(mediaKind==='image')await writeFile(join(input.root,'out',path),await readFile(join(fixture.root,'image-0.png')));
+   else{
+    // Same declared source and opaque pixel format as scripts/turn-pad-browser.ts.
+    const ff=Bun.spawnSync(['ffmpeg','-v','error','-nostdin','-i',resolve('tests/fixtures/strip-probe/reference.mov'),'-an','-threads','1','-c:v','libvpx-vp9','-b:v','150k','-pix_fmt','yuv420p',join(input.root,'out',path)],{stdout:'pipe',stderr:'pipe'});
+    assert.equal(ff.exitCode,0,new TextDecoder().decode(ff.stderr));
+   }
+   const manifestPath=join(input.root,'out/review.json'),manifest=JSON.parse(await readFile(manifestPath,'utf8'));
+   delete manifest.model;delete manifest.direction;
+   manifest.references=[{id:'package-reference',type:mediaKind,label:'Package reference · 원본',path}];
+   manifest.checkpoints=[{id:'photo-check',title:'Inspect reference · 원본 검사',reference:'package-reference'}];
+   await writeFile(manifestPath,JSON.stringify(manifest));
+   const subject={kind:'checkpoint' as const,checkpointId:'photo-check',planStepId:'step-one'};
+   input.setContext({...input.getContext(),selector:null,parts:null,subjects:[...input.getContext().subjects,subject]});
+   console.log('REFERENCE_CASE_OPEN',mediaKind);
+   const hosted=await hub.openJob({root:input.root,fingerprint:(mediaKind==='image'?'b':'c').repeat(64),readerId:'synthetic-reference-screen/1',readPublished:async()=>input.getContext()});
+   let generation=0;
+   async function referenceApi(verb:string,value:Record<string,unknown>={}){
+    const response=await fetch(hosted.origin+'/jobs/'+hosted.session.jobId+'/api',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+hosted.session.hostCredentials().agent},body:JSON.stringify({schema:JOB_API_SCHEMA,jobId:hosted.session.jobId,requestId:randomUUID(),verb,...(verb==='next'?{}:{expectedGeneration:generation,idempotencyKey:randomUUID()}),...value})});
+    const result=await response.json();assert.equal(result.ok,true,JSON.stringify(result));generation=result.generation;return result.value;
+   }
+   console.log('REFERENCE_CASE_PUBLISH',mediaKind);
+   const publication=await referenceApi('publish',{result:{path:'out',selector:null},freeze:{kind:'producer-held',holdId:'reference-screen-held',record:{path:'record.json',sha256:hash(await readFile(join(input.root,'record.json')))}}}) as JobPublication;
+   assert.equal(publication.source.subject==='image-set'?undefined:publication.source.model,null);assert.equal(publication.visual.status,'available');
+   const frozen=await jobInputHashes(input.root);
+   for(const language of ['en','ko'] as const){
+    console.log('REFERENCE_CASE_ASK',mediaKind,language);
+    const ask=mediaKind==='image'?await referenceApi('ask',{publicationId:publication.publicationId,subject}) as JobPendingAsk:null;
+    const url=new URL(hosted.jobUrl);url.searchParams.set('lang',language);console.log('REFERENCE_CASE_GOTO',mediaKind,language);await page.goto(url.href,language);
+    const mediaSelector='#reference-content '+(mediaKind==='image'?'img':'video');
+    await wait(`document.body.dataset.ready==='true'&&(${mediaKind==='video'}||!document.querySelector('#save').disabled)&&!!document.querySelector(${JSON.stringify(mediaSelector)})`);
+    const layout:any=await page.evaluate(`(()=>{const m=document.querySelector(${JSON.stringify(mediaSelector)}),r=m.getBoundingClientRect(),v=document.querySelector('#reference-viewport').getBoundingClientRect();return {shells:document.querySelectorAll('#app').length,reference:{width:r.width,height:r.height,x:r.x,y:r.y},viewport:{width:v.width,height:v.height},decoded:${mediaKind==='image'?'m.complete&&m.naturalWidth>0':'m.readyState>=2&&!m.seeking'},models:document.querySelectorAll('#rig-root canvas').length,mode:document.querySelector('[data-mode][aria-pressed="true"]')?.dataset.mode,legacy:document.querySelectorAll('.job-inspection').length};})()`);
+    assert.equal(layout.shells,1);assert.equal(layout.legacy,0);assert.equal(layout.models,0);assert.equal(layout.mode,'rig');assert.equal(layout.decoded,true);assert.ok(layout.reference.width>0&&layout.reference.height>0&&layout.viewport.width>0&&layout.viewport.height>0);
+    await click('#stage-comment');
+    const point:any=await page.evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(mediaSelector)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    await page.mouse('mousePressed',point.x,point.y);await page.mouse('mouseReleased',point.x,point.y);await composer('Reference point · '+mediaKind+' · '+language);
+    await wait(`document.querySelectorAll('.stage-comment-pin').length>=1`);
+    const commentCount:number=await page.evaluate<number>(`document.querySelectorAll('.stage-comment-item').length`);assert.ok(commentCount>=1);
+    const key='rig-review-record-comments/1:'+publication.publicationId+':'+publication.source.sourceHash;
+    const draft:any=await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)}))`);assert.equal(draft.comments.at(-1).context.comment.viewport,'reference');assert.ok(draft.comments.at(-1).context.comment.crop.png);
+    let act:any=null;
+    if(ask){
+    await click('#save');await wait(`document.querySelector('#job-record-asks')?.open&&!!document.querySelector('form[data-job-ask="${ask.askId}"] select[name="outcome"]')`);
+    await page.evaluate(`(()=>{const f=document.querySelector('form[data-job-ask="${ask.askId}"]');f.querySelector('select[name="outcome"]').value='pass';f.dispatchEvent(new Event('input',{bubbles:true}));f.requestSubmit();})()`);
+    const deadline=Date.now()+20000;
+    while(Date.now()<deadline){const next=await referenceApi('next',{after:null,waitMs:0});act=next.events.find((event:any)=>event.type==='act'&&event.act.askId===ask.askId)?.act;if(act)break;await Bun.sleep(25);}
+    assert.ok(act,'model-less reference checkpoint committed');assert.equal(act.kind,'checkpoint');assert.equal(act.schema,'rig-review/act@6');assert.equal(act.source.model,null);assert.equal(act.value.checkpointId,'photo-check');assert.equal(act.value.planStepId,'step-one');assert.equal(act.value.outcome,'pass');assert.ok(act.value.comments.some((comment:any)=>comment.text.includes('Reference point · '+mediaKind+' · '+language)));assert.equal('still' in act,false);
+    await page.evaluate(`document.querySelector('#job-record-asks').close()`);
+    }else assert.equal(await page.evaluate(`document.querySelector('#save').disabled`),true);
+    const screenshot=language+'-reference-'+mediaKind+'.png';await writeFile(join(output,screenshot),await page.screenshot());observations.push({kind:'reference-'+mediaKind,language,layout,commentCount,act,screenshot});console.log('REFERENCE_CASE_DONE',mediaKind,language);
+   }
+   assert.deepEqual(await jobInputHashes(input.root),frozen);
+  }finally{console.log('REFERENCE_CASE_CLOSE',mediaKind);await input.close();}
+ }
  assert.deepEqual(errors,[]);assert.deepEqual(await jobInputHashes(fixture.root),immutable);
-}catch(error){failure=error;if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});}
+}catch(error){failure=error;if(page){await page.evaluate<string>(`JSON.stringify({ready:document.body.dataset.ready,language:document.documentElement.lang,text:document.body.innerText.slice(0,4000)})`).then(value=>writeFile(join(output,'failure-state.json'),value)).catch(()=>{});await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});}}
 finally{
  await page?.close();await hub.stop();await fixture.close();await rm(scratch,{recursive:true,force:true});
  await writeFile(join(output,'observations.json'),JSON.stringify({status:failure?'RED':'PASS',cases:observations,errors,error:failure instanceof Error?failure.stack:String(failure??''),fixtureBeforeSetup:before},null,2));
