@@ -874,3 +874,7 @@ Approval binds the frozen record revision through the existing project/source
 hashes, with no separate post-version selector or new ask/act field. Existing
 stages, schemas and stored act bytes retain their meaning. See the
 [record contract](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
+
+The public `JOB_PLAN_BOUND_SIGNOFF_STAGES` remains the original three-entry
+package list. The fourth stage is record-only; package `direction-review`
+signoffs and historical comments acts still accept a nullable plan.

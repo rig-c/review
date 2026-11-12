@@ -203,8 +203,10 @@ export const JOB_PLAN_BOUND_SIGNOFF_STAGES = [
   'plan-approved',
   'rigging-interview',
   'post-interview',
-  'direction-review',
 ] as const;
+
+/** Record-only approval stages; not part of the public job-host runtime exports. */
+export const JOB_RECORD_SIGNOFF_STAGES = [...JOB_PLAN_BOUND_SIGNOFF_STAGES, 'direction-review'] as const;
 
 /** Reserved kinds have no accepted value shape and cannot be asked or submitted.
  * Described correction awaits the joint Create #182 context allowlist.
@@ -512,9 +514,9 @@ export interface JobActValues {
   readonly signoff: {
     /** An explicitly declared Create stage. Validation belongs to its writer. */
     readonly stage: string;
-    /** Changes requested are a verdict. These four approval stages require
+    /** Changes requested are a verdict. These three approval stages require
      * source.plan with exact displayed IDs/hashes at runtime, plan-approved,
-     * rigging-interview, post-interview and direction-review. Other stages keep plan nullable
+     * rigging-interview and post-interview. Other stages keep plan nullable
      * where appropriate. Create validates through its existing steps/step_hashes
      * logic. No new owner approval or revision-hash gate is introduced.
      */
@@ -1032,7 +1034,7 @@ export interface RecordCheckpointSubject {
   readonly checkpointId: string;
 }
 
-export type RecordSignoffStage = typeof JOB_PLAN_BOUND_SIGNOFF_STAGES[number];
+export type RecordSignoffStage = typeof JOB_RECORD_SIGNOFF_STAGES[number];
 
 export interface RecordSignoffSubject {
   readonly kind: 'signoff';
