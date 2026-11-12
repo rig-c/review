@@ -16,12 +16,15 @@ const at=Bun.argv.indexOf('--out'),output=resolve(at<0?'artifacts/direction-scre
 const hash=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 const profile=await mkdtemp(join(tmpdir(),'review796-direction-'));
 const observations:any[]=[],errors:unknown[]=[];let page:InputCdpSession|undefined;
+let reloading=false;
+let command:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
 async function wait(expression:string){const end=Date.now()+20000;while(Date.now()<end){if(await page!.evaluate(expression))return;await Bun.sleep(25);}throw new Error('DIRECTION_SCREEN_WAIT '+expression);}
 async function click(selector:string){await page!.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);}
 async function composer(text:string){await wait(`!!document.querySelector('.stage-comment-composer input')`);await page!.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(text)};f.requestSubmit();})()`);await wait(`!document.querySelector('.stage-comment-composer')`);}
 function scrubAt(target:number|'max'):string{return `(()=>{const s=document.querySelector('#scrub'),step=Number(s.step),target=${target==='max'?'Number(s.max)':target};return Math.abs(Number(s.value)-target)<=step/2+Number.EPSILON;})()`;}
 try{
- page=await launchCdpSession(profile,{sendDeadlineMs:10000,onEvent(event){if(event.method==='Runtime.exceptionThrown'||event.method==='Page.javascriptDialogOpening')errors.push(event.params);}});await page.setViewport(1600,1000);
+ page=await launchCdpSession(profile,{sendDeadlineMs:10000,onEvent(event,send){command=send;if(event.method==='Page.javascriptDialogOpening'&&event.params?.type==='beforeunload'&&reloading){observations.push({kind:'reload-confirmation',type:event.params.type});return send('Page.handleJavaScriptDialog',{accept:true}).then(()=>{});}if(event.method==='Runtime.exceptionThrown'||event.method==='Page.javascriptDialogOpening')errors.push(event.params);}});await page.setViewport(1440,900);
+ assert.ok(command);await command('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
  for(const language of ['en','ko'] as const){
   const builder=await scriptedJobWindowFixture();await builder.publish('direction','direction-'+language);
   let recordContext:ReturnType<typeof createSyntheticPlanRecordWorkspace>['context']|undefined;
@@ -41,6 +44,21 @@ try{
    const layout:any=await page.evaluate(`(()=>{const visible=n=>!!n&&!n.closest('[hidden]')&&n.getBoundingClientRect().height>0;return {shells:document.querySelectorAll('#app').length,panels:document.querySelectorAll('#direction-panel').length,directionVisible:visible(document.querySelector('#direction-panel')),actBars:document.querySelectorAll('.workspace-act-bar').length,verdictInBar:!!document.querySelector('.workspace-act-bar #review-status'),notes:[...document.querySelectorAll('textarea[name="note"],textarea[name="words"],form[data-job-ask] textarea')].filter(visible).length,legacyDumps:document.querySelectorAll('[data-job-direction]').length};})()`);
    assert.equal(layout.shells,1);assert.equal(layout.panels,1);assert.equal(layout.directionVisible,true);
    assert.equal(layout.actBars,1);assert.equal(layout.verdictInBar,true);assert.equal(layout.notes,0);assert.equal(layout.legacyDumps,0);
+   const panelState=()=>page!.evaluate<any>(`(()=>{const p=document.querySelector('#direction-panel'),r=document.querySelector('#rig-overlay').getBoundingClientRect();return {open:p.open,summary:p.querySelector('summary').textContent,width:r.width,height:r.height,dpr:devicePixelRatio};})()`);
+   const closed=await panelState();assert.equal(closed.open,false,'direction closed on initial load');
+   assert.equal(closed.summary,language==='en'?'Direction · 1 s · loop · fixed camera':'연출 · 1초 · 반복 · 카메라 고정');
+   assert.equal(closed.dpr,2);
+   await click('#direction-panel > summary');
+   await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+   const expanded=await panelState();assert.equal(expanded.open,true);
+   const detailsText:string=await page.evaluate(`document.querySelector('#direction-panel > div').textContent`);
+   for(const code of ['DEPTH_UNAVAILABLE','SETS_UNAVAILABLE','CAMERA_PLAYBACK_UNAVAILABLE','CAMERA_APPLY_UNSUPPORTED'])assert.ok(detailsText.includes(code),code);
+   assert.match(detailsText,/[a-f0-9]{64}/,'expanded hashes retained');
+   assert.ok(closed.height>expanded.height,'closing direction returns height to the main view');
+   await click('#direction-panel > summary');
+   await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+   assert.equal((await panelState()).height,closed.height);
+   observations.push({kind:'direction-collapse',language,closed,expanded,detailsText});
    // #559 successor: exercise the actual shared-screen playback for a direction-bearing post source.
    await page.evaluate(`(()=>{const select=document.querySelector('#animation-select');select.value='inspect';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
    assert.equal(await page.evaluate(scrubAt(0)),true);
@@ -72,8 +90,12 @@ try{
    const projected=projectComments(draft.comments.map((row:any)=>'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
    assert.equal(draft.status,'approved','legacy comment draft records the earlier verdict');
    await page.evaluate(`(()=>{const s=document.querySelector('#review-status');s.value='changes-requested';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-   await page.goto(url.href,language);
+   await click('#direction-panel > summary');assert.equal((await panelState()).open,true);
+   // Do not let the readiness check match the old document during same-URL navigation.
+   await page.evaluate(`document.body.dataset.ready='reloading'`);reloading=true;
+   await command!('Page.reload',{ignoreCache:true});
    await wait(`document.body.dataset.ready==='true'&&!document.querySelector('#save').disabled&&document.querySelectorAll('.stage-comment-item').length===2`);
+   reloading=false;assert.equal((await panelState()).open,false,'direction closed again after reload');
    assert.equal(await page.evaluate(`document.querySelector('#review-status').value`),'changes-requested','inspection draft is authoritative after reload');
    await click('#workspace-tab-feedback');await wait(`!document.querySelector('#inspector-feedback').hidden`);
    const corrections:any=await page.evaluate(`(()=>{document.querySelector('#correction-controls').open=true;const visible=n=>!!n&&!n.closest('[hidden]')&&n.getBoundingClientRect().height>0;return {fileVisible:visible(document.querySelector('#correction-words')),addVisible:visible(document.querySelector('#add-proposal')),hiddenByGate:!!document.querySelector('#correction-words').closest('[hidden]')&&!!document.querySelector('#add-proposal').closest('[hidden]')};})()`);
@@ -115,9 +137,9 @@ try{
    assert.ok(signed,'record direction signoff committed after verdict');assert.equal(signed.schema,'rig-review/act@4');assert.equal(signed.value.stage,'direction-review');assert.equal(signed.kind,'signoff');
    observations.push({kind:'record-signoff-after-verdict',language,act:signed,verdictActId:act.actId});
 
-  }catch(error){await writeFile(join(output,'inner-failure-state.json'),await page.evaluate<string>(`JSON.stringify({text:document.body.innerText,ready:document.body.dataset.ready,forms:[...document.querySelectorAll('form[data-job-ask]')].map(f=>({id:f.dataset.jobAsk,disabled:f.querySelector('fieldset')?.disabled})),dialogs:[...document.querySelectorAll('dialog')].map(d=>({id:d.id,open:d.open}))})`));await writeFile(join(output,'inner-failure.png'),await page.screenshot());throw error;}finally{await page.goto('about:blank');host.stop();await builder.close();}
+  }catch(error){await writeFile(join(output,'original-error.json'),JSON.stringify({error:String(error),stack:error instanceof Error?error.stack:undefined,observations,errors},null,2));await writeFile(join(output,'inner-failure-state.json'),await page.evaluate<string>(`JSON.stringify({text:document.body.innerText,ready:document.body.dataset.ready,forms:[...document.querySelectorAll('form[data-job-ask]')].map(f=>({id:f.dataset.jobAsk,disabled:f.querySelector('fieldset')?.disabled})),dialogs:[...document.querySelectorAll('dialog')].map(d=>({id:d.id,open:d.open}))})`));await writeFile(join(output,'inner-failure.png'),await page.screenshot()).catch(()=>{});throw error;}finally{await page.goto('about:blank');host.stop();await builder.close();}
  }
  assert.deepEqual(errors,[]);
  await writeFile(join(output,'observations.json'),JSON.stringify({status:'PASS',cases:observations,errors},null,2));
-}catch(error){if(page){await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});await writeFile(join(output,'failure-state.json'),await page.evaluate<string>(`JSON.stringify({text:document.body.innerText,ready:document.body.dataset.ready})`)).catch(()=>{});}await writeFile(join(output,'observations.json'),JSON.stringify({status:'RED',cases:observations,errors,error:String(error)},null,2));throw error;}
+}catch(error){await writeFile(join(output,'observations.json'),JSON.stringify({status:'RED',cases:observations,errors,error:String(error)},null,2));if(page){await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});await writeFile(join(output,'failure-state.json'),await page.evaluate<string>(`JSON.stringify({text:document.body.innerText,ready:document.body.dataset.ready})`)).catch(()=>{});}await writeFile(join(output,'observations.json'),JSON.stringify({status:'RED',cases:observations,errors,error:String(error)},null,2));throw error;}
 finally{await page?.close();await rm(profile,{recursive:true,force:true});}
