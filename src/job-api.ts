@@ -1497,7 +1497,10 @@ export async function jobBody(request: Request, maximum = jobBodyLimit): Promise
       chunks.push(value);
     }
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
-    if (size > jobBodyLimit && (value?.kind !== 'review-verdict' || value?.value?.stage !== 'rig-review' || !value.capture)) {
+    const hasCommentImages = ['parts-verdict', 'review-verdict', 'checkpoint', 'signoff', 'reopen'].includes(value?.kind) &&
+      /"png":"data:image\/png;base64,/.test(JSON.stringify(value?.value));
+    const rigCapture = value?.kind === 'review-verdict' && value?.value?.stage === 'rig-review' && value.capture;
+    if (size > jobBodyLimit && !(maximum > jobBodyLimit && (rigCapture || hasCommentImages))) {
       throw new JobError('JOB_BODY_LIMIT');
     }
     return value;
@@ -1547,6 +1550,17 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
       let input: JobAgentRequest | AgentRequestV3 | JobFetchActRequest | FetchActRequestV3 | null = null;
       let responseSchema: typeof JOB_API_SCHEMA | typeof JOB_API_V3_SCHEMA = session.apiSchema;
       try {
+        const cropUrl = new URL(request.url);
+        const crop = new RegExp('^' + base + '/comment-crops/([a-f0-9]{64})\\.png$').exec(cropUrl.pathname);
+        if (crop && request.method === 'GET' && cropUrl.origin === origin && !cropUrl.search && !cropUrl.hash) {
+          if (request.headers.get('sec-fetch-site') === 'cross-site' ||
+              request.headers.get('origin') !== null && request.headers.get('origin') !== origin) {
+            throw new JobError('JOB_SAME_ORIGIN_REQUIRED');
+          }
+          session.authorize('ui', request.headers.get('X-Review-Capability'));
+          return new Response(new Uint8Array(session.readCommentCrop(crop[1]!)),
+            {headers: {...responseHeaders, 'Content-Type': 'image/png'}});
+        }
         gate(request, base + '/api', false);
         const body = await jobBody(request);
         const mode: JobPublicationMode =

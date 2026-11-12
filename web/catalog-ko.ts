@@ -3474,7 +3474,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.submit.JOB_ACT_NOTHING_TO_SUBMIT": "판정이 선택되지 않았어요 — 승인, 수정 요청 또는 체크포인트 결과를 선택해 주세요.",
   "job.submit.JOB_STILL_CAPTURE_FAILED": "리그 이미지를 캡처하지 못했어요 — 리그가 다 그려질 때까지 기다린 뒤 다시 제출해 주세요.",
   "job.submit.JOB_STILL_BINDING_MISMATCH": "표시된 프레임이나 원본이 바뀌었어요 — 현재 리그가 로드될 때까지 기다린 뒤 다시 제출해 주세요.",
-  "job.submit.JOB_BODY_LIMIT": "요청 또는 리뷰 이벤트가 허용된 크기를 초과했어요 — 초안을 보존하고 호스트 담당자에게 크기 제한 확인을 요청해 주세요.",
+  "job.submit.JOB_BODY_LIMIT": "댓글에 첨부된 이미지나 리그 캡처 때문에 리뷰 제출 데이터가 너무 커요 — 이미지 댓글을 일부 삭제하거나, 수정될 때까지 초안을 보존해 주세요.",
   "job.submit.JOB_ACT_SOURCE_STALE": "리뷰 원본이 바뀌었어요 — 리뷰를 새로고침하고 현재 원본을 확인한 뒤 제출해 주세요.",
   "job.submit.JOB_STILL_UNAVAILABLE": "보존된 리그 이미지를 사용할 수 없어요 — 현재 리그 리뷰를 다시 열고 제출해 주세요.",
   "job.submit.JOB_STILL_OUTPUT_FAILED": "리그 이미지를 저장하지 못했어요 — 호스트 담당자에게 출력 위치 확인을 요청해 주세요.",

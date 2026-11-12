@@ -577,6 +577,34 @@ export async function* jobWindowEvents(access: JobWindowAccess, after: string | 
                     !['published', 'pending', 'act', 'closed'].includes(event.type))
                     throw new Error('JOB_STREAM_FAILED');
                 buffered = buffered.slice(newline + 1);
+                const crops = new Map<string, {owner: Record<string, unknown>; key: string}[]>();
+                const packed = event as EventV3 & {_jobCommentCrops?: [string[], string][]};
+                for (const [path, sha256] of packed._jobCommentCrops ?? []) {
+                    if (!Array.isArray(path) || !path.every(key => typeof key === 'string') || path.at(-1) !== 'png' ||
+                        typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('JOB_STREAM_FAILED');
+                    let owner: any = event;
+                    for (const key of path.slice(0, -1)) {
+                        if (!owner || typeof owner !== 'object' || !Object.hasOwn(owner, key)) throw new Error('JOB_STREAM_FAILED');
+                        owner = owner[key];
+                    }
+                    if (owner?.png !== 'job-crop:' + sha256 || owner.sha256 !== sha256 ||
+                        owner.path !== `comment-crops/${sha256}.png`) throw new Error('JOB_STREAM_FAILED');
+                    const reference = 'job-crop:' + sha256, refs = crops.get(reference) ?? [];
+                    refs.push({owner, key: 'png'}); crops.set(reference, refs);
+                }
+                delete packed._jobCommentCrops;
+                for (const [reference, refs] of crops) {
+                    const crop = await fetcher(access.route('comment-crops/' + reference.slice(9) + '.png'),
+                        {signal, headers: access.headers()});
+                    if (!crop.ok) throw new Error('JOB_STREAM_FAILED');
+                    const bytes = new Uint8Array(await crop.arrayBuffer());
+                    const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
+                        byte => byte.toString(16).padStart(2, '0')).join('');
+                    if (digest !== reference.slice(9)) throw new Error('JOB_STREAM_FAILED');
+                    let binary = '';
+                    for (const byte of bytes) binary += String.fromCharCode(byte);
+                    for (const ref of refs) ref.owner[ref.key] = 'data:image/png;base64,' + btoa(binary);
+                }
                 yield event;
                 newline = buffered.indexOf('\n');
             }

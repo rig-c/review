@@ -3474,7 +3474,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.submit.JOB_ACT_NOTHING_TO_SUBMIT": "No decision was selected — choose Approved, Changes requested or a checkpoint outcome.",
   "job.submit.JOB_STILL_CAPTURE_FAILED": "The rig image could not be captured — wait for the rig to finish drawing and try again.",
   "job.submit.JOB_STILL_BINDING_MISMATCH": "The displayed frame or source changed — wait for the current rig to load and submit again.",
-  "job.submit.JOB_BODY_LIMIT": "The request or review event exceeds the allowed size — keep the draft and ask the host operator to inspect the size limit.",
+  "job.submit.JOB_BODY_LIMIT": "The images attached to your comments or the rig still make this review too large to send — remove some image comments, or keep the draft until this is fixed.",
   "job.submit.JOB_ACT_SOURCE_STALE": "The review source changed — refresh the review and inspect the current source before submitting.",
   "job.submit.JOB_STILL_UNAVAILABLE": "The retained rig image is unavailable — reopen the current rig review and try again.",
   "job.submit.JOB_STILL_OUTPUT_FAILED": "The rig image could not be saved — ask the host operator to check the output destination.",

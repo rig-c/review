@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeSync} from 'node:fs';
 import {join} from 'node:path';
-import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit,
+import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit, jobActDeliveryLimit, jobResponseBodyLimit,
   type JobAct, type JobCommentsAct, type JobAgentRequest, type JobNextRequest, type JobNextValue } from './job-contract.ts';
 import { assertJobApiSchema, jobFailure, jobHash, jobId, jobInteger, jobObject, jobWaitLimitMs, parseJobRequest, parseCommentsAct } from './job-api.ts';
 import { JobError } from './job-store.ts';
@@ -313,7 +313,7 @@ async function fetchActCommand(args: readonly string[], options: JobCLIOptions):
     if (response.headers.get('content-type')?.split(';')[0] !== accept) throw new JobError('JOB_REQUEST_INVALID');
     return bytes;
   }
-  const bytes = await read(jobRawActMediaType, 512 * 1024);
+  const bytes = await read(jobRawActMediaType, jobActDeliveryLimit);
   const act = parseConsumerAct(bytes, job, actId);
   const still = 'still' in act ? act.still : undefined;
   const destination = values.get('still-out');
@@ -340,7 +340,7 @@ async function readJobResponse(response: Response, interrupted?: Promise<never>)
       const { done, value } = await (interrupted ? Promise.race([reader.read(), interrupted]) : reader.read());
       if (done) break;
       size += value.byteLength;
-      if (size > 1024 * 1024) {
+      if (size > jobResponseBodyLimit) {
         try { void reader.cancel().catch(() => {}); } catch {}
         throw new JobError('JOB_BODY_LIMIT');
       }

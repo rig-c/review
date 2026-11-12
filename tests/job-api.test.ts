@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { createJobHostPorts, jobBodyLimit, parseJobRequest } from '../src/job-api.ts';
-import { JOB_API_SCHEMA } from '../src/job-contract.ts';
+import { JOB_API_SCHEMA, jobActDeliveryLimit, jobResponseBodyLimit } from '../src/job-contract.ts';
 import { parseJobCLI, jobCommand } from '../src/job-cli.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
 import { Database } from 'bun:sqlite';
@@ -196,7 +196,7 @@ test('CLI constructs semantic vocabulary without a storage file and exposes no h
   expect(output[0]).not.toContain(f.state);
 });
 
-test('CLI streams response bytes up to 1 MiB, cancels on overflow and preserves decode/schema/exit priorities', async () => {
+test('CLI streams response bytes up to the full-act envelope bound, cancels on overflow and preserves decode/schema/exit priorities', async () => {
   const locator = 'http://127.0.0.1:4100/jobs/job-1';
   const args = ['next', locator, '--wait-ms', '0'] as const;
   const run = (response: Response, out: string[] = []) => jobCommand(args, {
@@ -207,7 +207,7 @@ test('CLI streams response bytes up to 1 MiB, cancels on overflow and preserves 
 
   let pulls = 0;
   let cancelled = false;
-  const chunkSize = 300 * 1024;
+  const chunkSize = Math.ceil(jobResponseBodyLimit / 3);
   const overflowStream = new ReadableStream<Uint8Array>({
     pull(controller) {
       pulls += 1;
@@ -226,15 +226,15 @@ test('CLI streams response bytes up to 1 MiB, cancels on overflow and preserves 
   expect(pulls).toBeLessThanOrEqual(5);
 
   const rejectCancelStream = new ReadableStream<Uint8Array>({
-    pull(controller) { controller.enqueue(new Uint8Array(1024 * 1024 + 1)); },
+    pull(controller) { controller.enqueue(new Uint8Array(jobResponseBodyLimit + 1)); },
     cancel() { return Promise.reject(new Error('cancel boom')); },
   });
   await expect(run(new Response(rejectCancelStream))).rejects.toThrow('JOB_BODY_LIMIT');
 
   const prefix = `{"schema":${JSON.stringify(JOB_API_SCHEMA)},"pad":"`;
   const suffix = '"}';
-  const exactBytes = new TextEncoder().encode(prefix + 'a'.repeat(1024 * 1024 - prefix.length - suffix.length) + suffix);
-  expect(exactBytes.byteLength).toBe(1024 * 1024);
+  const exactBytes = new TextEncoder().encode(prefix + 'a'.repeat(jobResponseBodyLimit - prefix.length - suffix.length) + suffix);
+  expect(exactBytes.byteLength).toBe(jobResponseBodyLimit);
   const exactOut: string[] = [];
   await run(new Response(new ReadableStream<Uint8Array>({
     start(controller) {
@@ -244,7 +244,7 @@ test('CLI streams response bytes up to 1 MiB, cancels on overflow and preserves 
     },
   })), exactOut);
   expect(exactOut).toHaveLength(1);
-  expect(Buffer.byteLength(exactOut[0])).toBe(1024 * 1024);
+  expect(Buffer.byteLength(exactOut[0])).toBe(jobResponseBodyLimit);
 
   const boundaryPlusOneOut: string[] = [];
   await expect(run(new Response(new ReadableStream<Uint8Array>({
@@ -617,7 +617,7 @@ test('#557 backend consumer bounds stdin and raw streams before filesystem or st
   expect(requests).toBe(0);
   expect(cancelled).toBe(true);
   const overflow = new ReadableStream<Uint8Array>({
-    pull(controller) {controller.enqueue(new Uint8Array(512 * 1024 + 1));},
+    pull(controller) {controller.enqueue(new Uint8Array(jobActDeliveryLimit + 1));},
   }, {highWaterMark: 0});
   await expect(jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', 'absent'], {
     consumerCapability: f.session.writerGrant().fetchCapability, write: text => {stdout += text;},
