@@ -94,39 +94,25 @@ Leave existing workers under their owner's control. Follow
 [workspace lifecycle and restart](https://github.com/rig-c/review/blob/main/docs/WORKFLOWS.md#workspace-lifecycle-and-restart)
 for host reuse, live unresponsive PID refusal and aggregate shutdown behavior.
 
-For both CLI and embedded integrations, use **N reviews → one invocation, one
-owner URL**. Core's `rigc review` passes arguments through unchanged. For
-semantic jobs, use `startJobHub` from `@rig-c/review/job-host` once and call
-`hub.openJob` per designated job in that process. Give the person `hub.ownerUrl`
-and one what-to-look-at line. One PID/listener owns the list and selected Review
-UI, with a common trusted bootstrap reviewer. Keep each job's identity,
-generation CAS, source, asks, acts, cursors and grants separate under
-job-api@2/act@2. Follow the
-[embedded workflow and trusted-hook example](https://github.com/rig-c/review/blob/main/docs/WORKFLOWS.md#embedded-semantic-jobs)
-and [public signatures](https://github.com/rig-c/review/blob/main/docs/STABILITY.md#embedded-semantic-job-hub).
+For CLI integrations, use **N reviews → one invocation, one owner URL**.
+Core's `rigc review` passes arguments through unchanged. For semantic jobs, use
+`startJobHost` from `@rig-c/review/job-host` once per designated job and give the person that host's owner URL and one
+what-to-look-at line. Keep each job's identity, generation CAS, source, asks,
+acts, cursors and grants separate under job-api@2/act@2. Follow the
+[public signatures](https://github.com/rig-c/review/blob/main/docs/STABILITY.md#managed-owner-host).
 
 Register `readPublished`, `partsEnumerator` and `installWriterBinding` with their
 declared IDs in the owning process. The consumer host owns these implementations
 and private bootstrap channels. General cross-process callback registration is
-deferred. Compatible legacy `startJobHost` attachment to a hub-owned job remains
-supported. An active external standalone owner refuses `JOB_HUB_EXTERNAL_HOST`,
-and a live unresponsive owner refuses `JOB_HUB_HOST_UNRESPONSIVE`.
+deferred.
 
 Use `publish`, `ask` and `next` per job. The trusted writer directly fetches
 finalized acts with its separate read-only grant. Human submission stays in the
 Review UI. Semantic `close` ends only that job and revokes its writer grant.
-`await hub.stop()` stops transport, preserving active durable jobs and grants.
-On restart, re-register callbacks, refresh writer origins and obtain the new hub
-owner URL. The hub capability and `workspace` incarnation rotate, while retained
-active job identities and grants persist until close. Closed retained entries
-count toward the hub's 32-entry application bound. Selected frames are retained
-lazily within that bound, with no hardware performance guarantee.
-
-External consumer-owned hub adoption remains pending in
-[Review #512](https://github.com/rig-c/review/issues/512). Keep imagery, questions
-and approvals in the Review UI through supported commands and APIs. Supplied
-sources stay immutable. Agents never construct internal Review state, binding
-files or human acts, and owner capabilities stay in private owner channels.
+Keep imagery, questions and approvals in the Review UI through supported
+commands and APIs. Supplied sources stay immutable. Agents never construct
+internal Review state, binding files or human acts, and owner capabilities stay
+in private owner channels.
 
 ## Active cycle standing live-job contract
 
