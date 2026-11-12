@@ -38,6 +38,7 @@ export interface RigHostCommit {
 }
 export interface RigHost {
   readonly subject?:'parts';
+  readonly unavailable?:string;
   readonly direction?:{readonly publicationId:string;readonly sourceHash:string};
   readonly imageSet?:{readonly label:string;readonly publicationId:string;readonly source:JobImageSourceBinding;readonly gallery:HTMLElement};
   canSubmit?():boolean;
@@ -45,7 +46,7 @@ export interface RigHost {
   readonly navigation?:RigHostNavigation;
   /** Derived from the displayed subject's finalized verdict; never a mode or another subject's act. */
   reviewState?(issues:number,sending:boolean):string;
-  readonly record?:{readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean};
+  readonly record?:{readonly publicationId?:string;readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean};
   submitParts?(issues:readonly PartsIssue[]):Promise<string>;
   readonly access: InstanceAccess;
   /** UI act authority is separate from a retained backdrop's immutable source access. */

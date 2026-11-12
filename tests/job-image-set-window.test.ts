@@ -2,7 +2,7 @@
 import {afterEach, expect, test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
-import {createJobRigScreen,jobRigScreenRoute} from '../web/job-rig-screen.ts';
+import {createJobRigScreen,jobRigScreenRoute,jobRigScreenRefusal} from '../web/job-rig-screen.ts';
 import {mountViewportPair} from '../web/viewport-pair.ts';
 import {layerShortcuts, describeLayerToggles, inspectionViewSwitch, createViewControls, createRigLayerControls} from '../web/view-controls.ts';
 import {SENTINELS} from '../web/parts-render.ts';
@@ -215,65 +215,9 @@ class MountElement extends EventTarget {
   }
 }
 
-async function actualBuildBody() {
-  const source = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
-  const parsed = ts.createSourceFile('job-session.ts', source, ts.ScriptTarget.Latest, true);
-  let body: string | undefined;
-  let gallery: string | undefined;
-  function visit(node: ts.Node) {
-    if (ts.isFunctionDeclaration(node) && node.name?.text === 'build') body = node.getText(parsed);
-    if (ts.isFunctionDeclaration(node) && node.name?.text === 'imageGallery') gallery = node.getText(parsed);
-    ts.forEachChild(node, visit);
-  }
-  visit(parsed);
-  if (!body || !gallery) throw new Error('Production build/gallery body missing');
-  return gallery + '\n' + body;
-}
-
-function mountActualBuild(body: string, prepared: JobPreparedInspection): MountElement {
-  const translate = (key: string) => enCatalog[key] ?? key;
-  const node = (tag: string, key?: string) => {
-    const element = new MountElement(tag);
-    if (key) {element.dataset.jobText = key; element.textContent = translate(key);}
-    return element;
-  };
-  const inputLabel = (key: string, input: MountElement) => {const label = node('label'); label.append(node('span', key), input); return label;};
-  const selectValues = (values: string[], keys: string[]) => {
-    const select = node('select');
-    for (const [index, value] of values.entries()) {const option = node('option', keys[index]); option.value = value; select.append(option);}
-    return select;
-  };
-  replaceGlobal('HTMLElement', MountElement);
-  replaceGlobal('document', {createElement: node, createTextNode: (text: string) => {const node = new MountElement('#text'); node.textContent = text; return node;}});
-  // Execute the actual nested production build body, without adding a product test seam.
-  const javascript = new Bun.Transpiler({loader: 'ts'}).transformSync(body);
-  const build = new Function('deps', `
-    const {node, inputLabel, selectValues, mountViewportPair, t, layerShortcuts, createViewControls, createRigLayerControls,
-      describeLayerToggles, SENTINELS, RigOverlays, inspectionViewSwitch} = deps;
-    let loop = true, stageBackground = '';
-    const layers = {images: true, mesh: false, bones: false, meshOpacity: 0.65};
-    const i18n = {tr: t}, overlays = new WeakMap();
-    ${javascript}
-    return build;
-  `)({node, inputLabel, selectValues, mountViewportPair, t: translate, layerShortcuts, createViewControls, createRigLayerControls,
-    describeLayerToggles, SENTINELS, RigOverlays, inspectionViewSwitch}) as (prepared: JobPreparedInspection) => MountElement;
-  const host = node('main'); host.append(build(prepared));
-  return host;
-}
-
-function buildFixture(f: ReturnType<typeof setup>): JobPreparedInspection {
-  const rigRoot = new MountElement('div'); rigRoot.id = 'rig-root';
-  return {display: f.display, metadata: f.metadata, interview: null, parts: null,
-    partImages: new Map(), interviewImages: new Map(), references: [], assets: null, player: null,
-    rigRoot: rigRoot as unknown as HTMLElement,
-    imageSetImages: f.source.imageSet.images.map(() => new MountElement('img') as unknown as HTMLImageElement),
-    inspection: null, setupPose() {}, dispose() {}};
-}
-
 test('#688 shared rig layer constructor preserves structure and job language bindings in EN and KO', async () => {
-  const f = setup();
-  const prepared=buildFixture(f);prepared.display=fixturePublication();
-  mountActualBuild(await actualBuildBody(), prepared);
+  setup();
+  replaceGlobal('document',{createElement:(tag:string)=>new MountElement(tag)});
   const rig = createRigLayerControls();
   expect(rig.id).toBe('layer-controls');
   expect(rig.className).toBe('layer-toggles');
@@ -293,25 +237,16 @@ test('#688 shared rig layer constructor preserves structure and job language bin
   }
 });
 
-test('#772 the legacy image screen refuses instead of building a second gallery',async()=>{
-  const f=setup(),body=await actualBuildBody(),prepared=buildFixture(f);
-  expect(f.metadata.feedbackCatalog.slots).toBeNull();
-  expect(()=>mountActualBuild(body,prepared)).toThrow('JOB_PANEL_UNAVAILABLE');
+test('#774 the shared source host names a missing direction instead of rebuilding a part selector',()=>{
+ const f=setup(),display=fixturePublication(),source=display.publication.source;
+ if(source.subject==='image-set')throw new Error('Expected model fixture');
+ for(const slots of [['body','arm'],[]]){
+  const before=structuredClone(slots);
+  const post={...display,publication:{...display.publication,source:{...source,selector:{kind:'post' as const,version:1,rigVersion:1},direction:null}}};
+  expect(jobRigScreenRefusal(post,[],new Set())).toBe('JOB_DIRECTION_MISSING');
+  expect(slots).toEqual(before);expect(f.metadata.feedbackCatalog.slots).toBeNull();
+ }
 });
-
-test('522 hostless direction fallback preserves known slot metadata without rebuilding a part selector',async()=>{
-  const f=setup(),body=await actualBuildBody();
-  for(const slots of [['body','arm'],[]]){
-    const prepared=buildFixture(f),display=fixturePublication(),source=display.publication.source;
-    if(source.subject==='image-set')throw new Error('Expected model fixture');
-    prepared.display={...display,publication:{...display.publication,source:{...source,selector:{kind:'post',version:1,rigVersion:1},direction:{path:'direction.json',sha256:'d'.repeat(64)}}}};
-    prepared.metadata={...f.metadata,manifest:{...f.metadata.manifest,model:'skeleton.model.json'},feedbackCatalog:{slots}};
-    const before=structuredClone(prepared.metadata.feedbackCatalog),mounted=mountActualBuild(body,prepared);
-    expect(mounted.querySelector('#job-part')).toBeNull();expect(prepared.metadata.feedbackCatalog).toEqual(before);
-    expect(mounted.querySelectorAll('figure')).toHaveLength(0);expect(mounted.querySelector('#stage-layout')?.hidden).toBe(false);prepared.dispose();
-  }
-});
-
 
 test('#772 shared image preparation waits for every sealed member and routes image verdicts only',async()=>{
  const f=setup(),ask={askId:'image',publicationId:f.display.publication.publicationId,source:f.source,status:'pending' as const,subject:{kind:'review-verdict' as const,stage:'image-review' as const}};
@@ -323,4 +258,18 @@ test('#772 shared image preparation waits for every sealed member and routes ima
  let returned=false;const preparing=screen.prepare(f.display,new AbortController().signal).then(result=>{returned=true;return result;});
  await until(()=>f.images.length===2);f.images[0]!.resolve();await Bun.sleep(1);expect(returned).toBe(false);f.images[1]!.resolve();
  const result=await preparing;expect(result?.images?.imageSetImages?.map(image=>image.alt)).toEqual(['Source','Candidate']);expect(result?.record).toBeUndefined();expect(result?.modals).toBeUndefined();result!.images!.dispose();
+});
+
+for(const kind of ['model','parts','direction'] as const)test('#774 missing '+kind+' prepares the existing empty host without preloading a picture',async()=>{
+ const f=setup(),display=fixturePublication(),source=display.publication.source;
+ if(source.subject==='image-set')throw new Error('Expected model fixture');
+ const input={...display,publication:{...display.publication,source:{...source,model:kind==='direction'?source.model:null,selector:kind==='parts'?{kind:'draft' as const,id:'missing'}:kind==='direction'?{kind:'post' as const,version:2,rigVersion:1}:null}}};
+ f.metadata.sourceHash=input.publication.source.sourceHash;
+ if(kind==='direction')f.metadata.reviewedSource={...f.metadata.reviewedSource,rig:{path:source.model!.path,sha256:source.model!.sha256} as never};
+ f.metadata.capabilities={playback:kind==='direction',preRig:kind==='parts'} as never;
+ const screen=createJobRigScreen({host:{} as HTMLElement,pageId:'empty',access:{capability:'fixture',headers:init=>new Headers(init)},window:{state:()=>({pending:[],receipt:null,generation:1,preparing:false,closed:false}),submit:async()=>{throw Error('No authority invented');}},routes:d=>({entry:d.routes.entry,api:path=>d.routes.apiBase+path}),translate:key=>key,refusal:String,formDependencies:{} as never,load:async()=>{}});
+ const prepared=await screen.prepare(input,new AbortController().signal);
+ expect(prepared!.record!.picture).toBeNull();expect(prepared!.record!.forms.size).toBe(0);
+ expect(prepared!.refusal).toBe(kind==='model'?'JOB_MODEL_MISSING':kind==='parts'?'JOB_PARTS_MISSING':'JOB_DIRECTION_MISSING');
+ expect(f.requests).toHaveLength(1);expect(f.requests[0]).toEndWith('/api/review');prepared!.record!.inspection.dispose();
 });

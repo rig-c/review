@@ -81,10 +81,10 @@ async function resources() {
  assert.equal(grant.jobId, jobs[0]!.session.jobId); assert.ok(/^[a-f0-9]{64}$/.test(grant.capability));
  const landing = await fetch(hub!.origin + grant.entry + '&lang=en');
  const html = await landing.text(), csp = landing.headers.get('content-security-policy');
- assert.equal(landing.status, 200); assert.ok(html.includes('data-job-window')); assert.ok(csp?.includes("frame-ancestors 'self'"));
+ assert.equal(landing.status, 200); assert.ok(html.includes('<div id="app"></div>')); assert.ok(csp?.includes("frame-ancestors 'self'"));
  const direct = await fetch(jobs[0]!.jobUrl.split('#')[0]); await direct.body?.cancel();
  assert.ok(direct.headers.get('content-security-policy')?.includes("frame-ancestors 'none'"));
- for (const path of ['job.js', 'styles.css']) {
+ for (const path of ['main.js', 'styles.css']) {
   const response = await fetch(hub!.origin + '/jobs/' + grant.jobId + '/' + path), body = await response.text();
   assert.ok(response.ok && body.length > 0); rows.push({path, status: response.status, type: response.headers.get('content-type'), bytes: body.length});
  }

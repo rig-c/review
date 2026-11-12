@@ -74,7 +74,7 @@ test('member embedding grants frame ancestors only to its validated landing quer
   }
   for (const suffix of ['?hub=other', '?hub=' + f.incarnation + '&hub=' + f.incarnation,
     '?hub=' + f.incarnation + '&lang=en&lang=ko', '?hub=' + f.incarnation + '&extra=1', '?hub=' + f.incarnation + '&lang=other',
-    'job.js?hub=' + f.incarnation, 'styles.css?lang=en', 'publications/unknown?hub=' + f.incarnation,
+    'main.js?hub=' + f.incarnation, 'styles.css?lang=en', 'publications/unknown?hub=' + f.incarnation,
     'publications/unknown/instances/' + 'a'.repeat(64) + '/assets/model.json?hub=' + f.incarnation]) {
     const response = await fetch(base + suffix); expect(response.status).toBe(400); await response.body?.cancel();
   }

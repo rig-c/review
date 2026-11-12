@@ -194,8 +194,8 @@ test('#743 no-picture record attaches owned lifecycle only after asynchronous wo
  const suspend=()=>{},resume=async()=>{},dispose=()=>{};
  const scope={document,host:{record:{label:'Plan',sourceHash:'a'.repeat(64),hasPicture:false},attach(screen:unknown){attached=screen;events.push('attached');},displayed(){expect(document.body.dataset.ready).toBe('true');events.push('displayed');}},
   readOnly:null,actReadOnly:null,access:{capability:"owner"},readOnlyReason,rigInput:null,referenceInput:null,parts:null,disposed:false,tr:String,
-  bindWorkspace(){},bindInspector(){},renderLayout(){},text(){},message(){},el:()=>({hidden:false}),
-  setupComments(){commentsSetup++;},rigInspector:{comments:{button:commentButton}},button:()=>stageCommentButton,
+  bindWorkspace(){},bindInspector(){},renderLayout(){},text(){},message(){},el:()=>({hidden:false,children:[]}),
+  restoreRecordComments(){},showRecordComments(){},setupComments(){commentsSetup++;},rigInspector:{comments:{button:commentButton}},button:()=>stageCommentButton,
   PartExplorer:class{},workspace:{settle:()=>new Promise<void>(resolve=>{settle=resolve;})},
   viewport:{observeResize:()=>({disconnect:()=>events.push('disconnected')})},viewDisposers:disposers,
   renderRecordForms(){},renderPendingSubjects(){},suspendScreen:suspend,resumeScreen:resume,disposeScreen:dispose};

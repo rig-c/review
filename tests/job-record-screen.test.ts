@@ -88,24 +88,29 @@ test('#750 record metadata mismatch refuses',async()=>{
 });
 
 test('#750 missing record form dependencies refuse before legacy fallback',async()=>{
- const h=await harness();try{const screen=createJobRigScreen({...h.options,formDependencies:undefined});await expect(screen.prepare(h.f.display,new AbortController().signal)).rejects.toThrow('JOB_PANEL_UNAVAILABLE');expect(screen.mounted()).toBeNull();}finally{await h.close();}
+ const h=await harness();try{const screen=createJobRigScreen({...h.options,formDependencies:undefined});await expect(screen.prepare(h.f.display,new AbortController().signal)).rejects.toThrow('JOB_ACT_KIND_DISABLED');expect(screen.mounted()).toBeNull();}finally{await h.close();}
 });
 
-test('#750 unsupported fallback drains its first stream and starts legacy only once; supported records do not fall back',async()=>{
+test('#774 all shared publications keep one stream; cancellation never mounts another screen',async()=>{
  const source=await readFile(new URL('../web/job-session.ts',import.meta.url),'utf8');
- const start=source.indexOf('export async function mountJobScreen('),end=source.indexOf('/** Browser mount is explicit',start);
- let body=source.slice(start,end).replace('export async function mountJobScreen','async function mountJobScreen').replace("await import('./i18n.ts')",'i18nDouble');
+ const start=source.indexOf('export async function mountJobScreen(');
+ const body=source.slice(start).replace('export async function mountJobScreen','async function mountJobScreen').replace("await import('./i18n.ts')",'i18nDouble');
  const run=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(body)};return mountJobScreen;}`);
- for(const variant of ['unsupported','supported','mounted-supported','stop-during-fallback']){
-  const supported=variant==='supported'||variant==='mounted-supported';
-  let adapter:any,drained=false,legacy=0,streams=0,aborted=false,disposed=0,reports=0,changed=0,finishLegacy:(()=>void)|undefined;const document={createElement:()=>({dataset:{},setAttribute(){}})};
-  const environment={document,sessionStorage:{},localStorage:{},location:{href:'http://127.0.0.1/jobs/fixture/',origin:'http://127.0.0.1'},history:{replaceState(){}},crypto,AbortController,URL,jobWindowAccess:()=>({jobId:'fixture'}),i18nDouble:{onLanguageChange:()=>()=>{}},t:(key:string)=>key,createJobFormHelpers:()=>({}),createJobFormDrafts:()=>({saveDraft(){}}),createJobWindowTransport:()=>({}),createJobRigScreen:()=>({mounted:()=>variant==='mounted-supported'?{}:null,prepare:async()=>supported?{}:null,changed(){changed++;},report(){reports++;},painted:async()=>{}}),createJobWindow:(options:any)=>{adapter=options.adapter;return {stop(){aborted=true;},state:()=>({}),event(){}};},startJobWindowEvents:()=>{streams++;return {done:Promise.resolve().then(()=>{drained=true;}),displayed(){}};},mountJobSession:async(_host:any,flag:boolean)=>{expect(flag).toBe(true);expect(aborted).toBe(true);expect(drained).toBe(true);legacy++;if(variant==='stop-during-fallback')await new Promise<void>(resolve=>{finishLegacy=resolve;});return ()=>{disposed++;};},assertJobAskSource(){},jobCheckpointContext,jobPublicationRoutes,jobWindowRefusal:String,globalThis:{addEventListener(){},removeEventListener(){}},JOB_HUB_READY:'ready',jobHubMessageMatches(){}};
+ for(const mounted of [false,true]){
+  let adapter:any,streams=0,aborted=false,paints=0,reports=0,changed=0;
+  const prepared={},controller=new AbortController();
+  const environment={document:{createElement:()=>({dataset:{},setAttribute(){}})},sessionStorage:{},localStorage:{},location:{href:'http://127.0.0.1/jobs/fixture/',origin:'http://127.0.0.1'},history:{replaceState(){}},crypto,AbortController,URL,
+   jobWindowAccess:()=>({jobId:'fixture'}),i18nDouble:{onLanguageChange:()=>()=>{}},t:(key:string)=>key,createJobFormHelpers:()=>({}),createJobFormDrafts:()=>({saveDraft(){}}),createJobWindowTransport:()=>({}),
+   createJobRigScreen:()=>({mounted:()=>mounted?prepared:null,prepare:async()=>prepared,changed(){changed++;},report(){reports++;},painted:async()=>{paints++;}}),
+   createJobWindow:(options:any)=>{adapter=options.adapter;return {stop(){aborted=true;},state:()=>({}),event(){}};},startJobWindowEvents:()=>{streams++;return {done:Promise.resolve(),displayed(){}};},
+   assertJobAskSource(){},jobCheckpointContext,jobPublicationRoutes,jobWindowRefusal:String,globalThis:{addEventListener(){},removeEventListener(){}},JOB_HUB_READY:'ready',jobHubMessageMatches(){}};
   const stop=await run(environment)({append(){},querySelectorAll:()=>[]});
-  if(!supported){const signal=new AbortController().signal;const pending=Promise.all([adapter.painted(null,signal),adapter.painted(null,signal)]);if(variant==='stop-during-fallback'){while(!finishLegacy)await Bun.sleep(1);stop();finishLegacy();}await pending;expect(legacy).toBe(1);}else{const prepared=await adapter.prepare({},new AbortController().signal);expect(prepared).toBeTruthy();await adapter.painted(prepared,new AbortController().signal);expect(legacy).toBe(0);if(variant==='mounted-supported'){adapter.changed({error:'fixture load failure'});expect(changed).toBe(1);expect(reports).toBe(0);}}
-  expect(streams).toBe(1);stop();expect(disposed).toBe(supported?0:1);
+  expect(await adapter.prepare({},controller.signal)).toBe(prepared);await adapter.painted(prepared,controller.signal);expect(paints).toBe(1);
+  adapter.changed({error:'fixture load failure'});expect(changed).toBe(1);expect(reports).toBe(mounted?0:0);
+  controller.abort();await adapter.painted(prepared,controller.signal);expect(paints).toBe(1);
+  stop();expect(aborted).toBe(true);await adapter.painted(prepared,new AbortController().signal);expect(paints).toBe(1);expect(streams).toBe(1);stop();
  }
 });
-
 
 test('#750 deterministic interview writer persists inline Other and note at a valid past timestamp',async()=>{
  const f=await recordScreenFixture('interview-picks');try{

@@ -1,4 +1,12 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+  "JOB_DIRECTION_MISSING": "JOB_DIRECTION_MISSING",
+  "job.refusal.JOB_DIRECTION_MISSING": "이 게시물에는 디렉션이 없습니다. 제작 도구에서 모델과 함께 디렉션 데이터를 게시해야 합니다.",
+  "JOB_PARTS_MISSING": "JOB_PARTS_MISSING",
+  "job.refusal.JOB_PARTS_MISSING": "이 초안에는 파츠가 없습니다. 제작 도구에서 초안 파츠를 게시한 후 파츠 검토를 요청해야 합니다.",
+  "JOB_MODEL_MISSING": "JOB_MODEL_MISSING",
+  "job.refusal.JOB_MODEL_MISSING": "이 요청에는 컴파일된 모델이 없습니다. 제작 도구에서 컴파일된 모델을 게시한 후 리그 판정을 요청해야 합니다.",
+  "JOB_ASK_UNSUPPORTED": "JOB_ASK_UNSUPPORTED",
+  "job.refusal.JOB_ASK_UNSUPPORTED": "이 요청에 맞는 소스 또는 체크포인트 연결 정보가 없습니다. 제작 도구에서 해당 소스와 계획 연결 정보를 게시한 후 다시 요청해야 합니다.",
   "job.imageNoParts": "이미지 세트에는 파츠나 컴파일된 리그 편집 도구가 없습니다.",
   "job.imageWaiting": "대기 중인 이미지 검토 요청이 있고 이미지 로딩이 끝나야 제출할 수 있습니다.",
   "job.imageSubmitting": "이미지 검토를 제출하고 있습니다.",

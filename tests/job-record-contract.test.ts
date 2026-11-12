@@ -2551,7 +2551,7 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
     expect(optInspection.interview?.questions.map(q => q.set.id)).toEqual(['chain-bones']);
     optInspection.dispose();
 
-    // 4. Explicit MODEL_UNAVAILABLE on a package publication still refuses before preparation
+    // 4. A model-less package reaches retained-publication lookup; a fabricated missing publication still refuses.
     window.event({
       type: 'published',
       jobId: host.session.jobId,
@@ -2579,7 +2579,7 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
       },
     });
     await window.settled();
-    expect(window.state().error).toBe('MODEL_UNAVAILABLE');
+    expect(window.state().error).toBe('JOB_PUBLICATION_UNKNOWN');
     window.stop();
   } finally {
     if (savedLocation) Object.defineProperty(globalThis, 'location', savedLocation);

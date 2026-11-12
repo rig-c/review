@@ -14,14 +14,8 @@ function fragment(start: string, end: string) {
     return source.slice(first, last);
 }
 const resetBody = fragment('            resetToSetup = (setup = true) => {', '            resetToSetup();');
-const poseBody = fragment('    function pose(seekReference = true): void {', '    function hubBinding()')
-    .replace('pose(seekReference = true): void', 'pose(seekReference = true)')
-    .replace("el<HTMLInputElement>('job-time')", "el('job-time')");
-const drawBody = fragment('    function drawInspection(owner: JobPreparedInspection): void {', '    function syncTransportControls(')
-    .replace('owner: JobPreparedInspection', 'owner').replace('): void {', ') {');
-
 /** Public-player test double models the published fresh null-pose and composed seek boundary.
- * Executes the actual reset/pose/draw bodies, without a browser or raster claim.
+ * Executes the actual retained reset body, without a browser or raster claim.
  */
 class PublicPlayer {
     generation = 0;
@@ -112,19 +106,14 @@ function windowPose(visible = true) {
     const reset: (setup?: boolean) => void = new Function('scope', `with(scope){${resetBody};return resetToSetup;}`)(scope);
     const current = {assets, source: binding, rigRoot: root, metadata: {feedbackCatalog: {bones: []}},
         get player() {return scope.player;}, get inspection() {return scope.inspection;}, setupPose: reset};
-    const context = {...scope, current};
-    const drawScript = new Bun.Transpiler({loader: 'ts', target: 'bun'}).transformSync(drawBody);
-    const drawInspection = new Function('scope', `with(scope){${drawScript};return drawInspection;}`)(context);
-    const pose: () => void = new Function('scope', 'drawInspection', `with(scope){${poseBody};return ()=>pose(false);}`)(context, drawInspection);
     reset();
-    function at(animation: string, time: number) {context.animation = animation; context.time = time; pose();}
     function state(): JobRigDrawState {
         const presentation: JobRigPresentation = {canvas: {} as HTMLCanvasElement, width: 1, height: 1, ratio: 1,
             area: {x: 0, y: 0, width: 1, height: 1}};
         return {player: current.player!, presentation, frameGeneration: current.inspection!.frame('single')!.generation,
             source: binding, layout: JSON.stringify(camera), defaultCamera: true, wholeRig: true, playing: false};
     }
-    return {current, scope, context, players, root, assets, camera, binding, clock, at, state, reset};
+    return {current, scope, players, root, assets, camera, binding, clock, state, reset};
 }
 
 test('#557 setup initializes a fresh null-pose public player before draw/present', () => {
@@ -139,49 +128,6 @@ test('#557 setup initializes a fresh null-pose public player before draw/present
     expect(h.current.inspection!.frame('single')!.generation).toBe(h.current.player!.generation);
 });
 
-test('#557 setup to inspect zero and .375 to setup replaces composed players and preserves source/camera with no legacy part selector', () => {
-    const h = windowPose(), first = h.current.player!;
-    h.at('inspect', 0);
-    const animated = h.current.player!;
-    expect(first.disposed).toBe(true);
-    expect(animated).not.toBe(first);
-    expect(animated.composed).toBe(false);
-    expect(animated.calls).toEqual(['play', 'seek', 'pause', 'draw']);
-    expect(h.current.inspection!.value()).toBeNull();
-    h.at('inspect', 0.375);
-    expect(h.current.player).toBe(animated);
-    expect(animated.time).toBe(0.375);
-    h.at('', 0);
-    expect(animated.disposed).toBe(true);
-    expect(h.current.player!.current).toBeNull();
-    expect(h.current.player!.composed).toBe(true);
-    expect(h.current.inspection!.value()).toBeNull();
-    expect(h.current.inspection!.frame('single')!.generation).toBe(h.current.player!.generation);
-    expect(h.players).toHaveLength(3);
-    expect(h.players.every(player => player.root === h.root && player.assets === h.assets)).toBe(true);
-    expect(h.current.source).toBe(h.binding);
-    expect(h.camera).toEqual({center: {x: 20, y: 20}, zoom: 1});
-});
-
-test('#557 setup and seek captures bind the coherent displayed public draw through both transitions', async () => {
-    const h = windowPose();
-    let drawGeneration = 0;
-    for (const [animation, time] of [['', 0], ['inspect', 0], ['inspect', 0.375], ['', 0]] as const) {
-        h.at(animation, time);
-        const state = h.state(), displayed = h.current.player!.renderer.frame!;
-        expect(displayed.order).toHaveLength(1);
-        expect(displayed.generation).toBe(state.frameGeneration);
-        expect(h.current.inspection!.frame('single')).toEqual(displayed);
-        const capture = await freezeJobRigCapture(recordJobRigDraw(state, ++drawGeneration), state, 'ask-1',
-            () => ({width: 1, height: 1, encode: async () => 'data:image/png;base64,ZmFrZQ=='})).encode();
-        expect(capture.frame).toBe(animation ? time : 'setup');
-        if (animation) expect(capture.animation).toBe(animation);
-        else expect(capture).not.toHaveProperty('animation');
-        expect(capture.binding).toEqual({...h.binding, askId: 'ask-1', drawGeneration,
-            playerGeneration: h.current.player!.generation});
-    }
-});
-
 test('#557 setup initialization retains valid models with no visible attachment', () => {
     const h = windowPose(false);
     expect(h.current.player!.renderer.frame!.order).toEqual([]);
@@ -190,23 +136,6 @@ test('#557 setup initialization retains valid models with no visible attachment'
     expect(h.current.inspection!.frame('single')!.generation).toBe(h.current.player!.generation);
 });
 
-
-test('#557 shared inspection selection refuses partial capture and clearing it restores coherent public frames',async()=>{
-    const h=windowPose();h.at('inspect',0.375);let copies=0,generation=0;
-    for(const mode of ['context','solo'] as const){
-        h.current.inspection!.select({side:'single',slot:'mesh',mode});
-        expect(h.current.inspection!.value()).toMatchObject({slot:'mesh',mode});
-        const partial={...h.state(),wholeRig:false};
-        expect(()=>freezeJobRigCapture(recordJobRigDraw(partial,++generation),partial,'ask-1',()=>{throw new Error('partial capture must not copy');})).toThrow('JOB_STILL_VIEW_UNSUPPORTED');
-        h.current.inspection!.select(null);expect(h.current.inspection!.value()).toBeNull();
-        const state=h.state(),capture=await freezeJobRigCapture(recordJobRigDraw(state,++generation),state,'ask-1',()=>{copies++;return {width:1,height:1,encode:async()=> 'data:image/png;base64,ZmFrZQ=='};}).encode();
-        expect(capture.frame).toBe(0.375);expect(capture.binding.playerGeneration).toBe(h.current.player!.generation);
-        expect(h.current.inspection!.frame('single')).toEqual(h.current.player!.renderer.frame!);
-    }
-    expect(copies).toBe(2);
-    expect(()=>recordJobRigDraw({...h.state(),presentation:undefined},++generation)).toThrow('JOB_STILL_CAPTURE_FAILED');
-    expect(copies).toBe(2);
-});
 
 test('#557 setup reset clears its owned presentation before replacing the public player', () => {
     const h = windowPose();
@@ -219,34 +148,4 @@ test('#557 setup reset clears its owned presentation before replacing the public
     h.reset();
     expect(clears).toBe(1);
     expect(previous.disposed).toBe(true);
-});
-
-test('#559 active-animation manual seek at duration under Repeat=true synchronizes UI clock, closure time, public entry.animationTime and captured frame to 0 while preserving Setup reference-only time', async () => {
-    const h = windowPose();
-    let drawGeneration = 0;
-    h.context.loop = true;
-    h.at('inspect', 1);
-    expect(h.current.player!.entry(0)!.animationTime).toBe(0);
-    expect(h.context.time).toBe(0);
-    expect(h.clock.value).toBe('0');
-    const stateLoop = h.state();
-    const captureLoop = await freezeJobRigCapture(recordJobRigDraw(stateLoop, ++drawGeneration), stateLoop, 'ask-loop-end',
-        () => ({width: 1, height: 1, encode: async () => 'data:image/png;base64,ZmFrZQ=='})).encode();
-    expect(captureLoop.frame).toBe(0);
-    expect(captureLoop.animation).toBe('inspect');
-
-    h.context.loop = false;
-    h.at('', 0);
-    h.at('inspect', 1);
-    expect(h.current.player!.entry(0)!.animationTime).toBe(1);
-    expect(h.context.time).toBe(1);
-    expect(h.clock.value).toBe('1');
-    const stateOneShot = h.state();
-    const captureOneShot = await freezeJobRigCapture(recordJobRigDraw(stateOneShot, ++drawGeneration), stateOneShot, 'ask-oneshot-end',
-        () => ({width: 1, height: 1, encode: async () => 'data:image/png;base64,ZmFrZQ=='})).encode();
-    expect(captureOneShot.frame).toBe(1);
-
-    h.at('', 1.25);
-    expect(h.context.time).toBe(1.25);
-    expect(h.clock.value).toBe('1.25');
 });

@@ -42,6 +42,18 @@ export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readon
   });
 }
 
+/** Refusals describe missing producer inputs without granting a new act authority. */
+export function jobRigScreenRefusal(display:DisplayPublicationV3,pending:readonly PendingAskV3[],checkpoints:ReadonlySet<string>):string|null {
+  const source=display.publication.source;
+  if('record' in source)return null;
+  if(source.subject!=='image-set'){
+    if(source.selector?.kind==='post'&&!source.direction)return 'JOB_DIRECTION_MISSING';
+    if(source.selector?.kind==='draft'&&!source.parts)return 'JOB_PARTS_MISSING';
+    if(!source.model&&!source.parts)return 'JOB_MODEL_MISSING';
+  }
+  return jobRigScreenRoute(display,pending,checkpoints)?null:'JOB_ASK_UNSUPPORTED';
+}
+
 export type JobRigScreenDecision =
   | {readonly ask: PendingAskV3; readonly kind: 'checkpoint'; readonly value: Extract<JobUISubmission, {kind: 'checkpoint'}>['value']}
   | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review' | 'direction-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]}};
@@ -70,7 +82,7 @@ export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'c
 
 interface ReviewJson {manifest: ReviewManifest; reviewedSource: ReviewedSource; sourceHash: string}
 export interface JobRigScreenPrepared {readonly jobRigScreen: true; readonly display: DisplayPublicationV3; readonly entry: string;
-  readonly images?:JobPreparedInspection; readonly modals?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>}; readonly review?: ReviewJson; readonly record?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>;picture:JobRigScreenPrepared|null}; readonly parts?:PartsSubjectData; readonly checkpoints: ReadonlySet<string>}
+  readonly refusal?:string; readonly images?:JobPreparedInspection; readonly modals?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>}; readonly review?: ReviewJson; readonly record?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>;picture:JobRigScreenPrepared|null}; readonly parts?:PartsSubjectData; readonly checkpoints: ReadonlySet<string>}
 export function isJobRigScreen(value: unknown): value is JobRigScreenPrepared {
   return !!value && typeof value === 'object' && (value as {jobRigScreen?: unknown}).jobRigScreen === true;
 }
@@ -96,7 +108,7 @@ export function createJobRigScreen(options: {
     if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
     const source = display.publication.source;
     if ('record' in source) {
-      if (!options.formDependencies) throw new Error('JOB_PANEL_UNAVAILABLE');
+      if (!options.formDependencies) throw new Error('JOB_ACT_KIND_DISABLED');
       const inspection = await prepareJobInspection(display, signal);
       try {
         const forms = prepareJobForms(display, options.window.state().pending, ask => formFor(ask, inspection, options.formDependencies!));
@@ -127,7 +139,14 @@ export function createJobRigScreen(options: {
       const images=await prepareJobInspection(display,signal);
       return {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints:new Set(),images};
     }
-    if (!jobRigScreenSubject(source)) return null;
+    if (!jobRigScreenSubject(source)) {
+      if(!options.formDependencies)throw new Error('JOB_ACT_KIND_DISABLED');
+      const inspection=await prepareJobInspection(display,signal,true);
+      try {
+        const forms=prepareJobForms(display,options.window.state().pending.filter(ask=>ask.subject.kind==='signoff'||ask.subject.kind==='interview-picks'),ask=>formFor(ask,inspection,options.formDependencies!));
+        return {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints:new Set(),record:{inspection,forms,picture:null},refusal:jobRigScreenRefusal(display,options.window.state().pending,new Set())??undefined};
+      }catch(error){inspection.dispose();throw error;}
+    }
     const routes = options.routes(display);
     const response = await fetch(routes.api('review'), {signal});
     if (!response.ok) throw new Error('JOB_VISUAL_UNAVAILABLE');
@@ -136,7 +155,7 @@ export function createJobRigScreen(options: {
         review.manifest.id !== source.package.id || review.manifest.revision !== source.package.revision ||
         (review.reviewedSource.rig?.sha256 ?? null) !== (source.model?.sha256 ?? null)) throw new Error('JOB_DISPLAY_MISMATCH');
     const checkpoints = new Set(review.manifest.checkpoints.map(item => item.id));
-    if (!backdropOnly && !jobRigScreenRoute(display, options.window.state().pending, checkpoints)) return null;
+    const refusal=backdropOnly?null:jobRigScreenRefusal(display,options.window.state().pending,checkpoints);
     let parts:PartsSubjectData|undefined;
     if(source.selector?.kind==='draft'&&source.parts){
       const response=await fetch(routes.api('stage-parts'),{signal});if(!response.ok)throw new Error('JOB_VISUAL_UNAVAILABLE');
@@ -144,13 +163,13 @@ export function createJobRigScreen(options: {
       if(parts.sourceHash!==source.sourceHash||parts.mode!=='parts')throw new Error('JOB_DISPLAY_MISMATCH');
     }
     let modals:JobRigScreenPrepared['modals'];
-    const asks=options.window.state().pending.filter(ask=>ask.publicationId===display.publication.publicationId&&ask.subject.kind!=='parts-verdict'&&!(ask.subject.kind==='review-verdict'&&(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review')));
+    const asks=options.window.state().pending.filter(ask=>ask.publicationId===display.publication.publicationId&&(ask.subject.kind==='signoff'||ask.subject.kind==='interview-picks'||ask.subject.kind==='checkpoint'&&!refusal));
     if(!backdropOnly&&options.formDependencies){
       const inspection=await prepareJobInspection(display,signal,true);
       try{modals={inspection,forms:prepareJobForms(display,asks,ask=>formFor(ask,inspection,options.formDependencies!))};}
       catch(error){inspection.dispose();throw error;}
     }
-    return {jobRigScreen: true, display, entry: routes.entry, review, checkpoints,...parts?{parts}:{},...modals?{modals}:{}};
+    return {jobRigScreen: true, display, entry: routes.entry, review, checkpoints,...refusal?{refusal}:{},...parts?{parts}:{},...modals?{modals}:{}};
   }
   function still(ask: PendingAskV3, prepared: JobRigScreenPrepared) {
     screen?.redraw();
@@ -173,6 +192,7 @@ export function createJobRigScreen(options: {
     const prepared = mounted, state = options.window.state();
     if (!prepared || !state.receipt || state.preparing) throw new Error('JOB_ACT_SOURCE_STALE');
     if (state.closed) throw new Error('JOB_CLOSED');
+    const refusal=jobRigScreenRefusal(prepared.display,state.pending,prepared.checkpoints);if(refusal)throw new Error(options.translate('job.refusal.'+refusal));
     if (!options.access.capability) throw new Error('JOB_CAPABILITY_REQUIRED');
     const imageSource=prepared.display.publication.source;
     const imageAsk=state.pending.find(ask=>ask.publicationId===prepared.display.publication.publicationId&&ask.status==='pending'&&ask.subject.kind==='review-verdict'&&ask.subject.stage==='image-review');
@@ -226,7 +246,7 @@ export function createJobRigScreen(options: {
       return {...(backdrop?.subject?{subject:backdrop.subject}:{}),access:{...(backdrop?.access??access),capability:null,
         headers:init=>{const headers=options.access.headers(init);headers.delete('X-Review-Capability');return headers;}},
         ownerActAccess:{capability:options.access.capability},
-        record:{label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture},pendingSubjects,
+        record:{publicationId:prepared.display.publication.publicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
@@ -235,7 +255,7 @@ export function createJobRigScreen(options: {
     }
     if(prepared.images){
       const source=prepared.display.publication.source;if(source.subject!=='image-set')throw new Error('JOB_DISPLAY_MISMATCH');
-      if(!options.formDependencies)throw new Error('JOB_PANEL_UNAVAILABLE');
+      if(!options.formDependencies)throw new Error('JOB_ACT_KIND_DISABLED');
       const gallery=options.formDependencies.helpers.imageGallery(source.imageSet.images.map((image,index)=>({...image,element:prepared.images!.imageSetImages?.[index],duplicate:source.duplicateHashes.some(group=>group.names.includes(image.name))})),false,true);
       gallery.dataset.jobImageSet='';
       return {access,pendingSubjects,imageSet:{label:prepared.display.publication.label,publicationId:prepared.display.publication.publicationId,source,gallery},
@@ -245,7 +265,7 @@ export function createJobRigScreen(options: {
         attach:value=>{screen=value;screen.pendingSubjects?.(pendingSubjects());},displayed:()=>ready.resolve(),failed:error=>ready.reject(error)};
     }
     if(!review)throw new Error('JOB_DISPLAY_MISMATCH');
-    return {access,pendingSubjects,navigation,...prepared.display.publication.source.direction?{direction:{publicationId:prepared.display.publication.publicationId,sourceHash:prepared.display.publication.source.sourceHash}}:{},
+    return {access,pendingSubjects,navigation,...prepared.refusal?{unavailable:prepared.refusal}:{},...prepared.display.publication.source.direction?{direction:{publicationId:prepared.display.publication.publicationId,sourceHash:prepared.display.publication.source.sourceHash}}:{},
       reviewState(issues,sending) {
         if(sending)return options.translate('job.parts.sending');
         const kind=prepared.parts?'parts-verdict':'review-verdict';
@@ -280,7 +300,7 @@ export function createJobRigScreen(options: {
   function refreshRecordForms():void {
     const record=mounted?.record??mounted?.modals,deps=options.formDependencies;if(!record||!deps)return;
     const state=options.window.state(),display=record.inspection.display;
-    const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&!(ask.subject.kind==='review-verdict'&&(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review'))),ask=>record.forms.get(ask.askId)??formFor(ask,record.inspection,deps));
+    const next=prepareJobForms(display,state.pending.filter(ask=>(!mounted?.refusal||ask.subject.kind==='signoff'||ask.subject.kind==='interview-picks')&&ask.subject.kind!=='parts-verdict'&&!(ask.subject.kind==='review-verdict'&&(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review'))),ask=>record.forms.get(ask.askId)??formFor(ask,record.inspection,deps));
     for(const [id,entry]of next)record.forms.set(id,entry);
     for(const [id,entry]of record.forms){const ask=state.pending.find(ask=>ask.askId===id);entry.fieldset.disabled=entry.submitting||ask?.status!=='pending'||state.preparing||state.closed||!state.receipt||!options.access.capability;}
     screen?.recordForms?.([...record.forms.values()].map(entry=>entry.form));
@@ -314,7 +334,7 @@ export function createJobRigScreen(options: {
       try {
         setRigHost(host(prepared, ready,navigation));
         const app = document.createElement('div');app.id = 'app';
-        options.host.classList.remove('job-window');options.host.replaceChildren(app);document.body?.removeAttribute('data-ready');
+        options.host.replaceChildren(app);document.body?.removeAttribute('data-ready');
         const loaded=await options.load();
         if(loaded&&typeof loaded==='object')candidate=loaded as {dispose?():void};
         await shown;
@@ -325,11 +345,12 @@ export function createJobRigScreen(options: {
         if (signal.aborted) throw new Error('JOB_PRELOAD_CANCELLED');
       }catch(error){await rollback();throw error;}
     },
-    /** A newly pending ask the screen cannot answer, or a later publication, reloads into the job window's route. */
+    /** Pending asks keep their shared screen; unsupported source bindings are explained in place. */
     changed(state: {readonly pending: readonly PendingAskV3[]; readonly closed: boolean; readonly preparing?:boolean; readonly error?:string|null; readonly previousLabel?:string|null; readonly displayed?:DisplayPublicationV3|null}): void {
       if (!mounted) return;
-      if(mounted.record){refreshRecordForms();if(state.closed)screen?.message(options.translate('job.closed'),true);return;}
-      if (!jobRigScreenRoute(mounted.display, state.pending, mounted.checkpoints)) {location.reload(); return;}
+      if(mounted.record){refreshRecordForms();if(mounted.refusal){screen?.message(options.translate('job.refusal.'+mounted.refusal),true);const notice=document.getElementById('message');if(notice)notice.title=mounted.refusal;}if(state.closed)screen?.message(options.translate('job.closed'),true);return;}
+      const refusal=jobRigScreenRefusal(mounted.display,state.pending,mounted.checkpoints);
+      if(refusal){screen?.message(options.translate('job.refusal.'+refusal),true);const notice=document.getElementById('message');if(notice)notice.title=refusal;return;}
       screen?.pendingSubjects?.(pendingSubjects());
       refreshRecordForms();
       if(state.error)screen?.message(options.translate('job.failed')+' · '+options.refusal(state.error),true);

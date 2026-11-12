@@ -1372,7 +1372,7 @@ test('#743 live host notices and act status retain English source and render in 
  const start = sessionSource.indexOf('    const rigScreen=createJobRigScreen(', live);
  const end = sessionSource.indexOf('    let bootstrapNotice:', start);
  expect(start).toBeGreaterThan(live);
- expect(end).toBeLessThan(sessionSource.indexOf('/** Browser mount is explicit', live));
+ expect(end).toBeLessThan(sessionSource.length);
  // Execute the actual host wiring, rather than supplying an already corrected translator.
  const translate = new Function('createJobRigScreen', 'host', 'pageId', 'access', 'i18n', 't', 'jobWindowRefusal', 'dependencies',
   transpiler.transformSync(sessionSource.slice(start, end)) + ';return rigScreen.translate;')(

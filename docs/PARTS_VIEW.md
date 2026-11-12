@@ -469,7 +469,7 @@ uses the individual part view described below.
 draw, alpha picking, hidden layers, pan and camera preservation. `tests/parts-comments-browser.ts`
 covers assembled seam capture, chip edits, saved-view restoration, crop evidence and source immutability
 in both languages. `tests/parts-mesh-browser.ts` covers the global mesh control and unavailable states.
-The live job host's `tests/job-window-browser.ts` covers the same mount through submission and reconnect.
+The live job host's `tests/job-image-screen-browser.ts` covers the same mount through submission and reconnect.
 
 ## Draft mesh correction connection
 

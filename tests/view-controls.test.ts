@@ -533,19 +533,8 @@ test('#496 explicit camera and saved numeric coverage survive the expanded basis
  expect(h.state.cameraCenter).toEqual({x:34.5,y:34.5});
 });
 
-test('#496 semantic window uses the shared stable frame through pose changes and publication rollback',async()=>{
- const source=await readFile(new URL('../web/job-session.ts',import.meta.url),'utf8');
- const start=source.indexOf('    const provider ='),end=source.indexOf('const canonicalControls',start);
- expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
- const script=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(start,end));
- const construct=new Function('deps',`const {el,current,reference,setText,notice,jobWindowRefusal,viewportState,createRigViewportProvider,view}=deps;${script}return provider;`);
- const h=rigFramingHarness({x:0,y:0,width:80,height:80},{x:-11,y:-11,width:22,height:22},(host,state)=>{
-  const current={get player(){return host.player();},get assets(){return host.assets();},get inspection(){return host.parts();},
-   rigRoot:host.el('rig-root'),metadata:{feedbackCatalog:{bones:[]}},display:{publication:{generation:1}}};
-  return construct({el:host.el,current,reference:host.referenceSize,setText:host.text,notice:{textContent:''},
-   jobWindowRefusal:String,viewportState:state,createRigViewportProvider,view:'compare',
-  });
- });
+test('#496 shared viewport keeps stable frames through pose changes and publication rollback',async()=>{
+ const h=rigFramingHarness({x:0,y:0,width:80,height:80},{x:-11,y:-11,width:22,height:22});
  h.controller.fitCamera();
  const original=h.source(),box=h.provider.geometry('rig')!.box,key=h.provider.layoutKey(),view=h.controller.numericView();
  h.pose({x:-300,y:-400,width:600,height:800});h.controller.fitCamera();
@@ -556,7 +545,6 @@ test('#496 semantic window uses the shared stable frame through pose changes and
  h.use(original);h.controller.fitCamera();
  expect(h.provider.geometry('rig')?.box).toEqual(box);
  expect(h.controller.numericView()).toEqual(view);
- expect(source.slice(start,end)).not.toContain('RigOverlays');
 });
 
 

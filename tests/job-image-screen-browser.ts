@@ -144,6 +144,42 @@ try{
    assert.deepEqual(await jobInputHashes(directionFixture.input.root),frozen);
   }
  }finally{await directionFixture.close();}
+ // #774: missing pictures and unsupported post sources stay inside the same shell.
+ for(const kind of ['empty','post-without-direction'] as const){
+  const input=await jobFixture();
+  try{
+   const manifestPath=join(input.root,'out/review.json'),manifest=JSON.parse(await readFile(manifestPath,'utf8'));
+   if(kind==='empty')delete manifest.model;
+   delete manifest.direction;manifest.references=[];
+   await writeFile(manifestPath,JSON.stringify(manifest));
+   const selector=kind==='empty'?null:{kind:'post' as const,version:2,rigVersion:1};
+   input.setContext({...input.getContext(),selector,parts:null});
+   const hosted=await hub.openJob({root:input.root,fingerprint:(kind==='empty'?'e':'d').repeat(64),readerId:'synthetic-empty-screen/1',readPublished:async()=>input.getContext()});
+   const response=await fetch(hosted.origin+'/jobs/'+hosted.session.jobId+'/api',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+hosted.session.hostCredentials().agent},body:JSON.stringify({schema:JOB_API_SCHEMA,jobId:hosted.session.jobId,requestId:randomUUID(),verb:'publish',expectedGeneration:0,idempotencyKey:randomUUID(),result:{path:'out',selector},freeze:{kind:'producer-held',holdId:'empty-screen-held',record:{path:'record.json',sha256:hash(await readFile(join(input.root,'record.json')))}}})});
+   const result=await response.json();assert.equal(result.ok,true,JSON.stringify(result));
+   const frozen=await jobInputHashes(input.root),code=kind==='empty'?'JOB_MODEL_MISSING':'JOB_DIRECTION_MISSING';
+   for(const language of ['en','ko'] as const){
+    const url=new URL(hosted.jobUrl);url.searchParams.set('lang',language);await page.goto(url.href,language);
+    await wait(`document.body.dataset.ready==='true'&&document.querySelector('#message').title===${JSON.stringify(code)}`);
+    const catalog=language==='en'?enCatalog:koCatalog;
+    const layout:any=await page.evaluate(`(()=>{const r=n=>{const b=n.getBoundingClientRect();return {y:b.y,bottom:b.bottom,height:b.height};};return {shells:document.querySelectorAll('#app').length,main:r(document.querySelector('#rig-viewport')),bottom:r(document.querySelector('.inspector')),message:document.querySelector('#message').textContent,title:document.querySelector('#message').title,empty:document.querySelector('#rig-empty').textContent,disabled:document.querySelector('#save').disabled,legacy:document.querySelectorAll('.job-inspection').length,bars:document.querySelectorAll('.workspace-main-toolbar').length,secondary:document.querySelectorAll('.workspace-secondary-toolbar').length,notes:[...document.querySelectorAll('textarea')].filter(n=>n.getBoundingClientRect().height>0&&!n.closest('[hidden]')).length,collapseDisabled:document.querySelector('#workspace-bottom-collapse').disabled,checkpointVisible:!!document.querySelector('#checkpoint-detail')&&!document.querySelector('#checkpoint-detail').hidden};})()`);
+    assert.equal(layout.shells,1);assert.equal(layout.legacy,0);assert.equal(layout.bars,1);assert.equal(layout.secondary,1);assert.equal(layout.notes,0);assert.equal(layout.disabled,true);assert.equal(layout.collapseDisabled,false);assert.equal(layout.checkpointVisible,false);
+    await click('#workspace-bottom-collapse');await wait(`document.querySelector('#workspace-bottom-collapse').getAttribute('aria-expanded')==='false'`);await click('#workspace-bottom-collapse');await wait(`document.querySelector('#workspace-bottom-collapse').getAttribute('aria-expanded')==='true'`);
+    assert.equal(layout.message,catalog['job.refusal.'+code]);assert.equal(layout.message.includes(code),false);assert.equal(layout.title,code);assert.ok(layout.bottom.y>=layout.main.bottom);
+    if(kind==='empty'){
+     await click('[data-comment-general]');await composer('Empty request comment · 그림 없는 요청');
+     await wait(`document.querySelectorAll('.stage-comment-item').length===1`);
+     const key='rig-review-record-comments/1:'+result.value.publicationId+':'+result.value.source.sourceHash;
+     const draft:any=await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)}))`);assert.equal(draft.comments.length,1);
+     await page.goto(url.href,language);await wait(`document.body.dataset.ready==='true'&&document.querySelectorAll('.stage-comment-item').length===1`);
+     // Each language starts from its own explicit comment count rather than accumulating across locales.
+     await page.evaluate(`localStorage.removeItem(${JSON.stringify(key)})`);
+    }
+    const screenshot=language+'-'+kind+'.png';await writeFile(join(output,screenshot),await page.screenshot());observations.push({kind,language,layout,screenshot});
+   }
+   assert.deepEqual(await jobInputHashes(input.root),frozen);
+  }finally{await input.close();}
+ }
  assert.deepEqual(errors,[]);assert.deepEqual(await jobInputHashes(fixture.root),immutable);
 }catch(error){failure=error;if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});}
 finally{

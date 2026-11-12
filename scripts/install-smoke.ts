@@ -194,11 +194,11 @@ try {
  const owner = new URL(host.ownerUrl);
  assert(owner.origin === host.origin && owner.hostname === '127.0.0.1' &&
   owner.pathname === '/jobs/' + binding.jobId + '/' && /^[a-f0-9]{64}$/.test(owner.hash.slice(5)), 'OWNER_URL');
- for (const [path, type] of [['', 'text/html'], ['job.js', 'text/javascript'], ['styles.css', 'text/css']]) {
+ for (const [path, type] of [['', 'text/html'], ['main.js', 'text/javascript'], ['styles.css', 'text/css']]) {
   const response = await fetch(host.origin + owner.pathname + path);
   const body = await response.text();
   assert(response.ok && response.headers.get('content-type')?.includes(type!) && body.length > 0, 'OWNER_RESOURCE');
-  if (!path) assert(body.includes('data-job-window'), 'FULL_OWNER_WINDOW');
+  if (!path) assert(body.includes('<div id="app"></div>'), 'FULL_OWNER_WINDOW');
  }
  const reused = await start({...options, partsEnumerator: {...partsEnumerator, enumerate: dir => partsEnumerator.enumerate(dir)}, readPublished: async value => readPublished(value),
   installWriterBinding: value => {binding = value;}});
@@ -411,7 +411,7 @@ try{
   step('installed job metadata stays bound to the displayed source',data.sourceHash===publication.value.source.sourceHash);
   const model=await fetch(owner.origin+descriptor.value.routes.assetsBase+data.manifest.model);
   step('installed job serves its retained model',model.ok&&(await model.text()).length>0);
-  for(const path of ['', 'job.js','styles.css']){
+  for(const path of ['', 'main.js','styles.css']){
    const response=await fetch(locator+'/'+path);const body=await response.text();
    step('installed standing owner resource '+(path||'page'),response.ok&&body.length>0);
   }

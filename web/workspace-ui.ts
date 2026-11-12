@@ -33,7 +33,7 @@ export function mountStatusBar(options:WorkspaceStatusBarOptions|{placement:'inl
  return {footer,message};
 }
 
-export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyJobStep5'|'legacyHubStep6'|'legacyOwnerStep6';
+export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyHubStep6'|'legacyOwnerStep6';
 export interface WorkspaceHeaderOptions {
  compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;hideLanguage?:boolean;title?:string;revision?:string;
  /** Only the stopped compare host supplies its existing domain controls and actions. */
@@ -46,10 +46,10 @@ export interface WorkspaceHeader {
 }
 /** One C1 construction path; the finite legacy choices expire at their named screen migrations. */
 export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHeader {
- const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',parts=kind==='legacyPartsStep2',interview=kind==='legacyInterviewStep4',job=kind==='legacyJobStep5',hub=kind==='legacyHubStep6',owner=kind==='legacyOwnerStep6';
+ const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',parts=kind==='legacyPartsStep2',interview=kind==='legacyInterviewStep4',hub=kind==='legacyHubStep6',owner=kind==='legacyOwnerStep6';
  const branded=rig||compare||parts,settingsLanguage=rig||compare;
  const header=panelMake('header');
- const headerClass=rig?'topbar':parts?'pv-top':job?'job-header':hub?'hub-header':owner?'owner-header':null;
+ const headerClass=rig?'topbar':parts?'pv-top':hub?'hub-header':owner?'owner-header':null;
  if(headerClass)header.className=headerClass;
  if(branded){
   const brand=panelMake('div',{className:parts?'pv-brand':'brand'});
@@ -61,7 +61,6 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
  const titleId=rig?'package-title':compare?'title':parts?'pv-title':null;
  if(titleId)title.id=titleId;
  title.textContent=options.title??(rig?'Review package':compare?'A / B comparison':parts?'Parts review':'');
- if(job)title.dataset.jobText='job.title';
  let subtitle:HTMLElement|null=null;
  if(branded){
   subtitle=panelMake('span',{id:rig?'revision':compare?'animation':'pv-mode',className:rig?'subtle':compare?'hint':'pv-subtle',textContent:options.revision??''});
@@ -91,13 +90,13 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
   language=panelMake('select');
   if(settingsLanguage){language.id='settings-language';language.dataset.appPreference='';}
   for(const value of settingsLanguage?['system','en','ko']:['en','ko']){
-   const text=settingsLanguage?(value==='system'?'System':value==='en'?'English':'한국어'):interview?(value==='en'?'English':'한국어'):job?value:'';
+   const text=settingsLanguage?(value==='system'?'System':value==='en'?'English':'한국어'):interview?(value==='en'?'English':'한국어'):'';
    language.append(panelMake('option',{value,textContent:text}));
   }
   if(settingsLanguage){languageLabel=labelledControl('Language ',language);if(rig)header.append(languageLabel);}
   else{if(interview)header.append('\n    ');header.append(language);if(interview)header.append('\n  ');}
  }
- if(options.embedded){if(rig||parts)header.hidden=true;else if(interview||job)language!.hidden=true;}
+ if(options.embedded){if(rig||parts)header.hidden=true;else if(interview)language!.hidden=true;}
  if(options.hideLanguage){if(languageLabel)languageLabel.hidden=true;else if(language)language.hidden=true;}
  return {header,title,subtitle,modeSwitch,dirty,stages,status,language,languageLabel,dispose(){header.remove();languageLabel?.remove();}};
 }

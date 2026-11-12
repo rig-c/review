@@ -631,3 +631,13 @@ test('#739 standalone rest canvas uses the declared native stage and refuses inf
   expect(() => rigRestCanvas({stage: {...stage, x: .5}}, {width: 1920, height: 1080})).toThrow('PARTS_PAINTING_MAPPING');
   expect(() => rigRestCanvas({stage: {...stage, width: 16385}}, {width: 16385, height: 1080})).toThrow('PARTS_PAINTING_MAPPING');
 });
+
+// #774: the shared screen owns player disposal when the host replaces it.
+test('#774 disposing the replaced shared screen releases its player and assets exactly once',()=>{
+ const main=readFileSync(new URL('../web/main.ts',import.meta.url),'utf8');
+ const body=main.slice(main.indexOf('function disposeScreen()'),main.indexOf("window.addEventListener('pagehide',disposeScreen"));
+ const calls:string[]=[];
+ const scope={disposed:false,suspendScreen:()=>calls.push('suspend'),lifecycle:{abort:()=>calls.push('abort')},comments:null,partsSubject:null,turnPad:null,inspectorBlocks:null,inspectorTabs:null,workspace:null,controlDispose:null,appearance:null,rigInspector:{actBar:{dispose(){}}},shell:{dispose(){}},viewDisposers:[],overlays:null,player:{dispose:()=>calls.push('player')},assets:{dispose:()=>calls.push('assets')}};
+ const dispose=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(body)};return disposeScreen;}`)(scope);
+ dispose();dispose();expect(calls).toEqual(['suspend','abort','player','assets']);expect(scope.disposed).toBe(true);
+});

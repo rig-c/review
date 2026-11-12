@@ -1,5 +1,5 @@
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
-import {joinedInterviewForms} from './job-session.ts';
+import {mountJobScreen,joinedInterviewForms} from './job-session.ts';
 import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding} from '../src/parts-comment.ts';
 import type {JobForm} from './job-session.ts';
 import {bindWorkspaceDrawer} from './workspace-layout.ts';
@@ -1206,7 +1206,7 @@ function bindWorkspace():void {
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   bindReviewDialog();
-  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.imageSet?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
+  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.imageSet||host?.record&&!host.record.hasPicture?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
 }
 async function start(): Promise<void> {
   try {
@@ -1218,7 +1218,7 @@ async function start(): Promise<void> {
     const [saved,accessState]=await Promise.all([api<ReviewSession|PartsSubjectSession>('/api/session'),api<{capabilityRequired:boolean;control?:boolean}>('/api/access')]);
     if('subject' in opened&&opened.subject==='parts'){await startParts(opened,saved as PartsSubjectSession,accessState);return;}
     data=opened as ReviewResponse;session=saved as ReviewSession;writes=accessState;
-    readOnly = host?.record ? tr('JOB_REVIEW_READ_ONLY') : readOnlyReason(access, writes.capabilityRequired);
+    readOnly = host?.unavailable?t('job.refusal.'+host.unavailable):host?.record ? tr('JOB_REVIEW_READ_ONLY') : readOnlyReason(access, writes.capabilityRequired);
     actReadOnly = readOnlyReason(access, writes.capabilityRequired, host?.ownerActAccess);
     if(data.capabilities.preRig){rigInspector.comments.button.disabled=true;rigInspector.act.hidden=true;}
     submittedBaseline=structuredClone(session);
@@ -1322,7 +1322,14 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
 
  document.body.dataset.ready='true';
 }
-/** Record-only publications reuse the empty main view; no package or model is manufactured. */
+/** Use the existing Comments-only presentation for subjects without rig capabilities. */
+function showRecordComments():void {
+ for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
+ for(const child of rigInspector.comments.panel.children)(child as HTMLElement).hidden=child!==el('proposal-panel')&&!child.classList.contains('review-dialog-header');
+ rigInspector.comments.panel.style.display='block';
+ rigInspector.collapse.disabled=false;setSourceAttribute(rigInspector.collapse,'title','');
+}
+/** Publications without a picture reuse the empty main view; no model is manufactured. */
 async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  const imageSet=host?.imageSet;
  if(!host?.record&&!interview&&!imageSet)throw new Error('JOB_DISPLAY_MISMATCH');
@@ -1340,9 +1347,10 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
   label();viewDisposers.push(onLanguageChange(label));
   viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,t('interview.title'),true)));
   text('provenance-rig',unavailable);text('provenance-motion',unavailable);text('source-files','project.json');
- }else if(imageSet){await bindImageReview();}else{setupComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}
+ }else if(imageSet){await bindImageReview();}else{restoreRecordComments();setupComments();showRecordComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  await workspace?.settle();if(disposed)return;
+ if(host?.unavailable){message(t('job.refusal.'+host.unavailable),true);el('message').title=host.unavailable;button('save').disabled=true;button('save').title=host.unavailable;}
  document.body.dataset.ready='true';
  if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:subjects=>{renderPendingSubjects(subjects);if(imageSet)refreshImageAct?.();},stage:()=>null,redraw:()=>{if(imageSet)fitCamera();},message,suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
@@ -1355,9 +1363,7 @@ async function bindImageReview():Promise<void> {
  rigRaster.active=()=>true;rigRaster.frameSize=()=>({w:gallery.offsetWidth,h:gallery.offsetHeight});
  const measure=()=>fitCamera();
  measure();const sizes=new ResizeObserver(measure);sizes.observe(gallery);viewDisposers.push(()=>sizes.disconnect());
- for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
- for(const child of rigInspector.comments.panel.children)(child as HTMLElement).hidden=child!==el('proposal-panel')&&!child.classList.contains('review-dialog-header');
- rigInspector.comments.panel.style.display='block';
+ showRecordComments();
  const rows=recordComments as ImageCommentRow[],submitted=new Set<string>();
  const projection=()=>rows.map(row=>({text:row.summary,...row.image?{anchor:{name:row.image.name}}:{}}));
  const changed=()=>{dirty=true;recordCommentsChanged();renderDraftState();};
@@ -1380,7 +1386,6 @@ async function bindImageReview():Promise<void> {
  const save=button('save');
  refreshImageAct=()=>{save.disabled=!!actReadOnly||saving||!host!.canSubmit?.();setSourceAttribute(save,'title',save.disabled?actReadOnly??t(saving?'job.imageSubmitting':'job.imageWaiting',undefined,'en'):'');};
  refreshImageAct();
- rigInspector.collapse.disabled=false;setSourceAttribute(rigInspector.collapse,'title','');
  save.onclick=async()=>{if(saving||actReadOnly||!host!.canSubmit?.())return;saving=true;refreshImageAct!();verdict.disabled=true;renderDraftState();
   try{const frozen=structuredClone(projection());message(await host!.submitImages!(verdict.value as import('../src/job-contract.ts').JobImageReviewValue['verdict'],frozen));for(const row of rows)submitted.add(row.id);dirty=false;try{localStorage.removeItem(recordCommentKey);}catch{}rigInspector.actBar.setSaveState({kind:'saved',text:'Submitted'});comments?.refresh();}
   catch(error){message(errorText(error),true);}finally{saving=false;verdict.disabled=!!actReadOnly;refreshImageAct!();renderDraftState();}
@@ -1393,7 +1398,7 @@ let recordDialog:HTMLDialogElement|null=null;
 /** Reuse the form's publication binding for native record comments, without a package session. */
 function restoreRecordComments(form?:HTMLFormElement):void {
  if((!host?.record&&!host?.imageSet&&!host?.direction)||recordCommentKey)return;
- const publicationId=host?.imageSet?.publicationId??host?.direction?.publicationId??form?.dataset.jobPublication,sourceHash=host?.imageSet?.source.sourceHash??host?.direction?.sourceHash??host!.record!.sourceHash;
+ const publicationId=host?.imageSet?.publicationId??host?.direction?.publicationId??host?.record?.publicationId??form?.dataset.jobPublication,sourceHash=host?.imageSet?.source.sourceHash??host?.direction?.sourceHash??host!.record!.sourceHash;
  if(!publicationId)throw new Error('JOB_DISPLAY_MISMATCH');
  recordCommentKey='rig-review-record-comments/1:'+publicationId+':'+sourceHash;
  try {
@@ -1422,7 +1427,7 @@ function recordCommentWords():string {
 }
 function recordCommentsChanged():void {
  if(!host?.record&&!host?.imageSet&&!host?.direction)return;
- try{if(recordCommentKey)localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:host?.imageSet?.publicationId??host?.direction?.publicationId??recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication,sourceHash:host?.imageSet?.source.sourceHash??host?.direction?.sourceHash??host!.record!.sourceHash,comments:recordComments}));}catch{/* In-memory comments remain bound to this host. */}
+ try{if(recordCommentKey)localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:host?.imageSet?.publicationId??host?.direction?.publicationId??host?.record?.publicationId??recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication,sourceHash:host?.imageSet?.source.sourceHash??host?.direction?.sourceHash??host!.record!.sourceHash,comments:recordComments}));}catch{/* In-memory comments remain bound to this host. */}
  setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);
  for(const form of recordDialog?.querySelectorAll('form[data-job-ask]')??[])form.dispatchEvent(new Event('input',{bubbles:true}));
 }
@@ -3225,4 +3230,4 @@ return {dispose:disposeScreen};
 }
 
 // Package entries mount directly; the live host invokes this same composition for each publication.
-if(!rigHost())mountRigScreen();
+if(!rigHost()){if(/^\/jobs\/[^/]+\/$/.test(location.pathname))void mountJobScreen(document.body);else mountRigScreen();}

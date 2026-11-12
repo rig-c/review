@@ -1,4 +1,12 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+  "JOB_DIRECTION_MISSING": "JOB_DIRECTION_MISSING",
+  "job.refusal.JOB_DIRECTION_MISSING": "This post has no direction. The producer must publish direction data with the model.",
+  "JOB_PARTS_MISSING": "JOB_PARTS_MISSING",
+  "job.refusal.JOB_PARTS_MISSING": "This draft has no parts. The producer must publish the draft parts before requesting a parts review.",
+  "JOB_MODEL_MISSING": "JOB_MODEL_MISSING",
+  "job.refusal.JOB_MODEL_MISSING": "This request has no compiled model. The producer must publish a compiled model before requesting a rig verdict.",
+  "JOB_ASK_UNSUPPORTED": "JOB_ASK_UNSUPPORTED",
+  "job.refusal.JOB_ASK_UNSUPPORTED": "This request lacks a supported source or checkpoint mapping. The producer must publish the matching source and plan mapping before asking again.",
   "job.imageNoParts": "Image sets have no parts or compiled rig editing tools.",
   "job.imageWaiting": "Wait for a pending image review request and for the images to finish loading before submitting.",
   "job.imageSubmitting": "The image review is being submitted.",
