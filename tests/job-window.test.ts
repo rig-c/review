@@ -2210,8 +2210,9 @@ describe('#559 continuous Rig motion transport and job forms', () => {
                         ...(overrides?.interview === undefined ? {} : {interview: overrides.interview}),
                         source: {
                             ...base.publication.source,
-                            selector: {kind: 'post', version: 1, rigVersion: 1},
-                            direction: {path:'direction.json',sha256:'d'.repeat(64)},
+                            // #774 deletes this model-less fallback and will move these playback assertions again.
+                            // The declared player double tests transport mechanics, not direction hosting.
+                            selector: null, model: null, direction: null,
                             ...(overrides?.optionSet === undefined ? {} : {optionSet: overrides.optionSet}),
                         },
                     },
@@ -2239,35 +2240,11 @@ describe('#559 continuous Rig motion transport and job forms', () => {
         };
     }
 
-    test('#709 retained direction verdict form submits its unchanged value through the synthetic transport', async () => {
-        for (const stage of ['direction-review'] as const) {
-            const s = await mountRuntimeSession();
-            try {
-                const base = fixturePublication();
-                if (base.publication.source.subject === 'image-set') throw new Error('Expected model fixture');
-                const source =
-                    {...base.publication.source, selector: {kind: 'post' as const, version: 1, rigVersion: 1},
-                        direction: {path: 'direction.json', sha256: 'd'.repeat(64)}};
-                const display = {...base, publication: {...base.publication, source}};
-                await s.publishDisplay(display);
-                const ask: PendingAskV3 = {askId: stage, publicationId: display.publication.publicationId,
-                    source, subject: {kind: 'review-verdict', stage}, status: 'pending'};
-                s.fixture.pending(ask, 2);
-                s.window.event(s.fixture.events.at(-1)!);
-                const form = s.workspace.querySelector(`form[data-job-ask="${stage}"]`)!;
-                expect(form).not.toBeNull();
-                form.querySelector('select[name="verdict"]')!.value = 'approved';
-                form.querySelector('textarea[name="note"]')!.value = '  preserve 원문\n';
-                const value = {stage, verdict: 'approved', words: '  preserve 원문\n',
-                    };
-                s.fixture.returnAct({...fixtureAct('review-verdict'), askId: ask.askId, source, value} as ActV3);
-                form.dispatchEvent({type: 'input'});
-                await form.onsubmit?.({preventDefault() {}});
-                expect(s.outgoingSubmits).toHaveLength(1);
-                expect(s.outgoingSubmits[0]!.body.value).toEqual(value);
-                expect(s.outgoingSubmits[0]!.body).not.toHaveProperty('capture');
-            } finally {s.cleanup();}
-        }
+    test('#773 direction verdict form is refused by the old job-window builder', async () => {
+        const source = await Bun.file(new URL('../web/job-session.ts', import.meta.url)).text();
+        expect(source).toContain("if(subject.kind==='review-verdict')throw new Error('JOB_PANEL_UNAVAILABLE')");
+        expect(source).not.toContain("else if (subject.kind === 'review-verdict' && subject.stage === 'direction-review')");
+        expect(source).not.toContain('direction.dataset.jobDirection');
     });
 
     test('#559 runtime transport lifecycle: #job-play, #job-loop, single rAF, loop wrap, physics-reset loop toggle, and one-shot completion', async () => {

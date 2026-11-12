@@ -145,7 +145,9 @@ test('#746 a present empty list means zero comments, while the act bar omits fee
 test('#746 decisions never answer direction or image verdicts with rig feedback', () => {
   for (const stage of ['direction-review', 'image-review'] as const) {
     const ask = {askId: stage, publicationId: 'publication', status: 'pending', subject: {kind: 'review-verdict', stage}} as PendingAskV3;
-    expect(jobRigScreenDecisions({status: 'approved', checkpoints: {}, feedback: feedbackFor(baseline.source)}, [ask], 'publication')).toEqual([]);
+    const decisions=jobRigScreenDecisions({status: 'approved', checkpoints: {}, feedback: feedbackFor(baseline.source)}, [ask], 'publication');
+    if(stage==='image-review')expect(decisions).toEqual([]);
+    else {expect(decisions).toHaveLength(1);expect(decisions[0]!.value).toMatchObject({stage,verdict:'approved'});expect(decisions[0]!.value).not.toHaveProperty('feedback');}
   }
   // @ts-expect-error Feedback is admitted only on rig-review UI values.
   const direction: JobUIActValues['review-verdict'] = {stage: 'direction-review', verdict: 'approved', words: '', feedback: []};

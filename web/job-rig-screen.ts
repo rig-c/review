@@ -17,12 +17,12 @@ export function jobRigScreenSubject(source: SourceV3): boolean {
   if ('record' in source) return false;
   if (source.subject === 'image-set') return true;
   if(source.selector?.kind==='draft'&&source.parts)return true;
-  return !!source.model && !source.direction && (source.selector === null || source.selector.kind === 'rig');
+  return !!source.model && (source.direction ? source.selector?.kind === 'post' : source.selector === null || source.selector.kind === 'rig');
 }
 /** The asks the rig screen's act bar answers: the rig verdict and checkpoints the package declares. */
 export function jobRigScreenAnswers(ask: Pick<PendingAskV3, 'subject'>, checkpoints: ReadonlySet<string>): boolean {
   const subject = ask.subject;
-  return subject.kind === 'review-verdict' ? subject.stage === 'rig-review' :
+  return subject.kind === 'review-verdict' ? (subject.stage === 'rig-review' || subject.stage === 'direction-review') :
     subject.kind === 'checkpoint' && checkpoints.has(subject.checkpointId);
 }
 export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readonly PendingAskV3[],
@@ -38,13 +38,13 @@ export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readon
         return true;
       } catch {return false;}
     }
-    return jobRigScreenAnswers(ask, checkpoints) || ask.subject.kind === 'signoff' || ask.subject.kind === 'interview-picks';
+    return (jobRigScreenAnswers(ask, checkpoints) && (ask.subject.kind !== 'review-verdict' || ask.subject.stage === (display.publication.source.subject !== 'image-set' && display.publication.source.direction ? 'direction-review' : 'rig-review'))) || ask.subject.kind === 'signoff' || ask.subject.kind === 'interview-picks';
   });
 }
 
 export type JobRigScreenDecision =
   | {readonly ask: PendingAskV3; readonly kind: 'checkpoint'; readonly value: Extract<JobUISubmission, {kind: 'checkpoint'}>['value']}
-  | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]}};
+  | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review' | 'direction-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]}};
 /** The act bar's decisions as the pending asks' values. `words` is the comments' projection (act@6's), or empty;
  * a decision still pending is not sent, so a pending ask is never answered with "pending". Checkpoints go first. */
 export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'checkpoints' | 'feedback'>,
@@ -59,11 +59,11 @@ export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'c
     decisions.push({ask, kind: 'checkpoint', value: {checkpointId, outcome: entry.outcome,
       words: entry.note.trim() ? projectComments(checkpointNoteComments({checkpointId, planStepId, note: entry.note})) : ''}});
   }
-  const verdict = open.find(ask => ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review');
-  if (verdict && session.status !== 'pending') {
-    decisions.push({ask: verdict, kind: 'review-verdict', value: {stage: 'rig-review', verdict: session.status,
+  const verdict = open.find(ask => ask.subject.kind === 'review-verdict' && (ask.subject.stage === 'rig-review' || ask.subject.stage === 'direction-review'));
+  if (verdict?.subject.kind === 'review-verdict' && verdict.subject.stage !== 'image-review' && session.status !== 'pending') {
+    decisions.push({ask: verdict, kind: 'review-verdict', value: {stage: verdict.subject.stage, verdict: session.status,
       words: session.feedback.length ? projectComments(feedbackItemComments(session.feedback)) : '',
-      ...(session.feedback.length ? {feedback: structuredClone(session.feedback)} : {})}});
+      ...(verdict.subject.kind === 'review-verdict' && verdict.subject.stage === 'rig-review' && session.feedback.length ? {feedback: structuredClone(session.feedback)} : {})}});
   }
   return decisions;
 }
@@ -144,7 +144,7 @@ export function createJobRigScreen(options: {
       if(parts.sourceHash!==source.sourceHash||parts.mode!=='parts')throw new Error('JOB_DISPLAY_MISMATCH');
     }
     let modals:JobRigScreenPrepared['modals'];
-    const asks=options.window.state().pending.filter(ask=>ask.publicationId===display.publication.publicationId&&ask.subject.kind!=='parts-verdict'&&!(ask.subject.kind==='review-verdict'&&ask.subject.stage==='rig-review'));
+    const asks=options.window.state().pending.filter(ask=>ask.publicationId===display.publication.publicationId&&ask.subject.kind!=='parts-verdict'&&!(ask.subject.kind==='review-verdict'&&(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review')));
     if(!backdropOnly&&options.formDependencies){
       const inspection=await prepareJobInspection(display,signal,true);
       try{modals={inspection,forms:prepareJobForms(display,asks,ask=>formFor(ask,inspection,options.formDependencies!))};}
@@ -249,7 +249,7 @@ export function createJobRigScreen(options: {
         if(sending)return options.translate('job.parts.sending');
         const kind=prepared.parts?'parts-verdict':'review-verdict';
         const ask=options.window.state().pending.filter(ask=>ask.publicationId===prepared.display.publication.publicationId&&
-          ask.subject.kind===kind&&(ask.subject.kind!=='review-verdict'||ask.subject.stage==='rig-review')).at(-1);
+          ask.subject.kind===kind&&(ask.subject.kind!=='review-verdict'||(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review'))).at(-1);
         const act=ask?.status==='answered'?ask.act:undefined;
         const verdict=act?.kind===kind&&(act.kind==='parts-verdict'||act.kind==='review-verdict')?act.value.verdict:null;
         return verdict==='changes-requested'?options.translate('job.parts.sent'):verdict==='approved'?options.translate('job.review.approved'):
@@ -279,7 +279,7 @@ export function createJobRigScreen(options: {
   function refreshRecordForms():void {
     const record=mounted?.record??mounted?.modals,deps=options.formDependencies;if(!record||!deps)return;
     const state=options.window.state(),display=record.inspection.display;
-    const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&!(ask.subject.kind==='review-verdict'&&ask.subject.stage==='rig-review')),ask=>record.forms.get(ask.askId)??formFor(ask,record.inspection,deps));
+    const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&!(ask.subject.kind==='review-verdict'&&(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review'))),ask=>record.forms.get(ask.askId)??formFor(ask,record.inspection,deps));
     for(const [id,entry]of next)record.forms.set(id,entry);
     for(const [id,entry]of record.forms){const ask=state.pending.find(ask=>ask.askId===id);entry.fieldset.disabled=entry.submitting||ask?.status!=='pending'||state.preparing||state.closed||!state.receipt||!options.access.capability;}
     screen?.recordForms?.([...record.forms.values()].map(entry=>entry.form));

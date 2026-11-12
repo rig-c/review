@@ -1,4 +1,4 @@
-/** #772 ordinary Nova: image asks on the one shell, EN/KO, real pointer comments and writer fetch. */
+/** #772/#773 ordinary Nova: image asks on the one shell, EN/KO, real pointer comments and writer fetch. */
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
 import {mkdir,readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
@@ -10,6 +10,7 @@ import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {projectComments} from '../src/stage-comment.ts';
 import {jobFixture,jobInputHashes} from './helpers/job-api-fixture.ts';
+import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 const arg=Bun.argv.indexOf('--out'),output=resolve(arg<0?'artifacts/image-screen-772':Bun.argv[arg+1]!);
 await mkdir(output,{recursive:true});
@@ -72,6 +73,50 @@ try{
   assert.deepEqual(await api('fetch-act',{actId:act.actId},true),act);
   observations.push({language,layout,resize,act,commentScreenshot:language+'-comments.png',pinTransport:'text projection only; structured position/crop follow-up #776'});
  }
+ const directionFixture=await scriptedJobWindowFixture();
+ try{
+  for(const language of ['en','ko'] as const){
+   const publication=await directionFixture.publish('direction','direction-'+language);
+   const frozen=await jobInputHashes(directionFixture.input.root);
+   const ask=await directionFixture.ask(publication,{kind:'review-verdict',stage:'direction-review'});
+   const url=new URL(directionFixture.host.ownerUrl);url.searchParams.set('lang',language);
+   await page.goto(url.href,language);
+   await wait(`document.body.dataset.ready==='true'&&!document.querySelector('#save').disabled&&!!document.querySelector('#rig-root canvas')`);
+   assert.equal(await page.evaluate(`document.documentElement.lang`),language);
+   const layout:any=await page.evaluate(`(()=>{const visible=n=>!!n&&!n.closest('[hidden]')&&n.getBoundingClientRect().height>0;return {shells:document.querySelectorAll('#app').length,panels:document.querySelectorAll('#direction-panel').length,directionVisible:visible(document.querySelector('#direction-panel')),actBars:document.querySelectorAll('.workspace-act-bar').length,verdictInBar:!!document.querySelector('.workspace-act-bar #review-status'),notes:[...document.querySelectorAll('textarea[name="note"],textarea[name="words"],form[data-job-ask] textarea')].filter(visible).length,legacyDumps:document.querySelectorAll('[data-job-direction]').length};})()`);
+   assert.equal(layout.shells,1);assert.equal(layout.panels,1);assert.equal(layout.directionVisible,true);
+   assert.equal(layout.actBars,1);assert.equal(layout.verdictInBar,true);assert.equal(layout.notes,0);assert.equal(layout.legacyDumps,0);
+   // #559 successor: exercise the actual shared-screen playback for a direction-bearing post source.
+   await page.evaluate(`(()=>{const select=document.querySelector('#animation-select');select.value='inspect';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),'0');
+   await click('#play');await wait(`Number(document.querySelector('#scrub').value)>0.05`);await click('#play');
+   const paused:string=await page.evaluate<string>(`document.querySelector('#scrub').value`);await Bun.sleep(100);
+   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),paused);
+   await click('#play');
+   await page.evaluate(`(()=>{const scrub=document.querySelector('#scrub');scrub.value='0.123456789';scrub.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),'0.123456789');await Bun.sleep(100);
+   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),'0.123456789');
+   await page.evaluate(`(()=>{const select=document.querySelector('#animation-select');select.value='short';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),'0');await Bun.sleep(100);
+   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),'0');
+   await click('#play');await wait(`Number(document.querySelector('#scrub').value)===Number(document.querySelector('#scrub').max)`);
+   const ended:string=await page.evaluate<string>(`document.querySelector('#scrub').value`);await Bun.sleep(100);
+   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),ended);
+   await click('[data-comment-general]');await composer('Direction comment · 연출');
+   await wait(`document.querySelectorAll('.stage-comment-item').length===1`);
+   const screenshot=language+'-direction.png';await writeFile(join(output,screenshot),await page.screenshot());
+   await page.evaluate(`(()=>{const v=document.querySelector('#review-status');v.value='approved';v.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+   await click('#save');
+   let act:any;const deadline=Date.now()+20000;
+   while(Date.now()<deadline){const next=await directionFixture.next();act=next.events.flatMap(e=>e.type==='act'&&e.act.askId===ask.askId?[e.act]:[])[0];if(act)break;await Bun.sleep(25);}
+   assert.ok(act,'direction UI committed act');assert.equal(act.schema,'rig-review/act@6');assert.equal(act.authority.channel,'review-ui');
+   assert.equal(act.value.stage,'direction-review');assert.equal(act.value.verdict,'approved');
+   assert.equal(act.value.comments.length,1);assert.ok(act.value.comments[0].text.includes('Direction comment · 연출'));
+   assert.equal('still' in act,false);assert.deepEqual(act.source.direction,publication.source.direction);
+   observations.push({kind:'direction',language,layout,act,screenshot,pinTransport:'text projection only; positions/crops/bookmarks follow-up #776'});
+   assert.deepEqual(await jobInputHashes(directionFixture.input.root),frozen);
+  }
+ }finally{await directionFixture.close();}
  assert.deepEqual(errors,[]);assert.deepEqual(await jobInputHashes(fixture.root),immutable);
 }catch(error){failure=error;if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});}
 finally{

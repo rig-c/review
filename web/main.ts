@@ -1137,6 +1137,7 @@ function bind(): void {
   },name=>{
     const picker=select('part-set');picker.value=name;picker.dispatchEvent(new Event('change',{bubbles:true}));
   });
+  directionPanel.show(!!data.direction);
   viewDisposers.push(()=>directionPanel?.dispose());
   bindWorkspace();
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});

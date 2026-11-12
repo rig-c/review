@@ -1,6 +1,8 @@
 import {afterEach, expect, test} from 'bun:test';
 import {readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
+import {jobRigScreenDecisions} from '../web/job-rig-screen.ts';
+import {feedbackItemComments} from '../src/stage-comment.ts';
 import {bindJobAsk, finalizeJobAct} from '../src/job-act.ts';
 import {jobHash} from '../src/job-api.ts';
 import {parseCommentsAct, projectComments} from '../src/job-host.ts';
@@ -78,6 +80,16 @@ test('post direction verdict is written as act@6 and read back through the publi
   expect(parseCommentsAct(JSON.parse(JSON.stringify(act)))).toEqual(act as never);
   expect(() => finalizeJobAct({jobId: f.session.jobId, submission: {...submission,
     value: {...submission.value, feedback: []}} as JobUISubmission, ask, retained, reviewer})).toThrow('JOB_REQUEST_INVALID');
+  const rows = [{id:'first',frameStart:0,frameEnd:1,target:{kind:'rig' as const,name:'fixture'},category:'defect' as const,summary:'first comment'},
+    {id:'second',frameStart:null,frameEnd:null,target:{kind:'rig' as const,name:'fixture'},category:'defect' as const,summary:'second comment'}];
+  const decision = jobRigScreenDecisions({status:'changes-requested',checkpoints:{},feedback:rows}, [ask], publication.publicationId)[0]!;
+  const projected = projectComments(feedbackItemComments(rows));
+  const shared = finalizeJobAct({jobId:f.session.jobId,submission:{...submission,value:decision.value} as JobUISubmission,ask,retained,reviewer});
+  expect(parseCommentsAct(shared)).toMatchObject({schema:'rig-review/act@6',value:{stage:'direction-review',comments:[{text:projected}]}});
+  expect(shared).not.toHaveProperty('still');
+  expect(decision.value).not.toHaveProperty('feedback');
+  expect(() => finalizeJobAct({jobId:f.session.jobId,submission:{...submission,value:{...decision.value,comments:feedbackItemComments(rows)}} as unknown as JobUISubmission,ask,retained,reviewer})).toThrow('JOB_REQUEST_INVALID');
+
 });
 
 test('image-review stays pinned at act@2 with words and imageNotes', async () => {

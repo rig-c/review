@@ -1380,7 +1380,7 @@ export interface JobFormDependencies {
         if (ask.subject.kind !== 'review-verdict') {source.title = ask.source.sourceHash; source.setAttribute('translate', 'no');}
         fields.append(source);
         const subject = ask.subject;
-        if(subject.kind==='review-verdict'&&subject.stage==='image-review')throw new Error('JOB_PANEL_UNAVAILABLE');
+        if(subject.kind==='review-verdict')throw new Error('JOB_PANEL_UNAVAILABLE');
         const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff' || subject.kind === 'reopen';
         const note = commentOnly || subject.kind === 'interview-picks' ? null : textArea(fields, 'interview.note');
         if(commentOnly)fields.append(node('p','job.commentsFromWorkspace'));
@@ -1496,13 +1496,6 @@ export interface JobFormDependencies {
             submitKey = 'job.saveCheckpoint';
         }
         else if(subject.kind==='parts-verdict')throw new Error('JOB_PANEL_UNAVAILABLE');
-        else if (subject.kind === 'review-verdict' && subject.stage === 'direction-review') {
-            const verdict = selectValues(['pending', 'approved', 'changes-requested'], ['Pending', 'Approved', 'Changes requested']);
-            verdict.name = 'verdict';
-            fields.append(verdict);
-            const stage = subject.stage;
-            read = () => ({ stage, verdict: verdict.value as 'pending' | 'approved' | 'changes-requested', words: (note?.value ?? '') });
-        }
         else if (subject.kind === 'signoff') {
             fields.title = subject.stage;
             if (ask.source.plan) fields.append(planTextList(ask.source.plan, prepared.metadata.planText));
@@ -2100,17 +2093,10 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         const host = workspace.querySelector<HTMLElement>('[data-job-forms]');
         if (!host)
             return;
-        for(const ask of state.pending){
-            if(ask.publicationId!==current.display.publication.publicationId)continue;
-            if(ask.subject.kind!=='review-verdict'||!['image-review','direction-review'].includes(ask.subject.stage))throw new Error('JOB_PANEL_UNAVAILABLE');
-            let entry=forms.get(ask.askId);
-            if(!entry&&ask.status==='pending'){
-                try{entry=prepareJobForms.formFor(ask,current,formDependencies);forms.set(ask.askId,entry);host.append(entry.form);}
-                catch(error){const refusal=node('p');refusal.textContent=jobWindowRefusal(error,'JOB_ASK_INVALID');host.append(refusal);}
-            }
-            if(entry)entry.fieldset.disabled=entry.submitting||ask.status!=='pending'||state.preparing||state.closed||!state.receipt||!access.capability;
-        }
+        const publicationId=current.display.publication.publicationId;
+        if(state.pending.some(ask=>ask.publicationId===publicationId))throw new Error('JOB_PANEL_UNAVAILABLE');
     }
+
     function build(prepared: JobPreparedInspection): HTMLElement {
         const root = node('div');
         root.className = 'job-inspection';
@@ -2292,11 +2278,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         formsHost.dataset.jobForms = '';
         const heading = node('h2', 'job.pending');
         formsHost.append(heading);
-        const direction = node('pre');
-        direction.className = 'job-direction';
-        direction.dataset.jobDirection = '';
-        if (prepared.metadata.direction)
-            direction.textContent = t('job.metadata') + '\n' + JSON.stringify(prepared.metadata.direction, null, 2);
         const interviewDiagnostics = node('section');
         interviewDiagnostics.className = 'job-interview-diagnostics';
         interviewDiagnostics.dataset.jobInterviewDiagnostics = '';
@@ -2333,7 +2314,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         const history = node('div');
         history.className = 'job-history';
         history.dataset.jobHistory = '';
-        formsHost.append(direction, interviewDiagnostics, history);
+        formsHost.append(interviewDiagnostics, history);
         root.append(sidebar, stage, formsHost);
         return root;
     }
@@ -2343,8 +2324,6 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
         el('reference-empty').hidden = !!value;
     }
     function showPanel(): void {
-        const direction = workspace.querySelector<HTMLElement>('[data-job-direction]');
-        if (direction) direction.hidden = !current?.metadata.direction;
         saveWindowState();
     }
     function pose(seekReference = true): void {
@@ -2424,7 +2403,7 @@ export async function mountJobSession(host: HTMLElement, legacy=false, inherited
                 if (rig && current) { location.reload(); return new Promise<never>(() => {}); }
                 if (rig) return rig;
                 const source = display.publication.source;
-                if ('record' in source || source.subject !== 'image-set' && !source.direction && (source.model || source.parts))
+                if ('record' in source || source.subject !== 'image-set' && (source.model || source.parts))
                     throw new Error('JOB_PANEL_UNAVAILABLE');
                 const inspection = await prepareJobInspection(display, signal);
                 try {
