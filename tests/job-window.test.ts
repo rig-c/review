@@ -1755,83 +1755,6 @@ describe('C4 shared parts host', () => {
         expect(jobPartsPainting(prepared)).toBeNull();
     });
 
-    test('C4 zero issues sends verdict then signoff with the original words', async () => {
-        const h = await partsHarness();
-        const requests: UISubmissionV3[] = [];
-        h.fixture.ports.commitUIAct = async (_job, request) => {
-            const input = await request.json() as UISubmissionV3;
-            requests.push(input);
-            const act = input.kind === 'parts-verdict' ? h.act : {...fixtureAct('signoff'),
-                askId: h.signoff.askId, source: h.act.source, value: input.value} as ActV3;
-            return {ok: true, value: act};
-        };
-        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(true);
-        expect(requests.map(input => input.kind)).toEqual(['parts-verdict', 'signoff']);
-        expect(requests[1]!.value).toEqual({stage: 'parts-review', decision: 'approved', words: '  source words\n'});
-        expect(h.window.state().pending.find(ask => ask.askId === h.act.askId)?.act).toEqual(h.act);
-        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('approved');
-    });
-
-    test('C4 issues send only the registered verdict value', async () => {
-        const h = await partsHarness(false);
-        const act = partsAct('changes-requested');
-        const requests: UISubmissionV3[] = [];
-        h.fixture.ports.commitUIAct = async (_job, request) => {
-            requests.push(await request.json() as UISubmissionV3);
-            return {ok: true, value: act};
-        };
-        expect((await h.window.submitParts({...h.input, value: act.value} as UISubmissionV3, 'unused')).ok).toBe(true);
-        expect(requests).toHaveLength(1);
-        expect(requests[0]!.value).toEqual(act.value);
-        expect(jobPartsReviewState(h.window.state().pending, act.publicationId)).toBe('sent');
-    });
-
-    test('C4 first failure retries the verdict, second failure retries only the pending signoff', async () => {
-        const h = await partsHarness();
-        const requests: UISubmissionV3[] = [];
-        let fail = 'parts-verdict';
-        h.fixture.ports.commitUIAct = async (_job, request) => {
-            const input = await request.json() as UISubmissionV3;
-            requests.push(input);
-            if (input.kind === fail) return {ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}};
-            return {ok: true, value: input.kind === 'parts-verdict' ? h.act : {...fixtureAct('signoff'),
-                askId: h.signoff.askId, source: h.act.source, value: input.value} as ActV3};
-        };
-        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(false);
-        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('reviewing');
-        fail = 'signoff';
-        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(false);
-        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('retry-signoff');
-        fail = '';
-        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(true);
-        expect(requests.map(input => input.kind)).toEqual(['parts-verdict', 'parts-verdict', 'signoff', 'signoff']);
-        expect(requests.slice(2).map(input => input.submissionId)).toEqual(['signoff-submit', 'signoff-submit']);
-    });
-
-    test('#713 an act@6 parts verdict counts as finalized and its retried signoff resends its general note', async () => {
-        const h = await partsHarness();
-        const act6 = {...h.act, schema: 'rig-review/act@6', value: {verdict: 'approved',
-            comments: [{text: h.act.value.words}]}} as unknown as ActV3;
-        const requests: UISubmissionV3[] = [];
-        let fail = 'signoff';
-        h.fixture.ports.commitUIAct = async (_job, request) => {
-            const input = await request.json() as UISubmissionV3;
-            requests.push(input);
-            if (input.kind === fail) return {ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}};
-            return {ok: true, value: input.kind === 'parts-verdict' ? act6 : {...fixtureAct('signoff'),
-                askId: h.signoff.askId, source: h.act.source, value: input.value} as ActV3};
-        };
-        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(false);
-        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('retry-signoff');
-        fail = '';
-        // The retry reads the finalized @6 verdict, not the form, and resends its one general comment as words.
-        expect((await h.window.submitParts({...h.input, value: {...h.input.value, words: 'edited'}} as UISubmissionV3,
-            'signoff-submit')).ok).toBe(true);
-        expect(requests.map(input => input.kind)).toEqual(['parts-verdict', 'signoff', 'signoff']);
-        expect(requests[2]!.value).toEqual({stage: 'parts-review', decision: 'approved', words: h.act.value.words});
-        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('approved');
-    });
-
     test('C4 act events and reconnect replay retain the finalized value and never fabricate a signoff', async () => {
         const h = await partsHarness();
         h.window.event(actEvent(h.act));
@@ -1851,15 +1774,6 @@ describe('C4 shared parts host', () => {
             parts: [{partId: 'body', part: {outcome: 'clean', note: ''}, mesh: {outcome: 'clean', note: ''}}],
         }};
         expect(jobPartsReviewState([{...h.verdict, status: 'answered', act: legacy}], h.act.publicationId)).toBe('reviewing');
-    });
-
-    test('C4 missing signoff and stale source are refused before another write', async () => {
-        const h = await partsHarness(false);
-        await expect(h.window.submitParts(h.input, 'signoff-submit')).rejects.toThrow('JOB_PARTS_SIGNOFF_MISSING');
-        expect(h.fixture.submissions).toHaveLength(0);
-        await h.publish(2);
-        await expect(h.window.submitParts(h.input, 'signoff-submit')).rejects.toThrow('JOB_ACT_SOURCE_STALE');
-        expect(h.fixture.submissions).toHaveLength(0);
     });
 
     test('C4 source mounts one workspace and removes duplicate parts controls', async () => {

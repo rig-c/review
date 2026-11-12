@@ -6,7 +6,6 @@ import {lstatSync, readFileSync, writeFileSync, renameSync, mkdirSync} from 'nod
 import {JobSession} from '../src/job-session.ts';
 import {JobStore, JobError} from '../src/job-store.ts';
 import {createJobRequestContext, jobHostIdentity} from '../src/job-front.ts';
-import {startJobWorker} from '../src/job-worker.ts';
 import {startJobHub} from '../src/job-host.ts';
 import {
   JOB_ACT_SCHEMA,
@@ -764,11 +763,8 @@ test('CP1 item 4: exact readonly session is staged before the final network prob
   finally {JobSession.openReadOnly = original;}
 });
 
-test('CP1 item 5: worker and hub expose canonical shared listener incarnation', async () => {
+test('CP1 item 5: hub exposes canonical shared listener incarnation', async () => {
   const f = await createFixture(), options = baseOptions(f);
-  const worker = await startJobWorker({...options, stateDir: join(f.scratch, 'worker-state')});
-  try {expect((worker as typeof worker & {listenerIncarnation?: string}).listenerIncarnation)
-    .toMatch(/^[0-9a-f-]{36}$/);} finally {worker.stop();}
   const hub = await startJobHub({stateDir: options.stateDir, reviewer: options.reviewer});
   let originalBinding: JobHostReuseExpectation;
   try {

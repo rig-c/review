@@ -12,6 +12,11 @@ const failuresOf = (map: ReadonlyMap<string, string>) => checkScreenCopies(map).
 /** Remove every hit of a row: delete its files and strip its matches. */
 function zeroed(row: CopyRow): Map<string, string> {
   const map = new Map(sources);
+  if (row.exactSet) for (const [path, text] of map) {
+    if (!row.exactSet.paths.test(path)) continue;
+    if (row.exactSet.pattern) map.set(path, text.replace(row.exactSet.pattern, ''));
+    else map.delete(path);
+  }
   for (const file of row.files ?? []) map.delete(file);
   if (row.fileGlob) for (const path of [...map.keys()]) if (row.fileGlob.pattern.test(path) && !row.fileGlob.except.includes(path)) map.delete(path);
   for (const matcher of row.matchers ?? []) for (const [path, text] of map) {
@@ -32,28 +37,48 @@ test('#686: every row is at its ceiling on this tree and the script exits 0', ()
 });
 
 for (const row of ROWS) {
+  if (row.exactSet) test(`#801 planted extra entry refuses by name: ${row.name}`, () => {
+    const map = new Map(sources), {plantIn, plant} = row.exactSet!;
+    map.set(plantIn, (map.get(plantIn) ?? '') + '\n' + plant);
+    expect(countRow(row, map)).toBe(row.ceiling + 1);
+    const failures = checkScreenCopies(map, [row]);
+    expect(failures[0]!.failure).toStartWith(`SCREEN_ENTRY_SET_CHANGED: ${row.name}:`);
+    expect(failures[0]!.failure).toContain(plantIn === 'src/build.ts' ? 'web/planted.ts' : plantIn);
+  });
+  if (row.exactSet) test(`#801 same-count replacement refuses by name: ${row.name}`, () => {
+    const map = new Map(sources), set = row.exactSet!;
+    if (!set.pattern) map.delete(set.expected[0]!);
+    else if (row.name === 'buildWeb entries exact set') {
+      map.set('src/build.ts', map.get('src/build.ts')!.replace(set.expected[0]!, 'web/planted.ts'));
+    } else map.set(set.expected[0]!, map.get(set.expected[0]!)!.replace(set.pattern, ''));
+    if (row.name !== 'buildWeb entries exact set') map.set(set.plantIn, (map.get(set.plantIn) ?? '') + '\n' + set.plant);
+    expect(countRow(row, map)).toBe(row.ceiling);
+    expect(checkScreenCopies(map, [row])[0]!.failure).toStartWith(`SCREEN_ENTRY_SET_CHANGED: ${row.name}:`);
+  });
   for (const [i, matcher] of (row.matchers ?? []).entries()) test(`#686 planted extra hit refuses: ${row.name} [${i}]`, () => {
     const map = new Map(sources);
     expect(map.has(matcher.plantIn)).toBe(true);
     map.set(matcher.plantIn, map.get(matcher.plantIn)! + matcher.plant);
     expect(countRow(row, map)).toBe(row.ceiling + 1);
-    expect(failuresOf(map)).toEqual([`SCREEN_COPY_ROSE: ${row.name}: ${row.ceiling + 1} > ceiling ${row.ceiling} (step ${row.step})`]);
+    expect(checkScreenCopies(map, [row])[0]!.failure).toBe(`SCREEN_COPY_ROSE: ${row.name}: ${row.ceiling + 1} > ceiling ${row.ceiling} (step ${row.step})`);
+    expect(failuresOf(map).filter(failure => !failure.startsWith('SCREEN_ENTRY_SET_CHANGED:'))).toEqual([`SCREEN_COPY_ROSE: ${row.name}: ${row.ceiling + 1} > ceiling ${row.ceiling} (step ${row.step})`]);
   });
   if (row.fileGlob) test(`#686 planted extra file refuses: ${row.name}`, () => {
     const map = new Map(sources);
     const planted = row.fileGlob!.pattern.source.includes('html') ? 'web/planted.html' : 'web/planted.css';
     map.set(planted, '');
     expect(countRow(row, map)).toBe(row.ceiling + 1);
-    expect(failuresOf(map)).toEqual([`SCREEN_COPY_ROSE: ${row.name}: ${row.ceiling + 1} > ceiling ${row.ceiling} (step ${row.step})`]);
+    expect(checkScreenCopies(map, [row])[0]!.failure).toBe(`SCREEN_COPY_ROSE: ${row.name}: ${row.ceiling + 1} > ceiling ${row.ceiling} (step ${row.step})`);
+    expect(failuresOf(map).filter(failure => !failure.startsWith('SCREEN_ENTRY_SET_CHANGED:'))).toEqual([`SCREEN_COPY_ROSE: ${row.name}: ${row.ceiling + 1} > ceiling ${row.ceiling} (step ${row.step})`]);
   });
   test(`#686 reaching 0 without lowering the ceiling refuses: ${row.name}`, () => {
     const map = zeroed(row);
     expect(countRow(row, map)).toBe(0);
     // A synthetic positive ceiling stands for the row before its step lowered it, so this still holds once the row is 0.
-    const stale = {...row, ceiling: Math.max(row.ceiling, 1)};
+    const stale = {...row, exactSet: undefined, ceiling: Math.max(row.ceiling, 1)};
     expect(checkScreenCopies(map, [stale])[0]!.failure).toBe(`SCREEN_COPY_CEILING_STALE: ${row.name}: 0 hits, lower its ceiling from ${stale.ceiling} to 0 (step ${row.step})`);
     // The same tree passes that row once its ceiling is 0.
-    expect(checkScreenCopies(map, [{...row, ceiling: 0}])[0]!.failure).toBeNull();
+    expect(checkScreenCopies(map, [{...row, exactSet: undefined, ceiling: 0}])[0]!.failure).toBeNull();
   });
 }
 
