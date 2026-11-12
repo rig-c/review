@@ -57,7 +57,6 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
  }};
  front=createJobFront({origin,ports:ports as typeof fake.ports,publication:retainedPublicationRoutes(session),resource:async name=>{
   const body=await resources(name);
-  if(name==='index.html'&&mode.startsWith('job-window'))return String(body).replace('<body data-job-window>','<body>');
   return body;
  }});
  return {scratch,root,session,origin,display,ask,backdrop,workspace,reader,fake,files,submissions,ports,
@@ -71,7 +70,7 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
 
 /** Reuse the existing job-window DOM double, without registering its test suite. */
 export async function recordScreenDom(){
- const source=await readFile(new URL('../job-window.test.ts',import.meta.url),'utf8'),start=source.indexOf('    class RuntimeDomNode {'),end=source.indexOf('    function createPublicPlayerDouble(',start);
+ const source=await readFile(new URL('../job-window.test.ts',import.meta.url),'utf8'),start=source.indexOf('    class RuntimeDomNode {'),end=source.indexOf('\n});',start);
  if(start<0||end<start)throw new Error('SYNTHETIC_750_DOM_BOUNDARY');
  const Node=new Function(new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return RuntimeDomNode;')();
  const saved=new Map<string,PropertyDescriptor|undefined>();

@@ -8,7 +8,7 @@ import { assertReviewUnchanged } from '../src/reference.ts';
 import { startServer } from '../src/server.ts';
 import { freshSession } from '../src/session.ts';
 import { verifyCompiledModel } from '../src/strip-render.ts';
-import { directionRows } from '../web/direction-panel.ts';
+import { directionRows, directionSummary } from '../web/direction-panel.ts';
 import { t } from '../web/i18n.ts';
 import { formatTurnValue, TurnState } from '../src/turn-pad.ts';
 
@@ -137,3 +137,18 @@ test('joined Made correction refusal uses the direction catalog ID in both langu
   expect(t(id, undefined, 'en')).toBe('CAMERA_APPLY_UNSUPPORTED · Camera Apply is unavailable.');
   expect(t(id, undefined, 'ko')).toBe('CAMERA_APPLY_UNSUPPORTED · 카메라 적용을 지원하지 않습니다.');
 });
+
+ test('direction summary uses authored take, camera and optional joined post version in EN/KO', async () => {
+  const pkg = await loadReview(fixture);
+  const view = { model: { ...pkg.reviewedSource.rig!, inspected: true }, revision: pkg.manifest.revision,
+    sourceHash: pkg.sourceHash, runtime: pkg.reviewedSource.runtimeVersion, dials: [], sets: [], authored: pkg.direction! };
+  expect(directionSummary(view, 'en')).toBe('Direction · 4 s · once · moving camera');
+  expect(directionSummary(view, 'ko')).toBe('연출 · 4초 · 한 번 · 카메라 이동');
+  const authored = { ...pkg.direction!, joined: { postVersion: 16, projectHash: 'project', packageSourceHash: 'package',
+    packageRoot: 'out', projectModel: pkg.reviewedSource.rig! }, take: { duration: 8, loop: true },
+    camera: { ...pkg.direction!.camera, keys: [pkg.direction!.camera.keys[0]!] } };
+  expect(directionSummary({ ...view, authored }, 'en')).toBe('Direction v16 · 8 s · loop · fixed camera');
+  expect(directionSummary({ ...view, authored }, 'ko')).toBe('연출 v16 · 8초 · 반복 · 카메라 고정');
+  expect(directionSummary({ ...view, authored, model: { ...view.model, inspected: false } }, 'en')).toBe('Direction inspection');
+  expect(directionRows(view)).toEqual(directionRows({ ...view, authored: { ...view.authored, take: { duration: 8, loop: true } } }));
+ });

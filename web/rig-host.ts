@@ -38,10 +38,12 @@ export interface RigHostCommit {
 }
 export interface RigHost {
   readonly subject?:'parts';
+  readonly unavailable?:string;
+  readonly direction?:{readonly publicationId:string;readonly sourceHash:string};
   readonly navigation?:RigHostNavigation;
   /** Derived from the displayed subject's finalized verdict; never a mode or another subject's act. */
   reviewState?(issues:number,sending:boolean):string;
-  readonly record?:{readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean};
+  readonly record?:{readonly publicationId?:string;readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean};
   submitParts?(issues:readonly PartsIssue[]):Promise<string>;
   readonly access: InstanceAccess;
   /** UI act authority is separate from a retained backdrop's immutable source access. */
@@ -51,7 +53,7 @@ export interface RigHost {
   /** A read the host answers itself, or undefined to fetch it from the subject's routes. */
   read(path: string, method: string): Promise<unknown> | undefined;
   /** The act bar's Submit review: the session's decisions go out as the pending asks' acts. */
-  submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>): Promise<string>;
+  submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionWords?:string): Promise<string>;
   attach(screen: RigHostScreen): void;
   /** The first rig draw is on screen (or the open failed): the job acknowledges the display after it. */
   displayed(): void;

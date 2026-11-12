@@ -10,7 +10,7 @@ import {
   JOB_PARTS_ENUMERATOR_RANGE,
 } from './job-contract.ts';
 import type {
-  JobCheckpointEvidence, JobFileIdentity, JobImageSetInput, JobInterviewDiagnostics, JobInterviewRecord, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
+  JobCheckpointEvidence, JobFileIdentity, JobInterviewDiagnostics, JobInterviewRecord, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
   JobSelector, JobSourceBinding, JobSubject, JobPlanTextProjection, JobPlanTextStep,
   OptionContext, OptionSource, PackageResultV3, PlanContext, PlanSource, ProjectRecord, PublishRequestV3,
   RecordFreeze, RecordOptionResult, RecordPlanResult, RecordPublicationReader, RecordPublishedContext,
@@ -43,7 +43,6 @@ import {
   validateRecordAskSubject,
 } from './job-api.ts';
 import { JobError, type JobSnapshotOwner } from './job-store.ts';
-import { prepareJobImageSet } from './job-image-set.ts';
 
 export interface JobRootIdentity {
   readonly path: string;
@@ -58,7 +57,6 @@ export interface JobRootIdentity {
  */
 export interface JobPublishedContext {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
-  readonly imageSet?: JobImageSetInput;
   readonly selector: JobSelector | null;
   readonly plan: JobPlanIdentity | null;
   readonly parts: JobPartsIdentity | null;
@@ -1304,8 +1302,6 @@ export async function prepareJobSource(options: {
   if (requestDigest(context.selector) !== requestDigest(request.result.selector)) throw new JobError('JOB_SOURCE_MISMATCH');
   const declared = publishedIdentities(context);
   const evidence = checkpointEvidenceFields(context, context.plan, context.subjects, declared);
-  if (evidence.checkpointEvidence && context.imageSet !== undefined) throw new JobError(
-    'JOB_SOURCE_MISMATCH', 'CHECKPOINT_EVIDENCE_INVALID');
   checkpointEvidenceMetadata(root.path, evidence.checkpointEvidence);
   let review: Awaited<ReturnType<typeof loadReview>>;
   try {
@@ -1343,9 +1339,6 @@ export async function prepareJobSource(options: {
     await mkdir(snapshotRoot, {mode: 0o700});
     const info = lstatSync(snapshotRoot);
     snapshotIdentity = {dev: info.dev, ino: info.ino};
-    const imageSet = context.imageSet === undefined ? null : prepareJobImageSet(context.imageSet,
-      path => sourceBytes(root.path, path));
-    for (const image of imageSet?.imageSet.images ?? []) add(image.path, image.sha256);
     const parts = await prepareParts(root.path, snapshotRoot, context.parts, declared, options.partsEnumerator);
     for (const [path, bytes] of parts.bytes) add(path, jobHash(bytes));
     if (wanted.size > maxSourceFiles) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_LIMIT');
@@ -1394,13 +1387,6 @@ export async function prepareJobSource(options: {
       optionSet: null, appliedResult: null, plan: context.plan, parts: parts.identity,
     };
     let source: JobSourceBinding = {...modelSource, ...evidence};
-    if (imageSet) {
-      if (modelSource.model || modelSource.selector) throw new JobError('JOB_IMAGE_SET_INVALID');
-      const {model, selector, ...common} = modelSource;
-      source = {...common, subject: 'image-set', ...imageSet,
-        sourceHash: jobHash(JSON.stringify({schema: 'rig-review-job-image-set/1',
-          packageSourceHash: modelSource.sourceHash, record, imageSet: imageSet.imageSet}))};
-    }
     const boundReview = { ...review, sourceHash: source.sourceHash };
     const sealedByPath = new Map(seals.map(seal => [seal.path, seal.sha256]));
     const retainedInterview = project
@@ -1426,7 +1412,7 @@ export async function prepareJobSource(options: {
       instanceKey: openKey({ mode: 'single', p: boundReview, inputs: { input: review.manifestPath },
         contentHash: source.sourceHash, selection: null }, options.fingerprint),
       label: review.manifest.title,
-      visual: imageSet || review.manifest.model || review.manifest.references.length ? { status: 'available' } :
+      visual: review.manifest.model || review.manifest.references.length ? { status: 'available' } :
         { status: 'unavailable', code: 'MODEL_UNAVAILABLE' },
       subjects: context.subjects,
       questions: (project?.questions ?? []).map(question => {
@@ -1468,7 +1454,7 @@ export function assertStoredCheckpointEvidence(retained: JobRetainedSourceV3): v
   }
   if (!hasEvidence && !('checkpointEvidencePackageHash' in retained)) return;
   const source = retained.source;
-  if (!hasEvidence || source.subject === 'image-set' || !retained.record) throw new JobError('JOB_SOURCE_MISMATCH');
+  if (!hasEvidence || !retained.record) throw new JobError('JOB_SOURCE_MISMATCH');
   const evidence = checkpointEvidenceFields(source, source.plan, retained.subjects, retained.seals);
   const packageSourceHash = jobSha(retained.checkpointEvidencePackageHash);
   const expected = packageSourceDigest(packageSourceHash, retained.record, source, retained.seals, evidence);

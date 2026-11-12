@@ -12,8 +12,6 @@ import {
   type JobEnabledActKind,
   type JobEvent,
   type JobHumanAuthority,
-  type JobImageReviewValue,
-  type JobImageSetInput,
   type JobNextValue,
   type JobRigStill,
 } from '../src/job-contract.ts';
@@ -182,7 +180,6 @@ test('real semantic next preserves verbatim reviewer words across checkpoint, si
   const f = await fixture();
   const beforeHashes = await jobInputHashes(f.root);
   const publication = await f.publish();
-  if (publication.source.subject === 'image-set') throw new Error('Expected model source binding');
 
   const checkpointWords =
     '  [검수/Checkpoint #1] 어깨 실루엣이 2px 어긋남 — needs exact hold! 🤔\n\t- line 2: 앞뒤 공백·탭·줄바꿈(CRLF 아님) & 기호(!@#$%^&*) 유지 ✨  ';
@@ -361,7 +358,6 @@ test('real semantic next preserves verbatim issue summaries in act@6 parts-verdi
   partsFixture.setContext({...partsFixture.getContext(), parts: partsIdentity});
   const partsBeforeHashes = await jobInputHashes(partsFixture.root);
   const partsPublication = await partsFixture.publish();
-  if (partsPublication.source.subject === 'image-set') throw new Error('Expected model source binding');
   const retained = partsFixture.session.retainedSource(partsPublication.publicationId);
   const pkg = await loadPartsView(join(retained.snapshotRoot, 'out'));
   const partsAsk = await partsFixture.ask(partsPublication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
@@ -467,7 +463,6 @@ test('real semantic next preserves verbatim nested human notes in interview-pick
   });
   const interviewBeforeHashes = await jobInputHashes(interviewFixture.root);
   const interviewPublication = await interviewFixture.publish();
-  if (interviewPublication.source.subject === 'image-set') throw new Error('Expected model source binding');
   const interviewAsk = await interviewFixture.ask(interviewPublication, {
     kind: 'interview-picks',
     questionId: pendingQuestion.set.question,
@@ -555,95 +550,4 @@ test('real semantic next preserves verbatim nested human notes in interview-pick
       },
     },
   );
-});
-
-test('real semantic next preserves verbatim nested human notes in image-set review-verdict and rejects named in-memory mutations', async () => {
-  // Part C: image-set review-verdict with per-image `imageNotes` and top-level `words`
-  const imageFixture = await fixture();
-  const pngBytes = await readFile(join(imageFixture.root, 'out/rigid.png'));
-  const images: JobImageSetInput['images'][number][] = [
-    { role: 'source', name: 'Image 0', path: 'image-0.png', sha256: jobHash(pngBytes) },
-    { role: 'candidate', name: 'Image 1', path: 'image-1.png', sha256: jobHash(pngBytes) },
-  ];
-  for (const img of images) await writeFile(join(imageFixture.root, img.path), pngBytes);
-  await writeFile(
-    join(imageFixture.root, 'out/review.json'),
-    JSON.stringify({
-      schema: 'rig-review/1',
-      id: 'image-set-fixture',
-      title: 'Synthetic image set',
-      revision: 'one',
-      references: [],
-    }),
-  );
-  imageFixture.setContext({
-    selector: null,
-    plan: null,
-    parts: null,
-    subjects: [],
-    partIds: [],
-    files: [],
-    imageSet: { purpose: 'plate-adoption', images },
-  });
-  const imageBeforeHashes = await jobInputHashes(imageFixture.root);
-  const imagePublication = await imageFixture.publish();
-  if (imagePublication.source.subject !== 'image-set') throw new Error('Expected image-set source binding');
-  const imageAsk = await imageFixture.ask(imagePublication, { kind: 'review-verdict', stage: 'image-review' });
-  const imagePage = await imageFixture.display(imagePublication);
-
-  const imageVerdictWords =
-    '  [이미지 세트/Plate Adoption] 후보 1번 채택 보류 — 명암 대비(contrast) 보정 필요 🎨\n\t"원문 그대로 전달"  ';
-  const perImageNoteWords = '  후보 1 세부 메모: 머리카락 하이라이트 경계선 정리 필요 ✨\n\t  ';
-  const imageValue: JobImageReviewValue = {
-    stage: 'image-review',
-    verdict: 'changes-requested',
-    words: imageVerdictWords,
-    imageNotes: [{ name: 'Image 1', words: perImageNoteWords }],
-  };
-
-  const committedImage = await imageFixture.ports.commitUIAct(
-    imageFixture.session.jobId,
-    imageFixture.uiRequest({
-      ...imagePage,
-      askId: imageAsk.askId,
-      expectedGeneration: imageFixture.session.status().generation,
-      submissionId: 'verbatim-image-verdict',
-      kind: 'review-verdict',
-      value: imageValue,
-    }),
-  );
-  expect(committedImage.ok).toBe(true);
-  if (!committedImage.ok) throw new Error(committedImage.error.code);
-
-  const expectedImageActs: ExpectedActOracleInput<'review-verdict'>[] = [
-    {
-      actId: committedImage.value.actId,
-      jobId: imageFixture.session.jobId,
-      askId: imageAsk.askId,
-      publicationId: imagePublication.publicationId,
-      kind: 'review-verdict',
-      authority: EXPECTED_AUTHORITY,
-      source: imagePublication.source,
-      value: imageValue,
-    },
-  ];
-
-  const rawImageNext = await (
-    await imageFixture.call({ ...imageFixture.base(), verb: 'next', after: null, waitMs: 0 })
-  ).json();
-  const genuineImageNext = assertNextVerbatimOracle(rawImageNext, imageFixture.session.jobId, expectedImageActs);
-  expect(await jobInputHashes(imageFixture.root)).toEqual(imageBeforeHashes);
-
-  assertPlantedMutantRejectedBySameOracle(genuineImageNext, imageFixture.session.jobId, expectedImageActs, {
-    name: 'planted-mutant:image-review-per-image-note-rewrite',
-    targetField: 'events[review-verdict].act.value.imageNotes[0].words',
-    originalWords: perImageNoteWords,
-    mutatedWords: perImageNoteWords.trim(),
-    mutate(cloned) {
-      const event = cloned.value.events.find(e => e.type === 'act' && e.act.kind === 'review-verdict');
-      if (!event || event.type !== 'act' || event.act.kind !== 'review-verdict') throw new Error('Missing image review-verdict');
-      const value = event.act.value as JobImageReviewValue;
-      (value.imageNotes![0] as { words: string }).words = perImageNoteWords.trim();
-    },
-  });
 });

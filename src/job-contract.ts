@@ -112,7 +112,7 @@ export const JOB_PANEL_COMPOSITION_SCHEMA = 'rig-review/panels@1' as const;
 export type PanelSlot = 'left' | 'stage' | 'toolbar' | 'side';
 export const PANEL_COMPONENTS = [
   'parts.canvas', 'parts.list', 'parts.issues', 'parts.layers', 'act.submit',
-  'interview.picks', 'plan.body', 'rig.playback', 'scene.composite', 'images.set',
+  'interview.picks', 'plan.body', 'rig.playback', 'scene.composite',
 ] as const;
 export type PanelComponent = typeof PANEL_COMPONENTS[number];
 export interface JobPanelComposition {
@@ -385,17 +385,13 @@ export type JobSelector =
   | { readonly kind: 'rig'; readonly version: number }
   | { readonly kind: 'post'; readonly version: number; readonly rigVersion: number };
 
-/** The original model branch keeps required explicit nulls. The image branch
- * omits model and selector entirely. The daemon derives the binding from
+/** The model source keeps required explicit nulls. The daemon derives its binding from
  * validated retained bytes and the actual displayed publication. Clients never
  * provide trusted source hashes or transfer old approval onto a new binding.
  */
 export interface JobModelSourceBinding {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
   readonly subject?: never;
-  readonly imageSet?: never;
-  readonly imageSetDigest?: never;
-  readonly duplicateHashes?: never;
   readonly sourceHash: JobSha256;
   readonly projectHash: JobSha256 | null;
   readonly package: { readonly id: string; readonly revision: string };
@@ -408,36 +404,9 @@ export interface JobModelSourceBinding {
   readonly parts: JobPartsIdentity | null;
 }
 
-/** Trusted-reader input. Hashes are optional claims, checked against retained bytes. */
-export interface JobImageSetInput {
-  readonly purpose: 'plate-adoption';
-  readonly images: readonly {
-    readonly role: 'source' | 'candidate' | 'reference';
-    readonly name: string;
-    readonly path: string;
-    readonly sha256?: JobSha256;
-  }[];
-}
-
-export interface JobImageSet {
-  readonly purpose: 'plate-adoption';
-  readonly images: readonly (Omit<JobImageSetInput['images'][number], 'sha256'> & {readonly sha256: JobSha256})[];
-}
-
-export interface JobImageSourceBinding extends Omit<JobModelSourceBinding,
-  'subject' | 'model' | 'selector' | 'imageSet' | 'imageSetDigest' | 'duplicateHashes' | 'checkpointEvidence'> {
-  readonly checkpointEvidence?: never;
-  readonly subject: 'image-set';
-  readonly model?: never;
-  readonly selector?: never;
-  readonly imageSet: JobImageSet;
-  readonly imageSetDigest: JobSha256;
-  readonly duplicateHashes: readonly {readonly names: readonly string[]; readonly sha256: JobSha256}[];
-}
-
-export type JobSourceBinding = JobModelSourceBinding | JobImageSourceBinding;
-export interface JobCapabilities { readonly imageSetVerdict: true }
-export const JOB_CAPABILITIES: JobCapabilities = Object.freeze({imageSetVerdict: true});
+export type JobSourceBinding = JobModelSourceBinding;
+export interface JobCapabilities {}
+export const JOB_CAPABILITIES: JobCapabilities = Object.freeze({});
 
 export interface JobModelReviewValue {
   readonly stage: 'rig-review' | 'direction-review';
@@ -547,7 +516,7 @@ export interface JobActSources {
     readonly selector: Extract<JobSelector, { kind: 'draft' }>;
     readonly parts: JobPartsIdentity;
   };
-  readonly 'review-verdict': JobImageSourceBinding | (JobModelSourceBinding & {
+  readonly 'review-verdict': (JobModelSourceBinding & {
     readonly selector: Extract<JobSelector, { kind: 'rig' | 'post' }>;
     readonly model: JobFileIdentity;
   });
@@ -572,8 +541,7 @@ export type JobLegacyAct = {
     readonly authority: JobHumanAuthority;
     readonly at: string;
   } & (Kind extends 'review-verdict' ? (
-    | {readonly source: Exclude<JobActSources['review-verdict'], JobImageSourceBinding>; readonly value: JobModelReviewValue}
-    | {readonly source: JobImageSourceBinding; readonly value: JobImageReviewValue}
+    | {readonly source: JobActSources['review-verdict']; readonly value: JobModelReviewValue | JobImageReviewValue}
   ) : Kind extends 'parts-verdict' ? {readonly source: JobActSources['parts-verdict']; readonly value: JobLegacyPartsVerdictValue}
   : {readonly source: JobActSources[Kind]; readonly value: JobActValues[Kind]});
 }[JobEnabledActKind];
@@ -792,12 +760,6 @@ export const JOB_ERROR_CODES = [
   'JOB_ROOT_REPLACED',
   'JOB_PUBLICATION_UNKNOWN',
   'JOB_SNAPSHOT_RECLAIMED',
-  'JOB_IMAGE_SET_UNSUPPORTED',
-  'JOB_IMAGE_SET_INVALID',
-  'JOB_IMAGE_SET_DUPLICATE_NAME',
-  'JOB_IMAGE_SET_DUPLICATE_PATH',
-  'JOB_IMAGE_SET_ROLE_INVALID',
-  'JOB_IMAGE_SET_PATH_REFUSED',
   'JOB_ASK_INVALID',
   'JOB_ASK_SUPERSEDED',
   'JOB_ACT_UNKNOWN',
@@ -1105,9 +1067,6 @@ export interface RecordSourceBase {
   readonly direction?: never;
   readonly appliedResult?: never;
   readonly parts?: never;
-  readonly imageSet?: never;
-  readonly imageSetDigest?: never;
-  readonly duplicateHashes?: never;
   readonly sourceHash: JobSha256;
   readonly projectHash: JobSha256;
   readonly record: ProjectRecord;
@@ -1204,7 +1163,6 @@ export interface JobCapabilitiesV3 extends JobCapabilities {
 }
 
 export const JOB_CAPABILITIES_V3: JobCapabilitiesV3 = Object.freeze({
-  imageSetVerdict: true,
   recordPublication: true,
   recordActSchema: JOB_RECORD_ACT_SCHEMA,
 });

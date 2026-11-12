@@ -34,11 +34,24 @@ export function directionRows(view: DirectionView): { key: string; values?: stri
   ];
 }
 
+/** Summarize only authored fields bound to the model currently on stage. */
+export function directionSummary(view: DirectionView, language?: 'en' | 'ko'): string {
+  const authored = view.model?.inspected ? view.authored : undefined;
+  if (!authored) return t('direction.title', undefined, language);
+  const first = authored.camera.keys[0]!.box;
+  const fixed = authored.camera.keys.every(({ box }) =>
+    box.x === first.x && box.y === first.y && box.width === first.width && box.height === first.height);
+  const version = authored.joined ? ` v${authored.joined.postVersion}` : '';
+  return t('direction.summary', [version, String(authored.take.duration),
+    t(authored.take.loop ? 'direction.loop' : 'direction.once', undefined, language),
+    t(fixed ? 'direction.fixedCamera' : 'direction.movingCamera', undefined, language)], language);
+}
+
 /** The adjacent viewport, reference picker and Turn Pad keep their normal input and rendering paths. */
 export function bindDirectionPanel(before: HTMLElement, read: () => DirectionView, set: (name: string) => void) {
   const host = document.createElement('details');
   host.id = 'direction-panel';
-  host.open = true;
+  host.open = false;
   host.hidden = true;
   const title = document.createElement('summary');
   const body = document.createElement('div');
@@ -57,7 +70,7 @@ export function bindDirectionPanel(before: HTMLElement, read: () => DirectionVie
   function refresh() {
     if (host.hidden) return;
     const view = read();
-    title.textContent = t('direction.title');
+    title.textContent = directionSummary(view);
     const rows = directionRows(view).map(({ key, values }) => {
       const row = document.createElement('li');
       row.textContent = t(key, values);

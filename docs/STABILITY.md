@@ -146,7 +146,6 @@ interface JobPublishedContext {
   readonly selector: JobSelector | null;
   readonly plan: JobPlanIdentity | null;
   readonly parts: JobPartsIdentity | null;
-  readonly imageSet?: JobImageSetInput;
   readonly subjects: readonly JobSubject[];
   readonly partIds: readonly string[];
   readonly files: readonly JobFileIdentity[];
@@ -509,90 +508,6 @@ Consumer-owned adoption remains external and pending in
 [embedded consumer example](WORKFLOWS.md#embedded-semantic-jobs) for trusted-hook
 ownership and the ordinary semantic cycle.
 
-## Image-set verdict extension
-
-Review #522 adds an HQ-approved image branch to `rig-review/job-api@2` and
-`rig-review/act@2`. The original model source and value keep their exact fields
-and serialization. Model acts carry no image discriminant, digest, duplicate
-array or added nulls. The image branch carries `source.subject = "image-set"`
-and omits `model` and `selector` entirely. Its ask and value use
-`{kind: "review-verdict", stage: "image-review"}` and the existing human UI
-verdict lifecycle. HQ exact-head dependency sign-off is required before landing.
-The current `src/job-contract.ts` candidate SHA-256 is
-`e7d2be222af6be6cc4718a57fbfef6de606a0c6268efc7b32b15e1bd75bcce65`.
-The Tower records the final signed head separately.
-
-Agents discover support through `session next <job-url> --wait-ms 0`, reading
-`response.value.capabilities.imageSetVerdict === true`. API callers send the
-existing `next` request with their agent bearer capability. The authenticated
-hub `/hub/host` and owner `/hub/api/jobs` metadata also advertise that capability.
-`JOB_CAPABILITIES` is the current immutable capability object.
-`assertJobImageSetCapability(response.value.capabilities)` throws
-`JOB_IMAGE_SET_UNSUPPORTED` when support is absent. Call it before asking.
-An older installed parser refuses `image-review` with `JOB_ASK_INVALID`.
-The preserved parser control uses its exact original function body and shared
-current validators. It does not run an older server.
-
-The trusted `JobPublicationReader` may return optional `imageSet` in its
-`JobPublishedContext`. The existing callback runs only when publication supplies
-a non-null frozen record. A Create root still requires its producer-owned reader.
-Review defines this return value, with no new producer record format or Parts
-adoption adapter. `result.selector` is null for image publication.
-
-```ts
-interface JobImageSetInput {
-  readonly purpose: 'plate-adoption';
-  readonly images: readonly {
-    readonly role: 'source' | 'candidate' | 'reference';
-    readonly name: string;
-    readonly path: string;
-    readonly sha256?: string;
-  }[];
-}
-function assertJobImageSetCapability(capabilities: unknown): void;
-```
-
-The ordered set has 2–8 rows, exactly one `source`, at least one `candidate`, and
-optional `reference` rows. Names and paths must each be unique. Names use the
-existing nonempty 128-unit text bound. Paths are literal job-root-relative paths
-with the existing 4096-unit bound and regular-file, containment and symlink
-checks. Files retain the existing 64 MiB per-file and 256 MiB total source limits.
-Every supplied hash must match disk bytes. The daemon hashes retained inputs,
-seals them, derives ask bindings from checked disk bytes and rechecks at finalize.
-Equal hashes are allowed and produce ordered `source.duplicateHashes` groups of
-`{names: string[], sha256: string}`. Groups appear by first hash occurrence and
-names retain producer order. An empty group array is explicit on image sources.
-
-`source.imageSet` contains required derived hashes. `source.imageSetDigest` is
-SHA-256 over the UTF-8 bytes of the following exact JSON serialization.
-
-```ts
-JSON.stringify(images.map(({role, name, sha256}) => ({role, name, sha256})))
-```
-
-Property order is `role`, `name`, `sha256`. Array order and strings remain exact,
-with no whitespace insertion or Unicode normalization. Paths are excluded from
-this digest. The separate source hash binds the package source hash, frozen
-record and complete image set including paths under `rig-review-job-image-set/1`.
-Consumers can hash their designated bytes and reconstruct the ordered digest
-without parsing Review's private files.
-
-The image value is `{stage: "image-review", verdict, words, imageNotes?}`.
-Optional notes are `{name, words}` rows with unique member names and exact human
-text. Unknown fields, duplicate names and nonmember notes refuse. The UI omits
-empty optional notes and preserves whitespace-only notes. Source hashes, digests,
-duplicate groups and authority are daemon-owned and rejected in UI values.
-All images decode and reach the existing painted lifecycle boundary before
-`ackDisplayed` supplies a nonce and enables submission. Retained routes serve only
-sealed indexed image rows. Drafts, visibility messages, replay and writer-owned
-`fetch-act` keep their existing publication/source and capability bindings.
-
-New named refusals are `JOB_IMAGE_SET_UNSUPPORTED`, `JOB_IMAGE_SET_INVALID`,
-`JOB_IMAGE_SET_DUPLICATE_NAME`, `JOB_IMAGE_SET_DUPLICATE_PATH`,
-`JOB_IMAGE_SET_ROLE_INVALID` and `JOB_IMAGE_SET_PATH_REFUSED`.
-Disk hash mismatches use `JOB_SOURCE_MISMATCH`. A verdict ask with neither a valid
-model binding nor a valid image-set binding uses `JOB_ASK_INVALID`.
-
 ## Named export inventory
 
 The backend rig-still extension retains the original twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill` and `JobPartsVerdictAct` at act@5 (`PartsVerdictValue` with pointed `issues` and `words`, while preserving `JobLegacyPartsVerdictValue` at act@2 for historical acts). The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobPartsVerdictAct`, `JobLegacyPartsVerdictValue`, `PartsVerdictValue`, `JobPanelComposition`, `PanelComponent`, `JobRigStill` and `JobRigCapture` exports, [Review #563](https://github.com/rig-c/review/issues/563) adds five type-only exports (`JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`, `JobHostAttachField` and `JobHostAttachFailure`), and [Review #555](https://github.com/rig-c/review/issues/555) adds four type-only interview diagnostic exports (`JobInterviewJson`, `JobInterviewRecord`, `JobInterviewDiagnostic` and `JobInterviewDiagnostics`). [Review #588](https://github.com/rig-c/review/issues/588) activates record mode when `readRecordPublished` and `recordReaderId` are supplied to a host or session (`publicationMode: 'record-and-package'`), serving `rig-review/job-api@3` (`JOB_API_V3_SCHEMA`), `rig-review/act@4` (`JOB_RECORD_ACT_SCHEMA`) and normal owner URL model-free record inspection while keeping default package-only hosts and exact `package-only` `job-ui/<jobId>.json` descriptor bytes at @2 and enforcing `publicationMode` / `recordReaderId` reuse compatibility across ordinary reuse and strict `reuseOnly` attachment. It exports six additional record-mode runtime symbols (`JOB_API_V3_SCHEMA`, `JOB_RECORD_ACT_SCHEMA`, `JOB_RECORD_READER_ID`, `parseRecordAct`, `prepareJobRecordAct` and `prepareJobRecordSource`, for eighteen runtime exports total) and the V3/record type surface listed below. The rig and parts-verdict act revision constants, transport limits and the internal `POST /jobs/<jobId>/host` helper remain internal to their modules. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend) and [Model-free record mode and source seam](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
@@ -639,7 +554,6 @@ values from the frozen semantic contract.
 
 - `startJobHost`
 - `startJobHub`
-- `assertJobImageSetCapability`
 - `parseRecordAct`
 - `prepareJobRecordAct`
 - `prepareJobRecordSource`
@@ -710,13 +624,9 @@ without aliases or copied wire shapes.
 - `JobSelector`
 - `JobSourceBinding`
 - `JobModelSourceBinding`
-- `JobImageSourceBinding`
-- `JobImageSetInput`
-- `JobImageSet`
 - `JobCapabilities`
 - `JobCapabilitiesV3`
 - `JobModelReviewValue`
-- `JobImageReviewValue`
 - `JobReviewerBinding`
 - `JobHumanAuthority`
 - `JobVerdict`

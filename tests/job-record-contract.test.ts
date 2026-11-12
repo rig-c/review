@@ -136,9 +136,8 @@ test('CP1 schema constants and capabilities preserve API@2 defaults alongside op
   expect(JOB_RECORD_SOURCE_SCHEMA).toBe('rig-review-job-record-source/1');
   expect(JOB_RECORD_INSTANCE_SCHEMA).toBe('rig-review-job-record-instance/1');
   expect(JOB_PUBLICATION_MODES).toEqual(['package-only', 'record-and-package']);
-  expect(JOB_CAPABILITIES).toEqual({ imageSetVerdict: true });
+  expect(JOB_CAPABILITIES).toEqual({});
   expect(JOB_CAPABILITIES_V3).toEqual({
-    imageSetVerdict: true,
     recordPublication: true,
     recordActSchema: 'rig-review/act@4',
   });
@@ -2554,7 +2553,7 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
     expect(optInspection.interview?.questions.map(q => q.set.id)).toEqual(['chain-bones']);
     optInspection.dispose();
 
-    // 4. Explicit MODEL_UNAVAILABLE on a package publication still refuses before preparation
+    // 4. A model-less package reaches retained-publication lookup; a fabricated missing publication still refuses.
     window.event({
       type: 'published',
       jobId: host.session.jobId,
@@ -2582,7 +2581,7 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
       },
     });
     await window.settled();
-    expect(window.state().error).toBe('MODEL_UNAVAILABLE');
+    expect(window.state().error).toBe('JOB_PUBLICATION_UNKNOWN');
     window.stop();
   } finally {
     if (savedLocation) Object.defineProperty(globalThis, 'location', savedLocation);

@@ -1,6 +1,8 @@
 import {afterEach, expect, test} from 'bun:test';
 import {readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
+import {jobRigScreenDecisions} from '../web/job-rig-screen.ts';
+import {feedbackItemComments} from '../src/stage-comment.ts';
 import {bindJobAsk, finalizeJobAct} from '../src/job-act.ts';
 import {jobHash} from '../src/job-api.ts';
 import {parseCommentsAct, projectComments} from '../src/job-host.ts';
@@ -78,31 +80,16 @@ test('post direction verdict is written as act@6 and read back through the publi
   expect(parseCommentsAct(JSON.parse(JSON.stringify(act)))).toEqual(act as never);
   expect(() => finalizeJobAct({jobId: f.session.jobId, submission: {...submission,
     value: {...submission.value, feedback: []}} as JobUISubmission, ask, retained, reviewer})).toThrow('JOB_REQUEST_INVALID');
-});
+  const rows = [{id:'first',frameStart:0,frameEnd:1,target:{kind:'rig' as const,name:'fixture'},category:'defect' as const,summary:'first comment'},
+    {id:'second',frameStart:null,frameEnd:null,target:{kind:'rig' as const,name:'fixture'},category:'defect' as const,summary:'second comment'}];
+  const decision = jobRigScreenDecisions({status:'changes-requested',checkpoints:{},feedback:rows}, [ask], publication.publicationId)[0]!;
+  const projected = projectComments(feedbackItemComments(rows));
+  const shared = finalizeJobAct({jobId:f.session.jobId,submission:{...submission,value:decision.value} as JobUISubmission,ask,retained,reviewer});
+  expect(parseCommentsAct(shared)).toMatchObject({schema:'rig-review/act@6',value:{stage:'direction-review',comments:[{text:projected}]}});
+  expect(shared).not.toHaveProperty('still');
+  expect(decision.value).not.toHaveProperty('feedback');
+  expect(() => finalizeJobAct({jobId:f.session.jobId,submission:{...submission,value:{...decision.value,comments:feedbackItemComments(rows)}} as unknown as JobUISubmission,ask,retained,reviewer})).toThrow('JOB_REQUEST_INVALID');
 
-test('image-review stays pinned at act@2 with words and imageNotes', async () => {
-  const f = await fixture();
-  const bytes = await readFile(join(f.root, 'out/rigid.png'));
-  const images = [0, 1].map(index => ({role: index ? 'candidate' as const : 'source' as const,
-    name: `Image ${index}`, path: `image-${index}.png`, sha256: jobHash(bytes)}));
-  for (const image of images) await writeFile(join(f.root, image.path), bytes);
-  await writeFile(join(f.root, 'out/review.json'), JSON.stringify({schema: 'rig-review/1',
-    id: 'image-set-fixture', title: 'Synthetic image set', revision: 'one', references: []}));
-  f.setContext({selector: null, plan: null, parts: null, subjects: [], partIds: [], files: [],
-    imageSet: {purpose: 'plate-adoption', images}});
-  const publication = await f.publish(), ask = await f.ask(publication, {kind: 'review-verdict', stage: 'image-review'});
-  const page = await f.display(publication);
-  const value = {stage: 'image-review', verdict: 'approved', words: '  exact  ', imageNotes: [{name: 'Image 0', words: ' note '}]};
-  const refused = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: f.session.status().generation, submissionId: 'image-feedback-refused', kind: 'review-verdict',
-    value: {...value, feedback: []}}));
-  expect(refused.ok).toBe(false);
-  if (!refused.ok) expect(refused.error.code).toBe('JOB_REQUEST_INVALID');
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: f.session.status().generation, submissionId: 'image-pin', kind: 'review-verdict', value}));
-  if (!saved.ok) throw new Error(saved.error.code);
-  expect(saved.value.schema).toBe('rig-review/act@2');
-  expect(saved.value.value).toEqual(value);
 });
 
 test('interview-picks stays pinned at act@2 with its note', async () => {

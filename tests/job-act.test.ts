@@ -47,21 +47,6 @@ test('#653 P1 checkpoint comment and top-level checkpoint share declared evidenc
   expect(parseCommentsAct(absent).schema).toBe('rig-review/act@6');
 });
 
-test('#646 ordered-general-and-image: exact whitespace and stored order use existing image names', () => {
-  const act = commentsAct(), old = act.source;
-  const images = [{name: 'original', role: 'source', path: 'original.png', sha256: 'a'.repeat(64)},
-    {name: 'candidate', role: 'candidate', path: 'candidate.png', sha256: 'b'.repeat(64)}];
-  const {selector: _selector, model: _model, ...common} = old;
-  act.source = {...common, subject: 'image-set', imageSet: {purpose: 'plate-adoption', images},
-    imageSetDigest: jobHash(JSON.stringify(images.map(({name, role, sha256}) => ({role, name, sha256})))), duplicateHashes: []};
-  act.kind = 'review-verdict';
-  act.value = {stage: 'image-review', verdict: 'approved', comments: [{text: '  First\nline  '}, {text: 'Second', anchor: {name: 'candidate'}}]};
-  const parsed = parseCommentsAct(act);
-  expect(projectComments(parsed.value.comments)).toBe('[general]\n  First\nline  \n\n[["candidate"]]\nSecond');
-  const bad = structuredClone(act); bad.value.comments[1].anchor.name = 'unbound';
-  expect(() => parseCommentsAct(bad)).toThrow('JOB_ACT_INVALID');
-});
-
 test('#646 empty-comments: fresh blank refuses, historical empty/whitespace fields remain display-only', () => {
   expect(projectComments(parseCommentsAct(commentsAct()).value.comments)).toBe('');
   expect(() => parseCommentsAct({...commentsAct(), value: {...commentsAct().value, comments: [{text: ' \n'}]}})).toThrow('JOB_ACT_INVALID');

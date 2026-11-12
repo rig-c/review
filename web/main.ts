@@ -1,5 +1,5 @@
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
-import {joinedInterviewForms,jobSubmissionRefusal} from './job-session.ts';
+import {mountJobScreen,joinedInterviewForms,mediaReady,jobSubmissionRefusal} from './job-session.ts';
 import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding} from '../src/parts-comment.ts';
 import type {JobForm} from './job-session.ts';
 import {bindWorkspaceDrawer} from './workspace-layout.ts';
@@ -9,7 +9,7 @@ import {rigWorkspaceMarkup,rigFeedbackMarkup,sharedViewToolsMarkup,sharedComment
 import {bindDirectionPanel} from './direction-panel.ts';
 import {bindWorkspaceVisibility} from './workspace-visibility.ts';
 import type {DirectionInspection} from '../src/direction-inspection.ts';
-import {parseStageComment,feedbackItemComments,projectComments,timeOnlyBasis,feedbackTimingLabel,requireFeedbackFrames,isTimeOnlyFeedback} from '../src/stage-comment.ts';
+import {parseStageComment,feedbackItemComments,projectComments,timeOnlyBasis,unprojectMark,feedbackTimingLabel,requireFeedbackFrames,isTimeOnlyFeedback} from '../src/stage-comment.ts';
 import {bindStageComments,type CommentRow,type CommentPose} from './stage-comments.ts';
 import {discoverTurnDials,TurnState} from '../src/turn-pad.ts';
 import {bindTurnPad,type TurnPad} from './turn-pad.ts';
@@ -180,6 +180,7 @@ let playbackCarry = 0;
 let comments:ReturnType<typeof bindStageComments>|null=null;
 const recordComments:CommentRow[]=[];
 let recordCommentKey='';
+const submittedDirectionComments=new Set<string>();
 let view: 'compare' | 'reference' | 'rig' = 'compare';
 // Requested layout persists in the source-bound draft; the effective one follows actual load events only.
 let rigInput:InputState={state:'pending'},referenceInput:InputState={state:'absent'},effectiveView:SingleLayout|null=null;
@@ -616,7 +617,7 @@ function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): voi
   select('animation-select').value = name;
   // #191: the wind restarts before the clip's first frame is drawn, so the paused stage shows the schedule's t=0 world.
   time = 0; clipMoved(move);
-  if (player && runtimeAnimation) { drawRig(()=>{player!.play(name,{loop:canRepeatIdle()});player!.pause();refreshAnimationInspection();player!.draw();}); }
+  if (player && runtimeAnimation) { restartSetupPlayer();drawRig(()=>{player!.play(name,{loop:canRepeatIdle()});player!.pause();refreshAnimationInspection();player!.draw();}); }
   else if (player && name){text('renderer-state',rendererStatus(null,'failed').label);message(`Animation "${name}" is not present in the rig.`, true);}
   renderTransport(); renderCues();renderIdle();
 }
@@ -822,6 +823,22 @@ function configurePartSets(keep=''):void {
  if(keep&&presets.some(set=>set.name===keep)){player!.setSet(keep);picker.value=keep;}
 }
 
+/** One creation path for initial load, rebuilds and a post-Setup single-track restart. */
+function createInspectionPlayer(root:HTMLElement,loaded:ModelAssets,mode?:RigPlayer['mode']):RigPlayer {
+ const next=new RigPlayer(root,loaded,{mode});
+ next.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
+ return next;
+}
+/** Public clear composes tracks permanently; restart single-track seeking over the same immutable assets. */
+function restartSetupPlayer(force=false):void {
+ const previous=player,loaded=assets;if(!previous||!loaded||!force&&(previous.current!==null||!previous.composed))return;
+ const skin=previous.skin,sets=[...previous.activeSets],slots=previous.slots,adjust=previous.adjust,world=previous.environment(),mode=previous.mode;
+ const entries=partModel&&inspectionSourceState==='ready'?partCatalog(partModel,data.feedbackCatalog.slots??[]):null;
+ previous.dispose();player=createInspectionPlayer(el('rig-root'),loaded,mode);
+ player.skin=skin;if(sets.length)player.setSets(sets);player.slots=slots;player.adjust=adjust;player.environment(world);
+ setupChestWorld=readSetupChest(player);
+ if(entries)parts?.register('single',entries,player,new PartThumbnails(pageRegionTable(partModel),loaded.pageImages));
+}
 async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   text('renderer-state',rendererStatus(null,'pending').label);
   if (!data.manifest.model) { text('player-state', 'No rig supplied · reference review is available'); return; }
@@ -832,11 +849,10 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     assets = await loadModel({ modelUrl, ...stageLoadInputs(modelUrl,inspectedModel.sha256), resolvePage: (name, url) => {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith(access.route('/assets/'))) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
-    player = new RigPlayer(el('rig-root'), assets);
+    player = createInspectionPlayer(el('rig-root'), assets);
     setupChestWorld = readSetupChest(player);
     // Parts inspection is an add-on: a catalog refusal is shown in the explorer and never aborts the rig.
     try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
-    player.on('event', event => { text('event-log', `Runtime event: ${event.name} · ${event.time.toFixed(2)} s`); });
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
     animations.disabled = assets.animations.length === 0;
@@ -877,6 +893,7 @@ function isSubmittedFeedback(id:string):boolean {
 
 function renderProposals(): void {
   comments?.refresh();
+  if(host?.direction){setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);return;}
   const count=session.feedback.length;setSourceText(rigInspector.comments.button, `Comments (${count})`);
   const area = el('proposal-list'); area.replaceChildren();
   const warnings = el('feedback-warnings'); warnings.hidden = session.feedbackWarnings.length === 0;
@@ -1117,9 +1134,10 @@ function bind(): void {
           dirty = session.status !== submittedBaseline.status || JSON.stringify(session.feedback) !== JSON.stringify(submittedBaseline.feedback) ||
             [...ids].some(id => JSON.stringify(session.checkpoints[id] ?? {outcome: 'pending', note: ''}) !==
               JSON.stringify(submittedBaseline!.checkpoints[id] ?? {outcome: 'pending', note: ''}));
+          if(host?.direction){for(const row of recordComments)submittedDirectionComments.add(row.id);try{localStorage.removeItem(recordCommentKey);}catch{}}
           await persistence?.submitted(submittedBaseline);
           comments?.refresh(); renderProposals();
-        });
+        },host.direction?recordCommentWords():undefined);
         message(sent);
       } catch (error) {
         submissionFailure = jobSubmissionRefusal(error);
@@ -1149,6 +1167,7 @@ function bind(): void {
   },name=>{
     const picker=select('part-set');picker.value=name;picker.dispatchEvent(new Event('change',{bubbles:true}));
   });
+  directionPanel.show(!!data.direction);
   viewDisposers.push(()=>directionPanel?.dispose());
   bindWorkspace();
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
@@ -1213,7 +1232,7 @@ function bindWorkspace():void {
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   bindReviewDialog();
-  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
+  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!data.manifest.model)?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
 }
 async function start(): Promise<void> {
   try {
@@ -1224,9 +1243,9 @@ async function start(): Promise<void> {
     const [saved,accessState]=await Promise.all([api<ReviewSession|PartsSubjectSession>('/api/session'),api<{capabilityRequired:boolean;control?:boolean}>('/api/access')]);
     if('subject' in opened&&opened.subject==='parts'){await startParts(opened,saved as PartsSubjectSession,accessState);return;}
     data=opened as ReviewResponse;session=saved as ReviewSession;writes=accessState;
-    readOnly = host?.record ? tr('JOB_REVIEW_READ_ONLY') : readOnlyReason(access, writes.capabilityRequired);
+    readOnly = host?.unavailable?t('job.refusal.'+host.unavailable):host?.record ? tr('JOB_REVIEW_READ_ONLY') : readOnlyReason(access, writes.capabilityRequired);
     actReadOnly = readOnlyReason(access, writes.capabilityRequired, host?.ownerActAccess);
-    if(data.capabilities.preRig){rigInspector.comments.button.disabled=true;rigInspector.act.hidden=true;}
+    if(data.capabilities.preRig&&!host?.record){rigInspector.comments.button.disabled=true;rigInspector.act.hidden=true;}
     submittedBaseline=structuredClone(session);
     text('package-title', data.manifest.title); text('revision', data.manifest.revision); document.title = `${data.manifest.title} · rig review`; text('source-hash', `source ${data.sourceHash.slice(0, 12)}`); select('review-status').value = session.status; select('feedback-target-kind').value = 'rig'; input('feedback-target-name').value = data.manifest.id;
     select('reference-select').replaceChildren(); for (const reference of data.manifest.references) select('reference-select').append(option(reference.id, `${reference.label} · ${reference.type}`));
@@ -1239,7 +1258,7 @@ async function start(): Promise<void> {
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     // A job rig subject lands in Animate before the model finishes loading (#709).
-    if(host)showInspector('playback');
+    if(host)showInspector(data.manifest.model?'playback':'rig');
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
     await initPlayer(first);
     // initPlayer keeps `player` only after its first draw succeeded; a declared model path alone never counts.
@@ -1252,14 +1271,20 @@ async function start(): Promise<void> {
     else if (host?.ownerActAccess) message('Not submitted');
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     frameHandle=requestAnimationFrame(tick);
-    const restored=await setupPersistence();setupComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();setupComments();if(host?.direction)showRecordComments(true);else if(host?.record&&!data.manifest.model)showRecordComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
     bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause});
     if(host){
-      if(!player)throw new Error('JOB_VISUAL_UNAVAILABLE');
+      if(!player&&video){
+        await waitReferenceMetadata(video,lifecycle.signal);
+        if(video.readyState<2)await mediaReady(video,'loadeddata',lifecycle.signal);
+        if(video.seeking)await mediaReady(video,'seeked',lifecycle.signal);
+        if(!video.seeking&&video.readyState>=2&&video.currentTime===time)setReferenceInput({state:'loaded'});
+      }
+      if(!player&&(data.manifest.model||referenceInput.state!=='loaded'))throw new Error('JOB_VISUAL_UNAVAILABLE');
       await restorePublicationNavigation();document.body.dataset.ready='true';
-      host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});showInspector('playback');host.displayed();
+      host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});showInspector(data.manifest.model?'playback':'rig');host.displayed();
     }
   } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
 }
@@ -1328,7 +1353,15 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
 
  document.body.dataset.ready='true';
 }
-/** Record-only publications reuse the empty main view; no package or model is manufactured. */
+/** Use the existing Comments-only presentation for subjects without rig capabilities. */
+function showRecordComments(preserveInspector=false):void {
+ for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
+ if(preserveInspector)return;
+ for(const child of rigInspector.comments.panel.children)(child as HTMLElement).hidden=child!==el('proposal-panel')&&!child.classList.contains('review-dialog-header');
+ rigInspector.comments.panel.style.display='block';
+ rigInspector.collapse.disabled=false;setSourceAttribute(rigInspector.collapse,'title','');
+}
+/** Publications without a picture reuse the empty main view; no model is manufactured. */
 async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  if(!host?.record&&!interview)throw new Error('JOB_DISPLAY_MISMATCH');
  const unavailable=interview?'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.':'This request has no picture.';
@@ -1345,17 +1378,18 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
   label();viewDisposers.push(onLanguageChange(label));
   viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,t('interview.title'),true)));
   text('provenance-rig',unavailable);text('provenance-motion',unavailable);text('source-files','project.json');
- }else{setupComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}
+ }else{restoreRecordComments();setupComments();showRecordComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  await workspace?.settle();if(disposed)return;
+ if(host?.unavailable){message(t('job.refusal.'+host.unavailable),true);el('message').title=host.unavailable;button('save').disabled=true;button('save').title=host.unavailable;}
  document.body.dataset.ready='true';
  if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
 let recordDialog:HTMLDialogElement|null=null;
 /** Reuse the form's publication binding for native record comments, without a package session. */
-function restoreRecordComments(form:HTMLFormElement):void {
- if(!host?.record||recordCommentKey)return;
- const publicationId=form.dataset.jobPublication,sourceHash=host.record.sourceHash;
+function restoreRecordComments(form?:HTMLFormElement):void {
+ if((!host?.record&&!host?.direction)||recordCommentKey)return;
+ const publicationId=host?.direction?.publicationId??host?.record?.publicationId??form?.dataset.jobPublication,sourceHash=host?.direction?.sourceHash??host!.record!.sourceHash;
  if(!publicationId)throw new Error('JOB_DISPLAY_MISMATCH');
  recordCommentKey='rig-review-record-comments/1:'+publicationId+':'+sourceHash;
  try {
@@ -1367,7 +1401,7 @@ function restoreRecordComments(form:HTMLFormElement):void {
    if(!row||typeof row.id!=='string'||!row.id||ids.has(row.id)||typeof row.summary!=='string'||!row.summary.trim()||row.summary.length>1000)throw new Error('JOB_ACT_INVALID');
    ids.add(row.id);
    if('schema' in row){const issue=parsePartsIssue(row,false,true,false),items=new Map((partsSubject?.items()??[]).map(item=>[item.name,{...item,imageHash:item.imageHash!}]));assertPartsIssueBinding(issue,items,partsSubject!.sourceHash());}
-   else if('target' in row){const mark=parseStageComment((row.context as {comment?:unknown})?.comment);if(!host.record.hasPicture||mark.sourceHash!==data.sourceHash)throw new Error('JOB_DISPLAY_MISMATCH');}
+   else if('target' in row){const mark=parseStageComment((row.context as {comment?:unknown})?.comment);if((!host?.direction&&!host!.record!.hasPicture)||mark.sourceHash!==data.sourceHash)throw new Error('JOB_DISPLAY_MISMATCH');}
    else if(Object.keys(row).some(key=>key!=='id'&&key!=='summary'))throw new Error('JOB_ACT_INVALID');
   }
   projectComments(rows.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
@@ -1379,8 +1413,8 @@ function recordCommentWords():string {
  return projectComments(recordComments.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
 }
 function recordCommentsChanged():void {
- if(!host?.record)return;
- try{if(recordCommentKey)localStorage.setItem(recordCommentKey,JSON.stringify({publicationId:recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication,sourceHash:host.record.sourceHash,comments:recordComments}));}catch{/* In-memory comments remain bound to this host. */}
+ if(!host?.record&&!host?.direction)return;
+ try{if(recordCommentKey)localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:host?.direction?.publicationId??host?.record?.publicationId??recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication,sourceHash:host?.direction?.sourceHash??host!.record!.sourceHash,comments:recordComments}));}catch{/* In-memory comments remain bound to this host. */}
  setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);
  for(const form of recordDialog?.querySelectorAll('form[data-job-ask]')??[])form.dispatchEvent(new Event('input',{bubbles:true}));
 }
@@ -1398,7 +1432,7 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
  if(!standalone&&forms[0])restoreRecordComments(forms[0] as HTMLFormElement);
  const added=forms.filter(form=>!recordDialog!.contains(form));
  for(const form of forms){
-  if(!standalone)(form as JobForm['form']).commentWords=()=>host?.record?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):projectComments(feedbackItemComments(session.feedback));
+  if(!standalone)(form as JobForm['form']).commentWords=()=>host?.record||host?.direction?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):projectComments(feedbackItemComments(session.feedback));
   if(!recordDialog.contains(form)){if(!form.classList.contains('interview-answer'))form.style.overflow='auto';form.style.minHeight='0';recordDialog.append(form);}
  }
  if(host?.record){
@@ -1488,7 +1522,7 @@ function bindInspector(partsSubject=false):void {
  inspectorTabs?.dispose();
  rigInspector.row.reveal=()=>workspace?.revealInspector();
  inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode)inspectorBlocks?.activate(mode);workspace?.afterTab();renderLayout();},()=>workspace?.beforeTab(),rigInspector.row);
- viewDisposers.push(bindHeaderModeAvailability(partsSubject?{model:false,parts:true}:{model:!!data.manifest.model,preRig:data.capabilities.preRig}));
+ viewDisposers.push(bindHeaderModeAvailability(partsSubject?{model:false,parts:true}:{model:!!data.manifest.model,preRig:data.capabilities.preRig,parts:!!host?.record&&!data.manifest.model}));
  for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
@@ -1555,14 +1589,14 @@ async function inspectControlTime(target:number,signal:AbortSignal,preserveSecon
  // #191: a control seek is a clip move like the transport's: a seek to 0 restarts the wind clock while the exported world is in use.
  clipMoved({kind:'seek',to:target});
  const media=video;
- if(!media){if(player){player.seek(target);drawRig(()=>player!.draw());}time=target;renderSequenceFrame();renderTransport();return;}
+ if(!media){if(player?.current){player.seek(target);drawRig(()=>player!.draw());}time=target;renderSequenceFrame();renderTransport();return;}
  if(media.readyState<1||target>media.duration)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');
  const previousPosition=media.currentTime;
  const commit=(actual:number)=>{
   if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');
   if(!Number.isFinite(actual)||actual<0||actual>duration)throw new Error('CONTROL_TIME_OUTSIDE_DOMAIN');
   const seconds=preserveSeconds?target:actual;
-  if(player){player.seek(seconds);drawRig(()=>player!.draw());}time=seconds;
+  if(player?.current){player.seek(seconds);drawRig(()=>player!.draw());}time=seconds;
   controlledVideoSample={media,position:media.currentTime,time:actual};if(axisInspection&&duration>0){const axis=data.manifest.axes.find(item=>item.id===select('axis-select').value&&item.animation===animation);if(axis){const value=axis.min+actual/duration*(axis.max-axis.min);input('axis-value').value=String(value);text('axis-value-label',value.toFixed(3));}}renderSequenceFrame();renderTransport();
  };
  try{const actual=await decodedControlTime(media,target,signal);if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');commit(actual);if(Math.abs(actual-target)>1e-6)message(`Reference decoded ${actual.toFixed(4)} s · requested ${target.toFixed(4)} s. The rig and saved view use the decoded timestamp.`);}
@@ -1643,7 +1677,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,pr
  if(selection.checkpoint!==undefined){checkpoint=data.manifest.checkpoints.find(c=>c.id===selection.checkpoint);renderCheckpoint();renderCheckpoints();}
  if(selection.reference!==undefined&&select('reference-select').value!==(selection.reference??'')){select('reference-select').value=selection.reference??'';await showReference(selection.reference??'');if(selection.reference&&!referenceSize&& !video)throw new Error('Saved reference did not load');}
  if(bookmark.animation&&player)chooseAnimation(bookmark.animation);
- else if(player){player.clear();animation='';duration=0;time=0;select('animation-select').value='';}
+ else if(player){restartSetupPlayer(true);player!.clear();animation='';duration=0;time=0;select('animation-select').value='';}
  if(selection.axis){select('axis-select').value=selection.axis.id;chooseAxis();input('axis-value').value=String(selection.axis.value);applyAxis();}
  if(selection.partSet!==undefined&&player){if(selection.partSet||player.sets().length)player.setSet(selection.partSet||null);select('part-set').value=selection.partSet??'';}
  if(bookmark.time!==null){if(video&&video.readyState<1)await waitReferenceMetadata(video,signal);await inspectControlTime(bookmark.time,signal,preserveSeconds);}
@@ -2689,10 +2723,9 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  inspectionSourceState='pending';partModel=null;pause();refreshAnimationInspection();
  const next=await loadModel({modelUrl,...stageLoadInputs(modelUrl,sha256),resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}}).catch(error=>{inspectionSourceState='failed';refreshAnimationInspection();throw error;});
  physicsPanel?.clearPreview();
- pause();player?.dispose();assets?.dispose();assets=next;player=new RigPlayer(el('rig-root'),assets);setupChestWorld=readSetupChest(player);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
+ pause();player?.dispose();assets?.dispose();assets=next;player=createInspectionPlayer(el('rig-root'),assets);setupChestWorld=readSetupChest(player);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
  {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
- player.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
  try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();meshEditor?.selectionChanged();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
  configurePartSets(keepSet);
  // The same world before the first pose: a physics Apply resumes the wind (clock and pulse), the pending jolts, gravity and
@@ -2870,14 +2903,15 @@ function commentCaptureRefusal():string|null {
  return preview?`COMMENT_UNAPPLIED_PREVIEW: ${preview} is active; leave or disable that preview before commenting (nothing is cleared or applied automatically)`:null;
 }
 function setupComments():void {
- comments=bindStageComments<CommentRow,CommentPose>({general:host?.record?{create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row)}:undefined,listHost:el('comments-list-host'),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?{}:{rig:el('rig-viewport'),reference:el('reference-viewport')},
+ if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.length;if(host?.direction)dirty=dirty||recordComments.length>0;}
+ comments=bindStageComments<CommentRow,CommentPose>({general:host?.record||host?.direction?{create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row)}:undefined,listHost:el('comments-list-host'),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?{}:{rig:el('rig-viewport'),reference:el('reference-viewport')},
   pose:view=>{
    if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;
    const renderer=player?.renderer;const current=time,index=frameAtTime(activeFrameClock(),current),referenceId=view==='reference'?select('reference-select').value||null:null,referenceHash=referenceId?data.referenceHashes?.[referenceId]??(data.explicitReference?.id===referenceId?data.explicitReference.sha256:null):null;
    return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;
   },
-  pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:inspectionBookmark,restore:(b,timed)=>restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal,!!timed),feedback:()=>host?.record?recordComments:session.feedback,
-  locked:host?.record?()=>false:isSubmittedFeedback,add:f=>{if(host?.record)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(host?.record){recordCommentsChanged();return;}markDirty();renderProposals();persistence?.save();},error:value=>message(value,true),
+  pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:inspectionBookmark,restore:(b,timed)=>restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal,!!timed),feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
+  locked:host?.record?()=>false:host?.direction?id=>submittedDirectionComments.has(id):isSubmittedFeedback,add:f=>{if(host?.record||host?.direction)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(host?.record||host?.direction){recordCommentsChanged();if(host?.direction){markDirty();comments?.refresh();}return;}markDirty();renderProposals();persistence?.save();},error:value=>message(value,true),
   refusal:()=>host?.record&&!host.record.hasPicture?null:commentCaptureRefusal(),blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
  });
 }
@@ -3020,7 +3054,7 @@ async function prepareStageDraftBuild(
   // Release the previous renderer's root clip while retaining its pose and views for rollback.
   prevPlayer?.renderer.render({order:[]});
   rigRoot.replaceChildren();
-  nextPlayer=new RigPlayer(rigRoot,nextAssets);
+  nextPlayer=createInspectionPlayer(rigRoot,nextAssets);
   // A fresh player's draw has no held pose. Clearing track 0 publicly poses Setup.
   nextPlayer.clear();
   const nextSetupChest=readSetupChest(nextPlayer);
@@ -3057,7 +3091,6 @@ async function prepareStageDraftBuild(
    animSelect.disabled=nextAssets.animations.length===0;
    animSelect.value='';
   }
-  nextPlayer.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
   if(partSetNode)configurePartSets(keepSet);
   if(options?.world){
    wind.resume(options.world.wind);
@@ -3182,4 +3215,4 @@ return {dispose:disposeScreen};
 }
 
 // Package entries mount directly; the live host invokes this same composition for each publication.
-if(!rigHost())mountRigScreen();
+if(!rigHost()){if(/^\/jobs\/[^/]+\/$/.test(location.pathname))void mountJobScreen(document.body);else mountRigScreen();}

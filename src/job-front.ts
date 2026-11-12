@@ -1,3 +1,4 @@
+import {buildWeb} from './build.ts';
 import {PNG} from 'pngjs';
 import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-checkpoint-evidence.ts';
 /** Disjoint live-job routes. The backend receives the original authenticated Request. */
@@ -100,7 +101,7 @@ export function createJobFront(options: {
     origin: string;
     ports: JobHostPorts;
     hubIncarnation?: string;
-    resource: (name: 'index.html' | 'job.js' | 'styles.css') => Promise<BodyInit>;
+    resource: (name: 'index.html' | 'main.js' | 'styles.css') => Promise<BodyInit>;
     publication?: (jobId: string, publicationId: string, instanceKey: string, path: string, request: Request) => Promise<Response>;
 }) {
     const origin = new URL(options.origin);
@@ -205,10 +206,10 @@ export function createJobFront(options: {
         const publication = /^publications\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/.exec(route);
         if (publication)
             return result(await options.ports.readPublication(jobId, publication[1]!));
-        const name = route === '' ? 'index.html' : route === 'job.js' ? 'job.js' : route === 'styles.css' ? 'styles.css' : null;
+        const name = route === '' ? 'index.html' : route === 'main.js' ? 'main.js' : route === 'styles.css' ? 'styles.css' : null;
         if (!name)
             return failure('JOB_REQUEST_INVALID', 404);
-        const type = name === 'index.html' ? 'text/html; charset=utf-8' : name === 'job.js' ? 'text/javascript' : 'text/css';
+        const type = name === 'index.html' ? 'text/html; charset=utf-8' : name === 'main.js' ? 'text/javascript' : 'text/css';
         return new Response(request.method === 'HEAD' ? null : await options.resource(name), {
             headers: { ...headers, 'Content-Type': type, ...(embedded ? {
                 'Content-Security-Policy': headers['Content-Security-Policy'].replace("frame-ancestors 'none'", "frame-ancestors 'self'"),
@@ -224,26 +225,12 @@ export function createJobFront(options: {
 /** Installed files are fixed here. A job request never selects a local pathname. */
 export function jobWindowResources() {
     let bundle: Promise<Blob> | null = null;
-    return async (name: 'index.html' | 'job.js' | 'styles.css'): Promise<BodyInit> => {
-        if (name === 'index.html') {
-            return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
-                '<title>rig-review</title><link rel="stylesheet" href="styles.css"></head>' +
-                '<body data-job-window><script type="module" src="job.js"></script></body></html>';
-        }
+    return async (name: 'index.html' | 'main.js' | 'styles.css'): Promise<BodyInit> => {
+        if (name === 'index.html') return await Bun.file(new URL('../web/index.html', import.meta.url)).text();
         if (name === 'styles.css')return await Bun.file(new URL('../web/styles.css', import.meta.url)).text();
-        bundle ??= buildJobWindow();
+        bundle ??= buildWeb();
         return bundle;
     };
-}
-export async function buildJobWindow(): Promise<Blob> {
-    const source = new URL('../web/job-session.ts', import.meta.url).pathname;
-    const result = await Bun.build({ entrypoints: [source], target: 'browser', format: 'esm', minify: false });
-    if (!result.success)
-        throw new Error(result.logs.map(log => log.message).join('\n'));
-    const output = result.outputs.find(output => output.path.endsWith('.js'));
-    if (!output)
-        throw new Error('JOB_WINDOW_BUNDLE_MISSING');
-    return output;
 }
 
 interface RetainedView {
@@ -393,12 +380,6 @@ export function retainedPublicationRoutes(session: JobSession) {
                     const image = retained.questions.find(question => question.ref.sha256 === interview[1])?.images[Number(interview[2])];
                     if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
                     return await sealedFile(image.ref.path);
-                }
-                const imageSetImage = /^api\/image-set\/(0|[1-9]\d*)$/.exec(path);
-                if (imageSetImage && retained.source.subject === 'image-set') {
-                    const image = retained.source.imageSet.images[Number(imageSetImage[1])];
-                    if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
-                    return await sealedFile(image.path);
                 }
                 if (crop) {
                     if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);

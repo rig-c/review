@@ -24,7 +24,6 @@ import { parseFeedback } from './session.ts';
 import { parsePartsIssue } from './parts-comment.ts';
 import { parseStageComment, hasStageComment, projectComments, commentModes } from './stage-comment.ts';
 import { validatePngCrop, validatePngCropMetadata } from './comment-crops.ts';
-import {parseJobImageSetBinding} from './job-image-set.ts';
 import {parseJobPartsIdentity} from './job-source.ts';
 import {parseControlPart, parseControlView} from './control.ts';
 import {EMIT_UNPINNED_CREATE_FIELDS} from './create-pin-gate.ts';
@@ -1254,8 +1253,7 @@ function parseCommentAnchor(raw: unknown, text: string, source?: SourceV3 | stri
   if ('name' in item) {
     commentsObject(item, ['name'], ['imageRegion', 'crop', 'nativeCrop']);
     const name = jobText(item.name);
-    if (source && (typeof source === 'string' || source.subject !== 'image-set' ||
-        !source.imageSet.images.some(image => image.name === name))) throw new JobError('JOB_ACT_SOURCE_STALE');
+    if (source) throw new JobError('JOB_ACT_SOURCE_STALE');
     if (Object.keys(item).length === 1) return {name};
     commentsObject(item, ['name', 'imageRegion', 'crop', 'nativeCrop']);
     const region = commentsObject(item.imageRegion, ['x', 'y', 'width', 'height']);
@@ -1312,7 +1310,7 @@ function parseCommentContext(raw: unknown, source?: SourceV3 | string): JobComme
     if (selector === null) throw new JobError('JOB_ACT_INVALID');
     const bound = typeof source === 'string' ? source : source?.sourceHash;
     if (bound && sourceHash !== bound) throw new JobError('JOB_ACT_SOURCE_STALE');
-    if (selector && source && typeof source !== 'string' && !('record' in source) && source.subject !== 'image-set' &&
+    if (selector && source && typeof source !== 'string' && !('record' in source) &&
         JSON.stringify(selector) !== JSON.stringify(source.selector)) throw new JobError('JOB_ACT_SOURCE_STALE');
     out.subject = {ask, sourceHash, ...(selector ? {selector} : {})};
   }
@@ -1365,14 +1363,12 @@ function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
     if (record.subject !== 'plan') throw new JobError('JOB_ACT_INVALID');
     return record;
   }
-  const image = !!raw && typeof raw === 'object' && (raw as {subject?: unknown}).subject === 'image-set';
   const common = ['sourceHash', 'projectHash', 'package', 'direction', 'optionSet', 'appliedResult', 'plan', 'parts'];
-  const item = commentsObject(raw, image ? [...common, 'subject', 'imageSet', 'imageSetDigest', 'duplicateHashes'] :
-    [...common, 'selector', 'model'], image ? [] : ['checkpointEvidence']);
+  const item = commentsObject(raw, [...common, 'selector', 'model'], ['checkpointEvidence']);
   jobSha(item.sourceHash); if (item.projectHash !== null) jobSha(item.projectHash);
   const pkg = commentsObject(item.package, ['id', 'revision']); jobText(pkg.id); jobText(pkg.revision);
-  for (const key of image ? ['direction'] : ['direction', 'model']) if (item[key] !== null) parseFileRow(item[key], 'JOB_ACT_INVALID');
-  if (!image) parseJobSelector(item.selector);
+  for (const key of ['direction', 'model']) if (item[key] !== null) parseFileRow(item[key], 'JOB_ACT_INVALID');
+  parseJobSelector(item.selector);
   if (item.optionSet !== null) {
     const set = commentsObject(item.optionSet, ['id', 'sha256']); jobId(set.id); jobSha(set.sha256);
   }
@@ -1395,7 +1391,6 @@ function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
     });
     checkpointEvidenceFields(item, item.plan as JobPlanIdentity | null, subjects, files);
   }
-  if (image) parseJobImageSetBinding({imageSet: item.imageSet, imageSetDigest: item.imageSetDigest, duplicateHashes: item.duplicateHashes});
   return structuredClone(item) as unknown as Exclude<SourceV3, OptionSource>;
 }
 
@@ -1434,7 +1429,6 @@ function decodeCommentsAct(raw: unknown, withContext: boolean): JobCommentsAct |
     };
     const keys = typeof item.kind === 'string' && Object.hasOwn(fields, item.kind) ? fields[item.kind] : undefined;
     if (!keys) throw new JobError('JOB_ACT_INVALID');
-    if (source.subject === 'image-set' && item.kind !== 'review-verdict') throw new JobError('JOB_ACT_INVALID');
     const value = commentsObject(item.value, keys);
     const comments = withContext ? decodeComments(value.comments, source, true) : parseComments(value.comments, source);
     if (comments.some(comment => comment.anchor && 'side' in comment.anchor)) throw new JobError('JOB_ACT_INVALID');
@@ -1445,14 +1439,13 @@ function decodeCommentsAct(raw: unknown, withContext: boolean): JobCommentsAct |
       if (typeof value.outcome !== 'string' || !['pass', 'fail'].includes(value.outcome)) throw new JobError('JOB_ACT_INVALID');
       assertCommentsCheckpointBinding(source, checkpointId, planStepId);
     } else if (item.kind === 'parts-verdict') {
-      if ('record' in source || source.subject === 'image-set' || source.selector?.kind !== 'draft' || !source.parts || !source.projectHash ||
+      if ('record' in source || source.selector?.kind !== 'draft' || !source.parts || !source.projectHash ||
           typeof value.verdict !== 'string' || !['approved', 'changes-requested'].includes(value.verdict)) throw new JobError('JOB_ACT_INVALID');
       const issues = comments.filter(comment => comment.anchor && 'schema' in comment.anchor).length;
       if ((value.verdict === 'approved') !== (issues === 0)) throw new JobError('JOB_ACT_INVALID');
     } else if (item.kind === 'review-verdict') {
       if ('record' in source || typeof value.verdict !== 'string' || !['pending', 'approved', 'changes-requested'].includes(value.verdict)) throw new JobError('JOB_ACT_INVALID');
-      if (source.subject === 'image-set' ? value.stage !== 'image-review' :
-          !source.model || (value.stage === 'rig-review' ? source.selector?.kind !== 'rig' : value.stage !== 'direction-review' || source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ACT_INVALID');
+      if (!source.model || (value.stage === 'rig-review' ? source.selector?.kind !== 'rig' : value.stage !== 'direction-review' || source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ACT_INVALID');
     } else {
       const stage = jobId(value.stage);
       if (item.kind === 'signoff' && value.decision !== 'approved') throw new JobError('JOB_ACT_INVALID');
