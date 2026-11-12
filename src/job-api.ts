@@ -2,7 +2,7 @@ import {checkpointEvidenceFields} from './job-checkpoint-evidence.ts';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
   JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PARTS_ENUMERATOR_RANGE,
-  JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RECORD_ACT_SCHEMA, JOB_RECORD_INSTANCE_SCHEMA, JOB_RECORD_SOURCE_SCHEMA,
+  JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RECORD_SIGNOFF_STAGES, JOB_RECORD_ACT_SCHEMA, JOB_RECORD_INSTANCE_SCHEMA, JOB_RECORD_SOURCE_SCHEMA,
   JOB_RESERVED_ACT_KINDS,
   type AgentRequestV3, type FetchActRequestV3, type JobAgentRequest, type JobApiSchema,
   type JobCheckpointEvidence, type JobDisplayAcknowledgment, type JobErrorCode, type JobFetchActRequest, type JobFileIdentity,
@@ -257,7 +257,7 @@ export function parseRecordSubject(value: unknown): RecordSubject {
     case 'signoff': {
       jobObject(item, ['kind', 'stage']);
       const stage = jobId(item.stage);
-      if (!(JOB_PLAN_BOUND_SIGNOFF_STAGES as readonly string[]).includes(stage)) {
+      if (!(JOB_RECORD_SIGNOFF_STAGES as readonly string[]).includes(stage)) {
         throw new JobError('JOB_ASK_INVALID');
       }
       return { kind: 'signoff', stage: stage as RecordSignoffStage };
@@ -1151,7 +1151,7 @@ export function parseRecordAct(value: unknown): RecordAct {
       if (source.subject !== 'plan' || source.plan.steps.length === 0) throw new JobError('JOB_ACT_INVALID');
       const rawValue = exactObject(item.value, ['stage', 'decision', 'words'], 'JOB_ACT_INVALID');
       const stage = asCode(() => jobId(rawValue.stage), 'JOB_ACT_INVALID');
-      if (!(JOB_PLAN_BOUND_SIGNOFF_STAGES as readonly string[]).includes(stage) || rawValue.decision !== 'approved') {
+      if (!(JOB_RECORD_SIGNOFF_STAGES as readonly string[]).includes(stage) || rawValue.decision !== 'approved') {
         throw new JobError('JOB_ACT_INVALID');
       }
       asCode(() => validateRecordAskSubject({ kind: 'signoff', stage }, source), 'JOB_ACT_INVALID');
@@ -1457,7 +1457,8 @@ function decodeCommentsAct(raw: unknown, withContext: boolean): JobCommentsAct |
       const stage = jobId(value.stage);
       if (item.kind === 'signoff' && value.decision !== 'approved') throw new JobError('JOB_ACT_INVALID');
       if (item.kind === 'reopen' && !('record' in source)) throw new JobError('JOB_ACT_INVALID');
-      if (item.kind === 'signoff' && JOB_PLAN_BOUND_SIGNOFF_STAGES.includes(stage as RecordSignoffStage) && !source.plan?.steps.length) throw new JobError('JOB_ACT_INVALID');
+      const planBoundStages = 'record' in source ? JOB_RECORD_SIGNOFF_STAGES : JOB_PLAN_BOUND_SIGNOFF_STAGES;
+      if (item.kind === 'signoff' && (planBoundStages as readonly string[]).includes(stage) && !source.plan?.steps.length) throw new JobError('JOB_ACT_INVALID');
     }
     if ('record' in source) validateRecordAskSubject(item.kind === 'checkpoint' ? {kind: item.kind, checkpointId: value.checkpointId} :
       {kind: item.kind, stage: value.stage}, source);

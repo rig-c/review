@@ -864,3 +864,17 @@ installed manifest and requires the public import to fail for that missing
 subpath. It restores the exact manifest bytes, verifies their SHA-256 and imports
 again. The smoke prints the planned RED's raw exit and diagnostic. This control
 runs inside the ordinary installed smoke, alongside existing CLI coverage.
+
+## Record direction-review signoff
+
+Record publications accept `{kind: 'signoff', stage: 'direction-review'}` through
+the existing signoff path. Like `plan-approved`, `rigging-interview` and
+`post-interview`, it requires a declared subject and non-empty published plan.
+Approval binds the frozen record revision through the existing project/source
+hashes, with no separate post-version selector or new ask/act field. Existing
+stages, schemas and stored act bytes retain their meaning. See the
+[record contract](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
+
+The public `JOB_PLAN_BOUND_SIGNOFF_STAGES` remains the original three-entry
+package list. The fourth stage is record-only; package `direction-review`
+signoffs and historical comments acts still accept a nullable plan.

@@ -723,3 +723,28 @@ for (const [field, value] of [['sourceHash', 'wrong-source'], ['askId', 'other-a
     expect(f.session.status().pending.map(ask => ask.askId)).toContain(input.askId);
   });
 }
+
+
+test('#794 package direction signoff without a plan remains valid and its historical act parses byte-identically', async () => {
+  const f = await fixture(), context = f.getContext();
+  f.setContext({...context, plan: null, subjects: [{kind: 'signoff', stage: 'direction-review'}]});
+  const publication = await f.publish();
+  const ask = await f.ask(publication, {kind: 'signoff', stage: 'direction-review'}), page = await f.display(publication);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
+    expectedGeneration: f.session.status().generation, submissionId: 'direction-signoff', kind: 'signoff',
+    value: {stage: 'direction-review', decision: 'approved', words: '  Original direction approval\n'}}));
+  expect(saved.ok).toBe(true);
+  if (!saved.ok) throw new Error(saved.error.code);
+  expect(saved.value.source.plan).toBeNull();
+  expect(saved.value.value).toEqual({stage: 'direction-review', decision: 'approved', comments: [{text: '  Original direction approval\n'}]});
+  const bytes = f.session.readActExport(saved.value.actId, false).toString();
+  expect(bytes).toBe(JSON.stringify(saved.value));
+  expect(JSON.stringify(parseCommentsAct(JSON.parse(bytes)))).toBe(bytes);
+
+  // A pre-existing act@6 package signoff is independent of the new record allowlist.
+  const historical = {...commentsAct(), kind: 'signoff',
+    value: {stage: 'direction-review', decision: 'approved', comments: []}};
+  historical.source.plan = null;
+  const historicalBytes = JSON.stringify(historical);
+  expect(JSON.stringify(parseCommentsAct(JSON.parse(historicalBytes)))).toBe(historicalBytes);
+});

@@ -205,6 +205,9 @@ export const JOB_PLAN_BOUND_SIGNOFF_STAGES = [
   'post-interview',
 ] as const;
 
+/** Record-only approval stages; not part of the public job-host runtime exports. */
+export const JOB_RECORD_SIGNOFF_STAGES = [...JOB_PLAN_BOUND_SIGNOFF_STAGES, 'direction-review'] as const;
+
 /** Reserved kinds have no accepted value shape and cannot be asked or submitted.
  * Described correction awaits the joint Create #182 context allowlist.
  * Mesh edit awaits the joint Parts #1159 freeze. Proposal 6ff03ec9 discusses
@@ -1031,7 +1034,7 @@ export interface RecordCheckpointSubject {
   readonly checkpointId: string;
 }
 
-export type RecordSignoffStage = typeof JOB_PLAN_BOUND_SIGNOFF_STAGES[number];
+export type RecordSignoffStage = typeof JOB_RECORD_SIGNOFF_STAGES[number];
 
 export interface RecordSignoffSubject {
   readonly kind: 'signoff';

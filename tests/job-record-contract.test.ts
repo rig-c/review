@@ -4,6 +4,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'bun:test';
+import {JobSession} from '../src/job-session.ts';
+import {createJobHostPorts} from '../src/job-api.ts';
+import {createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './helpers/job-record-fixture.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
 import { runRecordBrowserPreflightSetupCheck } from './job-record-browser.ts';
 import {
@@ -316,7 +319,7 @@ test('CP1 opt-in API@3 request parser validates discriminated package and record
   expect(() => parseProjectRecord({ path: 'other.json', sha256: sha('a') })).toThrow('JOB_FREEZE_REQUIRED');
 });
 
-test('CP1 parseRecordSubject enforces canonical step-ID checkpoint wire shape and three signoff stages', () => {
+test('CP1 parseRecordSubject enforces canonical step-ID checkpoint wire shape and four signoff stages', () => {
   expect(parseRecordSubject({ kind: 'interview-picks', questionId: 'q_1', setId: 'set_1' })).toEqual({
     kind: 'interview-picks',
     questionId: 'q_1',
@@ -326,7 +329,7 @@ test('CP1 parseRecordSubject enforces canonical step-ID checkpoint wire shape an
     kind: 'checkpoint',
     checkpointId: 'step_rig_1',
   });
-  for (const stage of ['plan-approved', 'rigging-interview', 'post-interview'] as const) {
+  for (const stage of ['plan-approved', 'rigging-interview', 'post-interview', 'direction-review'] as const) {
     expect(parseRecordSubject({ kind: 'signoff', stage })).toEqual({ kind: 'signoff', stage });
   }
 
@@ -342,7 +345,7 @@ test('CP1 parseRecordSubject enforces canonical step-ID checkpoint wire shape an
   ).toThrow('JOB_REQUEST_INVALID');
 
   // Rejects non-CP1 signoff stages, package-only subjects, and reserved act kinds
-  expect(() => parseRecordSubject({ kind: 'signoff', stage: 'direction-review' })).toThrow('JOB_ASK_INVALID');
+  expect(() => parseRecordSubject({ kind: 'signoff', stage: 'unknown-stage' })).toThrow('JOB_ASK_INVALID');
   expect(() => parseRecordSubject({ kind: 'parts-verdict', draftId: 'draft-1' })).toThrow('JOB_ASK_INVALID');
   expect(() => parseRecordSubject({ kind: 'review-verdict', stage: 'rig-review' })).toThrow('JOB_ASK_INVALID');
   expect(() => parseRecordSubject({ kind: 'mesh-edit' })).toThrow('JOB_ACT_KIND_DISABLED');
@@ -3085,4 +3088,70 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
     host.stop();
     await rm(scratch, { recursive: true, force: true });
   }
+});
+
+// Review-side synthetic reader only; no installed Create consumer conformance claim.
+test('#794 all four record signoffs retain UI submission bytes through consumer fetch and refuse unbound acts', async () => {
+  const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-direction-signoff-'));
+  const root = join(scratch, 'input');
+  await mkdir(root);
+  const stages = ['plan-approved', 'rigging-interview', 'post-interview', 'direction-review'] as const;
+  const workspace = createSyntheticPlanRecordWorkspace(root, {
+    subjects: stages.map(stage => ({kind: 'signoff', stage})),
+  });
+  const emptyPlanSource = buildRecordSource({record: workspace.record, selection: workspace.result,
+    context: {...workspace.context, plan: {steps: []}, subjects: []}});
+  const undeclaredSource = buildRecordSource({record: workspace.record, selection: workspace.result,
+    context: {...workspace.context, subjects: []}});
+  const reader = createSyntheticRecordReader({onPlan: () => workspace.context});
+  const session = new JobSession({root, stateDir: join(scratch, 'state'), fingerprint: 'a'.repeat(64),
+    reviewer: {id: 'synthetic-owner', role: 'owner'}, publicationMode: 'record-and-package', readRecordPublished: reader.reader});
+  const origin = 'http://127.0.0.1:19484', ports = createJobHostPorts(session, origin), credentials = session.hostCredentials();
+  let sequence = 0;
+  const call = (body: object, token = credentials.agent, accept?: string) => ports.handleJobApi(new Request(origin + `/jobs/${session.jobId}/api`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + token, ...(accept ? {Accept: accept} : {})},
+    body: JSON.stringify({schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'request-' + (++sequence), ...body}),
+  }));
+  try {
+    const published = await (await call({verb: 'publish', expectedGeneration: 0, idempotencyKey: 'publish',
+      result: workspace.result, freeze: {kind: 'producer-held', holdId: 'synthetic', record: workspace.record}})).json();
+    expect(published.ok).toBe(true);
+    const publication = published.value;
+    const unknown = await (await call({verb: 'ask', expectedGeneration: session.status().generation, idempotencyKey: 'unknown',
+      publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'unknown-stage'}})).json();
+    expect(unknown).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+    for (const stage of stages) {
+      const asked = await (await call({verb: 'ask', expectedGeneration: session.status().generation, idempotencyKey: stage,
+        publicationId: publication.publicationId, subject: {kind: 'signoff', stage}})).json();
+      expect(asked.ok).toBe(true);
+      const receipt = await ports.ackDisplayed(session.jobId, new Request(origin + `/jobs/${session.jobId}/ui/displayed`, {
+        method: 'POST', headers: {'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': credentials.ui},
+        body: JSON.stringify({publicationId: publication.publicationId, pageId: stage, sourceHash: publication.source.sourceHash}),
+      }));
+      expect(receipt.ok).toBe(true);
+      if (!receipt.ok) throw new Error(receipt.error.code);
+      const value = {stage, decision: 'approved', words: '  Original approval · 원문\n'};
+      const committed = await ports.commitUIAct(session.jobId, new Request(origin + `/jobs/${session.jobId}/ui/acts`, {
+        method: 'POST', headers: {'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': credentials.ui},
+        body: JSON.stringify({kind: 'signoff', publicationId: publication.publicationId, askId: asked.value.askId, pageId: stage,
+          displayedNonce: receipt.value.displayedNonce, expectedGeneration: session.status().generation, submissionId: stage, value}),
+      }));
+      expect(committed.ok).toBe(true);
+      if (!committed.ok) throw new Error(committed.error.code);
+      expect(committed.value.value).toEqual(value);
+      const raw = await call({verb: 'fetch-act', actId: committed.value.actId}, session.writerGrant().fetchCapability, 'application/vnd.rig-review.act+json');
+      expect(raw.status).toBe(200);
+      expect(await raw.text()).toBe(JSON.stringify(committed.value));
+      const act = parseRecordAct(committed.value), source = act.source;
+      if (source.subject !== 'plan') throw new Error('Expected plan-bound signoff');
+      expect(act.source.projectHash).toBe(workspace.record.sha256);
+      expect(act.source.selection).toEqual({kind: 'plan'});
+      expect('selector' in act.source).toBe(false);
+      expect(() => parseRecordAct({...act, value: {...value, stage: 'unknown-stage'}})).toThrow('JOB_ACT_INVALID');
+      expect(() => parseRecordAct({...act, source: emptyPlanSource})).toThrow('JOB_ACT_INVALID');
+      expect(() => validateRecordAskSubject({kind: 'signoff', stage}, emptyPlanSource)).toThrow('JOB_ASK_INVALID');
+      expect(() => parseRecordAct({...act, source: undeclaredSource})).toThrow('JOB_ACT_INVALID');
+    }
+    expect(await readFile(join(root, 'project.json'), 'utf8')).toBe(await readFile(join(session.retainedSourceV3(publication.publicationId).root.path, 'project.json'), 'utf8'));
+  } finally {session.dispose(); await rm(scratch, {recursive: true, force: true});}
 });
