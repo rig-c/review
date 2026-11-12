@@ -9,15 +9,15 @@ import {createJobHostPorts} from '../../src/job-api.ts';
 import {prepareJobRecordAct} from '../../src/job-act.ts';
 import type {JobRetainedRecordSource} from '../../src/job-source.ts';
 import {createJobFront, jobWindowResources, retainedPublicationRoutes} from '../../src/job-front.ts';
-import {JOB_API_V3_SCHEMA, type DisplayPublicationV3, type PendingAskV3, type UISubmissionV3} from '../../src/job-contract.ts';
+import {JOB_API_V3_SCHEMA, type DisplayPublicationV3, type PendingAskV3, type UISubmissionV3, type RecordSignoffStage} from '../../src/job-contract.ts';
 import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixture.ts';
 import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'reopen'|'interview-picks';
-export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string){
+export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved'){
  const scratch=await mkdtemp(join(tmpdir(),'review-750-')),root=join(scratch,'input');await mkdir(root);
  let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root):createSyntheticPlanRecordWorkspace(root,{subjects:[
-  {kind:'checkpoint',checkpointId:'step_layout'},{kind:'signoff',stage:'plan-approved'},{kind:'reopen',stage:'plan-approved'},
+  {kind:'checkpoint',checkpointId:'step_layout'},{kind:'signoff',stage:signoffStage},{kind:'reopen',stage:'plan-approved'},
  ]});
  const reader=createSyntheticRecordReader({onOption:()=>workspace.context as never,onPlan:()=>workspace.context as never});
  let packageContext={selector:{kind:'rig',version:1},plan:null,parts:null,subjects:[],partIds:[],files:[]} as import('../../src/job-source.ts').JobPublishedContext;

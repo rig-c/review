@@ -11,16 +11,19 @@ import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
-import {parseRecordAct,parseCommentsAct} from '../src/job-api.ts';
+import {parseRecordAct,parseCommentsAct,parseRecordSubject} from '../src/job-api.ts';
 import {JOB_API_SCHEMA,type PendingAskV3} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 const arg=(key:string)=>{const at=Bun.argv.indexOf(key);return at<0?undefined:Bun.argv[at+1];};
+const directionSignoff=Bun.argv.includes('--direction-signoff');
+const signoffSubject=parseRecordSubject({kind:'signoff',stage:directionSignoff?'direction-review':'plan-approved'});
+if(signoffSubject.kind!=='signoff')throw new Error('SYNTHETIC_SIGNOFF_STAGE_INVALID');
 const output=resolve(arg('--out')??'artifacts/715');await mkdir(output,{recursive:true});
 if(Bun.argv.includes('--serve')){
  const kinds=(arg('--kind')?[arg('--kind')]:['checkpoint','signoff','reopen']) as RecordScreenKind[];
  const fixtures=[];
- for(const kind of kinds){const fixture=await recordScreenFixture(kind,true);fixtures.push(fixture);const url=new URL(fixture.ownerUrl);url.searchParams.set('lang','en');console.log(JSON.stringify({url:url.href,pid:process.pid,kind,sourceHash:fixture.display.publication.source.sourceHash,fixture:'synthetic trusted record host; shared screen'}));}
+ for(const kind of kinds){const fixture=await recordScreenFixture(kind,true,undefined,signoffSubject.stage);fixtures.push(fixture);const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',arg('--lang')??(directionSignoff?'ko':'en'));console.log(JSON.stringify({url:url.href,pid:process.pid,kind,sourceHash:fixture.display.publication.source.sourceHash,fixture:'synthetic trusted record host; shared screen'}));}
  await new Promise<void>(resolve=>{process.once('SIGTERM',resolve);process.once('SIGINT',resolve);});for(const fixture of fixtures)await fixture.close();process.exit(0);
 }
 const profile=await mkdtemp(join(tmpdir(),'review-715-browser-'));let page:InputCdpSession|undefined,command:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
@@ -49,10 +52,10 @@ try{
  // resolve in memory, so a network-only delay would never exercise this capability-pending state.
  await command!('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{const all=Promise.all;Promise.all=function(values){return all.call(this,values).then(rows=>{if(rows.length===2&&rows.some(row=>row&&typeof row==='object'&&'capabilityRequired' in row)){globalThis.__access756='pending';return new Promise(resolve=>{globalThis.__releaseAccess756=()=>{globalThis.__access756='resolved';resolve(rows);};});}return rows;});};})();`});
  await page.setViewport(1600,1000);
- const boundary=Bun.argv.includes('--parts-only'),sample=Bun.argv.includes('--sample'),kinds:RecordScreenKind[]=sample?['checkpoint']:['checkpoint','signoff','reopen'];
- for(const kind of kinds)for(const picture of sample?[false]:kind==='checkpoint'?[false,true,'parts'] as const:[false,true])for(const language of sample?['en'] as const:['en','ko'] as const){
+ const boundary=Bun.argv.includes('--parts-only'),sample=Bun.argv.includes('--sample'),kinds:RecordScreenKind[]=directionSignoff?['signoff']:sample?['checkpoint']:['checkpoint','signoff','reopen'];
+ for(const kind of kinds)for(const picture of directionSignoff||sample?[false]:kind==='checkpoint'?[false,true,'parts'] as const:[false,true])for(const language of directionSignoff?['ko'] as const:sample?['en'] as const:['en','ko'] as const){
   if(boundary&&picture!=='parts')continue;
-  const fixture=await recordScreenFixture(kind,picture),out=join(output,kind,picture==='parts'?'parts':picture?'picture':'empty',language);await mkdir(out,{recursive:true});fixture.output(out);
+  const fixture=await recordScreenFixture(kind,picture,undefined,signoffSubject.stage),out=join(output,kind,picture==='parts'?'parts':picture?'picture':'empty',language);await mkdir(out,{recursive:true});fixture.output(out);
   const before=await jobInputHashes(fixture.root),selector=`form[data-job-ask="${fixture.ask.askId}"]`,catalog=language==='en'?enCatalog:koCatalog;
   try{
    const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href);
@@ -81,12 +84,12 @@ try{
    await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#job-record-asks[open]')`,'reopen after reload');
    if(kind==='checkpoint')await page.evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(selector)});f.querySelector('select[name=outcome]').value='pass';f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
    await shot(out,'before-submit');await click(page,selector+' button[type=submit]');await wait(`document.querySelector(${JSON.stringify(selector+' [role=status]')})?.textContent===${JSON.stringify(catalog['job.saved'])}`,'saved');
-   const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);assert.notEqual(act.kind,'interview-picks');if(act.kind!=='interview-picks')assert.equal(act.value.words,expected);assert.equal('feedback' in act.value,false);assert.equal('comments' in act.value,false);
+   const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);assert.notEqual(act.kind,'interview-picks');if(act.kind!=='interview-picks')assert.equal(act.value.words,expected);if(directionSignoff){assert.equal(act.kind,'signoff');assert.equal((act.value as {stage:string}).stage,'direction-review');}assert.equal('feedback' in act.value,false);assert.equal('comments' in act.value,false);
    await shot(out,'submitted');await page.evaluate(`(()=>{const d=JSON.parse(localStorage.getItem(${JSON.stringify(key)}));d.sourceHash='0'.repeat(64);localStorage.setItem(${JSON.stringify(key)},JSON.stringify(d));})()`);await page.goto('about:blank');await page.goto(url.href);if(picture){await wait(`globalThis.__access756==='pending'`,'reload capability');await page.evaluate(`globalThis.__releaseAccess756()`);}await wait(`!!document.querySelector('#stage-comment-list')&&!!document.querySelector(${JSON.stringify(selector)})`,'mismatched reload');assert.equal(await page.evaluate(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length`),0);
    assert.deepEqual(await jobInputHashes(fixture.root),before);const result={kind,picture,language,state,comments:draft.comments.length,sourceHash:act.source.sourceHash,sourceDraftRestored:true,mismatchedDraftRefused:true,pointedRefusedByReadOnly:picture==='parts',scalarOnly:true,words:expected,actPath:join(out,'one-screen.json')};cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('715_CASE_PASS '+kind+' '+picture+' '+language);
   }catch(error){await shot(out,'failure');throw error;}finally{await page.goto('about:blank');await fixture.close();}
  }
- if(!sample)for(const parts of boundary?[true]:[false,true])for(const language of ['en','ko'] as const){
+ if(!sample&&!directionSignoff)for(const parts of boundary?[true]:[false,true])for(const language of ['en','ko'] as const){
   const fixture=parts?await scriptedJobWindowFixture({c5Parts:'mesh'}):await realJobWindowFixture(),out=join(output,parts?'mixed-parts':'mixed',language);await mkdir(out,{recursive:true});
   try{
    const publication=parts?await (fixture as Awaited<ReturnType<typeof scriptedJobWindowFixture>>).publish('parts'):await (fixture as Awaited<ReturnType<typeof realJobWindowFixture>>).publish(),asks:PendingAskV3[]=[];
@@ -97,7 +100,7 @@ try{
   }catch(error){const ui=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.value,saveDisabled:document.querySelector('#save')?.disabled,activeElement:document.activeElement?.id,dialogs:[...document.querySelectorAll('dialog')].map(n=>({id:n.id,open:n.open}))})`);const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0});const next=await response.json();await writeFile(join(out,'failure-state.json'),JSON.stringify({error:String(error),ui,next,actTransport},null,2)+'\n');await shot(out,'failure');throw error;}finally{await page.goto('about:blank');await fixture.close();}
  }
  // A copied capability-free link has no act authority, even though its backdrop is still readable.
- if(!sample&&!boundary)for(const picture of [true,'parts'] as const)for(const language of ['en','ko'] as const){
+ if(!sample&&!boundary&&!directionSignoff)for(const picture of [true,'parts'] as const)for(const language of ['en','ko'] as const){
   const fixture=await recordScreenFixture('checkpoint',picture),out=join(output,'readonly-link',picture===true?'rig':'parts',language);await mkdir(out,{recursive:true});
   try{
    const url=new URL(fixture.ownerUrl);url.hash='';url.searchParams.set('lang',language);const before=await jobInputHashes(fixture.root);
