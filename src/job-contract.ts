@@ -206,7 +206,7 @@ export const JOB_PLAN_BOUND_SIGNOFF_STAGES = [
 ] as const;
 
 /** Record-only approval stages; not part of the public job-host runtime exports. */
-export const JOB_RECORD_SIGNOFF_STAGES = [...JOB_PLAN_BOUND_SIGNOFF_STAGES, 'direction-review'] as const;
+export const JOB_RECORD_SIGNOFF_STAGES = [...JOB_PLAN_BOUND_SIGNOFF_STAGES, 'direction-review', 'interview'] as const;
 
 /** Reserved kinds have no accepted value shape and cannot be asked or submitted.
  * Described correction awaits the joint Create #182 context allowlist.

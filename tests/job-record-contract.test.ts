@@ -318,7 +318,7 @@ test('CP1 opt-in API@3 request parser validates discriminated package and record
   expect(() => parseProjectRecord({ path: 'other.json', sha256: sha('a') })).toThrow('JOB_FREEZE_REQUIRED');
 });
 
-test('CP1 parseRecordSubject enforces canonical step-ID checkpoint wire shape and four signoff stages', () => {
+test('CP1 parseRecordSubject enforces canonical step-ID checkpoint wire shape and five signoff stages', () => {
   expect(parseRecordSubject({ kind: 'interview-picks', questionId: 'q_1', setId: 'set_1' })).toEqual({
     kind: 'interview-picks',
     questionId: 'q_1',
@@ -328,7 +328,7 @@ test('CP1 parseRecordSubject enforces canonical step-ID checkpoint wire shape an
     kind: 'checkpoint',
     checkpointId: 'step_rig_1',
   });
-  for (const stage of ['plan-approved', 'rigging-interview', 'post-interview', 'direction-review'] as const) {
+  for (const stage of ['plan-approved', 'rigging-interview', 'post-interview', 'direction-review', 'interview'] as const) {
     expect(parseRecordSubject({ kind: 'signoff', stage })).toEqual({ kind: 'signoff', stage });
   }
 
@@ -3090,11 +3090,11 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
 });
 
 // Review-side synthetic reader only; no installed Create consumer conformance claim.
-test('#794 all four record signoffs retain UI submission bytes through consumer fetch and refuse unbound acts', async () => {
+test('#800 all five record signoffs retain UI submission bytes through consumer fetch and refuse unbound acts', async () => {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-direction-signoff-'));
   const root = join(scratch, 'input');
   await mkdir(root);
-  const stages = ['plan-approved', 'rigging-interview', 'post-interview', 'direction-review'] as const;
+  const stages = ['plan-approved', 'rigging-interview', 'post-interview', 'direction-review', 'interview'] as const;
   const workspace = createSyntheticPlanRecordWorkspace(root, {
     subjects: stages.map(stage => ({kind: 'signoff', stage})),
   });
