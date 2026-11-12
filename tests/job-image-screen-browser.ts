@@ -8,7 +8,8 @@ import {PNG} from 'pngjs';
 import {startJobHub,JOB_API_SCHEMA,type JobPublication,type JobPendingAsk,type JobImageSetInput} from '../src/job-host.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
-import {projectComments} from '../src/stage-comment.ts';
+import type {Feedback} from '../src/session.ts';
+import {projectComments,feedbackItemComments} from '../src/stage-comment.ts';
 import {jobFixture,jobInputHashes} from './helpers/job-api-fixture.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
@@ -39,6 +40,10 @@ async function api(verb:string,value:Record<string,unknown>={},consumer=false){
  const result=await response.json();assert.equal(result.ok,true,JSON.stringify(result));generation=result.generation;return result.value;
 }
 async function wait(expression:string){const end=Date.now()+20000;while(Date.now()<end){if(await page!.evaluate(expression))return;await Bun.sleep(25);}throw new Error('IMAGE_SCREEN_WAIT '+expression);}
+// Compare range destinations at the precision the product exposes; paused-sample stability stays exact.
+function scrubAt(target:number|'max'):string {
+ return `(()=>{const scrub=document.querySelector('#scrub'),step=Number(scrub.step),target=${target==='max'?'Number(scrub.max)':target};return Number.isFinite(step)&&step>0&&Math.abs(Number(scrub.value)-target)<=step/2+Number.EPSILON;})()`;
+}
 async function click(selector:string){await page!.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);}
 async function composer(text:string){await wait(`!!document.querySelector('.stage-comment-composer input')`);await page!.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value=${JSON.stringify(text)};form.requestSubmit();})()`);await wait(`!document.querySelector('.stage-comment-composer')`);}
 try{
@@ -88,22 +93,35 @@ try{
    assert.equal(layout.actBars,1);assert.equal(layout.verdictInBar,true);assert.equal(layout.notes,0);assert.equal(layout.legacyDumps,0);
    // #559 successor: exercise the actual shared-screen playback for a direction-bearing post source.
    await page.evaluate(`(()=>{const select=document.querySelector('#animation-select');select.value='inspect';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),'0');
+   assert.equal(await page.evaluate(scrubAt(0)),true);
    await click('#play');await wait(`Number(document.querySelector('#scrub').value)>0.05`);await click('#play');
    const paused:string=await page.evaluate<string>(`document.querySelector('#scrub').value`);await Bun.sleep(100);
    assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),paused);
    await click('#play');
-   await page.evaluate(`(()=>{const scrub=document.querySelector('#scrub');scrub.value='0.123456789';scrub.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),'0.123456789');await Bun.sleep(100);
-   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),'0.123456789');
+   // The shared range control normalizes to its step; exercise a step-aligned seek, not arbitrary precision.
+   await page.evaluate(`(()=>{const scrub=document.querySelector('#scrub');scrub.value='0.123';scrub.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+   assert.equal(await page.evaluate(scrubAt(0.123)),true);await Bun.sleep(100);
+   assert.equal(await page.evaluate(scrubAt(0.123)),true);
    await page.evaluate(`(()=>{const select=document.querySelector('#animation-select');select.value='short';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),'0');await Bun.sleep(100);
-   assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),'0');
-   await click('#play');await wait(`Number(document.querySelector('#scrub').value)===Number(document.querySelector('#scrub').max)`);
+   assert.equal(await page.evaluate(scrubAt(0)),true);await Bun.sleep(100);
+   assert.equal(await page.evaluate(scrubAt(0)),true);
+   await click('#play');await wait(scrubAt('max'));
    const ended:string=await page.evaluate<string>(`document.querySelector('#scrub').value`);await Bun.sleep(100);
    assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),ended);
    await click('[data-comment-general]');await composer('Direction comment · 연출');
    await wait(`document.querySelectorAll('.stage-comment-item').length===1`);
+   await click('#stage-comment');
+   const point:any=await page.evaluate(`(()=>{const r=document.querySelector('#rig-viewport').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
+   await page.mouse('mousePressed',point.x,point.y);await page.mouse('mouseReleased',point.x,point.y);await composer('Direction spot · 연출 위치');
+   await wait(`document.querySelectorAll('.stage-comment-item').length===2`);
+   const key='rig-review-record-comments/1:'+publication.publicationId+':'+publication.source.sourceHash;
+   const draft:any=await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)}))`);
+   assert.deepEqual(draft.comments.map((row:any)=>row.summary),['Direction comment · 연출','Direction spot · 연출 위치']);
+   assert.equal('target' in draft.comments[0],false);assert.ok(draft.comments[1].context.comment.crop.png);
+   const projected=projectComments(draft.comments.map((row:any)=>'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
+   await page.goto(url.href,language);
+   await wait(`document.body.dataset.ready==='true'&&!document.querySelector('#save').disabled&&document.querySelectorAll('.stage-comment-item').length===2`);
+   assert.deepEqual(await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)})).comments.map(row=>row.summary)`),draft.comments.map((row:any)=>row.summary));
    const screenshot=language+'-direction.png';await writeFile(join(output,screenshot),await page.screenshot());
    await page.evaluate(`(()=>{const v=document.querySelector('#review-status');v.value='approved';v.dispatchEvent(new Event('change',{bubbles:true}));})()`);
    await click('#save');
@@ -111,9 +129,10 @@ try{
    while(Date.now()<deadline){const next=await directionFixture.next();act=next.events.flatMap(e=>e.type==='act'&&e.act.askId===ask.askId?[e.act]:[])[0];if(act)break;await Bun.sleep(25);}
    assert.ok(act,'direction UI committed act');assert.equal(act.schema,'rig-review/act@6');assert.equal(act.authority.channel,'review-ui');
    assert.equal(act.value.stage,'direction-review');assert.equal(act.value.verdict,'approved');
-   assert.equal(act.value.comments.length,1);assert.ok(act.value.comments[0].text.includes('Direction comment · 연출'));
+   assert.equal(act.value.comments.length,1);assert.equal(act.value.comments[0].text,projected);
    assert.equal('still' in act,false);assert.deepEqual(act.source.direction,publication.source.direction);
-   observations.push({kind:'direction',language,layout,act,screenshot,pinTransport:'text projection only; positions/crops/bookmarks follow-up #776'});
+   const playback=await page.evaluate(`(()=>{const s=document.querySelector('#scrub');return {value:s.value,max:s.max,step:s.step};})()`);
+   observations.push({kind:'direction',language,layout,playback,projected,restoredRows:2,act,screenshot,pinTransport:'text projection only; positions/crops/bookmarks follow-up #776'});
    assert.deepEqual(await jobInputHashes(directionFixture.input.root),frozen);
   }
  }finally{await directionFixture.close();}

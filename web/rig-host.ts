@@ -38,6 +38,7 @@ export interface RigHostCommit {
 }
 export interface RigHost {
   readonly subject?:'parts';
+  readonly direction?:{readonly publicationId:string;readonly sourceHash:string};
   readonly imageSet?:{readonly label:string;readonly publicationId:string;readonly source:JobImageSourceBinding;readonly gallery:HTMLElement};
   canSubmit?():boolean;
   submitImages?(verdict:JobImageReviewValue['verdict'],comments:readonly JobComment[]):Promise<string>;
@@ -54,7 +55,7 @@ export interface RigHost {
   /** A read the host answers itself, or undefined to fetch it from the subject's routes. */
   read(path: string, method: string): Promise<unknown> | undefined;
   /** The act bar's Submit review: the session's decisions go out as the pending asks' acts. */
-  submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>): Promise<string>;
+  submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionWords?:string): Promise<string>;
   attach(screen: RigHostScreen): void;
   /** The first rig draw is on screen (or the open failed): the job acknowledges the display after it. */
   displayed(): void;

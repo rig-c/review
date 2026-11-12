@@ -169,7 +169,7 @@ export function createJobRigScreen(options: {
       return freezeJobRigCapture(draw, jobRigDrawState(bound), ask.askId, () => copyJobRigViewport(presentation));
     } finally {presentation.canvas.remove();}
   }
-  async function submit(session: Pick<ReviewSession,'status'|'checkpoints'|'feedback'>, committed: (commit: RigHostCommit) => void | Promise<void>, imageComments?:readonly JobComment[]): Promise<string> {
+  async function submit(session: Pick<ReviewSession,'status'|'checkpoints'|'feedback'>, committed: (commit: RigHostCommit) => void | Promise<void>, imageComments?:readonly JobComment[], directionWords?:string): Promise<string> {
     const prepared = mounted, state = options.window.state();
     if (!prepared || !state.receipt || state.preparing) throw new Error('JOB_ACT_SOURCE_STALE');
     if (state.closed) throw new Error('JOB_CLOSED');
@@ -178,6 +178,7 @@ export function createJobRigScreen(options: {
     const imageAsk=state.pending.find(ask=>ask.publicationId===prepared.display.publication.publicationId&&ask.status==='pending'&&ask.subject.kind==='review-verdict'&&ask.subject.stage==='image-review');
     const decisions:(JobRigScreenDecision|{ask:PendingAskV3;kind:'review-verdict';value:JobImageReviewValue})[] = imageSource.subject==='image-set' ?
       imageAsk&&session.status!=='pending'?[{ask:imageAsk,kind:'review-verdict',value:imageReviewValue(imageSource,session.status,imageComments??[])}]:[] : jobRigScreenDecisions(session, state.pending.filter(ask=>!prepared.modals?.forms.has(ask.askId)), prepared.display.publication.publicationId);
+    if(directionWords!==undefined)for(const decision of decisions)if(decision.kind==='review-verdict'&&decision.value.stage==='direction-review')decision.value.words=directionWords;
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     for (const decision of decisions) {
       const key = JSON.stringify(decision.value);
@@ -244,7 +245,7 @@ export function createJobRigScreen(options: {
         attach:value=>{screen=value;screen.pendingSubjects?.(pendingSubjects());},displayed:()=>ready.resolve(),failed:error=>ready.reject(error)};
     }
     if(!review)throw new Error('JOB_DISPLAY_MISMATCH');
-    return {access,pendingSubjects,navigation,
+    return {access,pendingSubjects,navigation,...prepared.display.publication.source.direction?{direction:{publicationId:prepared.display.publication.publicationId,sourceHash:prepared.display.publication.source.sourceHash}}:{},
       reviewState(issues,sending) {
         if(sending)return options.translate('job.parts.sending');
         const kind=prepared.parts?'parts-verdict':'review-verdict';
@@ -270,7 +271,7 @@ export function createJobRigScreen(options: {
           feedbackWarnings: [], updatedAt: null} satisfies ReviewSession);
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },
-      submit: (session, committed) => submit(session, committed).catch(error => {throw new Error(options.refusal(error, 'JOB_ACT_INVALID'));}),
+      submit: (session, committed, directionWords) => submit(session, committed,undefined,directionWords).catch(error => {throw new Error(options.refusal(error, 'JOB_ACT_INVALID'));}),
       attach: value => {screen = value;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
       displayed: () => ready.resolve(),
       failed: error => ready.reject(error)};

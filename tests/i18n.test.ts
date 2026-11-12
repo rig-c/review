@@ -591,6 +591,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
    const jsSource=new Bun.Transpiler({loader:'ts'}).transformSync(`${controls}\n${fnSource}`);
    const run=new Function('scope',`with(scope){${jsSource}; renderProposals();}`);
    run({
+    host:null,
     comments:null,
     rigInspector:{comments:{button:doc.createElement('button')}},setSourceText,
     el:(id:string)=>doc.getElementById(id),
