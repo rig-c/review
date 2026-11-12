@@ -23,7 +23,6 @@ import {koCatalog} from './catalog-ko.ts';
 import {t,onLanguageChange} from './i18n.ts';
 import type {InstanceAccess} from './instance-access.ts';
 import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
-import {JOB_HUB_READY, jobHubMessageMatches} from './job-hub.ts';
 import {createJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
 import type {JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl} from './view-controls.ts';
@@ -377,41 +376,8 @@ export function createJobWindow<Prepared>(options: {
         }
         return result;
     }
-    async function submitParts(input: UISubmissionV3, signoffSubmissionId: string): Promise<JobResult<ActV3>> {
-        const publicationId = input.publicationId;
-        const ask = pending.get(input.askId);
-        if (!displayed || displayed.publication.publicationId !== publicationId || !ask ||
-            ask.subject.kind !== 'parts-verdict') throw new Error('JOB_ACT_SOURCE_STALE');
-        assertJobAskSource(ask, displayed);
-        const previous = ask.act;
-        // An act@6 verdict's note is its one general comment; the signoff resends it.
-        const value = (previous?.kind !== 'parts-verdict' ? input.value : previous.schema !== JOB_COMMENTS_ACT_SCHEMA ? previous.value :
-            {verdict: previous.value.verdict, words: previous.value.comments.find(comment => !comment.anchor)?.text ?? ''}) as Pick<PartsVerdictValue, 'verdict' | 'words'>;
-        const signoff = [...pending.values()].find(item => item.publicationId === publicationId &&
-            item.subject.kind === 'signoff' && item.subject.stage === 'parts-review' && item.status === 'pending');
-        if (value.verdict === 'approved' && !signoff) throw new Error('JOB_PARTS_SIGNOFF_MISSING');
-        let result: JobResult<ActV3>;
-        if (ask.status === 'pending') {
-            result = await submit(input);
-            if (!result.ok) return result;
-        } else {
-            if (!previous || previous.kind !== 'parts-verdict' || (previous.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA && previous.schema !== JOB_COMMENTS_ACT_SCHEMA) ||
-                value.verdict !== 'approved') throw new Error('JOB_ACT_SOURCE_STALE');
-            result = {ok: true, value: previous};
-        }
-        if (value.verdict !== 'approved') return result;
-        // Recheck after the first durable write. A replacement never inherits this signoff.
-        const latest = state();
-        if (latest.displayed?.publication.publicationId !== publicationId || !latest.receipt || !signoff)
-            throw new Error('JOB_ACT_SOURCE_STALE');
-        assertJobAskSource(signoff, latest.displayed);
-        return submit({kind: 'signoff', publicationId, pageId: input.pageId, askId: signoff.askId,
-            expectedGeneration: latest.generation, displayedNonce: latest.receipt.displayedNonce,
-            submissionId: signoffSubmissionId,
-            value: {stage: 'parts-review', decision: 'approved', words: value.words}});
-    }
     return {
-        event, replace, submit, submitParts, state, refresh: changed,
+        event, replace, submit, state, refresh: changed,
         settled: () => queue,
         stop() { stopped = true; ++intent; controller?.abort(); },
     };
@@ -625,25 +591,17 @@ export async function* jobWindowEvents(access: JobWindowAccess, after: string | 
         reader.releaseLock();
     }
 }
-/** One reader per window. Hub members bootstrap before visibility can suspend transport. */
+/** One persistent reader per window, resumed from the last delivered cursor. */
 export function startJobWindowEvents(options: {
     access: JobWindowAccess;
     signal: AbortSignal;
-    member: boolean;
     event(value: EventV3): void;
     refused(error: unknown): void;
     fetcher?: typeof fetch;
 }) {
-    let bootstrap = options.member;
-    let visible = !options.member;
     let cursor: string | null = null;
     let reader: AbortController | null = null;
     let wake: (() => void) | null = null;
-    const enabled = () => bootstrap || visible;
-    function changed() {
-        if (!enabled()) reader?.abort();
-        wake?.();
-    }
     const stopped = () => { reader?.abort(); wake?.(); };
     options.signal.addEventListener('abort', stopped, {once: true});
     function wait(milliseconds?: number): Promise<void> {
@@ -657,7 +615,6 @@ export function startJobWindowEvents(options: {
     const done = (async () => {
         try {
             while (!options.signal.aborted) {
-                if (!enabled()) { await wait(); continue; }
                 const current = new AbortController();
                 reader = current;
                 try {
@@ -670,14 +627,12 @@ export function startJobWindowEvents(options: {
                 } catch (error) {
                     if (!current.signal.aborted && !options.signal.aborted) options.refused(error);
                 } finally { reader = null; }
-                if (!options.signal.aborted && enabled() && !current.signal.aborted) await wait(500);
+                if (!options.signal.aborted && !current.signal.aborted) await wait(500);
             }
         } finally { options.signal.removeEventListener('abort', stopped); }
     })();
     return {
         done,
-        visibility(value: boolean) { if (options.member) { bootstrap = false; visible = value; changed(); } },
-        displayed() { if (options.member) { bootstrap = false; changed(); } },
     };
 }
 import type { ModelAssets, RigPlayer } from '@rig-c/play';
@@ -1717,7 +1672,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     const modalState=()=>{const prepared=rigScreen.mounted();return prepared?.record??prepared?.modals;};
     const drafts=createJobFormDrafts({jobId:access.jobId,current:()=>modalState()?.inspection??null,forms:()=>modalState()?.forms??emptyForms,storage:()=>localStorage});
     const transport=createJobWindowTransport(access);
-    let events:ReturnType<typeof startJobWindowEvents>|undefined,stopped=false;
+    let stopped=false;
     const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource,jobCheckpointContext},draftStorage:()=>localStorage,...drafts,access,pageId,
         window:{state:()=>window.state(),submit:input=>window.submit(input)}};
     const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),refusal:jobWindowRefusal,formDependencies:dependencies,
@@ -1731,14 +1686,10 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
         commit:prepared=>prepared?rigScreen.commit(prepared):{rollback(){},finalize(){}},
         async painted(prepared,signal){if(stopped||signal.aborted)return;if(prepared)await rigScreen.painted(prepared,signal);},
         discard:prepared=>{const modal=prepared?.record??prepared?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();},
-        changed(state){rigScreen.changed(state);if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.error);if(state.receipt&&!state.preparing){events?.displayed();if(hub)globalThis.parent.postMessage({...binding(),schema:JOB_HUB_READY},location.origin);}},
+        changed(state){rigScreen.changed(state);if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.error);},
     }});
-    const hub=new URL(location.href).searchParams.get('hub');
-    const binding=()=>({jobId:access.jobId,incarnation:hub!,publicationId:window.state().displayed?.publication.publicationId??null,sourceHash:window.state().displayed?.publication.source.sourceHash??null});
-    const visibility=(event:MessageEvent)=>{if(!hub||!jobHubMessageMatches(event,location.origin,globalThis.parent,binding(),'visibility'))return;events?.visibility(event.data.visible);i18n.setLinkLanguage(null);i18n.setLanguagePreference(event.data.language);};
-    if(hub)globalThis.addEventListener('message',visibility);
     const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);for(const form of host.querySelectorAll('form.interview-answer'))form.dispatchEvent(new Event('job-form-language'));});
-    events=startJobWindowEvents({access,signal:abort.signal,member:!!hub,event:event=>{window.event(event);if(hub)globalThis.parent.postMessage({...binding(),schema:JOB_HUB_READY},location.origin);},refused:error=>report(error,'JOB_STREAM_FAILED')});
-    const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();const modal=modalState();for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();localize();globalThis.removeEventListener('message',visibility);globalThis.removeEventListener('pagehide',stop);};
+    startJobWindowEvents({access,signal:abort.signal,event:event=>window.event(event),refused:error=>report(error,'JOB_STREAM_FAILED')});
+    const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();const modal=modalState();for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();localize();globalThis.removeEventListener('pagehide',stop);};
     globalThis.addEventListener('pagehide',stop,{once:true});return stop;
 }

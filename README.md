@@ -44,7 +44,7 @@ the same CLI. `@rig-c/review` remains the canonical package.
 
 `rig-review` runs under **Bun 1.3.0 or later**, which must be on `PATH`; CI runs the installed package on 1.3.0 and on the latest Bun. `open` prints a loopback URL and exits; see [One-command owner handoff](#one-command-owner-handoff). `npx rig-review --help` lists every command.
 
-The CLI and `@rig-c/review/job-host` support owner hosting, including embedded N-job `startJobHub`/`openJob`. See [Public API stability](docs/STABILITY.md) for exports and signatures.
+The CLI and `@rig-c/review/job-host` support owner hosting. See [Public API stability](docs/STABILITY.md) for exports and signatures.
 
 Example stdout from `open` (private capability omitted):
 

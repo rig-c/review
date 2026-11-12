@@ -58,14 +58,14 @@ export interface RetainedSubjectItem {
 }
 
 /** Shared composition preserves each host's original header status, rows and retained stage. */
-export function mountRetainedWorkspace(options: {root: HTMLElement; kind: 'hub' | 'owner'}) {
+export function mountRetainedWorkspace(options: {root: HTMLElement; kind: 'owner'}) {
   const {root, kind} = options;
   root.dataset.retainedWorkspace = kind;
-  const shell = mountWorkspaceShell({compatibility: kind === 'hub' ? 'legacyHubStep6' : 'legacyOwnerStep6'});
+  const shell = mountWorkspaceShell({compatibility: 'legacyOwnerStep6'});
   const {header, title} = shell, language = shell.language!;
   const {message} = mountStatusBar({placement: 'inline', message: shell.status!});
-  const list = panelMake('nav', {className: kind === 'hub' ? 'hub-list' : 'owner-list'});
-  const stage = panelMake('main', {className: kind === 'hub' ? 'hub-stage' : 'owner-stage'});
+  const list = panelMake('nav', {className: 'owner-list'});
+  const stage = panelMake('main', {className: 'owner-stage'});
   root.replaceChildren(header, list, stage);
   function render(view: {
     lang: string;
@@ -93,9 +93,9 @@ export function mountRetainedWorkspace(options: {root: HTMLElement; kind: 'hub' 
       for (const [name, value] of Object.entries(item.dataset)) button.dataset[name] = value;
       button.setAttribute('aria-pressed', String(item.key === view.selected));
       const label = panelMake('span', {textContent: item.label});
-      if (kind === 'owner') label.className = 'owner-target-title';
-      const state = panelMake('span', {className: kind === 'hub' ? 'hub-job-state' : 'owner-target-status', textContent: item.state});
-      const detail = panelMake('span', {className: kind === 'hub' ? 'hub-job-source' : 'owner-target-animation', textContent: item.detail ?? ''});
+      label.className = 'owner-target-title';
+      const state = panelMake('span', {className: 'owner-target-status', textContent: item.state});
+      const detail = panelMake('span', {className: 'owner-target-animation', textContent: item.detail ?? ''});
       button.append(label, state, detail);
       button.onclick = item.onSelect;
       list.append(button);

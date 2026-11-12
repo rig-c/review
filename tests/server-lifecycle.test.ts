@@ -262,7 +262,7 @@ test('single and compare servers count live WebSocket connections, survive reloa
   expect(compareLines).toEqual(['review compare: exiting — last review window closed (0 live connections for 120ms).']);
 });
 
-test('foreign and missing Origin headers are refused on the managed front and on both direct servers without raising connections, while same-origin connects', async () => {
+test('foreign and missing Origin headers are refused on both direct servers without raising connections, while same-origin connects', async () => {
   const root = await makeTempRoot();
   const pkgA = join(root, 'a');
   const pkgB = join(root, 'b');
@@ -323,35 +323,6 @@ test('foreign and missing Origin headers are refused on the managed front and on
   const cOk = await openLiveSocket(compareOrigin + LIVE_PATH, compareOrigin);
   expect(compare.live.connections).toBe(1);
   cOk.abort();
-
-  // 3. Managed front: foreign and missing Origin refused with 403 FRONT_SAME_ORIGIN_REQUIRED before touching worker
-  const frontStateDir = join(root, 'state-front');
-  const frontPort = freePort();
-  const opened = await openReview(
-    { input: pkgA, animation: 'inspect', viewOnly: true },
-    { stateDir: frontStateDir, frontPort, graceMs: 300, idleMs: 5_000 },
-  );
-  const frontOrigin = new URL(opened.url).origin;
-  const frontLiveUrl = frontOrigin + new URL(opened.url).pathname + 'api/live';
-  const workerKey = new URL(opened.url).pathname.split('/')[2]!;
-  const workerRecord = JSON.parse(await readFile(join(frontStateDir, 'open', `${workerKey}.json`), 'utf8')) as { origin: string };
-
-  for (const badOrigin of ['http://evil.test', `http://localhost:${frontPort}`, 'null', null]) {
-    const httpRes = await fetch(frontLiveUrl, {
-      headers: badOrigin !== null ? { Origin: badOrigin } : {},
-    });
-    expect(httpRes.status).toBe(403);
-    expect(await httpRes.json()).toEqual({ error: 'FRONT_SAME_ORIGIN_REQUIRED' });
-    await expect(openLiveSocket(frontLiveUrl, badOrigin)).rejects.toThrow();
-  }
-  // Also verify direct foreign-Origin attempt against the managed worker's own port is refused
-  await expect(openLiveSocket(workerRecord.origin + LIVE_PATH, 'http://evil.test')).rejects.toThrow();
-  await expect(openLiveSocket(workerRecord.origin + LIVE_PATH, null)).rejects.toThrow();
-
-  // Same-origin on the front connects cleanly (front relays to worker with nonce and no browser Origin)
-  const fOk = await openLiveSocket(frontLiveUrl, frontOrigin);
-  expect(fOk.firstMessage).toContain('live');
-  fOk.abort();
 });
 
 test('when a live WebSocket drops while the only window is still open, connectLiveWindow reconnects within graceMs and the server survives', async () => {
@@ -406,7 +377,7 @@ test('when a live WebSocket drops while the only window is still open, connectLi
   expect(exitInfo?.reason).toBe('last-window-closed');
 });
 
-test('managed front relays 8 concurrent WebSocket windows across 2 instances and completes session save on the 8th + loads a 9th page', async () => {
+test('direct workers serve 8 concurrent WebSocket windows across 2 instances and completes session save on the 8th + loads a 9th page', async () => {
   const root = await makeTempRoot();
   const pkgA = join(root, 'pkg-a');
   const pkgB = join(root, 'pkg-b');
@@ -423,40 +394,32 @@ test('managed front relays 8 concurrent WebSocket windows across 2 instances and
   const occupied = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('planted port owner') });
   const releasedPort = occupied.port!;
   activeServers.push(occupied);
-  const instA = await openReview({ input: pkgA, animation: 'inspect', viewOnly: true }, { stateDir, frontPort: 0, graceMs: 600, idleMs: 5_000 });
-  const instB = await openReview({ input: pkgB, animation: 'inspect', viewOnly: true }, { stateDir, frontPort: 0, graceMs: 600, idleMs: 5_000 });
+  const instA = await openReview({ input: pkgA, animation: 'inspect', viewOnly: true }, { stateDir, direct: true, graceMs: 600, idleMs: 5_000 });
+  const instB = await openReview({ input: pkgB, animation: 'inspect', viewOnly: true }, { stateDir, direct: true, graceMs: 600, idleMs: 5_000 });
 
   const urlA = new URL(instA.url);
   const urlB = new URL(instB.url);
   const frontOrigin = urlA.origin;
-  expect(urlB.origin).toBe(frontOrigin);
+  expect(urlB.origin).not.toBe(frontOrigin);
   expect(Number(urlA.port)).toBeGreaterThan(0);
   expect(Number(urlA.port)).not.toBe(releasedPort);
   expect(await (await fetch(`http://127.0.0.1:${releasedPort}`)).text()).toBe('planted port owner');
-  const frontRecord = JSON.parse(await readFile(join(stateDir, 'open', 'front-0.json'), 'utf8'));
-  expect(frontRecord.origin).toBe(frontOrigin);
-  expect(frontRecord.port).toBe(Number(urlA.port));
   const baseA = frontOrigin + urlA.pathname;
-  const baseB = frontOrigin + urlB.pathname;
+  const baseB = urlB.origin + urlB.pathname;
   const capB = urlB.hash.slice(5);
 
-  // Non-upgrade same-origin GET to front /api/live is refused with 426 FRONT_UPGRADE_REQUIRED
-  const nonWs = await fetch(baseA + 'api/live', { headers: { Origin: frontOrigin } });
-  expect(nonWs.status).toBe(426);
-  expect((await nonWs.json()).error).toBe('FRONT_UPGRADE_REQUIRED');
-
-  // Open 8 windows across the 2 instances through the same front origin
+  // Open 8 windows across the 2 direct worker instances
   const windows = await Promise.all(
     Array.from({ length: 8 }, (_, idx) => openLiveSocket((idx < 4 ? baseA : baseB) + 'api/live')),
   );
   expect(windows).toHaveLength(8);
 
-  // On the 8th window (instance B), read and save feedback session through the front
+  // On the 8th window (instance B), read and save its feedback session
   const sessionB = await (await fetch(baseB + 'api/session')).json();
   const saveRes = await fetch(baseB + 'api/session', {
     method: 'PUT',
     headers: {
-      Origin: frontOrigin,
+      Origin: urlB.origin,
       'Content-Type': 'application/json',
       'X-Review-Capability': capB,
     },
@@ -469,7 +432,7 @@ test('managed front relays 8 concurrent WebSocket windows across 2 instances and
   expect(saveRes.status).toBe(200);
   expect((await saveRes.json()).status).toBe('approved');
 
-  // Open a 9th page and live socket through the front while all 8 are still connected
+  // Open a 9th page and live socket while all 8 are still connected
   const ninthLanding = await fetch(instA.url);
   expect(ninthLanding.status).toBe(200);
   const ninthReview = await fetch(baseA + 'api/review');
@@ -845,150 +808,6 @@ test('wall-clock sleep jump resets pending countdown instead of exiting prematur
   }
 });
 
-test('a front stays up while its control directory has a live record and exits within a bound when the control directory is deleted, while the planted .catch(()=>{}) form fails', async () => {
-  const root = await makeTempRoot();
-  const pkg = join(root, 'pkg');
-  await cp(join(import.meta.dir, 'fixtures/strip-probe'), pkg, { recursive: true });
-  const stateDir = join(root, 'state');
-  const frontPort = freePort();
-  const idleMs = 120;
-
-  await openReview(
-    { input: pkg, animation: 'inspect', viewOnly: true },
-    { stateDir, frontPort, frontIdleMs: idleMs, graceMs: 300, idleMs: 5_000 },
-  );
-  await collectOpenDaemons(root);
-
-  const control = join(stateDir, 'open');
-  const frontRec = JSON.parse(await readFile(join(control, `front-${frontPort}.json`), 'utf8')) as {
-    pid: number;
-    origin: string;
-    nonce: string;
-  };
-
-  // Bar 3: while the control directory exists with a live instance record, the front stays up past idleMs.
-  await Bun.sleep(idleMs * 3);
-  expect(running(frontRec.pid)).toBe(true);
-  const statusRes = await fetch(frontRec.origin + '/api/front-status', {
-    headers: { authorization: `Bearer ${frontRec.nonce}` },
-  });
-  expect(statusRes.status).toBe(200);
-
-  // Any other read error (here EACCES) stays as it is and does not stop the front. One chmod makes the error
-  // in place: replacing the directory with a file (rm, then writeFile) left a moment where the path was empty
-  // or missing, which is the front's exit signal, and a front tick under load landed in it (#354).
-  const dirSkip = await makeUnreadable(control, 0o700, readdir);
-  if (dirSkip) {
-    console.warn(`SKIP front unreadable-directory step: ${dirSkip}`);
-  } else {
-    await Bun.sleep(idleMs * 3);
-    expect(running(frontRec.pid)).toBe(true);
-    await chmod(control, 0o700);
-  }
-
-  // The same holds for a worker record that cannot be read while its directory can: it is not a gone instance.
-  const workerRecord = (await readdir(control)).find(n => /^[a-f0-9]{64}\.json$/.test(n));
-  expect(workerRecord).toBeDefined();
-  const recordSkip = await makeUnreadable(join(control, workerRecord!), 0o600, readFile);
-  if (recordSkip) {
-    console.warn(`SKIP front unreadable-record step: ${recordSkip}`);
-  } else {
-    await Bun.sleep(idleMs * 3);
-    expect(running(frontRec.pid)).toBe(true);
-    await chmod(join(control, workerRecord!), 0o600);
-  }
-
-  // Bar 1: deleting the control directory causes the front to exit within the bound.
-  await rm(control, { recursive: true, force: true });
-  const deadline = performance.now() + 1_500;
-  while (performance.now() < deadline && running(frontRec.pid)) {
-    await Bun.sleep(25);
-  }
-  expect(running(frontRec.pid)).toBe(false);
-
-  // Planted pre-#287 control: unguarded readdir(control) swallowed by .catch(()=>{}) fails the exit bound.
-  const plantedControl = join(root, 'planted-open');
-  await mkdir(plantedControl, { recursive: true, mode: 0o700 });
-  // A live claim keeps the planted front up while its directory exists, so the only way it can stop is through the
-  // deletion below. Without one, any tick before the rm finished saw an empty directory and exited (#354).
-  await writeFile(join(plantedControl, `${'0'.repeat(64)}.claim`), '', { mode: 0o600 });
-  const plantedPort = freePort();
-  const plantedNonce = crypto.randomUUID();
-  const plantedReq = join(plantedControl, `front-${plantedPort}.${plantedNonce}.request.json`);
-  const plantedRecPath = join(plantedControl, `front-${plantedPort}.json`);
-  const frontSrc = await readFile(new URL('../src/front.ts', import.meta.url), 'utf8');
-  const plantedFrontSrc = frontSrc.replace(
-    /async function liveInstances\(control:string\):Promise<boolean>\{[^\n]*\}/,
-    'async function liveInstances(control:string):Promise<boolean>{for(const name of await readdir(control)){if(/^[a-f0-9]{64}\\.claim$/.test(name))return true;}return false;}',
-  );
-  const plantedDir = join(root, 'planted-src');
-  await mkdir(plantedDir, { recursive: true });
-  for (const name of [
-    'build.ts',
-    'open.ts',
-    'open-protocol.ts',
-    'live-lifecycle.ts',
-    'control.ts',
-    'reference.ts',
-    'manifest.ts',
-    'compare.ts',
-    'server.ts',
-    'compare-server.ts',
-    'animation-selection.ts',
-    'versions.ts',
-    'handoff.ts',
-    'state-dir.ts',
-    'stage-parts.ts',
-    'interview-routes.ts',
-    'interview-picks.ts',
-    'joined-project.ts',
-  ]) {
-    await writeFile(join(plantedDir, name), `export * from ${JSON.stringify(join(import.meta.dir, '../src', name))};\n`);
-  }
-  await writeFile(join(plantedDir, 'front.ts'), plantedFrontSrc);
-  await writeFile(
-    plantedReq,
-    JSON.stringify({
-      schema: 'rig-review-front-request/1',
-      control: plantedControl,
-      request: plantedReq,
-      record: plantedRecPath,
-      port: plantedPort,
-      nonce: plantedNonce,
-      fingerprint: await openFingerprint(),
-      idleMs,
-    }),
-    { mode: 0o600 },
-  );
-  const plantedProc = Bun.spawn(
-    [
-      process.execPath,
-      '-e',
-      `import {runFront} from ${JSON.stringify(join(plantedDir, 'front.ts'))}; await runFront(process.argv[1]);`,
-      plantedReq,
-    ],
-    { cwd: plantedControl, stdout: 'ignore', stderr: 'ignore' },
-  );
-  subprocs.push(plantedProc);
-  // Wait until the planted front answers: deleting its directory while it still starts makes its startup read
-  // fail, and it exits for that reason instead of the one this control is about (#354).
-  let plantedReady = false;
-  const plantedDeadline = performance.now() + 15_000;
-  while (!plantedReady && performance.now() < plantedDeadline) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${plantedPort}/api/front-status`, {
-        headers: { authorization: `Bearer ${plantedNonce}` },
-      });
-      plantedReady = r.ok;
-    } catch {}
-    if (!plantedReady) await Bun.sleep(25);
-  }
-  expect(plantedReady).toBe(true);
-  await rm(plantedControl, { recursive: true, force: true });
-  await Bun.sleep(idleMs * 4);
-  expect(running(plantedProc.pid)).toBe(true);
-  // Process starts take seconds under contention; the cap is not a wait, nothing sleeps toward it.
-}, 30_000);
 
 test('#562(ii) server context wires joined draft into rebuilds and stage-parts, enforces capability/viewOnly/locked gates, and leaves fixture bytes unchanged', async () => {
   const { joinedVerdictFixture } = await import('./helpers/joined-verdict-fixture.ts');

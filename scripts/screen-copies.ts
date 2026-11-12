@@ -32,6 +32,14 @@ export interface CopyRow {
   /** The SCREENS.md §4 step whose PR removes this copy. */
   step: string;
   ceiling: number;
+  /** Pin identities as well as counts; a replacement at the same count also refuses. */
+  exactSet?: {
+    paths: RegExp;
+    pattern?: RegExp;
+    expected: readonly string[];
+    plantIn: string;
+    plant: string;
+  };
   /** Count = number of these paths that exist. */
   files?: readonly string[];
   /** Count = number of scanned paths matching this expression that exist (for "any other file" rows). */
@@ -40,7 +48,7 @@ export interface CopyRow {
   matchers?: readonly PatternMatcher[];
 }
 
-const SCAN_DIRS = ['web', 'src'] as const;
+const SCAN_DIRS = ['web', 'src', 'scripts'] as const;
 const SCAN_EXT = /\.(?:ts|html|css)$/u;
 
 const compareCameraStack = [
@@ -65,10 +73,29 @@ const identifierRow = (name: string, step: string, ceiling: number, plantIn: str
 });
 
 export const ROWS: readonly CopyRow[] = [
+  {name: 'entry HTML exact set', step: '801', ceiling: 2, exactSet: {
+    paths: /^web\/.*\.html$/u, expected: ['web/index.html', 'web/compare.html'],
+    plantIn: 'web/planted.html', plant: '<!doctype html>',
+  }},
+  {name: 'Bun.serve files exact set', step: '801', ceiling: 5, exactSet: {
+    paths: /^src\/.*\.ts$/u, pattern: /\bBun\.serve\s*(?:<[^;{}]*>)?\s*\(/gu,
+    expected: ['src/server.ts', 'src/compare-server.ts', 'src/parts-server.ts', 'src/open-workspace.ts', 'src/job-front.ts'],
+    plantIn: 'src/planted.ts', plant: 'Bun.serve({});',
+  }},
+  {name: 'import.meta.main scripts exact set', step: '801', ceiling: 10, exactSet: {
+    paths: /^(?:src|web|scripts)\/.*\.ts$/u, pattern: /\bimport\.meta\.main\b/gu,
+    expected: ['src/build.ts', 'src/cli.ts', 'src/entry.ts', 'src/job-cli.ts', 'src/open-worker.ts', 'src/open-workspace-worker.ts',
+      'scripts/alias_tarball.ts', 'scripts/confirm-alias.ts', 'scripts/check-readme.ts', 'scripts/screen-copies.ts'],
+    plantIn: 'scripts/planted.ts', plant: 'if (import.meta.main) {}',
+  }},
+  {name: 'buildWeb entries exact set', step: '801', ceiling: 3, exactSet: {
+    paths: /^src\/build\.ts$/u, pattern: /['"](web\/[^'"]+\.ts)['"]/gu,
+    expected: ['web/main.ts', 'web/compare.ts', 'web/owner-workspace.ts'],
+    plantIn: 'src/build.ts', plant: "const plantedEntry = 'web/planted.ts';",
+  }},
   {name: 'entry HTML web/parts.html', step: '2', ceiling: 0, files: ['web/parts.html']},
   {name: 'entry HTML web/compare.html', step: '3', ceiling: 1, files: ['web/compare.html']},
   {name: 'entry HTML web/interview.html', step: '4', ceiling: 0, files: ['web/interview.html']},
-  {name: 'entry HTML web/job-hub.html', step: '6', ceiling: 0, files: ['web/job-hub.html']},
   {name: 'entry HTML web/owner-workspace.html', step: '6', ceiling: 0, files: ['web/owner-workspace.html']},
   {name: 'entry HTML files besides web/index.html', step: '2-6', ceiling: 1, fileGlob: {pattern: /^web\/[^/]+\.html$/u, except: ['web/index.html']}},
   {name: 'inline HTML document in src/job-front.ts', step: '5', ceiling: 0, matchers: [
@@ -90,7 +117,6 @@ export const ROWS: readonly CopyRow[] = [
   {name: 'per-screen CSS web/parts.css', step: '2', ceiling: 0, files: ['web/parts.css']},
   {name: 'per-screen CSS web/compare.css', step: '3', ceiling: 1, files: ['web/compare.css']},
   {name: 'per-screen CSS web/interview.css', step: '4', ceiling: 0, files: ['web/interview.css']},
-  {name: 'per-screen CSS web/job-hub.css', step: '6', ceiling: 0, files: ['web/job-hub.css']},
   {name: 'per-screen CSS web/owner-workspace.css', step: '6', ceiling: 0, files: ['web/owner-workspace.css']},
   {name: 'CSS files besides web/styles.css', step: '2-6', ceiling: 1, fileGlob: {pattern: /^web\/[^/]+\.css$/u, except: ['web/styles.css']}},
   {name: 'job fixed row grid-template-rows:250px in .job-inspection', step: '5', ceiling: 0, matchers: [
@@ -136,12 +162,25 @@ function countMatches(text: string, matcher: PatternMatcher): number {
   return hits;
 }
 
+function exactEntries(row: CopyRow, sources: Sources): string[] {
+  const entries = new Set<string>();
+  const set = row.exactSet!;
+  for (const [path, text] of sources) {
+    if (!set.paths.test(path)) continue;
+    if (!set.pattern) entries.add(path);
+    else for (const match of text.matchAll(set.pattern)) entries.add(match[1] ?? path);
+  }
+  return [...entries].sort();
+}
+
 export function countRow(row: CopyRow, sources: Sources): number {
+  if (row.exactSet) return exactEntries(row, sources).length;
   let count = 0;
   for (const file of row.files ?? []) if (sources.has(file)) count++;
   if (row.fileGlob) for (const path of sources.keys()) if (row.fileGlob.pattern.test(path) && !row.fileGlob.except.includes(path)) count++;
   for (const matcher of row.matchers ?? []) {
     for (const [path, text] of sources) {
+      if (path.startsWith('scripts/')) continue;
       if (matcher.files && !matcher.files.includes(path)) continue;
       if (matcher.except?.includes(path)) continue;
       count += countMatches(text, matcher);
@@ -155,7 +194,11 @@ export interface RowResult {row: CopyRow; current: number; failure: string | nul
 export function checkScreenCopies(sources: Sources, rows: readonly CopyRow[] = ROWS): RowResult[] {
   return rows.map(row => {
     const current = countRow(row, sources);
-    const failure = current > row.ceiling
+    const actual = row.exactSet ? exactEntries(row, sources) : null;
+    const expected = row.exactSet ? [...row.exactSet.expected].sort() : null;
+    const failure = actual && JSON.stringify(actual) !== JSON.stringify(expected)
+      ? `SCREEN_ENTRY_SET_CHANGED: ${row.name}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`
+      : current > row.ceiling
       ? `SCREEN_COPY_ROSE: ${row.name}: ${current} > ceiling ${row.ceiling} (step ${row.step})`
       : current < row.ceiling
         ? `SCREEN_COPY_CEILING_STALE: ${row.name}: ${current} hits, lower its ceiling from ${row.ceiling} to ${current} (step ${row.step})`

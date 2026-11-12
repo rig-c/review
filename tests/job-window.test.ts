@@ -6,7 +6,6 @@ import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRe
 import {createJobRigSubmission} from '../web/job-rig-capture.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
 import {t} from '../web/i18n.ts';
-import {jobHubMessageMatches, JOB_HUB_VISIBILITY, type JobHubBinding} from '../web/job-hub.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 
 test('C4 panel parser shares one browser-safe implementation with manifest compatibility exports', async () => {
@@ -1243,7 +1242,7 @@ test('the declared browser inputs publish parts, rig and direction through the r
     } finally {await f.close();}
 });
 
-describe('hub member event subscription lifetime', () => {
+describe('standalone event subscription lifetime', () => {
     async function settled(predicate: () => boolean) {
         for (let attempt = 0; attempt < 100; attempt++) {
             if (predicate()) return;
@@ -1251,43 +1250,7 @@ describe('hub member event subscription lifetime', () => {
         }
         throw new Error('event lifetime did not settle');
     }
-    test('invisible bootstrap acknowledges before suspension, then replays hidden publication and close', async () => {
-        const h = harness();
-        const front = createJobFront({origin: 'http://127.0.0.1:4318', ports: h.fixture.ports, resource: async name => name});
-        const stop = new AbortController();
-        const requests: {after: string | null; signal: AbortSignal}[] = [];
-        const failures: unknown[] = [];
-        const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
-            const request = new Request(new URL(String(input), 'http://127.0.0.1:4318'), init);
-            requests.push({after: new URL(request.url).searchParams.get('after'), signal: request.signal});
-            return (await front.fetch(request))!;
-        }) as typeof fetch;
-        const access = jobWindowAccess('http://127.0.0.1:4318/jobs/window-fixture/', null, () => {});
-        const subscription = startJobWindowEvents({access, member: true, signal: stop.signal, fetcher,
-            event: event => h.window.event(event), refused: error => failures.push(error)});
-        try {
-            h.fixture.publish(fixturePublication(1));
-            await settled(() => !!h.window.state().receipt);
-            expect(requests).toHaveLength(1);
-            expect(requests[0]!.signal.aborted).toBe(false);
-            h.live()!.draft.words = 'exact unsaved human words';
-            subscription.displayed();
-            await settled(() => requests[0]!.signal.aborted);
-            expect(h.fixture.acknowledgments).toHaveLength(1);
-            h.fixture.publish(fixturePublication(2));
-            h.fixture.close(3);
-            expect(h.window.state().closed).toBe(false);
-            subscription.visibility(true);
-            await subscription.done;
-            await settled(() => h.window.state().displayed?.publication.publicationId === 'publication-2');
-            expect(requests.map(value => value.after)).toEqual([null, '1']);
-            expect(h.window.state().closed).toBe(true);
-            expect(h.window.state().retainedDrafts[0]!.value).toEqual({words: 'exact unsaved human words'});
-            expect(h.fixture.acknowledgments).toHaveLength(2);
-            expect(failures).toEqual([]);
-        } finally {stop.abort(); await subscription.done; h.window.stop(); front.stop();}
-    });
-    test('rapid hide/show drains the old reader and partial lines never advance the resume cursor', async () => {
+    test('standalone reconnect drains the old reader and partial lines never advance the resume cursor', async () => {
         const fixture = createJobWindowFixture();
         fixture.publish(fixturePublication(1)); fixture.publish(fixturePublication(2));
         const act = {...fixtureAct('checkpoint'), publicationId: 'publication-2'};
@@ -1297,7 +1260,7 @@ describe('hub member event subscription lifetime', () => {
         fixture.close(5);
         const stop = new AbortController(), access = jobWindowAccess('http://127.0.0.1:4318/jobs/window-fixture/', null, () => {});
         const requests: (string | null)[] = [], received: string[] = [], failures: unknown[] = [];
-        let active = 0, maximumActive = 0, aborted = 0;
+        let active = 0, maximumActive = 0, disconnected = 0;
         const encoder = new TextEncoder();
         const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
             requests.push(new URL(String(input), 'http://127.0.0.1:4318').searchParams.get('after'));
@@ -1309,7 +1272,7 @@ describe('hub member event subscription lifetime', () => {
                 start(controller) {
                     if (first) {
                         controller.enqueue(encoder.encode(JSON.stringify(fixture.events[0]) + '\n' + JSON.stringify(fixture.events[1]).slice(0, 20)));
-                        init!.signal!.addEventListener('abort', () => {aborted++; controller.error(new DOMException('Aborted', 'AbortError')); finish();}, {once: true});
+                        setTimeout(() => {disconnected++; controller.close(); finish();}, 0);
                     } else {
                         controller.enqueue(encoder.encode(fixture.events.slice(1).map(event => JSON.stringify(event) + '\n').join('')));
                         controller.close(); finish();
@@ -1318,60 +1281,20 @@ describe('hub member event subscription lifetime', () => {
                 cancel() {finish();},
             }));
         }) as typeof fetch;
-        const subscription = startJobWindowEvents({access, member: true, signal: stop.signal, fetcher,
+        const subscription = startJobWindowEvents({access, signal: stop.signal, fetcher,
             event: event => received.push(event.cursor), refused: error => failures.push(error)});
         try {
             await settled(() => received.length === 1);
-            subscription.visibility(true); subscription.displayed();
-            subscription.visibility(false); subscription.visibility(true);
             await subscription.done;
             expect(requests).toEqual([null, '1']);
             expect(received).toEqual(['1', '2', '3', '4', '5']);
             expect(fixture.events.map(event => event.type)).toEqual(['published', 'published', 'pending', 'act', 'closed']);
             expect(maximumActive).toBe(1); expect(active).toBe(0);
-            expect(aborted).toBe(1);
-            expect(failures).toEqual([]);
+            expect(disconnected).toBe(1);
+            expect(failures.map(error => (error as Error).message)).toEqual(['JOB_STREAM_INCOMPLETE']);
         } finally {stop.abort(); await subscription.done;}
     });
-    test('a validated published-null handshake completes bootstrap and hides/resumes before any acknowledgment', async () => {
-        const h = frontHarness(), stop = new AbortController();
-        const requests: {signal: AbortSignal; after: string | null}[] = [], received: string[] = [], failures: unknown[] = [];
-        const origin = 'http://127.0.0.1:4318', owner = {} as Window;
-        const binding: JobHubBinding = {incarnation: 'null-publication-incarnation', jobId: h.fixture.jobId,
-            publicationId: null, sourceHash: null};
-        const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
-            const request = new Request(new URL(String(input), origin), init);
-            requests.push({signal: request.signal, after: new URL(request.url).searchParams.get('after')});
-            return (await h.front.fetch(request))!;
-        }) as typeof fetch;
-        const subscription = startJobWindowEvents({access: jobWindowAccess(origin + '/jobs/window-fixture/', null, () => {}),
-            member: true, signal: stop.signal, fetcher, event: event => received.push(event.cursor), refused: error => failures.push(error)});
-        const visibility = (visible: boolean, publicationId: string | null = null) => {
-            const event = {origin, source: owner, data: {...binding, publicationId, schema: JOB_HUB_VISIBILITY, visible, language: 'en'}};
-            if (jobHubMessageMatches(event, origin, owner, binding, 'visibility')) subscription.visibility(visible);
-        };
-        try {
-            await settled(() => requests.length === 1);
-            expect(received).toEqual([]); expect(h.fixture.acknowledgments).toHaveLength(0);
-            visibility(true);
-            visibility(false, 'wrong-publication');
-            expect(requests[0]!.signal.aborted).toBe(false);
-            visibility(false);
-            await settled(() => requests[0]!.signal.aborted);
-            h.fixture.publish(fixturePublication(1));
-            expect(received).toEqual([]);
-            visibility(true);
-            await settled(() => received.length === 1);
-            expect(requests.map(request => request.after)).toEqual([null, null]);
-            expect(received).toEqual(['1']);
-            h.fixture.close(2);
-            await subscription.done;
-            expect(received).toEqual(['1', '2']);
-            expect(h.fixture.acknowledgments).toHaveLength(0);
-            expect(failures).toEqual([]);
-        } finally {stop.abort(); await subscription.done; h.front.stop();}
-    });
-    test('standalone keeps its persistent stream regardless of member lifecycle calls', async () => {
+    test('standalone keeps its persistent stream until the window stops', async () => {
         const h = frontHarness(), stop = new AbortController();
         const requests: AbortSignal[] = [];
         const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1379,10 +1302,9 @@ describe('hub member event subscription lifetime', () => {
             requests.push(request.signal); return (await h.front.fetch(request))!;
         }) as typeof fetch;
         const subscription = startJobWindowEvents({access: jobWindowAccess('http://127.0.0.1:4318/jobs/window-fixture/', null, () => {}),
-            member: false, signal: stop.signal, fetcher, event: () => {}, refused: error => {throw error;}});
+            signal: stop.signal, fetcher, event: () => {}, refused: error => {throw error;}});
         try {
             await settled(() => requests.length === 1);
-            subscription.displayed(); subscription.visibility(false);
             await Bun.sleep(10);
             expect(requests).toHaveLength(1); expect(requests[0]!.aborted).toBe(false);
         } finally {stop.abort(); await subscription.done; h.front.stop();}
@@ -1399,7 +1321,6 @@ import {recordJobRigDraw, jobRigDrawState} from '../web/job-rig-capture.ts';
 import {isJobRigScreen} from '../web/job-rig-screen.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
-import {JOB_HUB_READY} from '../web/job-hub.ts';
 import {advancePlayback} from '../web/playback-clock.ts';
 import {parseControlPart, parsePartIdentity, type ControlPart} from '../src/control.ts';
 import {parseManifest} from '../src/manifest.ts';
@@ -1755,83 +1676,6 @@ describe('C4 shared parts host', () => {
         expect(jobPartsPainting(prepared)).toBeNull();
     });
 
-    test('C4 zero issues sends verdict then signoff with the original words', async () => {
-        const h = await partsHarness();
-        const requests: UISubmissionV3[] = [];
-        h.fixture.ports.commitUIAct = async (_job, request) => {
-            const input = await request.json() as UISubmissionV3;
-            requests.push(input);
-            const act = input.kind === 'parts-verdict' ? h.act : {...fixtureAct('signoff'),
-                askId: h.signoff.askId, source: h.act.source, value: input.value} as ActV3;
-            return {ok: true, value: act};
-        };
-        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(true);
-        expect(requests.map(input => input.kind)).toEqual(['parts-verdict', 'signoff']);
-        expect(requests[1]!.value).toEqual({stage: 'parts-review', decision: 'approved', words: '  source words\n'});
-        expect(h.window.state().pending.find(ask => ask.askId === h.act.askId)?.act).toEqual(h.act);
-        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('approved');
-    });
-
-    test('C4 issues send only the registered verdict value', async () => {
-        const h = await partsHarness(false);
-        const act = partsAct('changes-requested');
-        const requests: UISubmissionV3[] = [];
-        h.fixture.ports.commitUIAct = async (_job, request) => {
-            requests.push(await request.json() as UISubmissionV3);
-            return {ok: true, value: act};
-        };
-        expect((await h.window.submitParts({...h.input, value: act.value} as UISubmissionV3, 'unused')).ok).toBe(true);
-        expect(requests).toHaveLength(1);
-        expect(requests[0]!.value).toEqual(act.value);
-        expect(jobPartsReviewState(h.window.state().pending, act.publicationId)).toBe('sent');
-    });
-
-    test('C4 first failure retries the verdict, second failure retries only the pending signoff', async () => {
-        const h = await partsHarness();
-        const requests: UISubmissionV3[] = [];
-        let fail = 'parts-verdict';
-        h.fixture.ports.commitUIAct = async (_job, request) => {
-            const input = await request.json() as UISubmissionV3;
-            requests.push(input);
-            if (input.kind === fail) return {ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}};
-            return {ok: true, value: input.kind === 'parts-verdict' ? h.act : {...fixtureAct('signoff'),
-                askId: h.signoff.askId, source: h.act.source, value: input.value} as ActV3};
-        };
-        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(false);
-        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('reviewing');
-        fail = 'signoff';
-        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(false);
-        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('retry-signoff');
-        fail = '';
-        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(true);
-        expect(requests.map(input => input.kind)).toEqual(['parts-verdict', 'parts-verdict', 'signoff', 'signoff']);
-        expect(requests.slice(2).map(input => input.submissionId)).toEqual(['signoff-submit', 'signoff-submit']);
-    });
-
-    test('#713 an act@6 parts verdict counts as finalized and its retried signoff resends its general note', async () => {
-        const h = await partsHarness();
-        const act6 = {...h.act, schema: 'rig-review/act@6', value: {verdict: 'approved',
-            comments: [{text: h.act.value.words}]}} as unknown as ActV3;
-        const requests: UISubmissionV3[] = [];
-        let fail = 'signoff';
-        h.fixture.ports.commitUIAct = async (_job, request) => {
-            const input = await request.json() as UISubmissionV3;
-            requests.push(input);
-            if (input.kind === fail) return {ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}};
-            return {ok: true, value: input.kind === 'parts-verdict' ? act6 : {...fixtureAct('signoff'),
-                askId: h.signoff.askId, source: h.act.source, value: input.value} as ActV3};
-        };
-        expect((await h.window.submitParts(h.input, 'signoff-submit')).ok).toBe(false);
-        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('retry-signoff');
-        fail = '';
-        // The retry reads the finalized @6 verdict, not the form, and resends its one general comment as words.
-        expect((await h.window.submitParts({...h.input, value: {...h.input.value, words: 'edited'}} as UISubmissionV3,
-            'signoff-submit')).ok).toBe(true);
-        expect(requests.map(input => input.kind)).toEqual(['parts-verdict', 'signoff', 'signoff']);
-        expect(requests[2]!.value).toEqual({stage: 'parts-review', decision: 'approved', words: h.act.value.words});
-        expect(jobPartsReviewState(h.window.state().pending, h.act.publicationId)).toBe('approved');
-    });
-
     test('C4 act events and reconnect replay retain the finalized value and never fabricate a signoff', async () => {
         const h = await partsHarness();
         h.window.event(actEvent(h.act));
@@ -1851,15 +1695,6 @@ describe('C4 shared parts host', () => {
             parts: [{partId: 'body', part: {outcome: 'clean', note: ''}, mesh: {outcome: 'clean', note: ''}}],
         }};
         expect(jobPartsReviewState([{...h.verdict, status: 'answered', act: legacy}], h.act.publicationId)).toBe('reviewing');
-    });
-
-    test('C4 missing signoff and stale source are refused before another write', async () => {
-        const h = await partsHarness(false);
-        await expect(h.window.submitParts(h.input, 'signoff-submit')).rejects.toThrow('JOB_PARTS_SIGNOFF_MISSING');
-        expect(h.fixture.submissions).toHaveLength(0);
-        await h.publish(2);
-        await expect(h.window.submitParts(h.input, 'signoff-submit')).rejects.toThrow('JOB_ACT_SOURCE_STALE');
-        expect(h.fixture.submissions).toHaveLength(0);
     });
 
     test('C4 source mounts one workspace and removes duplicate parts controls', async () => {

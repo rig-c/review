@@ -38,11 +38,11 @@ try{
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
  for(const [width,height] of (interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]])){
  await page.setViewport(width!,height!);
- for(const kind of ['interview-picks'] as RecordScreenKind[])for(const picture of [false,true]){
+ for(const kind of ['interview-picks'] as RecordScreenKind[])for(const picture of [false,true,'parts'] as const){
   const fixture=await recordScreenFixture(kind,picture);const before=await jobInputHashes(fixture.root);
   try{
    for(const language of ['en','ko'] as const){
-    const out=join(output,width+'x'+height,kind,picture?'picture':'empty',language);await mkdir(out,{recursive:true});fixture.output(out);
+    const out=join(output,width+'x'+height,kind,picture==='parts'?'parts':picture?'picture':'empty',language);await mkdir(out,{recursive:true});fixture.output(out);
     const observation:Record<string,unknown>={kind,picture,language,width,height,sourceHash:fixture.display.publication.source.sourceHash,readerPhases:fixture.reader.calls.map(call=>call.phase),fixture:'synthetic trusted-host record reader and deterministic act writer'};
     for(const mode of ['one-screen']){
      fixture.mode(mode);const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href);
@@ -98,7 +98,7 @@ try{
     }
     const one=await readFile(join(out,'one-screen.json'));observation.persistedAct={bytes:one.length,oneScreenSha256:sha(one),oneScreenFile:join(out,'one-screen.json')};
     await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');cases.push(observation);
-    console.log('750_BROWSER_CASE_PASS '+kind+' '+(picture?'picture':'empty')+' '+language+' bytes='+(observation.persistedAct as {bytes:number}).bytes);
+    console.log('750_BROWSER_CASE_PASS '+kind+' '+(picture==='parts'?'parts':picture?'picture':'empty')+' '+language+' bytes='+(observation.persistedAct as {bytes:number}).bytes);
    }
    assert.deepEqual(await jobInputHashes(fixture.root),before,'inspected source files remain immutable');
   }finally{await fixture.close();}
@@ -106,7 +106,7 @@ try{
  }
  assert.equal(exceptions.length,0,'no browser exceptions');
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
- const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:0,askKinds:1,languages:['en','ko'],backdrops:['empty','picture'],viewports:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],exceptions,mutations,browserWorkers:'single-process/no-zygote; one renderer; raster threads=1; JS heap 1024MiB'};
+ const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:0,askKinds:1,languages:['en','ko'],backdrops:['empty','picture','parts'],viewports:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],exceptions,mutations,browserWorkers:'single-process/no-zygote; one renderer; raster threads=1; JS heap 1024MiB'};
  await writeFile(join(output,'result.json'),JSON.stringify(result,null,2)+'\n');console.log('750_BROWSER_PASS '+JSON.stringify(result));
 }catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,completedCases:cases},null,2)+'\n');if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await rm(profile,{recursive:true,force:true});}

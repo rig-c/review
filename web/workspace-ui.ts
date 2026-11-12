@@ -33,9 +33,9 @@ export function mountStatusBar(options:WorkspaceStatusBarOptions|{placement:'inl
  return {footer,message};
 }
 
-export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyHubStep6'|'legacyOwnerStep6';
+export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyOwnerStep6';
 export interface WorkspaceHeaderOptions {
- compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;hideLanguage?:boolean;title?:string;revision?:string;
+ compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;
  /** Only the stopped compare host supplies its existing domain controls and actions. */
  compare?:{modeSwitch:HTMLElement;buildPicker:HTMLElement;actions:HTMLElement};
 }
@@ -46,10 +46,10 @@ export interface WorkspaceHeader {
 }
 /** One C1 construction path; the finite legacy choices expire at their named screen migrations. */
 export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHeader {
- const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',parts=kind==='legacyPartsStep2',interview=kind==='legacyInterviewStep4',hub=kind==='legacyHubStep6',owner=kind==='legacyOwnerStep6';
+ const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',parts=kind==='legacyPartsStep2',interview=kind==='legacyInterviewStep4',owner=kind==='legacyOwnerStep6';
  const branded=rig||compare||parts,settingsLanguage=rig||compare;
  const header=panelMake('header');
- const headerClass=rig?'topbar':parts?'pv-top':hub?'hub-header':owner?'owner-header':null;
+ const headerClass=rig?'topbar':parts?'pv-top':owner?'owner-header':null;
  if(headerClass)header.className=headerClass;
  if(branded){
   const brand=panelMake('div',{className:parts?'pv-brand':'brand'});
@@ -84,7 +84,7 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
  }
  let stages:HTMLElement|null=null,status:HTMLParagraphElement|null=null;
 
- if(hub||owner){status=panelMake('p',{className:hub?'hub-status':'owner-status'});status.setAttribute('role','status');header.append(status);}
+ if(owner){status=panelMake('p',{className:'owner-status'});status.setAttribute('role','status');header.append(status);}
  let language:HTMLSelectElement|null=null,languageLabel:HTMLLabelElement|null=null;
  if(!parts){
   language=panelMake('select');
@@ -97,7 +97,6 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
   else{if(interview)header.append('\n    ');header.append(language);if(interview)header.append('\n  ');}
  }
  if(options.embedded){if(rig||parts)header.hidden=true;else if(interview)language!.hidden=true;}
- if(options.hideLanguage){if(languageLabel)languageLabel.hidden=true;else if(language)language.hidden=true;}
  return {header,title,subtitle,modeSwitch,dirty,stages,status,language,languageLabel,dispose(){header.remove();languageLabel?.remove();}};
 }
 

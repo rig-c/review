@@ -291,7 +291,7 @@ async function fileHashes(directory: string, prefix = ''): Promise<Record<string
 
 export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
   const {launchCdpSession} = await import('./parts-explorer-browser.ts');
-  const {openReview, readRecord, running, smallJson} = await import('../src/open.ts');
+  const {openReview, readRecord, running} = await import('../src/open.ts');
   const {withDeadline} = await import('./helpers/walk-deadline.ts');
   const {joinedVerdictFixture} = await import('./helpers/joined-verdict-fixture.ts');
   const started = performance.now();
@@ -300,7 +300,6 @@ export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'review496-'));
   let page: InputCdpSession | undefined;
   const workers: NonNullable<Awaited<ReturnType<typeof readRecord>>>[] = [];
-  let frontPid: number | undefined;
   const stateDir = join(root, 'state'), controlDir = join(stateDir, 'open');
   const diagnostics: {method: string; atMs: number; parameters: string; truncated: boolean}[] = [];
   let droppedDiagnostics = 0;
@@ -343,16 +342,14 @@ export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
     await browser.setViewport(1440, 1000);
     const probe = Bun.serve({hostname: '127.0.0.1', port: 0, fetch: () => new Response()});
     const frontPort = probe.port!; probe.stop(true);
-    const launchOptions = {stateDir, frontPort, frontIdleMs: 1200, idleMs: 15000, graceMs: 400};
+    const launchOptions = {stateDir, direct: true, idleMs: 15000, graceMs: 400};
     const claimWorker = async (opened: Awaited<ReturnType<typeof openReview>>) => {
       assert.equal(opened.reused, false, 'STAGE3_WORKER_REUSED');
       const key = new URL(opened.url).searchParams.get('handoff')!;
       const worker = await readRecord(join(controlDir, key + '.json'), key);
       assert(worker && worker.nonce === opened.nonce, 'STAGE3_WORKER_IDENTITY');
       workers.push(worker);
-      const front = await smallJson(join(controlDir, `front-${frontPort}.json`)) as {pid: number};
-      if (frontPid !== undefined) assert.equal(front.pid, frontPid, 'STAGE3_FRONT_REPLACED');
-      frontPid = front.pid;
+
     };
     const opened = await openReview({input: join(demo, 'review.json'), viewOnly: true}, launchOptions);
     await claimWorker(opened);
@@ -537,11 +534,8 @@ export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
       for (const worker of workers) await withDeadline('STAGE3_WORKER_EXIT', 7000, async signal => {
         while (!signal.aborted && (await readRecord(join(controlDir, worker.key + '.json'), worker.key) || running(worker.pid))) await Bun.sleep(25);
       });
-      if (frontPid) await withDeadline('STAGE3_FRONT_EXIT', 7000, async signal => {
-        while (!signal.aborted && running(frontPid!)) await Bun.sleep(25);
-      });
       report.cleanup = {browserClosed: true, workerExited: workers.every(worker => !running(worker.pid)),
-        workers: workers.map(worker => ({key: worker.key, pid: worker.pid, processExited: !running(worker.pid)})), frontExited: frontPid ? !running(frontPid) : null};
+        workers: workers.map(worker => ({key: worker.key, pid: worker.pid, processExited: !running(worker.pid)})), frontExited: null};
       await rm(root, {recursive: true, force: true});
     } catch (error) {
       report.cleanupError = String(error); report.status = 'UNEXPECTED_RED'; process.exitCode = 2;

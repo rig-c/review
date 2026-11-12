@@ -135,7 +135,7 @@ const rigStatusBar=mountStatusBar({
 app.querySelector<HTMLElement>('[data-workspace-status]')!.replaceWith(rigStatusBar.footer);
 for(const id of ['layout-state','idle-state','control-state','draft-state'])el(id).setAttribute('role','status');
 el('layout-state').setAttribute('aria-label','Effective layout');el('renderer-state').setAttribute('aria-label','Last draw backend');el('draft-state').setAttribute('aria-live','polite');el('view-coordinates').setAttribute('aria-label','Current numeric inspection region');
-const shell=mountWorkspaceShell({compatibility:'rigStep1',hideLanguage:new URLSearchParams(location.search).has('hub'),embedded:new URLSearchParams(location.search).has('stageEmbed')&&!location.pathname.endsWith('/stage-interview.html')});app.prepend(shell.header);
+const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearchParams(location.search).has('stageEmbed')&&!location.pathname.endsWith('/stage-interview.html')});app.prepend(shell.header);
 el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.append(createRigLayerControls());
 el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;
@@ -1180,7 +1180,7 @@ function bind(): void {
   });
   directionPanel.show(!!data.direction);
   viewDisposers.push(()=>directionPanel?.dispose());
-  bindWorkspace();
+  bindWorkspace(!!data.manifest.model);
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(tr(text)),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
@@ -1238,12 +1238,12 @@ function bind(): void {
 }
 
 /** The one shell and block binding, for either subject. */
-function bindWorkspace():void {
+function bindWorkspace(hasModel=false):void {
   workspace=bindWorkspaceUI({root:screenRoot,regions:{layout:screenRoot.querySelector<HTMLElement>('.layout')!,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   bindReviewDialog();
-  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!data.manifest.model)?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
+  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel)?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{workspace?.refresh();persistence?.save();}});
 }
 async function start(): Promise<void> {
   try {
