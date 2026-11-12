@@ -58,6 +58,7 @@ try{
    await click('#play');await wait(scrubAt('max'));
    const ended:string=await page.evaluate<string>(`document.querySelector('#scrub').value`);await Bun.sleep(100);
    assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),ended);
+   await page.evaluate(`(()=>{const s=document.querySelector('#review-status');s.value='approved';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
    await click('[data-comment-general]');await composer('Direction comment · 연출');
    await wait(`document.querySelectorAll('.stage-comment-item').length===1`);
    await click('#stage-comment');
@@ -69,16 +70,21 @@ try{
    assert.deepEqual(draft.comments.map((row:any)=>row.summary),['Direction comment · 연출','Direction spot · 연출 위치']);
    assert.equal('target' in draft.comments[0],false);assert.ok(draft.comments[1].context.comment.crop.png);
    const projected=projectComments(draft.comments.map((row:any)=>'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
+   assert.equal(draft.status,'approved','legacy comment draft records the earlier verdict');
+   await page.evaluate(`(()=>{const s=document.querySelector('#review-status');s.value='changes-requested';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
    await page.goto(url.href,language);
    await wait(`document.body.dataset.ready==='true'&&!document.querySelector('#save').disabled&&document.querySelectorAll('.stage-comment-item').length===2`);
+   assert.equal(await page.evaluate(`document.querySelector('#review-status').value`),'changes-requested','inspection draft is authoritative after reload');
+   await click('#workspace-tab-feedback');await wait(`!document.querySelector('#inspector-feedback').hidden`);
+   const corrections:any=await page.evaluate(`(()=>{document.querySelector('#correction-controls').open=true;const visible=n=>!!n&&!n.closest('[hidden]')&&n.getBoundingClientRect().height>0;return {fileVisible:visible(document.querySelector('#correction-words')),addVisible:visible(document.querySelector('#add-proposal')),hiddenByGate:!!document.querySelector('#correction-words').closest('[hidden]')&&!!document.querySelector('#add-proposal').closest('[hidden]')};})()`);
+   assert.deepEqual(corrections,{fileVisible:false,addVisible:false,hiddenByGate:true});
    assert.deepEqual(await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)})).comments.map(row=>row.summary)`),draft.comments.map((row:any)=>row.summary));
    const screenshot=language+'-direction.png';await writeFile(join(output,screenshot),await page.screenshot());
-   await page.evaluate(`(()=>{const v=document.querySelector('#review-status');v.value='approved';v.dispatchEvent(new Event('change',{bubbles:true}));})()`);
    await click('#save');
    let act:any;const deadline=Date.now()+20000;
    while(Date.now()<deadline){const next=await api('next',{after:null,waitMs:0});act=next.events.flatMap((e:any)=>e.type==='act'&&e.act.askId===ask.askId?[e.act]:[])[0];if(act)break;await Bun.sleep(25);}
    assert.ok(act,'direction UI committed act');assert.equal(act.schema,'rig-review/act@6');assert.equal(act.authority.channel,'review-ui');
-   assert.equal(act.value.stage,'direction-review');assert.equal(act.value.verdict,'approved');
+   assert.equal(act.value.stage,'direction-review');assert.equal(act.value.verdict,'changes-requested');
    assert.equal(act.value.comments.length,1);assert.equal(act.value.comments[0].text,projected);
    assert.equal('still' in act,false);assert.deepEqual(act.source.direction,publication.source.direction);
    const playback=await page.evaluate(`(()=>{const s=document.querySelector('#scrub');return {value:s.value,max:s.max,step:s.step};})()`);

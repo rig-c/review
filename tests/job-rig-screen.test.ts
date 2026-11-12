@@ -216,3 +216,33 @@ test('#784 model-less checkpoint routing uses its declared plan mapping independ
  expect(jobRigScreenRoute(display,[invalid],new Set(['photo-check']))).toBe(false);
  expect(jobRigScreenRoute(display,[{...ask,subject:{kind:'review-verdict',stage:'rig-review'}} as PendingAskV3],new Set())).toBe(false);
 });
+
+test('#798 direction comments restore cannot override the inspection draft verdict', async()=>{
+ const main=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
+ const start=main.indexOf('function restoreRecordComments('),end=main.indexOf('/** Comments remain native rows',start);
+ const code=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(start,end));
+ const selector={value:'changes-requested'},saved={publicationId:'publication',sourceHash:'source',status:'approved',comments:[{id:'general',summary:'Inspect the timing'}]};
+ const scope={host:{direction:{publicationId:'publication',sourceHash:'source'}},recordCommentKey:'',recordComments:[] as {id:string;summary:string}[],session:{status:'changes-requested'},localStorage:{getItem:()=>JSON.stringify(saved)},select:()=>selector,projectComments};
+ new Function('scope',`with(scope){${code};restoreRecordComments();}`)(scope);
+ expect(scope.recordComments).toEqual(saved.comments);
+ expect(selector.value).toBe('changes-requested');expect(scope.session.status).toBe('changes-requested');
+ const restore=main.match(/restoreSession:\(value,isDirty\)=>\{([\s\S]*?)\},bookmark:/)![1]!;
+ const applyScope={session:{status:'pending'},dirty:false,select:()=>selector,renderProposals(){},renderCheckpoint(){},renderCheckpoints(){},renderProvenance(){},updateSavedState(){}};
+ new Function('scope','value','isDirty',`with(scope){${restore}}`)(applyScope,{status:'changes-requested'},true);
+ expect(applyScope.session.status).toBe('changes-requested');expect(selector.value).toBe(applyScope.session.status);
+});
+
+test('#798 direction reuses the Comments input gate without changing the rig inspector presentation',async()=>{
+ const main=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
+ const start=main.indexOf('function showRecordComments('),end=main.indexOf('/** Publications without a picture',start);
+ const code=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(start,end));
+ for(const preserveInspector of [true,false]){
+  const correction={id:'correction-controls',hidden:false},fileButton={id:'add-proposal',hidden:false},comments={id:'comments-list-host',hidden:false};
+  const panel={children:[] as {hidden:boolean;classList:{contains(value:string):boolean}}[],style:{display:'none'}},collapse={disabled:true};
+  const scope={el:()=>({children:[correction,fileButton,comments]}),rigInspector:{comments:{panel},collapse},setSourceAttribute(){}};
+  new Function('scope','preserveInspector',`with(scope){${code};showRecordComments(preserveInspector);}`)(scope,preserveInspector);
+  expect(correction.hidden).toBe(true);expect(fileButton.hidden).toBe(true);expect(comments.hidden).toBe(false);
+  expect(panel.style.display).toBe(preserveInspector?'none':'block');expect(collapse.disabled).toBe(preserveInspector);
+ }
+ expect(main).toContain('if(host?.direction)showRecordComments(true);else if(host?.record&&!data.manifest.model)showRecordComments();');
+});

@@ -1271,7 +1271,7 @@ async function start(): Promise<void> {
     else if (host?.ownerActAccess) message('Not submitted');
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     frameHandle=requestAnimationFrame(tick);
-    const restored=await setupPersistence();setupComments();if(host?.record&&!data.manifest.model)showRecordComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();setupComments();if(host?.direction)showRecordComments(true);else if(host?.record&&!data.manifest.model)showRecordComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
     bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause});
@@ -1354,8 +1354,9 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  document.body.dataset.ready='true';
 }
 /** Use the existing Comments-only presentation for subjects without rig capabilities. */
-function showRecordComments():void {
+function showRecordComments(preserveInspector=false):void {
  for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
+ if(preserveInspector)return;
  for(const child of rigInspector.comments.panel.children)(child as HTMLElement).hidden=child!==el('proposal-panel')&&!child.classList.contains('review-dialog-header');
  rigInspector.comments.panel.style.display='block';
  rigInspector.collapse.disabled=false;setSourceAttribute(rigInspector.collapse,'title','');
@@ -1405,7 +1406,6 @@ function restoreRecordComments(form?:HTMLFormElement):void {
   }
   projectComments(rows.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
   recordComments.push(...rows);
-  if(host?.direction&&['pending','approved','changes-requested'].includes(saved.status))select('review-status').value=saved.status;
  }catch{/* A mismatched or invalid local draft has no authority. */}
 }
 /** Comments remain native rows locally; the old act field carries their scalar projection only. */
