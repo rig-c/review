@@ -707,6 +707,39 @@ process.exit(1);
   return { pkgDir, demoAnimText };
 }
 
+/** Measure dock clipping at both the legacy entry size and #741's ruling size, in both languages. */
+async function captureDockEvidence(session: CdpSession, directory: string, phase: string) {
+  for (const [width, height] of [[1440, 900], [1600, 1000]]) {
+    await session.setViewport(width!, height!);
+    for (const language of ['en', 'ko']) {
+      await session.evaluate(`(async () => {
+        const select = document.getElementById('settings-language');
+        select.value = '${language}'; select.dispatchEvent(new Event('change'));
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      })()`);
+      const measurement = await session.evaluate(`(() => {
+        const dock = document.querySelector('.inspector').getBoundingClientRect();
+        const lanes = document.querySelector('.animation-lanes').getBoundingClientRect();
+        const ruler = document.querySelector('[data-animation-ruler]').getBoundingClientRect();
+        const rows = [...document.querySelectorAll('.animation-lanes .animation-lane, .animation-lanes .animation-readonly-lane')].map(node => node.getBoundingClientRect()).filter(rect => rect.height > 0);
+        const nodes = [...document.querySelectorAll('.inspector, .inspector-heading, .applied-records, #animation-dock, #animation-dock *')];
+        return {width: innerWidth, height: innerHeight, language: document.documentElement.lang,
+          visibleRows: rows.filter(rect => rect.top >= ruler.bottom - 1.5 && rect.bottom <= Math.min(lanes.bottom, dock.bottom) + 1.5).length,
+          rowRects: rows.slice(0, 6).map(rect => ({top: rect.top, bottom: rect.bottom, height: rect.height})),
+          rectangles: nodes.filter(node => node.closest('.animation-inspection') === null || node.parentElement?.classList.contains('animation-inspection') || node.parentElement?.classList.contains('animation-dock-status')).map(node => {
+            const rect = node.getBoundingClientRect(), style = getComputedStyle(node);
+            return {node: node.id || node.className, text: node.textContent?.slice(0, 1200), top: rect.top, bottom: rect.bottom, height: rect.height, overflowY: style.overflowY, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight};
+          })};
+      })()`);
+      const name = `${phase}-${width}x${height}-${language}`;
+      await writeFile(join(directory, `${name}.json`), JSON.stringify(measurement, null, 2));
+      await writeFile(join(directory, `${name}.png`), await session.screenshot());
+    }
+  }
+  await session.setViewport(1600, 1000);
+  await session.evaluate(`(async () => { const select = document.getElementById('settings-language'); select.value = 'en'; select.dispatchEvent(new Event('change')); await new Promise(resolve => setTimeout(resolve, 100)); })()`);
+}
+
 async function main() {
   const root = await mkdtemp(join(tmpdir(), 'review-anim-browser-'));
   const profileDir = join(root, 'chrome-profile');
@@ -720,8 +753,8 @@ async function main() {
   const session = await launchCdpSession(profileDir);
 
   try {
-    // Slice 3b Bar 2: Exact 1440x900 viewport
-    await session.setViewport(1440, 900);
+    // #741 rules on the shared 262px default at 1600x1000; measure that viewport.
+    await session.setViewport(1600, 1000);
     await session.goto(`http://127.0.0.1:${server.port}`);
 
     // Wait for player and rebuild status (animations_from source) to load, and switch to Animate (playback) inspector
@@ -760,7 +793,9 @@ async function main() {
       throw new Error(`Player initialization failed: ${JSON.stringify(initDiag)}`);
     }
 
-    // Slice 3b Bar 1, Bar 2, Bar 7: Verify at 1440x900 with zero page/inspector scroll:
+    if (screenshotDir) await captureDockEvidence(session, screenshotDir, 'default');
+
+    // Slice 3b Bar 1, Bar 2, Bar 7: Verify at 1600x1000 with zero page/inspector scroll:
     // - stage is visible above the dock
     // - Play, scrub, time ruler with ticks, playhead, track names column, key lanes, key inspector fields, pending/Apply bar are ALL in viewport without scrolling
     // - time labels have zero Float32 noise
@@ -816,16 +851,17 @@ async function main() {
       for (const [k, sel] of Object.entries(selectors)) {
         const r = box(sel);
         rects[k] = r;
-        if (!r || r.width <= 0 || r.height <= 0 || r.left < 0 || r.top < 0 || r.right > 1440 || r.bottom > 900) {
+        if (!r || r.width <= 0 || r.height <= 0 || r.left < 0 || r.top < 0 || r.right > 1600 || r.bottom > 1000) {
           allInViewport = false;
         }
       }
       const lanesBox = document.querySelector('.animation-lanes').getBoundingClientRect();
+      const dockBox = document.querySelector('.inspector').getBoundingClientRect();
       const rulerBox = document.querySelector('[data-animation-ruler]').getBoundingClientRect();
       const allLaneEls = [...document.querySelectorAll('.animation-lanes .animation-lane, .animation-lanes .animation-readonly-lane')];
       const visibleLanesAtDefaultHeight = allLaneEls.filter((el) => {
         const lr = el.getBoundingClientRect();
-        return lr.height > 0 && lr.top >= rulerBox.bottom - 1.5 && lr.bottom <= lanesBox.bottom + 1.5;
+        return lr.height > 0 && lr.top >= rulerBox.bottom - 1.5 && lr.bottom <= Math.min(lanesBox.bottom, dockBox.bottom) + 1.5;
       }).length;
       const inspPanel = document.querySelector('[data-inspector-panel="playback"]');
       const axisText = document.querySelector('.animation-axis')?.textContent ?? '';
@@ -851,19 +887,20 @@ async function main() {
       };
     })()`);
 
+    // #741 supersedes #258's 350px default: the shared 262px panel shows three rows.
+    // Keep the stage, controls and unscrolled-page checks; do not enlarge the product for this fixture.
     if (
-      slice3bDockCheck.viewportWidth !== 1440 ||
-      slice3bDockCheck.viewportHeight !== 900 ||
+      slice3bDockCheck.viewportWidth !== 1600 ||
+      slice3bDockCheck.viewportHeight !== 1000 ||
       slice3bDockCheck.windowScrollY !== 0 ||
       slice3bDockCheck.docScrollTop !== 0 ||
       slice3bDockCheck.inspectorScrollTop !== 0 ||
       !slice3bDockCheck.allInViewport ||
       slice3bDockCheck.stageRect.height < slice3bDockCheck.dockRect.height ||
-      slice3bDockCheck.visibleLanesAtDefaultHeight < 6 ||
       slice3bDockCheck.stageRect.bottom > slice3bDockCheck.dockRect.top ||
       slice3bDockCheck.hasFloat32Noise
     ) {
-      throw new Error(`Slice 3b/3c 1440x900 dock verification failed: ${JSON.stringify(slice3bDockCheck, null, 2)}`);
+      throw new Error(`Slice 3b/3c 1600x1000 dock verification failed: ${JSON.stringify(slice3bDockCheck, null, 2)}`);
     }
 
     // Slice 3c Bar 1 & Bar 2:
@@ -917,7 +954,8 @@ async function main() {
         return out;
       };
       const baselineRects = measureTracked();
-      const buttons = [...blocksPanel.querySelectorAll('.block-row button[data-block-target]')];
+      // #741 moves the existing Animate row into the shared bottom-panel heading.
+      const buttons = [...document.querySelectorAll('.inspector-heading .block-row:not([hidden]) button[data-block-target]')].filter((button) => button.getAttribute('data-block-target') !== 'feedback');
       const tabsMeasured = [];
       let maxDeltaAcrossAllTabsPx = 0;
 
@@ -983,7 +1021,7 @@ async function main() {
     }
 
     if (screenshotDir) {
-      await writeFile(join(screenshotDir, 'slice3c-dock-physics-tab-1440x900.png'), await session.screenshot());
+      await writeFile(join(screenshotDir, 'slice3c-dock-physics-tab-1600x1000.png'), await session.screenshot());
     }
 
     // Bar 6: Verify Apply isolation note (Ruling H2)
@@ -1050,7 +1088,7 @@ async function main() {
     })()`);
 
     if (screenshotDir) {
-      await writeFile(join(screenshotDir, 'slice3c-dock-idle-1440x900.png'), await session.screenshot());
+      await writeFile(join(screenshotDir, 'slice3c-dock-idle-1600x1000.png'), await session.screenshot());
     }
 
     await session.evaluate(`(async () => {
@@ -1274,7 +1312,7 @@ async function main() {
     if (screenshotDir) {
       const demoPng = await session.screenshot();
       await writeFile(join(screenshotDir, 'slice3-dopesheet-preview.png'), demoPng);
-      await writeFile(join(screenshotDir, 'slice3b-dock-demo-1440x900.png'), demoPng);
+      await writeFile(join(screenshotDir, 'slice3b-dock-demo-1600x1000.png'), demoPng);
     }
 
     // Bar 3: Measure pending preview stage pose BEFORE Apply vs compiled build pose AFTER Apply across sample times
@@ -1481,7 +1519,7 @@ async function main() {
     })()`);
 
     if (screenshotDir) {
-      await writeFile(join(screenshotDir, 'slice3c-dock-refusal-1440x900.png'), await session.screenshot());
+      await writeFile(join(screenshotDir, 'slice3c-dock-refusal-1600x1000.png'), await session.screenshot());
     }
 
     await session.evaluate(`(() => { window.rigReviewEditor.animation.clearPending(); })()`);
@@ -1640,12 +1678,13 @@ async function main() {
     }
 
     // Bar 7 + Slice 3c Bar 3 & Bar 4 on 'hello': U2 measurement (MAX_ANIMATION_OPS = 200 on 'hello': 16 tracks × 115 keys = 1,840 keys),
-    // visible lanes >= 6 at default 1440x900 height, and ANIMATION_OPS_TOO_MANY + dense-track refusal readable in full with 0 px shift!
+    // visible lanes >= 3 at the shared 262px default height (#741), and ANIMATION_OPS_TOO_MANY + dense-track refusal readable in full with 0 px shift!
     const bar7Result = await session.evaluate<{
       totalTracks: number;
       editableTracks: number;
       readOnlyTracks: number;
       visibleHelloLanesAtDefaultHeight: number;
+      layout: { dock: unknown; lanes: unknown; ruler: unknown; laneRects: unknown[] };
       move115Ok: boolean;
       move115OpsCount: number;
       move196Ok: boolean;
@@ -1754,6 +1793,7 @@ async function main() {
         editableTracks: editable.length,
         readOnlyTracks: readOnly.length,
         visibleHelloLanesAtDefaultHeight,
+        layout: { dock: rectOf('.inspector'), lanes: lanesBefore, ruler: rectOf('[data-animation-ruler]'), laneRects: allHelloLanes.slice(0, 4).map((el) => ({top: el.getBoundingClientRect().top, bottom: el.getBoundingClientRect().bottom})) },
         move115Ok: res115.ok,
         move115OpsCount,
         move196Ok: res196.ok,
@@ -1773,14 +1813,17 @@ async function main() {
     })()`);
 
     if (screenshotDir) {
-      await writeFile(join(screenshotDir, 'slice3c-dock-hello-1440x900.png'), await session.screenshot());
+      await writeFile(join(screenshotDir, 'slice3c-dock-hello-1600x1000.png'), await session.screenshot());
+      await captureDockEvidence(session, screenshotDir, 'post-apply-hello');
     }
 
     if (
+      // Defer the default row-count failure until the post-Apply evidence is recorded.
+      slice3bDockCheck.visibleLanesAtDefaultHeight < 3 ||
       bar7Result.totalTracks !== 16 ||
       bar7Result.editableTracks !== 14 ||
       bar7Result.readOnlyTracks !== 2 ||
-      bar7Result.visibleHelloLanesAtDefaultHeight < 6 ||
+      bar7Result.visibleHelloLanesAtDefaultHeight < 3 ||
       !bar7Result.move115Ok ||
       bar7Result.move115OpsCount !== 115 ||
       !bar7Result.move196Ok ||
@@ -1797,7 +1840,7 @@ async function main() {
       bar7Result.stageShiftPxOnCapRefusal !== 0 ||
       bar7Result.lanesShiftPxOnCapRefusal !== 0
     ) {
-      throw new Error(`Bar 7 / Slice 3c Bar 3/4 verification failed: ${JSON.stringify(bar7Result, null, 2)}`);
+      throw new Error(`Bar 7 / Slice 3c Bar 3/4 verification failed (default visible rows: ${slice3bDockCheck.visibleLanesAtDefaultHeight}): ${JSON.stringify(bar7Result, null, 2)}`);
     }
 
     // Slice 3b Bar 3, Bar 4, Bar 9 on 'hello' (16 lanes × 115 keys):
@@ -1899,7 +1942,7 @@ async function main() {
     if (screenshotDir) {
       const helloPng = await session.screenshot();
       await writeFile(join(screenshotDir, 'slice3-hello-cap-refusal.png'), helloPng);
-      await writeFile(join(screenshotDir, 'slice3b-dock-hello-1440x900.png'), helloPng);
+      await writeFile(join(screenshotDir, 'slice3b-dock-hello-1600x1000.png'), helloPng);
     }
 
     // Slice 4a Browser Verification:
@@ -2083,7 +2126,7 @@ async function main() {
     await session.dispatchMouseEvent({ type: 'mouseReleased', x: targetCurveHx, y: targetCurveHy, button: 'left', buttons: 0 });
 
     if (screenshotDir) {
-      await writeFile(join(screenshotDir, 'slice4a-curves-drag-1440x900.png'), await session.screenshot());
+      await writeFile(join(screenshotDir, 'slice4a-curves-drag-1600x1000.png'), await session.screenshot());
     }
 
     const slice4aPostDrag = await session.evaluate<{
@@ -2154,7 +2197,7 @@ async function main() {
     })()`);
 
     if (screenshotDir) {
-      await writeFile(join(screenshotDir, 'slice4a-defect3-4-dopesheet-1440x900.png'), await session.screenshot());
+      await writeFile(join(screenshotDir, 'slice4a-defect3-4-dopesheet-1600x1000.png'), await session.screenshot());
     }
 
     if (
@@ -2318,8 +2361,8 @@ async function main() {
 
     if (screenshotDir) {
       const boxPng = await session.screenshot();
-      await writeFile(join(screenshotDir, 'slice4b-box-select-1440x900.png'), boxPng);
-      await writeFile(join(screenshotDir, 'slice4c-box-select-1440x900.png'), boxPng);
+      await writeFile(join(screenshotDir, 'slice4b-box-select-1600x1000.png'), boxPng);
+      await writeFile(join(screenshotDir, 'slice4c-box-select-1600x1000.png'), boxPng);
     }
 
     await session.dispatchMouseEvent({ type: 'mouseReleased', x: boxX1, y: boxY1, button: 'left', buttons: 0 });
@@ -2562,7 +2605,7 @@ async function main() {
     await session.dispatchMouseEvent({ type: 'mouseReleased', x: rotTargetX, y: rotTargetY, button: 'left', buttons: 0 });
 
     if (screenshotDir) {
-      await writeFile(join(screenshotDir, 'slice4b-bone-drag-1440x900.png'), await session.screenshot());
+      await writeFile(join(screenshotDir, 'slice4b-bone-drag-1600x1000.png'), await session.screenshot());
     }
 
     const slice4bStageResult = await session.evaluate<{
@@ -3241,7 +3284,7 @@ async function main() {
               readOnlyTrack: slice4bStageResult.readOnlyTrackRefusal,
             },
           },
-          slice3bDock1440x900: {
+          slice3bDock1600x1000: {
             viewport: `${slice3bDockCheck.viewportWidth}x${slice3bDockCheck.viewportHeight}`,
             windowScrollY: slice3bDockCheck.windowScrollY,
             inspectorScrollTop: slice3bDockCheck.inspectorScrollTop,
