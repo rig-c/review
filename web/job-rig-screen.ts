@@ -266,7 +266,7 @@ export function createJobRigScreen(options: {
   return {
     prepare,
     mounted: () => mounted,
-    report(error:unknown,_fallback?:string) {const refusal=jobSubmissionRefusal(error);screen?.message(refusal.text,true,refusal.title);},
+    report:(error:unknown,fallback?:string)=>screen?.message(options.refusal(error,fallback),true,jobSubmissionRefusal(error).title),
     commit(prepared: JobRigScreenPrepared) {
       const previous=mounted;mounted=prepared;
       return {async rollback(){try{await transition?.rollback();}finally{transition=null;mounted=previous;}},finalize(){try{transition?.finalize();}finally{transition=null;if(previous!==prepared){const modal=previous?.record??previous?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();}}}};
@@ -306,7 +306,7 @@ export function createJobRigScreen(options: {
       if (!jobRigScreenRoute(mounted.display, state.pending, mounted.checkpoints)) {location.reload(); return;}
       screen?.pendingSubjects?.(pendingSubjects());
       refreshRecordForms();
-      if(state.error){const refusal=jobSubmissionRefusal(new Error(state.error,{cause:state.errorOrigin}));screen?.message(refusal.text,true,refusal.title);}
+      if(state.error)screen?.message(options.translate('job.failed')+' · '+options.refusal(state.error),true,jobSubmissionRefusal(new Error(state.error,{cause:state.errorOrigin})).title);
       else if (state.closed) screen?.message(options.translate('job.closed'), true);
       else if(!state.preparing&&state.displayed?.publication.publicationId===mounted.display.publication.publicationId){
         const label=state.previousLabel?options.translate('job.updated',[state.previousLabel,mounted.display.publication.label]):mounted.display.publication.label;
