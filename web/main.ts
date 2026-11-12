@@ -261,8 +261,8 @@ function message(value: string, error = false, footerOnly = false, diagnostic?: 
   // The modal makes the footer inert; the review dialog repeats the latest message for its reader.
   text('review-message', value); el('review-message').classList.toggle('error', error);
   if (diagnostic) {
-    rigInspector.actBar.setSaveState({kind: 'failed', text: value});
-    el('review-draft-state').title = diagnostic; el('message').title = diagnostic;
+    rigInspector.actBar.setSaveState({kind: 'failed', text: value, title: diagnostic});
+    el('message').title = diagnostic;
   }
 }
 
@@ -1130,8 +1130,7 @@ function bind(): void {
       finally {
         saving = false; updateSavedState();
         if (submissionFailure) {
-          rigInspector.actBar.setSaveState({kind: 'failed', text: submissionFailure.text});
-          el('review-draft-state').title = submissionFailure.title;
+          rigInspector.actBar.setSaveState({kind: 'failed', text: submissionFailure.text, title: submissionFailure.title});
           el('message').title = submissionFailure.title;
         }
       }

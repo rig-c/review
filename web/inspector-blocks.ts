@@ -152,7 +152,7 @@ export interface ActBarOptions {
 }
 /** C10 save state: one model for every screen. `text` and the retry label are English source text the caller owns. */
 export type ActSaveKind='saved'|'unsaved'|'saving'|'failed'|'read-only';
-export interface ActSaveState {kind:ActSaveKind;text:string;retry?:{label:string;run:()=>void}}
+export interface ActSaveState {kind:ActSaveKind;text:string;retry?:{label:string;run:()=>void};/** Diagnostic hover (a refusal code and its origin), untranslated. */title?:string}
 export interface ActBar {element:HTMLElement;refresh():void;dispose():void;setSaveState(state:ActSaveState):void;saveState():ActSaveState|null}
 /** C10: screen-owned decision, submit and save state, with an optional shared action menu. */
 export function mountActBar(options:ActBarOptions):ActBar {
@@ -189,7 +189,8 @@ export function mountActBar(options:ActBarOptions):ActBar {
  let current:ActSaveState|null=null,retry:HTMLButtonElement|null=null;
  /** The one renderer: kind as data, the same text in the act node and its copies, a retry action only when failed. */
  const setSaveState=(state:ActSaveState)=>{
-  current={...state};options.saveState.dataset.saveState=state.kind;setSourceText(options.saveState,state.text);
+  const titled=current?.title;current={...state};options.saveState.dataset.saveState=state.kind;setSourceText(options.saveState,state.text);
+  if(state.title)options.saveState.setAttribute('title',state.title);else if(titled)options.saveState.removeAttribute('title');
   for(const copy of options.saveStateCopies??[]){copy.node.dataset.saveState=state.kind;setSourceText(copy.node,state.text);if(copy.title)setSourceAttribute(copy.node,'title',state.text);}
   const action=state.kind==='failed'?state.retry:undefined;
   if(action&&!retry){retry=actionButton('',()=>{const run=current?.kind==='failed'?current.retry?.run:undefined;run?.();});retry.className='act-save-retry';options.saveState.after(retry);}

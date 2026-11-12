@@ -514,6 +514,8 @@ test('#695 act bar save state: one model renders saved, unsaved, saving, failed 
   expect(bar.saveState()).toBeNull();expect(state.textContent).toBe('');expect(actions.children).toEqual([state,submit]);
   const shown=(kind:ActSaveKind,text:string)=>{for(const node of [state,footer,plain]){expect(node.dataset.saveState).toBe(kind);expect(node.textContent).toBe(text);}expect(footer.getAttribute('title')).toBe(text);expect(plain.getAttribute('title')).toBeNull();expect(bar!.saveState()?.kind).toBe(kind);};
   bar.setSaveState({kind:'unsaved',text:'Unsaved changes.'});shown('unsaved','Unsaved changes.');expect(actions.children).toEqual([state,submit]);
+  bar.setSaveState({kind:'failed',text:'Review was NOT submitted.',title:'JOB_BODY_LIMIT · POST /jobs/x/ui/acts · 9 bytes · HTTP 413'});expect(state.getAttribute('title')).toBe('JOB_BODY_LIMIT · POST /jobs/x/ui/acts · 9 bytes · HTTP 413');expect(footer.getAttribute('title')).toBe('Review was NOT submitted.');
+  bar.setSaveState({kind:'unsaved',text:'Unsaved changes.'});expect(state.getAttribute('title')).toBeNull();
   bar.setSaveState({kind:'saving',text:'Restoring source-bound view · inspection controls temporarily paused.'});shown('saving','Restoring source-bound view · inspection controls temporarily paused.');
   bar.setSaveState({kind:'failed',text:'Save failed.'});shown('failed','Save failed.');expect(actions.children).toEqual([state,submit]);
   bar.setSaveState({kind:'failed',text:'Save failed.',retry:{label:'Submit review',run:()=>retried++}});shown('failed','Save failed.');

@@ -53,7 +53,7 @@ async function mainSave(session: ReviewSession, submittedBaseline: ReviewSession
   `)({session, submittedBaseline, host, jobSubmissionRefusal}) as {
     save(): Promise<void>; locked(id: string): boolean;
     state(): {dirty: boolean; saving: boolean; session: ReviewSession; submittedBaseline: ReviewSession;
-      readouts: Record<string, string>; messages: string[]; saved: ReviewSession[]; title: string; saveStates: {kind: string; text: string}[]};
+      readouts: Record<string, string>; messages: string[]; saved: ReviewSession[]; title: string; saveStates: {kind: string; text: string; title?: string}[]};
   };
 }
 
@@ -88,7 +88,7 @@ for (const language of ['en', 'ko'] as const) test(`#785 ${code} says NOT submit
       expect(app.state().title).toContain('POST /jobs/' + f.session.jobId + '/ui/acts');
       expect(app.state().title).toMatch(/ · \d+ bytes · HTTP 413$/);
     }
-    expect(app.state().saveStates.at(-1)).toEqual({kind: 'failed', text: sentence});
+    expect(app.state().saveStates.at(-1)).toEqual({kind: 'failed', text: sentence, title: app.state().title});
     expect(app.state().messages.at(-1)).toBe(sentence);
     expect(app.state().readouts.dirty).toBe('Unsubmitted changes');
     expect(app.state().submittedBaseline.updatedAt).toBeNull();
