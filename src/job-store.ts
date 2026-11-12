@@ -2,6 +2,8 @@ import { Database, constants as sqliteConstants } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import {createHash} from 'node:crypto';
+import {validatePngCrop} from './comment-crops.ts';
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobEvent } from './job-contract.ts';
 
 export class JobError extends Error {
@@ -62,6 +64,28 @@ interface JobRow {
 }
 
 const maximumDocumentBytes = 16 * 1024 * 1024;
+
+/** Private representation only. Public act bytes are reconstructed without changing key order. */
+export function jobCropReferences(value: unknown, save?: (sha256: string, bytes: Buffer) => void): string {
+  const paths = new WeakMap<object, string[]>(), references: [string[], string][] = [];
+  const text = JSON.stringify(value, function(key, item) {
+    if (save && (item === undefined || typeof item === 'function' || typeof item === 'symbol' ||
+        typeof item === 'bigint' || typeof item === 'number' && !Number.isFinite(item))) throw new JobError('JOB_STORAGE_FAILED');
+    const path = key === '' ? [] : [...(paths.get(this) ?? []), key];
+    if (item && typeof item === 'object') paths.set(item, path);
+    if (key === 'png' && typeof item === 'string' && item.startsWith('data:image/png;base64,') &&
+        this.path === `comment-crops/${this.sha256}.png`) {
+      if (save) save(this.sha256, validatePngCrop(this));
+      references.push([path, this.sha256]);
+      return 'job-crop:' + this.sha256;
+    }
+    return item;
+  });
+  if (!references.length) return text;
+  const packed = JSON.parse(text);
+  packed._jobCommentCrops = references;
+  return JSON.stringify(packed);
+}
 
 function encode(value: unknown): string {
   try {
@@ -208,6 +232,9 @@ export class JobStore<Data> {
         job_id TEXT NOT NULL, act_id TEXT NOT NULL, page_id TEXT NOT NULL, submission_id TEXT NOT NULL,
         sha256 TEXT NOT NULL, binding TEXT NOT NULL, png BLOB NOT NULL, act_bytes BLOB NOT NULL,
         PRIMARY KEY(job_id, act_id), UNIQUE(job_id, page_id, submission_id)
+      );
+      CREATE TABLE IF NOT EXISTS job_comment_crops (
+        sha256 TEXT PRIMARY KEY, png BLOB NOT NULL
       );`);
       this.captureStorage();
     } catch {
@@ -272,7 +299,8 @@ export class JobStore<Data> {
       const row = this.db.query<JobRow, [string]>(`SELECT jobs.*, job_closures.document AS closure
         FROM jobs LEFT JOIN job_closures USING(job_id) WHERE job_id=?`).get(jobId);
       if (!row) throw new JobError('JOB_UNKNOWN');
-      return decode<Data>(row);
+      const stored = decode<Data>(row);
+      return {...stored, data: this.restoreCrops(stored.data)};
     } catch (error) {
       if (error instanceof JobError) throw error;
       throw new JobError('JOB_STORAGE_FAILED', 'Stored job state is invalid');
@@ -282,7 +310,7 @@ export class JobStore<Data> {
   activeByRootKey(rootKey: string): StoredJob<Data> | null {
     try {
       const row = this.db.query<JobRow, [string]>('SELECT * FROM jobs WHERE root_key=? AND active=1').get(rootKey);
-      return row ? decode<Data>(row) : null;
+      return row ? this.get(row.job_id) : null;
     } catch {
       throw new JobError('JOB_STORAGE_FAILED', 'Stored job state is invalid');
     }
@@ -309,7 +337,7 @@ export class JobStore<Data> {
       const current = this.db.query<JobRow, [string]>(
         'SELECT * FROM jobs WHERE root_key=? AND active=1',
       ).get(rootKey);
-      if (current) return decode<Data>(current);
+      if (current) return this.get(current.job_id);
       const jobId = randomUUID();
       const document = encode(initialize(jobId));
       this.db.query('INSERT INTO jobs(job_id,root_key,revision,active,document) VALUES(?,?,0,1,?)')
@@ -336,7 +364,7 @@ export class JobStore<Data> {
       if (expectedRevision !== null && current.revision !== expectedRevision) throw new JobError('JOB_GENERATION_STALE');
       const next = operation(current);
       const active = next.active ?? current.active;
-      const document = encode(next.data);
+      const document = encode(JSON.parse(this.saveCrops(next.data)));
       if (next.snapshot) {
         const snapshot = next.snapshot;
         this.db.query(`INSERT INTO job_snapshot_owners
@@ -347,7 +375,8 @@ export class JobStore<Data> {
         const still = next.still;
         this.db.query(`INSERT INTO job_act_stills
           (job_id,act_id,page_id,submission_id,sha256,binding,png,act_bytes) VALUES(?,?,?,?,?,?,?,?)`)
-          .run(jobId, still.actId, still.pageId, still.submissionId, still.sha256, still.binding, still.png, still.actBytes);
+          .run(jobId, still.actId, still.pageId, still.submissionId, still.sha256, still.binding, still.png,
+            Buffer.from(this.saveCrops(JSON.parse(Buffer.from(still.actBytes).toString()))));
       }
       this.db.query('UPDATE jobs SET revision=?,active=?,document=? WHERE job_id=?')
         .run(current.revision + 1, active ? 1 : 0, document, jobId);
@@ -356,9 +385,54 @@ export class JobStore<Data> {
   }
 
   readStill(jobId: string, actId: string): Pick<JobStoredStill, 'sha256' | 'png' | 'actBytes'> | null {
-    return this.db.query<{sha256: string; png: Uint8Array; actBytes: Uint8Array}, [string, string]>(
+    const stored = this.db.query<{sha256: string; png: Uint8Array; actBytes: Uint8Array}, [string, string]>(
       'SELECT sha256,png,act_bytes AS actBytes FROM job_act_stills WHERE job_id=? AND act_id=?',
     ).get(jobId, actId);
+    if (!stored) return null;
+    let parsed: unknown;
+    try { parsed = JSON.parse(Buffer.from(stored.actBytes).toString()); }
+    catch { throw new JobError('JOB_STILL_CAPTURE_FAILED'); }
+    if (!Buffer.from(JSON.stringify(parsed)).equals(Buffer.from(stored.actBytes))) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+    return {...stored, actBytes: Buffer.from(JSON.stringify(this.restoreCrops(parsed)))};
+  }
+
+  readCrop(sha256: string): Buffer {
+    const row = this.db.query<{png: Uint8Array}, [string]>('SELECT png FROM job_comment_crops WHERE sha256=?').get(sha256);
+    if (!row || createHash('sha256').update(row.png).digest('hex') !== sha256) throw new JobError('JOB_STORAGE_FAILED');
+    return Buffer.from(row.png);
+  }
+
+  private saveCrops(value: unknown): string {
+    this.db.exec('CREATE TABLE IF NOT EXISTS job_comment_crops (sha256 TEXT PRIMARY KEY, png BLOB NOT NULL)');
+    const saved = new Set<string>();
+    return jobCropReferences(value, (sha256, bytes) => {
+      if (saved.has(sha256)) return;
+      saved.add(sha256);
+      this.db.query('INSERT OR IGNORE INTO job_comment_crops(sha256,png) VALUES(?,?)').run(sha256, bytes);
+      if (!this.readCrop(sha256).equals(bytes)) throw new JobError('JOB_STORAGE_FAILED');
+    });
+  }
+
+  private restoreCrops<T>(value: T): T {
+    const packed = value as Record<string, unknown>, references = packed._jobCommentCrops;
+    if (references === undefined) return value;
+    if (!Array.isArray(references)) throw new JobError('JOB_STORAGE_FAILED');
+    delete packed._jobCommentCrops;
+    const cache = new Map<string, string>();
+    for (const [path, sha256] of references) {
+      if (!Array.isArray(path) || !path.every(key => typeof key === 'string') || path.at(-1) !== 'png' ||
+          typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256)) throw new JobError('JOB_STORAGE_FAILED');
+      let owner: any = packed;
+      for (const key of path.slice(0, -1)) {
+        if (!owner || typeof owner !== 'object' || !Object.hasOwn(owner, key)) throw new JobError('JOB_STORAGE_FAILED');
+        owner = owner[key];
+      }
+      if (owner?.png !== 'job-crop:' + sha256 || owner.sha256 !== sha256 ||
+          owner.path !== `comment-crops/${sha256}.png`) throw new JobError('JOB_STORAGE_FAILED');
+      if (!cache.has(sha256)) cache.set(sha256, 'data:image/png;base64,' + this.readCrop(sha256).toString('base64'));
+      owner.png = cache.get(sha256);
+    }
+    return value;
   }
 
   /** Close never grows or rewrites the bounded historical document. */

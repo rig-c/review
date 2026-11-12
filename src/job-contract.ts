@@ -172,6 +172,9 @@ export type JobPublicationMode = typeof JOB_PUBLICATION_MODES[number];
 export type JobApiSchema = typeof JOB_API_SCHEMA | typeof JOB_API_V3_SCHEMA;
 export const jobStillByteLimit = 8 * 1024 * 1024;
 export const jobCaptureBodyLimit = 12 * 1024 * 1024;
+/** Full act plus its envelope; comment pixels use separate private storage. */
+export const jobActDeliveryLimit = 16 * 1024 * 1024;
+export const jobResponseBodyLimit = jobActDeliveryLimit + 64 * 1024;
 export const jobRawActMediaType = 'application/vnd.rig-review.act+json';
 export const JOB_PARTS_ENUMERATOR_RANGE = '>=2.25.0 <3.0.0' as const;
 

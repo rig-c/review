@@ -6,7 +6,7 @@ import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumera
 import { JobSession } from './job-session.ts';
 import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, type JobRootIdentity } from './job-source.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
-import { JobError, JobStore } from './job-store.ts';
+import { JobError, JobStore, jobCropReferences } from './job-store.ts';
 import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 import { serveReference, assertReviewUnchanged } from './reference.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
@@ -146,6 +146,7 @@ export function createJobFront(options: {
         const liveness = await options.ports.jobLiveness(jobId);
         if (!liveness.ok)
             return result(liveness);
+        if (/^comment-crops\/[a-f0-9]{64}\.png$/.test(route) && request.method === 'GET') return options.ports.handleJobApi(request);
         if (route === 'events' && request.method === 'GET') {
             const keys = [...url.searchParams.keys()];
             if (keys.length > 1 || keys.some(key => key !== 'after'))
@@ -170,7 +171,7 @@ export function createJobFront(options: {
                             controller.close();
                         }
                         else {
-                            controller.enqueue(encoder.encode(JSON.stringify(next.value) + '\n'));
+                            controller.enqueue(encoder.encode(jobCropReferences(next.value) + '\n'));
                             if (next.value.type === 'closed') {
                                 stop();
                                 controller.close();

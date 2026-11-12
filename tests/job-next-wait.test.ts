@@ -2,7 +2,7 @@ import {afterEach, expect, spyOn, test} from 'bun:test';
 import {join} from 'node:path';
 import {writeFile} from 'node:fs/promises';
 import {createJobHostPorts} from '../src/job-api.ts';
-import {JOB_API_SCHEMA} from '../src/job-contract.ts';
+import {JOB_API_SCHEMA, jobResponseBodyLimit} from '../src/job-contract.ts';
 import {jobCommand, parseJobCLI, type JobCLIOptions} from '../src/job-cli.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
 
@@ -165,10 +165,10 @@ test('deadline includes validation time and dispatches no next request after exp
   } finally {parsing.mockRestore(); stderr.mockRestore();}
 });
 
-test('opt-in retains the existing 1 MiB streaming, UTF-8 and schema refusals', async () => {
+test('opt-in retains the bounded full-act streaming, UTF-8 and schema refusals', async () => {
   let cancelled = false;
   const overflow = new Response(new ReadableStream<Uint8Array>({
-    pull(controller) {controller.enqueue(new Uint8Array(1024 * 1024 + 1));},
+    pull(controller) {controller.enqueue(new Uint8Array(jobResponseBodyLimit + 1));},
     cancel() {cancelled = true; return Promise.reject(new Error('synthetic cancellation rejection'));},
   }, {highWaterMark: 0}));
   await expect(jobCommand(waitArgs, options(async () => overflow))).rejects.toThrow('JOB_BODY_LIMIT');

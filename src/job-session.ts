@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
-  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
+  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, jobActDeliveryLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
   type ActV3, type AgentRequestV3, type EventV3, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayPublicationV3, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest, type JobFetchActRequestV3,
   type JobNextValue, type JobPendingAsk, type JobPublication, type JobPublicationMode, type JobReviewerBinding,
@@ -13,7 +13,7 @@ import {
   assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
   type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
 } from './job-source.ts';
-import { JobError, JobStore, type JobSnapshotOwner, type StoredJob } from './job-store.ts';
+import { JobError, JobStore, jobCropReferences, type JobSnapshotOwner, type StoredJob } from './job-store.ts';
 import { canonicalStatePath } from './state-dir.ts';
 import { loadReview } from './manifest.ts';
 import { loadPartsView } from './parts-view.ts';
@@ -405,7 +405,7 @@ export class JobSession {
 
   private event(data: JobData, value: JobEventPayload): EventV3 {
     const event: EventV3 = { ...value, cursor: randomUUID(), jobId: this.jobId, generation: data.generation };
-    if (Buffer.byteLength(JSON.stringify(event)) > maximumEventBytes) {
+    if (Buffer.byteLength(jobCropReferences(event)) > maximumEventBytes) {
       throw new JobError('JOB_BODY_LIMIT', 'Job event exceeds its delivery bound');
     }
     data.events.push(event);
@@ -457,7 +457,7 @@ export class JobSession {
             jobId: this.jobId,
             generation: fresh.data.generation,
           };
-          if (Buffer.byteLength(JSON.stringify(event)) > maximumEventBytes) {
+          if (Buffer.byteLength(jobCropReferences(event)) > maximumEventBytes) {
             throw new JobError('JOB_BODY_LIMIT', 'Job event exceeds its delivery bound');
           }
           fresh.data.events.push(event);
@@ -615,13 +615,24 @@ export class JobSession {
     }
     if (!still) throw new JobError('JOB_STILL_CAPTURE_FAILED');
     const stored = this.store.readStill(this.jobId, actId);
-    if (!stored || stored.png.byteLength > jobStillByteLimit || stored.actBytes.byteLength > maximumEventBytes ||
+    if (!stored || stored.png.byteLength > jobStillByteLimit || stored.actBytes.byteLength > jobActDeliveryLimit ||
         stored.sha256 !== still.sha256 || jobHash(stored.png) !== still.sha256 ||
         still.path !== still.sha256 + '.png' ||
         !Buffer.from(stored.actBytes).equals(actBytes)) {
       throw new JobError('JOB_STILL_CAPTURE_FAILED');
     }
     return Buffer.from(png ? stored.png : stored.actBytes);
+  }
+
+  readCommentCrop(sha256: string): Buffer {
+    const current = this.current();
+    if (!current.active) throw new JobError('JOB_CLOSED');
+    let referenced = false;
+    jobCropReferences(current.data, hash => { if (hash === sha256) referenced = true; });
+    if (!/^[a-f0-9]{64}$/.test(sha256) || !referenced) {
+      throw new JobError('JOB_ACT_UNKNOWN');
+    }
+    return this.store.readCrop(sha256);
   }
 
   ackDisplayed(input: JobDisplayAcknowledgment): JobDisplayReceipt {
@@ -759,8 +770,9 @@ export class JobSession {
     let size = 0;
     for (const event of events.slice(index + 1, index + 65)) {
       const bytes = Buffer.byteLength(JSON.stringify(event));
-      if (bytes > maximumEventBytes) throw new JobError('JOB_BODY_LIMIT', 'Stored job event exceeds its delivery bound');
-      if (size + bytes > maximumEventBytes) break;
+      const metadataBytes = Buffer.byteLength(jobCropReferences(event));
+      if (metadataBytes > maximumEventBytes || bytes > jobActDeliveryLimit) throw new JobError('JOB_BODY_LIMIT', 'Stored job event exceeds its delivery bound');
+      if (batch.length && size + bytes > jobActDeliveryLimit) break;
       size += bytes;
       batch.push(event);
     }
