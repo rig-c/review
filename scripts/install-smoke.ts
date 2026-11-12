@@ -1,6 +1,7 @@
 /**
  * Install smoke: what an agent gets from `npm i -D @rig-c/review`, not what a checkout has.
- * Packs this tree, installs the tarball into an empty project, then runs the installed bin:
+ * Packs this tree by default, or installs a published --spec from the registry
+ * without packing the checkout. Installs the selected package into an empty project, then runs the installed bin:
  * help, `check` on the bundled demo, and a served page whose browser bundle is built from the
  * installed `web/` against the installed `@rig-c/play`. A file missing from `files` fails here.
  * Internal packs skip lifecycle scripts and override inherited dry-run, as does the empty install.
@@ -14,6 +15,11 @@ import {leaksCapability,redactCapability} from './redact.ts';
 import {createHash} from 'node:crypto';
 import {installedWorkspaceSmoke} from './installed-workspace-smoke.ts';
 import {installedJobHubSmoke} from './installed-job-hub-smoke.ts';
+const args=process.argv.slice(2);
+if(args.length && (args.length!==2 || args[0]!=='--spec' || !/^@rig-c\/review@[^\s/:]+$/.test(args[1]!))) {
+ console.error('SMOKE_SPEC_INVALID: expected --spec @rig-c/review@<version-or-tag>');process.exit(1);
+}
+const spec=args[1];
 const root=new URL('..',import.meta.url).pathname,work=await mkdtemp(join(tmpdir(),'rig-review-smoke-')),app=join(work,'app');
 const manifest=JSON.parse(await readFile(join(root,'package.json'),'utf8')) as {name:string;bin:Record<string,string>;devDependencies:{typescript:string;'@types/bun':string}};
 let failed=false;const printed:string[]=[];let servedCapability='';
@@ -336,27 +342,40 @@ async function publicHostSmoke(): Promise<void> {
 }
 
 try{
+ let target=spec;
+ let files:string[]=[];
+ if(!spec){
  const packed=await run(['npm','pack','--json','--ignore-scripts','--dry-run=false','--pack-destination',work],root);
  if(!step('npm pack',packed.exit===0,packed.stderr.trim().split('\n').at(-1)))throw new Error('pack');
- const info=packResult(JSON.parse(packed.stdout),manifest.name);const files=info.files.map(f=>f.path);
+ const info=packResult(JSON.parse(packed.stdout),manifest.name);files=info.files.map(f=>f.path);target=join(work,info.filename);
+ }else log('SKIP npm pack · SMOKE_REGISTRY_SPEC: installing published '+spec);
+ await Bun.$`mkdir -p ${app}`;await writeFile(join(app,'package.json'),JSON.stringify({name:'rig-review-smoke',private:true})+'\n');
+ const installed=await run(['npm','i','-D','--dry-run=false','--no-audit','--no-fund',target!],app);
+ if(!step(spec?'npm i -D '+spec+' from registry':'npm i -D <tarball> into an empty project',installed.exit===0,installed.stderr.trim()))throw new Error(spec?'SMOKE_REGISTRY_INSTALL: '+spec:'install');
+ if(spec)files=[...new Bun.Glob('**/*').scanSync({cwd:join(app,'node_modules/@rig-c/review'),onlyFiles:true,dot:true})].map(f=>f.replaceAll('\\','/'));
  step('tarball carries the bin, public host, stability reference, web, demo and licence',['src/entry.ts','src/cli.ts','src/job-host.ts','src/job-front.ts','src/job-session.ts','src/job-contract.ts','src/job-image-set.ts','src/job-hub.ts','web/job-hub.ts','docs/STABILITY.md','web/job-session.ts','web/main.ts','web/index.html','examples/demo/review.json','LICENSE'].every(f=>files.includes(f)),`${files.length} files`);
  step('tarball carries no tests or fixtures',!files.some(f=>f.startsWith('tests/')||f.startsWith('node_modules/')));
- await Bun.$`mkdir -p ${app}`;await writeFile(join(app,'package.json'),JSON.stringify({name:'rig-review-smoke',private:true})+'\n');
- const installed=await run(['npm','i','-D','--dry-run=false','--no-audit','--no-fund',join(work,info!.filename)],app);
- if(!step('npm i -D <tarball> into an empty project',installed.exit===0,installed.stderr.trim().split('\n').at(-1)))throw new Error('install');
  await writeFile(join(app,'node_modules/.metadata_never_index'),'');
  await installedWorkspaceSmoke({app, work, fixtureRoot:join(root,'tests/fixtures/strip-probe'), foreground:true, log});
  await publicHostSmoke();
  await installedJobHubSmoke({app, work, log});
  const help=await run(['npx','--no-install','rig-review','--help'],app);step('npx rig-review --help',help.exit===0&&help.stdout.includes('Usage'));
+ if(!spec){
  const development=await run([process.execPath,'src/entry.ts','--help'],root);
  const legacy=await run([process.execPath,'src/cli.ts','--help'],root);
  step('installed/development/legacy help parity',development.exit===help.exit&&legacy.exit===help.exit&&development.stdout===help.stdout&&legacy.stdout===help.stdout);
  const sessionHelp=await run(['npx','--no-install','rig-review','session','--help'],app);
  const developmentSession=await run([process.execPath,'src/entry.ts','session','--help'],root);
  step('installed/development session entry parity',sessionHelp.exit===0&&developmentSession.exit===0&&sessionHelp.stdout===developmentSession.stdout&&sessionHelp.stdout.includes('session publish'));
+ }else{
+  log('SKIP installed/development/legacy help parity · SMOKE_REGISTRY_TREE_UNBOUND: registry spec is not bound to this working tree');
+  const sessionHelp=await run(['npx','--no-install','rig-review','session','--help'],app);
+  step('installed session entry help',sessionHelp.exit===0&&sessionHelp.stdout.includes('session publish'));
+  log('SKIP installed/development session entry parity · SMOKE_REGISTRY_TREE_UNBOUND: registry spec is not bound to this working tree');
+ }
+ if(spec)log('SKIP working-tree bin manifest equality · SMOKE_REGISTRY_TREE_UNBOUND: registry spec is not bound to this working tree');
  const installedManifest=JSON.parse(await readFile(join(app,'node_modules/@rig-c/review/package.json'),'utf8'));
- step('installed bin maps to the thin entry',installedManifest.bin['rig-review']==='src/entry.ts'&&manifest.bin['rig-review']==='src/entry.ts');
+ step('installed bin maps to the thin entry',installedManifest.bin['rig-review']==='src/entry.ts'&&(!!spec||manifest.bin['rig-review']==='src/entry.ts'));
  const openHelp=await run(['npx','--no-install','rig-review','open','--help'],app);step('npx rig-review open --help',openHelp.exit===0&&openHelp.stdout.includes('rig-review open <dir>'));
  const demo=join(app,'node_modules/@rig-c/review/examples/demo/review.json');
  const check=await run(['npx','--no-install','rig-review','check',demo],app);step('rig-review check <bundled demo>',check.exit===0&&check.stdout.includes('Package valid'),check.stdout.split('\n')[0]||check.stderr.trim());

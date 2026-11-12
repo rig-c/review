@@ -232,7 +232,9 @@ test('release packs after the scoped gate and publishes only an equal alias with
 test('publish gates the full repository and smoke overrides only internal lifecycle and dry-run settings', () => {
   const smoke = readFileSync(join(ROOT, 'scripts/install-smoke.ts'), 'utf8');
   expect(smoke).toContain("['npm','pack','--json','--ignore-scripts','--dry-run=false','--pack-destination',work]");
-  expect(smoke).toContain("['npm','i','-D','--dry-run=false','--no-audit','--no-fund',join(work,info!.filename)]");
+  expect(smoke).toContain("['npm','i','-D','--dry-run=false','--no-audit','--no-fund',target!]");
+  expect(smoke).toContain("let target=spec;");
+  expect(smoke).toContain("target=join(work,info.filename);");
 });
 
 test('confirmation really installs despite inherited publish dry-run, checks version, and runs the local bin', () => {
