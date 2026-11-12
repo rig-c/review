@@ -377,41 +377,8 @@ export function createJobWindow<Prepared>(options: {
         }
         return result;
     }
-    async function submitParts(input: UISubmissionV3, signoffSubmissionId: string): Promise<JobResult<ActV3>> {
-        const publicationId = input.publicationId;
-        const ask = pending.get(input.askId);
-        if (!displayed || displayed.publication.publicationId !== publicationId || !ask ||
-            ask.subject.kind !== 'parts-verdict') throw new Error('JOB_ACT_SOURCE_STALE');
-        assertJobAskSource(ask, displayed);
-        const previous = ask.act;
-        // An act@6 verdict's note is its one general comment; the signoff resends it.
-        const value = (previous?.kind !== 'parts-verdict' ? input.value : previous.schema !== JOB_COMMENTS_ACT_SCHEMA ? previous.value :
-            {verdict: previous.value.verdict, words: previous.value.comments.find(comment => !comment.anchor)?.text ?? ''}) as Pick<PartsVerdictValue, 'verdict' | 'words'>;
-        const signoff = [...pending.values()].find(item => item.publicationId === publicationId &&
-            item.subject.kind === 'signoff' && item.subject.stage === 'parts-review' && item.status === 'pending');
-        if (value.verdict === 'approved' && !signoff) throw new Error('JOB_PARTS_SIGNOFF_MISSING');
-        let result: JobResult<ActV3>;
-        if (ask.status === 'pending') {
-            result = await submit(input);
-            if (!result.ok) return result;
-        } else {
-            if (!previous || previous.kind !== 'parts-verdict' || (previous.schema !== JOB_PARTS_VERDICT_ACT_SCHEMA && previous.schema !== JOB_COMMENTS_ACT_SCHEMA) ||
-                value.verdict !== 'approved') throw new Error('JOB_ACT_SOURCE_STALE');
-            result = {ok: true, value: previous};
-        }
-        if (value.verdict !== 'approved') return result;
-        // Recheck after the first durable write. A replacement never inherits this signoff.
-        const latest = state();
-        if (latest.displayed?.publication.publicationId !== publicationId || !latest.receipt || !signoff)
-            throw new Error('JOB_ACT_SOURCE_STALE');
-        assertJobAskSource(signoff, latest.displayed);
-        return submit({kind: 'signoff', publicationId, pageId: input.pageId, askId: signoff.askId,
-            expectedGeneration: latest.generation, displayedNonce: latest.receipt.displayedNonce,
-            submissionId: signoffSubmissionId,
-            value: {stage: 'parts-review', decision: 'approved', words: value.words}});
-    }
     return {
-        event, replace, submit, submitParts, state, refresh: changed,
+        event, replace, submit, state, refresh: changed,
         settled: () => queue,
         stop() { stopped = true; ++intent; controller?.abort(); },
     };

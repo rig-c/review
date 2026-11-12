@@ -226,8 +226,8 @@ fs.writeFileSync(path.join(out,'page.png'),'rebuilt-png');console.log('rigc: wro
   const frontPort = probe.port!;
   probe.stop(true);
 
-  const opened = await openReview({ input: join(root, 'a'), compare: join(root, 'b'), reference: refPath, animation: 'inspect' }, { stateDir, frontPort });
-  const frontOrigin = `http://127.0.0.1:${frontPort}`;
+  const opened = await openReview({ input: join(root, 'a'), compare: join(root, 'b'), reference: refPath, animation: 'inspect' }, { stateDir, direct: true });
+  const frontOrigin = new URL(opened.url).origin;
   const base = frontOrigin + new URL(opened.url).pathname;
   const cap = new URL(opened.url).hash.slice(5);
   const headers = { Origin: frontOrigin, 'Content-Type': 'application/json', 'X-Review-Capability': cap };

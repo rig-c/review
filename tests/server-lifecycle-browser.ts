@@ -704,11 +704,11 @@ export async function runServerLifecycleBrowserVerification(options?: {
     const frontPort = freePort();
     const open1 = await openReview(
       { input: frontPkg1, animation: 'inspect', viewOnly: true },
-      { stateDir: frontStateDir, frontPort, graceMs: 600, idleMs: 10_000 },
+      { stateDir: frontStateDir, direct: true, graceMs: 600, idleMs: 10_000 },
     );
     const open2 = await openReview(
       { input: frontPkg2, animation: 'inspect', viewOnly: true },
-      { stateDir: frontStateDir, frontPort, graceMs: 600, idleMs: 10_000 },
+      { stateDir: frontStateDir, direct: true, graceMs: 600, idleMs: 10_000 },
     );
     const frontOrigin = new URL(open1.url).origin;
     const cap2 = new URL(open2.url).hash.slice(5);

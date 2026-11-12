@@ -15,7 +15,6 @@ import {startServer} from './server.ts';
 import {startCompareServer} from './compare-server.ts';
 import {selectAnimation,AnimationSelectionError,type AnimationSelection} from './animation-selection.ts';
 import {capabilityHeader,capabilityPattern,type OpenIdentity} from './open-protocol.ts';
-import {ensureFront,frontPort} from './front.ts';
 import {playBuildConditions} from './build.ts';
 import {playPackagePath} from './versions.ts';
 import {HandoffError,HANDOFF_FLAGS,isBuildRoot,type HandoffFlags,type HandoffRecord} from './handoff.ts';
@@ -150,12 +149,12 @@ export async function prepareOpenTarget(inputs: OpenInputs, options: OpenOptions
  return {package:p,key,fingerprint,stateDir,viewOnly,cwd:resolve(options.cwd??process.cwd()),build};
 }
 export async function openReview(inputs:OpenInputs,options:OpenOptions={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null;direct:boolean;build:BuildOpen|null}>{
- const direct=options.direct??inputs.direct??false,port=direct?0:frontPort(options.frontPort);
+ const direct=true;
  const prepared=await prepareOpenTarget(inputs,options);
  const {package:p,key,fingerprint,stateDir,viewOnly,build}=prepared;
  const control=join(stateDir,'open');await mkdir(control,{recursive:true,mode:0o700});const canonicalControl=await realpath(control);if((await lstat(control)).isSymbolicLink())throw new Error('open.state: control directory cannot be a symlink');
  const worker=await ensureWorker(p,key,fingerprint,stateDir,canonicalControl,options.idleMs??DEFAULT_UNOPENED_TIMEOUT_MS,options.graceMs,viewOnly,options.cwd);
- const url=direct?openUrl(worker.row):openUrl(worker.row,await ensureFront({control:canonicalControl,port,fingerprint,idleMs:options.frontIdleMs}));
+ const url=openUrl(worker.row);
  // #149: the check package of a rig-parts build root says which package it opened and which config the handoff took.
  return {url,reused:worker.reused,nonce:worker.row.nonce,inputs:p.inputs,selection:p.selection,direct,build};
 }

@@ -514,7 +514,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
     probe.stop(true);
     const opened = await openReview(
       { input: join(root, 'a'), compare: join(root, 'b'), reference: refPath, animation: 'inspect' },
-      { stateDir, frontPort },
+      { stateDir, direct: true },
     );
 
     // Verify comparison session in browser
