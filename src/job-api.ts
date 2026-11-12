@@ -1557,7 +1557,7 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
               request.headers.get('origin') !== null && request.headers.get('origin') !== origin) {
             throw new JobError('JOB_SAME_ORIGIN_REQUIRED');
           }
-          session.authorize('ui', request.headers.get('X-Review-Capability'));
+          session.authorize('ui-evidence', request.headers.get('X-Review-Capability'));
           return new Response(new Uint8Array(session.readCommentCrop(crop[1]!)),
             {headers: {...responseHeaders, 'Content-Type': 'image/png'}});
         }

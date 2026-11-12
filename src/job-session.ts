@@ -234,11 +234,12 @@ export class JobSession {
     return { jobId: this.jobId, fetchCapability: current.data.fetchCapability };
   }
 
-  authorize(role: 'agent' | 'ui' | 'consumer', given: string | null): void {
+  authorize(role: 'agent' | 'ui' | 'ui-evidence' | 'consumer', given: string | null): void {
     const current = this.current();
     if (role === 'consumer' && !current.active) throw new JobError('JOB_CLOSED');
-    const secret = role === 'agent' ? current.data.agentCapability : role === 'ui' ? current.data.uiCapability : current.data.fetchCapability;
-    if (!secret || !sameCapability(given, role === 'ui' ? secret : 'Bearer ' + secret)) {
+    const ui = role === 'ui' || role === 'ui-evidence';
+    const secret = role === 'agent' ? current.data.agentCapability : ui ? current.data.uiCapability : current.data.fetchCapability;
+    if (!secret || !sameCapability(given, ui ? secret : 'Bearer ' + secret)) {
       throw new JobError('JOB_CAPABILITY_REQUIRED');
     }
     if (role === 'ui' && !current.active) throw new JobError('JOB_CLOSED');
@@ -626,9 +627,8 @@ export class JobSession {
 
   readCommentCrop(sha256: string): Buffer {
     const current = this.current();
-    if (!current.active) throw new JobError('JOB_CLOSED');
     let referenced = false;
-    jobCropReferences(current.data, hash => { if (hash === sha256) referenced = true; });
+    jobCropReferences(current.data.events, hash => { if (hash === sha256) referenced = true; });
     if (!/^[a-f0-9]{64}$/.test(sha256) || !referenced) {
       throw new JobError('JOB_ACT_UNKNOWN');
     }
