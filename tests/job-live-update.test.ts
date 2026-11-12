@@ -84,7 +84,7 @@ test('#743 main caller rebinds only navigation; missing selection clears Solo an
   let restored:any,notice=false,saves=0;
   const binding={mode:'single',sourceHash:'b'.repeat(64),rigs:['c'.repeat(64)]};
   const bookmark={binding:{...binding,sourceHash:'a'.repeat(64)},animation:'idle',time:.625,view:{cameras:{rig:{zoom:2,center:{x:12,y:34}},reference:null}},selection:{part:{side:'single',slot:'sleeve',mode:'solo',identity:{skin:'old-skin',attachment:'old-art'}},reference:'painting',partSet:'gone',axis:{id:'gone',value:1},turn:{schema:'rig-review-turn/1',values:{yaw:1}},person:'gone'}};
-  const state=await new Function('host','partsOnly','parts','data','assets','inspectionBinding','restoreInspection','persistence','message','tr','player','turnPad','inspectionReferenceInfo',`let navigationMissing=false;${js};return restorePublicationNavigation().then(()=>navigationMissing);`)(
+  const state=await new Function('host','partsOnly','parts','data','assets','inspectionBinding','restoreInspection','persistence','message','tr','player','turnPad','inspectionReferenceInfo',`const activeScene=()=>undefined;let navigationMissing=false;${js};return restorePublicationNavigation().then(()=>navigationMissing);`)(
    {navigation:{subject:'rig',bookmark}},false,{validate(){if(missing)throw Error('missing');}},
    {manifest:{references:[{id:'painting'}],checkpoints:[],axes:[]}}, {animations:[{name:'idle',duration:10}]},()=>binding,async(value:any)=>{restored=value;},{save(){saves++;}},()=>{notice=true;},String,{sets:()=>[]},null,async()=>({people:[],duration:null}));
   expect(restored.binding).toEqual(binding);expect(bookmark.binding.sourceHash).toBe('a'.repeat(64));expect(restored.time).toBe(.625);expect(restored.view).toEqual(bookmark.view);expect(restored.selection.reference).toBe('painting');
@@ -123,7 +123,7 @@ for(const scenario of [
   player:{sets:()=>[]},turnPad:null,select:()=>({value:'reference'}),
   inspectionReferenceInfo:async()=>({width:100,height:100,duration:scenario.referenceDuration,people:[]}),result};
  // Execute the actual validator on the normalized bookmark: an out-of-range restore must reject the old implementation.
- const validate=await new Function('scope',`with(scope){let navigationMissing=false;${js};async function restoreInspection(bookmark,signal){await prepareInspection(bookmark,signal);result.restored=structuredClone(bookmark);}return restorePublicationNavigation().then(()=>{result.missing=navigationMissing;return prepareInspection;});}`)(scope);
+ const validate=await new Function('scope',`with(scope){const activeScene=()=>undefined;let navigationMissing=false;${js};async function restoreInspection(bookmark,signal){await prepareInspection(bookmark,signal);result.restored=structuredClone(bookmark);}return restorePublicationNavigation().then(()=>{result.missing=navigationMissing;return prepareInspection;});}`)(scope);
  if(scenario.missing)await expect(validate(bookmark,new AbortController().signal)).rejects.toThrow('Saved inspection time is outside the selected clip/reference');
  else await validate(bookmark,new AbortController().signal);
  expect(result.restored.time).toBe(scenario.expected);expect((result as any).missing).toBe(scenario.missing);

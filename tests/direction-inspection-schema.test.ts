@@ -15,6 +15,7 @@ test('readDirectionInspection preserves rig-create/direction@1 acceptance and in
   const v1File = { path: 'evidence/direction/v2.json', sha256: v1Sha256 };
   expect(readDirectionInspection(v1Doc, v1File, v1Doc.rig.model)).toEqual({
     file: v1File,
+    model: v1Doc.rig.model,
     rigVersion: 1,
     camera: v1Doc.camera,
     take: v1Doc.take,
@@ -29,7 +30,7 @@ test('readDirectionInspection preserves rig-create/direction@1 acceptance and in
   expect(() => readDirectionInspection(v1Doc, v1File, { ...v1Doc.rig.model, path: 'other.model.json' })).toThrow('DIRECTION_MODEL_MISMATCH');
 });
 
-test('readDirectionInspection accepts rig-create/direction@2 with unchanged inspection subset and ignores scene reference', async () => {
+test('readDirectionInspection accepts rig-create/direction@2 with unchanged inspection subset and retains the scene reference', async () => {
   const v2Bytes = await readFile(v2Path);
   expect(createHash('sha256').update(v2Bytes).digest('hex')).toBe(v2Sha256);
   const v2Doc = JSON.parse(v2Bytes.toString('utf8'));
@@ -43,12 +44,14 @@ test('readDirectionInspection accepts rig-create/direction@2 with unchanged insp
   const v2Inspected = readDirectionInspection(v2Doc, v2File, v2Doc.rig.model);
   expect(v2Inspected).toEqual({
     file: v2File,
+    model: v2Doc.rig.model,
+    scene: v2Doc.scene,
     rigVersion: 1,
     camera: v2Doc.camera,
     take: v2Doc.take,
     timing: v2Doc.timing.keys,
   });
-  expect('scene' in v2Inspected).toBe(false);
+  expect(v2Inspected.scene).toEqual(v2Doc.scene);
   expect(() => readDirectionInspection(v2Doc, v2File, null)).toThrow('DIRECTION_MODEL_MISMATCH');
   expect(() => readDirectionInspection(v2Doc, v2File, { ...v2Doc.rig.model, sha256: '0'.repeat(64) })).toThrow('DIRECTION_MODEL_MISMATCH');
   expect(() => readDirectionInspection(v2Doc, v2File, { ...v2Doc.rig.model, path: 'other.model.json' })).toThrow('DIRECTION_MODEL_MISMATCH');

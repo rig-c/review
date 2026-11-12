@@ -1,3 +1,5 @@
+import {takeSample} from '../web/scene-plates.ts';
+import type {DirectionInspection} from '../src/direction-inspection.ts';
 import {expect,test} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import {RigPlayer} from '@rig-c/play';
@@ -12,18 +14,20 @@ const controls=fragment('function chooseAnimation(', 'function stopAudio()');
 const setup=fragment(" else if(player){restartSetupPlayer(true);",' if(selection.axis)');
 
 /** Execute the shared screen's actual transport over the published player and native canvas. */
-async function screen(visible=true){
+async function screen(visible=true,direction?:DirectionInspection){
  const doc=JSON.parse(readFileSync(new URL('./fixtures/strip-probe/build/skeleton.model.json',import.meta.url),'utf8'));
  if(!visible){doc.slots=[];for(const skin of doc.editorOrder.skins)skin.slots=[];for(const skin of doc.skins)skin.attachments={};}
  const loaded=await loadSetupAssets(doc),root=setupRoot(),player=new RigPlayer(root,loaded.assets,{mode:'canvas'});
  const parts=new PartInspection();parts.register('single',partCatalog(doc,doc.slots.map((s:{name:string})=>s.name)),player);
  const source={publicationId:'publication-1',instanceKey:'instance-1',sourceHash:'a'.repeat(64),pageId:'page-1'};
+ const drawTimes:number[]=[];
  const camera={center:{x:20,y:20},zoom:2},clock={value:''},nodes=new Map<string,{hidden:boolean;value:string}>();
  const scope={player,assets:loaded.assets,source,camera,parts,RigPlayer,ModelAssets:undefined,partModel:doc,inspectionSourceState:'ready',data:{feedbackCatalog:{slots:doc.slots.map((s:{name:string})=>s.name)}},partCatalog,PartThumbnails:class{},pageRegionTable:()=>({}),readSetupChest:()=>null,setupChestWorld:null,animation:'',time:0,duration:0,axisInspection:false,rigDifference:null,video:null,repeat:true,
   pause(){player.pause();},clipMoved(){},leaveRigDifference(){},renderLayout(){},
   el(id:string){if(id==='rig-root')return root as never;if(!nodes.has(id))nodes.set(id,{hidden:false,value:''});return nodes.get(id)!;},select(id:string){return this.el(id);},
+  activeScene:()=>direction,takeSample,
   clipDuration(name:string){return loaded.assets.animations.find(a=>a.name===name)?.duration??0;},canRepeatIdle(){return scope.repeat;},
-  drawRig(action:()=>void){action();parts.present('single');},refreshAnimationInspection(){},renderTransport(){clock.value=String(scope.time);},renderCues(){},renderIdle(){},renderSequenceFrame(){},text(){},message(){},rendererStatus(){return {label:''};},errorText:String};
+  drawRig(action:()=>void){action();drawTimes.push(scope.player.entry(0)?.animationTime??0);parts.present('single');},refreshAnimationInspection(){},renderTransport(){clock.value=String(scope.time);},renderCues(){},renderIdle(){},renderSequenceFrame(){},text(){},message(){},rendererStatus(){return {label:''};},errorText:String};
  const code=new Bun.Transpiler({loader:'ts'}).transformSync(lifecycle+'\n'+controls+'\n'+fragment('async function inspectControlTime(', 'async function decodedControlTime('));
  const transport=new Function('scope',`with(scope){${code};return {chooseAnimation,seek,inspectControlTime};}`)(scope) as {chooseAnimation(name:string):void;seek(time:number):void;inspectControlTime(time:number,signal:AbortSignal):Promise<void>};
  const reset=new Function('scope',`with(scope){${code};${new Bun.Transpiler({loader:'ts'}).transformSync('if(false){}'+setup)};drawRig(()=>player.draw());renderTransport();}`);
@@ -39,7 +43,7 @@ async function screen(visible=true){
   finally{document.createElement=create;if(saved)Object.defineProperty(globalThis,'FileReader',saved);else delete (globalThis as unknown as Record<string,unknown>).FileReader;}
  }
  at('',0);
- return {scope,get player(){return scope.player;},parts,root,source,camera,clock,at,capture,restoreTime:(time:number)=>transport.inspectControlTime(time,new AbortController().signal),close(){scope.player.dispose();loaded.dispose();}};
+ return {scope,drawTimes,open:(name:string)=>transport.chooseAnimation(name),get player(){return scope.player;},parts,root,source,camera,clock,at,capture,restoreTime:(time:number)=>transport.inspectControlTime(time,new AbortController().signal),close(){scope.player.dispose();loaded.dispose();}};
 }
 
 test('#557 shared Setup holds a public null-animation pose before inspection',async()=>{
@@ -93,4 +97,21 @@ test('#796 Repeat-end UI endpoint, public wrapped frame and whole-rig capture ag
 
 test('#796 restored Setup retains numeric reference seconds without seeking a cleared rig track',async()=>{
  const h=await screen();try{await h.restoreTime(1.25);expect(h.scope.time).toBe(1.25);expect(h.clock.value).toBe('1.25');expect(h.player.current).toBeNull();expect(h.player.time).toBe(0);expect((await h.capture()).frame).toBe('setup');h.at('inspect',.375);expect(h.player.entry(0)!.animationTime).toBe(.375);}finally{h.close();}
+});
+
+
+test('#799 the first scene draw and immediate frozen pose use a nonzero mapped source start while take time stays zero',async()=>{
+ const direction:DirectionInspection={file:{path:'direction.json',sha256:'a'.repeat(64)},model:{path:'skeleton.model.json',sha256:'b'.repeat(64)},rigVersion:1,
+  camera:{space:'rig-world-y-up',keys:[{time:0,easing:'hold',box:{x:0,y:0,width:80,height:64}}]},
+  take:{duration:8,loop:true},timing:[{time:0,source_time:.5,easing:'linear'},{time:8,source_time:2,easing:'hold'}]};
+ const h=await screen(true,direction);try{
+  h.drawTimes.length=0;h.open('inspect');
+  expect(h.scope.time).toBe(0);expect(h.clock.value).toBe('0');
+  expect(h.drawTimes).toEqual([.5]);expect(h.player.entry(0)!.animationTime).toBe(.5);
+  const initial=structuredClone(h.player.posedFrame()),captured=await h.capture();
+  expect(captured.frame).toBe(.5);expect(captured.binding.sourceHash).toBe(h.source.sourceHash);
+  h.at('inspect',1);h.at('inspect',0);
+  expect(h.player.posedFrame().order).toEqual(initial.order);
+  expect((await h.capture()).png).toBe(captured.png);expect(h.scope.time).toBe(0);
+ }finally{h.close();}
 });

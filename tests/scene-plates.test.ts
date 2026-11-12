@@ -286,3 +286,10 @@ for (const side of ['background', 'foreground'] as const) {
     expect(canvas.stack).toHaveLength(0);
   });
 }
+
+
+test('#797 an explicitly absent foreground draws background and rig while null still refuses a required plate',()=>{
+ const h=recordingCanvas(),input=frame();h.render({...input,foreground:undefined});
+ expect(h.draws.length).toBe(1);
+ expect(()=>h.render({...input,foreground:null})).toThrow('SCENE_PLATE_REQUIRED: foreground');
+});

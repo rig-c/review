@@ -148,6 +148,7 @@ test('joined Made correction refusal uses the direction catalog ID in both langu
     packageRoot: 'out', projectModel: pkg.reviewedSource.rig! }, take: { duration: 8, loop: true },
     camera: { ...pkg.direction!.camera, keys: [pkg.direction!.camera.keys[0]!] } };
   expect(directionSummary({ ...view, authored }, 'en')).toBe('Direction v16 · 8 s · loop · fixed camera');
+  expect(directionSummary({...view,authored:{...authored,joined:undefined,postVersion:16}},'ko')).toBe('연출 v16 · 8초 · 반복 · 카메라 고정');
   expect(directionSummary({ ...view, authored }, 'ko')).toBe('연출 v16 · 8초 · 반복 · 카메라 고정');
   expect(directionSummary({ ...view, authored, model: { ...view.model, inspected: false } }, 'en')).toBe('Direction inspection');
   expect(directionRows(view)).toEqual(directionRows({ ...view, authored: { ...view.authored, take: { duration: 8, loop: true } } }));
