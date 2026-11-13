@@ -238,6 +238,12 @@ export function retainedPublicationRoutes(session: JobSession) {
             if (crop) session.authorize('ui', request.headers.get('X-Review-Capability'));
             return await session.readPublicationResponse(publicationId, async retained => {
                 const display = session.displayPublication(publicationId);
+                // Retain history, but expose images only for this publication's declared questions.
+                const questions = retained.questions.map(question => ({...question,
+                    images: retained.subjects.some(subject => subject.kind === 'interview-picks' &&
+                        subject.setId === question.set.id && subject.questionId === question.set.question)
+                        ? question.images : [],
+                }));
                 if (key !== display.publication.instanceKey) return failure('JOB_DISPLAY_MISMATCH', 409);
                 if (crop && session.status().publication?.publicationId !== publicationId)
                     return failure('JOB_ACT_SOURCE_STALE', 409);
@@ -283,7 +289,7 @@ export function retainedPublicationRoutes(session: JobSession) {
                         });
                     }
                     if (path === 'api/interview') {
-                        return json({questions: retained.questions.map(question => ({...question,
+                        return json({questions: questions.map(question => ({...question,
                             images: question.images.map((image, index) => ({name: image.name,
                                 url: `/api/interview/image/${question.ref.sha256}/${index}`})),
                         }))});
@@ -359,7 +365,7 @@ export function retainedPublicationRoutes(session: JobSession) {
                 if (path === 'api/interview') {
                     const interview = retained.interview !== undefined ? retained.interview : display.publication.interview;
                     return json({
-                        questions: retained.questions.map(question => ({...question,
+                        questions: questions.map(question => ({...question,
                             images: question.images.map((image, index) => ({name: image.name,
                                 url: `/api/interview/image/${question.ref.sha256}/${index}`})),
                         })),

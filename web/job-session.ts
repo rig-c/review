@@ -792,7 +792,6 @@ export interface JobPreparedInspection {
     parts: JobPartsInventory | null;
     partImages: Map<string, HTMLImageElement>;
     partPages?: Map<number, HTMLImageElement>;
-    interviewImages: Map<string, HTMLImageElement>;
     checkpointEvidence?: readonly {
         packet: JobCheckpointEvidence;
         table: JobCheckpointTable;
@@ -962,7 +961,6 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
             throw new Error('JOB_SOURCE_MISMATCH');
         const references: JobReferenceView[] = [];
         const partImages = new Map<string, HTMLImageElement>();
-        const interviewImages = new Map<string, HTMLImageElement>();
         const partPages = new Map<number, HTMLImageElement>();
         const preload: Promise<void>[] = [];
         const source = display.publication.source;
@@ -1123,10 +1121,6 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
             preload.push(image(routes.api('stage-parts/page/' + page.index))
                 .then(element => { partPages.set(page.index, element); }));
         }
-        for (const question of interview?.questions ?? [])
-            for (const asset of question.images) {
-                preload.push(image(routes.instance(asset.url)).then(element => { element.alt = asset.name; interviewImages.set(asset.url, element); }));
-            }
         const preloaded = await Promise.allSettled(preload);
         const failed = preloaded.find(result => result.status === 'rejected');
         if (failed?.status === 'rejected')
@@ -1171,7 +1165,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         const order = [metadata.sourcePainting?.id, ...(metadata.manifest?.references.map(reference => reference.id) ?? [])];
         references.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
         return {
-            display, metadata, interview, parts, partImages, partPages, interviewImages, checkpointEvidence, references, assets, rigRoot,
+            display, metadata, interview, parts, partImages, partPages, checkpointEvidence, references, assets, rigRoot,
             get rigPresentation() { return rigPresentation; },
             set rigPresentation(value) {
                 clearRigPresentation();
@@ -1400,7 +1394,7 @@ export interface JobFormDependencies {
                 fields.prepend(legacyNotice);
             }
             interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,
-                images:question.images.map(image=>{const visual=prepared.interviewImages.get(image.url);if(!visual)throw new Error('JOB_VISUAL_UNAVAILABLE');return {name:image.name,src:visual.src};}),answered:ask.status==='answered'});
+                images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered'});
             disposeInterview=interviewForm.dispose;read=interviewForm.read;
             submitKey = 'interview.save';
         }
