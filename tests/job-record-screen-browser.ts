@@ -25,6 +25,7 @@ const output=resolve(arg('--out')??'artifacts/record-screen-750');await mkdir(ou
 const sha=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('hex');
 const profile=await mkdtemp(join(tmpdir(),'review-750-browser-'));
 let page:InputCdpSession|undefined,command:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
+let holdImages=false;const pausedImages:string[]=[];
 const exceptions:unknown[]=[],mutations:{method:string;path:string}[]=[],cases:unknown[]=[];
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('750_BROWSER_TIMEOUT '+label);}
 
@@ -35,7 +36,8 @@ try{
  const chrome:string=new Function('join','homedir','existsSync','readdirSync',new Bun.Transpiler({loader:'ts'}).transformSync(finder)+';return findBrowserBinary();')(join,homedir,existsSync,readdirSync);
  const wrapper=join(output,chrome.includes('headless')?'chrome-limited-headless':'chrome-limited');await writeFile(wrapper,'#!/usr/bin/env bash\nexec '+"'"+chrome.replaceAll("'","'\\''")+"'"+' --single-process --no-zygote --renderer-process-limit=1 --num-raster-threads=1 --disable-breakpad --disable-crash-reporter --js-flags=--max-old-space-size=1024 "$@"\n',{mode:0o755});
  process.env.CHROME_BIN=wrapper;
- page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
+ page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
+ await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
  for(const [width,height] of (interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]])){
  await page.setViewport(width!,height!);
@@ -46,7 +48,7 @@ try{
     const out=join(output,width+'x'+height,kind,picture==='parts'?'parts':picture?'picture':'empty',language);await mkdir(out,{recursive:true});fixture.output(out);
     const observation:Record<string,unknown>={kind,picture,language,width,height,sourceHash:fixture.display.publication.source.sourceHash,readerPhases:fixture.reader.calls.map(call=>call.phase),fixture:'synthetic trusted-host record reader and deterministic act writer'};
     for(const mode of ['one-screen']){
-     fixture.mode(mode);const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href);
+     fixture.mode(mode);const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);holdImages=true;await command!('Page.navigate',{url:url.href});
      const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
      await wait(`!!document.querySelector(${JSON.stringify(selector+' fieldset:not(:disabled)')})`,kind+'/'+mode+'/receipt');
      if(mode==='one-screen'){
@@ -58,11 +60,36 @@ try{
       if(!picture&&!freshParts){assert.equal(state.noPicture,(language==='en'?enCatalog:koCatalog)['This request has no picture.']);assert.equal(state.backgroundStatus,state.noPicture);assert.equal(state.emptyListText,'');assert.equal(state.saveState,(language==='en'?enCatalog:koCatalog)['Not submitted']);}
       assert.ok(state.dialogRect.x>=0&&state.dialogRect.y>=0&&state.dialogRect.x+state.dialogRect.width<=width!&&state.dialogRect.y+state.dialogRect.height<=height!);
       if(freshParts){await wait(`document.getElementById('renderer-state')?.textContent===${JSON.stringify((language==='en'?enCatalog:koCatalog)['Parts raster drawn · Canvas2D'])}`,'bound parts raster drawn');assert.notEqual(state.noPicture,(language==='en'?enCatalog:koCatalog)['This request has no picture.']);assert.equal(fixture.display.publication.previousPublicationId,null);await wait(`document.querySelectorAll('[data-part-list] button').length>0`,'fresh parts list');}
+      if(!freshParts){
+      // Hold the option request to prove loading is no longer a screen-readiness gate.
+      const loading:any=await page.evaluate(`(()=>{const viewport=document.querySelector(${JSON.stringify(selector+' .interview-viewport')}),canvas=viewport.querySelector('canvas');return {rect:viewport.getBoundingClientRect().toJSON(),width:canvas.width,height:canvas.height,pixel:[...canvas.getContext('2d').getImageData(0,0,1,1).data]};})()`);
+      assert.deepEqual(loading.pixel,[0,0,0,0]);assert.equal(loading.width,300);assert.equal(loading.height,150);
+      assert.ok(pausedImages.length>0,'option request held while the drawer is usable');
+      await writeFile(join(out,'option-loading.png'),await page.screenshot());
+      holdImages=false;for(const requestId of pausedImages.splice(0))await command!('Fetch.continueRequest',{requestId});
+      await wait(`document.querySelector(${JSON.stringify(selector+' .interview-viewport canvas')})?.width===2`,'option loaded');
+      const loadedRect:any=await page.evaluate(`document.querySelector(${JSON.stringify(selector+' .interview-viewport')}).getBoundingClientRect().toJSON()`);
+      assert.deepEqual(loadedRect,loading.rect,'option load does not move or resize its viewport');
+      observation.imageLoading={...loading,loadedRect};
+      }
       observation.screen=state;
       await click(page,'dialog[open] .workspace-drawer-close');assert.equal(await page.evaluate(`document.activeElement.id==='workspace-pending-ask'&&document.getElementById('workspace-pending-ask').getAttribute('aria-expanded')==='false'`),true,'shared drawer returns focus to the existing act button');await writeFile(join(out,'backdrop.png'),await page.screenshot());
       await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('dialog[open]')`,'reopen-modal');
      }
      if(kind==='interview-picks'){
+      if(!freshParts){
+      // #813 visit every bound option image through the existing interview view switch.
+      const imageCount = fixture.session.retainedSourceV3(fixture.ask.publicationId).questions
+       .find(question => question.set.id === fixture.ask.source.optionSet?.id)!.images.length;
+      assert.ok(imageCount > 0);
+      assert.equal(await page.evaluate(`document.querySelectorAll(${JSON.stringify(selector+' .interview-view [data-view]')}).length`), imageCount);
+      for (let index = 0; index < imageCount; index++) {
+       await page.evaluate(`document.querySelector(${JSON.stringify(selector+' .interview-view')}+' [data-view="'+${index}+'"]').click()`);
+       await wait(`(()=>{const canvas=document.querySelector(${JSON.stringify(selector+' .interview-viewport canvas')});return canvas?.width===2&&canvas.height===2&&canvas.getContext('2d').getImageData(0,0,1,1).data[3]===255;})()`, '813 option image '+index);
+       await writeFile(join(out,'option-image-'+index+'.png'),await page.screenshot());
+      }
+      observation.optionImagesShown=imageCount;
+      }
       const draft=JSON.stringify({other:'  Custom topology · 직접 입력\n'});
       await page.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)}),draft=${draft};for(const value of ['topology_other','density_auto'])form.querySelector('input[type=radio][value="'+value+'"]').click();const other=form.querySelector('textarea[name="other.topology"]');other.value=draft.other;other.dispatchEvent(new Event('input',{bubbles:true}));})()`);
       const identities:unknown=await page.evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(selector+' input[type=radio]')}),input=>({name:input.name,value:input.value}))`);
