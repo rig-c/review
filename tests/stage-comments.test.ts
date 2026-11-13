@@ -421,8 +421,8 @@ test('#276 Bar 4 & Bar 5: feedback output is byte-identical for a stored review 
   };
   const warnings:string[]=[];
   const store=new InspectionDraftStore('single:'+p.manifest.id,bookmark0241.binding,s=>warnings.push(s),memoryStorage);
-  expect(store.write(draftRecord0241)).toBe(true);
-  const loadedDraft=store.read();
+  expect(await store.write(draftRecord0241)).toBe(true);
+  const loadedDraft=await store.read();
   expect(loadedDraft).toEqual(draftRecord0241);
   expect(warnings).toEqual([]);
   const recovered=recoverSession(loadedDraft!.session,baseline);

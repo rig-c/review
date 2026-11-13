@@ -39,9 +39,9 @@ test('same-pane bookmark preserves exact saved numeric zoom without a reciprocal
  expect(restoredZoom(c,base,755,522)).toBe(zoom);
  expect(numericCamera('image',c.center,restoredZoom(c,base,755,522),base*zoom,755,522)).toEqual(c);
 });
-test('all unsent form text/status/radio and feedback session remain local; exact baseline fingerprint detects a newer submission',async()=>{const storage=new MemoryStorage(),warnings:string[]=[],store=new InspectionDraftStore('single:rig',binding,s=>warnings.push(s),storage),value=draft();expect(store.write(value)).toBe(true);expect(store.read()).toEqual(value);expect(recoverSession(value.session,baseline)?.status).toBe('approved');expect(baseline.status).toBe('pending');expect(recoverSession({...value.session as object,sourceHash:'f'.repeat(64)},baseline)).toBe(null);const before=await sessionFingerprint(baseline),after=await sessionFingerprint({...baseline,updatedAt:'2026-10-18T09:00:00Z'});expect(before).not.toBe(after);expect(warnings).toEqual([]);});
-test('opening another source of the same scope deletes nothing, preserving unrelated local data',()=>{const storage=new MemoryStorage(),first=new InspectionDraftStore('single:rig',binding,()=>{},storage);first.write(draft());storage.setItem('unrelated','keep');const other=new InspectionDraftStore('single:other',binding,()=>{},storage);other.write(draft());const changed=new InspectionDraftStore('single:rig',{...binding,sourceHash:'d'.repeat(64)},()=>{},storage);expect(changed.read()).toBe(null);expect(storage.getItem(first.key)).not.toBe(null);expect(storage.getItem(other.key)).not.toBe(null);expect(storage.getItem('unrelated')).toBe('keep');});
-test('corrupt local storage stays downloadable and cannot be silently overwritten; storage denial is visible',()=>{const storage=new MemoryStorage(),warnings:string[]=[],store=new InspectionDraftStore('single:rig',binding,s=>warnings.push(s),storage);storage.setItem(store.key,'{broken');expect(store.read()).toBe(null);expect(store.recovery()).toBe('{broken');expect(store.write(draft())).toBe(false);expect(storage.getItem(store.key)).toBe('{broken');expect(warnings[0]).toContain('remains in storage');store.clear();expect(store.write(draft())).toBe(true);const denied:Storage={length:0,getItem(){throw new Error('denied');},setItem(){throw new Error('denied');},removeItem(){throw new Error('denied');},key(){throw new Error('denied');},clear(){throw new Error('Global clear is forbidden');}};new InspectionDraftStore('denied',binding,s=>warnings.push(s),denied);expect(warnings.at(-1)).toContain('unavailable');});
+test('all unsent form text/status/radio and feedback session remain local; exact baseline fingerprint detects a newer submission',async()=>{const storage=new MemoryStorage(),warnings:string[]=[],store=new InspectionDraftStore('single:rig',binding,s=>warnings.push(s),storage),value=draft();expect(await store.write(value)).toBe(true);expect(await store.read()).toEqual(value);expect(recoverSession(value.session,baseline)?.status).toBe('approved');expect(baseline.status).toBe('pending');expect(recoverSession({...value.session as object,sourceHash:'f'.repeat(64)},baseline)).toBe(null);const before=await sessionFingerprint(baseline),after=await sessionFingerprint({...baseline,updatedAt:'2026-10-18T09:00:00Z'});expect(before).not.toBe(after);expect(warnings).toEqual([]);});
+test('opening another source of the same scope deletes nothing, preserving unrelated local data',async()=>{const storage=new MemoryStorage(),first=new InspectionDraftStore('single:rig',binding,()=>{},storage);await first.write(draft());storage.setItem('unrelated','keep');const other=new InspectionDraftStore('single:other',binding,()=>{},storage);await other.write(draft());const changed=new InspectionDraftStore('single:rig',{...binding,sourceHash:'d'.repeat(64)},()=>{},storage);expect(await changed.read()).toBe(null);expect(storage.getItem(first.key)).not.toBe(null);expect(storage.getItem(other.key)).not.toBe(null);expect(storage.getItem('unrelated')).toBe('keep');});
+test('corrupt local storage stays downloadable and cannot be silently overwritten; storage denial is visible',async()=>{const storage=new MemoryStorage(),warnings:string[]=[],store=new InspectionDraftStore('single:rig',binding,s=>warnings.push(s),storage);storage.setItem(store.key,'{broken');expect(await store.read()).toBe(null);expect(store.recovery()).toBe('{broken');expect(await store.write(draft())).toBe(false);expect(storage.getItem(store.key)).toBe('{broken');expect(warnings[0]).toContain('remains in storage');await store.clear();expect(await store.write(draft())).toBe(true);const denied:Storage={length:0,getItem(){throw new Error('denied');},setItem(){throw new Error('denied');},removeItem(){throw new Error('denied');},key(){throw new Error('denied');},clear(){throw new Error('Global clear is forbidden');}};new InspectionDraftStore('denied',binding,s=>warnings.push(s),denied);expect(warnings.at(-1)).toContain('unavailable');});
 
 test('actual fixed-instance landing gate accepts copied view links while arbitrary query capabilities are excluded',()=>{
  const identity={contentHash:'a'.repeat(64),key:'b'.repeat(64),nonce:'private capability',fingerprint:'c'.repeat(64)};
@@ -75,7 +75,7 @@ test('actual single restore adapter rejects unavailable selections before mutati
  expect(()=>restoredZoom(region.view.cameras.rig!,Math.min((302-28)/800,(773-58)/2284),302,773)).toThrow('VIEW_CAMERA_RANGE');await cross.restore(region);expect(cross.state().orientation).toBe('vertical');expect(cross.state().bookmark.view.cameras.rig?.zoom).toBeCloseTo(.9013928458372903,12);expect(cross.state().bookmark.view.cameras.rig?.center).toEqual({x:0,y:1142});const visible=numericCamera('world',{x:0,y:1142},cross.state().bookmark.view.cameras.rig!.zoom,cross.state().scale,612,382)!;expect(visible.visible.width).toBeCloseTo(region.view.cameras.rig!.visible.width,8);expect(visible.visible.height).toBeGreaterThanOrEqual(region.view.cameras.rig!.visible.height);expect(cross.state().referenceZoom).toBeCloseTo(.9012112631744532,12);const referenceVisible=numericCamera('image',{x:400,y:1142},cross.state().referenceZoom,cross.state().referenceScale,612,382)!;expect(referenceVisible.visible.width).toBeCloseTo(region.view.cameras.reference!.visible.width,8);expect(referenceVisible.visible.height).toBeGreaterThanOrEqual(region.view.cameras.reference!.visible.height);
 });
 
-async function openFormCoordinator(saved:LocalInspectionDraft,explicit:InspectionBookmark|null){
+async function openFormCoordinator(saved:LocalInspectionDraft,explicit:InspectionBookmark|null,options:{storage?:MemoryStorage;factory?:IDBFactory|null}={}){
  const source=await readFile(new URL('../web/inspection-persistence.ts',import.meta.url),'utf8'),compare=await readFile(new URL('../web/compare.ts',import.meta.url),'utf8');
  const controls=(await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8')).split('export type ThemePreference')[0]!.replaceAll('export const','const');
  const inputs=source.slice(source.indexOf('export function captureInputs('),source.indexOf('function parseInputs(')).replaceAll('export function','function');
@@ -83,26 +83,26 @@ async function openFormCoordinator(saved:LocalInspectionDraft,explicit:Inspectio
  const ids=source.slice(source.indexOf('const viewInputIds='),source.indexOf('/** Restore once'));
  const begin=compare.indexOf('afterInputs:()=>{'),end=compare.indexOf(',onConflict:',begin);if(begin<0||end<begin)throw new Error('compare restored-input action missing');
  const action=compare.slice(begin+'afterInputs:'.length,end);
- const script=`async function open(deps){const {InspectionDraftStore:Base,storage,saved,explicit,baseline,binding,bookmark,sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction}=deps;
+ const script=`async function open(deps){const {InspectionDraftStore:Base,storage,factory,saved,explicit,baseline,binding,bookmark,sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction}=deps;
  class HTMLInputElement{hasAttribute(name){return name==='data-app-preference'&&this.id.startsWith('settings-');}constructor(id,type,value,checked=false){Object.assign(this,{id,type,value,checked,name:''});}}class HTMLSelectElement{hasAttribute(name){return name==='data-app-preference'&&this.id.startsWith('settings-');}constructor(id,value,values){this.id=id;this.value=value;this.options=values.map(value=>({value}));}}class HTMLTextAreaElement{}
  const nodes=[new HTMLInputElement('settings-sync','checkbox','on',false),new HTMLInputElement('camera-sync','checkbox','on',false),new HTMLInputElement('reference-audio','checkbox','on',false),new HTMLSelectElement('part-set','','alternate old'.split(' ')),new HTMLInputElement('target-name','text','server target'),new HTMLSelectElement('status','pending',['pending','approved'])],video={muted:true},CSS={escape:value=>value};
  const notice={children:[],replaceChildren(){this.children=[];},append(button){this.children.push(button);}},document={hidden:false,body:{inert:false},getElementById:id=>id==='draft-recovery'?notice:null,querySelectorAll:()=>nodes,querySelector:selector=>nodes.find(n=>'#'+n.id===selector),createElement:()=>({type:'',textContent:'',onclick:null,append(){}})};
  const window=new EventTarget(),location={href:'http://127.0.0.1:1234/',hash:explicit?encodeBookmark(explicit):''},history={replaceState(_state,_unused,value){const url=new URL(value);location.href=url.href;location.hash=url.hash;}},navigator={clipboard:{writeText:async()=>{}}};
- const InspectionDraftStore=class extends Base{constructor(scope,binding,warn){super(scope,binding,warn,storage);}};
- new InspectionDraftStore('single:rig',binding,()=>{}).write(saved);
+ const InspectionDraftStore=class extends Base{constructor(scope,binding,warn){super(scope,binding,warn,storage,Date.now,factory);}};
+ await new InspectionDraftStore('single:rig',binding,()=>{}).write(saved);
  let current=structuredClone(baseline),dirty=false,conflict=false,restores=0,preset='',displayedTime=null;const held=new Map(),calls=[];const messages=[],input=id=>nodes.find(n=>n.id===id),renderFeedbackSelection=()=>{};
  const afterInputs=${action};
  ${controls}\n${ids}\n${inputs}\n${connect}
  const connection=await connectInspectionPersistence({scope:'single:rig',binding,baseline,session:()=>current,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{current=value;dirty=isDirty;restores++;},bookmark:()=>{const value=explicit??bookmark;return {...value,time:displayedTime??value.time,selection:{...value.selection,partSet:preset}};},restoreBookmark:async(value,signal)=>{await restoreTransaction(async()=>{},()=>({preset,displayedTime}),async()=>{calls.push(value.time);preset=value.selection.partSet??'';input('part-set').value=preset;input('camera-sync').checked=value.view.cameraSync??false;const gate=held.get(value.time);if(gate)await gate.promise;if(signal.aborted)throw new Error('RESTORE_SUPERSEDED');displayedTime=value.time;},async previous=>{preset=previous.preset;displayedTime=previous.displayedTime;input('part-set').value=preset;});},ui:()=>({}),restoreUI:()=>{},afterInputs,onConflict:value=>{conflict=value;},onStatus:value=>messages.push(value)});
- return {connection,savedFields:()=>Object.keys(JSON.parse(storage.getItem('rig-review-draft/1:single:rig:'+binding.sourceHash)).inputs),url:()=>location.href,state:()=>({current,dirty,conflict,restores,preset,presetWidget:input('part-set').value,settingsSync:input('settings-sync').checked,syncWidget:input('camera-sync').checked,muted:video.muted,audioChecked:input('reference-audio').checked,displayedTime,inert:document.body.inert,calls:[...calls],target:input('target-name').value}),hold:time=>{let release;const promise=new Promise(resolve=>release=resolve);held.set(time,{promise,release});},release:time=>held.get(time).release(),navigate:(value,event='hashchange')=>{location.hash=typeof value==='string'?value:encodeBookmark(value);location.href='http://127.0.0.1:1234/'+location.hash;window.dispatchEvent(new Event(event));},buttons:()=>notice.children.map(b=>b.textContent),click:label=>{const b=notice.children.find(b=>b.textContent===label);if(!b)throw new Error('missing recovery action');b.onclick();},messages};}`;
- const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script),storage=new MemoryStorage();
- return await new Function('deps',code+';return open(deps);')({InspectionDraftStore,storage,saved,explicit,baseline,binding,bookmark:bookmark(),sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction}) as {connection:{dispose():void;save():void;restoring():boolean};savedFields():string[];url():string;navigate(value:InspectionBookmark|string,event?:string):void;hold(time:number):void;release(time:number):void;state():{current:typeof baseline;dirty:boolean;conflict:boolean;restores:number;preset:string;presetWidget:string;settingsSync:boolean;syncWidget:boolean;muted:boolean;audioChecked:boolean;displayedTime:number|null;inert:boolean;calls:number[];target:string};buttons():string[];click(label:string):void;messages:string[]};
+ return {connection,edit:(value,isDirty)=>{current=value;dirty=isDirty;},savedFields:()=>Object.keys(JSON.parse(storage.getItem('rig-review-draft/1:single:rig:'+binding.sourceHash)).inputs),url:()=>location.href,state:()=>({current,dirty,conflict,restores,preset,presetWidget:input('part-set').value,settingsSync:input('settings-sync').checked,syncWidget:input('camera-sync').checked,muted:video.muted,audioChecked:input('reference-audio').checked,displayedTime,inert:document.body.inert,calls:[...calls],target:input('target-name').value}),hold:time=>{let release;const promise=new Promise(resolve=>release=resolve);held.set(time,{promise,release});},release:time=>held.get(time).release(),navigate:(value,event='hashchange')=>{location.hash=typeof value==='string'?value:encodeBookmark(value);location.href='http://127.0.0.1:1234/'+location.hash;window.dispatchEvent(new Event(event));},buttons:()=>notice.children.map(b=>b.textContent),click:label=>{const b=notice.children.find(b=>b.textContent===label);if(!b)throw new Error('missing recovery action');return b.onclick();},messages};}`;
+ const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(script),storage=options.storage??new MemoryStorage(),factory=options.factory??null;
+ return await new Function('deps',code+';return open(deps);')({InspectionDraftStore,storage,factory,saved,explicit,baseline,binding,bookmark:bookmark(),sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction}) as {connection:{dispose():void;save():void;submitted(session:unknown):Promise<void>;restoring():boolean};edit(value:typeof baseline,isDirty:boolean):void;savedFields():string[];url():string;navigate(value:InspectionBookmark|string,event?:string):void;hold(time:number):void;release(time:number):void;state():{current:typeof baseline;dirty:boolean;conflict:boolean;restores:number;preset:string;presetWidget:string;settingsSync:boolean;syncWidget:boolean;muted:boolean;audioChecked:boolean;displayedTime:number|null;inert:boolean;calls:number[];target:string};buttons():string[];click(label:string):Promise<void>|void;messages:string[]};
 }
 
 test('valid draft with incompatible session offers scoped discard, retains server baseline and unblocks submission',async()=>{
  const saved=draft();saved.session={...baseline,id:'different',status:'approved'};
  const explicit=bookmark();explicit.selection.partSet='alternate';const app=await openFormCoordinator(saved,explicit);
- try{expect(app.state()).toMatchObject({conflict:true,restores:0,current:baseline,preset:'alternate',presetWidget:'alternate'});expect(app.buttons()).toContain('Download saved local draft');expect(app.buttons()).toContain('Discard conflicting local draft');expect(app.buttons()).not.toContain('Recover local draft as pending');app.click('Discard conflicting local draft');expect(app.state()).toMatchObject({conflict:false,dirty:false,current:baseline,preset:'alternate',presetWidget:'alternate'});expect(app.messages.at(-1)).toContain('submitted review retained');}finally{app.connection.dispose();}
+ try{expect(app.state()).toMatchObject({conflict:true,restores:0,current:baseline,preset:'alternate',presetWidget:'alternate'});expect(app.buttons()).toContain('Download saved local draft');expect(app.buttons()).toContain('Discard conflicting local draft');expect(app.buttons()).not.toContain('Recover local draft as pending');await app.click('Discard conflicting local draft');expect(app.state()).toMatchObject({conflict:false,dirty:false,current:baseline,preset:'alternate',presetWidget:'alternate'});expect(app.messages.at(-1)).toContain('submitted review retained');}finally{app.connection.dispose();}
 });
 
 test('restored audio checkbox applies actual media mute while explicit URL preset owns both actual selection and widget',async()=>{
@@ -149,34 +149,34 @@ test('source-bound links retain exact owning identity and null reasons without p
 
 test('browser Settings are neither saved into nor restored from a source draft',async()=>{
  const saved=draft();saved.baseline=await sessionFingerprint(baseline);saved.session=baseline;saved.reviewDirty=false;saved.inputs['settings-sync']={value:'on',checked:true};
- const app=await openFormCoordinator(saved,null);try{expect(app.state().settingsSync).toBe(false);app.connection.save();expect(app.savedFields()).not.toContain('settings-sync');expect(app.savedFields()).toContain('camera-sync');}finally{app.connection.dispose();}
+ const app=await openFormCoordinator(saved,null);try{expect(app.state().settingsSync).toBe(false);app.connection.save();await app.connection.submitted(app.state().current);expect(app.savedFields()).not.toContain('settings-sync');expect(app.savedFields()).toContain('camera-sync');}finally{app.connection.dispose();}
 });
 
-test('two revisions of one manifest id keep both drafts on one origin',()=>{
+test('two revisions of one manifest id keep both drafts on one origin',async()=>{
  const storage=new MemoryStorage(),revised:InspectionBinding={...binding,sourceHash:'d'.repeat(64)};
  const first=new InspectionDraftStore('single:rig:'+binding.sourceHash,binding,()=>{},storage),second=new InspectionDraftStore('single:rig:'+revised.sourceHash,revised,()=>{},storage);
  const one=draft(),two={...draft(),sourceHash:revised.sourceHash,bookmark:{...bookmark(),binding:revised},inputs:{'feedback-summary':{value:'Second revision note'}}};
- expect(first.write(one)).toBe(true);expect(second.write(two)).toBe(true);expect(first.key).not.toBe(second.key);
- expect(new InspectionDraftStore('single:rig:'+binding.sourceHash,binding,()=>{},storage).read()?.inputs).toEqual(one.inputs);
- expect(new InspectionDraftStore('single:rig:'+revised.sourceHash,revised,()=>{},storage).read()?.inputs).toEqual(two.inputs);
+ expect(await first.write(one)).toBe(true);expect(await second.write(two)).toBe(true);expect(first.key).not.toBe(second.key);
+ expect((await new InspectionDraftStore('single:rig:'+binding.sourceHash,binding,()=>{},storage).read())?.inputs).toEqual(one.inputs);
+ expect((await new InspectionDraftStore('single:rig:'+revised.sourceHash,revised,()=>{},storage).read())?.inputs).toEqual(two.inputs);
 });
-test('least-recently-written drafts beyond 32 are evicted, but never one written in the last 24 hours',()=>{
+test('least-recently-written drafts beyond 32 are evicted, but never one written in the last 24 hours',async()=>{
  const storage=new MemoryStorage(),day=24*60*60*1000,start=Date.parse('2026-10-01T00:00:00Z');let clock=start;const store=(n:number)=>new InspectionDraftStore('single:rig'+n,binding,()=>{},storage,()=>clock);
- for(let n=0;n<30;n++){clock=start+n*1000;store(n).write(draft());}
- clock=start+3*day;for(let n=30;n<40;n++){clock+=1000;store(n).write(draft());}
+ for(let n=0;n<30;n++){clock=start+n*1000;await store(n).write(draft());}
+ clock=start+3*day;for(let n=30;n<40;n++){clock+=1000;await store(n).write(draft());}
  const kept=(s:MemoryStorage)=>[...s.values.keys()].filter(k=>k.startsWith('rig-review-draft/1:'));
  expect(kept(storage)).toHaveLength(32);for(let n=0;n<8;n++)expect(storage.getItem(store(n).key)).toBeNull();for(let n=8;n<40;n++)expect(storage.getItem(store(n).key)).not.toBeNull();
  // All 40 written within 24 h: none is evicted, even beyond the limit.
- const fresh=new MemoryStorage();clock=start;for(let n=0;n<40;n++){clock+=60000;new InspectionDraftStore('single:recent'+n,binding,()=>{},fresh,()=>clock).write(draft());}expect(kept(fresh)).toHaveLength(40);
+ const fresh=new MemoryStorage();clock=start;for(let n=0;n<40;n++){clock+=60000;await new InspectionDraftStore('single:recent'+n,binding,()=>{},fresh,()=>clock).write(draft());}expect(kept(fresh)).toHaveLength(40);
  // Rewriting an old scope makes it recent, so the next eviction takes the following oldest instead.
- clock+=3*day;store(8).write(draft());clock+=1000;store(40).write(draft());expect(storage.getItem(store(8).key)).not.toBeNull();expect(storage.getItem(store(9).key)).toBeNull();expect(kept(storage)).toHaveLength(32);
+ clock+=3*day;await store(8).write(draft());clock+=1000;await store(40).write(draft());expect(storage.getItem(store(8).key)).not.toBeNull();expect(storage.getItem(store(9).key)).toBeNull();expect(kept(storage)).toHaveLength(32);
 });
 
 test('the active Inspector block per section roundtrips through the stored local draft and nothing else is added',async()=>{
  const {activeBlocksUI,restoreActiveBlocksUI}=await import('../web/inspector-blocks.ts');
  const storage=new MemoryStorage(),store=new InspectionDraftStore('single:rig',binding,()=>{},storage),value=draft();
- value.ui={...value.ui,...activeBlocksUI({rig:'chest-regions',playback:'physics-panel'})};expect(store.write(value)).toBe(true);
- const read=store.read()!;expect(restoreActiveBlocksUI(read.ui)).toEqual({rig:'chest-regions',playback:'physics-panel'});
+ value.ui={...value.ui,...activeBlocksUI({rig:'chest-regions',playback:'physics-panel'})};expect(await store.write(value)).toBe(true);
+ const read=(await store.read())!;expect(restoreActiveBlocksUI(read.ui)).toEqual({rig:'chest-regions',playback:'physics-panel'});
  expect(Object.keys(read.ui).filter(key=>!Object.hasOwn(draft().ui,key))).toEqual(['inspectorBlocks']);expect(read.bookmark).toEqual(draft().bookmark);
 });
 
@@ -209,9 +209,9 @@ async function openDraftReopenScenario(opts:{
  const ids=source.slice(source.indexOf('const viewInputIds='),source.indexOf('/** Restore once'));
  if(opts.legacyMain){
   connect=connect
-   .replace("let draft=store.read(session=>recoverSession(session,adapter.baseline)!==null);","const draft=store.read();")
+   .replace("let draft=await store.read(session=>recoverSession(session,adapter.baseline)!==null);","const draft=await store.read();")
    .replace("const notices=[document.getElementById('draft-recovery'),document.getElementById('review-draft-recovery')].filter((node):node is HTMLElement=>node!==null);","const notices=[document.getElementById('draft-recovery')].filter((node):node is HTMLElement=>node!==null);")
-   .replace("const prior=recovered?recoverSession(adapter.baseline,draft.session as T):null;\n  sameBaseline=draft.baseline===baseline||(prior!==null&&draft.baseline===await sessionFingerprint(prior));\n  if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){store.clear();draft=null;recovered=null;}","sameBaseline=draft.baseline===baseline;")
+   .replace("const prior=recovered?recoverSession(adapter.baseline,draft.session as T):null;\n  sameBaseline=draft.baseline===baseline||(prior!==null&&draft.baseline===await sessionFingerprint(prior));\n  if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){await store.clear();draft=null;recovered=null;}","sameBaseline=draft.baseline===baseline;")
    .replace("status(recovered?'Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.':'Saved local draft conflicts with the current submitted review. Server status is unchanged; download or discard it.');","status('Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.');");
  }
  const legacyRecover=(value:unknown,base:typeof baseline):typeof baseline|null=>{
@@ -221,7 +221,7 @@ async function openDraftReopenScenario(opts:{
  };
  const scope=opts.mode==='single'?`single:rig:${opts.currentBinding.sourceHash}`:`compare:rig-a:${'b'.repeat(64)}:rig-b:${'c'.repeat(64)}`;
  const storage=new MemoryStorage();
- new InspectionDraftStore(scope,opts.savedBinding??opts.currentBinding,()=>{},storage).write(opts.saved);
+ await new InspectionDraftStore(scope,opts.savedBinding??opts.currentBinding,()=>{},storage).write(opts.saved);
  const script=`async function open(deps){const {InspectionDraftStore:Base,storage,scope,currentBaseline,currentBinding,bookmark,sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction,mode}=deps;
  class HTMLInputElement{hasAttribute(name){return name==='data-app-preference'&&this.id.startsWith('settings-');}constructor(id,type,value,checked=false){Object.assign(this,{id,type,value,checked,name:''});}}class HTMLSelectElement{hasAttribute(name){return name==='data-app-preference'&&this.id.startsWith('settings-');}constructor(id,value,values){this.id=id;this.value=value;this.options=values.map(value=>({value}));}}class HTMLTextAreaElement{hasAttribute(){return false;}constructor(id,value=''){this.id=id;this.value=value;}}
  const nodes=[new HTMLSelectElement('review-status',currentBaseline.status,['pending','approved','changes-requested']),new HTMLSelectElement('status',currentBaseline.status,['pending','approved','changes-requested']),new HTMLTextAreaElement('checkpoint-note',''),new HTMLInputElement('feedback-summary','text',''),new HTMLInputElement('summary','text','')];
@@ -242,7 +242,7 @@ async function openDraftReopenScenario(opts:{
   statusButtons:()=>statusNotice.children.map(b=>b.textContent),
   actionNodes:()=>({status:statusNotice.children,dialog:dialogNotice.children}),
   dialogButtons:()=>mode==='single'?dialogNotice.children.map(b=>b.textContent):statusNotice.children.map(b=>b.textContent),
-  clickInDialog:label=>{const list=mode==='single'?dialogNotice.children:statusNotice.children,b=list.find(x=>x.textContent===label);if(!b)throw new Error('missing dialog recovery action: '+label);b.onclick();},
+  clickInDialog:label=>{const list=mode==='single'?dialogNotice.children:statusNotice.children,b=list.find(x=>x.textContent===label);if(!b)throw new Error('missing dialog recovery action: '+label);return b.onclick();},
   downloads:async()=>Promise.all(downloads.map(async d=>({download:d.download,text:await d.blob.text()}))),
   submit:async()=>{if(conflict)throw new Error('Resolve the saved local draft conflict before submitting.');const saved={...structuredClone(current),updatedAt:'2026-11-02T00:00:00.000Z'};current=saved;dirty=false;await connection.submitted(saved);return saved;}
  };}`;
@@ -257,7 +257,7 @@ async function openDraftReopenScenario(opts:{
   actionNodes():{status:HTMLButtonElement[];dialog:HTMLButtonElement[]};
   statusButtons():string[];
   dialogButtons():string[];
-  clickInDialog(label:string):void;
+  clickInDialog(label:string):Promise<void>|void;
   downloads():Promise<{download:string;text:string}[]>;
   submit():Promise<Record<string,any>>;
  };
@@ -339,10 +339,10 @@ test('#301 Bar 3 & Bar 4: real conflict refuses submit, exposes download/recover
   for(let i=0;i<actions.status.length;i++){expect(actions.status[i]).not.toBe(actions.dialog[i]);expect(actions.status[i]!.type).toBe('button');expect(actions.dialog[i]!.type).toBe('button');expect(actions.status[i]!.onclick).toBe(actions.dialog[i]!.onclick);}
   expect(recoverApp.statusButtons()).toEqual(['Download saved local draft','Recover local draft as pending','Discard conflicting local draft']);
   expect(recoverApp.state().dialogStatusText).toBe('Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.');
-  recoverApp.clickInDialog('Download saved local draft');
+  await recoverApp.clickInDialog('Download saved local draft');
   const downloaded=await recoverApp.downloads();
   expect(downloaded).toHaveLength(1);expect(downloaded[0]!.download).toBe('review-local-draft.json');expect(JSON.parse(downloaded[0]!.text).session.feedback).toEqual([item]);
-  recoverApp.clickInDialog('Recover local draft as pending');
+  await recoverApp.clickInDialog('Recover local draft as pending');
   expect(recoverApp.state()).toMatchObject({conflict:false,dirty:true,statusWidget:'pending',dialogStatusText:'Recovered local draft as pending · not submitted'});
   expect(recoverApp.dialogButtons()).toEqual([]);expect(recoverApp.statusButtons()).toEqual([]);
   expect(recoverApp.state().current.feedback).toEqual([item]);
@@ -355,7 +355,7 @@ test('#301 Bar 3 & Bar 4: real conflict refuses submit, exposes download/recover
  const discardApp=await openDraftReopenScenario({mode:'single',saved:conflictingSingleDraft,currentBaseline:submittedSingle,currentBinding:binding});
  try{
   expect(discardApp.state().conflict).toBe(true);
-  discardApp.clickInDialog('Discard conflicting local draft');
+  await discardApp.clickInDialog('Discard conflicting local draft');
   expect(discardApp.state()).toMatchObject({conflict:false,dirty:false,statusWidget:'approved',dialogStatusText:'Local draft discarded · current submitted review retained.'});
   expect(discardApp.dialogButtons()).toEqual([]);expect(discardApp.statusButtons()).toEqual([]);
   const savedAfterDiscard=await discardApp.submit();
@@ -373,9 +373,9 @@ test('#301 Bar 3 & Bar 4: real conflict refuses submit, exposes download/recover
   expect(compareConflictApp.state().conflict).toBe(true);
   await expect(compareConflictApp.submit()).rejects.toThrow('Resolve the saved local draft conflict before submitting.');
   expect(compareConflictApp.dialogButtons()).toEqual(['Download saved local draft','Recover local draft as pending','Discard conflicting local draft']);
-  compareConflictApp.clickInDialog('Download saved local draft');
+  await compareConflictApp.clickInDialog('Download saved local draft');
   expect((await compareConflictApp.downloads())).toHaveLength(1);
-  compareConflictApp.clickInDialog('Recover local draft as pending');
+  await compareConflictApp.clickInDialog('Recover local draft as pending');
   expect(compareConflictApp.state()).toMatchObject({conflict:false,dirty:true,statusWidget:'pending'});
   expect(compareConflictApp.state().current.feedback).toEqual([compareItem]);
   expect(compareConflictApp.state().current.binding).toEqual(submittedCompare.binding);
@@ -455,4 +455,239 @@ test('#301 Bar 6: planted legacy-main controls fail every new #301 bar',async()=
  try{
   expect(legacyConflict.dialogButtons()).toEqual([]); // fails Bar 3: no recovery controls inside #review-dialog
  }finally{legacyConflict.connection.dispose();}
+});
+
+
+// A bounded IDB test double: staged writes, request-success-before-commit, abort rollback and cursor deletion.
+// It deliberately does not claim native-browser admission/eviction or IndexedDB conformance coverage.
+class DraftIDB {
+ values=new Map<string,{key:IDBValidKey;value:Blob}>();
+ failWrite=false;
+ failRead=false;
+ failOpen=false;
+ events:string[]=[];
+ private created=false;
+ private gate:{started:()=>void;promise:Promise<void>}|null=null;
+ holdWrite():{started:Promise<void>;release:()=>void} {
+  let started!:()=>void,release!:()=>void;
+  const begin=new Promise<void>(resolve=>started=resolve),promise=new Promise<void>(resolve=>release=resolve);
+  this.gate={started,promise};return {started:begin,release};
+ }
+ readonly factory={open:(name:string,version:number)=>{
+  expect([name,version]).toEqual(['rig-review-inspection-drafts',1]);
+  const request:any={};
+  setTimeout(()=>{
+   if(this.failOpen){request.error=new Error('denied');request.onerror?.();return;}
+   request.result={createObjectStore:(store:string)=>{expect(store).toBe('crops');},close:()=>{},transaction:(store:string,mode:IDBTransactionMode)=>{
+    expect(store).toBe('crops');return this.transaction(mode);
+   }};
+   if(!this.created){this.created=true;request.onupgradeneeded?.();}
+   request.onsuccess?.();
+  },0);
+  return request;
+ }} as unknown as IDBFactory;
+ private transaction(mode:IDBTransactionMode):IDBTransaction {
+  const staged=new Map(this.values),operations:(()=>void)[]=[],tx:any={};
+  let aborted=false;
+  const request=(operation:()=>unknown)=>{
+   const value:any={};operations.push(()=>{value.result=operation();value.onsuccess?.();});return value;
+  };
+  const store={
+   put:(value:Blob,key:IDBValidKey)=>request(()=>{staged.set(JSON.stringify(key),{key:structuredClone(key),value:structuredClone(value)});return key;}),
+   get:(key:IDBValidKey)=>request(()=>structuredClone(staged.get(JSON.stringify(key))?.value)),
+   openCursor:()=>{
+    const value:any={},entries=[...staged.entries()];let index=0;
+    const next=()=>{const entry=entries[index++];value.result=entry?{key:entry[1].key,delete:()=>request(()=>staged.delete(entry[0])),continue:()=>operations.push(next)}:null;value.onsuccess?.();};
+    operations.push(next);return value;
+   },
+  };
+  tx.objectStore=()=>store;
+  tx.abort=()=>{aborted=true;tx.error=new Error('aborted');};
+  setTimeout(async()=>{
+   if(!aborted)for(let i=0;i<operations.length;i++)operations[i]!();
+   if(mode==='readwrite'&&this.gate){const gate=this.gate;this.gate=null;gate.started();await gate.promise;}
+   if(aborted||mode==='readwrite'&&this.failWrite||mode==='readonly'&&this.failRead){tx.error=new Error('aborted');this.events.push('abort');tx.onabort?.();return;}
+   if(mode==='readwrite')this.values=staged;
+   this.events.push(mode==='readwrite'?'commit':'read');tx.oncomplete?.();
+  },0);
+  return tx;
+ }
+}
+
+// Existing dependencies only: valid incompressible PNGs, not huge strings masquerading as image evidence.
+import {PNG} from 'pngjs';
+import {createHash} from 'node:crypto';
+function cropDraft(count=1):LocalInspectionDraft {
+ const value=draft();
+ const feedback=Array.from({length:count},(_,index)=>{
+  const image=new PNG({width:160,height:160});let seed=index+1;
+  for(let i=0;i<image.data.length;i++){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;image.data[i]=seed&255;}
+  const bytes=PNG.sync.write(image),sha256=createHash('sha256').update(bytes).digest('hex');
+  const comment={schema:'rig-review-comment/1',mode:'setup',viewport:'rig',frame:{index:0,basis:'producer'},time:0,animation:'idle',sourceHash:binding.sourceHash,modelHash:binding.rigs[0],referenceHash:null,referenceId:null,camera,screen:{x:0,y:0,width:10,height:10},world:{x:0,y:0,width:10,height:10},slots:[],crop:{path:`comment-crops/${sha256}.png`,sha256,png:'data:image/png;base64,'+bytes.toString('base64'),width:160,height:160},bookmark:bookmark()};
+  return {id:'crop-'+index,frameStart:0,frameEnd:0,target:{kind:'rig',name:'rig'},category:'quality',summary:'Original crop '+index,context:{animation:'idle',time:0,frame:0,comment}};
+ });
+ value.session={...baseline,status:'changes-requested',feedback};return value;
+}
+function commentCrops(value:LocalInspectionDraft):{png:string;sha256:string;width:number;height:number}[] {
+ return (value.session as {feedback:any[]}).feedback.map(item=>item.context.comment.crop);
+}
+function idbStore(storage:MemoryStorage,idb:DraftIDB|null,scope='single:rig',warnings:string[]=[]){
+ return new InspectionDraftStore(scope,binding,message=>warnings.push(message),storage,Date.now,idb?.factory??null);
+}
+
+test('#816 multi-crop drafts above 512 KiB keep exact PNGs and hydrate before canonical recovery, with no private keys in source data',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb),value=cropDraft(8),original=structuredClone(value);
+ expect(new TextEncoder().encode(JSON.stringify(value)).length).toBeGreaterThan(512*1024);
+ expect(await store.write(value)).toBe(true);
+ const raw=storage.getItem(store.key)!;
+ expect(new TextEncoder().encode(raw).length).toBeLessThanOrEqual(512*1024);
+ expect(JSON.parse(raw).schema).toBe('rig-review-local-draft/2');expect(raw).not.toContain('data:image/png');
+ expect(idb.values.size).toBe(8);
+ const loaded=(await store.read())!;
+ expect(loaded).toEqual(original);expect(value).toEqual(original);
+ expect(recoverSession(loaded.session,baseline)?.feedback).toEqual((original.session as any).feedback);
+ expect(JSON.stringify(loaded)).not.toContain('draft-crop:');expect(JSON.stringify(value)).not.toContain('draft-crop:');
+ loaded.inputs['feedback-summary']!.value='mutated after restore';expect((await store.read())?.inputs).toEqual(original.inputs);
+});
+
+test('#816 legacy inline /1 reads unchanged without IDB and only the next save uses private /2',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb),value=cropDraft(),raw=JSON.stringify(value);
+ storage.setItem(store.key,raw);idb.failOpen=true;
+ expect(await store.read()).toEqual(value);expect(storage.getItem(store.key)).toBe(raw);expect(idb.events).toEqual([]);
+ idb.failOpen=false;expect(await store.write(value)).toBe(true);
+ expect(JSON.parse(storage.getItem(store.key)!).schema).toBe('rig-review-local-draft/2');expect(await store.read()).toEqual(value);
+});
+
+test('#816 request success is insufficient: crop transaction commits before metadata, and queued clear cannot resurrect a save',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb),value=cropDraft(),expected=structuredClone(value),gate=idb.holdWrite();
+ const saved=store.write(value);commentCrops(value)[0]!.png='changed during await';value.inputs['feedback-summary']!.value='later';
+ await gate.started;expect(storage.getItem(store.key)).toBeNull();expect(idb.values.size).toBe(0);
+ const read=store.read(),cleared=store.clear();gate.release();
+ expect(await saved).toBe(true);expect(await read).toEqual(expected);await cleared;
+ expect(storage.getItem(store.key)).toBeNull();expect(idb.values.size).toBe(0);
+ expect(await store.write(expected)).toBe(true);expect(await store.read()).toEqual(expected);
+});
+
+test('#816 clear deletes only this draft scope and revision even when comments share digests',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),a=idbStore(storage,idb),b=idbStore(storage,idb,'single:other'),value=cropDraft();
+ const revisedBinding={...binding,sourceHash:'f'.repeat(64)},revisedValue={...cropDraft(),sourceHash:revisedBinding.sourceHash,bookmark:{...bookmark(),binding:revisedBinding}};
+ const c=new InspectionDraftStore('single:rig',revisedBinding,()=>{},storage,Date.now,idb.factory);
+ await a.write(value);await b.write(value);await c.write(revisedValue);storage.setItem('unrelated','keep');
+ await a.clear();expect(idb.values.size).toBe(2);expect(await b.read()).toEqual(value);expect(await c.read()).toEqual(revisedValue);expect(storage.getItem('unrelated')).toBe('keep');
+});
+
+for(const failure of ['absent','denied','abort'] as const)test(`#816 IDB ${failure} keeps under-cap inline fallback and retains older draft on oversized failure`,async()=>{
+ const storage=new MemoryStorage(),idb=failure==='absent'?null:new DraftIDB(),warnings:string[]=[],store=idbStore(storage,idb,'single:rig',warnings);
+ if(idb){idb.failOpen=failure==='denied';idb.failWrite=failure==='abort';}
+ const value=cropDraft();expect(await store.write(value)).toBe(true);
+ const raw=storage.getItem(store.key)!;expect(JSON.parse(raw).schema).toBe('rig-review-local-draft/1');expect(await store.read()).toEqual(value);
+ expect(await store.write(cropDraft(8))).toBe(false);expect(storage.getItem(store.key)).toBe(raw);expect(warnings.at(-1)).toContain('512 KiB');
+ if(idb)expect(idb.values.size).toBe(0);
+});
+
+test('#816 localStorage failure after IDB commit retains the previous recoverable snapshot',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb),first=cropDraft();
+ await store.write(first);const original=storage.getItem(store.key),set=storage.setItem;
+ storage.setItem=()=>{throw new Error('quota');};
+ expect(await store.write(cropDraft(2))).toBe(false);expect(storage.getItem(store.key)).toBe(original);
+ storage.setItem=set;expect(await store.read()).toEqual(first);
+});
+
+for(const corruption of ['missing','digest','dimensions','signature','scope'] as const)test(`#816 ${corruption} drops only one image comment, preserving N-1 crops, general comments and order`,async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb),value=cropDraft(3),warnings:string[]=[];
+ const session=value.session as {feedback:any[]},pointed=session.feedback;
+ session.feedback=[{...feedbackItem('General before'),id:'general-before'},pointed[0],pointed[1],{...feedbackItem('General between'),id:'general-between'},pointed[2]];
+ const expected={...structuredClone(value),session:{...structuredClone(session),feedback:structuredClone(session.feedback.filter(row=>row.id!=='crop-1'))}};
+ await store.write(value);const sha=pointed[1].context.comment.crop.sha256,key=JSON.stringify([store.key,'crop-1',sha]),entry=idb.values.get(key)!;
+ if(corruption==='missing')idb.values.delete(key);
+ if(corruption==='scope'){idb.values.delete(key);idb.values.set(JSON.stringify(['other-scope','crop-1',sha]),entry);}
+ if(corruption==='digest')idb.values.set(key,{...entry,value:new Blob([await idb.values.get(JSON.stringify([store.key,'crop-0',pointed[0].context.comment.crop.sha256]))!.value.arrayBuffer()])});
+ if(corruption==='dimensions'){const packed=JSON.parse(storage.getItem(store.key)!);packed.session.feedback[2].context.comment.crop.width++;storage.setItem(store.key,JSON.stringify(packed));}
+ if(corruption==='signature'){
+  const bytes=new Uint8Array(await entry.value.arrayBuffer());bytes[0]=0;
+  const digest=createHash('sha256').update(bytes).digest('hex'),packed=JSON.parse(storage.getItem(store.key)!),crop=packed.session.feedback[2].context.comment.crop;
+  crop.sha256=digest;crop.path=`comment-crops/${digest}.png`;crop.png='draft-crop:'+digest;
+  const replacement=[store.key,'crop-1',digest];idb.values.set(JSON.stringify(replacement),{key:replacement,value:new Blob([bytes])});storage.setItem(store.key,JSON.stringify(packed));
+ }
+ const raw=storage.getItem(store.key),blobsBefore=idb.values.size,reopen=idbStore(storage,idb,'single:rig',warnings),loaded=(await reopen.read())!;
+ expect(loaded).toEqual(expected);expect((loaded.session as {feedback:unknown[]}).feedback).toHaveLength(4);
+ expect(recoverSession<Omit<typeof baseline,'feedback'>&{feedback:unknown[]}>(loaded.session,baseline)?.feedback).toEqual(expected.session.feedback);
+ expect(JSON.stringify(loaded)).not.toContain('draft-crop:');expect(storage.getItem(store.key)).toBe(raw);expect(idb.values.size).toBe(blobsBefore);expect(warnings).toEqual([]);
+ expect(await reopen.write(loaded)).toBe(true);
+});
+
+for(const corruption of ['missing','digest'] as const)test(`#816 identical PNGs with distinct comment IDs remain isolated after one ${corruption} entry`,async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb),value=cropDraft(),session=value.session as {feedback:any[]};
+ const original=session.feedback[0],sibling={...structuredClone(original),id:'same-png-other-comment',summary:'Different comment, identical pixels'};
+ session.feedback=[original,feedbackItem('General survives'),sibling];
+ await store.write(value);const sha=original.context.comment.crop.sha256,key=JSON.stringify([store.key,original.id,sha]),otherKey=JSON.stringify([store.key,sibling.id,sha]);
+ expect(idb.values.size).toBe(2);expect(idb.values.has(key)).toBe(true);expect(idb.values.has(otherKey)).toBe(true);
+ if(corruption==='missing')idb.values.delete(key);else {const bytes=new Uint8Array(await idb.values.get(key)!.value.arrayBuffer());bytes[bytes.length-1]=bytes[bytes.length-1]!^1;idb.values.set(key,{key:[store.key,original.id,sha],value:new Blob([bytes])});}
+ const loaded=(await store.read())!,expected=[session.feedback[1],sibling];
+ expect((loaded.session as {feedback:unknown[]}).feedback).toEqual(expected);expect(recoverSession<Omit<typeof baseline,'feedback'>&{feedback:unknown[]}>(loaded.session,baseline)?.feedback).toEqual(expected);
+ expect(JSON.stringify(loaded)).not.toContain('draft-crop:');expect(await idb.values.get(otherKey)!.value.arrayBuffer()).toEqual(await new Blob([Buffer.from(sibling.context.comment.crop.png.slice(22),'base64')]).arrayBuffer());
+});
+
+for(const invalid of ['binding','version','marker','owner','limit'] as const)test(`#816 invalid ${invalid} remains a whole-draft failure rather than partial recovery`,async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb),value=cropDraft(2),warnings:string[]=[];
+ await store.write(value);const packed=JSON.parse(storage.getItem(store.key)!);
+ if(invalid==='binding')packed.sourceHash='f'.repeat(64);
+ if(invalid==='version')packed.schema='unsupported';
+ if(invalid==='marker')packed.session.feedback[1].context.comment.crop.png='wrong-marker';
+ if(invalid==='owner')delete packed.session.feedback[1].id;
+ if(invalid==='limit')packed.ui.large='x'.repeat(512*1024);
+ const raw=JSON.stringify(packed);storage.setItem(store.key,raw);
+ const reopen=idbStore(storage,idb,'single:rig',warnings);expect(await reopen.read()).toBeNull();expect(reopen.recovery()).toBe(raw);
+ expect(warnings.at(-1)).toContain('remains in storage');expect(await reopen.write(value)).toBe(false);expect(storage.getItem(store.key)).toBe(raw);
+});
+
+test('#816 metadata remains capped at 512 KiB and write snapshots source bindings before asynchronous work',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),value=cropDraft(),original=structuredClone(value),mutable=structuredClone(binding);
+ const store=new InspectionDraftStore('single:rig',mutable,()=>{},storage,Date.now,idb.factory);
+ mutable.sourceHash='f'.repeat(64);expect(await store.write(value)).toBe(true);expect(await store.read()).toEqual(original);
+ const raw=storage.getItem(store.key),large=cropDraft();large.ui={large:'x'.repeat(512*1024)};
+ expect(await store.write(large)).toBe(false);expect(storage.getItem(store.key)).toBe(raw);
+});
+
+test('#816 queued save cannot resurrect submitted dirty state; clean view/input state remains and only its blobs are reclaimed',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),saved=cropDraft();saved.baseline=await sessionFingerprint(baseline);
+ const app=await openFormCoordinator(saved,null,{storage,factory:idb.factory}),other=idbStore(storage,idb,'single:other');
+ try{
+  await other.write(cropDraft());const gate=idb.holdWrite();app.connection.save();await gate.started;
+  const submitted=structuredClone(app.state().current);app.edit(submitted,false);
+  const done=app.connection.submitted(submitted);gate.release();await done;
+  const read=await idbStore(storage,idb).read();expect(read?.reviewDirty).toBe(false);expect(read?.baseline).toBe(await sessionFingerprint(submitted));
+  expect(read?.inputs['target-name']?.value).toBe('server target');expect(read?.bookmark).toMatchObject({binding});
+  expect(idb.values.size).toBe(1);expect(await other.read()).not.toBeNull();expect(app.state().current).toEqual(submitted);
+ }finally{app.connection.dispose();}
+});
+
+for(const timing of ['before','after'] as const)test(`#816 edits ${timing} the submit callback survive pending-save cleanup with the new baseline`,async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),saved=cropDraft();saved.baseline=await sessionFingerprint(baseline);
+ const app=await openFormCoordinator(saved,null,{storage,factory:idb.factory});
+ try{
+  const gate=idb.holdWrite();app.connection.save();await gate.started;
+  const submitted=structuredClone(app.state().current),ongoing=(cropDraft(2).session as typeof baseline);
+  app.edit(timing==='before'?ongoing:submitted,timing==='before');
+  const done=app.connection.submitted(submitted);
+  if(timing==='after')app.edit(ongoing,true);
+  app.connection.save();gate.release();await done;
+  // Wait for the later autosave's metadata, without another submit that could hide lost edits.
+  const key=idbStore(storage,idb).key;
+  for(let attempt=0;attempt<100;attempt++){
+   if(JSON.parse(storage.getItem(key)??'null')?.session?.feedback?.length===2)break;
+   await new Promise(resolve=>setTimeout(resolve,5));
+  }
+  const read=(await idbStore(storage,idb).read())!;expect(read.reviewDirty).toBe(true);expect(read.baseline).toBe(await sessionFingerprint(submitted));expect(read.session).toEqual(ongoing);
+  expect(idb.values.size).toBe(2);expect(JSON.stringify(ongoing)).not.toContain('draft-crop:');
+ }finally{app.connection.dispose();}
+});
+
+
+for(const failure of ['open','read-abort'] as const)test(`#816 IDB ${failure} retains whole-draft recovery rather than dropping comments`,async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb),value=cropDraft(),warnings:string[]=[];
+ await store.write(value);const raw=storage.getItem(store.key);idb.failOpen=failure==='open';idb.failRead=failure==='read-abort';
+ const reopen=idbStore(storage,idb,'single:rig',warnings);
+ expect(await reopen.read()).toBeNull();expect(reopen.recovery()).toBe(raw);expect(warnings.at(-1)).toContain('remains in storage');
+ expect(await reopen.write(draft())).toBe(false);expect(storage.getItem(store.key)).toBe(raw);
 });

@@ -154,6 +154,30 @@ export function recoverSession<T extends {id:string;revision:string;sourceHash:s
 /** Drafts kept per origin before least-recently-written eviction; recent drafts are never evicted. */
 export const maximumDrafts=32,protectedDraftMs=24*60*60*1000;
 const draftPrefix='rig-review-draft/1:',draftIndex='rig-review-draft-index/1';
+const cropDatabase='rig-review-inspection-drafts',cropStore='crops',cropReference='draft-crop:';
+/** Only existing stage-comment crops in inspection sessions belong to this private transport. */
+function draftCrops(session:unknown):{row:{id:string};crop:Record<string,unknown>}[] {
+ if(!session||typeof session!=='object'||!Array.isArray((session as PersistenceSession).feedback))return [];
+ return (session as PersistenceSession).feedback.flatMap(item=>{
+  const comment=(item as {context?:{comment?:unknown}}|null)?.context?.comment;
+  if(!hasStageComment(comment))return [];
+  const row=record(item,'draft');if(typeof row.id!=='string')throw new Error('Draft review state invalid');
+  return [{row:row as {id:string},crop:record((comment as {crop:unknown}).crop,'crop')}];
+ });
+}
+/** Browser counterpart of comment-crops.ts's signature/dimension/digest boundary (no Node imports). */
+async function draftPng(blob:Blob,crop:Record<string,unknown>):Promise<string|null> {
+ if(!(blob instanceof Blob)||blob.size>150000)return null;
+ const bytes=new Uint8Array(await blob.arrayBuffer()),view=new DataView(bytes.buffer);
+ if(bytes.length<33||[137,80,78,71,13,10,26,10].some((value,i)=>bytes[i]!==value)||
+  view.getUint32(8)!==13||String.fromCharCode(...bytes.slice(12,16))!=='IHDR'||
+  ![crop.width,crop.height].every(n=>Number.isSafeInteger(n)&&Number(n)>0&&Number(n)<=1024)||
+  view.getUint32(16)!==crop.width||view.getUint32(20)!==crop.height)return null;
+ const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(n=>n.toString(16).padStart(2,'0')).join('');
+ if(digest!==crop.sha256||crop.path!==`comment-crops/${digest}.png`)return null;
+ let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);
+ const png='data:image/png;base64,'+btoa(binary);if(png.length>200000)return null;return png;
+}
 /** Storage is confined to this app; the scope carries the source identity (`single:<id>:<sourceHash>`), so
  * revisions of one package opened on one origin keep separate drafts. Opening deletes nothing; writing evicts
  * the least-recently-written drafts beyond 32, except any written within the last 24 hours. */
@@ -162,9 +186,11 @@ export class InspectionDraftStore {
  private blocked=false;
  private rawRecovery:string|null=null;
  private priorKey:string|null=null;
+ private pending:Promise<void>=Promise.resolve();
  recovery():string|null{return this.rawRecovery;}
  readonly key:string;
- constructor(private readonly scope:string,private readonly binding:InspectionBinding,private readonly warn:(message:string)=>void,storage?:Storage,private readonly now:()=>number=Date.now){
+ constructor(private readonly scope:string,private readonly binding:InspectionBinding,private readonly warn:(message:string)=>void,storage?:Storage,private readonly now:()=>number=Date.now,private readonly factory?:IDBFactory|null){
+  this.binding=structuredClone(binding);
   this.key=`${draftPrefix}${scope}:${binding.sourceHash}`;
   try{this.storage=storage??localStorage;this.storage.getItem(draftIndex);}catch{this.storage=null;warn('Local draft storage unavailable. Keep this page open or export feedback before leaving.');}
  }
@@ -175,7 +201,7 @@ export class InspectionDraftStore {
   return times;
  }
  private evict():void{
-  const storage=this.storage!,now=this.now(),times=this.written();if(this.priorKey&&this.priorKey!==this.key){storage.removeItem(this.priorKey);times.delete(this.priorKey);this.priorKey=null;}times.set(this.key,now);
+  const storage=this.storage!,now=this.now(),times=this.written();if(this.priorKey&&this.priorKey!==this.key){storage.removeItem(this.priorKey);times.delete(this.priorKey);}times.set(this.key,now);
   const old=[...times].filter(([key,time])=>key!==this.key&&now-time>protectedDraftMs).sort((a,b)=>a[1]-b[1]);
   for(const [key]of old){if(times.size<=maximumDrafts)break;storage.removeItem(key);times.delete(key);}
   storage.setItem(draftIndex,JSON.stringify(Object.fromEntries(times)));
@@ -183,21 +209,105 @@ export class InspectionDraftStore {
  private parseDraft(raw:string,expectedBinding:InspectionBinding):LocalInspectionDraft{
   if(new TextEncoder().encode(raw).length>maximumDraftBytes)throw new Error('Draft exceeds 512 KiB');const o=record(JSON.parse(raw),'draft');keys(o,['schema','sourceHash','baseline','savedAt','reviewDirty','bookmark','inputs','session','ui'],'draft');if(o.schema!=='rig-review-local-draft/1'||o.sourceHash!==expectedBinding.sourceHash)throw new Error('Draft binding/version differs');if(typeof o.reviewDirty!=='boolean')throw new Error('Draft review state invalid');const bookmark=parseBookmark(o.bookmark,expectedBinding),baseline=hash(o.baseline);if(typeof o.savedAt!=='string'||!Number.isFinite(Date.parse(o.savedAt)))throw new Error('Draft timestamp invalid');const ui=record(o.ui,'draft UI');for(const [k,v]of Object.entries(ui)){text(k,'draft UI key');if(v!==null&&typeof v!=='string'&&typeof v!=='number'||typeof v==='number'&&!Number.isFinite(v))throw new Error('Draft UI value invalid');}return {schema:o.schema,sourceHash:this.binding.sourceHash,baseline,savedAt:o.savedAt,reviewDirty:o.reviewDirty,bookmark:{...bookmark,binding:{...bookmark.binding,sourceHash:this.binding.sourceHash}},inputs:parseInputs(o.inputs),session:o.session,ui:ui as LocalInspectionDraft['ui']};
  }
- read(canRecover?:(session:unknown)=>boolean):LocalInspectionDraft|null {
-  if(!this.storage)return null;try{const raw=this.storage.getItem(this.key);if(!raw){
-   if(this.binding.mode==='compare'&&canRecover){
-    const prefix=`${draftPrefix}${this.scope}:`,candidates=[...this.written().entries()].filter(([k])=>k!==this.key&&k.startsWith(prefix)).sort((a,b)=>b[1]-a[1]);
-    for(const [candidateKey]of candidates){
-     try{const candidateRaw=this.storage.getItem(candidateKey);if(!candidateRaw)continue;const sourceHash=hash(candidateKey.slice(prefix.length)),parsed=this.parseDraft(candidateRaw,{...this.binding,sourceHash});if(!canRecover(parsed.session))continue;this.priorKey=candidateKey;this.rawRecovery=candidateRaw;return parsed;}catch{}
-    }
+ private ordered<T>(operation:()=>Promise<T>):Promise<T> {
+  const result=this.pending.then(operation);this.pending=result.then(()=>{},()=>{});return result;
+ }
+ private openCrops():Promise<IDBDatabase> {
+  return new Promise<IDBDatabase>((resolve,reject)=>{
+   const factory=this.factory===undefined?globalThis.indexedDB:this.factory;
+   if(!factory){reject(new Error('COMMENT_CROP_STATE_UNAVAILABLE: stored crop cannot be read'));return;}
+   const request=factory.open(cropDatabase,1);let blocked=false;
+   request.onupgradeneeded=()=>request.result.createObjectStore(cropStore);
+   request.onerror=()=>reject(request.error);
+   request.onblocked=()=>{blocked=true;reject(new Error('COMMENT_CROP_STATE_UNAVAILABLE: stored crop cannot be read'));};
+   request.onsuccess=()=>{if(blocked)request.result.close();else resolve(request.result);};
+  });
+ }
+ /** Resolve only on transaction completion, never an individual request's success. */
+ private async crops(mode:IDBTransactionMode,visit:(store:IDBObjectStore)=>void):Promise<void> {
+  const db=await this.openCrops();
+  try{await new Promise<void>((resolve,reject)=>{
+   const transaction=db.transaction(cropStore,mode);
+   transaction.oncomplete=()=>resolve();transaction.onabort=()=>reject(transaction.error);
+   transaction.onerror=()=>{};
+   try{visit(transaction.objectStore(cropStore));}catch(error){transaction.abort();reject(error);}
+  });}finally{db.close();}
+ }
+ private async unpack(raw:string,key:string,expected:InspectionBinding):Promise<LocalInspectionDraft> {
+  if(new TextEncoder().encode(raw).length>maximumDraftBytes)throw new Error('Draft exceeds 512 KiB');
+  const packed=record(JSON.parse(raw),'draft');
+  if(packed.schema!=='rig-review-local-draft/2')return this.parseDraft(raw,expected);
+  // Check the bounded envelope/binding before touching IDB; validate the full session only after hydration.
+  const draft=this.parseDraft(JSON.stringify({...packed,schema:'rig-review-local-draft/1'}),expected);
+  const crops=draftCrops(draft.session),blobs=new Map<{id:string},Blob>();
+  if(crops.length)await this.crops('readonly',store=>{
+   for(const {row,crop}of crops){
+    if(crop.png!==cropReference+crop.sha256)throw new Error('COMMENT_CROP_STATE_UNAVAILABLE: stored crop cannot be read');
+    const request=store.get([key,row.id,hash(crop.sha256)]);request.onsuccess=()=>blobs.set(row,request.result);
    }
-   return null;
-  }this.rawRecovery=raw;return this.parseDraft(raw,this.binding);}catch(error){this.blocked=true;this.warn(`Saved local draft was not restored: ${error instanceof Error?error.message:String(error)}. It remains in storage for recovery.`);return null;}
+  });
+  // A completed read with missing/corrupt bytes loses only that image comment; transport failures still throw.
+  const unavailable=new Set<unknown>();
+  for(const {row,crop}of crops){const png=await draftPng(blobs.get(row)!,crop);if(png===null)unavailable.add(row);else crop.png=png;}
+  if(unavailable.size){const session=record(draft.session,'draft');session.feedback=(session.feedback as unknown[]).filter(row=>!unavailable.has(row));}
+  return draft;
  }
- write(draft:LocalInspectionDraft):boolean {
-  if(!this.storage||this.blocked)return false;try{const value=JSON.stringify(draft);if(new TextEncoder().encode(value).length>maximumDraftBytes)throw new Error('Draft exceeds 512 KiB');this.storage.setItem(this.key,value);try{this.evict();}catch{}return true;}catch(error){this.warn(`Local draft could not be saved: ${error instanceof Error?error.message:String(error)}. Export feedback before leaving.`);return false;}
+ read(canRecover?:(session:unknown)=>boolean):Promise<LocalInspectionDraft|null> {
+  return this.ordered(async()=>{
+   if(!this.storage)return null;try{const raw=this.storage.getItem(this.key);if(!raw){
+    if(this.binding.mode==='compare'&&canRecover){
+     const prefix=`${draftPrefix}${this.scope}:`,candidates=[...this.written().entries()].filter(([k])=>k!==this.key&&k.startsWith(prefix)).sort((a,b)=>b[1]-a[1]);
+     for(const [candidateKey]of candidates){
+      const candidateRaw=this.storage.getItem(candidateKey);if(!candidateRaw)continue;
+      let parsed:LocalInspectionDraft;
+      try{const sourceHash=hash(candidateKey.slice(prefix.length));parsed=await this.unpack(candidateRaw,candidateKey,{...this.binding,sourceHash});}
+      catch(error){let referenced=false;try{referenced=JSON.parse(candidateRaw).schema==='rig-review-local-draft/2';}catch{}if(!referenced)continue;this.priorKey=candidateKey;this.rawRecovery=candidateRaw;throw error;}
+      if(!canRecover(parsed.session))continue;this.priorKey=candidateKey;this.rawRecovery=JSON.parse(candidateRaw).schema==='rig-review-local-draft/2'?JSON.stringify(parsed):candidateRaw;return parsed;
+     }
+    }
+    return null;
+   }this.rawRecovery=raw;const parsed=await this.unpack(raw,this.key,this.binding);this.rawRecovery=JSON.parse(raw).schema==='rig-review-local-draft/2'?JSON.stringify(parsed):raw;return parsed;}catch(error){this.blocked=true;this.warn(`Saved local draft was not restored: ${error instanceof Error?error.message:String(error)}. It remains in storage for recovery.`);return null;}
+  });
  }
- clear():void {try{this.storage?.removeItem(this.key);if(this.priorKey&&this.priorKey!==this.key){this.storage?.removeItem(this.priorKey);this.priorKey=null;}this.blocked=false;this.rawRecovery=null;}catch{this.warn('Local draft could not be cleared.');}}
+ write(draft:LocalInspectionDraft):Promise<boolean> {
+  // Snapshot at invocation, before any await or queued storage operation can observe later edits.
+  const snapshot=JSON.stringify(draft);
+  return this.ordered(async()=>{
+   if(!this.storage||this.blocked)return false;
+   try{
+    const packed=JSON.parse(snapshot) as LocalInspectionDraft;
+    // Clean sessions are already durable on the server and are never restored as unsent feedback.
+    if(!packed.reviewDirty&&packed.session&&typeof packed.session==='object'){
+     packed.session={...packed.session,feedback:[]};
+    }
+    const crops=draftCrops(packed.session),blobs:{key:IDBValidKey;blob:Blob}[]=[];
+    for(const {row,crop}of crops){
+     if(typeof crop.png!=='string'||crop.png.length>200000||!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(crop.png))throw new Error('COMMENT_CROP_STATE_UNAVAILABLE: stored crop cannot be read');
+     blobs.push({key:[this.key,row.id,hash(crop.sha256)],blob:new Blob([Uint8Array.from(atob(crop.png.slice(22)),c=>c.charCodeAt(0))],{type:'image/png'})});
+     crop.png=cropReference+crop.sha256;
+    }
+    let value=JSON.stringify({...packed,schema:'rig-review-local-draft/2'});
+    if(new TextEncoder().encode(value).length>maximumDraftBytes)throw new Error('Draft exceeds 512 KiB');
+    try{if(blobs.length)await this.crops('readwrite',store=>{for(const {key,blob}of blobs)store.put(blob,key);});}
+    catch{value=snapshot;if(new TextEncoder().encode(value).length>maximumDraftBytes)throw new Error('Draft exceeds 512 KiB');}
+    // IDB has committed before localStorage can publish a crop reference. Failure retains the old draft.
+    this.storage.setItem(this.key,value);try{this.evict();}catch{}return true;
+   }catch(error){this.warn(`Local draft could not be saved: ${error instanceof Error?error.message:String(error)}. Export feedback before leaving.`);return false;}
+  });
+ }
+ clear():Promise<void> {
+  return this.ordered(async()=>{
+   const keys=[this.key,...(this.priorKey&&this.priorKey!==this.key?[this.priorKey]:[])];
+   try{
+    for(const key of keys)this.storage?.removeItem(key);
+    this.priorKey=null;this.blocked=false;this.rawRecovery=null;
+    // Only explicit clear/submission reclaims blobs, never opening, autosave or draft-index eviction.
+    try{await this.crops('readwrite',store=>{
+     const request=store.openCursor();request.onsuccess=()=>{const cursor=request.result;if(cursor){if(Array.isArray(cursor.key)&&keys.includes(String(cursor.key[0])))cursor.delete();cursor.continue();}};
+    });}catch{} // Unavailable IDB must not prevent clearing the local draft.
+   }catch{this.warn('Local draft could not be cleared.');}
+  });
+ }
 }
 
 interface PersistenceSession {id:string;revision:string;sourceHash:string;status:string;feedback:unknown[]}
@@ -218,7 +328,7 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
  const holdRestore=(value:boolean)=>{restoring=value;const body=document.body;if(value){if(body&&previousInert===null){previousInert=body.inert;body.inert=true;}}else if(body&&previousInert!==null){body.inert=previousInert;previousInert=null;}};
  let baseline=await sessionFingerprint(adapter.baseline);const status=adapter.onStatus,initialInputs=captureInputs();
  const store=new InspectionDraftStore(adapter.scope,adapter.binding,status);
- let draft=store.read(session=>recoverSession(session,adapter.baseline)!==null);
+ let draft=await store.read(session=>recoverSession(session,adapter.baseline)!==null);
  const notices=[document.getElementById('draft-recovery'),document.getElementById('review-draft-recovery')].filter((node):node is HTMLElement=>node!==null);
  const clearNotices=()=>{for(const node of notices)node.replaceChildren();};
  const appendAction=(label:string,onclick:()=>void)=>{for(const node of notices){const button=actionButton(label,onclick);node.append(button);}};
@@ -231,7 +341,7 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
   recovered=recoverSession(draft.session,adapter.baseline);
   const prior=recovered?recoverSession(adapter.baseline,draft.session as T):null;
   sameBaseline=draft.baseline===baseline||(prior!==null&&draft.baseline===await sessionFingerprint(prior));
-  if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){store.clear();draft=null;recovered=null;}
+  if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){await store.clear();draft=null;recovered=null;}
  }
  const raw=store.recovery();
  if(draft){
@@ -245,7 +355,7 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
  }
  if(raw&&(conflict||!draft))appendAction('Download saved local draft',()=>download(raw));
  if(conflict&&recovered)appendAction('Recover local draft as pending',()=>{try{adapter.restoreSession({...recovered,status:'pending'},true);conflict=false;adapter.onConflict(false);clearNotices();status('Recovered local draft as pending · not submitted');save();}catch(error){status(`Local draft recovery refused: ${error instanceof Error?error.message:String(error)}`);}});
- if(conflict)appendAction('Discard conflicting local draft',()=>{adapter.restoreSession(structuredClone(adapter.baseline),false);restoreInputs(initialInputs,viewInputIds);adapter.afterInputs();store.clear();conflict=false;adapter.onConflict(false);clearNotices();status('Local draft discarded · current submitted review retained.');save();});
+ if(conflict)appendAction('Discard conflicting local draft',async()=>{adapter.restoreSession(structuredClone(adapter.baseline),false);restoreInputs(initialInputs,viewInputIds);adapter.afterInputs();await store.clear();conflict=false;adapter.onConflict(false);clearNotices();status('Local draft discarded · current submitted review retained.');save();});
  const selected=location.hash.startsWith('#review=')?explicit:draft?.bookmark;
  let restored=location.hash.startsWith('#review=')||!!draft;
  if(selected){try{await adapter.restoreBookmark(selected,new AbortController().signal);restored=true;}catch(error){status(`Inspection was not restored: ${error instanceof Error?error.message:String(error)}`);}}
@@ -253,13 +363,20 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
   const excluded=new Set(viewInputIds);if(conflict||!draft.reviewDirty){excluded.add('review-status');excluded.add('status');excluded.add('checkpoint-note');for(const key of Object.keys(draft.inputs))if(key.startsWith('radio:outcome:'))excluded.add(key);}
   restoreInputs(draft.inputs,excluded);adapter.afterInputs();
  }
- if(raw&&!draft)appendAction('Discard unusable local draft',()=>{store.clear();clearNotices();status('Unusable local draft discarded for this review only.');save();});
+ if(raw&&!draft)appendAction('Discard unusable local draft',async()=>{await store.clear();clearNotices();status('Unusable local draft discarded for this review only.');save();});
+ let writes=Promise.resolve();
  restoring=false;
  if(draft&&!conflict&&draft.baseline!==baseline)save();
+ function snapshot():LocalInspectionDraft {
+  return structuredClone<LocalInspectionDraft>({schema:'rig-review-local-draft/1',sourceHash:adapter.binding.sourceHash,baseline,savedAt:new Date().toISOString(),reviewDirty:adapter.reviewDirty(),bookmark:parseBookmark(adapter.bookmark(),adapter.binding),inputs:captureInputs(),session:adapter.session(),ui:adapter.ui()});
+ }
+ async function persist(value:LocalInspectionDraft,navigation:number):Promise<void> {
+  value.baseline=baseline;
+  if(await store.write(value)&&!closed&&!restoring&&navigation===navigationGeneration){const url=new URL(location.href);url.hash=encodeBookmark(value.bookmark);history.replaceState(null,'',url);lastNavigationHash=url.hash;}
+ }
  function save():void {
   if(closed||restoring||conflict)return;
-  try{const bookmark=parseBookmark(adapter.bookmark(),adapter.binding);const value:LocalInspectionDraft={schema:'rig-review-local-draft/1',sourceHash:adapter.binding.sourceHash,baseline,savedAt:new Date().toISOString(),reviewDirty:adapter.reviewDirty(),bookmark,inputs:captureInputs(),session:adapter.session(),ui:adapter.ui()};
-   if(store.write(value)){const url=new URL(location.href);url.hash=encodeBookmark(bookmark);history.replaceState(null,'',url);lastNavigationHash=url.hash;}
+  try{const value=snapshot(),navigation=navigationGeneration;writes=writes.then(()=>persist(value,navigation)).catch(error=>{status(`Local view was not saved: ${error instanceof Error?error.message:String(error)}`);});
   }catch(error){status(`Local view was not saved: ${error instanceof Error?error.message:String(error)}`);}
  }
  function navigateView():void {
@@ -285,5 +402,9 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
  const events=['input','change','click','pointerup','wheel'] as const;for(const event of events)window.addEventListener(event,schedule,{passive:true});
  const interval=setInterval(()=>{if(!document.hidden)save();},1000);
  const copy=document.getElementById('copy-view');const copyView=async()=>{if(closed)return;try{const url=inspectionLink(location.href,adapter.bookmark());await navigator.clipboard.writeText(url.href);history.replaceState(null,'',url);lastNavigationHash=url.hash;status('View link copied · source-bound numeric region, no review decisions.');}catch(error){status(`View link was not copied: ${error instanceof Error?error.message:String(error)}`);}};if(copy)copy.onclick=copyView;
- return {restored,restoring:()=>restoring,save,submitted:async session=>{baseline=await sessionFingerprint(session);save();},dispose:()=>{save();closed=true;++navigationGeneration;navigationAbort?.abort();holdRestore(false);window.removeEventListener('hashchange',navigateView);window.removeEventListener('popstate',navigateView);if(copy?.onclick===copyView)copy.onclick=null;if(timer)clearTimeout(timer);clearInterval(interval);for(const event of events)window.removeEventListener(event,schedule);}};
+ return {restored,restoring:()=>restoring,save,submitted:session=>{
+  if(closed)return Promise.resolve();
+  const submitted=structuredClone(session),value=snapshot(),navigation=navigationGeneration;
+  writes=writes.then(async()=>{baseline=await sessionFingerprint(submitted);await store.clear();await persist(value,navigation);});return writes;
+ },dispose:()=>{save();closed=true;++navigationGeneration;navigationAbort?.abort();holdRestore(false);window.removeEventListener('hashchange',navigateView);window.removeEventListener('popstate',navigateView);if(copy?.onclick===copyView)copy.onclick=null;if(timer)clearTimeout(timer);clearInterval(interval);for(const event of events)window.removeEventListener(event,schedule);}};
 }
