@@ -668,3 +668,30 @@ test('#606 closed metadata grammar rejects malformed value/issue entries while r
     (p:any)=>{p.steps.push(structuredClone(p.steps[0]));},
   ]) {const bad=structuredClone(good);mutate(bad);expect(()=>parseJobPlanTextProjection(bad)).toThrow('PLAN_TEXT_METADATA_INVALID');}
 });
+
+test('#813 publication image projection excludes unrelated option sets without deleting retained history', async () => {
+  const f = await fixture();
+  await joinedVerdictFixture(f.root, '2-rigging-answers');
+  const questions = readProject(f.root).questions;
+  const pending = questions.find(question => question.editable)!;
+  f.setRecordPath('project.json');
+  const routes = retainedPublicationRoutes(f.session);
+  for (const includeInterview of [false, true]) {
+    f.setContext({...f.getContext(), plan: null, subjects: includeInterview ? [{kind: 'interview-picks',
+      questionId: pending.set.question, setId: pending.set.id}] : []});
+    const published = await f.publish();
+    const retained = f.session.retainedSource(published.publicationId);
+    const before = JSON.stringify(retained.questions);
+    const response = await routes(f.session.jobId, published.publicationId, published.instanceKey, 'api/interview',
+      new Request(f.origin + '/api/interview'));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.questions).toHaveLength(questions.length);
+    for (const question of body.questions) {
+      const original = questions.find(item => item.set.id === question.set.id)!;
+      expect(question.images).toHaveLength(includeInterview && original.set.id === pending.set.id ? original.images.length : 0);
+      expect(question.answer).toEqual(original.answer);
+    }
+    expect(JSON.stringify(retained.questions)).toBe(before);
+  }
+});
