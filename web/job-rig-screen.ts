@@ -171,7 +171,8 @@ export function createJobRigScreen(options: {
     let modals:JobRigScreenPrepared['modals'];
     const asks=options.window.state().pending.filter(ask=>ask.publicationId===display.publication.publicationId&&ask.subject.kind!=='review-verdict'&&ask.subject.kind!=='parts-verdict'&&jobRigScreenAsk(display,ask,checkpoints));
     if(!backdropOnly&&options.formDependencies){
-      const inspection=await prepareJobInspection(display,signal,true);
+      // The shared main workspace loads visuals; modal forms keep data and checkpoint evidence.
+      const inspection=await prepareJobInspection(display,signal,true,false);
       try{modals={inspection,forms:prepareJobForms(display,asks,ask=>formFor(ask,inspection,options.formDependencies!))};}
       catch(error){inspection.dispose();throw error;}
     }
