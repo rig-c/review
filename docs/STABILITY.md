@@ -412,7 +412,7 @@ preserve capability, origin, size, cancellation and replay checks.
 
 ## Changelog
 
-- Breaking, next cut 4.0.0 (#806): remove `startJobHub` and its `JobHubOptions`, `JobHubJobOptions`, `JobHubJob` and `JobOwnerHub` types; the uncalled semantic-job hub is deleted.
+- Breaking, 4.0.0 (#806): remove `startJobHub` and its `JobHubOptions`, `JobHubJobOptions`, `JobHubJob` and `JobOwnerHub` types; the uncalled semantic-job hub is deleted.
 
 ## Named export inventory
 

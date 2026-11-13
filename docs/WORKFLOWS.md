@@ -496,7 +496,7 @@ On the view you are inspecting, choose **Comment · C (n)**, drag over the detai
 
 The four-stage navigator preserves this entry and its explicit save behavior. Compiled sessions reuse the atlas surface read-only; see [Four inspection stages](PANELS.md#four-inspection-stages).
 
-The managed front forwards a query only to the landing page; every other route refuses one. Stage navigation never changes CLI arguments or package bindings.
+The legacy managed front forwarded a query only to the landing page; every other route refused one. Stage navigation never changes CLI arguments or package bindings.
 
 ## Standing live job workflow
 

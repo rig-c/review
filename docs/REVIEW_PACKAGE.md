@@ -1,6 +1,6 @@
 # Review package and existing-folder adapter v1
 
-The toolchain delivery flow is **Parts → Pose → Core (rigc) → Review → Play →
+The toolchain delivery flow is **Create → Parts → Pose → Core (rigc) → Review → Play →
 Adapter**. Review supplies human inspection and feedback bound to the exact
 reviewed sources; it neither replaces Core's build validation nor authors motion.
 The app uses the published `@rig-c/play` loader/player to preview artifacts during

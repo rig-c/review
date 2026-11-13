@@ -19,14 +19,14 @@ merge (R0). This documentation update adds no UI or public contract.
   through `setupEntryHtml` and `web/main.ts`; the old `/parts.html` URL redirects
   to the same entry (#745). Rig and parts do not have separate review pages.
 - **E2** Preserve public rig/compare, `/instances/<key>/…`, `/jobs/<jobId>/`,
-  `/hub/`, owner, language and capability URLs. Routing does not widen grants or
+  owner, language and capability URLs. Routing does not widen grants or
   change API contracts. See [public stability](STABILITY.md).
 - **E3** Record publications are hosted over the existing inspection screen
   (#754). Their checkpoint, signoff, reopen and interview forms open in a dialog.
   A record without a picture does not manufacture a model or package.
-- **Remaining:** legacy job-window owner surfaces still exist (#756); hub/owner
-  single-entry adoption is planned under F (#734). A shared component requirement
-  is not evidence that those migrations have shipped.
+- **Shipped:** #756 and hub/owner single-entry adoption F (#734) shipped in
+  [2.13.0](../CHANGELOG.md#2130). The remaining job window and hub were removed in
+  [4.0.0](../CHANGELOG.md#400).
 - **Compare is preserved:** header Compare remains two-build A/B comparison with
   a reference, enabled when a second build is supplied. Its existing host,
   layouts and controls remain unchanged. Card D is **PARKED**, not planned work.
@@ -215,8 +215,8 @@ These are subjects and hosts of the existing tool, not designs for new screens.
 | Record checkpoint, signoff, reopen, interview | Shipped hosting (#754) | Existing screen with a dialog; no model fabricated for a record without a picture |
 | Remaining interview-modal work | Planned B (#722) | Extend existing interview component |
 | Remaining record-modal feedback cleanup | Planned C (#715) | Move existing memo feedback to Comments without changing contracts |
-| Legacy job-window owner surfaces | Removal planned (#756) | Existing shared inspection and record-dialog homes |
-| Hub and owner workspace | Single-entry adoption planned F (#734) | Existing hosts remain until their migration lands |
+| Legacy job-window owner surfaces | #756 shipped in [2.13.0](../CHANGELOG.md#2130); remainder removed in [4.0.0](../CHANGELOG.md#400) | Existing shared inspection and record-dialog homes |
+| Hub and owner workspace | F (#734) shipped in [2.13.0](../CHANGELOG.md#2130); hub removed in [4.0.0](../CHANGELOG.md#400) | Owner workspace remains on the single entry |
 
 ## 4. Migration order
 
@@ -234,12 +234,13 @@ or ownership beyond the existing cards:
 
 - B (#722): remaining interview-modal work.
 - C (#715): remaining record-modal work, including memo feedback to Comments.
-- F (#734): hub/owner single-entry adoption.
-- #756: removal of remaining job-window owner surfaces.
 - #743: in-place update when the agent publishes a new result, keeping the
   selection, camera and time, and the act bar's status text after submit.
 - #725: a joined Create project opens at its current stage, including an
   interview-stage project with no build yet.
+
+F (#734): hub/owner single-entry adoption shipped in [2.13.0](../CHANGELOG.md#2130); hub removed in [4.0.0](../CHANGELOG.md#400).
+#756: shipped in [2.13.0](../CHANGELOG.md#2130); remaining job window removed in [4.0.0](../CHANGELOG.md#400).
 
 Card D is **PARKED**. Compare remains A/B with a reference. Difference is already
 shipped in Setup; neither a Compare-to-diff conversion nor a Compare migration

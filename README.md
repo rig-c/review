@@ -18,7 +18,7 @@ The app provides one inspection workspace for setup geometry and motion, compile
 
 ## Place in the toolchain
 
-[Parts](https://github.com/rig-c/parts) → [Pose](https://github.com/rig-c/pose) →
+[Create](https://github.com/rig-c/create) → [Parts](https://github.com/rig-c/parts) → [Pose](https://github.com/rig-c/pose) →
 [Core / rigc](https://github.com/rig-c/core) → **Review** →
 [Play](https://github.com/rig-c/play) → **Adapter** (consumer integration).
 
@@ -81,7 +81,7 @@ http://127.0.0.1:4318/?workspace=<incarnation>#cap=…
 | <a id="control-the-current-inspection-page"></a>Control an opted-in inspection | `control` | [Inspection control — WORKFLOWS](docs/WORKFLOWS.md#control-the-current-inspection-page) |
 | <a id="keep-and-share-an-inspection"></a>Restore a view link or local draft | View link, draft | [Keep and share — WORKFLOWS](docs/WORKFLOWS.md#keep-and-share-an-inspection) |
 | <a id="launcher-contract"></a>Start or reuse the launcher | `open` | [Launcher contract — WORKFLOWS](docs/WORKFLOWS.md#launcher-contract) |
-| <a id="managed-front-and-write-capability"></a>Use the managed front and write capability | `open` | [Managed front — WORKFLOWS](docs/WORKFLOWS.md#managed-front-and-write-capability) |
+| <a id="managed-front-and-write-capability"></a>Read the legacy managed-front reference | `open` | [Legacy managed front — WORKFLOWS](docs/WORKFLOWS.md#managed-front-and-write-capability) |
 
 ## License
 
