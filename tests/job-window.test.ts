@@ -2550,3 +2550,43 @@ describe('#629 sealed checkpoint preparation without browser or raster execution
         } finally {window.stop(); active?.dispose(); await f.close();}
     });
 });
+
+test('#813 first paint does not wait on interview image preload', async () => {
+    const display = fixturePublication();
+    const source = {...display.publication.source, model: null} as JobModelSourceBinding;
+    Object.assign(display, {publication: {...display.publication, source}});
+    const saved = new Map<string, PropertyDescriptor | undefined>();
+    const requests: string[] = [];
+    let release!: () => void;
+    const held = new Promise<void>(resolve => {release = resolve;});
+    for (const [key, value] of Object.entries({
+        location: {origin: 'http://127.0.0.1:19484'},
+        document: {createElement: () => ({id: ''})},
+        Image: class {src = ''; alt = ''; naturalWidth = 1; naturalHeight = 1; decode() {return Promise.resolve();}},
+        fetch: async (input: string) => {
+            requests.push(input);
+            if (input.endsWith('/api/review')) return Response.json({sourceHash: source.sourceHash,
+                manifest: {...source.package, checkpoints: [], references: []}, reviewedSource: {rig: null},
+                capabilities: {interview: true}, feedbackCatalog: {slots: null}});
+            if (input.endsWith('/api/interview')) return Response.json({questions: [{images: [{name: 'Option image', url: '/api/interview/image/test/0'}]}]});
+            await held;
+            return new Response(new Uint8Array([1]));
+        },
+    })) {
+        saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+        Object.defineProperty(globalThis, key, {value, configurable: true, writable: true});
+    }
+    let prepared: Awaited<ReturnType<typeof prepareJobInspection>> | undefined;
+    const pending = prepareJobInspection(display, new AbortController().signal, true).then(value => {prepared = value;});
+    try {
+        await Promise.race([pending, Bun.sleep(50)]);
+        expect(prepared).toBeDefined();
+        expect(requests.filter(url => url.includes('/api/interview/image/'))).toHaveLength(0);
+        expect(prepared!.interview?.questions[0]?.images).toHaveLength(1);
+    } finally {
+        release(); await pending; prepared?.dispose();
+        for (const [key, descriptor] of saved) {
+            if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key);
+        }
+    }
+});
