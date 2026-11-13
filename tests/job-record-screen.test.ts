@@ -9,8 +9,8 @@ import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jo
 import type {DisplayPublicationV3,PendingAskV3,UISubmissionV3} from '../src/job-contract.ts';
 import {recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 
-async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'='checkpoint'){
- const f=await recordScreenFixture(kind,picture),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
+async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'='checkpoint',boundParts=false){
+ const f=await recordScreenFixture(kind,picture,undefined,undefined,boundParts),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
  const state={pending:[f.ask] as PendingAskV3[],receipt:null as {publicationId:string;pageId:string;displayedNonce:string}|null,generation:f.display.publication.generation,preparing:false,closed:false};
  const submitted:UISubmissionV3[]=[],store=new Map<string,string>();
  const node=((tag:string,key?:string)=>{const value=dom.document.createElement(tag);if(key)value.textContent=key;return value;}) as JobFormDependencies['node'];
@@ -337,5 +337,39 @@ test('#805 record option-set with a parts picture reaches the existing inspector
   // The same gate retains the existing rig and picture-free record decisions.
   const bind=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(gate)};return bindWorkspace;}`)(environment);
   bind(true);expect(available).toBeUndefined();environment.host.record.hasPicture=false;bind(false);expect(available).toEqual(['feedback']);
+ }finally{await h.close();}
+});
+
+ test('#814 fresh-host option-set uses its own sealed parts without a previous publication',async()=>{
+ const h=await harness(false,'fixture','interview-picks',true);try{
+  expect(h.f.display.publication.previousPublicationId).toBeNull();
+  const ready=await h.screen.prepare(h.f.display,new AbortController().signal);
+  expect(ready?.record?.picture?.parts?.items.map(item=>item.name)).toEqual(['body']);
+  expect(h.reads).toEqual([]);
+  h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
+  expect(rigHost()!.subject).toBe('parts');expect(rigHost()!.access.capability).toBeNull();
+ }finally{await h.close();}
+});
+
+for(const mutant of ['hash','mode'] as const)test('#814 bound picture refuses mismatched '+mutant,async()=>{
+ const h=await harness(false,'fixture','interview-picks',true),original=globalThis.fetch;
+ try{
+  h.dom.set('fetch',async(...args:Parameters<typeof fetch>)=>{
+   const response=await original(...args);
+   if(String(args[0]).endsWith('/stage-parts')){const parts=await response.json();if(mutant==='hash')parts.sourceHash='0'.repeat(64);else parts.mode='atlas';return Response.json(parts);}
+   return response;
+  });
+  await expect(h.screen.prepare(h.f.display,new AbortController().signal)).rejects.toThrow('JOB_DISPLAY_MISMATCH');
+  expect(h.screen.mounted()).toBeNull();
+ }finally{await h.close();}
+});
+test('#814 bound record image route serves only the sealed part and rejects writes',async()=>{
+ const h=await harness(false,'fixture','interview-picks',true);try{
+  const base=h.f.origin+h.f.display.routes.apiBase;
+  const image=await fetch(base+'stage-parts/image/0');expect(image.status).toBe(200);
+  const retained=h.f.session.retainedSourceV3(h.f.display.publication.publicationId);
+  expect(jobHash(Buffer.from(await image.arrayBuffer()))).toBe(retained.seals.find(file=>file.path.endsWith('/parts/body.png'))!.sha256);
+  expect((await fetch(base+'stage-parts/image/1')).status).toBe(404);
+  expect((await fetch(base+'stage-parts',{method:'POST'})).status).toBeGreaterThanOrEqual(400);
  }finally{await h.close();}
 });

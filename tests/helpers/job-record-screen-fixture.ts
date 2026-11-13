@@ -14,9 +14,9 @@ import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixt
 import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'reopen'|'interview-picks';
-export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved'){
+export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false){
  const scratch=await mkdtemp(join(tmpdir(),'review-750-')),root=join(scratch,'input');await mkdir(root);
- let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root):createSyntheticPlanRecordWorkspace(root,{subjects:[
+ let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root,{boundParts}):createSyntheticPlanRecordWorkspace(root,{subjects:[
   {kind:'checkpoint',checkpointId:'step_layout'},{kind:'signoff',stage:signoffStage},{kind:'reopen',stage:'plan-approved'},
  ]});
  const reader=createSyntheticRecordReader({onOption:()=>workspace.context as never,onPlan:()=>workspace.context as never});

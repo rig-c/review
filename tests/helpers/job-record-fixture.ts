@@ -66,6 +66,7 @@ export function createSyntheticOptionRecordWorkspace(
     readonly setId?: string;
     readonly stage?: 'interview' | 'rigging-interview' | 'post-interview';
     readonly includeHistoricalSignoff?: boolean;
+    readonly boundParts?: boolean;
   },
 ): SyntheticOptionWorkspace {
   const questionId = options?.questionId ?? 'rig_type';
@@ -79,6 +80,10 @@ export function createSyntheticOptionRecordWorkspace(
     JSON.stringify({ character: 'hero', version: 1 }, null, 2) + '\n',
   );
 
+  const boundFiles = options?.boundParts ? [
+    writeWorkspaceFile(root, 'derived/drafts/synthetic/parts/body.png', makeSyntheticPngBytes()),
+    writeWorkspaceFile(root, 'derived/drafts/synthetic/parts.json', JSON.stringify({rig_size:[2,2],parts:[{name:'body',x:0,y:0,w:2,h:2}]})),
+  ] : [];
   const optionSetDoc = {
     schema: 'rig-create/interview-options@1',
     id: setId,
@@ -86,7 +91,7 @@ export function createSyntheticOptionRecordWorkspace(
     stage,
     drafted_by: 'ai',
     drafted_at: '2026-11-01T00:00:00.000Z',
-    context: {
+    context: options?.boundParts ? {kind:'parts',draft_id:'synthetic',parts:{path:'derived/drafts/synthetic',files:boundFiles}} : {
       kind: 'inputs',
       files: [inputImage, inputSpec],
     },
@@ -217,7 +222,7 @@ export function createSyntheticOptionRecordWorkspace(
 
   const recordIdentity = writeWorkspaceFile(root, 'project.json', JSON.stringify(projectDoc, null, 2) + '\n');
   const record: ProjectRecord = { path: 'project.json', sha256: recordIdentity.sha256 };
-  const files = [inputImage, inputSpec, optionSetFile, record].sort((a, b) =>
+  const files = [inputImage, inputSpec, optionSetFile, record, ...boundFiles].sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
   const result: RecordOptionResult = { kind: 'option-set', questionId, setId };
