@@ -496,7 +496,7 @@ On the view you are inspecting, choose **Comment · C (n)**, drag over the detai
 
 The four-stage navigator preserves this entry and its explicit save behavior. Compiled sessions reuse the atlas surface read-only; see [Four inspection stages](PANELS.md#four-inspection-stages).
 
-The legacy managed front forwarded a query only to the landing page; every other route refused one. Stage navigation never changes CLI arguments or package bindings.
+The current owner workspace accepts optional, nonduplicated `workspace` (matching the host incarnation) and `lang=en|ko` queries at `/`; `/main.js` and `/styles.css` accept only an optional `?lang=en` or `?lang=ko`, while workspace API and live routes reject queries. For allowed `/instances/<key>/…` routes, it passes landing-page queries (`/` or `/index.html`) to the in-process target handler and refuses queries on other target routes. Stage navigation never changes CLI arguments or package bindings.
 
 ## Standing live job workflow
 
