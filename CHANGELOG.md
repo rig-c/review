@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.0.1
+
+Parts and rig job pages reach their first screen faster, and record option sets show their parts picture on a fresh host. The first-load performance work remains a partial fix.
+
+### Fixed
+
+* The first screen of a parts or rig job page no longer waits on interview images it does not show (#818, refs #813). First load is faster, but the 2-second target is not reached yet; #813 stays open. Retained questions, answers, snapshots and source identity are unchanged.
+* A fresh host draws the parts picture for a record option set from its own sealed draft closure when no previous picture exists (#820, closes #814). The existing per-publication view cache validates and loads that draft; historical records with incomplete picture closures remain readable, and source and act schemas are unchanged.
+
+### Changed
+
+* Documentation starts the toolchain and delivery flow with Create and identifies the job window, hub and managed-front relay as removed or legacy (#812). Existing reference anchors are retained.
+
 ## 4.0.0
 
 Direction publications now use the shared inspection workspace, with composited scene playback when a scene is declared. Review submission captures whole-rig evidence independently of the inspection view and carries multiple image comments without changing finalized act bytes.

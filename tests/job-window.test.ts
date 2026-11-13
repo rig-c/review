@@ -2395,6 +2395,18 @@ describe('#629 sealed checkpoint preparation without browser or raster execution
             expect(f.revoked).toEqual(f.created);
         } finally {await f.close();}
     });
+    test('#813 modal-only preparation still authenticates checkpoint tables and tiles', async () => {
+        const f = await setup('package');
+        try {
+            const ready = await prepareJobInspection(f.display, new AbortController().signal, true, false);
+            expect(ready.checkpointEvidence?.[0]?.table.rows).toHaveLength(103);
+            expect(ready.checkpointEvidence?.[0]?.images).toHaveLength(4);
+            expect(f.requests).toHaveLength(6);
+            ready.dispose();
+            f.bytes.set('/tiles/0', new Uint8Array([1]));
+            await expect(prepareJobInspection(f.display, new AbortController().signal, true, false)).rejects.toThrow('CHECKPOINT_EVIDENCE_HASH_MISMATCH');
+        } finally {await f.close();}
+    });
     for (const kind of ['plan','package'] as const) test('#606 '+kind+' real preparation checks plan metadata association while trusting daemon strings',async()=>{
         const f=await setup(kind);
         try {
@@ -2585,6 +2597,66 @@ test('#813 first paint does not wait on interview image preload', async () => {
         expect(prepared!.interview?.questions[0]?.images).toHaveLength(1);
     } finally {
         release(); await pending; prepared?.dispose();
+        for (const [key, descriptor] of saved) {
+            if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key);
+        }
+    }
+});
+
+test('#813 modal-only preparation skips 60 workspace visual requests while defaults retain them', async () => {
+    const display = fixturePublication();
+    const source = {...display.publication.source, model: null,
+        parts: {enumeratorVersion: '2.25.1', manifest: {path: 'parts.json', sha256: '1'.repeat(64)}, images: []}} as JobModelSourceBinding;
+    Object.assign(display, {publication: {...display.publication, source}});
+    const bytes = new Uint8Array([1, 2, 3]);
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(value => value.toString(16).padStart(2, '0')).join('');
+    const references = Array.from({length: 35}, (_, index) => ({id: 'reference-' + index, type: 'image', label: 'Reference ' + index, path: 'reference-' + index + '.png'}));
+    const metadata = {sourceHash: source.sourceHash, manifest: {...source.package, checkpoints: [], references},
+        reviewedSource: {rig: null}, capabilities: {interview: true, preRig: true}, feedbackCatalog: {slots: null},
+        sourcePainting: {id: 'painting', path: 'painting.png', url: '/review-painting', sha256: hash}};
+    const inventory = {sourceHash: source.sourceHash, mode: 'parts', pages: [] as {index: number}[],
+        items: Array.from({length: 24}, (_, index) => ({index, name: 'part-' + index, imageHash: hash}))};
+    const saved = new Map<string, PropertyDescriptor | undefined>(), requests: string[] = [];
+    for (const [key, value] of Object.entries({location: {origin: 'http://127.0.0.1:19484'},
+        document: {createElement: () => ({id: ''})},
+        Image: class {src = ''; alt = ''; naturalWidth = 2; naturalHeight = 2; decode() {return Promise.resolve();}},
+        fetch: async (input: string) => {
+            requests.push(input);
+            if (input.endsWith('/api/review')) return Response.json(metadata);
+            if (input.endsWith('/api/interview')) return Response.json({questions: []});
+            if (input.endsWith('/api/stage-parts')) return Response.json(inventory);
+            return new Response(bytes);
+        },
+    })) {
+        saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+        Object.defineProperty(globalThis, key, {value, configurable: true, writable: true});
+    }
+    try {
+        const modal = await prepareJobInspection(display, new AbortController().signal, true, false);
+        try {
+            expect(requests).toHaveLength(3);
+            expect(modal.metadata.sourceHash).toBe(source.sourceHash);
+            expect(modal.interview?.questions).toEqual([]);
+            expect(modal.parts?.items).toHaveLength(24);
+            expect(modal.references).toEqual([]);
+            expect(modal.partImages.size).toBe(0);
+        } finally {modal.dispose();}
+        requests.length = 0;
+        const legacy = await prepareJobInspection(display, new AbortController().signal, true);
+        try {
+            expect(requests).toHaveLength(63);
+            expect(legacy.references).toHaveLength(36);
+            expect(legacy.partImages.size).toBe(24);
+        } finally {legacy.dispose();}
+        inventory.pages.push({index: 0}); requests.length = 0;
+        const modalWithPage = await prepareJobInspection(display, new AbortController().signal, true, false);
+        try {expect(requests).toHaveLength(3); expect(modalWithPage.partPages?.size).toBe(0);} finally {modalWithPage.dispose();}
+        requests.length = 0;
+        const legacyWithPage = await prepareJobInspection(display, new AbortController().signal, true);
+        try {expect(requests).toHaveLength(64); expect(legacyWithPage.partPages?.size).toBe(1);} finally {legacyWithPage.dispose();}
+        metadata.sourceHash = '0'.repeat(64);
+        await expect(prepareJobInspection(display, new AbortController().signal, true, false)).rejects.toThrow('JOB_SOURCE_MISMATCH');
+    } finally {
         for (const [key, descriptor] of saved) {
             if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key);
         }
