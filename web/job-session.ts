@@ -1679,7 +1679,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
         window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),
         routes:display=>jobPublicationRoutes(display,location.origin),load:async()=>(await import('./main.ts')).mountRigScreen()});
     let bootstrapNotice:HTMLElement|null=null;
-    const report=(error:unknown,fallback?:string)=>{if(rigScreen.mounted()){rigScreen.report(error,fallback);return;}if(!bootstrapNotice){bootstrapNotice=node('p');bootstrapNotice.setAttribute('role','status');host.append(bootstrapNotice);}bootstrapNotice.textContent=jobWindowRefusal(error,fallback);};
+    const report=(error:unknown,fallback?:string)=>{if(rigScreen.mounted()){rigScreen.report(error,fallback);return;}if(!bootstrapNotice){bootstrapNotice=node('p');bootstrapNotice.setAttribute('role','status');host.prepend(bootstrapNotice);}bootstrapNotice.textContent=jobWindowRefusal(error,fallback);};
     const window=createJobWindow<JobRigScreenPrepared|null>({jobId:access.jobId,pageId,transport,adapter:{
         async prepare(display,signal){return rigScreen.prepare(display,signal);},
         captureDraft(){drafts.saveDraft();const forms=modalState()?.forms;const dirty=forms?[...forms].filter(([,entry])=>entry.dirty):[];return dirty.length?dirty.map(([askId,entry])=>({askId,value:entry.read()})):null;},
