@@ -36,11 +36,12 @@ try {
       const expected = (language === 'en' ? enCatalog : koCatalog)['JOB_CAPABILITY_REQUIRED']!;
       const deadline = Date.now() + 20000;
       while (Date.now() < deadline && !await page.evaluate(`document.querySelector('body > [role=status]')?.textContent === ${JSON.stringify(expected)}`)) await Bun.sleep(25);
-      const notice = await page.evaluate<any>(`(()=>{const n=document.querySelector('body > [role=status]');if(!n)return null;const r=n.getBoundingClientRect(),s=getComputedStyle(n);return {text:n.textContent,x:r.x,y:r.y,width:r.width,height:r.height,display:s.display,visibility:s.visibility,hit:document.elementFromPoint(r.x+1,r.y+1)===n,language:document.documentElement.lang};})()`);
+      const notice = await page.evaluate<any>(`(()=>{const n=document.querySelector('body > [role=status]');if(!n)return null;const r=n.getBoundingClientRect(),s=getComputedStyle(n);return {text:n.textContent,title:n.title,x:r.x,y:r.y,width:r.width,height:r.height,display:s.display,visibility:s.visibility,hit:document.elementFromPoint(r.x+1,r.y+1)===n,language:document.documentElement.lang};})()`);
       await writeFile(join(output, 'fresh-' + language + '.json'), JSON.stringify({notice, network}, null, 2) + '\n');
       await writeFile(join(output, 'fresh-' + language + '.png'), await page.screenshot());
       assert.ok(notice, 'bootstrap notice exists');
       assert.equal(notice.text, expected);
+      assert.equal(notice.title, 'JOB_CAPABILITY_REQUIRED');
       assert.equal(notice.language, language);
       assert.ok(notice.width > 0 && notice.height > 0 && notice.x >= 0 && notice.y >= 0 && notice.y + notice.height <= 1000, 'notice is inside the viewport');
       assert.notEqual(notice.display, 'none');

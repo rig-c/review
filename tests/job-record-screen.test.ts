@@ -1,3 +1,5 @@
+import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
 import {fixturePublication} from './helpers/job-window-fixture.ts';
 import {parseManifest} from '../src/manifest.ts';
 import {jobHash} from '../src/job-api.ts';
@@ -100,9 +102,9 @@ test('#774 all shared publications keep one stream; cancellation never mounts an
  const body=source.slice(start).replace('export async function mountJobScreen','async function mountJobScreen').replace("await import('./i18n.ts')",'i18nDouble');
  const run=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(body)};return mountJobScreen;}`);
  for(const mounted of [false,true]){
-  let adapter:any,streams=0,aborted=false,paints=0,reports=0,changed=0;const notices:string[]=[];
+  let adapter:any,streams=0,aborted=false,paints=0,reports=0,changed=0;const notices:string[]=[];let notice:any;
   const prepared={},controller=new AbortController();
-  const environment={document:{createElement:()=>({dataset:{},setAttribute(){}})},sessionStorage:{},localStorage:{},location:{href:'http://127.0.0.1/jobs/fixture/',origin:'http://127.0.0.1'},history:{replaceState(){}},crypto,AbortController,URL,
+  const environment={enCatalog,koCatalog,document:{createElement:()=>notice=({dataset:{},setAttribute(){}})},sessionStorage:{},localStorage:{},location:{href:'http://127.0.0.1/jobs/fixture/',origin:'http://127.0.0.1'},history:{replaceState(){}},crypto,AbortController,URL,
    jobWindowAccess:()=>({jobId:'fixture'}),i18nDouble:{onLanguageChange:()=>()=>{}},t:(key:string)=>key,createJobFormHelpers:()=>({}),createJobFormDrafts:()=>({saveDraft(){}}),createJobWindowTransport:()=>({}),
    createJobRigScreen:()=>({mounted:()=>mounted?prepared:null,prepare:async()=>prepared,changed(){changed++;},report(){reports++;},painted:async()=>{paints++;}}),
    createJobWindow:(options:any)=>{adapter=options.adapter;return {stop(){aborted=true;},state:()=>({}),event(){}};},startJobWindowEvents:()=>{streams++;return {done:Promise.resolve(),displayed(){}};},
@@ -110,6 +112,7 @@ test('#774 all shared publications keep one stream; cancellation never mounts an
   const stop=await run(environment)({append(){notices.push('append');},prepend(){notices.push('prepend');},querySelectorAll:()=>[]});
   expect(await adapter.prepare({},controller.signal)).toBe(prepared);await adapter.painted(prepared,controller.signal);expect(paints).toBe(1);
   adapter.changed({error:'fixture load failure'});expect(changed).toBe(1);expect(reports).toBe(mounted?0:0);expect(notices).toEqual(mounted?[]:['prepend']);
+  if(!mounted){expect(notice.title).toBe('JOB_WINDOW_FAILED');adapter.changed({error:new Error('JOB_CAPABILITY_REQUIRED')});expect(notice.title).toBe('JOB_CAPABILITY_REQUIRED');adapter.changed({error:'JOB_STREAM_FAILED'});expect(notice.title).toBe('JOB_STREAM_FAILED');}
   controller.abort();await adapter.painted(prepared,controller.signal);expect(paints).toBe(1);
   stop();expect(aborted).toBe(true);await adapter.painted(prepared,new AbortController().signal);expect(paints).toBe(1);expect(streams).toBe(1);stop();
  }
