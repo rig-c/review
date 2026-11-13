@@ -922,13 +922,30 @@ function decodeRetainedRecordProject(
         }
       }
     }
+    // Older record readers retained only inputs/evidence. Keep those records usable,
+    // but expose a parts picture only when the option's entire draft closure is sealed.
+    let hasBoundParts = false;
+    const boundParts = ctx?.kind === 'parts' ? asPlainObject(ctx.parts) : null;
+    if (boundParts && typeof boundParts.path === 'string' && Array.isArray(boundParts.files)) {
+      try {
+        const root = jobPath(boundParts.path), paths = new Set<string>();
+        hasBoundParts = boundParts.files.every(value => {
+          const file = asPlainObject(value);
+          if (!file) return false;
+          const path = jobPath(file.path), sha = jobSha(file.sha256);
+          if (!path.startsWith(root + '/') || paths.has(path) || sealMap.get(path) !== sha) return false;
+          paths.add(path);
+          return true;
+        }) && paths.has(root + '/parts.json');
+      } catch {hasBoundParts = false;}
+    }
     return {
       questions: [{
         ref,
         set,
         editable: true,
         images,
-        hasParts: false,
+        hasParts: hasBoundParts,
       }],
       optionSetFile: ref,
     };
