@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.0.2
+
+Parts and rig modal forms reach their first screen faster, and image comments survive reload beyond the local draft size limit when IndexedDB is available.
+
+### Fixed
+
+* Parts and rig modal forms no longer preload pictures that the shared workspace loads anyway (#824, closes #813). Measured parts cold loads improved from 4.009 s median (range 3.746–4.373 s) to 1.769 s median (range 1.552–2.065 s). The 2-second target is met on the median, with one of three samples above it.
+* Image comments drawn past the 512 KiB local draft size limit were dropped on reload while Submit still succeeded (#826, closes #816). Each crop is now stored in IndexedDB before the draft that references it, then restored and checked against its digest and dimensions. The PR's draw → reload → submit measurement lost no comments at 8, 16 or 32 image comments. A missing or corrupt crop drops only its own comment; the rest of the draft restores. Without IndexedDB, or if a crop write fails, the old inline format and 512 KiB limit still apply, so an oversized save can leave the older draft; the hidden storage warning and enabled Submit are tracked in #825.
+
 ## 4.0.1
 
 Parts and rig job pages reach their first screen faster, and record option sets show their parts picture on a fresh host. The first-load performance work remains a partial fix.
