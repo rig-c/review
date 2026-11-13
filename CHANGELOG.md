@@ -1,5 +1,34 @@
 # Changelog
 
+## 4.0.0
+
+Direction publications now use the shared inspection workspace, with composited scene playback when a scene is declared. Review submission captures whole-rig evidence independently of the inspection view and carries multiple image comments without changing finalized act bytes.
+
+### Breaking
+
+* `@rig-c/review/job-host` removes `startJobHub` and the `JobHubOptions`, `JobHubJobOptions`, `JobHubJob` and `JobOwnerHub` types (#806, #808). The semantic-job hub is deleted. Use the standalone `startJobHost` or the owner workspace, which remain available along with retained-frame behavior and historical payload samples.
+
+3.x is skipped because 3.7.0 on that line is a withdrawn version-alignment release.
+
+### Removed
+
+* The legacy job window and image-set public surface (#796, #798). Direction publications use the existing inspection workspace, direction panel, Comments and act bar; model-less references, checkpoints and the existing signoff modal are retained.
+* The managed-front relay and unused job-window parts submission path (#801, #804). Per-package opening is now direct-only; production parts submission remains in the shared rig screen.
+
+### Changed
+
+* Record publications accept interview-stage approval through the existing signoff ask, modal and act when the displayed plan contains steps and declares the signoff subject (#800, #803). Package interview approvals retain nullable-plan and serialized-act behavior.
+* Parts-backed record interview questions no longer crash before their form mounts (#805, #807). The existing inspector gate receives the subject's model capability, so parts and empty subjects do not read unavailable rig data.
+* Direction@2 publications with a declared scene play their composited take in the existing viewport, using authored timing and camera boxes, shared view controls and pointed comments (#797, #799). Scene plates are contained and byte-bound. Direction@1 and scene-less publications keep the plain view with a reason; live post summaries use the publication selector's version.
+* Setup restoration renews a cleared player before animation seeking, preserving source, camera and part selection (#796, #798). Numeric reference time in Setup no longer seeks a nonexistent animation.
+* Direction-review accepts sign-off on a frozen record revision through the existing modal, bound to project and source hashes (#794, #795). No post-version selector or new act or ask field is added.
+* Submit captures a fitted whole-rig evidence still off-screen from the held pose, independently of zoom, part selection, mode and view (#788, #789). The inspection state stays unchanged; large stills scale within the existing 8 MiB limit.
+* Submit refusals explain in English and Korean that the review was not submitted, what went wrong and what to do (#785, #787). Diagnostic titles retain refusal codes and identify the request or client boundary for size and unrecognized errors.
+* Multiple pinned image comments use stored crop references in job events and the browser stream, while consumer fetches and exports retain the full finalized act and original crop pixels (#790, #791). Full-act delivery is bounded at 16 MiB; ordinary mutation and event-metadata bounds remain unchanged.
+* Closing a job after a pinned-comment act keeps its recorded crops readable by its UI capability (#790, #792). Failed crop reads mark the crop unavailable and let the stream reach closed; stored acts and crop pixels remain unchanged.
+* Hub language propagation and duplicate-selector fixes preceded the hub's removal (#770, #777); standalone inspection retains one language selector (#806, #808).
+* The existing install smoke accepts `--spec @rig-c/review@<version-or-tag>` to check a published package in an empty consumer project (#771, #775). The default local-pack path and installed-bin checks remain unchanged; registry mode labels checkout-parity checks as skipped.
+
 ## 2.13.0
 
 Every Create ask now opens on the one review screen. The header owns the inspection mode, and parts packages, record publications, the interview, the plan step, sign-off and reopen all open there as modes or modals. The job window keeps only publications that have no host on that screen yet.
