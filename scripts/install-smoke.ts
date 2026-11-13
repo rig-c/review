@@ -129,12 +129,14 @@ assert(JOB_API_SCHEMA === 'rig-review/job-api@2' && JOB_ACT_SCHEMA === 'rig-revi
 assert(JOB_ENABLED_ACT_KINDS.length === 5 && JOB_RESERVED_ACT_KINDS.length === 2 &&
  JOB_PLAN_BOUND_SIGNOFF_STAGES.length === 3 && JOB_CONSUMER_AUTH_MODE === 'writer-owned-sibling-fetch-capability' &&
  JOB_ERROR_CODES.includes('JOB_CLOSED'), 'CONTRACT');
-// Package plan binding stays at three; record ask/value types admit all four stages.
-const recordSignoffStages = ['plan-approved', 'rigging-interview', 'post-interview', 'direction-review'] as const satisfies readonly RecordSignoffStage[];
+// Package plan binding stays at three; record ask/value types admit all five stages.
+const recordSignoffStages = ['plan-approved', 'rigging-interview', 'post-interview', 'direction-review', 'interview'] as const satisfies readonly RecordSignoffStage[];
 const recordStagesComplete: Exclude<RecordSignoffStage, typeof recordSignoffStages[number]> extends never ? true : never = true;
+const interviewRecordAsk: JobRecordSignoffSubject = {kind: 'signoff', stage: 'interview'};
+const interviewRecordValue: JobRecordSignoffValue = {stage: 'interview', decision: 'approved', words: ''};
 const directionRecordAsk: JobRecordSignoffSubject = {kind: 'signoff', stage: 'direction-review'};
 const directionRecordValue: JobRecordSignoffValue = {stage: 'direction-review', decision: 'approved', words: ''};
-assert(recordStagesComplete && recordSignoffStages.length === 4 && directionRecordAsk.stage === directionRecordValue.stage,
+assert(recordStagesComplete && recordSignoffStages.length === 5 && directionRecordAsk.stage === directionRecordValue.stage && interviewRecordAsk.stage === interviewRecordValue.stage,
  'RECORD_SIGNOFF_STAGES');
 assert(JSON.stringify(JOB_PLAN_BOUND_SIGNOFF_STAGES) === JSON.stringify(recordSignoffStages.slice(0, 3)), 'PACKAGE_SIGNOFF_STAGES');
 

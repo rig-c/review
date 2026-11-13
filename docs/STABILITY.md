@@ -689,3 +689,11 @@ stages, schemas and stored act bytes retain their meaning. See the
 The public `JOB_PLAN_BOUND_SIGNOFF_STAGES` remains the original three-entry
 package list. The fourth stage is record-only; package `direction-review`
 signoffs and historical comments acts still accept a nullable plan.
+
+## Record interview signoff
+
+Record publications also accept `{kind: 'signoff', stage: 'interview'}` through
+the existing modal and record act shape. A declared subject and non-empty displayed
+plan remain required. The record stage type has five members; the public package
+plan-bound list remains at three. Package interview signoffs and historical acts
+retain their existing nullable-plan behavior. No schema or runtime export changes.
