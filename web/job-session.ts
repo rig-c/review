@@ -866,8 +866,8 @@ export function mediaReady(media: HTMLVideoElement, name: 'loadeddata' | 'seeked
             failed();
     });
 }
-/** Prepare the real published Play model, references and every form dependency off-stage. */
-export async function prepareJobInspection(display: DisplayPublicationV3, signal: AbortSignal, formsOnly=false): Promise<JobPreparedInspection> {
+/** Prepare off-stage; modal-only callers may skip workspace visuals, never checkpoint evidence. */
+export async function prepareJobInspection(display: DisplayPublicationV3, signal: AbortSignal, formsOnly=false, preloadVisuals=true): Promise<JobPreparedInspection> {
     const routes = jobPublicationRoutes(display, location.origin);
     const metadata = await jobJson<JobInspectionMetadataV3>(routes.api('review'), signal);
     const publishedSource = display.publication.source;
@@ -1006,7 +1006,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
                 checkpointEvidence[index] = {packet, table, images};
             })());
         }
-        for (const reference of metadata.manifest?.references ?? []) {
+        for (const reference of preloadVisuals ? metadata.manifest?.references ?? [] : []) {
             if (reference.id === metadata.sourcePainting?.id) continue;
             preload.push((async () => {
                 if (reference.type === 'image') {
@@ -1105,7 +1105,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
                 }
             })());
         }
-        if (metadata.sourcePainting) {
+        if (preloadVisuals && metadata.sourcePainting) {
             const source = metadata.sourcePainting;
             preload.push(image(routes.instance(source.url), source.sha256).then(element => {
                 element.alt = source.path;
@@ -1113,11 +1113,11 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
                     width: element.naturalWidth, height: element.naturalHeight, seek: async () => { } });
             }));
         }
-        for (const part of parts?.items ?? []) {
+        for (const part of preloadVisuals ? parts?.items ?? [] : []) {
             preload.push(image(routes.api('stage-parts/image/' + part.index), part.imageHash)
                 .then(element => { element.alt = part.name; partImages.set(part.name, element); }));
         }
-        for (const page of parts?.pages ?? []) {
+        for (const page of preloadVisuals ? parts?.pages ?? [] : []) {
             preload.push(image(routes.api('stage-parts/page/' + page.index))
                 .then(element => { partPages.set(page.index, element); }));
         }
