@@ -463,10 +463,10 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-review-panel .review-dialog-header{padding:0 0 10px}
 .workspace-review-panel .review-dialog-header h2{flex:none}
 .workspace-review-panel .review-dialog-header .hint{font-size:11px}
-/* The act bar lives in the bottom panel heading in every state (#709); only the drawer holds it in its body. */
-.inspector-heading .workspace-act-bar{padding:0;border:0;margin-left:auto}
-.inspector-heading .workspace-act-bar .review-dialog-actions{flex:none;flex-wrap:nowrap}
-.inspector-heading .workspace-act-bar .review-message{flex:0 1 auto;max-width:36ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Shared act styling follows the live ask row and the retained standalone heading. */
+:is(.inspector-heading,.workspace-act-row) .workspace-act-bar{padding:0;border:0;margin-left:auto}
+:is(.inspector-heading,.workspace-act-row) .workspace-act-bar .review-dialog-actions{flex:none;flex-wrap:nowrap}
+:is(.inspector-heading,.workspace-act-row) .workspace-act-bar .review-message{flex:0 1 auto;max-width:36ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .workspace-drawer>.inspector-body{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
 .workspace-drawer>.inspector-body>[data-inspector-panel]{flex:1;min-height:0;overflow:auto;padding:12px}
 
@@ -482,7 +482,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-tabs-menu button{text-align:left;font-size:11px;padding:4px 9px;border-color:transparent;background:transparent;color:var(--fg);white-space:nowrap}
 .workspace-tabs-menu button:hover,.workspace-tabs-menu button:focus-visible{background:var(--rv-control-hover);color:var(--fg-strong)}
 .inspector-body>[data-comments=true]{display:none!important}
-.inspector-heading .workspace-act-bar{flex:none;flex-wrap:nowrap;gap:6px}
+:is(.inspector-heading,.workspace-act-row) .workspace-act-bar{flex:none;flex-wrap:nowrap;gap:6px}
 .inspector-heading .workspace-act-bar .review-draft-state{max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .workspace-act-ask{white-space:normal;overflow-wrap:anywhere}
 #comments-list-host .stage-comment-list-inline{position:static;width:auto;max-width:none;max-height:none;border:0;padding:0}
@@ -533,7 +533,22 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .owner-stage iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .owner-stage iframe[hidden]{display:block!important;visibility:hidden;pointer-events:none}
 
-.inspector-heading .workspace-act-bar{flex:1 1 auto;flex-wrap:wrap;min-width:0;max-width:100%}
-.inspector-heading .workspace-act-bar .review-draft-state[data-save-state=failed]{max-width:none;white-space:normal;overflow:visible;order:-1;flex-basis:100%}
+:is(.inspector-heading,.workspace-act-row) .workspace-act-bar{flex:1 1 auto;flex-wrap:wrap;min-width:0;max-width:100%}
+:is(.inspector-heading,.workspace-act-row) .workspace-act-bar .review-draft-state[data-save-state=failed]{max-width:none;white-space:normal;overflow:visible;order:-1;flex-basis:100%}
 
-.inspector-heading .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-dialog-actions{order:-1;flex:1 1 100%;flex-wrap:wrap;min-width:0;max-width:100%}
+:is(.inspector-heading,.workspace-act-row) .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-dialog-actions{order:-1;flex:1 1 100%;flex-wrap:wrap;min-width:0;max-width:100%}
+
+/* The live ask owns one shell row, including when the embedded header is hidden. */
+#app:has(>.workspace-act-row){grid-template-rows:auto auto minmax(0,1fr) auto}
+#app:has(>.workspace-act-row)>.topbar{grid-row:1}
+.workspace-act-row{grid-row:2;min-width:0;padding:10px 22px;border-bottom:1px solid var(--border);background:var(--active-bg)}
+#app:has(>.workspace-act-row)>.layout{grid-row:3}
+#app:has(>.workspace-act-row)>.status-bar{grid-row:4}
+.workspace-act-row .workspace-act-bar{margin:0;width:100%;flex-wrap:nowrap;gap:12px}
+.workspace-act-row #workspace-ask-headline{flex:1 1 0;min-width:0;font-size:16px;font-weight:700;color:var(--fg-strong);white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.workspace-act-row #workspace-pending-ask{order:2;flex:none}
+.workspace-act-row .review-dialog-actions{min-width:0;gap:8px;justify-content:flex-end}
+.workspace-act-row .review-message:not(.error){display:none}
+.workspace-act-row .review-message.error{max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.workspace-act-row .review-draft-state{min-width:0;max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]){flex-wrap:wrap}

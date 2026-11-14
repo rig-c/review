@@ -90,7 +90,7 @@ async function run(lang: 'en' | 'ko') {
   async function screen(name: string) {
     const state = await page!.evaluate<{
       language: string; counts: Record<string, number>; title: string; rigHash: string; fullRigHash: string | null; sourceHash: string;
-      status: string; selectedLabel: string; actInHeading: boolean; actVisible: boolean;
+      status: string; selectedLabel: string; actInHeading: boolean; actInRow: boolean; actRowDirect: boolean; actVisible: boolean;
       actGeometry: unknown; inspectorHeight: number; controls: string[];
     }>(`(()=>{
       const visible=${fullyVisible.toString()}, geometry=${visibilityGeometry.toString()};
@@ -103,7 +103,7 @@ async function run(lang: 'en' | 'ko') {
         rigHash:document.getElementById('provenance-rig').textContent,
         fullRigHash:provenance.reviewedSource?.rig?.sha256??null,sourceHash:provenance.sourceHash,
         status:status.value,selectedLabel:status.selectedOptions[0].textContent,
-        actInHeading:!!act?.closest('.inspector-heading'),actVisible:!!act&&visible(act),
+        actInHeading:!!act?.closest('.inspector-heading'),actInRow:act?.parentElement?.id==='workspace-act-row',actRowDirect:document.getElementById('workspace-act-row')?.previousElementSibling===document.querySelector('.topbar'),actVisible:!!act&&visible(act),
         actGeometry:act?geometry(act):null,inspectorHeight:document.querySelector('.inspector').getBoundingClientRect().height,
         controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(node=>node.id)};
     })()`);
@@ -111,7 +111,9 @@ async function run(lang: 'en' | 'ko') {
     assert.equal(state.language, lang);
     for (const [selector, count] of Object.entries(state.counts)) assert.equal(count, 1, 'single shared screen ' + selector);
     assert.deepEqual(state.controls, ['zoom-in', 'zoom-out', 'fit', 'native-one', 'view-menu']);
-    assert.equal(state.actInHeading, true, 'the decision and submit act bar stays in the bottom heading');
+    assert.equal(state.actInHeading, false, 'the live act leaves the bottom heading');
+    assert.equal(state.actInRow, true, 'the decision and submit act nodes stay in the shared act row');
+    assert.equal(state.actRowDirect, true, 'the act row sits directly beneath the topbar');
     assert.equal(state.actVisible, true, 'the complete act bar stays visible');
     if (Bun.argv.includes('--assert-default262')) assert.ok(Math.abs(state.inspectorHeight - 262) <= 1, 'default bottom height 262');
     await writeFile(join(out, name + '.png'), await page!.screenshot());

@@ -1,5 +1,6 @@
 /** #838 bottom-panel and toolbar playback browser proof: single non-wrapping bottom tab strip with overflow menu, Timeline first tab, Inspection rename, and chevron collapse control. Ordinary Nova only. */
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
@@ -184,6 +185,22 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
    else assert.equal(await page.evaluate(`document.getElementById('play').hidden`),true,'parts Setup hides playback');
 
    if(width===1100&&kind!=='parts'){
+    // #840 frees the heading from the act. A 1100px viewport alone no longer
+    // guarantees overflow: constrain only this test's existing strip instead.
+    // Hash the exact inline style attribute we own, not the live tab state that
+    // these menu actions intentionally change. Restore the attribute in finally.
+    const stripBefore:{style:string|null;width:number;height:number;tabs:number}=await page.evaluate<{style:string|null;width:number;height:number;tabs:number}>(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs'),row=strip.querySelector('.block-row:not([hidden])');return {style:strip.getAttribute('style'),width:strip.clientWidth,height:strip.clientHeight,tabs:row.querySelectorAll('[role=tab]').length};})()`);
+    assert.ok(stripBefore.tabs>2,'overflow fixture has actual inspection tabs');
+    const narrowWidth=Math.min(320,Math.floor(stripBefore.width/2));
+    const beforeHash=createHash('sha256').update(JSON.stringify(stripBefore.style)).digest('hex');
+    const mutation={kind,lang,width,height,selector:'.workspace-bottom-tabs',scope:'test-only DOM inline style attribute',narrowWidth,beforeHash};
+    const receipt=join(output,`${kind}-${lang}-${width}x${height}-overflow-mutation`);
+    console.log('BOTTOM_TABS_DOM_MUTATION_BEGIN '+JSON.stringify(mutation));
+    await writeFile(receipt+'-begin.json',JSON.stringify({...mutation,before:stripBefore},null,2)+'\n');
+    let overflowFailed=false,overflowError:unknown;
+    try{
+     await page.evaluate(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs');strip.style.flex='0 0 '+${narrowWidth}+'px';strip.style.width=${narrowWidth}+'px';strip.style.maxWidth=${narrowWidth}+'px';})()`);
+     await wait(page,`(()=>{const row=document.querySelector('.workspace-bottom-tabs > .block-row:not([hidden])'),more=row.querySelector('.workspace-tabs-more');return row.clientWidth<=${narrowWidth}+1&&!more.hidden&&row.querySelector('[data-block-target="report-panel"]').hasAttribute('data-tab-overflow');})()`,'test-only constrained strip really overflows');
     await page.evaluate(`document.querySelector('.workspace-inspectorHeight').dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true}))`);
     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
     const overflowState:any=await page.evaluate<any>(`(()=>{
@@ -192,12 +209,13 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
      more.click();
      const menu=row.querySelector('.workspace-tabs-menu');
      const items=[...menu.querySelectorAll('button[role="menuitem"]')].filter(b=>!b.hidden).map(b=>({target:b.dataset.blockMoreTarget,text:b.textContent}));
-     return {moreVisible:!more.hidden&&getComputedStyle(more).display!=='none',menuOpen:!menu.hidden&&getComputedStyle(menu).display!=='none',items,rect:menu.getBoundingClientRect().toJSON(),viewport:{width:innerWidth,height:innerHeight}};
+     return {rowWidth:row.clientWidth,overflowCount:row.querySelectorAll('[data-tab-overflow]').length,moreVisible:!more.hidden&&getComputedStyle(more).display!=='none',menuOpen:!menu.hidden&&getComputedStyle(menu).display!=='none',items,rect:menu.getBoundingClientRect().toJSON(),viewport:{width:innerWidth,height:innerHeight}};
     })()`);
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-overflow.json`),JSON.stringify(overflowState,null,2));
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-overflow-before.png`),await page.screenshot());
     assert.ok(overflowState.rect.bottom<=overflowState.viewport.height&&overflowState.rect.top>=0,'whole overflow menu stays inside viewport');
-    assert.equal(overflowState.moreVisible,true,'overflow button visible when strip is narrow at 1100x800');
+    assert.ok(overflowState.rowWidth<=narrowWidth+1&&overflowState.overflowCount>0,'actual tab width exceeds the constrained strip');
+    assert.equal(overflowState.moreVisible,true,'overflow button visible on the test-only narrowed strip at 1100x800');
     assert.equal(overflowState.menuOpen,true,'clicking ⋯ opens overflow menu');
     assert.ok(overflowState.items.some((item:any)=>item.target==='report-panel'),'Report tab is in overflow menu');
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-overflow-menu.png`),await page.screenshot());
@@ -227,6 +245,43 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
      if(tab&&!tab.hasAttribute('data-tab-overflow'))tab.click();
      else row.querySelector('button[data-block-more-target="animation-dock"]')?.click();
     })()`);
+    }catch(error){overflowFailed=true;overflowError=error;throw error;}
+    finally{
+     try{
+      // Capture null vs empty before and after touching the live style getter,
+      // then after ResizeObserver/layout callbacks. Do not equate the two values.
+      const immediate:{style:string|null;cssText:string;afterGetter:string|null}=await page.evaluate<{style:string|null;cssText:string;afterGetter:string|null}>(`(()=>{
+       const strip=document.querySelector('.workspace-bottom-tabs'),original=${JSON.stringify(stripBefore.style)};
+       if(original===null)strip.removeAttribute('style');else strip.setAttribute('style',original);
+       const style=strip.getAttribute('style'),cssText=strip.style.cssText;
+       return {style,cssText,afterGetter:strip.getAttribute('style')};
+      })()`);
+      await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+      const afterSettle:{style:string|null;width:number;height:number}=await page.evaluate<{style:string|null;width:number;height:number}>(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs');return {style:strip.getAttribute('style'),width:strip.clientWidth,height:strip.clientHeight};})()`);
+      // Replay the original attribute once after callbacks settle. Read its exact
+      // value immediately, without a style getter, and measure the normal layout.
+      const finalRestore:{style:string|null;width:number;height:number}=await page.evaluate<{style:string|null;width:number;height:number}>(`(()=>{
+       const strip=document.querySelector('.workspace-bottom-tabs'),original=${JSON.stringify(stripBefore.style)};
+       if(original===null)strip.removeAttribute('style');else strip.setAttribute('style',original);
+       return {style:strip.getAttribute('style'),width:strip.clientWidth,height:strip.clientHeight};
+      })()`);
+      const immediateHash:string=createHash('sha256').update(JSON.stringify(immediate.style)).digest('hex');
+      const restoredHash:string=createHash('sha256').update(JSON.stringify(finalRestore.style)).digest('hex');
+      const driftStage=immediate.afterGetter!==immediate.style?'style-getter':afterSettle.style!==immediate.afterGetter?'after-settle':'none';
+      const restored={...mutation,immediate,immediateHash,afterSettle,finalRestore,driftStage,restoredHash,restored:restoredHash===beforeHash,overflowError:overflowFailed?String(overflowError):null};
+      console.log('BOTTOM_TABS_DOM_MUTATION_RESTORED '+JSON.stringify(restored));
+      await writeFile(receipt+'-restored.json',JSON.stringify(restored,null,2)+'\n');
+      assert.equal(restoredHash,beforeHash,'final inline style restoration is exact immediately after settled callbacks');
+      assert.ok(Math.abs(finalRestore.width-stripBefore.width)<=1,'normal strip width restored before collapse measurement');
+      assert.ok(Math.abs(finalRestore.height-stripBefore.height)<=1,'normal strip height restored before collapse measurement');
+      assert.ok(finalRestore.width>narrowWidth,'test-only narrow width is removed');
+     }catch(restoreError){
+      const failure={overflowError:overflowFailed?String(overflowError):null,restoreError:String(restoreError)};
+      console.error('BOTTOM_TABS_DOM_RESTORE_FAILED '+JSON.stringify(failure));
+      await writeFile(receipt+'-restore-failure.json',JSON.stringify(failure,null,2)+'\n').catch(()=>{});
+      if(!overflowFailed)throw restoreError; // Otherwise preserve the original assertion and stack.
+     }
+    }
    }
 
    if(kind==='parts'&&width===1100){
@@ -325,13 +380,15 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
      controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(n=>n.id),collapseDisabled:collapse.disabled,collapseText:collapse.textContent,
      availableTabs:row?[...row.querySelectorAll('[role=tab]')].filter(n=>!n.hidden).length:0,selected:selected?.dataset.blockTarget,selectedVisible:!!selected&&!selected.hasAttribute('data-tab-overflow')&&selected.getBoundingClientRect().width>0,
      ask:document.querySelector('#workspace-ask-headline').textContent,answer:document.querySelector('#workspace-pending-ask').textContent,
-     actInHeading:act.parentElement===heading,actRect:act.getBoundingClientRect().toJSON()};
+     actInHeading:act.parentElement===heading,actHome:act.parentElement.id,actRowDirect:document.getElementById('workspace-act-row')?.previousElementSibling===document.querySelector('.topbar'),actRect:act.getBoundingClientRect().toJSON()};
    })()`);
    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-state.json`),JSON.stringify(state,null,2));
    assert.equal(state.language,lang);assert.equal(state.entry,1);assert.equal(state.viewports,1);
-   assert.deepEqual(state.headingOrder,['tabs','collapse','act'],'act order stays owned by #840');
+   const live=kind!=='standalone'&&kind!=='interview-standalone';
+   assert.deepEqual(state.headingOrder,live?['tabs','collapse']:['tabs','collapse','act'],'only live asks leave the bottom heading');
+   if(live){assert.equal(state.actHome,'workspace-act-row');assert.equal(state.actRowDirect,true);}
    assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
-   assert.equal(state.wrap,'nowrap');assert.equal(state.actInHeading,true);assert.equal(state.collapseText,'⌄');
+   assert.equal(state.wrap,'nowrap');assert.equal(state.actInHeading,!live);assert.equal(state.collapseText,'⌄');
    if(state.availableTabs)assert.equal(state.selectedVisible,true);else assert.equal(state.selected,undefined,'subjects without rig capabilities expose no block tab');
    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-workspace.png`),await page.screenshot());
    if(!state.collapseDisabled){
