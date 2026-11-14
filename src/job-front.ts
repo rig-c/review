@@ -224,7 +224,7 @@ export function jobWindowResources() {
 }
 
 interface RetainedView {
-    review: ReviewPackage;
+    review: ReviewPackage | null;
     parts: PartsViewPackage | null;
 }
 
@@ -270,6 +270,31 @@ export function retainedPublicationRoutes(session: JobSession) {
                     return await sealedFile(member.path);
                 }
                 if (isRetainedRecordSource(retained)) {
+                    // hasParts is projected only after validating the option's sealed draft closure.
+                    const question = retained.questions.find(question => question.hasParts);
+                    if (question && (path === 'api/stage-parts' || /^api\/stage-parts\/(image|page)\/(0|[1-9]\d*)$/.test(path))) {
+                        let pending = views.get(publicationId);
+                        if (!pending) {
+                            pending = (async () => {
+                                const context = (question.set as unknown as {context:{parts:{path:string;files:{path:string;sha256:string}[]}}}).context;
+                                const root = join(retained.snapshotRoot, context.parts.path);
+                                const parts = await loadPartsView(root);
+                                for (const file of [...parts.files, ...parts.flagFiles]) {
+                                    const path = relative(retained.snapshotRoot, file.abs).split('\\').join('/');
+                                    if (!context.parts.files.some(bound => bound.path === path && bound.sha256 === file.sha256)) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+                                }
+                                return {review:null, parts};
+                            })();
+                            views.set(publicationId, pending);
+                        }
+                        const {parts} = await pending;
+                        if (!parts) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+                        if (path === 'api/stage-parts') return json({...partsViewJson(parts, {verdict:null,stale:null}),
+                            sourceHash:retained.source.sourceHash,inspectionSourceHash:retained.source.sourceHash,readOnly:true});
+                        const image = /^api\/stage-parts\/(image|page)\/(0|[1-9]\d*)$/.exec(path)!;
+                        const file = servedImage(parts, image[1] as 'image'|'page', Number(image[2]));
+                        return file ? await sealedFile(relative(retained.snapshotRoot,file).split('\\').join('/')) : failure('JOB_SOURCE_UNRETAINABLE',404);
+                    }
                     if (path === 'api/review') {
                         return json({
                             ...checkpointEvidenceMetadata(retained.snapshotRoot, retained.source.checkpointEvidence),
@@ -337,6 +362,7 @@ export function retainedPublicationRoutes(session: JobSession) {
                     views.set(publicationId, pending);
                 }
                 const {review, parts} = await pending;
+                if (!review) throw new JobError('JOB_SOURCE_MISMATCH');
                 await assertReviewUnchanged(review);
                 if (retained.checkpointEvidencePackageHash !== undefined && retained.checkpointEvidencePackageHash !== review.sourceHash) {
                     throw new JobError('JOB_SOURCE_MISMATCH');

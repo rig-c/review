@@ -132,6 +132,13 @@ export function createJobRigScreen(options: {
           if (jobRigScreenSubject(candidate.publication.source)) {picture = await prepare(candidate, signal, true);break;}
           previous = candidate.publication.previousPublicationId;
         }
+        if (!picture && inspection.interview?.questions.some(question => question.hasParts)) {
+          const response = await fetch(options.routes(display).api('stage-parts'), {signal});
+          if (!response.ok) throw new Error('JOB_VISUAL_UNAVAILABLE');
+          const parts = await response.json() as PartsSubjectData;
+          if (parts.sourceHash !== source.sourceHash || parts.mode !== 'parts') throw new Error('JOB_DISPLAY_MISMATCH');
+          picture = {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints:new Set(),parts};
+        }
         if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
         return {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints:new Set(),record:{inspection,forms,picture}};
       } catch(error) {inspection.dispose();throw error;}
@@ -164,7 +171,8 @@ export function createJobRigScreen(options: {
     let modals:JobRigScreenPrepared['modals'];
     const asks=options.window.state().pending.filter(ask=>ask.publicationId===display.publication.publicationId&&ask.subject.kind!=='review-verdict'&&ask.subject.kind!=='parts-verdict'&&jobRigScreenAsk(display,ask,checkpoints));
     if(!backdropOnly&&options.formDependencies){
-      const inspection=await prepareJobInspection(display,signal,true);
+      // The shared main workspace loads visuals; modal forms keep data and checkpoint evidence.
+      const inspection=await prepareJobInspection(display,signal,true,false);
       try{modals={inspection,forms:prepareJobForms(display,asks,ask=>formFor(ask,inspection,options.formDependencies!))};}
       catch(error){inspection.dispose();throw error;}
     }
@@ -241,7 +249,7 @@ export function createJobRigScreen(options: {
         attach:value=>{screen=value;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
         displayed:()=>ready.resolve(),failed:error=>ready.reject(error)};
     }
-    if(!review)throw new Error('JOB_DISPLAY_MISMATCH');
+    if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
     return {access,pendingSubjects,navigation,...prepared.refusal?{unavailable:prepared.refusal}:{},...prepared.display.publication.source.direction?{direction:{publicationId:prepared.display.publication.publicationId,sourceHash:prepared.display.publication.source.sourceHash}}:{},
       reviewState(issues,sending) {
         if(sending)return options.translate('job.parts.sending');
@@ -261,10 +269,10 @@ export function createJobRigScreen(options: {
           if(path==='/api/session'){const act=options.window.state().pending.filter(ask=>ask.publicationId===prepared.display.publication.publicationId&&ask.subject.kind==='parts-verdict').at(-1)?.act;return Promise.resolve({subject:'parts',issues:act?.kind==='parts-verdict'&&act.schema==='rig-review/act@6'?commentPartsIssues(act.value.comments):act?.kind==='parts-verdict'&&act.schema==='rig-review/act@5'?act.value.issues:[]});}
           return undefined;
         }
-        if (path === '/api/review') return Promise.resolve(structuredClone(review));
+        if (path === '/api/review') return Promise.resolve(structuredClone(review!));
         if (path === '/api/access') return Promise.resolve({capabilityRequired: true, control: false});
-        if (path === '/api/session') return Promise.resolve({schema: 'rig-review-session/1', id: review.manifest.id, revision: review.manifest.revision,
-          sourceHash: review.sourceHash, reviewedSource: structuredClone(review.reviewedSource), status: 'pending', checkpoints: {}, feedback: [],
+        if (path === '/api/session') return Promise.resolve({schema: 'rig-review-session/1', id: review!.manifest.id, revision: review!.manifest.revision,
+          sourceHash: review!.sourceHash, reviewedSource: structuredClone(review!.reviewedSource), status: 'pending', checkpoints: {}, feedback: [],
           feedbackWarnings: [], updatedAt: null} satisfies ReviewSession);
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },

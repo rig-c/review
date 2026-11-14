@@ -1,5 +1,27 @@
 # Changelog
 
+## 4.0.2
+
+Parts and rig modal forms reach their first screen faster, and image comments survive reload beyond the local draft size limit when IndexedDB is available.
+
+### Fixed
+
+* Parts and rig modal forms no longer preload pictures that the shared workspace loads anyway (#824, closes #813). Measured parts cold loads improved from 4.009 s median (range 3.746–4.373 s) to 1.769 s median (range 1.552–2.065 s). The 2-second target is met on the median, with one of three samples above it.
+* Image comments drawn past the 512 KiB local draft size limit were dropped on reload while Submit still succeeded (#826, closes #816). Each crop is now stored in IndexedDB before the draft that references it, then restored and checked against its digest and dimensions. The PR's draw → reload → submit measurement lost no comments at 8, 16 or 32 image comments. A missing or corrupt crop drops only its own comment; the rest of the draft restores. Without IndexedDB, or if a crop write fails, the old inline format and 512 KiB limit still apply, so an oversized save can leave the older draft; the hidden storage warning and enabled Submit are tracked in #825.
+
+## 4.0.1
+
+Parts and rig job pages reach their first screen faster, and record option sets show their parts picture on a fresh host. The first-load performance work remains a partial fix.
+
+### Fixed
+
+* The first screen of a parts or rig job page no longer waits on interview images it does not show (#818, refs #813). First load is faster, but the 2-second target is not reached yet; #813 stays open. Retained questions, answers, snapshots and source identity are unchanged.
+* A fresh host draws the parts picture for a record option set from its own sealed draft closure when no previous picture exists (#820, closes #814). The existing per-publication view cache validates and loads that draft; historical records with incomplete picture closures remain readable, and source and act schemas are unchanged.
+
+### Changed
+
+* Documentation starts the toolchain and delivery flow with Create and identifies the job window, hub and managed-front relay as removed or legacy (#812). Existing reference anchors are retained.
+
 ## 4.0.0
 
 Direction publications now use the shared inspection workspace, with composited scene playback when a scene is declared. Review submission captures whole-rig evidence independently of the inspection view and carries multiple image comments without changing finalized act bytes.
