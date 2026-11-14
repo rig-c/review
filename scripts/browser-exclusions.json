@@ -1,8 +1,4 @@
 {
-  "tests/parts-comments-browser.ts": {
-    "issue": 843,
-    "reason": "PRODUCT: assembled part binding regression; keep suite unchanged and restore whole suite when #843 lands."
-  },
   "tests/stage1-corrections-browser.ts": {
     "issue": 847,
     "reason": "PRODUCT: lost human Chest opener/part-specific seed Apply path; whole suite unchanged, no split or moved Mesh cases; #847 must return the whole suite."

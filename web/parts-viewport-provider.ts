@@ -55,7 +55,7 @@ export function createPartsViewport(host:PartsViewportHost){const state=createVi
 
 import type {partsViewJson} from '../src/parts-view.ts';
 import {defaultPartsComparison,paintingRectangle,differencePixels,assertOriginalPaintingSize,type PartsComparison} from '../src/parts-comparison.ts';
-import {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,type Box} from './parts-render.ts';
+import {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,pickAssembly,type Box} from './parts-render.ts';
 import {bindStageComments,type CommentCodec,type CommentUiPose,type CommentRow} from './stage-comments.ts';
 import {parsePartsIssue,assertPartsIssueBinding,snapImageRegion,type PartsIssue} from '../src/parts-comment.ts';
 import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
@@ -85,7 +85,7 @@ export function bindPartsSubject(host:{
  request:(path:string,init?:RequestInit)=>Promise<Response>;base:string;paintingPath:string;
  mesh:()=>boolean;restoreMesh:(on:boolean)=>void;images:()=>boolean;changed:()=>void;selectionChanged:()=>void;locked:(id:string)=>boolean;refusal:()=>string|null;drawn:(input:{state:'loaded'}|{state:'failed';reason:string})=>void;message:ViewportProvider['message'];
 }) {
- const data=host.data,hidden=new Set<string>(),images=new Map<number,Promise<HTMLImageElement>>();
+ const data=host.data,hidden=new Set<string>(),images=new Map<number,Promise<HTMLImageElement>>(),loaded=new Map<string,HTMLImageElement>(),assemblyAlpha=new Map<string,{box:Box;alpha:Uint8ClampedArray}>();
  let selected:string|null=null,solo=false,comparison:PartsComparison=defaultPartsComparison(),token=0,disposed=false,busy=false,failed=false;
  let drawnFrame:{w:number;h:number}|null=null,drawnReferenceFrame:{w:number;h:number}|null=null;
  let drawnRegion:Box|null=null,drawnSolo=false;
@@ -98,7 +98,8 @@ export function bindPartsSubject(host:{
   const image=await loadViewportImage(await host.request(path));
   if(disposed)throw new Error('PARTS_PAINT_FAILED');return image;
  };
- const image=(entry:Item)=>{let pending=images.get(entry.index);if(!pending){pending=loadImage(`${host.base}/image/${entry.index}`);images.set(entry.index,pending);}return pending;};
+ const image=(entry:Item)=>{let pending=images.get(entry.index);if(!pending){pending=loadImage(`${host.base}/image/${entry.index}`).then(img=>{loaded.set(entry.name,img);return img;});images.set(entry.index,pending);}return pending;};
+ const sourceAlpha=(entry:Item,img:HTMLImageElement)=>{const cached=assemblyAlpha.get(entry.name);if(cached)return cached;const c=makeCanvas(entry.w,entry.h),rgba=(c.getContext('2d')!.drawImage(img,0,0),c.getContext('2d')!.getImageData(0,0,c.width,c.height).data),alpha=new Uint8ClampedArray(c.width*c.height);for(let i=0;i<alpha.length;i++)alpha[i]=rgba[i*4+3]!;const layer={box:{...entry,w:c.width,h:c.height},alpha};assemblyAlpha.set(entry.name,layer);return layer;};
  const painting=()=>original??=loadImage(host.paintingPath);
  const partsBinding=(names:readonly string[])=>names.map(name=>{const entry=data.items.find(item=>item.name===name);if(!entry?.imageHash)throw new Error('PARTS_COMMENT_PART_MISMATCH');return {name,imageHash:entry.imageHash};});
  const sourceItems=()=>new Map(data.items.map(item=>[item.name,{...item,imageHash:item.imageHash!}]));
@@ -115,7 +116,7 @@ export function bindPartsSubject(host:{
   try{
    if(data.mode!=='parts'||!data.items.length)throw new Error('PARTS_IMAGE_UNAVAILABLE');
    const frame=box(),referenceBox=selected===null?null:item(),shown=assembled()?data.items.filter(item=>!hidden.has(item.name)):[item()];
-   const layers=await Promise.all(shown.map(async entry=>({box:entry,image:await image(entry)})));
+   const layers=await Promise.all(shown.map(async entry=>{const img=await image(entry);loaded.set(entry.name,img);return {box:entry,image:img};}));
    let reference:HTMLCanvasElement|null=null;
    if(data.painting&&data.rigSize){
     const original=await painting();
@@ -154,7 +155,16 @@ export function bindPartsSubject(host:{
   signature:pose=>[pose.sourceHash,pose.item.name,pose.item.imageHash,pose.view],
   matches:(_mark,pose,raw)=>{try{const c=parsePartsIssue(raw,false,true,false);return pose.sourceHash===c.sourceHash&&pose.view.mode===c.view.mode&&(assembled()||c.parts[0]?.name===pose.item.name);}catch{return false;}},
   label:raw=>{const issue=parsePartsIssue(raw,false,true,false);return `${issue.parts.map(part=>part.name).join(', ')} · ${issue.summary}`;},
-  chips:(pose,_screen,existing)=>({selected:existing?parsePartsIssue(existing,false,true,false).parts.map(part=>part.name):(pose.view.mode==='item'?[pose.item.name]:[]),candidates:pose.view.mode==='assembled'?data.items.filter(item=>!hidden.has(item.name)).map(item=>item.name):[]}),
+  chips:(pose,screen,existing)=>{
+   const visible=data.items.filter(item=>!hidden.has(item.name)),candidates=pose.view.mode==='assembled'?visible.map(item=>item.name):[];
+   if(existing)return {selected:parsePartsIssue(existing,false,true,false).parts.map(part=>part.name),candidates};
+   if(pose.view.mode==='item')return {selected:[pose.item.name],candidates};
+   const frame=box(),r=snapImageRegion(region(unprojectMark(screen,pose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},pose.camera),{x:0,y:0,width:frame.w,height:frame.h}));
+   const hits=new Set<string>(),layers=visible.flatMap(box=>{const img=loaded.get(box.name);return img?[sourceAlpha(box,img)]:[];});
+   const stepX=Math.max(1,r.width/32),stepY=Math.max(1,r.height/32);
+   for(let y=r.y+.5;y<r.y+r.height;y+=stepY)for(let x=r.x+.5;x<r.x+r.width;x+=stepX){const hit=pickAssembly(layers,x,y);if(hit)hits.add(hit.name);}
+   return {selected:visible.filter(item=>hits.has(item.name)).map(item=>item.name),candidates};
+  },
   create:async(pose,_view,screen,crop,_bookmark,summary,parts)=>{
    const frame=box(),r=snapImageRegion(region(unprojectMark(screen,pose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},pose.camera),{x:0,y:0,width:frame.w,height:frame.h})),single=pose.view.mode==='item';
    return prepare({schema:'rig-review-parts-comment/2',id:crypto.randomUUID(),summary,sourceHash:data.sourceHash,parts:partsBinding(single?[pose.item.name]:parts??[]),rigRegion:single?{...r,x:r.x+pose.item.x,y:r.y+pose.item.y}:r,imageRegion:single?r:null,view:structuredClone(pose.view),crop,nativeCrop:null});
@@ -186,7 +196,7 @@ export function bindPartsSubject(host:{
   comparison:()=>comparison,setComparison:(mode:PartsComparison['mode'])=>{comparison=mode==='difference'?{mode,opacity:comparison.opacity,threshold:0}:{mode,opacity:comparison.opacity};redraw();},
   opacity:(value:number)=>{comparison.opacity=value;redraw();},paint,redraw,
   async ready(){if(data.painting)host.viewport.state.cameraSync=true;await paint();},
-  dispose(){disposed=true;++token;comments?.dispose();images.clear();},
+  dispose(){disposed=true;++token;comments?.dispose();images.clear();loaded.clear();assemblyAlpha.clear();},
  };
 }
 

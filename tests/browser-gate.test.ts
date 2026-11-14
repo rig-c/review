@@ -22,7 +22,6 @@ test('exclusion metadata requires a positive integer issue and nonempty reason w
 test('live tree partition covers every discovered suite once or by its named exemption',async()=>{
  const plan=await browserPlan();
  expect(Object.fromEntries(Object.entries(plan.exclusions).map(([file,entry])=>[file,entry.issue]))).toEqual({
-  "tests/parts-comments-browser.ts": 843,
   "tests/stage1-corrections-browser.ts": 847,
   "tests/stage1-review-fixes-browser.ts": 847,
   "tests/job-checkpoint-evidence-browser.ts": 848,
@@ -52,4 +51,5 @@ test('suite argv uses supported output/locale contracts and enables assertions',
  expect(browserInvocation('tests/chest-panel-browser.ts','default','/tmp/evidence').argv.slice(-2)).toEqual(['--shots','/tmp/evidence']);
  expect(browserInvocation('tests/inspection-clock-consumers-browser.ts','default','/tmp/evidence','/isolated').env.CLOCK_PRODUCER_BENCH).toBe('/isolated');
  expect(browserInvocation('tests/parts-explorer-browser.ts','default','/tmp/evidence').env.OUT_JSON).toBe('/tmp/evidence/report.json');
+ expect(browserInvocation('tests/parts-comments-browser.ts','default','/tmp/evidence').argv).toEqual(['bun','tests/parts-comments-browser.ts']);
 });

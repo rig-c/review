@@ -31,7 +31,7 @@ export function browserInvocation(file:string, language:string, output:string, r
     case 'stage3-framing-browser.ts': env.RV496_LANG=language;env.RV496_ARTIFACTS=output;break;
     case 'inspection-clock-consumers-browser.ts': env.CLOCK_PRODUCER_BENCH=root;break;
     case 'correction-handoff-browser.ts': case 'stage1-corrections-browser.ts': case 'stage1-review-fixes-browser.ts': env.RV367_BENCH=root;break;
-    case 'inspection-bookmark-time-browser.ts': case 'compare-playback-stability-browser.ts': break;
+    case 'inspection-bookmark-time-browser.ts': case 'compare-playback-stability-browser.ts': case 'parts-comments-browser.ts': break;
     case 'job-checkpoint-evidence-browser.ts':case 'job-checkpoint-wire-browser.ts':case 'job-record-browser.ts':case 'open-workspace-browser.ts': argv.push('--lang',language,'--out',output);break;
     default: argv.push('--out',output);
   }
