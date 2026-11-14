@@ -1393,9 +1393,9 @@ test('#743 live host notices and act status retain English source and render in 
    for (const id of ['message', 'review-message', 'review-draft-state', 'status-copy']) {
     const node = doc.createElement('span'); node.id = id; root.append(node);
    }
-   const render = new Function('el', 'setSourceText', 'setSourceAttribute', 'titledIds',
+   const render = new Function('el', 'setSourceText', 'setSourceAttribute', 'titledIds', 'host',
     transpiler.transformSync(text + message) + ';return message;')(
-     (id: string) => doc.getElementById(id), setSourceText, setSourceAttribute, new Set(['message']));
+     (id: string) => doc.getElementById(id), setSourceText, setSourceAttribute, new Set(['message']), {});
    // Use the existing act bar renderer and its copies, through the same source-text writer.
    const renderStatus = new Function('options', 'setSourceText', 'setSourceAttribute',
     transpiler.transformSync('let current=null,retry=null;'+saveState) + ';return setSaveState;')({

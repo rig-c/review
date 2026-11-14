@@ -60,3 +60,24 @@ test('#833 live act reveals only after controls render and initialises the share
  const state=h.rigInspector.actBar.saveState();expect(state).toEqual({kind:'unsaved',text:'Not submitted'});
  h.render();expect(h.rigInspector.actBar.saveState()).toBe(state);
 });
+
+for(const item of [
+ {name:'early live refusal',host:{},error:true,footerOnly:false,hidden:true,reveal:true},
+ {name:'footer-only refusal',host:{},error:true,footerOnly:true,hidden:true,reveal:false},
+ {name:'ordinary loading message',host:{},error:false,footerOnly:false,hidden:true,reveal:false},
+ {name:'standalone refusal',host:null,error:true,footerOnly:false,hidden:true,reveal:false},
+ {name:'already rendered live refusal',host:{},error:true,footerOnly:false,hidden:false,reveal:false},
+])test('#833 '+item.name+' preserves refusal visibility without exposing legacy acts',()=>{
+ const begin=main.indexOf('function message(value:'),end=main.indexOf('\nasync function api',begin);
+ const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end));
+ const node=()=>({hidden:false,title:'',textContent:'',classList:{toggle(){}}});
+ const nodes={'message':node(),'review-message':node()},legacy=[node(),node(),node()];
+ const act={hidden:item.hidden,querySelectorAll:()=>legacy};
+ const env={host:item.host,rigInspector:{act},el:(id:keyof typeof nodes)=>nodes[id],text:(id:keyof typeof nodes,value:string)=>{nodes[id].textContent=value;}};
+ const message=new Function('env',`with(env){${script};return message;}`)(env);
+ message('JOB_VISUAL_UNAVAILABLE',item.error,item.footerOnly,'source refusal');
+ expect(nodes.message.textContent).toBe('JOB_VISUAL_UNAVAILABLE');
+ expect(nodes['review-message'].textContent).toBe(item.footerOnly?'':'JOB_VISUAL_UNAVAILABLE');
+ expect(act.hidden).toBe(item.reveal?false:item.hidden);
+ expect(legacy.map(control=>control.hidden)).toEqual(item.reveal?[true,true,true]:[false,false,false]);
+});

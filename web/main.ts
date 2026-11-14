@@ -272,6 +272,10 @@ function message(value: string, error = false, footerOnly = false, diagnostic?: 
   if (footerOnly) return;
   // The modal makes the footer inert; the review dialog repeats the latest message for its reader.
   text('review-message', value); el('review-message').classList.toggle('error', error);
+  if(host&&error&&rigInspector.act.hidden){
+    for(const node of rigInspector.act.querySelectorAll<HTMLElement>('#save,#review-status,label[for="review-status"]'))node.hidden=true;
+    rigInspector.act.hidden=false;
+  }
   // A background refusal names its code and origin on hover; only Submit's own catch changes the act bar.
   if (diagnostic) el('message').title = diagnostic;
 }
