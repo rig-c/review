@@ -9,15 +9,16 @@ const renderer=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(start,
 function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  const control=()=>({hidden:false,disabled:false,title:'',textContent:'',onclick:null as null|((e:unknown)=>unknown),classList:{values:new Set<string>(),toggle(name:string,on:boolean){on?this.values.add(name):this.values.delete(name);}}});
  const save=control(),requestChanges=control(),rigAsk=control(),select=control(),label=control(),submit=control();
+ let state:{kind:string;text:string}|null=null;const rigInspector={act:{hidden:true},actBar:{saveState:()=>state,setSaveState:(value:{kind:string;text:string})=>{state=value;}}};
  const calls:string[]=[],session={feedbackWarnings:[],status:'pending'};
  const env={activeInterviewImages:null as unknown,host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
-  session,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
+  session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
   recordDialog:{querySelector:(selector:string)=>selector.includes('fieldset:disabled')?null:({disabled:false}),querySelectorAll:()=>[submit]},
   button:()=>save,select:()=>select,document:{querySelector:()=>label},
   setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
   verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};
  const render=new Function('env',`with(env){${renderer};return renderAnswerControls;}`)(env);
- render();return {save,requestChanges,rigAsk,submit,session,calls,env,render};
+ render();return {save,requestChanges,rigAsk,submit,session,calls,env,render,rigInspector};
 }
 for(const stage of ['rig-review','direction-review'])test('#809 '+stage+' directly submits the selected answer and requires a comment for changes',()=>{
  const h=harness([{kind:'review-verdict',stage}]);
@@ -63,4 +64,30 @@ test('#834 completed pictured answers retain a non-emphasised enabled readback o
 test('#834 an inline pictured pending answer does not emphasise a second opener',()=>{
  const h=harness([{kind:'interview-picks'}]);h.env.activeInterviewImages=[{name:'question',src:'/bound'}];h.render();
  expect(h.rigAsk.hidden).toBe(true);expect(h.rigAsk.classList.values.has('primary')).toBe(false);
+});
+test('#833 live act reveals only after controls render and initialises the shared save state once',()=>{
+ const h=harness([{kind:'interview-picks'}]);expect(h.rigInspector.act.hidden).toBe(false);
+ const state=h.rigInspector.actBar.saveState();expect(state).toEqual({kind:'unsaved',text:'Not submitted'});
+ h.render();expect(h.rigInspector.actBar.saveState()).toBe(state);
+});
+
+for(const item of [
+ {name:'early live refusal',host:{},error:true,footerOnly:false,hidden:true,reveal:true},
+ {name:'footer-only refusal',host:{},error:true,footerOnly:true,hidden:true,reveal:false},
+ {name:'ordinary loading message',host:{},error:false,footerOnly:false,hidden:true,reveal:false},
+ {name:'standalone refusal',host:null,error:true,footerOnly:false,hidden:true,reveal:false},
+ {name:'already rendered live refusal',host:{},error:true,footerOnly:false,hidden:false,reveal:false},
+])test('#833 '+item.name+' preserves refusal visibility without exposing legacy acts',()=>{
+ const begin=main.indexOf('function message(value:'),end=main.indexOf('\nasync function api',begin);
+ const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end));
+ const node=()=>({hidden:false,title:'',textContent:'',classList:{toggle(){}}});
+ const nodes={'message':node(),'review-message':node()},legacy=[node(),node(),node()];
+ const act={hidden:item.hidden,querySelectorAll:()=>legacy};
+ const env={host:item.host,rigInspector:{act},el:(id:keyof typeof nodes)=>nodes[id],text:(id:keyof typeof nodes,value:string)=>{nodes[id].textContent=value;}};
+ const message=new Function('env',`with(env){${script};return message;}`)(env);
+ message('JOB_VISUAL_UNAVAILABLE',item.error,item.footerOnly,'source refusal');
+ expect(nodes.message.textContent).toBe('JOB_VISUAL_UNAVAILABLE');
+ expect(nodes['review-message'].textContent).toBe(item.footerOnly?'':'JOB_VISUAL_UNAVAILABLE');
+ expect(act.hidden).toBe(item.reveal?false:item.hidden);
+ expect(legacy.map(control=>control.hidden)).toEqual(item.reveal?[true,true,true]:[false,false,false]);
 });
