@@ -31,10 +31,6 @@
     "issue": 842,
     "reason": "IN PROGRESS under 89d907 phase2a: Owner restart did not complete before aggregate sample budget; cause unexplained. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
   },
-  "tests/parts-setup-browser.ts": {
-    "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Approved Request changes repoint was not executed before sample budget ended. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
-  },
   "tests/rig-bottom-browser.ts": {
     "issue": 842,
     "reason": "IN PROGRESS under 89d907 phase2a: Current Transport/headline migration was not executed before sample budget ended. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
