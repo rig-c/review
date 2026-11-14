@@ -75,6 +75,8 @@ try{
    assert.equal(menu.language,language);assert.equal(menu.mode,mode);
    assert.deepEqual(menu.viewport,{width:1600,height:1000});assert.equal(menu.open,true);
    assert.deepEqual(menu.toolbar,toolbarIds);assert.equal(menu.headings,0);assert.equal(menu.cameraTarget,'rig');
+   const padding:any=await page.evaluate(`(()=>{const bar=document.querySelector('.workspace-main-toolbar'),readout=document.getElementById('zoom-value'),style=getComputedStyle(bar);return {right:bar.getBoundingClientRect().right-readout.getBoundingClientRect().right,paddingLeft:parseFloat(style.paddingLeft),paddingRight:parseFloat(style.paddingRight)};})()`);
+   assert.ok(padding.right>=padding.paddingLeft&&padding.paddingRight===padding.paddingLeft,'main toolbar keeps balanced outer padding');
    assert.equal(menu.zoomValue,catalog['100% · Rig']??('100% · '+catalog['Rig']));
    assert.deepEqual(menu.choices.map(choice=>choice.id),expectedIds);
    assert.deepEqual(menu.choices.map(choice=>choice.label),['Side by side','Reference','Rig','Difference'].map(key=>catalog[key]));

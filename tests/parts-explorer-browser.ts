@@ -374,7 +374,7 @@ const SELF_CONTAINED_SLOTS = [
   { name: 'no_region_fallback_slot', kind: 'region' as const, hasRegion: false },
 ];
 
-async function buildTwentySlotModel(variant: 'a' | 'b' = 'a'): Promise<string> {
+export async function buildTwentySlotModel(variant: 'a' | 'b' = 'a'): Promise<string> {
   const raw = JSON.parse(
     await readFile(new URL('./fixtures/strip-probe/build/skeleton.model.json', import.meta.url), 'utf8'),
   );

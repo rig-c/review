@@ -79,7 +79,7 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
    if(typeof (doc as Document).createElement==='function'&&tabs.length){
     const placeOverflow=(menu:HTMLElement)=>{
      if(typeof row.getBoundingClientRect!=='function')return;
-     const rect=row.getBoundingClientRect(),clip=section.closest('main')?.getBoundingClientRect(),above=Math.max(0,rect.top-(clip?.top??0)-8),below=Math.max(0,Math.min(innerHeight,clip?.bottom??innerHeight)-rect.bottom-8);
+     const rect=row.getBoundingClientRect(),clip=row.closest('.inspector')?.getBoundingClientRect(),main=section.closest('main')?.getBoundingClientRect(),above=Math.max(0,rect.top-Math.max(clip?.top??0,main?.top??0)-8),below=Math.max(0,Math.min(innerHeight,clip?.bottom??innerHeight,main?.bottom??innerHeight)-rect.bottom-8);
      const up=below<Math.min(menu.scrollHeight,220)&&above>below;menu.dataset.side=up?'above':'below';menu.style.maxHeight=Math.min(220,up?above:below)+'px';
     };
     const items:HTMLButtonElement[]=[],more=bindPopupMenu('workspace-tabs-more-'+name,()=>{syncOverflow();return items.filter(item=>!item.hidden);},cleanups,placeOverflow);
@@ -94,11 +94,11 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
      for(const tab of tabs)tab.button.removeAttribute('data-tab-overflow');
      if(row.hidden||!(row.clientWidth>0)){more.button.hidden=true;more.close(false);return;}
      more.button.hidden=false;
-     const availableWidth=row.clientWidth,moreWidth=(more.button.offsetWidth||28)+4,widths=tabs.map(tab=>tab.button.offsetWidth);
-     if(widths.reduce((sum,w,i)=>sum+w+(i>0?4:0),0)<=availableWidth){more.button.hidden=true;more.close(false);return;}
+     const availableWidth=row.getBoundingClientRect?.().width??row.clientWidth,gap=4,moreWidth=(more.button.getBoundingClientRect?.().width??more.button.offsetWidth??28)+gap,widths=tabs.map(tab=>tab.button.getBoundingClientRect?.().width??tab.button.offsetWidth);
+     if(widths.reduce((sum,w,i)=>sum+w+(i>0?gap:0),0)<=availableWidth){more.button.hidden=true;more.close(false);return;}
      const selectedIndex=tabs.findIndex(tab=>tab.button.getAttribute('aria-selected')==='true'),visible=new Set<number>();
-     let used=moreWidth+(selectedIndex>=0?widths[selectedIndex]!+4:0);if(selectedIndex>=0)visible.add(selectedIndex);
-     for(let i=0;i<tabs.length;i++)if(i!==selectedIndex){if(used+widths[i]!+4<=availableWidth){visible.add(i);used+=widths[i]!+4;}else break;}
+     let used=moreWidth+(selectedIndex>=0?widths[selectedIndex]!+gap:0);if(selectedIndex>=0)visible.add(selectedIndex);
+     for(let i=0;i<tabs.length;i++)if(i!==selectedIndex){if(used+widths[i]!+gap<=availableWidth){visible.add(i);used+=widths[i]!+gap;}}
      for(const [i,tab]of tabs.entries()){const over=!visible.has(i);if(over)tab.button.setAttribute('data-tab-overflow','true');items[i]!.hidden=!over;items[i]!.disabled=tab.button.disabled;items[i]!.textContent=tab.button.textContent;const title=tab.button.getAttribute('title');if(title)items[i]!.setAttribute('title',title);else items[i]!.removeAttribute('title');}
      if(!more.menu.hidden)placeOverflow(more.menu);
     };

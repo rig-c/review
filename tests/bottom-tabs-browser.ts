@@ -13,7 +13,7 @@ import {jobFixture} from './helpers/job-api-fixture.ts';
 import {startServer} from '../src/server.ts';
 import {joinProject} from '../src/joined-project.ts';
 import {loadReview} from '../src/manifest.ts';
-import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
+import {launchCdpSession,buildTwentySlotModel,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 
 const at=Bun.argv.indexOf('--out'),output=resolve(at<0?'artifacts/bottom-tabs':Bun.argv[at+1]!);
@@ -29,9 +29,36 @@ async function wait(page:InputCdpSession,expression:string,label:string){
 async function selectTab(page:InputCdpSession,target:string){
  const selector=`.workspace-bottom-tabs > .block-row:not([hidden]) [data-block-target="${target}"]`;
  const overflow=await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}).hasAttribute('data-tab-overflow')`);
- if(overflow){await click(page,'.workspace-bottom-tabs > .block-row:not([hidden]) .workspace-tabs-more');await click(page,`.workspace-tabs-menu:not([hidden]) [data-block-more-target="${target}"]`);}
+ if(overflow){
+  await click(page,'.workspace-bottom-tabs > .block-row:not([hidden]) .workspace-tabs-more');
+  await page.evaluate(`document.querySelector('.workspace-tabs-menu:not([hidden]) [data-block-more-target="${target}"]')?.scrollIntoView({block:'nearest'})`);
+  if(Bun.argv.includes('--standalone-widths')){
+   const hit:any=await page.evaluate(`(()=>{const n=document.querySelector('.workspace-tabs-menu:not([hidden]) [data-block-more-target="${target}"]'),r=n.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2),ancestors=[];for(let p=n.parentElement;p;p=p.parentElement){const s=getComputedStyle(p);ancestors.push({id:p.id,className:p.className,rect:p.getBoundingClientRect().toJSON(),overflowX:s.overflowX,overflowY:s.overflowY,scrollTop:p.scrollTop});}return {target:'${target}',language:document.documentElement.lang,width:innerWidth,rect:r.toJSON(),hit:hit?{tag:hit.tagName,id:hit.id,className:hit.className}:null,receivesHit:n.contains(hit),ancestors};})()`);
+   await writeFile(join(output,`menu-hit-${hit.language}-${hit.width}-${target}.json`),JSON.stringify(hit,null,2)+'\n');
+  }
+  await click(page,`.workspace-tabs-menu:not([hidden]) [data-block-more-target="${target}"]`);
+ }
  else await click(page,selector);
  await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+}
+
+/** #856: measure the real tab strip, not just whether overflow attributes exist. */
+async function proveHeading(page:InputCdpSession,label:string){
+ await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+ const g:any=await page.evaluate<any>(`(()=>{
+  const rect=n=>n.getBoundingClientRect().toJSON(),panel=document.getElementById('workspace-inspector'),strip=document.querySelector('.workspace-bottom-tabs'),row=strip.querySelector('.block-row:not([hidden])'),chevron=document.getElementById('workspace-bottom-collapse');
+  return {panel:rect(panel),strip:rect(strip),row:rect(row),chevron:rect(chevron),width:innerWidth,act:[...document.querySelectorAll('.inspector-heading>.workspace-act-bar,.inspector-heading>.workspace-act-bar *')].filter(n=>!n.closest('[hidden]')&&n.getBoundingClientRect().width>0&&getComputedStyle(n).display!=='contents').map(n=>({id:n.id,rect:rect(n)})),tabs:[...row.querySelectorAll('[role=tab]')].filter(n=>n.getBoundingClientRect().width>0).map(n=>({id:n.dataset.blockTarget,selected:n.getAttribute('aria-selected')==='true',rect:rect(n)}))};
+ })()`);
+ for(const node of g.act)assert.ok(node.rect.left>=g.panel.left-1&&node.rect.right<=g.panel.right+1&&node.rect.left>=0&&node.rect.right<=g.width,label+' retained act inside panel and viewport: '+node.id);
+ const center=(r:any)=>(r.top+r.bottom)/2;
+ for(const tab of g.tabs){
+  assert.ok(tab.rect.top>=g.panel.top-1&&tab.rect.bottom<=g.panel.bottom+1,label+' tab inside panel: '+tab.id);
+  assert.ok(tab.rect.left>=g.strip.left-1&&tab.rect.right<=g.strip.right+1&&tab.rect.left>=0&&tab.rect.right<=g.width,label+' tab inside strip and viewport: '+tab.id);
+  assert.ok(Math.abs(center(tab.rect)-center(g.chevron))<=1,label+' tab and chevron share centre');
+ }
+ assert.ok(g.row.top>=g.panel.top-1&&g.row.bottom<=g.panel.bottom+1,label+' row inside panel');
+ assert.ok(g.tabs.some((tab:any)=>tab.selected),label+' selected tab has a visible box');
+ return g;
 }
 
 /** Native activation of the retained transport, with time read from the shipped runtime UI. */
@@ -47,6 +74,8 @@ async function proveToolbarPlayback(page:InputCdpSession,kind:string,lang:string
   await click(page,'#play');
   await wait(page,`document.getElementById('play').textContent==='Ⅱ'&&Math.abs(Number(document.getElementById('scrub').value)-${before})>=.04`,tab+' actual playback advances');
   const advanced=await page.evaluate<number>(`Number(document.getElementById('scrub').value)`);
+  const playingBox:any=await page.evaluate(`({play:document.getElementById('play').getBoundingClientRect().toJSON(),zoom:document.getElementById('zoom-in').getBoundingClientRect().toJSON()})`);
+  assert.ok(Math.abs(playingBox.play.height-playingBox.zoom.height)<=1,'Pause glyph height equals Zoom in');
   await click(page,'#play');
   await wait(page,`document.getElementById('play').textContent==='▶'`,tab+' pauses');
   const held=await page.evaluate<number>(`Number(document.getElementById('scrub').value)`);
@@ -59,6 +88,8 @@ async function proveToolbarPlayback(page:InputCdpSession,kind:string,lang:string
     visible:!play.hidden&&r.width>0&&r.height>0,rect:r.toJSON(),controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(n=>n.id)};
   })()`);
   assert.equal(state.count,1);assert.equal(state.identity,true);assert.equal(state.handler,true);assert.equal(state.main,true);
+  assert.ok(Math.abs(state.rect.height-playingBox.play.height)<=1&&Math.abs(state.rect.width-playingBox.play.width)<=1,'Play and Pause have the same dimensions');
+  assert.ok(Math.abs(state.rect.height-playingBox.zoom.height)<=1,'Play glyph height equals Zoom in');
   assert.equal(state.visible,true);assert.equal(state.beforeControls,true);assert.equal(state.text,'▶');assert.equal(state.time,held,'pause holds the actual transport time');
   assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
   assert.ok(state.rect.left>=0&&state.rect.top>=0&&state.rect.right<=width&&state.rect.bottom<=height);
@@ -125,6 +156,7 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
     };
    })()`);
 
+   await proveHeading(page,kind+' '+lang+' initial');
    assert.equal(initial.lang,lang);
    assert.equal(initial.stripFlexWrap,'nowrap');
    assert.equal(initial.rowFlexWrap,'nowrap');
@@ -312,6 +344,7 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
      actVisible:act.getBoundingClientRect().height>0,
     };
    })()`);
+   await proveHeading(page,kind+' '+lang+' collapsed');
    assert.equal(collapsedState.text,'⌃');
    assert.equal(collapsedState.expanded,'false');
    assert.equal(collapsedState.label,catalog['Expand bottom panel']);
@@ -325,6 +358,20 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
    await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
    assert.equal(await page.evaluate(`document.getElementById('workspace-bottom-collapse').textContent`),'⌄');
 
+   if(width===1100){
+    const widths=[240,320,540,700,900,1100,1280,1440],sweep:unknown[]=[];
+    for(const w of widths){
+     await page.setViewport(w,900);
+     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+     const targets=await page.evaluate<string[]>(`[...document.querySelectorAll('.workspace-bottom-tabs>.block-row:not([hidden]) [role=tab]')].filter(n=>!n.hidden&&!n.disabled).map(n=>n.dataset.blockTarget)`);
+     for(const target of targets){await selectTab(page,target);sweep.push({width:w,target,geometry:await proveHeading(page,kind+' '+lang+' '+w+' '+target)});}
+    }
+    await page.setViewport(width,height);await selectTab(page,kind==='parts'?'selected-part':'animation-dock');
+    await page.evaluate(`document.querySelector('.workspace-inspectorHeight').dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true}))`);
+    sweep.push({minimum:await proveHeading(page,kind+' '+lang+' minimum height')});
+    await click(page,'#workspace-bottom-collapse');sweep.push({collapsedMinimum:await proveHeading(page,kind+' '+lang+' minimum collapsed')});await click(page,'#workspace-bottom-collapse');
+    await writeFile(join(output,`${kind}-${lang}-856-width-sweep.json`),JSON.stringify(sweep,null,2)+'\n');
+   }
    observations.push({kind,lang,viewport:`${width}x${height}`,initial,collapsedState});
    await writeFile(join(output,'observations.json'),JSON.stringify(observations,null,2)+'\n');
   }
@@ -340,13 +387,15 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
 }
 
 /** Record --plan, interview backdrops and standalone package/--question reuse the shipped shell. */
-async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'interview-standalone'|'standalone',lang:'en'|'ko'){
+async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'interview-standalone'|'standalone'|'standalone-many',lang:'en'|'ko'){
  const profile=await mkdtemp(join(tmpdir(),'review838-shared-'));
  let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
   let url:string;
-  if(kind==='standalone'){
-   const f=await jobFixture(),capability='b'.repeat(64),server=await startServer(await loadReview(join(f.root,'out')),{port:0,capability,stateDir:f.state});
+  if(kind.startsWith('standalone')){
+   const f=await jobFixture();
+   if(kind==='standalone-many')await writeFile(join(f.root,'out/skeleton.model.json'),await buildTwentySlotModel());
+   const capability='b'.repeat(64),server=await startServer(await loadReview(join(f.root,'out')),{port:0,capability,stateDir:f.state});
    close=async()=>{server.stop(true);await f.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
   }else if(kind==='interview-standalone'){
    const f=await interviewOpenFixture(2),capability='a'.repeat(64),server=await startServer(null,{port:0,capability,joined:joinProject(null,f.inputs.project),stateDir:f.stateDir});
@@ -357,9 +406,9 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
   }
   const target=new URL(url);target.searchParams.set('lang',lang);
   page=await launchCdpSession(profile,{sendDeadlineMs:20_000});
-  for(const [width,height]of [[1440,900],[1100,800]] as const){
+  for(const [width,height]of (Bun.argv.includes('--standalone-widths')?[[240,900],[320,900],[540,720],[700,720],[900,720],[1100,800],[1280,720],[1440,900]]:[[1440,900],[1280,720],[1100,800]])){
    await page.setViewport(width,height);await page.goto(target.href,lang);
-   await wait(page,kind==='standalone'?`!!document.querySelector('#rig-root canvas')`:`document.body.dataset.ready==='true'&&!document.body.inert`,kind+' ready');
+   await wait(page,kind.startsWith('standalone')?`!!document.querySelector('#rig-root canvas')`:`document.body.dataset.ready==='true'&&!document.body.inert`,kind+' ready');
    if(kind.startsWith('interview')){
     await wait(page,`!!document.querySelector('#job-record-asks .interview-grid fieldset:not(:disabled)')`,kind+' form');
     if(!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page,'#workspace-pending-ask');
@@ -372,6 +421,14 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
     await click(page,'#job-record-asks .workspace-drawer-close');
     assert.equal(await page.evaluate(`document.activeElement.id`),'workspace-pending-ask');
    }
+   if(kind==='standalone-many'){
+    const list:any=await page.evaluate<any>(`(()=>{const list=document.querySelector('[data-part-list]'),help=list.nextElementSibling;list.scrollTop=list.scrollHeight;return {count:list.children.length,overflow:getComputedStyle(list).overflowY,border:getComputedStyle(list).borderBottomWidth,rect:list.getBoundingClientRect().toJSON(),last:list.lastElementChild.getBoundingClientRect().toJSON(),help:help.getBoundingClientRect().toJSON(),client:list.clientHeight,scroll:list.scrollHeight};})()`);
+    assert.equal(list.count,20);assert.equal(list.overflow,'auto');assert.ok(list.scroll>list.client&&parseFloat(list.border)>0);
+    assert.ok(list.last.top>=list.rect.top&&list.last.bottom<=list.rect.bottom,'last synthetic part is entirely reachable');
+    assert.ok(list.rect.bottom<list.help.top,'list has a clear end before the help paragraph');
+    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-list.json`),JSON.stringify(list,null,2)+'\n');
+    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-list.png`),await page.screenshot());
+   }
    const state:any=await page.evaluate<any>(`(()=>{
     const heading=document.querySelector('.inspector-heading'),strip=heading.querySelector('.workspace-bottom-tabs'),collapse=document.querySelector('#workspace-bottom-collapse'),act=document.querySelector('#workspace-review-act');
     const row=strip.querySelector('.block-row:not([hidden])'),selected=row?.querySelector('[role=tab][aria-selected=true]:not([hidden])');
@@ -383,8 +440,12 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
      actInHeading:act.parentElement===heading,actHome:act.parentElement.id,actRowDirect:document.getElementById('workspace-act-row')?.previousElementSibling===document.querySelector('.topbar'),actRect:act.getBoundingClientRect().toJSON()};
    })()`);
    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-state.json`),JSON.stringify(state,null,2));
+   if(Bun.argv.includes('--standalone-widths')){
+    const targets=await page.evaluate<string[]>(`[...document.querySelectorAll('.workspace-bottom-tabs>.block-row:not([hidden]) [role=tab]')].filter(n=>!n.hidden&&!n.disabled).map(n=>n.dataset.blockTarget)`);
+    for(const target of targets){await selectTab(page,target);await proveHeading(page,kind+' '+lang+' '+width+' '+target);}
+   }
    assert.equal(state.language,lang);assert.equal(state.entry,1);assert.equal(state.viewports,1);
-   const live=kind!=='standalone'&&kind!=='interview-standalone';
+   const live=!kind.startsWith('standalone')&&kind!=='interview-standalone';
    assert.deepEqual(state.headingOrder,live?['tabs','collapse']:['tabs','collapse','act'],'only live asks leave the bottom heading');
    if(live){assert.equal(state.actHome,'workspace-act-row');assert.equal(state.actRowDirect,true);}
    assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
@@ -411,10 +472,11 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
 }
 
 for(const lang of ['en','ko'] as const){
+ if(Bun.argv.includes('--standalone-widths')){await runSharedCase('standalone',lang);continue;}
  for(const kind of ['rig','direction','parts'] as const){
   await runCase(kind,lang);
  }
- for(const kind of ['plan','interview-rig','interview-parts','interview-standalone','standalone'] as const)await runSharedCase(kind,lang);
+ for(const kind of ['plan','interview-rig','interview-parts','interview-standalone','standalone','standalone-many'] as const)await runSharedCase(kind,lang);
 }
 await writeFile(join(output,'observations.json'),JSON.stringify(observations,null,2)+'\n');
 console.log(`BOTTOM_TABS_838_OK cases=${observations.length}`);
