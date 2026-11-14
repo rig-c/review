@@ -116,7 +116,7 @@ test('B/reference hashes, viewport and bookmark are independently bound; loopbac
 
 const {bindStageComments}=await import(process.env.RIG_REVIEW_COMMENTS_ADAPTER??'../web/stage-comments.ts');
 /** Event/DOM adapter control only; this does not claim browser pixels or native capture. */
-function commentUI(feedback:any[]=[],options:{general?:boolean;locked?:(id:string)=>boolean;cropImpl?:()=>Promise<any>;canvasFactory?:()=>any;inline?:boolean;restoreImpl?:()=>Promise<void>;codec?:import("../web/stage-comments.ts").CommentCodec<any,any>}={}) {
+function commentUI(feedback:any[]=[],options:{general?:boolean;locked?:(id:string)=>boolean;cropImpl?:()=>Promise<any>;canvasFactory?:()=>any;inline?:boolean;restoreImpl?:()=>Promise<void>;noPicture?:boolean;openList?:()=>void;hasPicture?:()=>boolean;codec?:import("../web/stage-comments.ts").CommentCodec<any,any>}={}) {
  class Node {
   children:Node[]=[];parent:Node|null=null;style:any={};dataset:Record<string,string>={};className='';id='';textContent='';title='Comment · C';value='';placeholder='';type='';maxLength=0;hidden=false;disabled=false;readOnly=false;clientWidth=100;clientHeight=100;clientLeft=0;clientTop=0;captured=new Set<number>();attributes=new Map<string,string>();listeners=new Map<string,Function[]>();onclick:Function|null=null;onsubmit:Function|null=null;onkeydown:Function|null=null;
   classList={toggle:(name:string,on:boolean)=>{
@@ -135,7 +135,7 @@ function commentUI(feedback:any[]=[],options:{general?:boolean;locked?:(id:strin
  const prevGetComputedStyle=(globalThis as any).getComputedStyle;
  for(const [k,v]of Object.entries({document:doc,window:win,requestAnimationFrame:(f:Function)=>{next=f;return 1;},cancelAnimationFrame:()=>{},getComputedStyle:()=>({getPropertyValue:()=>'#3b82f6',backgroundColor:'rgb(20, 24, 32)',backgroundImage:'none',backgroundSize:'auto',backgroundPosition:'0% 0%',display:'block',visibility:'visible',opacity:'1',filter:'none',transformOrigin:'0px 0px',transform:'matrix(1, 0, 0, 1, 0, 0)',zIndex:'0',width:'100px',height:'100px',mixBlendMode:'normal'})})){saved.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;}
  let pose:any={mode:'animate',camera:mark({sourceHash:'a'.repeat(64)}).camera,frame:{index:0,basis:'producer'},time:0,animation:'idle',turn:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,rig:'probe'};
- const tool=bindStageComments({general:options.general?{create:(summary:string)=>({id:crypto.randomUUID(),summary}),matches:(row:any)=>!row.target}:undefined,toolbar:toolbar as any,listHost:options.inline?side as any:undefined,viewports:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;await options.restoreImpl?.();},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;},error:(m:string)=>errors.push(m),blocked:()=>false,codec:options.codec});
+ const tool=bindStageComments({general:options.general?{create:(summary:string)=>({id:crypto.randomUUID(),summary}),matches:(row:any)=>!row.target}:undefined,toolbar:toolbar as any,listHost:options.inline?side as any:undefined,openList:options.openList,hasPicture:options.hasPicture,viewports:options.noPicture?{}:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;await options.restoreImpl?.();},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;},error:(m:string)=>errors.push(m),blocked:()=>false,codec:options.codec});
  const event=(extra:any={})=>({button:0,isPrimary:true,pointerId:7,clientX:50,clientY:50,target:new Node(),preventDefault(){},stopImmediatePropagation(){},...extra});
  const list=()=>(options.inline?side:workspace).children.find(n=>n.id==='stage-comment-list')!;
  return {toggle,pane,workspace,side,list,tool,pose,errors,restores:()=>restores,changes:()=>changes,tick:()=>next(),down:()=>{if(!tool.active())toggle.onclick?.();pane.dispatch('pointerdown',event());},up:()=>pane.emit('pointerup',event()),key:(k:string)=>doc.dispatch('keydown',event({key:k})),escape:()=>doc.dispatch('keydown',event({key:'Escape'})),blur:()=>win.dispatch('blur'),cleanup:()=>{tool.dispose();for(const [k,v]of saved)(globalThis as any)[k]=v;if(prevGetComputedStyle===undefined)delete (globalThis as any).getComputedStyle;}};
@@ -259,17 +259,17 @@ for(const inline of [false,true])test('#276 Bar 2 '+(inline?'inline':'overlay')+
   expect(ui.workspace.children).toHaveLength(inline?0:1);
   expect(ui.side.children).toHaveLength(inline?1:0);
   expect(ui.list().className.includes('stage-comment-list-inline')).toBe(inline);
-  expect(ui.list().children[0]!.textContent).toBe(inline?'Issues':'Comments');
-  if(inline)expect(ui.list().children[1]!.textContent).toBe('No issues yet.');
+  expect(ui.list().children[0]!.textContent).toBe('Comments');
+  if(inline)expect(ui.list().children[1]!.textContent).toBe('No comments yet.');
 
-  // C toggles capture. The inline list stays visible when capture is off or Escape cancels.
+  // The inline top entry always reveals the list and enables capture; Escape ends capture.
   ui.toggle.onclick?.();
   expect(ui.tool.active()).toBe(true);
   expect(ui.list().hidden).toBe(false);
   expect(ui.toggle.getAttribute('aria-pressed')).toBe('true');
   expect(ui.toggle.getAttribute('aria-expanded')).toBe('true');
   ui.toggle.onclick?.();
-  expect(ui.tool.active()).toBe(false);
+  expect(ui.tool.active()).toBe(inline);
   expect(ui.list().hidden).toBe(!inline);
   ui.key('c');
   expect(ui.tool.active()).toBe(true);
@@ -299,8 +299,8 @@ for(const inline of [false,true])test('#276 Bar 2 '+(inline?'inline':'overlay')+
   expect(rowButtons).toHaveLength(1);
   expect(item.children.some(n=>n.textContent==='Edit'||n.textContent==='Delete')).toBe(false);
 
-  // Turn comment mode off: pins stay visible on stage, and clicking a pin enters the mode, restores pose and opens composer.
-  ui.toggle.onclick?.();
+  // Escape ends capture: pins stay visible and restore the existing comment.
+  ui.escape();
   expect(ui.tool.active()).toBe(false);
   expect(ui.list().hidden).toBe(!inline);
   ui.tick();
@@ -618,5 +618,19 @@ test('#715 native general comments use the same composer for multiple rows, edit
   expect(rows.map(row=>row.summary)).toEqual(['둘째 코멘트']);
   add().onclick!();expect(ui.tool.draft()).toBe(true);ui.escape();expect(ui.tool.draft()).toBe(false);
   expect(ui.errors).toEqual([]);expect(ui.restores()).toBe(0);
+ }finally{ui.cleanup();}
+});
+
+for(const noPicture of [false,true])test('#828 top entry and C reveal the existing list; image-free subjects never enter pin mode '+noPicture,()=>{
+ let opens=0;const ui=commentUI([],{inline:true,general:true,noPicture,openList:()=>{opens++;}});
+ try{ui.toggle.onclick?.();expect(opens).toBe(1);expect(ui.tool.active()).toBe(!noPicture);ui.key('c');expect(opens).toBe(2);expect(ui.tool.active()).toBe(!noPicture);expect(ui.list().children.some(node=>node.textContent==='Add general comment')).toBe(true);expect(ui.list().children[0]!.textContent).toBe('Comments');}finally{ui.cleanup();}
+});
+
+
+test('#834 transient question pictures open the comment list without entering pin mode, then restore capture',()=>{
+ let transient=true,opens=0;const ui=commentUI([],{inline:true,general:true,hasPicture:()=>!transient,openList:()=>{opens++;}});
+ try{ui.toggle.onclick?.();expect(opens).toBe(1);expect(ui.tool.active()).toBe(false);expect(ui.pane.className).not.toContain('stage-comment-mode');
+ transient=false;ui.key('c');expect(opens).toBe(2);expect(ui.tool.active()).toBe(true);
+ transient=true;ui.tick();expect(ui.tool.active()).toBe(false);expect(ui.pane.className).not.toContain('stage-comment-mode');
  }finally{ui.cleanup();}
 });

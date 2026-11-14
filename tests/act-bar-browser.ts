@@ -52,21 +52,25 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await until(page,`!document.querySelector('#save').disabled`);
   }
   if(!['rig','direction','parts'].includes(mode)){
-   await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#job-record-asks[open]')`);
+   const inline=await page.evaluate<boolean>(`!!document.querySelector('#workspace-interview-answer')`);
+   if(!inline){await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#job-record-asks[open]')`);}
+   const answerRoot=inline?'#workspace-interview-answer':'#job-record-asks';
    assert.equal(await page.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`),false);
-   if(mode==='interview'||mode==='joined-interview')await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#job-record-asks input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
-   const selector=mode==='checkpoint-fail'?'#job-record-asks button[data-job-text="job.fail"]':mode==='checkpoint-pass'?'#job-record-asks button[data-job-text="Pass"]':'#job-record-asks button[type=submit]';
+   if(mode==='interview'||mode==='joined-interview')await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll(${JSON.stringify(answerRoot+' input[type=radio]')}))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
+   const selector=mode==='checkpoint-fail'?'#job-record-asks button[data-job-text="job.fail"]':mode==='checkpoint-pass'?'#job-record-asks button[data-job-text="Pass"]':answerRoot+' button[type=submit]';
    await writeFile(join(out,`${mode}-${lang}-answer.png`),await page.screenshot());
+   await page.evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`);
    await click(page,selector);
    await until(page,`!document.querySelector('#job-record-asks[open]')&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
    if(mode==='joined-interview'){
-    assert.equal(await page.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false,'saved first answer leaves the opener enabled');
-    await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#job-record-asks[open]')`);
+    if(!inline){assert.equal(await page.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false,'saved first answer leaves the opener enabled');
+    await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#job-record-asks[open]')`);}
     await click(page,'.interview-questions li:nth-child(2) button');
-    await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#job-record-asks input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
-    await click(page,'#job-record-asks button[type=submit]');
-    await until(page,`!document.querySelector('#job-record-asks[open]')&&!document.querySelector('#workspace-pending-ask').disabled`);
+    await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll(${JSON.stringify(answerRoot+' input[type=radio]')}))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
+    await page.evaluate(`document.querySelector(${JSON.stringify(answerRoot+' button[type=submit]')}).scrollIntoView({block:'center'})`);
+    await click(page,answerRoot+' button[type=submit]');
+    await until(page,`!document.querySelector('#job-record-asks[open]')&&(${inline}||!document.querySelector('#workspace-pending-ask').disabled)`);
     const saved=await page.evaluate<number>(`fetch('/api/interview').then(r=>r.json()).then(data=>data.questions.filter(question=>question.saved).length)`);
     assert.equal(saved,2,'both joined interview questions reached the real picks route');
     await writeFile(join(out,`${mode}-${lang}-second-saved.png`),await page.screenshot());

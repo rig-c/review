@@ -10,9 +10,9 @@ function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  const control=()=>({hidden:false,disabled:false,title:'',textContent:'',onclick:null as null|((e:unknown)=>unknown),classList:{values:new Set<string>(),toggle(name:string,on:boolean){on?this.values.add(name):this.values.delete(name);}}});
  const save=control(),requestChanges=control(),rigAsk=control(),select=control(),label=control(),submit=control();
  const calls:string[]=[],session={feedbackWarnings:[],status:'pending'};
- const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
+ const env={activeInterviewImages:null as unknown,host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
   session,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
-  recordDialog:{querySelector:()=>({disabled:false}),querySelectorAll:()=>[submit]},
+  recordDialog:{querySelector:(selector:string)=>selector.includes(':disabled')?null:({disabled:false}),querySelectorAll:()=>[submit]},
   button:()=>save,select:()=>select,document:{querySelector:()=>label},
   setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
   verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};
@@ -46,10 +46,21 @@ test('#825 draft failure leads the live job state; saved answers use the act-bar
  const begin=main.indexOf('function renderDraftState(): void {'),end=main.indexOf('\nfunction renderProvenance',begin);
  const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end));
  const states:any[]=[];
- const env={host:{reviewState:()=> 'Reviewing · 0 issues'},liveIssueCount:()=>0,saving:false,draftConflict:true,draftStatus:'Saved local draft was not restored: fixture.',answerSaved:false,actReadOnly:null,dirty:false,
+ const env={activeInterviewImages:null as unknown,host:{reviewState:()=> 'Reviewing · 0 issues'},liveIssueCount:()=>0,saving:false,draftConflict:true,draftStatus:'Saved local draft was not restored: fixture.',answerSaved:false,actReadOnly:null,dirty:false,
   renderAnswerControls(){},rigInspector:{actBar:{setSaveState:(state:any)=>states.push(state)}}};
  const render=new Function('env',`with(env){${script};return renderDraftState;}`)(env);render();
  expect(states.at(-1).kind).toBe('failed');expect(states.at(-1).text).toBe('Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.');
  env.draftConflict=false;env.draftStatus='Local draft could not be saved: Draft exceeds 512 KiB. Export feedback before leaving.';render();expect(states.at(-1).text).toBe(env.draftStatus);
  env.answerSaved=true;render();expect(states.at(-1).text).toBe('Answer saved');
+});
+
+
+test('#834 completed pictured answers retain a non-emphasised enabled readback opener',()=>{
+ const h=harness([]);h.env.recordDialog.querySelector=(selector:string)=>selector.includes(':not(')?null:({disabled:true});h.render();
+ expect(h.rigAsk.hidden).toBe(false);expect(h.rigAsk.disabled).toBe(false);expect(h.rigAsk.classList.values.has('primary')).toBe(false);
+ expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);
+});
+test('#834 an inline pictured pending answer does not emphasise a second opener',()=>{
+ const h=harness([{kind:'interview-picks'}]);h.env.activeInterviewImages=[{name:'question',src:'/bound'}];h.render();
+ expect(h.rigAsk.hidden).toBe(true);expect(h.rigAsk.classList.values.has('primary')).toBe(false);
 });

@@ -51,6 +51,7 @@ try{
   const state:any=await page.evaluate(`(()=>{const panel=document.querySelector('#workspace-interview-answer'),picture=document.querySelector('#reference-viewport'),r=panel.getBoundingClientRect(),p=picture.getBoundingClientRect();return {language:document.documentElement.lang,dpr:devicePixelRatio,topbars:document.querySelectorAll('.topbar').length,dialogs:document.querySelectorAll('dialog[open]').length,noteInputs:panel.querySelectorAll('textarea[name=note]').length,controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(node=>node.id),extraViewports:panel.querySelectorAll('.interview-viewport').length,above:p.bottom<=r.top,pictureVisible:p.width>0&&p.height>0&&!document.querySelector('#reference-pane').hidden,height:r.height};})()`);
   assert.equal(state.language,language);assert.equal(state.dpr,2);assert.equal(state.topbars,1);assert.equal(state.dialogs,0);
   assert.equal(state.noteInputs,0);assert.equal(state.extraViewports,0);assert.equal(state.above,true);assert.equal(state.pictureVisible,true);
+  assert.equal(await page.evaluate(`document.querySelector('#stage-comment').hidden`),true,'standalone interview hides the unbound comment entry');
   assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
   assert.equal(await page.evaluate(`document.querySelector('#workspace-interview-answer pre.interview-note')?.textContent`),retainedNote);
   const zoom=await page.evaluate(`document.querySelector('#zoom-value').textContent`);await click(page,'#zoom-in');

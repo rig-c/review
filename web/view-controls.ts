@@ -299,9 +299,9 @@ export function bindInspectorTabs(changed:()=>void,beforeChange:()=>void=()=>{},
   if(user)row.reveal?.(id);
  };
  const key=(tab:InspectorTabItem,event:KeyboardEvent)=>{
-  if(tab.attribute==='aria-pressed')return;const index=tabs.indexOf(tab);
-  const next=event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:event.key==='Home'?0:event.key==='End'?tabs.length-1:null;
-  if(next===null)return;event.preventDefault();const target=tabs[next];if(target){if(row.reveal)target.button.focus();activate(target.id,true);if(!row.reveal)target.button.focus();}
+  if(tab.attribute==='aria-pressed')return;const visible=tabs.filter(item=>!item.button.hidden),index=visible.indexOf(tab);if(index<0)return;
+  const next=event.key==='ArrowRight'?(index+1)%visible.length:event.key==='ArrowLeft'?(index+visible.length-1)%visible.length:event.key==='Home'?0:event.key==='End'?visible.length-1:null;
+  if(next===null)return;event.preventDefault();const target=visible[next];if(target){if(row.reveal)target.button.focus();activate(target.id,true);if(!row.reveal)target.button.focus();}
  };
  if(root){
   const tabOf=(event:Event)=>{const button=(event.target as Element|null)?.closest?.('button[data-block-target]');return tabs.find(tab=>tab.button===button);};

@@ -1330,7 +1330,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded'||draftConflict;
  partsAnswerBlocked=saveBlocked;
  text('rig-empty','Loading package…');
- partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),issues,...host?.record?{recordComments}:{},request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,changed:()=>{if(host?.record){recordCommentsChanged();return;}changed();},selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
+ partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),openComments:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot),issues,...host?.record?{recordComments}:{},request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,changed:()=>{if(host?.record){recordCommentsChanged();return;}changed();},selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
  parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>openReview());
  const thumbnails=new PartThumbnails();viewDisposers.push(()=>thumbnails.dispose());
  parts.registerImages({thumbnail:(icon,item,glyph)=>thumbnails.showOriginal(icon,item,()=>partsSubject!.image(item.index),glyph),items:subject.items,selected:partsSubject.selected,solo:partsSubject.solo,visible:partsSubject.visible,select:partsSubject.select,isolate:partsSubject.isolate,show:partsSubject.show});
@@ -1397,6 +1397,7 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty',unavailable);
  for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')){control.disabled=true;setSourceAttribute(control,'title',unavailable);}
  if(interview){
+  button('stage-comment').hidden=true;
   button('save').disabled=true;setSourceAttribute(button('save'),'title',unavailable);
   const label=()=>{setSourceText(rigAsk,t('interview.title'));recordDialog?.setAttribute('aria-label',t('interview.title'));};
   label();viewDisposers.push(onLanguageChange(label));
@@ -1525,7 +1526,7 @@ function renderAnswerControls():void {
  const subjects=host?.pendingSubjects?.()??pendingAnswers;
  const verdict=subjects.some(subject=>subject.kind==='review-verdict'||subject.kind==='parts-verdict');
  const dialog=subjects.some(subject=>!subject.kind.endsWith('verdict'))&&!verdict&&!activeInterviewImages;
- const readable=!!recordDialog?.querySelector('fieldset'),enabled=!!recordDialog?.querySelector('fieldset:not(:disabled)');
+ const readable=!!recordDialog?.querySelector('form.interview-answer fieldset:disabled'),enabled=!!recordDialog?.querySelector('fieldset:not(:disabled)');
  const blocked=saving||draftConflict||!!actReadOnly||!!host?.unavailable;
  const save=button('save');
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
@@ -1535,7 +1536,7 @@ function renderAnswerControls():void {
  rigAsk.hidden=!dialog&&!readable;rigAsk.classList.toggle('primary',dialog&&enabled&&!blocked);
  const kind=subjects.find(subject=>!subject.kind.endsWith('verdict'))?.kind;
  setSourceText(rigAsk,kind==='signoff'?'Approve…':kind==='interview-picks'?'Answer…':'Review…');
- rigAsk.disabled=!readable||(enabled&&blocked);
+ rigAsk.disabled=(!enabled&&!readable)||(enabled&&blocked);
  if(verdict){
   const parts=subjects.some(subject=>subject.kind==='parts-verdict'),count=host?.direction?recordComments.length:liveIssueCount();
   setSourceText(save,'Approve');setSourceText(requestChanges,'Request changes');
@@ -3005,7 +3006,7 @@ function commentCaptureRefusal():string|null {
 }
 function setupComments():void {
  if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.length;if(host?.direction)dirty=dirty||recordComments.length>0;}
- comments=bindStageComments<CommentRow,CommentPose>({general:host?.record||host?.direction?{create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row)}:undefined,listHost:el('comments-list-host'),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?{}:{rig:el('rig-viewport'),reference:el('reference-viewport')},
+ comments=bindStageComments<CommentRow,CommentPose>({general:host?.record||host?.direction?{create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row)}:undefined,listHost:el('comments-list-host'),openList:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?{}:{rig:el('rig-viewport'),reference:el('reference-viewport')},
   pose:view=>{
    if(hasTransientQuestionImage(screenRoot))return null;
    if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;

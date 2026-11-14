@@ -103,6 +103,7 @@ class Node {
  get ownerDocument(){return this.root().doc!;}
  root():Node{return this.parent?this.parent.root():this;}
  append(...nodes:Node[]){for(const node of nodes){if(node.parent)node.parent.children=node.parent.children.filter(child=>child!==node);node.parent=this;this.children.push(node);}}
+ remove(){if(this.parent)this.parent.children=this.parent.children.filter(child=>child!==this);this.parent=null;}
  all():Node[]{return this.children.flatMap(n=>[n,...n.all()]);}
  contains(node:unknown):boolean{return node===this||this.children.some(n=>n.contains(node));}
  querySelectorAll(selector:string){if(selector!=='button[data-block-target]')throw new Error(selector);return this.all().filter(n=>n.tag==='button'&&'blockTarget'in n.dataset);}
@@ -312,24 +313,24 @@ test('#666 restore leaves remembered user offsets intact and dispose/rebind remo
 });
 
 
-test('#735 header mode swaps existing block rows and one Comments tab, preserving mode selections and input nodes',async()=>{
+test('#828 top-entry selection swaps existing block rows without a Comments tab, preserving input nodes',async()=>{
  const app=await openPage(undefined,true),meshInput=app.doc.getElementById('mesh-density')??app.section('mesh-panel').all().find(n=>n.tag==='input')!;
  const rows=app.strip.children.slice();expect(rows).toHaveLength(2);expect(rows.map(row=>row.hidden)).toEqual([false,true]);
- app.tab('mesh-panel').click();meshInput.value='preserve draft';app.comment.click();expect(app.ui.state()).toEqual({rig:'feedback',playback:'motion-tools'});expect(app.panel.hidden).toBe(false);expect(app.section('inspector-rig').dataset.comments).toBe('true');
- app.ui.activate('playback');expect(rows.map(row=>row.hidden)).toEqual([true,false]);expect(app.panel.hidden).toBe(true);expect(app.comment.parent).toBe(rows[1]!);expect(rows[0]!.all()).not.toContain(app.comment);
- app.comment.key('End');expect(app.ui.state().playback).toBe('feedback');expect(app.panel.hidden).toBe(false);app.tab('physics-panel').click();
- app.ui.activate('rig');expect(app.panel.hidden).toBe(false);expect(app.comment.parent).toBe(rows[0]!);expect(app.comment.getAttribute('aria-selected')).toBe('true');app.tab('mesh-panel').click();expect(app.panel.hidden).toBe(true);expect(meshInput.value).toBe('preserve draft');
+ app.tab('mesh-panel').click();meshInput.value='preserve draft';app.ui.select('rig','feedback');expect(app.ui.state()).toEqual({rig:'feedback',playback:'motion-tools'});expect(app.panel.hidden).toBe(false);expect(app.section('inspector-rig').dataset.comments).toBe('true');
+ app.ui.activate('playback');expect(rows.map(row=>row.hidden)).toEqual([true,false]);expect(app.panel.hidden).toBe(true);expect(app.comment.parent).toBe(null);expect(rows[0]!.all()).not.toContain(app.comment);
+ app.ui.select('playback','feedback');expect(app.ui.state().playback).toBe('feedback');expect(app.panel.hidden).toBe(false);app.tab('physics-panel').click();app.tab('physics-panel').key('End');expect(app.ui.state().playback).not.toBe('feedback');app.tab('physics-panel').click();
+ app.ui.activate('rig');expect(app.panel.hidden).toBe(false);expect(app.comment.parent).toBe(null);expect(app.comment.getAttribute('aria-selected')).toBe('true');app.tab('mesh-panel').click();expect(app.panel.hidden).toBe(true);expect(meshInput.value).toBe('preserve draft');
  app.ui.activate('playback');expect(app.ui.state().playback).toBe('physics-panel');
  app.ui.restore({rig:'feedback',playback:'report-panel'});expect(app.ui.state()).toEqual({rig:'feedback',playback:'report-panel'});app.ui.activate('rig');expect(app.panel.hidden).toBe(false);
- expect(app.page.all().filter(n=>n.id==='workspace-tab-feedback')).toHaveLength(1);app.ui.dispose();
+ expect(app.page.all().filter(n=>n.id==='workspace-tab-feedback')).toHaveLength(0);app.ui.dispose();
 });
 
 
-test('#772 image subjects retain only the shared Comments tab and its keyboard path',async()=>{
+test('#828 image subjects retain programmatic Comments selection without a bottom tab',async()=>{
  const app=await openPage(undefined,true,['feedback']);
  expect(app.ui.state()['rig']).toBe('feedback');expect(app.shown('inspector-rig')).toEqual([]);
  for(const target of app.page.all().filter(node=>node.dataset.blockTarget&&node.dataset.blockTarget!=='feedback')){expect(target.hidden).toBe(true);expect(target.disabled).toBe(true);}
- app.comment.key('Home');app.comment.key('End');app.comment.key('ArrowRight');
+ expect(app.comment.hidden).toBe(true);expect(app.strip.all()).not.toContain(app.comment);app.ui.select('rig','feedback');
  expect(app.ui.state()['rig']).toBe('feedback');expect(app.panel.hidden).toBe(false);
  app.ui.dispose();
 });

@@ -61,6 +61,7 @@ async function completedPictureChecks(){
    await wait(`JSON.stringify(${inspectionExpression})===${JSON.stringify(JSON.stringify(original))}`,'834 original reference ready');
    const restored=await inspectionState();assert.deepEqual(restored,original,'switch, Difference availability, layout and hidden blocks restored');
    await writeFile(join(out,'restored-inspection.png'),await page!.screenshot());
+   assert.equal(await page!.evaluate(`(()=>{const opener=document.querySelector('#workspace-pending-ask');return !opener.hidden&&!opener.disabled&&!opener.classList.contains('primary');})()`),true,'completed answers have a reachable secondary opener');
    await click(page!,'#workspace-pending-ask');await wait(`!!document.querySelector('#job-record-asks[open] '+${JSON.stringify(selector)})`,'834 answered dialog');
    const readback=await page!.evaluate<any>(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});return {disabled:form.querySelector('fieldset').disabled,checked:[...form.querySelectorAll('input:checked')].map(node=>node.value),text:form.textContent};})()`);
    assert.equal(readback.disabled,true);assert.deepEqual(readback.checked,['biped_std','density_high']);assert.ok(readback.text.includes('Select rig topology'));

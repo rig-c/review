@@ -372,8 +372,8 @@ test('stage comments (#276) switch live between en and ko including hints, refus
   setLanguagePreference('ko');
   expect(toggle.textContent).toBe('코멘트 · C (1)');
   expect(toggle.title).toBe('코멘트 · C (활성 메시 편집기가 C 키를 사용함)');
-  expect(list.getAttribute('aria-label')).toBe('스테이지 코멘트');
-  expect(list.children[0]!.textContent).toBe('코멘트 목록');
+  expect(list.getAttribute('aria-label')).toBe('코멘트');
+  expect(list.children[0]!.textContent).toBe('코멘트');
   expect(composer.getAttribute('aria-label')).toBe('코멘트 작성기');
   expect(composer.children[0]!.getAttribute('aria-label')).toBe('코멘트 내용');
   expect(composer.children[0]!.placeholder).toBe('이 지점에 대해 설명하세요…');
