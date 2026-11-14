@@ -145,7 +145,7 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
     // guarantees overflow: constrain only this test's existing strip instead.
     // Hash the exact inline style attribute we own, not the live tab state that
     // these menu actions intentionally change. Restore the attribute in finally.
-    const stripBefore:{style:string|null;width:number;tabs:number}=await page.evaluate<{style:string|null;width:number;tabs:number}>(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs'),row=strip.querySelector('.block-row:not([hidden])');return {style:strip.getAttribute('style'),width:strip.clientWidth,tabs:row.querySelectorAll('[role=tab]').length};})()`);
+    const stripBefore:{style:string|null;width:number;height:number;tabs:number}=await page.evaluate<{style:string|null;width:number;height:number;tabs:number}>(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs'),row=strip.querySelector('.block-row:not([hidden])');return {style:strip.getAttribute('style'),width:strip.clientWidth,height:strip.clientHeight,tabs:row.querySelectorAll('[role=tab]').length};})()`);
     assert.ok(stripBefore.tabs>2,'overflow fixture has actual inspection tabs');
     const narrowWidth=Math.min(320,Math.floor(stripBefore.width/2));
     const beforeHash=createHash('sha256').update(JSON.stringify(stripBefore.style)).digest('hex');
@@ -153,6 +153,7 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
     const receipt=join(output,`${kind}-${lang}-${width}x${height}-overflow-mutation`);
     console.log('BOTTOM_TABS_DOM_MUTATION_BEGIN '+JSON.stringify(mutation));
     await writeFile(receipt+'-begin.json',JSON.stringify({...mutation,before:stripBefore},null,2)+'\n');
+    let overflowFailed=false,overflowError:unknown;
     try{
      await page.evaluate(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs');strip.style.flex='0 0 '+${narrowWidth}+'px';strip.style.width=${narrowWidth}+'px';strip.style.maxWidth=${narrowWidth}+'px';})()`);
      await wait(page,`(()=>{const row=document.querySelector('.workspace-bottom-tabs > .block-row:not([hidden])'),more=row.querySelector('.workspace-tabs-more');return row.clientWidth<=${narrowWidth}+1&&!more.hidden&&row.querySelector('[data-block-target="report-panel"]').hasAttribute('data-tab-overflow');})()`,'test-only constrained strip really overflows');
@@ -200,15 +201,43 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
      if(tab&&!tab.hasAttribute('data-tab-overflow'))tab.click();
      else row.querySelector('button[data-block-more-target="animation-dock"]')?.click();
     })()`);
-    }finally{
-     await page.evaluate(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs'),style=${JSON.stringify(stripBefore.style)};if(style===null)strip.removeAttribute('style');else strip.setAttribute('style',style);})()`);
-     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
-     const restoredStyle:string|null=await page.evaluate<string|null>(`document.querySelector('.workspace-bottom-tabs').getAttribute('style')`);
-     const restoredHash:string=createHash('sha256').update(JSON.stringify(restoredStyle)).digest('hex');
-     const restored={...mutation,restoredHash,restored:restoredHash===beforeHash};
-     console.log('BOTTOM_TABS_DOM_MUTATION_RESTORED '+JSON.stringify(restored));
-     await writeFile(receipt+'-restored.json',JSON.stringify(restored,null,2)+'\n');
-     assert.equal(restoredHash,beforeHash,'strip inline style restored exactly before collapse measurement');
+    }catch(error){overflowFailed=true;overflowError=error;throw error;}
+    finally{
+     try{
+      // Capture null vs empty before and after touching the live style getter,
+      // then after ResizeObserver/layout callbacks. Do not equate the two values.
+      const immediate:{style:string|null;cssText:string;afterGetter:string|null}=await page.evaluate<{style:string|null;cssText:string;afterGetter:string|null}>(`(()=>{
+       const strip=document.querySelector('.workspace-bottom-tabs'),original=${JSON.stringify(stripBefore.style)};
+       if(original===null)strip.removeAttribute('style');else strip.setAttribute('style',original);
+       const style=strip.getAttribute('style'),cssText=strip.style.cssText;
+       return {style,cssText,afterGetter:strip.getAttribute('style')};
+      })()`);
+      await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+      const afterSettle:{style:string|null;width:number;height:number}=await page.evaluate<{style:string|null;width:number;height:number}>(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs');return {style:strip.getAttribute('style'),width:strip.clientWidth,height:strip.clientHeight};})()`);
+      // Replay the original attribute once after callbacks settle. Read its exact
+      // value immediately, without a style getter, and measure the normal layout.
+      const finalRestore:{style:string|null;width:number;height:number}=await page.evaluate<{style:string|null;width:number;height:number}>(`(()=>{
+       const strip=document.querySelector('.workspace-bottom-tabs'),original=${JSON.stringify(stripBefore.style)};
+       if(original===null)strip.removeAttribute('style');else strip.setAttribute('style',original);
+       return {style:strip.getAttribute('style'),width:strip.clientWidth,height:strip.clientHeight};
+      })()`);
+      const immediateHash:string=createHash('sha256').update(JSON.stringify(immediate.style)).digest('hex');
+      const restoredHash:string=createHash('sha256').update(JSON.stringify(finalRestore.style)).digest('hex');
+      const driftStage=immediate.afterGetter!==immediate.style?'style-getter':afterSettle.style!==immediate.afterGetter?'after-settle':'none';
+      const restored={...mutation,immediate,immediateHash,afterSettle,finalRestore,driftStage,restoredHash,restored:restoredHash===beforeHash,overflowError:overflowFailed?String(overflowError):null};
+      console.log('BOTTOM_TABS_DOM_MUTATION_RESTORED '+JSON.stringify(restored));
+      await writeFile(receipt+'-restored.json',JSON.stringify(restored,null,2)+'\n');
+      assert.equal(immediateHash,beforeHash,'initial inline style restoration is exact before style getter/layout callbacks');
+      assert.equal(restoredHash,beforeHash,'final inline style restoration is exact immediately after settled callbacks');
+      assert.ok(Math.abs(finalRestore.width-stripBefore.width)<=1,'normal strip width restored before collapse measurement');
+      assert.ok(Math.abs(finalRestore.height-stripBefore.height)<=1,'normal strip height restored before collapse measurement');
+      assert.ok(finalRestore.width>narrowWidth,'test-only narrow width is removed');
+     }catch(restoreError){
+      const failure={overflowError:overflowFailed?String(overflowError):null,restoreError:String(restoreError)};
+      console.error('BOTTOM_TABS_DOM_RESTORE_FAILED '+JSON.stringify(failure));
+      await writeFile(receipt+'-restore-failure.json',JSON.stringify(failure,null,2)+'\n').catch(()=>{});
+      if(!overflowFailed)throw restoreError; // Otherwise preserve the original assertion and stack.
+     }
     }
    }
 
