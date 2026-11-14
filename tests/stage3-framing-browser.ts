@@ -5,6 +5,7 @@ import {cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile} from 'no
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {InputCdpSession} from './parts-explorer-browser.ts';
+import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
@@ -26,7 +27,6 @@ export interface FramingSample {
   stage: string | null;
   refused: string | null;
   mode: string | null;
-  panelHidden: boolean;
   usableModes: string[];
   playDisabled: boolean;
   lifecycle: {documentComplete: boolean; commentsBound: boolean; restoring: boolean};
@@ -65,7 +65,7 @@ export function containment(sample: Pick<FramingSample, 'projected' | 'clip'>) {
 export function displayReady(sample: FramingSample): boolean {
   const camera = sample.camera;
   const catalog = sample.language === 'ko' ? koCatalog : enCatalog;
-  return (sample.language === 'en' || sample.language === 'ko') && sample.stage === '3' && sample.refused === null && sample.panelHidden &&
+  return (sample.language === 'en' || sample.language === 'ko') && (sample.mode === 'rig' || sample.mode === 'playback') && sample.refused === null &&
     !sample.playDisabled && !sample.held.playing && !sample.held.busy && !!sample.held.modelHash &&
     sample.lifecycle.documentComplete && sample.lifecycle.commentsBound && !sample.lifecycle.restoring &&
     !!sample.renderer && !sample.renderer.startsWith(catalog['Not rendered']) && !sample.renderer.startsWith(catalog['Rendering failed']) &&
@@ -155,41 +155,27 @@ export function restorationRectDisplacement(expected: FramingSample, actual: Fra
 }
 
 export interface PreRigReadout {
-  language: string; stage: string | null; refused: string | null; status: string; statusVisible: boolean;
-  modeSwitch: {hidden: boolean; display: string; rects: number};
+  language: string; status: string;
   controls: {disabled: boolean; title: string | null; pressed: string | null; rects: number}[];
 }
-
 const preRigRefusal = 'RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.';
-
 export function assertPreRigRefusal(readout: PreRigReadout, language: ProbeLanguage): void {
   const catalog = language === 'ko' ? koCatalog : enCatalog;
   assert.equal(readout.language, language, 'STAGE3_PRE_RIG_LANGUAGE');
-  assert.equal(readout.stage, '3', 'STAGE3_PRE_RIG_STAGE');
-  assert.equal(readout.refused, 'true', 'STAGE3_PRE_RIG_GUARD');
   assert.equal(readout.status, catalog[preRigRefusal], 'STAGE3_PRE_RIG_REASON');
-  assert.equal(readout.statusVisible, true, 'STAGE3_PRE_RIG_REASON_VISIBLE');
-  assert.deepEqual(readout.modeSwitch, {hidden: true, display: 'none', rects: 0}, 'STAGE3_PRE_RIG_MODE_SWITCH');
   assert(readout.controls.length > 0, 'STAGE3_PRE_RIG_CONTROLS_MISSING');
   for (const control of readout.controls) {
     assert.equal(control.disabled, true, 'STAGE3_PRE_RIG_CONTROL_ENABLED');
     assert.equal(control.title, catalog[preRigRefusal], 'STAGE3_PRE_RIG_CONTROL_REASON');
     if (control.pressed !== null) assert.equal(control.pressed, 'false', 'STAGE3_PRE_RIG_CONTROL_PRESSED');
-    assert.equal(control.rects, 0, 'STAGE3_PRE_RIG_CONTROL_VISIBLE');
+    assert(control.rects > 0, 'STAGE3_PRE_RIG_REASON_NOT_REACHABLE');
   }
 }
-
 function readPreRigDisplay(): PreRigReadout {
-  const status = document.querySelector<HTMLElement>('.review-stage-panel > [role=status]');
-  const box = status?.getBoundingClientRect(), modeSwitch = document.querySelector<HTMLElement>('.mode-switch')!;
-  return {language: document.documentElement.lang, stage: document.documentElement.dataset.inspectionStage ?? null,
-    refused: document.documentElement.dataset.stageRefused ?? null, status: status?.textContent ?? '',
-    statusVisible: !!status && !!box && box.width > 0 && box.height > 0 && getComputedStyle(status).visibility !== 'hidden',
-    modeSwitch: {hidden: modeSwitch.hidden, display: getComputedStyle(modeSwitch).display, rects: modeSwitch.getClientRects().length},
-    controls: [...document.querySelectorAll<HTMLButtonElement>('[data-mode],[data-inspector]')].map(button => ({
-      disabled: button.disabled, title: button.getAttribute('title'), pressed: button.getAttribute('aria-pressed'), rects: button.getClientRects().length,
-    })),
-  };
+  const controls = [...document.querySelectorAll<HTMLButtonElement>('[data-mode="playback"]')];
+  return {language: document.documentElement.lang, status: controls[0]?.title ?? '',
+    controls: controls.map(button => ({disabled: button.disabled, title: button.getAttribute('title'),
+      pressed: button.getAttribute('aria-pressed'), rects: button.getClientRects().length}))};
 }
 
 export function settled(samples: readonly FramingSample[]): boolean {
@@ -237,7 +223,7 @@ function readDisplay(slotNames: string[]): FramingSample {
     language: document.documentElement.lang, stage: document.documentElement.dataset.inspectionStage ?? null,
     refused: document.documentElement.dataset.stageRefused ?? null,
     mode: document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode ?? null,
-    panelHidden: (document.querySelector('.review-stage-panel') as HTMLElement).hidden,
+    // #735:8-11 / #741 removes the stage panel; header mode is the readiness state.
     usableModes: [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')].filter(button => !button.disabled && button.getClientRects().length > 0).map(button => button.dataset.mode!),
     playDisabled: (node('play') as HTMLButtonElement).disabled,
     // setupComments runs after the awaited initial persistence restoration in start().
@@ -361,8 +347,14 @@ export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
         while (!signal.aborted) {if (await browser.evaluate<boolean>(expression)) return; await Bun.sleep(25);}
       });
     };
-    await wait(`document.documentElement.lang===${JSON.stringify(language)}&&document.readyState==='complete'&&Boolean(document.querySelector('[data-review-stage="3"]'))&&!document.getElementById('play').disabled&&Boolean(document.getElementById('stage-comment-list'))&&!document.body.inert&&Boolean(window.rigReviewEditor?.stage().modelHash)`);
-    await browser.evaluate(`if(document.getElementById('play').textContent!=='▶')document.getElementById('play').click()`);
+    await wait(`document.documentElement.lang===${JSON.stringify(language)}&&document.readyState==='complete'&&!document.getElementById('play').disabled&&Boolean(document.getElementById('stage-comment-list'))&&!document.body.inert&&Boolean(window.rigReviewEditor?.stage().modelHash)`);
+    // b433: wait for actual autoplay, pause through the real visible control, then keep every numeric oracle.
+    await wait(`window.rigReviewEditor.stage().playing===true`);
+    await click(browser,'[data-mode="playback"]');
+    if(await browser.evaluate<boolean>(`window.rigReviewEditor.stage().playing`))await click(browser,'#play');
+    await wait(`window.rigReviewEditor.stage().playing===false`);
+    assert.equal(await browser.evaluate(`window.rigReviewEditor.stage().playing`),false,'real playback is paused before geometry sampling');
+    await click(browser,'[data-mode="rig"]');
     const sample = () => browser.evaluate<FramingSample>(`(${readDisplay.toString()})(${JSON.stringify(slots)})`);
     const stable = async () => {
       const recent: FramingSample[] = [];
@@ -403,12 +395,19 @@ export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
     const animate = await stable();
     assert.equal(animate.mode, 'playback', 'STAGE3_ANIMATE_NOT_SELECTED');
     await capture(positiveFrameNames[1], animate);
-    await browser.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
-    assert.equal(await browser.evaluate(`getComputedStyle(document.querySelector('.mode-switch')).display`), 'none');
-    await wait(`document.querySelector('.review-stage-panel iframe')?.contentDocument?.body?.dataset.ready==='true'`);
-    await browser.evaluate(`document.querySelector('[data-review-stage="3"]').click()`);
+    // #735:8-11 / #741: roundtrip through the existing header modes, no stage chips/iframe.
+    await browser.evaluate(`document.querySelector('[data-mode="rig"]').click()`);
+    const revisitedSetup = await stable();
+    assert.equal(revisitedSetup.mode, 'rig', 'STAGE3_SETUP_ROUNDTRIP');
+    assert.deepEqual(revisitedSetup.held, animate.held, 'STAGE3_SETUP_HELD_POSE_CHANGED');
+    assert.deepEqual(revisitedSetup.camera, animate.camera, 'STAGE3_SETUP_CAMERA_CHANGED');
+    assert.deepEqual(revisitedSetup.projected, animate.projected, 'STAGE3_SETUP_PROJECTION_CHANGED');
+    await browser.evaluate(`document.querySelector('[data-mode="playback"]').click()`);
     const returned = await stable();
     assert.equal(returned.mode, 'playback', 'STAGE3_ANIMATE_NOT_RETAINED');
+    assert.deepEqual(returned.held, animate.held, 'STAGE3_ROUNDTRIP_HELD_POSE_CHANGED');
+    assert.deepEqual(returned.camera, animate.camera, 'STAGE3_ROUNDTRIP_CAMERA_CHANGED');
+    assert.deepEqual(returned.projected, animate.projected, 'STAGE3_ROUNDTRIP_PROJECTION_CHANGED');
     await capture(positiveFrameNames[2], returned);
     for (const delay of [250, 1000]) {
       await Bun.sleep(delay);
@@ -486,23 +485,17 @@ export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
     await claimWorker(openedPreRig);
     const preRigUrl = new URL(openedPreRig.url); preRigUrl.searchParams.set('lang', language);
     await browser.goto(preRigUrl.href, language);
-    const frame = `document.querySelector('.review-stage-panel iframe:not([hidden]):not(.review-interview-frame)')`;
-    await wait(`${frame}?.contentDocument?.body?.dataset.ready==='true'`);
-    assert.equal(await browser.evaluate('document.documentElement.dataset.inspectionStage'), '1', 'STAGE3_PRE_RIG_INITIAL_STAGE');
-    assert.equal(await browser.evaluate(`${frame}?.contentDocument?.documentElement.lang`), language, 'STAGE3_PRE_RIG_FRAME_LANGUAGE');
-    await browser.evaluate(`document.querySelector('[data-review-stage="3"]').click()`);
+    // #735:8-11 / #741 removed pre-rig stage navigation and its iframe; retain readable refusal.
+    await wait(`document.querySelector('[data-mode="playback"]')?.disabled&&document.readyState==='complete'`);
     const refused = await browser.evaluate<PreRigReadout>(`(${readPreRigDisplay.toString()})()`);
     report.preRig = {refused, originalInputHashes: preRigHashes};
     assertPreRigRefusal(refused, language);
-    const refusedBytes = await browser.screenshot(), refusedPath = `${language}-pre-rig-stage3-refused.png`;
+    const refusedBytes = await browser.screenshot(), refusedPath = `${language}-pre-rig-refusal.png`;
     await writeFile(join(out, refusedPath), refusedBytes);
-    report.preRigScreenshot = {path: refusedPath, sha256: sha256(refusedBytes)};
-    await browser.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
-    await wait(`${frame}?.contentDocument?.body?.dataset.ready==='true'`);
-    assert.equal(await browser.evaluate('document.documentElement.dataset.inspectionStage'), '1', 'STAGE3_PRE_RIG_RETURN_STAGE');
+    report.preRigScreenshot = {path: refusedPath, sha256: createHash('sha256').update(refusedBytes).digest('hex')};
     await fixture.assertFixture();
     assert.deepEqual(await fileHashes(fixtureRoot), preRigHashes, 'STAGE3_PRE_RIG_SOURCE_CHANGED');
-    report.preRigReturnedToStage1 = true;
+    report.preRigRefusalReadable = true;
     assert.deepEqual(await fileHashes('examples/demo'), originalHashes, 'STAGE3_ORIGINAL_SOURCE_CHANGED');
     assert.deepEqual(await fileHashes(demo), originalHashes, 'STAGE3_COPIED_SOURCE_CHANGED');
     report.sourceUnchanged = true;
