@@ -26,6 +26,10 @@ function navigationURL() {
   url.searchParams.set('lang', language);
   return url.href;
 }
+const atlasImage = PNG.sync.read(await readFile(new URL('fixtures/strip-probe/build/rigid.png', import.meta.url)));
+const atlasCenter = (Math.floor(atlasImage.height / 2) * atlasImage.width + Math.floor(atlasImage.width / 2)) * 4;
+const atlasPixel = [...atlasImage.data.subarray(atlasCenter, atlasCenter + 4)];
+assert.ok(atlasImage.width > 1 && atlasImage.height > 1 && atlasPixel[3]! > 0);
 await mkdir(output, {recursive: true});
 const root = await mkdtemp(join(tmpdir(), 'review-owner-browser-'));
 const inputs: string[] = [], children: Bun.Subprocess[] = [];
@@ -225,8 +229,29 @@ async function capturePaint(index: number, canvasSelector = '#rig-root canvas', 
   return {rectangle, changedPixels, width: shown.width, height: shown.height};
 }
 
-// Removed embedded atlas oracle: #735 lines 8-11 / #741 replaces stage navigation.
-// Existing main-viewport capturePaint assertions above retain actual source-rendered pixels.
+/** Atlas body readiness precedes async paint, so bind the completed image to the fixture. */
+async function verifyAtlas(index: number, name: string, expectedSide: string | null) {
+  await wait(frameExpression(index, `(()=>{
+    const stage=document.querySelector('.review-stage-panel iframe:not([hidden])');
+    const childDocument=stage?.contentDocument,canvas=childDocument?.querySelector('#pv-canvas');
+    if(!stage?.contentWindow?.rigReviewStageParts || childDocument.documentElement.lang!==${JSON.stringify(language)} ||
+      childDocument.body.dataset.ready!=='true' || canvas?.width!==${atlasImage.width} || canvas.height!==${atlasImage.height} ||
+      !childDocument.querySelector('.pv-region-edge') || !childDocument.querySelector('#pv-caption').textContent.includes('rigid'))return false;
+    const pixel=[...canvas.getContext('2d').getImageData(${Math.floor(atlasImage.width / 2)},${Math.floor(atlasImage.height / 2)},1,1).data];
+    return JSON.stringify(pixel)===${JSON.stringify(JSON.stringify(atlasPixel))};
+  })()`), name + ' completed atlas pixels');
+  const stage = await inside<any>(index, `(()=>{
+    const stage=document.querySelector('.review-stage-panel iframe:not([hidden])');
+    const childDocument=stage.contentDocument,canvas=childDocument.querySelector('#pv-canvas'),url=new URL(stage.src);
+    return {path:url.pathname,query:url.search,side:url.searchParams.get('side'),language:childDocument.documentElement.lang,
+      ready:childDocument.body.dataset.ready,canvasWidth:canvas.width,canvasHeight:canvas.height,
+      centerPixel:[...canvas.getContext('2d').getImageData(${Math.floor(atlasImage.width / 2)},${Math.floor(atlasImage.height / 2)},1,1).data],
+      caption:childDocument.querySelector('#pv-caption').textContent,snapshot:stage.contentWindow.rigReviewStageParts.snapshot()};
+  })()`);
+  assert.equal(stage.side, expectedSide); assert.equal(stage.language, language);
+  const paint = await capturePaint(index, '#pv-canvas', name, true);
+  await record(name, {...stage, expectedDimensions:{width:atlasImage.width,height:atlasImage.height},expectedPixel:atlasPixel,paint});
+}
 
 async function control(index: number) {
   const result = await cli(['control', inputs[index]!, '--animation', 'synthetic-animation-' + (index + 1)]);
@@ -325,16 +350,10 @@ try {
   await clickInside(0, '[data-part-list] button');
   await clickInside(0, '[data-inspector="playback"]');
   await clickInside(0, '#zoom-in');
-  await clickInside(0, '#stage-comment');
-  const commentPoint=await page.evaluate<{x:number;y:number}>(`(()=>{const frame=document.querySelector('.owner-stage>iframe'),outer=frame.getBoundingClientRect(),r=frame.contentDocument.querySelector('#rig-viewport').getBoundingClientRect();return {x:outer.left+r.left+r.width/2,y:outer.top+r.top+r.height/2};})()`);
-  await page.mouse('mousePressed',commentPoint.x,commentPoint.y);
-  await page.mouse('mouseReleased',commentPoint.x,commentPoint.y);
-  await wait(frameExpression(0, `!!document.querySelector('.stage-comment-composer input')`),'current comment composer');
-  // b433: composer cancels on blur by design (stage-comments.ts:221,227); retain a saved Comment.
-  await inside(0, `(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Synthetic saved comment';form.requestSubmit();return true;})()`);
-  await wait(frameExpression(0, `!document.querySelector('.stage-comment-composer')&&[...document.querySelectorAll('.stage-comment-summary')].some(node=>node.textContent.includes('Synthetic saved comment'))`),'saved Comment list');
+  await clickInside(0, '[data-inspector="feedback"]');
+  await inside(0, `(()=>{const node=document.querySelector('#feedback-summary');node.value='Synthetic human unsaved note';node.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
   await clickInside(0, '[data-inspector="playback"]');
-  const snapshotExpression = `({animation:document.querySelector('#animation-select').value,time:document.querySelector('#scrub').value,zoom:document.querySelector('#zoom-value').textContent,part:document.querySelector('#selected-part').textContent,panel:document.querySelector('[data-inspector][aria-pressed="true"], [data-inspector][aria-selected="true"]')?.getAttribute('data-inspector'),comments:[...document.querySelectorAll('.stage-comment-summary')].map(node=>node.textContent),source:document.querySelector('#provenance-rig').textContent})`;
+  const snapshotExpression = `({animation:document.querySelector('#animation-select').value,time:document.querySelector('#scrub').value,zoom:document.querySelector('#zoom-value').textContent,part:document.querySelector('#selected-part').textContent,panel:document.querySelector('[data-inspector][aria-pressed="true"], [data-inspector][aria-selected="true"]')?.getAttribute('data-inspector'),note:document.querySelector('#feedback-summary').value,source:document.querySelector('#provenance-rig').textContent})`;
   const saved = await inside(0, snapshotExpression);
   await record('retention-before', saved);
   // Exercise the public legacy control locator while the real frame is connected.
@@ -358,8 +377,7 @@ try {
   const held = await inside<any>(0, snapshotExpression);
   await Bun.sleep(250); assert.deepEqual(await inside(0, snapshotExpression), held);
   await choose(0, 9); assert.deepEqual(await inside(0, snapshotExpression), held);
-  assert.deepEqual(held.comments,(saved as any).comments);
-  assert.ok(held.comments.some((text:string)=>text.includes('Synthetic saved comment')));
+  assert.equal(held.note, 'Synthetic human unsaved note');
   assert.equal(held.source, (saved as any).source); assert.equal(held.zoom, (saved as any).zoom);
   await record('retention-after', held);
   await Bun.sleep(1200);
@@ -369,7 +387,9 @@ try {
   assert.equal(controlAfter.sourceHash, controlBefore.sourceHash);
   assert.equal(controlAfter.pages[0].inspection.playing, false);
   await record('control-after-retention', controlAfter);
-  // #735:8-11 / #741 removed stage chips and the embedded atlas view; no replacement viewer.
+  await clickInside(0, '[data-review-stage="1"]');
+  await verifyAtlas(0, 'single-stage-frame', null);
+  await clickInside(0, '[data-review-stage="3"]');
   const geometry = await page.evaluate<any>(`(()=>{
     const rect=selector=>{
       const element=document.querySelector(selector),box=element.getBoundingClientRect();
@@ -496,11 +516,11 @@ try {
   await record('compare-browser', await inside(0, `({title:document.title,renderers:[...document.querySelectorAll('[id*="renderer"]')].map(n=>({id:n.id,text:n.textContent}))})`));
   await clickInside(0, '[data-mode="rig"]');
   for (const side of ['a', 'b']) {
-    await clickInside(0, '[data-mode="rig"]');
+    await clickInside(0, '[data-review-stage="3"]');
     await clickInside(0, '#mode-build-picker [data-build-side="' + side + '"]');
     await wait(frameExpression(0, `document.querySelector('#stage-layout').dataset.pickedSide===${JSON.stringify(side)}`), 'picked compare side ' + side);
-    await clickInside(0, '[data-mode="playback"]');
-    // Main pairPaint above retains both actual source canvas pixel checks (#735:8-11 / #741).
+    await clickInside(0, '[data-review-stage="1"]');
+    await verifyAtlas(0, 'compare-stage-' + side, side);
   }
   await writeFile(join(output, 'owner-compare-' + language + '.png'), await page.screenshot());
   assert.deepEqual(await Promise.all(inputs.map(jobInputHashes)), before);

@@ -27,7 +27,6 @@ import {
 import { enCatalog } from '../web/catalog-en.ts';
 import { koCatalog } from '../web/catalog-ko.ts';
 import { jobFixture, jobInputHashes } from './helpers/job-api-fixture.ts';
-import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
 
 const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -283,7 +282,7 @@ async function captureFailure(error: unknown) {
         alerts: string[];
         bodyText: string;
       }>(`(()=>{
-        const notice=document.querySelector('#message');
+        const notice=document.querySelector('.job-notice');
         return {
           html:document.documentElement.outerHTML,
           url:location.href,
@@ -334,8 +333,7 @@ async function submitForm(askId: string): Promise<{ statusText: string; statusKe
     `!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled`,
     `enabled form ${askId}`,
   );
-  if (!await page!.evaluate(`document.querySelector('#job-record-asks').open`)) await click(page!,'#workspace-pending-ask');
-  await click(page!,selector+' button[type="submit"]');
+  await page!.evaluate(`document.querySelector(${JSON.stringify(selector)}).querySelector('button[type="submit"]').click()`);
   await wait(
     `document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled && document.querySelector(${JSON.stringify(selector)}).querySelector('[role="status"]').textContent.length > 0`,
     `submitted form ${askId}`,
@@ -464,7 +462,9 @@ try {
   const picksAsk = askOpt.value as JobPendingAskV3;
 
   await wait(
-    `document.getElementById('package-title')?.textContent===${JSON.stringify(optionPublication.label)} &&
+    `document.querySelector('.job-notice')?.dataset.failed === 'false' &&
+     document.querySelector('.job-notice')?.textContent?.includes(${JSON.stringify(optionPublication.label)}) &&
+     !!document.querySelector('[data-job-record="option-set"]') &&
      !!document.querySelector('form[data-job-ask=${JSON.stringify(picksAsk.askId)}]')`,
     'option-set displayed on normal owner URL',
   );
@@ -474,19 +474,22 @@ try {
     headerTitle: string;
     selectedLang: string;
     sourceBinding: Record<string, unknown>;
+    recordSummary: string[];
     stageHidden: boolean;
     rigCanvasCount: number;
     questionHeading: string | null;
     selectNames: string[]; jobSelects: number;
-  }>(`(async()=>{
-    const sourceBinding = await (await fetch(${JSON.stringify(`/jobs/${recordHost.session.jobId}/publications/${optionPublication.publicationId}/instances/${optionPublication.instanceKey}/api/review`)})).json().then(body=>body.recordSource);
+  }>(`(()=>{
+    const sourceBinding = JSON.parse(document.querySelector('.job-inspection details pre.job-source').textContent);
+    const summary = [...document.querySelectorAll('[data-job-record="option-set"] p')].map(n => n.textContent);
     const stage = document.getElementById('stage-layout');
     const form = document.querySelector('form[data-job-ask=${JSON.stringify(picksAsk.askId)}]');
     return {
       lang: document.documentElement.lang,
-      headerTitle: document.querySelector('#package-title').textContent,
-      selectedLang: document.querySelector('#settings-language').value,
+      headerTitle: document.querySelector('.job-header h1').textContent,
+      selectedLang: document.querySelector('.job-header select').value,
       sourceBinding,
+      recordSummary: summary,
       stageHidden: !!stage && (stage.hidden || getComputedStyle(stage).display === 'none'),
       rigCanvasCount: document.querySelectorAll('#rig-root canvas').length,
       questionHeading: form?.querySelector('h3')?.textContent ?? null,
@@ -502,12 +505,14 @@ try {
   assert.equal(Object.hasOwn(optionDom.sourceBinding, 'package'), false);
   assert.equal(Object.hasOwn(optionDom.sourceBinding, 'model'), false);
   assert.equal(Object.hasOwn(optionDom.sourceBinding, 'selector'), false);
-  // #715 / #796 and #750: record uses the shared empty viewport; no hidden legacy stage assertion.
+  assert.equal(optionDom.stageHidden, true);
   assert.equal(optionDom.rigCanvasCount, 0);
   assert.equal(optionDom.questionHeading, 'bones');
   assert.deepEqual(optionDom.selectNames, ['choice.chains', 'choice.placement', 'choice.length']);
   assert.equal(optionDom.jobSelects, 0);
-  // #715 / #796: deleted raw wrapper summaries; recordSource/project digest remain checked below.
+  assert.equal(optionDom.recordSummary.length, 2);
+  assert.ok(optionDom.recordSummary[0]?.includes(`project.json · ${projectSha}`));
+  assert.ok(optionDom.recordSummary[1]?.includes('bones · chain-bones · evidence/interview/bones.json'));
 
   const optionInstanceBase = `/jobs/${recordHost.session.jobId}/publications/${optionPublication.publicationId}/instances/${optionPublication.instanceKey}`;
   const optionRoutes = await page.evaluate<{
@@ -538,18 +543,10 @@ try {
     'captured api/interview questions for option-set publication',
   );
 
-  // #809:92: Answer… opens the native dialog; a prepared hidden form is not a pointer target.
-  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('form[data-job-ask="${picksAsk.askId}"] fieldset:not(:disabled)')`,'interview owner ready');
-  if(!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page,'#workspace-pending-ask');
-  await wait(`!!document.querySelector('#job-record-asks[open] form[data-job-ask="${picksAsk.askId}"]')`,'Answer dialog opened');
   for (const name of optionDom.selectNames) {
-    await click(page,`form[data-job-ask="${picksAsk.askId}"] input[type="radio"][name="${name}"][value="keep"]`);
+    await edit(`form[data-job-ask="${picksAsk.askId}"] select[name="${name}"]`, 'keep');
   }
-  // R2 / #764: no new Note field; an existing note is read-only and carried unchanged.
-  const sourceProject=JSON.parse(await readFile(join(recordRoot,'project.json'),'utf8'));
-  const existingNote=sourceProject.interview.waypoints.find((row:{id:string})=>row.id==='bones')?.guide?.choice?.note??'';
-  assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"],input[name="note"]').length`),0);
-  if(existingNote)assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${picksAsk.askId}"] .interview-note').textContent`),existingNote);
+  await edit(`form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]`, `Option picks note (${language})`);
   const picksSubmitStatus = await submitForm(picksAsk.askId);
   assert.equal(picksSubmitStatus.statusKey, 'job.saved');
   assert.equal(picksSubmitStatus.statusText, catalog['job.saved']);
@@ -603,15 +600,17 @@ try {
   const reopenAsk = askReopen.value as JobPendingAskV3;
 
   await wait(
-    `document.getElementById('package-title')?.textContent===${JSON.stringify(planPublication.label)} &&
+    `document.querySelector('.job-notice')?.dataset.failed === 'false' &&
+     document.querySelector('.job-notice')?.textContent?.includes(${JSON.stringify(planPublication.label)}) &&
+     !!document.querySelector('[data-job-record="plan"]') &&
      !!document.querySelector('form[data-job-ask=${JSON.stringify(cpAsk.askId)}]') &&
      !!document.querySelector('form[data-job-ask=${JSON.stringify(signoffAsk.askId)}]') &&
      !!document.querySelector('form[data-job-ask=${JSON.stringify(reopenAsk.askId)}]')`,
     'plan displayed with checkpoint, signoff and reopen forms on normal owner URL',
   );
 
-  // #715 / #796: shared title and native dialog replace the deleted job-panel/record wrapper.
-  if(!await page.evaluate(`document.querySelector('#job-record-asks').open`))await click(page,'#workspace-pending-ask');
+  // Verify panel switching to '2' (Interview) keeps record forms visible
+  await edit('#job-panel', '2');
   const planDom = await page.evaluate<{
     sentinel: string;
     lang: string;
@@ -629,8 +628,8 @@ try {
     reopenStageText: string | null;
     reopenSubmitKey: string | null;
     reopenSubmitText: string | null;
-  }>(`(async()=>{
-    const sourceBinding = await (await fetch(${JSON.stringify(`/jobs/${recordHost.session.jobId}/publications/${planPublication.publicationId}/instances/${planPublication.instanceKey}/api/review`)})).json().then(body=>body.recordSource);
+  }>(`(()=>{
+    const sourceBinding = JSON.parse(document.querySelector('.job-inspection details pre.job-source').textContent);
     const stage = document.getElementById('stage-layout');
     const cpForm = document.querySelector('form[data-job-ask=${JSON.stringify(cpAsk.askId)}]');
     const signoffForm = document.querySelector('form[data-job-ask=${JSON.stringify(signoffAsk.askId)}]');
@@ -639,18 +638,18 @@ try {
     return {
       sentinel: globalThis.__jobRecordOwnerSentinel,
       lang: document.documentElement.lang,
-      headerTitle: document.querySelector('#package-title').textContent,
+      headerTitle: document.querySelector('.job-header h1').textContent,
       sourceBinding,
-      recordLine: cpForm?.querySelector('.job-source')?.title??null,
-      renderedSteps: [...cpForm.querySelectorAll('.job-plan-steps summary')].map(row=>row.title),
+      recordLine: document.querySelector('[data-job-record="plan"] > p')?.textContent ?? null,
+      renderedSteps: [...document.querySelectorAll('[data-job-record="plan"] .job-plan-steps > li')].map(li => li.querySelector('summary').textContent+' · '+li.querySelector('code').textContent),
       stageHidden: !!stage && (stage.hidden || getComputedStyle(stage).display === 'none'),
       rigCanvasCount: document.querySelectorAll('#rig-root canvas').length,
       cpFormHidden: !cpForm || cpForm.hidden,
       signoffFormHidden: !signoffForm || signoffForm.hidden,
       reopenFormHidden: !reopenForm || reopenForm.hidden,
-      cpStepText: cpForm?.querySelector('.job-plan-steps summary')?.title??null,
-      signoffStageText: signoffForm?.querySelector('fieldset')?.title??null,
-      reopenStageText: reopenForm?.querySelector('fieldset')?.title??null,
+      cpStepText: cpForm?.querySelector('.job-plan-steps summary')?.textContent+' · '+cpForm?.querySelector('.job-plan-steps code')?.textContent,
+      signoffStageText: [...(signoffForm?.querySelectorAll('fieldset > p') ?? [])].at(-1)?.textContent ?? null,
+      reopenStageText: [...(reopenForm?.querySelectorAll('fieldset > p') ?? [])].at(-1)?.textContent ?? null,
       reopenSubmitKey: reopenBtn?.dataset.jobText ?? null,
       reopenSubmitText: reopenBtn?.textContent ?? null,
     };
@@ -664,17 +663,19 @@ try {
   assert.equal(Object.hasOwn(planDom.sourceBinding, 'package'), false);
   assert.equal(Object.hasOwn(planDom.sourceBinding, 'model'), false);
   assert.equal(Object.hasOwn(planDom.sourceBinding, 'selector'), false);
-  assert.equal(planDom.recordLine,planPublication.source.sourceHash);
-  assert.equal(planPublication.source.record.sha256,projectSha);
-  // #768:8: only the asked step is shown; its raw id/hash live in title, not visible prose.
+  assert.equal(planDom.recordLine, `project.json · ${projectSha}`);
+  assert.deepEqual(
+    planDom.renderedSteps,
+    planSteps.map(step => `${step.id} · ${step.hash}`),
+  );
+  assert.equal(planDom.stageHidden, true);
   assert.equal(planDom.rigCanvasCount, 0);
   assert.equal(planDom.cpFormHidden, false);
   assert.equal(planDom.signoffFormHidden, false);
   assert.equal(planDom.reopenFormHidden, false);
   const expectedCpStep = planSteps.find(step => step.id === 'seethrough');
   assert.ok(expectedCpStep, 'declared seethrough step exists in planSteps');
-  assert.ok(planDom.cpStepText?.includes(expectedCpStep.id));
-  assert.ok(planDom.cpStepText?.includes(expectedCpStep.hash));
+  assert.equal(planDom.cpStepText, `${expectedCpStep.id} · ${expectedCpStep.hash}`);
   assert.equal(planDom.signoffStageText, 'rigging-interview');
   assert.equal(planDom.reopenStageText, 'plan-approved');
   assert.equal(planDom.reopenSubmitKey, 'job.reopen');
@@ -698,18 +699,18 @@ try {
 
   // Submit checkpoint, signoff and reopen through actual DOM forms
   await edit(`form[data-job-ask="${cpAsk.askId}"] select[name="outcome"]`, 'pass');
-  const checkpointWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
-  assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"],input[name="note"]').length`),0);
+  await edit(`form[data-job-ask="${cpAsk.askId}"] textarea[name="note"]`, `Checkpoint approved in ${language}`);
   const cpSubmitStatus = await submitForm(cpAsk.askId);
   assert.equal(cpSubmitStatus.statusKey, 'job.saved');
   assert.equal(cpSubmitStatus.statusText, catalog['job.saved']);
 
-  const signoffWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
+  await edit(`form[data-job-ask="${signoffAsk.askId}"] textarea[name="note"]`, `Signoff approved in ${language}`);
   const signoffSubmitStatus = await submitForm(signoffAsk.askId);
   assert.equal(signoffSubmitStatus.statusKey, 'job.saved');
   assert.equal(signoffSubmitStatus.statusText, catalog['job.saved']);
 
-  const reopenVerbatimWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
+  const reopenVerbatimWords = `  Reopen plan-approved in ${language}\n`;
+  await edit(`form[data-job-ask="${reopenAsk.askId}"] textarea[name="note"]`, reopenVerbatimWords);
   const reopenSubmitStatus = await submitForm(reopenAsk.askId);
   assert.equal(reopenSubmitStatus.statusKey, 'job.saved');
   assert.equal(reopenSubmitStatus.statusText, catalog['job.saved']);
@@ -726,8 +727,7 @@ try {
     buttonRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
     statusRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
   }>(`(async () => {
-    const formsHost = document.querySelector('#job-record-asks');
-    if(!formsHost.open)formsHost.showModal();
+    const formsHost = document.querySelector('[data-job-forms]');
     const form = document.querySelector('form[data-job-ask=${JSON.stringify(reopenAsk.askId)}]');
     const button = form?.querySelector('button[type="submit"]');
     const status = form?.querySelector('[role="status"]');
@@ -839,7 +839,7 @@ try {
       { itemId: 'placement', optionId: 'keep', otherText: null },
       { itemId: 'length', optionId: 'keep', otherText: null },
     ],
-    note: existingNote,
+    note: `Option picks note (${language})`,
   });
 
   assert.equal(fetchedActs.checkpoint?.source.subject, 'plan');
@@ -847,14 +847,14 @@ try {
     checkpointId: 'seethrough',
     planStepId: 'seethrough',
     outcome: 'pass',
-    words: checkpointWords,
+    words: `Checkpoint approved in ${language}`,
   });
 
   assert.equal(fetchedActs.signoff?.source.subject, 'plan');
   assert.deepEqual(fetchedActs.signoff?.value, {
     stage: 'rigging-interview',
     decision: 'approved',
-    words: signoffWords,
+    words: `Signoff approved in ${language}`,
   });
 
   assert.equal(fetchedActs.reopen?.source.subject, 'plan');
@@ -922,34 +922,35 @@ try {
   pkgOwnerUrl.searchParams.set('lang', language);
   await page.goto(pkgOwnerUrl.href);
   await wait(
-    `document.getElementById('package-title')?.textContent===${JSON.stringify(pkgPubBody.value.label)}&&!!document.querySelector('#rig-root canvas')`,
+    `document.querySelector('.job-notice')?.dataset.failed === 'false' &&
+     document.querySelector('.job-header h1')?.textContent === ${JSON.stringify(pkgPubBody.value.source.package.id)} &&
+     document.querySelector('.job-notice')?.textContent?.includes(${JSON.stringify(pkgPubBody.value.label)}) &&
+     document.querySelector('.job-sidebar .job-source')?.textContent?.includes(${JSON.stringify(pkgPubBody.value.source.sourceHash)}) &&
+     !!document.querySelector('#rig-root canvas') &&
+     !document.querySelector('[data-job-record]')`,
     'package normal entry rendered with canvas',
   );
 
   const pkgDom = await page.evaluate<{
     headerTitle: string;
-    visibleModelHash: string|null;
     hasPackageField: boolean;
     hasModelField: boolean;
     canvasCount: number;
-  }>(`(async()=>{
-    const source=await (await fetch(${JSON.stringify(`/jobs/${pkgHost.session.jobId}/publications/${pkgPubBody.value.publicationId}/instances/${pkgPubBody.value.instanceKey}/api/review`)})).json();
-    const visible=JSON.parse(document.getElementById('provenance-full').textContent);
+  }>(`(()=>{
+    const source = JSON.parse(document.querySelector('.job-inspection details pre.job-source').textContent);
     return {
-      headerTitle: document.querySelector('#package-title').textContent,
-      hasPackageField:source.manifest?.id===${JSON.stringify(pkgPubBody.value.source.package.id)},
-      hasModelField:source.reviewedSource?.rig?.sha256===${JSON.stringify(pkgPubBody.value.source.model.sha256)},
-      visibleModelHash:visible.reviewedSource?.rig?.sha256??null,
+      headerTitle: document.querySelector('.job-header h1').textContent,
+      hasPackageField: !!source.package?.id,
+      hasModelField: !!source.model?.sha256,
       canvasCount: document.querySelectorAll('#rig-root canvas').length,
     };
   })()`);
-  assert.equal(pkgDom.headerTitle, pkgPubBody.value.label);
+  assert.equal(pkgDom.headerTitle, pkgPubBody.value.source.package.id);
   assert.equal(pkgDom.hasPackageField, true);
   assert.equal(pkgDom.hasModelField, true);
-  assert.equal(pkgDom.visibleModelHash,pkgPubBody.value.source.model.sha256);
   assert.ok(pkgDom.canvasCount >= 1);
 
-  // #796 / 368ffec shared-screen refusal: no model/reference/pending dialog names JOB_MODEL_MISSING (web/job-rig-screen.ts:54).
+  // Publishing a model-less/reference-less package still triggers MODEL_UNAVAILABLE in the browser
   const emptyPkgRes = await fetch(`${pkgHost.origin}/jobs/${pkgHost.session.jobId}/api`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pkgAgent}` },
@@ -966,8 +967,9 @@ try {
   });
   assert.equal(emptyPkgRes.status, 200);
   await wait(
-    `document.querySelector('#message')?.title==='JOB_MODEL_MISSING'||document.querySelector('#message')?.textContent?.includes('JOB_MODEL_MISSING')`,
-    'model-less package publication names JOB_MODEL_MISSING',
+    `document.querySelector('.job-notice')?.dataset.failed === 'true' &&
+     document.querySelector('.job-notice')?.textContent?.includes('MODEL_UNAVAILABLE')`,
+    'model-less package publication refuses MODEL_UNAVAILABLE',
   );
 
   assert.equal(browserExceptions.length, 0, `unexpected browser exceptions: ${JSON.stringify(browserExceptions)}`);

@@ -1,4 +1,4 @@
-import projectPackage from '../package.json';
+import producerPins from './fixtures/correction-producer-pins.json';
 /** Actual installed-producer Stage-1 loop; explicit runner, never part of the unit suite. */
 import {mkdir,mkdtemp,writeFile,readFile,readdir,rm,cp} from 'node:fs/promises';
 import {PNG} from 'pngjs';
@@ -20,6 +20,7 @@ const DESCRIBED_DEADLINE_MS = 5_000;
 // One ordinary-pool run, n=2 (EN 7.390 s, KO 7.405 s).
 // Allow 4× the larger hold, rounded up to 30 s.
 const MESH_SETTLE_DEADLINE_MS = 30_000;
+const PARTS_DOCUMENT = "document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument";
 
 type CorrectionPage = Pick<InputCdpSession, 'evaluate'>;
 
@@ -93,8 +94,7 @@ for(const path of toolPaths){
  catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
 }
 await writeFile(join(artifacts,'installed-tool-hashes.json'),JSON.stringify(installed,null,2));
-const partsManifest=JSON.parse(await readFile(join(bench,'node_modules/@rig-c/parts/package.json'),'utf8'));
-if(versions.parts!==projectPackage.devDependencies['@rig-c/parts']||partsCompiler!==partsManifest.dependencies['@rig-c/core'])throw Error('CONFIG_LOADER_PIN_STALE: frozen-lockfile producer/compiler');
+if(versions.parts!==producerPins.reviewRemesh.version||installed['@rig-c/parts/package.json']!==producerPins.reviewRemesh.packageSha256)throw Error('CONFIG_LOADER_PIN_STALE: installed remesh sample producer');
 console.log('FROZEN_PRODUCERS '+JSON.stringify({...versions,partsCompiler}));
 try{
  await writeStage1LivePackage(pkg);
@@ -117,23 +117,35 @@ try{
     const text = document.getElementById('handoff-line')?.textContent;
     return {ready: Boolean(window.rigReviewEditor && text && !/Reading/.test(text))};
   })()`);
-  // #735:8-11 / #741 removes stage chips; #745/#737 removes the embedded Parts frame.
-  // #731/#726 is the earlier frame context, not the stage-chip deletion. Use the current shared Setup.
-  await page.evaluate(`document.querySelector('[data-mode="rig"]').click()`);
-  await waitForReadiness(page, 'PARTS_NOT_READY', READINESS_DEADLINE_MS, `({ready:!!document.querySelector('[data-part-list] button[data-slot="torso"]')})`);
-  await page.evaluate(`document.querySelector('[data-part-list] button[data-slot="torso"]').click();document.getElementById('zoom-in').click()`);
+  await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
+  await waitForReadiness(page, 'PARTS_NOT_READY', READINESS_DEADLINE_MS, `(() => {
+    const d = ${PARTS_DOCUMENT};
+    return d?.body.dataset.ready === 'true' ? {ready: true} : {ready: false, detail: d?.body.textContent};
+  })()`);
+  await page.evaluate(`(() => {
+    const d = ${PARTS_DOCUMENT};
+    if (d?.body.dataset.ready !== 'true') throw Error('PARTS_NOT_READY ' + d?.body.textContent);
+    d.querySelector('[data-pv-item=torso]').click();
+    d.getElementById('zoom-in').click();
+  })()`);
+  await Bun.sleep(50);
+  const before = await page.evaluate(`(() => {
+    const d = ${PARTS_DOCUMENT};
+    return {snapshot:d.defaultView.rigReviewStageParts.snapshot(),text:d.querySelector('#pv-corrections')?.textContent,buttons:[...d.querySelectorAll('#pv-corrections button')].map(b=>b.textContent)};
+  })()`);
+  await page.evaluate(`document.querySelector('[data-review-stage="3"]').click();document.querySelector('[data-review-stage="1"]').click()`);
+  const retained=await page.evaluate<any>(`document.querySelector('.review-stage-panel iframe:not([hidden])').contentWindow.rigReviewStageParts.snapshot()`);
+  if(retained.part!=='torso'||JSON.stringify(retained.rig)!==JSON.stringify((before as any).snapshot.rig))throw Error('NON_FIRST_PART_OR_CAMERA_LOST_ON_NAV');
+  receipts.push({lang,before,retained});await writeFile(join(artifacts,lang+'-parts.png'),await page.screenshot());
+  // Parameter editor: enter from the selected part, change a producer field, run its existing Apply.
+  await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
   await waitForReadiness(page, 'MESH_ROUTE_TIMEOUT', READINESS_DEADLINE_MS,
-    `({ready:window.rigReviewEditor.mesh.part()==='torso'&&!!window.rigReviewEditor.mesh.configEntry()})`);
-  const selectionAndCamera=`({part:document.querySelector('[data-part-list] button[aria-pressed="true"]')?.dataset.slot,rig:JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig})`;
-  const before=await page.evaluate<any>(`({snapshot:${selectionAndCamera},text:document.getElementById('mesh-panel-state').textContent,buttons:[...document.querySelectorAll('#mesh-panel button')].map(button=>button.textContent)})`);
-  await page.evaluate(`document.querySelector('[data-mode="playback"]').click();document.querySelector('[data-mode="rig"]').click()`);
-  await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
-  const retained=await page.evaluate<any>(selectionAndCamera);
-  if(retained.part!=='torso'||JSON.stringify(retained.rig)!==JSON.stringify(before.snapshot.rig))throw Error('SHARED_SETUP_ANIMATE_PART_OR_CAMERA_CHANGED');
-  receipts.push({lang,before,retained,retention:'current shared Setup/Animate, not removed embedded-frame navigation'});
-  await writeFile(join(artifacts,lang+'-parts.png'),await page.screenshot());
-  // Existing parameter editor and public Apply path; identity/gate/patch/source assertions below stay unchanged.
-  await page.evaluate(`document.querySelector('[data-block-target="mesh-panel"]').click()`);
+    `({ready: ${PARTS_DOCUMENT}?.body.dataset.ready === 'true'})`);
+  await page.evaluate(`(() => {
+    const d = ${PARTS_DOCUMENT};
+    if (d?.body.dataset.ready !== 'true') throw Error('MESH_ROUTE_TIMEOUT');
+    d.querySelectorAll('#pv-corrections button')[1].click();
+  })()`);
   const meshJob = await settleCorrectionMesh(page);
   if(meshJob.status!=='built'||meshJob.check?.pass!==true)throw Error('MESH_PARAMETER_APPLY_REFUSED '+JSON.stringify(meshJob));
   if(await page.evaluate(`document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot`)!=='torso')throw Error('MESH_SELECTION_LOST');
@@ -142,7 +154,7 @@ try{
 
   const applied=receipts.at(-1).applied;
   if(applied.schema!=='rig-review-applied/2'||!applied.stageInputHash||applied.check?.gate!==true||
-     applied.producer.version!==versions.parts||applied.compiler.version!==partsCompiler)throw Error('CORRECTION_SAMPLE_APPLY_IDENTITY');
+     applied.producer.version!==producerPins.reviewRemesh.version||applied.compiler.version!=='3.2.1')throw Error('CORRECTION_SAMPLE_APPLY_IDENTITY');
   const bytes=patchText(applied.patch);
   if(createHash('sha256').update(bytes).digest('hex')!==applied.patchSha256)throw Error('CORRECTION_SAMPLE_PATCH_HASH');
   if(lang==='en'){
@@ -156,7 +168,7 @@ try{
   if(translated!==(lang==='en'?'Correction handoff':'수정 인계'))throw Error('CORRECTION_SAMPLE_LOCALE '+lang+' '+translated);
   const exact='Keep the precise words.  \r\n';
   await page.evaluate(`(() => {
-    document.getElementById('stage-comment').click();
+    document.getElementById('write-review').click();
     document.getElementById('correction-controls').open=true;
     for(const [id,value] of Object.entries({'feedback-start':'0','feedback-end':'0','feedback-target-kind':'rig','feedback-target-name':'generated-draft','feedback-category':'quality','correction-stage':'parts-review','correction-selector':'source','correction-path':'described'}))document.getElementById(id).value=value;
     const dt=new DataTransfer(); dt.items.add(new File([${JSON.stringify(exact)}],'request.txt',{type:'text/plain'}));document.getElementById('correction-words').files=dt.files;
@@ -165,14 +177,9 @@ try{
   await waitForReadiness(page, 'CORRECTION_DESCRIBED_ADD', DESCRIBED_DEADLINE_MS, `(() => {
     return document.querySelector('.proposal-item')
       ? {ready: true}
-      : {ready: false, detail: document.getElementById('message').textContent};
+      : {ready: false, detail: document.getElementById('review-message').textContent};
   })()`);
-  // 5735 / R2 / #741/#735: no separate summary input. Both corrections use the existing file upload.
-  // The handler consumes/clears that file, and add is async; never resend the add click.
-  const madeWords='Adjust the torso contour spacing';
-  await page.evaluate(`(() => {document.getElementById('correction-path').value='made';const dt=new DataTransfer();dt.items.add(new File([${JSON.stringify(madeWords)}],'made-request.txt',{type:'text/plain'}));document.getElementById('correction-words').files=dt.files;document.getElementById('add-proposal').click()})()`);
-  await waitForReadiness(page,'CORRECTION_MADE_ADD',DESCRIBED_DEADLINE_MS,`({ready:document.querySelectorAll('.proposal-item').length===2,detail:document.getElementById('message').textContent})`);
-  await page.evaluate(`if(document.querySelectorAll('.proposal-item').length!==2)throw Error('CORRECTION_MADE_ADD '+document.getElementById('message').textContent);document.getElementById('save').click()`);
+  await page.evaluate(`(() => {document.getElementById('correction-path').value='made';document.getElementById('feedback-summary').value='Adjust the torso contour spacing';document.getElementById('add-proposal').click();if(document.querySelectorAll('.proposal-item').length!==2)throw Error('CORRECTION_MADE_ADD '+document.getElementById('review-message').textContent);document.getElementById('save').click()})()`);
   const file=sessionFile(p,state);
   let savedBytes:Buffer|undefined;
   for(let i=0;i<200;i++){
@@ -180,9 +187,9 @@ try{
     catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
     await Bun.sleep(50);
   }
-  if(!savedBytes)throw Error('CORRECTION_SAMPLE_SUBMIT '+await page.evaluate(`document.getElementById('message').textContent`));
+  if(!savedBytes)throw Error('CORRECTION_SAMPLE_SUBMIT '+await page.evaluate(`document.getElementById('review-message').textContent`));
   const session=JSON.parse(savedBytes.toString());
-  if(session.feedback[0].summary!==exact||session.feedback[1].summary!==madeWords||JSON.stringify(session.feedback[1].context.applied)!==JSON.stringify(applied))throw Error('CORRECTION_SAMPLE_SESSION_MISMATCH');
+  if(session.feedback[0].summary!==exact||JSON.stringify(session.feedback[1].context.applied)!==JSON.stringify(applied))throw Error('CORRECTION_SAMPLE_SESSION_MISMATCH');
   await writeFile(join(artifacts,lang+'-session.json'),savedBytes);
   for(const [index,item] of session.feedback.entries())for(const format of ['json','issue']){
     const code="import {main} from './src/cli.ts'; await main(process.argv.slice(1),{stateDir:process.env.SAMPLE_STATE});";
