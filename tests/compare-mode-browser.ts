@@ -564,6 +564,9 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         const pressedPart = document.querySelector('[data-part-list] button[aria-pressed="true"]');
         return {
           mode: m,
+          playCount:document.querySelectorAll('#play').length,
+          playVisible:!document.getElementById('play').hidden&&document.getElementById('play').getBoundingClientRect().width>0,
+          playInMainToolbar:!!document.getElementById('play').closest('.toolbar'),
           sentinel: window.__compareBootSentinel,
           time: Number(document.getElementById('scrub').value),
           selectedPart: pressedPart ? pressedPart.getAttribute('data-side') + ':' + pressedPart.getAttribute('data-slot') : null,
@@ -1433,6 +1436,8 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       failures.push(`compare initial mode state mismatch: ${JSON.stringify(compareCheck.initialMode)}`);
 
     for (const step of compareCheck.switches) {
+      if (step.playCount !== 1 || !step.playInMainToolbar || step.playVisible !== (step.mode === 'playback'))
+        failures.push(`mode switch ${step.mode} play control ownership/visibility mismatch: ${JSON.stringify(step)}`);
       if (step.sentinel !== 'no-reload-1')
         failures.push(`mode switch ${step.mode} reloaded page`);
       if (Math.abs(step.time - compareCheck.timeBeforeSwitch) > 0.02)

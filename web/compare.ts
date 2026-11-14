@@ -48,6 +48,7 @@ function mountComparisonChrome(){
  }
  const controls=createViewControls({layout:'legacyCompareStep3'});
  document.querySelector('[data-workspace-camera]')!.replaceWith(controls.zoomGroup!);
+ const play=document.getElementById('play')!;play.hidden=true;controls.zoomGroup!.before(play);
  return shell;
 }
 const shell=mountComparisonChrome();

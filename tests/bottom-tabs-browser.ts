@@ -1,4 +1,4 @@
-/** #838 Part 1 browser proof: single non-wrapping bottom tab strip with overflow menu, Timeline first tab, Inspection rename, and chevron collapse control. Ordinary Nova only. */
+/** #838 bottom-panel and toolbar playback browser proof: single non-wrapping bottom tab strip with overflow menu, Timeline first tab, Inspection rename, and chevron collapse control. Ordinary Nova only. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
@@ -32,6 +32,47 @@ async function selectTab(page:InputCdpSession,target:string){
  if(overflow){await click(page,'.workspace-bottom-tabs > .block-row:not([hidden]) .workspace-tabs-more');await click(page,`.workspace-tabs-menu:not([hidden]) [data-block-more-target="${target}"]`);}
  else await click(page,selector);
  await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+}
+
+/** Native activation of the retained transport, with time read from the shipped runtime UI. */
+async function proveToolbarPlayback(page:InputCdpSession,kind:string,lang:string,width:number,height:number){
+ await wait(page,`!!document.querySelector('#rig-root canvas')&&!document.getElementById('play').disabled`,kind+' playable model');
+ await page.evaluate(`window.__838p2PlayNode=document.getElementById('play');window.__838p2PlayHandler=window.__838p2PlayNode.onclick`);
+ const samples:unknown[]=[];
+ for(const tab of ['sound-panel','report-panel']){
+  await selectTab(page,tab);
+  assert.equal(await page.evaluate(`document.getElementById('animation-dock').hidden`),true,'non-Timeline tab hides Timeline');
+  if(await page.evaluate(`document.getElementById('play').textContent==='Ⅱ'`))await click(page,'#play');
+  const before=await page.evaluate<number>(`Number(document.getElementById('scrub').value)`);
+  await click(page,'#play');
+  await wait(page,`document.getElementById('play').textContent==='Ⅱ'&&Math.abs(Number(document.getElementById('scrub').value)-${before})>=.04`,tab+' actual playback advances');
+  const advanced=await page.evaluate<number>(`Number(document.getElementById('scrub').value)`);
+  await click(page,'#play');
+  await wait(page,`document.getElementById('play').textContent==='▶'`,tab+' pauses');
+  const held=await page.evaluate<number>(`Number(document.getElementById('scrub').value)`);
+  await Bun.sleep(220);
+  const state:any=await page.evaluate<any>(`(()=>{
+   const play=document.getElementById('play'),zoom=document.getElementById('zoom-in'),r=play.getBoundingClientRect();
+   return {time:Number(document.getElementById('scrub').value),text:play.textContent,label:play.getAttribute('aria-label'),count:document.querySelectorAll('#play').length,
+    identity:play===window.__838p2PlayNode,handler:play.onclick===window.__838p2PlayHandler,main:!!play.closest('.viewbar.workspace-main-toolbar'),
+    beforeControls:play.nextElementSibling?.contains(zoom)&&r.right<=zoom.getBoundingClientRect().left,
+    visible:!play.hidden&&r.width>0&&r.height>0,rect:r.toJSON(),controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(n=>n.id)};
+  })()`);
+  assert.equal(state.count,1);assert.equal(state.identity,true);assert.equal(state.handler,true);assert.equal(state.main,true);
+  assert.equal(state.visible,true);assert.equal(state.beforeControls,true);assert.equal(state.text,'▶');assert.equal(state.time,held,'pause holds the actual transport time');
+  assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
+  assert.ok(state.rect.left>=0&&state.rect.top>=0&&state.rect.right<=width&&state.rect.bottom<=height);
+  samples.push({tab,before,advanced,held,after220ms:state.time,state});
+  await writeFile(join(output,`${kind}-${lang}-${width}x${height}-${tab}-toolbar-pause.png`),await page.screenshot());
+ }
+ await click(page,'[data-mode="rig"]');
+ assert.equal(await page.evaluate(`document.getElementById('play').hidden`),true,'Setup hides the retained control');
+ await writeFile(join(output,`${kind}-${lang}-${width}x${height}-setup-no-play.png`),await page.screenshot());
+ await click(page,'[data-mode="playback"]');
+ assert.equal(await page.evaluate(`!document.getElementById('play').hidden&&document.getElementById('play')===window.__838p2PlayNode&&document.getElementById('play').onclick===window.__838p2PlayHandler`),true);
+ await selectTab(page,'animation-dock');
+ await writeFile(join(output,`${kind}-${lang}-${width}x${height}-playback-proof.json`),JSON.stringify(samples,null,2)+'\n');
+ return samples;
 }
 
 async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
@@ -139,6 +180,9 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
      }
     }
    }
+
+   if(kind!=='parts')await proveToolbarPlayback(page,kind,lang,width,height);
+   else assert.equal(await page.evaluate(`document.getElementById('play').hidden`),true,'parts Setup hides playback');
 
    if(width===1100&&kind!=='parts'){
     // #840 frees the heading from the act. A 1100px viewport alone no longer

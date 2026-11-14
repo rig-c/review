@@ -978,7 +978,7 @@ async function main() {
       const restoredRects = measure();
       return {timelineIsPanel:dock.parentElement === section && dock.getAttribute('role') === 'tabpanel',
         oldSplitPresent:!!document.getElementById('animate-blocks'),tabsMeasured,baselineRects,restoredRects,
-        retained:tracked.every(node => node.isConnected && dock.contains(node))};
+        retained:tracked.every(node => node.isConnected && (node.id === 'play' ? !!node.closest('.workspace-main-toolbar') : dock.contains(node)))};
     })()`);
     if (!slice3cTabsResult.timelineIsPanel || slice3cTabsResult.oldSplitPresent || !slice3cTabsResult.retained ||
       slice3cTabsResult.tabsMeasured.length !== 10 ||
