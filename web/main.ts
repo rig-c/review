@@ -145,7 +145,12 @@ const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.
 const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
 for(const event of ['click','change'])secondaryToolbar.addEventListener(event,()=>{if(rigDifference){leaveRigDifference();renderLayout();}},true);
 const rigInspector=mountRigInspector();
-const rigAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigAsk.type='button';rigInspector.act.prepend(rigAsk);
+const rigAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigAsk.type='button';
+const askHeadline=panelMake('span',{id:'workspace-ask-headline',className:'workspace-act-ask',hidden:true});
+const requestChanges=panelMake('button',{id:'request-changes',type:'button',hidden:true});
+rigInspector.act.prepend(askHeadline,rigAsk);button('save').after(requestChanges);
+let pendingAnswers:readonly {kind:string;stage?:string}[]=[],answerSaved=false;
+let partsAnswerBlocked:()=>boolean=()=>false;
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
 const partsCanvas=document.createElement('canvas'),partsReference=document.createElement('canvas');partsCanvas.width=partsCanvas.height=partsReference.width=partsReference.height=0;
@@ -297,14 +302,16 @@ function updateSavedState(): void {
   button('save').disabled = saving || draftConflict || !!readOnly || session.feedbackWarnings.length > 0;
   button('save').title = actReadOnly ? actReadOnly : session.feedbackWarnings.length ? 'Delete feedback with validation warnings, then add it again with a valid target.' : '';
   renderDraftState();
+  renderAnswerControls();
 }
 
 /** C10: the act bar renders the latest local draft status; rig only classifies it. Nothing renders before the first status. */
 let liveIssueCount=()=>session?.feedback.length??0;
 function renderDraftState(): void {
   const live=host?.reviewState?.(liveIssueCount(),saving);
-  if (draftStatus === null && !live) return;
-  rigInspector.actBar.setSaveState({ kind: actReadOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: actReadOnly??live??draftStatus! });
+  renderAnswerControls();
+  if (draftStatus === null && !live && !answerSaved) return;
+  rigInspector.actBar.setSaveState({ kind: actReadOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftConflict ? 'Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.' : answerSaved ? 'Answer saved' : draftStatus&&/^(Saved local draft was not restored|Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus)?draftStatus:actReadOnly??live??draftStatus! });
 }
 
 function renderProvenance(): void {
@@ -1186,6 +1193,7 @@ function bind(): void {
   viewDisposers.push(()=>directionPanel?.dispose());
   bindWorkspace(!!data.manifest.model);
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
+  verdictSubmit=button('save').onclick as ((event:MouseEvent)=>unknown)|null;
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(tr(text)),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
   weightsView=bindWeightsView({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,inspector:()=>selectedInspector(),slot:()=>parts?.value()?.slot??stageDraftSelection?.slot??null,
@@ -1286,7 +1294,7 @@ async function start(): Promise<void> {
     else if (host?.ownerActAccess) message('Not submitted');
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     frameHandle=requestAnimationFrame(tick);
-    const restored=await setupPersistence();setupComments();if(host?.direction)showRecordComments(true);else if(host?.record&&!data.manifest.model)showRecordComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();setupComments();renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'review-verdict',stage:'rig-review'}]);if(host?.direction)showRecordComments(true);else if(host?.record&&!data.manifest.model)showRecordComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
     bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause});
@@ -1319,9 +1327,10 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  };
  const changed=()=>{dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});renderDraftState();setSourceText(rigInspector.comments.button,`Comments (${issues.length})`);};
  // A parts verdict is saved only over a drawn subject: until the first paint, or after a failed one, Save stays off.
- const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded';
+ const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded'||draftConflict;
+ partsAnswerBlocked=saveBlocked;
  text('rig-empty','Loading package…');
- partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),issues,...host?.record?{recordComments}:{},request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,changed:()=>{if(host?.record){recordCommentsChanged();return;}changed();},selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
+ partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),issues,...host?.record?{recordComments}:{},request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,changed:()=>{if(host?.record){recordCommentsChanged();return;}changed();},selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
  parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>openReview());
  const thumbnails=new PartThumbnails();viewDisposers.push(()=>thumbnails.dispose());
  parts.registerImages({thumbnail:(icon,item,glyph)=>thumbnails.showOriginal(icon,item,()=>partsSubject!.image(item.index),glyph),items:subject.items,selected:partsSubject.selected,solo:partsSubject.solo,visible:partsSubject.visible,select:partsSubject.select,isolate:partsSubject.isolate,show:partsSubject.show});
@@ -1434,10 +1443,16 @@ function recordCommentsChanged():void {
  if(!host?.record&&!host?.direction)return;
  try{if(recordCommentKey)localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:host?.direction?.publicationId??host?.record?.publicationId??recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication,sourceHash:host?.direction?.sourceHash??host!.record!.sourceHash,comments:recordComments}));}catch{/* In-memory comments remain bound to this host. */}
  setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);
+ renderAnswerControls();
  for(const form of recordDialog?.querySelectorAll('form[data-job-ask]')??[])form.dispatchEvent(new Event('input',{bubbles:true}));
 }
 /** The shared answer forms use the one native dialog, opened from the current ask line. */
 function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',standalone=false):void {
+ if(standalone){pendingAnswers=[{kind:'interview-picks'}];}
+ for(const form of forms){
+  form.addEventListener('submit',event=>{if(draftConflict||pendingAnswers.some(subject=>subject.kind.endsWith('verdict'))){event.preventDefault();event.stopImmediatePropagation();}},true);
+  form.addEventListener('job-answer-saved',()=>{answerSaved=true;recordDialog?.close();renderDraftState();},{once:true});
+ }
  const imageForms=forms.filter(form=>form.dataset.interviewMain!==undefined);
  const active=imageForms.find(form=>!form.querySelector('fieldset')?.disabled);
  const previous=document.getElementById('workspace-interview-answer');
@@ -1473,7 +1488,7 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
   }
  }
  forms=forms.filter(form=>!imageForms.includes(form)||form.querySelector('fieldset')?.disabled);
- if(active&&!forms.length){recordDialog?.close();return;}
+ if(active&&!forms.length){recordDialog?.close();renderAnswerControls();return;}
  if(!forms.length&&!recordDialog)return;
  if(!recordDialog){
   recordDialog=panelMake('dialog',{id:'job-record-asks',className:'workspace-drawer'});recordDialog.setAttribute('aria-label',tr(label));
@@ -1492,19 +1507,50 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
  if(host?.record){
   for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
   setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);comments?.refresh();partsSubject?.refreshComments();
-  button('save').disabled=!forms.some(form=>!form.querySelector('fieldset')?.disabled);button('save').onclick=()=>rigAsk.click();
+  button('save').onclick=()=>rigAsk.click();
  }
- if(standalone||forms.some(form=>imageForms.includes(form))){rigAsk.hidden=false;setSourceText(rigAsk,t('interview.title'));}
- rigAsk.disabled=!forms.length;
+ renderAnswerControls();
  if((standalone?added.length>0:added.some(form=>form.classList.contains('interview-answer')&&!form.querySelector('fieldset')?.disabled))&&!recordDialog.open)rigAsk.click();
 }
 /** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {
  const requests:Record<string,string>={'parts-verdict':'Check the parts and meshes.','interview-picks':'Answer these questions.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.','review-verdict:image-review':'Check these images.','checkpoint':'Review this checkpoint.','signoff':'Approve this stage.','reopen':'Review the reopened stage.'};
  const labels=subjects.map(subject=>requests[subject.kind+':'+subject.stage]??requests[subject.kind]).filter((label):label is string=>!!label);
+ pendingAnswers=subjects;
+ askHeadline.hidden=false;setSourceText(askHeadline,labels.join(' · ')||'Nothing is waiting for your answer.');
  renderDraftState();
- rigAsk.hidden=!labels.length;setSourceText(rigAsk,labels.join(' · '));setSourceAttribute(rigAsk,'title',labels.join(' · '));
 }
+/** Answer controls compose the existing act bar and submit handlers; act payloads stay unchanged. */
+function renderAnswerControls():void {
+ const subjects=host?.pendingSubjects?.()??pendingAnswers;
+ const verdict=subjects.some(subject=>subject.kind==='review-verdict'||subject.kind==='parts-verdict');
+ const dialog=subjects.some(subject=>!subject.kind.endsWith('verdict'))&&!verdict&&!activeInterviewImages;
+ const readable=!!recordDialog?.querySelector('fieldset'),enabled=!!recordDialog?.querySelector('fieldset:not(:disabled)');
+ const blocked=saving||draftConflict||!!actReadOnly||!!host?.unavailable;
+ const save=button('save');
+ select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
+ save.hidden=!verdict;save.classList.toggle('primary',verdict&&!(subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0));
+ requestChanges.classList.toggle('primary',verdict&&subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0);
+ requestChanges.hidden=!verdict;
+ rigAsk.hidden=!dialog&&!readable;rigAsk.classList.toggle('primary',dialog&&enabled&&!blocked);
+ const kind=subjects.find(subject=>!subject.kind.endsWith('verdict'))?.kind;
+ setSourceText(rigAsk,kind==='signoff'?'Approve…':kind==='interview-picks'?'Answer…':'Review…');
+ rigAsk.disabled=!readable||(enabled&&blocked);
+ if(verdict){
+  const parts=subjects.some(subject=>subject.kind==='parts-verdict'),count=host?.direction?recordComments.length:liveIssueCount();
+  setSourceText(save,'Approve');setSourceText(requestChanges,'Request changes');
+  save.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||(parts&&(partsAnswerBlocked()||count>0));
+  requestChanges.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||count===0||(parts&&partsAnswerBlocked());
+  setSourceAttribute(save,'title',parts&&count>0?'Remove the flagged parts comments before approving.':'');
+  setSourceAttribute(requestChanges,'title',count===0?'Add a comment where changes are needed.':'');
+  if(!parts){
+   save.onclick=event=>{session.status='approved';select('review-status').value=session.status;return verdictSubmit?.(event);};
+  }
+  requestChanges.onclick=()=>{if(requestChanges.disabled)return;if(parts){void save.onclick?.call(save,new PointerEvent('click'));}else{session.status='changes-requested';select('review-status').value=session.status;void verdictSubmit?.(new MouseEvent('click'));}};
+ }
+ for(const control of recordDialog?.querySelectorAll<HTMLButtonElement>('button[type="submit"]')??[])control.disabled=blocked||verdict;
+}
+let verdictSubmit:((event:MouseEvent)=>unknown)|null=null;
 /** The rig pane for a live job's still (#709): the job binds and copies it, this screen keeps its view. */
 function hostStage():RigHostStage|null {
  if(!player)return null;const frame=parts?.frame('single');

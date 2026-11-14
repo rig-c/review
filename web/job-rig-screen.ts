@@ -329,7 +329,7 @@ export function createJobRigScreen(options: {
     /** Unsupported asks stay on the shared screen with a named explanation. */
     changed(state: {readonly pending: readonly PendingAskV3[]; readonly closed: boolean; readonly preparing?:boolean; readonly error?:string|null; readonly errorOrigin?:string; readonly previousLabel?:string|null; readonly displayed?:DisplayPublicationV3|null}): void {
       if (!mounted) return;
-      if(mounted.record){refreshRecordForms();if(mounted.refusal){screen?.message(options.translate('job.refusal.'+mounted.refusal),true);const notice=document.getElementById('message');if(notice)notice.title=mounted.refusal;}if(state.closed)screen?.message(options.translate('job.closed'),true);return;}
+      if(mounted.record){screen?.pendingSubjects?.(pendingSubjects());refreshRecordForms();if(mounted.refusal){screen?.message(options.translate('job.refusal.'+mounted.refusal),true);const notice=document.getElementById('message');if(notice)notice.title=mounted.refusal;}if(state.closed)screen?.message(options.translate('job.closed'),true);return;}
       const refusal=jobRigScreenRefusal(mounted.display,state.pending,mounted.checkpoints);
       if(refusal){screen?.message(options.translate('job.refusal.'+refusal),true);const notice=document.getElementById('message');if(notice)notice.title=refusal;return;}
       screen?.pendingSubjects?.(pendingSubjects());

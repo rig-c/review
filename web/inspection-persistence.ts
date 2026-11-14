@@ -344,6 +344,8 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
   if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){await store.clear();draft=null;recovered=null;}
  }
  const raw=store.recovery();
+ const restoreFailed=!!raw&&!draft;
+ if(restoreFailed){conflict=true;adapter.onConflict(true);status('Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.');}
  if(draft){
   conflict=!sameBaseline||!recovered;
   if(!conflict&&recovered&&draft.reviewDirty){try{adapter.restoreSession(recovered,true);status('Restored local draft · not submitted');}catch(error){conflict=true;adapter.onConflict(true);status(`Local draft needs explicit recovery: ${error instanceof Error?error.message:String(error)}`);}}
@@ -353,9 +355,9 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
   }
   try{adapter.restoreUI(draft.ui);}catch(error){status(`Saved panel selection unavailable: ${error instanceof Error?error.message:String(error)}`);}
  }
- if(raw&&(conflict||!draft))appendAction('Download saved local draft',()=>download(raw));
+ if(raw&&(conflict||!draft))appendAction('Download saved local draft',()=>{download(raw);if(restoreFailed){conflict=false;adapter.onConflict(false);clearNotices();status('Saved draft downloaded · not submitted');}});
  if(conflict&&recovered)appendAction('Recover local draft as pending',()=>{try{adapter.restoreSession({...recovered,status:'pending'},true);conflict=false;adapter.onConflict(false);clearNotices();status('Recovered local draft as pending · not submitted');save();}catch(error){status(`Local draft recovery refused: ${error instanceof Error?error.message:String(error)}`);}});
- if(conflict)appendAction('Discard conflicting local draft',async()=>{adapter.restoreSession(structuredClone(adapter.baseline),false);restoreInputs(initialInputs,viewInputIds);adapter.afterInputs();await store.clear();conflict=false;adapter.onConflict(false);clearNotices();status('Local draft discarded · current submitted review retained.');save();});
+ if(conflict&&!restoreFailed)appendAction('Discard conflicting local draft',async()=>{adapter.restoreSession(structuredClone(adapter.baseline),false);restoreInputs(initialInputs,viewInputIds);adapter.afterInputs();await store.clear();conflict=false;adapter.onConflict(false);clearNotices();status('Local draft discarded · current submitted review retained.');save();});
  const selected=location.hash.startsWith('#review=')?explicit:draft?.bookmark;
  let restored=location.hash.startsWith('#review=')||!!draft;
  if(selected){try{await adapter.restoreBookmark(selected,new AbortController().signal);restored=true;}catch(error){status(`Inspection was not restored: ${error instanceof Error?error.message:String(error)}`);}}
@@ -363,7 +365,7 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
   const excluded=new Set(viewInputIds);if(conflict||!draft.reviewDirty){excluded.add('review-status');excluded.add('status');excluded.add('checkpoint-note');for(const key of Object.keys(draft.inputs))if(key.startsWith('radio:outcome:'))excluded.add(key);}
   restoreInputs(draft.inputs,excluded);adapter.afterInputs();
  }
- if(raw&&!draft)appendAction('Discard unusable local draft',async()=>{await store.clear();clearNotices();status('Unusable local draft discarded for this review only.');save();});
+ if(raw&&!draft)appendAction('Discard unusable local draft',async()=>{await store.clear();conflict=false;adapter.onConflict(false);clearNotices();status('Unusable local draft discarded for this review only.');save();});
  let writes=Promise.resolve();
  restoring=false;
  if(draft&&!conflict&&draft.baseline!==baseline)save();
