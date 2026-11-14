@@ -66,6 +66,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    if(mode==='joined-interview'){
     if(!inline){assert.equal(await page.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false,'saved first answer leaves the opener enabled');
     await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#job-record-asks[open]')`);}
+    await page.evaluate(`document.querySelector('.interview-questions li:nth-child(2) button').scrollIntoView({block:'center'})`);
     await click(page,'.interview-questions li:nth-child(2) button');
     await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll(${JSON.stringify(answerRoot+' input[type=radio]')}))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
     await page.evaluate(`document.querySelector(${JSON.stringify(answerRoot+' button[type=submit]')}).scrollIntoView({block:'center'})`);
