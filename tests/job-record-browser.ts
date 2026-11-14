@@ -328,23 +328,24 @@ async function edit(selector: string, value: string): Promise<void> {
   );
 }
 
-async function submitForm(askId: string): Promise<{ statusText: string; statusKey: string | null }> {
+async function submitForm(askId: string, checkpoint = false): Promise<{ statusText: string; statusKey: string | null }> {
   const selector = `form[data-job-ask=${JSON.stringify(askId)}]`;
+  const submitSelector=selector+(checkpoint?' button[data-job-text="Pass"]':' button[type="submit"]');
   await wait(
     `!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled`,
     `enabled form ${askId}`,
   );
   if (!await page!.evaluate(`document.querySelector('#job-record-asks').open`)) await click(page!,'#workspace-pending-ask');
-  await wait(`(()=>{const dialog=document.querySelector('#job-record-asks[open]'),button=document.querySelector(${JSON.stringify(selector+' button[type="submit"]')});return !!dialog&&!!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
-  await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type="submit"]')}).scrollIntoView({block:'center',inline:'nearest'})`);
+  await wait(`(()=>{const dialog=document.querySelector('#job-record-asks[open]'),button=document.querySelector(${JSON.stringify(submitSelector)});return !!dialog&&!!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
+  await page!.evaluate(`document.querySelector(${JSON.stringify(submitSelector)}).scrollIntoView({block:'center',inline:'nearest'})`);
   await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
-  await click(page!,selector+' button[type="submit"]');
+  await click(page!,submitSelector);
   await wait(
-    `document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled && document.querySelector(${JSON.stringify(selector)}).querySelector('[role="status"]').textContent.length > 0`,
+    `document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled && document.querySelector(${JSON.stringify(selector)}).querySelector(':scope > [role="status"]').dataset.jobText === 'job.saved'`,
     `submitted form ${askId}`,
   );
   return page!.evaluate<{ statusText: string; statusKey: string | null }>(
-    `(()=>{const st=document.querySelector(${JSON.stringify(selector)}).querySelector('[role="status"]');return {statusText:st.textContent,statusKey:st.dataset.jobText??null};})()`,
+    `(()=>{const st=document.querySelector(${JSON.stringify(selector)}).querySelector(':scope > [role="status"]');return {statusText:st.textContent,statusKey:st.dataset.jobText??null};})()`,
   );
 }
 
@@ -703,7 +704,7 @@ try {
   await edit(`form[data-job-ask="${cpAsk.askId}"] select[name="outcome"]`, 'pass');
   const checkpointWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
   assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"],input[name="note"]').length`),0);
-  const cpSubmitStatus = await submitForm(cpAsk.askId);
+  const cpSubmitStatus = await submitForm(cpAsk.askId,true);
   assert.equal(cpSubmitStatus.statusKey, 'job.saved');
   assert.equal(cpSubmitStatus.statusText, catalog['job.saved']);
 

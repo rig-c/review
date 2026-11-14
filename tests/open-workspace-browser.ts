@@ -33,6 +33,8 @@ const observations: Record<string, unknown> = {};
 let page: InputCdpSession | undefined, stateDir = join(root, 'state'), ownerURL = '';
 let port = 0;
 const events: unknown[] = [];
+let expectedDeparture:{origin:string;paths:string[]}|undefined;
+const departureDialogs:{type:string;pathname:string;accepted:boolean}[]=[];
 async function record(name: string, value: unknown) {
   observations[name] = value;
   await writeFile(join(output, 'observations.json'), JSON.stringify(observations, null, 2));
@@ -279,7 +281,16 @@ try {
     assert.equal(joined.stdout.trim(), ownerURL);
     await record('foreground-entry', {...initial, afterJoin: await foregroundInventory(), sameOwnerURL: true, joinerExits: [0, joined.exit]});
   }
-  page = await launchCdpSession(join(root, 'browser'), {browserArgs: singleEntry ? ['--single-process', '--no-zygote', '--num-raster-threads=1', '--js-flags=--max-old-space-size=1024'] : [], onEvent(event) {
+  page = await launchCdpSession(join(root, 'browser'), {sendDeadlineMs:20_000,browserArgs: singleEntry ? ['--single-process', '--no-zygote', '--num-raster-threads=1', '--js-flags=--max-old-space-size=1024'] : [], onEvent(event,send) {
+    // Same CDP departure handling as job-checkpoint-evidence-browser: only a planned departure may accept dirty-form beforeunload.
+    if(event.method==='Page.javascriptDialogOpening'){
+      const u=new URL(String(event.params?.url));
+      assert.equal(event.params?.type,'beforeunload','unexpected dialog type');
+      assert.ok(expectedDeparture&&u.origin===expectedDeparture.origin&&expectedDeparture.paths.includes(u.pathname),'dialog belongs to planned owner departure');
+      departureDialogs.push({type:'beforeunload',pathname:u.pathname,accepted:true});
+      console.log('OWNER_DEPARTURE_CONFIRM '+u.pathname);
+      return send('Page.handleJavaScriptDialog',{accept:true}).then(()=>{});
+    }
     if (event.method === 'Runtime.exceptionThrown') events.push(event);
   }});
   await page.setViewport(1600, 1000); await page.goto(navigationURL(), language);
@@ -437,7 +448,11 @@ try {
   assert.notEqual(restartedOwner.searchParams.get('workspace'), priorOwner.searchParams.get('workspace'));
   assert.notEqual(restartedOwner.hash, priorOwner.hash);
   let restartedLoader: string | undefined;
+  await record('restart-navigation-start',{priorOwner:priorOwner.origin,newOwner:restartedOwner.origin});
+  expectedDeparture=await page.evaluate(`({origin:location.origin,paths:[location.pathname,...[...document.querySelectorAll('.owner-stage>iframe')].map(frame=>new URL(frame.src).pathname)]})`);
   await page.goto(navigationURL(), language, navigation => {restartedLoader = navigation.loaderId;});
+  expectedDeparture=undefined;
+  await record('restart-navigation-ready',{loaderId:restartedLoader,departureDialogs});
   assert.ok(restartedLoader, 'restart navigation replaces the document loader');
   assert.ok(await page.evaluate(`window.__restartDocument===undefined`), 'restart replaces the prior document identity');
   await wait(`document.querySelectorAll('.owner-list button').length===32`, 'restarted source list');
@@ -466,7 +481,9 @@ try {
   ownerURL = new URL(compared.stdout.trim()).href;
   await page.evaluate(`window.__comparePriorDocument=document`);
   let compareLoader: string | undefined;
+  expectedDeparture=await page.evaluate(`({origin:location.origin,paths:[location.pathname,...[...document.querySelectorAll('.owner-stage>iframe')].map(frame=>new URL(frame.src).pathname)]})`);
   await page.goto(navigationURL(), language, navigation => {compareLoader = navigation.loaderId;});
+  expectedDeparture=undefined;
   assert.ok(compareLoader);
   assert.ok(await page.evaluate(`window.__comparePriorDocument===undefined`));
   await wait(`document.querySelectorAll('.owner-list button').length===1 && !!document.querySelector('.owner-stage>iframe')`, 'compare owner');

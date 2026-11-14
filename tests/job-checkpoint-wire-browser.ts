@@ -307,7 +307,7 @@ try {
     await record('overlay-mesh-and-bones-drawn', overlayStats);
 
     // 3b. Camera pan & fit alignment: open Settings and focus its real Theme selector first, then drag #rig-viewport
-    // to prove pointer interaction leaves text entry and rigProject tracks live pan/fit transforms.
+    // to measure real pan/Fit. Dragging a nonfocusable viewport need not blur the select; shortcuts require a real nontext control focus.
     const focusBaseline=await page.evaluate(`({mode:document.querySelector('[data-mode][aria-pressed="true"]')?.dataset.mode,time:document.getElementById('scrub').value})`);
     if(!await page.evaluate(`document.getElementById('settings-toggle').getAttribute('aria-expanded')==='true'`))await click(page,'#settings-toggle');
     await wait(`!document.getElementById('settings-body').hidden&&document.getElementById('settings-theme').getClientRects().length>0`,'visible shared Settings select');
@@ -328,11 +328,15 @@ try {
     const deltaRootTop = pannedStats.rootTop - overlayStats.rootTop;
     const deltaCentroidX = pannedStats.centroidX - overlayStats.centroidX;
     const deltaCentroidY = pannedStats.centroidY - overlayStats.centroidY;
-    assert.equal(pannedStats.textEntryFocused, false, 'pointerdown on #rig-viewport leaves text/select/textarea entry');
+    // view-controls.ts:84-97 intentionally rejects keys from text/select. Close Settings with its actual button first.
+    await click(page,'#settings-toggle');
+    const keyboardFocus=await readOverlayAlignment();
+    assert.equal(keyboardFocus.textEntryFocused,false,'real Settings button establishes nontext keyboard focus');
+    await record('keyboard-focus-before-effects',{beforeDrag:overlayStats.activeElementId,afterDrag:pannedStats.activeElementId,afterRealButton:keyboardFocus.activeElementId});
     assert.ok(deltaRootLeft > 20 && deltaRootTop > 12, 'dragging #rig-viewport pans #rig-root');
     assert.ok(Math.abs(deltaCentroidX - deltaRootLeft) < 3, 'wire overlay X centroid tracks live pan transform');
     assert.ok(Math.abs(deltaCentroidY - deltaRootTop) < 3, 'wire overlay Y centroid tracks live pan transform');
-    // Real M key effect after leaving the select: checkbox AND rendered overlay must change, then restore.
+    // Real M key effect after the explicit nontext button focus: checkbox AND rendered overlay must change, then restore.
     await pressKey('m');
     await wait(`!document.getElementById('layer-mesh').checked`,'M disables mesh after viewport focus');
     let meshOff=await readOverlayAlignment();
@@ -427,11 +431,11 @@ try {
     const expectedCommentWords=projectComments(feedbackItemComments([{...comment,summary:commentText}]));
     await click(page,'#workspace-pending-ask');
     await wait(`!!document.querySelector('#job-record-asks[open]')`,'checkpoint dialog');
-    await click(page,`form[data-job-ask="${cpAsk.askId}"] button[type="submit"]`);
+    await click(page,`form[data-job-ask="${cpAsk.askId}"] button[data-job-text="Pass"]`);
     await wait(`document.querySelector('form[data-job-ask="${cpAsk.askId}"] [role="status"]')?.dataset.jobText==='job.saved'`,'checkpoint saved');
     const cpEvents=await nextEvents(),cpActEvent=cpEvents.events.find(e=>e.type==='act'&&e.act.askId===cpAsk.askId);
     assert.ok(cpActEvent?.type==='act'&&cpActEvent.act.kind==='checkpoint');
-    assert.deepEqual(cpActEvent.act.value,{checkpointId:'meshes',planStepId:'inspect-body',outcome:'pass',words:expectedCommentWords});
+    assert.deepEqual(cpActEvent.act.value,{checkpointId:'meshes',planStepId:'inspect-body',outcome:'pass',comments:[{text:expectedCommentWords,anchor:{checkpointId:'meshes',planStepId:'inspect-body'}}]});
     assert.equal(cpActEvent.act.source.sourceHash,rig.source.sourceHash);
     await record('checkpoint-act-committed',cpActEvent.act);
     // Explicit human restoration replaces the deleted automatic reset; fixed evidence remains checked.
@@ -442,10 +446,10 @@ try {
     await click(page,'#save');
     let verdictActEvent:Extract<JobNextValue['events'][number],{type:'act'}>|undefined;
     await until(async()=>{verdictActEvent=(await nextEvents()).events.find((e):e is Extract<JobNextValue['events'][number],{type:'act'}>=>e.type==='act'&&e.act.askId===verdictAsk.askId);return !!verdictActEvent;},'verdict act');
-    assert.ok(verdictActEvent?.act.kind==='review-verdict'&&verdictActEvent.act.schema==='rig-review/act@3');
+    assert.ok(verdictActEvent?.act.kind==='review-verdict'&&verdictActEvent.act.schema==='rig-review/act@6');
     assert.equal(verdictActEvent.act.still.camera,'fixed');
     assert.equal(verdictActEvent.act.source.sourceHash,rig.source.sourceHash);
-    assert.equal((verdictActEvent.act.value as {words:string}).words,expectedCommentWords);
+    assert.deepEqual((verdictActEvent.act.value as {comments:unknown}).comments,feedbackItemComments([{...comment,summary:commentText}]));
     await record('canonical-verdict-committed',verdictActEvent.act);
 
     // Reconnect and new publication still exercise the shared overlay and actual source binding.
