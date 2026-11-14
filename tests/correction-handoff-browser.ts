@@ -1,4 +1,4 @@
-import producerPins from './fixtures/correction-producer-pins.json';
+import projectPackage from '../package.json';
 /** Actual installed-producer Stage-1 loop; explicit runner, never part of the unit suite. */
 import {mkdir,mkdtemp,writeFile,readFile,readdir,rm,cp} from 'node:fs/promises';
 import {PNG} from 'pngjs';
@@ -94,7 +94,8 @@ for(const path of toolPaths){
  catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
 }
 await writeFile(join(artifacts,'installed-tool-hashes.json'),JSON.stringify(installed,null,2));
-if(versions.parts!==producerPins.reviewRemesh.version||installed['@rig-c/parts/package.json']!==producerPins.reviewRemesh.packageSha256)throw Error('CONFIG_LOADER_PIN_STALE: installed remesh sample producer');
+const partsManifest=JSON.parse(await readFile(join(bench,'node_modules/@rig-c/parts/package.json'),'utf8'));
+if(versions.parts!==projectPackage.devDependencies['@rig-c/parts']||partsCompiler!==partsManifest.dependencies['@rig-c/core'])throw Error('CONFIG_LOADER_PIN_STALE: frozen-lockfile producer/compiler');
 console.log('FROZEN_PRODUCERS '+JSON.stringify({...versions,partsCompiler}));
 try{
  await writeStage1LivePackage(pkg);
@@ -154,7 +155,7 @@ try{
 
   const applied=receipts.at(-1).applied;
   if(applied.schema!=='rig-review-applied/2'||!applied.stageInputHash||applied.check?.gate!==true||
-     applied.producer.version!==producerPins.reviewRemesh.version||applied.compiler.version!=='3.2.1')throw Error('CORRECTION_SAMPLE_APPLY_IDENTITY');
+     applied.producer.version!==versions.parts||applied.compiler.version!==partsCompiler)throw Error('CORRECTION_SAMPLE_APPLY_IDENTITY');
   const bytes=patchText(applied.patch);
   if(createHash('sha256').update(bytes).digest('hex')!==applied.patchSha256)throw Error('CORRECTION_SAMPLE_PATCH_HASH');
   if(lang==='en'){

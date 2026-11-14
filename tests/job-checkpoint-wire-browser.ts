@@ -10,8 +10,10 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
-import {SENTINELS} from '../web/parts-render.ts';
+import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import type {JobNextValue, JobPendingAsk, JobSubject} from '../src/job-contract.ts';
+import {projectComments,feedbackItemComments,parseStageComment} from '../src/stage-comment.ts';
+import type {Feedback} from '../src/session.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
@@ -208,120 +210,33 @@ try {
 
     const immutableInputs = await jobInputHashes(fixture.input.root);
     const rig = await fixture.publish();
-    await wait(
-        `!!document.querySelector('#job-time') && document.querySelector('.job-notice')?.textContent.includes(${JSON.stringify(rig.label)}) && document.querySelector('.job-notice')?.dataset.failed==='false'`,
-        'display ' + rig.label,
-    );
-
-    // 1. Normal ask (review-verdict only, no checkpoint ask yet): layer controls and Background selector stay hidden & disabled
-    const verdictAsk = await ask(rig, {kind: 'review-verdict', stage: 'rig-review'});
-    await wait(`!!document.querySelector('form[data-job-ask="${verdictAsk.askId}"]')`, 'verdict form');
-
-    await page.evaluate(`document.getElementById('rig-viewport').focus()`);
-    await pressKey('i');
-    await pressKey('m');
-    await pressKey('b');
-
-    const initialState = await page.evaluate<{
-        activeElementId: string | null;
-        viewportTabIndex: string | null;
-        layerControlsHidden: boolean;
-        layerInputsDisabled: boolean;
-        imagesChecked: boolean;
-        meshChecked: boolean;
-        bonesChecked: boolean;
-        bgFieldHidden: boolean;
-        bgDisabled: boolean;
-        bgValue: string;
-        hasCanonicalMarker: boolean;
-        canonicalValue: string | null;
-        hasPresentation: boolean;
-        overlayNonZeroAlpha: number;
-        layerTitles: string[];
-    }>(`(()=>{
-        const vp = document.getElementById('rig-viewport');
-        const overlay = document.getElementById('rig-overlay');
-        const ctx = overlay.getContext('2d');
-        const data = ctx.getImageData(0, 0, overlay.width, overlay.height).data;
-        let nonZero = 0;
-        for (let i = 3; i < data.length; i += 4) if (data[i] > 0) nonZero++;
-        return {
-            activeElementId: document.activeElement?.id ?? null,
-            viewportTabIndex: vp.getAttribute('tabindex'),
-            layerControlsHidden: document.getElementById('layer-controls').hidden,
-            layerInputsDisabled: ['layer-images', 'layer-mesh', 'layer-bones'].every(id => document.getElementById(id).disabled),
-            imagesChecked: document.getElementById('layer-images').checked,
-            meshChecked: document.getElementById('layer-mesh').checked,
-            bonesChecked: document.getElementById('layer-bones').checked,
-            bgFieldHidden: document.getElementById('job-background-field').hidden,
-            bgDisabled: document.getElementById('job-background').disabled,
-            bgValue: document.getElementById('job-background').value,
-            hasCanonicalMarker: vp.hasAttribute('data-job-rig-canonical'),
-            canonicalValue: vp.dataset.jobRigCanonical ?? null,
-            hasPresentation: !!document.querySelector('[data-job-rig-presentation]'),
-            overlayNonZeroAlpha: nonZero,
-            layerTitles: Array.from(document.querySelectorAll('#layer-controls .layer-toggle'), el => el.title),
-        };
-    })()`);
-    assert.equal(initialState.activeElementId, 'rig-viewport');
-    assert.equal(initialState.viewportTabIndex, '-1');
-    assert.equal(initialState.layerControlsHidden, true, 'Layer controls stay hidden on normal asks');
-    assert.equal(initialState.layerInputsDisabled, true, 'Layer checkboxes stay disabled on normal asks so I/M/B are inert');
-    assert.equal(initialState.imagesChecked, true);
-    assert.equal(initialState.meshChecked, false);
-    assert.equal(initialState.bonesChecked, false);
-    assert.equal(initialState.bgFieldHidden, true, 'Background selector stays hidden on normal asks');
-    assert.equal(initialState.bgDisabled, true, 'Background selector stays disabled on normal asks');
-    assert.equal(initialState.bgValue, '');
-    assert.equal(initialState.hasCanonicalMarker, true);
-    assert.equal(initialState.canonicalValue, '');
-    assert.equal(initialState.hasPresentation, true);
-    assert.equal(initialState.overlayNonZeroAlpha, 0);
-    await record('initial-default-state', initialState);
-
-    // 2. Meshes checkpoint ask reveals & enables Layer controls and Background selector with existing SENTINELS options
+    await wait(`document.getElementById('package-title')?.textContent===${JSON.stringify(rig.label)}&&!!document.querySelector('#rig-root canvas')&&!!document.querySelector('#stage-comment-list')`, 'shared rig display');
+    const sharedLayers=()=>page!.evaluate<{visible:boolean;enabled:boolean;images:boolean;mesh:boolean;bones:boolean;overlayPixels:number}>(`(()=>{
+      const field=document.getElementById('layer-controls'),box=field.getBoundingClientRect(),overlay=document.getElementById('rig-overlay');
+      const pixels=overlay.getContext('2d').getImageData(0,0,overlay.width,overlay.height).data;
+      return {visible:!field.hidden&&getComputedStyle(field).display!=='none'&&box.width>0&&box.height>0,
+        enabled:['layer-images','layer-mesh','layer-bones'].every(id=>!document.getElementById(id).disabled),
+        images:document.getElementById('layer-images').checked,mesh:document.getElementById('layer-mesh').checked,bones:document.getElementById('layer-bones').checked,
+        overlayPixels:pixels.filter((value,index)=>index%4===3&&value>0).length};})()`);
+    const initialState=await sharedLayers();
+    // #768:5-7 / #796: shared-shell availability replaces the deleted ask-only hidden/disabled gate.
+    assert.equal(initialState.visible,true);assert.equal(initialState.enabled,true);
+    assert.equal(initialState.images,true);assert.equal(initialState.mesh,false);assert.equal(initialState.bones,false);
+    assert.equal(initialState.overlayPixels,0,'initial shared overlay is empty');
+    await record('initial-shared-layer-state',initialState);
+    // #768:5-7 / #796 (368ffec): legacy ask-only layer gate and Background widget are deleted.
     const cpAsk = await ask(rig, {kind: 'checkpoint', checkpointId: 'meshes', planStepId: 'inspect-body'});
-    await wait(`!!document.querySelector('form[data-job-ask="${cpAsk.askId}"]')`, 'meshes checkpoint form');
-
-    const cpState = await page.evaluate<{
-        layerControlsHidden: boolean;
-        layerInputsDisabled: boolean;
-        bgFieldHidden: boolean;
-        bgDisabled: boolean;
-        bgOptions: {value: string; text: string}[];
-        bgLabel: string;
-        layerTitles: string[];
-    }>(`(()=>{
-        const field = document.getElementById('job-background-field');
-        const select = document.getElementById('job-background');
-        return {
-            layerControlsHidden: document.getElementById('layer-controls').hidden,
-            layerInputsDisabled: ['layer-images', 'layer-mesh', 'layer-bones'].some(id => document.getElementById(id).disabled),
-            bgFieldHidden: field.hidden,
-            bgDisabled: select.disabled,
-            bgOptions: Array.from(select.options, opt => ({value: opt.value, text: opt.textContent})),
-            bgLabel: field.querySelector('span')?.textContent ?? '',
-            layerTitles: Array.from(document.querySelectorAll('#layer-controls .layer-toggle'), el => el.title),
-        };
-    })()`);
-    assert.equal(cpState.layerControlsHidden, false, 'Layer controls are visible at meshes checkpoint');
-    assert.equal(cpState.layerInputsDisabled, false, 'Layer checkboxes are enabled at meshes checkpoint');
-    assert.equal(cpState.bgFieldHidden, false, 'Background selector is visible at meshes checkpoint');
-    assert.equal(cpState.bgDisabled, false, 'Background selector is enabled at meshes checkpoint');
-    assert.deepEqual(cpState.bgOptions.map(o => o.value), ['', ...Object.keys(SENTINELS)]);
-    assert.equal(cpState.bgLabel, catalog['Background']);
-    assert.deepEqual(
-        cpState.layerTitles,
-        ([['Images', 'I'], ['Mesh edges', 'M'], ['Bone points', 'B']] as const).map(([label, key]) =>
-            catalog['{0} · key {1}'].replace('{0}', catalog[label]).replace('{1}', key)),
-    );
-    await record('checkpoint-controls-revealed', cpState);
-
-    // 3. Toggle Mesh edges (M) and Bone points (B) via real keyboard shortcuts while #rig-viewport is focused
+    await wait(`!!document.querySelector('form[data-job-ask="${cpAsk.askId}"] fieldset:not(:disabled)')`, 'meshes checkpoint form');
+    const cpState = await page.evaluate<{disabled:boolean;titles:string[]}>(`({disabled:['layer-images','layer-mesh','layer-bones'].some(id=>document.getElementById(id).disabled),titles:[...document.querySelectorAll('#layer-controls .layer-toggle')].map(el=>el.title)})`);
+    assert.equal(cpState.disabled,false,'shared layer checkboxes are enabled');
+    assert.equal((await sharedLayers()).visible,true,'checkpoint shared layer controls are visible');
+    assert.deepEqual(cpState.titles,([['Images','I'],['Mesh edges','M'],['Bone points','B']] as const).map(([label,key])=>catalog['{0} · key {1}'].replace('{0}',catalog[label]).replace('{1}',key)));
+    await record('shared-checkpoint-controls',cpState);
+    await click(page,'[data-mode="rig"]');
     await page.evaluate(`document.getElementById('rig-viewport').focus()`);
-    await pressKey('m');
-    await pressKey('b');
-    await wait(`document.getElementById('layer-mesh').checked && document.getElementById('layer-bones').checked`, 'M and B shortcuts toggled');
+    assert.equal(await page.evaluate(`document.getElementById('rig-viewport').getAttribute('tabindex')`),'-1');
+    await pressKey('m');await pressKey('b');
+    await wait(`document.getElementById('layer-mesh').checked&&document.getElementById('layer-bones').checked`,'M/B shared shortcuts');
 
     const readOverlayAlignment = () =>
         page!.evaluate<{
@@ -337,9 +252,6 @@ try {
             rootTop: number;
             viewportCenterX: number;
             viewportCenterY: number;
-            hasCanonicalMarker: boolean;
-            canonicalValue: string | null;
-            hasPresentation: boolean;
         }>(`(()=>{
             const vp = document.getElementById('rig-viewport');
             const rect = vp.getBoundingClientRect();
@@ -378,9 +290,6 @@ try {
                 rootTop: Number.parseFloat(root.style.top || '0'),
                 viewportCenterX: Math.round(rect.left + rect.width / 2),
                 viewportCenterY: Math.round(rect.top + rect.height / 2),
-                hasCanonicalMarker: vp.hasAttribute('data-job-rig-canonical'),
-                canonicalValue: vp.dataset.jobRigCanonical ?? null,
-                hasPresentation: !!document.querySelector('[data-job-rig-presentation]'),
             };
         })()`);
 
@@ -388,15 +297,13 @@ try {
     assert.equal(overlayStats.activeElementId, 'rig-viewport');
     assert.ok(overlayStats.leftHalfPixels > 20, 'synthetic generated-kind mesh slot (rigid, left side) and bone points are drawn on #rig-overlay');
     assert.ok(overlayStats.rightHalfPixels > 20, 'inline mesh slot (mesh, right side) and bone points are drawn on #rig-overlay');
-    assert.equal(overlayStats.hasCanonicalMarker, false, 'overlay removes canonical still capture marker attribute');
-    assert.equal(overlayStats.canonicalValue, null, 'overlay clears dataset.jobRigCanonical');
-    assert.equal(overlayStats.hasPresentation, false, 'opaque presentation canvas is removed while overlay is active');
+    // #768:5-7 / #796: removed automatic canonical marker/presentation assertions.
     await record('overlay-mesh-and-bones-drawn', overlayStats);
 
-    // 3b. Camera pan & fit alignment: focus <select id="job-background"> first, then drag #rig-viewport
+    // 3b. Camera pan & fit alignment: focus the existing animation selector first, then drag #rig-viewport
     // to prove pointer interaction moves focus to #rig-viewport and rigProject tracks live pan/fit transforms.
-    await page.evaluate(`document.getElementById('job-background').focus()`);
-    assert.equal(await page.evaluate<string | null>(`document.activeElement?.id ?? null`), 'job-background');
+    await page.evaluate(`document.getElementById('animation-select').focus()`);
+    assert.equal(await page.evaluate<string | null>(`document.activeElement?.id ?? null`), 'animation-select');
     await dragMouse(
         overlayStats.viewportCenterX,
         overlayStats.viewportCenterY,
@@ -426,8 +333,8 @@ try {
     });
 
     // 4. Detail controls: part selection + solo + zoom/fit
-    await edit('#job-part', 'mesh');
-    await page.evaluate(`(()=>{const solo=document.getElementById('job-solo');solo.checked=true;solo.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await click(page,'[data-part-list] button[data-slot="mesh"]');
+    await page.evaluate(`(()=>{const solo=document.querySelector('[data-part-solo]');solo.checked=true;solo.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await page.evaluate(`document.getElementById('zoom-in').click()`);
     const soloStats = await page.evaluate<{part: string; solo: boolean; totalPixels: number}>(`(()=>{
         const overlay = document.getElementById('rig-overlay');
@@ -435,8 +342,8 @@ try {
         let totalPixels = 0;
         for (let i = 3; i < data.length; i += 4) if (data[i] > 0) totalPixels++;
         return {
-            part: document.getElementById('job-part').value,
-            solo: document.getElementById('job-solo').checked,
+            part: document.querySelector('[data-part-list] button[aria-pressed="true"]').dataset.slot,
+            solo: document.querySelector('[data-part-solo]').checked,
             totalPixels,
         };
     })()`);
@@ -446,285 +353,98 @@ try {
     await record('detail-controls-solo-zoom', soloStats);
 
     // Restore whole-rig framing for full wire inspection on white & sentinel backgrounds:
-    await page.evaluate(`(()=>{const solo=document.getElementById('job-solo');solo.checked=false;solo.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-    await edit('#job-part', '');
+    await page.evaluate(`(()=>{const solo=document.querySelector('[data-part-solo]');solo.checked=false;solo.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await click(page,'[data-part-whole]');
     await page.evaluate(`document.getElementById('fit').click()`);
 
-    // 5. Images off (I) + White and Green sentinel backgrounds
-    await page.evaluate(`document.getElementById('rig-viewport').focus()`);
+    // #796 / 368ffec and #768:5-7: delete Background and old display-screenshot refusal/reset assertions.
+    // Non-whole-rig rejection remains at ACT layer: tests/job-act.test.ts:566, src/job-act.ts:174.
+    // Current web/job-rig-capture.ts:199 captures whole rig independently of display selection.
+    // Keep the real Images shortcut and text-entry protection on the current comment composer.
+    await page.evaluate(`document.getElementById('rig-viewport').focus()`);await pressKey('i');
+    await wait(`!document.getElementById('layer-images').checked`,'Images shortcut off');
+    assert.equal(await page.evaluate(`getComputedStyle(document.getElementById('rig-root')).visibility`),'hidden');
     await pressKey('i');
-    await wait(`!document.getElementById('layer-images').checked`, 'I shortcut toggled Images off');
-    await edit('#job-background', 'white');
-    const whiteState = await page.evaluate<{
-        imagesChecked: boolean;
-        rigRootVisibility: string;
-        viewportBg: string;
-        computedBg: string;
-    }>(`(()=>{
-        const vp = document.getElementById('rig-viewport');
-        return {
-            imagesChecked: document.getElementById('layer-images').checked,
-            rigRootVisibility: document.getElementById('rig-root').style.visibility,
-            viewportBg: vp.style.backgroundColor,
-            computedBg: getComputedStyle(vp).backgroundColor,
-        };
+    await click(page,'#stage-comment');
+    const point=await page.evaluate<{x:number;y:number}>(`(()=>{const r=document.getElementById('rig-viewport').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
+    await control!('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
+    await control!('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
+    await wait(`!!document.querySelector('.stage-comment-composer input')`,'current comment composer');
+    await page.evaluate(`document.querySelector('.stage-comment-composer input').focus()`);
+    await pressKey('i');await pressKey('m');await pressKey('b');
+    const afterNoteKeys=await page.evaluate(`({imagesChecked:document.getElementById('layer-images').checked,meshChecked:document.getElementById('layer-mesh').checked,bonesChecked:document.getElementById('layer-bones').checked})`);
+    assert.deepEqual(afterNoteKeys,{imagesChecked:true,meshChecked:true,bonesChecked:true},'typing I/M/B in comment must not toggle layers');
+    // R2 removes new Note input/verbatim note projection. Save through the existing Comments contract.
+    assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"]').length`),0);
+    const commentText='Inspecting I M B mesh seam · 원문';
+    await edit('.stage-comment-composer input',commentText);
+    await page.evaluate(`document.querySelector('.stage-comment-composer').requestSubmit()`);
+    await wait(`!document.querySelector('.stage-comment-composer')`,'comment saved');
+    // Fixed human input plus the persisted source-bound anchor, as in direction-screen.
+    // Read draft data only, never form.commentWords() or a finalized act as the expected result.
+    await wait(`Object.entries(localStorage).some(([key,value])=>key.startsWith('rig-review-draft/1:')&&JSON.parse(value).session?.feedback?.some(row=>row.summary===${JSON.stringify(commentText)}))`,'source-bound comment draft');
+    const comment=await page.evaluate<Feedback>(`(async()=>{
+      const drafts=Object.entries(localStorage).filter(([key])=>key.startsWith('rig-review-draft/1:'));
+      const entry=drafts.find(([,value])=>JSON.parse(value).session?.feedback?.some(row=>row.summary===${JSON.stringify(commentText)}));
+      const [key,raw]=entry,draft=JSON.parse(raw),row=draft.session.feedback.find(row=>row.summary===${JSON.stringify(commentText)});
+      const crop=row.context.comment.crop;
+      if(crop.png.startsWith('draft-crop:')){
+        const db=await new Promise((resolve,reject)=>{const request=indexedDB.open('rig-review-inspection-drafts');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+        try{
+          const blob=await new Promise((resolve,reject)=>{const request=db.transaction('crops').objectStore('crops').get([key,row.id,crop.sha256]);request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+          crop.png=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob);});
+        }finally{db.close();}
+      }
+      return row;
     })()`);
-    assert.equal(whiteState.imagesChecked, false);
-    assert.equal(whiteState.rigRootVisibility, 'hidden');
-    assert.equal(whiteState.computedBg, 'rgb(255, 255, 255)');
-    await writeFile(join(output, `wire-white-${language}.png`), await page.screenshot());
-    await record('wire-white-background', whiteState);
+    assert.equal(comment.summary,commentText);
+    const mark=parseStageComment((comment.context as {comment:unknown}).comment);
+    assert.equal(mark.mode,'setup');
+    assert.ok(mark.crop.png.startsWith('data:image/png;base64,'));
+    const expectedCommentWords=projectComments(feedbackItemComments([{...comment,summary:commentText}]));
+    await click(page,'#workspace-pending-ask');
+    await wait(`!!document.querySelector('#job-record-asks[open]')`,'checkpoint dialog');
+    await click(page,`form[data-job-ask="${cpAsk.askId}"] button[type="submit"]`);
+    await wait(`document.querySelector('form[data-job-ask="${cpAsk.askId}"] [role="status"]')?.dataset.jobText==='job.saved'`,'checkpoint saved');
+    const cpEvents=await nextEvents(),cpActEvent=cpEvents.events.find(e=>e.type==='act'&&e.act.askId===cpAsk.askId);
+    assert.ok(cpActEvent?.type==='act'&&cpActEvent.act.kind==='checkpoint');
+    assert.deepEqual(cpActEvent.act.value,{checkpointId:'meshes',planStepId:'inspect-body',outcome:'pass',words:expectedCommentWords});
+    assert.equal(cpActEvent.act.source.sourceHash,rig.source.sourceHash);
+    await record('checkpoint-act-committed',cpActEvent.act);
+    // Explicit human restoration replaces the deleted automatic reset; fixed evidence remains checked.
+    await click(page,'.layer-toggle:has(#layer-mesh)');await click(page,'.layer-toggle:has(#layer-bones)');await click(page,'#fit');
+    const verdictAsk=await ask(rig,{kind:'review-verdict',stage:'rig-review'});
+    const verdictLayers=await sharedLayers();assert.equal(verdictLayers.visible,true);assert.equal(verdictLayers.enabled,true);
+    await wait(`!document.getElementById('save').hidden&&!document.getElementById('save').disabled`,'direct verdict');
+    await click(page,'#save');
+    let verdictActEvent:Extract<JobNextValue['events'][number],{type:'act'}>|undefined;
+    await until(async()=>{verdictActEvent=(await nextEvents()).events.find((e):e is Extract<JobNextValue['events'][number],{type:'act'}>=>e.type==='act'&&e.act.askId===verdictAsk.askId);return !!verdictActEvent;},'verdict act');
+    assert.ok(verdictActEvent?.act.kind==='review-verdict'&&verdictActEvent.act.schema==='rig-review/act@3');
+    assert.equal(verdictActEvent.act.still.camera,'fixed');
+    assert.equal(verdictActEvent.act.source.sourceHash,rig.source.sourceHash);
+    assert.equal((verdictActEvent.act.value as {words:string}).words,expectedCommentWords);
+    await record('canonical-verdict-committed',verdictActEvent.act);
 
-    await edit('#job-background', 'green');
-    const greenState = await page.evaluate<{computedBg: string}>(`(()=>{
-        const vp = document.getElementById('rig-viewport');
-        return {computedBg: getComputedStyle(vp).backgroundColor};
-    })()`);
-    assert.equal(greenState.computedBg, 'rgb(0, 255, 0)');
-    await writeFile(join(output, `wire-green-${language}.png`), await page.screenshot());
-    await record('wire-green-background', greenState);
-
-    // 6. Canonical review-verdict still capture is refused while checkpoint ask is pending and wire/background are active
-    await edit(`form[data-job-ask="${verdictAsk.askId}"] select[name="verdict"]`, 'approved');
-    await edit(`form[data-job-ask="${verdictAsk.askId}"] textarea[name="note"]`, 'verdict while wire active');
-    await page.evaluate(`document.querySelector('form[data-job-ask="${verdictAsk.askId}"] button[type="submit"]').click()`);
-    await wait(
-        `document.querySelector('form[data-job-ask="${verdictAsk.askId}"] [role="status"]')?.dataset.jobText === 'JOB_STILL_VIEW_UNSUPPORTED'`,
-        'verdict refused while non-default layers/background active',
-    );
-    const refusalText = await page.evaluate<string>(
-        `document.querySelector('form[data-job-ask="${verdictAsk.askId}"] [role="status"]').textContent`,
-    );
-    assert.equal(refusalText, catalog['JOB_STILL_VIEW_UNSUPPORTED']);
-    await record('still-capture-refused-on-non-default-view', {refusalText});
-
-    // 7. textEntryFocused guard: typing I/M/B in checkpoint textarea[name="note"] does NOT toggle layers
-    const noteSelector = `form[data-job-ask="${cpAsk.askId}"] textarea[name="note"]`;
-    await page.evaluate(`document.querySelector(${JSON.stringify(noteSelector)}).focus()`);
-    await pressKey('i');
-    await pressKey('m');
-    await pressKey('b');
-    const afterNoteKeys = await page.evaluate<{
-        imagesChecked: boolean;
-        meshChecked: boolean;
-        bonesChecked: boolean;
-    }>(`(()=>({
-        imagesChecked: document.getElementById('layer-images').checked,
-        meshChecked: document.getElementById('layer-mesh').checked,
-        bonesChecked: document.getElementById('layer-bones').checked,
-    }))()`);
-    assert.equal(afterNoteKeys.imagesChecked, false, 'typing i in note must not toggle Images');
-    assert.equal(afterNoteKeys.meshChecked, true, 'typing m in note must not toggle Mesh');
-    assert.equal(afterNoteKeys.bonesChecked, true, 'typing b in note must not toggle Bones');
-
-    // Submit checkpoint with pass and verbatim words
-    const verbatimWords = '  Inspecting I M B mesh seam verbatim\n';
-    await edit(`form[data-job-ask="${cpAsk.askId}"] select[name="outcome"]`, 'pass');
-    await edit(noteSelector, verbatimWords);
-    await page.evaluate(`document.querySelector('form[data-job-ask="${cpAsk.askId}"] button[type="submit"]').click()`);
-    await wait(
-        `document.querySelector('form[data-job-ask="${cpAsk.askId}"] [role="status"]')?.dataset.jobText === 'job.saved'`,
-        'checkpoint saved',
-    );
-    const cpEvents = await nextEvents();
-    const cpActEvent = cpEvents.events.find(e => e.type === 'act' && e.act.askId === cpAsk.askId);
-    assert.ok(cpActEvent?.type === 'act' && cpActEvent.act.kind === 'checkpoint');
-    assert.deepEqual(cpActEvent.act.value, {
-        checkpointId: 'meshes',
-        planStepId: 'inspect-body',
-        outcome: 'pass',
-        words: verbatimWords,
-    });
-    await record('checkpoint-act-committed', cpActEvent.act);
-
-    // Transition 1: once the checkpoint ask is answered and only review-verdict remains pending,
-    // updateForms automatically resets layers/background to canonical defaults and hides/disables checkpoint controls.
-    await wait(
-        `document.getElementById('layer-controls').hidden && document.getElementById('job-background-field').hidden && document.getElementById('rig-viewport').hasAttribute('data-job-rig-canonical') && !!document.querySelector('[data-job-rig-presentation]')`,
-        'auto-reset to canonical view after checkpoint ask answered',
-    );
-    const postCheckpointReset = await page.evaluate<{
-        layerControlsHidden: boolean;
-        layerInputsDisabled: boolean;
-        imagesChecked: boolean;
-        meshChecked: boolean;
-        bonesChecked: boolean;
-        bgFieldHidden: boolean;
-        bgDisabled: boolean;
-        bgValue: string;
-        viewportBg: string;
-        hasCanonicalMarker: boolean;
-        canonicalValue: string | null;
-        hasPresentation: boolean;
-        overlayNonZeroAlpha: number;
-    }>(`(()=>{
-        const vp = document.getElementById('rig-viewport');
-        const overlay = document.getElementById('rig-overlay');
-        const data = overlay.getContext('2d').getImageData(0, 0, overlay.width, overlay.height).data;
-        let nonZero = 0;
-        for (let i = 3; i < data.length; i += 4) if (data[i] > 0) nonZero++;
-        return {
-            layerControlsHidden: document.getElementById('layer-controls').hidden,
-            layerInputsDisabled: ['layer-images', 'layer-mesh', 'layer-bones'].every(id => document.getElementById(id).disabled),
-            imagesChecked: document.getElementById('layer-images').checked,
-            meshChecked: document.getElementById('layer-mesh').checked,
-            bonesChecked: document.getElementById('layer-bones').checked,
-            bgFieldHidden: document.getElementById('job-background-field').hidden,
-            bgDisabled: document.getElementById('job-background').disabled,
-            bgValue: document.getElementById('job-background').value,
-            viewportBg: vp.style.backgroundColor,
-            hasCanonicalMarker: vp.hasAttribute('data-job-rig-canonical'),
-            canonicalValue: vp.dataset.jobRigCanonical ?? null,
-            hasPresentation: !!document.querySelector('[data-job-rig-presentation]'),
-            overlayNonZeroAlpha: nonZero,
-        };
-    })()`);
-    assert.equal(postCheckpointReset.layerControlsHidden, true);
-    assert.equal(postCheckpointReset.layerInputsDisabled, true);
-    assert.equal(postCheckpointReset.imagesChecked, true);
-    assert.equal(postCheckpointReset.meshChecked, false);
-    assert.equal(postCheckpointReset.bonesChecked, false);
-    assert.equal(postCheckpointReset.bgFieldHidden, true);
-    assert.equal(postCheckpointReset.bgDisabled, true);
-    assert.equal(postCheckpointReset.bgValue, '');
-    assert.equal(postCheckpointReset.viewportBg, '');
-    assert.equal(postCheckpointReset.hasCanonicalMarker, true);
-    assert.equal(postCheckpointReset.canonicalValue, '');
-    assert.equal(postCheckpointReset.hasPresentation, true);
-    assert.equal(postCheckpointReset.overlayNonZeroAlpha, 0);
-    await record('transition-1-auto-reset-after-checkpoint', postCheckpointReset);
-
-    // Submit review-verdict directly without manual key toggles now that canonical view auto-restored
-    await edit(`form[data-job-ask="${verdictAsk.askId}"] textarea[name="note"]`, '  restored canonical verdict\n');
-    await page.evaluate(`document.querySelector('form[data-job-ask="${verdictAsk.askId}"] button[type="submit"]').click()`);
-    await wait(
-        `document.querySelector('form[data-job-ask="${verdictAsk.askId}"] [role="status"]')?.dataset.jobText === 'job.saved'`,
-        'canonical verdict saved after auto-reset',
-    );
-    const verdictEvents = await nextEvents();
-    const verdictActEvent = verdictEvents.events.find(e => e.type === 'act' && e.act.askId === verdictAsk.askId);
-    assert.ok(verdictActEvent?.type === 'act' && verdictActEvent.act.kind === 'review-verdict' && verdictActEvent.act.schema === 'rig-review/act@3');
-    assert.equal(verdictActEvent.act.still.camera, 'fixed');
-    assert.equal((verdictActEvent.act.value as {words: string}).words, '  restored canonical verdict\n');
-    await record('canonical-verdict-committed', {
-        actId: verdictActEvent.act.actId,
-        schema: verdictActEvent.act.schema,
-        still: verdictActEvent.act.still,
-    });
-
-    // 8. Reconnect and publication transition (Transition 2): overlay disposal and no stale draw
-    const cpAsk2 = await ask(rig, {kind: 'checkpoint', checkpointId: 'step-one', planStepId: 'step-one'});
-    await wait(`!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"]') && !document.getElementById('layer-controls').hidden`, 'second checkpoint form');
-    await page.evaluate(`document.getElementById('rig-viewport').focus()`);
-    await pressKey('m');
-    await edit('#job-background', 'magenta');
-    await wait(`document.getElementById('layer-mesh').checked && document.getElementById('job-background').value === 'magenta'`, 'mesh and magenta active before reconnect');
-
-    // Page reconnect (about:blank -> owner.href)
-    await page.goto('about:blank');
-    await page.goto(owner.href);
-    await wait(
-        `!!document.querySelector('#job-time') && !!document.querySelector('form[data-job-ask="${cpAsk2.askId}"]') && !document.getElementById('layer-controls').hidden`,
-        'reconnected with pending checkpoint ask',
-    );
-    const reconnectedState = await page.evaluate<{
-        layerControlsHidden: boolean;
-        bgFieldHidden: boolean;
-        imagesChecked: boolean;
-        meshChecked: boolean;
-        bonesChecked: boolean;
-        bgValue: string;
-        hasCanonicalMarker: boolean;
-        canonicalValue: string | null;
-    }>(`(()=>{
-        const vp = document.getElementById('rig-viewport');
-        return {
-            layerControlsHidden: document.getElementById('layer-controls').hidden,
-            bgFieldHidden: document.getElementById('job-background-field').hidden,
-            imagesChecked: document.getElementById('layer-images').checked,
-            meshChecked: document.getElementById('layer-mesh').checked,
-            bonesChecked: document.getElementById('layer-bones').checked,
-            bgValue: document.getElementById('job-background').value,
-            hasCanonicalMarker: vp.hasAttribute('data-job-rig-canonical'),
-            canonicalValue: vp.dataset.jobRigCanonical ?? null,
-        };
-    })()`);
-    assert.equal(reconnectedState.layerControlsHidden, false);
-    assert.equal(reconnectedState.bgFieldHidden, false);
-    assert.equal(reconnectedState.imagesChecked, true);
-    assert.equal(reconnectedState.meshChecked, false);
-    assert.equal(reconnectedState.bonesChecked, false);
-    assert.equal(reconnectedState.bgValue, '');
-    assert.equal(reconnectedState.hasCanonicalMarker, true);
-    assert.equal(reconnectedState.canonicalValue, '');
-    await record('reconnected-checkpoint-state', reconnectedState);
-
-    // Activate wire + magenta background again, then publish a new rig publication (Transition 2)
-    await page.evaluate(`document.getElementById('rig-viewport').focus()`);
-    await pressKey('m');
-    await pressKey('b');
-    await edit('#job-background', 'magenta');
-    await wait(`document.getElementById('layer-mesh').checked && document.getElementById('layer-bones').checked`, 'wire active before publication swap');
-
-    fixture.input.setContext({
-        ...fixture.input.getContext(),
-        selector: {kind: 'rig', version: 2},
-    });
-    const rig2 = await fixture.publish();
-    await wait(
-        `!document.querySelector('form[data-job-ask="${cpAsk2.askId}"]') && document.getElementById('layer-controls')?.hidden === true`,
-        'display second publication ' + rig2.publicationId,
-    );
-    const postPublicationSwap = await page.evaluate<{
-        layerControlsHidden: boolean;
-        layerInputsDisabled: boolean;
-        imagesChecked: boolean;
-        meshChecked: boolean;
-        bonesChecked: boolean;
-        bgFieldHidden: boolean;
-        bgDisabled: boolean;
-        bgValue: string;
-        viewportBg: string;
-        hasCanonicalMarker: boolean;
-        canonicalValue: string | null;
-        hasPresentation: boolean;
-        overlayNonZeroAlpha: number;
-    }>(`(()=>{
-        const vp = document.getElementById('rig-viewport');
-        const overlay = document.getElementById('rig-overlay');
-        const data = overlay.getContext('2d').getImageData(0, 0, overlay.width, overlay.height).data;
-        let nonZero = 0;
-        for (let i = 3; i < data.length; i += 4) if (data[i] > 0) nonZero++;
-        return {
-            layerControlsHidden: document.getElementById('layer-controls').hidden,
-            layerInputsDisabled: ['layer-images', 'layer-mesh', 'layer-bones'].every(id => document.getElementById(id).disabled),
-            imagesChecked: document.getElementById('layer-images').checked,
-            meshChecked: document.getElementById('layer-mesh').checked,
-            bonesChecked: document.getElementById('layer-bones').checked,
-            bgFieldHidden: document.getElementById('job-background-field').hidden,
-            bgDisabled: document.getElementById('job-background').disabled,
-            bgValue: document.getElementById('job-background').value,
-            viewportBg: vp.style.backgroundColor,
-            hasCanonicalMarker: vp.hasAttribute('data-job-rig-canonical'),
-            canonicalValue: vp.dataset.jobRigCanonical ?? null,
-            hasPresentation: !!document.querySelector('[data-job-rig-presentation]'),
-            overlayNonZeroAlpha: nonZero,
-        };
-    })()`);
-    assert.equal(postPublicationSwap.layerControlsHidden, true);
-    assert.equal(postPublicationSwap.layerInputsDisabled, true);
-    assert.equal(postPublicationSwap.imagesChecked, true);
-    assert.equal(postPublicationSwap.meshChecked, false);
-    assert.equal(postPublicationSwap.bonesChecked, false);
-    assert.equal(postPublicationSwap.bgFieldHidden, true);
-    assert.equal(postPublicationSwap.bgDisabled, true);
-    assert.equal(postPublicationSwap.bgValue, '');
-    assert.equal(postPublicationSwap.viewportBg, '');
-    assert.equal(postPublicationSwap.hasCanonicalMarker, true);
-    assert.equal(postPublicationSwap.canonicalValue, '');
-    assert.equal(postPublicationSwap.hasPresentation, true);
-    assert.equal(postPublicationSwap.overlayNonZeroAlpha, 0, 'no stale overlay draw after publication swap');
-    await record('transition-2-publication-swap-clean-reset', postPublicationSwap);
+    // Reconnect and new publication still exercise the shared overlay and actual source binding.
+    const cpAsk2=await ask(rig,{kind:'checkpoint',checkpointId:'step-one',planStepId:'step-one'});
+    await wait(`!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"]')`,'second checkpoint form');
+    await page.evaluate(`document.getElementById('rig-viewport').focus()`);await pressKey('m');
+    await wait(`document.getElementById('layer-mesh').checked`,'wire active before reconnect');
+    await page.goto('about:blank');await page.goto(owner.href);
+    await wait(`!!document.querySelector('#scrub')&&!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"] fieldset:not(:disabled)')`,'reconnected checkpoint');
+    assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${cpAsk2.askId}"] .job-source').title`),rig.source.sourceHash);
+    const reconnectLayers=await sharedLayers();
+    assert.equal(reconnectLayers.visible,true,'reconnect keeps shared controls visible');assert.equal(reconnectLayers.enabled,true,'reconnect shared controls enabled');
+    await record('reconnected-checkpoint-state',{layers:reconnectLayers,geometry:await readOverlayAlignment()});
+    await page.evaluate(`(()=>{for(const id of ['layer-mesh','layer-bones']){const input=document.getElementById(id);if(!input.checked)input.click();}})()`);
+    await wait(`document.getElementById('layer-mesh').checked&&document.getElementById('layer-bones').checked`,'wire active before publication swap');
+    fixture.input.setContext({...fixture.input.getContext(),selector:{kind:'rig',version:2}});
+    const rig2=await fixture.publish();
+    await wait(`!document.querySelector('form[data-job-ask="${cpAsk2.askId}"]')&&JSON.parse(document.getElementById('provenance-full').textContent).sourceHash===${JSON.stringify(rig2.source.sourceHash)}`,'new publication source');
+    await page.evaluate(`(()=>{for(const id of ['layer-mesh','layer-bones']){const input=document.getElementById(id);if(input.checked)input.click();}})()`);
+    const postPublicationSwap=await readOverlayAlignment();
+    assert.equal(postPublicationSwap.totalPixels,0,'no stale overlay after explicit shared layer reset on new publication');
+    await record('publication-swap-overlay-disposal',postPublicationSwap);
 
     assert.deepEqual(await jobInputHashes(fixture.input.root), immutableInputs);
     assert.equal(browserEvents.length, 0, 'zero browser runtime exceptions or network loading failures');

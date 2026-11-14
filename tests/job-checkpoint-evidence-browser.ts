@@ -2,7 +2,7 @@
  * Run after parent exact-commit GO with --lang en or --lang ko.
  */
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -124,31 +124,23 @@ async function run() {
         for (const {phase, ...viewport} of samples) {
             await page!.setViewport(viewport.width, viewport.height);
             if (phase === 'initial') await page!.goto(owner.href);
-            await until(() => page!.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`), prefix + ' evidence');
-            const askId = await page!.evaluate<string>(`document.querySelector('[data-job-checkpoint-evidence]').closest('form').dataset.jobAsk`);
-            await until(async () => (await checkpointForm(askId)).ready, prefix + ' layout checkpoint ready');
-            await page!.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+            const pending=host.session.status().pending.find(ask=>ask.publicationId===publication.publicationId&&ask.subject.kind==='checkpoint'&&ask.subject.checkpointId===packet.checkpointId);
+            assert.ok(pending,prefix+' pending source-bound checkpoint');
+            const askId=pending.askId;
+            await until(async () => (await checkpointForm(askId)).ready,prefix+' checkpoint form ready');
             await page!.evaluate(`(()=>{const d=document.querySelector('#job-record-asks');if(!d.open)document.querySelector('#workspace-pending-ask').click();})()`);
-            const layout = await page!.evaluate<any>(`(()=>{
-                const dialog=document.querySelector('#job-record-asks'),forms=document.querySelector('form[data-job-ask="${askId}"]');
-                const evidence=forms.querySelector('[data-job-checkpoint-evidence]'),gallery=evidence.querySelector('section');
-                const titles=[...gallery.querySelectorAll('figure h3')],fourth=titles[3];fourth.scrollIntoView({block:'center',inline:'nearest'});
-                const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
-                const range=document.createRange();range.selectNodeContents(fourth);
-                return {viewport:{width:innerWidth,height:innerHeight},askId:evidence.closest('form').dataset.jobAsk,
-                    dialog:rect(dialog),forms:rect(forms),formsClientHeight:forms.clientHeight,
-                    labels:titles.map(n=>n.textContent),gallery:{...rect(gallery),scrollWidth:gallery.scrollWidth,clientWidth:gallery.clientWidth},
-                    fourthTitleTextRects:[...range.getClientRects()].map(r=>({left:r.left,right:r.right,top:r.top,bottom:r.bottom})),
-                    summaries:[...forms.querySelectorAll('.job-plan-steps summary')].map(n=>({text:n.textContent,title:n.title})),
-                    legacy:document.querySelectorAll('.job-inspection,[data-job-forms],[data-job-plan-workspace]').length};
+            const layout=await page!.evaluate<any>(`(()=>{
+              const dialog=document.querySelector('#job-record-asks'),forms=document.querySelector('form[data-job-ask="${askId}"]');
+              const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
+              return {viewport:{width:innerWidth,height:innerHeight},askId:forms.dataset.jobAsk,dialog:rect(dialog),forms:rect(forms),formsClientHeight:forms.clientHeight,
+                summaries:[...forms.querySelectorAll('.job-plan-steps summary')].map(n=>({text:n.textContent,title:n.title})),legacy:document.querySelectorAll('.job-inspection,[data-job-forms],[data-job-plan-workspace]').length};
             })()`);
             layout.phase=phase;layout.sourceHash=publication.source.sourceHash;layout.recordSha256=publication.source.projectHash;
             layoutObservations.push(layout);assert.deepEqual(layout.viewport,viewport);assert.equal(layout.askId,askId);
             assert.equal(layout.legacy,0);assert.ok(layout.recordSha256,prefix+' authenticated text record');
             assert.ok(layout.dialog.left>=0&&layout.dialog.top>=0&&layout.dialog.right<=viewport.width&&layout.dialog.bottom<=viewport.height,prefix+' native dialog is bounded');
             assert.ok(layout.forms.width>0&&layout.formsClientHeight>0&&layout.forms.width<=layout.dialog.width,prefix+' scrollable form stays inside dialog');
-            assert.deepEqual(layout.labels,packet.tiles.map(tile=>tile.label));
-            for(const box of layout.fourthTitleTextRects)assert.ok(box.left>=layout.dialog.left-1&&box.right<=layout.dialog.right+1&&box.top>=layout.dialog.top-1&&box.bottom<=layout.dialog.bottom+1,prefix+' complete fourth-tile title remains reachable');
+            // #809 question 4, phase1b/issue-809-numbered.txt:94: delete only tile labels/fourth-title grid reachability.
             for(const summary of layout.summaries){assert.ok(summary.title.includes(packet.planStepId));assert.equal(summary.text.includes(packet.planStepId),false);}
             let screenshot:Uint8Array|undefined;
             if (prefix.startsWith('package-')) {
@@ -229,32 +221,31 @@ async function run() {
             }
 
         }
-        const snapshot = await page!.evaluate<any>(`(()=>{const s=document.querySelector('[data-job-checkpoint-evidence]');
-            return {id:s.dataset.jobCheckpointEvidence, labels:[...s.querySelectorAll('figure h3')].map(n=>n.textContent),
-            images:[...s.querySelectorAll('img')].map(n=>({complete:n.complete,width:n.naturalWidth})),
-            columns:[...s.querySelectorAll('th')].map(n=>n.textContent),
-            rows:[...s.querySelectorAll('tbody tr')].map(r=>[...r.querySelectorAll('td')].map(c=>c.textContent)),
-            texts:[...s.querySelectorAll('pre')].map(n=>n.textContent),
-            recommendation:s.querySelector('[data-job-text="job.checkpointRecommendation"]').textContent,
-            mapping:document.querySelector('[data-job-text="job.checkpointRouteMapping"]').textContent,
-            scripts:s.querySelectorAll('script').length};})()`);
-        assert.equal(snapshot.id, packet.checkpointId);
-        assert.deepEqual(snapshot.labels, packet.tiles.map(tile => tile.label));
-        assert.equal(snapshot.images.length, 4);
-        assert.ok(snapshot.images.every((image: any) => image.complete && image.width > 0));
-        assert.deepEqual(snapshot.columns, evidence.table.columns);
-        assert.deepEqual(snapshot.rows, evidence.table.rows.map(row => row.map(String)));
-        assert.deepEqual(snapshot.texts, [packet.routesText, packet.recommendationText]);
-        assert.equal(snapshot.recommendation, catalog['job.checkpointRecommendation']);
-        assert.equal(snapshot.mapping, catalog['job.checkpointRouteMapping']);
-        assert.equal(snapshot.scripts, 0);
-        observations[prefix + '-dom'] = snapshot;
-        await page!.evaluate(`document.querySelector('[data-job-checkpoint-evidence] figure').scrollIntoView()`);
-        await writeFile(join(output, prefix + '-gallery.png'), await page!.screenshot());
-        await page!.evaluate(`document.querySelector('[data-job-checkpoint-table] tbody tr:last-child').scrollIntoView()`);
-        await writeFile(join(output, prefix + '-row103.png'), await page!.screenshot());
-        await page!.evaluate(`document.querySelector('[data-job-text="job.checkpointRecommendation"]').scrollIntoView()`);
-        await writeFile(join(output, prefix + '-recommendation.png'), await page!.screenshot());
+        // #809 question 4, phase1b/issue-809-numbered.txt:94: removed grid id/labels, four <img>
+        // load/readiness, table columns/103 DOM rows, routes/recommendation <pre>/catalog labels,
+        // gallery/last-row/recommendation scrolling/screenshots and grid-local script count.
+        // These asserted grid rendering only. Retained packet parsing/binding/file hashes are below;
+        // current modal plan fields still prove inert text/zero markup and exact producer prose.
+        const display=host.session.displayPublication(publication.publicationId);
+        const base=`${host.origin}/jobs/${host.session.jobId}/publications/${publication.publicationId}/instances/${display.publication.instanceKey}`;
+        const response=await fetch(base+'/api/review');assert.equal(response.status,200);
+        const metadata=await response.json();
+        const retained=metadata.checkpointEvidence.find((entry:JobCheckpointEvidence)=>entry.checkpointId===packet.checkpointId);
+        assert.ok(retained,prefix+' retained checkpoint packet');
+        assert.equal(metadata.sourceHash,publication.source.sourceHash);
+        assert.deepEqual(display.publication.source.checkpointEvidence?.find(entry=>entry.checkpointId===packet.checkpointId),packet);
+        assert.equal(retained.planStepId,packet.planStepId);
+        assert.deepEqual(retained.tiles.map(({url,...tile}:any)=>tile),packet.tiles);
+        assert.equal(retained.table.path,packet.table.path);assert.equal(retained.table.sha256,packet.table.sha256);
+        assert.deepEqual(retained.table.columns,evidence.table.columns);assert.deepEqual(retained.table.rows,evidence.table.rows);
+        assert.equal(retained.routesText,packet.routesText);assert.equal(retained.recommendationText,packet.recommendationText);
+        for(const file of [...retained.tiles,retained.table]){
+            const raw=await fetch(base+file.url);assert.equal(raw.status,200);
+            const bytes=Buffer.from(await raw.arrayBuffer());
+            assert.equal(createHash('sha256').update(bytes).digest('hex'),file.sha256,prefix+' immutable evidence member');
+        }
+        assert.equal(await page!.evaluate(`document.querySelectorAll('#job-record-asks script').length`),0,'current dialog does not execute packet/plan text');
+        assert.equal(await page!.evaluate(`document.querySelectorAll('[data-job-checkpoint-evidence]').length`),0,'retired evidence grid is absent');
         for (const outcome of ['pass', 'fail']) {
             console.log('CHECKPOINT_DECISION ' + prefix + ' ' + outcome);
             const asked = await call(host, schema, {verb: 'ask', expectedGeneration: host.session.status().generation,
@@ -266,7 +257,7 @@ async function run() {
                 sourceHash: publication.source.sourceHash, outcome, words, prefix};
             latestNext = undefined;
             await until(async () => (await checkpointForm(asked.askId)).ready, prefix + ' ' + outcome + ' decision ready');
-            await page!.evaluate(`(()=>{document.querySelector('#job-record-asks').close();const comments=[...document.querySelectorAll('.inspector-heading button')].find(n=>n.textContent.includes(${JSON.stringify(language==='en'?'Comments':'코멘트')}));comments.click();})()`);
+            await page!.evaluate(`(()=>{document.querySelector('#job-record-asks').close();document.querySelector('#stage-comment').click();})()`);
             if(await page!.evaluate(`!!document.querySelector('[data-comment-general]')`))await page!.evaluate(`document.querySelector('[data-comment-general]').click()`);
             else {
                 await page!.evaluate(`(()=>{const button=document.querySelector('#stage-comment');if(button.getAttribute('aria-pressed')!=='true')button.click();})()`);

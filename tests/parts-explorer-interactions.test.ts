@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import {browserInvocation} from '../scripts/browser-gate.ts';
 
 const runner = readFileSync(new URL('./parts-explorer-browser.ts', import.meta.url), 'utf8');
 
@@ -144,36 +145,21 @@ test.each([
   expect(samples).toBe(press === 'restore' ? 1 : 0);
 });
 
-test('Check requires the direct Parts Explorer runner before uploading its measurements', () => {
-  const workflow = Bun.YAML.parse(readFileSync(new URL('../.github/workflows/check.yml', import.meta.url), 'utf8')) as {
-    jobs: Record<string, { steps: Array<{
-      name?: string;
-      run?: string;
-      uses?: string;
-      if?: string;
-      'continue-on-error'?: boolean;
-      with?: Record<string, string>;
-    }> }>;
-  };
-  const { steps } = workflow.jobs.check;
-  const runnerIndex = steps.findIndex(step => step.name === 'Verify Parts Explorer in Chrome');
-  const installIndex = steps.findIndex(step => step.run === 'bun install --frozen-lockfile');
-  const uploadIndex = steps.findIndex(step => step.name === 'Upload Parts Explorer measurements');
-  expect(installIndex).toBeGreaterThanOrEqual(0);
-  expect(runnerIndex).toBeGreaterThan(installIndex);
-  expect(uploadIndex).toBeGreaterThan(runnerIndex);
-  expect(steps[runnerIndex]?.if).toBeUndefined();
-  expect(steps[runnerIndex]?.['continue-on-error']).toBeUndefined();
-  expect(steps[runnerIndex]?.run?.trim().split('\n')).toEqual([
-    'chrome_bin="$(command -v google-chrome)"',
-    'printf \'Chrome path: %s\\n\' "$chrome_bin"',
-    '"$chrome_bin" --version',
-    'unset NO_ASSERT SCREENSHOT_DIR SCREENSHOT_BASE64',
-    'time CHROME_BIN="$chrome_bin" OUT_JSON="$RUNNER_TEMP/parts-explorer.json" bun tests/parts-explorer-browser.ts',
-  ]);
-  expect(steps[uploadIndex]?.uses).toBe('actions/upload-artifact@v4');
-  expect(steps[uploadIndex]?.with?.path).toBe('${{ runner.temp }}/parts-explorer.json');
-  expect(steps[uploadIndex]?.with?.['if-no-files-found']).toBe('error');
+test('Check runs discovered browser shards without masking failures and always uploads Parts measurements', () => {
+  const workflow = Bun.YAML.parse(readFileSync(new URL('../.github/workflows/check.yml', import.meta.url), 'utf8')) as any;
+  const job=workflow.jobs.browser;
+  expect(job.needs).toContain('browser-plan');
+  expect(job.strategy['fail-fast']).toBe(false);
+  expect(job.strategy.matrix.shard).toEqual([1,2,3,4]);
+  expect(job['continue-on-error']??false).toBe(false);
+  const verify=job.steps.find((step:any)=>step.name==='Verify browser shard in Chrome');
+  expect(verify.run).toContain('bun scripts/browser-gate.ts --shard ${{ matrix.shard }}');
+  expect(verify['continue-on-error']??false).toBe(false);
+  const upload=job.steps.find((step:any)=>step.uses?.startsWith('actions/upload-artifact@'));
+  expect(upload.if).toBe('${{ always() }}');expect(upload.with['if-no-files-found']).toBe('error');
+  expect(job.steps.indexOf(upload)).toBeGreaterThan(job.steps.indexOf(verify));
+  const invocation=browserInvocation('tests/parts-explorer-browser.ts','default','/tmp/measurements');
+  expect(invocation.env.OUT_JSON).toBe('/tmp/measurements/report.json');expect(invocation.env.NO_ASSERT).toBeUndefined();
 });
 
 const mouseDispatch = runnerBlock('      async mouse(', '      async touch(');

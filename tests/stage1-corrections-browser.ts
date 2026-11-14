@@ -1,3 +1,4 @@
+import projectPackage from '../package.json';
 /** Actual installed-producer Stage-1 loop; explicit runner, never part of the unit suite. */
 import {mkdir,mkdtemp,writeFile,readFile,readdir,rm} from 'node:fs/promises';
 import {PNG} from 'pngjs';
@@ -180,6 +181,8 @@ async function producer(args:string[]){const child=Bun.spawn([process.execPath,j
 let page:InputCdpSession|undefined,server:Awaited<ReturnType<typeof startServer>>|undefined;
 const receipts:any[]=[];
 const versions={parts:JSON.parse(await readFile(join(bench,'node_modules/@rig-c/parts/package.json'),'utf8')).version,core:JSON.parse(await readFile(join(bench,'node_modules/@rig-c/core/package.json'),'utf8')).version};let partsCompiler=versions.core;try{partsCompiler=JSON.parse(await readFile(join(bench,'node_modules/@rig-c/parts/node_modules/@rig-c/core/package.json'),'utf8')).version;}catch{}
+const declaredParts=JSON.parse(await readFile(join(bench,'node_modules/@rig-c/parts/package.json'),'utf8'));
+if(versions.parts!==projectPackage.devDependencies['@rig-c/parts']||partsCompiler!==declaredParts.dependencies['@rig-c/core'])throw Error('FROZEN_LOCK_PRODUCER_MISMATCH');
 console.log('FROZEN_PRODUCERS '+JSON.stringify({...versions,partsCompiler}));
 try{
  await writeStage1LivePackage(pkg);

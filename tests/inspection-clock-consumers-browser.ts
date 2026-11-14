@@ -1,3 +1,5 @@
+import projectPackage from '../package.json';
+import {instrumentRigMount} from './helpers/mount-probe.ts';
 /** Nova-only: generated public fixture, installed real producers, observation-only clock instrumentation. */
 import {mkdir,mkdtemp,readFile,writeFile,cp,readdir} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
@@ -15,6 +17,8 @@ const parts=join(bench,'node_modules/@rig-c/parts'),core=join(bench,'node_module
 const hash=(b:string|Uint8Array)=>createHash('sha256').update(b).digest('hex');
 const check=(v:unknown,s:string)=>{if(!v)throw Error(s);};
 const pins={parts:JSON.parse(await readFile(join(parts,'package.json'),'utf8')).version,core:JSON.parse(await readFile(join(core,'package.json'),'utf8')).version,play:JSON.parse(await readFile('node_modules/@rig-c/play/package.json','utf8')).version,bun:Bun.version};
+const declaredParts=JSON.parse(await readFile(join(parts,'package.json'),'utf8'));
+check(pins.parts===projectPackage.devDependencies['@rig-c/parts']&&pins.core===declaredParts.dependencies['@rig-c/core'],'FROZEN_LOCK_PRODUCER_MISMATCH');
 // Save the installed capabilities as evidence before using their published rig/check + animations_from contract.
 await writeFile(join(out,'producer-contract.txt'),(await readFile(join(parts,'src/rig.ts'),'utf8')).split('\n').filter(l=>/animations_from|motion/.test(l)).join('\n'));
 await mkdir(join(pkg,'out/parts'),{recursive:true});
@@ -30,7 +34,7 @@ await run(['check','--rig',join(pkg,'out/rig'),'--parts',join(pkg,'out'),'--out'
 await cp(join(pkg,'check/build'),join(pkg,'build'),{recursive:true});
 async function tree(dir:string,prefix=''):Promise<Record<string,string>>{let v:Record<string,string>={};for(const e of await readdir(dir,{withFileTypes:true})){const name=prefix+e.name;if(e.isDirectory())Object.assign(v,await tree(join(dir,e.name),name+'/'));else if(e.isFile())v[name]=hash(await readFile(join(dir,e.name)));}return v;}
 const before=await tree(pkg),main=await readFile('web/main.ts','utf8');
-const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'clock-observation-only',setup(b){b.onLoad({filter:/\/web\/main\.ts$/},()=>({loader:'ts',contents:main+`\nObject.assign(window,{__clockReading:()=>({display:time,runtime:player?.time,duration,playing,restoring:persistence?.restoring()??true,panel:Number(document.querySelector<HTMLInputElement>('[data-curve-time]')?.value),sourceHash:data.sourceHash,stageHash:stageModelHash,applied:appliedOnStage})});` }));}}]});
+const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'clock-observation-only',setup(b){b.onLoad({filter:/\/web\/main\.ts$/},()=>({loader:'ts',contents:instrumentRigMount(main,`\nObject.assign(window,{__clockReading:()=>({display:time,runtime:player?.time,duration,playing,restoring:persistence?.restoring()??true,panel:Number(document.querySelector<HTMLInputElement>('[data-curve-time]')?.value),sourceHash:data.sourceHash,stageHash:stageModelHash,applied:appliedOnStage})});`) }));}}]});
 check(built.success,String(built.logs));const bundle=await built.outputs[0]!.text();
 const rows:any[]=[],cap='e'.repeat(64);
 for(const lang of ['en','ko']){

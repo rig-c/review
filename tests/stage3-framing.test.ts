@@ -7,7 +7,7 @@ import {koCatalog} from '../web/catalog-ko.ts';
 
 function sample(): FramingSample {
   return {
-    language: 'en', stage: '3', refused: null, mode: 'rig', panelHidden: true,
+    language: 'en', stage: '3', refused: null, mode: 'rig',
     usableModes: ['rig', 'playback'], playDisabled: false, draft: '', renderer: 'No mesh · DOM images',
     lifecycle: {documentComplete: true, commentsBound: true, restoring: false},
     held: {modelHash: 'a'.repeat(64), inspectedHash: 'a'.repeat(64), animation: 'idle', time: .2, playing: false, busy: false},
@@ -170,13 +170,12 @@ test('atomic restoration plant measures translate or computed-position fallback 
   }
 });
 
-test('pre-rig refusal requires the existing localized reason and disables every mode control in EN and KO', () => {
+test('pre-rig refusal keeps the existing localized reason on the unavailable Animate mode in EN and KO', () => {
   for (const language of ['en', 'ko'] as const) {
     const catalog = language === 'ko' ? koCatalog : enCatalog;
     const reason = catalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.'];
-    const refused: PreRigReadout = {language, stage: '3', refused: 'true', status: reason, statusVisible: true,
-      modeSwitch: {hidden: true, display: 'none', rects: 0},
-      controls: [{disabled: true, title: reason, pressed: 'false', rects: 0}],
+    const refused: PreRigReadout = {language, status: reason,
+      controls: [{disabled: true, title: reason, pressed: 'false', rects: 1}],
     };
     expect(() => assertPreRigRefusal(refused, language)).not.toThrow();
     const exposed = structuredClone(refused); exposed.controls[0]!.disabled = false;

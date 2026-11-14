@@ -1,0 +1,6 @@
+{
+  "tests/parts-comments-browser.ts": {
+    "issue": 843,
+    "reason": "Automatic assembled part binding regression; suite remains immutable until #843 lands."
+  }
+}

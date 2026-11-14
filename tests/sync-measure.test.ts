@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { summary,terminalTimingNotApplicable } from './sync-measure.ts';
-import type { Sample, SyncBrowserReport } from './sync-measure-browser.ts';
+import type { Sample, SyncBrowserReport } from './sync-measure-page.ts';
 
 function row(time:number, overrides:Partial<Sample>={}):Sample {
  return {nextReferenceEstimateMs:20,decodedIndex:0,nextDecodedPts:.04,playbackRate:1,videoPaused:false,videoSeeking:false,phase:'playback',callbackNow:10,callbackStartedAt:10,mediaTime:time,currentTimeBefore:time,currentTimeAfter:time,preparedBefore:{a:time,b:time},preparedAfter:{a:time,b:time},expectedDisplayTime:20,presentedFrames:1,before:{a:time,b:time},after:{a:time,b:time},poseFinishedAt:12,seekMs:1,drawMs:1,callbackMs:2,seekCalls:2,drawCalls:2,requestedTimes:[time,time],appliedTimes:[time,time],...overrides};

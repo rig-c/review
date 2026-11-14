@@ -236,14 +236,12 @@ async function run(lang: 'en' | 'ko') {
       assert.equal(Number((beforeSubmit as any).time),0.375);
       await record('788-before-submit',beforeSubmit);
     }
-    // Use the screen's actual select, change handler and trusted pointer submit. No /ui/acts call here.
-    await click(page, '#review-status');
-    await page.evaluate(`(()=>{const select=document.getElementById('review-status');select.value=${JSON.stringify(verdict)};
-      select.dispatchEvent(new Event('input',{bubbles:true}));select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-    await page.evaluate('document.activeElement?.blur()');
-    await wait(`document.getElementById('review-status').value===${JSON.stringify(verdict)}&&!document.getElementById('save').disabled`, 'decision-ready');
+    // Use the screen's direct verdict button and trusted pointer submit. No /ui/acts call here.
+    assert.equal(await page.evaluate(`document.getElementById('review-status').hidden`),true);
+    const answerSelector=verdict==='approved'?'#save':'#request-changes';
+    await wait(`!document.querySelector(${JSON.stringify(answerSelector)}).disabled`, 'decision-ready');
     await screen('decision-screen');
-    await click(page, '#save');
+    await click(page, answerSelector);
     let finalized: JobNextValue | undefined;
     await withDeadline('709.' + lang + '.recorded-act', 20_000, async signal => {
       while (!signal.aborted) {

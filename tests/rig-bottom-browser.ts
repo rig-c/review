@@ -53,14 +53,14 @@ async function run(lang:'en'|'ko',output:string){
      const act=document.querySelector('#workspace-review-act'),comment=document.querySelector('#workspace-tab-feedback'),panel=document.querySelector('#inspector-feedback');
      return {language:document.documentElement.lang,mode:document.querySelector('[data-mode][aria-pressed="true"]')?.dataset.mode,
       tabs:[...row.querySelectorAll('button')].map(node=>node.textContent),rows:[...document.querySelectorAll('.workspace-bottom-tabs .block-row')].filter(node=>!node.hidden).length,
-      actVisible:visible(act),commentsVisible:!!comment&&visible(comment),commentsPanel:!panel.hidden&&getComputedStyle(panel).display!=='none',actInHeading:!!act.closest('.inspector-heading'),ask:document.querySelector('#workspace-pending-ask').textContent,
+      actVisible:visible(act),commentsVisible:!!comment&&visible(comment),commentsPanel:!panel.hidden&&getComputedStyle(panel).display!=='none',actInHeading:!!act.closest('.inspector-heading'),ask:document.querySelector('#workspace-ask-headline').textContent,
       summaryInputs:document.querySelectorAll('input#feedback-summary,textarea#checkpoint-note').length,commentLists:document.querySelectorAll('#stage-comment-list').length,commentListInPanel:!!document.querySelector('#comments-list-host #stage-comment-list'),
       modeLabels:[...document.querySelectorAll('.workspace-bottom-tabs button')].map(node=>node.textContent),actGeometry:geometry(act),commentsGeometry:comment?geometry(comment):null};
     })()`);
     await record(mode+(comments?'-comments':'-blocks'),state);
     assert.equal(state.language,lang);assert.equal(state.mode,mode);assert.equal(state.rows,1);assert.equal(state.actVisible,true,'whole act visible');assert.equal(state.actInHeading,true);
     assert.equal(state.commentsVisible,false,'no bottom Comments tab');assert.equal(state.commentsPanel,comments);assert.ok(!state.tabs.includes(catalog['Comments (0)']));
-    assert.equal(state.tabs[0],catalog[mode==='rig'?'Part':'Transport']);assert.equal(state.summaryInputs,0);assert.equal(state.commentLists,1);assert.equal(state.commentListInPanel,true);
+    assert.equal(state.tabs[0],catalog[mode==='rig'?'Part':'Timeline']);assert.equal(state.summaryInputs,0);assert.equal(state.commentLists,1);assert.equal(state.commentListInPanel,true);
     assert.equal(state.ask,catalog['Check the rig and motion.']);
     for(const label of state.modeLabels)assert.ok(!['Setup','Animate','Write review','셋업','애니메이트','리뷰 작성'].includes(label),'no bottom mode labels');
     await writeFile(join(out,mode+(comments?'-comments':'-blocks')+'.png'),await page.screenshot());

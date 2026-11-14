@@ -1,3 +1,4 @@
+import {instrumentRigMount} from './helpers/mount-probe.ts';
 /** Nova-only synthetic one-second loop. Instrumentation observes clocks; it never sets them or changes restore predicates. */
 import {cp,mkdtemp,mkdir,readFile,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -16,7 +17,7 @@ const hash=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
 const files=['review.json','skeleton.model.json','lantern.png','lantern.svg','pose.json','SOURCE.md','chime.wav'];
 const hashes=async()=>Object.fromEntries(await Promise.all(files.map(async f=>[f,hash(await readFile(join(root,'package',f)))])));
 const before=await hashes();
-const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'read-only-clock-observation',setup(build){build.onLoad({filter:/\/web\/main\.ts$/},async args=>({loader:'ts',contents:await readFile(args.path,'utf8')+`\nObject.assign(window,{__bookmarkReading:()=>({display:time,runtime:player?.time,duration,playing,bookmark:inspectionBookmark(),control:controlState(),restoring:persistence?.restoring()??true})});` }));}}]});
+const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'read-only-clock-observation',setup(build){build.onLoad({filter:/\/web\/main\.ts$/},async args=>({loader:'ts',contents:instrumentRigMount(await readFile(args.path,'utf8'),`Object.assign(window,{__bookmarkReading:()=>({display:time,runtime:player?.time,duration,playing,bookmark:inspectionBookmark(),control:controlState(),restoring:persistence?.restoring()??true})});`) }));}}]});
 if(!built.success)throw new Error(String(built.logs));
 const bundle=await built.outputs[0]!.text();
 const server=await startServer(await loadReview(join(root,'package/review.json')),{port:0,capability:cap,stateDir:join(root,'state'),viewOnly:true,graceMs:60000});
