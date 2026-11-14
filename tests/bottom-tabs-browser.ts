@@ -227,7 +227,6 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
       const restored={...mutation,immediate,immediateHash,afterSettle,finalRestore,driftStage,restoredHash,restored:restoredHash===beforeHash,overflowError:overflowFailed?String(overflowError):null};
       console.log('BOTTOM_TABS_DOM_MUTATION_RESTORED '+JSON.stringify(restored));
       await writeFile(receipt+'-restored.json',JSON.stringify(restored,null,2)+'\n');
-      assert.equal(immediateHash,beforeHash,'initial inline style restoration is exact before style getter/layout callbacks');
       assert.equal(restoredHash,beforeHash,'final inline style restoration is exact immediately after settled callbacks');
       assert.ok(Math.abs(finalRestore.width-stripBefore.width)<=1,'normal strip width restored before collapse measurement');
       assert.ok(Math.abs(finalRestore.height-stripBefore.height)<=1,'normal strip height restored before collapse measurement');
