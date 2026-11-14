@@ -1,39 +1,22 @@
 import {readdir, mkdir, writeFile} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
-import durations from './browser-durations.json';
 import exclusions from './browser-exclusions.json';
 
-export const SHARD_COUNT = 4;
 export type Exclusions = Record<string, {issue:number;reason:string}>;
-export function partitionBrowserSuites(files:readonly string[], weights:Record<string,number> = durations.seconds,
-  omitted:Exclusions = exclusions, unknownSeconds = durations.unknownSeconds) {
-  if (!(unknownSeconds > 0) || !Number.isFinite(unknownSeconds)) throw Error('BROWSER_UNKNOWN_WEIGHT_INVALID');
+export function partitionBrowserSuites(files:readonly string[], omitted:Exclusions = exclusions) {
   const discovered = [...files].sort();
   if (new Set(discovered).size !== discovered.length) throw Error('BROWSER_DUPLICATE_SUITE');
   for (const [file, entry] of Object.entries(omitted)) {
-    if (!discovered.includes(file) || !Number.isSafeInteger(entry.issue) || entry.issue <= 0 || !entry.reason.trim())
+    if (!discovered.includes(file) || !entry || !Number.isSafeInteger(entry.issue) || entry.issue <= 0 ||
+        typeof entry.reason !== 'string' || !entry.reason.trim())
       throw Error('BROWSER_EXCLUSION_INVALID: '+file);
   }
-  const weight = (file:string) => {
-    const value = weights[file] ?? unknownSeconds;
-    if (!Number.isFinite(value) || value < 0) throw Error('BROWSER_WEIGHT_INVALID: '+file);
-    return value;
-  };
-  const shards = Array.from({length:SHARD_COUNT}, (_,index) => ({shard:index+1, seconds:0, suites:[] as string[]}));
-  for (const file of discovered.filter(file=>!Object.hasOwn(omitted,file)).sort((a,b)=>weight(b)-weight(a)||a.localeCompare(b))) {
-    const target = [...shards].sort((a,b)=>a.seconds-b.seconds||a.shard-b.shard)[0]!;
-    target.suites.push(file); target.seconds += weight(file);
-  }
-  return {discovered, exclusions:omitted, shards};
+  const suites = discovered.filter(file=>!Object.hasOwn(omitted,file));
+  return {discovered, exclusions:omitted, suites};
 }
 export async function browserPlan(root = process.cwd()) {
   const files = (await readdir(join(root,'tests'))).filter(file=>file.endsWith('-browser.ts')).map(file=>'tests/'+file);
   return partitionBrowserSuites(files);
-}
-export async function assertExclusionIssuesOpen(omitted:Exclusions, read:(issue:number)=>Promise<string>) {
-  for (const issue of new Set(Object.values(omitted).map(entry=>entry.issue))) {
-    if (await read(issue) !== 'open') throw Error('BROWSER_EXCLUSION_ISSUE_NOT_OPEN: #'+issue);
-  }
 }
 export function browserInvocation(file:string, language:string, output:string, root = process.cwd()) {
   const argv = ['bun',file];
@@ -55,14 +38,13 @@ export function browserInvocation(file:string, language:string, output:string, r
   return {argv,env};
 }
 const bilingual = new Set(['job-checkpoint-evidence','job-checkpoint-wire','job-record','open-workspace','stage3-framing'].map(name=>'tests/'+name+'-browser.ts'));
-export async function runBrowserShard(shard:number, output:string) {
-  const plan=await browserPlan(), selected=plan.shards.find(entry=>entry.shard===shard);
-  if (!selected) throw Error('BROWSER_SHARD_INVALID');
+export async function runBrowserSuites(output:string) {
+  const plan=await browserPlan();
   await mkdir(output,{recursive:true});
   await writeFile(join(output,'plan.json'),JSON.stringify(plan,null,2)+'\n');
   const results:{suite:string;language:string;exit:number;seconds:number;raw:string}[]=[];
   let failed=false;
-  for (const suite of selected.suites) for (const language of bilingual.has(suite)?['en','ko']:['default']) {
+  for (const suite of plan.suites) for (const language of bilingual.has(suite)?['en','ko']:['default']) {
     const dir=join(output,suite.slice(6,-3),language);await mkdir(dir,{recursive:true});
     const {argv,env}=browserInvocation(suite,language,dir);
     const started=performance.now(),raw=join(dir,'raw.log');
@@ -82,16 +64,8 @@ export async function runBrowserShard(shard:number, output:string) {
   return failed?1:0;
 }
 if (import.meta.main) {
-  if (Bun.argv.includes('--check-issues')) {
-    await assertExclusionIssuesOpen(exclusions,async issue=>{
-      const child=Bun.spawn(['gh','api',`repos/rig-c/review/issues/${issue}`,'--jq','.state'],{stdout:'pipe',stderr:'pipe'});
-      const [output,error,exit]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);
-      if(exit!==0)throw Error('BROWSER_EXCLUSION_LOOKUP_FAILED: '+error);
-      return output.trim();
-    });
-  } else if (Bun.argv.includes('--shard')) {
-    const shard=Number(Bun.argv[Bun.argv.indexOf('--shard')+1]);
-    const output=resolve(process.env.BROWSER_ARTIFACTS??'artifacts/browser-shard-'+shard);
-    process.exitCode=await runBrowserShard(shard,output);
+  if (Bun.argv.includes('--run')) {
+    const output=resolve(process.env.BROWSER_ARTIFACTS??'artifacts/browser');
+    process.exitCode=await runBrowserSuites(output);
   } else console.log(JSON.stringify(await browserPlan(),null,2));
 }

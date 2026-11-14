@@ -145,17 +145,21 @@ test.each([
   expect(samples).toBe(press === 'restore' ? 1 : 0);
 });
 
-test('Check runs discovered browser shards without masking failures and always uploads Parts measurements', () => {
+test('Check runs one serial discovered browser job without masking failures and always uploads Parts measurements', () => {
   const workflow = Bun.YAML.parse(readFileSync(new URL('../.github/workflows/check.yml', import.meta.url), 'utf8')) as any;
   const job=workflow.jobs.browser;
-  expect(job.needs).toContain('browser-plan');
-  expect(job.strategy['fail-fast']).toBe(false);
-  expect(job.strategy.matrix.shard).toEqual([1,2,3,4]);
+  expect(job.needs).toBe('tree-verdict');
+  expect(job.strategy).toBeUndefined();
+  expect(Object.keys(workflow.jobs).filter(name=>name.startsWith('browser'))).toEqual(['browser']);
   expect(job['continue-on-error']??false).toBe(false);
-  const verify=job.steps.find((step:any)=>step.name==='Verify browser shard in Chrome');
-  expect(verify.run).toContain('bun scripts/browser-gate.ts --shard ${{ matrix.shard }}');
+  const verify=job.steps.find((step:any)=>step.name==='Verify browser suites in Chrome');
+  expect(verify.run).toContain('bun scripts/browser-gate.ts --run');
   expect(verify['continue-on-error']??false).toBe(false);
-  const upload=job.steps.find((step:any)=>step.uses?.startsWith('actions/upload-artifact@'));
+  const uploads=job.steps.filter((step:any)=>step.uses?.startsWith('actions/upload-artifact@'));
+  expect(uploads).toHaveLength(1);
+  const upload=uploads[0];
+  expect(upload.with.name).toBe('browser');
+  expect(verify.env.BROWSER_ARTIFACTS).toBe('${{ runner.temp }}/browser');
   expect(upload.if).toBe('${{ always() }}');expect(upload.with['if-no-files-found']).toBe('error');
   expect(job.steps.indexOf(upload)).toBeGreaterThan(job.steps.indexOf(verify));
   const invocation=browserInvocation('tests/parts-explorer-browser.ts','default','/tmp/measurements');

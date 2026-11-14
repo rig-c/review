@@ -50,29 +50,10 @@ jobs:
       - run: bun run test
       - run: bun run build
       - run: bun run check:demo
-  browser-plan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Discover browser suites and validate exclusions
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          bun scripts/browser-gate.ts
-          bun scripts/browser-gate.ts --check-issues
   browser:
-    needs: [tree-verdict, browser-plan]
+    needs: tree-verdict
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    name: browser (${{ matrix.shard }})
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -105,10 +86,10 @@ jobs:
           printf '%s  %s\n' "$CJK_FONT_SHA256" "$font_file" | sha256sum -c -
           fc-cache -f
           fc-list | grep -q "Noto Sans CJK"
-      - name: Verify browser shard in Chrome
+      - name: Verify browser suites in Chrome
         shell: bash
         env:
-          BROWSER_ARTIFACTS: ${{ runner.temp }}/browser-${{ matrix.shard }}
+          BROWSER_ARTIFACTS: ${{ runner.temp }}/browser
         run: |
           chrome_bin="$(command -v google-chrome)"
           printf 'Chrome path: %s\n' "$chrome_bin"
@@ -119,13 +100,13 @@ jobs:
           pkg_info="NotoSansCJK-Regular.ttc Sans2.004 sha256 $(sha256sum "$HOME/.local/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc" | cut -d' ' -f1)"
           ko_font="$(fc-match :lang=ko)"
           printf 'font: %s\nfc-match :lang=ko: %s\n' "$pkg_info" "$ko_font" | tee "$BROWSER_ARTIFACTS/cjk-font.txt"
-          bun scripts/browser-gate.ts --shard ${{ matrix.shard }}
+          bun scripts/browser-gate.ts --run
       - name: Upload browser evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: browser-${{ matrix.shard }}
-          path: ${{ runner.temp }}/browser-${{ matrix.shard }}/
+          name: browser
+          path: ${{ runner.temp }}/browser/
           if-no-files-found: error
   install-smoke:
     needs: tree-verdict
