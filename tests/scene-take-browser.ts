@@ -9,7 +9,7 @@ import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts
 const at=Bun.argv.indexOf('--out'),out=resolve(at<0?'artifacts/scene-take-797':Bun.argv[at+1]!);
 await mkdir(out,{recursive:true});const profile=await mkdtemp(join(tmpdir(),'scene-take-797-'));
 let page:InputCdpSession|undefined;const errors:unknown[]=[],observations:unknown[]=[];
-async function wait(expression:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate(expression))return;await Bun.sleep(25);}throw new Error('SCENE_WAIT '+expression);}
+async function wait<T=boolean>(expression:string){const until=Date.now()+20000;while(Date.now()<until){const value=await page!.evaluate<T>(expression);if(value)return value;await Bun.sleep(25);}throw new Error('SCENE_WAIT '+expression);}
 async function click(selector:string){await page!.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);}
 async function capturePoint(summary:string,count:number){
  if(!await page!.evaluate(`document.querySelector('#stage-comment').getAttribute('aria-pressed')==='true'`))await click('#stage-comment');
@@ -33,7 +33,8 @@ try{
    await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')&&!document.querySelector('#save').disabled`);
    if(sourceStart!==0){
     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
-    const initialPng:string=await page.evaluate(`document.querySelector('#rig-root canvas').toDataURL('image/png')`);
+    const initialRaster:{png:string;width:number;height:number}=await page.evaluate(`(()=>{const c=document.querySelector('#rig-root canvas');return {png:c.toDataURL('image/png'),width:c.width,height:c.height};})()`);
+    const initialPng=initialRaster.png;
     assert.equal(await page.evaluate(`Number(document.querySelector('#scrub').value)`),0);
     // No scrub or play occurs before this first actual point capture.
     await capturePoint('Initial mapped source pose',1);
@@ -45,7 +46,9 @@ try{
     assert.equal(direction.timing.keys[0]!.source_time,sourceStart);
     await page.evaluate(`(()=>{const s=document.querySelector('#scrub');for(const t of ['1','0']){s.value=t;s.dispatchEvent(new Event('input',{bubbles:true}));}})()`);
     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
-    const mappedPng:string=await page.evaluate(`document.querySelector('#rig-root canvas').toDataURL('image/png')`);
+    // The seek-back sample may precede the fitted raster resize.
+    // Read the same raster size atomically; the PNG equality below still checks the pose.
+    const mappedPng=await wait<string>(`(()=>{const c=document.querySelector('#rig-root canvas');return c.width===${initialRaster.width}&&c.height===${initialRaster.height}?c.toDataURL('image/png'):null;})()`);
     await writeFile(join(out,language+'-initial-pose.png'),Buffer.from(initialPng.split(',')[1]!,'base64'));
     await writeFile(join(out,language+'-mapped-pose.png'),Buffer.from(mappedPng.split(',')[1]!,'base64'));
     assert.equal(sceneHash(initialPng),sceneHash(mappedPng),'the initial draw equals the canonical mapped seek back to take zero');

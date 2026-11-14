@@ -25,16 +25,11 @@ test('live tree partition covers every discovered suite once or by its named exe
   "tests/stage1-corrections-browser.ts": 847,
   "tests/stage1-review-fixes-browser.ts": 847,
   "tests/job-checkpoint-evidence-browser.ts": 848,
-  "tests/act-row-browser.ts": 850,
-  "tests/correction-handoff-browser.ts": 842,
-  "tests/inspection-bookmark-time-browser.ts": 842,
+  "tests/correction-handoff-browser.ts": 858,
   "tests/inspection-clock-consumers-browser.ts": 842,
   "tests/job-checkpoint-wire-browser.ts": 842,
   "tests/job-record-browser.ts": 842,
-  "tests/open-workspace-browser.ts": 842,
-  "tests/parts-setup-browser.ts": 842,
-  "tests/rig-bottom-browser.ts": 842,
-  "tests/stage3-framing-browser.ts": 842
+  "tests/open-workspace-browser.ts": 842
 });
  const assigned=plan.suites;
  const omitted=Object.keys(exclusions);

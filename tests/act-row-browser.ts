@@ -86,16 +86,21 @@ const geometry=`(()=>{
    labels:[...document.querySelectorAll('.label,.eyebrow,.inspector-body label')].filter(n=>visible(n)&&n.textContent.trim()).map(style)},
   band:row?{background:getComputedStyle(row).backgroundColor,clientWidth:row.clientWidth,scrollWidth:row.scrollWidth}:null,
   draftStates:['review-draft-state','draft-state'].map(id=>document.getElementById(id)).filter(n=>visible(n)&&n.textContent.trim()).map(style),
+  footer:[...document.querySelectorAll('footer,footer .status-message,footer .status-readouts,footer .status-source,footer span,footer summary')].filter(n=>visible(n)&&!n.closest('.view-region-body')).map(n=>({id:n.id,rect:rect(n),clientWidth:n.clientWidth,scrollWidth:n.scrollWidth,clientHeight:n.clientHeight,scrollHeight:n.scrollHeight})),
   commentButtons:document.querySelectorAll('#stage-comment').length,
   gateHidden:document.querySelector('[data-animation-gate]')?.hidden,title:document.getElementById('rig-label')?.textContent};
 })()`;
-async function capture(page:InputCdpSession,out:string,name:string){
+async function settleLayout(page:InputCdpSession){
  await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+}
+async function capture(page:InputCdpSession,out:string,name:string){
+ await settleLayout(page);
  const state:any=await page.evaluate<any>(geometry);
  await writeFile(join(out,name+'.json'),JSON.stringify(state,null,2)+'\n');
  await writeFile(join(out,name+'.png'),await page.screenshot());return state;
 }
 function assertPending(state:any,mode:Mode,width:number){
+ for(const part of state.footer){assert.ok(part.rect.left>=0&&part.rect.right<=width&&part.rect.top>=state.footer[0].rect.top&&part.rect.bottom<=state.footer[0].rect.bottom,'shown footer item inside viewport and footer: '+part.id);assert.ok(part.scrollWidth<=part.clientWidth+1&&part.scrollHeight<=part.clientHeight+1,'shown footer text fits: '+part.id);}
  assert.equal(state.bars,1);assert.equal(state.rows,1);assert.equal(state.rowVisible,true);assert.equal(state.direct,true);assert.equal(state.home,'workspace-act-row');
  assert.equal(state.headerVisible,mode!=='embedded-rig');
  assert.ok(Math.abs(state.row.top-(mode==='embedded-rig'?0:state.header.bottom))<=1,'row directly beneath topbar, or at embedded top');
@@ -220,6 +225,9 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(await page.evaluate(`document.getElementById('workspace-ask-headline').scrollWidth<=document.getElementById('workspace-ask-headline').clientWidth+1`),true);
   }finally{
    await page.evaluate(`document.getElementById('workspace-ask-headline').textContent=${JSON.stringify(headlineBefore.text)}`);
+   // Restoring the question resizes the row. ResizeObserver schedules workspace
+   // layout in the following frame; settle it before the CDP click caches a point.
+   await settleLayout(page);
    const restoredHtml:string=await page.evaluate(`document.getElementById('workspace-ask-headline').outerHTML`);
    const restoredHash=createHash('sha256').update(restoredHtml).digest('hex');
    const restored={...mutation,restoredHash,restored:restoredHash===beforeHash};
@@ -246,6 +254,9 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
      const blocked:{submit:boolean;changes:boolean;noticeInRow:boolean;noticeVisible:boolean;kind:string}=await page.evaluate<any>(`({submit:document.getElementById('save').disabled,changes:document.getElementById('request-changes').disabled,noticeInRow:!!document.querySelector('#workspace-act-row #review-draft-recovery'),noticeVisible:!!document.getElementById('review-draft-recovery').getClientRects().length,kind:document.getElementById('review-draft-state').dataset.saveState})`);
      assert.deepEqual(blocked,{submit:true,changes:true,noticeInRow:true,noticeVisible:true,kind:'failed'});
      const recovery:any=await capture(page,out,'restore-'+action+'-blocked');assertPending(recovery,mode,width);
+     const bands:any=await page.evaluate(`(()=>{const r=id=>document.getElementById(id).getBoundingClientRect().toJSON();return {headline:r('workspace-ask-headline'),notice:r('review-draft-state'),recovery:r('review-draft-recovery')};})()`);
+     assert.ok(bands.headline.top<bands.notice.top,'restore notice follows the first-line question');
+     assert.ok(Math.abs((bands.headline.top+bands.headline.bottom)/2-(bands.recovery.top+bands.recovery.bottom)/2)<=1,'restore actions stay beside the first-line question');
      await click(page,'#review-draft-recovery button:'+(action==='download'?'first-child':'last-child'));
      await wait(page,`!document.getElementById('save').disabled&&!document.querySelector('#review-draft-recovery button')`);
      await capture(page,out,'restore-'+action+'-unlocked');

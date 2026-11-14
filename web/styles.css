@@ -47,7 +47,7 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 .left-panel{min-height:0;overflow:auto;padding:13px 10px}
 #stage-layout{height:auto;min-height:0;flex:1;overflow:hidden;padding:8px;gap:7px}
 .inspector{height:clamp(205px,32dvh,340px);min-height:180px;flex:none;display:flex;flex-direction:column;border-top:1px solid var(--border);background:var(--rv-panel);overflow:hidden}
-.inspector-heading{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:7px 12px;border-bottom:1px solid var(--border);flex:none;font-size:11px}
+.inspector-heading{display:flex;align-items:center;gap:12px;flex-wrap:nowrap;margin:0 12px;padding:7px 0;border-bottom:1px solid var(--border);flex:none;min-width:0;font-size:11px}
 .inspector-heading strong{font-size:10px;letter-spacing:.08em;font-weight:500}
 
 
@@ -80,7 +80,7 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 #stage-layout:has(>.stage-pane[hidden]){grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 
 /* Slot explorer shares the stage row; bottom Inspector remains in the main column. */
-.layout{grid-template-columns:260px minmax(0,1fr)!important}.parts-explorer{display:flex;flex-direction:column;grid-template-columns:none;gap:normal;min-width:0;min-height:0;overflow:hidden;border-left:1px solid var(--border);background:var(--rv-panel);padding:12px;overscroll-behavior:contain}.parts-tools{flex:none;display:flex;flex-direction:column;gap:6px;padding-bottom:8px;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2;background:var(--rv-panel)}.parts-explorer h2{font-size:12px;margin:0}.parts-tools>label,.parts-explorer>label{display:block;font-size:11px;margin:0}.parts-explorer input[type=search]{width:100%;min-width:0}.parts-explorer .part-solo{display:flex;gap:6px;align-items:center;margin:0}.parts-tools [data-part-status]{margin:0}.parts-explorer ul{flex:1 1 0%;min-height:0;overflow-y:auto;overscroll-behavior:contain;list-style:none;margin:8px 0;padding:0;display:flex;flex-direction:column;gap:4px}.parts-explorer>.hint{flex:none;margin:0}.parts-explorer li{flex:none;min-width:0}.parts-explorer li button{display:flex;align-items:center;gap:6px;width:100%;height:36px;min-height:36px;max-height:36px;padding:5px 8px;box-sizing:border-box;text-align:left;white-space:nowrap;overflow:hidden;font-size:11px}
+.layout{grid-template-columns:260px minmax(0,1fr)!important}.parts-explorer{display:flex;flex-direction:column;grid-template-columns:none;gap:normal;min-width:0;min-height:0;overflow:hidden;border-left:1px solid var(--border);background:var(--rv-panel);padding:12px;overscroll-behavior:contain}.parts-tools{overflow-y:auto;scrollbar-gutter:stable;flex:none;display:flex;flex-direction:column;gap:6px;padding-bottom:8px;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2;background:var(--rv-panel)}.parts-explorer h2{font-size:12px;margin:0}.parts-tools>label,.parts-explorer>label{display:block;font-size:11px;margin:0}.parts-explorer input[type=search]{width:100%;min-width:0}.parts-explorer .part-solo{display:flex;gap:6px;align-items:center;margin:0}.parts-tools [data-part-status]{margin:0}.parts-explorer ul{border-block:1px solid var(--border);border-bottom:2px solid var(--border-strong);scrollbar-gutter:stable;flex:1 1 0%;min-height:0;overflow-y:auto;overscroll-behavior:contain;list-style:none;margin:8px 0;padding:4px 0;display:flex;flex-direction:column;gap:4px}.parts-explorer>.hint{flex:none;margin:0}.parts-explorer li{flex:none;min-width:0}.parts-explorer li button{display:flex;align-items:center;gap:6px;width:100%;height:36px;min-height:36px;max-height:36px;padding:5px 8px;box-sizing:border-box;text-align:left;white-space:nowrap;overflow:hidden;font-size:11px}
 /* A slot's thumbnail: its declared page region in a 24px box, or the type icon when it has none. */
 .part-thumb{flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;overflow:hidden;border-radius:3px}
 .part-thumb canvas{display:block;width:24px;height:24px}
@@ -92,7 +92,7 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 
 /* Resizable workspace: one measured shell; workspace-ui clamps the desired browser sizes. */
 .layout.workspace-layout{display:grid;grid-template-columns:var(--workspace-columns)!important;min-height:0!important;overflow:hidden}
-.workspace-layout>main{display:grid;min-width:0;min-height:0;overflow:hidden;grid-column:3;grid-row:1}
+.workspace-layout>main{display:grid;grid-template-columns:minmax(0,1fr);min-width:0;min-height:0;overflow:hidden;grid-column:3;grid-row:1}
 .workspace-stage-stack{grid-row:1;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
 .workspace-stage-stack>#stage-layout{flex:1;min-height:0;height:auto;overflow:hidden}
 .workspace-layout>.left-panel{grid-column:1;grid-row:1;display:flex!important;flex-direction:column;overflow:hidden;min-width:0;padding:0;border-right:1px solid var(--border)}
@@ -119,6 +119,10 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 .workspace-drawer{position:fixed;inset:0;width:min(94vw,950px);height:min(92dvh,850px);max-width:94vw;max-height:92dvh;margin:auto;padding:8px;border:1px solid var(--border-strong);border-radius:8px;background:var(--rv-panel);color:inherit;overflow:hidden;z-index:20}
 .workspace-drawer:not([open]){display:none}.workspace-drawer[open]{display:flex;flex-direction:column;gap:8px}
 .workspace-drawer::backdrop{background:var(--rv-backdrop)}
+#job-record-asks:not(.interview-modal){width:min(94vw,760px);height:fit-content;max-height:92dvh;gap:4px}
+#job-record-asks:not(.interview-modal) fieldset{min-width:0;margin:0;padding:0 4px 4px;border:0}
+#job-record-asks:not(.interview-modal) fieldset>:first-child{margin-top:0}
+#job-record-asks:not(.interview-modal) fieldset>button+button{margin-left:8px}
 .workspace-drawer-close{align-self:flex-end;flex:none}
 .workspace-drawer>.left-panel{display:flex!important;flex-direction:column;flex:1;overflow:hidden;min-height:0;padding:0}
 .workspace-drawer>.parts-explorer{display:flex;flex-direction:column;grid-template-columns:none;flex:1;width:auto;min-width:0;min-height:0;height:auto;overflow:hidden}
@@ -134,7 +138,7 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 .package-context #checkpoints{margin-top:6px}
 .package-context .checkpoint{padding:6px 8px;margin:2px 0}
 .package-context section{margin-top:10px}
-.left-panel .parts-explorer{display:flex;flex-direction:column;flex:1 1 0%;min-height:180px;border:0;padding:0;background:transparent;overflow:visible}
+.left-panel .parts-explorer{display:flex;flex-direction:column;flex:1 1 0%;min-height:180px;border:0;padding:0;background:transparent;overflow:hidden}
 .source-files{margin-top:12px}
 .source-files .eyebrow{margin-bottom:4px}
 
@@ -162,12 +166,17 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 .transport .idle-repeat input{flex:none;width:auto;margin:0}
 
 /* Footer is the one status area: message | readouts | view region and source hash. */
-footer.status-bar{flex-wrap:nowrap}
-.status-message{flex:1 1 180px;min-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.status-readouts{flex:0 1 auto;max-width:60%;display:flex;align-items:center;justify-content:flex-end;gap:2px 12px;flex-wrap:nowrap;min-width:0;overflow:hidden}.status-readouts>*{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+footer.status-bar{display:grid;max-width:100vw;grid-template-columns:minmax(0,1fr) minmax(0,3fr) max-content;gap:12px;min-width:0}
+.status-message{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.status-readouts{display:flex;align-items:center;justify-content:flex-end;gap:2px 12px;flex-wrap:nowrap;min-width:0;max-width:100%}.status-readouts>*{flex:none;min-width:0;white-space:nowrap;text-overflow:ellipsis}
 .status-readouts .draft-notice{padding:0}
 .status-readouts .draft-notice #draft-recovery{margin-left:6px}
-.status-source{display:flex;align-items:center;gap:12px;margin-left:auto;flex:none;white-space:nowrap}
+.status-source{display:flex;align-items:center;gap:12px;min-width:0;white-space:nowrap}
+
+@media(max-width:1599px){.status-readouts :is(#layer-state,#idle-state,#control-state){display:none}}
+@media(max-width:1279px){.status-readouts #renderer-state{display:none}}
+@media(max-width:1000px){.status-readouts #layout-state,.status-source #source-hash{display:none}}
+@media(max-width:700px){footer.status-bar{grid-template-columns:minmax(0,1fr) max-content}.status-readouts{display:none}}
 .view-region{position:relative}
 .view-region>summary{cursor:pointer}
 /* A popover above the 40px footer, clamped to the viewport: fixed so the footer's overflow never clips it
@@ -281,26 +290,29 @@ footer.status-bar{flex-wrap:nowrap}
 .applied-list [data-check-verdict="failed"],#idle-pending-list [data-idle-op-check="failed"]{color:var(--fail)}
 .applied-list [data-check-verdict="passed"]{color:var(--pass)}
 #applied-status{margin:0;flex:0 1 auto;max-width:30%;min-width:0;font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.inspector #inspector-playback{padding:3px 10px;box-sizing:border-box}
+.inspector #inspector-playback{padding:3px 10px;box-sizing:border-box;overflow-y:auto;scrollbar-gutter:stable}
+.inspector #inspector-playback .transport #frame-label{font-family:var(--font-sans);white-space:nowrap}
+.inspector #inspector-playback .transport #time-label{min-width:0;margin-right:4px}
+.inspector #inspector-playback>*,.animation-dock-panel>*,.animation-inspection>*{flex-shrink:0}
 .animation-dock-panel{display:flex;flex-direction:column;gap:2px;min-width:0;min-height:0}
 .inspector #inspector-playback>.block-row{top:-3px;margin:-3px -10px 8px;padding:4px 10px}
-.inspector #inspector-playback .transport{padding:0;gap:5px;flex-wrap:nowrap;height:22px;min-height:22px;align-items:center}
+.inspector #inspector-playback .transport{padding:0 0 4px;gap:6px 12px;flex-wrap:wrap;min-height:22px;align-items:center}
 .inspector #inspector-playback .transport select{padding:1px 5px;height:20px}
 .inspector #inspector-playback .transport button{padding:1px 7px;height:20px;font-size:11px}
 .animation-inspection{display:flex;flex-direction:column;gap:2px;min-width:0;min-height:0}
-.animation-dock-bar{display:flex;align-items:center;flex-wrap:nowrap;gap:3px;height:24px;min-height:24px;max-height:24px;padding:0 4px;border:1px solid var(--border);border-radius:5px;background:var(--rv-raised);font-size:11px;overflow:hidden}
+.animation-dock-bar{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;min-height:24px;padding:3px 4px;border:1px solid var(--border);border-radius:5px;background:var(--rv-raised);font-size:11px;flex:none}
 .animation-dock-title{display:none}
 .animation-view-buttons,.animation-zoom-buttons,.animation-pose-buttons{display:inline-flex;align-items:center;gap:2px;margin:0;flex:none}
 .animation-view-buttons button,.animation-zoom-buttons button,.animation-pose-buttons button,.animation-editor-actions button{padding:1px 4px;height:18px;font-size:9.5px;line-height:1;white-space:nowrap;flex:none}
 .animation-view-buttons button[aria-pressed=true],.animation-zoom-buttons button[aria-pressed=true],.animation-pose-buttons button[aria-pressed=true],.animation-tree button[aria-pressed=true]{color:var(--pass);border-color:var(--pass)}
-.animation-editor-bar{display:flex;align-items:center;gap:3px;margin:0 0 0 auto;padding:0;border:0;background:transparent;font-size:11px;min-width:0;flex:1 1 auto;justify-content:flex-end;overflow:hidden}
-.animation-editor-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:nowrap;gap:3px;margin:0;min-width:0;flex:1 1 auto;overflow:hidden}
+.animation-editor-bar{display:flex;align-items:center;gap:8px;margin:0 0 0 auto;padding:0;border:0;background:transparent;font-size:11px;min-width:0;flex:1 1 auto;justify-content:flex-end;flex-wrap:wrap}
+.animation-editor-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:4px 8px;margin:0;min-width:0;flex:1 1 auto}
 .animation-preview-badge{padding:1px 4px;border:1px solid var(--warn);border-radius:4px;color:var(--warn);font:9px var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:36px;max-width:95px;flex:0 1 auto}
-.animation-ops-summary{font:9.5px var(--font-mono);color:var(--fg-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:44px;max-width:95px;flex:0 1 auto}
+.animation-ops-summary{font:11px var(--font-sans);color:var(--fg-muted);white-space:nowrap;flex:none}
 .workspace-layout:has(>.parts-explorer) .animation-preview-badge,.workspace-layout:has(>.parts-explorer) .animation-ops-summary{display:none}
-.animation-dock-status{display:flex;flex-direction:column;justify-content:flex-start;gap:2px;height:44px;min-height:44px;max-height:44px;padding:1px 6px;box-sizing:border-box;font-size:9.5px;line-height:11px;overflow:hidden;flex:none}
+.animation-dock-status{display:flex;flex-direction:column;justify-content:flex-start;gap:4px;height:auto;min-height:0;max-height:none;padding:1px 6px;box-sizing:border-box;font-size:11px;line-height:1.5;flex:none}
 .animation-dock-status:has(>[data-rebuild-drop="animation"]:not([hidden])){height:auto;max-height:none;overflow:visible}
-.animation-gate-banner{margin:0;padding:1px 6px;border:1px solid var(--border-strong);border-radius:4px;background:var(--rv-raised);color:var(--fg-soft);font-size:9.5px;line-height:11px;white-space:normal;overflow-wrap:anywhere;text-overflow:clip;max-width:100%;width:100%;box-sizing:border-box;flex:none}
+.animation-gate-banner{margin:0;padding:4px 8px;border:0;border-left:2px solid var(--border-strong);border-radius:0;background:var(--rv-raised);color:var(--fg-soft);font-size:11px;line-height:1.5;white-space:normal;overflow-wrap:anywhere;max-width:100%;width:100%;box-sizing:border-box;flex:none}
 .animation-gate-banner[data-editable=true]{border-color:var(--pass);color:var(--fg-strong)}
 .animation-gate-banner[data-editable=false]{border-color:var(--warn);color:var(--warn)}
 .animation-gate-banner[data-loading=true]{border-color:var(--border-strong);color:var(--fg-muted)}
@@ -328,7 +340,7 @@ footer.status-bar{flex-wrap:nowrap}
 .workspace-layout:has(>.parts-explorer) .animation-key-title{min-width:0;max-width:84px}
 .workspace-layout:has(>.parts-explorer) .animation-key-channels{gap:4px}
 .animation-key-empty{margin:0;white-space:normal;overflow-wrap:anywhere;text-overflow:clip;font-size:9px;line-height:10.5px;min-width:0;flex:1 1 auto}
-.animation-lanes{position:relative;overflow:auto;height:186px;min-height:88px;max-height:560px;border:1px solid var(--border);border-radius:5px;background:var(--code-bg);overscroll-behavior:contain;user-select:none;-webkit-user-select:none}
+.animation-lanes{position:relative;overflow:auto;height:186px;min-height:88px;max-height:560px;border:0;border-block:1px solid var(--border);border-radius:0;background:var(--code-bg);overscroll-behavior:contain;user-select:none;-webkit-user-select:none;flex:none}
 .animation-ruler{position:sticky;top:0;z-index:6;display:grid;grid-template-columns:190px minmax(340px,1fr);height:20px;min-height:20px;align-items:center;background:var(--rv-bar);border-bottom:1px solid var(--border-strong);user-select:none;-webkit-user-select:none}
 .animation-ruler-corner{position:sticky;left:0;z-index:7;display:flex;align-items:center;height:100%;padding:0 6px;background:var(--rv-bar);border-right:1px solid var(--border)}
 .animation-axis{color:var(--fg-muted);font:10px var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -452,17 +464,29 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 
 /* Persistent job inspection uses the canonical pair and camera controls. */
 /* Step 1 rig composition: primary camera/comment actions and auxiliary tools have distinct regions. */
-.workspace-main-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--border-strong);background:var(--rv-panel)}
+.workspace-main-toolbar{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--border-strong);background:var(--rv-panel)}
 .workspace-secondary-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 12px;border-bottom:1px solid var(--border)}
 .workspace-main-toolbar [data-workspace-camera]{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .workspace-secondary-toolbar .layer-toggles{flex:none}
+.workspace-main-toolbar .zoom-controls>button{height:26px}
+.workspace-main-toolbar #play{height:26px;width:26px;padding:4px 8px;font-size:12px;line-height:1;flex:none}
+.workspace-secondary-toolbar>label{display:inline-flex;align-items:center;gap:6px;font-size:11px;line-height:1.5}
+.workspace-secondary-toolbar>label input[type=checkbox]{margin:0}
+.workspace-main-toolbar .zoom-controls{padding-right:2px}
 .workspace-bottom-tabs{display:flex;align-items:center;gap:5px;flex-wrap:nowrap}
 .workspace-bottom-tabs [aria-selected=true]{background:var(--rv-pressed-bg);border-color:var(--rv-pressed-border)}
 .workspace-act-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 0;border-top:1px solid var(--border)}
 .workspace-act-bar>label{margin:0}.workspace-act-bar>select{width:auto}.workspace-act-bar .review-dialog-actions{padding:0;border:0;flex:1}
-.workspace-review-panel .review-dialog-header{padding:0 0 10px}
-.workspace-review-panel .review-dialog-header h2{flex:none}
+.workspace-review-panel .review-dialog-header{grid-column:1/-1;align-items:center;padding:0 0 10px}
+.workspace-review-panel .review-dialog-header h2{flex:none;margin:0}
 .workspace-review-panel .review-dialog-header .hint{font-size:11px}
+#inspector-feedback.workspace-review-panel{flex:1 1 0;min-height:0;overflow-y:auto;scrollbar-gutter:stable;padding:12px 15px;gap:12px 20px}
+.workspace-review-panel .eyebrow,#comments-list-host h3{margin-top:0;line-height:1.5}
+.workspace-review-panel>*{min-width:0}
+.workspace-review-panel>.report-panel{border-top:0}
+.workspace-review-panel #stage-comment-list>strong:first-child{display:none}
+.workspace-review-panel .frame-range{grid-template-columns:repeat(2,minmax(0,1fr))}
+.workspace-review-panel .frame-range input{min-width:0;width:100%}
 /* Shared act styling follows the live ask row and the retained standalone heading. */
 :is(.inspector-heading,.workspace-act-row) .workspace-act-bar{padding:0;border:0;margin-left:auto}
 :is(.inspector-heading,.workspace-act-row) .workspace-act-bar .review-dialog-actions{flex:none;flex-wrap:nowrap}
@@ -471,8 +495,10 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-drawer>.inspector-body>[data-inspector-panel]{flex:1;min-height:0;overflow:auto;padding:12px}
 
 /* The header owns mode; its existing block row fills the heading as one non-wrapping tab strip with overflow menu. */
-.workspace-bottom-tabs{position:relative;min-width:0;flex:999 1 80px;flex-wrap:nowrap}
-.workspace-bottom-tabs>.block-row{position:relative;min-width:0;margin:0;padding:0;border:0;flex:1 1 0;flex-wrap:nowrap;overflow:visible}
+.workspace-bottom-tabs{position:relative;min-width:0;flex:1 1 0;flex-wrap:nowrap}
+.inspector-heading:has(>.workspace-act-bar){flex-wrap:wrap}
+.inspector-heading:has(>.workspace-act-bar)>.workspace-bottom-tabs{flex-basis:min(240px,calc(100% - 40px))}
+.workspace-bottom-tabs>.block-row{position:relative;top:auto;min-width:0;max-width:100%;margin:0;padding:0;border:0;flex:1 1 0;align-items:center;flex-wrap:nowrap;overflow:visible}
 .workspace-bottom-tabs>button,#workspace-bottom-collapse{flex:none;white-space:nowrap}
 #workspace-bottom-collapse{padding:4px 8px;line-height:1}
 [data-tab-overflow]{display:none!important}
@@ -483,6 +509,13 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-tabs-menu button:hover,.workspace-tabs-menu button:focus-visible{background:var(--rv-control-hover);color:var(--fg-strong)}
 .inspector-body>[data-comments=true]{display:none!important}
 :is(.inspector-heading,.workspace-act-row) .workspace-act-bar{flex:none;flex-wrap:nowrap;gap:6px}
+.inspector-heading>.workspace-act-bar .review-dialog-actions{flex:1 1 0;flex-wrap:wrap;min-width:0;max-width:100%}
+.inspector-heading>.workspace-act-bar>*{min-width:0;max-width:100%}
+.inspector-heading>.workspace-act-bar .review-dialog-actions>:not(.review-message){min-width:0;max-width:100%}
+@media(max-width:1000px){
+ .inspector-heading>.workspace-act-bar .review-dialog-actions{flex-basis:100%;gap:8px}
+ .inspector-heading>.workspace-act-bar .review-dialog-actions>.review-message{flex:1 0 100%;max-width:100%}
+}
 .inspector-heading .workspace-act-bar .review-draft-state{max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .workspace-act-ask{white-space:normal;overflow-wrap:anywhere}
 #comments-list-host .stage-comment-list-inline{position:static;width:auto;max-width:none;max-height:none;border:0;padding:0}
@@ -536,7 +569,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 :is(.inspector-heading,.workspace-act-row) .workspace-act-bar{flex:1 1 auto;flex-wrap:wrap;min-width:0;max-width:100%}
 :is(.inspector-heading,.workspace-act-row) .workspace-act-bar .review-draft-state[data-save-state=failed]{max-width:none;white-space:normal;overflow:visible;order:-1;flex-basis:100%}
 
-:is(.inspector-heading,.workspace-act-row) .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-dialog-actions{order:-1;flex:1 1 100%;flex-wrap:wrap;min-width:0;max-width:100%}
+:is(.inspector-heading,.workspace-act-row) .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-dialog-actions{flex-wrap:wrap;min-width:0;max-width:100%}
 
 /* The live ask owns one shell row, including when the embedded header is hidden. */
 #app:has(>.workspace-act-row){grid-template-rows:auto auto minmax(0,1fr) auto}
@@ -551,7 +584,13 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-act-row .review-message:not(.error){display:none}
 .workspace-act-row .review-message.error{max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row .review-draft-state{min-width:0;max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
-.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]){flex-wrap:wrap}
+.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]){display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center}
+.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #workspace-ask-headline{grid-column:1;grid-row:1}
+.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-dialog-actions{display:contents}
+.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-draft-state{grid-column:1/-1;grid-row:2;order:0}
+.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-draft-recovery{grid-column:2;grid-row:1;justify-content:flex-end}
+.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #save{grid-column:3;grid-row:1;justify-self:end}
+.workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #request-changes{grid-column:4;grid-row:1;justify-self:end}
 
 /* Pictured job questions keep the shared bottom panel and its existing tabs. */
 .workspace-interview-panel{flex:1;min-height:0;overflow:auto;padding:12px 15px}

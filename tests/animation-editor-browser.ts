@@ -1494,8 +1494,6 @@ async function main() {
       await writeFile(join(screenshotDir, 'slice3c-dock-refusal-1600x1000.png'), await session.screenshot());
     }
 
-    await session.evaluate(`(() => { window.rigReviewEditor.animation.clearPending(); })()`);
-
     if (
       !bar8Result.durationUnchangedAfterEdit ||
       !bar8Result.statusAfterRefusedApply.includes('CE_COMPILE_KEY_AFTER_DURATION') ||
@@ -1506,6 +1504,36 @@ async function main() {
     ) {
       throw new Error(`Bar 8 / Slice 3c Bar 4 verification failed: ${JSON.stringify(bar8Result, null, 2)}`);
     }
+
+    // #856: the real compiler refusal stays in one footer cell at every layout width.
+    const refusalFooterGeometry = [];
+    for (const width of [1600, 1440, 1280, 900]) {
+      await session.setViewport(width, 1000);
+      const geometry = await session.evaluate<any>(`(() => {
+        const footer = document.querySelector('footer.status-bar');
+        const message = footer.querySelector('.status-message');
+        const readouts = footer.querySelector('.status-readouts');
+        const style = getComputedStyle(message);
+        const rect = node => node.getBoundingClientRect().toJSON();
+        const range = document.createRange();range.selectNodeContents(message);
+        return {width:innerWidth, footer:rect(footer), message:rect(message), readouts:rect(readouts),
+          text:range.getBoundingClientRect().toJSON(), refusal:message.textContent,
+          whiteSpace:style.whiteSpace, overflow:style.overflowX, ellipsis:style.textOverflow};
+      })()`);
+      refusalFooterGeometry.push(geometry);
+      const {footer, message, readouts, text} = geometry;
+      if (!geometry.refusal.includes('CE_COMPILE_KEY_AFTER_DURATION') ||
+          geometry.whiteSpace !== 'nowrap' || geometry.overflow !== 'hidden' || geometry.ellipsis !== 'ellipsis' ||
+          message.left < footer.left || message.right > footer.right ||
+          message.top < footer.top || message.bottom > footer.bottom ||
+          text.top < footer.top || text.bottom > footer.bottom ||
+          message.right > readouts.left) {
+        throw new Error('Refusal footer overlaps or escapes: ' + JSON.stringify(geometry));
+      }
+    }
+    await session.setViewport(1600, 1000);
+    console.log('REFUSAL_FOOTER_GEOMETRY ' + JSON.stringify(refusalFooterGeometry));
+    await session.evaluate(`(() => { window.rigReviewEditor.animation.clearPending(); })()`);
 
     // PR #255 Review Findings 1 & 2 live browser verification:
     // - Reset to clean baseline, edit head.rotate key 1 on 'tilt' from 10 to 22.5, and Apply.
