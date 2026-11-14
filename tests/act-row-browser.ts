@@ -20,10 +20,19 @@ await mkdir(output,{recursive:true});
 const observations:unknown[]=[];
 const modes=['rig','direction','parts','signoff','checkpoint','interview','embedded-rig','standalone'] as const;
 type Mode=typeof modes[number];
+const diagnostic=`(()=>{
+ const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden],dialog:not([open])');
+ return {path:location.pathname,query:location.search,readyState:document.readyState,ready:document.body?.dataset.ready,inert:document.body?.inert,
+  probe:window.__earlyActReadProbe??null,readRefused:window.__earlyActReadRefused??false,refusal:window.__earlyActRowRefusal??null,
+  loadingSamples:(window.__actRowSamples??[]).slice(-10),
+  nodes:['workspace-act-row','workspace-review-act','review-message','message','dirty','save','request-changes','workspace-pending-ask'].map(id=>{
+   const n=document.getElementById(id);return {id,present:!!n,hidden:n?.hidden,visible:visible(n),text:n?.textContent,classes:n?.className};})};
+})()`;
 async function wait(page:InputCdpSession,expression:string){
  const end=Date.now()+20_000;
  while(Date.now()<end){if(await page.evaluate<boolean>(expression))return;await Bun.sleep(30);}
- throw new Error('ACT_ROW_WAIT '+expression);
+ const state:unknown=await page.evaluate(diagnostic).catch(error=>({diagnosticError:String(error)}));
+ throw new Error('ACT_ROW_WAIT '+expression+' '+JSON.stringify(state));
 }
 const sampler=`(()=>{
  const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden],dialog:not([open])')&&getComputedStyle(n).visibility!=='hidden';
@@ -182,6 +191,9 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    // native immediately; this is a synthetic read refusal, not a product hook.
    await control('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{
     const native=window.structuredClone;
+    const probe=window.__earlyActReadProbe={documentToken:Date.now()+':'+Math.random(),installed:true,calls:[],triggered:0,errors:[]};
+    addEventListener('error',event=>{if(probe.errors.length<20)probe.errors.push({kind:'error',message:event.message});});
+    addEventListener('unhandledrejection',event=>{if(probe.errors.length<20)probe.errors.push({kind:'unhandledrejection',message:String(event.reason)});});
     new MutationObserver(()=>{
      if(!window.__earlyActReadRefused||window.__earlyActRowRefusal)return;
      const row=document.getElementById('workspace-act-row'),message=document.getElementById('review-message');
@@ -192,14 +204,29 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
       rowRect:row.getBoundingClientRect().toJSON(),messageRect:message.getBoundingClientRect().toJSON()};
     }).observe(document,{childList:true,subtree:true,attributes:true});
     window.structuredClone=function(value,...args){
-     if(document.getElementById('workspace-act-row')?.hidden&&value?.manifest&&value?.sourceHash){window.structuredClone=native;window.__earlyActReadRefused=true;throw Error('JOB_VISUAL_UNAVAILABLE');}
+     const row=document.getElementById('workspace-act-row');
+     const call={rowPresent:!!row,rowHidden:row?.hidden??null,hasManifest:!!value?.manifest,hasSourceHash:!!value?.sourceHash};
+     if(probe.calls.length<100)probe.calls.push(call);
+     if(call.rowHidden&&call.hasManifest&&call.hasSourceHash){
+      window.structuredClone=native;probe.triggered++;probe.trigger=call;window.__earlyActReadRefused=true;throw Error('JOB_VISUAL_UNAVAILABLE');
+     }
      return native.call(this,value,...args);
     };
    })()`});
+   // The capability is consumed from the URL. Reopening url from the submitted
+   // screen can be only a hash navigation, which does not run new-document scripts.
+   // Leave the document first, just as the corrupt-draft checks above do.
+   await page.goto('about:blank');
+   const blankToken=await page.evaluate<string|null>(`window.__earlyActReadProbe?.documentToken??null`);
    await page.goto(url,language);
    // The normal host rolls the failed candidate back. Observe the real message()
    // reveal at its mutation boundary, before that rollback; do not suppress it.
    await wait(page,`!!window.__earlyActRowRefusal`);
+   const probe=await page.evaluate<any>(`window.__earlyActReadProbe`);
+   assert.equal(typeof probe.documentToken,'string');assert.notEqual(probe.documentToken,blankToken,'early refusal runs in a fresh document');
+   assert.equal(probe.installed,true);assert.equal(probe.triggered,1);
+   assert.deepEqual(probe.trigger,{rowPresent:true,rowHidden:true,hasManifest:true,hasSourceHash:true});
+   await writeFile(join(out,'early-refusal-probe.json'),JSON.stringify(probe,null,2)+'\n');
    const refusal=await page.evaluate<any>(`window.__earlyActRowRefusal`);
    assert.equal(refusal.rowVisible,true);assert.equal(refusal.messageVisible,true);assert.deepEqual(refusal.controls,[]);
    assert.ok(refusal.text.includes('JOB_VISUAL_UNAVAILABLE'));
@@ -207,7 +234,11 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    await writeFile(join(out,'early-refusal-after-rollback.png'),await page.screenshot());
   }
   observations.push({mode,language,width,height,initial,collapsed,held});
- }catch(error){if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error)},null,2)+'\n');throw error;}
+ }catch(error){
+  const runtime:unknown=page?await page.evaluate(diagnostic).catch(reason=>({diagnosticError:String(reason)})):null;
+  if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});
+  await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error),runtime},null,2)+'\n');throw error;
+ }
  finally{await page?.close();await close?.();await rm(profile,{recursive:true,force:true});await writeFile(join(output,'observations.json'),JSON.stringify(observations,null,2)+'\n');}
 }
 console.log('ACT_ROW_840_OK cases='+observations.length+' EN=16 KO=16');
