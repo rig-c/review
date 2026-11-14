@@ -32,7 +32,7 @@
     "reason": "FLAKE: collapse step wait for .inspector-body hidden times out intermittently on main code (hosted CI and Nova); #850 fixes the race and returns the suite."
   },
   "tests/correction-handoff-browser.ts": {
-    "issue": 842,
+    "issue": 858,
     "reason": "PRODUCT STOP per Tower: Mesh Apply loses selected torso. ONE phase2b Nova sourcea081797c run20261114T104922Z-12655230e56e4e7eb8d5c2346ca352f6 actualexit1 EN11.818s at correction-handoff:139 MESH_SELECTION_LOST after built/check.pass guard passed. Actual replacement selection not captured; no root-cause claim. KO/later applied/upload/export NOT RUN. Candidate and selected-part assertion preserved; no retry/product fix."
   }
 }
