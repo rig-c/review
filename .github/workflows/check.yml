@@ -50,28 +50,19 @@ jobs:
       - run: bun run test
       - run: bun run build
       - run: bun run check:demo
-      - name: Verify Parts Explorer in Chrome
-        shell: bash
-        run: |
-          chrome_bin="$(command -v google-chrome)"
-          printf 'Chrome path: %s\n' "$chrome_bin"
-          "$chrome_bin" --version
-          unset NO_ASSERT SCREENSHOT_DIR SCREENSHOT_BASE64
-          time CHROME_BIN="$chrome_bin" OUT_JSON="$RUNNER_TEMP/parts-explorer.json" bun tests/parts-explorer-browser.ts
-      - name: Verify animation editor in Chrome
-        timeout-minutes: 2
-        shell: bash
-        run: |
-          chrome_bin="$(command -v google-chrome)"
-          printf 'Chrome path: %s\n' "$chrome_bin"
-          "$chrome_bin" --version
-          time CHROME_BIN="$chrome_bin" bun tests/animation-editor-browser.ts
-      - name: Upload Parts Explorer measurements
-        uses: actions/upload-artifact@v4
+  browser:
+    needs: tree-verdict
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          name: parts-explorer-measurements
-          path: ${{ runner.temp }}/parts-explorer.json
-          if-no-files-found: error
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Install reference video export tools
+        timeout-minutes: 3
+        uses: ./.github/actions/reference-video-tools
       - name: Restore CJK font for Parts camera
         id: cjk-font-cache
         uses: actions/cache@v4
@@ -95,31 +86,27 @@ jobs:
           printf '%s  %s\n' "$CJK_FONT_SHA256" "$font_file" | sha256sum -c -
           fc-cache -f
           fc-list | grep -q "Noto Sans CJK"
-      - name: Verify Parts camera in Chrome
-        timeout-minutes: 2
+      - name: Verify browser suites in Chrome
         shell: bash
+        env:
+          BROWSER_ARTIFACTS: ${{ runner.temp }}/browser
         run: |
-          pkg_info="NotoSansCJK-Regular.ttc Sans2.004 sha256 $(sha256sum "$HOME/.local/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc" | cut -d' ' -f1)"
-          ko_font="$(fc-match :lang=ko)"
-          mkdir -p "$RUNNER_TEMP/parts-camera-race"
-          printf 'font: %s\nfc-match :lang=ko: %s\n' "$pkg_info" "$ko_font" | tee "$RUNNER_TEMP/parts-camera-race/cjk-font.txt"
           chrome_bin="$(command -v google-chrome)"
           printf 'Chrome path: %s\n' "$chrome_bin"
           "$chrome_bin" --version
-          time CHROME_BIN="$chrome_bin" REVIEW464_CAMERA_ARTIFACTS="$RUNNER_TEMP/parts-camera-race" bun tests/parts-camera-race-browser.ts
-      - name: Verify Parts comments in Chrome
-        timeout-minutes: 3
-        shell: bash
-        run: |
-          chrome_bin="$(command -v google-chrome)"
-          "$chrome_bin" --version
-          time CHROME_BIN="$chrome_bin" bun tests/parts-comments-browser.ts
-      - name: Upload Parts camera evidence
+          unset NO_ASSERT SCREENSHOT_DIR SCREENSHOT_BASE64
+          export CHROME_BIN="$chrome_bin"
+          mkdir -p "$BROWSER_ARTIFACTS"
+          pkg_info="NotoSansCJK-Regular.ttc Sans2.004 sha256 $(sha256sum "$HOME/.local/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc" | cut -d' ' -f1)"
+          ko_font="$(fc-match :lang=ko)"
+          printf 'font: %s\nfc-match :lang=ko: %s\n' "$pkg_info" "$ko_font" | tee "$BROWSER_ARTIFACTS/cjk-font.txt"
+          bun scripts/browser-gate.ts --run
+      - name: Upload browser evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: parts-camera-race
-          path: ${{ runner.temp }}/parts-camera-race/
+          name: browser
+          path: ${{ runner.temp }}/browser/
           if-no-files-found: error
   install-smoke:
     needs: tree-verdict
@@ -149,7 +136,7 @@ jobs:
           npm --version
       - run: bun run smoke
   tree-verdict-receipt:
-    needs: [check, install-smoke]
+    needs: [check, install-smoke, browser]
     if: ${{ success() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

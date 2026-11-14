@@ -102,7 +102,7 @@ try{
    assert.deepEqual(corrections,{fileVisible:false,addVisible:false,hiddenByGate:true});
    assert.deepEqual(await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)})).comments.map(row=>row.summary)`),draft.comments.map((row:any)=>row.summary));
    const screenshot=language+'-direction.png';await writeFile(join(output,screenshot),await page.screenshot());
-   await click('#save');
+   await click('#request-changes');
    let act:any;const deadline=Date.now()+20000;
    while(Date.now()<deadline){const next=await api('next',{after:null,waitMs:0});act=next.events.flatMap((e:any)=>e.type==='act'&&e.act.askId===ask.askId?[e.act]:[])[0];if(act)break;await Bun.sleep(25);}
    assert.ok(act,'direction UI committed act');assert.equal(act.schema,'rig-review/act@6');assert.equal(act.authority.channel,'review-ui');
@@ -121,7 +121,7 @@ try{
     await click(`[data-mode="${mode}"]`);await page.evaluate(`document.querySelector('#view-menu').open=true`);await click(`#view-menu [data-view="${view}"]`);
     const counts:any=await page.evaluate(`Object.fromEntries(['#app','#rig-viewport','#view-menu','#zoom-in','#zoom-out','#fit','#native-one','[data-part-list]'].map(s=>[s,document.querySelectorAll(s).length]))`);
     for(const count of Object.values(counts))assert.equal(count,1);
-    await click('#save');let value:any;const until=Date.now()+20000;while(Date.now()<until){const next=await api('next',{after:null,waitMs:0});value=next.events.find((e:any)=>e.type==='act'&&e.act.askId===nextAsk.askId)?.act;if(value)break;await Bun.sleep(25);}
+    await click('#request-changes');let value:any;const until=Date.now()+20000;while(Date.now()<until){const next=await api('next',{after:null,waitMs:0});value=next.events.find((e:any)=>e.type==='act'&&e.act.askId===nextAsk.askId)?.act;if(value)break;await Bun.sleep(25);}
     assert.ok(value,'verdict from '+mode+'/'+view);assert.equal(value.value.stage,'direction-review');submittedViews.push({mode,view,actId:value.actId,counts});
    }
    observations.push({kind:'verdict-every-view',language,submittedViews});

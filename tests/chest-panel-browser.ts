@@ -39,8 +39,17 @@ async function launch(profile:string):Promise<Page> {
  const chrome=await launchChrome([browserBinary(),'--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-angle=swiftshader','--enable-unsafe-swiftshader',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--mute-audio','--hide-scrollbars']);
  const {endpoint}=chrome;
  try {
-  const targets=await (await fetch(`http://${new URL(endpoint).host}/json/list`)).json() as {type:string;webSocketDebuggerUrl?:string}[];
-  const ws=new WebSocket(targets.find(t=>t.type==='page')!.webSocketDebuggerUrl!);await new Promise((res,rej)=>{ws.onopen=res;ws.onerror=rej;});
+  const deadline=performance.now()+10_000;
+  let target:{type:string;webSocketDebuggerUrl?:string}|undefined;
+  while(performance.now()<deadline){
+   const targets=await (await fetch(`http://${new URL(endpoint).host}/json/list`,{signal:AbortSignal.timeout(Math.max(1,deadline-performance.now()))})).json() as {type:string;webSocketDebuggerUrl?:string}[];
+   target=targets.find(t=>t.type==='page'&&!!t.webSocketDebuggerUrl);
+   if(target)break;
+   if(chrome.proc.exitCode!==null)throw Error('CHEST_BROWSER_EXIT_BEFORE_PAGE '+chrome.proc.exitCode);
+   await Bun.sleep(25);
+  }
+  if(!target?.webSocketDebuggerUrl)throw Error('CHEST_BROWSER_PAGE_TARGET_TIMEOUT (10000ms)');
+  const ws=new WebSocket(target.webSocketDebuggerUrl);await new Promise((res,rej)=>{ws.onopen=res;ws.onerror=rej;});
   let id=0;const pending=new Map<number,{res:(v:any)=>void;rej:(e:Error)=>void}>();
   ws.onmessage=event=>{const msg=JSON.parse(String(event.data));const p=pending.get(msg.id);if(!p)return;pending.delete(msg.id);if(msg.error)p.rej(new Error(msg.error.message));else p.res(msg.result);};
   const send=(method:string,params:Record<string,unknown>={})=>new Promise<any>((res,rej)=>{const n=++id;pending.set(n,{res,rej});ws.send(JSON.stringify({id:n,method,params}));});

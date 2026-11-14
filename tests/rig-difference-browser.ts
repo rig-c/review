@@ -1,4 +1,6 @@
-/** #739 ordinary Nova proof. Packages are explicit, frozen inputs outside the repository. */
+import {writeRigDifferencePackages} from './helpers/rig-difference-package.ts';
+import {instrumentRigMount} from './helpers/mount-probe.ts';
+/** #739 ordinary Nova proof. Default packages are generated from small public inputs. */
 import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
@@ -19,7 +21,7 @@ Object.assign(window,{__difference739:{
  difference:()=>{const c=document.getElementById('rig-difference-canvas'),d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let red=0;for(let i=0;i<d.length;i+=4)if(d[i]>0&&d[i+1]===0&&d[i+2]===0)red++;return {width:c.width,height:c.height,red};}
 }});
 `;
-const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'difference-observation',setup(build){build.onLoad({filter:/web\/main\.ts$/},async({path})=>({loader:'ts',contents:await readFile(path,'utf8')+probe}));}}]});
+const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'difference-observation',setup(build){build.onLoad({filter:/web\/main\.ts$/},async({path})=>({loader:'ts',contents:instrumentRigMount(await readFile(path,'utf8'),probe)}));}}]});
 assert.ok(built.success,JSON.stringify(built.logs));const bundle=built.outputs[0]!;
 async function wait(expression:string,label:string){const end=Date.now()+30000;while(Date.now()<end){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(50);}throw new Error('RIG_DIFFERENCE_WAIT '+label+' '+await page!.evaluate('document.body.innerText'));}
 async function settle(){await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');}
@@ -38,7 +40,8 @@ async function open(path:string,lang:string){
 }
 try{
  page=await launchCdpSession(join(root,'profile'));await page.setViewport(1600,1000);
- const reference=arg('--miko')??arg('--reference');
+ const fixtures=await writeRigDifferencePackages(root);
+ const reference=arg('--miko')??arg('--reference')??fixtures.reference;
  for(const lang of ['en','ko']){
   if(reference){
    await open(reference,lang);await menu('rig');await click(page,'#fit');await click(page,'#zoom-in');
@@ -68,9 +71,11 @@ try{
    await menu('difference');await click(page,'[data-mode="playback"]');await settle();assert.equal((await state()).active,false);assert.equal(await page.evaluate(`document.querySelector('[data-view="difference"]').disabled`),true);
    report['reference-'+lang]={before,during,after,oracle,pixels,selected,renderedMessage,toolbarExit};
   }
-  const wind=arg('--wind');if(wind){await open(wind,lang);await click(page,'#view-menu summary');const unavailable:{disabled:boolean;reason:string}=await page.evaluate<{disabled:boolean;reason:string}>(`({disabled:document.querySelector('[data-view="difference"]').disabled,reason:document.querySelector('[data-view="difference"]').title})`);assert.equal(unavailable.disabled,true);assert.match(unavailable.reason,/RIG_DIFFERENCE_REFERENCE_UNAVAILABLE/);await shot('wind-no-reference-'+lang);report['wind-'+lang]=unavailable;}
-  const mismatch=arg('--mismatch');if(mismatch){await open(mismatch,lang);await click(page,'#view-menu summary');const unavailable:{disabled:boolean;reason:string}=await page.evaluate<{disabled:boolean;reason:string}>(`({disabled:document.querySelector('[data-view="difference"]').disabled,reason:document.querySelector('[data-view="difference"]').title})`);assert.equal(unavailable.disabled,true);assert.match(unavailable.reason,/RIG_DIFFERENCE_NATIVE_SCALE/);await shot('native-mismatch-'+lang);report['mismatch-'+lang]=unavailable;}
+  const wind=arg('--wind')??fixtures.wind;if(wind){await open(wind,lang);await click(page,'#view-menu summary');const unavailable:{disabled:boolean;reason:string}=await page.evaluate<{disabled:boolean;reason:string}>(`({disabled:document.querySelector('[data-view="difference"]').disabled,reason:document.querySelector('[data-view="difference"]').title})`);assert.equal(unavailable.disabled,true);assert.match(unavailable.reason,/RIG_DIFFERENCE_REFERENCE_UNAVAILABLE/);await shot('wind-no-reference-'+lang);report['wind-'+lang]=unavailable;}
+  const mismatch=arg('--mismatch')??fixtures.mismatch;if(mismatch){await open(mismatch,lang);await click(page,'#view-menu summary');const unavailable:{disabled:boolean;reason:string}=await page.evaluate<{disabled:boolean;reason:string}>(`({disabled:document.querySelector('[data-view="difference"]').disabled,reason:document.querySelector('[data-view="difference"]').title})`);assert.equal(unavailable.disabled,true);assert.match(unavailable.reason,/RIG_DIFFERENCE_NATIVE_SCALE/);await shot('native-mismatch-'+lang);report['mismatch-'+lang]=unavailable;}
  }
+ // Every refusal/positive case must complete in both languages; an empty run is a failure.
+ assert.deepEqual(Object.keys(report).sort(),['mismatch-en','mismatch-ko','reference-en','reference-ko','wind-en','wind-ko'],'RIG_DIFFERENCE_CASES_INCOMPLETE');
  await writeFile(join(output,'report.json'),JSON.stringify(report,null,2)+'\n');console.log('RIG_DIFFERENCE_739_PASS '+Object.keys(report).join(','));
 }catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),report,state:page?await state().catch(()=>null):null},null,2));if(page)await shot('failure');throw error;}
 finally{await page?.close();for(const server of servers)server.stop(true);await rm(root,{recursive:true,force:true});}

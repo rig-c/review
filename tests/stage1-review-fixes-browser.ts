@@ -1,3 +1,4 @@
+import projectPackage from '../package.json';
 /** Narrow EN/KO controls for adopted #403 chest rebinding and region-only inspection. No correction producer run. */
 import {mkdir,mkdtemp,writeFile,readFile,readdir,rm,cp} from 'node:fs/promises';
 import {join,relative} from 'node:path';
@@ -127,6 +128,8 @@ export async function captureStage1Fix(page: FixPage){return await page.evaluate
 
 if (import.meta.main) {
 const bench=process.env.RV367_BENCH;if(!bench)throw Error('Installed producer bench required');
+const declaredParts=JSON.parse(await readFile(join(bench,'node_modules/@rig-c/parts/package.json'),'utf8')),declaredCore=JSON.parse(await readFile(join(bench,'node_modules/@rig-c/core/package.json'),'utf8'));
+if(declaredParts.version!==projectPackage.devDependencies['@rig-c/parts']||declaredCore.version!==declaredParts.dependencies['@rig-c/core'])throw Error('FROZEN_LOCK_PRODUCER_MISMATCH');
 const root=await mkdtemp(join(tmpdir(),'fix.')),out=join(process.cwd(),'artifacts/stage1-review-fixes');await mkdir(out,{recursive:true});
 let page:InputCdpSession|undefined,server:Awaited<ReturnType<typeof startServer>>|undefined;
 const receipt:any[]=[];

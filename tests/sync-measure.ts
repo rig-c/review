@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { loadCompare } from '../src/compare.ts';
 import { startCompareServer } from '../src/compare-server.ts';
 import { timeAtFrame } from '../src/frame-clock.ts';
-import type { SyncBrowserReport } from './sync-measure-browser.ts';
+import type { SyncBrowserReport } from './sync-measure-page.ts';
 interface Page {goto(url:string):Promise<unknown>;waitForFunction(fn:()=>boolean):Promise<unknown>;evaluate<T>(fn:()=>T|Promise<T>):Promise<T>;evaluate<T,A>(fn:(arg:A)=>T|Promise<T>,arg:A):Promise<T>}
 interface Browser {newPage(options:{viewport:{width:number;height:number}}):Promise<Page>;version():string;close():Promise<void>}
 interface Playwright {chromium:{launch(options:{headless:boolean;args:string[]}):Promise<Browser>}}
@@ -59,7 +59,7 @@ async function main(args:string[]):Promise<void>{
  await mkdir(out,{recursive:true});const app=await startCompareServer(p,{port:0,stateDir:resolve(out,'state')});
  let browser:Browser|null=null,proxy:ReturnType<typeof Bun.serve>|null=null;const cleanup={ownedBrowserClosed:true,ownedProxyStopped:true,ownedAppStopped:false,hqServerAccessed:false};
  try{
-  const built=await Bun.build({entrypoints:[resolve(import.meta.dir,'sync-measure-browser.ts')],target:'browser',format:'esm'});if(!built.success)throw new Error(built.logs.map(row=>row.message).join('\n'));const bundle=built.outputs[0]!;const oracleEntry=options.get('--oracle-entry');let oracleBundle:Blob|null=null;if(oracleEntry){const oracle=await Bun.build({entrypoints:[resolve(oracleEntry)],target:'browser',format:'esm'});if(!oracle.success)throw new Error(oracle.logs.map(row=>row.message).join('\n'));oracleBundle=oracle.outputs[0]!;}
+  const built=await Bun.build({entrypoints:[resolve(import.meta.dir,'sync-measure-page.ts')],target:'browser',format:'esm'});if(!built.success)throw new Error(built.logs.map(row=>row.message).join('\n'));const bundle=built.outputs[0]!;const oracleEntry=options.get('--oracle-entry');let oracleBundle:Blob|null=null;if(oracleEntry){const oracle=await Bun.build({entrypoints:[resolve(oracleEntry)],target:'browser',format:'esm'});if(!oracle.success)throw new Error(oracle.logs.map(row=>row.message).join('\n'));oracleBundle=oracle.outputs[0]!;}
   cleanup.ownedProxyStopped=false;proxy=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(req){const url=new URL(req.url);if(url.origin!==`http://127.0.0.1:${proxy!.port}`)return new Response('Loopback host required',{status:403});if(req.method!=='GET'&&req.method!=='HEAD')return new Response('Read-only measurement',{status:405});if(url.pathname==='/oracle.js'&&oracleBundle)return new Response(req.method==='HEAD'?null:oracleBundle,{headers:{'Content-Type':'text/javascript'}});if(url.pathname==='/main.js')return new Response(req.method==='HEAD'?null:bundle,{headers:{'Content-Type':'text/javascript'}});const headers=new Headers(req.headers);headers.delete('host');return fetch(`http://127.0.0.1:${app.port}${url.pathname}${url.search}`,{method:req.method,headers,redirect:'error'});}});
   const flags=['--autoplay-policy=no-user-gesture-required'];browser=await tool.chromium.launch({headless:true,args:flags});cleanup.ownedBrowserClosed=false;const page=await browser.newPage({viewport:{width:1600,height:1000}});
   await page.goto(`http://127.0.0.1:${proxy.port}/`);await page.waitForFunction(()=>window.__rigReviewSync?.ready()===true);
@@ -73,7 +73,7 @@ async function main(args:string[]):Promise<void>{
   await persist('completed-scrub');if(options.get('--mode')!=='scrub-only')await page.evaluate(async()=>{await window.__rigReviewSync!.mutant();});
   const result=await persist(options.get('--mode')==='scrub-only'?'scrub-only-complete':'complete');console.log(JSON.stringify(result.summary,null,2));
   // Record the exact observer bytes; no screenshot or device-visual claim.
-  await writeFile(resolve(out,'harness.json'),JSON.stringify({observerSha256:createHash('sha256').update(await readFile(resolve(import.meta.dir,'sync-measure-browser.ts'))).digest('hex')},null,2)+'\n');
+  await writeFile(resolve(out,'harness.json'),JSON.stringify({observerSha256:createHash('sha256').update(await readFile(resolve(import.meta.dir,'sync-measure-page.ts'))).digest('hex')},null,2)+'\n');
   await page.evaluate(()=>window.__rigReviewSync!.stop());if(oracleEntry){const oracle=await page.evaluate(async()=>{const url='/oracle.js';const module=await import(url) as {runOracle:()=>Promise<unknown>};return module.runOracle();});await writeFile(resolve(out,'cold-oracle.json'),JSON.stringify(oracle,null,2)+'\n');}
  }finally{try{await browser?.close();cleanup.ownedBrowserClosed=true;}finally{try{await proxy?.stop(true);cleanup.ownedProxyStopped=true;}finally{try{await app.stop(true);cleanup.ownedAppStopped=true;}finally{await writeFile(resolve(out,'cleanup.json'),JSON.stringify(cleanup)+'\n');}}}}
 }

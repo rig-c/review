@@ -87,10 +87,11 @@ async function run(lang: 'en' | 'ko') {
     await record(name, {samples});
     return samples.at(-1)!;
   }
-  async function screen(name: string) {
+  async function screen(name: string, pendingAct = true) {
+    if (!pendingAct) await wait(`document.getElementById('workspace-act-row')?.hidden===true`, name + '.act-row-complete');
     const state = await page!.evaluate<{
       language: string; counts: Record<string, number>; title: string; rigHash: string; fullRigHash: string | null; sourceHash: string;
-      status: string; selectedLabel: string; actInHeading: boolean; actInRow: boolean; actRowDirect: boolean; actVisible: boolean;
+      status: string; selectedLabel: string; actInHeading: boolean; actInRow: boolean; actRowDirect: boolean; actVisible: boolean; actRowHidden: boolean; visibleSaveStates: string[];
       actGeometry: unknown; inspectorHeight: number; controls: string[];
     }>(`(()=>{
       const visible=${fullyVisible.toString()}, geometry=${visibilityGeometry.toString()};
@@ -104,6 +105,7 @@ async function run(lang: 'en' | 'ko') {
         fullRigHash:provenance.reviewedSource?.rig?.sha256??null,sourceHash:provenance.sourceHash,
         status:status.value,selectedLabel:status.selectedOptions[0].textContent,
         actInHeading:!!act?.closest('.inspector-heading'),actInRow:act?.parentElement?.id==='workspace-act-row',actRowDirect:document.getElementById('workspace-act-row')?.previousElementSibling===document.querySelector('.topbar'),actVisible:!!act&&visible(act),
+        actRowHidden:document.getElementById('workspace-act-row').hidden,visibleSaveStates:['dirty','review-draft-state','draft-state'].filter(id=>{const node=document.getElementById(id);return node&&visible(node)&&!!node.textContent.trim();}),
         actGeometry:act?geometry(act):null,inspectorHeight:document.querySelector('.inspector').getBoundingClientRect().height,
         controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(node=>node.id)};
     })()`);
@@ -114,7 +116,10 @@ async function run(lang: 'en' | 'ko') {
     assert.equal(state.actInHeading, false, 'the live act leaves the bottom heading');
     assert.equal(state.actInRow, true, 'the decision and submit act nodes stay in the shared act row');
     assert.equal(state.actRowDirect, true, 'the act row sits directly beneath the topbar');
-    assert.equal(state.actVisible, true, 'the complete act bar stays visible');
+    // #844/#845: pending acts occupy the row; completion returns the sole save state to the topbar.
+    assert.equal(state.actVisible, pendingAct, 'act bar visibility follows the pending act phase');
+    assert.equal(state.actRowHidden, !pendingAct, 'only a pending act owns the act row');
+    if (!pendingAct) assert.deepEqual(state.visibleSaveStates, ['dirty'], 'completed act has one visible topbar save state');
     if (Bun.argv.includes('--assert-default262')) assert.ok(Math.abs(state.inspectorHeight - 262) <= 1, 'default bottom height 262');
     await writeFile(join(out, name + '.png'), await page!.screenshot());
     return state;
@@ -238,14 +243,12 @@ async function run(lang: 'en' | 'ko') {
       assert.equal(Number((beforeSubmit as any).time),0.375);
       await record('788-before-submit',beforeSubmit);
     }
-    // Use the screen's actual select, change handler and trusted pointer submit. No /ui/acts call here.
-    await click(page, '#review-status');
-    await page.evaluate(`(()=>{const select=document.getElementById('review-status');select.value=${JSON.stringify(verdict)};
-      select.dispatchEvent(new Event('input',{bubbles:true}));select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-    await page.evaluate('document.activeElement?.blur()');
-    await wait(`document.getElementById('review-status').value===${JSON.stringify(verdict)}&&!document.getElementById('save').disabled`, 'decision-ready');
+    // Use the screen's direct verdict button and trusted pointer submit. No /ui/acts call here.
+    assert.equal(await page.evaluate(`document.getElementById('review-status').hidden`),true);
+    const answerSelector=verdict==='approved'?'#save':'#request-changes';
+    await wait(`!document.querySelector(${JSON.stringify(answerSelector)}).disabled`, 'decision-ready');
     await screen('decision-screen');
-    await click(page, '#save');
+    await click(page, answerSelector);
     let finalized: JobNextValue | undefined;
     await withDeadline('709.' + lang + '.recorded-act', 20_000, async signal => {
       while (!signal.aborted) {
@@ -275,7 +278,7 @@ async function run(lang: 'en' | 'ko') {
     assert.match(act.still.sha256, /^[a-f0-9]{64}$/);
     assert.equal(act.still.path, act.still.sha256 + '.png');
     await wait(`document.getElementById('dirty')?.classList.contains('dirty')===false`, 'submitted-clean');
-    await screen('submitted-screen');
+    await screen('submitted-screen', false);
     if(autoStill){
       const after=await page.evaluate(inspectionExpression);
       assert.deepEqual(after,beforeSubmit,'Submit preserves camera, selection, time and mode');
