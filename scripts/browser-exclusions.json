@@ -11,40 +11,24 @@
     "issue": 848,
     "reason": "PRODUCT: package checkpoint saved Comments vanish on reconnect; preserve exact words assertion and neutral bounded read/wait/log probe until #848 restores whole suite."
   },
-  "tests/correction-handoff-browser.ts": {
-    "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Retained selection assertion failed after built Mesh Apply; cause unresolved. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
-  },
-  "tests/inspection-bookmark-time-browser.ts": {
-    "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Standalone observer readiness migration remains in progress; last repair used host-only ready guard. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
-  },
   "tests/inspection-clock-consumers-browser.ts": {
     "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Standalone observer readiness migration remains in progress; last repair used host-only ready guard. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
+    "reason": "UNRESOLVED: ONE phase2b Nova source8ffb3d43 run20261114T100450Z-3fa07706c6d049268d134d5df1ffcbff exits1 after38.153s: EN reopen wait requires applied, but reading.applied=null with restoring=false. Initial loop/Idle Apply reached; later key/pose checks and KO not run. No product root-cause ruling; preserve candidate assertions and do not retry."
   },
   "tests/job-checkpoint-wire-browser.ts": {
     "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Trusted focus setup failed before pan/Fit assertions; harness cause unresolved. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
+    "reason": "UNRESOLVED focus RED: ONE phase2b Nova sourcefb057cb7 run20261114T103903Z-dae7eec94c9247a8a3805b8204a5ebe7 exits1 EN1.571s at wire:331: post-viewport-drag textEntryFocused actualtrue expectedfalse. Initial M/B checked+overlay prefix passed; no postdrag geometry/hit/focus-id artifact proves cause. Later key/pan/Fit/point/act checks and KO NOT RUN. Candidate preserved, no retry/product ruling."
   },
   "tests/job-record-browser.ts": {
     "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Answer submission trusted target unavailable; harness cause unresolved. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
+    "reason": "HARNESS RED: ONE phase2b Nova source5a4d7482 run20261114T101339Z-5013bbc80fe846d2b1cb7f23073f5f86 exits1 EN19.571s waiting submitted form. Captured form is answered, fieldset disabled and direct job.saved status populated, but helper selects first nested empty interview-diagnostics [role=status]. No retry; KO NOT RUN; candidate preserved."
   },
   "tests/open-workspace-browser.ts": {
     "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Owner restart did not complete before aggregate sample budget; cause unexplained. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
+    "reason": "UNRESOLVED restart stall: ONE phase2b Nova sourceb138e261 run20261114T101952Z-52710c9998f54a699ccdcba382b177c3 actualexit124 EN590.005s. Last recorded checkpoint cleanup-23886; cli-8.json then records successful new owner open exit0, but same-tab-owner-restart checkpoint never reached. KO NOT RUN; no product cause proven, no retry/exit workaround; candidate retained."
   },
-  "tests/parts-setup-browser.ts": {
-    "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Approved Request changes repoint was not executed before sample budget ended. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
-  },
-  "tests/rig-bottom-browser.ts": {
-    "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Current Transport/headline migration was not executed before sample budget ended. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
-  },
-  "tests/stage3-framing-browser.ts": {
-    "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Approved real-pause migration was not executed before sample budget ended. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
+  "tests/correction-handoff-browser.ts": {
+    "issue": 858,
+    "reason": "PRODUCT STOP per Tower: Mesh Apply loses selected torso. ONE phase2b Nova sourcea081797c run20261114T104922Z-12655230e56e4e7eb8d5c2346ca352f6 actualexit1 EN11.818s at correction-handoff:139 MESH_SELECTION_LOST after built/check.pass guard passed. Actual replacement selection not captured; no root-cause claim. KO/later applied/upload/export NOT RUN. Candidate and selected-part assertion preserved; no retry/product fix."
   }
 }
