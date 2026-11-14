@@ -404,7 +404,7 @@ test('#671 real mounted outer tab-panel relationships preserve original nodes an
  const innerBefore=page.all().filter(node=>node.attrs.get('aria-labelledby')?.startsWith('block-tab-')).map(node=>[node.id,node.getAttribute('role'),node.getAttribute('aria-labelledby')]);
  try{
   const mounted=mountRigInspector(document as unknown as Document),row=mounted.row,owners=row.tabs.map(tab=>tab.button.id);
-  expect(new Set(owners).size).toBe(2);expect([...mounted.strip.children].map(node=>node.textContent)).toEqual(['Comments (0)']);
+  expect(new Set(owners).size).toBe(2);expect([...mounted.strip.children]).toEqual([]);expect(mounted.comments.button.hidden).toBe(true);expect(mounted.comments.panel.getAttribute('aria-labelledby')).toBe('stage-comment');expect(document.getElementById('proposal-panel')!.children[0]!.id).toBe('comments-list-host');
   for(const [index,tab] of row.tabs.entries()){
    const panel=tab.panels[0]!;expect(panel).toBe(originals[index] as unknown as HTMLElement);expect(panel.getAttribute('role')).toBe('region');expect(panel.getAttribute('aria-labelledby')).toBe(tab.button.id);expect(tab.button.getAttribute('aria-controls')).toBe(panel.id);
    expect(document.getElementById(panel.getAttribute('aria-labelledby')!)).toBe(tab.button as unknown as Host);

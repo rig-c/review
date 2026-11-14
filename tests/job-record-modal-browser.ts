@@ -73,7 +73,7 @@ try{
    await wait(`!!document.querySelector('#stage-comment-list')&&!!document.querySelector(${JSON.stringify(selector+' fieldset:not(:disabled)')})`,'receipt');
    await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#job-record-asks[open]')`,'ask line opens');
    const state=await screen(out,fixture);assert.equal(state.language,language);await closeDialog();
-   await page.evaluate(`(()=>{const b=[...document.querySelectorAll('.inspector-heading button')].find(n=>n.textContent.includes(${JSON.stringify(language==='en'?'Comments':'코멘트')}));if(!b)throw new Error('COMMENTS_TAB_MISSING');b.click();})()`);
+   await click(page,'#stage-comment');
    if(picture==='parts'){const posts=commentPosts.length;await click(page,'#stage-comment');assert.equal(await page.evaluate(`document.getElementById('stage-comment-refusal').textContent`),catalog['JOB_REVIEW_READ_ONLY']);assert.equal(await page.evaluate(`document.querySelectorAll('.stage-comment-composer').length`),0);assert.equal(commentPosts.length,posts);await shot(out,'pointed-read-only-refusal');}
    await addGeneral('First comment · 원문 '+language);await addGeneral('Second comment · 둘째 '+language);
    if(picture===true){

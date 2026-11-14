@@ -32,7 +32,7 @@ export interface InspectorBlocksOptions {
  available?:readonly string[];
  /** Called when a click or a key changes a section's active tab. */
  changed?:()=>void;
- /** The rig reuses its block rows in the heading, with one shared Comments tab. */
+ /** The rig reuses its block rows in the heading, with one programmatic Comments selection. */
  bottom?:{strip:HTMLElement;comment:HTMLButtonElement;panel:HTMLElement};
 }
 export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlocks):void;select(section:string,id:string):void;activate(section:string):void;dispose():void}
@@ -80,7 +80,7 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
   if(active===name)return;
   if(active){saved[active]=rows.get(active)?.state()??saved[active]!;rows.get(active)?.dispose();rows.delete(active);definitions.get(active)!.row.hidden=true;}
   active=name;const {section,row,scrollRoot,tabs}=definitions.get(name)!,bottom=options.bottom;
-  bottom.comment.dataset.blockTarget='feedback';row.append(bottom.comment);row.hidden=false;
+  bottom.comment.dataset.blockTarget='feedback';bottom.comment.hidden=true;bottom.comment.remove();row.hidden=false;
   const all=[...tabs,{button:bottom.comment,id:'feedback',panel:bottom.panel,included:[]}];
   ids.set(name,new Set(all.map(tab=>tab.id)));
   const sync=()=>{section.dataset.comments=String(rows.get(name)?.state()==='feedback');options.changed?.();};
@@ -107,7 +107,9 @@ export function mountRigInspector(root:Document=document):BottomPanel&{actBar:Ac
  const title=dialog.querySelector<HTMLElement>('.review-dialog-header')!;title.querySelector('#review-dialog-close')?.remove();
  feedback.className='workspace-review-panel';feedback.hidden=true;feedback.prepend(title);body.append(feedback);dialog.remove();
  feedback.removeAttribute('data-inspector-panel');
- const bottom=mountBottomPanel({kind:'rig',heading,act,actHome:heading,tabs:[{id:'feedback',label:'Comments (0)',panel:feedback}]}),comment=bottom.row.tabs[0]!.button;
+ root.getElementById('proposal-panel')!.prepend(root.getElementById('comments-list-host')!);
+ const bottom=mountBottomPanel({kind:'rig',heading,act,actHome:heading,tabs:[]}),comment=actionButton(tr('Comments'),null);
+ comment.hidden=true;feedback.setAttribute('role','region');feedback.setAttribute('aria-labelledby','stage-comment');
  delete comment.dataset.inspector;bottom.strip.removeAttribute('role');
  for(const button of root.querySelectorAll<HTMLButtonElement>('[data-mode][data-inspector]')){button.id||='mode-'+button.dataset.mode;const panel=root.getElementById('inspector-'+button.dataset.mode)!;panel.setAttribute('role','region');panel.setAttribute('aria-labelledby',button.id);}
  bottom.row={tabs:[...root.querySelectorAll<HTMLButtonElement>('[data-mode][data-inspector]')].map(button=>({id:button.dataset.mode!,button,attribute:'aria-pressed',panels:[root.getElementById('inspector-'+button.dataset.mode)!]})),panels:[root.getElementById('inspector-rig')!,root.getElementById('inspector-playback')!],initialize:true};
