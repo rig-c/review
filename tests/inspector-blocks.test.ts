@@ -377,22 +377,31 @@ test('#838 bottom tab strip overflow menu hides overflowing tabs, keeps the sele
  }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });
 
-test('#839 registered Question uses the existing controller and preserves all block tabs and fields',async()=>{
+test('#839 Question registers first while preserving original tab order, fields and default append behavior',async()=>{
  const previous=Object.getOwnPropertyDescriptor(globalThis,'document');
  Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Node(tag)}});
  try{
   const app=await openPage(undefined,true),panel=new Node('section');panel.id='question-panel';app.page.append(panel);
   const original=app.strip.all().filter(node=>'blockTarget' in node.dataset);
-  const unregister=app.ui.register({id:'question',panel:panel as unknown as HTMLElement,label:'Question'});
+  const rows=app.strip.children.map(row=>({row,tabs:row.children.filter(node=>'blockTarget' in node.dataset)}));
+  const unregister=app.ui.register({id:'question',panel:panel as unknown as HTMLElement,label:'Question',position:'first'});
+  for(const {row,tabs}of rows){const registered=row.children.filter(node=>'blockTarget' in node.dataset);expect(registered[0]!.dataset.blockTarget).toBe('question');expect(registered.slice(1)).toEqual(tabs);}
   app.ui.select('rig','question');expect(panel.hidden).toBe(false);expect(app.ui.state().rig).toBe('question');
   for(const tab of original)expect(app.strip.contains(tab)).toBe(true);
   const field=new Node('input');panel.append(field);field.checked=true;
   app.ui.select('rig','mesh-panel');expect(panel.hidden).toBe(true);expect(field.checked).toBe(true);
   app.ui.select('rig','question');expect(panel.hidden).toBe(false);expect(panel.children[0]).toBe(field);
   const question=app.strip.all().find(node=>node.dataset.blockTarget==='question')!;
+  question.key('ArrowRight');expect(app.ui.state().rig).toBe(rows[0]!.tabs[0]!.dataset.blockTarget);
+  question.click();question.key('Home');expect(app.ui.state().rig).toBe('question');
   question.key('ArrowLeft');expect(app.ui.state().rig).not.toBe('question');
   app.ui.activate('playback');app.ui.select('playback','question');expect(panel.hidden).toBe(false);
   unregister();expect(panel.hidden).toBe(true);expect(app.strip.all().some(node=>node.dataset.blockTarget==='question')).toBe(false);
+  for(const {row,tabs}of rows)expect(row.children.filter(node=>'blockTarget' in node.dataset)).toEqual(tabs);
+  const auxiliary=new Node('section');auxiliary.id='auxiliary-panel';app.page.append(auxiliary);
+  const removeAuxiliary=app.ui.register({id:'auxiliary',panel:auxiliary as unknown as HTMLElement,label:'Inspection'});
+  for(const {row,tabs}of rows){const registered=row.children.filter(node=>'blockTarget' in node.dataset);expect(registered.slice(0,-1)).toEqual(tabs);expect(registered.at(-1)!.dataset.blockTarget).toBe('auxiliary');}
+  removeAuxiliary();
   app.ui.dispose();
  }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });

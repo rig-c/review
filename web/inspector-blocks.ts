@@ -35,7 +35,7 @@ export interface InspectorBlocksOptions {
  /** The rig reuses its block rows in the heading, with one programmatic Comments selection. */
  bottom?:{strip:HTMLElement;comment:HTMLButtonElement;panel:HTMLElement};
 }
-export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlocks):void;select(section:string,id:string):void;activate(section:string):void;register(tab:{id:string;panel:HTMLElement;label:string}):()=>void;dispose():void}
+export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlocks):void;select(section:string,id:string):void;activate(section:string):void;register(tab:{id:string;panel:HTMLElement;label:string;position?:'first'|'last'}):()=>void;dispose():void}
 
 interface Tab {button:HTMLButtonElement;id:string;panel:HTMLElement;included:HTMLElement[]}
 const isRow=(node:Element)=>node.classList.contains('block-row');
@@ -148,8 +148,9 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
    for(const [name,definition]of definitions){
     const button=actionButton(tr(tab.label),null);button.id='inspector-tab-'+name+'-'+tab.id;
     button.dataset.blockTarget=tab.id;button.setAttribute('role','tab');button.setAttribute('aria-controls',tab.panel.id);button.setAttribute('aria-selected','false');button.tabIndex=-1;
-    definition.row.insertBefore(button,definition.row.querySelector('.workspace-tabs-more'));buttons.push(button);
-    definition.tabs.push({button,id:tab.id,panel:tab.panel,included:[]});
+    definition.row.insertBefore(button,tab.position==='first'?definition.tabs[0]?.button??null:definition.row.querySelector('.workspace-tabs-more'));buttons.push(button);
+    const entry={button,id:tab.id,panel:tab.panel,included:[]};
+    if(tab.position==='first')definition.tabs.unshift(entry);else definition.tabs.push(entry);
    }
    const localize=onLanguageChange(()=>{for(const button of buttons)setSourceText(button,tab.label);syncActiveOverflow();});
    if(active)activate(active,true);

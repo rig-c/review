@@ -1506,7 +1506,7 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
   for(const form of questionForms)if(!imageForms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
   questionForms=imageForms;
   for(const form of imageForms)if(form.parentElement!==questionPanel)questionPanel.append(form);
-  if(added){viewDisposers.push(inspectorBlocks!.register({id:'question',panel:questionPanel,label:'Question'}));inspectorBlocks!.restore({rig:'question',playback:'question'});inspectorBlocks!.select(selectedInspector()??'rig','question');workspace?.revealInspector();}
+  if(added){viewDisposers.push(inspectorBlocks!.register({id:'question',panel:questionPanel,label:'Question',position:'first'}));inspectorBlocks!.restore({rig:'question',playback:'question'});inspectorBlocks!.select(selectedInspector()??'rig','question');workspace?.revealInspector();}
   syncQuestionImage();
   if(imageForms.every(form=>form.dataset.interviewAnswered==='true'))answerSaved=true;
   rigAsk.onclick=()=>{if(draftConflict)return;inspectorBlocks?.select(selectedInspector()??'rig','question');workspace?.revealInspector();};
