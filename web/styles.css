@@ -167,7 +167,7 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 
 /* Footer is the one status area: message | readouts | view region and source hash. */
 footer.status-bar{display:grid;max-width:100vw;grid-template-columns:minmax(0,1fr) minmax(0,3fr) max-content;gap:12px;min-width:0}
-.status-message{min-width:0;white-space:normal;overflow-wrap:anywhere}
+.status-message{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .status-readouts{display:flex;align-items:center;justify-content:flex-end;gap:2px 12px;flex-wrap:nowrap;min-width:0;max-width:100%}.status-readouts>*{flex:none;min-width:0;white-space:nowrap;text-overflow:ellipsis}
 .status-readouts .draft-notice{padding:0}
 .status-readouts .draft-notice #draft-recovery{margin-left:6px}
@@ -175,7 +175,7 @@ footer.status-bar{display:grid;max-width:100vw;grid-template-columns:minmax(0,1f
 
 @media(max-width:1599px){.status-readouts :is(#layer-state,#idle-state,#control-state){display:none}}
 @media(max-width:1279px){.status-readouts #renderer-state{display:none}}
-@media(max-width:1000px){.status-readouts #layout-state,.status-source #source-hash{display:none}.status-message{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}}
+@media(max-width:1000px){.status-readouts #layout-state,.status-source #source-hash{display:none}}
 @media(max-width:700px){footer.status-bar{grid-template-columns:minmax(0,1fr) max-content}.status-readouts{display:none}}
 .view-region{position:relative}
 .view-region>summary{cursor:pointer}
