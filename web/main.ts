@@ -1684,7 +1684,7 @@ function syncPlayerLoop():void {
  catch(error){message(errorText(error),true);}
 }
 function canRepeatIdle():boolean{const direction=activeScene();if(direction)return direction.take.loop;return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
-function renderIdle():void {text('idle-state',canRepeatIdle()?'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
+function renderIdle():void {text('idle-state',canRepeatIdle()?activeScene()&&animation&&animation!=='idle'?`${data.manifest?.animations?.find(a=>a.id===animation)?.label??animation} · repeating`:'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
 async function playPreview():Promise<void> {
  if((!player&&!video&&!sequence)||duration<=0)return;
  const intent=++playbackIntent;desiredPlay=true;idleHeld=false;syncPlayerLoop();if(time>=duration)seek(0,{kind:'replay'});

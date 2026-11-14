@@ -2995,6 +2995,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "{0} · folds: not run": "{0} · folds: not run",
   "{0} · key {1}": "{0} · key {1}",
   "{0} · picture-px / top-left / y↓ · {1} frames{2}": "{0} · picture-px / top-left / y↓ · {1} frames{2}",
+  "{0} · repeating": "{0} · repeating",
   "{0} · review F{1}": "{0} · review F{1}",
   "{0} · rig review": "{0} · rig review",
   "{0} · rig review compare": "{0} · rig review compare",

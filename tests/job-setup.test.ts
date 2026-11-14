@@ -1,8 +1,10 @@
 import {takeSample} from '../web/scene-plates.ts';
 import type {DirectionInspection} from '../src/direction-inspection.ts';
+import {idleAvailable} from '../web/view-controls.ts';
 import {expect,test} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import {RigPlayer} from '@rig-c/play';
+import {applyDomI18n,setLanguagePreference,setSourceText} from '../web/i18n.ts';
 import {PartInspection,partCatalog} from '../web/part-selection.ts';
 import {freezeJobRigStage} from '../web/job-rig-capture.ts';
 import {loadSetupAssets,setupRoot} from './helpers/setup-mesh.ts';
@@ -11,6 +13,7 @@ const main=readFileSync(new URL('../web/main.ts',import.meta.url),'utf8');
 function fragment(start:string,end:string){const a=main.indexOf(start),b=main.indexOf(end,a);expect(a).toBeGreaterThanOrEqual(0);expect(b).toBeGreaterThan(a);return main.slice(a,b);}
 const lifecycle=fragment('function createInspectionPlayer(', 'async function initPlayer(');
 const controls=fragment('function chooseAnimation(', 'function stopAudio()');
+const idle=fragment('function canRepeatIdle(', 'async function playPreview(');
 const setup=fragment(" else if(player){restartSetupPlayer(true);",' if(selection.axis)');
 
 /** Execute the shared screen's actual transport over the published player and native canvas. */
@@ -114,4 +117,53 @@ test('#799 the first scene draw and immediate frozen pose use a nonzero mapped s
   expect(h.player.posedFrame().order).toEqual(initial.order);
   expect((await h.capture()).png).toBe(captured.png);expect(h.scope.time).toBe(0);
  }finally{h.close();}
+});
+
+test('#841 a looping direction scene with a non-idle clip labels #idle-state by the clip in EN and KO while idle and non-scene cases keep the idle label',()=>{
+ const direction:DirectionInspection={file:{path:'direction.json',sha256:'a'.repeat(64)},model:{path:'skeleton.model.json',sha256:'b'.repeat(64)},rigVersion:1,
+  camera:{space:'rig-world-y-up',keys:[{time:0,easing:'hold',box:{x:0,y:0,width:80,height:64}}]},
+  take:{duration:4,loop:true},timing:[{time:0,source_time:0,easing:'linear'},{time:4,source_time:2,easing:'hold'}]};
+ const textNode:{nodeType:3;nodeValue:string;parentElement:unknown}={nodeType:3,nodeValue:'',parentElement:null};
+ const idleStateEl={id:'idle-state',tagName:'SPAN',childNodes:[textNode],getAttribute:()=>null,ownerDocument:{createTreeWalker:()=>{let done=false;return {nextNode:()=>done?null:(done=true,textNode)};}},get textContent(){return textNode.nodeValue;},set textContent(v:string){textNode.nodeValue=v;}} as unknown as Element;
+ textNode.parentElement=idleStateEl;
+ const rendered=(lang:'en'|'ko')=>{setLanguagePreference(lang);applyDomI18n(idleStateEl);return idleStateEl.textContent;};
+ let scene:DirectionInspection|undefined=direction;
+ const scope={
+  player:{},
+  assets:{animations:[{name:'idle',duration:2},{name:'look_around',duration:2}]},
+  data:{manifest:{animations:[{id:'idle',label:'Idle'},{id:'look_around',label:'Look around'}] as {id:string;label?:string}[]}},
+  animation:'look_around',
+  duration:2,
+  axisInspection:false,
+  idleAvailable,
+  activeScene:()=>scene,
+  input:()=>({checked:true}),
+  text:(id:string,value:string)=>{if(id==='idle-state')setSourceText(idleStateEl,value);},
+ };
+ const run=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(idle)};return {canRepeatIdle,renderIdle};}`)(scope) as {canRepeatIdle():boolean;renderIdle():void};
+ try{
+  run.renderIdle();
+  expect(rendered('en')).toBe('Look around · repeating');
+  expect(rendered('ko')).toBe('Look around · 반복 재생 중');
+
+  scope.data.manifest.animations=[{id:'idle',label:'Idle'}];
+  run.renderIdle();
+  expect(rendered('en')).toBe('look_around · repeating');
+  expect(rendered('ko')).toBe('look_around · 반복 재생 중');
+
+  scope.animation='idle';
+  run.renderIdle();
+  expect(rendered('en')).toBe('Actual idle · repeat enabled');
+  expect(rendered('ko')).toBe('실제 아이들 · 반복 활성화됨');
+
+  scene=undefined;
+  run.renderIdle();
+  expect(rendered('en')).toBe('Actual idle · repeat enabled');
+  expect(rendered('ko')).toBe('실제 아이들 · 반복 활성화됨');
+
+  scope.animation='look_around';
+  run.renderIdle();
+  expect(rendered('en')).toBe('Non-idle inspection · no automatic playback');
+  expect(rendered('ko')).toBe('비아이들 점검 · 자동 재생 안 함');
+ }finally{setLanguagePreference('system');}
 });
