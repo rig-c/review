@@ -88,3 +88,23 @@ test('#839 answered Question readback does not reveal completed answer controls 
  const h=harness([]);(h.env as any).questionForms=[{dataset:{interviewAnswered:'true'},querySelector:()=>({disabled:true}),querySelectorAll:()=>[]}];h.render();
  expect(h.rigAsk.hidden).toBe(true);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.classList.values.has('primary')).toBe(false);expect(h.rigInspector.act.hidden).toBe(true);
 });
+
+
+for(const sample of [
+ {name:'saved interview-only',record:true,subjects:[],saved:true,expected:'Answer saved'},
+ {name:'pending interview',record:true,subjects:[{kind:'interview-picks'}],saved:false,expected:'Not submitted'},
+ {name:'rig verdict after an interview answer',record:false,subjects:[{kind:'review-verdict',stage:'rig-review'}],saved:true,expected:'Not submitted'},
+ {name:'parts verdict after an interview answer',record:false,subjects:[{kind:'parts-verdict'}],saved:true,expected:'Not submitted'},
+ {name:'record host with a pending verdict',record:true,subjects:[{kind:'review-verdict',stage:'rig-review'}],saved:true,expected:'Not submitted'},
+ {name:'saved interview with a pending checkpoint',record:true,subjects:[{kind:'checkpoint'}],saved:true,expected:'Not submitted'},
+ {name:'saved interview with a footer refusal',record:true,subjects:[],saved:true,error:true,expected:'JOB_VISUAL_UNAVAILABLE'},
+])test('#851 footer '+sample.name+' reads the production footer node',()=>{
+ const begin=main.indexOf('function renderDraftState(): void {'),end=main.indexOf('\nfunction renderProvenance',begin);
+ const messageBegin=main.indexOf('function message(value:'),messageEnd=main.indexOf('\nasync function api',messageBegin);
+ const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(messageBegin,messageEnd)+'\n'+main.slice(begin,end));
+ const footer={textContent:sample.error?'JOB_VISUAL_UNAVAILABLE':'Not submitted',title:'',classList:{error:!!sample.error,contains(name:string){return name==='error'&&this.error;},toggle(name:string,on:boolean){if(name==='error')this.error=on;}}};
+ const nodes={message:footer,'review-message':{...footer,textContent:''}};
+ const env={host:{...(sample.record?{record:{hasPicture:true}}:{}),pendingSubjects:()=>sample.subjects,reviewState:()=> 'Reviewing'},pendingAnswers:sample.subjects,liveIssueCount:()=>0,saving:false,draftConflict:false,draftStatus:null,answerSaved:sample.saved,actReadOnly:null,dirty:false,renderAnswerControls(){},rigInspector:{actBar:{setSaveState(){}},act:{hidden:false}},el:(id:keyof typeof nodes)=>nodes[id],text:(id:keyof typeof nodes,value:string)=>{nodes[id].textContent=value;}};
+ const render=new Function('env',`with(env){${script};return renderDraftState;}`)(env);render();
+ const footerText=()=>nodes.message.textContent;expect(footerText()).toBe(sample.expected);
+});

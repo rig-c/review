@@ -200,6 +200,7 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   const drafts=createJobFormDrafts({jobId:f.session.jobId,current:()=>inspection!,forms:()=>forms,storage:()=>({setItem:(key,value)=>{store.set(key,value);}})});
   const deps:JobFormDependencies={node,translate:key=>key,helpers:{...createJobFormHelpers(node,key=>key),jobCheckpointContext,assertJobAskSource:(ask,display)=>{prepareJobForms(display,[ask],()=>null);}},draftStorage:()=>({getItem:key=>store.get(key)??null}),...drafts,access:{capability:'fixture'},pageId:'page',window:{state:()=>({pending:[f.ask],receipt:null,preparing:false,closed:false,generation:1}),submit:async()=>{throw new Error('No submission in draft test');}}};
   const entry=formFor(f.ask,inspection,deps);forms.set(f.ask.askId,entry);
+  expect(entry.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(false);
   const radios=[...entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')],identities=radios.map(input=>({name:input.name,value:input.value}));
   for(const input of radios){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
   entry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='  직접 입력\n';
@@ -220,6 +221,9 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   const finalized=formFor(answered,inspection,deps);
   expect([...finalized.form.querySelectorAll<HTMLInputElement>('input[type=radio]')].filter(input=>input.checked).map(input=>input.value)).toEqual([answered.act.value.selections[0].optionId,'density_auto']);
   expect(finalized.dirty).toBe(false);
+  expect(finalized.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(true);
+  restored.form.dataset.interviewAnswered='true';restored.form.dispatchEvent(new Event('change'));
+  expect(restored.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(true);
  }finally{inspection?.dispose();dom.restore();await f.close();}
 });
 

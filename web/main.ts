@@ -319,6 +319,8 @@ function renderDraftState(): void {
   renderAnswerControls();
   if (draftStatus === null && !live && !answerSaved) return;
   rigInspector.actBar.setSaveState({ kind: actReadOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftConflict ? 'Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.' : answerSaved ? 'Answer saved' : draftStatus&&/^(Saved local draft was not restored|Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus)?draftStatus:actReadOnly??live??draftStatus! });
+  if(answerSaved&&!saving&&!draftConflict&&!dirty&&!actReadOnly&&(host?.record||!host)&&
+      (host?.pendingSubjects?.()??pendingAnswers).every(subject=>subject.kind==='interview-picks')&&!el('message').classList.contains('error'))message('Answer saved',false,true);
 }
 
 function renderProvenance(): void {

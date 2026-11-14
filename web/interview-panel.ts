@@ -241,6 +241,7 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   let view:ReturnType<typeof interviewImageView>|undefined,list:HTMLElement|undefined,records:HTMLElement|undefined;
   const showImage=(index:number)=>{view?.dispose();view?.element.remove();view=interviewImageView(options.images,index,showImage,context);art.append(view.element);};
   const refresh=()=>{
+    submit.hidden=!question.editable||form.dataset.interviewAnswered==='true';
     provenance.textContent=t('interview.provenance',[question.set.drafted_by,question.set.drafted_at]);
     const questions=typeof options.questions==='function'?options.questions():options.questions;
     const items=questions?.map((item,index)=>({...item,answered:index===(options.selected??0)?form.dataset.interviewAnswered==='true':item.answered}))??[{label:question.set.question+' · '+question.set.id,answered:form.dataset.interviewAnswered==='true'}];

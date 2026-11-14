@@ -99,6 +99,7 @@ async function questionTabChecks(){
    await wait(`!!document.querySelector(${JSON.stringify(root+' '+selector+' fieldset:not(:disabled)')})&&!!document.querySelector('[data-block-target=question][aria-selected=true]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 pending on page load');
    const pendingStrip=await stripState();assert.equal(pendingStrip.tabs[0]!.id,'question');assert.deepEqual(pendingStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs retained on pending load');assert.equal(pendingStrip.selectedVisible,true);assert.equal(pendingStrip.questionFirst,true);
    if(ordinary)comparePartsStrip(pendingStrip,ordinary.state,true);
+   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),false,'pending interview save remains visible');
    await writeFile(join(out,'load.png'),await page!.screenshot());
    let narrowStrip:StripState|undefined;
    if(picture===true&&narrowQuestionResize){
@@ -131,11 +132,15 @@ async function questionTabChecks(){
    await click(page!,selector+' button[type=submit]');
    await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'&&document.querySelector('#dirty').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})&&document.querySelector('#workspace-act-row').hidden`,'839 answer saved');
    assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
+   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),true,'answered interview submit is absent from readback');
+   assert.equal(await page!.evaluate(`document.getElementById('message').textContent`),(language==='en'?enCatalog:koCatalog)['Answer saved'],'interview-only saved footer agrees with saved header');
    assert.deepEqual(await page!.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
    assert.equal(await page!.evaluate(`['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)`),true,'completed answer controls hidden');
    assert.equal(await page!.evaluate(`document.querySelector('#workspace-act-row').hidden`),true);
    assert.deepEqual(await page!.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'single visible saved state');
    const answeredStrip=await stripState();assert.equal(answeredStrip.tabs[0]!.id,'question');assert.deepEqual(answeredStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs retained after save');if(ordinary)comparePartsStrip(answeredStrip,ordinary.state,true);
+   const savedFooter=await page!.evaluate(`document.getElementById('message').textContent`);
+   assert.equal(savedFooter,(language==='en'?enCatalog:koCatalog)['Answer saved']);
    const readbackCopy=await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).textContent`);assert.equal(readbackCopy,(language==='en'?enCatalog:koCatalog)['job.saved']);
    await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).scrollIntoView({block:'center'})`);await writeFile(join(out,'readback-status.png'),await page!.screenshot());
    await selectBlock(awayTarget);if(ordinary){const savedAway=await stripState();comparePartsStrip(savedAway,ordinary.state,true);assert.equal(savedAway.ordinaryPanelVisible,true);}
@@ -153,6 +158,8 @@ async function questionTabChecks(){
    if(!pending||pending.type!=='pending')throw Error('missing pending fixture event');fixture.fake.events.push({type:'act',jobId:fixture.session.jobId,generation:fixture.display.publication.generation+2,cursor:String(fixture.fake.events.length+1),act});
    await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 reload readback');
    assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
+   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),true,'answered interview submit is absent from readback');
+   assert.equal(await page!.evaluate(`document.getElementById('message').textContent`),(language==='en'?enCatalog:koCatalog)['Answer saved'],'interview-only saved footer agrees with saved header');
    assert.deepEqual(await page!.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
    assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' textarea[name="other.topology"]')}).value`),'  Custom topology · 직접 입력\n');
    assert.equal(await page!.evaluate(`document.querySelector('#workspace-act-row').hidden&&['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)`),true,'reloaded completed row and controls hidden');
@@ -161,7 +168,7 @@ async function questionTabChecks(){
    await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
    await writeFile(join(out,'reload.png'),await page!.screenshot());
    const reloadStrip=await stripState();assert.equal(reloadStrip.tabs[0]!.id,'question');assert.deepEqual(reloadStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs retained on readback reload');if(ordinary)comparePartsStrip(reloadStrip,ordinary.state,true);
-   const observation={originalView,pendingPreviousView,transientPinRefused:true,pendingOnLoad:true,picture,language,width:1440,height:900,dpr:2,originalTabs,ordinary,beforeAskStrip,eventArrivalStrip,eventAwayStrip,pendingStrip,awayStrip,answeredStrip,reloadStrip,narrowStrip,readbackCopy,sourceHash:fixture.display.publication.source.sourceHash,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));
+   const observation={originalView,pendingPreviousView,transientPinRefused:true,pendingOnLoad:true,picture,language,width:1440,height:900,dpr:2,originalTabs,ordinary,beforeAskStrip,eventArrivalStrip,eventAwayStrip,pendingStrip,awayStrip,answeredStrip,reloadStrip,narrowStrip,readbackCopy,savedFooter,sourceHash:fixture.display.publication.source.sourceHash,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));
    console.log('839_QUESTION_PASS '+JSON.stringify(observation));
    assert.deepEqual(await jobInputHashes(fixture.root),before);
   }finally{await fixture.close();}
@@ -189,6 +196,8 @@ async function picturelessPartsQuestionChecks(){
    await page!.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});for(const value of ['topology_other','density_auto'])form.querySelector('input[value="'+value+'"]').click();const other=form.querySelector('textarea[name="other.topology"]');other.value=${JSON.stringify('  Custom topology · 직접 입력\n')};other.dispatchEvent(new Event('input',{bubbles:true}));form.querySelector('button[type=submit]').scrollIntoView({block:'center'});})()`);
    await click(page!,selector+' button[type=submit]');await wait(`!document.querySelector('#job-record-asks[open]')&&document.querySelector('#workspace-act-row').hidden&&document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'`,'839 no-image saved');
    const answeredStrip=await stripState();comparePartsStrip(answeredStrip,ordinary.state,false);assert.equal(answeredStrip.ordinaryPanelVisible,true);assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
+   const savedFooter=await page!.evaluate(`document.getElementById('message').textContent`);
+   assert.equal(savedFooter,(language==='en'?enCatalog:koCatalog)['Answer saved']);
    const readbackCopy=await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).textContent`);assert.equal(readbackCopy,(language==='en'?enCatalog:koCatalog)['job.saved']);await writeFile(join(out,'answered.png'),await page!.screenshot());
    const bytes=await readFile(join(out,'one-screen.json'),'utf8'),act=parseRecordAct(JSON.parse(bytes));assert.equal(act.kind,'interview-picks');if(act.kind!=='interview-picks')throw Error('wrong act');assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
    const expected=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});assert.equal(bytes,JSON.stringify(expected));assert.equal(sha(await readFile(new URL('../src/job-act.ts',import.meta.url))),baseline.writerSourceSha256);
@@ -196,7 +205,7 @@ async function picturelessPartsQuestionChecks(){
    await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#workspace-act-row').hidden`,'839 no-image saved reload');
    if(await page!.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page!,'#job-record-asks .workspace-drawer-close');
    const reloadStrip=await stripState();comparePartsStrip(reloadStrip,ordinary.state,false);assert.equal(reloadStrip.ordinaryPanelVisible,true);await writeFile(join(out,'reload.png'),await page!.screenshot());
-   const observation={picture:'parts',questionImages:false,language,sourceHash:fixture.display.publication.source.sourceHash,ordinary,pendingStrip,awayStrip,answeredStrip,reloadStrip,readbackCopy,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));console.log('839_NO_IMAGE_PARTS_PASS '+JSON.stringify(observation));
+   const observation={picture:'parts',questionImages:false,language,sourceHash:fixture.display.publication.source.sourceHash,ordinary,pendingStrip,awayStrip,answeredStrip,reloadStrip,readbackCopy,savedFooter,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));console.log('839_NO_IMAGE_PARTS_PASS '+JSON.stringify(observation));
    assert.deepEqual(await jobInputHashes(fixture.root),before);
   }finally{await fixture.close();}
  }
@@ -356,8 +365,10 @@ try{
      observation[mode+'Controls']=values;
      await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type="submit"]')}).scrollIntoView({block:'center'});`);
      await writeFile(join(out,mode+'-answered.png'),await page.screenshot());
+     assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),false,'pending interview submit remains visible');
      await click(page,selector+' button[type="submit"]');
      const path=join(out,mode+'.json');await wait(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')})?.textContent===${JSON.stringify((language==='en'?enCatalog:koCatalog)['job.saved'])}`,kind+'/'+mode+'/saved');
+     if(kind==='interview-picks'){assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),true,'saved interview submit hidden');const footer=await page.evaluate(`document.getElementById('message').textContent`);assert.equal(footer,(language==='en'?enCatalog:koCatalog)['Answer saved'],'interview-only footer saved');observation.savedFooter=footer;}
      if(kind==='interview-picks')assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector+' .interview-questions>p')}).textContent`),(language==='en'?enCatalog:koCatalog)['interview.answered'].replace('{0}','1').replace('{1}','1'),'progress counts the saved question, not individual asks or an unsent draft');
      assert.ok(existsSync(path),'writer actually persisted '+mode);const act=parseRecordAct(JSON.parse(await readFile(path,'utf8')));
      assert.equal(act.at,'2026-11-08T12:00:00.000Z');

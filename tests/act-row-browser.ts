@@ -75,7 +75,7 @@ const geometry=`(()=>{
  const style=n=>{if(!n)return null;const s=getComputedStyle(n);return {rect:rect(n),text:n.textContent.trim(),size:parseFloat(s.fontSize),weight:Number(s.fontWeight),color:s.color,whiteSpace:s.whiteSpace,overflow:s.textOverflow,overflowX:s.overflowX,overflowY:s.overflowY,clientWidth:n.clientWidth,scrollWidth:n.scrollWidth,clientHeight:n.clientHeight,scrollHeight:n.scrollHeight};};
  const colorProbe=document.createElement('canvas').getContext('2d');const color=value=>{colorProbe.fillStyle=value;return colorProbe.fillStyle;};
  const rootStyle=getComputedStyle(document.documentElement);
- return {language:document.documentElement.lang,bars:document.querySelectorAll('#workspace-review-act').length,rows:document.querySelectorAll('#workspace-act-row').length,
+ return {language:document.documentElement.lang,footerMessage:document.getElementById('message').textContent,bars:document.querySelectorAll('#workspace-review-act').length,rows:document.querySelectorAll('#workspace-act-row').length,
   rowVisible:visible(row),headerVisible:visible(header),direct:row?.previousElementSibling===header&&header?.parentElement===row?.parentElement,home:bar.parentElement?.id,
   row:rect(row),bar:rect(bar),header:rect(header),heading:rect(heading),panel:rect(document.getElementById('workspace-inspector')),
   headingChildren:[...heading.children].map(n=>n.classList.contains('workspace-bottom-tabs')?'tabs':n.id),
@@ -100,6 +100,7 @@ async function capture(page:InputCdpSession,out:string,name:string){
  await writeFile(join(out,name+'.png'),await page.screenshot());return state;
 }
 function assertPending(state:any,mode:Mode,width:number){
+ if(mode==='rig'||mode==='parts')assert.equal(state.footerMessage,(state.language==='en'?enCatalog:koCatalog)['Not submitted'],'pending verdict footer must not inherit an interview saved state');
  for(const part of state.footer){assert.ok(part.rect.left>=0&&part.rect.right<=width&&part.rect.top>=state.footer[0].rect.top&&part.rect.bottom<=state.footer[0].rect.bottom,'shown footer item inside viewport and footer: '+part.id);assert.ok(part.scrollWidth<=part.clientWidth+1&&part.scrollHeight<=part.clientHeight+1,'shown footer text fits: '+part.id);}
  assert.equal(state.bars,1);assert.equal(state.rows,1);assert.equal(state.rowVisible,true);assert.equal(state.direct,true);assert.equal(state.home,'workspace-act-row');
  assert.equal(state.headerVisible,mode!=='embedded-rig');
