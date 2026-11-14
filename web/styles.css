@@ -104,7 +104,7 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 .workspace-settings .hint{margin:6px 0}
 .workspace-settings input[type=checkbox]{width:auto;flex:none}
 .workspace-layout>.parts-explorer{display:flex;flex-direction:column;grid-template-columns:none;grid-column:5;grid-row:1;width:auto;min-width:0;min-height:0;height:auto;overflow:hidden}
-.workspace-layout .inspector{grid-row:3;height:auto!important;min-height:0!important;max-height:none;overflow:hidden}
+.workspace-layout .inspector{grid-row:3;height:auto!important;min-height:0!important;max-height:none;overflow:visible}
 .workspace-separator{position:relative;z-index:3;background:var(--rv-separator);touch-action:none;cursor:col-resize;min-width:0;min-height:0}
 .workspace-separator:hover{background:var(--rv-separator-hover)}
 /* Drawn 4px (workspaceMinimums.separator); the transparent hit area stays 16px, 22px on coarse pointers. */
@@ -282,11 +282,8 @@ footer.status-bar{flex-wrap:nowrap}
 .applied-list [data-check-verdict="passed"]{color:var(--pass)}
 #applied-status{margin:0;flex:0 1 auto;max-width:30%;min-width:0;font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .inspector #inspector-playback{padding:3px 10px;box-sizing:border-box}
-.inspector #inspector-playback:not([hidden]){display:grid;grid-template-columns:minmax(0,1.55fr) minmax(320px,1fr);gap:10px;flex:1 1 0;min-height:0;overflow:hidden}
-.workspace-layout:has(>.parts-explorer) .inspector #inspector-playback:not([hidden]){grid-template-columns:minmax(0,2.2fr) minmax(220px,.85fr);gap:8px}
-.animation-dock-panel{display:flex;flex-direction:column;gap:2px;min-width:0;min-height:0;height:100%;overflow:hidden}
-.animate-blocks-panel{min-width:0;min-height:0;height:100%;overflow-y:auto;overflow-x:hidden;padding:12px 15px;box-sizing:border-box;border-left:1px solid var(--border);overscroll-behavior:contain}
-.inspector #inspector-playback .animate-blocks-panel>.block-row{top:-12px;margin:-12px -15px 8px;padding:4px 15px}
+.animation-dock-panel{display:flex;flex-direction:column;gap:2px;min-width:0;min-height:0}
+.inspector #inspector-playback>.block-row{top:-3px;margin:-3px -10px 8px;padding:4px 10px}
 .inspector #inspector-playback .transport{padding:0;gap:5px;flex-wrap:nowrap;height:22px;min-height:22px;align-items:center}
 .inspector #inspector-playback .transport select{padding:1px 5px;height:20px}
 .inspector #inspector-playback .transport button{padding:1px 7px;height:20px;font-size:11px}
@@ -459,7 +456,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-secondary-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 12px;border-bottom:1px solid var(--border)}
 .workspace-main-toolbar [data-workspace-camera]{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .workspace-secondary-toolbar .layer-toggles{flex:none}
-.workspace-bottom-tabs{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.workspace-bottom-tabs{display:flex;align-items:center;gap:5px;flex-wrap:nowrap}
 .workspace-bottom-tabs [aria-selected=true]{background:var(--rv-pressed-bg);border-color:var(--rv-pressed-border)}
 .workspace-act-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 0;border-top:1px solid var(--border)}
 .workspace-act-bar>label{margin:0}.workspace-act-bar>select{width:auto}.workspace-act-bar .review-dialog-actions{padding:0;border:0;flex:1}
@@ -472,13 +469,18 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .inspector-heading .workspace-act-bar .review-message{flex:0 1 auto;max-width:36ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .workspace-drawer>.inspector-body{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
 .workspace-drawer>.inspector-body>[data-inspector-panel]{flex:1;min-height:0;overflow:auto;padding:12px}
-.workspace-drawer>.inspector-body>#inspector-playback:not([hidden]){display:grid;grid-template-columns:minmax(0,1fr);overflow:auto}
 
-/* The header owns mode; its existing block row and one Comments tab fill the heading. */
-/* The heading's block row wraps rather than scrolls, so no scrollbar shows at any width; below
-   the tabs' 380px basis the act bar moves to its own line instead of squeezing the tabs (#735). */
-.workspace-bottom-tabs{min-width:0;flex:1 1 380px;flex-wrap:nowrap}
-.workspace-bottom-tabs>.block-row{position:static;min-width:0;margin:0;padding:0;border:0;flex:1;flex-wrap:wrap;row-gap:4px;overflow:visible}
+/* The header owns mode; its existing block row fills the heading as one non-wrapping tab strip with overflow menu. */
+.workspace-bottom-tabs{position:relative;min-width:0;flex:999 1 80px;flex-wrap:nowrap}
+.workspace-bottom-tabs>.block-row{position:relative;min-width:0;margin:0;padding:0;border:0;flex:1 1 0;flex-wrap:nowrap;overflow:visible}
+.workspace-bottom-tabs>button,#workspace-bottom-collapse{flex:none;white-space:nowrap}
+#workspace-bottom-collapse{padding:4px 8px;line-height:1}
+[data-tab-overflow]{display:none!important}
+.workspace-tabs-more{flex:none;padding:3px 8px;font-size:11px;line-height:1}
+.workspace-tabs-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:15;display:flex;flex-direction:column;gap:2px;min-width:140px;max-height:220px;overflow-y:auto;padding:4px;background:var(--rv-panel);border:1px solid var(--border-strong);border-radius:8px}
+.workspace-tabs-menu[data-side=above]{top:auto;bottom:calc(100% + 4px)}
+.workspace-tabs-menu button{text-align:left;font-size:11px;padding:4px 9px;border-color:transparent;background:transparent;color:var(--fg);white-space:nowrap}
+.workspace-tabs-menu button:hover,.workspace-tabs-menu button:focus-visible{background:var(--rv-control-hover);color:var(--fg-strong)}
 .inspector-body>[data-comments=true]{display:none!important}
 .inspector-heading .workspace-act-bar{flex:none;flex-wrap:nowrap;gap:6px}
 .inspector-heading .workspace-act-bar .review-draft-state{max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

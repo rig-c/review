@@ -39,10 +39,21 @@ export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlock
 
 interface Tab {button:HTMLButtonElement;id:string;panel:HTMLElement;included:HTMLElement[]}
 const isRow=(node:Element)=>node.classList.contains('block-row');
+function bindPopupMenu(id:string,items:()=>HTMLButtonElement[],cleanups:(()=>void)[],place?:(menu:HTMLElement)=>void):{button:HTMLButtonElement;menu:HTMLElement;close:(focus?:boolean)=>void} {
+ const button=actionButton('⋯',null),menu=panelMake('div',{id,hidden:true}),listen=(node:HTMLElement,type:string,fn:(event:Event)=>void)=>{node.addEventListener(type,fn);cleanups.push(()=>node.removeEventListener(type,fn));};
+ button.setAttribute('aria-haspopup','menu');button.setAttribute('aria-controls',id);button.setAttribute('aria-expanded','false');menu.setAttribute('role','menu');
+ const close=(focus=true)=>{menu.hidden=true;button.setAttribute('aria-expanded','false');if(focus)button.focus();};
+ const open=(last=false)=>{const visible=items();if(!visible.length)return;const list=visible.filter(item=>!item.disabled);menu.hidden=false;place?.(menu);button.setAttribute('aria-expanded','true');if(list.length)list[last?list.length-1:0]!.focus();else{menu.tabIndex=-1;menu.focus();}};
+ listen(button,'click',()=>menu.hidden?open():close());
+ listen(button,'keydown',event=>{const key=(event as KeyboardEvent).key;if(['ArrowDown','ArrowUp','Enter',' '].includes(key)){event.preventDefault();open(key==='ArrowUp');}else if(key==='Escape'){event.preventDefault();close();}});
+ listen(menu,'keydown',event=>{const key=(event as KeyboardEvent).key,list=items().filter(item=>!item.disabled);if(key==='Escape'){event.preventDefault();close();}else if(['ArrowDown','ArrowUp','Home','End'].includes(key)&&list.length){event.preventDefault();const index=list.indexOf(event.target as HTMLButtonElement);list[key==='Home'?0:key==='End'?list.length-1:(index+(key==='ArrowDown'?1:list.length-1))%list.length]!.focus();}});
+ listen(menu,'focusout',event=>{const target=(event as FocusEvent).relatedTarget;if(target!==button&&!menu.contains(target as Node|null))close(false);});
+ return {button,menu,close};
+}
 
 export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlocks {
- const rows=new Map<string,InspectorTabs>(),ids=new Map<string,Set<string>>();
- const definitions=new Map<string,{section:HTMLElement;row:HTMLElement;scrollRoot:HTMLElement;tabs:Tab[]}>(),saved:ActiveBlocks={};
+ const rows=new Map<string,InspectorTabs>(),ids=new Map<string,Set<string>>(),cleanups:(()=>void)[]=[];
+ const definitions=new Map<string,{section:HTMLElement;row:HTMLElement;scrollRoot:HTMLElement;tabs:Tab[];syncOverflow:()=>void}>(),saved:ActiveBlocks={};
  let active:string|undefined;
  let disposedState:ActiveBlocks|undefined;
  const state=()=>disposedState??Object.fromEntries([...rows].map(([name,row])=>[name,row.state()!]));
@@ -50,7 +61,7 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
  const resolve=(name:string,id:string)=>id==='transport'&&!ids.get(name)?.has(id)?'motion-tools':id;
  for(const section of options.sections){
   const name=section.dataset.inspectorPanel??'';if(!name)continue;
-  // In Animate the row heads the blocks panel beside the timeline; that panel is what scrolls.
+  // In Animate the row heads the section directly and switches the whole panel body.
   const children=[...section.children],directRow=children.find(isRow) as HTMLElement|undefined;
   const scrollRoot=directRow?section:children.find(node=>[...node.children].some(isRow)) as HTMLElement|undefined;if(!scrollRoot)continue;
   const row=directRow??[...scrollRoot.children].find(isRow) as HTMLElement;
@@ -64,7 +75,35 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
   }
   if(!tabs.length&&!options.bottom)continue;
   if(options.bottom){
-   definitions.set(name,{section,row,scrollRoot,tabs});saved[name]=tabs.find(tab=>tab.button.getAttribute('aria-selected')==='true')?.id??tabs[0]?.id??'feedback';
+   let syncOverflow=()=>{};
+   if(typeof (doc as Document).createElement==='function'&&tabs.length){
+    const placeOverflow=(menu:HTMLElement)=>{
+     if(typeof row.getBoundingClientRect!=='function')return;
+     const rect=row.getBoundingClientRect(),clip=section.closest('main')?.getBoundingClientRect(),above=Math.max(0,rect.top-(clip?.top??0)-8),below=Math.max(0,Math.min(innerHeight,clip?.bottom??innerHeight)-rect.bottom-8);
+     const up=below<Math.min(menu.scrollHeight,220)&&above>below;menu.dataset.side=up?'above':'below';menu.style.maxHeight=Math.min(220,up?above:below)+'px';
+    };
+    const items:HTMLButtonElement[]=[],more=bindPopupMenu('workspace-tabs-more-'+name,()=>{syncOverflow();return items.filter(item=>!item.hidden);},cleanups,placeOverflow);
+    more.button.className='workspace-tabs-more';more.button.hidden=true;more.menu.className='workspace-tabs-menu';
+    for(const tab of tabs){
+     const item=actionButton(tab.button.textContent??'',()=>{more.close(false);rows.get(name)?.select(tab.id);syncOverflow();tab.button.focus();});
+     item.setAttribute('role','menuitem');item.dataset.blockMoreTarget=tab.id;item.tabIndex=-1;item.hidden=true;items.push(item);more.menu.append(item);
+    }
+    row.append(more.button,more.menu);
+    syncOverflow=()=>{
+     const label=tr('More tabs');more.button.setAttribute('aria-label',label);more.button.setAttribute('title',label);
+     for(const tab of tabs)tab.button.removeAttribute('data-tab-overflow');
+     if(row.hidden||!(row.clientWidth>0)){more.button.hidden=true;more.close(false);return;}
+     more.button.hidden=false;
+     const availableWidth=row.clientWidth,moreWidth=(more.button.offsetWidth||28)+4,widths=tabs.map(tab=>tab.button.offsetWidth);
+     if(widths.reduce((sum,w,i)=>sum+w+(i>0?4:0),0)<=availableWidth){more.button.hidden=true;more.close(false);return;}
+     const selectedIndex=tabs.findIndex(tab=>tab.button.getAttribute('aria-selected')==='true'),visible=new Set<number>();
+     let used=moreWidth+(selectedIndex>=0?widths[selectedIndex]!+4:0);if(selectedIndex>=0)visible.add(selectedIndex);
+     for(let i=0;i<tabs.length;i++)if(i!==selectedIndex){if(used+widths[i]!+4<=availableWidth){visible.add(i);used+=widths[i]!+4;}else break;}
+     for(const [i,tab]of tabs.entries()){const over=!visible.has(i);if(over)tab.button.setAttribute('data-tab-overflow','true');items[i]!.hidden=!over;items[i]!.disabled=tab.button.disabled;items[i]!.textContent=tab.button.textContent;const title=tab.button.getAttribute('title');if(title)items[i]!.setAttribute('title',title);else items[i]!.removeAttribute('title');}
+     if(!more.menu.hidden)placeOverflow(more.menu);
+    };
+   }
+   definitions.set(name,{section,row,scrollRoot,tabs,syncOverflow});saved[name]=tabs.find(tab=>tab.button.getAttribute('aria-selected')==='true')?.id??tabs[0]?.id??'feedback';
    row.hidden=true;options.bottom.strip.append(row);continue;
   }
   ids.set(name,new Set(tabs.map(tab=>tab.id)));
@@ -73,28 +112,33 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
    panels:tabs.map(tab=>tab.panel),root:row,scrollRoot,initialize:true,
   }));
  }
+ const syncActiveOverflow=()=>{if(active)definitions.get(active)?.syncOverflow();};
+ if(options.bottom&& [...definitions.values()].some(d=>typeof (d.section.ownerDocument as Document).createElement==='function')){
+  cleanups.push(onLanguageChange(syncActiveOverflow));
+  if(typeof ResizeObserver==='function'){const ro=new ResizeObserver(syncActiveOverflow);ro.observe(options.bottom.strip);cleanups.push(()=>ro.disconnect());}
+ }
  // Rebind the existing tab controller when the header mode changes. The shared Comments
  // button/panel retain identity; each mode retains its own last selected block.
  const activate=(name:string)=>{
   if(!options.bottom||!definitions.has(name))return;
   if(active===name)return;
   if(active){saved[active]=rows.get(active)?.state()??saved[active]!;rows.get(active)?.dispose();rows.delete(active);definitions.get(active)!.row.hidden=true;}
-  active=name;const {section,row,scrollRoot,tabs}=definitions.get(name)!,bottom=options.bottom;
+  active=name;const {section,row,scrollRoot,tabs,syncOverflow}=definitions.get(name)!,bottom=options.bottom;
   bottom.comment.dataset.blockTarget='feedback';bottom.comment.hidden=true;bottom.comment.remove();row.hidden=false;
   const all=[...tabs,{button:bottom.comment,id:'feedback',panel:bottom.panel,included:[]}];
   ids.set(name,new Set(all.map(tab=>tab.id)));
-  const sync=()=>{section.dataset.comments=String(rows.get(name)?.state()==='feedback');options.changed?.();};
+  const sync=()=>{section.dataset.comments=String(rows.get(name)?.state()==='feedback');syncOverflow();options.changed?.();};
   for(const tab of all)tab.button.setAttribute('aria-selected',String(tab.id===saved[name]));
   rows.set(name,bindInspectorTabs(sync,()=>{},{tabs:all.map(tab=>({id:tab.id,button:tab.button,panels:[tab.panel],included:tab.included,attribute:'aria-selected'})),panels:all.map(tab=>tab.panel),root:row,scrollRoot,initialize:true}));
-  section.dataset.comments=String(saved[name]==='feedback');
+  section.dataset.comments=String(saved[name]==='feedback');syncOverflow();
  };
  if(options.bottom)activate(options.sections[0]?.dataset.inspectorPanel??'');
  return {
   state:()=>({...saved,...state()}),activate,
-  select:(name,id)=>{rows.get(name)?.select(resolve(name,id));},
+  select:(name,id)=>{rows.get(name)?.select(resolve(name,id));definitions.get(name)?.syncOverflow();},
   /** Restore saved tabs without touching the workspace's section scroll offset. */
-  restore(value){for(const [name,id]of Object.entries(value)){if(options.bottom){const definition=definitions.get(name);if(id==='feedback'||definition?.tabs.some(tab=>tab.id===resolve(name,id)))saved[name]=resolve(name,id);}rows.get(name)?.restore(resolve(name,id));}},
-  dispose(){disposedState=state();for(const row of rows.values())row.dispose();rows.clear();ids.clear();},
+  restore(value){for(const [name,id]of Object.entries(value)){if(options.bottom){const definition=definitions.get(name);if(id==='feedback'||definition?.tabs.some(tab=>tab.id===resolve(name,id)))saved[name]=resolve(name,id);}rows.get(name)?.restore(resolve(name,id));definitions.get(name)?.syncOverflow();}},
+  dispose(){disposedState=state();for(const cleanup of cleanups)cleanup();for(const row of rows.values())row.dispose();rows.clear();ids.clear();},
  };
 }
 
@@ -136,7 +180,7 @@ export function mountBottomPanel(options:BottomPanelOptions):BottomPanel {
   panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',button.id);
   strip.append(button);return {id,button,panels:[panel],attribute:'aria-selected' as const};
  });
- const collapse=actionButton(tr('Collapse bottom panel'),null);collapse.id='workspace-bottom-collapse';collapse.setAttribute('aria-expanded','true');collapse.setAttribute('aria-controls','workspace-inspector');
+ const collapseLabel=tr('Collapse bottom panel'),collapse=actionButton('⌄',null);collapse.id='workspace-bottom-collapse';collapse.setAttribute('aria-expanded','true');collapse.setAttribute('aria-controls','workspace-inspector');collapse.setAttribute('aria-label',collapseLabel);collapse.setAttribute('title',collapseLabel);
  options.heading.replaceChildren(strip,collapse);
  return {row:{tabs,panels:tabs.flatMap(tab=>tab.panels),initialize:true},strip,act:options.act,actHome:options.actHome,collapse,kind:options.kind};
 }
@@ -166,25 +210,13 @@ export function mountActBar(options:ActBarOptions):ActBar {
  const cleanups:(()=>void)[]=[],labels:{button:HTMLButtonElement;label:string}[]=[];
  const listen=(node:HTMLElement,type:string,fn:(event:Event)=>void)=>{node.addEventListener(type,fn);cleanups.push(()=>node.removeEventListener(type,fn));};
  if(options.overflow?.length){
-  const button=actionButton('⋯',null),menu=panelMake('div',{id:options.id+'-menu',hidden:true});
-  button.setAttribute('aria-haspopup','menu');button.setAttribute('aria-controls',menu.id);button.setAttribute('aria-expanded','false');
-  menu.setAttribute('role','menu');
-  const close=(focus=true)=>{menu.hidden=true;button.setAttribute('aria-expanded','false');if(focus)button.focus();};
-  const items=options.overflow.map(action=>{
+  const items:HTMLButtonElement[]=[],more=bindPopupMenu(options.id+'-menu',()=>items,cleanups);
+  for(const action of options.overflow){
    const item=actionButton(tr(action.label),null);item.setAttribute('role','menuitem');item.tabIndex=-1;
-   listen(item,'click',()=>{close();action.handler();});labels.push({button:item,label:action.label});menu.append(item);return item;
-  });
-  const open=(last=false)=>{menu.hidden=false;button.setAttribute('aria-expanded','true');items[last?items.length-1:0]!.focus();};
-  listen(button,'click',()=>menu.hidden?open():close());
-  listen(button,'keydown',event=>{const key=(event as KeyboardEvent).key;if(['ArrowDown','ArrowUp','Enter',' '].includes(key)){event.preventDefault();open(key==='ArrowUp');}else if(key==='Escape'){event.preventDefault();close();}});
-  listen(menu,'keydown',event=>{
-   const key=(event as KeyboardEvent).key;
-   if(key==='Escape'){event.preventDefault();close();return;}
-   if(['ArrowDown','ArrowUp','Home','End'].includes(key)){event.preventDefault();const index=items.indexOf(event.target as HTMLButtonElement);items[key==='Home'?0:key==='End'?items.length-1:(index+(key==='ArrowDown'?1:items.length-1))%items.length]!.focus();}
-  });
-  listen(menu,'focusout',event=>{const target=(event as FocusEvent).relatedTarget;if(target!==button&&!menu.contains(target as Node|null))close(false);});
+   listen(item,'click',()=>{more.close();action.handler();});labels.push({button:item,label:action.label});more.menu.append(item);items.push(item);
+  }
   // Item listeners own activation; events from the sibling popup never trigger submit.
-  actions.append(button,menu);labels.push({button,label:'More act actions'});
+  actions.append(more.button,more.menu);labels.push({button:more.button,label:'More act actions'});
  }
  const refresh=()=>{
   if(options.submitLabel!==undefined)options.submit.textContent=tr(typeof options.submitLabel==='function'?options.submitLabel():options.submitLabel);

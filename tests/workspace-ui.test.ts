@@ -138,9 +138,9 @@ test('an explorer inside the left column makes it the parts column: no right col
 
 const indexHtml=composedRigMarkup;
 const between=(html:string,start:string,end:string)=>{const a=html.indexOf(start),b=html.indexOf(end,a);if(a<0||b<a)throw new Error(`index.html region missing: ${start} … ${end}`);return html.slice(a,b+end.length);};
-test('canonical rig content preserves both source sections and all 18 real tool tabs; C6 mounts the Review act separately',async()=>{
+test('canonical rig content preserves both source sections and all 19 real tool tabs; C6 mounts the Review act separately',async()=>{
  const html=await indexHtml(),inspector=between(html,'<section class="inspector"','</main>');
- expect([...inspector.matchAll(/role="tab"[^>]*data-block-target="([^"]+)"/g)].map(m=>m[1])).toEqual(['selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields','cuts-panel','cloth-panel','motion-tools','sound-panel','environment','physics-panel','idle-tracks','readings','requirements','retarget','report-panel']);
+ expect([...inspector.matchAll(/role="tab"[^>]*data-block-target="([^"]+)"/g)].map(m=>m[1])).toEqual(['selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields','cuts-panel','cloth-panel','animation-dock','motion-tools','sound-panel','environment','physics-panel','idle-tracks','readings','requirements','retarget','report-panel']);
  expect([...inspector.matchAll(/data-inspector-panel="([^"]+)"/g)].map(m=>m[1])).toEqual(['rig','playback']);
  const source=await readFile(new URL('../web/inspector-blocks.ts',import.meta.url),'utf8');
  expect(source).toContain("feedback.removeAttribute('data-inspector-panel')");expect(source).toContain('body.append(feedback);dialog.remove()');expect(source).toContain("row:{tabs,panels:tabs.flatMap(tab=>tab.panels),initialize:true}");
@@ -357,9 +357,9 @@ test('#671 collapse and expand keep single act identity and explicit selected-ta
  const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});
  try{
   const {collapse,act,strip,actHome}=app.bottomPanel!,body=app.bottomBody!;
-  collapse.click();app.flush();expect(body.hidden).toBe(true);expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('true');
+  collapse.click();app.flush();expect(body.hidden).toBe(true);expect(collapse.textContent).toBe('⌃');expect(collapse.getAttribute('aria-label')).toBe('Expand bottom panel');expect(collapse.getAttribute('title')).toBe('Expand bottom panel');expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('true');
   app.tabBinding!.restore('rig');app.flush();expect(body.hidden).toBe(true);
-  app.tabBinding!.select('rig');app.flush();expect(body.hidden).toBe(false);expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('false');
+  app.tabBinding!.select('rig');app.flush();expect(body.hidden).toBe(false);expect(collapse.textContent).toBe('⌄');expect(collapse.getAttribute('aria-label')).toBe('Collapse bottom panel');expect(collapse.getAttribute('title')).toBe('Collapse bottom panel');expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('false');
   app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();
   collapse.click();app.flush();expect(body.hidden).toBe(true);
   collapse.click();app.flush();const drawer=app.get('workspace-drawer-inspectorHeight');expect(body.hidden).toBe(false);expect(drawer.open).toBe(true);expect(drawer.contains(act)).toBe(true);
@@ -446,7 +446,7 @@ test('#674 non-rig tabs reuse the C6 strip and collapse structure with a screen-
   expect(mounted.kind).toBe('synthetic');expect(mounted.act).toBe(act as unknown as HTMLElement);expect(mounted.actHome).toBe(actHome as unknown as HTMLElement);expect(act.parentElement).toBe(actHome);
   expect(heading.children).toEqual([mounted.strip,mounted.collapse] as unknown as Host[]);expect(layout.children).toEqual([heading,column]);
   expect(mounted.strip.className).toBe('workspace-bottom-tabs');expect(mounted.strip.getAttribute('role')).toBe('tablist');expect(mounted.strip.getAttribute('aria-label')).toBe('Inspection controls');
-  expect(mounted.collapse.id).toBe('workspace-bottom-collapse');expect(mounted.collapse.getAttribute('aria-controls')).toBe('workspace-inspector');expect(mounted.collapse.getAttribute('aria-expanded')).toBe('true');expect(mounted.collapse.textContent).toBe('Collapse bottom panel');
+  expect(mounted.collapse.id).toBe('workspace-bottom-collapse');expect(mounted.collapse.getAttribute('aria-controls')).toBe('workspace-inspector');expect(mounted.collapse.getAttribute('aria-expanded')).toBe('true');expect(mounted.collapse.textContent).toBe('⌄');expect(mounted.collapse.getAttribute('aria-label')).toBe('Collapse bottom panel');expect(mounted.collapse.getAttribute('title')).toBe('Collapse bottom panel');
   expect(mounted.row.tabs.map(tab=>[tab.id,tab.button.id,tab.button.textContent,tab.button.getAttribute('role'),tab.button.getAttribute('aria-controls'),tab.button.getAttribute('aria-selected'),tab.button.tabIndex])).toEqual([
    ['issues','workspace-tab-issues','Setup','tab','synthetic-issues','true',0],['flags','workspace-tab-flags','Animate','tab','synthetic-flags','false',-1],
   ]);
@@ -466,7 +466,9 @@ test('#674 shared bottom strip keeps rig labels and accessibility text in EN and
    const mounted=mountBottomPanel({kind:'rig',heading:heading as unknown as HTMLElement,act:act as unknown as HTMLElement,actHome:actHome as unknown as HTMLElement,tabs:['rig','playback','feedback'].map((id,index)=>{const panel=new Host('section');panel.id='inspector-'+id;return {id,label:['Setup','Animate','Write review'][index]!,panel:panel as unknown as HTMLElement};})});
    expect(mounted.row.tabs.map(tab=>tab.button.textContent)).toEqual(language==='en'?['Setup','Animate','Write review']:['셋업','애니메이트','리뷰 작성']);
    expect(mounted.strip.getAttribute('aria-label')).toBe(language==='en'?'Inspection controls':'검사 컨트롤');
-   expect(mounted.collapse.textContent).toBe(language==='en'?'Collapse bottom panel':'하단 패널 접기');
+   expect(mounted.collapse.textContent).toBe('⌄');
+   expect(mounted.collapse.getAttribute('aria-label')).toBe(language==='en'?'Collapse bottom panel':'하단 패널 접기');
+   expect(mounted.collapse.getAttribute('title')).toBe(language==='en'?'Collapse bottom panel':'하단 패널 접기');
    expect(mounted.row.tabs.map(tab=>tab.button.getAttribute('aria-controls'))).toEqual(['inspector-rig','inspector-playback','inspector-feedback']);
   }
  }finally{setLinkLanguage(link);setLanguagePreference(preference);if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}

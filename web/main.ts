@@ -140,6 +140,7 @@ el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=shar
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.append(createRigLayerControls());
 el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;
 const controls=createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(chooseInspectionView,true)}),cameraControls=el('app').querySelector<HTMLElement>('[data-workspace-camera]')!;cameraControls.append(controls.syncLabel,controls.zoomGroup!);
+cameraControls.insertBefore(button('play'),controls.zoomGroup!);button('play').hidden=true;
 const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.classList.add('workspace-main-toolbar');
 const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
 for(const event of ['click','change'])secondaryToolbar.addEventListener(event,()=>{if(rigDifference){leaveRigDifference();renderLayout();}},true);
@@ -420,6 +421,7 @@ function leaveRigDifference():void {
 function layoutEligibility(){return singleEligibility({rig:rigInput,reference:referenceInput,requested:view});}
 /** Unavailable layouts stay visible but disabled with their named reason; no placeholder pane stands in for a missing input. */
 function renderLayout():void {
+ el('play').hidden=selectedInspector()!=='playback';
  if(rigDifference&&(rigDifferenceReason()||rigDifference.assets!==assets||rigDifference.painting!==el('reference-content').querySelector('img')))leaveRigDifference();
  const state=layoutEligibility();effectiveView=state.effective;
  for(const id of controls.viewModeIds)if(id!=='difference')controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
