@@ -1,7 +1,7 @@
 /** #725 synthetic browser proof; ordinary Nova only, 1600x1000 EN/KO.
- * Uses the shipped managed target and main/dialog/interview components. No submission or source write. */
+ * Uses the shipped managed target and main/bottom/interview components. Saves the same picks bytes under a fixed UI clock; no producer source write. */
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp,readdir,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readdir,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {parseOpenInputs} from '../src/cli.ts';
@@ -41,35 +41,43 @@ try{
  page=await launchCdpSession(profile,{onEvent:(event,send)=>{command=send;if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request)requests.push(new URL(request.url).pathname);if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Network.enable');
  await page.setViewport(1600,1000);
+ await command!('Emulation.setDeviceMetricsOverride',{width:1600,height:1000,deviceScaleFactor:2,mobile:false});
  for(const language of ['en','ko'] as const){
   const catalog=language==='en'?enCatalog:koCatalog,url=new URL(host.record.origin+list.targets[0]!.entry);
   url.searchParams.set('lang',language);url.hash='cap='+targetCapability(host.record.ownerCapability,host.record.incarnation,prepared.key);
   await page.goto(url.href);
-  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#job-record-asks[open] .interview-grid')`);
-  await wait(`document.querySelector('#job-record-asks canvas')?.width===32`);
-  const state:any=await page.evaluate<any>(`(()=>{const dialog=document.querySelector('#job-record-asks'),r=dialog.getBoundingClientRect();return {language:document.documentElement.lang,width:innerWidth,height:innerHeight,topbars:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,dialogs:document.querySelectorAll('dialog[open]').length,formCount:dialog.querySelectorAll('form.interview-answer').length,noteInputs:dialog.querySelectorAll('textarea[name=note]').length,columns:[...dialog.querySelector('form.interview-answer').children].filter(node=>['NAV','ASIDE','FIELDSET'].includes(node.tagName)).map(node=>node.tagName),imageControls:[...dialog.querySelectorAll('.interview-view .view-zoom button')].map(node=>node.textContent),focusContained:dialog.contains(document.activeElement),modelCanvas:document.querySelectorAll('#rig-root canvas').length,modelReason:document.getElementById('rig-empty').textContent,interviewButton:document.getElementById('workspace-pending-ask').textContent,controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(node=>node.id),rect:{x:r.x,y:r.y,width:r.width,height:r.height}};})()`);
-  assert.equal(state.language,language);assert.equal(state.width,1600);assert.equal(state.height,1000);
-  assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.dialogs,1);assert.equal(state.formCount,1);assert.equal(state.focusContained,true);assert.equal(state.modelCanvas,0);
-  assert.equal(state.noteInputs,0);assert.deepEqual(state.columns,['NAV','ASIDE','FIELDSET']);
-  assert.equal(await page.evaluate(`document.querySelector('#job-record-asks pre.interview-note')?.textContent`),retainedNote);
-  assert.equal(state.interviewButton,catalog['interview.title']);
-  assert.equal(state.modelReason,catalog['MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.']);
+  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#workspace-interview-answer form')`);
+  await wait(`document.querySelector('#reference-content img')?.naturalWidth===32`);
+  const state:any=await page.evaluate(`(()=>{const panel=document.querySelector('#workspace-interview-answer'),picture=document.querySelector('#reference-viewport'),r=panel.getBoundingClientRect(),p=picture.getBoundingClientRect();return {language:document.documentElement.lang,dpr:devicePixelRatio,topbars:document.querySelectorAll('.topbar').length,dialogs:document.querySelectorAll('dialog[open]').length,noteInputs:panel.querySelectorAll('textarea[name=note]').length,controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(node=>node.id),extraViewports:panel.querySelectorAll('.interview-viewport').length,above:p.bottom<=r.top,pictureVisible:p.width>0&&p.height>0&&!document.querySelector('#reference-pane').hidden,height:r.height};})()`);
+  assert.equal(state.language,language);assert.equal(state.dpr,2);assert.equal(state.topbars,1);assert.equal(state.dialogs,0);
+  assert.equal(state.noteInputs,0);assert.equal(state.extraViewports,0);assert.equal(state.above,true);assert.equal(state.pictureVisible,true);
   assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
-  assert.ok(state.rect.x>=0&&state.rect.y>=0&&state.rect.x+state.rect.width<=1600&&state.rect.y+state.rect.height<=1000);
+  assert.equal(await page.evaluate(`document.querySelector('#workspace-interview-answer pre.interview-note')?.textContent`),retainedNote);
+  const zoom=await page.evaluate(`document.querySelector('#zoom-value').textContent`);await click(page,'#zoom-in');
+  assert.notEqual(await page.evaluate(`document.querySelector('#zoom-value').textContent`),zoom);
+  assert.equal(await page.evaluate(`!!document.querySelector('#workspace-interview-answer input[type=radio]')`),true);
   await writeFile(join(out,language+'-interview.png'),await page.screenshot());
-  await click(page,'#job-record-asks .workspace-drawer-close');
-  assert.equal(await page.evaluate(`!document.querySelector('dialog[open]')&&document.activeElement.id==='workspace-pending-ask'`),true);
-  assert.equal(await page.evaluate(`document.querySelectorAll('.topbar').length===1&&document.querySelectorAll('#rig-viewport').length===1`),true);
-  const closed:{visibleInterviewTriggers:string[];saveDisabled:boolean;focused:string}=await page.evaluate<{visibleInterviewTriggers:string[];saveDisabled:boolean;focused:string}>(`(()=>{const label=${JSON.stringify(catalog['interview.title'])};return {visibleInterviewTriggers:[...document.querySelectorAll('button')].filter(button=>button.textContent.trim()===label&&button.getClientRects().length>0&&getComputedStyle(button).visibility!=='hidden').map(button=>button.id),saveDisabled:document.getElementById('save').disabled,focused:document.activeElement.id};})()`);
-  assert.deepEqual(closed.visibleInterviewTriggers,['workspace-pending-ask']);assert.equal(closed.saveDisabled,true);assert.equal(closed.focused,'workspace-pending-ask');
-  state.closedWorkspace=closed;
-  await writeFile(join(out,language+'-workspace.png'),await page.screenshot());
-  await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#job-record-asks[open] .interview-grid')`);
+  const resize='.workspace-inspectorHeight';
+  await page.evaluate(`document.querySelector(${JSON.stringify(resize)}).focus()`);
+  await command!('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});
+  await command!('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});
+  await wait(`document.querySelector('#workspace-interview-answer').getBoundingClientRect().height!==${state.height}`);
+  state.resizedHeight=await page.evaluate(`document.querySelector('#workspace-interview-answer').getBoundingClientRect().height`);
+  await writeFile(join(out,language+'-resized.png'),await page.screenshot());
+  const beforePicks=await readFile(join(f.root,'picks',question.ref.sha256+'.json'));
+  await page.evaluate(`Date.prototype.toISOString=function(){return '2026-11-11T00:00:00.000Z';};document.querySelector('#workspace-interview-answer button[type=submit]').scrollIntoView({block:'center'});`);
+  await click(page,'#workspace-interview-answer button[type=submit]');
+  await wait(`document.querySelector('#workspace-interview-answer form>p[role=status]')?.textContent===${JSON.stringify(catalog['interview.saved'])}`);
+  const afterPicks=await readFile(join(f.root,'picks',question.ref.sha256+'.json'));assert.deepEqual(afterPicks,beforePicks);
+  state.savedPicksBytes=afterPicks.length;state.savedPicksByteEqual=true;
+  state.cleanup=await page.evaluate(`(()=>{const zoom=document.querySelector('#zoom-in'),bound=typeof zoom.onclick==='function',enabled=!zoom.disabled;window.dispatchEvent(new Event('pagehide'));return {bound,enabled,released:zoom.onclick===null,disabled:zoom.disabled,modes:[...document.querySelectorAll('#view-menu [data-view]')].map(node=>node.dataset.view),bottom:!!document.querySelector('#workspace-interview-answer')};})()`);
+  assert.equal(state.cleanup.bound,true);assert.equal(state.cleanup.enabled,true);assert.equal(state.cleanup.released,true);assert.equal(state.cleanup.disabled,false);assert.equal(state.cleanup.bottom,false);
+  assert.deepEqual(state.cleanup.modes,['compare','reference','rig','difference']);
   cases.push(state);await page.goto('about:blank');
  }
  const after={files:await jobInputHashes(f.root),entries:(await readdir(f.root,{recursive:true})).sort()};
- assert.deepEqual(after,before);assert.deepEqual(exceptions,[]);assert.deepEqual(mutations,[]);assert.ok(requests.some(path=>path.endsWith('/api/interview')));
+ assert.deepEqual(after,before);assert.deepEqual(exceptions,[]);assert.equal(mutations.length,2);assert.ok(mutations.every((item:any)=>item.method==='POST'&&item.path.endsWith('/api/interview/picks')));assert.ok(requests.some(path=>path.endsWith('/api/interview')));
  await writeFile(join(out,'result.json'),JSON.stringify({fixture:'synthetic interview-stage project; demo/build versions; no draft or review package',cases,sourceFilesBefore:before,sourceFilesAfter:after,sourceWrites:0,networkRequests:requests.length,exceptions,mutations},null,2)+'\n');
- console.log('725_BROWSER_PASS '+JSON.stringify({cases:cases.length,languages:['en','ko'],viewport:'1600x1000',sourceWrites:0,exceptions:exceptions.length}));
+ console.log('725_BROWSER_PASS '+JSON.stringify({cases:cases.length,languages:['en','ko'],viewport:'1600x1000 DPR 2',sourceWrites:0,exceptions:exceptions.length}));
 }catch(error){await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,cases},null,2)+'\n');if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await host.stop();await f.close();await rm(profile,{recursive:true,force:true});}

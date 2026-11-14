@@ -941,6 +941,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    playing:false,
    stageClock:null,
    view:'reference',
+   activeInterviewImages:null,
    rigInput:{state:'absent'},
    referenceInput:{state:'loaded'},
    effectiveView:'reference',

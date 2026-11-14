@@ -140,6 +140,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "PLAN_TEXT_RECORD_HASH_MISMATCH": "보존된 계획 기록의 바이트가 봉인 해시와 다릅니다.",
   "interview.recommended": "AI 추천",
   "interview.note": "메모 (선택 사항)",
+  "interview.answers": "설문 답변",
   "interview.save": "선택 기록 저장",
   "interview.unsaved": "저장하지 않은 변경 사항이 있습니다.",
   "interview.saved": "선택 기록을 저장했습니다.",

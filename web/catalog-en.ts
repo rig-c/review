@@ -140,6 +140,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "PLAN_TEXT_RECORD_HASH_MISMATCH": "The retained plan record bytes differ from their seal.",
   "interview.recommended": "AI recommendation",
   "interview.note": "Note (optional)",
+  "interview.answers": "Interview answers",
   "interview.save": "Save explicit picks",
   "interview.unsaved": "Unsaved changes.",
   "interview.saved": "Picks saved.",

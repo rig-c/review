@@ -1394,7 +1394,7 @@ export interface JobFormDependencies {
                 fields.prepend(legacyNotice);
             }
             interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,
-                images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered'});
+                mainView:true,images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered'});
             disposeInterview=interviewForm.dispose;read=interviewForm.read;
             submitKey = 'interview.save';
         }
@@ -1601,7 +1601,7 @@ export async function joinedInterviewForms(access:InstanceAccess,present:(forms:
         let entry=forms.get(index);
         if(!entry){
             entry=createInterviewForm({question,id:'joined-interview-'+question.ref.sha256,node,
-                images:question.images.map(image=>({name:image.name,src:access.route(image.url)})),
+                mainView:true,images:question.images.map(image=>({name:image.name,src:access.route(image.url)})),
                 questions:()=>data.questions.map((item,i)=>({label:item.set.question+' · '+item.set.id+(item.editable?'':' · '+t('interview.history')),answered:forms.get(i)?.form.dataset.interviewAnswered==='true'||Boolean(item.saved||item.answer)})),
                 selected:index,onSelect:show,diagnostics:data.diagnostics,historical:data.historical});
             const answer=entry;

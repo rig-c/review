@@ -1,3 +1,4 @@
+import {hasTransientQuestionImage} from './interview-panel.ts';
 import {bindScenePlates,loadScenePlates,takeSample} from './scene-plates.ts';
 import type {SceneInspection} from '../src/scene-inspection.ts';
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
@@ -156,7 +157,7 @@ if(partsOnly){partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);e
 let sceneComposite:ReturnType<typeof bindScenePlates>|undefined;
 const activeScene=()=>sceneComposite&&data.direction&&(!stageSource||stageSource.url===inspectedModel?.url)?data.direction:undefined;
 const sceneBox=()=>{const direction=activeScene();return direction?takeSample(direction,time).box:null;};
-const viewport=createViewportController(partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',framingBox:sceneBox,el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,raster:rigRaster},viewportState),viewportState);
+const viewport=createViewportController(partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>target==='reference'&&activeInterviewImage&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',framingBox:sceneBox,el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,raster:rigRaster},viewportState),viewportState);
 const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera}=viewport;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
 if(!host)connectLiveWindow(access);
@@ -366,6 +367,7 @@ function renderCheckpoint(): void {
 
 function setView(value: typeof view): void {view=value;renderLayout();}
 function chooseInspectionView(id:string):void {
+ if(activeInterviewImages){const image=activeInterviewImages[Number(id.replace('interview-image-',''))];if(id.startsWith('interview-image-')&&image){activeInterviewImage=image;void showReference('',image);}return;}
  if(!partsSubject){
   if(id==='difference'){
    const reason=rigDifferenceReason();if(reason){message(reason,true);renderLayout();return;}
@@ -411,7 +413,8 @@ function renderLayout():void {
  if(rigDifference&&(rigDifferenceReason()||rigDifference.assets!==assets||rigDifference.painting!==el('reference-content').querySelector('img')))leaveRigDifference();
  const state=layoutEligibility();effectiveView=state.effective;
  for(const id of controls.viewModeIds)if(id!=='difference')controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
- controls.setMode(rigDifference||partsSubject?.comparison().mode==='difference'?'difference':state.effective,state.effective??state.requested);
+ if(activeInterviewImages)controls.setMode('interview-image-'+activeInterviewImages.indexOf(activeInterviewImage!));
+ else controls.setMode(rigDifference||partsSubject?.comparison().mode==='difference'?'difference':state.effective,state.effective??state.requested);
  if(partsSubject){controls.setDisabled('difference',partsSubject.differenceAvailable()&&rigInput.state==='loaded'&&referenceInput.state==='loaded'?null:tr('PARTS_DIFFERENCE_UNAVAILABLE: missing painting_in_rig declaration or painting_in_rig.json sidecar and its bound operand.'));if(partsSubject.comparison().mode==='difference')controls.setMode('difference');}
  if(!partsSubject){controls.setDisabled('difference',tr(rigDifferenceReason()??'')||null);if(rigDifference)controls.setMode('difference');}
  el('reference-pane').hidden=state.effective!=='compare'&&state.effective!=='reference';el('rig-pane').hidden=state.effective!=='compare'&&state.effective!=='rig';
@@ -486,17 +489,17 @@ function renderSequenceFrame(): void {
   for (const [name, joint] of Object.entries(person.joints)) { if (!joint.at || joint.state === 'missing') continue; const dot = svgNode('circle', { cx: joint.at[0], cy: joint.at[1], r: 4, fill: joint.state === 'observed' ? '#c6e6d7' : '#294535', stroke: '#c6e6d7', 'stroke-width': 1.5 }, sequenceSvg); const title = document.createElementNS(sequenceSvg.namespaceURI, 'title'); title.textContent = `${name}: ${joint.state}${joint.score === undefined ? '' : ` · score ${joint.score}`}`; dot.append(title); }
 }
 
-async function showReference(id: string): Promise<void> {
+async function showReference(id: string, bound?:{name:string;src:string}): Promise<void> {
   rigDifferenceFailure=null;leaveRigDifference();
   const generation = ++referenceGeneration;
   video?.pause(); video = null;controlledVideoSample=null;delete viewport.state.cameraFrames.reference; viewport.state.referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; selectedPerson=''; lastPoseFrame = -1; el('person-control').hidden = true;
   const content = el('reference-content'); content.replaceChildren();
-  const reference = data.manifest.references.find(item => item.id === id);
+  const reference = bound?{id:'',label:bound.name,type:'image' as const,path:''}:data.manifest.references.find(item => item.id === id);
   el('reference-empty').hidden = false;setReferenceInput(reference?{state:'pending'}:{state:'absent'});
   if (!reference) { text('reference-empty', 'No reference supplied.'); text('reference-info', 'Add image, video or input-pose references to the package.'); return; }
   text('reference-label', reference.label + (reference.type === 'pose' ? ' · Static input pose' : ' · Reference'));
   text('reference-empty', 'Loading reference…');
-  text('reference-info', `${reference.type} · ${data.sourcePainting?.id === reference.id ? data.sourcePainting.path : reference.path}`);
+  text('reference-info', `${reference.type} · ${bound?bound.name:data.sourcePainting?.id === reference.id ? data.sourcePainting.path : reference.path}`);
   const fail = (reason='reference could not render') => { if (generation !== referenceGeneration) return; setReferenceInput({state:'failed',reason}); el('reference-empty').hidden = false; text('reference-empty', 'Could not open the reference. Check the package files.'); };
   try {
     if (reference.type === 'pose') {
@@ -523,8 +526,9 @@ async function showReference(id: string): Promise<void> {
       }
       content.append(svg); el('reference-empty').hidden = true; setReferenceInput({state:'loaded'});
     } else if (reference.type === 'image') {
-      const image = new Image(); image.draggable=false; image.alt = reference.label; image.onload = () => { if (generation !== referenceGeneration) return; referenceSize = { width: image.naturalWidth, height: image.naturalHeight }; image.width = image.naturalWidth; image.height = image.naturalHeight; el('reference-empty').hidden = true; fitCamera(); }; await new Promise<void>((resolve,reject)=>{const loaded=image.onload;const timer=setTimeout(()=>reject(new Error('Reference image load timed out')),10000);image.onload=event=>{clearTimeout(timer);if(typeof loaded==='function')loaded.call(image,event);resolve();};image.onerror=()=>{clearTimeout(timer);fail();reject(new Error('Reference image load failed'));};image.src=referenceUrl(reference);content.append(image);});
-      await image.decode(); if (generation !== referenceGeneration) return; if (!image.naturalWidth || !image.naturalHeight) throw new Error('Reference image has no renderable pixels'); setReferenceInput({state:'loaded'});
+      const image = new Image(); image.draggable=false; image.alt = reference.label; image.onload = () => { if (generation !== referenceGeneration) return; referenceSize = { width: image.naturalWidth, height: image.naturalHeight }; image.width = image.naturalWidth; image.height = image.naturalHeight; el('reference-empty').hidden = true; fitCamera(); }; await new Promise<void>((resolve,reject)=>{const loaded=image.onload;const timer=setTimeout(()=>reject(new Error('Reference image load timed out')),10000);image.onload=event=>{clearTimeout(timer);if(typeof loaded==='function')loaded.call(image,event);resolve();};image.onerror=()=>{clearTimeout(timer);fail();reject(new Error('Reference image load failed'));};image.src=bound?.src??referenceUrl(reference);content.append(image);});
+      await image.decode(); if (generation !== referenceGeneration) return;
+      if (!image.naturalWidth || !image.naturalHeight) throw new Error('Reference image has no renderable pixels'); setReferenceInput({state:'loaded'});
     } else {
       const media = document.createElement('video'); media.controls = true; media.muted = true; media.preload = 'metadata'; media.playsInline = true;
       media.onloadedmetadata = () => { if (generation !== referenceGeneration) return; referenceSize = { width: media.videoWidth, height: media.videoHeight }; media.width = media.videoWidth; media.height = media.videoHeight; if (Number.isFinite(media.duration) && !player) duration = media.duration; el('reference-empty').hidden = true; holdVideoReference(media, generation); fitCamera(); renderTransport(); };
@@ -1397,6 +1401,9 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
 let recordDialog:HTMLDialogElement|null=null;
+let activeInterviewImages:readonly {name:string;src:string}[]|null=null;
+let activeInterviewImage:{name:string;src:string}|null=null;
+let releaseInterview:(()=>void)|null=null;
 /** Reuse the form's publication binding for native record comments, without a package session. */
 function restoreRecordComments(form?:HTMLFormElement):void {
  if((!host?.record&&!host?.direction)||recordCommentKey)return;
@@ -1431,6 +1438,42 @@ function recordCommentsChanged():void {
 }
 /** The shared answer forms use the one native dialog, opened from the current ask line. */
 function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',standalone=false):void {
+ const imageForms=forms.filter(form=>form.dataset.interviewMain!==undefined);
+ const active=imageForms.find(form=>!form.querySelector('fieldset')?.disabled)??imageForms[0];
+ const previous=document.getElementById('workspace-interview-answer');
+ if(previous?.firstElementChild!==active){
+  releaseInterview?.();releaseInterview=null;
+  if(active){
+   const images=(active as HTMLElement&{interviewImages:readonly {name:string;src:string}[]}).interviewImages;
+   const panel=panelMake('section',{id:'workspace-interview-answer',className:'workspace-interview-panel'});
+   setSourceAttribute(panel,'aria-label','interview.answers');
+   const inspector=screenRoot.querySelector<HTMLElement>('.inspector-body')!;
+   const hidden=new Map<HTMLElement,boolean>();
+   for(const node of [el('inspector-rig'),el('inspector-playback'),rigInspector.comments.panel,rigInspector.strip]){hidden.set(node,node.hidden);node.hidden=true;}
+   const previousView=view,previousReference=select('reference-select').value,previousSync=viewport.state.cameraSync;
+   const previousReferenceNodes=[...el('reference-content').childNodes],previousReferenceInput=referenceInput;
+   const disabled=new Map(controls.zoomButtons.concat(controls.nativeOne!).map(button=>[button,button.disabled]));
+   for(const button of disabled.keys())button.disabled=false;
+   const cameraBindings=button('zoom-in').onclick?[]:[viewport.bindControls(unitScaleMessage),viewport.bindNavigation()];
+   activeInterviewImages=images;activeInterviewImage=images[0]!;
+   const restore=controls.replaceViewSwitch({currentMode:'interview-image-0',groups:[{modes:images.map((image,index)=>({id:'interview-image-'+index,labelKey:image.name,pressed:index===0}))}],onChange:chooseInspectionView});
+   panel.append(active);inspector.append(panel);viewport.state.cameraSync=false;viewport.state.activeCamera='reference';view='reference';
+   void showReference('',activeInterviewImage);workspace?.revealInspector();workspace?.refresh();
+   const release=()=>{
+    if(!panel.isConnected)return;
+    ++referenceGeneration;activeInterviewImages=null;activeInterviewImage=null;restore();
+    for(const dispose of cameraBindings)dispose();for(const [button,value]of disabled)button.disabled=value;
+    active.remove();panel.remove();for(const [node,value]of hidden)node.hidden=value;
+    viewport.state.cameraSync=previousSync;view=previousView;
+    if(disposed)return;
+    if(data)void showReference(previousReference);else{el('reference-content').replaceChildren(...previousReferenceNodes);referenceSize=null;referenceInput=previousReferenceInput;renderLayout();}
+    workspace?.refresh();
+   };
+   releaseInterview=release;viewDisposers.push(release);
+  }
+ }
+ forms=forms.filter(form=>!imageForms.includes(form));
+ if(imageForms.length&&!forms.length){recordDialog?.close();return;}
  if(!forms.length&&!recordDialog)return;
  if(!recordDialog){
   recordDialog=panelMake('dialog',{id:'job-record-asks',className:'workspace-drawer'});recordDialog.setAttribute('aria-label',tr(label));
@@ -2918,6 +2961,7 @@ function setupComments():void {
  if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.length;if(host?.direction)dirty=dirty||recordComments.length>0;}
  comments=bindStageComments<CommentRow,CommentPose>({general:host?.record||host?.direction?{create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row)}:undefined,listHost:el('comments-list-host'),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?{}:{rig:el('rig-viewport'),reference:el('reference-viewport')},
   pose:view=>{
+   if(hasTransientQuestionImage(screenRoot))return null;
    if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;
    const renderer=player?.renderer;const current=time,index=frameAtTime(activeFrameClock(),current),referenceId=view==='reference'?select('reference-select').value||null:null,referenceHash=referenceId?data.referenceHashes?.[referenceId]??(data.explicitReference?.id===referenceId?data.explicitReference.sha256:null):null;
    return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;

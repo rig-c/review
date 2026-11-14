@@ -10,7 +10,7 @@ import {loadCompare} from '../src/compare.ts';
 import {freshCompareSession,saveCompareSession} from '../src/compare-session.ts';
 const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
 function singleHost(patch:Record<string,any>={}){
- let host:any;const scope:any={host:null,isSubmittedFeedback:()=>false,comments:null,bindStageComments:(h:any)=>{host=h;return {};},el:()=>({parentElement:{},hidden:true,childElementCount:0}),document:{getElementById:()=>null},saving:false,persistence:null,seekingControl:false,video:null,rebuildBusy:false,appliedOnStage:null,rigDifference:null,stripPending:null,idleAdjust:null,dialAdjust:null,physicsPreview:{read:()=>[]},meshEditor:null,bonesPanel:null,cutsPanel:null,clothPanel:null,meshPanel:null,rigFieldsPanel:null,idlePanel:null,chestRegions:()=>[],chestCircles:()=>[],chestMarkers:()=>[],inspectionBookmark:()=>({}),session:{feedback:[]},submittedBaseline:null,markDirty(){},renderProposals(){},message(){},restoreInspection(){},parseBookmark(){},inspectionBinding(){},playing:false,player:{held:false,paused:true,pause(){this.paused=true;},hold(on:boolean){this.held=on;},resume(){this.paused=false;}},turnPad:null,playbackIntent:0,desiredPlay:false,suspendedPreview:false,idleHeld:false,heldPhysicsFailed:false,lastFrame:0,playbackCarry:0,stopAudio(){},button:()=>({setAttribute(){}}),...patch};
+ let host:any;const scope:any={screenRoot:{},hasTransientQuestionImage:()=>false,host:null,isSubmittedFeedback:()=>false,comments:null,bindStageComments:(h:any)=>{host=h;return {};},el:()=>({parentElement:{},hidden:true,childElementCount:0}),document:{getElementById:()=>null},saving:false,persistence:null,seekingControl:false,video:null,rebuildBusy:false,appliedOnStage:null,rigDifference:null,stripPending:null,idleAdjust:null,dialAdjust:null,physicsPreview:{read:()=>[]},meshEditor:null,bonesPanel:null,cutsPanel:null,clothPanel:null,meshPanel:null,rigFieldsPanel:null,idlePanel:null,chestRegions:()=>[],chestCircles:()=>[],chestMarkers:()=>[],inspectionBookmark:()=>({}),session:{feedback:[]},submittedBaseline:null,markDirty(){},renderProposals(){},message(){},restoreInspection(){},parseBookmark(){},inspectionBinding(){},playing:false,player:{held:false,paused:true,pause(){this.paused=true;},hold(on:boolean){this.held=on;},resume(){this.paused=false;}},turnPad:null,playbackIntent:0,desiredPlay:false,suspendedPreview:false,idleHeld:false,heldPhysicsFailed:false,lastFrame:0,playbackCarry:0,stopAudio(){},button:()=>({setAttribute(){}}),...patch};
  const pauseLine=source.slice(source.indexOf('function pause():')).split('\n')[0];const start=source.includes('function commentCaptureRefusal(')?source.indexOf('function commentCaptureRefusal('):source.indexOf('function setupComments():');
  const end=source.indexOf('\nreturn {dispose:disposeScreen};',start);
  if(start<0||end<=start)throw new Error('Missing main callback slice before mountRigScreen return');
@@ -59,7 +59,7 @@ import {parseStageComment,projectMark,unprojectMark,region,feedbackTimingLabel} 
 import {textEntryFocused} from '../web/view-controls.ts';
 const binderSource=await readFile(new URL('../web/stage-comments.ts',import.meta.url),'utf8');
 /** Actual event controller with a controlled capture promise, no browser/pixel claim. */
-function commentController(initialRows:any[]=[],sourceOverride=binderSource){
+function commentController(initialRows:any[]=[],sourceOverride=binderSource,pose?: (view:string)=>any){
  class Node {
   children:any[]=[];parent:any=null;style:any={};dataset:Record<string,string>={};attributes=new Map();listeners=new Map<string,Function[]>();className='';id='';textContent='';title='Comment C';hidden=false;disabled=false;readOnly=false;value='';clientWidth=200;clientHeight=200;clientLeft=0;clientTop=0;captured=new Set();classList={toggle(){}};onclick:any=null;onsubmit:any=null;onkeydown:any=null;
   get offsetWidth(){return 286;}get offsetHeight(){return this.children.some((c:any)=>c.getAttribute?.('role')==='alert'&&c.textContent)?176:108;}
@@ -68,6 +68,7 @@ function commentController(initialRows:any[]=[],sourceOverride=binderSource){
  const toggle=new Node(),toolbar=new Node(),pane=new Node(),win=new Node(),doc:any=new Node();let tick=()=>{},reason:string|null=null,crops=0,restores=0,additions:any[]=[...initialRows],pause:Promise<void>=Promise.resolve(),resolveCrop:(v:any)=>void=()=>{};const messages:string[]=[];
  doc.createElement=()=>new Node();doc.getElementById=(id:string)=>id==='stage-comment'?toggle:null;
  const crop=()=>{crops++;return new Promise(resolve=>{resolveCrop=resolve;});},host={toolbar,viewports:{rig:pane},pose:()=>({mode:'animate',camera:{space:'world',center:{x:0,y:0},zoom:1,viewport:{width:200,height:200},visible:{x:-100,y:-100,width:200,height:200}},frame:{index:0,basis:'producer'},time:0,animation:null,turn:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,rig:'control'}),pause:()=>pause,bookmark:()=>({}),restore:async()=>{restores++;},feedback:()=>additions,locked:()=>false,add:(f:any)=>additions.push(f),changed(){},error:(v:string)=>messages.push(v),blocked:()=>false,refusal:()=>reason};
+ if(pose)host.pose=()=>pose('rig');
  const helpers=sourceOverride.slice(sourceOverride.indexOf('const markOf='),sourceOverride.indexOf('async function crop(')),body=sourceOverride.slice(sourceOverride.indexOf('export function bindStageComments')).replace('export function','function');const scope={host,crop,document:doc,window:win,requestAnimationFrame:(f:any)=>{tick=f;return 1;},cancelAnimationFrame(){},parseStageComment,projectMark,unprojectMark,region,feedbackTimingLabel,textEntryFocused};const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(helpers+body);const tool=new Function('scope',`with(scope){${code};return bindStageComments(host);}`)(scope);
  const event=()=>({button:0,isPrimary:true,pointerId:7,clientX:50,clientY:50,target:new Node(),preventDefault(){},stopImmediatePropagation(){}}),down=()=>pane.emit('pointerdown',event()),up=()=>pane.emit('pointerup',event()),submit=()=>{const form=pane.children.find((n:any)=>n.className.includes('stage-comment-composer'));form.children[0].value='safe note';return form.onsubmit({preventDefault(){}});};
  const list=()=>toolbar.children.find((n:any)=>n.id==='stage-comment-list');
@@ -213,4 +214,19 @@ test('#739 diagnostic comment refusal precedes applied/source/preview refusals a
  scope.rigDifference=null;expect(host.refusal()).toStartWith('COMMENT_APPLIED_BUILD_UNSUPPORTED:');
  scope.appliedOnStage=null;expect(host.refusal()).toStartWith('COMMENT_SOURCE_BUSY:');
  scope.rebuildBusy=false;expect(host.refusal()).toContain('COMMENT_UNAPPLIED_PREVIEW: Idle tracks');
+});
+
+
+test('#830 a pin attempt on a transient question image creates no row or feedback act field',async()=>{
+ const actual=singleHost({hasTransientQuestionImage:()=>true});
+ const before=JSON.stringify(actual.scope.session);
+ expect(actual.host.pose('reference')).toBeNull();expect(actual.host.pose('rig')).toBeNull();
+ const ui=commentController([],binderSource,actual.host.pose);
+ try{
+  ui.enable();await ui.down();await ui.up();
+  expect(ui.crops()).toBe(0);expect(ui.rows()).toEqual([]);
+  expect(actual.host.feedback()).toEqual([]);
+  expect(JSON.stringify(actual.scope.session)).toBe(before);
+  expect(actual.scope.session).not.toHaveProperty('comments');
+ }finally{ui.tool.dispose();}
 });
