@@ -47,7 +47,7 @@ for(const lang of ['en','ko']){
  async function loopPause(){await page.evaluate(`if(!window.__clockReading().playing)document.getElementById('play').click()`);await wait('window.__clockReading().runtime>2.2&&window.__clockReading().display>.25&&window.__clockReading().display<.75');await page.evaluate(`(()=>{document.getElementById('play').click()})()`);const p=await read();check(!p.playing&&p.runtime>2&&p.display<1,'independent clocks');await page.evaluate('new Promise(r=>{let n=0;function f(){if(++n===90)r(true);else requestAnimationFrame(f)}requestAnimationFrame(f)})');check(JSON.stringify(await read())===JSON.stringify(p),'paused clocks stable for 90 frames');return p;}
  try{
   await page.setViewport(1440,1000);await page.goto(`http://127.0.0.1:${proxy.port}/?lang=${lang}#cap=${cap}`);
-  await wait('window.__clockReading&&!window.__clockReading().restoring&&!document.getElementById("play").disabled');
+  await wait('document.body.dataset.ready==="true"&&window.__clockReading&&!window.__clockReading().restoring&&!document.getElementById("play").disabled');
   await wait('window.rigReviewEditor.idle.source()?.tracks?.length>0');
   await page.evaluate(`(()=>{document.querySelector('[data-mode="playback"]').click();const s=document.getElementById('animation-select');s.value='idle';s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   const idleGate=await page.evaluate<any>('window.rigReviewEditor.animation.gate()');
@@ -69,7 +69,7 @@ for(const lang of ['en','ko']){
   check(JSON.stringify(draft).includes(applied.buildId),'APPLIED inputs saved in actual local draft');
   await writeFile(join(out,lang+'-rebuilt.png'),await page.screenshot());
   await page.goto(`http://127.0.0.1:${proxy.port}/?lang=${lang}&reopen=1#cap=${cap}`);
-  await wait('window.__clockReading&&!window.__clockReading().restoring&&!document.getElementById("play").disabled');
+  await wait('document.body.dataset.ready==="true"&&window.__clockReading&&!window.__clockReading().restoring&&!document.getElementById("play").disabled');
   const reopened=await page.evaluate<any>('JSON.parse(document.getElementById("rebuild-applied").value)');
   check(JSON.stringify(reopened)===JSON.stringify(applied),'actual reopen restores APPLIED inputs');
   // The editable clip is nonlooping: normal +Key and stage-pose UI retain their existing time.

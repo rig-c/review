@@ -5,6 +5,7 @@ import {cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile} from 'no
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {InputCdpSession} from './parts-explorer-browser.ts';
+import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
@@ -347,7 +348,13 @@ export async function runPostFixProbe(language: ProbeLanguage): Promise<void> {
       });
     };
     await wait(`document.documentElement.lang===${JSON.stringify(language)}&&document.readyState==='complete'&&!document.getElementById('play').disabled&&Boolean(document.getElementById('stage-comment-list'))&&!document.body.inert&&Boolean(window.rigReviewEditor?.stage().modelHash)`);
-    await browser.evaluate(`if(document.getElementById('play').textContent!=='▶')document.getElementById('play').click()`);
+    // b433: wait for actual autoplay, pause through the real visible control, then keep every numeric oracle.
+    await wait(`document.body.dataset.ready==='true'&&window.rigReviewEditor.stage().playing===true`);
+    await click(browser,'[data-mode="playback"]');
+    if(await browser.evaluate<boolean>(`window.rigReviewEditor.stage().playing`))await click(browser,'#play');
+    await wait(`window.rigReviewEditor.stage().playing===false`);
+    assert.equal(await browser.evaluate(`window.rigReviewEditor.stage().playing`),false,'real playback is paused before geometry sampling');
+    await click(browser,'[data-mode="rig"]');
     const sample = () => browser.evaluate<FramingSample>(`(${readDisplay.toString()})(${JSON.stringify(slots)})`);
     const stable = async () => {
       const recent: FramingSample[] = [];

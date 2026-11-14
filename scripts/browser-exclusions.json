@@ -2,5 +2,13 @@
   "tests/parts-comments-browser.ts": {
     "issue": 843,
     "reason": "Automatic assembled part binding regression; suite remains immutable until #843 lands."
+  },
+  "tests/stage1-corrections-browser.ts": {
+    "issue": 847,
+    "reason": "Lost human Chest opener and part-specific seed/Apply path; preserve this whole suite unchanged until #847 restores the capability and returns the whole suite to the gate."
+  },
+  "tests/stage1-review-fixes-browser.ts": {
+    "issue": 847,
+    "reason": "Lost human Chest opener and part-specific seed/Apply path; preserve this whole suite unchanged until #847 restores the capability and returns the whole suite to the gate."
   }
 }

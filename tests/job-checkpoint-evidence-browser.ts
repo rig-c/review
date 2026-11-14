@@ -277,12 +277,23 @@ async function run() {
             try {await page!.goto('about:blank');} finally {expectedDeparture = undefined;}
             await page!.goto(owner.href);
             // updateForms enables this fieldset only after display acknowledgment and pending-ask readiness.
-            await until(async () => (await checkpointForm(asked.askId)).ready, prefix + ' ' + outcome + ' reconnect ready');
+            await until(()=>page!.evaluate(`!!document.querySelector('form[data-job-ask="${asked.askId}"] fieldset:not(:disabled)')`),prefix+' '+outcome+' reconnect form enabled');
+            // b433: one bounded observation in this ordinary suite, never a second browser job or retry.
+            const commentReadyDeadline=Date.now()+10_000;let commentList:string[]=[];
+            do {
+                commentList=await page!.evaluate<string[]>(`Array.from(document.querySelectorAll('.stage-comment-summary'),node=>node.textContent??'')`);
+                if(commentList.some(text=>text.includes(words)))break;
+                await Bun.sleep(25);
+            }while(Date.now()<commentReadyDeadline);
             const restored = await checkpointForm(asked.askId);
+            const reconnectProbe={list:commentList,listHasSavedComment:commentList.some(text=>text.includes(words)),words:restored.words,expected:projected,remainingMs:Math.max(0,commentReadyDeadline-Date.now())};
+            observations[prefix+'-'+outcome+'-reconnect-comment-probe']=reconnectProbe;
+            console.log('CHECKPOINT_RECONNECT_COMMENT_PROBE '+JSON.stringify({prefix,outcome,...reconnectProbe}));
             assert.equal(restored.askId, asked.askId);
             assert.equal(restored.ready, true);
             assert.equal(restored.outcome, outcome);
             assert.equal(restored.words, projected);
+            assert.equal(reconnectProbe.listHasSavedComment,true,prefix+' saved Comment is in restored list');
             assert.equal(restored.valid, true);
             observations[prefix + '-' + outcome + '-ready'] = restored;
             await page!.evaluate(`document.querySelector('form[data-job-ask="${asked.askId}"]').requestSubmit()`);

@@ -233,14 +233,15 @@ try {
     assert.deepEqual(cpState.titles,([['Images','I'],['Mesh edges','M'],['Bone points','B']] as const).map(([label,key])=>catalog['{0} · key {1}'].replace('{0}',catalog[label]).replace('{1}',key)));
     await record('shared-checkpoint-controls',cpState);
     await click(page,'[data-mode="rig"]');
-    await page.evaluate(`document.getElementById('rig-viewport').focus()`);
-    assert.equal(await page.evaluate(`document.getElementById('rig-viewport').getAttribute('tabindex')`),'-1');
+    await click(page,'#rig-viewport');
+    // b433 / #796/#798: delete legacy tabindex attribute equality only; real keyboard/focus/geometry assertions remain.
     await pressKey('m');await pressKey('b');
     await wait(`document.getElementById('layer-mesh').checked&&document.getElementById('layer-bones').checked`,'M/B shared shortcuts');
 
     const readOverlayAlignment = () =>
         page!.evaluate<{
             activeElementId: string | null;
+            textEntryFocused: boolean;
             width: number;
             height: number;
             leftHalfPixels: number;
@@ -279,6 +280,10 @@ try {
             const totalPixels = leftHalfPixels + rightHalfPixels;
             return {
                 activeElementId: document.activeElement?.id ?? null,
+                textEntryFocused: !!document.activeElement && (
+                    document.activeElement.matches('textarea,select') || document.activeElement.isContentEditable ||
+                    (document.activeElement.tagName === 'INPUT' && !['checkbox','radio','button','submit','reset','range','color','file','image'].includes(document.activeElement.type))
+                ),
                 width,
                 height,
                 leftHalfPixels,
@@ -294,14 +299,15 @@ try {
         })()`);
 
     const overlayStats = await readOverlayAlignment();
-    assert.equal(overlayStats.activeElementId, 'rig-viewport');
+    // 305941 / #796/#798: document-bound shortcuts (web/view-controls.ts:84-97), not a focusable viewport ID.
+    assert.equal(overlayStats.textEntryFocused, false, 'M/B shortcuts run outside text/select/textarea entry');
     assert.ok(overlayStats.leftHalfPixels > 20, 'synthetic generated-kind mesh slot (rigid, left side) and bone points are drawn on #rig-overlay');
     assert.ok(overlayStats.rightHalfPixels > 20, 'inline mesh slot (mesh, right side) and bone points are drawn on #rig-overlay');
     // #768:5-7 / #796: removed automatic canonical marker/presentation assertions.
     await record('overlay-mesh-and-bones-drawn', overlayStats);
 
     // 3b. Camera pan & fit alignment: focus the existing animation selector first, then drag #rig-viewport
-    // to prove pointer interaction moves focus to #rig-viewport and rigProject tracks live pan/fit transforms.
+    // to prove pointer interaction leaves text entry and rigProject tracks live pan/fit transforms.
     await page.evaluate(`document.getElementById('animation-select').focus()`);
     assert.equal(await page.evaluate<string | null>(`document.activeElement?.id ?? null`), 'animation-select');
     await dragMouse(
@@ -315,7 +321,7 @@ try {
     const deltaRootTop = pannedStats.rootTop - overlayStats.rootTop;
     const deltaCentroidX = pannedStats.centroidX - overlayStats.centroidX;
     const deltaCentroidY = pannedStats.centroidY - overlayStats.centroidY;
-    assert.equal(pannedStats.activeElementId, 'rig-viewport', 'pointerdown on #rig-viewport moves focus out of <select>');
+    assert.equal(pannedStats.textEntryFocused, false, 'pointerdown on #rig-viewport leaves text/select/textarea entry');
     assert.ok(deltaRootLeft > 20 && deltaRootTop > 12, 'dragging #rig-viewport pans #rig-root');
     assert.ok(Math.abs(deltaCentroidX - deltaRootLeft) < 3, 'wire overlay X centroid tracks live pan transform');
     assert.ok(Math.abs(deltaCentroidY - deltaRootTop) < 3, 'wire overlay Y centroid tracks live pan transform');
@@ -361,7 +367,7 @@ try {
     // Non-whole-rig rejection remains at ACT layer: tests/job-act.test.ts:566, src/job-act.ts:174.
     // Current web/job-rig-capture.ts:199 captures whole rig independently of display selection.
     // Keep the real Images shortcut and text-entry protection on the current comment composer.
-    await page.evaluate(`document.getElementById('rig-viewport').focus()`);await pressKey('i');
+    await click(page,'#rig-viewport');await pressKey('i');
     await wait(`!document.getElementById('layer-images').checked`,'Images shortcut off');
     assert.equal(await page.evaluate(`getComputedStyle(document.getElementById('rig-root')).visibility`),'hidden');
     await pressKey('i');
@@ -428,7 +434,7 @@ try {
     // Reconnect and new publication still exercise the shared overlay and actual source binding.
     const cpAsk2=await ask(rig,{kind:'checkpoint',checkpointId:'step-one',planStepId:'step-one'});
     await wait(`!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"]')`,'second checkpoint form');
-    await page.evaluate(`document.getElementById('rig-viewport').focus()`);await pressKey('m');
+    await click(page,'#rig-viewport');await pressKey('m');
     await wait(`document.getElementById('layer-mesh').checked`,'wire active before reconnect');
     await page.goto('about:blank');await page.goto(owner.href);
     await wait(`!!document.querySelector('#scrub')&&!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"] fieldset:not(:disabled)')`,'reconnected checkpoint');

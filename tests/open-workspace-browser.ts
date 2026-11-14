@@ -330,9 +330,11 @@ try {
   await page.mouse('mousePressed',commentPoint.x,commentPoint.y);
   await page.mouse('mouseReleased',commentPoint.x,commentPoint.y);
   await wait(frameExpression(0, `!!document.querySelector('.stage-comment-composer input')`),'current comment composer');
-  await inside(0, `(()=>{const node=document.querySelector('.stage-comment-composer input');node.value='Synthetic human unsaved note';node.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
+  // b433: composer cancels on blur by design (stage-comments.ts:221,227); retain a saved Comment.
+  await inside(0, `(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Synthetic saved comment';form.requestSubmit();return true;})()`);
+  await wait(frameExpression(0, `!document.querySelector('.stage-comment-composer')&&[...document.querySelectorAll('.stage-comment-summary')].some(node=>node.textContent.includes('Synthetic saved comment'))`),'saved Comment list');
   await clickInside(0, '[data-inspector="playback"]');
-  const snapshotExpression = `({animation:document.querySelector('#animation-select').value,time:document.querySelector('#scrub').value,zoom:document.querySelector('#zoom-value').textContent,part:document.querySelector('#selected-part').textContent,panel:document.querySelector('[data-inspector][aria-pressed="true"], [data-inspector][aria-selected="true"]')?.getAttribute('data-inspector'),note:document.querySelector('.stage-comment-composer input').value,source:document.querySelector('#provenance-rig').textContent})`;
+  const snapshotExpression = `({animation:document.querySelector('#animation-select').value,time:document.querySelector('#scrub').value,zoom:document.querySelector('#zoom-value').textContent,part:document.querySelector('#selected-part').textContent,panel:document.querySelector('[data-inspector][aria-pressed="true"], [data-inspector][aria-selected="true"]')?.getAttribute('data-inspector'),comments:[...document.querySelectorAll('.stage-comment-summary')].map(node=>node.textContent),source:document.querySelector('#provenance-rig').textContent})`;
   const saved = await inside(0, snapshotExpression);
   await record('retention-before', saved);
   // Exercise the public legacy control locator while the real frame is connected.
@@ -356,7 +358,8 @@ try {
   const held = await inside<any>(0, snapshotExpression);
   await Bun.sleep(250); assert.deepEqual(await inside(0, snapshotExpression), held);
   await choose(0, 9); assert.deepEqual(await inside(0, snapshotExpression), held);
-  assert.equal(held.note, 'Synthetic human unsaved note');
+  assert.deepEqual(held.comments,(saved as any).comments);
+  assert.ok(held.comments.some((text:string)=>text.includes('Synthetic saved comment')));
   assert.equal(held.source, (saved as any).source); assert.equal(held.zoom, (saved as any).zoom);
   await record('retention-after', held);
   await Bun.sleep(1200);

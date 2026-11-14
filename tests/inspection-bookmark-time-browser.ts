@@ -34,7 +34,7 @@ try{
  for(const lang of ['en','ko']){
   const refusal=lang==='ko'?'저장된 점검 시간이 선택된 클립/레퍼런스 범위를 벗어났습니다':'Saved inspection time is outside the selected clip/reference';
   const url=`http://127.0.0.1:${proxy.port}/?lang=${lang}#cap=${cap}`;
-  await page.goto(url);await wait('window.__bookmarkReading&&!window.__bookmarkReading().restoring&&!document.getElementById("play").disabled');
+  await page.goto(url);await wait('document.body.dataset.ready==="true"&&window.__bookmarkReading&&!window.__bookmarkReading().restoring&&!document.getElementById("play").disabled');
   await page.evaluate(`document.querySelector('[data-mode="playback"]').click();document.querySelector('[data-part-list] button[data-slot="lantern"]').click();if(document.getElementById('play').getAttribute('aria-label')!=='Pause')document.getElementById('play').click()`);
   await wait('window.__bookmarkReading().runtime>2.2&&window.__bookmarkReading().display>.2&&window.__bookmarkReading().display<.8');
   await page.evaluate(`document.getElementById('play').click()`);
@@ -49,17 +49,17 @@ try{
   await writeFile(join(out,`${lang}-before.png`),await page.screenshot());
   // Real pagehide, then reopen at exactly the same origin using local draft (no URL override).
   await page.goto(`http://127.0.0.1:${proxy.port}/bookmark-away`);const hiddenDraft=JSON.parse((await page.evaluate<any>(drafts))[0][1]);check(JSON.stringify(hiddenDraft.bookmark)===JSON.stringify(draft.bookmark),'pagehide preserves actual bookmark');await page.goto(url);
-  await wait('window.__bookmarkReading&&!window.__bookmarkReading().restoring');
+  await wait('document.body.dataset.ready==="true"&&window.__bookmarkReading&&!window.__bookmarkReading().restoring');
   const reopened=await read(),warning=await page.evaluate<string>('document.body.innerText');
   await writeFile(join(out,`${lang}-reading.json`),JSON.stringify({paused,stable,draft,reopened,warning},null,2));
   if(red){check(warning.includes(refusal),'original named refusal');check(reopened.bookmark.selection.part===null,'RED loses selection');}
   else{check(Math.abs(reopened.display-paused.display)<1e-7,'actual inspection time restored');check(JSON.stringify(reopened.bookmark.selection.part)===JSON.stringify(draft.bookmark.selection.part),'slot identity restored');check(JSON.stringify(reopened.bookmark.view)===JSON.stringify(draft.bookmark.view),'canonical camera restored');check(!reopened.playing,'restores paused');}
   await writeFile(join(out,`${lang}-reopened.png`),await page.screenshot());
   // Explicit source-bound URL and a deliberately out-of-domain supplied bookmark. No modulo/clamp allowed.
-  await page.goto(url.split('#')[0]+encodeBookmark(draft.bookmark));await wait('window.__bookmarkReading&&!window.__bookmarkReading().restoring');
+  await page.goto(url.split('#')[0]+encodeBookmark(draft.bookmark));await wait('document.body.dataset.ready==="true"&&window.__bookmarkReading&&!window.__bookmarkReading().restoring');
   const linked=await read();if(!red)check(Math.abs(linked.display-paused.display)<1e-7&&linked.bookmark.selection.part?.slot==='lantern','URL restores bounded inspection');
   const invalid={...draft.bookmark,time:9};
-  await page.goto(url.split('#')[0]+encodeBookmark(invalid));await wait('window.__bookmarkReading&&!window.__bookmarkReading().restoring');
+  await page.goto(url.split('#')[0]+encodeBookmark(invalid));await wait('document.body.dataset.ready==="true"&&window.__bookmarkReading&&!window.__bookmarkReading().restoring');
   check((await page.evaluate<string>('document.body.innerText')).includes(refusal),'invalid supplied domain still named-refuses');
   rows.push({lang,paused,stable,saved:draft,pagehide:hiddenDraft,href:saved.href,reopened,linked,invalidTime:9,invalidRefused:true});
   await page.evaluate('for(const [k] of '+drafts+')localStorage.removeItem(k)');

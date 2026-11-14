@@ -538,6 +538,10 @@ try {
     'captured api/interview questions for option-set publication',
   );
 
+  // #809:92: Answer… opens the native dialog; a prepared hidden form is not a pointer target.
+  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('form[data-job-ask="${picksAsk.askId}"] fieldset:not(:disabled)')`,'interview owner ready');
+  if(!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page,'#workspace-pending-ask');
+  await wait(`!!document.querySelector('#job-record-asks[open] form[data-job-ask="${picksAsk.askId}"]')`,'Answer dialog opened');
   for (const name of optionDom.selectNames) {
     await click(page,`form[data-job-ask="${picksAsk.askId}"] input[type="radio"][name="${name}"][value="keep"]`);
   }

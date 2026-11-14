@@ -12,14 +12,23 @@ test('every discovered nonexcluded browser goes to exactly one shard, including 
  expect(()=>partitionBrowserSuites([...files,files[0]!])).toThrow('BROWSER_DUPLICATE_SUITE');
 });
 test('closed issue cannot silently retain an exclusion; ordinary test injects states and never calls GitHub',async()=>{
- const seen:number[]=[];
- await expect(assertExclusionIssuesOpen(exclusions,async issue=>{seen.push(issue);return 'closed';})).rejects.toThrow('BROWSER_EXCLUSION_ISSUE_NOT_OPEN: #843');
- expect(seen).toEqual([843]);
- await assertExclusionIssuesOpen(exclusions,async()=> 'open');
+ const issues=[843,847];
+ for(const closed of issues){
+  const seen:number[]=[];
+  await expect(assertExclusionIssuesOpen(exclusions,async issue=>{seen.push(issue);return issue===closed?'closed':'open';})).rejects.toThrow('BROWSER_EXCLUSION_ISSUE_NOT_OPEN: #'+closed);
+  expect(seen).toEqual(closed===843?[843]:issues);
+ }
+ const openSeen:number[]=[];
+ await assertExclusionIssuesOpen(exclusions,async issue=>{openSeen.push(issue);return 'open';});
+ expect(openSeen).toEqual(issues);
 });
-test('live tree partition has only the named regression exemption',async()=>{
+test('live tree partition has exactly the three issue-bound whole-suite exemptions',async()=>{
  const plan=await browserPlan();
- expect(Object.keys(plan.exclusions)).toEqual(['tests/parts-comments-browser.ts']);
+ expect(Object.fromEntries(Object.entries(plan.exclusions).map(([file,entry])=>[file,entry.issue]))).toEqual({
+  'tests/parts-comments-browser.ts':843,
+  'tests/stage1-corrections-browser.ts':847,
+  'tests/stage1-review-fixes-browser.ts':847,
+ });
  expect(new Set(plan.shards.flatMap(shard=>shard.suites))).toEqual(new Set(plan.discovered.filter(file=>!Object.hasOwn(exclusions,file))));
 });
 test('suite argv uses supported output/locale contracts and enables assertions',()=>{
