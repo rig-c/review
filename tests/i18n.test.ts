@@ -40,6 +40,13 @@ import {commentCropPaths} from '../src/comment-crops.ts';
 import {feedbackWithCommentGroups,formatFeedbackIssues} from '../src/feedback-export.ts';
 import {bindStageComments} from '../web/stage-comments.ts';
 
+test('#839 Korean saved readback aliases use the requested conversational ending',()=>{
+ for(const key of ['Human action saved.','job.saved']){
+  expect(koCatalog[key]).toBe('사용자 작업을 저장했어요.');
+  expect(enCatalog[key]).toBe('Human action saved.');
+ }
+});
+
 test('#788 active Rig still refusals have paired visible EN/KO messages without exemptions',()=>{
  for(const code of ['JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED'])for(const catalog of [enCatalog,koCatalog]) {
   expect(catalog[code]).toBeUndefined();expect(catalog['job.submit.'+code]).toBeUndefined();

@@ -11,6 +11,7 @@ import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {recordScreenFixture,type RecordScreenKind} from './helpers/job-record-screen-fixture.ts';
+import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {prepareJobRecordAct} from '../src/job-act.ts';
 import type {JobRetainedRecordSource} from '../src/job-source.ts';
 import {parseRecordAct} from '../src/job-api.ts';
@@ -30,6 +31,31 @@ let holdImages=false;const pausedImages:string[]=[];
 const exceptions:unknown[]=[],mutations:{method:string;path:string}[]=[],cases:unknown[]=[];
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('750_BROWSER_TIMEOUT '+label);}
 
+type StripState={tabs:{id:string;text:string;disabled:boolean}[];selected:string|null;selectedVisible:boolean;questionLast:boolean;reportOverflow:boolean;actRowVisible:boolean;ordinaryPanelVisible:boolean};
+const stripState=()=>page!.evaluate<StripState>(`(()=>{const row=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])'),visible=n=>!!n&&!n.hidden&&n.getClientRects().length>0&&getComputedStyle(n).display!=='none';const buttons=[...row.querySelectorAll(':scope>button[role=tab]')],selected=row.querySelector('[aria-selected=true]');return {tabs:buttons.filter(visible).map(n=>({id:n.dataset.blockTarget,text:n.textContent,disabled:n.disabled})),selected:selected?.dataset.blockTarget??null,selectedVisible:visible(selected),questionLast:buttons.at(-1)?.dataset.blockTarget==='question',reportOverflow:!!row.querySelector('[data-block-target=report-panel][data-tab-overflow]'),actRowVisible:visible(document.querySelector('#workspace-act-row')),ordinaryPanelVisible:visible(document.querySelector('#selected-part'))};})()`);
+async function selectBlock(target:string){
+ const selector=`.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target="${target}"]`;
+ if(await page!.evaluate(`document.querySelector(${JSON.stringify(selector)}).hasAttribute('data-tab-overflow')`)){
+  await click(page!,'.workspace-bottom-tabs>.block-row:not([hidden]) .workspace-tabs-more');await click(page!,`.workspace-tabs-menu:not([hidden]) [data-block-more-target="${target}"]`);
+ }else await click(page!,selector);
+}
+const ordinaryParts=new Map<string,{state:StripState;sourceHash:string}>();
+async function ordinaryPartsStrip(language:string,out:string){
+ const fixture=await scriptedJobWindowFixture({c5Parts:'mesh'});
+ try{
+  const publication=await fixture.publish('parts');await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
+  const before=await jobInputHashes(fixture.input.root),url=new URL(fixture.locator+'/#cap='+fixture.credentials.ui);url.searchParams.set('lang',language);
+  await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.body.dataset.ready==='true'&&document.querySelector('[data-part-list] button')&&!document.body.inert`,'839 genuine ordinary parts verdict');
+  const state=await stripState();assert.equal(state.tabs.length,9);assert.equal(state.tabs[0]!.id,'selected-part');assert.equal(state.tabs[0]!.disabled,false);assert.ok(state.tabs.slice(1).every(tab=>tab.disabled));
+  const result={state,sourceHash:publication.source.sourceHash};await writeFile(join(out,'ordinary-parts.json'),JSON.stringify(result,null,2));await writeFile(join(out,'ordinary-parts.png'),await page!.screenshot());
+  assert.deepEqual(await jobInputHashes(fixture.input.root),before);ordinaryParts.set(language,result);return result;
+ }finally{await page!.goto('about:blank');await fixture.close();}
+}
+function comparePartsStrip(state:StripState,ordinary:StripState,question:boolean){
+ assert.deepEqual(state.tabs.filter(tab=>tab.id!=='question'),ordinary.tabs,'displayed ordinary parts tabs and disabled states match genuine parts-verdict job');
+ assert.equal(state.tabs.some(tab=>tab.id==='question'),question);
+ if(question){assert.equal(state.questionLast,true);assert.equal(state.tabs.find(tab=>tab.id==='question')!.disabled,false);}
+}
 
 /** #839 uses the same retained fixture and #834 viewport instrument; no replacement screen. */
 async function questionTabChecks(){
@@ -41,8 +67,11 @@ async function questionTabChecks(){
    for(let i=fixture.fake.events.length-1;i>=0;i--)if(fixture.fake.events[i]!.type==='pending')fixture.fake.events.splice(i,1);
    const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
    await page!.setViewport(1440,900);await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
+   const ordinary=picture==='parts'?await ordinaryPartsStrip(language,out):null;
    await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')`,'839 baseline');
-   const tabs=()=>page!.evaluate<string[]>(`[...document.querySelectorAll('.block-row button[data-block-target]')].map(n=>n.dataset.blockTarget)`);
+   const tabs=async()=>(await stripState()).tabs;
+   const beforeAskStrip=await stripState();if(ordinary)comparePartsStrip(beforeAskStrip,ordinary.state,false);else assert.equal(beforeAskStrip.tabs.length,10,'ten ordinary Animate tabs remain displayed');
+   const awayTarget=picture==='parts'?'selected-part':'animation-dock';
    // A non-default camera makes restoration stronger than a view-label check.
    if(picture==='parts')await click(page!,'#native-one');await click(page!,'#zoom-in');
    const viewExpression=`(()=>{const raw=document.querySelector('#view-coordinates').textContent;const numeric=raw?JSON.parse(raw):{cameraSync:document.querySelector('#camera-sync').checked,activeCamera:null,cameras:Object.fromEntries(['rig','reference'].map(key=>{const root=document.querySelector(key==='rig'?'#rig-root':'#reference-content'),pane=document.querySelector('#'+key+'-viewport'),scale=new DOMMatrix(getComputedStyle(root).transform);return [key,{space:'image',center:{x:(pane.clientWidth/2-parseFloat(root.style.left||'0'))/scale.a,y:(pane.clientHeight/2-parseFloat(root.style.top||'0'))/scale.d},zoom:scale.a}];}))};return {mode:document.querySelector('#view-menu [aria-pressed=true]')?.dataset.view,rigHidden:document.querySelector('#rig-pane').hidden,referenceHidden:document.querySelector('#reference-pane').hidden,reference:document.querySelector('#reference-select').value,referenceHTML:document.querySelector('#reference-content').innerHTML,cameraSync:numeric.cameraSync,activeCamera:numeric.activeCamera,cameras:Object.fromEntries(Object.entries(numeric.cameras).map(([key,camera])=>[key,camera?{space:camera.space,center:camera.center,zoom:camera.zoom}:null]))};})()`;
@@ -54,28 +83,40 @@ async function questionTabChecks(){
    await wait(`document.querySelector('#reference-content img')?.naturalWidth===2`,'839 question picture');
    assert.equal(await page!.evaluate('devicePixelRatio'),2);assert.equal(await page!.evaluate('innerWidth'),1440);
    assert.equal(await page!.evaluate(`document.querySelector('[data-block-target=question][aria-selected=true]').textContent`),(language==='en'?enCatalog:koCatalog)['Question']);
-   for(const tab of originalTabs)assert.ok((await tabs()).includes(tab),'existing tab retained: '+tab);
+   const eventArrivalStrip=await stripState();assert.deepEqual(eventArrivalStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs and enabled states retained');
+   if(ordinary)comparePartsStrip(eventArrivalStrip,ordinary.state,true);
    assert.equal(await page!.evaluate(`!!document.querySelector('dialog[open]')`),false);
    await writeFile(join(out,'event-arrival.png'),await page!.screenshot());
-   await click(page!,'#stage-comment');await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 event-arrival away');
+   await selectBlock(awayTarget);await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 event-arrival away');
+   const eventAwayStrip=await stripState();assert.equal(eventAwayStrip.actRowVisible,true);if(ordinary){comparePartsStrip(eventAwayStrip,ordinary.state,true);assert.equal(eventAwayStrip.ordinaryPanelVisible,true);}
    assert.deepEqual(await page!.evaluate(viewExpression),originalView,'pre-ask view/reference/camera restored');
    assert.equal(await page!.evaluate(`(()=>{const nodes=[...document.querySelector('#reference-content').childNodes];return nodes.length===window.__questionOriginalReferenceNodes.length&&nodes.every((node,i)=>node===window.__questionOriginalReferenceNodes[i])&&document.querySelector('#person-select')===window.__questionOriginalPersonSelect;})()`),true);
    // The same genuine pending stream must select Question on initial navigation, not only event arrival.
    await page!.goto('about:blank');await page!.goto(url.href);
    await wait(`!!document.querySelector(${JSON.stringify(root+' '+selector+' fieldset:not(:disabled)')})&&!!document.querySelector('[data-block-target=question][aria-selected=true]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 pending on page load');
-   for(const tab of originalTabs)assert.ok((await tabs()).includes(tab),'existing tab on pending load: '+tab);
+   const pendingStrip=await stripState();assert.deepEqual(pendingStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs retained on pending load');assert.equal(pendingStrip.selectedVisible,true);assert.equal(pendingStrip.questionLast,true);
+   if(ordinary)comparePartsStrip(pendingStrip,ordinary.state,true);
    await writeFile(join(out,'load.png'),await page!.screenshot());
+   let narrowStrip:StripState|undefined;
+   if(picture===true){
+    await command!('Emulation.setDeviceMetricsOverride',{width:900,height:900,deviceScaleFactor:2,mobile:false});
+    await wait(`(()=>{const row=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])');return row.querySelector('[data-block-target=question][aria-selected=true]')?.getBoundingClientRect().width>0&&!!row.querySelector('[data-block-target=report-panel][data-tab-overflow]');})()`,'839 900px selected Question visible and Report overflows');
+    narrowStrip=await stripState();assert.equal(narrowStrip.selectedVisible,true);assert.equal(narrowStrip.reportOverflow,true);assert.equal(narrowStrip.questionLast,true);await writeFile(join(out,'narrow-900.png'),await page!.screenshot());
+    await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});await wait(`innerWidth===1440&&document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])').clientWidth>1000`,'839 full strip restored');
+   }
    // Establish the previous review view on this document before checking identity/camera restoration.
-   await click(page!,'#stage-comment');await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 pending load away');
+   await selectBlock(awayTarget);await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 pending load away');
    if(picture==='parts')await click(page!,'#native-one');await click(page!,'#zoom-in');
    await page!.evaluate(`window.__questionOriginalReferenceNodes=[...document.querySelector('#reference-content').childNodes];window.__questionOriginalPersonSelect=document.querySelector('#person-select')`);
    const pendingPreviousView=await page!.evaluate(viewExpression);
    await click(page!,'#workspace-pending-ask');await wait(`document.querySelector('#reference-content img')?.naturalWidth===2&&!!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 pending load return');
    // Comments exists for both backdrop kinds, including parts whose source has no model blocks.
-   await click(page!,'#stage-comment');await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 restore previous view');
+   await selectBlock(awayTarget);await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 restore previous view');
+   const awayStrip=await stripState();assert.equal(awayStrip.actRowVisible,true);if(ordinary){comparePartsStrip(awayStrip,ordinary.state,true);assert.equal(awayStrip.ordinaryPanelVisible,true);}
    assert.deepEqual(await page!.evaluate(viewExpression),pendingPreviousView,'actual view/reference/camera restored');
    assert.equal(await page!.evaluate(`(()=>{const nodes=[...document.querySelector('#reference-content').childNodes];return nodes.length===window.__questionOriginalReferenceNodes.length&&nodes.every((node,i)=>node===window.__questionOriginalReferenceNodes[i])&&document.querySelector('#person-select')===window.__questionOriginalPersonSelect;})()`),true,'prior reference node identity restored');
    await writeFile(join(out,'away.png'),await page!.screenshot());
+   await click(page!,'#stage-comment');
    await click(page!,'#workspace-pending-ask');await wait(`!!document.querySelector('#workspace-interview-answer[data-question-image-active]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 return image');
    // Return after the shipped Comment action enabled capture on the review backdrop.
    await wait(`!document.querySelector('#rig-viewport.stage-comment-mode,#reference-viewport.stage-comment-mode')`,'839 transient image refuses pin mode');
@@ -91,11 +132,11 @@ async function questionTabChecks(){
    assert.equal(await page!.evaluate(`['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)`),true,'completed answer controls hidden');
    assert.equal(await page!.evaluate(`document.querySelector('#workspace-act-row').hidden`),true);
    assert.deepEqual(await page!.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'single visible saved state');
-   await click(page!,'#stage-comment');
-   const questionTab='.workspace-bottom-tabs > .block-row:not([hidden]) [data-block-target="question"]';
-   if(await page!.evaluate(`document.querySelector(${JSON.stringify(questionTab)}).hasAttribute('data-tab-overflow')`)){
-    await click(page!,'.workspace-bottom-tabs > .block-row:not([hidden]) .workspace-tabs-more');await click(page!,'.workspace-tabs-menu:not([hidden]) [data-block-more-target="question"]');
-   }else await click(page!,questionTab);
+   const answeredStrip=await stripState();assert.deepEqual(answeredStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs retained after save');if(ordinary)comparePartsStrip(answeredStrip,ordinary.state,true);
+   const readbackCopy=await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).textContent`);assert.equal(readbackCopy,(language==='en'?enCatalog:koCatalog)['job.saved']);
+   await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).scrollIntoView({block:'center'})`);await writeFile(join(out,'readback-status.png'),await page!.screenshot());
+   await selectBlock(awayTarget);if(ordinary){const savedAway=await stripState();comparePartsStrip(savedAway,ordinary.state,true);assert.equal(savedAway.ordinaryPanelVisible,true);}
+   await selectBlock('question');
    await wait(`document.querySelector('#workspace-interview-answer[data-question-image-active]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 saved readback through Question tab');
    await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
    await writeFile(join(out,'answered.png'),await page!.screenshot());
@@ -116,8 +157,41 @@ async function questionTabChecks(){
    assert.ok(await page!.evaluate(`document.querySelector('#dirty').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`));
    await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
    await writeFile(join(out,'reload.png'),await page!.screenshot());
-   const observation={originalView,pendingPreviousView,transientPinRefused:true,pendingOnLoad:true,picture,language,width:1440,height:900,dpr:2,originalTabs,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));
+   const reloadStrip=await stripState();if(ordinary)comparePartsStrip(reloadStrip,ordinary.state,true);
+   const observation={originalView,pendingPreviousView,transientPinRefused:true,pendingOnLoad:true,picture,language,width:1440,height:900,dpr:2,originalTabs,ordinary,beforeAskStrip,eventArrivalStrip,eventAwayStrip,pendingStrip,awayStrip,answeredStrip,reloadStrip,narrowStrip,readbackCopy,sourceHash:fixture.display.publication.source.sourceHash,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));
    console.log('839_QUESTION_PASS '+JSON.stringify(observation));
+   assert.deepEqual(await jobInputHashes(fixture.root),before);
+  }finally{await fixture.close();}
+ }
+ await picturelessPartsQuestionChecks();
+}
+
+/** No option image changes the existing dialog, never the actual parts backdrop's capabilities. */
+async function picturelessPartsQuestionChecks(){
+ for(const language of ['en','ko'] as const){
+  const fixture=await recordScreenFixture('interview-picks','parts',undefined,undefined,false,false),out=join(output,'parts-no-question-image',language),ordinary=ordinaryParts.get(language);
+  assert.ok(ordinary);await mkdir(out,{recursive:true});fixture.output(out);const before=await jobInputHashes(fixture.root);
+  try{
+   const metadata=await (await fetch(fixture.origin+fixture.display.routes.apiBase+'interview')).json() as {questions:{images:unknown[]}[]};assert.equal(metadata.questions[0]!.images.length,0);assert.ok(fixture.backdrop);
+   await page!.setViewport(1440,900);await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
+   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page!.goto('about:blank');await page!.goto(url.href);
+   const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
+   await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&!!document.querySelector(${JSON.stringify('#job-record-asks[open] '+selector+' fieldset:not(:disabled)')})`,'839 no-image question over real parts');
+   assert.equal(await page!.evaluate(`!!document.querySelector('#workspace-interview-answer[data-question-image-active]')`),false);await writeFile(join(out,'pending-native.png'),await page!.screenshot());
+   await click(page!,'#job-record-asks .workspace-drawer-close');const pendingStrip=await stripState();comparePartsStrip(pendingStrip,ordinary.state,false);assert.equal(pendingStrip.actRowVisible,true);await writeFile(join(out,'pending.png'),await page!.screenshot());
+   await selectBlock('selected-part');const awayStrip=await stripState();comparePartsStrip(awayStrip,ordinary.state,false);assert.equal(awayStrip.ordinaryPanelVisible,true);await writeFile(join(out,'away.png'),await page!.screenshot());
+   await click(page!,'#workspace-pending-ask');await wait(`!!document.querySelector('#job-record-asks[open]')`,'839 no-image native opener');
+   await page!.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});for(const value of ['topology_other','density_auto'])form.querySelector('input[value="'+value+'"]').click();const other=form.querySelector('textarea[name="other.topology"]');other.value=${JSON.stringify('  Custom topology · 직접 입력\n')};other.dispatchEvent(new Event('input',{bubbles:true}));form.querySelector('button[type=submit]').scrollIntoView({block:'center'});})()`);
+   await click(page!,selector+' button[type=submit]');await wait(`!document.querySelector('#job-record-asks[open]')&&document.querySelector('#workspace-act-row').hidden&&document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'`,'839 no-image saved');
+   const answeredStrip=await stripState();comparePartsStrip(answeredStrip,ordinary.state,false);assert.equal(answeredStrip.ordinaryPanelVisible,true);assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
+   const readbackCopy=await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).textContent`);assert.equal(readbackCopy,(language==='en'?enCatalog:koCatalog)['job.saved']);await writeFile(join(out,'answered.png'),await page!.screenshot());
+   const bytes=await readFile(join(out,'one-screen.json'),'utf8'),act=parseRecordAct(JSON.parse(bytes));assert.equal(act.kind,'interview-picks');if(act.kind!=='interview-picks')throw Error('wrong act');assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
+   const expected=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});assert.equal(bytes,JSON.stringify(expected));assert.equal(sha(await readFile(new URL('../src/job-act.ts',import.meta.url))),baseline.writerSourceSha256);
+   fixture.fake.events.push({type:'act',jobId:fixture.session.jobId,generation:fixture.display.publication.generation+2,cursor:String(fixture.fake.events.length+1),act});
+   await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#workspace-act-row').hidden`,'839 no-image saved reload');
+   if(await page!.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page!,'#job-record-asks .workspace-drawer-close');
+   const reloadStrip=await stripState();comparePartsStrip(reloadStrip,ordinary.state,false);assert.equal(reloadStrip.ordinaryPanelVisible,true);await writeFile(join(out,'reload.png'),await page!.screenshot());
+   const observation={picture:'parts',questionImages:false,language,sourceHash:fixture.display.publication.source.sourceHash,ordinary,pendingStrip,awayStrip,answeredStrip,reloadStrip,readbackCopy,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));console.log('839_NO_IMAGE_PARTS_PASS '+JSON.stringify(observation));
    assert.deepEqual(await jobInputHashes(fixture.root),before);
   }finally{await fixture.close();}
  }
@@ -229,7 +303,7 @@ try{
  }
  assert.equal(exceptions.length,0,'no browser exceptions');
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
- const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:completedPicture?4:0,askKinds:1,languages:['en','ko'],backdrops:completedPicture?['rig','parts']:freshParts?['bound-parts']:['empty'],viewports:completedPicture?[[1440,900]]:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],...(completedPicture?{dpr:2}:{}),exceptions,mutations,browserWorkers:'shared launchCdpSession defaults'};
+ const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:completedPicture?6:0,askKinds:1,languages:['en','ko'],backdrops:completedPicture?['rig','parts','parts-no-question-image']:freshParts?['bound-parts']:['empty'],viewports:completedPicture?[[1440,900],[900,900]]:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],...(completedPicture?{dpr:2}:{}),exceptions,mutations,browserWorkers:'shared launchCdpSession defaults'};
  await writeFile(join(output,'result.json'),JSON.stringify(result,null,2)+'\n');console.log('750_BROWSER_PASS '+JSON.stringify(result));
 }catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,completedCases:cases},null,2)+'\n');if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await rm(profile,{recursive:true,force:true});}

@@ -67,6 +67,7 @@ export function createSyntheticOptionRecordWorkspace(
     readonly stage?: 'interview' | 'rigging-interview' | 'post-interview';
     readonly includeHistoricalSignoff?: boolean;
     readonly boundParts?: boolean;
+    readonly questionImages?: boolean;
   },
 ): SyntheticOptionWorkspace {
   const questionId = options?.questionId ?? 'rig_type';
@@ -93,7 +94,7 @@ export function createSyntheticOptionRecordWorkspace(
     drafted_at: '2026-11-01T00:00:00.000Z',
     context: options?.boundParts ? {kind:'parts',draft_id:'synthetic',parts:{path:'derived/drafts/synthetic',files:boundFiles}} : {
       kind: 'inputs',
-      files: [inputImage, inputSpec],
+      files: options?.questionImages===false ? [inputSpec] : [inputImage, inputSpec],
     },
     assembly: { rule: 'merge' },
     asks: [

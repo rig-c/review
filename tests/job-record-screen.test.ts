@@ -325,7 +325,7 @@ test('#784 model-less reference checkpoint survives preparation, receipt rearm a
  }finally{await h.close();}
 });
 
-test('#805 record option-set with a parts picture reaches the existing inspector gate without rig data',async()=>{
+test('#839 record parts pictures keep ordinary inspector eligibility without compiled rig data',async()=>{
  const h=await harness('parts','fixture','interview-picks'),f=h.f;try{
   h.dom.set('ResizeObserver',class{observe(){}disconnect(){}});h.dom.set('MutationObserver',class{observe(){}disconnect(){}});h.dom.set('window',new EventTarget());h.dom.set('requestAnimationFrame',()=>1);h.dom.set('cancelAnimationFrame',()=>{});
   Object.assign(h.dom.document,{addEventListener(){},removeEventListener(){}});
@@ -342,11 +342,22 @@ test('#805 record option-set with a parts picture reaches the existing inspector
    el:()=>element,input:()=>element,select:()=>element,text(){},document:{},tr:(key:string)=>key,readOnlyReason:()=>null,access:{},fitCamera(){},bindAppearance:()=>({}),bindReviewDialog(){},bindInspector(){inspector=true;},
    bindWorkspaceUI:()=>({defaults:()=>defaults}),bindInspectorBlocks:(options:{available:unknown})=>{available=options.available;return {};}};
   const run=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(gate+'\n'+parts)};return startParts;}`)(environment);
-  await run(opened,{issues:[]},{capabilityRequired:true});expect(available).toEqual(['feedback']);expect(inspector).toBe(true);
+  await run(opened,{issues:[]},{capabilityRequired:true});expect(available).toBeUndefined();expect(inspector).toBe(true);
   // The same gate retains the existing rig and picture-free record decisions.
   const bind=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(gate)};return bindWorkspace;}`)(environment);
-  bind(true);expect(available).toBeUndefined();environment.host.record.hasPicture=false;bind(false);expect(available).toEqual(['feedback']);
+  environment.partsOnly=false;bind(true);expect(available).toBeUndefined();bind(false);expect(available).toEqual(['feedback']);
+  environment.partsOnly=true;environment.host.record.hasPicture=false;bind(false);expect(available).toEqual(['feedback']);
  }finally{await h.close();}
+});
+
+test('#839 a question without option images retains its actual parts backdrop',async()=>{
+ const fixture=await recordScreenFixture('interview-picks','parts',undefined,undefined,false,false);
+ try{
+  const interview=await (await fetch(fixture.origin+fixture.display.routes.apiBase+'interview')).json() as {questions:{images:unknown[]}[]};
+  expect(interview.questions).toHaveLength(1);expect(interview.questions[0]!.images).toHaveLength(0);
+  expect(fixture.backdrop?.publication.source.package).toBeDefined();
+  expect(fixture.backdrop?.publication.source.selector?.kind).toBe('draft');
+ }finally{await fixture.close();}
 });
 
  test('#814 fresh-host option-set uses its own sealed parts without a previous publication',async()=>{

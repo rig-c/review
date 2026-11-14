@@ -1264,7 +1264,7 @@ function bindWorkspace(hasModel=false):void {
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   bindReviewDialog();
   screenRoot.querySelector<HTMLElement>('.inspector-body')!.append(questionPanel);
-  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel)?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{syncQuestionImage();workspace?.refresh();persistence?.save();}});
+  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel&&!partsOnly)?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{syncQuestionImage();workspace?.refresh();persistence?.save();}});
 }
 async function start(): Promise<void> {
   try {
