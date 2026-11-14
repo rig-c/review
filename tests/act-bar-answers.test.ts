@@ -9,15 +9,16 @@ const renderer=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(start,
 function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  const control=()=>({hidden:false,disabled:false,title:'',textContent:'',onclick:null as null|((e:unknown)=>unknown),classList:{values:new Set<string>(),toggle(name:string,on:boolean){on?this.values.add(name):this.values.delete(name);}}});
  const save=control(),requestChanges=control(),rigAsk=control(),select=control(),label=control(),submit=control();
+ let state:{kind:string;text:string}|null=null;const rigInspector={act:{hidden:true},actBar:{saveState:()=>state,setSaveState:(value:{kind:string;text:string})=>{state=value;}}};
  const calls:string[]=[],session={feedbackWarnings:[],status:'pending'};
  const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
-  session,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
+  session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
   recordDialog:{querySelector:()=>({disabled:false}),querySelectorAll:()=>[submit]},
   button:()=>save,select:()=>select,document:{querySelector:()=>label},
   setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
   verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};
  const render=new Function('env',`with(env){${renderer};return renderAnswerControls;}`)(env);
- render();return {save,requestChanges,rigAsk,submit,session,calls,env,render};
+ render();return {save,requestChanges,rigAsk,submit,session,calls,env,render,rigInspector};
 }
 for(const stage of ['rig-review','direction-review'])test('#809 '+stage+' directly submits the selected answer and requires a comment for changes',()=>{
  const h=harness([{kind:'review-verdict',stage}]);
@@ -52,4 +53,10 @@ test('#825 draft failure leads the live job state; saved answers use the act-bar
  expect(states.at(-1).kind).toBe('failed');expect(states.at(-1).text).toBe('Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.');
  env.draftConflict=false;env.draftStatus='Local draft could not be saved: Draft exceeds 512 KiB. Export feedback before leaving.';render();expect(states.at(-1).text).toBe(env.draftStatus);
  env.answerSaved=true;render();expect(states.at(-1).text).toBe('Answer saved');
+});
+
+test('#833 live act reveals only after controls render and initialises the shared save state once',()=>{
+ const h=harness([{kind:'interview-picks'}]);expect(h.rigInspector.act.hidden).toBe(false);
+ const state=h.rigInspector.actBar.saveState();expect(state).toEqual({kind:'unsaved',text:'Not submitted'});
+ h.render();expect(h.rigInspector.actBar.saveState()).toBe(state);
 });
