@@ -47,7 +47,7 @@ async function mainSave(session: ReviewSession, submittedBaseline: ReviewSession
     const el = () => node, button = el, text = (id, value) => {readouts[id] = value;};
     const errorText = error => error.message, message = value => messages.push(value);
     const comments = {refresh() {}}, persistence = {async submitted(value) {saved.push(structuredClone(value));}};
-    function renderProposals() {} function renderDraftState() {}
+    function renderProposals() {} function renderDraftState() {} function renderAnswerControls() {}
     ${javascript}
     return {save, locked: isSubmittedFeedback, state: () => ({dirty, saving, session, submittedBaseline, readouts, messages, saved, saveStates, title: node.title})};
   `)({session, submittedBaseline, host, jobSubmissionRefusal}) as {

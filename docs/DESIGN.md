@@ -23,6 +23,11 @@ change adds no screen, behavior or public contract.
   screens, gates, input fields, toolbars, panels and owner checkpoints, including
   Create-side changes that make Review render new owner content, gates or
   checkpoints. Nonvisual bug fixes are exempt.
+- **Pending asks** The full question leads the act bar. The control that answers
+  the pending ask is the only emphasised control; with no pending ask none is
+  emphasised. Verdict buttons submit directly. Signoff follows the verdict when
+  both are pending. Dialog saves close the dialog and show saved. A draft restore
+  failure leads the bar and blocks every submission until download or discard.
 - **R1** Every review view separates its main toolbar and secondary toolbar into
   distinct areas. Group primary inspection actions in the main area and auxiliary
   controls in the secondary area.
