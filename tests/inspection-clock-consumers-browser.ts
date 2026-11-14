@@ -1,3 +1,4 @@
+import {instrumentRigMount} from './helpers/mount-probe.ts';
 /** Nova-only: generated public fixture, installed real producers, observation-only clock instrumentation. */
 import {mkdir,mkdtemp,readFile,writeFile,cp,readdir} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
@@ -30,7 +31,7 @@ await run(['check','--rig',join(pkg,'out/rig'),'--parts',join(pkg,'out'),'--out'
 await cp(join(pkg,'check/build'),join(pkg,'build'),{recursive:true});
 async function tree(dir:string,prefix=''):Promise<Record<string,string>>{let v:Record<string,string>={};for(const e of await readdir(dir,{withFileTypes:true})){const name=prefix+e.name;if(e.isDirectory())Object.assign(v,await tree(join(dir,e.name),name+'/'));else if(e.isFile())v[name]=hash(await readFile(join(dir,e.name)));}return v;}
 const before=await tree(pkg),main=await readFile('web/main.ts','utf8');
-const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'clock-observation-only',setup(b){b.onLoad({filter:/\/web\/main\.ts$/},()=>({loader:'ts',contents:main+`\nObject.assign(window,{__clockReading:()=>({display:time,runtime:player?.time,duration,playing,restoring:persistence?.restoring()??true,panel:Number(document.querySelector<HTMLInputElement>('[data-curve-time]')?.value),sourceHash:data.sourceHash,stageHash:stageModelHash,applied:appliedOnStage})});` }));}}]});
+const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'clock-observation-only',setup(b){b.onLoad({filter:/\/web\/main\.ts$/},()=>({loader:'ts',contents:instrumentRigMount(main,`Object.assign(window,{__clockReading:()=>!data||!player||!persistence?null:({display:time,runtime:player.time,duration,playing,restoring:persistence.restoring(),panel:Number(document.querySelector<HTMLInputElement>('[data-curve-time]')?.value),sourceHash:data.sourceHash,stageHash:stageModelHash,applied:appliedOnStage})});`) }));}}]});
 check(built.success,String(built.logs));const bundle=await built.outputs[0]!.text();
 const rows:any[]=[],cap='e'.repeat(64);
 for(const lang of ['en','ko']){
@@ -43,7 +44,7 @@ for(const lang of ['en','ko']){
  async function loopPause(){await page.evaluate(`if(!window.__clockReading().playing)document.getElementById('play').click()`);await wait('window.__clockReading().runtime>2.2&&window.__clockReading().display>.25&&window.__clockReading().display<.75');await page.evaluate(`(()=>{document.getElementById('play').click()})()`);const p=await read();check(!p.playing&&p.runtime>2&&p.display<1,'independent clocks');await page.evaluate('new Promise(r=>{let n=0;function f(){if(++n===90)r(true);else requestAnimationFrame(f)}requestAnimationFrame(f)})');check(JSON.stringify(await read())===JSON.stringify(p),'paused clocks stable for 90 frames');return p;}
  try{
   await page.setViewport(1440,1000);await page.goto(`http://127.0.0.1:${proxy.port}/?lang=${lang}#cap=${cap}`);
-  await wait('window.__clockReading&&!window.__clockReading().restoring&&!document.getElementById("play").disabled');
+  await wait('window.__clockReading?.()&&!window.__clockReading().restoring&&!document.getElementById("play").disabled');
   await wait('window.rigReviewEditor.idle.source()?.tracks?.length>0');
   await page.evaluate(`(()=>{document.querySelector('[data-mode="playback"]').click();const s=document.getElementById('animation-select');s.value='idle';s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   const idleGate=await page.evaluate<any>('window.rigReviewEditor.animation.gate()');
@@ -65,7 +66,7 @@ for(const lang of ['en','ko']){
   check(JSON.stringify(draft).includes(applied.buildId),'APPLIED inputs saved in actual local draft');
   await writeFile(join(out,lang+'-rebuilt.png'),await page.screenshot());
   await page.goto(`http://127.0.0.1:${proxy.port}/?lang=${lang}&reopen=1#cap=${cap}`);
-  await wait('window.__clockReading&&!window.__clockReading().restoring&&!document.getElementById("play").disabled');
+  await wait('window.__clockReading?.()&&!window.__clockReading().restoring&&window.__clockReading().applied&&!document.getElementById("play").disabled');
   const reopened=await page.evaluate<any>('JSON.parse(document.getElementById("rebuild-applied").value)');
   check(JSON.stringify(reopened)===JSON.stringify(applied),'actual reopen restores APPLIED inputs');
   // The editable clip is nonlooping: normal +Key and stage-pose UI retain their existing time.
