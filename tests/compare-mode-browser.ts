@@ -641,7 +641,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         const gateText = gateEl?.textContent || '';
         const animApplyDisabled = document.querySelector('#animation-inspection [data-animation-apply]')?.disabled ?? false;
         const dockPanelPresent = !!document.getElementById('animation-dock');
-        const animateBlocksPresent = !!document.getElementById('animate-blocks');
+        const wholePanelTabs = !document.getElementById('animate-blocks') && !!document.querySelector('#inspector-playback [data-block-target=animation-dock]');
 
         document.querySelector('[data-animation-view="curve"]')?.click();
         await sleep(40);
@@ -685,7 +685,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
             gateText,
             animApplyDisabled,
             dockPanelPresent,
-            animateBlocksPresent,
+            wholePanelTabs,
             curvePaths,
             curveReadout,
             treeBones,
@@ -703,7 +703,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
 
       // Defect 5 (#235 Slice 4a), as tabs since #308: in a comparison session, switching to Setup or Animate and clicking
       // the block tabs marks aria-selected="true" and shows the chosen block alone in the panel container, with nothing
-      // scrolled to reach it, while #animation-dock stays stationary in Animate.
+      // scrolled to reach it. #838 hides the retained Timeline while another tab owns the body.
       await clickMode('rig');
       const rigScrollRoot = document.getElementById('inspector-rig');
       rigScrollRoot.scrollTop = 0;
@@ -736,11 +736,10 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       }
 
       await clickMode('playback');
-      const animateScrollRoot = document.getElementById('animate-blocks');
+      const animateScrollRoot = document.getElementById('inspector-playback');
       const dockEl = document.getElementById('animation-dock');
       animateScrollRoot.scrollTop = 0;
       await sleep(30);
-      const dockBeforeRect = dockEl.getBoundingClientRect();
       const animateBlockTargets = [
         ['Physics', 'physics-panel'],
         ['Idle tracks', 'idle-tracks'],
@@ -757,7 +756,6 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         const targetEl = document.getElementById(targetId);
         const rootRect = animateScrollRoot.getBoundingClientRect();
         const targetRect = targetEl.getBoundingClientRect();
-        const dockAfterRect = dockEl.getBoundingClientRect();
         animateBlockScrolls.push({
           label,
           targetId,
@@ -765,7 +763,8 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
           alone: [...document.querySelectorAll('[role=tabpanel][aria-labelledby^="block-tab-"]')].filter((p) => p.getClientRects().length > 0 && btn.closest('[data-inspector-panel]')?.contains(p)).map((p) => p.id).join(',') === targetId,
           scrollTop: Math.round(animateScrollRoot.scrollTop),
           inView: targetRect.top < rootRect.bottom && targetRect.bottom > rootRect.top,
-          dockTopDelta: Math.round(Math.abs(dockAfterRect.top - dockBeforeRect.top)),
+          dockHidden: dockEl.hidden,
+          dockRetained: document.getElementById('animation-dock') === dockEl,
           geometry: {root:[rootRect.top,rootRect.bottom],target:[targetRect.top,targetRect.bottom],parent:targetEl.parentElement.id,hidden:targetEl.hidden,display:getComputedStyle(targetEl).display},
         });
       }
@@ -1480,9 +1479,9 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         b.animate.editableLanes < 2 ||
         !b.animate.animApplyDisabled ||
         !b.animate.dockPanelPresent ||
-        !b.animate.animateBlocksPresent
+        !b.animate.wholePanelTabs
       ) {
-        failures.push(`${label}: compare timeline editable gate or split dock failed: ${JSON.stringify(b.animate)}`);
+        failures.push(`${label}: compare timeline editable gate or whole-panel tabs failed: ${JSON.stringify(b.animate)}`);
       }
       if (!b.animate.physicsHasStrength || !b.animate.idleHasMesh || !b.animate.retargetSequences.includes('pose-1'))
         failures.push(`${label}: physics/idle/retarget panels not populated: ${JSON.stringify(b.animate)}`);
@@ -1494,7 +1493,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       }
     }
     for (const row of compareCheck.blockScrolling?.animate ?? []) {
-      if (row.ariaSelected !== 'true' || !row.alone || row.scrollTop !== 0 || !row.inView || row.dockTopDelta !== 0) {
+      if (row.ariaSelected !== 'true' || !row.alone || row.scrollTop !== 0 || !row.inView || !row.dockHidden || !row.dockRetained) {
         failures.push(`Compare Animate block-tab scroll failed for ${row.label} (${row.targetId}): ${JSON.stringify(row)}`);
       }
     }

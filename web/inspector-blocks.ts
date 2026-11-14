@@ -39,14 +39,14 @@ export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlock
 
 interface Tab {button:HTMLButtonElement;id:string;panel:HTMLElement;included:HTMLElement[]}
 const isRow=(node:Element)=>node.classList.contains('block-row');
-function bindPopupMenu(id:string,items:()=>HTMLButtonElement[],cleanups:(()=>void)[],focusOnClose=true):{button:HTMLButtonElement;menu:HTMLElement;close:(focus?:boolean)=>void} {
+function bindPopupMenu(id:string,items:()=>HTMLButtonElement[],cleanups:(()=>void)[],place?:(menu:HTMLElement)=>void):{button:HTMLButtonElement;menu:HTMLElement;close:(focus?:boolean)=>void} {
  const button=actionButton('⋯',null),menu=panelMake('div',{id,hidden:true}),listen=(node:HTMLElement,type:string,fn:(event:Event)=>void)=>{node.addEventListener(type,fn);cleanups.push(()=>node.removeEventListener(type,fn));};
  button.setAttribute('aria-haspopup','menu');button.setAttribute('aria-controls',id);button.setAttribute('aria-expanded','false');menu.setAttribute('role','menu');
- const close=(focus=focusOnClose)=>{menu.hidden=true;button.setAttribute('aria-expanded','false');if(focus)button.focus();};
- const open=(last=false)=>{const list=items();if(!list.length)return;menu.hidden=false;button.setAttribute('aria-expanded','true');list[last?list.length-1:0]!.focus();};
+ const close=(focus=true)=>{menu.hidden=true;button.setAttribute('aria-expanded','false');if(focus)button.focus();};
+ const open=(last=false)=>{const visible=items();if(!visible.length)return;const list=visible.filter(item=>!item.disabled);menu.hidden=false;place?.(menu);button.setAttribute('aria-expanded','true');if(list.length)list[last?list.length-1:0]!.focus();else{menu.tabIndex=-1;menu.focus();}};
  listen(button,'click',()=>menu.hidden?open():close());
  listen(button,'keydown',event=>{const key=(event as KeyboardEvent).key;if(['ArrowDown','ArrowUp','Enter',' '].includes(key)){event.preventDefault();open(key==='ArrowUp');}else if(key==='Escape'){event.preventDefault();close();}});
- listen(menu,'keydown',event=>{const key=(event as KeyboardEvent).key,list=items();if(key==='Escape'){event.preventDefault();close();}else if(['ArrowDown','ArrowUp','Home','End'].includes(key)&&list.length){event.preventDefault();const index=list.indexOf(event.target as HTMLButtonElement);list[key==='Home'?0:key==='End'?list.length-1:(index+(key==='ArrowDown'?1:list.length-1))%list.length]!.focus();}});
+ listen(menu,'keydown',event=>{const key=(event as KeyboardEvent).key,list=items().filter(item=>!item.disabled);if(key==='Escape'){event.preventDefault();close();}else if(['ArrowDown','ArrowUp','Home','End'].includes(key)&&list.length){event.preventDefault();const index=list.indexOf(event.target as HTMLButtonElement);list[key==='Home'?0:key==='End'?list.length-1:(index+(key==='ArrowDown'?1:list.length-1))%list.length]!.focus();}});
  listen(menu,'focusout',event=>{const target=(event as FocusEvent).relatedTarget;if(target!==button&&!menu.contains(target as Node|null))close(false);});
  return {button,menu,close};
 }
@@ -77,7 +77,12 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
   if(options.bottom){
    let syncOverflow=()=>{};
    if(typeof (doc as Document).createElement==='function'&&tabs.length){
-    const items:HTMLButtonElement[]=[],more=bindPopupMenu('workspace-tabs-more-'+name,()=>{syncOverflow();return items.filter(item=>!item.hidden&&!item.disabled);},cleanups,false);
+    const placeOverflow=(menu:HTMLElement)=>{
+     if(typeof row.getBoundingClientRect!=='function')return;
+     const rect=row.getBoundingClientRect(),clip=section.closest('main')?.getBoundingClientRect(),above=Math.max(0,rect.top-(clip?.top??0)-8),below=Math.max(0,Math.min(innerHeight,clip?.bottom??innerHeight)-rect.bottom-8);
+     const up=below<Math.min(menu.scrollHeight,220)&&above>below;menu.dataset.side=up?'above':'below';menu.style.maxHeight=Math.min(220,up?above:below)+'px';
+    };
+    const items:HTMLButtonElement[]=[],more=bindPopupMenu('workspace-tabs-more-'+name,()=>{syncOverflow();return items.filter(item=>!item.hidden);},cleanups,placeOverflow);
     more.button.className='workspace-tabs-more';more.button.hidden=true;more.menu.className='workspace-tabs-menu';
     for(const tab of tabs){
      const item=actionButton(tab.button.textContent??'',()=>{more.close(false);rows.get(name)?.select(tab.id);syncOverflow();tab.button.focus();});
@@ -95,6 +100,7 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
      let used=moreWidth+(selectedIndex>=0?widths[selectedIndex]!+4:0);if(selectedIndex>=0)visible.add(selectedIndex);
      for(let i=0;i<tabs.length;i++)if(i!==selectedIndex){if(used+widths[i]!+4<=availableWidth){visible.add(i);used+=widths[i]!+4;}else break;}
      for(const [i,tab]of tabs.entries()){const over=!visible.has(i);if(over)tab.button.setAttribute('data-tab-overflow','true');items[i]!.hidden=!over;items[i]!.disabled=tab.button.disabled;items[i]!.textContent=tab.button.textContent;const title=tab.button.getAttribute('title');if(title)items[i]!.setAttribute('title',title);else items[i]!.removeAttribute('title');}
+     if(!more.menu.hidden)placeOverflow(more.menu);
     };
    }
    definitions.set(name,{section,row,scrollRoot,tabs,syncOverflow});saved[name]=tabs.find(tab=>tab.button.getAttribute('aria-selected')==='true')?.id??tabs[0]?.id??'feedback';

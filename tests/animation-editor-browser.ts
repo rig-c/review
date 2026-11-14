@@ -947,125 +947,48 @@ async function main() {
       throw new Error(`Slice 3b/3c 1600x1000 dock verification failed: ${JSON.stringify(slice3bDockCheck, null, 2)}`);
     }
 
-    // Slice 3c Bar 1 & Bar 2:
-    // - Timeline is its own panel (#animation-dock), not a child of any inspector block tab (#animate-blocks).
-    // - Switching across all 9 tabs ('Transport', 'Sound', 'Environment', 'Physics', 'Idle tracks', 'Readings', 'Requirements', 'Retarget', 'Report')
-    //   leaves play, scrub, ruler, lanes, and Apply in the exact same bounding rect (0 px change) while scrolling #animate-blocks to each block.
-    const slice3cTabsResult = await session.evaluate<{
-      timelineIsOwnPanel: boolean;
-      timelineInsideAnimateBlocks: boolean;
-      baselineRects: Record<string, { left: number; top: number; width: number; height: number }>;
-      tabsMeasured: Array<{
-        label: string;
-        targetId: string;
-        ariaSelected: string | null;
-        targetVisibleInBlocksPanel: boolean;
-        animateBlocksScrollTop: number;
-        maxDeltaPx: number;
-        deltas: Record<string, number>;
-      }>;
-      maxDeltaAcrossAllTabsPx: number;
-    }>(`(async () => {
-      const dockPanel = document.getElementById('animation-dock');
-      const blocksPanel = document.getElementById('animate-blocks');
-      const animInsp = document.getElementById('animation-inspection');
-      const timelineIsOwnPanel =
-        !!dockPanel &&
-        !!blocksPanel &&
-        dockPanel.parentElement?.id === 'inspector-playback' &&
-        blocksPanel.parentElement?.id === 'inspector-playback' &&
-        dockPanel.contains(animInsp);
-      const timelineInsideAnimateBlocks = !!blocksPanel && blocksPanel.contains(animInsp);
-
-      const tracked = {
-        play: '#play',
-        scrub: '#scrub',
-        ruler: '[data-animation-ruler]',
-        lanes: '.animation-lanes',
-        apply: '[data-animation-apply]',
-      };
-      const measureTracked = () => {
-        const out = {};
-        for (const [k, sel] of Object.entries(tracked)) {
-          const r = document.querySelector(sel).getBoundingClientRect();
-          out[k] = {
-            left: Math.round(r.left * 100) / 100,
-            top: Math.round(r.top * 100) / 100,
-            width: Math.round(r.width * 100) / 100,
-            height: Math.round(r.height * 100) / 100,
-          };
-        }
-        return out;
-      };
-      const baselineRects = measureTracked();
-      // #741 moves the existing Animate row into the shared bottom-panel heading.
-      const buttons = [...document.querySelectorAll('.inspector-heading .block-row:not([hidden]) button[data-block-target]')].filter((button) => button.getAttribute('data-block-target') !== 'feedback');
-      const tabsMeasured = [];
-      let maxDeltaAcrossAllTabsPx = 0;
-
-      for (const btn of buttons) {
-        btn.click();
-        // A tab shows its block alone (#308): nothing scrolls to reach it.
-        const targetId = btn.getAttribute('data-block-target') || '';
-        const targetEl = document.getElementById(targetId);
-        await new Promise((r) => setTimeout(r, 30));
-        const nowRects = measureTracked();
-        const deltas = {};
-        let tabMax = 0;
-        for (const k of Object.keys(tracked)) {
-          const b = baselineRects[k];
-          const n = nowRects[k];
-          const d = Math.max(
-            Math.abs(n.left - b.left),
-            Math.abs(n.top - b.top),
-            Math.abs(n.width - b.width),
-            Math.abs(n.height - b.height),
-          );
-          deltas[k] = Math.round(d * 100) / 100;
-          if (d > tabMax) tabMax = d;
-        }
-        if (tabMax > maxDeltaAcrossAllTabsPx) maxDeltaAcrossAllTabsPx = tabMax;
-        const tr = targetEl.getBoundingClientRect();
-        const pr = blocksPanel.getBoundingClientRect();
-        tabsMeasured.push({
-          label: btn.textContent?.trim() || '',
-          targetId,
-          ariaSelected: btn.getAttribute('aria-selected'),
-          targetVisibleInBlocksPanel: tr.bottom > pr.top && tr.top < pr.bottom,
-          animateBlocksScrollTop: Math.round(blocksPanel.scrollTop),
-          maxDeltaPx: Math.round(tabMax * 100) / 100,
-          deltas,
-        });
+    // #838 replaces the fixed two-column dock: each tab owns the entire body.
+    // Keep the actual timeline nodes and their geometry when returning to Timeline.
+    const slice3cTabsResult = await session.evaluate<any>(`(async () => {
+      const section = document.getElementById('inspector-playback');
+      const dock = document.getElementById('animation-dock');
+      const buttons = [...document.querySelectorAll('.inspector-heading .block-row:not([hidden]) button[data-block-target]')];
+      const timeline = buttons.find(button => button.dataset.blockTarget === 'animation-dock');
+      timeline.click();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const tracked = ['#play','#scrub','[data-animation-ruler]','.animation-lanes','[data-animation-apply]'].map(selector => document.querySelector(selector));
+      const measure = () => tracked.map(node => {
+        const rect = node.getBoundingClientRect();
+        return [rect.left,rect.top,rect.width,rect.height];
+      });
+      const baselineRects = measure(), tabsMeasured = [];
+      for (const button of buttons) {
+        button.click();
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const targetId = button.dataset.blockTarget, target = document.getElementById(targetId);
+        const rect = target.getBoundingClientRect(), body = section.getBoundingClientRect();
+        tabsMeasured.push({targetId,ariaSelected:button.getAttribute('aria-selected'),
+          shown:[...section.querySelectorAll(':scope > [role="tabpanel"]')].filter(panel => !panel.hidden && getComputedStyle(panel).display !== 'none').map(panel => panel.id),
+          inView:rect.height > 0 && rect.top < body.bottom && rect.bottom > body.top,
+          selectedVisible:button.getBoundingClientRect().width > 0 && !button.hasAttribute('data-tab-overflow'),
+          timelineHidden:dock.hidden});
       }
-
-      // Leave Physics tab selected briefly so we can capture a screenshot showing Physics next to Timeline
-      const physicsBtn = buttons.find((b) => b.getAttribute('data-block-target') === 'physics-panel');
-      if (physicsBtn) {
-        physicsBtn.click();
-        await new Promise((r) => setTimeout(r, 30));
-      }
-
-      return {
-        timelineIsOwnPanel,
-        timelineInsideAnimateBlocks,
-        baselineRects,
-        tabsMeasured,
-        maxDeltaAcrossAllTabsPx: Math.round(maxDeltaAcrossAllTabsPx * 100) / 100,
-      };
+      timeline.click();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const restoredRects = measure();
+      return {timelineIsPanel:dock.parentElement === section && dock.getAttribute('role') === 'tabpanel',
+        oldSplitPresent:!!document.getElementById('animate-blocks'),tabsMeasured,baselineRects,restoredRects,
+        retained:tracked.every(node => node.isConnected && dock.contains(node))};
     })()`);
-
-    if (
-      !slice3cTabsResult.timelineIsOwnPanel ||
-      slice3cTabsResult.timelineInsideAnimateBlocks ||
-      slice3cTabsResult.tabsMeasured.length !== 9 ||
-      slice3cTabsResult.maxDeltaAcrossAllTabsPx !== 0 ||
-      slice3cTabsResult.tabsMeasured.some((t) => t.ariaSelected !== 'true' || !t.targetVisibleInBlocksPanel)
-    ) {
-      throw new Error(`Slice 3c Bar 1/2 tab switch verification failed: ${JSON.stringify(slice3cTabsResult, null, 2)}`);
+    if (!slice3cTabsResult.timelineIsPanel || slice3cTabsResult.oldSplitPresent || !slice3cTabsResult.retained ||
+      slice3cTabsResult.tabsMeasured.length !== 10 ||
+      slice3cTabsResult.tabsMeasured.some((tab:any) => tab.ariaSelected !== 'true' || !tab.inView || !tab.selectedVisible ||
+        tab.shown.length !== 1 || tab.shown[0] !== tab.targetId || tab.timelineHidden !== (tab.targetId !== 'animation-dock')) ||
+      JSON.stringify(slice3cTabsResult.baselineRects) !== JSON.stringify(slice3cTabsResult.restoredRects)) {
+      throw new Error('Slice 3c whole-panel tab verification failed: '+JSON.stringify(slice3cTabsResult,null,2));
     }
-
     if (screenshotDir) {
-      await writeFile(join(screenshotDir, 'slice3c-dock-physics-tab-1600x1000.png'), await session.screenshot());
+      await writeFile(join(screenshotDir, 'slice3c-full-panel-timeline-1600x1000.png'), await session.screenshot());
     }
 
     // Bar 6: Verify Apply isolation note (Ruling H2)

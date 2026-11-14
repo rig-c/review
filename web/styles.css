@@ -478,7 +478,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 [data-tab-overflow]{display:none!important}
 .workspace-tabs-more{flex:none;padding:3px 8px;font-size:11px;line-height:1}
 .workspace-tabs-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:15;display:flex;flex-direction:column;gap:2px;min-width:140px;max-height:220px;overflow-y:auto;padding:4px;background:var(--rv-panel);border:1px solid var(--border-strong);border-radius:8px}
-.inspector[data-collapsed=true] .workspace-tabs-menu{top:auto;bottom:calc(100% + 4px)}
+.workspace-tabs-menu[data-side=above]{top:auto;bottom:calc(100% + 4px)}
 .workspace-tabs-menu button{text-align:left;font-size:11px;padding:4px 9px;border-color:transparent;background:transparent;color:var(--fg);white-space:nowrap}
 .workspace-tabs-menu button:hover,.workspace-tabs-menu button:focus-visible{background:var(--rv-control-hover);color:var(--fg-strong)}
 .inspector-body>[data-comments=true]{display:none!important}
