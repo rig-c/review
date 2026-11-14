@@ -428,6 +428,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
   }
 
   function syncModeButtons(): void {
+    button('play').hidden = workspaceMode !== 'animate';
     const expected = workspaceMode === 'setup' ? 'rig' : workspaceMode === 'animate' ? 'playback' : 'compare';
     for (const btn of document.querySelectorAll<HTMLButtonElement>('.mode-switch [data-mode]')) {
       btn.setAttribute('aria-pressed', String(btn.dataset.mode === expected));

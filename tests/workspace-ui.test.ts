@@ -22,7 +22,7 @@ test('compressed sidebar handles advertise reachable sizes and invert allocator 
 class Host extends EventTarget {
  id='';tagName:string;parentElement:Host|null=null;children:Host[]=[];dataset:Record<string,string>={};attrs=new Map<string,string>();hidden=false;tabIndex=-1;value='';checked=false;open=false;textContent='';scrollLeft=0;scrollTop=0;scrollWidth=1200;scrollHeight=1400;clientWidth=1200;clientHeight=800;captured=new Set<number>();
  style={touchAction:'',gridTemplateRows:'',values:new Map<string,string>(),setProperty(name:string,value:string){this.values.set(name,value);}};
- classes=new Set<string>();classList={add:(name:string)=>this.classes.add(name)};
+ classes=new Set<string>();classList={add:(name:string)=>this.classes.add(name),contains:(name:string)=>this.classes.has(name)};
  constructor(tag='div'){super();this.tagName=tag.toUpperCase();}
  get className(){return [...this.classes].join(' ');}set className(value:string){this.classes=new Set(value.split(' '));}
  get childNodes(){return this.children;}
@@ -138,9 +138,9 @@ test('an explorer inside the left column makes it the parts column: no right col
 
 const indexHtml=composedRigMarkup;
 const between=(html:string,start:string,end:string)=>{const a=html.indexOf(start),b=html.indexOf(end,a);if(a<0||b<a)throw new Error(`index.html region missing: ${start} … ${end}`);return html.slice(a,b+end.length);};
-test('canonical rig content preserves both source sections and all 18 real tool tabs; C6 mounts the Review act separately',async()=>{
+test('canonical rig content preserves both source sections and all 19 real tool tabs; C6 mounts the Review act separately',async()=>{
  const html=await indexHtml(),inspector=between(html,'<section class="inspector"','</main>');
- expect([...inspector.matchAll(/role="tab"[^>]*data-block-target="([^"]+)"/g)].map(m=>m[1])).toEqual(['selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields','cuts-panel','cloth-panel','motion-tools','sound-panel','environment','physics-panel','idle-tracks','readings','requirements','retarget','report-panel']);
+ expect([...inspector.matchAll(/role="tab"[^>]*data-block-target="([^"]+)"/g)].map(m=>m[1])).toEqual(['selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields','cuts-panel','cloth-panel','animation-dock','motion-tools','sound-panel','environment','physics-panel','idle-tracks','readings','requirements','retarget','report-panel']);
  expect([...inspector.matchAll(/data-inspector-panel="([^"]+)"/g)].map(m=>m[1])).toEqual(['rig','playback']);
  const source=await readFile(new URL('../web/inspector-blocks.ts',import.meta.url),'utf8');
  expect(source).toContain("feedback.removeAttribute('data-inspector-panel')");expect(source).toContain('body.append(feedback);dialog.remove()');expect(source).toContain("row:{tabs,panels:tabs.flatMap(tab=>tab.panels),initialize:true}");
@@ -157,12 +157,12 @@ test('Setup holds no control that seeks or plays: the angle tool and panel and e
 const mainSource=()=>readFile(new URL('../web/main.ts',import.meta.url),'utf8');
 /** Every id of the former Feedback section, unchanged so drafts, the control page and tests keep resolving them. */
 const feedbackIds=['inspector-feedback','review-status','provenance-version','provenance-rig','provenance-motion','provenance-full','source-files','checkpoint-detail','detail-title','detail-note','checkpoint-note','proposal-panel','feedback-start','feedback-end','feedback-range-hint','feedback-target-kind','feedback-target-name','feedback-target-names','feedback-target-hint','feedback-category','comments-list-host','proposal-boundary','feedback-warnings','proposal-list','strip-panel','strip-scope','strip-reference','strip-format','strip-export','strip-status'];
-test('the real review decision and Submit nodes move to the bottom act end without a proxy submit',async()=>{
+test('the real review decision and Submit nodes move once to their actHome without a proxy submit',async()=>{
  const html=await indexHtml(),dialog=between(html,'<dialog id="review-dialog"','</dialog>');
  for(const id of feedbackIds){expect(dialog).toContain(` id="${id}"`);expect(html.split(` id="${id}"`).length).toBe(2);}
  expect(dialog.match(/id="save"/g)?.length).toBe(1);
  const composition=await readFile(new URL('../web/inspector-blocks.ts',import.meta.url),'utf8');
- expect(composition).toContain("label,status,actions");expect(composition).toContain('heading.append(act)');expect(composition).toContain('dialog.remove()');
+ expect(composition).toContain("label,status,actions");expect(composition).toContain('bottom.actHome.append(act)');expect(composition).toContain('actHome:actHome??heading');expect(composition).toContain('dialog.remove()');
  const main=await mainSource();expect(main).toContain("rigInspector.row.reveal=()=>");expect(main).not.toContain('dialog.showModal()');expect(main).not.toContain("button('write-review')");
  expect(main).toContain("onStatus:value=>{draftStatus=value;renderDraftState();}");expect(main).toContain('rigInspector.actBar.setSaveState(');for(const id of ['review-draft-state','draft-state'])expect(main).not.toMatch(new RegExp(`text\\('${id}'|el\\('${id}'\\)\\.(title|textContent)`));expect(main).toContain("text('review-message', value);");
  for(const gone of ["button('export')","button('export-markdown')"])expect(main).not.toContain(gone);
@@ -357,13 +357,28 @@ test('#671 collapse and expand keep single act identity and explicit selected-ta
  const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});
  try{
   const {collapse,act,strip,actHome}=app.bottomPanel!,body=app.bottomBody!;
-  collapse.click();app.flush();expect(body.hidden).toBe(true);expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('true');
+  collapse.click();app.flush();expect(body.hidden).toBe(true);expect(collapse.textContent).toBe('⌃');expect(collapse.getAttribute('aria-label')).toBe('Expand bottom panel');expect(collapse.getAttribute('title')).toBe('Expand bottom panel');expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('true');
   app.tabBinding!.restore('rig');app.flush();expect(body.hidden).toBe(true);
-  app.tabBinding!.select('rig');app.flush();expect(body.hidden).toBe(false);expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('false');
+  app.tabBinding!.select('rig');app.flush();expect(body.hidden).toBe(false);expect(collapse.textContent).toBe('⌄');expect(collapse.getAttribute('aria-label')).toBe('Collapse bottom panel');expect(collapse.getAttribute('title')).toBe('Collapse bottom panel');expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('false');
   app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();
   collapse.click();app.flush();expect(body.hidden).toBe(true);
   collapse.click();app.flush();const drawer=app.get('workspace-drawer-inspectorHeight');expect(body.hidden).toBe(false);expect(drawer.open).toBe(true);expect(drawer.contains(act)).toBe(true);
   expect(app.bottomPanel!.act).toBe(act);expect(app.bottomPanel!.strip).toBe(strip);
+ }finally{app.close();}
+});
+
+test('#840 live act home stays outside the bottom heading through collapse and drawer layout',()=>{
+ const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});
+ try{
+  const row=new Host(),bottom=app.bottomPanel!,act=bottom.act;row.id='workspace-act-row';
+  app.layout.before(row);row.append(act);bottom.actHome=row;app.ui.refresh();app.flush();
+  expect(act.parentElement).toBe(row);expect(bottom.strip.parentElement!.children).toEqual([bottom.strip,bottom.collapse]);
+  bottom.collapse.click();app.flush();
+  expect(app.bottomBody!.hidden).toBe(true);expect(act.parentElement).toBe(row);expect(app.layout.querySelector('main')!.style.gridTemplateRows.endsWith('30px')).toBe(true);
+  app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();
+  bottom.collapse.click();app.flush();
+  expect(app.get('workspace-drawer-inspectorHeight').open).toBe(true);
+  expect(act.parentElement).toBe(row);expect(app.get('workspace-drawer-inspectorHeight').contains(act)).toBe(false);
  }finally{app.close();}
 });
 
@@ -387,7 +402,7 @@ test('#735 source-only startup disables Comments without changing its preserved 
  }
 });
 
-test('#671 real mounted outer tab-panel relationships preserve original nodes and inner rows, including pre-rig exclusion',async()=>{
+for(const live of [false,true])test('#840 '+(live?'live row':'standalone heading')+' preserves mounted nodes, save-state home and outer tab relationships',async()=>{
  const page=new Host('body'),stack=[page],voidTags=new Set(['input','br','img','meta','link','hr','source','col','area','base','embed','param','track','wbr']);
  for(const match of (rigWorkspaceMarkup+rigReviewDialogMarkup).matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"]|"[^"]*")*)>/g)){
   const [,close,raw,attrs]=match,tag=raw!.toLowerCase();if(close){if(!voidTags.has(tag))stack.pop();continue;}
@@ -399,11 +414,31 @@ test('#671 real mounted outer tab-panel relationships preserve original nodes an
  }
  const document={getElementById:(id:string)=>page.all().find(node=>node.id===id)??null,querySelector:(selector:string)=>page.querySelector(selector),querySelectorAll:(selector:string)=>selector==='[data-mode]'||selector==='[data-mode][data-inspector]'?page.all().filter(node=>'mode' in node.dataset&&(!selector.includes('[data-inspector]')||'inspector' in node.dataset)):[],createElement:(tag:string)=>new Host(tag)};
  const header=new Host('header');for(const id of ['rig','playback']){const button=new Host('button');button.id='mode-'+id;button.dataset.mode=id;button.dataset.inspector=id;button.setAttribute('aria-pressed',String(id==='rig'));button.setAttribute('aria-controls','inspector-'+id);header.append(button);}page.prepend(header);
+ const actRow=new Host(),dirtyState=new Host(),draftState=new Host(),draftRecovery=new Host();actRow.id='workspace-act-row';dirtyState.id='dirty';draftState.id='draft-state';draftRecovery.id='draft-recovery';
+ page.prepend(actRow,dirtyState,draftState,draftRecovery);
  const previous=Object.getOwnPropertyDescriptor(globalThis,'document'),oldFocus=hostDocument;Object.defineProperty(globalThis,'document',{configurable:true,value:document});hostDocument={activeElement:null};
  const originals=['rig','playback','feedback'].map(id=>document.getElementById('inspector-'+id)!);
  const innerBefore=page.all().filter(node=>node.attrs.get('aria-labelledby')?.startsWith('block-tab-')).map(node=>[node.id,node.getAttribute('role'),node.getAttribute('aria-labelledby')]);
  try{
-  const mounted=mountRigInspector(document as unknown as Document),row=mounted.row,owners=row.tabs.map(tab=>tab.button.id);
+  const mounted=mountRigInspector(document as unknown as Document,live?actRow as unknown as HTMLElement:undefined),row=mounted.row,owners=row.tabs.map(tab=>tab.button.id);
+  expect(mounted.act.parentElement).toBe(live?actRow as unknown as HTMLElement:mounted.strip.parentElement);
+  if(live){
+   const save=document.getElementById('save')!,refusal=document.getElementById('review-message')!;save.hidden=false;
+   mounted.act.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(true);expect(dirtyState.hidden).toBe(false);
+   const headline=new Host('span');headline.id='workspace-ask-headline';mounted.act.prepend(headline as unknown as HTMLElement);
+   for(const text of ['', '   ']){headline.textContent=text;mounted.syncActRow();expect(actRow.hidden).toBe(true);}
+   headline.textContent='Check the rig and motion.';headline.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(true);
+   // A read refusal remains readable before a question exists, but cannot be
+   // used to expose the answer that was rendered early during loading.
+   refusal.textContent='JOB_VISUAL_UNAVAILABLE';refusal.className='review-message error';refusal.hidden=false;
+   mounted.syncActRow();expect(actRow.hidden).toBe(true);
+   save.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(false);expect(dirtyState.hidden).toBe(true);expect(save.hidden).toBe(true);
+   refusal.className='review-message';mounted.syncActRow();expect(actRow.hidden).toBe(true);
+   headline.hidden=false;save.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);expect(save.hidden).toBe(false);
+  }
+  mounted.act.hidden=false;mounted.syncActRow();expect(dirtyState.hidden).toBe(live);expect(draftState.hidden).toBe(live);expect(draftRecovery.hidden).toBe(live);
+  mounted.actBar.setSaveState({kind:'saved',text:'Answer saved'});expect((live?dirtyState:draftState).textContent).toBe('Answer saved');
+  if(live){expect([...mounted.strip.parentElement!.children]).toEqual([mounted.strip,mounted.collapse]);mounted.act.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(true);expect(dirtyState.hidden).toBe(false);mounted.act.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);}
   expect(new Set(owners).size).toBe(2);expect([...mounted.strip.children]).toEqual([]);expect(mounted.comments.button.hidden).toBe(true);expect(mounted.comments.panel.getAttribute('aria-labelledby')).toBe('stage-comment');expect(document.getElementById('proposal-panel')!.children[0]!.id).toBe('comments-list-host');
   for(const [index,tab] of row.tabs.entries()){
    const panel=tab.panels[0]!;expect(panel).toBe(originals[index] as unknown as HTMLElement);expect(panel.getAttribute('role')).toBe('region');expect(panel.getAttribute('aria-labelledby')).toBe(tab.button.id);expect(tab.button.getAttribute('aria-controls')).toBe(panel.id);
@@ -446,7 +481,7 @@ test('#674 non-rig tabs reuse the C6 strip and collapse structure with a screen-
   expect(mounted.kind).toBe('synthetic');expect(mounted.act).toBe(act as unknown as HTMLElement);expect(mounted.actHome).toBe(actHome as unknown as HTMLElement);expect(act.parentElement).toBe(actHome);
   expect(heading.children).toEqual([mounted.strip,mounted.collapse] as unknown as Host[]);expect(layout.children).toEqual([heading,column]);
   expect(mounted.strip.className).toBe('workspace-bottom-tabs');expect(mounted.strip.getAttribute('role')).toBe('tablist');expect(mounted.strip.getAttribute('aria-label')).toBe('Inspection controls');
-  expect(mounted.collapse.id).toBe('workspace-bottom-collapse');expect(mounted.collapse.getAttribute('aria-controls')).toBe('workspace-inspector');expect(mounted.collapse.getAttribute('aria-expanded')).toBe('true');expect(mounted.collapse.textContent).toBe('Collapse bottom panel');
+  expect(mounted.collapse.id).toBe('workspace-bottom-collapse');expect(mounted.collapse.getAttribute('aria-controls')).toBe('workspace-inspector');expect(mounted.collapse.getAttribute('aria-expanded')).toBe('true');expect(mounted.collapse.textContent).toBe('⌄');expect(mounted.collapse.getAttribute('aria-label')).toBe('Collapse bottom panel');expect(mounted.collapse.getAttribute('title')).toBe('Collapse bottom panel');
   expect(mounted.row.tabs.map(tab=>[tab.id,tab.button.id,tab.button.textContent,tab.button.getAttribute('role'),tab.button.getAttribute('aria-controls'),tab.button.getAttribute('aria-selected'),tab.button.tabIndex])).toEqual([
    ['issues','workspace-tab-issues','Setup','tab','synthetic-issues','true',0],['flags','workspace-tab-flags','Animate','tab','synthetic-flags','false',-1],
   ]);
@@ -466,7 +501,9 @@ test('#674 shared bottom strip keeps rig labels and accessibility text in EN and
    const mounted=mountBottomPanel({kind:'rig',heading:heading as unknown as HTMLElement,act:act as unknown as HTMLElement,actHome:actHome as unknown as HTMLElement,tabs:['rig','playback','feedback'].map((id,index)=>{const panel=new Host('section');panel.id='inspector-'+id;return {id,label:['Setup','Animate','Write review'][index]!,panel:panel as unknown as HTMLElement};})});
    expect(mounted.row.tabs.map(tab=>tab.button.textContent)).toEqual(language==='en'?['Setup','Animate','Write review']:['셋업','애니메이트','리뷰 작성']);
    expect(mounted.strip.getAttribute('aria-label')).toBe(language==='en'?'Inspection controls':'검사 컨트롤');
-   expect(mounted.collapse.textContent).toBe(language==='en'?'Collapse bottom panel':'하단 패널 접기');
+   expect(mounted.collapse.textContent).toBe('⌄');
+   expect(mounted.collapse.getAttribute('aria-label')).toBe(language==='en'?'Collapse bottom panel':'하단 패널 접기');
+   expect(mounted.collapse.getAttribute('title')).toBe(language==='en'?'Collapse bottom panel':'하단 패널 접기');
    expect(mounted.row.tabs.map(tab=>tab.button.getAttribute('aria-controls'))).toEqual(['inspector-rig','inspector-playback','inspector-feedback']);
   }
  }finally{setLinkLanguage(link);setLanguagePreference(preference);if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}

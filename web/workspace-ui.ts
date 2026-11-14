@@ -35,12 +35,12 @@ export function mountStatusBar(options:WorkspaceStatusBarOptions|{placement:'inl
 
 export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyOwnerStep6';
 export interface WorkspaceHeaderOptions {
- compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;
+ compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;pendingActRow?:boolean;title?:string;revision?:string;
  /** Only the stopped compare host supplies its existing domain controls and actions. */
  compare?:{modeSwitch:HTMLElement;buildPicker:HTMLElement;actions:HTMLElement};
 }
 export interface WorkspaceHeader {
- header:HTMLElement;title:HTMLElement;subtitle:HTMLElement|null;modeSwitch:HTMLElement|null;dirty:HTMLElement|null;
+ header:HTMLElement;actRow:HTMLElement|null;title:HTMLElement;subtitle:HTMLElement|null;modeSwitch:HTMLElement|null;dirty:HTMLElement|null;
  stages:HTMLElement|null;status:HTMLParagraphElement|null;language:HTMLSelectElement|null;languageLabel:HTMLLabelElement|null;
  dispose:()=>void;
 }
@@ -97,7 +97,8 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
   else{if(interview)header.append('\n    ');header.append(language);if(interview)header.append('\n  ');}
  }
  if(options.embedded){if(rig||parts)header.hidden=true;else if(interview)language!.hidden=true;}
- return {header,title,subtitle,modeSwitch,dirty,stages,status,language,languageLabel,dispose(){header.remove();languageLabel?.remove();}};
+ const actRow=rig&&options.pendingActRow?panelMake('div',{id:'workspace-act-row',className:'workspace-act-row',hidden:true}):null;
+ return {header,actRow,title,subtitle,modeSwitch,dirty,stages,status,language,languageLabel,dispose(){header.remove();actRow?.remove();languageLabel?.remove();}};
 }
 
 /** Reachable effective bounds, accounting for the other panel's saved desired size. */
@@ -175,7 +176,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  if(bottom){try{collapsed=localStorage.getItem(bottomCollapseKey)==='true';}catch{}}
  const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=selectedInspector(scope) as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
  let disposed=false,frame=0,applying=false,available={width:0,height:0},effective=allocateWorkspaceLayout(available,desired,columns);
- const panelFor=(tab:InspectorTab)=>{const section=require('inspector-'+tab);return (typeof section.querySelector==='function'?section.querySelector<HTMLElement>('.animate-blocks-panel'):null)??section;};
+ const panelFor=(tab:InspectorTab)=>require('inspector-'+tab);
  const userByTab=new Map<InspectorTab,boolean>(),extentByTab=new Map<InspectorTab,string>(),extentOf=(panel:HTMLElement)=>`${panel.scrollWidth}:${panel.scrollHeight}:${panel.clientWidth}:${panel.clientHeight}`;
  const capture=()=>{if(!tabs.length)return;const tab=active(),section=require('inspector-'+tab),panel=panelFor(tab),saved=memory.snapshot()[tab];if(!section.hidden&&(!saved||saved.x<=Math.max(0,panel.scrollWidth-panel.clientWidth)&&saved.y<=Math.max(0,panel.scrollHeight-panel.clientHeight)))memory.capture(tab,panel,false);};
  const restore=()=>{if(disposed||!tabs.length)return;const tab=active(),panel=panelFor(tab);if(panel.clientWidth>0||panel.clientHeight>0)extentByTab.set(tab,extentOf(panel));memory.restore(tab,panel);};
@@ -205,8 +206,9 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
    let bottomHeight=effective.inspectorHeight;
    if(bottom){
     const compact=collapsed||effective.inspectorMode==='drawer';bottomBody!.hidden=collapsed;
-    const actTarget=dialogs.inspectorHeight.open?bottom.actHome:bottomHeading!;if(bottom.act.parentElement!==actTarget)actTarget.append(bottom.act);
-    inspector.dataset.collapsed=String(compact);bottom.collapse.setAttribute('aria-expanded',String(!collapsed));bottom.collapse.textContent=tr(collapsed?'Expand bottom panel':'Collapse bottom panel');
+    const actTarget=bottom.actHome.id==='workspace-act-row'||dialogs.inspectorHeight.open?bottom.actHome:bottomHeading!;if(bottom.act.parentElement!==actTarget)actTarget.append(bottom.act);
+    const collapseLabel=tr(collapsed?'Expand bottom panel':'Collapse bottom panel');
+    inspector.dataset.collapsed=String(compact);bottom.collapse.setAttribute('aria-expanded',String(!collapsed));bottom.collapse.textContent=collapsed?'⌃':'⌄';bottom.collapse.setAttribute('aria-label',collapseLabel);bottom.collapse.setAttribute('title',collapseLabel);
     if(compact)bottomHeight=bottomHeading!.getBoundingClientRect().height;
    }
    main.style.gridTemplateRows=`minmax(0,1fr) ${effective.inspectorMode==='panel'&&!collapsed?gap:0}px ${bottomHeight}px`;

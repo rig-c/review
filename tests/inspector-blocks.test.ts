@@ -29,12 +29,10 @@ function rowTabs(html:string,id:string){
  const tabs=[...row.matchAll(/<button([^>]*)>([^<]+)<\/button>/g)].map(m=>({attrs:m[1]!,label:m[2]!,target:attr(m[1]!,'data-block-target')!,includes:(attr(m[1]!,'data-block-includes')??'').split(' ').filter(Boolean)}));
  return {nav,tabs};
 }
-const expected={'inspector-rig':['Part','Modeling','Chest','Mesh','Weights','Bones','Fields','Cuts','Cloth'],'animate-blocks':['Transport','Sound','Environment','Physics','Idle tracks','Readings','Requirements','Retarget','Report']};
+const expected={'inspector-rig':['Part','Modeling','Chest','Mesh','Weights','Bones','Fields','Cuts','Cloth'],'inspector-playback':['Timeline','Inspection','Sound','Environment','Physics','Idle tracks','Readings','Requirements','Retarget','Report']};
 
-test('every block of each Inspector section has a row tab, and every row tab targets a block of that section; in Animate the timeline is its own panel beside the blocks panel',async()=>{
+test('every block of each Inspector section has a row tab, and every row tab targets a block of that section; in Animate the timeline is the first tab panel',async()=>{
  const html=await indexHtml();
- const playbackPanels=directChildren(html,'inspector-playback');
- expect(playbackPanels.map(p=>attr(p.attrs,'id'))).toEqual(['animation-dock','animate-blocks']);
  const dockChildren=directChildren(html,'animation-dock');
  expect(dockChildren.map(c=>attr(c.attrs,'id'))).toEqual(['transport','frame-controls','animation-inspection']);
  for(const [container,labels]of Object.entries(expected)){
@@ -43,8 +41,6 @@ test('every block of each Inspector section has a row tab, and every row tab tar
   expect(children[0]?.tag).toBe('nav');expect(attr(children[0]!.attrs,'class')).toBe('block-row');
   expect(tabs.map(b=>b.label)).toEqual(labels);
   const blocks=children.slice(1).map(child=>attr(child.attrs,'id'));expect(blocks.every(Boolean)).toBe(true);
-  // The timeline is never inside the blocks container.
-  expect(blocks).not.toContain('animation-inspection');
   const covered=new Set(tabs.flatMap(b=>[b.target,...b.includes]));
   for(const block of blocks)expect({block,covered:covered.has(block!)}).toEqual({block,covered:true});
   for(const tab of tabs){expect(blocks).toContain(tab.target);for(const id of tab.includes)expect(blocks).toContain(id);}
@@ -52,7 +48,7 @@ test('every block of each Inspector section has a row tab, and every row tab tar
   const order=blocks as string[];for(const [i,tab]of tabs.entries()){const at=order.indexOf(tab.target),next=i+1<tabs.length?order.indexOf(tabs[i+1]!.target):order.length;expect(at).toBeLessThan(next);for(const id of tab.includes){const k=order.indexOf(id);expect(k>at&&k<next).toBe(true);}}
  }
  // The row ids are new; each kept block id still appears exactly once.
- for(const id of ['animation-dock','animate-blocks','animation-inspection','transport','environment','physics-panel','idle-tracks','readings','sound-panel','report-panel','selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields','cuts-panel','cloth-panel'])expect(html.split(` id="${id}"`).length).toBe(2);
+ for(const id of ['animation-dock','animation-inspection','transport','environment','physics-panel','idle-tracks','readings','sound-panel','report-panel','selected-part','modeling-tools','chest-regions','mesh-panel','weights','bones-panel','rig-fields','cuts-panel','cloth-panel'])expect(html.split(` id="${id}"`).length).toBe(2);
 });
 
 test('each block row is a WAI-ARIA tablist: role=tab buttons control role=tabpanel blocks, the first is selected, and every other panel ships hidden',async()=>{
@@ -98,7 +94,9 @@ class Node {
  get scrollTop(){return this.#scrollTop;}set scrollTop(v:number){Node.log.push({node:this,what:'scrollTop'});this.#scrollTop=v;}
  scrollTo(){Node.log.push({node:this,what:'scrollTo'});}scrollIntoView(){Node.log.push({node:this,what:'scrollIntoView'});}
  constructor(tag:string){this.tag=tag;}
- get id(){return this.attrs.get('id')??'';}
+ get id(){return this.attrs.get('id')??'';}set id(v:string){this.attrs.set('id',v);}
+ get className(){return [...this.classes].join(' ');}set className(v:string){this.classes=new Set(v.split(/\s+/).filter(Boolean));this.attrs.set('class',v);}
+ clientWidth=0;offsetWidth=0;onclick:((event?:unknown)=>void)|null=null;
  get classList(){return {contains:(name:string)=>this.classes.has(name)};}
  get ownerDocument(){return this.root().doc!;}
  root():Node{return this.parent?this.parent.root():this;}
@@ -116,7 +114,7 @@ class Node {
  focus(){Node.log.push({node:this,what:'focus'});this.root().doc!.activeElement=this;}
  /** A bubbling event whose target is this node. */
  fire(type:string,extra:Partial<FakeEvent>={}):FakeEvent{const event:FakeEvent={type,target:this,defaultPrevented:false,key:'',preventDefault(){event.defaultPrevented=true;},...extra};for(let node:Node|null=this;node;node=node.parent)for(const fn of node.listeners.get(type)??[])fn(event);return event;}
- click(){return this.fire('click');}
+ click(){const event=this.fire('click');this.onclick?.(event);return event;}
  key(key:string){return this.fire('keydown',{key});}
 }
 interface FakeEvent {type:string;target:Node;key:string;defaultPrevented:boolean;preventDefault():void}
@@ -147,24 +145,25 @@ async function openPage(changedFn?:()=>void,bottomMode=false,available?:readonly
 
 test('selecting a tab shows its panel alone, moves aria-selected and the roving tabindex, and scrolls nothing',async()=>{
  const app=await openPage();
- expect(app.shown('inspector-rig')).toEqual(['selected-part']);expect(app.shown('animate-blocks')).toEqual(['motion-tools']);
+ expect(app.shown('inspector-rig')).toEqual(['selected-part']);expect(app.shown('inspector-playback')).toEqual(['animation-dock']);
  Node.log=[];app.tab('mesh-panel').click();
  expect(app.shown('inspector-rig')).toEqual(['mesh-panel']);expect(app.selected('inspector-rig')).toEqual(['mesh-panel']);
  const rigTabs=app.section('inspector-rig').all().filter(n=>n.attrs.get('role')==='tab');expect(rigTabs.length).toBe(expected['inspector-rig'].length);
  expect(rigTabs.map(n=>[n.dataset.blockTarget,n.tabIndex])).toEqual(rigTabs.map(n=>[n.dataset.blockTarget,n.dataset.blockTarget==='mesh-panel'?0:-1]));
- expect(app.ui.state()).toEqual({rig:'mesh-panel',playback:'motion-tools'});expect(app.changed()).toBe(1);
+ expect(app.ui.state()).toEqual({rig:'mesh-panel',playback:'animation-dock'});expect(app.changed()).toBe(1);
  // One block on screen, and no scrolling to get there: no smooth scroll, no scrollIntoView.
  expect(Node.log.filter(w=>w.what==='scrollTo'||w.what==='scrollIntoView')).toEqual([]);
  // The other section is untouched.
- expect(app.shown('animate-blocks')).toEqual(['motion-tools']);
+ expect(app.shown('inspector-playback')).toEqual(['animation-dock']);
  // Clicking the selected tab again changes nothing.
  app.tab('mesh-panel').click();expect(app.changed()).toBe(1);
 });
 
-test('the Transport tab carries its included Angle block: hidden with the group by its own attribute, and the axis inspection keeps owning its hidden',async()=>{
+test('the Inspection tab carries its included Angle block: hidden with the group by its own attribute, and the axis inspection keeps owning its hidden',async()=>{
  const app=await openPage(),angle=app.doc.getElementById('angle-panel')!;
- expect(angle.hidden).toBe(true);expect(angle.hasAttribute('data-block-hidden')).toBe(false);
- // The axis inspection opens the Angle block while Transport is shown.
+ expect(angle.hidden).toBe(true);expect(angle.hasAttribute('data-block-hidden')).toBe(true);
+ // The axis inspection opens the Angle block while Inspection is shown.
+ app.tab('motion-tools').click();expect(angle.hasAttribute('data-block-hidden')).toBe(false);
  angle.hidden=false;
  app.tab('physics-panel').click();expect(angle.hasAttribute('data-block-hidden')).toBe(true);expect(angle.hidden).toBe(false);
  app.tab('motion-tools').click();expect(angle.hasAttribute('data-block-hidden')).toBe(false);expect(angle.hidden).toBe(false);
@@ -187,7 +186,7 @@ test('keyboard: Arrow keys move and wrap, Home and End jump, focus follows the s
  // A key pressed inside a panel is not the tablist's.
  app.tab('chest-regions').click();const field=app.doc.getElementById('chest-0-cx')!;expect(field.key('ArrowRight').defaultPrevented).toBe(false);expect(app.selected('inspector-rig')).toEqual(['chest-regions']);
  // The Animate row is its own tablist: keys there never move Setup.
- app.tab('motion-tools').focus();press('End');expect(app.selected('animate-blocks')).toEqual(['report-panel']);expect(app.selected('inspector-rig')).toEqual(['chest-regions']);
+ app.tab('animation-dock').focus();press('End');expect(app.selected('inspector-playback')).toEqual(['report-panel']);expect(app.selected('inspector-rig')).toEqual(['chest-regions']);
 });
 
 test('the active tab persists through the draft ui record, restores without moving the scroll, and refuses malformed values',async()=>{
@@ -197,23 +196,22 @@ test('the active tab persists through the draft ui record, restores without movi
  for(const bad of [undefined,'nope','[]','{"playback":3}','{"Bad":"x"}'])expect(parseActiveBlocks(bad)).toEqual({});
  const app=await openPage();Node.log=[];
  app.ui.restore({playback:'report-panel',rig:'unknown'});
- expect(app.shown('animate-blocks')).toEqual(['report-panel']);expect(app.shown('inspector-rig')).toEqual(['selected-part']);
+ expect(app.shown('inspector-playback')).toEqual(['report-panel']);expect(app.shown('inspector-rig')).toEqual(['selected-part']);
  // The section's scroll offset is the workspace scroll memory's to restore; restoring a tab does not touch it.
  expect(Node.log.filter(w=>['scrollTop','scrollTo','scrollIntoView','focus'].includes(w.what))).toEqual([]);
- app.ui.restore({playback:'missing'});expect(app.shown('animate-blocks')).toEqual(['report-panel']);
+ app.ui.restore({playback:'missing'});expect(app.shown('inspector-playback')).toEqual(['report-panel']);
  // The pre-#258 id of the Transport block still restores to its tab.
- app.ui.restore({playback:'transport'});expect(app.shown('animate-blocks')).toEqual(['motion-tools']);
+ app.ui.restore({playback:'transport'});expect(app.shown('inspector-playback')).toEqual(['motion-tools']);
 });
 
 test('each panel keeps its own scroll offset: a tab switch remembers where the panel was and opens a new one at the top',async()=>{
- const app=await openPage(),rig=app.section('inspector-rig'),animate=app.section('animate-blocks');
+ const app=await openPage(),rig=app.section('inspector-rig'),animate=app.section('inspector-playback');
  app.tab('mesh-panel').click();rig.scrollTop=140;
  app.tab('chest-regions').click();expect(rig.scrollTop).toBe(0);rig.scrollTop=60;
  app.tab('mesh-panel').click();expect(rig.scrollTop).toBe(140);
  app.tab('chest-regions').click();expect(rig.scrollTop).toBe(60);
- // Animate scrolls its blocks panel, not the section that also holds the timeline.
+ // Animate scrolls its section directly across all tabs.
  app.tab('physics-panel').click();animate.scrollTop=90;app.tab('readings').click();expect(animate.scrollTop).toBe(0);app.tab('physics-panel').click();expect(animate.scrollTop).toBe(90);
- expect(app.section('inspector-playback').scrollTop).toBe(0);
 });
 
 /** Step 1's inventory: every block that holds state a hidden panel must not lose, with what holds it. `selected-part`
@@ -227,6 +225,7 @@ const stateful:Record<string,string>={
  'rig-fields':'region, still, stops, inherit and turn groups and the pending textarea',
  'cuts-panel':'the cut editor, add form and pending textarea',
  'cloth-panel':'tag, declared and field controls and the pending textarea',
+ 'animation-dock':'the transport scrub, frame controls and animation inspection container',
  'motion-tools':'the axis inspection state, with its included Angle block (axis select and slider)',
  'sound-panel':'sync audio and volume',
  'environment':'wind, gust, gravity and use controls',
@@ -244,7 +243,7 @@ test('the stateful inventory covers every tab but Part, and names no block the p
 });
 
 for(const [block,holds]of Object.entries(stateful))test(`a hidden panel loses nothing: ${block} (${holds})`,async()=>{
- const app=await openPage(),panel=app.doc.getElementById(block)!,container=app.section('inspector-rig').contains(panel)?'inspector-rig':'animate-blocks';
+ const app=await openPage(),panel=app.doc.getElementById(block)!,container=app.section('inspector-rig').contains(panel)?'inspector-rig':'inspector-playback';
  const group=[panel,...(app.tab(block).dataset.blockIncludes??'').split(' ').filter(Boolean).map(id=>app.doc.getElementById(id)!)];
  const nodes=group.flatMap(n=>[n,...n.all()]);
  // Put state on every carrier the block has, then show the block: what the user typed, ticked or opened.
@@ -316,7 +315,7 @@ test('#666 restore leaves remembered user offsets intact and dispose/rebind remo
 test('#828 top-entry selection swaps existing block rows without a Comments tab, preserving input nodes',async()=>{
  const app=await openPage(undefined,true),meshInput=app.doc.getElementById('mesh-density')??app.section('mesh-panel').all().find(n=>n.tag==='input')!;
  const rows=app.strip.children.slice();expect(rows).toHaveLength(2);expect(rows.map(row=>row.hidden)).toEqual([false,true]);
- app.tab('mesh-panel').click();meshInput.value='preserve draft';app.ui.select('rig','feedback');expect(app.ui.state()).toEqual({rig:'feedback',playback:'motion-tools'});expect(app.panel.hidden).toBe(false);expect(app.section('inspector-rig').dataset.comments).toBe('true');
+ app.tab('mesh-panel').click();meshInput.value='preserve draft';app.ui.select('rig','feedback');expect(app.ui.state()).toEqual({rig:'feedback',playback:'animation-dock'});expect(app.panel.hidden).toBe(false);expect(app.section('inspector-rig').dataset.comments).toBe('true');
  app.ui.activate('playback');expect(rows.map(row=>row.hidden)).toEqual([true,false]);expect(app.panel.hidden).toBe(true);expect(app.comment.parent).toBe(null);expect(rows[0]!.all()).not.toContain(app.comment);
  app.ui.select('playback','feedback');expect(app.ui.state().playback).toBe('feedback');expect(app.panel.hidden).toBe(false);app.tab('physics-panel').click();app.tab('physics-panel').key('End');expect(app.ui.state().playback).not.toBe('feedback');app.tab('physics-panel').click();
  app.ui.activate('rig');expect(app.panel.hidden).toBe(false);expect(app.comment.parent).toBe(null);expect(app.comment.getAttribute('aria-selected')).toBe('true');app.tab('mesh-panel').click();expect(app.panel.hidden).toBe(true);expect(meshInput.value).toBe('preserve draft');
@@ -333,4 +332,45 @@ test('#828 image subjects retain programmatic Comments selection without a botto
  expect(app.comment.hidden).toBe(true);expect(app.strip.all()).not.toContain(app.comment);app.ui.select('rig','feedback');
  expect(app.ui.state()['rig']).toBe('feedback');expect(app.panel.hidden).toBe(false);
  app.ui.dispose();
+});
+
+test('#838 bottom tab strip overflow menu hides overflowing tabs, keeps the selected tab visible, and selects from the menu',async()=>{
+ const html=await indexHtml(),page=new Node('body'),doc={getElementById:(id:string)=>page.all().find(n=>n.id===id)??null,activeElement:null as Node|null,createElement:(tag:string)=>new Node(tag)};page.doc=doc;
+ const previous=Object.getOwnPropertyDescriptor(globalThis,'document');
+ Object.defineProperty(globalThis,'document',{configurable:true,value:doc});
+ try{
+  for(const id of ['inspector-rig','inspector-playback']){
+   const at=html.indexOf(` id="${id}"`),open=html.lastIndexOf('<',at);const stack:Node[]=[page];
+   for(const match of html.slice(open).matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"]|"[^"]*")*)>/g)){
+    const [,close,raw,attrs]=match,tag=raw!.toLowerCase();
+    if(close){if(!voids.has(tag))stack.pop();if(stack.length===1)break;continue;}
+    const node=new Node(tag);
+    for(const a of attrs!.matchAll(/([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:="([^"]*)")?/g)){const name=a[1]!,value=a[2]??'';if(name==='class')for(const c of value.split(/\s+/).filter(Boolean))node.classes.add(c);if(name.startsWith('data-'))node.dataset[name.slice(5).replace(/-([a-z])/g,(_,c:string)=>c.toUpperCase())]=value;node.attrs.set(name,value);}
+    if(node.attrs.has('hidden'))node.hidden=true;if(node.attrs.has('tabindex'))node.tabIndex=Number(node.attrs.get('tabindex'));
+    if(node.tag==='button')node.offsetWidth=60;
+    stack.at(-1)!.append(node);if(!voids.has(tag)&&!attrs!.trimEnd().endsWith('/'))stack.push(node);
+   }
+  }
+  const strip=new Node('nav'),comment=new Node('button'),panel=new Node('section');page.append(strip,panel);
+  const rigSection=doc.getElementById('inspector-rig')!,playbackSection=doc.getElementById('inspector-playback')!;
+  const rigRow=rigSection.children[0]!,playbackRow=playbackSection.children[0]!;
+  rigRow.clientWidth=240;playbackRow.clientWidth=240;
+  const ui=bindInspectorBlocks({sections:[rigSection as unknown as HTMLElement,playbackSection as unknown as HTMLElement],bottom:{strip:strip as unknown as HTMLElement,comment:comment as unknown as HTMLButtonElement,panel:panel as unknown as HTMLElement}});
+  ui.activate('playback');
+  const moreBtn=playbackRow.children.find(n=>n.classes.has('workspace-tabs-more'))!,moreMenu=playbackRow.children.find(n=>n.classes.has('workspace-tabs-menu'))!;
+  expect(moreBtn.hidden).toBe(false);expect(moreBtn.getAttribute('aria-label')).toBe('More tabs');
+  const visibleBefore=playbackRow.children.filter(n=>'blockTarget' in n.dataset&&!n.hasAttribute('data-tab-overflow')).map(n=>n.dataset.blockTarget);
+  expect(visibleBefore).toContain('animation-dock');expect(visibleBefore).not.toContain('report-panel');
+  moreBtn.click();expect(moreMenu.hidden).toBe(false);
+  const reportItem=moreMenu.children.find(n=>n.dataset.blockMoreTarget==='report-panel')!;
+  expect(reportItem.hidden).toBe(false);
+  reportItem.click();
+  expect(moreMenu.hidden).toBe(true);expect(ui.state().playback).toBe('report-panel');
+  const visibleAfter=playbackRow.children.filter(n=>'blockTarget' in n.dataset&&!n.hasAttribute('data-tab-overflow')).map(n=>n.dataset.blockTarget);
+  expect(visibleAfter).toContain('report-panel');
+  playbackRow.clientWidth=1000;ui.select('playback','animation-dock');
+  expect(moreBtn.hidden).toBe(true);
+  expect(playbackRow.children.filter(n=>'blockTarget' in n.dataset&&n.hasAttribute('data-tab-overflow'))).toEqual([]);
+  ui.dispose();
+ }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });
