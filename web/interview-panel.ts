@@ -248,12 +248,12 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
     const next=interviewQuestionList(items,options.selected??0,options.onSelect??(()=>{}),false,options.node);list?.remove();form.prepend(next);list=next;
     records?.remove();records=interviewRecords(options.diagnostics,options.historical,options.node);context.append(records);
   };
-  const submit=node('button','interview.save');submit.type='submit';submit.hidden=!question.editable;fields.append(submit);
+  const submit=node('button','interview.save');submit.type='submit';submit.hidden=!question.editable;
   const status=node('p',!question.editable?'interview.history':question.saved?'interview.saved':'interview.choose');status.setAttribute('role','status');form.append(status);
   const localize=()=>{for(const [item,key]of copy)item.textContent=t(item.dataset.jobText??key);refresh();};
   const dispose=()=>{view?.dispose();form.removeEventListener('input',refresh);form.removeEventListener('change',refresh);form.removeEventListener('job-form-language',localize);};
   form.addEventListener('input',refresh);form.addEventListener('change',refresh);form.addEventListener('job-form-language',localize);
-  try{if(options.mainView&&options.images.length){art.hidden=true;fields.append(context);}else if(options.images.length)showImage(0);else art.append(context);refresh();}catch(error){dispose();throw error;}
+  try{if(!options.mainView&&options.images.length)showImage(0);else{art.hidden=true;fields.append(context);}fields.append(submit);refresh();}catch(error){dispose();throw error;}
   return {form,fieldset:fields,submit,status,retainedNote,
     read:()=>jobInterviewValue(question.set.question,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),retainedNote??''),
     localize,dispose};
