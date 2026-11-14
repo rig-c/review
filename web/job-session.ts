@@ -1569,13 +1569,15 @@ export async function joinedInterviewForms(access:InstanceAccess,present:(forms:
             entry.form.onsubmit=async event=>{
                 event.preventDefault();if(!question.editable||!access.capability||entry!.fieldset.disabled||!entry!.form.reportValidity())return;
                 answer.fieldset.disabled=true;
+                let saved=false;
                 try{
                     const value=answer.read(),picks=value.selections.map(selection=>({ask:selection.itemId,option_id:selection.optionId,...(selection.otherText!==null?{other_text:selection.otherText}:{})}));
                     const record=interviewPicksRecord(question.ref,picks,answer.retainedNote,new Date().toISOString());
                     await request('/api/interview/picks',record);
-                    question.saved=record;answer.form.dataset.interviewAnswered='true';answer.status.dataset.jobText='interview.saved';answer.status.textContent=t('interview.saved');answer.form.dispatchEvent(new Event('change'));answer.form.dispatchEvent(new Event('job-answer-saved',{bubbles:true}));
+                    question.saved=record;answer.form.dataset.interviewAnswered='true';answer.status.dataset.jobText='interview.saved';answer.status.textContent=t('interview.saved');answer.form.dispatchEvent(new Event('change'));saved=true;
                 }catch(error){const code=error instanceof Error?error.message.split(':')[0]:'';answer.status.dataset.jobText=interviewErrors[code]??'interview.failed';answer.status.textContent=t(answer.status.dataset.jobText);}
                 finally{answer.fieldset.disabled=!question.editable||!access.capability;}
+                if(saved)answer.form.dispatchEvent(new Event('job-answer-saved',{bubbles:true}));
             };
             forms.set(index,entry);
         }

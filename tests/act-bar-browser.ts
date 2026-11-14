@@ -4,17 +4,24 @@ import {mkdir,mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
+import {joinProject} from '../src/joined-project.ts';
+import {startServer} from '../src/server.ts';
 import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 const out=Bun.argv[Bun.argv.indexOf('--out')+1]??'artifacts/act-bar';await mkdir(out,{recursive:true});
 const observations:unknown[]=[];
 async function until(page:InputCdpSession,expression:string){const end=Date.now()+20000;while(Date.now()<end){if(await page.evaluate<boolean>(expression))return;await Bun.sleep(100);}throw Error('ACT_BAR_WAIT: '+expression);}
-for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','parts','signoff-model','signoff-record','checkpoint-pass','checkpoint-fail','interview'] as const){
+for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','parts','signoff-model','signoff-record','checkpoint-pass','checkpoint-fail','interview','joined-interview'] as const){
  const profile=await mkdtemp(join(tmpdir(),'review809-browser-'));let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
   let url:string,draftKey:string|undefined;
-  if(['rig','direction','parts','signoff-model'].includes(mode)){
+  if(mode==='joined-interview'){
+   const f=await interviewOpenFixture(2);const capability='a'.repeat(64);
+   const server=await startServer(null,{port:0,capability,joined:joinProject(null,f.inputs.project),stateDir:f.stateDir});
+   close=async()=>{server.stop(true);await f.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
+  }else if(['rig','direction','parts','signoff-model'].includes(mode)){
    const f=await scriptedJobWindowFixture({c5Parts:'mesh'});close=()=>f.close();
    const stage=mode==='signoff-model'?'rig':mode as 'rig'|'direction'|'parts';
    const p=await f.publish(stage);draftKey=`rig-review-draft/1:single:${p.source.package.id}:${p.source.sourceHash}:${p.source.sourceHash}`;
@@ -25,8 +32,8 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   }
   const localized=new URL(url);localized.searchParams.set('lang',lang);url=localized.href;
   page=await launchCdpSession(profile,{browserArgs:['--force-device-scale-factor=2']});await page.setViewport(1440,900);await page.goto(url,lang);
-  await until(page,`document.body.dataset.ready==='true'&&!document.body.inert&&!!document.querySelector('#workspace-ask-headline')?.textContent`);
-  if(mode==='interview')await page.evaluate(`document.querySelector('#job-record-asks')?.close()`);
+  await until(page,`document.body.dataset.ready==='true'&&!document.body.inert&&(${mode==='joined-interview'}||!!document.querySelector('#workspace-ask-headline')?.textContent)`);
+  if(mode==='interview'||mode==='joined-interview')await page.evaluate(`document.querySelector('#job-record-asks')?.close()`);
   const state=await page.evaluate<any>(`(()=>{const visible=n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])');const headline=document.querySelector('#workspace-ask-headline');return {language:document.documentElement.lang,primary:[...document.querySelectorAll('button.primary')].filter(visible).map(n=>n.id),question:headline.textContent,whiteSpace:getComputedStyle(headline).whiteSpace,overflow:getComputedStyle(headline).textOverflow,changesDisabled:document.querySelector('#request-changes').disabled,saveHidden:document.querySelector('#save').hidden};})()`);
   assert.equal(state.language,lang);assert.equal(state.primary.length,1,mode+' one emphasised answer');assert.notEqual(state.whiteSpace,'nowrap');assert.notEqual(state.overflow,'ellipsis');
   if(['rig','direction','parts'].includes(mode))assert.equal(state.changesDisabled,true);
@@ -47,12 +54,23 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   if(!['rig','direction','parts'].includes(mode)){
    await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#job-record-asks[open]')`);
    assert.equal(await page.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`),false);
-   if(mode==='interview')await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#job-record-asks input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
+   if(mode==='interview'||mode==='joined-interview')await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#job-record-asks input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
    const selector=mode==='checkpoint-fail'?'#job-record-asks button[data-job-text="job.fail"]':mode==='checkpoint-pass'?'#job-record-asks button[data-job-text="Pass"]':'#job-record-asks button[type=submit]';
    await writeFile(join(out,`${mode}-${lang}-answer.png`),await page.screenshot());
    await click(page,selector);
    await until(page,`!document.querySelector('#job-record-asks[open]')&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
+   if(mode==='joined-interview'){
+    assert.equal(await page.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false,'saved first answer leaves the opener enabled');
+    await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#job-record-asks[open]')`);
+    await click(page,'.interview-questions li:nth-child(2) button');
+    await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#job-record-asks input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
+    await click(page,'#job-record-asks button[type=submit]');
+    await until(page,`!document.querySelector('#job-record-asks[open]')&&!document.querySelector('#workspace-pending-ask').disabled`);
+    const saved=await page.evaluate<number>(`fetch('/api/interview').then(r=>r.json()).then(data=>data.questions.filter(question=>question.saved).length)`);
+    assert.equal(saved,2,'both joined interview questions reached the real picks route');
+    await writeFile(join(out,`${mode}-${lang}-second-saved.png`),await page.screenshot());
+   }
   }
   if(['rig','direction','parts'].includes(mode)){
    await click(page,'#save');
