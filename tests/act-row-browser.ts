@@ -89,8 +89,11 @@ const geometry=`(()=>{
   commentButtons:document.querySelectorAll('#stage-comment').length,
   gateHidden:document.querySelector('[data-animation-gate]')?.hidden,title:document.getElementById('rig-label')?.textContent};
 })()`;
-async function capture(page:InputCdpSession,out:string,name:string){
+async function settleLayout(page:InputCdpSession){
  await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+}
+async function capture(page:InputCdpSession,out:string,name:string){
+ await settleLayout(page);
  const state:any=await page.evaluate<any>(geometry);
  await writeFile(join(out,name+'.json'),JSON.stringify(state,null,2)+'\n');
  await writeFile(join(out,name+'.png'),await page.screenshot());return state;
@@ -220,6 +223,9 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(await page.evaluate(`document.getElementById('workspace-ask-headline').scrollWidth<=document.getElementById('workspace-ask-headline').clientWidth+1`),true);
   }finally{
    await page.evaluate(`document.getElementById('workspace-ask-headline').textContent=${JSON.stringify(headlineBefore.text)}`);
+   // Restoring the question resizes the row. ResizeObserver schedules workspace
+   // layout in the following frame; settle it before the CDP click caches a point.
+   await settleLayout(page);
    const restoredHtml:string=await page.evaluate(`document.getElementById('workspace-ask-headline').outerHTML`);
    const restoredHash=createHash('sha256').update(restoredHtml).digest('hex');
    const restored={...mutation,restoredHash,restored:restoredHash===beforeHash};
