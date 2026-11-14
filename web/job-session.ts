@@ -1417,58 +1417,9 @@ export interface JobFormDependencies {
                 (JSON.stringify(evidence.packet) !== JSON.stringify(declared) || evidence.packet.planStepId !== checkpoint.step.id)) {
                 throw new Error('CHECKPOINT_EVIDENCE_INVALID');
             }
-            if (evidence) {
-                const section = node('section');
-                section.dataset.jobCheckpointEvidence = subject.checkpointId;
-                section.append(node('h4', 'job.checkpointEvidence'));
-                section.append(imageGallery(evidence.packet.tiles.map((tile, index) => ({name: tile.label,
-                    sha256: tile.sha256, element: evidence.images[index]?.cloneNode(true) as HTMLImageElement})), true));
-                const tableHost = node('div');
-                tableHost.style.overflow = 'auto';
-                tableHost.style.maxHeight = '50dvh';
-                const table = node('table');
-                table.dataset.jobCheckpointTable = '';
-                const caption = node('caption', 'job.checkpointTable');
-                if (evidence.packet.table.label !== undefined) {
-                    delete caption.dataset.jobText;
-                    caption.textContent = evidence.packet.table.label;
-                    caption.setAttribute('translate', 'no');
-                }
-                const head = node('thead');
-                head.setAttribute('translate', 'no');
-                const columns = node('tr');
-                for (const column of evidence.table.columns) {
-                    const cell = node('th');
-                    cell.scope = 'col';
-                    cell.textContent = column;
-                    columns.append(cell);
-                }
-                head.append(columns);
-                const body = node('tbody');
-                body.setAttribute('translate', 'no');
-                for (const row of evidence.table.rows) {
-                    const cells = node('tr');
-                    for (const value of row) {
-                        const cell = node('td');
-                        cell.textContent = String(value);
-                        cells.append(cell);
-                    }
-                    body.append(cells);
-                }
-                table.append(caption, head, body);
-                tableHost.append(table);
-                const routes = node('pre');
-                routes.textContent = evidence.packet.routesText;
-                routes.setAttribute('translate', 'no');
-                const recommendation = node('pre');
-                recommendation.textContent = evidence.packet.recommendationText;
-                recommendation.setAttribute('translate', 'no');
-                section.append(tableHost, node('h4', 'job.checkpointRoutes'), routes,
-                    node('h4', 'job.checkpointRecommendation'), recommendation);
-                fields.append(section, node('p', 'job.checkpointRouteMapping'));
-            }
             const outcome = selectValues(['', 'pass', 'fail'], ['Pending', 'Pass', 'job.fail']);
             outcome.required = true;
+            outcome.hidden = true;
             outcome.name = 'outcome';
             fields.append(outcome);
             read = () => ({ checkpointId: subject.checkpointId, outcome: outcome.value as 'pass' | 'fail', words: commentWords() });
@@ -1500,6 +1451,14 @@ export interface JobFormDependencies {
         }
         const submit = interviewForm?.submit??node('button', submitKey);
         submit.type = 'submit';
+        submit.classList.add('primary');
+        if(subject.kind==='checkpoint'){
+            submit.dataset.jobText='Pass';submit.textContent=t('Pass');
+            submit.onclick=()=>{form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='pass';form.dispatchEvent(new Event('input'));};
+            const fail=node('button','job.fail');fail.type='submit';
+            fail.onclick=()=>{form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='fail';form.dispatchEvent(new Event('input'));};
+            fields.append(fail);
+        }
         fields.append(submit);
         const status = interviewForm?.status??node('p');
         status.setAttribute('role', 'status');
@@ -1566,6 +1525,7 @@ export interface JobFormDependencies {
                 status.textContent = t('job.saved');
                 if(subject.kind==='interview-picks'){form.dataset.interviewAnswered='true';form.dispatchEvent(new Event('change'));}
                 saveDraft();
+                form.dispatchEvent(new Event('job-answer-saved',{bubbles:true}));
             }
             catch (error) {
                 entry.submitting = false;
@@ -1613,7 +1573,7 @@ export async function joinedInterviewForms(access:InstanceAccess,present:(forms:
                     const value=answer.read(),picks=value.selections.map(selection=>({ask:selection.itemId,option_id:selection.optionId,...(selection.otherText!==null?{other_text:selection.otherText}:{})}));
                     const record=interviewPicksRecord(question.ref,picks,answer.retainedNote,new Date().toISOString());
                     await request('/api/interview/picks',record);
-                    question.saved=record;answer.form.dataset.interviewAnswered='true';answer.status.dataset.jobText='interview.saved';answer.status.textContent=t('interview.saved');answer.form.dispatchEvent(new Event('change'));
+                    question.saved=record;answer.form.dataset.interviewAnswered='true';answer.status.dataset.jobText='interview.saved';answer.status.textContent=t('interview.saved');answer.form.dispatchEvent(new Event('change'));answer.form.dispatchEvent(new Event('job-answer-saved',{bubbles:true}));
                 }catch(error){const code=error instanceof Error?error.message.split(':')[0]:'';answer.status.dataset.jobText=interviewErrors[code]??'interview.failed';answer.status.textContent=t(answer.status.dataset.jobText);}
                 finally{answer.fieldset.disabled=!question.editable||!access.capability;}
             };

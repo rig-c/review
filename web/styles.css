@@ -482,7 +482,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .inspector-body>[data-comments=true]{display:none!important}
 .inspector-heading .workspace-act-bar{flex:none;flex-wrap:nowrap;gap:6px}
 .inspector-heading .workspace-act-bar .review-draft-state{max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.workspace-act-ask{max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.workspace-act-ask{white-space:normal;overflow-wrap:anywhere}
 #comments-list-host .stage-comment-list-inline{position:static;width:auto;max-width:none;max-height:none;border:0;padding:0}
 
 .parts-explorer li:has([data-pv-visible]){display:flex;align-items:center;gap:4px}
@@ -530,3 +530,8 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .owner-stage{position:relative;min-width:0;min-height:0}
 .owner-stage iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .owner-stage iframe[hidden]{display:block!important;visibility:hidden;pointer-events:none}
+
+.inspector-heading .workspace-act-bar{flex:1 1 auto;flex-wrap:wrap;min-width:0;max-width:100%}
+.inspector-heading .workspace-act-bar .review-draft-state[data-save-state=failed]{max-width:none;white-space:normal;overflow:visible;order:-1;flex-basis:100%}
+
+.inspector-heading .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-dialog-actions{order:-1;flex:1 1 100%;flex-wrap:wrap;min-width:0;max-width:100%}
