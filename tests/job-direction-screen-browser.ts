@@ -18,7 +18,7 @@ const profile=await mkdtemp(join(tmpdir(),'review796-direction-'));
 const observations:any[]=[],errors:unknown[]=[];let page:InputCdpSession|undefined;
 let reloading=false;
 let command:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
-async function wait(expression:string){const end=Date.now()+20000;while(Date.now()<end){if(await page!.evaluate(expression))return;await Bun.sleep(25);}throw new Error('DIRECTION_SCREEN_WAIT '+expression);}
+async function wait(expression:string){const end=Date.now()+20000;while(Date.now()<end){try{if(await page!.evaluate(expression))return;}catch(error){if(!reloading||!String(error).includes('Inspected target navigated or closed'))throw error;}await Bun.sleep(25);}throw new Error('DIRECTION_SCREEN_WAIT '+expression);}
 async function click(selector:string){await page!.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);}
 async function composer(text:string){await wait(`!!document.querySelector('.stage-comment-composer input')`);await page!.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(text)};f.requestSubmit();})()`);await wait(`!document.querySelector('.stage-comment-composer')`);}
 function scrubAt(target:number|'max'):string{return `(()=>{const s=document.querySelector('#scrub'),step=Number(s.step),target=${target==='max'?'Number(s.max)':target};return Math.abs(Number(s.value)-target)<=step/2+Number.EPSILON;})()`;}
@@ -46,7 +46,7 @@ try{
    assert.equal(layout.actBars,1);assert.equal(layout.verdictInBar,true);assert.equal(layout.notes,0);assert.equal(layout.legacyDumps,0);
    const panelState=()=>page!.evaluate<any>(`(()=>{const p=document.querySelector('#direction-panel'),r=document.querySelector('#rig-overlay').getBoundingClientRect();return {open:p.open,summary:p.querySelector('summary').textContent,width:r.width,height:r.height,dpr:devicePixelRatio};})()`);
    const closed=await panelState();assert.equal(closed.open,false,'direction closed on initial load');
-   assert.equal(closed.summary,language==='en'?'Direction · 1 s · loop · fixed camera':'연출 · 1초 · 반복 · 카메라 고정');
+   assert.equal(closed.summary,language==='en'?'Direction v3 · 1 s · loop · fixed camera':'연출 v3 · 1초 · 반복 · 카메라 고정');
    assert.equal(closed.dpr,2);
    await click('#direction-panel > summary');
    await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
@@ -97,7 +97,7 @@ try{
    await wait(`document.body.dataset.ready==='true'&&!document.querySelector('#save').disabled&&document.querySelectorAll('.stage-comment-item').length===2`);
    reloading=false;assert.equal((await panelState()).open,false,'direction closed again after reload');
    assert.equal(await page.evaluate(`document.querySelector('#review-status').value`),'changes-requested','inspection draft is authoritative after reload');
-   await click('#workspace-tab-feedback');await wait(`!document.querySelector('#inspector-feedback').hidden`);
+   await click('#stage-comment');await wait(`!document.querySelector('#inspector-feedback').hidden`);
    const corrections:any=await page.evaluate(`(()=>{document.querySelector('#correction-controls').open=true;const visible=n=>!!n&&!n.closest('[hidden]')&&n.getBoundingClientRect().height>0;return {fileVisible:visible(document.querySelector('#correction-words')),addVisible:visible(document.querySelector('#add-proposal')),hiddenByGate:!!document.querySelector('#correction-words').closest('[hidden]')&&!!document.querySelector('#add-proposal').closest('[hidden]')};})()`);
    assert.deepEqual(corrections,{fileVisible:false,addVisible:false,hiddenByGate:true});
    assert.deepEqual(await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)})).comments.map(row=>row.summary)`),draft.comments.map((row:any)=>row.summary));
