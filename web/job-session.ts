@@ -1475,7 +1475,8 @@ export interface JobFormDependencies {
         if(disposeInterview)form.addEventListener('job-form-dispose',disposeInterview);
         try {
             const saved = JSON.parse(draftStorage().getItem(localDraftKey(prepared.display)) ?? 'null');
-            if (saved?.publicationId === prepared.display.publication.publicationId &&
+            // A finalized answer is read back from its act; a local draft never overrides it.
+            if (ask.status !== 'answered' && saved?.publicationId === prepared.display.publication.publicationId &&
                 saved?.sourceHash === prepared.display.publication.source.sourceHash) {
                 assertJobAskSource({...ask, source: saved.source}, prepared.display);
                 const original = saved.forms?.find((item: {

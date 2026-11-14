@@ -214,6 +214,12 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   expect(restored.read()).toEqual(entry.read());
   expect(restored.read()).toEqual({questionId:'rig_type',selections:[{itemId:'topology',optionId:'topology_other',otherText:'  직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:''});
   expect(restored.form.querySelectorAll('select')).toHaveLength(0);
+  // #851 review: a finalized answer reads back from its act even when this browser holds a different draft.
+  const at=new Date().toISOString();
+  const answered={...f.ask,status:'answered',act:{kind:'interview-picks',at,value:{questionId:'rig_type',selections:[{itemId:'topology',optionId:radios.find(input=>input.name==='choice.topology'&&input.value!=='topology_other')!.value,otherText:null},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:''}}} as any;
+  const finalized=formFor(answered,inspection,deps);
+  expect([...finalized.form.querySelectorAll<HTMLInputElement>('input[type=radio]')].filter(input=>input.checked).map(input=>input.value)).toEqual([answered.act.value.selections[0].optionId,'density_auto']);
+  expect(finalized.dirty).toBe(false);
  }finally{inspection?.dispose();dom.restore();await f.close();}
 });
 
