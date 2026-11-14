@@ -1101,6 +1101,13 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       const ed = window.rigReviewEditor;
       document.querySelector('.mode-switch [data-mode="playback"]').click();
       await sleep(60);
+      // #838 retains the last selected block; editing starts on the existing Timeline tab.
+      document.querySelector('#inspector-playback [data-block-target="animation-dock"]').click();
+      await sleep(30);
+      if (document.getElementById('animation-dock').hidden ||
+          document.querySelector('#inspector-playback [data-block-target="animation-dock"]').getAttribute('aria-selected') !== 'true') {
+        throw new Error('COMPARE_TIMELINE_TAB_NOT_VISIBLE');
+      }
       document.querySelector('#mode-build-picker [data-build-side="b"]').click();
       await sleep(80);
       const wholeBtn = document.querySelector('[data-part-whole]');
