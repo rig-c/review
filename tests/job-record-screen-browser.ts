@@ -12,6 +12,7 @@ import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {recordScreenFixture,type RecordScreenKind} from './helpers/job-record-screen-fixture.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {buildWeb} from '../src/build.ts';
 import {prepareJobRecordAct} from '../src/job-act.ts';
 import type {JobRetainedRecordSource} from '../src/job-source.ts';
 import {parseRecordAct} from '../src/job-api.ts';
@@ -22,6 +23,7 @@ const arg=(name:string)=>{const i=Bun.argv.indexOf(name);return i<0?undefined:Bu
 const interviewOnly=Bun.argv.includes('--interview-only');
 const completedPicture=Bun.argv.includes('--completed-picture')||Bun.argv.includes('--question-tab');
 const freshParts=Bun.argv.includes('--fresh-parts');
+const followup839=Bun.argv.includes('--followup-839');
 const baseline=await Bun.file(new URL('./fixtures/interview-722-empty-note.json',import.meta.url)).json();
 const output=resolve(arg('--out')??'artifacts/record-screen-750');await mkdir(output,{recursive:true});
 const sha=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('hex');
@@ -197,11 +199,81 @@ async function picturelessPartsQuestionChecks(){
  }
 }
 
+/** Observer changes only the served test bundle, preserving the original error and fallback call. */
+async function followupResources(root:string,identity:string){
+ const original=await (await buildWeb('single',root)).text();
+ const pattern=/refused:\s*\(?([\w$]+)\)?\s*=>\s*([\w$]+)\(\1,\s*["']JOB_STREAM_FAILED["']\)/g;
+ assert.equal([...original.matchAll(pattern)].length,1,'one pre-fallback observation site');
+ const instrumented=original.replace(pattern,(_match,errorName:string,reportName:string)=>`refused: (${errorName})=>{const chain=[];let item=${errorName};for(let i=0;item!=null&&i<5;i++,item=item.cause)chain.push({name:String(item.name??typeof item),message:String(item.message??item),stack:String(item.stack??'')});(globalThis.__839OriginalErrors??=[]).push({chain,at:performance.now(),ready:document.body.dataset.ready,dialogOpen:!!document.querySelector('#job-record-asks[open]')});${reportName}(${errorName},"JOB_STREAM_FAILED");}`);
+ const sources:Record<string,string>={};for(const path of ['web/main.ts','web/job-session.ts','web/job-rig-screen.ts','web/interview-panel.ts','web/inspector-blocks.ts','src/job-front.ts','src/build.ts'])sources[path]=sha(await readFile(join(root,path)));
+ await writeFile(join(output,identity+'-bundle.json'),JSON.stringify({identity,root,sources,originalBundleSha256:sha(original),observedBundleSha256:sha(instrumented),observer:'Before existing stream refused callback fallback; original Error/cause/stack and report call preserved; no source file mutation'},null,2));
+ return async(name:'index.html'|'main.js'|'styles.css'):Promise<BodyInit>=>name==='main.js'?instrumented:await readFile(join(root,'web',name),'utf8');
+}
+
+/** Paired native-form route diagnosis and fresh-load geometry are independent results. */
+async function followupQuestionChecks(){
+ const mainRoot=process.env.RIG_REVIEW_839_MAIN_ROOT;assert.ok(mainRoot,'immutable main input supplied through nova-run --script');
+ const variants=[{id:'main-38bb5f7',resource:await followupResources(mainRoot,'main-38bb5f7')},{id:'current-5011a1a',resource:await followupResources(resolve('.'),'current-5011a1a')}];
+ const pairs:Record<string,any>[]=[],numeric:Record<string,any>[]=[];
+ const snapshot=()=>page!.evaluate<any>(`({caught:globalThis.__839OriginalErrors??[],ready:document.body.dataset.ready,dialogOpen:!!document.querySelector('#job-record-asks[open]'),dialogConnected:!!document.querySelector('#job-record-asks')?.isConnected,partsWidth:document.querySelector('#parts-canvas')?.width,formReady:!!document.querySelector('form.interview-answer fieldset:not(:disabled)'),message:document.querySelector('#review-message')?.textContent,bodyText:document.body.innerText.slice(0,12000)})`);
+ for(const variant of variants)for(const language of ['en','ko'] as const){
+  const out=join(output,'no-image-pair',variant.id,language);await mkdir(out,{recursive:true});
+  const fixture=await recordScreenFixture('interview-picks','parts',out,undefined,false,false,variant.resource),entry:Record<string,any>={variant:variant.id,language,sourceHash:fixture.display.publication.source.sourceHash,fixture:'Same retained parts backdrop and images-empty record path, including original event history'};
+  try{
+   const before=await jobInputHashes(fixture.root),metadata=await (await fetch(fixture.origin+fixture.display.routes.apiBase+'interview')).json() as {questions:{images:unknown[]}[]};assert.equal(metadata.questions[0]!.images.length,0);
+   entry.events=fixture.fake.events;await page!.setViewport(1440,900);await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
+   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page!.goto('about:blank');await page!.goto(url.href);
+   await wait(`(globalThis.__839OriginalErrors?.length??0)>0||(document.body.dataset.ready==='true'&&!!document.querySelector('form.interview-answer fieldset:not(:disabled)'))`,'839 paired no-image original result');
+   entry.initial=await snapshot();
+   if(!entry.initial.caught.length){
+    if(!entry.initial.dialogOpen)await click(page!,'#workspace-pending-ask');
+    await wait(`(globalThis.__839OriginalErrors?.length??0)>0||!!document.querySelector('#job-record-asks[open] form.interview-answer fieldset:not(:disabled)')`,'839 paired native Answer action');
+    entry.afterAnswer=await snapshot();
+   }
+   const state=entry.afterAnswer??entry.initial;entry.verdict=state.caught.length?'RED_ORIGINAL_REFUSAL':state.dialogOpen?'NATIVE_FORM_OPEN':'RED_NATIVE_FORM_ABSENT';
+   entry.originalFailure=state.caught;entry.downstream=state.caught.length?'SKIP_NO_IMAGE_ACTS_ORIGINAL_REFUSAL':'native form reachable; answer/save follows';
+   if(entry.verdict==='NATIVE_FORM_OPEN'){
+    const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
+    await page!.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});for(const value of ['topology_other','density_auto'])form.querySelector('input[value="'+value+'"]').click();const other=form.querySelector('textarea[name="other.topology"]');other.value=${JSON.stringify('  Custom topology · 직접 입력\n')};other.dispatchEvent(new Event('input',{bubbles:true}));form.querySelector('button[type=submit]').scrollIntoView({block:'center'});})()`);await click(page!,selector+' button[type=submit]');
+    await wait(`(globalThis.__839OriginalErrors?.length??0)>0||document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'`,'839 paired native save');entry.saved=await snapshot();
+    if(entry.saved.caught.length){entry.verdict='RED_ORIGINAL_REFUSAL';entry.originalFailure=entry.saved.caught;}else{const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));assert.equal(act.kind,'interview-picks');if(act.kind==='interview-picks')assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);entry.verdict='NATIVE_ANSWER_SAVED';}
+   }
+   assert.deepEqual(await jobInputHashes(fixture.root),before);entry.sourceImmutable=true;
+  }catch(error){entry.verdict='RED_TEST_OR_ROUTE';entry.error={message:String(error),stack:error instanceof Error?error.stack:null};entry.final=await snapshot().catch(()=>null);}
+  finally{await writeFile(join(out,'screen.png'),await page!.screenshot()).catch(()=>{});await writeFile(join(out,'observation.json'),JSON.stringify(entry,null,2));pairs.push(entry);console.log('839_NO_IMAGE_PAIR '+JSON.stringify({variant:entry.variant,language,verdict:entry.verdict,originalFailure:entry.originalFailure,error:entry.error}));await page!.goto('about:blank');await fixture.close();}
+ }
+ await writeFile(join(output,'no-image-pair.json'),JSON.stringify(pairs,null,2));
+ for(const picture of [true,'parts'] as const)for(const language of ['en','ko'] as const){
+  const out=join(output,'fresh-900',picture==='parts'?'parts':'rig',language);await mkdir(out,{recursive:true});
+  const fixture=await recordScreenFixture('interview-picks',picture,out,undefined,false,true,variants[1]!.resource),entry:Record<string,any>={picture:picture==='parts'?'parts':'rig',language,sourceHash:fixture.display.publication.source.sourceHash,width:900,height:900,dpr:2,navigation:'fresh about:blank then genuine pending owner URL at preconfigured width900; no post-navigation resize'};
+  try{
+   // Keep only the actual active ask for this independent geometry measurement.
+   for(let i=fixture.fake.events.length-1;i>=0;i--)if(fixture.fake.events[i]!.type==='pending'&&(fixture.fake.events[i] as any).ask.askId==='historical-incompatible')fixture.fake.events.splice(i,1);
+   const before=await jobInputHashes(fixture.root);await page!.setViewport(900,900);await command!('Emulation.setDeviceMetricsOverride',{width:900,height:900,deviceScaleFactor:2,mobile:false});
+   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page!.goto('about:blank');await page!.goto(url.href);
+   await wait(`(globalThis.__839OriginalErrors?.length??0)>0||(document.body.dataset.ready==='true'&&!!document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target=question][aria-selected=true]')&&document.querySelector('#reference-content img')?.naturalWidth===2)`,'839 fresh900 pending ready');
+   entry.originalState=await snapshot();
+   if(entry.originalState.caught.length)entry.verdict='RED_ORIGINAL_REFUSAL';
+   else{
+    await page!.evaluate(`document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))`);
+    entry.geometry=await page!.evaluate<any>(`(()=>{const row=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])'),strip=document.querySelector('.workspace-bottom-tabs'),tab=row.querySelector('[data-block-target=question][aria-selected=true]'),rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};},selected=rect(tab),activeRow=rect(row),stripRect=rect(strip),viewport={left:0,top:0,right:innerWidth,bottom:innerHeight,width:innerWidth,height:innerHeight},deltas=b=>({left:selected.left-b.left,right:b.right-selected.right,top:selected.top-b.top,bottom:b.bottom-selected.bottom}),inside=b=>{const d=deltas(b);return selected.width>0&&selected.height>0&&Object.values(d).every(v=>v>=-0.5);};return {selected,activeRow,strip:stripRect,viewport,deltas:{row:deltas(activeRow),strip:deltas(stripRect),viewport:deltas(viewport)},insideRow:inside(activeRow),insideStrip:inside(stripRect),insideViewport:inside(viewport),selectedId:tab.dataset.blockTarget,questionLast:[...row.querySelectorAll(':scope>button[role=tab]')].at(-1)?.dataset.blockTarget==='question',reportOverflow:!!row.querySelector('[data-block-target=report-panel][data-tab-overflow]'),documentWidth:document.documentElement.scrollWidth,deviceScaleFactor:devicePixelRatio};})()`);
+    const g=entry.geometry;entry.verdict=g.viewport.width===900&&g.insideRow&&g.insideStrip&&g.insideViewport&&g.questionLast&&(picture==='parts'||g.reportOverflow)?'FRESH_900_CONTAINED':'RED_FRESH_900_CLIPPED';
+   }
+   assert.deepEqual(await jobInputHashes(fixture.root),before);entry.sourceImmutable=true;
+  }catch(error){entry.verdict='RED_TEST_OR_ROUTE';entry.error={message:String(error),stack:error instanceof Error?error.stack:null};entry.final=await snapshot().catch(()=>null);}
+  finally{await writeFile(join(out,'screen.png'),await page!.screenshot()).catch(()=>{});await writeFile(join(out,'geometry.json'),JSON.stringify(entry,null,2));numeric.push(entry);console.log('839_FRESH_900 '+JSON.stringify(entry));await page!.goto('about:blank');await fixture.close();}
+ }
+ await writeFile(join(output,'fresh-900.json'),JSON.stringify(numeric,null,2));
+ const result={pairs:pairs.map(e=>({variant:e.variant,language:e.language,verdict:e.verdict})),numeric:numeric.map(e=>({picture:e.picture,language:e.language,verdict:e.verdict})),originalRefusals:pairs.filter(e=>e.verdict==='RED_ORIGINAL_REFUSAL').length,uncaughtExceptions:exceptions,passed:pairs.every(e=>e.verdict==='NATIVE_ANSWER_SAVED')&&numeric.every(e=>e.verdict==='FRESH_900_CONTAINED')&&exceptions.length===0};
+ await writeFile(join(output,'followup-result.json'),JSON.stringify(result,null,2));console.log('839_FOLLOWUP_RESULT '+JSON.stringify(result));if(!result.passed)process.exitCode=1;
+}
+
 try{
  // Reuse the shared launcher's browser discovery and process policy without a suite-local wrapper.
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
+ if(followup839){holdImages=false;await followupQuestionChecks();}else{
  if(completedPicture){holdImages=false;await questionTabChecks();}
  if(!completedPicture){
  for(const [width,height] of (interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]])){
@@ -305,5 +377,6 @@ try{
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
  const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:completedPicture?6:0,askKinds:1,languages:['en','ko'],backdrops:completedPicture?['rig','parts','parts-no-question-image']:freshParts?['bound-parts']:['empty'],viewports:completedPicture?[[1440,900],[900,900]]:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],...(completedPicture?{dpr:2}:{}),exceptions,mutations,browserWorkers:'shared launchCdpSession defaults'};
  await writeFile(join(output,'result.json'),JSON.stringify(result,null,2)+'\n');console.log('750_BROWSER_PASS '+JSON.stringify(result));
+ }
 }catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,completedCases:cases},null,2)+'\n');if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await rm(profile,{recursive:true,force:true});}

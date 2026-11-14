@@ -14,7 +14,7 @@ import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixt
 import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'reopen'|'interview-picks';
-export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true){
+export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>){
  const scratch=await mkdtemp(join(tmpdir(),'review-750-')),root=join(scratch,'input');await mkdir(root);
  let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root,{boundParts}):createSyntheticPlanRecordWorkspace(root,{subjects:[
   {kind:'checkpoint',checkpointId:'step_layout'},{kind:'signoff',stage:signoffStage},{kind:'reopen',stage:'plan-approved'},
@@ -24,7 +24,7 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
  const session=new JobSession({root,stateDir:join(scratch,'state'),fingerprint:'7'.repeat(64),reviewer:{id:'synthetic-owner',role:'owner'},
   publicationMode:'record-and-package',readRecordPublished:reader.reader,
   partsEnumerator:{version:'2.25.1',enumerate:()=>[{path:'parts/body.png',role:'part'},{path:'parts/front.png',role:'part'},{path:'painting.png',role:'painting'}]},readPublished:async()=>structuredClone(packageContext)});
- const fake=createJobWindowFixture(session.jobId),resources=jobWindowResources();
+ const fake=createJobWindowFixture(session.jobId),resources=resourcesOverride??jobWindowResources();
  let front:ReturnType<typeof createJobFront>|undefined,mode='one-screen',writeRoot=output??join(scratch,'acts'),sequence=0;
  const server=Bun.serve({hostname:'127.0.0.1',port:0,idleTimeout:0,fetch:async request=>(await front?.fetch(request))??new Response(null,{status:404})});
  const origin=`http://127.0.0.1:${server.port}`,real=createJobHostPorts(session,origin),credentials=session.hostCredentials();
