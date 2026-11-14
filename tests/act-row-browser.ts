@@ -265,7 +265,18 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    await capture(page,out,'answer-dialog');
    await click(page,mode==='checkpoint'?'#job-record-asks button[data-job-text="Pass"]':'#job-record-asks button[type=submit]');
    await wait(page,`!document.querySelector('#job-record-asks[open]')&&document.getElementById('review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`);
-   const saved:any=await capture(page,out,'answer-saved');assertPending(saved,mode,width);assert.equal(saved.states.length,1);
+   const saved:any=await capture(page,out,'answer-saved');
+   const savedState:{pending:boolean;row:{kind:string;text:string};dirty:{kind:string;text:string}}=await page.evaluate(`(()=>{
+    const state=id=>{const n=document.getElementById(id);return {kind:n.dataset.saveState,text:n.textContent};};
+    return {pending:['save','request-changes','workspace-pending-ask'].some(id=>!document.getElementById(id).hidden),row:state('review-draft-state'),dirty:state('dirty')};
+   })()`);
+   await writeFile(join(out,'answer-saved-state.json'),JSON.stringify(savedState,null,2)+'\n');
+   assert.deepEqual(savedState.row,{kind:'saved',text:language==='ko'?koCatalog['Answer saved']:'Answer saved'});
+   if(savedState.pending)assertPending(saved,mode,width);
+   else{
+    assert.equal(saved.rowVisible,false);assert.deepEqual(saved.states,['dirty']);assert.deepEqual(saved.answers,[]);assert.deepEqual(saved.primary,[]);
+    assert.deepEqual(savedState.dirty,savedState.row,'completed dialog keeps the exact saved state in its one visible state copy');
+   }
   }
   if(mode==='rig'){
    // Fail the first hosted metadata clone before any answer renderer. Restore the
