@@ -122,4 +122,7 @@ test('#843 assembled comment chips preselect visible intersecting parts in draw 
  expect(h.api.chips(h.api.pose(),{x:12,y:12,width:13,height:12},existing)).toEqual({selected:['back_control','front'],candidates:['back_defect','back_control','front']});
  h.api.show('front',false);await h.api.paint();c.unitScaleCamera('rig');
  expect(h.api.chips(h.api.pose(),{x:12,y:12,width:13,height:12})).toEqual({selected:['back_defect'],candidates:['back_defect','back_control']});
+ h.data.items.push({name:'fractional_front',imageHash:'5'.repeat(64),index:3,x:40.25,y:20.5,w:5.75,h:6.5});
+ await h.api.paint();c.unitScaleCamera('rig');
+ expect(h.api.chips(h.api.pose(),{x:41,y:22,width:2,height:2})).toEqual({selected:['fractional_front'],candidates:['back_defect','back_control','fractional_front']});
 });

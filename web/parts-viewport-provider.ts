@@ -85,7 +85,7 @@ export function bindPartsSubject(host:{
  request:(path:string,init?:RequestInit)=>Promise<Response>;base:string;paintingPath:string;
  mesh:()=>boolean;restoreMesh:(on:boolean)=>void;images:()=>boolean;changed:()=>void;selectionChanged:()=>void;locked:(id:string)=>boolean;refusal:()=>string|null;drawn:(input:{state:'loaded'}|{state:'failed';reason:string})=>void;message:ViewportProvider['message'];
 }) {
- const data=host.data,hidden=new Set<string>(),images=new Map<number,Promise<HTMLImageElement>>(),loaded=new Map<string,HTMLImageElement>(),assemblyAlpha=new Map<string,Uint8ClampedArray>();
+ const data=host.data,hidden=new Set<string>(),images=new Map<number,Promise<HTMLImageElement>>(),loaded=new Map<string,HTMLImageElement>(),assemblyAlpha=new Map<string,{box:Box;alpha:Uint8ClampedArray}>();
  let selected:string|null=null,solo=false,comparison:PartsComparison=defaultPartsComparison(),token=0,disposed=false,busy=false,failed=false;
  let drawnFrame:{w:number;h:number}|null=null,drawnReferenceFrame:{w:number;h:number}|null=null;
  let drawnRegion:Box|null=null,drawnSolo=false;
@@ -99,7 +99,7 @@ export function bindPartsSubject(host:{
   if(disposed)throw new Error('PARTS_PAINT_FAILED');return image;
  };
  const image=(entry:Item)=>{let pending=images.get(entry.index);if(!pending){pending=loadImage(`${host.base}/image/${entry.index}`).then(img=>{loaded.set(entry.name,img);return img;});images.set(entry.index,pending);}return pending;};
- const sourceAlpha=(entry:Item,img:HTMLImageElement)=>{const cached=assemblyAlpha.get(entry.name);if(cached)return cached;const c=makeCanvas(entry.w,entry.h),rgba=(c.getContext('2d')!.drawImage(img,0,0),c.getContext('2d')!.getImageData(0,0,entry.w,entry.h).data),alpha=new Uint8ClampedArray(entry.w*entry.h);for(let i=0;i<alpha.length;i++)alpha[i]=rgba[i*4+3]!;assemblyAlpha.set(entry.name,alpha);return alpha;};
+ const sourceAlpha=(entry:Item,img:HTMLImageElement)=>{const cached=assemblyAlpha.get(entry.name);if(cached)return cached;const c=makeCanvas(entry.w,entry.h),rgba=(c.getContext('2d')!.drawImage(img,0,0),c.getContext('2d')!.getImageData(0,0,c.width,c.height).data),alpha=new Uint8ClampedArray(c.width*c.height);for(let i=0;i<alpha.length;i++)alpha[i]=rgba[i*4+3]!;const layer={box:{...entry,w:c.width,h:c.height},alpha};assemblyAlpha.set(entry.name,layer);return layer;};
  const painting=()=>original??=loadImage(host.paintingPath);
  const partsBinding=(names:readonly string[])=>names.map(name=>{const entry=data.items.find(item=>item.name===name);if(!entry?.imageHash)throw new Error('PARTS_COMMENT_PART_MISMATCH');return {name,imageHash:entry.imageHash};});
  const sourceItems=()=>new Map(data.items.map(item=>[item.name,{...item,imageHash:item.imageHash!}]));
@@ -160,7 +160,7 @@ export function bindPartsSubject(host:{
    if(existing)return {selected:parsePartsIssue(existing,false,true,false).parts.map(part=>part.name),candidates};
    if(pose.view.mode==='item')return {selected:[pose.item.name],candidates};
    const frame=box(),r=snapImageRegion(region(unprojectMark(screen,pose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},pose.camera),{x:0,y:0,width:frame.w,height:frame.h}));
-   const hits=new Set<string>(),layers=visible.flatMap(box=>{const img=loaded.get(box.name);return img?[{box,alpha:sourceAlpha(box,img)}]:[];});
+   const hits=new Set<string>(),layers=visible.flatMap(box=>{const img=loaded.get(box.name);return img?[sourceAlpha(box,img)]:[];});
    const stepX=Math.max(1,r.width/32),stepY=Math.max(1,r.height/32);
    for(let y=r.y+.5;y<r.y+r.height;y+=stepY)for(let x=r.x+.5;x<r.x+r.width;x+=stepX){const hit=pickAssembly(layers,x,y);if(hit)hits.add(hit.name);}
    return {selected:visible.filter(item=>hits.has(item.name)).map(item=>item.name),candidates};
