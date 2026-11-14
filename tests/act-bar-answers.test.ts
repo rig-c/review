@@ -12,7 +12,7 @@ function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  const calls:string[]=[],session={feedbackWarnings:[],status:'pending'};
  const env={activeInterviewImages:null as unknown,host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
   session,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
-  recordDialog:{querySelector:(selector:string)=>selector.includes(':disabled')?null:({disabled:false}),querySelectorAll:()=>[submit]},
+  recordDialog:{querySelector:(selector:string)=>selector.includes('fieldset:disabled')?null:({disabled:false}),querySelectorAll:()=>[submit]},
   button:()=>save,select:()=>select,document:{querySelector:()=>label},
   setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
   verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};

@@ -1533,7 +1533,7 @@ function renderAnswerControls():void {
  save.hidden=!verdict;save.classList.toggle('primary',verdict&&!(subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0));
  requestChanges.classList.toggle('primary',verdict&&subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0);
  requestChanges.hidden=!verdict;
- rigAsk.hidden=!dialog&&!readable;rigAsk.classList.toggle('primary',dialog&&enabled&&!blocked);
+ rigAsk.hidden=!dialog&&!readable;rigAsk.classList.toggle('primary',dialog);
  const kind=subjects.find(subject=>!subject.kind.endsWith('verdict'))?.kind;
  setSourceText(rigAsk,kind==='signoff'?'Approve…':kind==='interview-picks'?'Answer…':'Review…');
  rigAsk.disabled=(!enabled&&!readable)||(enabled&&blocked);
@@ -1627,7 +1627,12 @@ function bindInspector(partsSubject=false):void {
  for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
-function openReview():void {pause();if(!partsOnly)syncCorrectionStage();inspectorBlocks?.select(selectedInspector()??'rig','feedback');workspace?.revealInspector();}
+function openReview():void {
+ pause();if(!partsOnly)syncCorrectionStage();
+ if(hasTransientQuestionImage(screenRoot))rigInspector.comments.panel.hidden=false;
+ else inspectorBlocks?.select(selectedInspector()??'rig','feedback');
+ workspace?.revealInspector();
+}
 function unitScaleMessage(target:CameraTarget):void {message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');}
 function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');}
 

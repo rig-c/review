@@ -53,7 +53,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   }
   if(!['rig','direction','parts'].includes(mode)){
    const inline=await page.evaluate<boolean>(`!!document.querySelector('#workspace-interview-answer')`);
-   if(!inline){await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#job-record-asks[open]')`);}
+   if(!inline){await until(page,`!document.querySelector('#workspace-pending-ask').disabled`);await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#job-record-asks[open]')`);}
    const answerRoot=inline?'#workspace-interview-answer':'#job-record-asks';
    assert.equal(await page.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`),false);
    if(mode==='interview'||mode==='joined-interview')await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll(${JSON.stringify(answerRoot+' input[type=radio]')}))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);

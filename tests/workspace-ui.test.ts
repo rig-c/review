@@ -591,3 +591,14 @@ test('#743 workspace owns detached portal lookup, settles redocking, and dispose
   first.ui.dispose();expect(ownDrawer.parentElement).toBeNull();expect(otherDrawer.parentElement).not.toBeNull();expect(second.ui.element(fieldB.id)).toBe(fieldB as unknown as HTMLElement);
  }finally{second.close();first.close();}
 });
+
+
+test('#834 transient question comments reveal the existing list without changing the saved inspector selection',async()=>{
+ const source=await Bun.file(new URL('../web/main.ts',import.meta.url)).text(),a=source.indexOf('function openReview():void {'),b=source.indexOf('function unitScaleMessage(',a);
+ const script=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(a,b));
+ let transient=true,selected=0,revealed=0;const panel={hidden:true};
+ const env={pause(){},partsOnly:true,syncCorrectionStage(){},screenRoot:{},hasTransientQuestionImage:()=>transient,rigInspector:{comments:{panel}},inspectorBlocks:{select(){selected++;}},selectedInspector:()=>'rig',workspace:{revealInspector(){revealed++;}}};
+ const open=new Function('env',`with(env){${script};return openReview;}`)(env);open();
+ expect(panel.hidden).toBe(false);expect(selected).toBe(0);expect(revealed).toBe(1);
+ transient=false;open();expect(selected).toBe(1);expect(revealed).toBe(2);
+});
