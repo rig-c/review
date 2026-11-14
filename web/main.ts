@@ -1557,7 +1557,7 @@ function renderAnswerControls():void {
  save.hidden=!verdict;save.classList.toggle('primary',verdict&&!(subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0));
  requestChanges.classList.toggle('primary',verdict&&subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0);
  requestChanges.hidden=!verdict;
- rigAsk.hidden=!dialog&&!readable;rigAsk.classList.toggle('primary',dialog);
+ rigAsk.hidden=!dialog;rigAsk.classList.toggle('primary',dialog);
  const kind=subjects.find(subject=>!subject.kind.endsWith('verdict'))?.kind;
  setSourceText(rigAsk,kind==='signoff'?'Approve…':kind==='interview-picks'||readable?'Answer…':'Review…');
  rigAsk.disabled=(!enabled&&!readable)||(enabled&&blocked);
@@ -1574,7 +1574,7 @@ function renderAnswerControls():void {
   requestChanges.onclick=()=>{if(requestChanges.disabled)return;if(parts){void save.onclick?.call(save,new PointerEvent('click'));}else{session.status='changes-requested';select('review-status').value=session.status;void verdictSubmit?.(new MouseEvent('click'));}};
  }
  for(const root of [recordDialog,...questionForms])for(const control of root?.querySelectorAll<HTMLButtonElement>('button[type="submit"]')??[])control.disabled=blocked||verdict;
- if(host){rigInspector.answersRendered=true;rigInspector.act.hidden=subjects.length===0&&!readable;rigInspector.syncActRow?.();}
+ if(host){rigInspector.answersRendered=true;rigInspector.act.hidden=subjects.length===0;rigInspector.syncActRow?.();}
 }
 let verdictSubmit:((event:MouseEvent)=>unknown)|null=null;
 /** The rig pane for a live job's still (#709): the job binds and copies it, this screen keeps its view. */

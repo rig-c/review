@@ -84,7 +84,7 @@ for(const item of [
  expect(legacy.map(control=>control.hidden)).toEqual(item.reveal?[true,true,true]:[false,false,false]);
 });
 
-test('#839 answered Question keeps a secondary enabled opener and saved act row',()=>{
+test('#839 answered Question readback does not reveal completed answer controls or the act row',()=>{
  const h=harness([]);(h.env as any).questionForms=[{dataset:{interviewAnswered:'true'},querySelector:()=>({disabled:true}),querySelectorAll:()=>[]}];h.render();
- expect(h.rigAsk.hidden).toBe(false);expect(h.rigAsk.disabled).toBe(false);expect(h.rigAsk.classList.values.has('primary')).toBe(false);expect(h.rigInspector.act.hidden).toBe(false);
+ expect(h.rigAsk.hidden).toBe(true);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.classList.values.has('primary')).toBe(false);expect(h.rigInspector.act.hidden).toBe(true);
 });

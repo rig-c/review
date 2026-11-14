@@ -85,11 +85,18 @@ async function questionTabChecks(){
    await writeFile(join(out,'back.png'),await page!.screenshot());
    await page!.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});for(const value of ['topology_other','density_auto'])form.querySelector('input[value="'+value+'"]').click();const other=form.querySelector('textarea[name="other.topology"]');other.value=${JSON.stringify('  Custom topology · 직접 입력\n')};other.dispatchEvent(new Event('input',{bubbles:true}));form.querySelector('button[type=submit]').scrollIntoView({block:'center'});})()`);
    await click(page!,selector+' button[type=submit]');
-   await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'&&document.querySelector('#review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`,'839 answer saved');
+   await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'&&document.querySelector('#dirty').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})&&document.querySelector('#workspace-act-row').hidden`,'839 answer saved');
    assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
    assert.deepEqual(await page!.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
-   assert.equal(await page!.evaluate(`document.querySelector('#workspace-pending-ask').disabled||document.querySelector('#workspace-pending-ask').classList.contains('primary')`),false);
-   assert.equal(await page!.evaluate(`document.querySelector('#workspace-act-row').hidden`),false);
+   assert.equal(await page!.evaluate(`['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)`),true,'completed answer controls hidden');
+   assert.equal(await page!.evaluate(`document.querySelector('#workspace-act-row').hidden`),true);
+   assert.deepEqual(await page!.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'single visible saved state');
+   await click(page!,'#stage-comment');
+   const questionTab='.workspace-bottom-tabs > .block-row:not([hidden]) [data-block-target="question"]';
+   if(await page!.evaluate(`document.querySelector(${JSON.stringify(questionTab)}).hasAttribute('data-tab-overflow')`)){
+    await click(page!,'.workspace-bottom-tabs > .block-row:not([hidden]) .workspace-tabs-more');await click(page!,'.workspace-tabs-menu:not([hidden]) [data-block-more-target="question"]');
+   }else await click(page!,questionTab);
+   await wait(`document.querySelector('#workspace-interview-answer[data-question-image-active]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 saved readback through Question tab');
    await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
    await writeFile(join(out,'answered.png'),await page!.screenshot());
    const bytes=await readFile(join(out,'one-screen.json'),'utf8'),act=parseRecordAct(JSON.parse(bytes));assert.equal(act.kind,'interview-picks');
@@ -104,8 +111,9 @@ async function questionTabChecks(){
    assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
    assert.deepEqual(await page!.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
    assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' textarea[name="other.topology"]')}).value`),'  Custom topology · 직접 입력\n');
-   assert.equal(await page!.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false);
-   assert.ok(await page!.evaluate(`document.querySelector('#review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`));
+   assert.equal(await page!.evaluate(`document.querySelector('#workspace-act-row').hidden&&['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)`),true,'reloaded completed row and controls hidden');
+   assert.deepEqual(await page!.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'reloaded single visible saved state');
+   assert.ok(await page!.evaluate(`document.querySelector('#dirty').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`));
    await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
    await writeFile(join(out,'reload.png'),await page!.screenshot());
    const observation={originalView,pendingPreviousView,transientPinRefused:true,pendingOnLoad:true,picture,language,width:1440,height:900,dpr:2,originalTabs,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));
