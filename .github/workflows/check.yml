@@ -107,6 +107,13 @@ jobs:
           printf 'Chrome path: %s\n' "$chrome_bin"
           "$chrome_bin" --version
           time CHROME_BIN="$chrome_bin" REVIEW464_CAMERA_ARTIFACTS="$RUNNER_TEMP/parts-camera-race" bun tests/parts-camera-race-browser.ts
+      - name: Verify Parts comments in Chrome
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          chrome_bin="$(command -v google-chrome)"
+          "$chrome_bin" --version
+          time CHROME_BIN="$chrome_bin" bun tests/parts-comments-browser.ts
       - name: Upload Parts camera evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

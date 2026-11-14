@@ -2,17 +2,20 @@
 import {expect,test} from 'bun:test';
 import {createCanvas} from '@napi-rs/canvas';
 import {readFile} from 'node:fs/promises';
-import {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop} from '../web/parts-render.ts';
+import {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,pickAssembly} from '../web/parts-render.ts';
 import {paintingRectangle,defaultPartsComparison} from '../src/parts-comparison.ts';
 import {createViewportController,createViewportState,type ViewportController} from '../web/viewport-controller.ts';
 import {createPartsViewportProvider} from '../web/parts-viewport-provider.ts';
-import {parsePartsIssue,assertPartsIssueBinding,type PartsIssue} from '../src/parts-comment.ts';
+import {parsePartsIssue,assertPartsIssueBinding,snapImageRegion,type PartsIssue} from '../src/parts-comment.ts';
+import {unprojectMark,region} from '../src/stage-comment.ts';
 import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(reason:Error)=>void;const promise=new Promise<T>((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};}
 const raster=(color:string)=>{const canvas=createCanvas(8,8),ctx=canvas.getContext('2d');ctx.fillStyle=color;ctx.fillRect(0,0,8,8);return canvas;};
 async function harness(withPainting=false){
  const source=await readFile(new URL('../web/parts-viewport-provider.ts',import.meta.url),'utf8'),start=source.indexOf(' async function paint():Promise<void>{'),end=source.indexOf(' const redraw=',start);
  const body=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end));
+ const alphaStart=source.indexOf(' const sourceAlpha='),alphaEnd=source.indexOf('\n const painting=',alphaStart),alphaBody=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(alphaStart,alphaEnd));
+ const chipsStart=source.indexOf('  chips:(pose,screen,existing)=>{'),chipsEnd=source.indexOf('  create:async',chipsStart),chipsBody=new Bun.Transpiler({loader:'ts'}).transformSync('const chips='+source.slice(chipsStart+'  chips:'.length,chipsEnd).trim().replace(/,$/,''));
  const frameStart=source.indexOf('  frameSize:(target:CameraTarget):PartsFrame|null=>{'),frameEnd=source.indexOf('  image:',frameStart),frameBody=new Bun.Transpiler({loader:'ts'}).transformSync('const frameSize='+source.slice(frameStart+'  frameSize:'.length,frameEnd).trim().replace(/,$/,''));
  const poseStart=source.indexOf(' const pose=():PartsPose|null=>{'),poseEnd=source.indexOf(' comments=bindStageComments',poseStart),poseBody=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(poseStart,poseEnd));
  const restoreStart=source.indexOf('  restore:async raw=>'),restoreEnd=source.indexOf(',\n  feedback:',restoreStart),restoreBody=new Bun.Transpiler({loader:'ts'}).transformSync('const restore='+source.slice(restoreStart+'  restore:'.length,restoreEnd));
@@ -20,22 +23,25 @@ async function harness(withPainting=false){
  const original=createCanvas(32,16),originalContext=original.getContext('2d');originalContext.fillStyle='#ff0000';originalContext.fillRect(0,0,16,16);originalContext.fillStyle='#00ff00';originalContext.fillRect(16,0,16,16);
  const paintingImage=Object.assign(original,{naturalWidth:32,naturalHeight:16});
  const data={sourceHash:'1'.repeat(64),mode:'parts',rigSize:[16,8],painting:withPainting?{width:32,height:16}:undefined,items:[{name:'a',imageHash:'2'.repeat(64),index:0,x:0,y:0,w:8,h:8},{name:'b',imageHash:'3'.repeat(64),index:1,x:8,y:0,w:8,h:8}]};
- let loader=(entry:{name:string})=>Promise.resolve(raster(entry.name==='a'?'#ff0000':'#00ff00'));
+ let loader=(entry:{name:string;w:number;h:number})=>Promise.resolve(raster(entry.name==='a'?'#ff0000':'#00ff00'));
  let paintingLoader=()=>Promise.resolve(paintingImage);
  let request=async()=>new Response('pixels'),mesh=false;
  const nodes=new Map<string,{hidden:boolean;textContent:string;setAttribute():void}>();
  const host={data,canvas,referenceCanvas,restoreMesh:(value:boolean)=>{mesh=value;},selectionChanged(){},images:()=>true,mesh:()=>mesh,el:(id:string)=>{if(!nodes.has(id))nodes.set(id,{hidden:false,textContent:'',setAttribute(){}});return nodes.get(id)!;},drawn:(state:unknown)=>frames.push(state),viewport:{state:{cameraSync:true},requestFit(){},fitCamera(){}},message:(value:string)=>messages.push(value),request:(path:string)=>request()};
  const api=new Function('host','data','image','painting','makeCanvas','deps',`
  let selected='a',solo=true,token=0,disposed=false,busy=false,failed=false,drawnFrame=null,drawnReferenceFrame=null,drawnRegion=null,drawnSolo=false,comparison={mode:'part',opacity:.5},comments=null;
- const {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,paintingRectangle,defaultPartsComparison,t,createImageBitmap,parsePartsIssue,assertPartsIssueBinding,EMIT_UNPINNED_CREATE_FIELDS}=deps;
+ const loaded=new Map(),assemblyAlpha=new Map();
+ const {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,pickAssembly,paintingRectangle,defaultPartsComparison,t,createImageBitmap,parsePartsIssue,assertPartsIssueBinding,snapImageRegion,unprojectMark,region,EMIT_UNPINNED_CREATE_FIELDS}=deps;
  const sourceItems=()=>new Map(data.items.map(item=>[item.name,item]));
- const hidden=new Set(),item=()=>data.items.find(entry=>entry.name===selected),assembled=()=>!solo,box=()=>assembled()?{x:0,y:0,w:16,h:8}:item();
+ const hidden=new Set(),item=()=>data.items.find(entry=>entry.name===selected),assembled=()=>!solo,box=()=>assembled()?{x:0,y:0,w:data.rigSize[0],h:data.rigSize[1]}:item();
+ ${alphaBody}
  ${body}
+ ${chipsBody}
  ${frameBody}
  ${poseBody}
  ${restoreBody}
- return {restore,pose,frameSize,paint,select(name){selected=name},assemble(){solo=false},difference(){comparison={mode:'difference',opacity:.5,threshold:0}},dispose(){disposed=true;++token},referenceFrame:()=>drawnReferenceFrame,state:()=>({busy,failed,drawnFrame})};
- `)(host,data,(entry:{name:string})=>loader(entry),()=>paintingLoader(),(w:number,h:number)=>createCanvas(w,h),{paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,paintingRectangle,defaultPartsComparison,parsePartsIssue,assertPartsIssueBinding,EMIT_UNPINNED_CREATE_FIELDS,t:(key:string)=>key,createImageBitmap:async()=>{const bitmap=raster('#ff0000') as ReturnType<typeof raster>&{close:()=>void};const id=closed.length;bitmap.close=()=>closed.push(id);return bitmap;}}) as {restore(raw:unknown):Promise<void>;pose():any;frameSize(target:'rig'|'reference'):{w:number;h:number;world?:{box:{x:number;y:number;width:number;height:number};origin:{x:number;y:number};scale:{x:number;y:number}}}|null;paint():Promise<void>;select(name:string|null):void;assemble():void;difference():void;dispose():void;referenceFrame():{w:number;h:number}|null;state():{busy:boolean;failed:boolean;drawnFrame:{w:number;h:number}|null}};
+ return {chips,restore,pose,frameSize,paint,select(name){selected=name},show(name,on){if(on)hidden.delete(name);else hidden.add(name)},assemble(){solo=false},difference(){comparison={mode:'difference',opacity:.5,threshold:0}},dispose(){disposed=true;++token},referenceFrame:()=>drawnReferenceFrame,state:()=>({busy,failed,drawnFrame})};
+ `)(host,data,(entry:{name:string;w:number;h:number})=>loader(entry),()=>paintingLoader(),(w:number,h:number)=>createCanvas(w,h),{paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,pickAssembly,paintingRectangle,defaultPartsComparison,parsePartsIssue,assertPartsIssueBinding,snapImageRegion,unprojectMark,region,EMIT_UNPINNED_CREATE_FIELDS,t:(key:string)=>key,createImageBitmap:async()=>{const bitmap=raster('#ff0000') as ReturnType<typeof raster>&{close:()=>void};const id=closed.length;bitmap.close=()=>closed.push(id);return bitmap;}}) as {chips(pose:any,screen:{x:number;y:number;width:number;height:number},existing?:unknown):{selected:string[];candidates:string[]};restore(raw:unknown):Promise<void>;pose():any;frameSize(target:'rig'|'reference'):{w:number;h:number;world?:{box:{x:number;y:number;width:number;height:number};origin:{x:number;y:number};scale:{x:number;y:number}}}|null;paint():Promise<void>;select(name:string|null):void;show(name:string,on:boolean):void;assemble():void;difference():void;dispose():void;referenceFrame():{w:number;h:number}|null;state():{busy:boolean;failed:boolean;drawnFrame:{w:number;h:number}|null}};
  return {api,canvas,referenceCanvas,paintingImage,setViewport(value:ViewportController){host.viewport=value;},frames,messages,closed,data,setLoader(value:typeof loader){loader=value;},setPaintingLoader(value:typeof paintingLoader){paintingLoader=value;},setRequest(value:typeof request){request=value;},mesh(value:boolean){mesh=value;},pixel:()=>[...canvas.getContext('2d').getImageData(3,3,1,1).data],referencePixel:()=>[...referenceCanvas.getContext('2d').getImageData(3,3,1,1).data]};
 }
 test('#737 failed image clears old pixels and geometry; only a later successful draw restores loaded eligibility',async()=>{
@@ -93,4 +99,30 @@ for(const mode of ['item','assembled']as const)test(`#742 restores ${mode} comme
  // OFF retains the independent peer even when restoring a Solo-local camera into rig-world coordinates.
  c.setCameraSync(false);c.panCamera('reference',7,5);const independent=structuredClone(c.paneCamera('reference'));await h.api.restore(issue);expect(c.paneCamera('rig')).toEqual(expected);expect(c.paneCamera('reference')).toEqual(independent);expect(h.api.pose().view.camera).toEqual(local);
  expect(issue.imageRegion).toEqual(mode==='item'?{x:2,y:3,width:8,height:9}:null);expect(issue.rigRegion).toEqual({x:790,y:293,width:8,height:9});
+});
+
+test('#843 assembled comment chips preselect visible intersecting parts in draw order while preserving item and existing paths',async()=>{
+ const h=await harness();
+ h.data.rigSize=[64,64];
+ h.data.items=[
+  {name:'back_defect',imageHash:'1'.repeat(64),index:0,x:2,y:10,w:32,h:48},
+  {name:'back_control',imageHash:'2'.repeat(64),index:1,x:34,y:10,w:28,h:48},
+  {name:'front',imageHash:'3'.repeat(64),index:2,x:14,y:14,w:32,h:32},
+ ];
+ h.setLoader(entry=>{const c=createCanvas(entry.w,entry.h),ctx=c.getContext('2d');ctx.fillStyle='#ff0000';ctx.fillRect(0,0,entry.w,entry.h);return Promise.resolve(c);});
+ const nodes=new Map<string,any>(),el=(id:string)=>{if(!nodes.has(id))nodes.set(id,{clientWidth:64,clientHeight:64,hidden:false,style:{},setAttribute(){}});return nodes.get(id);};
+ const state=createViewportState(),c=createViewportController(createPartsViewportProvider({el,canvas:h.canvas as never,reference:()=>null,frameSize:target=>h.api.frameSize(target==='rig'?'rig':'reference'),message(){}},state),state);
+ h.setViewport(c);h.api.select('back_defect');await h.api.paint();c.unitScaleCamera('rig');
+ expect(h.api.chips(h.api.pose(),{x:12,y:12,width:13,height:12})).toEqual({selected:['back_defect'],candidates:[]});
+ h.api.assemble();await h.api.paint();c.unitScaleCamera('rig');
+ expect(h.api.chips(h.api.pose(),{x:12,y:12,width:13,height:12})).toEqual({selected:['back_defect','front'],candidates:['back_defect','back_control','front']});
+ expect(h.api.chips(h.api.pose(),{x:50,y:20,width:6,height:6})).toEqual({selected:['back_control'],candidates:['back_defect','back_control','front']});
+ expect(h.api.chips(h.api.pose(),{x:0,y:0,width:2,height:2})).toEqual({selected:[],candidates:['back_defect','back_control','front']});
+ const cropHash='4'.repeat(64),existing:PartsIssue={schema:'rig-review-parts-comment/2',id:'existing-assembled',summary:'Saved seam',parts:[{name:'back_control',imageHash:'2'.repeat(64)},{name:'front',imageHash:'3'.repeat(64)}],sourceHash:h.data.sourceHash,imageRegion:null,rigRegion:{x:12,y:12,width:13,height:12},view:{mode:'assembled',camera:{zoom:1,center:{x:32,y:32},viewport:{width:64,height:64}},cameraSync:false,referenceCamera:null,background:'checker',alpha:false,footprints:false,mesh:false},crop:{path:`comment-crops/${cropHash}.png`,sha256:cropHash,width:13,height:12},nativeCrop:null};
+ expect(h.api.chips(h.api.pose(),{x:12,y:12,width:13,height:12},existing)).toEqual({selected:['back_control','front'],candidates:['back_defect','back_control','front']});
+ h.api.show('front',false);await h.api.paint();c.unitScaleCamera('rig');
+ expect(h.api.chips(h.api.pose(),{x:12,y:12,width:13,height:12})).toEqual({selected:['back_defect'],candidates:['back_defect','back_control']});
+ h.data.items.push({name:'fractional_front',imageHash:'5'.repeat(64),index:3,x:40.25,y:20.5,w:5.75,h:6.5});
+ await h.api.paint();c.unitScaleCamera('rig');
+ expect(h.api.chips(h.api.pose(),{x:41,y:22,width:2,height:2})).toEqual({selected:['fractional_front'],candidates:['back_defect','back_control','fractional_front']});
 });
