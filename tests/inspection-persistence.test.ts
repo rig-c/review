@@ -201,6 +201,7 @@ async function openDraftReopenScenario(opts:{
  currentBaseline:Record<string,unknown>;
  currentBinding:InspectionBinding;
  legacyMain?:boolean;
+ corruptStored?:boolean;
 }){
  const source=await readFile(new URL('../web/inspection-persistence.ts',import.meta.url),'utf8');
  const controls=(await readFile(new URL('../web/view-controls.ts',import.meta.url),'utf8')).split('export type ThemePreference')[0]!.replaceAll('export const','const');
@@ -222,6 +223,7 @@ async function openDraftReopenScenario(opts:{
  const scope=opts.mode==='single'?`single:rig:${opts.currentBinding.sourceHash}`:`compare:rig-a:${'b'.repeat(64)}:rig-b:${'c'.repeat(64)}`;
  const storage=new MemoryStorage();
  await new InspectionDraftStore(scope,opts.savedBinding??opts.currentBinding,()=>{},storage).write(opts.saved);
+ if(opts.corruptStored)for(const key of storage.values.keys())if(key.startsWith('rig-review-draft/1:'))storage.setItem(key,'{corrupt saved draft');
  const script=`async function open(deps){const {InspectionDraftStore:Base,storage,scope,currentBaseline,currentBinding,bookmark,sessionFingerprint,recoverSession,decodeBookmark,encodeBookmark,parseBookmark,inspectionLink,restoreTransaction,mode}=deps;
  class HTMLInputElement{hasAttribute(name){return name==='data-app-preference'&&this.id.startsWith('settings-');}constructor(id,type,value,checked=false){Object.assign(this,{id,type,value,checked,name:''});}}class HTMLSelectElement{hasAttribute(name){return name==='data-app-preference'&&this.id.startsWith('settings-');}constructor(id,value,values){this.id=id;this.value=value;this.options=values.map(value=>({value}));}}class HTMLTextAreaElement{hasAttribute(){return false;}constructor(id,value=''){this.id=id;this.value=value;}}
  const nodes=[new HTMLSelectElement('review-status',currentBaseline.status,['pending','approved','changes-requested']),new HTMLSelectElement('status',currentBaseline.status,['pending','approved','changes-requested']),new HTMLTextAreaElement('checkpoint-note',''),new HTMLInputElement('feedback-summary','text',''),new HTMLInputElement('summary','text','')];
@@ -690,4 +692,18 @@ for(const failure of ['open','read-abort'] as const)test(`#816 IDB ${failure} re
  const reopen=idbStore(storage,idb,'single:rig',warnings);
  expect(await reopen.read()).toBeNull();expect(reopen.recovery()).toBe(raw);expect(warnings.at(-1)).toContain('remains in storage');
  expect(await reopen.write(draft())).toBe(false);expect(storage.getItem(store.key)).toBe(raw);
+});
+
+for(const action of ['Download saved local draft','Discard unusable local draft'])test('#825 failed restoration preserves recovery bytes and blocks submit until '+action,async()=>{
+ const app=await openDraftReopenScenario({mode:'single',saved:draft(),currentBaseline:singleSession(),currentBinding:binding,corruptStored:true});
+ try{
+  expect(app.state().conflict).toBe(true);
+  expect(app.state().statusText).toBe('Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.');
+  expect(app.dialogButtons()).toEqual(['Download saved local draft','Discard unusable local draft']);
+  await expect(app.submit()).rejects.toThrow('Resolve the saved local draft conflict');
+  expect([...app.storage.values.values()]).toContain('{corrupt saved draft');
+  await app.clickInDialog(action);expect(app.state().conflict).toBe(false);
+  if(action.startsWith('Download')){expect(await app.downloads()).toEqual([{download:'review-local-draft.json',text:'{corrupt saved draft'}]);expect([...app.storage.values.values()]).toContain('{corrupt saved draft');}
+  else expect([...app.storage.values.values()]).not.toContain('{corrupt saved draft');
+ }finally{app.connection.dispose();}
 });

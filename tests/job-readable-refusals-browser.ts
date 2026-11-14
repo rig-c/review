@@ -1,7 +1,7 @@
 /** #815 ordinary Nova: real job authentication and the existing bootstrap notice, EN/KO.
  * Synthetic package fixture; no producer conformance or closed-host availability claim. */
 import assert from 'node:assert/strict';
-import {mkdir, writeFile} from 'node:fs/promises';
+import {mkdir, writeFile, rm} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {launchCdpSession} from './parts-explorer-browser.ts';
@@ -61,7 +61,7 @@ try {
       }
       await writeFile(join(output, 'reload-' + language + '.png'), await page.screenshot());
       cases.push({language, state: 'same-tab-reload', ready: true});
-    } finally { await page.close(); }
+    } finally { await page.close(); await rm(profile, {recursive: true, force: true}); }
   }
 } finally {
   await fixture.close();

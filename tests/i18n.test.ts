@@ -1393,9 +1393,9 @@ test('#743 live host notices and act status retain English source and render in 
    for (const id of ['message', 'review-message', 'review-draft-state', 'status-copy']) {
     const node = doc.createElement('span'); node.id = id; root.append(node);
    }
-   const render = new Function('el', 'setSourceText', 'setSourceAttribute', 'titledIds',
+   const render = new Function('el', 'setSourceText', 'setSourceAttribute', 'titledIds', 'host',
     transpiler.transformSync(text + message) + ';return message;')(
-     (id: string) => doc.getElementById(id), setSourceText, setSourceAttribute, new Set(['message']));
+     (id: string) => doc.getElementById(id), setSourceText, setSourceAttribute, new Set(['message']), {});
    // Use the existing act bar renderer and its copies, through the same source-text writer.
    const renderStatus = new Function('options', 'setSourceText', 'setSourceAttribute',
     transpiler.transformSync('let current=null,retry=null;'+saveState) + ';return setSaveState;')({
@@ -1470,4 +1470,33 @@ test('#756 rendered semantic refusals remain idempotent across repeated translat
    }
   }
  }finally{setLanguagePreference(preference);}
+});
+
+test('#833 joined interview re-enables its opener before the saved event so question two remains answerable',async()=>{
+ const previousDocument=Object.getOwnPropertyDescriptor(globalThis,'document'),previousFetch=globalThis.fetch;
+ const {doc,root}=makeTestDoc(),dialog=doc.createElement('dialog'),opener=doc.createElement('button');root.append(opener,dialog);
+ const original=await Bun.file(new URL('./fixtures/interview-open-725/evidence/options.json',import.meta.url)).json();
+ const questions=[0,1].map(index=>({ref:{path:`evidence/options-${index}.json`,sha256:String(index?'b':'a').repeat(64)},set:{...original,id:'two-question-'+index,question:index?'rig_type':'reference'},editable:true,images:[],hasParts:false,saved:null}));
+ const posted:any[]=[],disabledAtSaved:boolean[]=[];let dispose:undefined|(()=>void),open=true;
+ try{
+  Object.defineProperty(globalThis,'document',{value:doc,configurable:true});
+  globalThis.fetch=Object.assign(async(_input:unknown,init?:RequestInit)=>{if(init?.method==='POST'){posted.push(JSON.parse(String(init.body)));return Response.json({ok:true});}return Response.json({questions,historical:[],diagnostics:[]});},{preconnect:previousFetch.preconnect}) as typeof fetch;
+  opener.onclick=()=>{if(!opener.disabled)open=true;};
+  dispose=await joinedInterviewForms({base:'/',key:'two-question',capability:'a'.repeat(64),route:path=>path,headers:init=>new Headers(init)},forms=>{
+   dialog.replaceChildren(...forms as unknown as TestElement[]);
+   for(const node of forms){const form=node as HTMLFormElement;form.reportValidity=()=>true;form.dispatchEvent=event=>{
+    if(event.type==='job-answer-saved'){
+     const field=form.querySelectorAll('fieldset')[0]!;
+     opener.disabled=(field as HTMLFieldSetElement).disabled;disabledAtSaved.push(opener.disabled);open=false;
+    }return true;
+   };}
+  });
+  for(let index=0;index<2;index++){
+   const form=dialog.querySelectorAll('form')[0]!;const radio=form.querySelectorAll('input')[0]! as TestElement&{checked:boolean};radio.checked=true;
+   await form.onsubmit!({preventDefault(){}});
+   expect(open).toBe(false);expect(opener.disabled).toBe(false);expect(posted).toHaveLength(index+1);
+   if(index===0){opener.onclick!({});expect(open).toBe(true);dialog.querySelectorAll('.interview-question')[1]!.onclick!({});}
+  }
+  expect(disabledAtSaved).toEqual([false,false]);expect(posted.map(value=>value.set.sha256)).toEqual(['a'.repeat(64),'b'.repeat(64)]);
+ }finally{dispose?.();globalThis.fetch=previousFetch;if(previousDocument)Object.defineProperty(globalThis,'document',previousDocument);else delete (globalThis as any).document;}
 });

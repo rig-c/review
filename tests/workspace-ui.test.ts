@@ -568,14 +568,14 @@ test('#678 rig caller regions preserve the legacy shell DOM, labels, drawers and
  }finally{setLinkLanguage(link);setLanguagePreference(preference);}
 });
 
-test('#735 pending ask heading uses fixed subject sentences in EN/KO and stays empty without subjects',async()=>{
- const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** The rig pane',start),raw:{text:string;title:string;hidden:boolean}={text:'',title:'',hidden:false};
- let statusRefreshes=0;const render=new Function('rigAsk','setSourceText','setSourceAttribute','renderDraftState',new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},(_:unknown,_key:string,value:string)=>{raw.title=value;},()=>{statusRefreshes++;});
- render([]);expect(raw.hidden).toBe(true);expect(raw.text).toBe('');
+test('#809 pending ask heading uses full subject sentences in EN/KO and names the absence of an ask',async()=>{
+ const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start),raw:{text:string;title:string;hidden:boolean}={text:'',title:'',hidden:false};
+ let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','setSourceAttribute','renderDraftState','let pendingAnswers=[];'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},(_:unknown,_key:string,value:string)=>{raw.title=value;},()=>{statusRefreshes++;});
+ render([]);expect(raw.hidden).toBe(false);expect(t(raw.text,undefined,'en')).toBe('Nothing is waiting for your answer.');expect(t(raw.text,undefined,'ko')).toBe('답변을 기다리는 요청이 없어요.');
  render([{kind:'review-verdict',stage:'rig-review'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
  expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Review this checkpoint.');
  expect(t(raw.text,undefined,'ko')).toBe('리그와 모션을 확인해 주세요. · 이 체크포인트를 검토해 주세요.');
- render([]);expect(raw.hidden).toBe(true);expect(raw.title).toBe('');expect(statusRefreshes).toBe(3);
+ render([]);expect(raw.hidden).toBe(false);expect(raw.text).toBe('Nothing is waiting for your answer.');expect(raw.title).toBe('');expect(statusRefreshes).toBe(3);
 });
 
 test('#743 workspace owns detached portal lookup, settles redocking, and disposes only its drawers',async()=>{

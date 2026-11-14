@@ -376,3 +376,20 @@ test('#814 bound record image route serves only the sealed part and rejects writ
   expect((await fetch(base+'stage-parts',{method:'POST'})).status).toBeGreaterThanOrEqual(400);
  }finally{await h.close();}
 });
+
+test('#809 checkpoint answers reuse the form contract without the evidence grid',async()=>{
+ const h=await harness();try{
+  const ready=await h.screen.prepare(h.f.display,new AbortController().signal);
+  const entry=ready!.record!.forms.get(h.f.ask.askId)!;
+  expect(entry.form.querySelector<HTMLSelectElement>('select[name=outcome]')!.hidden).toBe(true);
+  expect(entry.form.querySelector('[data-job-checkpoint-evidence]')).toBeNull();
+  const answers=[...entry.form.querySelectorAll<HTMLButtonElement>('button[type=submit]')];
+  expect(answers.map((button:any)=>button.textContent).sort()).toEqual(['Pass','job.fail'].sort());
+  for(const [label,outcome]of [['Pass','pass'],['job.fail','fail']]){
+   const button=answers.find((item:any)=>item.textContent===label)!;
+   button.click();
+   expect(entry.read()).toMatchObject({checkpointId:h.f.ask.subject.kind==='checkpoint'?h.f.ask.subject.checkpointId:'',outcome,words:''});
+  }
+  ready!.record!.inspection.dispose();
+ }finally{await h.close();}
+});
