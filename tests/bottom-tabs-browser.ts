@@ -61,6 +61,17 @@ async function proveHeading(page:InputCdpSession,label:string){
  return g;
 }
 
+/** Returned #856 polish: inspect the painted footer and the retained action group at narrow widths. */
+async function proveRetainedReadouts(page:InputCdpSession,label:string){
+ const g:any=await page.evaluate(`(()=>{const rect=n=>n.getBoundingClientRect().toJSON(),footer=document.querySelector('footer.status-bar'),message=document.querySelector('.inspector-heading .review-dialog-actions>.review-message'),approve=document.getElementById('save'),changes=document.getElementById('request-changes');return {width:innerWidth,footer:rect(footer),approve:rect(approve),changes:rect(changes),description:rect(message),items:[...footer.querySelectorAll('.status-message,.status-readouts>*,.status-source>summary,.status-source summary,.status-source>#source-hash')].filter(n=>n.getBoundingClientRect().width>0&&!n.closest('[hidden]')).map(n=>{const s=getComputedStyle(n),r=n.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(n);const t=range.getBoundingClientRect(),clip=['hidden','clip'].includes(s.overflowX);return {id:n.id||n.className,rect:r.toJSON(),text:{left:clip?Math.max(t.left,r.left):t.left,right:clip?Math.min(t.right,r.right):t.right,top:t.top,bottom:t.bottom},scroll:n.scrollWidth,client:n.clientWidth,overflow:s.overflowX,ellipsis:s.textOverflow};})};})()`);
+ assert.ok(g.footer.left>=0&&g.footer.right<=g.width+1,label+' footer is contained by viewport');
+ for(const n of g.items){assert.ok(n.rect.left>=g.footer.left&&n.rect.right<=g.footer.right&&n.text.left>=g.footer.left-1&&n.text.right<=g.footer.right+1,label+' shown footer text horizontally contained: '+n.id);assert.ok(n.text.top>=g.footer.top-1&&n.text.bottom<=g.footer.bottom+1,label+' shown footer text vertically contained: '+n.id);if(n.scroll>n.client+1)assert.ok(['hidden','clip'].includes(n.overflow)&&n.ellipsis==='ellipsis',label+' overflow uses explicit ellipsis: '+n.id);}
+ assert.ok(Math.abs(g.approve.top-g.changes.top)<=1&&Math.abs(g.approve.bottom-g.changes.bottom)<=1,label+' Approve and Request changes share one row');
+ assert.ok(g.description.bottom<=Math.min(g.approve.top,g.changes.top)+1,label+' description is above the action group');
+ assert.ok(g.approve.right<=g.changes.left,label+' action buttons retain order');
+ return g;
+}
+
 /** Native activation of the retained transport, with time read from the shipped runtime UI. */
 async function proveToolbarPlayback(page:InputCdpSession,kind:string,lang:string,width:number,height:number){
  await wait(page,`!!document.querySelector('#rig-root canvas')&&!document.getElementById('play').disabled`,kind+' playable model');
@@ -441,6 +452,7 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
    })()`);
    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-state.json`),JSON.stringify(state,null,2));
    if(Bun.argv.includes('--standalone-widths')){
+    if(width<=900){const readouts=await proveRetainedReadouts(page,kind+' '+lang+' '+width);await writeFile(join(output,`returned-polish-${lang}-${width}.json`),JSON.stringify(readouts,null,2)+'\n');}
     const targets=await page.evaluate<string[]>(`[...document.querySelectorAll('.workspace-bottom-tabs>.block-row:not([hidden]) [role=tab]')].filter(n=>!n.hidden&&!n.disabled).map(n=>n.dataset.blockTarget)`);
     for(const target of targets){await selectTab(page,target);await proveHeading(page,kind+' '+lang+' '+width+' '+target);}
    }
