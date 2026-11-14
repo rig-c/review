@@ -66,8 +66,10 @@ for(const lang of ['en','ko']){
   check(JSON.stringify(draft).includes(applied.buildId),'APPLIED inputs saved in actual local draft');
   await writeFile(join(out,lang+'-rebuilt.png'),await page.screenshot());
   await page.goto(`http://127.0.0.1:${proxy.port}/?lang=${lang}&reopen=1#cap=${cap}`);
-  await wait('window.__clockReading?.()&&!window.__clockReading().restoring&&window.__clockReading().applied&&!document.getElementById("play").disabled');
+  await wait('window.__clockReading?.()&&!window.__clockReading().restoring&&document.getElementById("rebuild-applied").value.length>0&&!document.getElementById("play").disabled');
+  // Draft inputs are restored independently of loading an active scratch build (inspection-persistence.ts:365-366).
   const reopened=await page.evaluate<any>('JSON.parse(document.getElementById("rebuild-applied").value)');
+  await writeFile(join(out,lang+'-reopened-observation.json'),JSON.stringify({reading:await read(),reopened},null,2));
   check(JSON.stringify(reopened)===JSON.stringify(applied),'actual reopen restores APPLIED inputs');
   // The editable clip is nonlooping: normal +Key and stage-pose UI retain their existing time.
   await page.evaluate(`(()=>{document.getElementById('play').click();const s=document.getElementById('animation-select');s.value='pulse';s.dispatchEvent(new Event('change',{bubbles:true}));const t=document.querySelector('[data-curve-time]');t.value='.375';document.querySelector('[data-curve-seek]').click()})()`);
