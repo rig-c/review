@@ -23,6 +23,10 @@
     "issue": 842,
     "reason": "IN PROGRESS under 89d907 phase2a: Trusted focus setup failed before pan/Fit assertions; harness cause unresolved. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
   },
+  "tests/job-record-browser.ts": {
+    "issue": 842,
+    "reason": "HARNESS RED: ONE phase2b Nova source5a4d7482 run20261114T101339Z-5013bbc80fe846d2b1cb7f23073f5f86 exits1 EN19.571s waiting submitted form. Captured form is answered, fieldset disabled and direct job.saved status populated, but helper selects first nested empty interview-diagnostics [role=status]. No retry; KO NOT RUN; candidate preserved."
+  },
   "tests/open-workspace-browser.ts": {
     "issue": 842,
     "reason": "IN PROGRESS under 89d907 phase2a: Owner restart did not complete before aggregate sample budget; cause unexplained. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."

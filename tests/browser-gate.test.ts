@@ -29,6 +29,7 @@ test('live tree partition covers every discovered suite once or by its named exe
   "tests/correction-handoff-browser.ts": 842,
   "tests/inspection-clock-consumers-browser.ts": 842,
   "tests/job-checkpoint-wire-browser.ts": 842,
+  "tests/job-record-browser.ts": 842,
   "tests/open-workspace-browser.ts": 842,
   "tests/parts-setup-browser.ts": 842,
   "tests/rig-bottom-browser.ts": 842,
