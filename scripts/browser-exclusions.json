@@ -11,10 +11,6 @@
     "issue": 848,
     "reason": "PRODUCT: package checkpoint saved Comments vanish on reconnect; preserve exact words assertion and neutral bounded read/wait/log probe until #848 restores whole suite."
   },
-  "tests/correction-handoff-browser.ts": {
-    "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Retained selection assertion failed after built Mesh Apply; cause unresolved. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
-  },
   "tests/inspection-clock-consumers-browser.ts": {
     "issue": 842,
     "reason": "UNRESOLVED: ONE phase2b Nova source8ffb3d43 run20261114T100450Z-3fa07706c6d049268d134d5df1ffcbff exits1 after38.153s: EN reopen wait requires applied, but reading.applied=null with restoring=false. Initial loop/Idle Apply reached; later key/pose checks and KO not run. No product root-cause ruling; preserve candidate assertions and do not retry."
