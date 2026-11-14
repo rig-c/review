@@ -153,7 +153,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
      await page.goto(new URL('/favicon.ico',url).href);
      await page.evaluate(`localStorage.setItem(${JSON.stringify(key)},'{corrupt saved draft')`);await page.goto(url,language);
      await wait(page,`document.body.dataset.ready==='true'&&!document.body.inert&&document.querySelector('#review-draft-recovery button')`);
-     const blocked=await page.evaluate<any>(`({submit:document.getElementById('save').disabled,changes:document.getElementById('request-changes').disabled,noticeInRow:!!document.querySelector('#workspace-act-row #review-draft-recovery'),noticeVisible:!!document.getElementById('review-draft-recovery').getClientRects().length,kind:document.getElementById('review-draft-state').dataset.saveState})`);
+     const blocked:{submit:boolean;changes:boolean;noticeInRow:boolean;noticeVisible:boolean;kind:string}=await page.evaluate<any>(`({submit:document.getElementById('save').disabled,changes:document.getElementById('request-changes').disabled,noticeInRow:!!document.querySelector('#workspace-act-row #review-draft-recovery'),noticeVisible:!!document.getElementById('review-draft-recovery').getClientRects().length,kind:document.getElementById('review-draft-state').dataset.saveState})`);
      assert.deepEqual(blocked,{submit:true,changes:true,noticeInRow:true,noticeVisible:true,kind:'failed'});
      const recovery=await capture(page,out,'restore-'+action+'-blocked');assertPending(recovery,mode,width);
      await click(page,'#review-draft-recovery button:'+(action==='download'?'first-child':'last-child'));

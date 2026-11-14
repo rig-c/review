@@ -421,10 +421,10 @@ for(const live of [false,true])test('#840 '+(live?'live row':'standalone heading
  const innerBefore=page.all().filter(node=>node.attrs.get('aria-labelledby')?.startsWith('block-tab-')).map(node=>[node.id,node.getAttribute('role'),node.getAttribute('aria-labelledby')]);
  try{
   const mounted=mountRigInspector(document as unknown as Document,live?actRow as unknown as HTMLElement:undefined),row=mounted.row,owners=row.tabs.map(tab=>tab.button.id);
-  expect(mounted.act.parentElement).toBe(live?actRow:mounted.strip.parentElement);
+  expect(mounted.act.parentElement).toBe(live?actRow as unknown as HTMLElement:mounted.strip.parentElement);
   mounted.act.hidden=false;mounted.syncActRow();expect(dirtyState.hidden).toBe(live);expect(draftState.hidden).toBe(live);expect(draftRecovery.hidden).toBe(live);
   mounted.actBar.setSaveState({kind:'saved',text:'Answer saved'});expect((live?dirtyState:draftState).textContent).toBe('Answer saved');
-  if(live){expect(mounted.strip.parentElement!.children).toEqual([mounted.strip,mounted.collapse]);mounted.act.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(true);expect(dirtyState.hidden).toBe(false);mounted.act.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);}
+  if(live){expect([...mounted.strip.parentElement!.children]).toEqual([mounted.strip,mounted.collapse]);mounted.act.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(true);expect(dirtyState.hidden).toBe(false);mounted.act.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);}
   expect(new Set(owners).size).toBe(2);expect([...mounted.strip.children]).toEqual([]);expect(mounted.comments.button.hidden).toBe(true);expect(mounted.comments.panel.getAttribute('aria-labelledby')).toBe('stage-comment');expect(document.getElementById('proposal-panel')!.children[0]!.id).toBe('comments-list-host');
   for(const [index,tab] of row.tabs.entries()){
    const panel=tab.panels[0]!;expect(panel).toBe(originals[index] as unknown as HTMLElement);expect(panel.getAttribute('role')).toBe('region');expect(panel.getAttribute('aria-labelledby')).toBe(tab.button.id);expect(tab.button.getAttribute('aria-controls')).toBe(panel.id);
