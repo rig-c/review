@@ -421,7 +421,7 @@ function leaveRigDifference():void {
 function layoutEligibility(){return singleEligibility({rig:rigInput,reference:referenceInput,requested:view});}
 /** Unavailable layouts stay visible but disabled with their named reason; no placeholder pane stands in for a missing input. */
 function renderLayout():void {
- button('play').hidden=selectedInspector()!=='playback';
+ el('play').hidden=selectedInspector()!=='playback';
  if(rigDifference&&(rigDifferenceReason()||rigDifference.assets!==assets||rigDifference.painting!==el('reference-content').querySelector('img')))leaveRigDifference();
  const state=layoutEligibility();effectiveView=state.effective;
  for(const id of controls.viewModeIds)if(id!=='difference')controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
