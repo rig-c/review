@@ -265,6 +265,11 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
 
     await page.evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
     assert.equal(await page.evaluate(`document.activeElement.classList.contains('workspace-tabs-more')`),true,'Escape returns focus to the overflow trigger');
+    await click(page,'#workspace-bottom-collapse');
+    assert.equal(await page.evaluate(`document.querySelector('.inspector').dataset.collapsed`),'true','overflow regression collapses the inspector body');
+    await selectTab(page,'sound-panel');
+    assert.equal(await page.evaluate(`document.querySelector('[data-block-target="sound-panel"]').getAttribute('aria-selected')`),'true','native overflow selects Sound with collapsed inspector');
+    await click(page,'#workspace-bottom-collapse');
     await selectTab(page,'report-panel');
     const pickedFromMore:any=await page.evaluate<any>(`(()=>{
      const row=[...document.querySelectorAll('.workspace-bottom-tabs>.block-row')].find(n=>!n.hidden);
@@ -398,7 +403,7 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
 }
 
 /** Record --plan, interview backdrops and standalone package/--question reuse the shipped shell. */
-async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'interview-standalone'|'standalone'|'standalone-many',lang:'en'|'ko'){
+async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview-parts'|'interview-standalone'|'standalone'|'standalone-many',lang:'en'|'ko'){
  const profile=await mkdtemp(join(tmpdir(),'review838-shared-'));
  let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
@@ -412,14 +417,24 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
    const f=await interviewOpenFixture(2),capability='a'.repeat(64),server=await startServer(null,{port:0,capability,joined:joinProject(null,f.inputs.project),stateDir:f.stateDir});
    close=async()=>{server.stop(true);await f.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
   }else{
-   const f=await recordScreenFixture(kind==='plan'?'signoff':'interview-picks',kind==='interview-rig'?true:kind==='interview-parts'?'parts':false);
+   const f=await recordScreenFixture(kind==='checkpoint'?'checkpoint':kind==='plan'?'signoff':'interview-picks',kind==='interview-rig'?true:kind==='interview-parts'?'parts':false);
    close=()=>f.close();url=f.ownerUrl;
   }
   const target=new URL(url);target.searchParams.set('lang',lang);
   page=await launchCdpSession(profile,{sendDeadlineMs:20_000});
-  for(const [width,height]of (Bun.argv.includes('--standalone-widths')?[[240,900],[320,900],[540,720],[700,720],[900,720],[1100,800],[1280,720],[1440,900]]:[[1440,900],[1280,720],[1100,800]])){
+  for(const [width,height]of (Bun.argv.includes('--finish-residues')?[[1440,900],[1280,720]]:Bun.argv.includes('--standalone-widths')?[[240,900],[320,900],[540,720],[700,720],[900,720],[1100,800],[1280,720],[1440,900]]:[[1440,900],[1280,720],[1100,800]])){
    await page.setViewport(width,height);await page.goto(target.href,lang);
    await wait(page,kind.startsWith('standalone')?`!!document.querySelector('#rig-root canvas')`:`document.body.dataset.ready==='true'&&!document.body.inert`,kind+' ready');
+   if(Bun.argv.includes('--finish-residues')&&(kind==='checkpoint'||kind==='plan')){
+    if(!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page,'#workspace-pending-ask');
+    await wait(page,`!!document.querySelector('#job-record-asks[open]')`,'record dialog');
+    const cap:any=await page.evaluate(`document.querySelector('#job-record-asks').getBoundingClientRect().toJSON()`);
+    assert.ok(cap.width<=760&&cap.width>0,'record dialog respects readable760px cap');
+    assert.ok(Math.abs((cap.left+cap.right)/2-width/2)<=1&&Math.abs((cap.top+cap.bottom)/2-height/2)<=1,'record dialog is centered');
+    assert.ok(cap.left>=0&&cap.top>=0&&cap.right<=width&&cap.bottom<=height,'record dialog stays in viewport');
+    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-cap.json`),JSON.stringify(cap,null,2)+'\n');
+    await click(page,'#job-record-asks .workspace-drawer-close');
+   }
    if(kind.startsWith('interview')){
     await wait(page,`!!document.querySelector('#job-record-asks .interview-grid fieldset:not(:disabled)')`,kind+' form');
     if(!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page,'#workspace-pending-ask');
@@ -433,8 +448,9 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
     assert.equal(await page.evaluate(`document.activeElement.id`),'workspace-pending-ask');
    }
    if(kind==='standalone-many'){
-    const list:any=await page.evaluate<any>(`(()=>{const list=document.querySelector('[data-part-list]'),help=list.nextElementSibling;list.scrollTop=list.scrollHeight;return {count:list.children.length,overflow:getComputedStyle(list).overflowY,border:getComputedStyle(list).borderBottomWidth,rect:list.getBoundingClientRect().toJSON(),last:list.lastElementChild.getBoundingClientRect().toJSON(),help:help.getBoundingClientRect().toJSON(),client:list.clientHeight,scroll:list.scrollHeight};})()`);
-    assert.equal(list.count,20);assert.equal(list.overflow,'auto');assert.ok(list.scroll>list.client&&parseFloat(list.border)>0);
+    const list:any=await page.evaluate<any>(`(()=>{const list=document.querySelector('[data-part-list]'),help=list.nextElementSibling,whole=document.querySelector('[data-part-whole]');list.scrollTop=list.scrollHeight;return {whole:whole.getBoundingClientRect().toJSON(),row:list.firstElementChild.getBoundingClientRect().toJSON(),button:list.firstElementChild.querySelector('button').getBoundingClientRect().toJSON(),count:list.children.length,overflow:getComputedStyle(list).overflowY,border:getComputedStyle(list).borderBottomWidth,rect:list.getBoundingClientRect().toJSON(),last:list.lastElementChild.getBoundingClientRect().toJSON(),help:help.getBoundingClientRect().toJSON(),client:list.clientHeight,scroll:list.scrollHeight};})()`);
+    assert.equal(list.count,20);assert.equal(list.overflow,'auto');assert.ok(list.scroll>list.client&&parseFloat(list.border)>=2,'scroll viewport has a strong bottom edge');
+    assert.ok(Math.abs(list.row.right-list.whole.right)<=1&&Math.abs(list.button.right-list.whole.right)<=1,'part row and Whole rig right edges agree within1px');
     assert.ok(list.last.top>=list.rect.top&&list.last.bottom<=list.rect.bottom,'last synthetic part is entirely reachable');
     assert.ok(list.rect.bottom<list.help.top,'list has a clear end before the help paragraph');
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-list.json`),JSON.stringify(list,null,2)+'\n');
@@ -484,6 +500,7 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
 }
 
 for(const lang of ['en','ko'] as const){
+ if(Bun.argv.includes('--finish-residues')){for(const kind of ['checkpoint','plan','standalone-many'] as const)await runSharedCase(kind,lang);continue;}
  if(Bun.argv.includes('--standalone-widths')){await runSharedCase('standalone',lang);continue;}
  for(const kind of ['rig','direction','parts'] as const){
   await runCase(kind,lang);

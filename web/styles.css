@@ -80,7 +80,7 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 #stage-layout:has(>.stage-pane[hidden]){grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 
 /* Slot explorer shares the stage row; bottom Inspector remains in the main column. */
-.layout{grid-template-columns:260px minmax(0,1fr)!important}.parts-explorer{display:flex;flex-direction:column;grid-template-columns:none;gap:normal;min-width:0;min-height:0;overflow:hidden;border-left:1px solid var(--border);background:var(--rv-panel);padding:12px;overscroll-behavior:contain}.parts-tools{flex:none;display:flex;flex-direction:column;gap:6px;padding-bottom:8px;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2;background:var(--rv-panel)}.parts-explorer h2{font-size:12px;margin:0}.parts-tools>label,.parts-explorer>label{display:block;font-size:11px;margin:0}.parts-explorer input[type=search]{width:100%;min-width:0}.parts-explorer .part-solo{display:flex;gap:6px;align-items:center;margin:0}.parts-tools [data-part-status]{margin:0}.parts-explorer ul{border-block:1px solid var(--border);scrollbar-gutter:stable;flex:1 1 0%;min-height:0;overflow-y:auto;overscroll-behavior:contain;list-style:none;margin:8px 0;padding:4px 0;display:flex;flex-direction:column;gap:4px}.parts-explorer>.hint{flex:none;margin:0}.parts-explorer li{flex:none;min-width:0}.parts-explorer li button{display:flex;align-items:center;gap:6px;width:100%;height:36px;min-height:36px;max-height:36px;padding:5px 8px;box-sizing:border-box;text-align:left;white-space:nowrap;overflow:hidden;font-size:11px}
+.layout{grid-template-columns:260px minmax(0,1fr)!important}.parts-explorer{display:flex;flex-direction:column;grid-template-columns:none;gap:normal;min-width:0;min-height:0;overflow:hidden;border-left:1px solid var(--border);background:var(--rv-panel);padding:12px;overscroll-behavior:contain}.parts-tools{overflow-y:auto;scrollbar-gutter:stable;flex:none;display:flex;flex-direction:column;gap:6px;padding-bottom:8px;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2;background:var(--rv-panel)}.parts-explorer h2{font-size:12px;margin:0}.parts-tools>label,.parts-explorer>label{display:block;font-size:11px;margin:0}.parts-explorer input[type=search]{width:100%;min-width:0}.parts-explorer .part-solo{display:flex;gap:6px;align-items:center;margin:0}.parts-tools [data-part-status]{margin:0}.parts-explorer ul{border-block:1px solid var(--border);border-bottom:2px solid var(--border-strong);scrollbar-gutter:stable;flex:1 1 0%;min-height:0;overflow-y:auto;overscroll-behavior:contain;list-style:none;margin:8px 0;padding:4px 0;display:flex;flex-direction:column;gap:4px}.parts-explorer>.hint{flex:none;margin:0}.parts-explorer li{flex:none;min-width:0}.parts-explorer li button{display:flex;align-items:center;gap:6px;width:100%;height:36px;min-height:36px;max-height:36px;padding:5px 8px;box-sizing:border-box;text-align:left;white-space:nowrap;overflow:hidden;font-size:11px}
 /* A slot's thumbnail: its declared page region in a 24px box, or the type icon when it has none. */
 .part-thumb{flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;overflow:hidden;border-radius:3px}
 .part-thumb canvas{display:block;width:24px;height:24px}
@@ -119,7 +119,7 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 .workspace-drawer{position:fixed;inset:0;width:min(94vw,950px);height:min(92dvh,850px);max-width:94vw;max-height:92dvh;margin:auto;padding:8px;border:1px solid var(--border-strong);border-radius:8px;background:var(--rv-panel);color:inherit;overflow:hidden;z-index:20}
 .workspace-drawer:not([open]){display:none}.workspace-drawer[open]{display:flex;flex-direction:column;gap:8px}
 .workspace-drawer::backdrop{background:var(--rv-backdrop)}
-#job-record-asks:not(.interview-modal){height:fit-content;max-height:92dvh;gap:4px}
+#job-record-asks:not(.interview-modal){width:min(94vw,760px);height:fit-content;max-height:92dvh;gap:4px}
 #job-record-asks:not(.interview-modal) fieldset{min-width:0;margin:0;padding:0 4px 4px;border:0}
 #job-record-asks:not(.interview-modal) fieldset>:first-child{margin-top:0}
 #job-record-asks:not(.interview-modal) fieldset>button+button{margin-left:8px}
@@ -483,6 +483,8 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 #inspector-feedback.workspace-review-panel{flex:1 1 0;min-height:0;overflow-y:auto;scrollbar-gutter:stable;padding:12px 15px;gap:12px 20px}
 .workspace-review-panel .eyebrow,#comments-list-host h3{margin-top:0;line-height:1.5}
 .workspace-review-panel>*{min-width:0}
+.workspace-review-panel>.report-panel{border-top:0}
+.workspace-review-panel #stage-comment-list>strong:first-child{display:none}
 .workspace-review-panel .frame-range{grid-template-columns:repeat(2,minmax(0,1fr))}
 .workspace-review-panel .frame-range input{min-width:0;width:100%}
 /* Shared act styling follows the live ask row and the retained standalone heading. */
@@ -507,9 +509,9 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-tabs-menu button:hover,.workspace-tabs-menu button:focus-visible{background:var(--rv-control-hover);color:var(--fg-strong)}
 .inspector-body>[data-comments=true]{display:none!important}
 :is(.inspector-heading,.workspace-act-row) .workspace-act-bar{flex:none;flex-wrap:nowrap;gap:6px}
-.inspector-heading>.workspace-act-bar .review-dialog-actions{flex:1 1 auto;flex-wrap:wrap;min-width:0;max-width:100%}
+.inspector-heading>.workspace-act-bar .review-dialog-actions{flex:1 1 0;flex-wrap:wrap;min-width:0;max-width:100%}
 .inspector-heading>.workspace-act-bar>*{min-width:0;max-width:100%}
-.inspector-heading>.workspace-act-bar .review-dialog-actions>*{min-width:0;max-width:100%}
+.inspector-heading>.workspace-act-bar .review-dialog-actions>:not(.review-message){min-width:0;max-width:100%}
 @media(max-width:1000px){
  .inspector-heading>.workspace-act-bar .review-dialog-actions{flex-basis:100%;gap:8px}
  .inspector-heading>.workspace-act-bar .review-dialog-actions>.review-message{flex:1 0 100%;max-width:100%}

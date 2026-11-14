@@ -79,8 +79,12 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
    if(typeof (doc as Document).createElement==='function'&&tabs.length){
     const placeOverflow=(menu:HTMLElement)=>{
      if(typeof row.getBoundingClientRect!=='function')return;
-     const rect=row.getBoundingClientRect(),clip=row.closest('.inspector')?.getBoundingClientRect(),main=section.closest('main')?.getBoundingClientRect(),above=Math.max(0,rect.top-Math.max(clip?.top??0,main?.top??0)-8),below=Math.max(0,Math.min(innerHeight,clip?.bottom??innerHeight,main?.bottom??innerHeight)-rect.bottom-8);
-     const up=below<Math.min(menu.scrollHeight,220)&&above>below;menu.dataset.side=up?'above':'below';menu.style.maxHeight=Math.min(220,up?above:below)+'px';
+     const rect=row.getBoundingClientRect(),inspector=row.closest('.inspector'),main=section.closest('main')?.getBoundingClientRect(),bounds=inspector?.getBoundingClientRect();
+     // A collapsed inspector retains its heading, not a clipping body.
+     const clip=inspector?.getAttribute('data-collapsed')==='true'||!bounds?.height?main:bounds,above=Math.max(0,rect.top-Math.max(clip?.top??0,main?.top??0)-8),below=Math.max(0,Math.min(innerHeight,clip?.bottom??innerHeight,main?.bottom??innerHeight)-rect.bottom-8);
+     const up=below<Math.min(menu.scrollHeight,220)&&above>below,height=Math.min(220,up?above:below);menu.dataset.side=up?'above':'below';menu.style.maxHeight=height+'px';
+     // Keep the popup in viewport coordinates when native focus scrolls its items.
+     menu.style.position='fixed';menu.style.right=Math.max(0,innerWidth-rect.right)+'px';menu.style.top=(up?rect.top-4-Math.min(menu.scrollHeight,height):rect.bottom+4)+'px';menu.style.bottom='auto';
     };
     const items:HTMLButtonElement[]=[],more=bindPopupMenu('workspace-tabs-more-'+name,()=>{syncOverflow();return items.filter(item=>!item.hidden);},cleanups,placeOverflow);
     more.button.className='workspace-tabs-more';more.button.hidden=true;more.menu.className='workspace-tabs-menu';
