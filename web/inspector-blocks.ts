@@ -159,7 +159,15 @@ export function mountRigInspector(root:Document=document,actHome?:HTMLElement):B
  for(const button of root.querySelectorAll<HTMLButtonElement>('[data-mode][data-inspector]')){button.id||='mode-'+button.dataset.mode;const panel=root.getElementById('inspector-'+button.dataset.mode)!;panel.setAttribute('role','region');panel.setAttribute('aria-labelledby',button.id);}
  bottom.row={tabs:[...root.querySelectorAll<HTMLButtonElement>('[data-mode][data-inspector]')].map(button=>({id:button.dataset.mode!,button,attribute:'aria-pressed',panels:[root.getElementById('inspector-'+button.dataset.mode)!]})),panels:[root.getElementById('inspector-rig')!,root.getElementById('inspector-playback')!],initialize:true};
  bottom.actHome.append(act);
- const syncActRow=()=>{if(actHome){actHome.hidden=act.hidden;root.getElementById('dirty')!.hidden=!act.hidden;}};
+ const syncActRow=()=>{
+  if(!actHome)return;
+  const headline=root.getElementById('workspace-ask-headline'),error=root.getElementById('review-message');
+  const question=!!headline&&!headline.hidden&&!!headline.textContent?.trim();
+  const refusal=!!error&&!error.hidden&&error.classList.contains('error')&&!!error.textContent?.trim()&&['save','request-changes','workspace-pending-ask'].every(id=>root.getElementById(id)?.hidden!==false);
+  // Loading may render answers before the question; an early read refusal can
+  // still use this row once its caller has hidden every answer control.
+  actHome.hidden=act.hidden||(!question&&!refusal);root.getElementById('dirty')!.hidden=!actHome.hidden;
+ };
  return {...bottom,actBar,answersRendered:false,syncActRow,comments:{button:comment,panel:feedback}};
 }
 

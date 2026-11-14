@@ -483,7 +483,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-tabs-menu button:hover,.workspace-tabs-menu button:focus-visible{background:var(--rv-control-hover);color:var(--fg-strong)}
 .inspector-body>[data-comments=true]{display:none!important}
 :is(.inspector-heading,.workspace-act-row) .workspace-act-bar{flex:none;flex-wrap:nowrap;gap:6px}
-:is(.inspector-heading,.workspace-act-row) .workspace-act-bar .review-draft-state{max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inspector-heading .workspace-act-bar .review-draft-state{max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .workspace-act-ask{white-space:normal;overflow-wrap:anywhere}
 #comments-list-host .stage-comment-list-inline{position:static;width:auto;max-width:none;max-height:none;border:0;padding:0}
 
@@ -541,14 +541,14 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 /* The live ask owns one shell row, including when the embedded header is hidden. */
 #app:has(>.workspace-act-row){grid-template-rows:auto auto minmax(0,1fr) auto}
 #app:has(>.workspace-act-row)>.topbar{grid-row:1}
-.workspace-act-row{grid-row:2;min-width:0;padding:10px 22px;border-bottom:1px solid var(--border);background:var(--rv-bar)}
+.workspace-act-row{grid-row:2;min-width:0;padding:10px 22px;border-bottom:1px solid var(--border);background:var(--active-bg)}
 #app:has(>.workspace-act-row)>.layout{grid-row:3}
 #app:has(>.workspace-act-row)>.status-bar{grid-row:4}
 .workspace-act-row .workspace-act-bar{margin:0;width:100%;flex-wrap:nowrap;gap:12px}
-.workspace-act-row #workspace-ask-headline{flex:1 1 0;min-width:0;font-weight:500;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.workspace-act-row #workspace-ask-headline{flex:1 1 0;min-width:0;font-size:16px;font-weight:700;color:var(--fg-strong);white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row #workspace-pending-ask{order:2;flex:none}
 .workspace-act-row .review-dialog-actions{min-width:0;gap:8px;justify-content:flex-end}
 .workspace-act-row .review-message:not(.error){display:none}
 .workspace-act-row .review-message.error{max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
-.workspace-act-row .review-draft-state{max-width:none;white-space:normal;overflow:visible;text-overflow:clip}
+.workspace-act-row .review-draft-state{min-width:0;max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]){flex-wrap:wrap}

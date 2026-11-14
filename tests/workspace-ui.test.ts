@@ -22,7 +22,7 @@ test('compressed sidebar handles advertise reachable sizes and invert allocator 
 class Host extends EventTarget {
  id='';tagName:string;parentElement:Host|null=null;children:Host[]=[];dataset:Record<string,string>={};attrs=new Map<string,string>();hidden=false;tabIndex=-1;value='';checked=false;open=false;textContent='';scrollLeft=0;scrollTop=0;scrollWidth=1200;scrollHeight=1400;clientWidth=1200;clientHeight=800;captured=new Set<number>();
  style={touchAction:'',gridTemplateRows:'',values:new Map<string,string>(),setProperty(name:string,value:string){this.values.set(name,value);}};
- classes=new Set<string>();classList={add:(name:string)=>this.classes.add(name)};
+ classes=new Set<string>();classList={add:(name:string)=>this.classes.add(name),contains:(name:string)=>this.classes.has(name)};
  constructor(tag='div'){super();this.tagName=tag.toUpperCase();}
  get className(){return [...this.classes].join(' ');}set className(value:string){this.classes=new Set(value.split(' '));}
  get childNodes(){return this.children;}
@@ -422,6 +422,20 @@ for(const live of [false,true])test('#840 '+(live?'live row':'standalone heading
  try{
   const mounted=mountRigInspector(document as unknown as Document,live?actRow as unknown as HTMLElement:undefined),row=mounted.row,owners=row.tabs.map(tab=>tab.button.id);
   expect(mounted.act.parentElement).toBe(live?actRow as unknown as HTMLElement:mounted.strip.parentElement);
+  if(live){
+   const save=document.getElementById('save')!,refusal=document.getElementById('review-message')!;save.hidden=false;
+   mounted.act.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(true);expect(dirtyState.hidden).toBe(false);
+   const headline=new Host('span');headline.id='workspace-ask-headline';mounted.act.prepend(headline as unknown as HTMLElement);
+   for(const text of ['', '   ']){headline.textContent=text;mounted.syncActRow();expect(actRow.hidden).toBe(true);}
+   headline.textContent='Check the rig and motion.';headline.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(true);
+   // A read refusal remains readable before a question exists, but cannot be
+   // used to expose the answer that was rendered early during loading.
+   refusal.textContent='JOB_VISUAL_UNAVAILABLE';refusal.className='review-message error';refusal.hidden=false;
+   mounted.syncActRow();expect(actRow.hidden).toBe(true);
+   save.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(false);expect(dirtyState.hidden).toBe(true);expect(save.hidden).toBe(true);
+   refusal.className='review-message';mounted.syncActRow();expect(actRow.hidden).toBe(true);
+   headline.hidden=false;save.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);expect(save.hidden).toBe(false);
+  }
   mounted.act.hidden=false;mounted.syncActRow();expect(dirtyState.hidden).toBe(live);expect(draftState.hidden).toBe(live);expect(draftRecovery.hidden).toBe(live);
   mounted.actBar.setSaveState({kind:'saved',text:'Answer saved'});expect((live?dirtyState:draftState).textContent).toBe('Answer saved');
   if(live){expect([...mounted.strip.parentElement!.children]).toEqual([mounted.strip,mounted.collapse]);mounted.act.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(true);expect(dirtyState.hidden).toBe(false);mounted.act.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);}

@@ -16,8 +16,12 @@ import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
 const at=Bun.argv.indexOf('--out'),output=resolve(at<0?'artifacts/act-row-840':Bun.argv[at+1]!);
+// RED collection mode samples the same 32 initial loads, then fails once after
+// writing every case. The default still exercises the full interaction matrix.
+const flashOnly=Bun.argv.includes('--flash-only');
 await mkdir(output,{recursive:true});
 const observations:unknown[]=[];
+const flashFailures:unknown[]=[],caseFailures:unknown[]=[];
 const modes=['rig','direction','parts','signoff','checkpoint','interview','embedded-rig','standalone'] as const;
 type Mode=typeof modes[number];
 const diagnostic=`(()=>{
@@ -25,6 +29,7 @@ const diagnostic=`(()=>{
  return {path:location.pathname,query:location.search,readyState:document.readyState,ready:document.body?.dataset.ready,inert:document.body?.inert,
   embeddedFixture:window.__embeddedActRowFixture??null,probe:window.__earlyActReadProbe??null,readRefused:window.__earlyActReadRefused??false,refusal:window.__earlyActRowRefusal??null,
   loadingSamples:(window.__actRowSamples??[]).slice(-10),
+  firstOffendingFrames:window.__actRowFirstOffendingFrames??[],
   nodes:['workspace-act-row','workspace-review-act','review-message','message','dirty','save','request-changes','workspace-pending-ask'].map(id=>{
    const n=document.getElementById(id);return {id,present:!!n,hidden:n?.hidden,visible:visible(n),text:n?.textContent,classes:n?.className};})};
 })()`;
@@ -35,33 +40,58 @@ async function wait(page:InputCdpSession,expression:string){
  throw new Error('ACT_ROW_WAIT '+expression+' '+JSON.stringify(state));
 }
 const sampler=`(()=>{
- const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden],dialog:not([open])')&&getComputedStyle(n).visibility!=='hidden';
- const samples=[];window.__actRowSamples=samples;
- const sample=()=>{const bar=document.getElementById('workspace-review-act');if(!bar||samples.length>=2000)return;
-  const save=document.getElementById('save'),row=document.getElementById('workspace-act-row');
-  samples.push({row:visible(row),bar:visible(bar),ready:document.body.dataset.ready==='true',legacySave:visible(save)&&/^(Submit review|리뷰 제출)$/.test(save.textContent.trim()),status:visible(document.getElementById('review-status')),label:visible(document.querySelector('label[for="review-status"]'))});
+ const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden],dialog:not([open])')&&getComputedStyle(n).visibility==='visible';
+ const samples=[],offenders=[];window.__actRowSamples=samples;window.__actRowFirstOffendingFrames=offenders;
+ let previous='',frame=0,sequence=0;
+ const sample=trigger=>{const bar=document.getElementById('workspace-review-act');if(!bar)return;
+  const save=document.getElementById('save'),row=document.getElementById('workspace-act-row'),headline=document.getElementById('workspace-ask-headline');
+  const controls=[...document.querySelectorAll('#save,#request-changes,#workspace-pending-ask')].filter(visible).map(n=>({id:n.id,text:n.textContent.trim(),disabled:n.disabled,rect:n.getBoundingClientRect().toJSON()}));
+  const state={row:visible(row),bar:visible(bar),ready:document.body?.dataset.ready==='true',headlinePresent:!!headline,headlineVisible:visible(headline),headline:headline?.textContent.trim()??'',controls,
+   legacySave:visible(save)&&/^(Submit review|리뷰 제출)$/.test(save.textContent.trim()),status:visible(document.getElementById('review-status')),label:visible(document.querySelector('label[for="review-status"]'))};
+  const signature=JSON.stringify(state);if(signature===previous&&trigger!=='animation-frame')return;previous=signature;
+  const reading={sequence:sequence++,frame,ms:performance.now(),trigger,...state,controlsBeforeQuestion:controls.length>0&&(!state.headlineVisible||!state.headline)};
+  if(samples.length<2000)samples.push(reading);
+  if(reading.controlsBeforeQuestion&&offenders.length<20)offenders.push(reading);
  };
- new MutationObserver(sample).observe(document,{childList:true,subtree:true,attributes:true,attributeFilter:['hidden','class']});
- const frame=()=>{sample();requestAnimationFrame(frame);};requestAnimationFrame(frame);
+ window.__sampleActRow=sample;
+ // MutationObserver batches same-tick changes. Observe *after* the native DOM
+ // write too: a row reveal followed immediately by a headline fill must survive
+ // in the evidence, without delaying, suppressing or changing either operation.
+ for(const [prototype,key]of [[HTMLElement.prototype,'hidden'],[Node.prototype,'textContent'],[Element.prototype,'innerHTML']]){
+  const descriptor=Object.getOwnPropertyDescriptor(prototype,key);if(!descriptor?.set)throw Error('ACT_ROW_SAMPLER_SETTER '+key);
+  Object.defineProperty(prototype,key,{...descriptor,set(value){descriptor.set.call(this,value);sample('setter:'+key);}});
+ }
+ for(const [prototype,keys]of [[Element.prototype,['setAttribute','removeAttribute','toggleAttribute','append','prepend','replaceChildren']],[Node.prototype,['appendChild','insertBefore','replaceChild']],[DOMTokenList.prototype,['add','remove','toggle','replace']]])for(const key of keys){
+  const native=prototype[key];prototype[key]=function(...args){const result=native.apply(this,args);sample('mutation:'+key);return result;};
+ }
+ new MutationObserver(()=>sample('mutation-observer')).observe(document,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['hidden','class','style']});
+ const tick=()=>{frame++;sample('animation-frame');requestAnimationFrame(tick);};requestAnimationFrame(tick);
 })()`;
 const geometry=`(()=>{
  const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden],dialog:not([open])')&&getComputedStyle(n).visibility!=='hidden';
  const rect=n=>n?.getBoundingClientRect().toJSON()??null;
  const row=document.getElementById('workspace-act-row'),bar=document.getElementById('workspace-review-act'),header=document.querySelector('.topbar'),heading=document.querySelector('.inspector-heading');
  const answers=[...bar.querySelectorAll('#save,#request-changes,#workspace-pending-ask')].filter(visible);
+ const style=n=>{if(!n)return null;const s=getComputedStyle(n);return {rect:rect(n),text:n.textContent.trim(),size:parseFloat(s.fontSize),weight:Number(s.fontWeight),color:s.color,whiteSpace:s.whiteSpace,overflow:s.textOverflow,overflowX:s.overflowX,overflowY:s.overflowY,clientWidth:n.clientWidth,scrollWidth:n.scrollWidth,clientHeight:n.clientHeight,scrollHeight:n.scrollHeight};};
+ const colorProbe=document.createElement('canvas').getContext('2d');const color=value=>{colorProbe.fillStyle=value;return colorProbe.fillStyle;};
+ const rootStyle=getComputedStyle(document.documentElement);
  return {language:document.documentElement.lang,bars:document.querySelectorAll('#workspace-review-act').length,rows:document.querySelectorAll('#workspace-act-row').length,
   rowVisible:visible(row),headerVisible:visible(header),direct:row?.previousElementSibling===header&&header?.parentElement===row?.parentElement,home:bar.parentElement?.id,
   row:rect(row),bar:rect(bar),header:rect(header),heading:rect(heading),panel:rect(document.getElementById('workspace-inspector')),
   headingChildren:[...heading.children].map(n=>n.classList.contains('workspace-bottom-tabs')?'tabs':n.id),
   states:['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return visible(n)&&!!n.textContent.trim();}),
   answers:answers.map(n=>({id:n.id,rect:rect(n)})),primary:answers.filter(n=>n.classList.contains('primary')).map(n=>n.id),
-  headline:{rect:rect(document.getElementById('workspace-ask-headline')),whiteSpace:getComputedStyle(document.getElementById('workspace-ask-headline')).whiteSpace,overflow:getComputedStyle(document.getElementById('workspace-ask-headline')).textOverflow},
+  headline:style(document.getElementById('workspace-ask-headline')),
+  typography:{bodySize:parseFloat(rootStyle.fontSize),bodyWeight:Number(rootStyle.fontWeight),primaryColor:color(rootStyle.getPropertyValue('--fg-strong').trim()),headlineColor:color(getComputedStyle(document.getElementById('workspace-ask-headline')).color),
+   labels:[...document.querySelectorAll('.label,.eyebrow,.inspector-body label')].filter(n=>visible(n)&&n.textContent.trim()).map(style)},
+  band:row?{background:getComputedStyle(row).backgroundColor,clientWidth:row.clientWidth,scrollWidth:row.scrollWidth}:null,
+  draftStates:['review-draft-state','draft-state'].map(id=>document.getElementById(id)).filter(n=>visible(n)&&n.textContent.trim()).map(style),
   commentButtons:document.querySelectorAll('#stage-comment').length,
   gateHidden:document.querySelector('[data-animation-gate]')?.hidden,title:document.getElementById('rig-label')?.textContent};
 })()`;
 async function capture(page:InputCdpSession,out:string,name:string){
  await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
- const state=await page.evaluate<any>(geometry);
+ const state:any=await page.evaluate<any>(geometry);
  await writeFile(join(out,name+'.json'),JSON.stringify(state,null,2)+'\n');
  await writeFile(join(out,name+'.png'),await page.screenshot());return state;
 }
@@ -73,6 +103,17 @@ function assertPending(state:any,mode:Mode,width:number){
  assert.deepEqual(state.headingChildren,['tabs','workspace-bottom-collapse']);
  assert.equal(state.primary.length,1);assert.equal(state.commentButtons,1);
  assert.notEqual(state.headline.whiteSpace,'nowrap');assert.notEqual(state.headline.overflow,'ellipsis');
+ assert.ok(state.headline.text,'pending question is nonempty');
+ assert.ok(state.headline.size>Math.max(state.typography.bodySize,...state.typography.labels.map((label:any)=>label.size)),'headline is larger than body labels');
+ assert.ok(state.headline.weight>Math.max(state.typography.bodyWeight,...state.typography.labels.map((label:any)=>label.weight)),'headline is heavier than body labels');
+ assert.equal(state.typography.headlineColor,state.typography.primaryColor,'headline uses the primary text token --fg-strong');
+ assert.notEqual(state.band.background,'transparent');assert.doesNotMatch(state.band.background,/[\/,]\s*0(?:\.0+)?\s*\)$/,'question band has a nontransparent background');
+ assert.ok(state.band.scrollWidth<=state.band.clientWidth+1,'live question row has no horizontal overflow');
+ for(const saved of state.draftStates){
+  assert.notEqual(saved.overflow,'ellipsis','live row state is not ellipsized');assert.notEqual(saved.whiteSpace,'nowrap','live row state can wrap');
+  assert.ok(saved.scrollWidth<=saved.clientWidth+1&&saved.scrollHeight<=saved.clientHeight+1,'live row state text is fully visible');
+  assert.ok(saved.rect.left>=state.bar.left-1&&saved.rect.right<=state.bar.right+1&&saved.rect.top>=state.row.top-1&&saved.rect.bottom<=state.row.bottom+1,'live state stays inside the row');
+ }
  const right=Math.max(...state.answers.map((answer:any)=>answer.rect.right));
  assert.ok(Math.abs(state.bar.right-right)<=1,'answers end flush with the row content edge');
  assert.ok(state.answers.every((answer:any)=>answer.rect.left>=state.bar.left&&answer.rect.right<=state.bar.right+1),'all answers stay inside row');
@@ -80,6 +121,7 @@ function assertPending(state:any,mode:Mode,width:number){
 }
 for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900],[1100,800]] as const)for(const mode of modes){
  const out=join(output,mode,language,`${width}x${height}`);await mkdir(out,{recursive:true});
+ const observationIndex=observations.length;
  const profile=await mkdtemp(join(tmpdir(),'review840-'));
  let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
@@ -103,8 +145,13 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    if(event.sessionId)control=send;
    if(event.method!=='Fetch.requestPaused')return;
    const request=event.params as {requestId:string};
-   const state=await send('Runtime.evaluate',{expression:`!!document.querySelector('#workspace-review-act')&&document.body.dataset.ready!=='true'`,returnByValue:true}) as any;
-   if(state.result?.value&&held===0){held++;await Bun.sleep(800);await writeFile(join(out,'slowed-load.png'),await page!.screenshot());}
+   const state:any=await send('Runtime.evaluate',{expression:`!!document.querySelector('#workspace-review-act')&&document.body.dataset.ready!=='true'`,returnByValue:true});
+   if(state.result?.value&&held===0){
+    held++;await Bun.sleep(800);
+    const slowed:unknown=await page!.evaluate(`(()=>{window.__sampleActRow?.('held-asset-response');return {runtime:${diagnostic},firstOffendingFrames:window.__actRowFirstOffendingFrames??[]};})()`);
+    await writeFile(join(out,'slowed-load.json'),JSON.stringify({holdMs:800,state:slowed},null,2)+'\n');
+    await writeFile(join(out,'slowed-load.png'),await page!.screenshot());
+   }
    await send('Fetch.continueResponse',{requestId:request.requestId});
   }});
   await page.setViewport(width,height);assert.ok(control);
@@ -128,38 +175,52 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   // Interview auto-opens its existing dialog; inspect the row after the normal close action.
   await page.evaluate(`document.querySelector('dialog[open] .workspace-drawer-close')?.click()`);
   if(mode==='embedded-rig'){
-   const embedding=await page.evaluate<{requestSearch:string;renderSearch:string;publicEmbeddedRoute:boolean}>(`window.__embeddedActRowFixture`);
+   const embedding:{requestSearch:string;renderSearch:string;publicEmbeddedRoute:boolean}=await page.evaluate(`window.__embeddedActRowFixture`);
    assert.equal(embedding.requestSearch,'?lang='+language);
    assert.equal(new URLSearchParams(embedding.renderSearch).get('stageEmbed'),'1');
    assert.equal(embedding.publicEmbeddedRoute,false);
    await writeFile(join(out,'embedded-presentation-fixture.json'),JSON.stringify(embedding,null,2)+'\n');
   }
-  const initial=await capture(page,out,'pending');assert.equal(initial.language,language);
-  const loading=await page.evaluate<any[]>(`window.__actRowSamples`);
-  await writeFile(join(out,'loading.json'),JSON.stringify({held,samples:loading},null,2)+'\n');
+  const initial:any=await capture(page,out,'pending');assert.equal(initial.language,language);
+  const loading:any[]=await page.evaluate(`window.__actRowSamples`);
+  const firstOffendingFrames:unknown[]=await page.evaluate(`window.__actRowFirstOffendingFrames`);
+  const violations=mode==='standalone'?[]:loading.filter(sample=>sample.controlsBeforeQuestion||sample.legacySave||sample.status||sample.label||sample.bar&&!sample.row);
+  const flash={mode,language,width,height,held,standaloneExempt:mode==='standalone',samples:loading.length,violations:violations.length,firstOffendingFrames};
+  if(violations.length)flashFailures.push(flash);
+  await writeFile(join(out,'loading.json'),JSON.stringify({held,samples:loading,firstOffendingFrames},null,2)+'\n');
+  await writeFile(join(out,'flash.json'),JSON.stringify({...flash,violations},null,2)+'\n');
+  console.log('ACT_ROW_FLASH_CASE '+JSON.stringify({...flash,firstOffendingFrames:firstOffendingFrames.slice(0,1)}));
+  // Persist the actual first offending mutation/frame before any style assertion
+  // can stop the default matrix. Flash-only never reaches those later assertions.
+  observations.push({mode,language,width,height,initial,flash});
+  assert.ok(loading.length>0,'sampler observed this screen');
+  if(flashOnly){
+   if(['rig','direction','parts','embedded-rig'].includes(mode))assert.ok(held>0,'asset response held while live workspace was loading');
+   continue;
+  }
   if(mode==='standalone'){
    assert.equal(initial.rows,0);assert.equal(initial.rowVisible,false);
    assert.equal(await page.evaluate(`!!document.querySelector('.inspector-heading>#workspace-review-act')`),true,'standalone keeps existing home');
-   assert.equal(await page.evaluate(`document.getElementById('save').hidden`),false);observations.push({mode,language,width,height,initial});continue;
+   assert.equal(await page.evaluate(`document.getElementById('save').hidden`),false);continue;
   }
+  assert.deepEqual(violations,[],'zero visible live answer controls before a visible nonempty question; no legacy/out-of-row flash');
   assertPending(initial,mode,width);
-  assert.ok(loading.length>0);assert.deepEqual(loading.filter(sample=>sample.legacySave||sample.status||sample.label),[],'no legacy act flash, including slowed load');
   if(['rig','direction','parts','embedded-rig'].includes(mode))assert.ok(held>0,'asset response held while live workspace was loading');
   assert.ok(!loading.some(sample=>sample.bar&&!sample.row),'a live act is only visible inside its row');
   // Test-only DOM mutation: announce and hash the exact node before changing it;
   // restore in finally and verify its hash before any subsequent measurement.
-  const headlineBefore=await page.evaluate<{text:string;html:string}>(`(()=>{const n=document.getElementById('workspace-ask-headline');return {text:n.textContent,html:n.outerHTML};})()`);
+  const headlineBefore:{text:string;html:string}=await page.evaluate(`(()=>{const n=document.getElementById('workspace-ask-headline');return {text:n.textContent,html:n.outerHTML};})()`);
   const beforeHash=createHash('sha256').update(headlineBefore.html).digest('hex');
   const mutation={mode,language,width,height,selector:'#workspace-ask-headline',scope:'test-only DOM',beforeHash};
   console.log('ACT_ROW_DOM_MUTATION_BEGIN '+JSON.stringify(mutation));
   await writeFile(join(out,'headline-mutation-begin.json'),JSON.stringify(mutation,null,2)+'\n');
   try{
    await page.evaluate(`document.getElementById('workspace-ask-headline').textContent=${JSON.stringify((headlineBefore.text+' ').repeat(16))}`);
-   const wrapped=await capture(page,out,'long-question');assertPending(wrapped,mode,width);assert.ok(wrapped.headline.rect.height>initial.headline.rect.height);
+   const wrapped:any=await capture(page,out,'long-question');assertPending(wrapped,mode,width);assert.ok(wrapped.headline.rect.height>initial.headline.rect.height);
    assert.equal(await page.evaluate(`document.getElementById('workspace-ask-headline').scrollWidth<=document.getElementById('workspace-ask-headline').clientWidth+1`),true);
   }finally{
    await page.evaluate(`document.getElementById('workspace-ask-headline').textContent=${JSON.stringify(headlineBefore.text)}`);
-   const restoredHtml=await page.evaluate<string>(`document.getElementById('workspace-ask-headline').outerHTML`);
+   const restoredHtml:string=await page.evaluate(`document.getElementById('workspace-ask-headline').outerHTML`);
    const restoredHash=createHash('sha256').update(restoredHtml).digest('hex');
    const restored={...mutation,restoredHash,restored:restoredHash===beforeHash};
    console.log('ACT_ROW_DOM_MUTATION_RESTORED '+JSON.stringify(restored));
@@ -168,7 +229,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   }
   await click(page,'#workspace-bottom-collapse');
   await wait(page,`document.querySelector('.inspector-body').hidden`);
-  const collapsed=await capture(page,out,'collapsed');assertPending(collapsed,mode,width);
+  const collapsed:any=await capture(page,out,'collapsed');assertPending(collapsed,mode,width);
   assert.ok(Math.abs(collapsed.panel.height-collapsed.heading.height)<=2,'collapsed panel is only its heading');
   assert.ok(collapsed.panel.height<initial.panel.height,'collapse actually shrinks the panel');
   await click(page,'#workspace-bottom-collapse');await wait(page,`!document.querySelector('.inspector-body').hidden`);
@@ -176,7 +237,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(await page.evaluate(`document.getElementById('request-changes').disabled`),true,'changes needs a comment');
    if(mode==='rig'){
     await click(page,'#zoom-in');await wait(page,`Object.keys(localStorage).some(key=>key.startsWith('rig-review-draft/1:'))`);
-    const key=await page.evaluate<string>(`Object.keys(localStorage).find(key=>key.startsWith('rig-review-draft/1:'))`);
+    const key:string=await page.evaluate(`Object.keys(localStorage).find(key=>key.startsWith('rig-review-draft/1:'))`);
     for(const action of ['download','discard']){
      // Leave first so departure persistence cannot overwrite the planted corrupt bytes.
      await page.goto(new URL('/favicon.ico',url).href);
@@ -184,7 +245,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
      await wait(page,`document.body.dataset.ready==='true'&&!document.body.inert&&document.querySelector('#review-draft-recovery button')`);
      const blocked:{submit:boolean;changes:boolean;noticeInRow:boolean;noticeVisible:boolean;kind:string}=await page.evaluate<any>(`({submit:document.getElementById('save').disabled,changes:document.getElementById('request-changes').disabled,noticeInRow:!!document.querySelector('#workspace-act-row #review-draft-recovery'),noticeVisible:!!document.getElementById('review-draft-recovery').getClientRects().length,kind:document.getElementById('review-draft-state').dataset.saveState})`);
      assert.deepEqual(blocked,{submit:true,changes:true,noticeInRow:true,noticeVisible:true,kind:'failed'});
-     const recovery=await capture(page,out,'restore-'+action+'-blocked');assertPending(recovery,mode,width);
+     const recovery:any=await capture(page,out,'restore-'+action+'-blocked');assertPending(recovery,mode,width);
      await click(page,'#review-draft-recovery button:'+(action==='download'?'first-child':'last-child'));
      await wait(page,`!document.getElementById('save').disabled&&!document.querySelector('#review-draft-recovery button')`);
      await capture(page,out,'restore-'+action+'-unlocked');
@@ -192,7 +253,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    }
    await click(page,'#save');
    await wait(page,`document.getElementById('workspace-act-row').hidden&&!document.getElementById('dirty').hidden`);
-   const submitted=await capture(page,out,'submitted');assert.equal(submitted.rowVisible,false);
+   const submitted:any=await capture(page,out,'submitted');assert.equal(submitted.rowVisible,false);
    if(mode!=='embedded-rig')assert.deepEqual(submitted.states,['dirty']);
    const catalog=language==='en'?enCatalog:koCatalog;
    assert.equal(await page.evaluate(`document.getElementById('dirty').textContent`),catalog['job.review.approved']);
@@ -204,7 +265,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    await capture(page,out,'answer-dialog');
    await click(page,mode==='checkpoint'?'#job-record-asks button[data-job-text="Pass"]':'#job-record-asks button[type=submit]');
    await wait(page,`!document.querySelector('#job-record-asks[open]')&&document.getElementById('review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`);
-   const saved=await capture(page,out,'answer-saved');assert.equal(saved.states.length,1);
+   const saved:any=await capture(page,out,'answer-saved');assertPending(saved,mode,width);assert.equal(saved.states.length,1);
   }
   if(mode==='rig'){
    // Fail the first hosted metadata clone before any answer renderer. Restore the
@@ -237,28 +298,34 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    // screen can be only a hash navigation, which does not run new-document scripts.
    // Leave the document first, just as the corrupt-draft checks above do.
    await page.goto('about:blank');
-   const blankToken=await page.evaluate<string|null>(`window.__earlyActReadProbe?.documentToken??null`);
+   const blankToken:string|null=await page.evaluate(`window.__earlyActReadProbe?.documentToken??null`);
    await page.goto(url,language);
    // The normal host rolls the failed candidate back. Observe the real message()
    // reveal at its mutation boundary, before that rollback; do not suppress it.
    await wait(page,`!!window.__earlyActRowRefusal`);
-   const probe=await page.evaluate<any>(`window.__earlyActReadProbe`);
+   const probe:any=await page.evaluate(`window.__earlyActReadProbe`);
    assert.equal(typeof probe.documentToken,'string');assert.notEqual(probe.documentToken,blankToken,'early refusal runs in a fresh document');
    assert.equal(probe.installed,true);assert.equal(probe.triggered,1);
    assert.deepEqual(probe.trigger,{rowPresent:true,rowHidden:true,hasManifest:true,hasSourceHash:true});
    await writeFile(join(out,'early-refusal-probe.json'),JSON.stringify(probe,null,2)+'\n');
-   const refusal=await page.evaluate<any>(`window.__earlyActRowRefusal`);
+   const refusal:any=await page.evaluate(`window.__earlyActRowRefusal`);
    assert.equal(refusal.rowVisible,true);assert.equal(refusal.messageVisible,true);assert.deepEqual(refusal.controls,[]);
    assert.ok(refusal.text.includes('JOB_VISUAL_UNAVAILABLE'));
    await writeFile(join(out,'early-refusal-before-rollback.json'),JSON.stringify(refusal,null,2)+'\n');
    await writeFile(join(out,'early-refusal-after-rollback.png'),await page.screenshot());
   }
-  observations.push({mode,language,width,height,initial,collapsed,held});
+  observations[observationIndex]={mode,language,width,height,initial,collapsed,held,flash};
  }catch(error){
   const runtime:unknown=page?await page.evaluate(diagnostic).catch(reason=>({diagnosticError:String(reason)})):null;
   if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});
-  await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error),runtime},null,2)+'\n');throw error;
+  const failed={mode,language,width,height,error:String(error),runtime};caseFailures.push(failed);
+  await writeFile(join(out,'failure.json'),JSON.stringify(failed,null,2)+'\n');
+  observations[observationIndex]={mode,language,width,height,failure:failed};
+  if(!flashOnly)throw error;
  }
  finally{await page?.close();await close?.();await rm(profile,{recursive:true,force:true});await writeFile(join(output,'observations.json'),JSON.stringify(observations,null,2)+'\n');}
 }
+await writeFile(join(output,'flash-summary.json'),JSON.stringify({flashOnly,cases:observations.length,flashFailures,caseFailures},null,2)+'\n');
+assert.deepEqual(caseFailures,[],'all matrix cases sampled successfully');
+assert.deepEqual(flashFailures,[],'zero live answer controls before the question across every sampled screen');
 console.log('ACT_ROW_840_OK cases='+observations.length+' EN=16 KO=16');
