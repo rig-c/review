@@ -63,7 +63,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   await page.goto(url,lang);
   await until(page,`(${mode==='standalone'}?!!document.querySelector('#rig-root canvas'):document.body.dataset.ready==='true')&&!document.body.inert&&(${mode==='joined-interview'||mode==='standalone'}||!!document.querySelector('#workspace-ask-headline')?.textContent)`);
   if(mode.startsWith('interview')||mode==='joined-interview')await page.evaluate(`document.querySelector('#job-record-asks')?.close()`);
-  const boot=await page.evaluate<any>(`(()=>{const visible=n=>!!n&&!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden'&&!n.closest('dialog:not([open])');const bar=document.querySelector('#workspace-review-act');const nodes=['review-message','review-draft-state','draft-state'].map(id=>{const n=document.getElementById(id);return {id,text:n?.textContent.trim(),visible:visible(n),inBar:!!n&&bar.contains(n)};});const primary=nodes.find(n=>n.id==='review-draft-state')?.text;return {samples:window.__actFlashSamples,held:${held},nodes,saveStates:nodes.filter(n=>n.visible&&n.inBar&&n.text&&(n.text===primary||/^(Not submitted|제출되지 않음)$/.test(n.text))),standaloneSave:document.querySelector('#save').textContent};})()`);
+  const boot=await page.evaluate<any>(`(()=>{const visible=n=>!!n&&!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden'&&!n.closest('dialog:not([open])');const bar=document.querySelector('#workspace-review-act');const nodes=['review-message','review-draft-state','draft-state','dirty'].map(id=>{const n=document.getElementById(id);return {id,text:n?.textContent.trim(),visible:visible(n),inBar:!!n&&bar.contains(n)};});const primary=nodes.find(n=>n.id==='review-draft-state')?.text;return {samples:window.__actFlashSamples,held:${held},nodes,saveStates:nodes.filter(n=>n.visible&&n.inBar&&n.text&&(n.text===primary||/^(Not submitted|제출되지 않음)$/.test(n.text))),home:bar.parentElement?.id,inHeading:!!bar.closest('.inspector-heading'),rowVisible:!!document.querySelector('#workspace-act-row')?.getClientRects().length,visibleStates:nodes.filter(n=>n.visible&&['review-draft-state','draft-state','dirty'].includes(n.id)&&n.text).map(n=>n.id),standaloneSave:document.querySelector('#save').textContent};})()`);
   observations.push({mode,lang,boot});
   await writeFile(join(out,'loading-observations.json'),JSON.stringify(observations,null,2));
   await writeFile(join(out,`${mode}-${lang}-loaded.png`),await page.screenshot());
@@ -74,6 +74,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   const legacy=boot.samples.filter((row:any)=>row.legacySave||row.status||row.label);
   if(mode!=='joined-interview'&&legacy.length)failures.push(mode+'/'+lang+' legacy controls in '+legacy.length+' frames');
   if(boot.saveStates.length!==1)failures.push(mode+'/'+lang+' save-state count '+boot.saveStates.length);
+  if(mode!=='joined-interview'){assert.equal(boot.home,'workspace-act-row');assert.equal(boot.inHeading,false);assert.equal(boot.rowVisible,true);assert.deepEqual(boot.visibleStates,['review-draft-state']);}
   if(flashOnly)continue;
   const state=await page.evaluate<any>(`(()=>{const visible=n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])');const headline=document.querySelector('#workspace-ask-headline');return {language:document.documentElement.lang,primary:[...document.querySelectorAll('button.primary')].filter(visible).map(n=>n.id),question:headline.textContent,whiteSpace:getComputedStyle(headline).whiteSpace,overflow:getComputedStyle(headline).textOverflow,changesDisabled:document.querySelector('#request-changes').disabled,saveHidden:document.querySelector('#save').hidden};})()`);
   assert.equal(state.language,lang);assert.equal(state.primary.length,1,mode+' one emphasised answer');assert.notEqual(state.whiteSpace,'nowrap');assert.notEqual(state.overflow,'ellipsis');
@@ -86,10 +87,10 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await page.goto(new URL('/favicon.ico',url).href);
    await page.evaluate(`localStorage.setItem(${JSON.stringify(draftKey)},'{corrupt saved draft')`);await page.goto(url,lang);
    await until(page,`document.body.dataset.ready==='true'&&!document.body.inert`);
-   const recovery=await page.evaluate<any>(`({blocked:document.querySelector('#save').disabled&&document.querySelector('#request-changes').disabled,text:document.querySelector('#review-draft-state').textContent,recoveryVisible:!!document.querySelector('#draft-recovery').getClientRects().length&&document.querySelector('#draft-recovery').children.length>0})`);
+   const recovery=await page.evaluate<any>(`({blocked:document.querySelector('#save').disabled&&document.querySelector('#request-changes').disabled,text:document.querySelector('#review-draft-state').textContent,recoveryVisible:!!document.querySelector('#workspace-act-row #review-draft-recovery').getClientRects().length&&document.querySelector('#review-draft-recovery').children.length>0})`);
    assert.equal(recovery.blocked,true);assert.equal(recovery.recoveryVisible,true);assert.ok(recovery.text.includes(lang==='ko'?'초안을 불러오지':'Saved draft could not be restored'));
    await writeFile(join(out,`restore-failure-${lang}.png`),await page.screenshot());
-   await page.evaluate(`document.querySelector('#draft-recovery button:last-child').click()`);
+   await page.evaluate(`document.querySelector('#workspace-act-row #review-draft-recovery button:last-child').click()`);
    await until(page,`!document.querySelector('#save').disabled`);
   }
   if(!['rig','direction','parts'].includes(mode)){
@@ -118,6 +119,8 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await until(page,`document.querySelector('#save').hidden&&document.querySelector('#workspace-pending-ask').hidden`);
    const done=await page.evaluate<any>(`({question:document.querySelector('#workspace-ask-headline').textContent,primary:[...document.querySelectorAll('button.primary')].filter(n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])')).length})`);
    assert.equal(done.primary,0);
+   assert.equal(await page.evaluate(`document.getElementById('workspace-act-row').hidden`),true);
+   assert.deepEqual(await page.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty']);
    await writeFile(join(out,`${mode}-${lang}-submitted.png`),await page.screenshot());
   }
   observations.push({mode,...state});

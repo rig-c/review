@@ -16,7 +16,7 @@ import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {fullyVisible,visibilityGeometry} from './helpers/walk-visibility.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 
-interface ScreenState {language:string;mode:string;tabs:string[];rows:number;actVisible:boolean;commentsVisible:boolean;commentsPanel:boolean;actInHeading:boolean;ask:string;summaryInputs:number;commentLists:number;commentListInPanel:boolean;modeLabels:string[]}
+interface ScreenState {language:string;mode:string;tabs:string[];rows:number;actVisible:boolean;commentsVisible:boolean;commentsPanel:boolean;actInHeading:boolean;actInRow:boolean;actRowDirect:boolean;ask:string;summaryInputs:number;commentLists:number;commentListInPanel:boolean;modeLabels:string[]}
 
 const cameraExpression="JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig";
 async function run(lang:'en'|'ko',output:string){
@@ -53,12 +53,12 @@ async function run(lang:'en'|'ko',output:string){
      const act=document.querySelector('#workspace-review-act'),comment=document.querySelector('#workspace-tab-feedback'),panel=document.querySelector('#inspector-feedback');
      return {language:document.documentElement.lang,mode:document.querySelector('[data-mode][aria-pressed="true"]')?.dataset.mode,
       tabs:[...row.querySelectorAll('button')].map(node=>node.textContent),rows:[...document.querySelectorAll('.workspace-bottom-tabs .block-row')].filter(node=>!node.hidden).length,
-      actVisible:visible(act),commentsVisible:!!comment&&visible(comment),commentsPanel:!panel.hidden&&getComputedStyle(panel).display!=='none',actInHeading:!!act.closest('.inspector-heading'),ask:document.querySelector('#workspace-ask-headline').textContent,
+      actVisible:visible(act),commentsVisible:!!comment&&visible(comment),commentsPanel:!panel.hidden&&getComputedStyle(panel).display!=='none',actInHeading:!!act.closest('.inspector-heading'),actInRow:act.parentElement?.id==='workspace-act-row',actRowDirect:document.getElementById('workspace-act-row')?.previousElementSibling===document.querySelector('.topbar'),ask:document.querySelector('#workspace-ask-headline').textContent,
       summaryInputs:document.querySelectorAll('input#feedback-summary,textarea#checkpoint-note').length,commentLists:document.querySelectorAll('#stage-comment-list').length,commentListInPanel:!!document.querySelector('#comments-list-host #stage-comment-list'),
       modeLabels:[...document.querySelectorAll('.workspace-bottom-tabs button')].map(node=>node.textContent),actGeometry:geometry(act),commentsGeometry:comment?geometry(comment):null};
     })()`);
     await record(mode+(comments?'-comments':'-blocks'),state);
-    assert.equal(state.language,lang);assert.equal(state.mode,mode);assert.equal(state.rows,1);assert.equal(state.actVisible,true,'whole act visible');assert.equal(state.actInHeading,true);
+    assert.equal(state.language,lang);assert.equal(state.mode,mode);assert.equal(state.rows,1);assert.equal(state.actVisible,true,'whole act visible');assert.equal(state.actInHeading,false);assert.equal(state.actInRow,true);assert.equal(state.actRowDirect,true);
     assert.equal(state.commentsVisible,false,'no bottom Comments tab');assert.equal(state.commentsPanel,comments);assert.ok(!state.tabs.includes(catalog['Comments (0)']));
     assert.equal(state.tabs[0],catalog[mode==='rig'?'Part':'Timeline']);assert.equal(state.summaryInputs,0);assert.equal(state.commentLists,1);assert.equal(state.commentListInPanel,true);
     assert.equal(state.ask,catalog['Check the rig and motion.']);

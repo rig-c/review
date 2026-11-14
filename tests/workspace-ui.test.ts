@@ -367,6 +367,21 @@ test('#671 collapse and expand keep single act identity and explicit selected-ta
  }finally{app.close();}
 });
 
+test('#840 live act home stays outside the bottom heading through collapse and drawer layout',()=>{
+ const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});
+ try{
+  const row=new Host(),bottom=app.bottomPanel!,act=bottom.act;row.id='workspace-act-row';
+  app.layout.before(row);row.append(act);bottom.actHome=row;app.ui.refresh();app.flush();
+  expect(act.parentElement).toBe(row);expect(bottom.strip.parentElement!.children).toEqual([bottom.strip,bottom.collapse]);
+  bottom.collapse.click();app.flush();
+  expect(app.bottomBody!.hidden).toBe(true);expect(act.parentElement).toBe(row);expect(app.layout.querySelector('main')!.style.gridTemplateRows.endsWith('30px')).toBe(true);
+  app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();
+  bottom.collapse.click();app.flush();
+  expect(app.get('workspace-drawer-inspectorHeight').open).toBe(true);
+  expect(act.parentElement).toBe(row);expect(app.get('workspace-drawer-inspectorHeight').contains(act)).toBe(false);
+ }finally{app.close();}
+});
+
 test('#671 actual rig selection adapter restores without explicit reveal and sends repeated user acts through the shared tab authority',async()=>{
  const source=await mainSource(),a=source.indexOf('function showInspector('),b=source.indexOf('function bindInspector(',a),trace:string[]=[];
  const inspectorTabs={select:(name:string)=>trace.push('select:'+name),restore:(name:string)=>trace.push('restore:'+name)},openReview=()=>trace.push('review');
@@ -387,7 +402,7 @@ test('#735 source-only startup disables Comments without changing its preserved 
  }
 });
 
-test('#671 real mounted outer tab-panel relationships preserve original nodes and inner rows, including pre-rig exclusion',async()=>{
+for(const live of [false,true])test('#840 '+(live?'live row':'standalone heading')+' preserves mounted nodes, save-state home and outer tab relationships',async()=>{
  const page=new Host('body'),stack=[page],voidTags=new Set(['input','br','img','meta','link','hr','source','col','area','base','embed','param','track','wbr']);
  for(const match of (rigWorkspaceMarkup+rigReviewDialogMarkup).matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"]|"[^"]*")*)>/g)){
   const [,close,raw,attrs]=match,tag=raw!.toLowerCase();if(close){if(!voidTags.has(tag))stack.pop();continue;}
@@ -399,11 +414,17 @@ test('#671 real mounted outer tab-panel relationships preserve original nodes an
  }
  const document={getElementById:(id:string)=>page.all().find(node=>node.id===id)??null,querySelector:(selector:string)=>page.querySelector(selector),querySelectorAll:(selector:string)=>selector==='[data-mode]'||selector==='[data-mode][data-inspector]'?page.all().filter(node=>'mode' in node.dataset&&(!selector.includes('[data-inspector]')||'inspector' in node.dataset)):[],createElement:(tag:string)=>new Host(tag)};
  const header=new Host('header');for(const id of ['rig','playback']){const button=new Host('button');button.id='mode-'+id;button.dataset.mode=id;button.dataset.inspector=id;button.setAttribute('aria-pressed',String(id==='rig'));button.setAttribute('aria-controls','inspector-'+id);header.append(button);}page.prepend(header);
+ const actRow=new Host(),dirtyState=new Host(),draftState=new Host(),draftRecovery=new Host();actRow.id='workspace-act-row';dirtyState.id='dirty';draftState.id='draft-state';draftRecovery.id='draft-recovery';
+ page.prepend(actRow,dirtyState,draftState,draftRecovery);
  const previous=Object.getOwnPropertyDescriptor(globalThis,'document'),oldFocus=hostDocument;Object.defineProperty(globalThis,'document',{configurable:true,value:document});hostDocument={activeElement:null};
  const originals=['rig','playback','feedback'].map(id=>document.getElementById('inspector-'+id)!);
  const innerBefore=page.all().filter(node=>node.attrs.get('aria-labelledby')?.startsWith('block-tab-')).map(node=>[node.id,node.getAttribute('role'),node.getAttribute('aria-labelledby')]);
  try{
-  const mounted=mountRigInspector(document as unknown as Document),row=mounted.row,owners=row.tabs.map(tab=>tab.button.id);
+  const mounted=mountRigInspector(document as unknown as Document,live?actRow as unknown as HTMLElement:undefined),row=mounted.row,owners=row.tabs.map(tab=>tab.button.id);
+  expect(mounted.act.parentElement).toBe(live?actRow:mounted.strip.parentElement);
+  mounted.act.hidden=false;mounted.syncActRow();expect(dirtyState.hidden).toBe(live);expect(draftState.hidden).toBe(live);expect(draftRecovery.hidden).toBe(live);
+  mounted.actBar.setSaveState({kind:'saved',text:'Answer saved'});expect((live?dirtyState:draftState).textContent).toBe('Answer saved');
+  if(live){expect(mounted.strip.parentElement!.children).toEqual([mounted.strip,mounted.collapse]);mounted.act.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(true);expect(dirtyState.hidden).toBe(false);mounted.act.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);}
   expect(new Set(owners).size).toBe(2);expect([...mounted.strip.children]).toEqual([]);expect(mounted.comments.button.hidden).toBe(true);expect(mounted.comments.panel.getAttribute('aria-labelledby')).toBe('stage-comment');expect(document.getElementById('proposal-panel')!.children[0]!.id).toBe('comments-list-host');
   for(const [index,tab] of row.tabs.entries()){
    const panel=tab.panels[0]!;expect(panel).toBe(originals[index] as unknown as HTMLElement);expect(panel.getAttribute('role')).toBe('region');expect(panel.getAttribute('aria-labelledby')).toBe(tab.button.id);expect(tab.button.getAttribute('aria-controls')).toBe(panel.id);

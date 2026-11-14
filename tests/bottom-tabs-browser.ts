@@ -281,13 +281,15 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
      controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(n=>n.id),collapseDisabled:collapse.disabled,collapseText:collapse.textContent,
      availableTabs:row?[...row.querySelectorAll('[role=tab]')].filter(n=>!n.hidden).length:0,selected:selected?.dataset.blockTarget,selectedVisible:!!selected&&!selected.hasAttribute('data-tab-overflow')&&selected.getBoundingClientRect().width>0,
      ask:document.querySelector('#workspace-ask-headline').textContent,answer:document.querySelector('#workspace-pending-ask').textContent,
-     actInHeading:act.parentElement===heading,actRect:act.getBoundingClientRect().toJSON()};
+     actInHeading:act.parentElement===heading,actHome:act.parentElement.id,actRowDirect:document.getElementById('workspace-act-row')?.previousElementSibling===document.querySelector('.topbar'),actRect:act.getBoundingClientRect().toJSON()};
    })()`);
    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-state.json`),JSON.stringify(state,null,2));
    assert.equal(state.language,lang);assert.equal(state.entry,1);assert.equal(state.viewports,1);
-   assert.deepEqual(state.headingOrder,['tabs','collapse','act'],'act order stays owned by #840');
+   const live=kind!=='standalone'&&kind!=='interview-standalone';
+   assert.deepEqual(state.headingOrder,live?['tabs','collapse']:['tabs','collapse','act'],'only live asks leave the bottom heading');
+   if(live){assert.equal(state.actHome,'workspace-act-row');assert.equal(state.actRowDirect,true);}
    assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
-   assert.equal(state.wrap,'nowrap');assert.equal(state.actInHeading,true);assert.equal(state.collapseText,'⌄');
+   assert.equal(state.wrap,'nowrap');assert.equal(state.actInHeading,!live);assert.equal(state.collapseText,'⌄');
    if(state.availableTabs)assert.equal(state.selectedVisible,true);else assert.equal(state.selected,undefined,'subjects without rig capabilities expose no block tab');
    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-workspace.png`),await page.screenshot());
    if(!state.collapseDisabled){

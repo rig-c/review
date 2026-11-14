@@ -135,7 +135,7 @@ const rigStatusBar=mountStatusBar({
 app.querySelector<HTMLElement>('[data-workspace-status]')!.replaceWith(rigStatusBar.footer);
 for(const id of ['layout-state','idle-state','control-state','draft-state'])el(id).setAttribute('role','status');
 el('layout-state').setAttribute('aria-label','Effective layout');el('renderer-state').setAttribute('aria-label','Last draw backend');el('draft-state').setAttribute('aria-live','polite');el('view-coordinates').setAttribute('aria-label','Current numeric inspection region');
-const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearchParams(location.search).has('stageEmbed')&&!location.pathname.endsWith('/stage-interview.html')});app.prepend(shell.header);
+const shell=mountWorkspaceShell({compatibility:'rigStep1',pendingActRow:!!host,embedded:new URLSearchParams(location.search).has('stageEmbed')&&!location.pathname.endsWith('/stage-interview.html')});app.prepend(shell.header,...shell.actRow?[shell.actRow]:[]);
 el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.append(createRigLayerControls());
 el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;
@@ -143,7 +143,7 @@ const controls=createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSw
 const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.classList.add('workspace-main-toolbar');
 const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
 for(const event of ['click','change'])secondaryToolbar.addEventListener(event,()=>{if(rigDifference){leaveRigDifference();renderLayout();}},true);
-const rigInspector=mountRigInspector();
+const rigInspector=mountRigInspector(document,shell.actRow??undefined);
 if(host)rigInspector.act.hidden=true;
 const rigAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigAsk.type='button';
 const askHeadline=panelMake('span',{id:'workspace-ask-headline',className:'workspace-act-ask',hidden:true});
@@ -272,9 +272,10 @@ function message(value: string, error = false, footerOnly = false, diagnostic?: 
   if (footerOnly) return;
   // The modal makes the footer inert; the review dialog repeats the latest message for its reader.
   text('review-message', value); el('review-message').classList.toggle('error', error);
-  if(host&&error&&rigInspector.act.hidden){
+  if(host&&error&&rigInspector.act.hidden&&!rigInspector.answersRendered){
     for(const node of rigInspector.act.querySelectorAll<HTMLElement>('#save,#review-status,label[for="review-status"]'))node.hidden=true;
     rigInspector.act.hidden=false;
+    rigInspector.syncActRow?.();
   }
   // A background refusal names its code and origin on hover; only Submit's own catch changes the act bar.
   if (diagnostic) el('message').title = diagnostic;
@@ -1513,7 +1514,7 @@ function renderAnswerControls():void {
   requestChanges.onclick=()=>{if(requestChanges.disabled)return;if(parts){void save.onclick?.call(save,new PointerEvent('click'));}else{session.status='changes-requested';select('review-status').value=session.status;void verdictSubmit?.(new MouseEvent('click'));}};
  }
  for(const control of recordDialog?.querySelectorAll<HTMLButtonElement>('button[type="submit"]')??[])control.disabled=blocked||verdict;
- if(host)rigInspector.act.hidden=false;
+ if(host){rigInspector.answersRendered=true;rigInspector.act.hidden=subjects.length===0;rigInspector.syncActRow?.();}
 }
 let verdictSubmit:((event:MouseEvent)=>unknown)|null=null;
 /** The rig pane for a live job's still (#709): the job binds and copies it, this screen keeps its view. */

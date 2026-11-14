@@ -143,22 +143,24 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
 }
 
 /** Compose the real rig acts into C6; all fields, submit nodes and their listeners retain identity. */
-export function mountRigInspector(root:Document=document):BottomPanel&{actBar:ActBar;comments:{button:HTMLButtonElement;panel:HTMLElement}} {
+export function mountRigInspector(root:Document=document,actHome?:HTMLElement):BottomPanel&{actBar:ActBar;answersRendered:boolean;syncActRow:()=>void;comments:{button:HTMLButtonElement;panel:HTMLElement}} {
  const inspector=root.querySelector<HTMLElement>('.inspector')!,body=inspector.querySelector<HTMLElement>('.inspector-body')!,heading=inspector.querySelector<HTMLElement>('.inspector-heading')!;
  const feedback=root.getElementById('inspector-feedback')!,dialog=root.getElementById('review-dialog')!;
  const [label,status,actions]=[feedback.querySelector<HTMLLabelElement>('label[for="review-status"]')!,root.getElementById('review-status')!,dialog.querySelector<HTMLElement>('.review-dialog-actions')!];
- const actBar=mountActBar({id:'workspace-review-act',decision:[label,status],actions,submit:root.getElementById('save') as HTMLButtonElement,saveState:root.getElementById('review-draft-state')!,saveStateCopies:[root.getElementById('draft-state')].flatMap(node=>node?[{node,title:true}]:[])}),act=actBar.element;
+ const actBar=mountActBar({id:'workspace-review-act',decision:[label,status],actions,submit:root.getElementById('save') as HTMLButtonElement,saveState:root.getElementById('review-draft-state')!,saveStateCopies:[root.getElementById(actHome?'dirty':'draft-state')].flatMap(node=>node?[{node,title:true}]:[])}),act=actBar.element;
+ if(actHome)for(const id of ['draft-state','draft-recovery'])root.getElementById(id)!.hidden=true;
  const title=dialog.querySelector<HTMLElement>('.review-dialog-header')!;title.querySelector('#review-dialog-close')?.remove();
  feedback.className='workspace-review-panel';feedback.hidden=true;feedback.prepend(title);body.append(feedback);dialog.remove();
  feedback.removeAttribute('data-inspector-panel');
  root.getElementById('proposal-panel')!.prepend(root.getElementById('comments-list-host')!);
- const bottom=mountBottomPanel({kind:'rig',heading,act,actHome:heading,tabs:[]}),comment=actionButton(tr('Comments'),null);
+ const bottom=mountBottomPanel({kind:'rig',heading,act,actHome:actHome??heading,tabs:[]}),comment=actionButton(tr('Comments'),null);
  comment.hidden=true;feedback.setAttribute('role','region');feedback.setAttribute('aria-labelledby','stage-comment');
  delete comment.dataset.inspector;bottom.strip.removeAttribute('role');
  for(const button of root.querySelectorAll<HTMLButtonElement>('[data-mode][data-inspector]')){button.id||='mode-'+button.dataset.mode;const panel=root.getElementById('inspector-'+button.dataset.mode)!;panel.setAttribute('role','region');panel.setAttribute('aria-labelledby',button.id);}
  bottom.row={tabs:[...root.querySelectorAll<HTMLButtonElement>('[data-mode][data-inspector]')].map(button=>({id:button.dataset.mode!,button,attribute:'aria-pressed',panels:[root.getElementById('inspector-'+button.dataset.mode)!]})),panels:[root.getElementById('inspector-rig')!,root.getElementById('inspector-playback')!],initialize:true};
- heading.append(act);
- return {...bottom,actBar,comments:{button:comment,panel:feedback}};
+ bottom.actHome.append(act);
+ const syncActRow=()=>{if(actHome){actHome.hidden=act.hidden;root.getElementById('dirty')!.hidden=!act.hidden;}};
+ return {...bottom,actBar,answersRendered:false,syncActRow,comments:{button:comment,panel:feedback}};
 }
 
 export interface BottomPanel {
