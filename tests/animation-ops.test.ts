@@ -1583,6 +1583,16 @@ test('PR #257 review findings 1-3 (compare read-only gate, retained key live tra
     expect(compareGate.code).toBe('ANIMATION_COMPARE_READ_ONLY');
     expect(compareGate.reason).toContain('read-only in comparison sessions');
     expect(compareHost.querySelector('[data-animation-gate]')?.textContent).toContain('ANIMATION_COMPARE_READ_ONLY');
+    expect(compareHost.querySelector('[data-animation-gate]')?.hidden).toBe(false);
+    const directionHost = new StubElement('section');
+    const directionPanel = new AnimationInspectionPanel({
+      host: directionHost as unknown as HTMLElement, stage: compareStage as unknown as HTMLElement,
+      select: () => {}, seek: () => {}, project: (x, y) => ({ x, y }), enabled: () => true, hideGateBanner: true,
+    });
+    directionPanel.model(model, 'tilt');
+    directionPanel.update(0, 1.6);
+    expect(directionHost.querySelector('[data-animation-gate]')?.hidden).toBe(true);
+    directionPanel.dispose();
     expect(compareHost.querySelector('[data-animation-apply]')?.disabled).toBe(true);
     expect(compareHost.querySelector('[data-insert-key]')?.disabled).toBe(true);
     expect(compareHost.querySelectorAll('.animation-lane').every((l) => l.dataset.editable === 'false')).toBe(true);

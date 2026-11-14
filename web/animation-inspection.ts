@@ -71,6 +71,7 @@ export interface AnimationPanelOptions {
  reset?:()=>Promise<void>;
  pause?:()=>void;
  readOnlyReason?:string|null|(()=>string|null);
+ hideGateBanner?:boolean;
 }
 
 export interface SelectedAnimationKey {
@@ -782,6 +783,7 @@ export class AnimationInspectionPanel {
  }
 
  private renderGateBanner(){
+  this.gateBanner.hidden=!!this.options.hideGateBanner;
   const gate=this.gateInfo();
   if(!this.animation){
    this.gateBanner.textContent='Select an animation clip to inspect or edit keys.';

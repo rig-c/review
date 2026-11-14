@@ -200,6 +200,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "INTERVIEW_UNAVAILABLE: No interview is attached to this inspection.": "INTERVIEW_UNAVAILABLE: No interview is attached to this inspection.",
   "DIRECTION_SOURCE_CHANGED: undeclared playback input": "DIRECTION_SOURCE_CHANGED: undeclared playback input",
   "DIRECTION_SOURCE_CHANGED: playback bytes differ from the bound SHA-256": "DIRECTION_SOURCE_CHANGED: playback bytes differ from the bound SHA-256",
+  "Take · {0} s": "Take · {0} s",
   "direction.title": "Direction inspection",
   'direction.planes': 'Plates: {0}',
   'direction.threePlanes': 'background → rig → foreground',
