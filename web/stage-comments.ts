@@ -101,6 +101,9 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    }
   }
  };
+ const revealLatest=()=>{
+  if(inline&&list.closest('.workspace-review-panel'))list.lastElementChild?.scrollIntoView({block:'nearest',behavior:'instant'});
+ };
  const setOpen=(value:boolean)=>{
   if(!value){cancel();list.hidden=!inline;toggle.setAttribute('aria-expanded',String(inline));setCapture(false);return;}
   if(host.busy?.()){(host.busyError??host.error)(t('COMMENT_BUSY: close the active editor or wait for the inspection to settle'));return;}
@@ -108,6 +111,9 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   const reason=updateRefusal();
   if(!reason&&host.blocked()){host.error(t('COMMENT_BUSY: close the active editor or wait for the inspection to settle'));return;}
   list.hidden=false;host.openList?.();placeList();toggle.setAttribute('aria-expanded','true');renderList();
+  // Explicitly opening Comments reveals the newest row within its own panel.
+  // Refreshes never change the reviewer's scroll position.
+  revealLatest();
   if(reason){setCapture(false);host.error(reason);return;}
   setCapture(layers.size>0);for(const view of layers.keys())host.pose(view);
  };
@@ -203,7 +209,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     const n=rigPose.frame?.index??null;host.add({id:crypto.randomUUID(),frameStart:n,frameEnd:n,target:slots[0]?{kind:'slot',name:slots[0].slot}:{kind:'rig',name:rigPose.rig},category:'defect',summary,context:{animation:rigPose.animation,time:rigPose.time,frame:rigPose.frame?.basis==='producer'?n:null,...(turn?{turn:turn as any}:{}),interval:n===null?null:{frameStart:n,frameEnd:n,inclusive:true},comment:comment as any} } as unknown as Row,rigPose.side);
     }
    }
-   cancel();host.changed();refresh();
+   cancel();host.changed();refresh();revealLatest();
   }catch(e){if(disposed||generation!==interaction)return;const msg=e instanceof Error?e.message:String(e);errorSource=toEn(msg);error.textContent=t(errorSource);place();if(locked)host.error(t(errorSource));field.disabled=false;field.focus();}finally{busy=false;if(composer===form)syncChips();}};
   field.focus();last='';
  };
