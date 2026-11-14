@@ -447,6 +447,7 @@ try {
     let verdictActEvent:Extract<JobNextValue['events'][number],{type:'act'}>|undefined;
     await until(async()=>{verdictActEvent=(await nextEvents()).events.find((e):e is Extract<JobNextValue['events'][number],{type:'act'}>=>e.type==='act'&&e.act.askId===verdictAsk.askId);return !!verdictActEvent;},'verdict act');
     assert.ok(verdictActEvent?.act.kind==='review-verdict'&&verdictActEvent.act.schema==='rig-review/act@6');
+    assert.ok(verdictActEvent.act.still);
     assert.equal(verdictActEvent.act.still.camera,'fixed');
     assert.equal(verdictActEvent.act.source.sourceHash,rig.source.sourceHash);
     assert.deepEqual((verdictActEvent.act.value as {comments:unknown}).comments,feedbackItemComments([{...comment,summary:commentText}]));
