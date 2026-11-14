@@ -174,6 +174,20 @@ The single review page is one inspection workspace: a left column, the stage, th
 - **Review dialog.** This label is historical for rig feedback: `mountRigInspector` moves its existing source context, comments, frame range, category, typed target, correction request, provenance, strip downloads and warnings into **Comments (n)** and removes `#review-dialog`. The decision, submit and save state live in the act bar. Record publications separately reuse existing checkpoint, signoff, reopen and interview forms in a native dialog over this same screen (#754), including an explicitly empty workspace when no picture is supplied. That hosting has shipped; remaining interview-modal work B (#722), record-modal memo-to-Comments work C (#715), and legacy job-window owner-surface removal (#756) have not.
 - **Footer.** Message (truncated, full text as tooltip) on the left; player, effective layout, renderer, layers, idle, remote control and draft state in the middle; the numeric view region (behind **View region**) and the source hash on the right. The View region body is a `position:fixed` popover above the 40px footer, right-aligned, its width and height clamped to the viewport and its content scrolling inside, so the footer's clipping never hides it and opening it never scrolls the page.
 
+### Status ownership
+
+Three places show status text, and each one has a single producer. A change that moves text between them changes this table.
+
+| Where | Node | Producer | What it says |
+| --- | --- | --- | --- |
+| Act save state (act bar, plus its copy in the top bar or the footer's middle) | `#review-draft-state`, copied to `#dirty` (top bar, `web/workspace-ui.ts`) or `#draft-state` | `setSaveState` of `mountActBar` (`web/inspector-blocks.ts`) is the one renderer. `web/main.ts` calls it from `renderDraftState`, the edit handler and Submit | The act's state as a kind (`read-only`, `saving`, `failed`, `unsaved`, `saved`) with its text, such as *Not submitted*, *Unsubmitted changes*, *Saving…* or *Answer saved*. "Not submitted" belongs here. |
+| Footer message (left end of the footer) | `#message`, repeated into `#review-message` unless the call is footer-only | `message()` in `web/main.ts` | The latest message: refusals and failures (with the `error` class and a diagnostic title), view readouts (footer-only), and the lines below. |
+| Live job host lines | the same `#message`, through `screen.message` | `changed()` of the live job host (`web/job-rig-screen.ts`) | On a live job page: a refusal, a failure, *closed*, or else the displayed **publication label** (with *updated* or *incompatible* when they apply). So on a pending rig or parts verdict page, the footer's left end shows the publication label, and "Not submitted" shows only in the act save state. |
+
+On an interview-only job, once every pending subject is `interview-picks` and the answer is saved, `renderDraftState` sets the footer message to the act save state's text (#851). The footer then agrees with the top bar instead of showing a stale line. Verdict pages are untouched by this.
+
+**Source text and rendered text.** `setSourceText` stores the English source string, and the catalog renders it in the page language. `sourceTextContent` reads the source string back, not what is on screen. The source key, the English catalog value and the rendered text can differ: the EN catalog maps *Answer saved* to *Saved*. A test that checks two status nodes agree compares their rendered text against each other, in both languages. It does not compare either node to a source literal or a catalog value.
+
 The compare page keeps its own markup and stylesheet: sources left, Parts explorer right, its four Inspector sections, its export buttons and its separator colour. It shares the workspace coordinator, so its separators are drawn at the same 4px.
 
 ## Model turn inspection
