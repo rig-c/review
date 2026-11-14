@@ -157,12 +157,12 @@ test('Setup holds no control that seeks or plays: the angle tool and panel and e
 const mainSource=()=>readFile(new URL('../web/main.ts',import.meta.url),'utf8');
 /** Every id of the former Feedback section, unchanged so drafts, the control page and tests keep resolving them. */
 const feedbackIds=['inspector-feedback','review-status','provenance-version','provenance-rig','provenance-motion','provenance-full','source-files','checkpoint-detail','detail-title','detail-note','checkpoint-note','proposal-panel','feedback-start','feedback-end','feedback-range-hint','feedback-target-kind','feedback-target-name','feedback-target-names','feedback-target-hint','feedback-category','comments-list-host','proposal-boundary','feedback-warnings','proposal-list','strip-panel','strip-scope','strip-reference','strip-format','strip-export','strip-status'];
-test('the real review decision and Submit nodes move to the bottom act end without a proxy submit',async()=>{
+test('the real review decision and Submit nodes move once to their actHome without a proxy submit',async()=>{
  const html=await indexHtml(),dialog=between(html,'<dialog id="review-dialog"','</dialog>');
  for(const id of feedbackIds){expect(dialog).toContain(` id="${id}"`);expect(html.split(` id="${id}"`).length).toBe(2);}
  expect(dialog.match(/id="save"/g)?.length).toBe(1);
  const composition=await readFile(new URL('../web/inspector-blocks.ts',import.meta.url),'utf8');
- expect(composition).toContain("label,status,actions");expect(composition).toContain('heading.append(act)');expect(composition).toContain('dialog.remove()');
+ expect(composition).toContain("label,status,actions");expect(composition).toContain('bottom.actHome.append(act)');expect(composition).toContain('actHome:actHome??heading');expect(composition).toContain('dialog.remove()');
  const main=await mainSource();expect(main).toContain("rigInspector.row.reveal=()=>");expect(main).not.toContain('dialog.showModal()');expect(main).not.toContain("button('write-review')");
  expect(main).toContain("onStatus:value=>{draftStatus=value;renderDraftState();}");expect(main).toContain('rigInspector.actBar.setSaveState(');for(const id of ['review-draft-state','draft-state'])expect(main).not.toMatch(new RegExp(`text\\('${id}'|el\\('${id}'\\)\\.(title|textContent)`));expect(main).toContain("text('review-message', value);");
  for(const gone of ["button('export')","button('export-markdown')"])expect(main).not.toContain(gone);

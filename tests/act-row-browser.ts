@@ -23,7 +23,7 @@ type Mode=typeof modes[number];
 const diagnostic=`(()=>{
  const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden],dialog:not([open])');
  return {path:location.pathname,query:location.search,readyState:document.readyState,ready:document.body?.dataset.ready,inert:document.body?.inert,
-  probe:window.__earlyActReadProbe??null,readRefused:window.__earlyActReadRefused??false,refusal:window.__earlyActRowRefusal??null,
+  embeddedFixture:window.__embeddedActRowFixture??null,probe:window.__earlyActReadProbe??null,readRefused:window.__earlyActReadRefused??false,refusal:window.__earlyActRowRefusal??null,
   loadingSamples:(window.__actRowSamples??[]).slice(-10),
   nodes:['workspace-act-row','workspace-review-act','review-message','message','dirty','save','request-changes','workspace-pending-ask'].map(id=>{
    const n=document.getElementById(id);return {id,present:!!n,hidden:n?.hidden,visible:visible(n),text:n?.textContent,classes:n?.className};})};
@@ -97,7 +97,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    await fixture.ask(publication,stage==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:stage==='direction'?'direction-review':'rig-review'});
    url=fixture.host.ownerUrl;
   }
-  const target=new URL(url);target.searchParams.set('lang',language);if(mode==='embedded-rig')target.searchParams.set('stageEmbed','1');url=target.href;
+  const target=new URL(url);target.searchParams.set('lang',language);url=target.href;
   let control:((method:string,params?:Record<string,unknown>)=>Promise<any>)|undefined,held=0;
   page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:async(event,send)=>{
    if(event.sessionId)control=send;
@@ -109,11 +109,31 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   }});
   await page.setViewport(width,height);assert.ok(control);
   await control('Page.addScriptToEvaluateOnNewDocument',{source:sampler});
+  if(mode==='embedded-rig'){
+   // The public job front accepts only the owner HTML's exact lang query.
+   // Publication entries expose sealed data/assets, not another HTML entry.
+   // Exercise main's existing embedded presentation in the real live-job host:
+   // load the allowed URL, then set only client URL state before app mounting.
+   // This fixture proves rendering with stageEmbed, not a public embedded URL.
+   await control('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{
+    if(location.pathname!==${JSON.stringify(target.pathname)})return;
+    const url=new URL(location.href),requestSearch=url.search;
+    url.searchParams.set('stageEmbed','1');history.replaceState(history.state,'',url.href);
+    window.__embeddedActRowFixture={requestSearch,renderSearch:url.search,publicEmbeddedRoute:false};
+   })()`});
+  }
   await control('Fetch.enable',{patterns:[{urlPattern:'*assets/*',requestStage:'Response'},{urlPattern:'*review-painting*',requestStage:'Response'},{urlPattern:'*api/stage-parts/image/*',requestStage:'Response'}]});
   await page.goto(url,language);
   await wait(page,mode==='standalone'?`!!document.querySelector('#rig-root canvas')&&!document.body.inert`:`document.body.dataset.ready==='true'&&!document.body.inert&&!!document.querySelector('#workspace-ask-headline')?.textContent`);
   // Interview auto-opens its existing dialog; inspect the row after the normal close action.
   await page.evaluate(`document.querySelector('dialog[open] .workspace-drawer-close')?.click()`);
+  if(mode==='embedded-rig'){
+   const embedding=await page.evaluate<{requestSearch:string;renderSearch:string;publicEmbeddedRoute:boolean}>(`window.__embeddedActRowFixture`);
+   assert.equal(embedding.requestSearch,'?lang='+language);
+   assert.equal(new URLSearchParams(embedding.renderSearch).get('stageEmbed'),'1');
+   assert.equal(embedding.publicEmbeddedRoute,false);
+   await writeFile(join(out,'embedded-presentation-fixture.json'),JSON.stringify(embedding,null,2)+'\n');
+  }
   const initial=await capture(page,out,'pending');assert.equal(initial.language,language);
   const loading=await page.evaluate<any[]>(`window.__actRowSamples`);
   await writeFile(join(out,'loading.json'),JSON.stringify({held,samples:loading},null,2)+'\n');

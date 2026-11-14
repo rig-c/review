@@ -1,5 +1,6 @@
 /** #838 Part 1 browser proof: single non-wrapping bottom tab strip with overflow menu, Timeline first tab, Inspection rename, and chevron collapse control. Ordinary Nova only. */
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
@@ -140,6 +141,21 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
    }
 
    if(width===1100&&kind!=='parts'){
+    // #840 frees the heading from the act. A 1100px viewport alone no longer
+    // guarantees overflow: constrain only this test's existing strip instead.
+    // Hash the exact inline style attribute we own, not the live tab state that
+    // these menu actions intentionally change. Restore the attribute in finally.
+    const stripBefore=await page.evaluate<{style:string|null;width:number;tabs:number}>(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs'),row=strip.querySelector('.block-row:not([hidden])');return {style:strip.getAttribute('style'),width:strip.clientWidth,tabs:row.querySelectorAll('[role=tab]').length};})()`);
+    assert.ok(stripBefore.tabs>2,'overflow fixture has actual inspection tabs');
+    const narrowWidth=Math.min(320,Math.floor(stripBefore.width/2));
+    const beforeHash=createHash('sha256').update(JSON.stringify(stripBefore.style)).digest('hex');
+    const mutation={kind,lang,width,height,selector:'.workspace-bottom-tabs',scope:'test-only DOM inline style attribute',narrowWidth,beforeHash};
+    const receipt=join(output,`${kind}-${lang}-${width}x${height}-overflow-mutation`);
+    console.log('BOTTOM_TABS_DOM_MUTATION_BEGIN '+JSON.stringify(mutation));
+    await writeFile(receipt+'-begin.json',JSON.stringify({...mutation,before:stripBefore},null,2)+'\n');
+    try{
+     await page.evaluate(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs');strip.style.flex='0 0 '+${narrowWidth}+'px';strip.style.width=${narrowWidth}+'px';strip.style.maxWidth=${narrowWidth}+'px';})()`);
+     await wait(page,`(()=>{const row=document.querySelector('.workspace-bottom-tabs > .block-row:not([hidden])'),more=row.querySelector('.workspace-tabs-more');return row.clientWidth<=${narrowWidth}+1&&!more.hidden&&row.querySelector('[data-block-target="report-panel"]').hasAttribute('data-tab-overflow');})()`,'test-only constrained strip really overflows');
     await page.evaluate(`document.querySelector('.workspace-inspectorHeight').dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true}))`);
     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
     const overflowState:any=await page.evaluate<any>(`(()=>{
@@ -148,12 +164,13 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
      more.click();
      const menu=row.querySelector('.workspace-tabs-menu');
      const items=[...menu.querySelectorAll('button[role="menuitem"]')].filter(b=>!b.hidden).map(b=>({target:b.dataset.blockMoreTarget,text:b.textContent}));
-     return {moreVisible:!more.hidden&&getComputedStyle(more).display!=='none',menuOpen:!menu.hidden&&getComputedStyle(menu).display!=='none',items,rect:menu.getBoundingClientRect().toJSON(),viewport:{width:innerWidth,height:innerHeight}};
+     return {rowWidth:row.clientWidth,overflowCount:row.querySelectorAll('[data-tab-overflow]').length,moreVisible:!more.hidden&&getComputedStyle(more).display!=='none',menuOpen:!menu.hidden&&getComputedStyle(menu).display!=='none',items,rect:menu.getBoundingClientRect().toJSON(),viewport:{width:innerWidth,height:innerHeight}};
     })()`);
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-overflow.json`),JSON.stringify(overflowState,null,2));
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-overflow-before.png`),await page.screenshot());
     assert.ok(overflowState.rect.bottom<=overflowState.viewport.height&&overflowState.rect.top>=0,'whole overflow menu stays inside viewport');
-    assert.equal(overflowState.moreVisible,true,'overflow button visible when strip is narrow at 1100x800');
+    assert.ok(overflowState.rowWidth<=narrowWidth+1&&overflowState.overflowCount>0,'actual tab width exceeds the constrained strip');
+    assert.equal(overflowState.moreVisible,true,'overflow button visible on the test-only narrowed strip at 1100x800');
     assert.equal(overflowState.menuOpen,true,'clicking ⋯ opens overflow menu');
     assert.ok(overflowState.items.some((item:any)=>item.target==='report-panel'),'Report tab is in overflow menu');
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-overflow-menu.png`),await page.screenshot());
@@ -183,6 +200,16 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
      if(tab&&!tab.hasAttribute('data-tab-overflow'))tab.click();
      else row.querySelector('button[data-block-more-target="animation-dock"]')?.click();
     })()`);
+    }finally{
+     await page.evaluate(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs'),style=${JSON.stringify(stripBefore.style)};if(style===null)strip.removeAttribute('style');else strip.setAttribute('style',style);})()`);
+     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+     const restoredStyle=await page.evaluate<string|null>(`document.querySelector('.workspace-bottom-tabs').getAttribute('style')`);
+     const restoredHash=createHash('sha256').update(JSON.stringify(restoredStyle)).digest('hex');
+     const restored={...mutation,restoredHash,restored:restoredHash===beforeHash};
+     console.log('BOTTOM_TABS_DOM_MUTATION_RESTORED '+JSON.stringify(restored));
+     await writeFile(receipt+'-restored.json',JSON.stringify(restored,null,2)+'\n');
+     assert.equal(restoredHash,beforeHash,'strip inline style restored exactly before collapse measurement');
+    }
    }
 
    if(kind==='parts'&&width===1100){
