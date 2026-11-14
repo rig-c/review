@@ -104,6 +104,8 @@ class Node {
  remove(){if(this.parent)this.parent.children=this.parent.children.filter(child=>child!==this);this.parent=null;}
  all():Node[]{return this.children.flatMap(n=>[n,...n.all()]);}
  contains(node:unknown):boolean{return node===this||this.children.some(n=>n.contains(node));}
+ querySelector(selector:string){if(selector==='.workspace-tabs-more')return this.children.find(node=>node.classes.has('workspace-tabs-more'))??null;throw new Error(selector);}
+ insertBefore(node:Node,before:Node|null){this.append(node);if(before){this.children.pop();this.children.splice(this.children.indexOf(before),0,node);}return node;}
  querySelectorAll(selector:string){if(selector!=='button[data-block-target]')throw new Error(selector);return this.all().filter(n=>n.tag==='button'&&'blockTarget'in n.dataset);}
  closest(selector:string){if(selector!=='button[data-block-target]')throw new Error(selector);let node:Node|null=this;while(node){if(node.tag==='button'&&'blockTarget'in node.dataset)return node;node=node.parent;}return null;}
  setAttribute(name:string,value:string){Node.log.push({node:this,what:name});this.attrs.set(name,value);if(name==='hidden')this.#hidden=true;}
@@ -372,5 +374,25 @@ test('#838 bottom tab strip overflow menu hides overflowing tabs, keeps the sele
   expect(moreBtn.hidden).toBe(true);
   expect(playbackRow.children.filter(n=>'blockTarget' in n.dataset&&n.hasAttribute('data-tab-overflow'))).toEqual([]);
   ui.dispose();
+ }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
+});
+
+test('#839 registered Question uses the existing controller and preserves all block tabs and fields',async()=>{
+ const previous=Object.getOwnPropertyDescriptor(globalThis,'document');
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:(tag:string)=>new Node(tag)}});
+ try{
+  const app=await openPage(undefined,true),panel=new Node('section');panel.id='question-panel';app.page.append(panel);
+  const original=app.strip.all().filter(node=>'blockTarget' in node.dataset);
+  const unregister=app.ui.register({id:'question',panel:panel as unknown as HTMLElement,label:'Question'});
+  app.ui.select('rig','question');expect(panel.hidden).toBe(false);expect(app.ui.state().rig).toBe('question');
+  for(const tab of original)expect(app.strip.contains(tab)).toBe(true);
+  const field=new Node('input');panel.append(field);field.checked=true;
+  app.ui.select('rig','mesh-panel');expect(panel.hidden).toBe(true);expect(field.checked).toBe(true);
+  app.ui.select('rig','question');expect(panel.hidden).toBe(false);expect(panel.children[0]).toBe(field);
+  const question=app.strip.all().find(node=>node.dataset.blockTarget==='question')!;
+  question.key('ArrowLeft');expect(app.ui.state().rig).not.toBe('question');
+  app.ui.activate('playback');app.ui.select('playback','question');expect(panel.hidden).toBe(false);
+  unregister();expect(panel.hidden).toBe(true);expect(app.strip.all().some(node=>node.dataset.blockTarget==='question')).toBe(false);
+  app.ui.dispose();
  }finally{if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');}
 });

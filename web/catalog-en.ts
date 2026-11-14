@@ -1,4 +1,5 @@
 export const enCatalog: Readonly<Record<string, string>> = {
+  'Question': 'Question',
   "Answer saved": "Saved",
   "Approve": "Approve",
   "Request changes": "Request changes",

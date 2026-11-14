@@ -166,11 +166,14 @@ export function createViewControls(options:ViewControlsOptions) {
   item.button.disabled=!!reason;item.button.title=reason??'';
   if(reason)item.button.setAttribute('aria-description',reason);else item.button.removeAttribute('aria-description');
  };
- if(rig){
-  const config=options.viewSwitch;
-  viewSwitch=panelMake('details',{id:'view-menu',className:'view-menu'});
-  const groups=config.groups.filter(group=>!group.hidden).map(group=>group.modes.filter(mode=>!mode.hidden)).filter(modes=>modes.length);
-  const current=groups.flat().find(mode=>mode.id===config.currentMode);
+ let config=rig?options.viewSwitch:null;
+ const configure=(next:ViewSwitchConfig)=>{
+  config=next;modes.clear();
+  for(const item of viewSwitch!.querySelectorAll?.('button')??[])(item as HTMLButtonElement).onclick=null;
+  if(viewSwitch!.children.length)viewSwitch!.replaceChildren();
+  viewSwitch!.open=false;
+  const groups=next.groups.filter(group=>!group.hidden).map(group=>group.modes.filter(mode=>!mode.hidden)).filter(modes=>modes.length);
+  const current=groups.flat().find(mode=>mode.id===next.currentMode);
   const label=viewLabel=panelMake('span',{id:'view-menu-label',textContent:current?t(current.labelKey):''});
   const summary=panelMake('summary',{},t('View switch')+' ',label);summary.setAttribute('aria-label',t('View layout'));
   const list=panelMake('div',{className:'view-menu-list'});list.setAttribute('role','group');list.setAttribute('aria-label',t('View'));
@@ -179,7 +182,7 @@ export function createViewControls(options:ViewControlsOptions) {
    for(const mode of group){
     const button=actionButton(t(mode.labelKey),()=>{
      if(button.disabled)return;
-     setMode(mode.id);viewSwitch!.open=false;config.onChange?.(mode.id);
+     setMode(mode.id);viewSwitch!.open=false;next.onChange?.(mode.id);
     });
     button.dataset.view=mode.id;button.setAttribute('aria-pressed',String(mode.pressed));
     modes.set(mode.id,{mode,button,group});
@@ -187,10 +190,18 @@ export function createViewControls(options:ViewControlsOptions) {
     list.append(button);
    }
   }
-  viewSwitch.append(summary,list);
+  viewSwitch!.append(summary,list);
+ };
+ const replaceViewSwitch=(next:ViewSwitchConfig)=>{
+  if(!viewSwitch||!config)return ()=>{};
+  const previous=config;configure(next);let active=true;
+  return ()=>{if(!active)return;active=false;if(config===next)configure(previous);};
+ };
+ if(rig){
+  viewSwitch=panelMake('details',{id:'view-menu',className:'view-menu'});configure(options.viewSwitch);
   zoomGroup!.append(zoomIn,zoomOut,fit,nativeOne!,viewSwitch,value);
  }else if(compare)zoomGroup!.append(syncLabel,zoomOut,value,zoomIn,fit);
- return {zoomButtons,zoomGroup,syncLabel,value,nativeOne,viewSwitch,viewModeIds:[...modes.keys()],setMode,setDisabled};
+ return {zoomButtons,zoomGroup,syncLabel,value,nativeOne,viewSwitch,get viewModeIds(){return [...modes.keys()];},setMode,setDisabled,replaceViewSwitch};
 }
 
 // Nested or separately disposed pan binders must not restore another binder's override.

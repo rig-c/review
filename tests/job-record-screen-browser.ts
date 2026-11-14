@@ -19,6 +19,7 @@ import {koCatalog} from '../web/catalog-ko.ts';
 
 const arg=(name:string)=>{const i=Bun.argv.indexOf(name);return i<0?undefined:Bun.argv[i+1];};
 const interviewOnly=Bun.argv.includes('--interview-only');
+const completedPicture=Bun.argv.includes('--completed-picture')||Bun.argv.includes('--question-tab');
 const freshParts=Bun.argv.includes('--fresh-parts');
 const baseline=await Bun.file(new URL('./fixtures/interview-722-empty-note.json',import.meta.url)).json();
 const output=resolve(arg('--out')??'artifacts/record-screen-750');await mkdir(output,{recursive:true});
@@ -29,14 +30,101 @@ let holdImages=false;const pausedImages:string[]=[];
 const exceptions:unknown[]=[],mutations:{method:string;path:string}[]=[],cases:unknown[]=[];
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('750_BROWSER_TIMEOUT '+label);}
 
+
+/** #839 uses the same retained fixture and #834 viewport instrument; no replacement screen. */
+async function questionTabChecks(){
+ for(const picture of [true,'parts'] as const)for(const language of ['en','ko'] as const){
+  const fixture=await recordScreenFixture('interview-picks',picture),out=join(output,picture==='parts'?'parts':'rig',language);
+  await mkdir(out,{recursive:true});fixture.output(out);const before=await jobInputHashes(fixture.root);
+  try{
+   // Measure the pre-existing controls, then publish the genuine pending ask through the fixture stream.
+   for(let i=fixture.fake.events.length-1;i>=0;i--)if(fixture.fake.events[i]!.type==='pending')fixture.fake.events.splice(i,1);
+   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
+   await page!.setViewport(1440,900);await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
+   await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')`,'839 baseline');
+   const tabs=()=>page!.evaluate<string[]>(`[...document.querySelectorAll('.block-row button[data-block-target]')].map(n=>n.dataset.blockTarget)`);
+   // A non-default camera makes restoration stronger than a view-label check.
+   if(picture==='parts')await click(page!,'#native-one');await click(page!,'#zoom-in');
+   const viewExpression=`(()=>{const raw=document.querySelector('#view-coordinates').textContent;const numeric=raw?JSON.parse(raw):{cameraSync:document.querySelector('#camera-sync').checked,activeCamera:null,cameras:Object.fromEntries(['rig','reference'].map(key=>{const root=document.querySelector(key==='rig'?'#rig-root':'#reference-content'),pane=document.querySelector('#'+key+'-viewport'),scale=new DOMMatrix(getComputedStyle(root).transform);return [key,{space:'image',center:{x:(pane.clientWidth/2-parseFloat(root.style.left||'0'))/scale.a,y:(pane.clientHeight/2-parseFloat(root.style.top||'0'))/scale.d},zoom:scale.a}];}))};return {mode:document.querySelector('#view-menu [aria-pressed=true]')?.dataset.view,rigHidden:document.querySelector('#rig-pane').hidden,referenceHidden:document.querySelector('#reference-pane').hidden,reference:document.querySelector('#reference-select').value,referenceHTML:document.querySelector('#reference-content').innerHTML,cameraSync:numeric.cameraSync,activeCamera:numeric.activeCamera,cameras:Object.fromEntries(Object.entries(numeric.cameras).map(([key,camera])=>[key,camera?{space:camera.space,center:camera.center,zoom:camera.zoom}:null]))};})()`;
+   await page!.evaluate(`window.__questionOriginalReferenceNodes=[...document.querySelector('#reference-content').childNodes];window.__questionOriginalPersonSelect=document.querySelector('#person-select')`);
+   const originalView=await page!.evaluate(viewExpression),originalTabs=await tabs();
+   fixture.fake.pending(fixture.ask,fixture.display.publication.generation+1);
+   const selector=`form[data-job-ask="${fixture.ask.askId}"]`,root='#workspace-interview-answer';
+   await wait(`!!document.querySelector(${JSON.stringify(root+' '+selector+' fieldset:not(:disabled)')})&&!!document.querySelector('[data-block-target=question][aria-selected=true]')`,'839 load Question selected');
+   await wait(`document.querySelector('#reference-content img')?.naturalWidth===2`,'839 question picture');
+   assert.equal(await page!.evaluate('devicePixelRatio'),2);assert.equal(await page!.evaluate('innerWidth'),1440);
+   assert.equal(await page!.evaluate(`document.querySelector('[data-block-target=question][aria-selected=true]').textContent`),(language==='en'?enCatalog:koCatalog)['Question']);
+   for(const tab of originalTabs)assert.ok((await tabs()).includes(tab),'existing tab retained: '+tab);
+   assert.equal(await page!.evaluate(`!!document.querySelector('dialog[open]')`),false);
+   await writeFile(join(out,'event-arrival.png'),await page!.screenshot());
+   await click(page!,'#stage-comment');await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 event-arrival away');
+   assert.deepEqual(await page!.evaluate(viewExpression),originalView,'pre-ask view/reference/camera restored');
+   assert.equal(await page!.evaluate(`(()=>{const nodes=[...document.querySelector('#reference-content').childNodes];return nodes.length===window.__questionOriginalReferenceNodes.length&&nodes.every((node,i)=>node===window.__questionOriginalReferenceNodes[i])&&document.querySelector('#person-select')===window.__questionOriginalPersonSelect;})()`),true);
+   // The same genuine pending stream must select Question on initial navigation, not only event arrival.
+   await page!.goto('about:blank');await page!.goto(url.href);
+   await wait(`!!document.querySelector(${JSON.stringify(root+' '+selector+' fieldset:not(:disabled)')})&&!!document.querySelector('[data-block-target=question][aria-selected=true]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 pending on page load');
+   for(const tab of originalTabs)assert.ok((await tabs()).includes(tab),'existing tab on pending load: '+tab);
+   await writeFile(join(out,'load.png'),await page!.screenshot());
+   // Establish the previous review view on this document before checking identity/camera restoration.
+   await click(page!,'#stage-comment');await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 pending load away');
+   if(picture==='parts')await click(page!,'#native-one');await click(page!,'#zoom-in');
+   await page!.evaluate(`window.__questionOriginalReferenceNodes=[...document.querySelector('#reference-content').childNodes];window.__questionOriginalPersonSelect=document.querySelector('#person-select')`);
+   const pendingPreviousView=await page!.evaluate(viewExpression);
+   await click(page!,'#workspace-pending-ask');await wait(`document.querySelector('#reference-content img')?.naturalWidth===2&&!!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 pending load return');
+   // Comments exists for both backdrop kinds, including parts whose source has no model blocks.
+   await click(page!,'#stage-comment');await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 restore previous view');
+   assert.deepEqual(await page!.evaluate(viewExpression),pendingPreviousView,'actual view/reference/camera restored');
+   assert.equal(await page!.evaluate(`(()=>{const nodes=[...document.querySelector('#reference-content').childNodes];return nodes.length===window.__questionOriginalReferenceNodes.length&&nodes.every((node,i)=>node===window.__questionOriginalReferenceNodes[i])&&document.querySelector('#person-select')===window.__questionOriginalPersonSelect;})()`),true,'prior reference node identity restored');
+   await writeFile(join(out,'away.png'),await page!.screenshot());
+   await click(page!,'#workspace-pending-ask');await wait(`!!document.querySelector('#workspace-interview-answer[data-question-image-active]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 return image');
+   // Return after the shipped Comment action enabled capture on the review backdrop.
+   await wait(`!document.querySelector('#rig-viewport.stage-comment-mode,#reference-viewport.stage-comment-mode')`,'839 transient image refuses pin mode');
+   const pinBox:any=await page!.evaluate(`document.querySelector('#reference-viewport').getBoundingClientRect().toJSON()`);
+   await page!.mouse('mousePressed',pinBox.x+pinBox.width/2,pinBox.y+pinBox.height/2);await page!.mouse('mouseReleased',pinBox.x+pinBox.width/2,pinBox.y+pinBox.height/2);
+   assert.equal(await page!.evaluate(`!!document.querySelector('.stage-comment-composer')`),false,'no pointed comment composer on transient question image');
+   await writeFile(join(out,'back.png'),await page!.screenshot());
+   await page!.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});for(const value of ['topology_other','density_auto'])form.querySelector('input[value="'+value+'"]').click();const other=form.querySelector('textarea[name="other.topology"]');other.value=${JSON.stringify('  Custom topology · 직접 입력\n')};other.dispatchEvent(new Event('input',{bubbles:true}));form.querySelector('button[type=submit]').scrollIntoView({block:'center'});})()`);
+   await click(page!,selector+' button[type=submit]');
+   await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'&&document.querySelector('#review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`,'839 answer saved');
+   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
+   assert.deepEqual(await page!.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
+   assert.equal(await page!.evaluate(`document.querySelector('#workspace-pending-ask').disabled||document.querySelector('#workspace-pending-ask').classList.contains('primary')`),false);
+   assert.equal(await page!.evaluate(`document.querySelector('#workspace-act-row').hidden`),false);
+   await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
+   await writeFile(join(out,'answered.png'),await page!.screenshot());
+   const bytes=await readFile(join(out,'one-screen.json'),'utf8'),act=parseRecordAct(JSON.parse(bytes));assert.equal(act.kind,'interview-picks');
+   if(act.kind!=='interview-picks')throw Error('wrong act');
+   assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
+   const expected=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});
+   assert.equal(bytes,JSON.stringify(expected));assert.equal(sha(await readFile(new URL('../src/job-act.ts',import.meta.url))),baseline.writerSourceSha256);
+   // The fixture server replays the committed act just as the real retained job stream does on reload.
+   const pending=fixture.fake.events.find(event=>event.type==='pending'&&event.ask.askId===fixture.ask.askId);
+   if(!pending||pending.type!=='pending')throw Error('missing pending fixture event');fixture.fake.events.push({type:'act',jobId:fixture.session.jobId,generation:fixture.display.publication.generation+2,cursor:String(fixture.fake.events.length+1),act});
+   await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 reload readback');
+   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
+   assert.deepEqual(await page!.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
+   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' textarea[name="other.topology"]')}).value`),'  Custom topology · 직접 입력\n');
+   assert.equal(await page!.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false);
+   assert.ok(await page!.evaluate(`document.querySelector('#review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`));
+   await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
+   await writeFile(join(out,'reload.png'),await page!.screenshot());
+   const observation={originalView,pendingPreviousView,transientPinRefused:true,pendingOnLoad:true,picture,language,width:1440,height:900,dpr:2,originalTabs,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));
+   console.log('839_QUESTION_PASS '+JSON.stringify(observation));
+   assert.deepEqual(await jobInputHashes(fixture.root),before);
+  }finally{await fixture.close();}
+ }
+}
+
 try{
  // Reuse the shared launcher's browser discovery and process policy without a suite-local wrapper.
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
+ if(completedPicture){holdImages=false;await questionTabChecks();}
+ if(!completedPicture){
  for(const [width,height] of (interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]])){
  await page.setViewport(width!,height!);
- for(const kind of ['interview-picks'] as RecordScreenKind[])for(const picture of (freshParts?[false]:[false,true,'parts']) as readonly (boolean|'parts')[]){
+ for(const kind of ['interview-picks'] as RecordScreenKind[])for(const picture of [false] as readonly (boolean|'parts')[]){
   const fixture=await recordScreenFixture(kind,picture,undefined,undefined,freshParts);const before=await jobInputHashes(fixture.root);
   try{
    for(const language of ['en','ko'] as const){
@@ -130,9 +218,10 @@ try{
   }finally{await fixture.close();}
  }
  }
+ }
  assert.equal(exceptions.length,0,'no browser exceptions');
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
- const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:0,askKinds:1,languages:['en','ko'],backdrops:freshParts?['bound-parts']:['empty','picture','parts'],viewports:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],exceptions,mutations,browserWorkers:'shared launchCdpSession defaults'};
+ const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:completedPicture?4:0,askKinds:1,languages:['en','ko'],backdrops:completedPicture?['rig','parts']:freshParts?['bound-parts']:['empty'],viewports:completedPicture?[[1440,900]]:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],...(completedPicture?{dpr:2}:{}),exceptions,mutations,browserWorkers:'shared launchCdpSession defaults'};
  await writeFile(join(output,'result.json'),JSON.stringify(result,null,2)+'\n');console.log('750_BROWSER_PASS '+JSON.stringify(result));
 }catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,completedCases:cases},null,2)+'\n');if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await rm(profile,{recursive:true,force:true});}

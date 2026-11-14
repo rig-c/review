@@ -6,6 +6,11 @@ import { createViewControls } from './view-controls.ts';
 import {WorkspacePreferenceStore,panelBounds} from './workspace-preferences.ts';
 import { createPartsViewport } from './parts-viewport-provider.ts';
 
+/** The active image-question form is mounted only while it owns the main reference pane. */
+export function hasTransientQuestionImage(root:{querySelector(selector:string):Element|null}=document):boolean {
+  return root.querySelector('#workspace-interview-answer[data-question-image-active=true] [data-interview-main]')!==null;
+}
+
 type Ask = InterviewQuestion['set']['asks'][number];
 type Pick = Picks['picks'][number];
 /** Element factory: the stage interview translates with `t`; the job page tags `data-job-text` for its own relocalize. */
@@ -202,7 +207,7 @@ export function interviewRecords(diagnostics:readonly InterviewDiagnostic[]=[],h
 
 /** B's list | image | survey builder. Hosts supply genuine source data and their own submit transport. */
 export function createInterviewForm(options:{question:InterviewDisplayQuestion;id:string;node?:InterviewText;form?:HTMLFormElement;fieldset?:HTMLFieldSetElement;source?:HTMLElement;
-    images:readonly {name:string;src:string}[];questions?:readonly {label:string;answered:boolean}[]|(()=>readonly {label:string;answered:boolean}[]);selected?:number;onSelect?:(index:number)=>void;answered?:boolean;
+    mainView?:boolean;images:readonly {name:string;src:string}[];questions?:readonly {label:string;answered:boolean}[]|(()=>readonly {label:string;answered:boolean}[]);selected?:number;onSelect?:(index:number)=>void;answered?:boolean;
     diagnostics?:readonly InterviewDiagnostic[];historical?:readonly HistoricalInterview[]}) {
   const question=options.question,copy=new Map<HTMLElement,string>();
   const make=<K extends keyof HTMLElementTagNameMap>(tag:K,content?:string)=>element(tag,content,options.node);
@@ -231,6 +236,7 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   if(question.partsUnavailable)context.append(node('p','interview.partsUnavailable'));
   const provenance=make('p'),binding=make('code',question.ref.path+' · '+question.ref.sha256);context.append(provenance,binding);
   if(question.answer)context.append(make('pre',[question.answer.by,question.answer.at,question.answer.source].filter(value=>typeof value==='string').join(' · ')),make('pre',typeof question.answer.verbatim==='string'?question.answer.verbatim:''));
+  if(options.mainView&&options.images.length){form.dataset.interviewMain='';Object.assign(form,{interviewImages:options.images});}
   const art=make('aside');art.className='interview-art';form.prepend(art);
   let view:ReturnType<typeof interviewImageView>|undefined,list:HTMLElement|undefined,records:HTMLElement|undefined;
   const showImage=(index:number)=>{view?.dispose();view?.element.remove();view=interviewImageView(options.images,index,showImage,context);art.append(view.element);};
@@ -246,7 +252,7 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   const localize=()=>{for(const [item,key]of copy)item.textContent=t(item.dataset.jobText??key);refresh();};
   const dispose=()=>{view?.dispose();form.removeEventListener('input',refresh);form.removeEventListener('change',refresh);form.removeEventListener('job-form-language',localize);};
   form.addEventListener('input',refresh);form.addEventListener('change',refresh);form.addEventListener('job-form-language',localize);
-  try{if(options.images.length)showImage(0);else art.append(context);refresh();}catch(error){dispose();throw error;}
+  try{if(options.mainView&&options.images.length){art.hidden=true;fields.append(context);}else if(options.images.length)showImage(0);else art.append(context);refresh();}catch(error){dispose();throw error;}
   return {form,fieldset:fields,submit,status,retainedNote,
     read:()=>jobInterviewValue(question.set.question,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),retainedNote??''),
     localize,dispose};

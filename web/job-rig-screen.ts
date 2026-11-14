@@ -113,7 +113,6 @@ export function createJobRigScreen(options: {
       if (!options.formDependencies) throw new Error('JOB_ACT_KIND_DISABLED');
       const inspection = await prepareJobInspection(display, signal);
       try {
-        const forms = prepareJobForms(display, options.window.state().pending, ask => formFor(ask, inspection, options.formDependencies!));
         let previous = display.publication.previousPublicationId, picture:JobRigScreenPrepared|null = null;
         const jobId=jobPublicationRoutes(display,location.origin).jobId;
         const seen = new Set([display.publication.publicationId]);
@@ -140,6 +139,7 @@ export function createJobRigScreen(options: {
           picture = {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints:new Set(),parts};
         }
         if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
+        const forms = prepareJobForms(display, options.window.state().pending, ask => formFor(ask, inspection, {...options.formDependencies!,interviewMainView:!!picture}),!!picture);
         return {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints:new Set(),record:{inspection,forms,picture}};
       } catch(error) {inspection.dispose();throw error;}
     }
@@ -285,7 +285,7 @@ export function createJobRigScreen(options: {
   function refreshRecordForms():void {
     const record=mounted?.record??mounted?.modals,deps=options.formDependencies;if(!record||!deps)return;
     const state=options.window.state(),display=record.inspection.display;
-    const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,mounted!.checkpoints)),ask=>record.forms.get(ask.askId)??formFor(ask,record.inspection,deps));
+    const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,mounted!.checkpoints)),ask=>{const previous=record.forms.get(ask.askId),saved=state.pending.find(item=>item.askId===ask.askId);if(previous&&saved?.act?.kind==='interview-picks'&&ask.status==='answered'&&!previous.submitting&&previous.form.dataset.interviewAnswered!=='true'){previous.dispose?.();return formFor(saved,record.inspection,{...deps,interviewMainView:!!mounted?.record?.picture});}return previous??formFor(saved??ask,record.inspection,{...deps,interviewMainView:!!mounted?.record?.picture});},!!mounted?.record?.picture);
     for(const [id,entry]of next)record.forms.set(id,entry);
     for(const [id,entry]of record.forms){const ask=state.pending.find(ask=>ask.askId===id);entry.fieldset.disabled=entry.submitting||ask?.status!=='pending'||state.preparing||state.closed||!state.receipt||!options.access.capability;}
     screen?.recordForms?.([...record.forms.values()].map(entry=>entry.form));

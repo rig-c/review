@@ -130,10 +130,11 @@ export function prepareJobForms<Form>(
     display: DisplayPublicationV3,
     asks: readonly PendingAskV3[],
     prepare: (ask: PendingAskV3) => Form,
+    answeredInterviews = false,
 ): Map<string, Form> {
     const prepared = new Map<string, Form>();
     for (const ask of asks) {
-        if (ask.publicationId !== display.publication.publicationId || ask.status !== 'pending') continue;
+        if (ask.publicationId !== display.publication.publicationId || ask.status !== 'pending' && !(answeredInterviews && ask.status === 'answered' && ask.subject.kind === 'interview-picks')) continue;
         assertJobAskSource(ask, display);
         prepared.set(ask.askId, prepare(ask));
     }
@@ -1321,6 +1322,7 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
 
 /** The answer builder owns no page shell, transport or draft collection. */
 export interface JobFormDependencies {
+    interviewMainView?:boolean;
     node: JobFormNode;
     translate: typeof import('./i18n.ts').t;
     helpers: ReturnType<typeof createJobFormHelpers> & {
@@ -1339,7 +1341,7 @@ export interface JobFormDependencies {
 }
 
 /** Build the existing answer form with explicit host dependencies. */
-    function formFor(ask: PendingAskV3, prepared: JobPreparedInspection, deps: JobFormDependencies): JobForm {
+    function formFor(ask: JobWindowAsk, prepared: JobPreparedInspection, deps: JobFormDependencies): JobForm {
         const {node, translate: t, helpers: {selectValues, imageGallery, planTextList, planStepText, assertJobAskSource, jobCheckpointContext},
             draftStorage, localDraftKey, saveDraft, window, access, pageId} = deps;
         if (ask.publicationId !== prepared.display.publication.publicationId)
@@ -1370,9 +1372,14 @@ export interface JobFormDependencies {
         let disposeInterview:(()=>void)|undefined;
         let interviewForm:ReturnType<typeof createInterviewForm>|undefined;
         if (subject.kind === 'interview-picks') {
-            const question = prepared.interview?.questions.find(item => item.set.id === subject.setId && item.set.question === subject.questionId);
+            let question:InterviewDisplayQuestion|undefined = prepared.interview?.questions.find(item => item.set.id === subject.setId && item.set.question === subject.questionId);
             if (!question || !question.editable) throw new Error('JOB_ASK_INVALID');
             if (question.ref.sha256 !== ask.source.optionSet?.sha256) throw new Error('JOB_ACT_SOURCE_STALE');
+            if(ask.status==='answered'&&ask.act?.kind==='interview-picks'){
+                const value=ask.act.value;
+                const picks=value.selections.map(selection=>({ask:selection.itemId,option_id:selection.optionId,...(selection.otherText!==null?{other_text:selection.otherText}:{})}));
+                question={...question,saved:interviewPicksRecord(question.ref,picks,value.note,ask.act.at)};
+            }
             const interviewState = prepared.interview?.interview ?? prepared.display.publication.interview ?? null;
             const inspectionRecord = interviewState?.records.find(
                 item => item.timeKind === 'inspection' &&
@@ -1393,7 +1400,7 @@ export interface JobFormDependencies {
                 legacyNotice.dataset.record = legacyDiagnostic.record;
                 fields.prepend(legacyNotice);
             }
-            interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,
+            interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:deps.interviewMainView,
                 images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered'});
             disposeInterview=interviewForm.dispose;read=interviewForm.read;
             submitKey = 'interview.save';

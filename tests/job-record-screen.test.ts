@@ -331,8 +331,8 @@ test('#805 record option-set with a parts picture reaches the existing inspector
   const opened=await rigHost()!.read('/api/review','GET') as {subject:string};
   expect(opened.subject).toBe('parts');expect(f.workspace.result.kind).toBe('option-set');
   let available:unknown='not-bound',inspector=false;
-  const element={querySelector:()=>({}),parentElement:{},checked:false},defaults={defaultCameraSync:false,defaultIdleRepeat:false,theme:'system'};
-  const environment={host:{record:{hasPicture:true},ownerActAccess:null},partsOnly:true,data:undefined,screenRoot:element,shell:{language:{}},rigInspector:{strip:{},comments:{button:{},panel:{}}},viewport:{state:{}},appearance:null,workspace:null,inspectorBlocks:null,liveIssueCount:null,readOnly:null,actReadOnly:null,
+  const element={querySelector:()=>({append(){}}),parentElement:{},checked:false},defaults={defaultCameraSync:false,defaultIdleRepeat:false,theme:'system'};
+  const environment={questionPanel:{},host:{record:{hasPicture:true},ownerActAccess:null},partsOnly:true,data:undefined,screenRoot:element,shell:{language:{}},rigInspector:{strip:{},comments:{button:{},panel:{}}},viewport:{state:{}},appearance:null,workspace:null,inspectorBlocks:null,liveIssueCount:null,readOnly:null,actReadOnly:null,
    el:()=>element,input:()=>element,select:()=>element,text(){},document:{},tr:(key:string)=>key,readOnlyReason:()=>null,access:{},fitCamera(){},bindAppearance:()=>({}),bindReviewDialog(){},bindInspector(){inspector=true;},
    bindWorkspaceUI:()=>({defaults:()=>defaults}),bindInspectorBlocks:(options:{available:unknown})=>{available=options.available;return {};}};
   const run=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(gate+'\n'+parts)};return startParts;}`)(environment);
@@ -392,4 +392,11 @@ test('#809 checkpoint answers reuse the form contract without the evidence grid'
   }
   ready!.record!.inspection.dispose();
  }finally{await h.close();}
+});
+
+test('#839 disposed workspace cannot re-enter the transient image while tabs unregister',async()=>{
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('function syncQuestionImage():void {'),end=source.indexOf('/** Pictured backdrop forms',start);
+ let released=0;const scope={disposed:true,releaseInterview:()=>{released++;}};
+ const run=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return syncQuestionImage;}`)(scope);
+ run();run();expect(released).toBe(1);expect(scope.releaseInterview).toBeNull();
 });

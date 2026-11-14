@@ -1,4 +1,5 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+  'Question': '질문',
   "Answer saved": "저장됨",
   "Approve": "승인",
   "Request changes": "수정 요청",

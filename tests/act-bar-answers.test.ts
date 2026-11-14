@@ -12,8 +12,8 @@ function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  let state:{kind:string;text:string}|null=null;const rigInspector={act:{hidden:true},actBar:{saveState:()=>state,setSaveState:(value:{kind:string;text:string})=>{state=value;}}};
  const calls:string[]=[],session={feedbackWarnings:[],status:'pending'};
  const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
-  session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
-  recordDialog:{querySelector:()=>({disabled:false}),querySelectorAll:()=>[submit]},
+  questionForms:[],session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
+  recordDialog:{querySelector:(selector:string)=>selector==='fieldset:not(:disabled)'?{disabled:false}:null,querySelectorAll:()=>[submit]},
   button:()=>save,select:()=>select,document:{querySelector:()=>label},
   setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
   verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};
@@ -82,4 +82,9 @@ for(const item of [
  expect(nodes['review-message'].textContent).toBe(item.footerOnly?'':'JOB_VISUAL_UNAVAILABLE');
  expect(act.hidden).toBe(item.reveal?false:item.hidden);expect(rowReveals).toBe(item.reveal?1:0);
  expect(legacy.map(control=>control.hidden)).toEqual(item.reveal?[true,true,true]:[false,false,false]);
+});
+
+test('#839 answered Question keeps a secondary enabled opener and saved act row',()=>{
+ const h=harness([]);(h.env as any).questionForms=[{dataset:{interviewAnswered:'true'},querySelector:()=>({disabled:true}),querySelectorAll:()=>[]}];h.render();
+ expect(h.rigAsk.hidden).toBe(false);expect(h.rigAsk.disabled).toBe(false);expect(h.rigAsk.classList.values.has('primary')).toBe(false);expect(h.rigInspector.act.hidden).toBe(false);
 });

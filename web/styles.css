@@ -552,3 +552,9 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-act-row .review-message.error{max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row .review-draft-state{min-width:0;max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]){flex-wrap:wrap}
+
+/* Pictured job questions keep the shared bottom panel and its existing tabs. */
+.workspace-interview-panel{flex:1;min-height:0;overflow:auto;padding:12px 15px}
+.workspace-interview-panel>.interview-answer{grid-template-columns:minmax(9rem,.4fr) minmax(0,1fr);grid-template-rows:auto auto;overflow:visible}
+.workspace-interview-panel .interview-answer-fields{grid-column:2;overflow:visible}
+.workspace-interview-panel .interview-questions{position:static}
