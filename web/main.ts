@@ -1439,7 +1439,7 @@ function recordCommentsChanged():void {
 /** The shared answer forms use the one native dialog, opened from the current ask line. */
 function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',standalone=false):void {
  const imageForms=forms.filter(form=>form.dataset.interviewMain!==undefined);
- const active=imageForms.find(form=>!form.querySelector('fieldset')?.disabled)??imageForms[0];
+ const active=imageForms.find(form=>!form.querySelector('fieldset')?.disabled);
  const previous=document.getElementById('workspace-interview-answer');
  if(previous?.firstElementChild!==active){
   releaseInterview?.();releaseInterview=null;
@@ -1472,8 +1472,8 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
    releaseInterview=release;viewDisposers.push(release);
   }
  }
- forms=forms.filter(form=>!imageForms.includes(form));
- if(imageForms.length&&!forms.length){recordDialog?.close();return;}
+ forms=forms.filter(form=>!imageForms.includes(form)||form.querySelector('fieldset')?.disabled);
+ if(active&&!forms.length){recordDialog?.close();return;}
  if(!forms.length&&!recordDialog)return;
  if(!recordDialog){
   recordDialog=panelMake('dialog',{id:'job-record-asks',className:'workspace-drawer'});recordDialog.setAttribute('aria-label',tr(label));
@@ -1494,9 +1494,9 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
   setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);comments?.refresh();partsSubject?.refreshComments();
   button('save').disabled=!forms.some(form=>!form.querySelector('fieldset')?.disabled);button('save').onclick=()=>rigAsk.click();
  }
- if(standalone){rigAsk.hidden=false;setSourceText(rigAsk,t('interview.title'));}
+ if(standalone||forms.some(form=>imageForms.includes(form))){rigAsk.hidden=false;setSourceText(rigAsk,t('interview.title'));}
  rigAsk.disabled=!forms.length;
- if((standalone?added.length>0:added.some(form=>form.classList.contains('interview-answer')))&&!recordDialog.open)rigAsk.click();
+ if((standalone?added.length>0:added.some(form=>form.classList.contains('interview-answer')&&!form.querySelector('fieldset')?.disabled))&&!recordDialog.open)rigAsk.click();
 }
 /** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {

@@ -376,3 +376,18 @@ test('#814 bound record image route serves only the sealed part and rejects writ
   expect((await fetch(base+'stage-parts',{method:'POST'})).status).toBeGreaterThanOrEqual(400);
  }finally{await h.close();}
 });
+
+
+test('#834 a completed pictured ask retains the same readable form while its fieldset becomes disabled',async()=>{
+ const h=await harness(true,'fixture','interview-picks');let rendered:readonly HTMLFormElement[]=[];
+ try{
+  h.options.load=async()=>{rigHost()!.attach({stage:()=>null,redraw(){},message(){},recordForms:forms=>{rendered=forms;}});rigHost()!.displayed();};
+  const ready=await h.screen.prepare(h.f.display,new AbortController().signal);h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
+  h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'pictured'};h.screen.changed(h.state);
+  const entry=ready!.record!.forms.get(h.f.ask.askId)!;expect(entry.form.dataset.interviewMain).toBeDefined();expect(entry.fieldset.disabled).toBe(false);
+  for(const radio of entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]'))if(['biped_std','density_high'].includes(radio.value))radio.checked=true;
+  const answer=entry.read();h.state.pending=[{...h.f.ask,status:'answered'}];h.screen.changed(h.state);
+  expect(rendered).toEqual([entry.form]);expect(entry.fieldset.disabled).toBe(true);expect(entry.read()).toEqual(answer);
+  expect([...entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')].filter(radio=>radio.checked)).toHaveLength(2);
+ }finally{await h.close();}
+});

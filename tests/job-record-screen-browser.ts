@@ -19,6 +19,7 @@ import {koCatalog} from '../web/catalog-ko.ts';
 
 const arg=(name:string)=>{const i=Bun.argv.indexOf(name);return i<0?undefined:Bun.argv[i+1];};
 const interviewOnly=Bun.argv.includes('--interview-only');
+const completedPicture=Bun.argv.includes('--completed-picture');
 const freshParts=Bun.argv.includes('--fresh-parts');
 const baseline=await Bun.file(new URL('./fixtures/interview-722-empty-note.json',import.meta.url)).json();
 const output=resolve(arg('--out')??'artifacts/record-screen-750');await mkdir(output,{recursive:true});
@@ -28,6 +29,51 @@ let page:InputCdpSession|undefined,command:((method:string,params?:Record<string
 let holdImages=false;const pausedImages:string[]=[];
 const exceptions:unknown[]=[],mutations:{method:string;path:string}[]=[],cases:unknown[]=[];
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('750_BROWSER_TIMEOUT '+label);}
+
+
+/** #834 regression: a real retained rig/parts host releases a finished pictured ask, then reopens its readback. */
+async function completedPictureChecks(){
+ for(const picture of [true,'parts'] as const)for(const language of ['en','ko'] as const){
+  const fixture=await recordScreenFixture('interview-picks',picture),out=join(output,picture==='parts'?'parts':'rig',language);
+  await mkdir(out,{recursive:true});fixture.output(out);
+  // Start with the genuine retained backdrop and no pending ask; add its one pictured ask after baseline measurement.
+  for(let index=fixture.fake.events.length-1;index>=0;index--)if(fixture.fake.events[index]!.type==='pending')fixture.fake.events.splice(index,1);
+  const before=await jobInputHashes(fixture.root);
+  try{
+   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
+   await page!.setViewport(1600,1000);await command!('Emulation.setDeviceMetricsOverride',{width:1600,height:1000,deviceScaleFactor:2,mobile:false});
+   await page!.goto(url.href);await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')`,'834 baseline inspection');
+   const inspectionExpression=`(()=>{const modes=[...document.querySelectorAll('#view-menu [data-view]')].map(node=>({id:node.dataset.view,disabled:node.disabled}));return {modes,blocks:['inspector-rig','inspector-playback','inspector-feedback'].map(id=>({id,hidden:document.getElementById(id).hidden})),tabsHidden:document.querySelector('.workspace-bottom-tabs').hidden,rigHidden:document.getElementById('rig-pane').hidden,referenceHidden:document.getElementById('reference-pane').hidden};})()`;
+   const inspectionState=()=>page!.evaluate<any>(inspectionExpression);
+   const original=await inspectionState();assert.ok(original.modes.some((mode:any)=>mode.id==='difference'));
+   fixture.fake.pending(fixture.ask,fixture.display.publication.generation+1);
+   const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
+   await wait(`!!document.querySelector('#workspace-interview-answer '+${JSON.stringify(selector+' fieldset:not(:disabled)')})`,'834 pending pictured form');
+   await wait(`document.querySelector('#reference-content img')?.naturalWidth===2`,'834 question image');
+   assert.equal(await page!.evaluate(`devicePixelRatio`),2);
+   assert.equal(await page!.evaluate(`document.querySelectorAll('#view-menu [data-view]').length>0&&[...document.querySelectorAll('#view-menu [data-view]')].every(node=>node.dataset.view.startsWith('interview-image-'))`),true);
+   await writeFile(join(out,'pending-picture.png'),await page!.screenshot());
+   await page!.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});for(const value of ['biped_std','density_high'])form.querySelector('input[value="'+value+'"]').click();form.querySelector('button[type=submit]').scrollIntoView({block:'center'});})()`);
+   await click(page!,selector+' button[type=submit]');
+   await wait(`!document.querySelector('#workspace-interview-answer')&&!!document.querySelector('#job-record-asks '+${JSON.stringify(selector+' fieldset:disabled')})`,'834 restored after final answer');
+   await wait(`!document.querySelector('#view-menu [data-view^="interview-image-"]')`,'834 original switch');
+   assert.equal(await page!.evaluate(`!!document.querySelector('dialog[open]')`),false,'answered dialog must wait for the ask-line action');
+   await wait(`JSON.stringify(${inspectionExpression})===${JSON.stringify(JSON.stringify(original))}`,'834 original reference ready');
+   const restored=await inspectionState();assert.deepEqual(restored,original,'switch, Difference availability, layout and hidden blocks restored');
+   await writeFile(join(out,'restored-inspection.png'),await page!.screenshot());
+   await click(page!,'#workspace-pending-ask');await wait(`!!document.querySelector('#job-record-asks[open] '+${JSON.stringify(selector)})`,'834 answered dialog');
+   const readback=await page!.evaluate<any>(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});return {disabled:form.querySelector('fieldset').disabled,checked:[...form.querySelectorAll('input:checked')].map(node=>node.value),text:form.textContent};})()`);
+   assert.equal(readback.disabled,true);assert.deepEqual(readback.checked,['biped_std','density_high']);assert.ok(readback.text.includes('Select rig topology'));
+   assert.equal(fixture.submissions.length,1);assert.equal(fixture.submissions[0]!.kind,'interview-picks');
+   await writeFile(join(out,'answered-dialog.png'),await page!.screenshot());
+   await click(page!,'#job-record-asks .workspace-drawer-close');assert.deepEqual(await inspectionState(),original);
+   assert.deepEqual(await jobInputHashes(fixture.root),before);
+   cases.push({picture:picture==='parts'?'parts':'rig',language,dpr:2,original,restored,readback:{disabled:readback.disabled,checked:readback.checked},submissions:fixture.submissions.length});
+  }finally{await page!.goto('about:blank');await fixture.close();}
+ }
+ assert.deepEqual(exceptions,[]);await writeFile(join(output,'result.json'),JSON.stringify({cases,exceptions},null,2)+'\n');
+ console.log('834_COMPLETED_PICTURE_PASS '+JSON.stringify({cases:cases.length,languages:['en','ko'],backdrops:['rig','parts'],dpr:2}));
+}
 
 try{
  // Keep the existing CDP launcher, limiting this tiny fixture browser to one renderer process.
@@ -39,6 +85,7 @@ try{
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
+ if(completedPicture){await completedPictureChecks();}else{
  for(const [width,height] of (interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]])){
  await page.setViewport(width!,height!);
  for(const kind of ['interview-picks'] as RecordScreenKind[])for(const picture of (freshParts?[false]:[false,true,'parts']) as readonly (boolean|'parts')[]){
@@ -139,5 +186,6 @@ try{
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
  const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:0,askKinds:1,languages:['en','ko'],backdrops:freshParts?['bound-parts']:['empty','picture','parts'],viewports:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],exceptions,mutations,browserWorkers:'single-process/no-zygote; one renderer; raster threads=1; JS heap 1024MiB'};
  await writeFile(join(output,'result.json'),JSON.stringify(result,null,2)+'\n');console.log('750_BROWSER_PASS '+JSON.stringify(result));
+ }
 }catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,completedCases:cases},null,2)+'\n');if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await rm(profile,{recursive:true,force:true});}
