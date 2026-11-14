@@ -23,10 +23,6 @@
     "issue": 842,
     "reason": "IN PROGRESS under 89d907 phase2a: Trusted focus setup failed before pan/Fit assertions; harness cause unresolved. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
   },
-  "tests/job-record-browser.ts": {
-    "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Answer submission trusted target unavailable; harness cause unresolved. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
-  },
   "tests/open-workspace-browser.ts": {
     "issue": 842,
     "reason": "IN PROGRESS under 89d907 phase2a: Owner restart did not complete before aggregate sample budget; cause unexplained. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
