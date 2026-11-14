@@ -145,7 +145,7 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
     // guarantees overflow: constrain only this test's existing strip instead.
     // Hash the exact inline style attribute we own, not the live tab state that
     // these menu actions intentionally change. Restore the attribute in finally.
-    const stripBefore=await page.evaluate<{style:string|null;width:number;tabs:number}>(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs'),row=strip.querySelector('.block-row:not([hidden])');return {style:strip.getAttribute('style'),width:strip.clientWidth,tabs:row.querySelectorAll('[role=tab]').length};})()`);
+    const stripBefore:{style:string|null;width:number;tabs:number}=await page.evaluate<{style:string|null;width:number;tabs:number}>(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs'),row=strip.querySelector('.block-row:not([hidden])');return {style:strip.getAttribute('style'),width:strip.clientWidth,tabs:row.querySelectorAll('[role=tab]').length};})()`);
     assert.ok(stripBefore.tabs>2,'overflow fixture has actual inspection tabs');
     const narrowWidth=Math.min(320,Math.floor(stripBefore.width/2));
     const beforeHash=createHash('sha256').update(JSON.stringify(stripBefore.style)).digest('hex');
@@ -203,8 +203,8 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
     }finally{
      await page.evaluate(`(()=>{const strip=document.querySelector('.workspace-bottom-tabs'),style=${JSON.stringify(stripBefore.style)};if(style===null)strip.removeAttribute('style');else strip.setAttribute('style',style);})()`);
      await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
-     const restoredStyle=await page.evaluate<string|null>(`document.querySelector('.workspace-bottom-tabs').getAttribute('style')`);
-     const restoredHash=createHash('sha256').update(JSON.stringify(restoredStyle)).digest('hex');
+     const restoredStyle:string|null=await page.evaluate<string|null>(`document.querySelector('.workspace-bottom-tabs').getAttribute('style')`);
+     const restoredHash:string=createHash('sha256').update(JSON.stringify(restoredStyle)).digest('hex');
      const restored={...mutation,restoredHash,restored:restoredHash===beforeHash};
      console.log('BOTTOM_TABS_DOM_MUTATION_RESTORED '+JSON.stringify(restored));
      await writeFile(receipt+'-restored.json',JSON.stringify(restored,null,2)+'\n');
