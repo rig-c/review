@@ -3,9 +3,9 @@
  * EN/KO, interview picks, picture/empty, 1600x1000; no installed-producer conformance claim. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {existsSync,readdirSync} from 'node:fs';
+import {existsSync} from 'node:fs';
 import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
-import {homedir,tmpdir} from 'node:os';
+import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
@@ -30,12 +30,7 @@ const exceptions:unknown[]=[],mutations:{method:string;path:string}[]=[],cases:u
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('750_BROWSER_TIMEOUT '+label);}
 
 try{
- // Keep the existing CDP launcher, limiting this tiny fixture browser to one renderer process.
- const launcherSource=await readFile(new URL('./parts-explorer-browser.ts',import.meta.url),'utf8');
- const finder=launcherSource.slice(launcherSource.indexOf('function findBrowserBinary()'),launcherSource.indexOf('export async function launchCdpSession('));
- const chrome:string=new Function('join','homedir','existsSync','readdirSync',new Bun.Transpiler({loader:'ts'}).transformSync(finder)+';return findBrowserBinary();')(join,homedir,existsSync,readdirSync);
- const wrapper=join(output,chrome.includes('headless')?'chrome-limited-headless':'chrome-limited');await writeFile(wrapper,'#!/usr/bin/env bash\nexec '+"'"+chrome.replaceAll("'","'\\''")+"'"+' --single-process --no-zygote --renderer-process-limit=1 --num-raster-threads=1 --disable-breakpad --disable-crash-reporter --js-flags=--max-old-space-size=1024 "$@"\n',{mode:0o755});
- process.env.CHROME_BIN=wrapper;
+ // Reuse the shared launcher's browser discovery and process policy without a suite-local wrapper.
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
@@ -137,7 +132,7 @@ try{
  }
  assert.equal(exceptions.length,0,'no browser exceptions');
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
- const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:0,askKinds:1,languages:['en','ko'],backdrops:freshParts?['bound-parts']:['empty','picture','parts'],viewports:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],exceptions,mutations,browserWorkers:'single-process/no-zygote; one renderer; raster threads=1; JS heap 1024MiB'};
+ const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:0,askKinds:1,languages:['en','ko'],backdrops:freshParts?['bound-parts']:['empty','picture','parts'],viewports:interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],exceptions,mutations,browserWorkers:'shared launchCdpSession defaults'};
  await writeFile(join(output,'result.json'),JSON.stringify(result,null,2)+'\n');console.log('750_BROWSER_PASS '+JSON.stringify(result));
 }catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,completedCases:cases},null,2)+'\n');if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await rm(profile,{recursive:true,force:true});}

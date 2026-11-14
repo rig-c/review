@@ -53,3 +53,12 @@ test('suite argv uses supported output/locale contracts and enables assertions',
  expect(browserInvocation('tests/parts-explorer-browser.ts','default','/tmp/evidence').env.OUT_JSON).toBe('/tmp/evidence/report.json');
  expect(browserInvocation('tests/parts-comments-browser.ts','default','/tmp/evidence').argv).toEqual(['bun','tests/parts-comments-browser.ts']);
 });
+
+test('gate CLI uses an explicit argv entry and importing it does not execute the CLI',async()=>{
+ const imported=Bun.spawn([process.execPath,'-e',"await import('./scripts/browser-gate.ts');console.log('IMPORT_SAFE')"],{stdout:'pipe',stderr:'pipe'});
+ const [importOut,importErr,importExit]=await Promise.all([new Response(imported.stdout).text(),new Response(imported.stderr).text(),imported.exited]);
+ expect(importExit).toBe(0);expect(importErr).toBe('');expect(importOut.trim()).toBe('IMPORT_SAFE');
+ const direct=Bun.spawn([process.execPath,'scripts/browser-gate.ts'],{stdout:'pipe',stderr:'pipe'});
+ const [planOut,planErr,planExit]=await Promise.all([new Response(direct.stdout).text(),new Response(direct.stderr).text(),direct.exited]);
+ expect(planExit).toBe(0);expect(planErr).toBe('');expect(JSON.parse(planOut)).toEqual(await browserPlan());
+});

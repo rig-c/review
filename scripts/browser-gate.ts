@@ -1,5 +1,6 @@
 import {readdir, mkdir, writeFile} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import exclusions from './browser-exclusions.json';
 
 export type Exclusions = Record<string, {issue:number;reason:string}>;
@@ -63,7 +64,7 @@ export async function runBrowserSuites(output:string) {
   }
   return failed?1:0;
 }
-if (import.meta.main) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (Bun.argv.includes('--run')) {
     const output=resolve(process.env.BROWSER_ARTIFACTS??'artifacts/browser');
     process.exitCode=await runBrowserSuites(output);
