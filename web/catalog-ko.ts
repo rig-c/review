@@ -2995,6 +2995,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "{0} · folds: not run": "{0} · 접힘(folds): 실행 안 됨",
   "{0} · key {1}": "{0} · 단축키 {1}",
   "{0} · picture-px / top-left / y↓ · {1} frames{2}": "{0} · picture-px / 좌상단 / y↓ · {1}프레임{2}",
+  "{0} · repeating": "{0} · 반복 재생 중",
   "{0} · review F{1}": "{0} · 리뷰 F{1}",
   "{0} · rig review": "{0} · 리그 리뷰",
   "{0} · rig review compare": "{0} · 리그 리뷰 비교",
