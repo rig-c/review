@@ -646,7 +646,7 @@ test('#774 disposing the replaced shared screen releases its player and assets e
  const main=readFileSync(new URL('../web/main.ts',import.meta.url),'utf8');
  const body=main.slice(main.indexOf('function disposeScreen()'),main.indexOf("window.addEventListener('pagehide',disposeScreen"));
  const calls:string[]=[];
- const scope={disposed:false,suspendScreen:()=>calls.push('suspend'),lifecycle:{abort:()=>calls.push('abort')},comments:null,partsSubject:null,turnPad:null,inspectorBlocks:null,inspectorTabs:null,workspace:null,controlDispose:null,appearance:null,rigInspector:{actBar:{dispose(){}}},shell:{dispose(){}},viewDisposers:[],overlays:null,player:{dispose:()=>calls.push('player')},assets:{dispose:()=>calls.push('assets')}};
+ const scope={releaseInterview:null,disposed:false,suspendScreen:()=>calls.push('suspend'),lifecycle:{abort:()=>calls.push('abort')},comments:null,partsSubject:null,turnPad:null,inspectorBlocks:null,inspectorTabs:null,workspace:null,controlDispose:null,appearance:null,rigInspector:{actBar:{dispose(){}}},shell:{dispose(){}},viewDisposers:[],overlays:null,player:{dispose:()=>calls.push('player')},assets:{dispose:()=>calls.push('assets')}};
  const dispose=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(body)};return disposeScreen;}`)(scope);
  dispose();dispose();expect(calls).toEqual(['suspend','abort','player','assets']);expect(scope.disposed).toBe(true);
 });

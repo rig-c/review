@@ -128,7 +128,7 @@ for(const language of ['en','ko'] as const)test(`#736 Amendment 1 ${language}: a
  const reasonStart=source.indexOf('function rigDifferenceReason()'),reason=source.slice(reasonStart,source.indexOf('/** Restore the compiled view',reasonStart));
  const start=source.indexOf('function layoutEligibility()'),end=source.indexOf('function setReferenceInput(',start);
  const {controls,buttons,label}=menu(),panes=new Map<string,{hidden:boolean}>(),painting={naturalWidth:320,naturalHeight:240};
- const scope:any={controls,rigDifference:null,rigDifferenceFailure:null,partsSubject:null,view:'compare',rigInput:{state:'loaded'},referenceInput:{state:'absent'},
+ const scope:any={activeInterviewImages:null,controls,rigDifference:null,rigDifferenceFailure:null,partsSubject:null,view:'compare',rigInput:{state:'loaded'},referenceInput:{state:'absent'},
   assets:{stage:{x:0,y:0,width:320,height:240}},player:{},selectedInspector:()=>'rig',singleEligibility,rigRestCanvas,tr:t,
   el:(id:string)=>{if(id==='reference-content')return {querySelector:()=>painting};if(!panes.has(id))panes.set(id,{hidden:false});return panes.get(id);},
   text:()=>{},fitCamera:()=>{},leaveRigDifference:()=>{throw new Error('No diagnostic was active in this fixture');},

@@ -76,8 +76,8 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   if(boot.saveStates.length!==1)failures.push(mode+'/'+lang+' save-state count '+boot.saveStates.length);
   if(mode!=='joined-interview'){assert.equal(boot.home,'workspace-act-row');assert.equal(boot.inHeading,false);assert.equal(boot.rowVisible,true);assert.deepEqual(boot.visibleStates,['review-draft-state']);}
   if(flashOnly)continue;
-  const state=await page.evaluate<any>(`(()=>{const visible=n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])');const headline=document.querySelector('#workspace-ask-headline');return {language:document.documentElement.lang,primary:[...document.querySelectorAll('button.primary')].filter(visible).map(n=>n.id),question:headline.textContent,whiteSpace:getComputedStyle(headline).whiteSpace,overflow:getComputedStyle(headline).textOverflow,changesDisabled:document.querySelector('#request-changes').disabled,saveHidden:document.querySelector('#save').hidden};})()`);
-  assert.equal(state.language,lang);assert.equal(state.primary.length,1,mode+' one emphasised answer');assert.notEqual(state.whiteSpace,'nowrap');assert.notEqual(state.overflow,'ellipsis');
+  const state=await page.evaluate<any>(`(()=>{const visible=n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])');const headline=document.querySelector('#workspace-ask-headline');return {language:document.documentElement.lang,primary:[...document.querySelectorAll('#workspace-review-act button.primary')].filter(visible).map(n=>n.id),question:headline.textContent,whiteSpace:getComputedStyle(headline).whiteSpace,overflow:getComputedStyle(headline).textOverflow,changesDisabled:document.querySelector('#request-changes').disabled,saveHidden:document.querySelector('#save').hidden};})()`);
+  assert.equal(state.language,lang);assert.equal(state.primary.length,1,mode+' one emphasised act-bar answer');assert.notEqual(state.whiteSpace,'nowrap');assert.notEqual(state.overflow,'ellipsis');
   if(['rig','direction','parts'].includes(mode))assert.equal(state.changesDisabled,true);
   await writeFile(join(out,`${mode}-${lang}-pending.png`),await page.screenshot());
   if(mode==='rig'){
@@ -94,11 +94,13 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await until(page,`!document.querySelector('#save').disabled`);
   }
   if(!['rig','direction','parts'].includes(mode)){
-   await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#job-record-asks[open]')`);
+   const questionTab=mode==='interview-rig'||mode==='interview-parts',answerRoot=questionTab?'#workspace-interview-answer':'#job-record-asks';
+   await click(page,'#workspace-pending-ask');await until(page,questionTab?`document.querySelector('[data-block-target=question][aria-selected=true]')!==null`:`!!document.querySelector('#job-record-asks[open]')`);
    assert.equal(await page.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`),false);
-   if(mode.startsWith('interview')||mode==='joined-interview')await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#job-record-asks input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
-   const selector=mode==='checkpoint-fail'?'#job-record-asks button[data-job-text="job.fail"]':mode==='checkpoint-pass'?'#job-record-asks button[data-job-text="Pass"]':'#job-record-asks button[type=submit]';
+   if(mode.startsWith('interview')||mode==='joined-interview')await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll(${JSON.stringify(answerRoot+' input[type=radio]')}))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
+   const selector=mode==='checkpoint-fail'?'#job-record-asks button[data-job-text="job.fail"]':mode==='checkpoint-pass'?'#job-record-asks button[data-job-text="Pass"]':answerRoot+' button[type=submit]';
    await writeFile(join(out,`${mode}-${lang}-answer.png`),await page.screenshot());
+   if(questionTab)await page.evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`);
    await click(page,selector);
    await until(page,`!document.querySelector('#job-record-asks[open]')&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
@@ -117,7 +119,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   if(['rig','direction','parts'].includes(mode)){
    await click(page,'#save');
    await until(page,`document.querySelector('#save').hidden&&document.querySelector('#workspace-pending-ask').hidden`);
-   const done=await page.evaluate<any>(`({question:document.querySelector('#workspace-ask-headline').textContent,primary:[...document.querySelectorAll('button.primary')].filter(n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])')).length})`);
+   const done=await page.evaluate<any>(`({question:document.querySelector('#workspace-ask-headline').textContent,primary:[...document.querySelectorAll('#workspace-review-act button.primary')].filter(n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])')).length})`);
    assert.equal(done.primary,0);
    assert.equal(await page.evaluate(`document.getElementById('workspace-act-row').hidden`),true);
    assert.deepEqual(await page.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty']);

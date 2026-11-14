@@ -12,8 +12,8 @@ function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  let state:{kind:string;text:string}|null=null;const rigInspector={act:{hidden:true},actBar:{saveState:()=>state,setSaveState:(value:{kind:string;text:string})=>{state=value;}}};
  const calls:string[]=[],session={feedbackWarnings:[],status:'pending'};
  const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
-  session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
-  recordDialog:{querySelector:()=>({disabled:false}),querySelectorAll:()=>[submit]},
+  questionForms:[],session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
+  recordDialog:{querySelector:(selector:string)=>selector==='fieldset:not(:disabled)'?{disabled:false}:null,querySelectorAll:()=>[submit]},
   button:()=>save,select:()=>select,document:{querySelector:()=>label},
   setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
   verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};
@@ -82,4 +82,29 @@ for(const item of [
  expect(nodes['review-message'].textContent).toBe(item.footerOnly?'':'JOB_VISUAL_UNAVAILABLE');
  expect(act.hidden).toBe(item.reveal?false:item.hidden);expect(rowReveals).toBe(item.reveal?1:0);
  expect(legacy.map(control=>control.hidden)).toEqual(item.reveal?[true,true,true]:[false,false,false]);
+});
+
+test('#839 answered Question readback does not reveal completed answer controls or the act row',()=>{
+ const h=harness([]);(h.env as any).questionForms=[{dataset:{interviewAnswered:'true'},querySelector:()=>({disabled:true}),querySelectorAll:()=>[]}];h.render();
+ expect(h.rigAsk.hidden).toBe(true);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.classList.values.has('primary')).toBe(false);expect(h.rigInspector.act.hidden).toBe(true);
+});
+
+
+for(const sample of [
+ {name:'saved interview-only',record:true,subjects:[],saved:true,expected:'Answer saved'},
+ {name:'pending interview',record:true,subjects:[{kind:'interview-picks'}],saved:false,expected:'Not submitted'},
+ {name:'rig verdict after an interview answer',record:false,subjects:[{kind:'review-verdict',stage:'rig-review'}],saved:true,expected:'Not submitted'},
+ {name:'parts verdict after an interview answer',record:false,subjects:[{kind:'parts-verdict'}],saved:true,expected:'Not submitted'},
+ {name:'record host with a pending verdict',record:true,subjects:[{kind:'review-verdict',stage:'rig-review'}],saved:true,expected:'Not submitted'},
+ {name:'saved interview with a pending checkpoint',record:true,subjects:[{kind:'checkpoint'}],saved:true,expected:'Not submitted'},
+ {name:'saved interview with a footer refusal',record:true,subjects:[],saved:true,error:true,expected:'JOB_VISUAL_UNAVAILABLE'},
+])test('#851 footer '+sample.name+' reads the production footer node',()=>{
+ const begin=main.indexOf('function renderDraftState(): void {'),end=main.indexOf('\nfunction renderProvenance',begin);
+ const messageBegin=main.indexOf('function message(value:'),messageEnd=main.indexOf('\nasync function api',messageBegin);
+ const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(messageBegin,messageEnd)+'\n'+main.slice(begin,end));
+ const footer={textContent:sample.error?'JOB_VISUAL_UNAVAILABLE':'Not submitted',title:'',classList:{error:!!sample.error,contains(name:string){return name==='error'&&this.error;},toggle(name:string,on:boolean){if(name==='error')this.error=on;}}};
+ const nodes={message:footer,'review-message':{...footer,textContent:''},dirty:{...footer,textContent:'Not submitted'}};
+ const env={host:{...(sample.record?{record:{hasPicture:true}}:{}),pendingSubjects:()=>sample.subjects,reviewState:()=> 'Reviewing'},pendingAnswers:sample.subjects,liveIssueCount:()=>0,saving:false,draftConflict:false,draftStatus:null,answerSaved:sample.saved,actReadOnly:null,dirty:false,renderAnswerControls(){},rigInspector:{actBar:{setSaveState(state:{text:string}){nodes.dirty.textContent=state.text;}},act:{hidden:false}},sourceTextContent:(node:{textContent:string})=>node.textContent,el:(id:keyof typeof nodes)=>nodes[id],text:(id:keyof typeof nodes,value:string)=>{nodes[id].textContent=value;}};
+ const render=new Function('env',`with(env){${script};return renderDraftState;}`)(env);render();
+ const footerText=()=>nodes.message.textContent;expect(footerText()).toBe(sample.expected);
 });

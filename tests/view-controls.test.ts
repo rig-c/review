@@ -686,3 +686,25 @@ test('#709 a job rig subject opens at Fit over a restored bookmark camera; the s
   expect(main).toContain('}finally{viewport.state.cameraRestoring=false;}\n if(!keepCamera){viewport.requestFit();fitCamera();}');
   expect(main).toContain('inspectionOpening=true;try{');
 });
+
+test('#830 question A → B → close restores the original shared switch and retires old handlers',async()=>{
+ const {recordScreenDom}=await import('./helpers/job-record-screen-fixture.ts');
+ const dom=await recordScreenDom();
+ try{
+  const selected:string[]=[];
+  const controls=createViewControls({layout:'rigStep1',viewSwitch:{currentMode:'rig',groups:[{modes:[{id:'rig',labelKey:'Rig',pressed:true},{id:'reference',labelKey:'Reference',pressed:false}]}],onChange:id=>selected.push(id)}});
+  const group=controls.zoomGroup!,zoom=[...controls.zoomButtons,controls.nativeOne!];
+  const config=(id:string)=>({currentMode:id,groups:[{modes:[{id,labelKey:id,pressed:true}]}],onChange:()=>selected.push(id)});
+  const closeA=controls.replaceViewSwitch(config('question-A'));
+  expect(controls.viewModeIds).toEqual(['question-A']);
+  const retired=controls.viewSwitch!.querySelector('button')!;retired.click();
+  closeA();const closeB=controls.replaceViewSwitch(config('question-B'));
+  expect(controls.viewModeIds).toEqual(['question-B']);
+  expect(retired.onclick).toBeNull();
+  controls.viewSwitch!.querySelector('button')!.click();closeB();closeB();
+  expect(controls.viewModeIds).toEqual(['rig','reference']);
+  expect([...group.children].filter(node=>zoom.includes(node as HTMLButtonElement))).toEqual(zoom);
+  expect(selected).toEqual(['question-A','question-B']);
+  controls.viewSwitch!.querySelector('button')!.click();expect(selected.at(-1)).toBe('rig');
+ }finally{dom.restore();}
+});

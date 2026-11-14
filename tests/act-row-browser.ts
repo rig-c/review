@@ -75,7 +75,7 @@ const geometry=`(()=>{
  const style=n=>{if(!n)return null;const s=getComputedStyle(n);return {rect:rect(n),text:n.textContent.trim(),size:parseFloat(s.fontSize),weight:Number(s.fontWeight),color:s.color,whiteSpace:s.whiteSpace,overflow:s.textOverflow,overflowX:s.overflowX,overflowY:s.overflowY,clientWidth:n.clientWidth,scrollWidth:n.scrollWidth,clientHeight:n.clientHeight,scrollHeight:n.scrollHeight};};
  const colorProbe=document.createElement('canvas').getContext('2d');const color=value=>{colorProbe.fillStyle=value;return colorProbe.fillStyle;};
  const rootStyle=getComputedStyle(document.documentElement);
- return {language:document.documentElement.lang,bars:document.querySelectorAll('#workspace-review-act').length,rows:document.querySelectorAll('#workspace-act-row').length,
+ return {language:document.documentElement.lang,footerMessage:document.getElementById('message').textContent,bars:document.querySelectorAll('#workspace-review-act').length,rows:document.querySelectorAll('#workspace-act-row').length,
   rowVisible:visible(row),headerVisible:visible(header),direct:row?.previousElementSibling===header&&header?.parentElement===row?.parentElement,home:bar.parentElement?.id,
   row:rect(row),bar:rect(bar),header:rect(header),heading:rect(heading),panel:rect(document.getElementById('workspace-inspector')),
   headingChildren:[...heading.children].map(n=>n.classList.contains('workspace-bottom-tabs')?'tabs':n.id),
@@ -99,7 +99,8 @@ async function capture(page:InputCdpSession,out:string,name:string){
  await writeFile(join(out,name+'.json'),JSON.stringify(state,null,2)+'\n');
  await writeFile(join(out,name+'.png'),await page.screenshot());return state;
 }
-function assertPending(state:any,mode:Mode,width:number){
+function assertPending(state:any,mode:Mode,width:number,expectedFooter?:string){
+ if(mode==='rig'||mode==='parts')assert.equal(state.footerMessage,expectedFooter,'pending verdict preserves origin/main publication-label footer');
  for(const part of state.footer){assert.ok(part.rect.left>=0&&part.rect.right<=width&&part.rect.top>=state.footer[0].rect.top&&part.rect.bottom<=state.footer[0].rect.bottom,'shown footer item inside viewport and footer: '+part.id);assert.ok(part.scrollWidth<=part.clientWidth+1&&part.scrollHeight<=part.clientHeight+1,'shown footer text fits: '+part.id);}
  assert.equal(state.bars,1);assert.equal(state.rows,1);assert.equal(state.rowVisible,true);assert.equal(state.direct,true);assert.equal(state.home,'workspace-act-row');
  assert.equal(state.headerVisible,mode!=='embedded-rig');
@@ -130,7 +131,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
  const profile=await mkdtemp(join(tmpdir(),'review840-'));
  let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
-  let url:string;
+  let url:string,expectedPendingFooter:string|undefined;
   if(mode==='standalone'){
    const fixture=await jobFixture(),capability='b'.repeat(64);
    const server=await startServer(await loadReview(join(fixture.root,'out')),{port:0,capability,stateDir:fixture.state});
@@ -141,6 +142,8 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   }else{
    const fixture=await scriptedJobWindowFixture({c5Parts:'mesh'});close=()=>fixture.close();
    const stage=mode==='embedded-rig'?'rig':mode,publication=await fixture.publish(stage);
+   // origin/main changed(): a fresh compatible publication has no previousLabel, so its label is the footer.
+   if(mode==='rig'||mode==='parts')expectedPendingFooter=publication.label;
    await fixture.ask(publication,stage==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:stage==='direction'?'direction-review':'rig-review'});
    url=fixture.host.ownerUrl;
   }
@@ -209,7 +212,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(await page.evaluate(`document.getElementById('save').hidden`),false);continue;
   }
   assert.deepEqual(violations,[],'zero visible live answer controls before a visible nonempty question; no legacy/out-of-row flash');
-  assertPending(initial,mode,width);
+  assertPending(initial,mode,width,expectedPendingFooter);
   if(['rig','direction','parts','embedded-rig'].includes(mode))assert.ok(held>0,'asset response held while live workspace was loading');
   assert.ok(!loading.some(sample=>sample.bar&&!sample.row),'a live act is only visible inside its row');
   // Test-only DOM mutation: announce and hash the exact node before changing it;
@@ -221,7 +224,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   await writeFile(join(out,'headline-mutation-begin.json'),JSON.stringify(mutation,null,2)+'\n');
   try{
    await page.evaluate(`document.getElementById('workspace-ask-headline').textContent=${JSON.stringify((headlineBefore.text+' ').repeat(16))}`);
-   const wrapped:any=await capture(page,out,'long-question');assertPending(wrapped,mode,width);assert.ok(wrapped.headline.rect.height>initial.headline.rect.height);
+   const wrapped:any=await capture(page,out,'long-question');assertPending(wrapped,mode,width,expectedPendingFooter);assert.ok(wrapped.headline.rect.height>initial.headline.rect.height);
    assert.equal(await page.evaluate(`document.getElementById('workspace-ask-headline').scrollWidth<=document.getElementById('workspace-ask-headline').clientWidth+1`),true);
   }finally{
    await page.evaluate(`document.getElementById('workspace-ask-headline').textContent=${JSON.stringify(headlineBefore.text)}`);
@@ -237,7 +240,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   }
   await click(page,'#workspace-bottom-collapse');
   await wait(page,`document.querySelector('.inspector-body').hidden`);
-  const collapsed:any=await capture(page,out,'collapsed');assertPending(collapsed,mode,width);
+  const collapsed:any=await capture(page,out,'collapsed');assertPending(collapsed,mode,width,expectedPendingFooter);
   assert.ok(Math.abs(collapsed.panel.height-collapsed.heading.height)<=2,'collapsed panel is only its heading');
   assert.ok(collapsed.panel.height<initial.panel.height,'collapse actually shrinks the panel');
   await click(page,'#workspace-bottom-collapse');await wait(page,`!document.querySelector('.inspector-body').hidden`);
@@ -253,7 +256,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
      await wait(page,`document.body.dataset.ready==='true'&&!document.body.inert&&document.querySelector('#review-draft-recovery button')`);
      const blocked:{submit:boolean;changes:boolean;noticeInRow:boolean;noticeVisible:boolean;kind:string}=await page.evaluate<any>(`({submit:document.getElementById('save').disabled,changes:document.getElementById('request-changes').disabled,noticeInRow:!!document.querySelector('#workspace-act-row #review-draft-recovery'),noticeVisible:!!document.getElementById('review-draft-recovery').getClientRects().length,kind:document.getElementById('review-draft-state').dataset.saveState})`);
      assert.deepEqual(blocked,{submit:true,changes:true,noticeInRow:true,noticeVisible:true,kind:'failed'});
-     const recovery:any=await capture(page,out,'restore-'+action+'-blocked');assertPending(recovery,mode,width);
+     const recovery:any=await capture(page,out,'restore-'+action+'-blocked');assertPending(recovery,mode,width,expectedPendingFooter);
      const bands:any=await page.evaluate(`(()=>{const r=id=>document.getElementById(id).getBoundingClientRect().toJSON();return {headline:r('workspace-ask-headline'),notice:r('review-draft-state'),recovery:r('review-draft-recovery')};})()`);
      assert.ok(bands.headline.top<bands.notice.top,'restore notice follows the first-line question');
      assert.ok(Math.abs((bands.headline.top+bands.headline.bottom)/2-(bands.recovery.top+bands.recovery.bottom)/2)<=1,'restore actions stay beside the first-line question');
@@ -283,7 +286,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    })()`);
    await writeFile(join(out,'answer-saved-state.json'),JSON.stringify(savedState,null,2)+'\n');
    assert.deepEqual(savedState.row,{kind:'saved',text:language==='ko'?koCatalog['Answer saved']:'Answer saved'});
-   if(savedState.pending)assertPending(saved,mode,width);
+   if(savedState.pending)assertPending(saved,mode,width,expectedPendingFooter);
    else{
     assert.equal(saved.rowVisible,false);assert.deepEqual(saved.states,['dirty']);assert.deepEqual(saved.answers,[]);assert.deepEqual(saved.primary,[]);
     assert.deepEqual(savedState.dirty,savedState.row,'completed dialog keeps the exact saved state in its one visible state copy');

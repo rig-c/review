@@ -1,4 +1,5 @@
 export const koCatalog: Readonly<Record<string, string>> = {
+  'Question': '질문',
   "Answer saved": "저장됨",
   "Approve": "승인",
   "Request changes": "수정 요청",
@@ -3441,7 +3442,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "This job was explicitly closed.": "이 작업은 명시적으로 종료되었습니다.",
   "The next result could not be displayed. The previous result is still shown.": "다음 결과를 표시하지 못했습니다. 이전 결과를 계속 표시합니다.",
   "The previous selection is unavailable in this result.": "이 결과에서 이전 선택 항목을 사용할 수 없습니다.",
-  "Human action saved.": "사용자 작업을 저장했습니다.",
+  "Human action saved.": "사용자 작업을 저장했어요.",
   "Updated from {0} to {1}.": "{0}에서 {1}(으)로 업데이트되었습니다.",
   "Approved · Next step": "승인됨 · 다음 단계",
   "Reviewing · {0} issues": "검수 중 · 이슈 {0}",
@@ -3457,7 +3458,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.retained": "이 초안은 {0}에 속합니다. 원래 소스에 연결된 채로 보관됩니다.",
   "job.saveCheckpoint": "체크포인트 결과 저장",
   "job.savePartsVerdict": "파츠 판정 저장",
-  "job.saved": "사용자 작업을 저장했습니다.",
+  "job.saved": "사용자 작업을 저장했어요.",
   "job.openPlanStep": "계획 단계 보기",
   "job.openPlan": "계획 보기",
   "job.signoff": "단계 승인 저장",

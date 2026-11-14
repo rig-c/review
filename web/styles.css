@@ -591,3 +591,15 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) .review-draft-recovery{grid-column:2;grid-row:1;justify-content:flex-end}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #save{grid-column:3;grid-row:1;justify-self:end}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #request-changes{grid-column:4;grid-row:1;justify-self:end}
+
+/* Pictured job questions keep the shared bottom panel and its existing tabs. */
+.workspace-interview-panel{flex:1;min-height:0;overflow:auto;padding:12px 15px}
+.workspace-interview-panel>.interview-answer{grid-template-columns:minmax(9rem,.4fr) minmax(0,1fr);grid-template-rows:auto auto;overflow:visible}
+.workspace-interview-panel .interview-answer-fields{grid-column:2;grid-row:1;overflow:visible}
+.workspace-interview-panel .interview-questions{position:static}
+.workspace-interview-panel .interview-answer>p[role=status]{grid-column:1/-1;grid-row:2}
+.workspace-interview-panel .interview-ask{border:0;border-top:1px solid var(--border-strong);padding-inline:0}
+.workspace-interview-panel .interview-ask>legend{font-weight:600;padding:0;margin-bottom:6px;white-space:pre-wrap;overflow-wrap:anywhere}
+.workspace-interview-panel .interview-image-context{overflow-wrap:anywhere;font-size:11px;color:var(--fg-muted)}
+.workspace-interview-panel .interview-image-context h2{font-size:14px;font-weight:600;margin:0 0 6px}
+.workspace-interview-panel .interview-image-context code{font:11px var(--font-mono)}

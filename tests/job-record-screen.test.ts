@@ -200,6 +200,7 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   const drafts=createJobFormDrafts({jobId:f.session.jobId,current:()=>inspection!,forms:()=>forms,storage:()=>({setItem:(key,value)=>{store.set(key,value);}})});
   const deps:JobFormDependencies={node,translate:key=>key,helpers:{...createJobFormHelpers(node,key=>key),jobCheckpointContext,assertJobAskSource:(ask,display)=>{prepareJobForms(display,[ask],()=>null);}},draftStorage:()=>({getItem:key=>store.get(key)??null}),...drafts,access:{capability:'fixture'},pageId:'page',window:{state:()=>({pending:[f.ask],receipt:null,preparing:false,closed:false,generation:1}),submit:async()=>{throw new Error('No submission in draft test');}}};
   const entry=formFor(f.ask,inspection,deps);forms.set(f.ask.askId,entry);
+  expect(entry.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(false);
   const radios=[...entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')],identities=radios.map(input=>({name:input.name,value:input.value}));
   for(const input of radios){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
   entry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='  직접 입력\n';
@@ -214,6 +215,15 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   expect(restored.read()).toEqual(entry.read());
   expect(restored.read()).toEqual({questionId:'rig_type',selections:[{itemId:'topology',optionId:'topology_other',otherText:'  직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:''});
   expect(restored.form.querySelectorAll('select')).toHaveLength(0);
+  // #851 review: a finalized answer reads back from its act even when this browser holds a different draft.
+  const at=new Date().toISOString();
+  const answered={...f.ask,status:'answered',act:{kind:'interview-picks',at,value:{questionId:'rig_type',selections:[{itemId:'topology',optionId:radios.find(input=>input.name==='choice.topology'&&input.value!=='topology_other')!.value,otherText:null},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:''}}} as any;
+  const finalized=formFor(answered,inspection,deps);
+  expect([...finalized.form.querySelectorAll<HTMLInputElement>('input[type=radio]')].filter(input=>input.checked).map(input=>input.value)).toEqual([answered.act.value.selections[0].optionId,'density_auto']);
+  expect(finalized.dirty).toBe(false);
+  expect(finalized.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(true);
+  restored.form.dataset.interviewAnswered='true';restored.form.dispatchEvent(new Event('change'));
+  expect(restored.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(true);
  }finally{inspection?.dispose();dom.restore();await f.close();}
 });
 
@@ -319,7 +329,7 @@ test('#784 model-less reference checkpoint survives preparation, receipt rearm a
  }finally{await h.close();}
 });
 
-test('#805 record option-set with a parts picture reaches the existing inspector gate without rig data',async()=>{
+test('#839 record parts pictures keep ordinary inspector eligibility without compiled rig data',async()=>{
  const h=await harness('parts','fixture','interview-picks'),f=h.f;try{
   h.dom.set('ResizeObserver',class{observe(){}disconnect(){}});h.dom.set('MutationObserver',class{observe(){}disconnect(){}});h.dom.set('window',new EventTarget());h.dom.set('requestAnimationFrame',()=>1);h.dom.set('cancelAnimationFrame',()=>{});
   Object.assign(h.dom.document,{addEventListener(){},removeEventListener(){}});
@@ -331,16 +341,27 @@ test('#805 record option-set with a parts picture reaches the existing inspector
   const opened=await rigHost()!.read('/api/review','GET') as {subject:string};
   expect(opened.subject).toBe('parts');expect(f.workspace.result.kind).toBe('option-set');
   let available:unknown='not-bound',inspector=false;
-  const element={querySelector:()=>({}),parentElement:{},checked:false},defaults={defaultCameraSync:false,defaultIdleRepeat:false,theme:'system'};
-  const environment={host:{record:{hasPicture:true},ownerActAccess:null},partsOnly:true,data:undefined,screenRoot:element,shell:{language:{}},rigInspector:{strip:{},comments:{button:{},panel:{}}},viewport:{state:{}},appearance:null,workspace:null,inspectorBlocks:null,liveIssueCount:null,readOnly:null,actReadOnly:null,
+  const element={querySelector:()=>({append(){}}),parentElement:{},checked:false},defaults={defaultCameraSync:false,defaultIdleRepeat:false,theme:'system'};
+  const environment={questionPanel:{},host:{record:{hasPicture:true},ownerActAccess:null},partsOnly:true,data:undefined,screenRoot:element,shell:{language:{}},rigInspector:{strip:{},comments:{button:{},panel:{}}},viewport:{state:{}},appearance:null,workspace:null,inspectorBlocks:null,liveIssueCount:null,readOnly:null,actReadOnly:null,
    el:()=>element,input:()=>element,select:()=>element,text(){},document:{},tr:(key:string)=>key,readOnlyReason:()=>null,access:{},fitCamera(){},bindAppearance:()=>({}),bindReviewDialog(){},bindInspector(){inspector=true;},
    bindWorkspaceUI:()=>({defaults:()=>defaults}),bindInspectorBlocks:(options:{available:unknown})=>{available=options.available;return {};}};
   const run=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(gate+'\n'+parts)};return startParts;}`)(environment);
-  await run(opened,{issues:[]},{capabilityRequired:true});expect(available).toEqual(['feedback']);expect(inspector).toBe(true);
+  await run(opened,{issues:[]},{capabilityRequired:true});expect(available).toBeUndefined();expect(inspector).toBe(true);
   // The same gate retains the existing rig and picture-free record decisions.
   const bind=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(gate)};return bindWorkspace;}`)(environment);
-  bind(true);expect(available).toBeUndefined();environment.host.record.hasPicture=false;bind(false);expect(available).toEqual(['feedback']);
+  environment.partsOnly=false;bind(true);expect(available).toBeUndefined();bind(false);expect(available).toEqual(['feedback']);
+  environment.partsOnly=true;environment.host.record.hasPicture=false;bind(false);expect(available).toEqual(['feedback']);
  }finally{await h.close();}
+});
+
+test('#839 a question without option images retains its actual parts backdrop',async()=>{
+ const fixture=await recordScreenFixture('interview-picks','parts',undefined,undefined,false,false);
+ try{
+  const interview=await (await fetch(fixture.origin+fixture.display.routes.apiBase+'interview')).json() as {questions:{images:unknown[]}[]};
+  expect(interview.questions).toHaveLength(1);expect(interview.questions[0]!.images).toHaveLength(0);
+  expect(fixture.backdrop?.publication.source.package).toBeDefined();
+  expect(fixture.backdrop?.publication.source.selector?.kind).toBe('draft');
+ }finally{await fixture.close();}
 });
 
  test('#814 fresh-host option-set uses its own sealed parts without a previous publication',async()=>{
@@ -392,4 +413,11 @@ test('#809 checkpoint answers reuse the form contract without the evidence grid'
   }
   ready!.record!.inspection.dispose();
  }finally{await h.close();}
+});
+
+test('#839 disposed workspace cannot re-enter the transient image while tabs unregister',async()=>{
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('function syncQuestionImage():void {'),end=source.indexOf('/** Pictured backdrop forms',start);
+ let released=0;const scope={disposed:true,releaseInterview:()=>{released++;}};
+ const run=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return syncQuestionImage;}`)(scope);
+ run();run();expect(released).toBe(1);expect(scope.releaseInterview).toBeNull();
 });

@@ -435,7 +435,13 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-cap.json`),JSON.stringify(cap,null,2)+'\n');
     await click(page,'#job-record-asks .workspace-drawer-close');
    }
-   if(kind.startsWith('interview')){
+   if(kind==='interview-rig'||kind==='interview-parts'){
+    await wait(page,`!!document.querySelector('#workspace-interview-answer .interview-grid fieldset:not(:disabled)')&&!!document.querySelector('[data-block-target=question][aria-selected=true]')`,kind+' Question tab');
+    assert.equal(await page.evaluate(`document.querySelectorAll('#workspace-interview-answer form.interview-answer').length`),1);
+    assert.equal(await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`),false);
+    assert.equal(await page.evaluate(`document.querySelector('[data-block-target=question][aria-selected=true]').textContent`),(lang==='en'?enCatalog:koCatalog)['Question']);
+    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-question.png`),await page.screenshot());
+   }else if(kind.startsWith('interview')){
     await wait(page,`!!document.querySelector('#job-record-asks .interview-grid fieldset:not(:disabled)')`,kind+' form');
     if(!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page,'#workspace-pending-ask');
     await wait(page,`!!document.querySelector('#job-record-asks[open] .interview-grid')`,kind+' dialog');
@@ -473,7 +479,7 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
     for(const target of targets){await selectTab(page,target);await proveHeading(page,kind+' '+lang+' '+width+' '+target);}
    }
    assert.equal(state.language,lang);assert.equal(state.entry,1);assert.equal(state.viewports,1);
-   const live=!kind.startsWith('standalone')&&kind!=='interview-standalone';
+   const live:boolean=!kind.startsWith('standalone')&&kind!=='interview-standalone';
    assert.deepEqual(state.headingOrder,live?['tabs','collapse']:['tabs','collapse','act'],'only live asks leave the bottom heading');
    if(live){assert.equal(state.actHome,'workspace-act-row');assert.equal(state.actRowDirect,true);}
    assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);

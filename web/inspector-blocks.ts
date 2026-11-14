@@ -35,7 +35,7 @@ export interface InspectorBlocksOptions {
  /** The rig reuses its block rows in the heading, with one programmatic Comments selection. */
  bottom?:{strip:HTMLElement;comment:HTMLButtonElement;panel:HTMLElement};
 }
-export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlocks):void;select(section:string,id:string):void;activate(section:string):void;dispose():void}
+export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlocks):void;select(section:string,id:string):void;activate(section:string):void;register(tab:{id:string;panel:HTMLElement;label:string;position?:'first'|'last'}):()=>void;dispose():void}
 
 interface Tab {button:HTMLButtonElement;id:string;panel:HTMLElement;included:HTMLElement[]}
 const isRow=(node:Element)=>node.classList.contains('block-row');
@@ -54,6 +54,7 @@ function bindPopupMenu(id:string,items:()=>HTMLButtonElement[],cleanups:(()=>voi
 export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlocks {
  const rows=new Map<string,InspectorTabs>(),ids=new Map<string,Set<string>>(),cleanups:(()=>void)[]=[];
  const definitions=new Map<string,{section:HTMLElement;row:HTMLElement;scrollRoot:HTMLElement;tabs:Tab[];syncOverflow:()=>void}>(),saved:ActiveBlocks={};
+ const external=new Set<string>();
  let active:string|undefined;
  let disposedState:ActiveBlocks|undefined;
  const state=()=>disposedState??Object.fromEntries([...rows].map(([name,row])=>[name,row.state()!]));
@@ -88,12 +89,16 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
     };
     const items:HTMLButtonElement[]=[],more=bindPopupMenu('workspace-tabs-more-'+name,()=>{syncOverflow();return items.filter(item=>!item.hidden);},cleanups,placeOverflow);
     more.button.className='workspace-tabs-more';more.button.hidden=true;more.menu.className='workspace-tabs-menu';
+    const updateItems=()=>{
+    for(const item of items.splice(0))item.remove();
     for(const tab of tabs){
      const item=actionButton(tab.button.textContent??'',()=>{more.close(false);rows.get(name)?.select(tab.id);syncOverflow();tab.button.focus();});
      item.setAttribute('role','menuitem');item.dataset.blockMoreTarget=tab.id;item.tabIndex=-1;item.hidden=true;items.push(item);more.menu.append(item);
     }
+    };updateItems();
     row.append(more.button,more.menu);
     syncOverflow=()=>{
+     if(items.length!==tabs.length)updateItems();
      const label=tr('More tabs');more.button.setAttribute('aria-label',label);more.button.setAttribute('title',label);
      for(const tab of tabs)tab.button.removeAttribute('data-tab-overflow');
      if(row.hidden||!(row.clientWidth>0)){more.button.hidden=true;more.close(false);return;}
@@ -123,22 +128,43 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
  }
  // Rebind the existing tab controller when the header mode changes. The shared Comments
  // button/panel retain identity; each mode retains its own last selected block.
- const activate=(name:string)=>{
+ const activate=(name:string,force=false)=>{
   if(!options.bottom||!definitions.has(name))return;
-  if(active===name)return;
+  if(active===name&&!force)return;
   if(active){saved[active]=rows.get(active)?.state()??saved[active]!;rows.get(active)?.dispose();rows.delete(active);definitions.get(active)!.row.hidden=true;}
   active=name;const {section,row,scrollRoot,tabs,syncOverflow}=definitions.get(name)!,bottom=options.bottom;
   bottom.comment.dataset.blockTarget='feedback';bottom.comment.hidden=true;bottom.comment.remove();row.hidden=false;
   const all=[...tabs,{button:bottom.comment,id:'feedback',panel:bottom.panel,included:[]}];
   ids.set(name,new Set(all.map(tab=>tab.id)));
-  const sync=()=>{section.dataset.comments=String(rows.get(name)?.state()==='feedback');syncOverflow();options.changed?.();};
+  const sync=()=>{section.dataset.comments=String(rows.get(name)?.state()==='feedback'||external.has(rows.get(name)?.state()??''));syncOverflow();options.changed?.();};
   for(const tab of all)tab.button.setAttribute('aria-selected',String(tab.id===saved[name]));
   rows.set(name,bindInspectorTabs(sync,()=>{},{tabs:all.map(tab=>({id:tab.id,button:tab.button,panels:[tab.panel],included:tab.included,attribute:'aria-selected'})),panels:all.map(tab=>tab.panel),root:row,scrollRoot,initialize:true}));
-  section.dataset.comments=String(saved[name]==='feedback');syncOverflow();
+  section.dataset.comments=String(saved[name]==='feedback'||external.has(saved[name]!));
+  for(const tab of tabs)if(external.has(tab.id))tab.panel.setAttribute('aria-labelledby',tab.button.id);syncOverflow();
  };
  if(options.bottom)activate(options.sections[0]?.dataset.inspectorPanel??'');
  return {
   state:()=>({...saved,...state()}),activate,
+  register(tab){
+   if(!options.bottom||external.has(tab.id))return ()=>{};
+   external.add(tab.id);tab.panel.hidden=true;tab.panel.setAttribute('role','tabpanel');
+   const buttons:HTMLButtonElement[]=[];
+   for(const [name,definition]of definitions){
+    const button=actionButton(tr(tab.label),null);button.id='inspector-tab-'+name+'-'+tab.id;
+    button.dataset.blockTarget=tab.id;button.setAttribute('role','tab');button.setAttribute('aria-controls',tab.panel.id);button.setAttribute('aria-selected','false');button.tabIndex=-1;
+    definition.row.insertBefore(button,tab.position==='first'?definition.tabs[0]?.button??null:definition.row.querySelector('.workspace-tabs-more'));buttons.push(button);
+    const entry={button,id:tab.id,panel:tab.panel,included:[]};
+    if(tab.position==='first')definition.tabs.unshift(entry);else definition.tabs.push(entry);
+   }
+   const localize=onLanguageChange(()=>{for(const button of buttons)setSourceText(button,tab.label);syncActiveOverflow();});
+   if(active)activate(active,true);
+   let removed=false;
+   const remove=()=>{if(removed)return;removed=true;localize();external.delete(tab.id);
+    for(const [name,definition]of definitions){definition.tabs.splice(definition.tabs.findIndex(item=>item.id===tab.id),1);if(rows.get(name)?.state()===tab.id)rows.get(name)?.select(definition.tabs[0]?.id??'feedback');if(saved[name]===tab.id)saved[name]=definition.tabs[0]?.id??'feedback';}
+    for(const button of buttons)button.remove();tab.panel.hidden=true;if(active)activate(active,true);
+   };
+   cleanups.push(remove);return remove;
+  },
   select:(name,id)=>{rows.get(name)?.select(resolve(name,id));definitions.get(name)?.syncOverflow();},
   /** Restore saved tabs without touching the workspace's section scroll offset. */
   restore(value){for(const [name,id]of Object.entries(value)){if(options.bottom){const definition=definitions.get(name);if(id==='feedback'||definition?.tabs.some(tab=>tab.id===resolve(name,id)))saved[name]=resolve(name,id);}rows.get(name)?.restore(resolve(name,id));definitions.get(name)?.syncOverflow();}},
