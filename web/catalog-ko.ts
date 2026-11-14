@@ -211,6 +211,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "INTERVIEW_UNAVAILABLE: No interview is attached to this inspection.": "INTERVIEW_UNAVAILABLE: 이 검토에 연결된 인터뷰가 없어요.",
   "DIRECTION_SOURCE_CHANGED: undeclared playback input": "DIRECTION_SOURCE_CHANGED: 선언되지 않은 재생 입력입니다.",
   "DIRECTION_SOURCE_CHANGED: playback bytes differ from the bound SHA-256": "DIRECTION_SOURCE_CHANGED: 재생 입력의 SHA-256이 기록된 값과 다릅니다.",
+  "Take · {0} s": "테이크 · {0}초",
   "direction.title": "연출 검사",
   'direction.planes': '합성 레이어: {0}',
   'direction.threePlanes': '배경 → 인물 → 전경',

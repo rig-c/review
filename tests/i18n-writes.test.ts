@@ -245,3 +245,10 @@ test('#448 applied history exposes a new last row and preserves manual scrolling
  renderAppliedHistory(list,next,'second');
  expect([list.scrollLeft,list.scrollTop]).toEqual([25,17]);
 });
+
+ test('#829 take title retains duration through source translation in both languages',()=>{
+  for(const seconds of ['1','8','2.5']){
+   const en=`Take · ${seconds} s`,ko=`테이크 · ${seconds}초`;
+   expect(tr(en,'ko')).toBe(ko);expect(tr(ko,'en')).toBe(en);expect(tr(ko,'ko')).toBe(ko);
+  }
+ });
