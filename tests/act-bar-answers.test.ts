@@ -103,8 +103,8 @@ for(const sample of [
  const messageBegin=main.indexOf('function message(value:'),messageEnd=main.indexOf('\nasync function api',messageBegin);
  const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(messageBegin,messageEnd)+'\n'+main.slice(begin,end));
  const footer={textContent:sample.error?'JOB_VISUAL_UNAVAILABLE':'Not submitted',title:'',classList:{error:!!sample.error,contains(name:string){return name==='error'&&this.error;},toggle(name:string,on:boolean){if(name==='error')this.error=on;}}};
- const nodes={message:footer,'review-message':{...footer,textContent:''}};
- const env={host:{...(sample.record?{record:{hasPicture:true}}:{}),pendingSubjects:()=>sample.subjects,reviewState:()=> 'Reviewing'},pendingAnswers:sample.subjects,liveIssueCount:()=>0,saving:false,draftConflict:false,draftStatus:null,answerSaved:sample.saved,actReadOnly:null,dirty:false,renderAnswerControls(){},rigInspector:{actBar:{setSaveState(){}},act:{hidden:false}},el:(id:keyof typeof nodes)=>nodes[id],text:(id:keyof typeof nodes,value:string)=>{nodes[id].textContent=value;}};
+ const nodes={message:footer,'review-message':{...footer,textContent:''},dirty:{...footer,textContent:'Not submitted'}};
+ const env={host:{...(sample.record?{record:{hasPicture:true}}:{}),pendingSubjects:()=>sample.subjects,reviewState:()=> 'Reviewing'},pendingAnswers:sample.subjects,liveIssueCount:()=>0,saving:false,draftConflict:false,draftStatus:null,answerSaved:sample.saved,actReadOnly:null,dirty:false,renderAnswerControls(){},rigInspector:{actBar:{setSaveState(state:{text:string}){nodes.dirty.textContent=state.text;}},act:{hidden:false}},sourceTextContent:(node:{textContent:string})=>node.textContent,el:(id:keyof typeof nodes)=>nodes[id],text:(id:keyof typeof nodes,value:string)=>{nodes[id].textContent=value;}};
  const render=new Function('env',`with(env){${script};return renderDraftState;}`)(env);render();
  const footerText=()=>nodes.message.textContent;expect(footerText()).toBe(sample.expected);
 });
