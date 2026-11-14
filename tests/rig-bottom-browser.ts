@@ -34,6 +34,8 @@ async function run(lang:'en'|'ko',output:string){
   const owner=new URL(fixture.host.ownerUrl);owner.searchParams.set('lang',lang);await page.goto(owner.href,lang);
   const wait=async(expression:string,name:string)=>withDeadline('735.'+lang+'.'+name,20_000,async signal=>{while(!signal.aborted){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(25);}throw signal.reason;});
   await wait("!!document.querySelector('#rig-root canvas')&&!!document.querySelector('#stage-comment-list')&&!!document.querySelector('#save:not(:disabled)')&&!!document.querySelector('#view-coordinates')?.textContent",'ready');
+  // #844 keeps the pending question in the dedicated headline/act row; wait for its real render.
+  await wait("!!document.querySelector('#workspace-ask-headline')?.textContent?.trim()&&!document.querySelector('#workspace-act-row')?.hidden",'pending-act-row');
   await page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   const initial=await page.evaluate<ControlNumericCamera>(cameraExpression);assert.equal(initial.zoom,1,'opens at fit-relative zoom 1');
   await click(page,'#fit');await page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
@@ -60,6 +62,7 @@ async function run(lang:'en'|'ko',output:string){
     await record(mode+(comments?'-comments':'-blocks'),state);
     assert.equal(state.language,lang);assert.equal(state.mode,mode);assert.equal(state.rows,1);assert.equal(state.actVisible,true,'whole act visible');assert.equal(state.actInHeading,false);assert.equal(state.actInRow,true);assert.equal(state.actRowDirect,true);
     assert.equal(state.commentsVisible,false,'no bottom Comments tab');assert.equal(state.commentsPanel,comments);assert.ok(!state.tabs.includes(catalog['Comments (0)']));
+    // #844 lands the #838 Timeline rename; the question remains separate from the Review opener.
     assert.equal(state.tabs[0],catalog[mode==='rig'?'Part':'Timeline']);assert.equal(state.summaryInputs,0);assert.equal(state.commentLists,1);assert.equal(state.commentListInPanel,true);
     assert.equal(state.ask,catalog['Check the rig and motion.']);
     for(const label of state.modeLabels)assert.ok(!['Setup','Animate','Write review','셋업','애니메이트','리뷰 작성'].includes(label),'no bottom mode labels');

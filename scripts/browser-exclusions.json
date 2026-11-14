@@ -31,10 +31,6 @@
     "issue": 842,
     "reason": "UNRESOLVED restart stall: ONE phase2b Nova sourceb138e261 run20261114T101952Z-52710c9998f54a699ccdcba382b177c3 actualexit124 EN590.005s. Last recorded checkpoint cleanup-23886; cli-8.json then records successful new owner open exit0, but same-tab-owner-restart checkpoint never reached. KO NOT RUN; no product cause proven, no retry/exit workaround; candidate retained."
   },
-  "tests/rig-bottom-browser.ts": {
-    "issue": 842,
-    "reason": "IN PROGRESS under 89d907 phase2a: Current Transport/headline migration was not executed before sample budget ended. Source restored byte-for-byte to MAIN58ae050; not a product classification or a passing claim."
-  },
   "tests/act-row-browser.ts": {
     "issue": 850,
     "reason": "FLAKE: collapse step wait for .inspector-body hidden times out intermittently on main code (hosted CI and Nova); #850 fixes the race and returns the suite."
