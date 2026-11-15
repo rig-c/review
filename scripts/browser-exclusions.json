@@ -1,10 +1,1 @@
-{
-  "tests/stage1-corrections-browser.ts": {
-    "issue": 847,
-    "reason": "PRODUCT: lost human Chest opener/part-specific seed Apply path; whole suite unchanged, no split or moved Mesh cases; #847 must return the whole suite."
-  },
-  "tests/stage1-review-fixes-browser.ts": {
-    "issue": 847,
-    "reason": "PRODUCT: lost human Chest opener/part-specific seed Apply path; whole suite unchanged, no split or moved Mesh cases; #847 must return the whole suite."
-  }
-}
+{}

@@ -3613,4 +3613,5 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Parts images · no compiled rig loaded": "Parts images · no compiled rig loaded",
   "Parts ready. Source files remain unchanged.": "Parts ready. Source files remain unchanged.",
   "This request has no picture.": "This request has no picture.",
+  "The selected part has no chest regions. The chest editor keeps its current part.": "The selected part has no chest regions. The chest editor keeps its current part.",
 };

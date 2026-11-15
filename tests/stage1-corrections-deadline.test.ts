@@ -17,13 +17,9 @@ function pageWith(globals: object) {
 
 type ReadyName = keyof typeof STAGE1_READINESS;
 const partsNames = ['PARTS_NOT_READY', 'SCRATCH_NOT_READY', 'MESH_ROUTE_TIMEOUT', 'DELTA_ROUTE_TIMEOUT'] as const;
-const visibleFrame = '.review-stage-panel iframe:not([hidden])';
-
+const visibleFrame = '[data-part-list] button[data-slot=torso]';
 function partsPage(ready?: string, hidden = false) {
-  const frame = {contentDocument: {body: {dataset: {ready}, textContent: 'fixture'}}};
-  return pageWith({document: {querySelector: (selector: string) => {
-    return hidden && selector.includes(':not([hidden])') ? undefined : frame;
-  }}});
+  return pageWith({document: {body:{textContent:'fixture'},querySelector: () => ready==='true'&&!hidden?{}:null}});
 }
 
 function handoffPage(editor: object | undefined, text?: string) {
@@ -40,8 +36,8 @@ const unready: [ReadyName, string, ReturnType<typeof pageWith>][] = [
   ['PAGE_NOT_READY', 'handoff still reading', handoffPage({}, 'Reading producer')],
 ];
 for (const name of partsNames) {
-  unready.push([name, 'false marker is truthy but not ready', partsPage('false')]);
-  unready.push([name, 'ready iframe is hidden', partsPage('true', true)]);
+  unready.push([name, 'selected part row absent', partsPage('false')]);
+  unready.push([name, 'part row absent during replacement', partsPage('true', true)]);
 }
 for (const [name, label, page] of unready) {
   test(`${name} refuses ${label} through its actual readiness waiter`, async () => {
@@ -61,35 +57,24 @@ test('the actual readiness waiter accepts complete state', async () => {
   }
 });
 
-test('the actual readiness expression and waiter tolerate null iframe body during replacement', async () => {
+test('the actual readiness expression and waiter tolerate a missing part row during replacement', async () => {
   for (const name of partsNames) {
-    const frame: { contentDocument: { body: null | { dataset: { ready?: string }; textContent: string } } } = {
-      contentDocument: { body: null },
-    };
-    const page = pageWith({
-      document: {
-        querySelector: (selector: string) => (selector.includes(visibleFrame) ? frame : undefined),
-      },
-    });
-    expect(await page.evaluate(STAGE1_READINESS[name].expression)).toEqual({
-      ready: false,
-      detail: undefined,
-    });
-    setTimeout(() => {
-      frame.contentDocument.body = { dataset: { ready: 'true' }, textContent: 'fixture' };
-    }, 30);
-    await waitForStage1Readiness(page, name, 200);
+    let ready=false;
+    const page=pageWith({document:{body:null,querySelector:()=>ready?{}:null}});
+    expect(await page.evaluate(STAGE1_READINESS[name].expression)).toEqual({ready:false,detail:undefined});
+    setTimeout(()=>{ready=true;},30);
+    await waitForStage1Readiness(page,name,200);
     expect(page.reads.length).toBeGreaterThan(1);
   }
 });
 
-function applyPage() {
+function applyPage(beginChest = false) {
   const actions: unknown[] = [];
   const state = {record: '', chestDisabled: false, deltaDisabled: false, chestError: false, selected: 'torso', ops: [1]};
   const field = {value: '9', dispatchEvent: () => actions.push('input')};
   const elements = {
     'bust-r-x': field,
-    'bust-apply': {get disabled() { return state.chestDisabled; }, click: () => actions.push('chest apply')},
+    'bust-apply': {get disabled() { return state.chestDisabled; }, click: () => {actions.push('chest apply');if(beginChest){state.chestDisabled=true;queueMicrotask(()=>{state.chestDisabled=false;});}}},
     'mesh-apply': {get disabled() { return state.deltaDisabled; }, click: () => actions.push('delta apply')},
     'rebuild-applied': {get value() { return state.record; }},
     'chest-editor-status': {textContent: 'planted chest error', classList: {contains: () => state.chestError}},
@@ -111,7 +96,7 @@ function applyPage() {
 const checked = {schema: 'rig-review-applied/3', part: 'torso'};
 test('Apply readback retains raw value, previous value, schema, and button guards', async () => {
   const {page, state} = applyPage();
-  for (const name of ['CHEST_APPLY_SETTLE', 'CHEST_REPEAT_APPLY_SETTLE', 'MESH_DELTA_APPLY_SETTLE'] as const) {
+  for (const name of ['CHEST_CURRENT_APPLY_SETTLE', 'CHEST_APPLY_SETTLE', 'CHEST_REPEAT_APPLY_SETTLE', 'MESH_DELTA_APPLY_SETTLE'] as const) {
     state.record = '';
     expect(await page.evaluate(stage1ApplyRead(name, 'old'))).not.toHaveProperty('applied');
     state.record = JSON.stringify(checked);
@@ -222,4 +207,17 @@ test('ambiguous mesh dispatch never resends or starts readback', async () => {
   }, 18)).rejects.toThrow('lost mesh dispatch reply');
   expect(actions).toHaveLength(2);
   expect(page.reads).toHaveLength(1);
+});
+
+
+test('current-part Apply preserves fields and selection and accepts an identical cached checked record after its button settles',async()=>{
+ const {page,state,actions,field}=applyPage(true);state.record=JSON.stringify(checked);
+ expect(await settleStage1Apply(page,'CHEST_CURRENT_APPLY_SETTLE',0)).toEqual(checked);
+ expect(actions).toEqual(['chest apply']);expect(field.value).toBe('9');expect(state.selected).toBe('torso');
+});
+
+
+test('current-part Apply cannot accept a stale checked record over a new refusal',async()=>{
+ const {page,state}=applyPage(true);state.record=JSON.stringify(checked);state.chestError=true;
+ await expect(settleStage1Apply(page,'CHEST_CURRENT_APPLY_SETTLE',0)).rejects.toThrow('planted chest error');
 });

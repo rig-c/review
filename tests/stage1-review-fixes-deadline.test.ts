@@ -32,31 +32,26 @@ function fixture({
 } = {}) {
   const actions: string[] = [];
   const reads: string[] = [];
-  const frame = {contentDocument: missingDocument ? null : {
-    body: {dataset: {ready: marker}},
-    querySelector(selector: string) {
-      if (selector === '#pv-corrections button') return {title: 'torsoB · correction', click: () => actions.push('correction')};
-      if (selector === '#pv-corrections') return {textContent: 'direct correction'};
-      if (selector === 'canvas') { actions.push('canvas'); return {}; }
-      if (/^\[data-pv-item="torsoB?"\]$/.test(selector)) return {click: () => actions.push(selector)};
-      throw Error(selector);
-    },
-    querySelectorAll: () => [],
-  }};
   const globals = {
     window: {rigReviewEditor: editor ? {} : undefined},
     document: {
-      documentElement: {dataset: {inspectionStage: stage}},
+      body: {textContent:'fixture'},
       getElementById(id: string) {
         if (id === 'handoff-line') return handoff === 'missing' ? null : {textContent: handoff};
-        if (id === 'chest-edit') return missingChest ? null : {getAttribute: () => pressed};
+        if (id === 'chest-unavailable') return {textContent:'direct correction'};
+        if (id === 'chest-edit') return missingChest ? null : {getAttribute: () => pressed,click:()=>actions.push('correction')};
         throw Error(id);
       },
       querySelector(selector: string) {
-        if (selector === '[data-review-stage="1"]') return {click() { actions.push('stage'); }};
-        if (!selector.startsWith('.review-stage-panel iframe')) throw Error(selector);
-        return hidden && selector.includes(':not([hidden])') ? null : frame;
+        if (selector === '[data-mode="rig"]') return {click() { actions.push('stage'); }};
+        if (selector === '[data-mode=rig]') return {getAttribute:()=>stage==='3'?'true':'false'};
+        if (selector === '[data-part-list]') return !hidden&&!missingDocument&&marker==='true'?{}:null;
+        if (selector === '#chest-unavailable') return {textContent:'direct correction'};
+        if (selector === 'canvas') {actions.push('canvas');return {};}
+        if (/^\[data-part-list\] button\[data-slot="torsoB?"\]$/.test(selector)) return {getAttribute:()=> 'false',click:()=>actions.push(selector)};
+        throw Error(selector);
       },
+      querySelectorAll:()=>[],
     },
     fetch: request, AbortController, performance, setTimeout, clearTimeout,
   };
@@ -74,12 +69,12 @@ const negatives: [Ready,string,Parameters<typeof fixture>[0]][] = [
   ['PAGE_NOT_READY','no handoff',{handoff:'missing'}],
   ['PAGE_NOT_READY','empty handoff',{handoff:''}],
   ['PAGE_NOT_READY','reading handoff',{handoff:'Reading producer'}],
-  ['STAGE1_PARTS_READY','hidden iframe',{hidden:true}],
-  ['STAGE1_PARTS_READY','no iframe document',{missingDocument:true}],
-  ['STAGE1_PARTS_READY','truthy false marker',{marker:'false'}],
-  ['STAGE1_PARTS_READY','empty marker',{marker:''}],
-  ['STAGE1_CHEST_BIND_READY','wrong stage with pressed button',{stage:'2'}],
-  ['STAGE1_CHEST_BIND_READY','correct stage with unpressed button',{pressed:'false'}],
+  ['STAGE1_PARTS_READY','part list absent while hidden',{hidden:true}],
+  ['STAGE1_PARTS_READY','part list absent during replacement',{missingDocument:true}],
+  ['STAGE1_PARTS_READY','part list not ready',{marker:'false'}],
+  ['STAGE1_PARTS_READY','part list still absent',{marker:''}],
+  ['STAGE1_CHEST_BIND_READY','Animate mode with pressed button',{stage:'2'}],
+  ['STAGE1_CHEST_BIND_READY','Setup mode with unpressed button',{pressed:'false'}],
   ['STAGE1_CHEST_BIND_READY','no chest button',{missingChest:true}],
 ];
 
@@ -96,7 +91,7 @@ test('positive readiness and one-shot chest actions retain order', async () => {
   const page = fixture();
   await waitForStage1FixReadiness(page,'PAGE_NOT_READY');
   await openStage1FixChest(page,'torsoB');
-  expect(page.actions).toEqual(['stage','[data-pv-item="torsoB"]','correction']);
+  expect(page.actions).toEqual(['stage','[data-part-list] button[data-slot="torsoB"]']);
 });
 
 test('parts and chest expiry stop the actual action flow', async () => {
@@ -105,7 +100,7 @@ test('parts and chest expiry stop the actual action flow', async () => {
   await expect(openStage1FixChest(parts,'torsoB',short)).rejects.toThrow('WALK_DEADLINE: STAGE1_PARTS_READY');
   expect(parts.actions).toEqual(['stage']);
   await expect(openStage1FixChest(chest,'torsoB',short)).rejects.toThrow('WALK_DEADLINE: STAGE1_CHEST_BIND_READY');
-  expect(chest.actions).toEqual(['stage','[data-pv-item="torsoB"]','correction']);
+  expect(chest.actions).toEqual(['stage','[data-part-list] button[data-slot="torsoB"]','correction']);
 });
 
 test('late readiness never dispatches a follow-up command', async () => {
@@ -143,7 +138,7 @@ for (const stalled of ['headers','body'] as const) {
     expect(signal?.aborted).toBe(true);
     expect(requested).toBe(1);
     expect(bodies).toBe(stalled === 'body' ? 1 : 0);
-    expect(page.actions).toEqual(['stage','[data-pv-item="torso"]']);
+    expect(page.actions).toEqual(['stage','[data-part-list] button[data-slot="torso"]']);
   });
 }
 
@@ -153,7 +148,7 @@ test('region body success preserves output and non-timeout errors', async () => 
   expect(await openStage1FixRegion(page)).toEqual({
     text:'direct correction', buttons:0, data:{items:[{name:'torso'}]}, canvas:true,
   });
-  expect(page.actions).toEqual(['stage','[data-pv-item="torso"]','canvas']);
+  expect(page.actions).toEqual(['stage','[data-part-list] button[data-slot="torso"]','canvas']);
   const broken = async () => new Response('not JSON');
   await expect(readStage1RegionParts(100,broken)).rejects.toBeInstanceOf(SyntaxError);
 });

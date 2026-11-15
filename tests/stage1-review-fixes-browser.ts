@@ -1,9 +1,10 @@
 import projectPackage from '../package.json';
-/** Narrow EN/KO controls for adopted #403 chest rebinding and region-only inspection. No correction producer run. */
+/** EN/KO chest rebinding, per-part drafts, checked Apply, and region-only inspection through the shared screen. */
 import {mkdir,mkdtemp,writeFile,readFile,readdir,rm,cp} from 'node:fs/promises';
 import {join,relative} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
+import {settleStage1Apply} from './stage1-corrections-browser.ts';
 import {writeStage1LivePackage} from './helpers/stage1-live-package.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {loadReview} from '../src/manifest.ts';
@@ -11,9 +12,9 @@ import {resolveProducer,runTool,compileArgs} from '../src/producer.ts';
 import {startServer} from '../src/server.ts';
 import {WalkDeadlineError,withDeadline} from './helpers/walk-deadline.ts';
 
-const partsDocument = `document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument`;
-const partsReady = `d?.body?.dataset.ready === 'true'`;
-const enterParts = `document.querySelector('[data-review-stage="1"]').click()`;
+const partsDocument = `document`;
+const partsReady = `!!d?.querySelector('[data-part-list]')`;
+const enterParts = `document.querySelector('[data-mode="rig"]')?.click()`;
 
 export const STAGE1_REGION_READ_BASELINE = {
   enEnvelopeMs: 96.661597,
@@ -36,8 +37,7 @@ export const STAGE1_FIX_READINESS = {
     return Boolean(window.rigReviewEditor && text && !/Reading/.test(text));
   })()`,
   STAGE1_PARTS_READY: `(() => { const d = ${partsDocument}; return ${partsReady}; })()`,
-  STAGE1_CHEST_BIND_READY: `document.documentElement.dataset.inspectionStage === '3' &&
-    document.getElementById('chest-edit')?.getAttribute('aria-pressed') === 'true'`,
+  STAGE1_CHEST_BIND_READY: `document.querySelector('[data-mode=rig]')?.getAttribute('aria-pressed') === 'true' && document.getElementById('chest-edit')?.getAttribute('aria-pressed') === 'true'`,
 } as const;
 
 type FixPage = Pick<InputCdpSession, 'evaluate'>;
@@ -71,11 +71,10 @@ export async function openStage1FixChest(
   await page.evaluate(`(async () => {
     const d = ${partsDocument};
     if (!(${partsReady})) throw Error('STAGE1_PARTS_READY_LOST');
-    d.querySelector('[data-pv-item="${name}"]').click();
-    await Promise.resolve();
-    const button = d.querySelector('#pv-corrections button');
-    if (!button?.title.startsWith('${name} ·')) throw Error('CORRECTION_BUTTON_NOT_REBOUND ' + button?.title);
-    button.click();
+    const row = d.querySelector('[data-part-list] button[data-slot="${name}"]');
+    if (row?.getAttribute('aria-pressed') !== 'true') row.click();
+    const button = d.getElementById('chest-edit');
+    if (button.getAttribute('aria-pressed') !== 'true') button.click();
   })()`);
   await waitForStage1FixReadiness(page, 'STAGE1_CHEST_BIND_READY', deadlines.STAGE1_CHEST_BIND_READY);
 }
@@ -114,9 +113,9 @@ export async function openStage1FixRegion(
   return page.evaluate<any>(`(async () => {
     const d = ${partsDocument};
     if (!(${partsReady})) throw Error('STAGE1_PARTS_READY_LOST');
-    d.querySelector('[data-pv-item="torso"]').click();
+    d.querySelector('[data-part-list] button[data-slot="torso"]').click();
     return {
-      text: d.querySelector('#pv-corrections').textContent,
+      text: d.querySelector('#chest-unavailable').textContent,
       buttons: d.querySelectorAll('#pv-corrections button').length,
       data: await (${readStage1RegionParts.toString()})(${deadlines.STAGE1_REGION_PARTS_READ}),
       canvas: !!d.querySelector('canvas'),
@@ -152,26 +151,44 @@ async function makePackage(kind:'chests'|'regions'){
 }
 try{
  page=await launchCdpSession(join(tmpdir(),'reviewfix-cdp'), {sendDeadlineMs: 10_000});await page.setViewport(1440,1000);
+ const evaluate=page.evaluate.bind(page),navigate=page.goto.bind(page);let evaluation=0;
+ page.evaluate=async<T>(expression:string):Promise<T>=>{const id=++evaluation,start=performance.now();console.log('FIX_EVALUATE_START '+JSON.stringify({id,expression:expression.slice(0,160)}));try{const result=await evaluate<T>(expression);console.log('FIX_EVALUATE_END '+JSON.stringify({id,ms:performance.now()-start}));return result;}catch(error){console.log('FIX_EVALUATE_FAILED '+JSON.stringify({id,ms:performance.now()-start,error:String(error)}));throw error;}};
+ page.goto=async(...args)=>{const start=performance.now();console.log('FIX_NAVIGATE_START');await navigate(...args);console.log('FIX_NAVIGATE_END '+(performance.now()-start));};
  for(const kind of ['chests','regions'] as const){
   const f=await makePackage(kind),original=await hashes(f.pkg);server=await startServer(await loadReview(f.pkg),{port:0,stateDir:join(root,kind+'-state'),cwd:bench,graceMs:600000,unopenedTimeoutMs:600000,exitOnClose:false});const base=`http://127.0.0.1:${server.port}`;
   for(const lang of ['en','ko']){
    await page.goto(base+'/?lang='+lang);
    await waitForStage1FixReadiness(page, 'PAGE_NOT_READY');
    if(kind==='chests'){
-    await page.evaluate(`(()=>{const real=window.fetch;window.captured=[];window.fetch=(url,init)=>{if(new URL(typeof url==='string'?url:url.url,location.href).pathname==='/api/rebuild'&&init?.method==='POST'){window.captured.push(JSON.parse(init.body));return Promise.resolve(Response.json({status:'refused',error:'CONTROL_CAPTURED',producerLine:null}));}return real(url,init);};})()`);
+    const capture=`(()=>{const real=window.fetch;window.realFetch=real;window.captured=[];window.fetch=(url,init)=>{if(new URL(typeof url==='string'?url:url.url,location.href).pathname==='/api/rebuild'&&init?.method==='POST'){window.captured.push(JSON.parse(init.body));return Promise.resolve(Response.json({status:'refused',error:'CONTROL_CAPTURED',producerLine:null}));}return real(url,init);};})()`;await page.evaluate(capture);
+    await openStage1FixChest(page, 'torso');await page.evaluate(`document.querySelector('[data-bust-mode=landmarks]').click()`);
     await openStage1FixChest(page, 'torsoB');const fields=await page.evaluate<any>(`({mode:document.getElementById('bust-mode').value,cx:document.getElementById('chest-0-cx').value,second:document.getElementById('chest-1-cx').value,landmark:document.getElementById('lm-apex_r-x').value})`);
     if(fields.mode!=='circles'||fields.cx!=='330'||fields.second!==''||fields.landmark!=='')throw Error('CROSS_PART_FIELDS '+JSON.stringify(fields));
     const b=await captureStage1Fix(page);if(b.part!=='torsoB'||JSON.stringify(b.regions)!==JSON.stringify(f.config.meshes.torsoB.contour.regions))throw Error('B_RECEIVED_A_SEED '+JSON.stringify(b));
     await page.evaluate(`document.getElementById('chest-0-cx').value='331';document.getElementById('chest-0-cx').dispatchEvent(new Event('input',{bubbles:true}))`);await openStage1FixChest(page, 'torsoB');const edited=await captureStage1Fix(page);if(edited.regions?.[0]?.cx!==331)throw Error('SAME_BINDING_EDIT_LOST');
     await writeFile(join(out,lang+'-chest-b.png'),await page.screenshot());
+    await page.evaluate(`(async()=>{for(let i=0;i<200;i++){const saved=Object.keys(localStorage).filter(key=>key.startsWith('rig-review-draft/1:')).map(key=>JSON.parse(localStorage.getItem(key)));if(saved.some(draft=>draft.bookmark?.selection?.part?.slot==='torsoB'&&draft.inputs?.['chest-0-cx']?.value==='331'))return;await new Promise(r=>setTimeout(r,25));}throw Error('B_DRAFT_NOT_SAVED')})()`);
+    await page.goto(base+'/?lang='+lang);await waitForStage1FixReadiness(page,'PAGE_NOT_READY');
+    const reopened=await page.evaluate<any>(`({part:document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot,cx:document.getElementById('chest-0-cx').value,landmark:document.getElementById('lm-apex_r-x').value})`);if(reopened.part!=='torsoB'||reopened.cx!=='331'||reopened.landmark!=='')throw Error('REOPENED_B_EDIT_LOST '+JSON.stringify(reopened));
+    await page.evaluate(capture);
     await openStage1FixChest(page, 'torso');const a=await captureStage1Fix(page);if(a.part!=='torso'||JSON.stringify(a.bust?.apex_r)!=='[90,105]'||a.bust?.bone_r!=='chest'||a.regions)throw Error('A_RECEIVED_B_SEED '+JSON.stringify(a));
-    await writeFile(join(out,lang+'-chest-a.png'),await page.screenshot());receipt.push({kind,lang,fields,b,edited,a,versions:f.versions,producerApplies:0});
+    await writeFile(join(out,lang+'-chest-a.png'),await page.screenshot());
+    await openStage1FixChest(page, 'torsoB');const restored=await captureStage1Fix(page);if(restored.part!=='torsoB'||restored.regions?.[0]?.cx!==331)throw Error('CROSS_BINDING_EDIT_LOST');
+    const applyDelay=Number(process.env.RV847_APPLY_DELAY_MS??0);
+    await openStage1FixChest(page, 'torso');await page.evaluate(`document.getElementById('lm-alpha').value='0.65';document.getElementById('lm-alpha').dispatchEvent(new Event('input',{bubbles:true}));window.commentSubmits=0;document.addEventListener('submit',event=>{if(event.target.matches('.stage-comment-composer'))window.commentSubmits++;},true);window.applyPolls=0;window.fetch=async(url,init)=>{const response=await window.realFetch(url,init);if(/\\/api\\/rebuild\\/[a-f0-9]+$/.test(new URL(typeof url==='string'?url:url.url,location.href).pathname)&&(!init?.method||init.method==='GET')){window.applyPolls++;if(window.applyPolls===1)await new Promise(r=>setTimeout(r,${applyDelay}));}return response;};`);
+    await openStage1FixChest(page, 'torsoB');
+    console.log('FIX_APPLY_BEGIN '+JSON.stringify(await page.evaluate(`({delay:${applyDelay},commentSubmits:window.commentSubmits})`)));
+    const applied=await settleStage1Apply<any>(page,'CHEST_CURRENT_APPLY_SETTLE',0);
+    const applyProbe=await page.evaluate(`({delay:${applyDelay},commentSubmits:window.commentSubmits,applyPolls:window.applyPolls})`);console.log('FIX_APPLY_END '+JSON.stringify(applyProbe));
+    if(applied.part!=='torsoB'||applied.check?.pass!==true||!applied.stageInputHash)throw Error('B_APPLIED_RECORD '+JSON.stringify(applied));
+    await openStage1FixChest(page, 'torso');if(await page.evaluate(`document.getElementById('lm-alpha').value`)!=='0.65')throw Error('A_UNAPPLIED_EDIT_LOST');
+    receipt.push({kind,lang,fields,b,edited,reopened,a,applied,versions:f.versions,producerApplies:1,applyProbe});
    }else{
     const data=await openStage1FixRegion(page);
-    if(data.data.items?.[0]?.name!=='torso'||data.data.items[0].mesh||data.data.draft||data.buttons!==0||!data.canvas||!data.data.draftUnavailable?.startsWith('STAGE_DRAFT_NO_MESH')||!data.text.includes(lang==='ko'?'직접 수정':'direct correction'))throw Error('REGION_INSPECTION_LOST '+JSON.stringify(data));
+    if(data.data.items?.[0]?.name!=='torso'||data.data.items[0].mesh||data.data.draft||data.buttons!==0||!data.canvas||!data.data.draftUnavailable?.startsWith('STAGE_DRAFT_NO_MESH')||!data.text.includes(lang==='ko'?'윤곽':'contour'))throw Error('REGION_INSPECTION_LOST '+JSON.stringify(data));
     await writeFile(join(out,lang+'-regions.png'),await page.screenshot());receipt.push({kind,lang,...data,versions:f.versions});
    }
-   await writeFile(join(out,'receipt.json'),JSON.stringify(receipt,null,2));console.log('ADOPTED_UI_CASE_PASS '+kind+' '+lang);
+   await writeFile(join(out,'receipt.json'),JSON.stringify(receipt,null,2));console.log('ADOPTED_UI_CASE_PASS '+kind+' '+lang);if(kind==='chests')await page.evaluate(`window.rigReviewEditor.reset()`);
   }
   await closeServer();if(JSON.stringify(original)!==JSON.stringify(await hashes(f.pkg)))throw Error('ORIGINALS_CHANGED '+kind);receipt.push({kind,immutable:true,originals:original});
  }
