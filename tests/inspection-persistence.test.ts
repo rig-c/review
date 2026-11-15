@@ -748,11 +748,21 @@ for(const version of ['1','2'])test(`#821 existing inline parts /${version} draf
  expect(await store.write(value)).toBe(true);expect(idb.values.size).toBe(1);expect(await store.read()).toEqual(value);
 });
 
-test('#821 parts afterInputs applies restored overlay and opacity to the existing renderer',async()=>{
+test('#821 parts afterInputs restores pending comparison without changing the opening view; clean starts replay nothing',async()=>{
  const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('setupPartsPersistence=async()=>'),begin=source.indexOf('afterInputs:',start),end=source.indexOf(',onConflict:',begin);
  const callback=source.slice(begin+'afterInputs:'.length,end),code=new Bun.Transpiler({loader:'ts'}).transformSync(`const applyInputs=${callback};applyInputs();`);
- const scope={overlay:{checked:true},opacity:{value:'0.31'},view:'compare',layouts:0,partsSubject:{setComparison:(mode:string)=>{state.mode=mode;},opacity:(value:number)=>{state.opacity=value;}},renderLayout:()=>{scope.layouts++;}},state={mode:'part',opacity:.5};
+ const state={mode:'part',opacity:.5},scope={dirty:true,issues:[{}],overlay:{checked:true},opacity:{value:'0.31'},view:'compare',paints:0,partsSubject:{comparison:()=>({...state}),setComparison:(mode:string)=>{state.mode=mode;scope.paints++;},opacity:(value:number)=>{state.opacity=value;scope.paints++;}}};
  const apply=new Function('scope',`with(scope){${code}}`);
- apply(scope);expect(state).toEqual({mode:'overlay',opacity:.31});expect(scope.view).toBe('rig');expect(scope.layouts).toBe(1);
- scope.overlay.checked=false;scope.opacity.value='0.74';apply(scope);expect(state).toEqual({mode:'part',opacity:.74});expect(scope.layouts).toBe(1);
+ apply(scope);expect(state).toEqual({mode:'overlay',opacity:.31});expect(scope.view).toBe('compare');expect(scope.paints).toBe(2);
+ for(const condition of ['clean','no-comments']){
+  scope.dirty=condition!=='clean';scope.issues=condition==='no-comments'?[]:[{}];scope.overlay.checked=false;scope.opacity.value='0.12';
+  const before={...state},paints=scope.paints;apply(scope);
+  expect(state).toEqual(before);expect(scope.paints).toBe(paints);expect(scope.view).toBe('compare');expect(scope.overlay.checked).toBe(true);expect(scope.opacity.value).toBe('0.31');
+ }
+});
+test('#821 parts opening ignores historical part and solo UI even on a pending draft',async()=>{
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('setupPartsPersistence=async()=>'),begin=source.indexOf('   ui:',start),end=source.indexOf(',afterInputs:',begin);
+ const code=new Bun.Transpiler({loader:'ts'}).transformSync(`const adapter={${source.slice(begin,end)}};adapter.restoreUI(saved);return adapter.ui();`);
+ const read=new Function('saved',code);
+ expect(read({part:'gap',solo:1})).toEqual({});expect(read({part:'front',solo:1})).toEqual({});
 });

@@ -250,6 +250,7 @@ try{
  page=await launchCdpSession(join(root,'profile'),{sendDeadlineMs:10000,onEvent:sourceResponseEvent});await page.setViewport(1600,1000);
  for(const lang of ['en','ko']as const){
   report.phase=lang+':pending-source';const progress:Record<string,unknown>={};report.observations.push({lang,progress});
+  if(lang==='ko'){progress.draftsBeforeReload=await page.evaluate(`Object.entries(localStorage).filter(([key])=>key.startsWith('rig-review-draft/1:parts:')).map(([key,raw])=>{const draft=JSON.parse(raw);return {key,reviewDirty:draft.reviewDirty,ui:draft.ui,bookmark:draft.bookmark}})`);console.log('PARTS_821_CAMERA_DRAFT '+JSON.stringify(progress.draftsBeforeReload));}
   await page.goto('about:blank');await armSourceResponse(page,`http://127.0.0.1:${server.port}/`);
   const installed=await sendCdp!('Page.addScriptToEvaluateOnNewDocument',{source:INSTALL_GATE_OBSERVERS}) as {identifier:string};
   await page.goto(`http://127.0.0.1:${server.port}/?lang=${lang}`,lang);

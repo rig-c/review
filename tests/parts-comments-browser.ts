@@ -139,11 +139,12 @@ async function main(){
  await page.goto(base+'?lang=en&comparison-draft=1');await wait(page,`document.body.dataset.ready==='true'`,'comparison draft boot');
  await click(page,'[data-part-whole]');await wait(page,commentReady,'comparison assembly ready');
  await page.evaluate(`(()=>{const overlay=document.getElementById('parts-overlay'),opacity=document.getElementById('parts-opacity');overlay.checked=true;overlay.dispatchEvent(new Event('change',{bubbles:true}));opacity.value='0.31';opacity.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+ await click(page,'#stage-comment');await wait(page,commentReady,'pending comparison comment ready');await mark(page,{x:45,y:18},{x:54,y:25},'Comparison pending before reload');
  await wait(page,`Object.entries(localStorage).some(([key,value])=>key.startsWith('rig-review-draft/1:parts:')&&JSON.parse(value).inputs['parts-overlay']?.checked===true&&JSON.parse(value).inputs['parts-opacity']?.value==='0.31')`,'comparison inputs durable');
  await page.goto(base+'?lang=en&comparison-reload=1');await wait(page,`document.body.dataset.ready==='true'`,'comparison reload');
  report.comparisonControls=await page.evaluate(`({mode:document.getElementById('parts-overlay').checked?'overlay':'part',opacity:Number(document.getElementById('parts-opacity').value)})`);
  await page.evaluate(`(()=>{window.__comparison821=null;const original=window.fetch;window.fetch=async(...args)=>{const response=await original(...args);if(String(args[0]).endsWith('/api/parts/comment')&&response.ok)window.__comparison821=(await response.clone().json()).comment.view.comparison;return response;};})()`);
- await click(page,'#stage-comment');await wait(page,commentReady,'comparison comment ready');await mark(page,{x:45,y:18},{x:54,y:25},'Comparison after reload');
+ await click(page,'#stage-comment');await wait(page,commentReady,'comparison comment ready');await mark(page,{x:45,y:30},{x:54,y:36},'Comparison after reload');
  report.comparisonRenderer=await page.evaluate('window.__comparison821');console.log('PARTS_821_COMPARISON '+JSON.stringify({controls:report.comparisonControls,renderer:report.comparisonRenderer}));
  assert(report.comparisonControls.mode==='overlay'&&report.comparisonControls.opacity===.31,'comparison inputs restored');
  assert(report.comparisonRenderer?.mode==='overlay'&&report.comparisonRenderer?.opacity===.31,'comparison renderer matches restored controls');
