@@ -307,7 +307,7 @@ footer.status-bar{display:grid;max-width:100vw;grid-template-columns:minmax(0,1f
 .animation-view-buttons button,.animation-zoom-buttons button,.animation-pose-buttons button,.animation-editor-actions button{line-height:1;white-space:nowrap;flex:none;height:var(--control-compact);padding:0 var(--space-2);font-size:var(--font-size-compact)}
 .animation-view-buttons button[aria-pressed=true],.animation-zoom-buttons button[aria-pressed=true],.animation-pose-buttons button[aria-pressed=true],.animation-tree button[aria-pressed=true]{color:var(--pass);border-color:var(--pass)}
 .animation-editor-bar{display:flex;align-items:center;gap:var(--space-2);margin:0 0 0 auto;padding:0;border:0;background:transparent;font-size:var(--font-size-meta);min-width:0;flex:1 1 auto;justify-content:flex-end;flex-wrap:wrap}
-.animation-editor-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:var(--space-1) var(--space-2);margin:0;min-width:0;flex:1 1 auto}
+.animation-editor-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:var(--space-1);margin:0;min-width:0;flex:1 1 auto}
 .animation-preview-badge{padding:var(--space-1) var(--space-1);border:1px solid var(--warn);border-radius:var(--radius-small);color:var(--warn);font:var(--font-size-meta) var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:36px;max-width:95px;flex:0 1 auto}
 .animation-ops-summary{font:var(--font-size-meta) var(--font-sans);color:var(--fg-muted);white-space:nowrap;flex:none}
 .workspace-layout:has(>.parts-explorer) .animation-preview-badge,.workspace-layout:has(>.parts-explorer) .animation-ops-summary{display:none}

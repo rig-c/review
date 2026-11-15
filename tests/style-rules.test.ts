@@ -130,6 +130,7 @@ export function styleRuleViolations(source:string):string[]{
     if(d.property==='font-weight'&&!['normal','inherit'].includes(raw)&&!/^var\(--font-weight-(?:regular|medium|emphasis)\)$/.test(raw))report(scheme,selector,d,'weight must use its named token');
     if(/^(?:min-|max-)?(?:height|block-size)$/.test(d.property)&&control(selector)&&!exception){
      const coarse=r.at.some(at=>/^@media\s*\(pointer:\s*coarse\)$/.test(at));
+     // Exact 44/40px exceptions are larger touch targets snapped from the original 42/38px minima.
      const coarseMinimum=coarse&&d.property==='min-height'&&(selector==='button'&&value==='44px'||selector==='.workspace-drawer-triggers button'&&value==='40px');
      if(!['24px','32px'].includes(value)&&!coarseMinimum)report(scheme,selector,d,'control outside 24/32px');
     }
