@@ -14,9 +14,9 @@ import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixt
 import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'reopen'|'interview-picks';
-export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>){
+export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false){
  const scratch=await mkdtemp(join(tmpdir(),'review-750-')),root=join(scratch,'input');await mkdir(root);
- let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root,{boundParts,questionImages}):createSyntheticPlanRecordWorkspace(root,{subjects:[
+ let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root,{boundParts,questionImages,longInterview}):createSyntheticPlanRecordWorkspace(root,{subjects:[
   {kind:'checkpoint',checkpointId:'step_layout'},{kind:'signoff',stage:signoffStage},{kind:'reopen',stage:'plan-approved'},
  ]});
  const reader=createSyntheticRecordReader({onOption:()=>workspace.context as never,onPlan:()=>workspace.context as never});
@@ -38,7 +38,7 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
   backdrop=session.displayPublication(publication.publicationId);fake.publish(backdrop);
  }
  // The prior rig is retained before the synthetic producer advances into pending options.
- if(kind==='interview-picks'&&picture)workspace=createSyntheticOptionRecordWorkspace(root,{questionImages});
+ if(kind==='interview-picks'&&picture)workspace=createSyntheticOptionRecordWorkspace(root,{questionImages,longInterview});
  const publication=await call({verb:'publish',expectedGeneration:session.status().generation,idempotencyKey:'record',result:workspace.result,freeze:{kind:'producer-held',holdId:'synthetic-record',record:workspace.record}});
  const display=session.displayPublication(publication.publicationId);fake.publish(display);
  const subject=workspace.context.subjects.find(subject=>subject.kind===kind)!;

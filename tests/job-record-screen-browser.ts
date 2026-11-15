@@ -26,6 +26,65 @@ const freshParts=Bun.argv.includes('--fresh-parts');
 const narrowQuestionResize=Bun.argv.includes('--question-narrow-resize');
 const followup839=Bun.argv.includes('--followup-839');
 const baseline=await Bun.file(new URL('./fixtures/interview-722-empty-note.json',import.meta.url)).json();
+async function assertLastAskPickKeepsScrollAndFocus(mode:'dialog'|'pictureless'|'question-tab'){
+ const scrollBefore=await page!.evaluate<number>(`(()=>{
+  const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
+  const panel=form.closest('#workspace-interview-answer[data-question-image-active="true"]')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
+  const firstOption=form.querySelector('fieldset.interview-ask:last-of-type label.interview-option');
+  const pr=panel.getBoundingClientRect(),or=firstOption.getBoundingClientRect();
+  panel.scrollTop=Math.max(0,Math.min(panel.scrollHeight-panel.clientHeight,panel.scrollTop+(or.top-pr.top)-4));
+  return new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r(panel.scrollTop))));
+ })()`);
+ assert.ok(scrollBefore>0,`#875 ${mode} panel scrolls before changing pick`);
+ await click(page!,'form[data-job-ask="ask-interview-picks"] label.interview-option:has(input[value="cloth_sim_other"])');
+ await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+ const afterOther=await page!.evaluate<{scrollTop:number;active:boolean}>(`(()=>{
+  const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
+  const panel=form.closest('#workspace-interview-answer[data-question-image-active="true"]')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
+  const other=form.querySelector('input[type=radio][name="choice.cloth_sim"][value="cloth_sim_other"]');
+  return {scrollTop:panel.scrollTop,active:document.activeElement===other};
+ })()`);
+ assert.equal(afterOther.scrollTop,scrollBefore,`#875 ${mode} scrollTop unchanged after picking other in last ask`);
+ assert.equal(afterOther.active,true,`#875 ${mode} document.activeElement unchanged after picking other in last ask`);
+ await click(page!,'form[data-job-ask="ask-interview-picks"] label.interview-option:has(input[value="cloth_baked"])');
+ await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+ const afterBaked=await page!.evaluate<{scrollHeight:number;clientHeight:number;scrollTop:number;active:boolean}>(`(()=>{
+  const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
+  const panel=form.closest('#workspace-interview-answer[data-question-image-active="true"]')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
+  const baked=form.querySelector('input[type=radio][name="choice.cloth_sim"][value="cloth_baked"]');
+  return {scrollHeight:panel.scrollHeight,clientHeight:panel.clientHeight,scrollTop:panel.scrollTop,active:document.activeElement===baked};
+ })()`);
+ assert.equal(afterBaked.scrollTop,scrollBefore,`#875 ${mode} scrollTop unchanged after changing pick in last ask`);
+ assert.equal(afterBaked.active,true,`#875 ${mode} document.activeElement unchanged after changing pick in last ask`);
+}
+async function longInterviewScrollChecks(questionTab:boolean){
+ for(const language of ['en','ko'] as const){
+  if(questionTab){
+   const fixture=await recordScreenFixture('interview-picks',true,undefined,undefined,false,true,undefined,true);
+   try{
+    const before=await jobInputHashes(fixture.root),url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
+    await page!.setViewport(1440,900);await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
+    await page!.goto('about:blank');await page!.goto(url.href);
+    await wait(`!!document.querySelector('#workspace-interview-answer form[data-job-ask="ask-interview-picks"] fieldset:not(:disabled)')&&!!document.querySelector('[data-block-target=question][aria-selected=true]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'875 long question tab ready');
+    await assertLastAskPickKeepsScrollAndFocus('question-tab');
+    assert.deepEqual(await jobInputHashes(fixture.root),before);
+   }finally{await page!.goto('about:blank');await fixture.close();}
+  }else{
+   for(const questionImages of [true,false] as const){
+    const fixture=await recordScreenFixture('interview-picks',false,undefined,undefined,false,questionImages,undefined,true);
+    try{
+     const before=await jobInputHashes(fixture.root),url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
+     await page!.setViewport(1600,1000);holdImages=false;await page!.goto('about:blank');await page!.goto(url.href);
+     await wait(`!!document.querySelector('form[data-job-ask="ask-interview-picks"] fieldset:not(:disabled)')`,'875 long dialog receipt');
+     if(!await page!.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page!,'#workspace-pending-ask');
+     await wait(`!!document.querySelector('#job-record-asks[open] form[data-job-ask="ask-interview-picks"] fieldset:not(:disabled)')`,'875 long dialog open');
+     await assertLastAskPickKeepsScrollAndFocus(questionImages?'dialog':'pictureless');
+     assert.deepEqual(await jobInputHashes(fixture.root),before);
+    }finally{await page!.goto('about:blank');await fixture.close();}
+   }
+  }
+ }
+}
 const output=resolve(arg('--out')??'artifacts/record-screen-750');await mkdir(output,{recursive:true});
 const sha=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('hex');
 const profile=await mkdtemp(join(tmpdir(),'review-750-browser-'));
@@ -174,6 +233,7 @@ async function questionTabChecks(){
   }finally{await fixture.close();}
  }
  await picturelessPartsQuestionChecks();
+ await longInterviewScrollChecks(true);
 }
 
 /** No option image changes the existing dialog, never the actual parts backdrop's capabilities. */
@@ -390,6 +450,7 @@ try{
   }finally{await fixture.close();}
  }
  }
+ await longInterviewScrollChecks(false);
  }
  assert.equal(exceptions.length,0,'no browser exceptions');
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
