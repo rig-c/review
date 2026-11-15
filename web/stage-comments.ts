@@ -27,7 +27,7 @@ interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=Commen
  pose:(view:StageComment['viewport'])=>Pose|null;pause:()=>Promise<void>;
  bookmark:()=>unknown;restore:(bookmark:unknown,timeOnly?:boolean)=>Promise<void>;
  feedback:()=>Row[];locked:(id:string)=>boolean;
- add:(feedback:Row,side?:'a'|'b')=>void;changed:()=>void;error:(message:string)=>void;
+ add:(feedback:Row,side?:'a'|'b')=>void;changed:()=>void|Promise<void>;error:(message:string)=>void;
  general?:{create:(summary:string)=>Row;matches:(row:Row)=>boolean};
  refusal?:()=>string|null;blocked:()=>boolean;busy?:()=>boolean;busyError?:(message:string)=>void;shortcutBlocked?:()=>boolean;shortcutActive?:()=>boolean;codec?:CommentCodec<Row,Pose>;
 }
@@ -209,7 +209,8 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     const n=rigPose.frame?.index??null;host.add({id:crypto.randomUUID(),frameStart:n,frameEnd:n,target:slots[0]?{kind:'slot',name:slots[0].slot}:{kind:'rig',name:rigPose.rig},category:'defect',summary,context:{animation:rigPose.animation,time:rigPose.time,frame:rigPose.frame?.basis==='producer'?n:null,...(turn?{turn:turn as any}:{}),interval:n===null?null:{frameStart:n,frameEnd:n,inclusive:true},comment:comment as any} } as unknown as Row,rigPose.side);
     }
    }
-   cancel();host.changed();refresh();revealLatest();
+   await host.changed();
+   cancel();refresh();revealLatest();
   }catch(e){if(disposed||generation!==interaction)return;const msg=e instanceof Error?e.message:String(e);errorSource=toEn(msg);error.textContent=t(errorSource);place();if(locked)host.error(t(errorSource));field.disabled=false;field.focus();}finally{busy=false;if(composer===form)syncChips();}};
   field.focus();last='';
  };

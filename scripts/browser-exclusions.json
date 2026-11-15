@@ -6,9 +6,5 @@
   "tests/stage1-review-fixes-browser.ts": {
     "issue": 847,
     "reason": "PRODUCT: lost human Chest opener/part-specific seed Apply path; whole suite unchanged, no split or moved Mesh cases; #847 must return the whole suite."
-  },
-  "tests/job-checkpoint-evidence-browser.ts": {
-    "issue": 848,
-    "reason": "PRODUCT: package checkpoint saved Comments vanish on reconnect; preserve exact words assertion and neutral bounded read/wait/log probe until #848 restores whole suite."
   }
 }
