@@ -83,7 +83,7 @@ export function bindPartsSubject(host:{
  data:PartsSubjectData;canvas:HTMLCanvasElement;referenceCanvas:HTMLCanvasElement;viewport:ViewportController;
  el:ViewportProvider['el'];toolbar:HTMLElement;commentsHost:HTMLElement;openComments?:()=>void;hasPicture?:()=>boolean;issues:PartsIssue[];recordComments?:CommentRow[];
  request:(path:string,init?:RequestInit)=>Promise<Response>;base:string;paintingPath:string;
- mesh:()=>boolean;restoreMesh:(on:boolean)=>void;images:()=>boolean;changed:()=>void;selectionChanged:()=>void;locked:(id:string)=>boolean;refusal:()=>string|null;drawn:(input:{state:'loaded'}|{state:'failed';reason:string})=>void;message:ViewportProvider['message'];
+ mesh:()=>boolean;restoreMesh:(on:boolean)=>void;images:()=>boolean;changed:()=>void|Promise<void>;selectionChanged:()=>void;locked:(id:string)=>boolean;refusal:()=>string|null;drawn:(input:{state:'loaded'}|{state:'failed';reason:string})=>void;message:ViewportProvider['message'];
 }) {
  const data=host.data,hidden=new Set<string>(),images=new Map<number,Promise<HTMLImageElement>>(),loaded=new Map<string,HTMLImageElement>(),assemblyAlpha=new Map<string,{box:Box;alpha:Uint8ClampedArray}>();
  let selected:string|null=null,solo=false,comparison:PartsComparison=defaultPartsComparison(),token=0,disposed=false,busy=false,failed=false;

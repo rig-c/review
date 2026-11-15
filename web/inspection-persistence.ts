@@ -277,7 +277,7 @@ export class InspectionDraftStore {
    try{
     const packed=JSON.parse(snapshot) as LocalInspectionDraft;
     // Clean sessions are already durable on the server and are never restored as unsent feedback.
-    if(!packed.reviewDirty&&packed.session&&typeof packed.session==='object'){
+    if(!packed.reviewDirty&&packed.session&&typeof packed.session==='object'&&'feedback'in packed.session){
      packed.session={...packed.session,feedback:[]};
     }
     const crops=draftCrops(packed.session),blobs:{key:IDBValidKey;blob:Blob}[]=[];
@@ -311,7 +311,8 @@ export class InspectionDraftStore {
 }
 
 interface PersistenceSession {id:string;revision:string;sourceHash:string;status:string;feedback:unknown[]}
-interface PersistenceAdapter<T extends PersistenceSession> {
+interface PersistenceAdapter<T> {
+ recover?:(value:unknown,baseline:T)=>T|null;
  scope:string;binding:InspectionBinding;baseline:T;session:()=>T;reviewDirty:()=>boolean;
  restoreSession:(value:T,dirty:boolean)=>void;bookmark:()=>InspectionBookmark;
  restoreBookmark:(bookmark:InspectionBookmark,signal:AbortSignal)=>Promise<void>;
@@ -321,14 +322,15 @@ interface PersistenceAdapter<T extends PersistenceSession> {
 export interface PersistenceConnection {restored:boolean;restoring:()=>boolean;save:()=>Promise<void>;submitted:(session:unknown)=>Promise<void>;dispose:()=>void}
 const viewInputIds=new Set(['part-search','part-solo','camera-sync','appearance','layer-images','layer-mesh','layer-bones','animation-select','reference-select','person-select','axis-select','axis-value','scrub','frame-number','frame-scrub','time-input','frame-input','part-set']);
 /** Restore once after normal startup; snapshots never perform a server mutation. */
-export async function connectInspectionPersistence<T extends PersistenceSession>(adapter:PersistenceAdapter<T>):Promise<PersistenceConnection> {
+export async function connectInspectionPersistence<T>(adapter:PersistenceAdapter<T>):Promise<PersistenceConnection> {
  let restoring=true,closed=false,conflict=false,timer:ReturnType<typeof setTimeout>|undefined;
  let navigationGeneration=0,navigationAbort:AbortController|null=null,navigationQueue=Promise.resolve(),lastNavigationHash=location.hash;
  let previousInert:boolean|null=null;
  const holdRestore=(value:boolean)=>{restoring=value;const body=document.body;if(value){if(body&&previousInert===null){previousInert=body.inert;body.inert=true;}}else if(body&&previousInert!==null){body.inert=previousInert;previousInert=null;}};
  let baseline=await sessionFingerprint(adapter.baseline);const status=adapter.onStatus,initialInputs=captureInputs();
  const store=new InspectionDraftStore(adapter.scope,adapter.binding,status);
- let draft=await store.read(session=>recoverSession(session,adapter.baseline)!==null);
+ const recover=adapter.recover??((value:unknown,baseline:T)=>recoverSession(value,baseline as T & PersistenceSession) as T|null);
+ let draft=await store.read(session=>recover(session,adapter.baseline)!==null);
  const notices=[document.getElementById('draft-recovery'),document.getElementById('review-draft-recovery')].filter((node):node is HTMLElement=>node!==null);
  const clearNotices=()=>{for(const node of notices)node.replaceChildren();};
  const appendAction=(label:string,onclick:()=>void)=>{for(const node of notices){const button=actionButton(label,onclick);node.append(button);}};
@@ -338,8 +340,8 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
  try{explicit=decodeBookmark(location.hash,adapter.binding);}catch(error){status(error instanceof Error?error.message:String(error));}
  let recovered:T|null=null,sameBaseline=false;
  if(draft){
-  recovered=recoverSession(draft.session,adapter.baseline);
-  const prior=recovered?recoverSession(adapter.baseline,draft.session as T):null;
+  recovered=recover(draft.session,adapter.baseline);
+  const prior=recovered?recover(adapter.baseline,draft.session as T):null;
   sameBaseline=draft.baseline===baseline||(prior!==null&&draft.baseline===await sessionFingerprint(prior));
   if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){await store.clear();draft=null;recovered=null;}
  }

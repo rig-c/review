@@ -157,6 +157,7 @@ mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
 const partsCanvas=document.createElement('canvas'),partsReference=document.createElement('canvas');partsCanvas.width=partsCanvas.height=partsReference.width=partsReference.height=0;
 let partsSubject:ReturnType<typeof bindPartsSubject>|null=null;
+let setupPartsPersistence:(()=>Promise<void>)|null=null;
 let rigDifference:{assets:ModelAssets;painting:HTMLImageElement;camera:ReturnType<typeof createViewportState>;hidden:Map<HTMLElement,boolean>;label:string;bookmark:InspectionBookmark}|null=null;
 let rigDifferenceFailure:string|null=null;
 const rigRaster={el,canvas:partsCanvas,message,reference:()=>null,frameSize:()=>({w:partsCanvas.width,h:partsCanvas.height}),active:()=>!!rigDifference};
@@ -1328,7 +1329,7 @@ async function start(): Promise<void> {
 }
 /** Parts have a verdict and image-space pixels, never fabricated model/session fields. */
 async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,writes:{capabilityRequired:boolean}):Promise<void>{
- const subject=opened.parts,issues=saved.issues,submittedIssues=new Set(host? saved.issues.map(issue=>issue.id):[]);
+ const subject=opened.parts,issues=saved.issues;let partsBaseline=structuredClone(saved);const submittedIssues=new Set(host? saved.issues.map(issue=>issue.id):[]);
  liveIssueCount=()=>issues.length;
  if(!partsOnly)throw new Error('PARTS_SUBJECT_ENTRY_REQUIRED');
  readOnly=host?.record?tr('JOB_REVIEW_READ_ONLY'):readOnlyReason(access,writes.capabilityRequired);
@@ -1340,12 +1341,12 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   const response=await fetch(access.route(path),{...init,headers:access.headers(init?.headers)});
   if(!response.ok){const body=await response.json();throw new Error(typeof body.error==='string'?body.error:body.error?.code??'PARTS_PAINT_FAILED');}return response;
  };
- const changed=()=>{dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});renderDraftState();setSourceText(rigInspector.comments.button,`Comments (${issues.length})`);};
+ const changed=()=>{dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});renderDraftState();setSourceText(rigInspector.comments.button,`Comments (${issues.length})`);return persistence?.save();};
  // A parts verdict is saved only over a drawn subject: until the first paint, or after a failed one, Save stays off.
- const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded'||draftConflict;
+ const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded'||draftConflict||!!persistence?.restoring();
  partsAnswerBlocked=saveBlocked;
  text('rig-empty','Loading package…');
- partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),openComments:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot),issues,...host?.record?{recordComments}:{},request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,changed:()=>{if(host?.record){recordCommentsChanged();return;}changed();},selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
+ partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),openComments:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot),issues,...host?.record?{recordComments}:{},request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,changed:()=>{if(host?.record){recordCommentsChanged();return;}return changed();},selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
  parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>openReview());
  const thumbnails=new PartThumbnails();viewDisposers.push(()=>thumbnails.dispose());
  parts.registerImages({thumbnail:(icon,item,glyph)=>thumbnails.showOriginal(icon,item,()=>partsSubject!.image(item.index),glyph),items:subject.items,selected:partsSubject.selected,solo:partsSubject.solo,visible:partsSubject.visible,select:partsSubject.select,isolate:partsSubject.isolate,show:partsSubject.show});
@@ -1380,14 +1381,28 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   try{
    if(host?.submitParts)message(await host.submitParts(frozen));
    else await request(base+'/verdict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:frozen.length?'changes-requested':'approved',issues:frozen})});
+   if(disposed)return;
    if(host)for(const issue of frozen)submittedIssues.add(issue.id);
-   dirty=JSON.stringify(issues)!==JSON.stringify(frozen);state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
+   dirty=JSON.stringify(issues)!==JSON.stringify(frozen);partsBaseline={subject:'parts',issues:frozen};await persistence?.submitted(partsBaseline);if(disposed)return;state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
   }catch(error){message(errorText(error),true);state.setSaveState({kind:'failed',text:'Save failed.'});}
   finally{saving=false;button('save').disabled=saveBlocked();renderDraftState();}
  };
  viewDisposers.push(viewport.bindControls(unitScaleMessage),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message(actReadOnly??(host?.ownerActAccess?'Not submitted':'Parts ready. Source files remain unchanged.'),!!actReadOnly,!!host?.ownerActAccess&&!actReadOnly);referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
+ setupPartsPersistence=async()=>{
+  if(host?.record)return;
+  const binding:InspectionBinding={mode:'single',sourceHash:subject.sourceHash,rigs:[null]};
+  const connection=await connectInspectionPersistence({scope:'parts:'+access.key+':'+access.base+':'+subject.sourceHash,binding,baseline:partsBaseline,session:()=>({subject:'parts' as const,issues}),reviewDirty:()=>dirty,
+   recover:value=>{try{if(!value||typeof value!=='object')return null;const row=value as PartsSubjectSession;if(row.subject!=='parts'||!Array.isArray(row.issues)||row.issues.length>1000||Object.keys(row).some(key=>!['subject','issues'].includes(key)))return null;const items=new Map(subject.items.map(item=>[item.name,{...item,imageHash:item.imageHash!}]));const restored=row.issues.map(issue=>{const parsed=parsePartsIssue(issue,false,true,false);assertPartsIssueBinding(parsed,items,subject.sourceHash);return parsed;});if(new Set(restored.map(issue=>issue.id)).size!==restored.length)return null;return {subject:'parts' as const,issues:restored};}catch{return null;}},
+   restoreSession:(value,isDirty)=>{issues.splice(0,issues.length,...value.issues);dirty=isDirty;partsSubject?.refreshComments();setSourceText(rigInspector.comments.button,`Comments (${issues.length})`);text('dirty',isDirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',isDirty);state.setSaveState({kind:isDirty?'unsaved':'saved',text:isDirty?'Unsubmitted changes':'Submitted'});},
+   bookmark:()=>({schema:'rig-review-inspection/1',binding,animation:null,time:null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:null,a:null,b:null,reference:null}},selection:{}}),
+   // Parts comments already carry their image-space view; rig bookmarks accept world-space cameras only.
+   restoreBookmark:async()=>{},
+   ui:()=>({part:partsSubject!.selected(),solo:Number(partsSubject!.solo())}),restoreUI:value=>{const part=typeof value.part==='string'&&subject.items.some(item=>item.name===value.part)?value.part:null;partsSubject!.select(part);partsSubject!.isolate(!!part&&value.solo===1);parts?.refreshImages();},afterInputs:()=>{},onConflict:value=>{draftConflict=value;button('save').disabled=saveBlocked();renderAnswerControls();},onStatus:value=>{draftStatus=value;renderDraftState();}});
+  if(disposed){connection.dispose();return;}persistence=connection;
+ };
+ await setupPartsPersistence();if(disposed)return;
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
  if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),pendingSubjects:renderPendingSubjects,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
 
@@ -1638,7 +1653,8 @@ async function resumeScreen():Promise<void> {
  try{
   await workspace?.settle();
   if(disposed)return;
-  if(!partsOnly&&(!host?.record||host.record.hasPicture))await setupPersistence(true);
+  if(partsOnly){await setupPartsPersistence?.();if(disposed)return;}
+  else if(!host?.record||host.record.hasPicture)await setupPersistence(true);
   suspended=false;if(!partsOnly&&(!host?.record||host.record.hasPicture))frameHandle=requestAnimationFrame(tick);ready=true;
  }finally{screenRoot.inert=ready?wasInert:true;if(ready&&!disposed)document.body.dataset.ready='true';}
 }

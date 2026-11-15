@@ -210,9 +210,9 @@ async function openDraftReopenScenario(opts:{
  const ids=source.slice(source.indexOf('const viewInputIds='),source.indexOf('/** Restore once'));
  if(opts.legacyMain){
   connect=connect
-   .replace("let draft=await store.read(session=>recoverSession(session,adapter.baseline)!==null);","const draft=await store.read();")
+   .replace("let draft=await store.read(session=>recover(session,adapter.baseline)!==null);","const draft=await store.read();")
    .replace("const notices=[document.getElementById('draft-recovery'),document.getElementById('review-draft-recovery')].filter((node):node is HTMLElement=>node!==null);","const notices=[document.getElementById('draft-recovery')].filter((node):node is HTMLElement=>node!==null);")
-   .replace("const prior=recovered?recoverSession(adapter.baseline,draft.session as T):null;\n  sameBaseline=draft.baseline===baseline||(prior!==null&&draft.baseline===await sessionFingerprint(prior));\n  if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){await store.clear();draft=null;recovered=null;}","sameBaseline=draft.baseline===baseline;")
+   .replace("const prior=recovered?recover(adapter.baseline,draft.session as T):null;\n  sameBaseline=draft.baseline===baseline||(prior!==null&&draft.baseline===await sessionFingerprint(prior));\n  if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){await store.clear();draft=null;recovered=null;}","sameBaseline=draft.baseline===baseline;")
    .replace("status(recovered?'Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.':'Saved local draft conflicts with the current submitted review. Server status is unchanged; download or discard it.');","status('Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.');");
  }
  const legacyRecover=(value:unknown,base:typeof baseline):typeof baseline|null=>{
@@ -707,3 +707,13 @@ for(const action of ['Download saved local draft','Discard unusable local draft'
   else expect([...app.storage.values.values()]).not.toContain('{corrupt saved draft');
  }finally{app.connection.dispose();}
 });
+
+ test('#821 parts draft membership is isolated by instance, route, and source without changing finalized rows',async()=>{
+ const storage=new MemoryStorage(),scope='parts:instance-a:/parts/a:'+binding.sourceHash,store=new InspectionDraftStore(scope,binding,()=>{},storage);
+ const value=draft();value.session={subject:'parts',issues:[{id:'draft-region',summary:'Keep this drawn comment'}]};
+ await store.write(value);
+ expect((await store.read())?.session).toEqual(value.session);
+ for(const otherScope of ['parts:instance-b:/parts/a:'+binding.sourceHash,'parts:instance-a:/parts/b:'+binding.sourceHash])expect(await new InspectionDraftStore(otherScope,binding,()=>{},storage).read()).toBeNull();
+ expect(await new InspectionDraftStore(scope,{...binding,sourceHash:'e'.repeat(64)},()=>{},storage).read()).toBeNull();
+ expect((await store.read())?.session).toEqual(value.session);
+ });
