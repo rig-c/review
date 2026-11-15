@@ -1,6 +1,1 @@
-{
-  "tests/job-checkpoint-evidence-browser.ts": {
-    "issue": 848,
-    "reason": "PRODUCT: package checkpoint saved Comments vanish on reconnect; preserve exact words assertion and neutral bounded read/wait/log probe until #848 restores whole suite."
-  }
-}
+{}

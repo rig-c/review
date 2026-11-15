@@ -215,3 +215,5 @@ jobs:
             exit 1
           fi
           bun scripts/confirm-alias.ts "$version"
+          # Run the installed main path (check, serve, session open/publish/close) on the served version, the same smoke CI runs on the packed tree.
+          bun run smoke -- --spec "@rig-c/review@$version"

@@ -22,7 +22,6 @@ test('exclusion metadata requires a positive integer issue and nonempty reason w
 test('live tree partition covers every discovered suite once or by its named exemption',async()=>{
  const plan=await browserPlan();
  expect(Object.fromEntries(Object.entries(plan.exclusions).map(([file,entry])=>[file,entry.issue]))).toEqual({
-  "tests/job-checkpoint-evidence-browser.ts": 848,
 });
  const assigned=plan.suites;
  const omitted=Object.keys(exclusions);
