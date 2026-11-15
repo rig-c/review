@@ -1535,10 +1535,12 @@ test('#847 native part selection reuses chest binding and refuses a contour part
  const region={name:'B',shape:'circle',cx:120,cy:50,r:10,bone:'chestB',spacing:4,band:2};
  const status={parts:[{name:'B',regions:[region]},{name:'empty',regions:[]}],contour:{B:{contour:{regions:[region]}},empty:{contour:{regions:[]}}}};
  const calls:unknown[]=[],notices:unknown[]=[];
- const scope={rebuildStatus:status,rebuildBusy:false,chestFormPart:'A',chestSeed,chestStatusForPart,chestEditor:{notify:(text:unknown)=>notices.push(text)},rebindChestPart:(s:unknown,p:string)=>{expect(s).toBe(status);calls.push(p);scope.chestFormPart=p;},redrawOverlay:()=>calls.push('draw')};
+ const scope={rebuildStatus:status,rebuildBusy:false,chestFormPart:'A',chestSeed,chestStatusForPart,chestEditor:{notify:(text:unknown)=>notices.push(text),noticeText:()=>notices.at(-1)},rebindChestPart:(s:unknown,p:string)=>{expect(s).toBe(status);calls.push(p);scope.chestFormPart=p;},redrawOverlay:()=>calls.push('draw')};
  const open=new Function('scope',`with(scope){${code};return openStageCorrection;}`)(scope);
  await open({part:'B',instrument:'selection'});expect(calls).toEqual(['B','draw']);
- await open({part:'B',instrument:'selection'});expect(calls).toEqual(['B','draw']);expect(notices.at(-1)).toBeNull();
+ await open({part:'B',instrument:'selection'});expect(calls).toEqual(['B','draw']);expect(notices).toEqual([]);
+ notices.push('CHEST_REGION_NOT_ELLIPSE: retained refusal');await open({part:'B',instrument:'selection'});expect(notices.at(-1)).toBe('CHEST_REGION_NOT_ELLIPSE: retained refusal');
  await open({part:'empty',instrument:'selection'});expect(scope.chestFormPart).toBe('B');expect(calls).toEqual(['B','draw']);expect(notices.at(-1)).toBe('The selected part has no chest regions. The chest editor keeps its current part.');
+ await open({part:'B',instrument:'selection'});expect(notices.at(-1)).toBeNull();
  scope.rebuildBusy=true;await open({part:'A',instrument:'selection'});expect(calls).toEqual(['B','draw']);
 });

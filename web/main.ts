@@ -3319,8 +3319,9 @@ async function openStageCorrection(request:{part:string;sourceHash:string;buildI
  if(!('sourceHash' in request)){
   if(!rebuildStatus||rebuildBusy)return;
   const seed=chestSeed(chestStatusForPart(rebuildStatus,request.part));
-  if(!seed.part){chestEditor?.notify('The selected part has no chest regions. The chest editor keeps its current part.');return;}
-  if(chestFormPart===request.part){chestEditor?.notify(null);return;}
+  const unavailable='The selected part has no chest regions. The chest editor keeps its current part.';
+  if(!seed.part){chestEditor?.notify(unavailable);return;}
+  if(chestFormPart===request.part){if(chestEditor?.noticeText?.()===unavailable)chestEditor.notify(null);return;}
   rebindChestPart(rebuildStatus,request.part);redrawOverlay(true);return;
  }
  if(readOnly)throw new Error(readOnly);
