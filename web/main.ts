@@ -1399,7 +1399,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
    bookmark:()=>({schema:'rig-review-inspection/1',binding,animation:null,time:null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:null,a:null,b:null,reference:null}},selection:{}}),
    // Parts comments already carry their image-space view; rig bookmarks accept world-space cameras only.
    restoreBookmark:async()=>{},
-   ui:()=>({part:partsSubject!.selected(),solo:Number(partsSubject!.solo())}),restoreUI:value=>{const part=typeof value.part==='string'&&subject.items.some(item=>item.name===value.part)?value.part:null;partsSubject!.select(part);partsSubject!.isolate(!!part&&value.solo===1);parts?.refreshImages();},afterInputs:()=>{},onConflict:value=>{draftConflict=value;button('save').disabled=saveBlocked();renderAnswerControls();},onStatus:value=>{draftStatus=value;renderDraftState();}});
+   ui:()=>({part:partsSubject!.selected(),solo:Number(partsSubject!.solo())}),restoreUI:value=>{const part=typeof value.part==='string'&&subject.items.some(item=>item.name===value.part)?value.part:null;partsSubject!.select(part);partsSubject!.isolate(!!part&&value.solo===1);parts?.refreshImages();},afterInputs:()=>{partsSubject!.setComparison(overlay.checked?'overlay':'part');partsSubject!.opacity(Number(opacity.value));if(overlay.checked){view='rig';renderLayout();}},onConflict:value=>{draftConflict=value;button('save').disabled=saveBlocked();renderAnswerControls();},onStatus:value=>{draftStatus=value;renderDraftState();}});
   if(disposed){connection.dispose();return;}persistence=connection;
  };
  await setupPartsPersistence();if(disposed)return;

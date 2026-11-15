@@ -519,13 +519,14 @@ class DraftIDB {
 // Existing dependencies only: valid incompressible PNGs, not huge strings masquerading as image evidence.
 import {PNG} from 'pngjs';
 import {createHash} from 'node:crypto';
-function cropDraft(count=1):LocalInspectionDraft {
+import {parsePartsIssue} from '../src/parts-comment.ts';
+function cropDraft(count=1,size=160):LocalInspectionDraft {
  const value=draft();
  const feedback=Array.from({length:count},(_,index)=>{
-  const image=new PNG({width:160,height:160});let seed=index+1;
+  const image=new PNG({width:size,height:size});let seed=index+1;
   for(let i=0;i<image.data.length;i++){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;image.data[i]=seed&255;}
   const bytes=PNG.sync.write(image),sha256=createHash('sha256').update(bytes).digest('hex');
-  const comment={schema:'rig-review-comment/1',mode:'setup',viewport:'rig',frame:{index:0,basis:'producer'},time:0,animation:'idle',sourceHash:binding.sourceHash,modelHash:binding.rigs[0],referenceHash:null,referenceId:null,camera,screen:{x:0,y:0,width:10,height:10},world:{x:0,y:0,width:10,height:10},slots:[],crop:{path:`comment-crops/${sha256}.png`,sha256,png:'data:image/png;base64,'+bytes.toString('base64'),width:160,height:160},bookmark:bookmark()};
+  const comment={schema:'rig-review-comment/1',mode:'setup',viewport:'rig',frame:{index:0,basis:'producer'},time:0,animation:'idle',sourceHash:binding.sourceHash,modelHash:binding.rigs[0],referenceHash:null,referenceId:null,camera,screen:{x:0,y:0,width:10,height:10},world:{x:0,y:0,width:10,height:10},slots:[],crop:{path:`comment-crops/${sha256}.png`,sha256,png:'data:image/png;base64,'+bytes.toString('base64'),width:size,height:size},bookmark:bookmark()};
   return {id:'crop-'+index,frameStart:0,frameEnd:0,target:{kind:'rig',name:'rig'},category:'quality',summary:'Original crop '+index,context:{animation:'idle',time:0,frame:0,comment}};
  });
  value.session={...baseline,status:'changes-requested',feedback};return value;
@@ -717,3 +718,41 @@ for(const action of ['Download saved local draft','Discard unusable local draft'
  expect(await new InspectionDraftStore(scope,{...binding,sourceHash:'e'.repeat(64)},()=>{},storage).read()).toBeNull();
  expect((await store.read())?.session).toEqual(value.session);
  });
+
+function partsCropDraft(count=3):LocalInspectionDraft {
+ const value=cropDraft(count,190),rows=(value.session as {feedback:any[]}).feedback;
+ value.session={subject:'parts',issues:rows.map(row=>({schema:'rig-review-parts-comment/2',id:row.id,summary:row.summary,sourceHash:binding.sourceHash,parts:[{name:'shirt',imageHash:'d'.repeat(64)}],rigRegion:{x:0,y:0,width:10,height:10},imageRegion:null,view:{mode:'assembled',camera:{zoom:1,center:{x:5,y:5},viewport:{width:10,height:10}},cameraSync:false,referenceCamera:null,background:'checker',alpha:false,footprints:false,mesh:false},crop:row.context.comment.crop,nativeCrop:null}))};
+ return value;
+}
+test('#821 review crop transport: three near-limit parts crops survive store reload above the inline cap',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb,'parts:one'),value=partsCropDraft(),original=structuredClone(value);
+ expect(new TextEncoder().encode(JSON.stringify(value)).length).toBeGreaterThan(512*1024);
+ for(const row of (value.session as any).issues){expect(parsePartsIssue(row,false,true)).toEqual(row);expect(row.crop.png.length).toBeGreaterThan(190000);expect(row.crop.png.length).toBeLessThanOrEqual(200000);}
+ expect(await store.write(value)).toBe(true);
+ expect(idb.values.size).toBe(3);expect(storage.getItem(store.key)).not.toContain('data:image/png');
+ expect(await idbStore(storage,idb,'parts:one').read()).toEqual(original);expect(value).toEqual(original);
+});
+
+test('#821 parts crop hydration drops only a missing issue and never invents feedback fields',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb,'parts:one'),value=partsCropDraft(),session=value.session as {subject:string;issues:any[]};
+ expect(await store.write(value)).toBe(true);
+ const missing=session.issues[1];idb.values.delete(JSON.stringify([store.key,missing.id,missing.crop.sha256]));
+ const loaded=await idbStore(storage,idb,'parts:one').read();
+ expect(loaded?.session).toEqual({...session,issues:session.issues.filter(row=>row.id!==missing.id)});
+ expect(Object.keys(loaded!.session as object)).toEqual(['subject','issues']);
+});
+for(const version of ['1','2'])test(`#821 existing inline parts /${version} draft remains readable before migration`,async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb,'parts:legacy'),value=partsCropDraft(1);
+ storage.setItem(store.key,JSON.stringify({...value,schema:'rig-review-local-draft/'+version}));
+ expect(await store.read()).toEqual(value);
+ expect(await store.write(value)).toBe(true);expect(idb.values.size).toBe(1);expect(await store.read()).toEqual(value);
+});
+
+test('#821 parts afterInputs applies restored overlay and opacity to the existing renderer',async()=>{
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('setupPartsPersistence=async()=>'),begin=source.indexOf('afterInputs:',start),end=source.indexOf(',onConflict:',begin);
+ const callback=source.slice(begin+'afterInputs:'.length,end),code=new Bun.Transpiler({loader:'ts'}).transformSync(`const applyInputs=${callback};applyInputs();`);
+ const scope={overlay:{checked:true},opacity:{value:'0.31'},view:'compare',layouts:0,partsSubject:{setComparison:(mode:string)=>{state.mode=mode;},opacity:(value:number)=>{state.opacity=value;}},renderLayout:()=>{scope.layouts++;}},state={mode:'part',opacity:.5};
+ const apply=new Function('scope',`with(scope){${code}}`);
+ apply(scope);expect(state).toEqual({mode:'overlay',opacity:.31});expect(scope.view).toBe('rig');expect(scope.layouts).toBe(1);
+ scope.overlay.checked=false;scope.opacity.value='0.74';apply(scope);expect(state).toEqual({mode:'part',opacity:.74});expect(scope.layouts).toBe(1);
+});

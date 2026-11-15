@@ -155,14 +155,20 @@ export function recoverSession<T extends {id:string;revision:string;sourceHash:s
 export const maximumDrafts=32,protectedDraftMs=24*60*60*1000;
 const draftPrefix='rig-review-draft/1:',draftIndex='rig-review-draft-index/1';
 const cropDatabase='rig-review-inspection-drafts',cropStore='crops',cropReference='draft-crop:';
-/** Only existing stage-comment crops in inspection sessions belong to this private transport. */
-function draftCrops(session:unknown):{row:{id:string};crop:Record<string,unknown>}[] {
- if(!session||typeof session!=='object'||!Array.isArray((session as PersistenceSession).feedback))return [];
- return (session as PersistenceSession).feedback.flatMap(item=>{
-  const comment=(item as {context?:{comment?:unknown}}|null)?.context?.comment;
-  if(!hasStageComment(comment))return [];
-  const row=record(item,'draft');if(typeof row.id!=='string')throw new Error('Draft review state invalid');
-  return [{row:row as {id:string},crop:record((comment as {crop:unknown}).crop,'crop')}];
+/** Existing rig feedback and native parts issues share the private crop transport. */
+function draftCrops(session:unknown):{row:{id:string};crop:Record<string,unknown>;parts:boolean}[] {
+ if(!session||typeof session!=='object')return [];
+ const value=session as {feedback?:unknown[];subject?:unknown;issues?:unknown[]};
+ const rows=[...(Array.isArray(value.feedback)?value.feedback:[]),...(value.subject==='parts'&&Array.isArray(value.issues)?value.issues:[])];
+ return rows.flatMap(item=>{
+  const row=record(item,'draft'),parts=value.subject==='parts'&&(row.schema==='rig-review-parts-comment/1'||row.schema==='rig-review-parts-comment/2');
+  const comment=parts?row:(item as {context?:{comment?:unknown}}|null)?.context?.comment;
+  if(!parts&&!hasStageComment(comment))return [];
+  const crop=record((comment as {crop:unknown}).crop,'crop');
+  // Finalized parts rows may retain only their server-backed path/hash, without inline pixels.
+  if(parts&&!Object.hasOwn(crop,'png'))return [];
+  if(typeof row.id!=='string')throw new Error('Draft review state invalid');
+  return [{row:row as {id:string},crop,parts}];
  });
 }
 /** Browser counterpart of comment-crops.ts's signature/dimension/digest boundary (no Node imports). */
@@ -239,7 +245,8 @@ export class InspectionDraftStore {
   if(packed.schema!=='rig-review-local-draft/2')return this.parseDraft(raw,expected);
   // Check the bounded envelope/binding before touching IDB; validate the full session only after hydration.
   const draft=this.parseDraft(JSON.stringify({...packed,schema:'rig-review-local-draft/1'}),expected);
-  const crops=draftCrops(draft.session),blobs=new Map<{id:string},Blob>();
+  // Earlier /2 parts drafts stored inline PNGs; migrate them only on their next save.
+  const crops=draftCrops(draft.session).filter(({parts,crop})=>!(parts&&typeof crop.png==='string'&&/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(crop.png))),blobs=new Map<{id:string},Blob>();
   if(crops.length)await this.crops('readonly',store=>{
    for(const {row,crop}of crops){
     if(crop.png!==cropReference+crop.sha256)throw new Error('COMMENT_CROP_STATE_UNAVAILABLE: stored crop cannot be read');
@@ -249,7 +256,7 @@ export class InspectionDraftStore {
   // A completed read with missing/corrupt bytes loses only that image comment; transport failures still throw.
   const unavailable=new Set<unknown>();
   for(const {row,crop}of crops){const png=await draftPng(blobs.get(row)!,crop);if(png===null)unavailable.add(row);else crop.png=png;}
-  if(unavailable.size){const session=record(draft.session,'draft');session.feedback=(session.feedback as unknown[]).filter(row=>!unavailable.has(row));}
+  if(unavailable.size){const session=record(draft.session,'draft');for(const key of ['feedback','issues'])if(Array.isArray(session[key]))session[key]=(session[key] as unknown[]).filter(row=>!unavailable.has(row));}
   return draft;
  }
  read(canRecover?:(session:unknown)=>boolean):Promise<LocalInspectionDraft|null> {
