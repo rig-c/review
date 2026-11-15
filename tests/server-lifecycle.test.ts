@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { chmod, cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -470,6 +470,82 @@ test('a server that never receives any page connection exits after unopenedTimeo
   expect(lines).toEqual(['review: exiting — no review window connected within 120ms.']);
 });
 
+// Capture the real lifecycle check without changing global time or waiting on host scheduling.
+// Restore the timer spy synchronously; the lifecycle owns and clears its real interval handles.
+function clockedLifecycle(now: () => number, events: { event: string; at: number }[]) {
+  const schedule = globalThis.setInterval;
+  let tick!: () => void;
+  const interval = spyOn(globalThis, 'setInterval').mockImplementation(((callback: () => void, ms: number) => {
+    if (ms === 50) tick = callback;
+    return schedule(callback, ms);
+  }) as typeof setInterval);
+  try {
+    const life = createLiveLifecycle({
+      now,
+      flush: () => { events.push({ event: 'flush', at: now() }); },
+      onClose: () => { events.push({ event: 'close', at: now() }); },
+      stopServer: () => { events.push({ event: 'stop', at: now() }); },
+      log: () => { events.push({ event: 'log', at: now() }); },
+    });
+    expect(tick).toBeFunction();
+    return { life, tick };
+  } finally {
+    interval.mockRestore();
+  }
+}
+
+test('last-window grace starts at socket teardown, does not exit at 2999ms, and exits at 3000ms', async () => {
+  let now = 1_000;
+  const events: { event: string; at: number }[] = [];
+  const { life, tick } = clockedLifecycle(() => now, events);
+  try {
+    const socket = life.attachSocket();
+    // Time before teardown is not part of the grace, even if a kill caller was delayed.
+    now = 10_000;
+    tick();
+    expect(life.connections).toBe(1);
+    expect(events).toEqual([]);
+    socket.close();
+    expect(life.connections).toBe(0);
+    for (now of [11_000, 12_000, 12_999]) {
+      tick();
+      expect(events).toEqual([]);
+    }
+    now = 13_000;
+    tick();
+    expect((await life.exited)?.reason).toBe('last-window-closed');
+    expect(events).toEqual(['flush', 'close', 'stop', 'log'].map(event => ({ event, at: 13_000 })));
+  } finally {
+    life.stop();
+  }
+});
+
+test.each([2_050, 2_051])('default grace checks the 2050ms sleep-jump boundary: %ims between ticks', async jumpMs => {
+  let now = 1_000;
+  const events: { event: string; at: number }[] = [];
+  const { life, tick } = clockedLifecycle(() => now, events);
+  try {
+    life.attachSocket().close();
+    now += jumpMs;
+    tick();
+    expect(events).toEqual([]);
+    // Only a gap strictly greater than 50ms + 2000ms restarts the countdown.
+    const exitAt = (jumpMs === 2_051 ? now : 1_000) + DEFAULT_CLOSE_GRACE_MS;
+    for (const at of [exitAt - 2_000, exitAt - 1_000, exitAt - 1]) {
+      if (at < 1_000 + jumpMs) continue;
+      now = at;
+      tick();
+      expect(events).toEqual([]);
+    }
+    now = exitAt;
+    tick();
+    expect((await life.exited)?.reason).toBe('last-window-closed');
+    expect(events).toEqual(['flush', 'close', 'stop', 'log'].map(event => ({ event, at: exitAt })));
+  } finally {
+    life.stop();
+  }
+});
+
 test('a SIGKILLed client process is detected via socket teardown without pagehide or sendBeacon, exiting 0 and freeing the port', async () => {
   const root = await makeTempRoot();
   const pkg = join(root, 'pkg');
@@ -513,8 +589,8 @@ test('a SIGKILLed client process is detected via socket teardown without pagehid
   }
   cReader.releaseLock();
 
-  // Kill the client with SIGKILL (-9): no pagehide, no sendBeacon
-  const killAt = performance.now();
+  // Real CLI integration: no pagehide or sendBeacon. The injected-clock tests above
+  // prove grace from teardown; caller scheduling and wall-clock jumps are not that clock.
   process.kill(clientProc.pid, 'SIGKILL');
   await clientProc.exited;
 
@@ -525,11 +601,8 @@ test('a SIGKILLed client process is detected via socket teardown without pagehid
     stdout += decoder.decode(step.value);
   }
   const exitCode = await srvProc.exited;
-  const elapsedMs = performance.now() - killAt;
 
   expect(exitCode).toBe(0);
-  expect(elapsedMs).toBeGreaterThanOrEqual(DEFAULT_CLOSE_GRACE_MS - 150);
-  expect(elapsedMs).toBeLessThan(DEFAULT_CLOSE_GRACE_MS + 1_500);
   expect(stdout).toContain('review: exiting — last review window closed (0 live connections for 3000ms).');
 
   // Verify the port is free
