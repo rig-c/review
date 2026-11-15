@@ -1,6 +1,8 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {applyAnimationOps,parseAnimationSourceOp} from '../src/animation-ops.ts';
+import {createViewportController,createViewportState} from '../web/viewport-controller.ts';
+import {createRigViewportProvider} from '../web/rig-viewport-provider.ts';
 import {PartInspection,partCatalog} from '../web/part-selection.ts';
 const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
 // Execute the actual consumer body with distinct clocks, without importing the page's startup side effects.
@@ -33,6 +35,7 @@ test('actual in-place swap keeps matching-canvas zoom/pan, refits a changed canv
   const deps={parts,viewport,next,messages,entries:removed?[]:entries,stage};
   const body=`return (async()=>{
    const {parts,viewport,next,messages,entries,stage}=deps;
+   const viewportProvider={geometry:()=>({box:stage})},rebuildFramingBoxes=new WeakMap();
    let stageCorrectionRebinding=0,inspectionSourceState='ready',partModel=null,setupChestWorld=null,stageModelHash=null,stageSource=null,stageDocumentSet=false;
    let player={dispose(){},draw(){}},assets={stage,dispose(){}},animation='',time=.375,playing=false,duration=1;
    const physicsPanel=null,weightsView=null,meshEditor=null,directionPanel=null,idlePanel=null;
@@ -59,4 +62,56 @@ test('invalid supplied operation and serialized operation record keep their time
  const op={op:'insert_key' as const,animation:'pulse',track:0,time:-1,value:[2]};
  expect(()=>applyAnimationOps(source,[op])).toThrow('ANIMATION_KEY_TIME_INVALID');
  expect(()=>parseAnimationSourceOp(JSON.parse(JSON.stringify(op)),'draft.ops[0]')).toThrow('draft.ops[0].time: expected finite number >= 0');
+});
+
+
+test('#858 actual swap preserves the entire numeric camera when equal-stage builds have different first drawn bounds',async()=>{
+ const swap=main.slice(main.indexOf('async function swapRig('),main.indexOf('\n/**\n * Mesh Apply'));
+ // Keep the actual provider construction and framing callback from main, including future fixes.
+ const wiringStart=main.includes('const viewportProvider=')?'const viewportProvider=':'const viewport=createViewportController(';
+ const wiring=main.slice(main.indexOf(wiringStart),main.indexOf('const {fitCamera,paneFrame,'));
+ const framingDeclaration=main.match(/const rebuildFramingBoxes=[^;]+;/)?.[0]??'';
+ const run=async(resized:boolean,removed:boolean)=>{
+  const body=`return (async()=>{
+   const {createViewportController,createViewportState,createRigViewportProvider,resized,removed}=deps;
+   const nodes=new Map();const el=id=>{if(!nodes.has(id))nodes.set(id,{clientWidth:1158,clientHeight:471,hidden:false,style:{}});return nodes.get(id);};
+   const stage={x:0,y:0,width:80,height:80};let bounds={x:-11,y:-11,width:22,height:22};
+   const newPlayer=()=>({dispose(){},draw(){},slots:null,generation:0,bounds:()=>bounds,renderer:{syncPixelRatio(){}}});
+   let player=newPlayer(),assets={stage,animations:[],dispose(){}},animation='',time=.375,playing=false,duration=1;
+   let selected={side:'single',slot:'torso',mode:'solo'};
+   const parts={value:()=>selected,frame:()=>({generation:0,order:[]}),bounds:()=>null,register(){},restoreSelection(value){selected=removed?null:value;}};
+   const partsOnly=false,sceneBox=()=>null,referenceSize=null,referenceGeneration=0,view='rig',rigRaster=undefined;
+   const text=()=>{},message=()=>{},redrawOverlay=()=>{},viewportState=createViewportState();
+   ${framingDeclaration}
+   ${wiring}
+   const {fitCamera}=viewport;viewport.renderNumericView=()=>{};
+   viewport.state.cameraSync=false;viewport.writeCamera('rig',{zoom:1.8292681684438339,center:{x:17,y:23}});fitCamera();
+   const before=structuredClone(viewport.numericView().cameras.rig),beforeFrame={...viewport.paneFrame('rig')};
+   let stageCorrectionRebinding=0,inspectionSourceState='ready',partModel=null,setupChestWorld=null,stageModelHash=null,stageSource=null,stageDocumentSet=false;
+   const physicsPanel=null,weightsView=null,meshEditor=null,directionPanel=null,idlePanel=null;
+   const data={feedbackCatalog:{slots:[]},manifest:{animations:[]}},location={origin:'http://local'};
+   const select=()=>({disabled:true,value:'',replaceChildren(){}});
+   const next={stage:{...stage,width:resized?81:80},animations:[],dispose(){}};
+   const stageLoadInputs=()=>({}),loadModel=async()=>next,createInspectionPlayer=()=>{bounds={x:-30,y:-20,width:60,height:40};return newPlayer();},readSetupChest=()=>null;
+   const refreshAnimationInspection=()=>{},pause=()=>{},configureTurnPad=()=>{},pageRegionTable=()=>({}),PartThumbnails=class{};
+   const loadPartModel=async()=>({model:{},entries:[]}),configurePartSets=()=>{},environmentApplied=()=>false;
+   const keptAnimation=()=>false,drawRig=fn=>fn(),renderTransport=()=>{},renderCues=()=>{},renderIdle=()=>{};
+   const updateChestMapping=()=>{},loadModelDocument=async()=>({ok:false}),playPreview=()=>{};
+   ${swap}
+   await swapRig('http://local/model','/', 'hash');
+   const after=viewport.numericView().cameras.rig;
+   // Simulate a later observer render and an even larger animated pose: neither may change retained framing.
+   bounds={x:-300,y:-200,width:600,height:400};fitCamera();
+   return {before,after,later:viewport.numericView().cameras.rig,beforeFrame,afterFrame:viewport.paneFrame('rig'),selected,restoring:viewport.state.cameraRestoring};
+  })();`;
+  return new Function('deps',new Bun.Transpiler({loader:'ts'}).transformSync(body))({createViewportController,createViewportState,createRigViewportProvider,resized,removed});
+ };
+ for(const removed of [false,true]){
+  const result=await run(false,removed);console.log('CAMERA_SWAP_EQUAL_STAGE '+JSON.stringify(result));
+  expect(result.after).toEqual(result.before);expect(result.later).toEqual(result.before);
+  expect(result.afterFrame.baseScale).toBe(result.beforeFrame.baseScale);
+  expect(result.selected).toEqual(removed?null:{side:'single',slot:'torso',mode:'solo'});expect(result.restoring).toBe(false);
+ }
+ const changed=await run(true,false);
+ expect(changed.after.zoom).toBe(1);expect(changed.after).not.toEqual(changed.before);
 });

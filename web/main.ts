@@ -164,7 +164,9 @@ if(partsOnly){partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);e
 let sceneComposite:ReturnType<typeof bindScenePlates>|undefined;
 const activeScene=()=>sceneComposite&&data.direction&&(!stageSource||stageSource.url===inspectedModel?.url)?data.direction:undefined;
 const sceneBox=()=>{const direction=activeScene();return direction?takeSample(direction,time).box:null;};
-const viewport=createViewportController(partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>target==='reference'&&activeInterviewImage&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',framingBox:sceneBox,el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,raster:rigRaster},viewportState),viewportState);
+const rebuildFramingBoxes=new WeakMap<ModelAssets,PoseBounds>();
+const viewportProvider=partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>target==='reference'&&activeInterviewImage&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',framingBox:()=>sceneBox()??(assets?rebuildFramingBoxes.get(assets)??null:null),el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,raster:rigRaster},viewportState);
+const viewport=createViewportController(viewportProvider,viewportState);
 const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera}=viewport;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
 if(!host)connectLiveWindow(access);
@@ -2852,12 +2854,15 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  const cameraRestoring=viewport.state.cameraRestoring;
  stageCorrectionRebinding++;try{
  const keepPart=parts?.value()??null,keepStage=assets?.stage;
+ const keepFramingBox=viewportProvider.geometry('rig')?.box;
  const keepRigCamera=structuredClone(viewport.paneCamera('rig')),keepReferenceCamera=structuredClone(viewport.paneCamera('reference'));
  const keepAnimation=animation,keepTime=time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  inspectionSourceState='pending';partModel=null;pause();refreshAnimationInspection();
  const next=await loadModel({modelUrl,...stageLoadInputs(modelUrl,sha256),resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}}).catch(error=>{inspectionSourceState='failed';refreshAnimationInspection();throw error;});
  const keepFraming=!!keepStage&&!!next.stage&&(['x','y','width','height'] as const).every(key=>keepStage[key]===next.stage![key]);
  viewport.state.cameraRestoring=true;viewport.cancelFit();
+ // The fit-relative zoom also depends on the first-draw framing basis, not just the declared stage.
+ if(keepFraming&&keepFramingBox)rebuildFramingBoxes.set(next,{...keepFramingBox});
  physicsPanel?.clearPreview();
  pause();player?.dispose();assets?.dispose();assets=next;player=createInspectionPlayer(el('rig-root'),assets);setupChestWorld=readSetupChest(player);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
