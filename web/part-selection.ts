@@ -82,6 +82,11 @@ export class PartInspection {
  value():ControlPart|null {const part=this.live();if(!part)return null;const state=this.sides.get(part.side),identity=partIdentity(state?.identity??null,part.slot);return {...part,...(identity?{identity}:{} )};}
  assertIdentity(expected:ControlPart|null|undefined):void {if(!expected)return;this.validate(expected);const actual=partIdentity(this.sides.get(expected.side)?.identity??null,expected.slot);if(!actual)throw new Error(`PART_IDENTITY_UNAVAILABLE: ${expected.side} / ${expected.slot} has no held public snapshot`);if(expected.identity&&JSON.stringify(actual)!==JSON.stringify(parsePartIdentity(expected.identity)))throw new Error(`PART_IDENTITY_MISMATCH: ${expected.side} / ${expected.slot} no longer resolves the bookmarked skin/attachment/set/reason`);}
  validate(value:ControlPart|null|undefined):void {if(!value)return;parseControlPart(value);const state=this.sides.get(value.side);if(!state||!state.entries.some(e=>e.slot===value.slot))throw new Error(`PART_UNAVAILABLE: ${value.side} / ${value.slot}`);}
+ /** An in-place rebuild keeps the subject, not the old attachment identity; removed slots become Whole rig. */
+ restoreSelection(value:ControlPart|null):void {
+  const available=value&&this.sides.get(value.side)?.entries.some(entry=>entry.slot===value.slot);
+  this.select(available?{side:value.side,slot:value.slot,mode:value.mode}:null);
+ }
  select(value:ControlPart|null):void {this.validate(value);const refusal=value?this.refused.get(value.side):undefined;if(refusal)throw new Error(`PARTS_UNAVAILABLE: ${value!.side} / ${refusal.message}`);const next=value?{side:value.side,slot:value.slot,mode:value.mode}:null,previous=this.selected;try{for(const [side,state]of this.sides)if(state.frame)state.player.renderer.render(selectedFrame(state.frame,next,side));}catch(error){for(const [side,state]of this.sides)if(state.frame)state.player.renderer.render(selectedFrame(state.frame,previous,side));throw error;}this.selected=next;}
  /** Called inside the successful draw boundary, before compare submission is measured complete. */
  present(side:ControlPart['side']):void {const state=this.sides.get(side);if(!state)return;this.commit(side,state,this.capture(state));}
