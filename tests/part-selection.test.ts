@@ -11,6 +11,23 @@ const clip={polygon:[0,0,5,0,5,5,0,5],inverse:false,convex:true};
 const frame:PosedFrame={generation:1,order:[{kind:'mesh',slot:'s',z:0,blend:'Normal',tint:[1,1,1,1],vertices:[0,0,10,0,0,10],uvs:[0,0,1,0,0,1],triangles:[0,1,2],page:'packed.png',pma:false,sequence:0,clip},{kind:'region',slot:'other',z:1,blend:'Normal',tint:[1,1,1,1],corners:[0,0,0,1,1,1,1,0],uvs:[0,0,0,1,1,1,1,0],region:'sprite',page:'packed.png',pma:false}]};
 const model={slots:[{name:'s',bone:'root',setup:'first'},{name:'other',bone:'root',setup:'sprite'},{name:'clip',bone:'root'}],skins:[{name:'default',attachments:{s:{first:{kind:'mesh',path:'texture-one'},alternate:{kind:'mesh',path:'texture-two'}},other:{sprite:{kind:'region',path:'sprite'}},clip:{mask:{kind:'clipping'}}}}]};
 const entries=partCatalog(model,['s','other','clip']);
+test('in-place rebuild restores side, slot and mode, or silently falls back to Whole rig for a removed slot',()=>{
+ const inspection=new PartInspection(),a=fake();inspection.register('single',entries,a.player);
+ inspection.select({side:'single',slot:'s',mode:'solo'});const kept=inspection.value();
+ inspection.register('single',entries,a.player);inspection.restoreSelection(kept);
+ expect(inspection.value()).toMatchObject({side:'single',slot:'s',mode:'solo'});
+ inspection.register('single',entries.filter(entry=>entry.slot!=='s'),a.player);
+ expect(()=>inspection.restoreSelection(kept)).not.toThrow();expect(inspection.value()).toBeNull();
+ expect(inspection.refusal('single')).toBeNull();
+});
+test('in-place rebuild falls back to Whole rig without throwing when the kept side refuses selection',()=>{
+ class RefusedInspection extends PartInspection {refuseSide(){this.refused.set('single',{code:'PART_IDENTITY_UNAVAILABLE',message:'identity refused',catalog:false});}}
+ const inspection=new RefusedInspection(),a=fake();inspection.register('single',entries,a.player);
+ inspection.select({side:'single',slot:'s',mode:'solo'});const kept=inspection.value();inspection.refuseSide();
+ expect(()=>inspection.select(kept)).toThrow('PARTS_UNAVAILABLE');
+ expect(()=>inspection.restoreSelection(kept)).not.toThrow();expect(inspection.value()).toBeNull();
+ expect(inspection.refusal('single')?.code).toBe('PART_IDENTITY_UNAVAILABLE');
+});
 function fake(){
  const rendered:PosedFrame[]=[];let sampled:unknown='unset',source=copyPartFrame(frame),override:SlotIdentitySnapshot|null=null;
  const snapshot=():SlotIdentitySnapshot=>override??{generation:source.generation!,set:null,sets:[],skin:null,slots:entries.map((entry,z)=>{const drawn=source.order.find(row=>row.slot===entry.slot),attachment=entry.slot==='s'?'first':'sprite';return {slot:entry.slot,z,attachment:drawn?attachment:null,skin:drawn?'default':null,reason:drawn?null:entry.slot==='clip'?'no-attachment':'timeline-null'};})};

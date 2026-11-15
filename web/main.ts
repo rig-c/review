@@ -2849,11 +2849,15 @@ async function resetRebuild(world:StageWorld|null=null):Promise<void> {
  */
 let stageSource:{url:string;prefix:string;hash:string}|null=null;
 async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWorld|null=null):Promise<void> {
+ const cameraRestoring=viewport.state.cameraRestoring;
  stageCorrectionRebinding++;try{
- const keepPart=stageCorrectionPart?parts?.value():null;
+ const keepPart=parts?.value()??null,keepStage=assets?.stage;
+ const keepRigCamera=structuredClone(viewport.paneCamera('rig')),keepReferenceCamera=structuredClone(viewport.paneCamera('reference'));
  const keepAnimation=animation,keepTime=time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  inspectionSourceState='pending';partModel=null;pause();refreshAnimationInspection();
  const next=await loadModel({modelUrl,...stageLoadInputs(modelUrl,sha256),resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}}).catch(error=>{inspectionSourceState='failed';refreshAnimationInspection();throw error;});
+ const keepFraming=!!keepStage&&!!next.stage&&(['x','y','width','height'] as const).every(key=>keepStage[key]===next.stage![key]);
+ viewport.state.cameraRestoring=true;viewport.cancelFit();
  physicsPanel?.clearPreview();
  pause();player?.dispose();assets?.dispose();assets=next;player=createInspectionPlayer(el('rig-root'),assets);setupChestWorld=readSetupChest(player);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
@@ -2871,12 +2875,14 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  // when none was staged — and nothing claims a clip the stage is not drawing.
  else{drawRig(()=>player!.draw());animation='';duration=0;time=0;select('animation-select').value='';renderTransport();renderCues();renderIdle();}
  if(environmentApplied())applyEnvironment();
- if(keepPart&&parts&&inspectionSourceState==='ready'){try{parts.select({side:keepPart.side,slot:keepPart.slot,mode:keepPart.mode});}catch{message('STAGE_DRAFT_MISMATCH',true);}}
- updateChestMapping();fitCamera();
+ if(parts&&inspectionSourceState==='ready')parts.restoreSelection(keepPart);
+ updateChestMapping();
+ if(keepFraming){viewport.writeCamera('rig',keepRigCamera);viewport.writeCamera('reference',keepReferenceCamera);fitCamera();}
+ else{viewport.state.cameraRestoring=cameraRestoring;viewport.requestFit();fitCamera();}
  // The preview (#104) drives the new player once its bone setups are read (an idle Apply cleared it first).
  stageDocumentSet=true;void loadModelDocument(modelUrl,sha256).then(loaded=>{if(loaded.ok&&stageModelHash===sha256)idlePanel?.model(boneSetup(loaded.document));});
  if(wasPlaying)void playPreview();
- }finally{stageCorrectionRebinding--;directionPanel?.refresh();}
+ }finally{viewport.state.cameraRestoring=cameraRestoring;stageCorrectionRebinding--;directionPanel?.refresh();}
 }
 /**
  * Mesh Apply (#106): the pending `meshes.<part>` entry becomes one config patch — `replace /meshes/<part>` and nothing

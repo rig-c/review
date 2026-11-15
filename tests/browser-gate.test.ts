@@ -25,7 +25,6 @@ test('live tree partition covers every discovered suite once or by its named exe
   "tests/stage1-corrections-browser.ts": 847,
   "tests/stage1-review-fixes-browser.ts": 847,
   "tests/job-checkpoint-evidence-browser.ts": 848,
-  "tests/correction-handoff-browser.ts": 858,
 });
  const assigned=plan.suites;
  const omitted=Object.keys(exclusions);

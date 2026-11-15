@@ -137,7 +137,10 @@ try{
   const meshJob = await settleCorrectionMesh(page);
   if(meshJob.status!=='built'||meshJob.check?.pass!==true)throw Error('MESH_PARAMETER_APPLY_REFUSED '+JSON.stringify(meshJob));
   if(await page.evaluate(`document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot`)!=='torso')throw Error('MESH_SELECTION_LOST');
-  receipts.push({lang,instrument:'mesh',applied:await page.evaluate(`JSON.parse(document.getElementById('rebuild-applied').value)`)});
+  const after=await page.evaluate<any>(`({snapshot:${selectionAndCamera},part:window.rigReviewEditor.mesh.part(),text:document.getElementById('mesh-panel-state').textContent})`);
+  if(after.part!=='torso'||!after.text.includes('torso'))throw Error('MESH_PANEL_CONTEXT_LOST '+JSON.stringify(after));
+  if(JSON.stringify(after.snapshot.rig)!==JSON.stringify(before.snapshot.rig))throw Error('MESH_CAMERA_CHANGED '+JSON.stringify({before:before.snapshot.rig,after:after.snapshot.rig}));
+  receipts.push({lang,instrument:'mesh',before:before.snapshot,after,applied:await page.evaluate(`JSON.parse(document.getElementById('rebuild-applied').value)`)});
   await writeFile(join(artifacts,lang+'-mesh.png'),await page.screenshot());
 
   const applied=receipts.at(-1).applied;
