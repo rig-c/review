@@ -46,6 +46,8 @@ async function inspect(name:string,pkg:PartsViewPackage,expectedDifference:boole
  const server=await startPartsServer(pkg,{port:0,exitOnClose:false,graceMs:3600000,unopenedTimeoutMs:3600000});servers.push(server);
  const hole=await uncovered(pkg);if(name==='negative')assert.ok(hole,'accepted-v6 supplied mesh must yield a tested uncovered art pixel');
  for(const lang of ['en','ko']as const){
+  if(lang==='ko')report[name+'-draft-before-ko']=await page!.evaluate(`Object.entries(localStorage).filter(([key])=>key.startsWith('rig-review-draft/1:parts:')).map(([key,raw])=>{const draft=JSON.parse(raw);return {key,reviewDirty:draft.reviewDirty,ui:draft.ui,bookmark:draft.bookmark,comparison:{overlay:draft.inputs['parts-overlay'],opacity:draft.inputs['parts-opacity']}}})`);
+  if(lang==='ko')console.log('U3_821_DRAFT '+JSON.stringify({case:name,drafts:report[name+'-draft-before-ko']}));
   console.log('U3_CASE '+name+' '+lang);
   await page!.goto(`http://127.0.0.1:${server.port}/?lang=${lang}`);await settled();const state=await controls();assert.deepEqual(state.ids,['zoom-in','zoom-out','fit','native-one','view-menu']);assert.deepEqual(state.menu,['compare','reference','rig','difference']);assert.deepEqual(state.counts,[1,1,1,1,1]);assert.equal(state.caption,lang==='ko'?koCatalog['Assembled parts']:enCatalog['Assembled parts']);
   await wait(`document.querySelectorAll('[data-part-list] .part-thumb[data-thumbnail="image"] canvas').length>0`,'original thumbnails');

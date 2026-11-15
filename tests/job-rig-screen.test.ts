@@ -226,7 +226,7 @@ test('#798 direction comments restore cannot override the inspection draft verdi
  new Function('scope',`with(scope){${code};restoreRecordComments();}`)(scope);
  expect(scope.recordComments).toEqual(saved.comments);
  expect(selector.value).toBe('changes-requested');expect(scope.session.status).toBe('changes-requested');
- const restore=main.match(/restoreSession:\(value,isDirty\)=>\{([\s\S]*?)\},bookmark:/)![1]!;
+ const restore=main.slice(main.indexOf('async function setupPersistence(')).match(/restoreSession:\(value,isDirty\)=>\{([\s\S]*?)\},bookmark:/)![1]!;
  const applyScope={session:{status:'pending'},dirty:false,select:()=>selector,renderProposals(){},renderCheckpoint(){},renderCheckpoints(){},renderProvenance(){},updateSavedState(){}};
  new Function('scope','value','isDirty',`with(scope){${restore}}`)(applyScope,{status:'changes-requested'},true);
  expect(applyScope.session.status).toBe('changes-requested');expect(selector.value).toBe(applyScope.session.status);

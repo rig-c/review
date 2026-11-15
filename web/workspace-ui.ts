@@ -1,7 +1,7 @@
 /** Browser workspace presentation. Source selection, player clocks and review decisions stay with the page. */
 import {WorkspacePreferenceStore,panelBounds,type WorkspaceLanguage,type WorkspacePanels,type WorkspacePreferences,type WorkspaceTheme} from './workspace-preferences.ts';
 import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,workspaceMinimums,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange} from './workspace-layout.ts';
-import {bindDomI18n,getLinkLanguage,setLanguagePreference,setLinkLanguage,tr,onLanguageChange} from './i18n.ts';
+import {bindDomI18n,getLinkLanguage,resolveLanguage,setLanguagePreference,setLinkLanguage,tr,onLanguageChange} from './i18n.ts';
 import {panelMake,actionButton,labelledControl} from './view-controls.ts';
 
 /** Header availability belongs to the shared shell, independently of the removed step chips. */
@@ -89,11 +89,12 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
  if(!parts){
   language=panelMake('select');
   if(settingsLanguage){language.id='settings-language';language.dataset.appPreference='';}
-  for(const value of settingsLanguage?['system','en','ko']:['en','ko']){
-   const text=settingsLanguage?(value==='system'?'System':value==='en'?'English':'한국어'):interview?(value==='en'?'English':'한국어'):'';
+  for(const value of ['en','ko']){
+   // Owner ruling #873: the top-bar choice is En or Kr, with no System option.
+   const text=settingsLanguage?(value==='en'?'En':'Kr'):interview?(value==='en'?'English':'한국어'):'';
    language.append(panelMake('option',{value,textContent:text}));
   }
-  if(settingsLanguage){languageLabel=labelledControl('Language ',language);if(rig)header.append(languageLabel);}
+  if(settingsLanguage){if(rig){language.setAttribute('aria-label','Language');header.append(language);}else languageLabel=labelledControl('Language ',language);}
   else{if(interview)header.append('\n    ');header.append(language);if(interview)header.append('\n  ');}
  }
  if(options.embedded){if(rig||parts)header.hidden=true;else if(interview)language!.hidden=true;}
@@ -153,6 +154,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  if(!sharedLanguage.closest('header'))settingsBody.firstElementChild!.after(sharedLanguage.parentElement!);
  sourceList.append(settings);
  const theme=require<HTMLSelectElement>('settings-theme'),language=sharedLanguage,sync=require<HTMLInputElement>('settings-sync'),idle=require<HTMLInputElement>('settings-idle'),status=require('settings-state');
+ let languageMigrated=false;
  const store=new WorkspacePreferenceStore({onStatus:value=>{status.textContent=tr(value.detail);}});let desired={...store.get().panels};
  const stack=document.createElement('div');stack.className='workspace-stage-stack';for(const child of [...main.children])if(child!==inspector)stack.append(child);main.prepend(stack);
  const triggers=document.createElement('div');triggers.className='workspace-drawer-triggers';triggers.setAttribute('aria-label','Workspace panels');stack.prepend(triggers);
@@ -215,7 +217,11 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
    layout.dataset.stageMinimum=String(effective.stageMinimumSatisfied);for(const binding of bindings)binding.refresh();options.changed();restore();
   }finally{applying=false;}
  }
- const renderSettings=()=>{const value=store.get();setLanguagePreference(value.language);settingsToggle.setAttribute('aria-expanded',String(!value.settingsCollapsed));settingsBody.hidden=value.settingsCollapsed;settings.dataset.collapsed=String(value.settingsCollapsed);theme.value=options.currentTheme?.()??value.theme;language.value=getLinkLanguage()??value.language;sync.checked=value.defaultCameraSync;idle.checked=value.defaultIdleRepeat;status.textContent=tr(store.status().detail);};
+ const renderSettings=()=>{const value=store.get();
+  // A stored or default 'system' becomes the browser's language once (ko → ko, else en) and is kept (#873).
+  const shown=value.language==='system'?resolveLanguage('system'):value.language;
+  if(value.language==='system'&&!languageMigrated){languageMigrated=true;store.update({language:shown});}
+  setLanguagePreference(shown);settingsToggle.setAttribute('aria-expanded',String(!value.settingsCollapsed));settingsBody.hidden=value.settingsCollapsed;settings.dataset.collapsed=String(value.settingsCollapsed);theme.value=options.currentTheme?.()??value.theme;language.value=getLinkLanguage()??shown;sync.checked=value.defaultCameraSync;idle.checked=value.defaultIdleRepeat;status.textContent=tr(store.status().detail);};
  const revealInspector=()=>{
   if(bottom&&collapsed){collapsed=false;try{localStorage.setItem(bottomCollapseKey,'false');}catch{}apply();}
   if(effective.inspectorMode==='drawer'&&!dialogs.inspectorHeight.open){for(const dialog of Object.values(dialogs))if(dialog.open)dialog.close();buttons.inspectorHeight.click();if(bottom)apply();}
