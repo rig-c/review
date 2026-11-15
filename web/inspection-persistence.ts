@@ -155,14 +155,20 @@ export function recoverSession<T extends {id:string;revision:string;sourceHash:s
 export const maximumDrafts=32,protectedDraftMs=24*60*60*1000;
 const draftPrefix='rig-review-draft/1:',draftIndex='rig-review-draft-index/1';
 const cropDatabase='rig-review-inspection-drafts',cropStore='crops',cropReference='draft-crop:';
-/** Only existing stage-comment crops in inspection sessions belong to this private transport. */
-function draftCrops(session:unknown):{row:{id:string};crop:Record<string,unknown>}[] {
- if(!session||typeof session!=='object'||!Array.isArray((session as PersistenceSession).feedback))return [];
- return (session as PersistenceSession).feedback.flatMap(item=>{
-  const comment=(item as {context?:{comment?:unknown}}|null)?.context?.comment;
-  if(!hasStageComment(comment))return [];
-  const row=record(item,'draft');if(typeof row.id!=='string')throw new Error('Draft review state invalid');
-  return [{row:row as {id:string},crop:record((comment as {crop:unknown}).crop,'crop')}];
+/** Existing rig feedback and native parts issues share the private crop transport. */
+function draftCrops(session:unknown):{row:{id:string};crop:Record<string,unknown>;parts:boolean}[] {
+ if(!session||typeof session!=='object')return [];
+ const value=session as {feedback?:unknown[];subject?:unknown;issues?:unknown[]};
+ const rows=[...(Array.isArray(value.feedback)?value.feedback:[]),...(value.subject==='parts'&&Array.isArray(value.issues)?value.issues:[])];
+ return rows.flatMap(item=>{
+  const row=record(item,'draft'),parts=value.subject==='parts'&&(row.schema==='rig-review-parts-comment/1'||row.schema==='rig-review-parts-comment/2');
+  const comment=parts?row:(item as {context?:{comment?:unknown}}|null)?.context?.comment;
+  if(!parts&&!hasStageComment(comment))return [];
+  const crop=record((comment as {crop:unknown}).crop,'crop');
+  // Finalized parts rows may retain only their server-backed path/hash, without inline pixels.
+  if(parts&&!Object.hasOwn(crop,'png'))return [];
+  if(typeof row.id!=='string')throw new Error('Draft review state invalid');
+  return [{row:row as {id:string},crop,parts}];
  });
 }
 /** Browser counterpart of comment-crops.ts's signature/dimension/digest boundary (no Node imports). */
@@ -239,7 +245,8 @@ export class InspectionDraftStore {
   if(packed.schema!=='rig-review-local-draft/2')return this.parseDraft(raw,expected);
   // Check the bounded envelope/binding before touching IDB; validate the full session only after hydration.
   const draft=this.parseDraft(JSON.stringify({...packed,schema:'rig-review-local-draft/1'}),expected);
-  const crops=draftCrops(draft.session),blobs=new Map<{id:string},Blob>();
+  // Earlier /2 parts drafts stored inline PNGs; migrate them only on their next save.
+  const crops=draftCrops(draft.session).filter(({parts,crop})=>!(parts&&typeof crop.png==='string'&&/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(crop.png))),blobs=new Map<{id:string},Blob>();
   if(crops.length)await this.crops('readonly',store=>{
    for(const {row,crop}of crops){
     if(crop.png!==cropReference+crop.sha256)throw new Error('COMMENT_CROP_STATE_UNAVAILABLE: stored crop cannot be read');
@@ -249,7 +256,7 @@ export class InspectionDraftStore {
   // A completed read with missing/corrupt bytes loses only that image comment; transport failures still throw.
   const unavailable=new Set<unknown>();
   for(const {row,crop}of crops){const png=await draftPng(blobs.get(row)!,crop);if(png===null)unavailable.add(row);else crop.png=png;}
-  if(unavailable.size){const session=record(draft.session,'draft');session.feedback=(session.feedback as unknown[]).filter(row=>!unavailable.has(row));}
+  if(unavailable.size){const session=record(draft.session,'draft');for(const key of ['feedback','issues'])if(Array.isArray(session[key]))session[key]=(session[key] as unknown[]).filter(row=>!unavailable.has(row));}
   return draft;
  }
  read(canRecover?:(session:unknown)=>boolean):Promise<LocalInspectionDraft|null> {
@@ -277,7 +284,7 @@ export class InspectionDraftStore {
    try{
     const packed=JSON.parse(snapshot) as LocalInspectionDraft;
     // Clean sessions are already durable on the server and are never restored as unsent feedback.
-    if(!packed.reviewDirty&&packed.session&&typeof packed.session==='object'){
+    if(!packed.reviewDirty&&packed.session&&typeof packed.session==='object'&&'feedback'in packed.session){
      packed.session={...packed.session,feedback:[]};
     }
     const crops=draftCrops(packed.session),blobs:{key:IDBValidKey;blob:Blob}[]=[];
@@ -311,7 +318,8 @@ export class InspectionDraftStore {
 }
 
 interface PersistenceSession {id:string;revision:string;sourceHash:string;status:string;feedback:unknown[]}
-interface PersistenceAdapter<T extends PersistenceSession> {
+interface PersistenceAdapter<T> {
+ recover?:(value:unknown,baseline:T)=>T|null;
  scope:string;binding:InspectionBinding;baseline:T;session:()=>T;reviewDirty:()=>boolean;
  restoreSession:(value:T,dirty:boolean)=>void;bookmark:()=>InspectionBookmark;
  restoreBookmark:(bookmark:InspectionBookmark,signal:AbortSignal)=>Promise<void>;
@@ -321,14 +329,15 @@ interface PersistenceAdapter<T extends PersistenceSession> {
 export interface PersistenceConnection {restored:boolean;restoring:()=>boolean;save:()=>Promise<void>;submitted:(session:unknown)=>Promise<void>;dispose:()=>void}
 const viewInputIds=new Set(['part-search','part-solo','camera-sync','appearance','layer-images','layer-mesh','layer-bones','animation-select','reference-select','person-select','axis-select','axis-value','scrub','frame-number','frame-scrub','time-input','frame-input','part-set']);
 /** Restore once after normal startup; snapshots never perform a server mutation. */
-export async function connectInspectionPersistence<T extends PersistenceSession>(adapter:PersistenceAdapter<T>):Promise<PersistenceConnection> {
+export async function connectInspectionPersistence<T>(adapter:PersistenceAdapter<T>):Promise<PersistenceConnection> {
  let restoring=true,closed=false,conflict=false,timer:ReturnType<typeof setTimeout>|undefined;
  let navigationGeneration=0,navigationAbort:AbortController|null=null,navigationQueue=Promise.resolve(),lastNavigationHash=location.hash;
  let previousInert:boolean|null=null;
  const holdRestore=(value:boolean)=>{restoring=value;const body=document.body;if(value){if(body&&previousInert===null){previousInert=body.inert;body.inert=true;}}else if(body&&previousInert!==null){body.inert=previousInert;previousInert=null;}};
  let baseline=await sessionFingerprint(adapter.baseline);const status=adapter.onStatus,initialInputs=captureInputs();
  const store=new InspectionDraftStore(adapter.scope,adapter.binding,status);
- let draft=await store.read(session=>recoverSession(session,adapter.baseline)!==null);
+ const recover=adapter.recover??((value:unknown,baseline:T)=>recoverSession(value,baseline as T & PersistenceSession) as T|null);
+ let draft=await store.read(session=>recover(session,adapter.baseline)!==null);
  const notices=[document.getElementById('draft-recovery'),document.getElementById('review-draft-recovery')].filter((node):node is HTMLElement=>node!==null);
  const clearNotices=()=>{for(const node of notices)node.replaceChildren();};
  const appendAction=(label:string,onclick:()=>void)=>{for(const node of notices){const button=actionButton(label,onclick);node.append(button);}};
@@ -338,8 +347,8 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
  try{explicit=decodeBookmark(location.hash,adapter.binding);}catch(error){status(error instanceof Error?error.message:String(error));}
  let recovered:T|null=null,sameBaseline=false;
  if(draft){
-  recovered=recoverSession(draft.session,adapter.baseline);
-  const prior=recovered?recoverSession(adapter.baseline,draft.session as T):null;
+  recovered=recover(draft.session,adapter.baseline);
+  const prior=recovered?recover(adapter.baseline,draft.session as T):null;
   sameBaseline=draft.baseline===baseline||(prior!==null&&draft.baseline===await sessionFingerprint(prior));
   if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){await store.clear();draft=null;recovered=null;}
  }

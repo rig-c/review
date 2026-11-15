@@ -210,9 +210,9 @@ async function openDraftReopenScenario(opts:{
  const ids=source.slice(source.indexOf('const viewInputIds='),source.indexOf('/** Restore once'));
  if(opts.legacyMain){
   connect=connect
-   .replace("let draft=await store.read(session=>recoverSession(session,adapter.baseline)!==null);","const draft=await store.read();")
+   .replace("let draft=await store.read(session=>recover(session,adapter.baseline)!==null);","const draft=await store.read();")
    .replace("const notices=[document.getElementById('draft-recovery'),document.getElementById('review-draft-recovery')].filter((node):node is HTMLElement=>node!==null);","const notices=[document.getElementById('draft-recovery')].filter((node):node is HTMLElement=>node!==null);")
-   .replace("const prior=recovered?recoverSession(adapter.baseline,draft.session as T):null;\n  sameBaseline=draft.baseline===baseline||(prior!==null&&draft.baseline===await sessionFingerprint(prior));\n  if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){await store.clear();draft=null;recovered=null;}","sameBaseline=draft.baseline===baseline;")
+   .replace("const prior=recovered?recover(adapter.baseline,draft.session as T):null;\n  sameBaseline=draft.baseline===baseline||(prior!==null&&draft.baseline===await sessionFingerprint(prior));\n  if(!draft.reviewDirty&&(!sameBaseline||!recovered||draft.baseline!==baseline)){await store.clear();draft=null;recovered=null;}","sameBaseline=draft.baseline===baseline;")
    .replace("status(recovered?'Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.':'Saved local draft conflicts with the current submitted review. Server status is unchanged; download or discard it.');","status('Saved local draft conflicts with the current submitted review. Server status is unchanged; download it or explicitly recover as pending.');");
  }
  const legacyRecover=(value:unknown,base:typeof baseline):typeof baseline|null=>{
@@ -519,13 +519,14 @@ class DraftIDB {
 // Existing dependencies only: valid incompressible PNGs, not huge strings masquerading as image evidence.
 import {PNG} from 'pngjs';
 import {createHash} from 'node:crypto';
-function cropDraft(count=1):LocalInspectionDraft {
+import {parsePartsIssue} from '../src/parts-comment.ts';
+function cropDraft(count=1,size=160):LocalInspectionDraft {
  const value=draft();
  const feedback=Array.from({length:count},(_,index)=>{
-  const image=new PNG({width:160,height:160});let seed=index+1;
+  const image=new PNG({width:size,height:size});let seed=index+1;
   for(let i=0;i<image.data.length;i++){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;image.data[i]=seed&255;}
   const bytes=PNG.sync.write(image),sha256=createHash('sha256').update(bytes).digest('hex');
-  const comment={schema:'rig-review-comment/1',mode:'setup',viewport:'rig',frame:{index:0,basis:'producer'},time:0,animation:'idle',sourceHash:binding.sourceHash,modelHash:binding.rigs[0],referenceHash:null,referenceId:null,camera,screen:{x:0,y:0,width:10,height:10},world:{x:0,y:0,width:10,height:10},slots:[],crop:{path:`comment-crops/${sha256}.png`,sha256,png:'data:image/png;base64,'+bytes.toString('base64'),width:160,height:160},bookmark:bookmark()};
+  const comment={schema:'rig-review-comment/1',mode:'setup',viewport:'rig',frame:{index:0,basis:'producer'},time:0,animation:'idle',sourceHash:binding.sourceHash,modelHash:binding.rigs[0],referenceHash:null,referenceId:null,camera,screen:{x:0,y:0,width:10,height:10},world:{x:0,y:0,width:10,height:10},slots:[],crop:{path:`comment-crops/${sha256}.png`,sha256,png:'data:image/png;base64,'+bytes.toString('base64'),width:size,height:size},bookmark:bookmark()};
   return {id:'crop-'+index,frameStart:0,frameEnd:0,target:{kind:'rig',name:'rig'},category:'quality',summary:'Original crop '+index,context:{animation:'idle',time:0,frame:0,comment}};
  });
  value.session={...baseline,status:'changes-requested',feedback};return value;
@@ -706,4 +707,62 @@ for(const action of ['Download saved local draft','Discard unusable local draft'
   if(action.startsWith('Download')){expect(await app.downloads()).toEqual([{download:'review-local-draft.json',text:'{corrupt saved draft'}]);expect([...app.storage.values.values()]).toContain('{corrupt saved draft');}
   else expect([...app.storage.values.values()]).not.toContain('{corrupt saved draft');
  }finally{app.connection.dispose();}
+});
+
+ test('#821 parts draft membership is isolated by instance, route, and source without changing finalized rows',async()=>{
+ const storage=new MemoryStorage(),scope='parts:instance-a:/parts/a:'+binding.sourceHash,store=new InspectionDraftStore(scope,binding,()=>{},storage);
+ const value=draft();value.session={subject:'parts',issues:[{id:'draft-region',summary:'Keep this drawn comment'}]};
+ await store.write(value);
+ expect((await store.read())?.session).toEqual(value.session);
+ for(const otherScope of ['parts:instance-b:/parts/a:'+binding.sourceHash,'parts:instance-a:/parts/b:'+binding.sourceHash])expect(await new InspectionDraftStore(otherScope,binding,()=>{},storage).read()).toBeNull();
+ expect(await new InspectionDraftStore(scope,{...binding,sourceHash:'e'.repeat(64)},()=>{},storage).read()).toBeNull();
+ expect((await store.read())?.session).toEqual(value.session);
+ });
+
+function partsCropDraft(count=3):LocalInspectionDraft {
+ const value=cropDraft(count,190),rows=(value.session as {feedback:any[]}).feedback;
+ value.session={subject:'parts',issues:rows.map(row=>({schema:'rig-review-parts-comment/2',id:row.id,summary:row.summary,sourceHash:binding.sourceHash,parts:[{name:'shirt',imageHash:'d'.repeat(64)}],rigRegion:{x:0,y:0,width:10,height:10},imageRegion:null,view:{mode:'assembled',camera:{zoom:1,center:{x:5,y:5},viewport:{width:10,height:10}},cameraSync:false,referenceCamera:null,background:'checker',alpha:false,footprints:false,mesh:false},crop:row.context.comment.crop,nativeCrop:null}))};
+ return value;
+}
+test('#821 review crop transport: three near-limit parts crops survive store reload above the inline cap',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb,'parts:one'),value=partsCropDraft(),original=structuredClone(value);
+ expect(new TextEncoder().encode(JSON.stringify(value)).length).toBeGreaterThan(512*1024);
+ for(const row of (value.session as any).issues){expect(parsePartsIssue(row,false,true)).toEqual(row);expect(row.crop.png.length).toBeGreaterThan(190000);expect(row.crop.png.length).toBeLessThanOrEqual(200000);}
+ expect(await store.write(value)).toBe(true);
+ expect(idb.values.size).toBe(3);expect(storage.getItem(store.key)).not.toContain('data:image/png');
+ expect(await idbStore(storage,idb,'parts:one').read()).toEqual(original);expect(value).toEqual(original);
+});
+
+test('#821 parts crop hydration drops only a missing issue and never invents feedback fields',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb,'parts:one'),value=partsCropDraft(),session=value.session as {subject:string;issues:any[]};
+ expect(await store.write(value)).toBe(true);
+ const missing=session.issues[1];idb.values.delete(JSON.stringify([store.key,missing.id,missing.crop.sha256]));
+ const loaded=await idbStore(storage,idb,'parts:one').read();
+ expect(loaded?.session).toEqual({...session,issues:session.issues.filter(row=>row.id!==missing.id)});
+ expect(Object.keys(loaded!.session as object)).toEqual(['subject','issues']);
+});
+for(const version of ['1','2'])test(`#821 existing inline parts /${version} draft remains readable before migration`,async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB(),store=idbStore(storage,idb,'parts:legacy'),value=partsCropDraft(1);
+ storage.setItem(store.key,JSON.stringify({...value,schema:'rig-review-local-draft/'+version}));
+ expect(await store.read()).toEqual(value);
+ expect(await store.write(value)).toBe(true);expect(idb.values.size).toBe(1);expect(await store.read()).toEqual(value);
+});
+
+test('#821 parts afterInputs restores pending comparison without changing the opening view; clean starts replay nothing',async()=>{
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('setupPartsPersistence=async()=>'),begin=source.indexOf('afterInputs:',start),end=source.indexOf(',onConflict:',begin);
+ const callback=source.slice(begin+'afterInputs:'.length,end),code=new Bun.Transpiler({loader:'ts'}).transformSync(`const applyInputs=${callback};applyInputs();`);
+ const state={mode:'part',opacity:.5},scope={dirty:true,issues:[{}],overlay:{checked:true},opacity:{value:'0.31'},view:'compare',paints:0,partsSubject:{comparison:()=>({...state}),setComparison:(mode:string)=>{state.mode=mode;scope.paints++;},opacity:(value:number)=>{state.opacity=value;scope.paints++;}}};
+ const apply=new Function('scope',`with(scope){${code}}`);
+ apply(scope);expect(state).toEqual({mode:'overlay',opacity:.31});expect(scope.view).toBe('compare');expect(scope.paints).toBe(2);
+ for(const condition of ['clean','no-comments']){
+  scope.dirty=condition!=='clean';scope.issues=condition==='no-comments'?[]:[{}];scope.overlay.checked=false;scope.opacity.value='0.12';
+  const before={...state},paints=scope.paints;apply(scope);
+  expect(state).toEqual(before);expect(scope.paints).toBe(paints);expect(scope.view).toBe('compare');expect(scope.overlay.checked).toBe(true);expect(scope.opacity.value).toBe('0.31');
+ }
+});
+test('#821 parts opening ignores historical part and solo UI even on a pending draft',async()=>{
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('setupPartsPersistence=async()=>'),begin=source.indexOf('   ui:',start),end=source.indexOf(',afterInputs:',begin);
+ const code=new Bun.Transpiler({loader:'ts'}).transformSync(`const adapter={${source.slice(begin,end)}};adapter.restoreUI(saved);return adapter.ui();`);
+ const read=new Function('saved',code);
+ expect(read({part:'gap',solo:1})).toEqual({});expect(read({part:'front',solo:1})).toEqual({});
 });
