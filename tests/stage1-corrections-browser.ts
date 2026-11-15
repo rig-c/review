@@ -99,6 +99,7 @@ export function stage1ApplyRead(name: ApplyName, previous?: string): string {
   const changed = name === 'CHEST_REPEAT_APPLY_SETTLE' ? ` && value !== ${JSON.stringify(previous)}` : '';
   return `(() => {
     const value = ${APPLIED_VALUE};
+    ${name === 'CHEST_CURRENT_APPLY_SETTLE' ? `const rejected = document.getElementById('chest-editor-status');if (rejected?.classList.contains('error')) throw Error(rejected.textContent);` : ''}
     if (value${changed} && !${CHEST_APPLY}.disabled) return {applied: JSON.parse(value)};
     const status = document.getElementById('chest-editor-status');
     if (status?.classList.contains('error')) throw Error(status.textContent);

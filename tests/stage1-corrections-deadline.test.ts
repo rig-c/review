@@ -215,3 +215,9 @@ test('current-part Apply preserves fields and selection and accepts an identical
  expect(await settleStage1Apply(page,'CHEST_CURRENT_APPLY_SETTLE',0)).toEqual(checked);
  expect(actions).toEqual(['chest apply']);expect(field.value).toBe('9');expect(state.selected).toBe('torso');
 });
+
+
+test('current-part Apply cannot accept a stale checked record over a new refusal',async()=>{
+ const {page,state}=applyPage(true);state.record=JSON.stringify(checked);state.chestError=true;
+ await expect(settleStage1Apply(page,'CHEST_CURRENT_APPLY_SETTLE',0)).rejects.toThrow('planted chest error');
+});
