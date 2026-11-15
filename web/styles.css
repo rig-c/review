@@ -437,7 +437,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .interview-modal fieldset.interview-ask{border-top:1px solid var(--border-strong);padding-top:var(--space-2);margin:var(--space-3) 0}
 .interview-modal legend{font-weight:var(--font-weight-emphasis);padding:0;margin-bottom:var(--space-2)}
 .interview-modal legend,.interview-option span,.interview-option strong{white-space:pre-wrap;overflow-wrap:anywhere}
-.interview-option{display:grid;grid-template-columns:min-content 1fr;background:var(--rv-panel);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;padding:var(--space-2) var(--space-3);margin:var(--space-1) 0;gap:var(--space-1) var(--space-2)}
+.interview-option{display:grid;grid-template-columns:min-content 1fr;background:var(--rv-panel);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;padding:var(--space-1) var(--space-3);margin:var(--space-1) 0;gap:var(--space-1) var(--space-2)}
 .interview-option:has(input:checked){border-color:var(--rv-pressed-border);background:var(--rv-pressed-bg)}
 .interview-option span,.interview-option b{grid-column:2}
 .interview-option span{color:var(--fg)}
