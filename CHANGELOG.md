@@ -1,5 +1,32 @@
 # Changelog
 
+## 4.1.0
+
+Pending asks move into a shared row beneath the top bar with direct verdict actions, a top-bar Comment entry, full-body bottom-panel tabs with a Question tab for pictured questions, and preserved part selection and camera framing across in-place rebuilds.
+
+### Added
+
+* The pending question becomes the full act-bar headline and submits verdicts directly through Approve or Request changes, while signoff, interview and checkpoint reuse the existing answer forms, close on save and show Saved (#833, closes #809, closes #825). Verdicts precede signoff on mixed pages, parts Approve requires zero issue rows while Request changes requires at least one (a general comment does not count), and a failed draft restoration leads the act bar and blocks every submitting control until the draft is downloaded or discarded. The checkpoint evidence grid is removed from the answer dialog while source/declaration equality, pinned table and image authentication, packet parsing, API delivery, replay, Pass/Fail answers, historical draft control values and act payloads remain unchanged.
+* The top Comment button and C shortcut reveal the bottom comment list and start pinning when the subject supports it, removing the duplicate bottom Comments tab while keeping existing mode selections and draft state intact (#835, closes #828). The list appears before legacy detail fields, uses Comments / 코멘트 consistently, standalone interviews hide their unbound toolbar button, general comments remain on the existing record and direction paths, and act, draft, session and submit contracts are unchanged.
+* Bottom-panel tabs switch the whole panel body instead of a two-column dock, starting in Animate with Timeline followed by Inspection (검사, renamed from Transport), Sound, Environment, Physics, Idle tracks, Readings, Requirements, Retarget and Report while Setup keeps its tabs with the same behaviour (#844, closes #838). Overflowing tabs collapse into a single-line "⋯" menu at the end of the strip while keeping the selected tab visible, the panel collapse button uses a chevron (⌄ / ⌃) with its existing accessible names, and the play/pause control (▶ / Ⅱ) moves into the main toolbar before the view controls in Animate on the rig and comparison screens.
+* Live-job act controls and dialog openers move into a shared row directly beneath the top bar that hides when no ask is pending and shares state with the top bar without a footer duplicate (#845, closes #840). An early refusal shows the row without legacy controls while recovery actions stay beside blocked answers, with no act payload, field or downstream contract changes.
+* A pictured interview question stays in the bottom panel as a Question (질문) tab beside the existing tabs, selecting the tab and showing the question's picture in the reference pane while the ask is pending (#851, closes #839). Leaving the tab restores the previous view, reference and camera, and after the answer is saved the act row hides while the answered question remains readable in the Question tab.
+
+### Fixed
+
+* A fresh job link without the tab's capability now prepends its bootstrap refusal notice at the top of the page (at y=13 instead of y=1013 in a 1600×1000 viewport), showing the reader's sentence first with the untranslated refusal code (`JOB_CAPABILITY_REQUIRED`) as the diagnostic title (#819, closes #815). Seven Korean refusal and guidance strings are normalized to 해요체, and the unused `JOB_PANEL_UNAVAILABLE` catalog entry is removed.
+* Direction review hides the animation-edit refusal banner on its inspect-only screen and titles the right pane with the bound take duration (`Take · {duration} s` / `테이크 · {0}초`, such as `Take · 8 s` / `테이크 · 8초`), while editing workspaces keep their banner and rig title (#832, closes #829).
+* Marking a new comment on the assembled parts view preselects the visible parts under the snapped mark region in draw order via 32×32 alpha sampling again, instead of starting with no part selected and refusing with "Select at least one part." (#846, closes #843). Item-mode marks, existing comments, manual chip toggling, the empty-selection refusal and the comment payload are unchanged.
+* Inspection workspace layout and styling polish aligns bottom-panel tabs, overflow popups, chevron controls, proportional transport text, scrolling tab and parts-list containers, inset dividers, timeline ruler bounds, single-line ellipsis footer readouts, padded Comments columns and balanced main-toolbar padding (#860, closes #856, closes #837). Restore-failure act rows place the headline and buttons on the first line with the notice on the second, checkpoint and signoff dialogs size to their content in a single frame with spacing between Fail and Pass, and inert comment-panel blocks hide when no checkpoint, authoring source or declared video is supplied or when the workspace is read-only.
+* An interview question without option images opens as a centred single-frame dialog (`min(94vw, 760px)` wide) with the art column hidden and the bound-source context and save button in the fields column, while pictured interview dialogs keep the three-column layout and form fields, saved bytes and the answer contract remain unchanged (#863, closes #861).
+* Twelve Korean interview messages in the Question tab now use 해요체 instead of formal endings, while leading machine codes (`INTERVIEW_OPTIONS_STALE:`, `INTERVIEW_IMAGE_INVALID:`) and English strings remain unchanged (#864, closes #854).
+* When a direction scene loops a non-idle clip, the footer readout labels it with the clip's manifest label or id as `<clip> · repeating` (`<클립 이름> · 반복 재생 중`), while looping idle scenes and non-scene cases keep `Actual idle · repeat enabled` (#865, closes #841).
+* In-place rebuilds (Mesh Apply, region and generic patch, retarget, animation Apply, Undo, Reset, density Load and Back) preserve the selected part, Mesh panel context and—when the compiled stage bounds are unchanged—the rig and reference camera zoom, center and world framing box (#867, #869, closes #858). A part removed or refused by the new build falls back to Whole rig, and a rebuild with changed stage bounds refits the view as before.
+
+### Changed
+
+* The serial CI browser gate now discovers all 35 browser suites and runs the 32 enabled ones, tracking the 3 excluded suites by issue (#849, #857, #866, #867, refs #842).
+
 ## 4.0.2
 
 Parts and rig modal forms reach their first screen faster, and image comments survive reload beyond the local draft size limit when IndexedDB is available.
