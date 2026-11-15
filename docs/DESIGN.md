@@ -246,17 +246,56 @@ Browser storage is origin-scoped. Managed opens (the default) share one loopback
 
 ## Theme
 
-The palette comes from the rig-c.org site stylesheet. Its dark `:root` values (`--bg`, `--fg`, `--fg-strong`, `--fg-soft`, `--fg-muted`, `--border`, `--border-strong`, `--hover-bg`, `--active-bg`, `--link`, `--link-hover`, `--btn-fg`, `--code-*`, `--footer-bg`, `--pass`, `--warn`, `--fail`, the font stacks and `--radius`) are copied into the `:root` block of `web/styles.css` and `web/compare.css`; nothing is fetched at runtime, so the viewer stays offline. The site loads Inter and JetBrains Mono from a font CDN; the review keeps only the family stacks and falls back to local fonts. The site has no light scheme, so the light values and every review-only surface token (`--rv-*`: bars, panels, controls, fields, pressed state, focus ring, backdrop, stage) are review-local derivations of the same palette.
+The palette comes from the rig-c.org site stylesheet. Its dark `:root` values (`--bg`, `--fg`, `--fg-strong`, `--fg-muted`, `--border`, `--border-strong`, `--hover-bg`, `--active-bg`, `--link`, `--link-hover`, `--btn-fg`, `--code-*`, `--footer-bg`, `--pass`, `--warn`, `--fail` and the font stacks) are copied into the `:root` block of `web/styles.css` and `web/compare.css`; nothing is fetched at runtime, so the viewer stays offline. Both sheets fold the site's `--fg-soft` into `--fg` and use the radius scale below. Their declared token names and values are identical per theme. The site loads Inter and JetBrains Mono from a font CDN; the review keeps only the family stacks and falls back to local fonts. The site has no light scheme, so the light values and every review-only surface token (`--rv-*`: bars, panels, controls, fields, pressed state, focus ring, backdrop, stage) are review-local derivations of the same palette.
 
 Rules:
 
 - No literal colour (`#hex`, `rgb()`, `hsl()`) outside the `:root` token blocks of either stylesheet. Rules use `var(--…)` only.
 - Every colour token is defined for both schemes: `:root` holds dark (the default before any script runs) and `:root[data-theme=light]` redefines the same set. The appearance control resolves `system` through `prefers-color-scheme` and always writes `data-theme=dark|light` on the root element, so the stylesheets carry no per-component light overrides.
 - State colours: pressed and current selections use the `--pass` family, primary actions and links `--link`, dirty and draft notices `--warn`, errors `--fail`.
-- The stage (pane gradient, grid dots, pane labels, empty-state text, video letterbox) stays dark in both schemes so source pixels and overlays read the same; its tokens carry equal values in both blocks.
+- The stage ground, grid dots, pane labels, empty-state text and video letterbox stay dark in both schemes so source pixels and overlays read the same; their colour tokens carry equal values in both blocks. Inspection and comparison use flat `--rv-pane-lo` grounds with the existing dot grids rather than decorative pane gradients. Comparison's rig viewport explicitly sets this ground below its dots, including in the light scheme.
 - Resize separators and scrollbars never share a colour: `--rv-separator` and `--rv-separator-hover` resolve to values different from both `--rv-scrollbar-*` colours in each scheme (the review page; the compare stylesheet keeps its own separator colour).
 
 `tests/theme.test.ts` enforces the first two rules and the separator/scrollbar rule.
+
+## Style scale (#883)
+
+The owner-accepted g1/g2/g3 appearance sheets guide density, colour and type;
+their override code is not shipped. Original declarations use named root roles,
+repeated identically for light where needed. Existing font stacks, source overlays
+and state colour families remain. Two serving sheets remain: `styles.css` and
+`compare.css` declare identical tokens per theme and follow the same scale. Their
+unification would require a separate TS/server change, outside this CSS scope.
+
+| Role or exception | Choice and reason |
+| --- | --- |
+| Spacing | `--space-1/2/3/4/5/6/7/8`: 4/8/12/16/20/24/28/32px. The 28px section separation gets its own token; Setup internals, report/dialog/provenance and retained hosts use the same grid. Negative sticky insets mirror panel padding. |
+| Controls | `--control-height`: 32px; `--control-compact`: 24px. Camera actions use 32; mode/language, layers, tabs, Setup fields and dock actions use 24. Multiline question/checkpoint/report/comment/owner rows grow from 32px; technical text links grow from 24px. |
+| Type | `--font-size-meta/compact/body/title/headline`: 11/12/13/14/16px. Only `.brand` may use `var(--font-size-wordmark)` 18px. `--font-weight-regular/medium/emphasis`: 400/500/600, including shorthands; emphasis is reserved for primary actions, panel/dialog headings, key selection and verdicts. Tracking is zero. Pin, comment-row and ask numerals use tabular figures. |
+| Growing rows | Exact `height:auto` exceptions: `.tool`, `.checkpoint`, `.report-event-list button`, `.stage-comment-item>button:first-child`, `.interview-question`, `.owner-list button` grow from 32px; `.physics-row-pick` and `.readings-go` grow from 24px. These rows contain wrapping text. The report event fills its content row rather than a toolbar; its old `height:100%` declaration is removed. Arbitrary controls may not use auto/none/zero heights. |
+| Colour and radii | Strong, normal `--fg`, muted: three neutral text roles. Pane-high token is retired; stage is flat dark with dots. Recommendation and auxiliary toggles lose their fill; current-body selections retain it. `--radius-small`: 4px, `--radius`: 6px controls, `--radius-panel`: 8px panels; flush edges stay 0, discs stay 50%. |
+| Thumbnail rows | `.parts-explorer li button` keeps height/min/max 36px for a uniform list row around a 24px thumbnail with 4px inset and border. It is not a toolbar density. |
+| Timeline geometry | 22px lanes, key hit boxes and lane-selection labels; add glyph stays 16px to fit. Ruler stays 20px; read-only lane minimum 33px, lanes viewport 186px and playhead positioning retain their coordinate geometry. Only `.animation-key` has 2px horizontal padding inside its glyph. |
+| Source-space handles | `.idle-handle` and `.rig-fields-handle`: 14px with exact `-7px 0 0 -7px` centering. `.idle-blink-marker`: 12px high/14px wide, `margin-left:-7px`. `.reading-tick`: 6px high/3px wide, `margin-left:-1px`. `.animation-bone-pick`: 10px. Resizing would change overlapping source/time picks. |
+| Native and accessible geometry | Checkbox/radio/range geometry stays platform-owned. `.layer-toggle input` remains clipped to 1px; its visible label is 24px. Coarse-pointer minimum buttons snap 42 to 44px, drawer triggers 38 to 40px for larger touch targets. |
+| Other measured chrome | 30px stage footer, 40px status bar, 4px separators with 16/22px hit regions, 6px scrollbars, 22px grid pitch, 1px hairlines and the 5px interview resize row retain their non-control geometry. |
+
+`tests/style-rules.test.ts` reuses the theme tokenizer and exports
+`styleRuleViolations(css)` for isolated planted violations. Both sheets receive
+the same logical-spacing, font-shorthand, named-weight, exact-control-exception,
+radius and literal-colour checks, resolving aliases separately in both themes.
+`styleTokenBlocks(css)` exposes their declared dark/light maps for the token
+identity assertion. Exceptions bind selector, property and value, each with a
+reason; unsupported spacing arithmetic and unresolved policy tokens fail closed.
+The unchanged chest parity test retains exact selector/body/order equality.
+These are source-policy guards, not browser or layout proof.
+
+The 24px strip/dock actions and 32px key inspector increase bottom-panel content.
+Check scrolling, tab overflow and the 240×180 minimum stage at 1280×720, both
+themes and EN/KO on Nova. The 24px comment pin replaces 26px; its source-point
+translation is unchanged, but captured pin/composer geometry needs rechecking.
+Setup tables may wrap sooner with 11px minimum metadata. Wording, component
+placement and comparison control order are separate work. (Naru, 2026-11-16)
 
 ## Comparison eligibility
 

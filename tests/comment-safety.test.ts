@@ -152,7 +152,11 @@ test('#276 refusal layout & read-only controls: one-line button without bar shif
  const css=await readFile(new URL('../web/styles.css',import.meta.url),'utf8');
  expect(css).toContain('#stage-comment{white-space:nowrap;flex:none}');
  expect(css).toContain('#stage-comment-refusal{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}');
- expect(css).toContain('.stage-comment-refusal-note{display:block;margin-top:4px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--fg-muted)}');
+ expect(css).toContain('.stage-comment-refusal-note{display:block;margin-top:var(--space-1);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:var(--font-size-meta);color:var(--fg-muted)}');
+ expect(css).toMatch(/:root\{[^}]*--space-1:4px(?:;|\})/);
+ expect(css).toMatch(/:root\{[^}]*--font-size-meta:11px(?:;|\})/);
+ expect(css).toMatch(/:root\[data-theme=light\]\{[^}]*--space-1:4px(?:;|\})/);
+ expect(css).toMatch(/:root\[data-theme=light\]\{[^}]*--font-size-meta:11px(?:;|\})/);
 
  const sha=createHash('sha256').update(Buffer.from(png,'base64')).digest('hex'),camera={space:'world',center:{x:0,y:0},zoom:1,viewport:{width:200,height:200},visible:{x:-100,y:-100,width:200,height:200}};
  const bottomComment={schema:'rig-review-comment/1',mode:'animate',viewport:'rig',frame:{index:0,basis:'producer'},time:0,animation:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,camera,screen:{x:40,y:190,width:10,height:6},world:{x:0,y:-90,width:10,height:6},slots:[],crop:{path:`comment-crops/${sha}.png`,sha256:sha,png:'data:image/png;base64,'+png,width:1,height:1},bookmark:{schema:'rig-review-inspection/1',binding:{mode:'single',sourceHash:'a'.repeat(64),rigs:[null]},time:0,animation:null,theme:'dark',layers:{images:true,meshes:false,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:camera,a:null,b:null,reference:null}},selection:{inspector:'playback'}}};
