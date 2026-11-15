@@ -33,6 +33,14 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, content?: string
   return el;
 }
 const translated: InterviewText = (tag, key) => element(tag, key === undefined ? undefined : t(key));
+function preserveScrollAndFocus(anchor: HTMLElement, mutate: () => void): void {
+  const active = typeof HTMLElement !== 'undefined' && document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const scrolls: [HTMLElement, number, number][] = [];
+  for (let node: HTMLElement | null = anchor; node; node = node.parentElement) scrolls.push([node, node.scrollTop, node.scrollLeft]);
+  mutate();
+  for (const [node, top, left] of scrolls) {if (node.scrollTop !== top) node.scrollTop = top; if (node.scrollLeft !== left) node.scrollLeft = left;}
+  if (active?.isConnected && document.activeElement !== active) active.focus({preventScroll:true});
+}
 /** The `rig-review/interview-picks@1` record exactly as the stage interview has always posted it (key order is the file's bytes). */
 export function interviewPicksRecord(ref: Picks['set'], picks: readonly Pick[], note: string | undefined, at: string): Picks {
   return {schema:'rig-review/interview-picks@1', set:ref, picks:picks as Pick[], ...(note !== undefined ? {note} : {}), by:'user', at};
@@ -71,7 +79,7 @@ export function interviewAskGroup(ask: Ask, options: {text?: InterviewText; name
     const label = make('label'); label.className = 'interview-option';
     const radio = make('input'); radio.type = 'radio'; radio.name = options.name ?? ask.id; radio.value = option.id;
     radio.required = true; radio.checked = option.id === pick?.option_id;
-    radio.onchange = () => {
+    radio.onchange = () => preserveScrollAndFocus(group, () => {
       if (!radio.checked) return;
       other.hidden = option.kind !== 'other';
       other.required = option.kind === 'other';
@@ -81,7 +89,7 @@ export function interviewAskGroup(ask: Ask, options: {text?: InterviewText; name
       pending.textContent = t(key);
       const next = {ask:ask.id, option_id:option.id};
       options.onPick?.(option.kind === 'other' ? {...next, other_text:other.value} : next);
-    };
+    });
     label.append(radio, make('strong', option.label), make('span', option.effect));
     if(option.kind==='auto'){const badge=text('b','interview.delegate');badge.className='interview-delegate';label.append(badge);}
     if (option.recommended) {
@@ -240,14 +248,15 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   const art=make('aside');art.className='interview-art';form.prepend(art);
   let view:ReturnType<typeof interviewImageView>|undefined,list:HTMLElement|undefined,records:HTMLElement|undefined;
   const showImage=(index:number)=>{view?.dispose();view?.element.remove();view=interviewImageView(options.images,index,showImage,context);art.append(view.element);};
-  const refresh=()=>{
+  const refresh=()=>preserveScrollAndFocus(fields,()=>{
     submit.hidden=!question.editable||form.dataset.interviewAnswered==='true';
     provenance.textContent=t('interview.provenance',[question.set.drafted_by,question.set.drafted_at]);
     const questions=typeof options.questions==='function'?options.questions():options.questions;
     const items=questions?.map((item,index)=>({...item,answered:index===(options.selected??0)?form.dataset.interviewAnswered==='true':item.answered}))??[{label:question.set.question+' · '+question.set.id,answered:form.dataset.interviewAnswered==='true'}];
-    const next=interviewQuestionList(items,options.selected??0,options.onSelect??(()=>{}),false,options.node);list?.remove();form.prepend(next);list=next;
+    const listTop=list?.scrollTop??0,listLeft=list?.scrollLeft??0;
+    const next=interviewQuestionList(items,options.selected??0,options.onSelect??(()=>{}),false,options.node);list?.remove();form.prepend(next);next.scrollTop=listTop;next.scrollLeft=listLeft;list=next;
     records?.remove();records=interviewRecords(options.diagnostics,options.historical,options.node);context.append(records);
-  };
+  });
   const submit=node('button','interview.save');submit.type='submit';submit.hidden=!question.editable;
   const status=node('p',!question.editable?'interview.history':question.saved?'interview.saved':'interview.choose');status.setAttribute('role','status');form.append(status);
   const localize=()=>{for(const [item,key]of copy)item.textContent=t(item.dataset.jobText??key);refresh();};

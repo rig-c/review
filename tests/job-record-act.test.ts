@@ -28,6 +28,7 @@ import {
   verifyJobRecordSourceFresh,
 } from '../src/job-source.ts';
 import {
+  SYNTHETIC_EXTRA_OPTION_SELECTIONS,
   createSyntheticOptionRecordWorkspace,
   createSyntheticPlanRecordWorkspace,
   createSyntheticRecordReader,
@@ -245,6 +246,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
         selections: [
           { itemId: 'topology', optionId: 'topology_other', otherText: verbatimOther },
           { itemId: 'detail_level', optionId: 'density_high', otherText: null },
+          ...SYNTHETIC_EXTRA_OPTION_SELECTIONS,
         ],
         note: verbatimNote,
       },
@@ -321,6 +323,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
             selections: [
               { itemId: 'topology', optionId: 'quad_alt', otherText: null },
               { itemId: 'detail_level', optionId: 'density_high', otherText: null },
+              ...SYNTHETIC_EXTRA_OPTION_SELECTIONS,
             ],
             note: 'disallowed combination',
           },
@@ -343,6 +346,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
             selections: [
               { itemId: 'topology', optionId: 'topology_other', otherText: '   ' },
               { itemId: 'detail_level', optionId: 'density_high', otherText: null },
+              ...SYNTHETIC_EXTRA_OPTION_SELECTIONS,
             ],
             note: '',
           },

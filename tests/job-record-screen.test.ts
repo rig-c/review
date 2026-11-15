@@ -10,6 +10,7 @@ import {rigHost,setRigHost} from '../web/rig-host.ts';
 import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jobPublicationRoutes,prepareJobForms,prepareJobInspection,type JobFormDependencies} from '../web/job-session.ts';
 import type {DisplayPublicationV3,PendingAskV3,UISubmissionV3} from '../src/job-contract.ts';
 import {recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
+import {SYNTHETIC_EXTRA_OPTION_SELECTIONS} from './helpers/job-record-fixture.ts';
 
 async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'='checkpoint',boundParts=false){
  const f=await recordScreenFixture(kind,picture,undefined,undefined,boundParts),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
@@ -120,7 +121,7 @@ test('#774 all shared publications keep one stream; cancellation never mounts an
 
 test('#750 deterministic interview writer persists inline Other and note at a valid past timestamp',async()=>{
  const f=await recordScreenFixture('interview-picks');try{
-  const result=await f.ports.commitUIAct(f.session.jobId,new Request(f.origin+'/ui/acts',{method:'POST',body:JSON.stringify({kind:'interview-picks',publicationId:f.ask.publicationId,askId:f.ask.askId,pageId:'page',displayedNonce:'nonce',expectedGeneration:f.display.publication.generation,submissionId:'submission',value:{questionId:(f.ask.subject as {questionId:string}).questionId,selections:[{itemId:'topology',optionId:'topology_other',otherText:'  original Other\n'},{itemId:'detail_level',optionId:'density_high',otherText:null}],note:'  original note\n'}})}));
+  const result=await f.ports.commitUIAct(f.session.jobId,new Request(f.origin+'/ui/acts',{method:'POST',body:JSON.stringify({kind:'interview-picks',publicationId:f.ask.publicationId,askId:f.ask.askId,pageId:'page',displayedNonce:'nonce',expectedGeneration:f.display.publication.generation,submissionId:'submission',value:{questionId:(f.ask.subject as {questionId:string}).questionId,selections:[{itemId:'topology',optionId:'topology_other',otherText:'  original Other\n'},{itemId:'detail_level',optionId:'density_high',otherText:null},...SYNTHETIC_EXTRA_OPTION_SELECTIONS],note:'  original note\n'}})}));
   expect(result.ok).toBe(true);const stored=JSON.parse(await readFile(f.files[0]!,'utf8'));expect(stored.at).toBe('2026-11-08T12:00:00.000Z');expect(stored.value.note).toBe('  original note\n');expect(stored.value.selections[0].otherText).toBe('  original Other\n');
  }finally{await f.close();}
 });
@@ -202,24 +203,26 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   const entry=formFor(f.ask,inspection,deps);forms.set(f.ask.askId,entry);
   expect(entry.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(false);
   const radios=[...entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')],identities=radios.map(input=>({name:input.name,value:input.value}));
-  for(const input of radios){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
+  const extraOptionIds=SYNTHETIC_EXTRA_OPTION_SELECTIONS.map(item=>item.optionId);
+  const chosenValues=['topology_other','density_auto',...extraOptionIds];
+  for(const input of radios){input.checked=chosenValues.includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
   entry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='  직접 입력\n';
   expect(entry.form.querySelector('textarea[name="note"]')).toBeNull();
   entry.dirty=true;drafts.saveDraft();
   const saved=JSON.parse(store.get(drafts.localDraftKey(f.display))!);
-  expect(saved.forms[0].controls.filter((input:{name:string})=>input.name.startsWith('choice.'))).toEqual([{name:'choice.topology',value:'topology_other'},{name:'choice.detail_level',value:'density_auto'}]);
+  expect(saved.forms[0].controls.filter((input:{name:string})=>input.name.startsWith('choice.'))).toEqual([{name:'choice.topology',value:'topology_other'},{name:'choice.detail_level',value:'density_auto'},...SYNTHETIC_EXTRA_OPTION_SELECTIONS.map(item=>({name:'choice.'+item.itemId,value:item.optionId}))]);
   const restored=formFor(f.ask,inspection,deps),restoredRadios=[...restored.form.querySelectorAll<HTMLInputElement>('input[type=radio]')];
   expect(restoredRadios.map(input=>({name:input.name,value:input.value}))).toEqual(identities);
-  expect(restoredRadios.filter(input=>input.checked).map(input=>input.value)).toEqual(['topology_other','density_auto']);
+  expect(restoredRadios.filter(input=>input.checked).map(input=>input.value)).toEqual(chosenValues);
   expect(restored.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.hidden).toBe(false);
   expect(restored.read()).toEqual(entry.read());
-  expect(restored.read()).toEqual({questionId:'rig_type',selections:[{itemId:'topology',optionId:'topology_other',otherText:'  직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:''});
+  expect(restored.read()).toEqual({questionId:'rig_type',selections:[{itemId:'topology',optionId:'topology_other',otherText:'  직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null},...SYNTHETIC_EXTRA_OPTION_SELECTIONS],note:''});
   expect(restored.form.querySelectorAll('select')).toHaveLength(0);
   // #851 review: a finalized answer reads back from its act even when this browser holds a different draft.
   const at=new Date().toISOString();
-  const answered={...f.ask,status:'answered',act:{kind:'interview-picks',at,value:{questionId:'rig_type',selections:[{itemId:'topology',optionId:radios.find(input=>input.name==='choice.topology'&&input.value!=='topology_other')!.value,otherText:null},{itemId:'detail_level',optionId:'density_auto',otherText:null}],note:''}}} as any;
+  const answered={...f.ask,status:'answered',act:{kind:'interview-picks',at,value:{questionId:'rig_type',selections:[{itemId:'topology',optionId:radios.find(input=>input.name==='choice.topology'&&input.value!=='topology_other')!.value,otherText:null},{itemId:'detail_level',optionId:'density_auto',otherText:null},...SYNTHETIC_EXTRA_OPTION_SELECTIONS],note:''}}} as any;
   const finalized=formFor(answered,inspection,deps);
-  expect([...finalized.form.querySelectorAll<HTMLInputElement>('input[type=radio]')].filter(input=>input.checked).map(input=>input.value)).toEqual([answered.act.value.selections[0].optionId,'density_auto']);
+  expect([...finalized.form.querySelectorAll<HTMLInputElement>('input[type=radio]')].filter(input=>input.checked).map(input=>input.value)).toEqual([answered.act.value.selections[0].optionId,'density_auto',...extraOptionIds]);
   expect(finalized.dirty).toBe(false);
   expect(finalized.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(true);
   restored.form.dataset.interviewAnswered='true';restored.form.dispatchEvent(new Event('change'));
