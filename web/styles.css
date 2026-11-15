@@ -574,6 +574,8 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 /* The live ask owns one shell row, including when the embedded header is hidden. */
 #app:has(>.workspace-act-row){grid-template-rows:auto auto minmax(0,1fr) auto}
 #app:has(>.workspace-act-row)>.topbar{grid-row:1}
+/* The top-bar language select sits on the bar's line, as tall as the mode buttons (#873). */
+.topbar>#settings-language{width:auto;padding-block:3px}
 .workspace-act-row{grid-row:2;min-width:0;padding:10px 22px;border-bottom:1px solid var(--border);background:var(--active-bg)}
 #app:has(>.workspace-act-row)>.layout{grid-row:3}
 #app:has(>.workspace-act-row)>.status-bar{grid-row:4}

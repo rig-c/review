@@ -1,6 +1,6 @@
 import {createRigViewControls} from './helpers/rig-view-controls.ts';
 import {composedRigMarkup} from './helpers/workspace-status-dom.ts';
-import {getLanguagePreference,getLinkLanguage,setLanguagePreference,setLinkLanguage,t} from '../web/i18n.ts';
+import {getLanguage,getLanguagePreference,getLinkLanguage,setLanguagePreference,setLinkLanguage,t} from '../web/i18n.ts';
 import {mountRigInspector,mountBottomPanel,mountActBar,type ActSaveKind} from '../web/inspector-blocks.ts';
 import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
@@ -87,9 +87,34 @@ test('Settings changes future sync/idle defaults only; transient source state an
   app.choose('settings-language','ko');expect(app.ui.defaults().language).toBe('ko');expect(held).toEqual(before);
   const other=new WorkspacePreferenceStore({storage:{getItem:key=>app.values.get(key)??null,setItem:(key,value)=>app.values.set(key,value)},events:null,writer:'other'});other.update({panels:{leftWidth:400,rightWidth:500}});const event=new Event('storage');Object.assign(event,{key:workspacePreferenceKey,newValue:app.values.get(workspacePreferenceKey)});app.events.dispatchEvent(event);app.flush();expect(app.ui.defaults().panels.leftWidth).toBe(400);expect(held).toEqual(before);
   app.get('settings-reset').click();expect(app.ui.defaults()).toMatchObject({theme:'light',language:'ko',defaultCameraSync:false,defaultIdleRepeat:false,panels:{leftWidth:170,rightWidth:260,inspectorHeight:262}});expect(held).toEqual(before);
-  app.choose('settings-language','system');expect(app.ui.defaults().language).toBe('system');
   other.dispose();
  }finally{app.close();}
+});
+
+function withNavigator<T>(languages:string[],run:()=>T):T {
+ const old=Object.getOwnPropertyDescriptor(globalThis,'navigator');Object.defineProperty(globalThis,'navigator',{value:{languages,language:languages[0]},configurable:true,writable:true});
+ try{return run();}finally{if(old)Object.defineProperty(globalThis,'navigator',old);else Reflect.deleteProperty(globalThis,'navigator');}
+}
+const storedLanguage=(values:Map<string,string>)=>JSON.parse(values.get(workspacePreferenceKey)!).language;
+
+test('#873 first visit takes the browser language once and stores it: ko → ko, anything else → en',()=>{
+ for(const [languages,expected] of [[['ko-KR','en'],'ko'],[['en-US'],'en'],[['fr-FR','ko'],'en']] as const)withNavigator([...languages],()=>{
+  const app=openHost();try{expect(app.ui.defaults().language).toBe(expected);expect(storedLanguage(app.values)).toBe(expected);expect(app.get('settings-language').value).toBe(expected);}finally{app.close();}
+ });
+ // Once stored, a later visit keeps the choice whatever the browser says.
+ const values=new Map<string,string>();withNavigator(['ko'],()=>{const app=openHost();try{app.choose('settings-language','en');for(const [k,v]of app.values)values.set(k,v);}finally{app.close();}});
+ withNavigator(['ko'],()=>{const app=openHost({stored:Object.fromEntries(values)});try{expect(app.ui.defaults().language).toBe('en');expect(app.get('settings-language').value).toBe('en');}finally{app.close();}});
+});
+
+test('#873 a stored "system" choice from before migrates to the browser language on load',()=>{
+ const values=new Map<string,string>();const store=new WorkspacePreferenceStore({storage:{getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)},events:null,writer:'before'});store.update({language:'ko'});store.update({language:'system'});store.dispose();
+ expect(storedLanguage(values)).toBe('system');
+ withNavigator(['ko-KR'],()=>{const app=openHost({stored:Object.fromEntries(values)});try{expect(app.ui.defaults().language).toBe('ko');expect(storedLanguage(app.values)).toBe('ko');expect(app.get('settings-language').value).toBe('ko');}finally{app.close();}});
+});
+
+test('#873 ?lang= still forces the page and the select without changing the stored choice',()=>{
+ withNavigator(['en-US'],()=>{setLinkLanguage('ko');const app=openHost();try{expect(getLanguage()).toBe('ko');expect(app.get('settings-language').value).toBe('ko');expect(storedLanguage(app.values)).toBe('en');
+  app.choose('settings-language','en');expect(getLinkLanguage()).toBeNull();expect(getLanguage()).toBe('en');}finally{app.close();setLinkLanguage(null);setLanguagePreference('en');}});
 });
 
 test('actual tab hooks retain independent x/y through resize and responsive drawer uses the same stable node',()=>{
