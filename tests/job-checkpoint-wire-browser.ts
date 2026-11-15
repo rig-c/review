@@ -207,6 +207,15 @@ try {
     const owner = new URL(fixture.host.ownerUrl);
     owner.searchParams.set('lang', language);
     await page.goto(owner.href);
+    await page.evaluate(`(()=>{
+        window.__review870WireKeys=[];
+        document.addEventListener('keydown',event=>{
+            if(event.key!=='m')return;
+            const mesh=document.getElementById('layer-mesh'),active=document.activeElement;
+            window.__review870WireKeys.push({key:event.key,targetId:event.target?.id??null,activeId:active?.id??null,
+                activeTag:active?.tagName??null,checkedBefore:mesh?.checked??null,disabled:mesh?.disabled??null});
+        },{capture:true,passive:true});
+    })()`);
 
     const immutableInputs = await jobInputHashes(fixture.input.root);
     const rig = await fixture.publish();
@@ -456,8 +465,42 @@ try {
     // Reconnect and new publication still exercise the shared overlay and actual source binding.
     const cpAsk2=await ask(rig,{kind:'checkpoint',checkpointId:'step-one',planStepId:'step-one'});
     await wait(`!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"]')`,'second checkpoint form');
-    await click(page,'#rig-viewport');await pressKey('m');
-    await wait(`document.getElementById('layer-mesh').checked`,'wire active before reconnect');
+    const wireState = () => page!.evaluate(`(()=>{
+        const mesh=document.getElementById('layer-mesh'),active=document.activeElement,network=navigator.connection;
+        return {predicates:{"document.getElementById('layer-mesh').checked":mesh?.checked??null},
+            mesh:{exists:!!mesh,checked:mesh?.checked??null,disabled:mesh?.disabled??null,connected:mesh?.isConnected??null},
+            activeElement:{id:active?.id??null,tag:active?.tagName??null,type:active?.getAttribute('type')??null},
+            dialogs:[...document.querySelectorAll('dialog')].map(node=>({id:node.id,open:node.open,modal:node.matches(':modal')})),
+            checkpoint:{exists:!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"]'),
+                enabled:!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"] fieldset:not(:disabled)')},
+            connection:{online:navigator.onLine,documentConnected:document.documentElement.isConnected,
+                network:network?{effectiveType:network.effectiveType,downlink:network.downlink,rtt:network.rtt,saveData:network.saveData}:null,
+                message:document.getElementById('message')?.textContent??null,
+                messageTitle:document.getElementById('message')?.title??null},
+            visibility:document.visibilityState,keyEvents:window.__review870WireKeys??[]};})()`);
+    // Earlier M/B assertions cover shortcuts. Reconnect needs wire on, regardless of retained layer state.
+    const wireActivation=await page.evaluate(`(()=>{
+        const mesh=document.getElementById('layer-mesh'),before=mesh.checked;
+        if(!mesh.checked)mesh.click();
+        return {before,after:mesh.checked};
+    })()`);
+    try {
+        await wait(`document.getElementById('layer-mesh').checked`,'wire active before reconnect');
+    } catch (error) {
+        try {
+            const state=await wireState(),events=await nextEvents();
+            const server=fixture.host.session.status();
+            await record('wire-active-before-reconnect-timeout',{state,connection:{serverStatus:server.status,
+                browserStream:'not exposed by the existing window API'},generation:{server:server.generation,
+                lastServerEvent:events.events.at(-1)?.generation??null},
+                lastEvent:{source:'server next events (not proof of browser delivery)',value:events.events.at(-1)??null}});
+            console.error('JOB_WIRE_TIMEOUT_DIAGNOSTICS '+JSON.stringify(observations['wire-active-before-reconnect-timeout']));
+        } catch (diagnosticError) {
+            console.error('JOB_WIRE_TIMEOUT_DIAGNOSTICS_FAILED',diagnosticError);
+        }
+        throw error;
+    }
+    await record('wire-active-before-reconnect',{activation:wireActivation,state:await wireState()});
     await page.goto('about:blank');await page.goto(owner.href);
     await wait(`!!document.querySelector('#scrub')&&!!document.querySelector('form[data-job-ask="${cpAsk2.askId}"] fieldset:not(:disabled)')`,'reconnected checkpoint');
     assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${cpAsk2.askId}"] .job-source').title`),rig.source.sourceHash);
