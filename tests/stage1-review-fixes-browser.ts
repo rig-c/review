@@ -4,6 +4,7 @@ import {mkdir,mkdtemp,writeFile,readFile,readdir,rm,cp} from 'node:fs/promises';
 import {join,relative} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
+import {settleStage1Apply} from './stage1-corrections-browser.ts';
 import {writeStage1LivePackage} from './helpers/stage1-live-package.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {loadReview} from '../src/manifest.ts';
@@ -150,28 +151,38 @@ async function makePackage(kind:'chests'|'regions'){
 }
 try{
  page=await launchCdpSession(join(tmpdir(),'reviewfix-cdp'), {sendDeadlineMs: 10_000});await page.setViewport(1440,1000);
+ const evaluate=page.evaluate.bind(page),navigate=page.goto.bind(page);let evaluation=0;
+ page.evaluate=async<T>(expression:string):Promise<T>=>{const id=++evaluation,start=performance.now();console.log('FIX_EVALUATE_START '+JSON.stringify({id,expression:expression.slice(0,160)}));try{const result=await evaluate<T>(expression);console.log('FIX_EVALUATE_END '+JSON.stringify({id,ms:performance.now()-start}));return result;}catch(error){console.log('FIX_EVALUATE_FAILED '+JSON.stringify({id,ms:performance.now()-start,error:String(error)}));throw error;}};
+ page.goto=async(...args)=>{const start=performance.now();console.log('FIX_NAVIGATE_START');await navigate(...args);console.log('FIX_NAVIGATE_END '+(performance.now()-start));};
  for(const kind of ['chests','regions'] as const){
   const f=await makePackage(kind),original=await hashes(f.pkg);server=await startServer(await loadReview(f.pkg),{port:0,stateDir:join(root,kind+'-state'),cwd:bench,graceMs:600000,unopenedTimeoutMs:600000,exitOnClose:false});const base=`http://127.0.0.1:${server.port}`;
   for(const lang of ['en','ko']){
    await page.goto(base+'/?lang='+lang);
    await waitForStage1FixReadiness(page, 'PAGE_NOT_READY');
    if(kind==='chests'){
-    await page.evaluate(`(()=>{const real=window.fetch;window.realFetch=real;window.captured=[];window.fetch=(url,init)=>{if(new URL(typeof url==='string'?url:url.url,location.href).pathname==='/api/rebuild'&&init?.method==='POST'){window.captured.push(JSON.parse(init.body));return Promise.resolve(Response.json({status:'refused',error:'CONTROL_CAPTURED',producerLine:null}));}return real(url,init);};})()`);
+    const capture=`(()=>{const real=window.fetch;window.realFetch=real;window.captured=[];window.fetch=(url,init)=>{if(new URL(typeof url==='string'?url:url.url,location.href).pathname==='/api/rebuild'&&init?.method==='POST'){window.captured.push(JSON.parse(init.body));return Promise.resolve(Response.json({status:'refused',error:'CONTROL_CAPTURED',producerLine:null}));}return real(url,init);};})()`;await page.evaluate(capture);
     await openStage1FixChest(page, 'torso');await page.evaluate(`document.querySelector('[data-bust-mode=landmarks]').click()`);
     await openStage1FixChest(page, 'torsoB');const fields=await page.evaluate<any>(`({mode:document.getElementById('bust-mode').value,cx:document.getElementById('chest-0-cx').value,second:document.getElementById('chest-1-cx').value,landmark:document.getElementById('lm-apex_r-x').value})`);
     if(fields.mode!=='circles'||fields.cx!=='330'||fields.second!==''||fields.landmark!=='')throw Error('CROSS_PART_FIELDS '+JSON.stringify(fields));
     const b=await captureStage1Fix(page);if(b.part!=='torsoB'||JSON.stringify(b.regions)!==JSON.stringify(f.config.meshes.torsoB.contour.regions))throw Error('B_RECEIVED_A_SEED '+JSON.stringify(b));
     await page.evaluate(`document.getElementById('chest-0-cx').value='331';document.getElementById('chest-0-cx').dispatchEvent(new Event('input',{bubbles:true}))`);await openStage1FixChest(page, 'torsoB');const edited=await captureStage1Fix(page);if(edited.regions?.[0]?.cx!==331)throw Error('SAME_BINDING_EDIT_LOST');
     await writeFile(join(out,lang+'-chest-b.png'),await page.screenshot());
+    await page.evaluate(`(async()=>{for(let i=0;i<200;i++){const saved=Object.keys(localStorage).filter(key=>key.startsWith('rig-review-draft/1:')).map(key=>JSON.parse(localStorage.getItem(key)));if(saved.some(draft=>draft.bookmark?.selection?.part?.slot==='torsoB'&&draft.inputs?.['chest-0-cx']?.value==='331'))return;await new Promise(r=>setTimeout(r,25));}throw Error('B_DRAFT_NOT_SAVED')})()`);
+    await page.goto(base+'/?lang='+lang);await waitForStage1FixReadiness(page,'PAGE_NOT_READY');
+    const reopened=await page.evaluate<any>(`({part:document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot,cx:document.getElementById('chest-0-cx').value,landmark:document.getElementById('lm-apex_r-x').value})`);if(reopened.part!=='torsoB'||reopened.cx!=='331'||reopened.landmark!=='')throw Error('REOPENED_B_EDIT_LOST '+JSON.stringify(reopened));
+    await page.evaluate(capture);
     await openStage1FixChest(page, 'torso');const a=await captureStage1Fix(page);if(a.part!=='torso'||JSON.stringify(a.bust?.apex_r)!=='[90,105]'||a.bust?.bone_r!=='chest'||a.regions)throw Error('A_RECEIVED_B_SEED '+JSON.stringify(a));
     await writeFile(join(out,lang+'-chest-a.png'),await page.screenshot());
     await openStage1FixChest(page, 'torsoB');const restored=await captureStage1Fix(page);if(restored.part!=='torsoB'||restored.regions?.[0]?.cx!==331)throw Error('CROSS_BINDING_EDIT_LOST');
-    await openStage1FixChest(page, 'torso');await page.evaluate(`document.getElementById('lm-alpha').value='0.65';document.getElementById('lm-alpha').dispatchEvent(new Event('input',{bubbles:true}));window.fetch=window.realFetch;`);
+    const applyDelay=Number(process.env.RV847_APPLY_DELAY_MS??0);
+    await openStage1FixChest(page, 'torso');await page.evaluate(`document.getElementById('lm-alpha').value='0.65';document.getElementById('lm-alpha').dispatchEvent(new Event('input',{bubbles:true}));window.commentSubmits=0;document.addEventListener('submit',event=>{if(event.target.matches('.stage-comment-composer'))window.commentSubmits++;},true);window.applyPolls=0;window.fetch=async(url,init)=>{const response=await window.realFetch(url,init);if(/\\/api\\/rebuild\\/[a-f0-9]+$/.test(new URL(typeof url==='string'?url:url.url,location.href).pathname)&&(!init?.method||init.method==='GET')){window.applyPolls++;if(window.applyPolls===1)await new Promise(r=>setTimeout(r,${applyDelay}));}return response;};`);
     await openStage1FixChest(page, 'torsoB');
-    const applied=await page.evaluate<any>(`(async()=>{document.getElementById('bust-apply').click();for(let i=0;i<1200;i++){const value=document.getElementById('rebuild-applied').value;if(value&&!document.getElementById('bust-apply').disabled)return JSON.parse(value);const status=document.getElementById('chest-editor-status');if(status.classList.contains('error'))throw Error(status.textContent);await new Promise(r=>setTimeout(r,25));}throw Error('B_APPLY_TIMEOUT')})()`);
+    console.log('FIX_APPLY_BEGIN '+JSON.stringify(await page.evaluate(`({delay:${applyDelay},commentSubmits:window.commentSubmits})`)));
+    const applied=await settleStage1Apply<any>(page,'CHEST_CURRENT_APPLY_SETTLE',0);
+    const applyProbe=await page.evaluate(`({delay:${applyDelay},commentSubmits:window.commentSubmits,applyPolls:window.applyPolls})`);console.log('FIX_APPLY_END '+JSON.stringify(applyProbe));
     if(applied.part!=='torsoB'||applied.check?.pass!==true||!applied.stageInputHash)throw Error('B_APPLIED_RECORD '+JSON.stringify(applied));
     await openStage1FixChest(page, 'torso');if(await page.evaluate(`document.getElementById('lm-alpha').value`)!=='0.65')throw Error('A_UNAPPLIED_EDIT_LOST');
-    receipt.push({kind,lang,fields,b,edited,a,applied,versions:f.versions,producerApplies:1});
+    receipt.push({kind,lang,fields,b,edited,reopened,a,applied,versions:f.versions,producerApplies:1,applyProbe});
    }else{
     const data=await openStage1FixRegion(page);
     if(data.data.items?.[0]?.name!=='torso'||data.data.items[0].mesh||data.data.draft||data.buttons!==0||!data.canvas||!data.data.draftUnavailable?.startsWith('STAGE_DRAFT_NO_MESH')||!data.text.includes(lang==='ko'?'윤곽':'contour'))throw Error('REGION_INSPECTION_LOST '+JSON.stringify(data));

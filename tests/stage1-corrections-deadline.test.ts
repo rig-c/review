@@ -68,13 +68,13 @@ test('the actual readiness expression and waiter tolerate a missing part row dur
   }
 });
 
-function applyPage() {
+function applyPage(beginChest = false) {
   const actions: unknown[] = [];
   const state = {record: '', chestDisabled: false, deltaDisabled: false, chestError: false, selected: 'torso', ops: [1]};
   const field = {value: '9', dispatchEvent: () => actions.push('input')};
   const elements = {
     'bust-r-x': field,
-    'bust-apply': {get disabled() { return state.chestDisabled; }, click: () => actions.push('chest apply')},
+    'bust-apply': {get disabled() { return state.chestDisabled; }, click: () => {actions.push('chest apply');if(beginChest){state.chestDisabled=true;queueMicrotask(()=>{state.chestDisabled=false;});}}},
     'mesh-apply': {get disabled() { return state.deltaDisabled; }, click: () => actions.push('delta apply')},
     'rebuild-applied': {get value() { return state.record; }},
     'chest-editor-status': {textContent: 'planted chest error', classList: {contains: () => state.chestError}},
@@ -96,7 +96,7 @@ function applyPage() {
 const checked = {schema: 'rig-review-applied/3', part: 'torso'};
 test('Apply readback retains raw value, previous value, schema, and button guards', async () => {
   const {page, state} = applyPage();
-  for (const name of ['CHEST_APPLY_SETTLE', 'CHEST_REPEAT_APPLY_SETTLE', 'MESH_DELTA_APPLY_SETTLE'] as const) {
+  for (const name of ['CHEST_CURRENT_APPLY_SETTLE', 'CHEST_APPLY_SETTLE', 'CHEST_REPEAT_APPLY_SETTLE', 'MESH_DELTA_APPLY_SETTLE'] as const) {
     state.record = '';
     expect(await page.evaluate(stage1ApplyRead(name, 'old'))).not.toHaveProperty('applied');
     state.record = JSON.stringify(checked);
@@ -207,4 +207,11 @@ test('ambiguous mesh dispatch never resends or starts readback', async () => {
   }, 18)).rejects.toThrow('lost mesh dispatch reply');
   expect(actions).toHaveLength(2);
   expect(page.reads).toHaveLength(1);
+});
+
+
+test('current-part Apply preserves fields and selection and accepts an identical cached checked record after its button settles',async()=>{
+ const {page,state,actions,field}=applyPage(true);state.record=JSON.stringify(checked);
+ expect(await settleStage1Apply(page,'CHEST_CURRENT_APPLY_SETTLE',0)).toEqual(checked);
+ expect(actions).toEqual(['chest apply']);expect(field.value).toBe('9');expect(state.selected).toBe('torso');
 });

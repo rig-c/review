@@ -85,7 +85,7 @@ function chestInput(increment: number): string {
 const APPLIED_VALUE = "document.getElementById('rebuild-applied').value";
 const CHEST_APPLY = "document.getElementById('bust-apply')";
 const MESH_APPLY = "document.getElementById('mesh-apply')";
-type ApplyName = 'CHEST_APPLY_SETTLE' | 'CHEST_REPEAT_APPLY_SETTLE' | 'MESH_DELTA_APPLY_SETTLE';
+type ApplyName = 'CHEST_CURRENT_APPLY_SETTLE' | 'CHEST_APPLY_SETTLE' | 'CHEST_REPEAT_APPLY_SETTLE' | 'MESH_DELTA_APPLY_SETTLE';
 
 export function stage1ApplyRead(name: ApplyName, previous?: string): string {
   if (name === 'MESH_DELTA_APPLY_SETTLE') return `(() => {
@@ -119,6 +119,8 @@ export async function settleStage1Apply<T>(
           if (document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot !== 'badge') throw Error('NATIVE_SELECTION_FAILED');
           ${chestInput(increment)}
           ${CHEST_APPLY}.click();`;
+      } else if (name === 'CHEST_CURRENT_APPLY_SETTLE') {
+        dispatch = `${CHEST_APPLY}.click();if (!${CHEST_APPLY}.disabled) throw Error('CHEST_APPLY_NOT_STARTED');`;
       } else if (name === 'CHEST_REPEAT_APPLY_SETTLE') {
         dispatch = `${chestInput(increment)}
           const previous = ${APPLIED_VALUE};
