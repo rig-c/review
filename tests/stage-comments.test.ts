@@ -116,7 +116,7 @@ test('B/reference hashes, viewport and bookmark are independently bound; loopbac
 
 const {bindStageComments}=await import(process.env.RIG_REVIEW_COMMENTS_ADAPTER??'../web/stage-comments.ts');
 /** Event/DOM adapter control only; this does not claim browser pixels or native capture. */
-function commentUI(feedback:any[]=[],options:{general?:boolean;locked?:(id:string)=>boolean;cropImpl?:()=>Promise<any>;canvasFactory?:()=>any;inline?:boolean;restoreImpl?:()=>Promise<void>;noPicture?:boolean;openList?:()=>void;codec?:import("../web/stage-comments.ts").CommentCodec<any,any>}={}) {
+function commentUI(feedback:any[]=[],options:{general?:boolean;changedImpl?:()=>Promise<void>;locked?:(id:string)=>boolean;cropImpl?:()=>Promise<any>;canvasFactory?:()=>any;inline?:boolean;restoreImpl?:()=>Promise<void>;noPicture?:boolean;openList?:()=>void;codec?:import("../web/stage-comments.ts").CommentCodec<any,any>}={}) {
  class Node {
   children:Node[]=[];parent:Node|null=null;style:any={};dataset:Record<string,string>={};className='';id='';textContent='';title='Comment · C';value='';placeholder='';type='';maxLength=0;hidden=false;disabled=false;readOnly=false;clientWidth=100;clientHeight=100;clientLeft=0;clientTop=0;captured=new Set<number>();attributes=new Map<string,string>();listeners=new Map<string,Function[]>();onclick:Function|null=null;onsubmit:Function|null=null;onkeydown:Function|null=null;
   classList={toggle:(name:string,on:boolean)=>{
@@ -135,7 +135,7 @@ function commentUI(feedback:any[]=[],options:{general?:boolean;locked?:(id:strin
  const prevGetComputedStyle=(globalThis as any).getComputedStyle;
  for(const [k,v]of Object.entries({document:doc,window:win,requestAnimationFrame:(f:Function)=>{next=f;return 1;},cancelAnimationFrame:()=>{},getComputedStyle:()=>({getPropertyValue:()=>'#3b82f6',backgroundColor:'rgb(20, 24, 32)',backgroundImage:'none',backgroundSize:'auto',backgroundPosition:'0% 0%',display:'block',visibility:'visible',opacity:'1',filter:'none',transformOrigin:'0px 0px',transform:'matrix(1, 0, 0, 1, 0, 0)',zIndex:'0',width:'100px',height:'100px',mixBlendMode:'normal'})})){saved.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;}
  let pose:any={mode:'animate',camera:mark({sourceHash:'a'.repeat(64)}).camera,frame:{index:0,basis:'producer'},time:0,animation:'idle',turn:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,rig:'probe'};
- const tool=bindStageComments({general:options.general?{create:(summary:string)=>({id:crypto.randomUUID(),summary}),matches:(row:any)=>!row.target}:undefined,toolbar:toolbar as any,listHost:options.inline?side as any:undefined,openList:options.openList,viewports:options.noPicture?{}:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;await options.restoreImpl?.();},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;},error:(m:string)=>errors.push(m),blocked:()=>false,codec:options.codec});
+ const tool=bindStageComments({general:options.general?{create:(summary:string)=>({id:crypto.randomUUID(),summary}),matches:(row:any)=>!row.target}:undefined,toolbar:toolbar as any,listHost:options.inline?side as any:undefined,openList:options.openList,viewports:options.noPicture?{}:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;await options.restoreImpl?.();},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;return options.changedImpl?.();},error:(m:string)=>errors.push(m),blocked:()=>false,codec:options.codec});
  const event=(extra:any={})=>({button:0,isPrimary:true,pointerId:7,clientX:50,clientY:50,target:new Node(),preventDefault(){},stopImmediatePropagation(){},...extra});
  const list=()=>(options.inline?side:workspace).children.find(n=>n.id==='stage-comment-list')!;
  return {toggle,pane,workspace,side,list,tool,pose,errors,restores:()=>restores,changes:()=>changes,tick:()=>next(),down:()=>{if(!tool.active())toggle.onclick?.();pane.dispatch('pointerdown',event());},up:()=>pane.emit('pointerup',event()),key:(k:string)=>doc.dispatch('keydown',event({key:k})),escape:()=>doc.dispatch('keydown',event({key:'Escape'})),blur:()=>win.dispatch('blur'),cleanup:()=>{tool.dispose();for(const [k,v]of saved)(globalThis as any)[k]=v;if(prevGetComputedStyle===undefined)delete (globalThis as any).getComputedStyle;}};
@@ -624,4 +624,48 @@ test('#715 native general comments use the same composer for multiple rows, edit
 for(const noPicture of [false,true])test('#828 top entry and C reveal the existing list; image-free subjects never enter pin mode '+noPicture,()=>{
  let opens=0;const ui=commentUI([],{inline:true,general:true,noPicture,openList:()=>{opens++;}});
  try{ui.toggle.onclick?.();expect(opens).toBe(1);expect(ui.tool.active()).toBe(!noPicture);ui.key('c');expect(opens).toBe(2);expect(ui.tool.active()).toBe(!noPicture);expect(ui.list().children.some(node=>node.textContent==='Add general comment')).toBe(true);expect(ui.list().children[0]!.textContent).toBe('Comments');}finally{ui.cleanup();}
+});
+
+test('#848 comment save waits for the host draft transaction before closing the composer',async()=>{
+ let release!:()=>void,started!:()=>void;
+ const savingStarted=new Promise<void>(resolve=>{started=resolve;});
+ const durable=new Promise<void>(resolve=>{release=resolve;});
+ const rows:any[]=[];
+ const ui=commentUI(rows,{changedImpl:()=>{started();return durable;},canvasFactory:()=>realCanvasNode(100,100)});
+ const canvas=createCanvas(100,100);
+ (canvas as any).getBoundingClientRect=()=>({left:0,top:0,width:100,height:100});
+ ui.pose.capture={pane:ui.pane,images:true,canvas,backend:'canvas2d'};
+ (ui.pane as any).querySelectorAll=()=>[];
+ try{
+  ui.down();await ui.up();
+  const composer=ui.pane.children.find(node=>node.className.includes('stage-comment-composer'))!;
+  composer.children[0]!.value='Saved before reconnect';
+  const saving=composer.onsubmit!({preventDefault(){}});
+  await savingStarted;
+  expect(ui.errors).toEqual([]);
+  expect(ui.changes()).toBe(1);
+  expect(rows).toHaveLength(1);
+  expect(ui.pane.children).toContain(composer);
+  release();await saving;
+  expect(ui.pane.children).not.toContain(composer);
+ }finally{release();ui.cleanup();}
+});
+
+test('#848 general comment ignores a second submit while the draft write is pending',async()=>{
+ let release!:()=>void;
+ const durable=new Promise<void>(resolve=>{release=resolve;});
+ const rows:any[]=[],ui=commentUI(rows,{inline:true,general:true,changedImpl:()=>durable});
+ let first:Promise<void>|undefined,second:Promise<void>|undefined;
+ try{
+  ui.list().children.find(node=>node.dataset.commentGeneral==='')!.onclick!();
+  const composer=ui.list().children.find(node=>node.className.includes('stage-comment-composer'))!;
+  composer.children[0]!.value='One general comment';
+  first=composer.onsubmit!({preventDefault(){}});
+  second=composer.onsubmit!({preventDefault(){}});
+  expect(rows.map(row=>row.summary)).toEqual(['One general comment']);
+  expect(ui.changes()).toBe(1);
+  release();await Promise.all([first,second]);
+  expect(ui.list().children).not.toContain(composer);
+  expect(ui.errors).toEqual([]);
+ }finally{release();await Promise.all([first,second]);ui.cleanup();}
 });

@@ -318,7 +318,7 @@ interface PersistenceAdapter<T extends PersistenceSession> {
  ui:()=>Record<string,string|number|null>;restoreUI:(ui:Record<string,string|number|null>)=>void;
  afterInputs:()=>void;onConflict:(conflict:boolean)=>void;onStatus:(message:string)=>void;
 }
-export interface PersistenceConnection {restored:boolean;restoring:()=>boolean;save:()=>void;submitted:(session:unknown)=>Promise<void>;dispose:()=>void}
+export interface PersistenceConnection {restored:boolean;restoring:()=>boolean;save:()=>Promise<void>;submitted:(session:unknown)=>Promise<void>;dispose:()=>void}
 const viewInputIds=new Set(['part-search','part-solo','camera-sync','appearance','layer-images','layer-mesh','layer-bones','animation-select','reference-select','person-select','axis-select','axis-value','scrub','frame-number','frame-scrub','time-input','frame-input','part-set']);
 /** Restore once after normal startup; snapshots never perform a server mutation. */
 export async function connectInspectionPersistence<T extends PersistenceSession>(adapter:PersistenceAdapter<T>):Promise<PersistenceConnection> {
@@ -376,10 +376,11 @@ export async function connectInspectionPersistence<T extends PersistenceSession>
   value.baseline=baseline;
   if(await store.write(value)&&!closed&&!restoring&&navigation===navigationGeneration){const url=new URL(location.href);url.hash=encodeBookmark(value.bookmark);history.replaceState(null,'',url);lastNavigationHash=url.hash;}
  }
- function save():void {
-  if(closed||restoring||conflict)return;
+ function save():Promise<void> {
+  if(closed||restoring||conflict)return Promise.resolve();
   try{const value=snapshot(),navigation=navigationGeneration;writes=writes.then(()=>persist(value,navigation)).catch(error=>{status(`Local view was not saved: ${error instanceof Error?error.message:String(error)}`);});
   }catch(error){status(`Local view was not saved: ${error instanceof Error?error.message:String(error)}`);}
+  return writes;
  }
  function navigateView():void {
   if(closed||location.hash===lastNavigationHash)return;
