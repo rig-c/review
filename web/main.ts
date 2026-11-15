@@ -2854,7 +2854,7 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  const cameraRestoring=viewport.state.cameraRestoring;
  stageCorrectionRebinding++;try{
  const keepPart=parts?.value()??null,keepStage=assets?.stage;
- const keepFramingBox=viewportProvider.geometry('rig')?.box;
+ const keepFramingBox=rigRaster.active()?undefined:viewportProvider.geometry('rig')?.box;
  const keepRigCamera=structuredClone(viewport.paneCamera('rig')),keepReferenceCamera=structuredClone(viewport.paneCamera('reference'));
  const keepAnimation=animation,keepTime=time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  inspectionSourceState='pending';partModel=null;pause();refreshAnimationInspection();

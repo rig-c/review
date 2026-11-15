@@ -22,20 +22,22 @@ test('scratch replacement snapshots inspected time before pause/load and retains
  expect(player.time).toBe(4.375);expect(swap).toContain("seek(keepTime,{kind:'reload'})");
 });
 
-test('actual in-place swap keeps matching-canvas zoom/pan, refits a changed canvas and silently clears a removed part',async()=>{
+test('actual in-place swap keeps matching-canvas zoom/pan, skips Difference framing, refits a changed canvas and silently clears a removed part',async()=>{
  const swap=main.slice(main.indexOf('async function swapRig('),main.indexOf('\n/**\n * Mesh Apply'));
  const stage={x:-10,y:20,width:100,height:200};
  const entries=partCatalog({slots:[{name:'torso',bone:'root',setup:'body'}],skins:[{name:'default',attachments:{torso:{body:{kind:'region',path:'body'}}}}]},['torso']);
- for(const removed of [false,true])for(const resized of [false,true]){
+ for(const difference of [false,true])for(const removed of [false,true])for(const resized of [false,true]){
   const parts=new PartInspection();parts.register('single',entries,{} as any);parts.select({side:'single',slot:'torso',mode:'solo'});
   const cameras={rig:{zoom:1.46,center:{x:17,y:-23}},reference:{zoom:2,center:{x:31,y:45}}},before=structuredClone(cameras),messages:unknown[]=[];
   let fits=0;const state={cameraRestoring:false};
   const viewport={state,cancelFit(){},paneCamera:(target:keyof typeof cameras)=>cameras[target],writeCamera:(target:keyof typeof cameras,value:any)=>{cameras[target]=value;},requestFit(){fits++;cameras.rig={zoom:1,center:{x:40,y:120}};}};
   const next={stage:{...stage,width:resized?101:100},animations:[],dispose(){}};
-  const deps={parts,viewport,next,messages,entries:removed?[]:entries,stage};
+  const deps={parts,viewport,next,messages,entries:removed?[]:entries,stage,difference};
   const body=`return (async()=>{
-   const {parts,viewport,next,messages,entries,stage}=deps;
-   const viewportProvider={geometry:()=>({box:stage})},rebuildFramingBoxes=new WeakMap();
+   const {parts,viewport,next,messages,entries,stage,difference}=deps;
+   let geometryReads=0;
+   const rigRaster={active:()=>difference};
+   const viewportProvider={geometry:()=>{geometryReads++;return {box:difference?{x:0,y:0,width:512,height:512}:stage};}},rebuildFramingBoxes=new WeakMap();
    let stageCorrectionRebinding=0,inspectionSourceState='ready',partModel=null,setupChestWorld=null,stageModelHash=null,stageSource=null,stageDocumentSet=false;
    let player={dispose(){},draw(){}},assets={stage,dispose(){}},animation='',time=.375,playing=false,duration=1;
    const physicsPanel=null,weightsView=null,meshEditor=null,directionPanel=null,idlePanel=null;
@@ -47,12 +49,14 @@ test('actual in-place swap keeps matching-canvas zoom/pan, refits a changed canv
    const keptAnimation=()=>false,drawRig=(fn)=>fn(),renderTransport=()=>{},renderCues=()=>{},renderIdle=()=>{};
    const updateChestMapping=()=>{},fitCamera=()=>{},loadModelDocument=async()=>({ok:false}),playPreview=()=>{},message=(...args)=>messages.push(args);
    ${swap}
-   await swapRig('http://local/model','/', 'hash');return {selection:parts.value(),restoring:viewport.state.cameraRestoring};
+   await swapRig('http://local/model','/', 'hash');return {selection:parts.value(),restoring:viewport.state.cameraRestoring,cachedFraming:rebuildFramingBoxes.get(next),geometryReads};
   })();`;
   const result=await new Function('deps',new Bun.Transpiler({loader:'ts'}).transformSync(body))(deps);
   expect(result.selection).toEqual(removed?null:{side:'single',slot:'torso',mode:'solo'});
   expect(messages).toEqual([]);expect(result.restoring).toBe(false);expect(fits).toBe(resized?1:0);
   expect(cameras).toEqual(resized?{...before,rig:{zoom:1,center:{x:40,y:120}}}:before);
+  expect(result.cachedFraming).toEqual(difference||resized?undefined:stage);
+  expect(result.geometryReads).toBe(difference?0:1);
  }
 });
 
@@ -80,7 +84,7 @@ test('#858 actual swap preserves the entire numeric camera when equal-stage buil
    let player=newPlayer(),assets={stage,animations:[],dispose(){}},animation='',time=.375,playing=false,duration=1;
    let selected={side:'single',slot:'torso',mode:'solo'};
    const parts={value:()=>selected,frame:()=>({generation:0,order:[]}),bounds:()=>null,register(){},restoreSelection(value){selected=removed?null:value;}};
-   const partsOnly=false,sceneBox=()=>null,referenceSize=null,referenceGeneration=0,view='rig',rigRaster=undefined;
+   const partsOnly=false,sceneBox=()=>null,referenceSize=null,referenceGeneration=0,view='rig',rigRaster={el,active:()=>false};
    const text=()=>{},message=()=>{},redrawOverlay=()=>{},viewportState=createViewportState();
    ${framingDeclaration}
    ${wiring}
