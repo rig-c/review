@@ -134,10 +134,12 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1.
+      # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1. Pinned exactly so a
+      # new npm reaches the cut only through a reviewed change; Check's `npm release`
+      # install-smoke entry installs the same version.
       - name: Use an npm that speaks OIDC
         run: |
-          npm install -g npm@latest
+          npm install -g npm@12.2.2
           npm --version
 
       - name: Install dependencies
