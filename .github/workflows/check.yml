@@ -113,7 +113,7 @@ jobs:
     if: ${{ !cancelled() && needs.tree-verdict.outputs.reused != 'true' }}
     # What `npm i -D @rig-c/review` delivers, on the minimum Bun the package declares and on latest.
     # The `release` entry is the release job's own environment (setup-node with registry-url, so its
-    # .npmrc is in use, and npm@latest), measured here so an npm change fails before a tag, not the cut.
+    # .npmrc is in use, and the same exact npm release.yml pins), measured here so an npm change fails before a tag, not the cut.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -131,8 +131,9 @@ jobs:
           registry-url: ${{ matrix.profile == 'latest, npm release' && 'https://registry.npmjs.org' || '' }}
       - name: Use the release job's npm
         if: ${{ matrix.profile == 'latest, npm release' }}
+        # Keep equal to the npm pinned in release.yml.
         run: |
-          npm install -g npm@latest
+          npm install -g npm@12.2.2
           npm --version
       - run: bun run smoke
   tree-verdict-receipt:
