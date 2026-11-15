@@ -20,6 +20,14 @@ test('in-place rebuild restores side, slot and mode, or silently falls back to W
  expect(()=>inspection.restoreSelection(kept)).not.toThrow();expect(inspection.value()).toBeNull();
  expect(inspection.refusal('single')).toBeNull();
 });
+test('in-place rebuild falls back to Whole rig without throwing when the kept side refuses selection',()=>{
+ class RefusedInspection extends PartInspection {refuseSide(){this.refused.set('single',{code:'PART_IDENTITY_UNAVAILABLE',message:'identity refused',catalog:false});}}
+ const inspection=new RefusedInspection(),a=fake();inspection.register('single',entries,a.player);
+ inspection.select({side:'single',slot:'s',mode:'solo'});const kept=inspection.value();inspection.refuseSide();
+ expect(()=>inspection.select(kept)).toThrow('PARTS_UNAVAILABLE');
+ expect(()=>inspection.restoreSelection(kept)).not.toThrow();expect(inspection.value()).toBeNull();
+ expect(inspection.refusal('single')?.code).toBe('PART_IDENTITY_UNAVAILABLE');
+});
 function fake(){
  const rendered:PosedFrame[]=[];let sampled:unknown='unset',source=copyPartFrame(frame),override:SlotIdentitySnapshot|null=null;
  const snapshot=():SlotIdentitySnapshot=>override??{generation:source.generation!,set:null,sets:[],skin:null,slots:entries.map((entry,z)=>{const drawn=source.order.find(row=>row.slot===entry.slot),attachment=entry.slot==='s'?'first':'sprite';return {slot:entry.slot,z,attachment:drawn?attachment:null,skin:drawn?'default':null,reason:drawn?null:entry.slot==='clip'?'no-attachment':'timeline-null'};})};
