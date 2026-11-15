@@ -28,15 +28,6 @@ export const DEFAULT_SYNTHETIC_PARTS: RecordPartsIdentity = Object.freeze({
   integrity: 'sha512-synthetic-parts-integrity',
 });
 
-export const SYNTHETIC_EXTRA_OPTION_SELECTIONS = Object.freeze([
-  { itemId: 'limb_ik', optionId: 'ik_two_bone', otherText: null },
-  { itemId: 'spine_chain', optionId: 'spine_three', otherText: null },
-  { itemId: 'hand_controls', optionId: 'hand_fingers', otherText: null },
-  { itemId: 'foot_roll', optionId: 'foot_reverse', otherText: null },
-  { itemId: 'face_rig', optionId: 'face_anchors', otherText: null },
-  { itemId: 'cloth_sim', optionId: 'cloth_baked', otherText: null },
-] as const);
-
 export function makeSyntheticPngBytes(r = 24, g = 120, b = 200): Buffer {
   const png = new PNG({ width: 2, height: 2 });
   for (let i = 0; i < png.data.length; i += 4) {
@@ -77,6 +68,7 @@ export function createSyntheticOptionRecordWorkspace(
     readonly includeHistoricalSignoff?: boolean;
     readonly boundParts?: boolean;
     readonly questionImages?: boolean;
+    readonly longInterview?: boolean;
   },
 ): SyntheticOptionWorkspace {
   const questionId = options?.questionId ?? 'rig_type';
@@ -181,6 +173,7 @@ export function createSyntheticOptionRecordWorkspace(
           },
         ],
       },
+      ...(options?.longInterview ? [
       {
         id: 'limb_ik',
         prompt: 'Select limb IK solver',
@@ -403,6 +396,7 @@ export function createSyntheticOptionRecordWorkspace(
           },
         ],
       },
+      ] : []),
     ],
     constraints: [
       {
