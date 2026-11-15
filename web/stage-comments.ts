@@ -209,7 +209,9 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     const n=rigPose.frame?.index??null;host.add({id:crypto.randomUUID(),frameStart:n,frameEnd:n,target:slots[0]?{kind:'slot',name:slots[0].slot}:{kind:'rig',name:rigPose.rig},category:'defect',summary,context:{animation:rigPose.animation,time:rigPose.time,frame:rigPose.frame?.basis==='producer'?n:null,...(turn?{turn:turn as any}:{}),interval:n===null?null:{frameStart:n,frameEnd:n,inclusive:true},comment:comment as any} } as unknown as Row,rigPose.side);
     }
    }
+   busy=true;field.disabled=true;syncChips();
    await host.changed();
+   if(disposed||generation!==interaction)return;
    cancel();refresh();revealLatest();
   }catch(e){if(disposed||generation!==interaction)return;const msg=e instanceof Error?e.message:String(e);errorSource=toEn(msg);error.textContent=t(errorSource);place();if(locked)host.error(t(errorSource));field.disabled=false;field.focus();}finally{busy=false;if(composer===form)syncChips();}};
   field.focus();last='';

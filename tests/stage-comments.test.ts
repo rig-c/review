@@ -650,3 +650,22 @@ test('#848 comment save waits for the host draft transaction before closing the 
   expect(ui.pane.children).not.toContain(composer);
  }finally{release();ui.cleanup();}
 });
+
+test('#848 general comment ignores a second submit while the draft write is pending',async()=>{
+ let release!:()=>void;
+ const durable=new Promise<void>(resolve=>{release=resolve;});
+ const rows:any[]=[],ui=commentUI(rows,{inline:true,general:true,changedImpl:()=>durable});
+ let first:Promise<void>|undefined,second:Promise<void>|undefined;
+ try{
+  ui.list().children.find(node=>node.dataset.commentGeneral==='')!.onclick!();
+  const composer=ui.list().children.find(node=>node.className.includes('stage-comment-composer'))!;
+  composer.children[0]!.value='One general comment';
+  first=composer.onsubmit!({preventDefault(){}});
+  second=composer.onsubmit!({preventDefault(){}});
+  expect(rows.map(row=>row.summary)).toEqual(['One general comment']);
+  expect(ui.changes()).toBe(1);
+  release();await Promise.all([first,second]);
+  expect(ui.list().children).not.toContain(composer);
+  expect(ui.errors).toEqual([]);
+ }finally{release();await Promise.all([first,second]);ui.cleanup();}
+});
