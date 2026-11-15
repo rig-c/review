@@ -484,7 +484,7 @@ function createCompareViewport(){
   cameraRestoring:{get:()=>cameraRestoring,set:(value:boolean)=>{cameraRestoring=value;}},
   cameraLayout:{get:()=>cameraLayout,set:(value:string)=>{cameraLayout=value;}}
  });
- const provider=createRigViewportProvider({el,player:()=>null,assets:()=>null,
+ const provider=createRigViewportProvider({fitLabel:'Fit',el,player:()=>null,assets:()=>null,
   panes:(['a','b'] as const).map(target=>({target,viewport:el(target+'-viewport'),pane:el(target+'-pane'),
    root:el(target+'-root'),fallback:target==='a'?'b' as const:'a' as const,box:sharedBox,
    player:()=>players[target]??null,scale:(value:number)=>{rigScales[target]=value;}})),
@@ -499,7 +499,7 @@ function createCompareViewport(){
    return selected?`Selected slot fitted${suffix}.`:`View fitted${suffix}.`;
   },
   cameraControls:{zoomId:'zoom-label',targetLabel:target=>target==='reference'?'Reference':target?.toUpperCase()??'A',
-   fitLabel:sync=>sync?'Fit synchronized views':'Fit active view',coordinatesId:null}
+   coordinatesId:null}
  },state);
  return createViewportController(provider,state);
 }

@@ -123,10 +123,13 @@ async function launchCdpSession(profileDir: string): Promise<CdpSession> {
   );
 
   try {
-    const wsUrl = new URL(chrome.endpoint);
-    const listRes = await fetch(`http://${wsUrl.host}/json/list`);
-    const targets = (await listRes.json()) as Array<{ type: string; webSocketDebuggerUrl?: string }>;
-    const pageTarget = targets.find(t => t.type === 'page' && t.webSocketDebuggerUrl);
+    const wsUrl = new URL(chrome.endpoint), deadline = performance.now() + 10_000;
+    let pageTarget: { type: string; webSocketDebuggerUrl?: string } | undefined;
+    while (performance.now() < deadline && !pageTarget?.webSocketDebuggerUrl) {
+      const targets = (await (await fetch(`http://${wsUrl.host}/json/list`)).json()) as Array<{ type: string; webSocketDebuggerUrl?: string }>;
+      pageTarget = targets.find(t => t.type === 'page' && t.webSocketDebuggerUrl);
+      if (!pageTarget?.webSocketDebuggerUrl) await Bun.sleep(25);
+    }
     if (!pageTarget?.webSocketDebuggerUrl) {
       await chrome.close();
       throw new Error('No page target found in DevTools JSON list');
@@ -539,6 +542,8 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
         disabled: b.disabled,
         pressed: b.getAttribute('aria-pressed'),
       }));
+
+      const controls = [...document.querySelectorAll('#camera-sync,#zoom-in,#zoom-out,#fit,#zoom-label')].map(n => n.id);
 
       const initialMode = {
         comparePressed: document.querySelector('.mode-switch [data-mode="compare"]')?.getAttribute('aria-pressed'),
@@ -1054,6 +1059,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       const commentModes = (sessionData.feedback || []).map(f => f.context?.comment?.mode).filter(Boolean);
 
       return {
+        controls,
         modeButtons,
         initialMode,
         timeBeforeSwitch,
@@ -1434,6 +1440,8 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       failures.push(`compare mode switch labels mismatch: ${JSON.stringify(compareCheck.modeButtons)}`);
     if (compareCheck.initialMode.comparePressed !== 'true' || !compareCheck.initialMode.pickerHidden)
       failures.push(`compare initial mode state mismatch: ${JSON.stringify(compareCheck.initialMode)}`);
+    if (JSON.stringify(compareCheck.controls) !== JSON.stringify(['camera-sync', 'zoom-in', 'zoom-out', 'fit', 'zoom-label']))
+      failures.push(`compare zoom controls order mismatch: ${JSON.stringify(compareCheck.controls)}`);
 
     for (const step of compareCheck.switches) {
       if (step.playCount !== 1 || !step.playInMainToolbar || step.playVisible !== (step.mode === 'playback'))

@@ -653,9 +653,10 @@ test('#671 common group composition retains each finite host tag, class, child o
  try{
   for(const layout of ['rigStep1','legacyCompareStep3'] as const){
    const controls=layout==='rigStep1'?createRigViewControls():createViewControls({layout}),group=controls.zoomGroup as unknown as Element;
-   const expected=layout==='rigStep1'?['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']:['camera-sync','zoom-out','zoom-label','zoom-in','fit'];
+   const expected=layout==='rigStep1'?['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']:['camera-sync','zoom-in','zoom-out','fit','zoom-label'];
    expect(group.tagName).toBe('div');expect(group.className).toBe(layout==='rigStep1'?'zoom-controls':'row');
    expect(group.children.map(node=>node.id||(node===controls.syncLabel?'camera-sync':null))).toEqual(expected);
+   expect(controls.zoomButtons.map(button=>button.textContent)).toEqual(['Zoom in','Zoom out','Fit']);
    expect(group.children).toContain(controls.value);for(const button of controls.zoomButtons)expect(group.children).toContain(button);
    if(layout==='legacyCompareStep3'){expect(group.children[0]).toBe(controls.syncLabel);expect(controls.nativeOne).toBeNull();expect(controls.viewSwitch).toBeNull();}
    else expect(group.children).toContain(controls.nativeOne);

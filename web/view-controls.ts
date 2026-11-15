@@ -140,9 +140,9 @@ export type ViewControlsOptions = {layout:'rigStep1';viewSwitch:ViewSwitchConfig
 /** One creation site for each common control; hosts retain adjacent tools and camera/event binding. */
 export function createViewControls(options:ViewControlsOptions) {
  const rig=options.layout==='rigStep1',compare=options.layout==='legacyCompareStep3';
- const zoomIn=actionButton(compare?'+':t(rig?'Zoom in':'job.zoomIn'),null);zoomIn.id='zoom-in';
- const zoomOut=actionButton(compare?'−':t(rig?'Zoom out':'job.zoomOut'),null);zoomOut.id='zoom-out';
- const fit=actionButton(t(compare?'Fit synchronized views':'Fit'),null);fit.id='fit';
+ const zoomIn=actionButton(t(rig||compare?'Zoom in':'job.zoomIn'),null);zoomIn.id='zoom-in';
+ const zoomOut=actionButton(t(rig||compare?'Zoom out':'job.zoomOut'),null);zoomOut.id='zoom-out';
+ const fit=actionButton(t('Fit'),null);fit.id='fit';
  const value=panelMake(rig||compare?'output':'span',{id:compare?'zoom-label':'zoom-value',textContent:rig||compare?'100%':''});
  const sync=panelMake('input',{id:'camera-sync',type:'checkbox'});
  const syncLabel=labelledControl(t('Sync cameras'),sync,true);
@@ -200,7 +200,7 @@ export function createViewControls(options:ViewControlsOptions) {
  if(rig){
   viewSwitch=panelMake('details',{id:'view-menu',className:'view-menu'});configure(options.viewSwitch);
   zoomGroup!.append(zoomIn,zoomOut,fit,nativeOne!,viewSwitch,value);
- }else if(compare)zoomGroup!.append(syncLabel,zoomOut,value,zoomIn,fit);
+ }else if(compare)zoomGroup!.append(syncLabel,zoomIn,zoomOut,fit,value);
  return {zoomButtons,zoomGroup,syncLabel,value,nativeOne,viewSwitch,get viewModeIds(){return [...modes.keys()];},setMode,setDisabled,replaceViewSwitch};
 }
 
