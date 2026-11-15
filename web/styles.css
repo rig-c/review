@@ -610,8 +610,8 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 
 
 /* Shared density primitives; native toggles and ranges keep their platform geometry. */
-:where(input:not([type=checkbox]):not([type=radio]):not([type=range]),select){height:var(--control-height);padding-block:0}
-:where(.workspace-settings,.chest-regions,.chest-editor-bar,.physics-panel,.environment-panel,.readings-panel,.idle-panel,.mesh-panel,.bones-panel,.rig-fields-group,.requirements-panel,.retarget-panel,.cloth-fields,.density-strip,.animation-curve-toolbar,.turn-pad) :where(input:not([type=checkbox]):not([type=radio]):not([type=range]),select){height:var(--control-compact);padding-block:0}
+:is(input:where(:not([type=checkbox]):not([type=radio]):not([type=range])),select){height:var(--control-height);padding-block:0}
+:where(.workspace-settings,.chest-regions,.chest-editor-bar,.physics-panel,.environment-panel,.readings-panel,.idle-panel,.mesh-panel,.bones-panel,.rig-fields-group,.requirements-panel,.retarget-panel,.cloth-fields,.density-strip,.animation-curve-toolbar,.turn-pad) :is(input:where(:not([type=checkbox]):not([type=radio]):not([type=range])),select){height:var(--control-compact);padding-block:0}
 :where(h2,h3){font-size:var(--font-size-title);font-weight:var(--font-weight-medium)}
 .workspace-settings h2,.interview-answer-fields>h3,#comments-list-host h3{font-weight:var(--font-weight-emphasis)}
 .interview-option strong{font-weight:var(--font-weight-medium)}
