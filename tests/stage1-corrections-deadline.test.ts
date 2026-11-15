@@ -17,13 +17,9 @@ function pageWith(globals: object) {
 
 type ReadyName = keyof typeof STAGE1_READINESS;
 const partsNames = ['PARTS_NOT_READY', 'SCRATCH_NOT_READY', 'MESH_ROUTE_TIMEOUT', 'DELTA_ROUTE_TIMEOUT'] as const;
-const visibleFrame = '.review-stage-panel iframe:not([hidden])';
-
+const visibleFrame = '[data-part-list] button[data-slot=torso]';
 function partsPage(ready?: string, hidden = false) {
-  const frame = {contentDocument: {body: {dataset: {ready}, textContent: 'fixture'}}};
-  return pageWith({document: {querySelector: (selector: string) => {
-    return hidden && selector.includes(':not([hidden])') ? undefined : frame;
-  }}});
+  return pageWith({document: {body:{textContent:'fixture'},querySelector: () => ready==='true'&&!hidden?{}:null}});
 }
 
 function handoffPage(editor: object | undefined, text?: string) {
@@ -40,8 +36,8 @@ const unready: [ReadyName, string, ReturnType<typeof pageWith>][] = [
   ['PAGE_NOT_READY', 'handoff still reading', handoffPage({}, 'Reading producer')],
 ];
 for (const name of partsNames) {
-  unready.push([name, 'false marker is truthy but not ready', partsPage('false')]);
-  unready.push([name, 'ready iframe is hidden', partsPage('true', true)]);
+  unready.push([name, 'selected part row absent', partsPage('false')]);
+  unready.push([name, 'part row absent during replacement', partsPage('true', true)]);
 }
 for (const [name, label, page] of unready) {
   test(`${name} refuses ${label} through its actual readiness waiter`, async () => {
@@ -61,24 +57,13 @@ test('the actual readiness waiter accepts complete state', async () => {
   }
 });
 
-test('the actual readiness expression and waiter tolerate null iframe body during replacement', async () => {
+test('the actual readiness expression and waiter tolerate a missing part row during replacement', async () => {
   for (const name of partsNames) {
-    const frame: { contentDocument: { body: null | { dataset: { ready?: string }; textContent: string } } } = {
-      contentDocument: { body: null },
-    };
-    const page = pageWith({
-      document: {
-        querySelector: (selector: string) => (selector.includes(visibleFrame) ? frame : undefined),
-      },
-    });
-    expect(await page.evaluate(STAGE1_READINESS[name].expression)).toEqual({
-      ready: false,
-      detail: undefined,
-    });
-    setTimeout(() => {
-      frame.contentDocument.body = { dataset: { ready: 'true' }, textContent: 'fixture' };
-    }, 30);
-    await waitForStage1Readiness(page, name, 200);
+    let ready=false;
+    const page=pageWith({document:{body:null,querySelector:()=>ready?{}:null}});
+    expect(await page.evaluate(STAGE1_READINESS[name].expression)).toEqual({ready:false,detail:undefined});
+    setTimeout(()=>{ready=true;},30);
+    await waitForStage1Readiness(page,name,200);
     expect(page.reads.length).toBeGreaterThan(1);
   }
 });

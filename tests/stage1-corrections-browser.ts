@@ -20,10 +20,10 @@ const APPLY_DEADLINE_MS = 30_000;
 // Default EN/KO baseline (n=2): 8,872.501 and 8,891.143 ms.
 // Four times the longer full CDP hold, rounded up to the next 10 s.
 const MESH_SETTLE_DEADLINE_MS = 40_000;
-const PARTS_DOCUMENT = "document.querySelector('.review-stage-panel iframe:not([hidden])')?.contentDocument";
+const PARTS_DOCUMENT = "document";
 const PARTS_READY = `(() => {
   const d = ${PARTS_DOCUMENT};
-  return {ready: d?.body?.dataset.ready === 'true', detail: d?.body?.textContent};
+  return {ready: !!d?.querySelector('[data-part-list] button[data-slot=torso]'), detail: d?.body?.textContent};
 })()`;
 
 export const STAGE1_READINESS = {
@@ -201,16 +201,21 @@ try{
  for(const lang of process.env.RV367_FOCUS?['en']:['en','ko']){
   await page.goto(base+'/?lang='+lang+'#cap='+'a'.repeat(64));
   await waitForStage1Readiness(page, 'PAGE_NOT_READY');
-  await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
+  await page.evaluate(`document.querySelector('[data-mode="rig"]').click()`);
   await waitForStage1Readiness(page, 'PARTS_NOT_READY');
-  const before=await page.evaluate(`(async()=>{const d=${PARTS_DOCUMENT};d.querySelector('[data-pv-item=torso]').click();d.getElementById('zoom-in').click();await new Promise(r=>setTimeout(r,50));return {snapshot:d.defaultView.rigReviewStageParts.snapshot(),text:d.querySelector('#pv-corrections')?.textContent,buttons:[...d.querySelectorAll('#pv-corrections button')].map(b=>b.textContent)}})()`);
-  await page.evaluate(`document.querySelector('[data-review-stage="3"]').click();document.querySelector('[data-review-stage="1"]').click()`);
-  const retained=await page.evaluate<any>(`document.querySelector('.review-stage-panel iframe:not([hidden])').contentWindow.rigReviewStageParts.snapshot()`);
+  const before=await page.evaluate(`(async()=>{const d=${PARTS_DOCUMENT};const row=d.querySelector('[data-part-list] button[data-slot=torso]');if(row.getAttribute('aria-pressed')!=='true')row.click();d.getElementById('zoom-in').click();await new Promise(r=>setTimeout(r,50));return {snapshot:({part:d.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot,rig:(()=>{const c=JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig;return {center:c.center,zoom:c.zoom};})()}),text:d.querySelector('#chest-editor-status')?.textContent,buttons:[...d.querySelectorAll('#chest-editor-bar button')].map(b=>b.textContent)}})()`);
+  await page.evaluate(`document.querySelector('[data-mode="playback"]').click();document.querySelector('[data-mode="rig"]').click()`);
+  const retained=await page.evaluate<any>(`({part:document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot,rig:(()=>{const c=JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig;return {center:c.center,zoom:c.zoom};})()})`);
   if(retained.part!=='torso'||JSON.stringify(retained.rig)!==JSON.stringify((before as any).snapshot.rig))throw Error('NON_FIRST_PART_OR_CAMERA_LOST_ON_NAV');
   receipts.push({lang,before,retained});await writeFile(join(artifacts,lang+'-parts.png'),await page.screenshot());
+  // A part without chest regions keeps the current form and names that refusal on the existing notice.
+  const unavailable=await page.evaluate(`(async()=>{const before=[...document.querySelectorAll('#chest-regions input')].map(n=>[n.id,n.value]);document.querySelector('[data-part-list] button[data-slot=badge]').click();await new Promise(resolve=>requestAnimationFrame(resolve));const after=[...document.querySelectorAll('#chest-regions input')].map(n=>[n.id,n.value]);return {before,after,text:document.getElementById('chest-editor-status').textContent};})()` ) as any;
+  if(JSON.stringify(unavailable.before)!==JSON.stringify(unavailable.after)||!unavailable.text.includes(lang==='ko'?'선택한 파츠에는 가슴 영역이 없어요.':'The selected part has no chest regions.'))throw Error('UNAVAILABLE_PART_CHANGED_FORM '+JSON.stringify(unavailable));
+  await writeFile(join(artifacts,lang+'-unavailable.png'),await page.screenshot());
+  await page.evaluate(`document.querySelector('[data-part-list] button[data-slot=torso]').click()`);
   // Enter via the actual Chest-regions button, designate with its own fields and click its Apply button twice.
-  await page.evaluate(`document.querySelector('.review-stage-panel iframe:not([hidden])').contentDocument.querySelector('#pv-corrections button').click()`);
-  await page.evaluate(`(async()=>{for(let i=0;i<200;i++){if(document.documentElement.dataset.inspectionStage==='3'&&document.getElementById('chest-edit').getAttribute('aria-pressed')==='true')return;await new Promise(r=>setTimeout(r,25));}throw Error('CHEST_NOT_OPEN')})()`);
+  await page.evaluate(`if(document.getElementById('chest-edit').getAttribute('aria-pressed')!=='true')document.getElementById('chest-edit').click()`);
+  await page.evaluate(`(async()=>{for(let i=0;i<200;i++){if(document.getElementById('chest-edit').getAttribute('aria-pressed')==='true')return;await new Promise(r=>setTimeout(r,25));}throw Error('CHEST_NOT_OPEN')})()`);
   await writeFile(join(artifacts,lang+'-chest.png'),await page.screenshot());
   receipts.push({lang,controls:await page.evaluate(`({buttons:[...document.querySelectorAll('#chest-editor-bar button')].map(b=>({id:b.id,text:b.textContent})),fields:[...document.querySelectorAll('#chest-regions input')].map(n=>({id:n.id,value:n.value}))})`)});
   if(process.env.RV367_FOCUS==='selection-exit'){
@@ -221,23 +226,24 @@ try{
    await writeFile(join(artifacts,'selection-exit.png'),await page.screenshot());continue;
   }
   for(let repeat=0;repeat<2;repeat++){
+   const applyCamera=await page.evaluate(`(()=>{const c=JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig;return {center:c.center,zoom:c.zoom};})()`);
    const applied=await settleStage1Apply<any>(page, 'CHEST_REPEAT_APPLY_SETTLE', lang==='en'?1:2);
    const selectedAfter=await page.evaluate<any>(`document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot`);if(selectedAfter!=='torso')throw Error('SELECTED_PART_LOST_AFTER_APPLY');
    if(applied.check?.pass!==true||!applied.stageInputHash||!applied.mesh)throw Error('UNCHECKED_APPLIED_RECORD '+JSON.stringify(applied));
-   await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
+   await page.evaluate(`document.querySelector('[data-mode="rig"]').click()`);
    await waitForStage1Readiness(page, 'SCRATCH_NOT_READY');
-   const watched=await page.evaluate<any>(`(async()=>{const d=${PARTS_DOCUMENT};const res=await fetch('/api/stage-parts',{headers:{'X-Review-Stage-Build':'${applied.buildId}'}});return {snapshot:d.defaultView.rigReviewStageParts.snapshot(),text:d.querySelector('#pv-corrections').textContent,data:await res.json()};})()`);
-   if(watched.snapshot.part!=='torso'||JSON.stringify(watched.snapshot.rig)!==JSON.stringify((before as any).snapshot.rig))throw Error('NON_FIRST_PART_OR_CAMERA_LOST_ON_REBUILD');
+   const watched=await page.evaluate<any>(`(async()=>{const d=${PARTS_DOCUMENT};const res=await fetch('/api/stage-parts',{headers:{'X-Review-Stage-Build':'${applied.buildId}'}});return {snapshot:({part:d.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot,rig:(()=>{const c=JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig;return {center:c.center,zoom:c.zoom};})()}),text:d.querySelector('#chest-editor-status').textContent,data:await res.json()};})()`);
+   if(watched.snapshot.part!=='torso'||JSON.stringify(watched.snapshot.rig)!==JSON.stringify(applyCamera))throw Error('NON_FIRST_PART_OR_CAMERA_LOST_ON_REBUILD '+JSON.stringify({before:applyCamera,after:watched.snapshot}));
    const mapping=watched.data.draft.mappings.find((m:any)=>m.part==='torso');
    if(mapping.vertices!==applied.mesh.after.vertices||mapping.triangles!==applied.mesh.after.triangles)throw Error('GEOMETRY_COUNTS_DIFFER');
    receipts.push({lang,repeat,applied,watched});await writeFile(join(artifacts,lang+'-scratch-'+repeat+'.png'),await page.screenshot());
-   await page.evaluate(`document.querySelector('.review-stage-panel iframe:not([hidden])').contentDocument.querySelector('#pv-corrections button').click()`);
+   await page.evaluate(`if(document.getElementById('chest-edit').getAttribute('aria-pressed')!=='true')document.getElementById('chest-edit').click()`);
    await page.evaluate(`new Promise(r=>setTimeout(r,200))`);
   }
   // Parameter editor: enter from the selected part, change a producer field, run its existing Apply.
-  await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
+  await page.evaluate(`document.querySelector('[data-mode="rig"]').click()`);
   await waitForStage1Readiness(page, 'MESH_ROUTE_TIMEOUT');
-  await page.evaluate(`${PARTS_DOCUMENT}.querySelectorAll('#pv-corrections button')[1].click()`);
+  await page.evaluate(`document.querySelector('[data-block-target=mesh-panel]').click()`);
   const meshJob=await settleStage1Mesh<any>(page, lang==='en'?18:20);
   if(meshJob.status!=='built'||meshJob.check?.pass!==true)throw Error('MESH_PARAMETER_APPLY_REFUSED '+JSON.stringify(meshJob));
   if(await page.evaluate(`document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot`)!=='torso')throw Error('MESH_SELECTION_LOST');
@@ -245,9 +251,10 @@ try{
   await writeFile(join(artifacts,lang+'-mesh.png'),await page.screenshot());
   // Reset before the typed delta: it must use the inspected producer input, not silently delta an unrelated scratch revision.
   await page.evaluate(`window.rigReviewEditor.reset()`);
-  await page.evaluate(`document.querySelector('[data-review-stage="1"]').click()`);
+  await page.evaluate(`document.querySelector('[data-mode="rig"]').click()`);
   await waitForStage1Readiness(page, 'DELTA_ROUTE_TIMEOUT');
-  await page.evaluate(`${PARTS_DOCUMENT}.querySelectorAll('#pv-corrections button')[2].click()`);
+  await page.evaluate(`document.querySelector('[data-block-target=modeling-tools]').click();if(document.getElementById('mesh-edit').getAttribute('aria-pressed')!=='true')document.getElementById('mesh-edit').click()`);
+  await writeFile(join(artifacts,lang+'-delta-entry.json'),JSON.stringify(await page.evaluate(`({selected:document.querySelector('[data-part-list] button[aria-pressed=true]')?.dataset.slot,mode:document.querySelector('[data-mode][aria-pressed=true]')?.dataset.mode,pressed:document.getElementById('mesh-edit').getAttribute('aria-pressed'),message:document.getElementById('message').textContent,status:document.getElementById('mesh-editor-status').textContent,stage:window.rigReviewEditor.stage()})`),null,2));
   const namedId=await dragStage1Delta(page,async diagnostic=>{
    await writeFile(join(artifacts,lang+'-delta-target.json'),JSON.stringify(diagnostic,null,2)+'\n');
   });

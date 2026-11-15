@@ -22,8 +22,6 @@ test('exclusion metadata requires a positive integer issue and nonempty reason w
 test('live tree partition covers every discovered suite once or by its named exemption',async()=>{
  const plan=await browserPlan();
  expect(Object.fromEntries(Object.entries(plan.exclusions).map(([file,entry])=>[file,entry.issue]))).toEqual({
-  "tests/stage1-corrections-browser.ts": 847,
-  "tests/stage1-review-fixes-browser.ts": 847,
   "tests/job-checkpoint-evidence-browser.ts": 848,
 });
  const assigned=plan.suites;

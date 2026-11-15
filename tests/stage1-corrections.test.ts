@@ -1526,3 +1526,19 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   }
  }
 });
+
+test('#847 native part selection reuses chest binding and refuses a contour part with no chest seed',async()=>{
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+ const start=source.indexOf('async function openStageCorrection('),end=source.indexOf('\n\nreturn {dispose:',start);
+ expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
+ const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(start,end));
+ const region={name:'B',shape:'circle',cx:120,cy:50,r:10,bone:'chestB',spacing:4,band:2};
+ const status={parts:[{name:'B',regions:[region]},{name:'empty',regions:[]}],contour:{B:{contour:{regions:[region]}},empty:{contour:{regions:[]}}}};
+ const calls:unknown[]=[],notices:unknown[]=[];
+ const scope={rebuildStatus:status,rebuildBusy:false,chestFormPart:'A',chestSeed,chestStatusForPart,chestEditor:{notify:(text:unknown)=>notices.push(text)},rebindChestPart:(s:unknown,p:string)=>{expect(s).toBe(status);calls.push(p);scope.chestFormPart=p;},redrawOverlay:()=>calls.push('draw')};
+ const open=new Function('scope',`with(scope){${code};return openStageCorrection;}`)(scope);
+ await open({part:'B',instrument:'selection'});expect(calls).toEqual(['B','draw']);
+ await open({part:'B',instrument:'selection'});expect(calls).toEqual(['B','draw']);expect(notices.at(-1)).toBeNull();
+ await open({part:'empty',instrument:'selection'});expect(scope.chestFormPart).toBe('B');expect(calls).toEqual(['B','draw']);expect(notices.at(-1)).toBe('The selected part has no chest regions. The chest editor keeps its current part.');
+ scope.rebuildBusy=true;await open({part:'A',instrument:'selection'});expect(calls).toEqual(['B','draw']);
+});
