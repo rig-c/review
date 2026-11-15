@@ -319,7 +319,7 @@ footer.status-bar{display:grid;max-width:100vw;grid-template-columns:minmax(0,1f
 .animation-gate-banner[data-loading=true]{border-color:var(--border-strong);color:var(--fg-muted)}
 .animation-dock-status>[data-rebuild-drop="animation"]{margin:0;font-size:var(--font-size-meta);line-height:11px;color:var(--warn);white-space:normal;overflow-wrap:anywhere;text-overflow:clip;max-width:100%;width:100%;min-width:0;flex:none}
 .animation-dock-status>[data-animation-editor-status]{margin:0;font:var(--font-size-meta)/16px var(--font-mono);white-space:normal;overflow-wrap:anywhere;text-overflow:clip;max-width:100%;width:100%;min-width:0;flex:none}
-.animation-dock-status>[data-animation-apply-note]{margin:0;font-size:var(--font-size-meta);line-height:11px;color:var(--fg-muted);white-space:normal;overflow-wrap:anywhere;text-overflow:clip;max-width:100%;width:100%;flex:none}
+.animation-dock-status>[data-animation-apply-note]{margin:0;font-size:var(--font-size-meta);line-height:16px;color:var(--fg-muted);white-space:normal;overflow-wrap:anywhere;text-overflow:clip;max-width:100%;width:100%;flex:none}
 .animation-dock-status>[data-inspection-status]{display:none;margin:0;font-size:var(--font-size-meta);line-height:11px;white-space:normal;overflow-wrap:anywhere}
 .animation-dock-status>[data-rebuild-drop="animation"]:not([hidden])~[data-animation-apply-note],.animation-dock-status>[data-animation-editor-status]:not(:empty)~[data-animation-apply-note],.animation-gate-banner[data-editable=false]~[data-animation-apply-note]{display:none}
 .animation-dock-status>[data-inspection-status]:empty,.animation-dock-status>[data-animation-editor-status]:empty{display:none}

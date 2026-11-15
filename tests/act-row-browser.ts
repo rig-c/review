@@ -277,6 +277,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(await page.evaluate(`document.getElementById('workspace-pending-ask').closest('#workspace-act-row')!==null`),true);
    if(mode==='interview')await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#job-record-asks input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
    await capture(page,out,'answer-dialog');
+   if(mode==='interview')await page.evaluate(`document.querySelector('#job-record-asks button[type=submit]')?.scrollIntoView({block:'nearest',inline:'nearest'})`);
    await click(page,mode==='checkpoint'?'#job-record-asks button[data-job-text="Pass"]':'#job-record-asks button[type=submit]');
    await wait(page,`!document.querySelector('#job-record-asks[open]')&&document.getElementById('review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`);
    const saved:any=await capture(page,out,'answer-saved');
