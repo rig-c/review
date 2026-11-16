@@ -67,6 +67,7 @@ async function run(lang:'en'|'ko',output:string){
     assert.equal(state.ask,catalog['Check the rig and motion.']);
     for(const label of state.modeLabels)assert.ok(!['Setup','Animate','Write review','셋업','애니메이트','리뷰 작성'].includes(label),'no bottom mode labels');
     await writeFile(join(out,mode+(comments?'-comments':'-blocks')+'.png'),await page.screenshot());
+    if(comments)await click(page,'#stage-comment');
    }
   }
   assert.deepEqual(await jobInputHashes(fixture.input.root),before,'source assets immutable through mode/comment navigation');
