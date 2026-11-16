@@ -294,6 +294,19 @@ export class JobStore<Data> {
     }
   }
 
+  /** Observe committed writes to one job without decoding its document or crops. */
+  revision(jobId: string): number {
+    try {
+      const row = this.db.query<{ revision: number }, [string]>('SELECT revision FROM jobs WHERE job_id=?').get(jobId);
+      if (!row) throw new JobError('JOB_UNKNOWN');
+      if (!Number.isSafeInteger(row.revision) || row.revision < 0) throw new JobError('JOB_STORAGE_FAILED');
+      return row.revision;
+    } catch (error) {
+      if (error instanceof JobError) throw error;
+      throw new JobError('JOB_STORAGE_FAILED', 'Stored job state is invalid');
+    }
+  }
+
   get(jobId: string): StoredJob<Data> {
     try {
       const row = this.db.query<JobRow, [string]>(`SELECT jobs.*, job_closures.document AS closure

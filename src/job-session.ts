@@ -786,19 +786,35 @@ export class JobSession {
     };
   }
 
-  private async next(after: string | null, waitMs: number, signal: AbortSignal): Promise<JobNextValue | NextValueV3> {
+  private async next(after: string | null, waitMs: number, signal: AbortSignal, observeWrites = false): Promise<JobNextValue | NextValueV3> {
     if (waitMs < 0 || waitMs > jobWaitLimitMs || !Number.isSafeInteger(waitMs)) throw new JobError('JOB_REQUEST_INVALID');
     if (signal.aborted) throw new JobError('JOB_REQUEST_INVALID', 'Request cancelled');
+    // Capture before reading events so a commit between the read and listener registration still wakes us.
+    const revision = observeWrites ? this.store.revision(this.jobId) : null;
     const ready = this.events(after);
     if (ready.status !== 'timeout' || !waitMs) return ready;
     await new Promise<void>((resolve, reject) => {
-      const finish = () => { clearTimeout(timer); this.listeners.delete(finish); signal.removeEventListener('abort', abort); resolve(); };
-      const abort = () => { clearTimeout(timer); this.listeners.delete(finish); signal.removeEventListener('abort', abort); reject(new JobError('JOB_REQUEST_INVALID', 'Request cancelled')); };
+      let poll: ReturnType<typeof setInterval> | undefined;
+      let settled = false;
+      const cleanup = () => { clearTimeout(timer); clearInterval(poll); this.listeners.delete(finish); signal.removeEventListener('abort', abort); };
+      const finish = () => { if (settled) return; settled = true; cleanup(); resolve(); };
+      const fail = (error: unknown) => { if (settled) return; settled = true; cleanup(); reject(error); };
+      const abort = () => fail(new JobError('JOB_REQUEST_INVALID', 'Request cancelled'));
+      const changed = () => {
+        try { if (this.store.revision(this.jobId) !== revision) finish(); }
+        catch (error) { fail(error); }
+      };
       const timer = setTimeout(finish, waitMs);
       this.listeners.add(finish);
       signal.addEventListener('abort', abort, { once: true });
-      if (signal.aborted) abort();
-      else if (this.events(after).status !== 'timeout') finish();
+      try {
+        if (signal.aborted) abort();
+        else if (observeWrites) {
+          // Other sessions commit to the same store but cannot notify this instance's listeners.
+          poll = setInterval(changed, 250);
+          changed();
+        } else if (this.events(after).status !== 'timeout') finish();
+      } catch (error) { fail(error); }
     });
     return this.events(after);
   }
@@ -808,7 +824,7 @@ export class JobSession {
     let after = input.after;
     while (!input.signal.aborted) {
       let value: JobNextValue | NextValueV3;
-      try { value = await this.next(after, jobWaitLimitMs, input.signal); }
+      try { value = await this.next(after, jobWaitLimitMs, input.signal, true); }
       catch (error) {
         if (input.signal.aborted && error instanceof JobError && error.code === 'JOB_REQUEST_INVALID') return;
         throw error;
