@@ -19,7 +19,9 @@ export interface CommentCodec<Row extends CommentRow,Pose extends CommentUiPose>
  read:(row:Row)=>CommentUiMark|null;signature:(pose:Pose)=>unknown;matches:(mark:CommentUiMark,pose:Pose,row:Row)=>boolean;
  label:(row:Row,mark:CommentUiMark)=>string;
  chips?:(pose:Pose,screen:MarkRegion,existing?:Row)=>{selected:string[];candidates:string[]};
- update?:(row:Row,summary:string,parts?:string[])=>Promise<Row>|Row;
+ /** Opt in only when this codec can prepare replacement geometry and fresh pixel evidence. */
+ geometry?:boolean;
+ update?:(row:Row,summary:string,parts?:string[],geometry?:{pose:Pose;screen:MarkRegion;crop:StageComment['crop']})=>Promise<Row>|Row;
  create:(pose:Pose,view:StageComment['viewport'],screen:MarkRegion,crop:StageComment['crop'],bookmark:unknown,summary:string,parts?:string[])=>Promise<Row>;
 }
 interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose> {
@@ -76,8 +78,12 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const updateRefusal=()=>{const raw=host.refusal?.()??null,reason=raw?t(raw):null,prev=refusalNote.textContent||'',nextTitle=reason??t(originalTitle);toggle.disabled=!!host.busy?.();toggle.setAttribute('aria-busy',String(toggle.disabled));if(toggle.title!==nextTitle)toggle.title=nextTitle;if(refusalNote.title!==(reason??''))refusalNote.title=reason??'';if(refusalNote.textContent!==(reason??''))refusalNote.textContent=reason??'';refusalNote.hidden=!reason;if(!list.hidden&&(reason??'')!==prev)renderList();return reason;};
  const layers=new Map<StageComment['viewport'],HTMLDivElement>();for(const [key,pane]of Object.entries(host.viewports)){const layer=document.createElement('div');layer.className='stage-comment-layer';pane!.append(layer);layers.set(key as StageComment['viewport'],layer);}
  let enabled=false,disposed=false,pending:{view:StageComment['viewport'];start:MarkPoint;end:MarkPoint;mode:string;id:number;interaction:number;settled:Promise<void>}|null=null,composer:HTMLFormElement|null=null,composerReadOnly=false,composerGeneral=false,syncComposerLang:(()=>void)|null=null,draftMark:{view:StageComment['viewport'];mode:string;screen:MarkRegion}|null=null,busy=false,last='',raf=0,interaction=0;
+ let geometryEdit:{view:StageComment['viewport'];screen:MarkRegion;id?:string;update:(screen:MarkRegion)=>void;changed:boolean;camera:string}|null=null;
+ let geometryDrag:{id:number;start:MarkPoint;screen:MarkRegion;handle:string}|null=null;
+ let suppressPinClick=false;
+ let pinPress:{id:number;view:StageComment['viewport'];start:MarkPoint;pin:HTMLButtonElement}|null=null;
  const setCapture=(value:boolean)=>{value=value&&host.hasPicture?.()!==false;enabled=value;toggle.setAttribute('aria-pressed',String(value||!inline&&!list.hidden));for(const pane of Object.values(host.viewports))pane!.classList.toggle('stage-comment-mode',value);};
- const cancel=()=>{++interaction;const previous=pending;pending=null;if(previous){const pane=host.viewports[previous.view];if(pane?.hasPointerCapture(previous.id))pane.releasePointerCapture(previous.id);}composer?.remove();composer=null;composerReadOnly=false;composerGeneral=false;syncComposerLang=null;draftMark=null;last='';};
+ const cancel=()=>{++interaction;const previous=pending??(geometryDrag&&geometryEdit?{view:geometryEdit.view,id:geometryDrag.id}:pinPress);geometryEdit=null;geometryDrag=null;pinPress=null;pending=null;if(previous){const pane=host.viewports[previous.view];if(pane?.hasPointerCapture(previous.id))pane.releasePointerCapture(previous.id);}composer?.remove();composer=null;composerReadOnly=false;composerGeneral=false;syncComposerLang=null;draftMark=null;last='';};
  const assertCapture=()=>{const reason=updateRefusal();if(reason){cancel();setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
  const assertEdit=(general=false)=>{const reason=general?null:updateRefusal();if(reason){setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
  let jumpGeneration = 0;
@@ -117,7 +123,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   if(reason){setCapture(false);host.error(reason);return;}
   setCapture(layers.size>0);for(const view of layers.keys())host.pose(view);
  };
- const openComment=async(f:Row)=>{const mark=readMark(f);if(!mark){if(host.general?.matches(f))openComposer(null,{x:0,y:0,width:0,height:0},f);return;}if(list.hidden)setOpen(true);if(list.hidden)return;if(await jump(f)){const reason=updateRefusal();setCapture(!reason&&!host.blocked());openComposer(mark.viewport,mark.screen,f,host.pose(mark.viewport)?.mode??mark.mode);}};
+ const openComment=async(f:Row)=>{const mark=readMark(f);if(!mark){if(host.general?.matches(f))openComposer(null,{x:0,y:0,width:0,height:0},f);return;}if(list.hidden)setOpen(true);if(list.hidden)return;if(await jump(f)){const reason=updateRefusal();setCapture(!reason&&!host.blocked());const pose=host.pose(mark.viewport),screen=host.codec?.geometry&&pose?region(projectMark(mark.world,pose.camera),projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera)):mark.screen;openComposer(mark.viewport,screen,f,pose?.mode??mark.mode);}};
  const renderList=()=>{placeList();list.setAttribute('aria-label',t('Comments'));list.replaceChildren();const title=document.createElement('strong');title.textContent=t('Comments');list.append(title);const rawReason=host.refusal?.()??null,reason=rawReason?t(rawReason):null;if(reason){const note=document.createElement('small');note.className='stage-comment-refusal-note';note.title=reason;note.textContent=reason;Object.assign(note.style,{display:'block',marginTop:'4px',maxWidth:'100%',whiteSpace:inline?'normal':'nowrap',overflow:'hidden',textOverflow:'ellipsis'});list.append(note);}if(host.general){const add=document.createElement('button');add.type='button';add.textContent=t('Add general comment');add.dataset.commentGeneral='';add.onclick=()=>openComposer(null,{x:0,y:0,width:0,height:0});list.append(add);}const all=host.feedback().filter(f=>readMark(f)||host.general?.matches(f));toggle.textContent=t(host.busy?.()?'Comment · C ({0}) · Rendering':'Comment · C ({0})').replace('{0}',String(all.length));if(!all.length){const empty=document.createElement('p');empty.textContent=t(inline?'No comments yet.':reason?'Read only · Escape closes':'Mark a point or region, then type. Enter saves · Escape cancels.');list.append(empty);}for(const [i,f]of all.entries()){
   const mark=readMark(f),row=document.createElement('div');row.className='stage-comment-item';row.dataset.commentId=f.id;
   const go=document.createElement('button');go.type='button';go.className='stage-comment-summary';go.textContent=!mark?`${i+1} · ${t('General comment')} · ${f.summary}`:host.codec?`${i+1} · ${host.codec.label(f,mark)}`:`${i+1} · ${mark.mode.toUpperCase()} · ${mark.viewport.toUpperCase()} · ${mark.frame?`F${mark.frame.index} (${mark.frame.basis})`:t(feedbackTimingLabel(f as unknown as Feedback))} · ${f.summary}`;go.onclick=()=>openComment(f);row.append(go);
@@ -132,7 +138,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   if(!general&&(!placementMode||currentMode&&currentMode!==placementMode)){cancel();return;}
   const locked=!!existing&&host.locked(existing.id),initialRefusal=existing&&!general?updateRefusal():null;
   if(existing&&!initialRefusal&&host.blocked()){host.error(t('COMMENT_BUSY: wait for inspection'));return;}
-  composer?.remove();composerReadOnly=locked||!!initialRefusal;composerGeneral=general;draftMark=view?{view,mode:placementMode!,screen}:null;const generation=interaction;const pane=view?host.viewports[view]!:list,form=composer=document.createElement('form');form.className='stage-comment-composer stage-comment-ui';form.setAttribute('aria-label',t('Comment composer'));if(general)form.style.position='relative';
+  geometryEdit=null;composer?.remove();composerReadOnly=locked||!!initialRefusal;composerGeneral=general;draftMark=view?{view,mode:placementMode!,screen}:null;const generation=interaction;const pane=view?host.viewports[view]!:list,form=composer=document.createElement('form');form.className='stage-comment-composer stage-comment-ui';form.setAttribute('aria-label',t('Comment composer'));if(general)form.style.position='relative';
   const field=document.createElement('input');field.type='text';field.maxLength=1000;field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');field.value=existing?.summary??'';
   if(locked||initialRefusal){field.readOnly=true;field.setAttribute('aria-readonly','true');}
   const hint=document.createElement('small');hint.textContent=composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels';hint.textContent=t(hint.textContent);const error=document.createElement('p');error.setAttribute('role','alert');form.append(field,hint,error);
@@ -153,7 +159,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   // Capture all view context now; camera or dial changes while typing cannot rebind the mark.
   const pose=view?host.pose(view):null,bookmark=general?null:copy(host.bookmark()),turn=pose?.turn===undefined?null:copy(pose.turn);
   const initialParts = pose ? host.codec?.chips?.(pose, screen, existing) : undefined;
-  let selectedParts = initialParts?.selected.slice();
+  let selectedParts = initialParts?.selected.slice(),partsTouched=!!existing;
   const chipBox = initialParts ? document.createElement('div') : null;
   const chipNames = initialParts ? [...new Set([...initialParts.selected, ...initialParts.candidates])] : [];
   const syncChips = () => {
@@ -165,6 +171,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     chip.setAttribute('aria-pressed', String(selectedParts!.includes(name)));
     chip.onclick = () => {
      if (busy || composerReadOnly) return;
+     partsTouched=true;
      const chosen = new Set(selectedParts);
      if (chosen.has(name)) chosen.delete(name);else chosen.add(name);
      selectedParts = chipNames.filter(part => chosen.has(part));
@@ -179,8 +186,16 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   syncComposerLang=()=>{if(composer!==form)return;form.setAttribute('aria-label',t('Comment composer'));if(general)form.style.position='relative';field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');hint.textContent=t(composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels');if(removeBtn)removeBtn.textContent=t('Delete');if(errorSource)error.textContent=t(errorSource);syncChips();};
   pane.append(form);place();
   const previous=existing?readMark(existing):null;
-  const prepared=general?Promise.resolve(null):previous?Promise.resolve(previous.crop):pose?crop(pose,screen):Promise.reject(new Error('COMMENT_VIEW_UNAVAILABLE'));
+  let prepared=general?Promise.resolve(null):previous?Promise.resolve(previous.crop):pose?crop(pose,screen):Promise.reject(new Error('COMMENT_VIEW_UNAVAILABLE'));
   prepared.catch(()=>{});
+  if(view&&pose&&host.codec?.geometry&&!composerReadOnly){
+   geometryEdit={view,screen:{...screen},id:existing?.id,changed:false,camera:JSON.stringify(pose.camera),update:next=>{
+    const a=unprojectMark(next,pose.camera),b=unprojectMark({x:next.x+next.width,y:next.y+next.height},pose.camera);
+    screen=region(projectMark({x:Math.round(a.x),y:Math.round(a.y)},pose.camera),projectMark({x:Math.round(b.x),y:Math.round(b.y)},pose.camera));draftMark={view,mode:placementMode!,screen};geometryEdit!.screen=screen;geometryEdit!.changed=true;
+    if(!partsTouched){selectedParts=host.codec?.chips?.(pose,screen)?.selected.slice();syncChips();}
+    prepared=crop(pose,screen);prepared.catch(()=>{});last='';place();
+   }};
+  }
   form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();setOpen(false);pane.focus();}};
   form.onsubmit=async e=>{e.preventDefault();if(busy)return;if(generation!==interaction||view&&host.pose(view)&&host.pose(view!)?.mode!==placementMode){cancel();return;}const summary=field.value.trim();if(!summary){field.focus();return;}try{
    if(selectedParts && !selectedParts.length)throw new Error(t('Select at least one part.'));
@@ -188,7 +203,9 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     assertEdit(general);if(host.locked(existing.id))throw new Error(t('COMMENT_SUBMITTED: submitted evidence is immutable'));
     busy=true;field.disabled=true;syncChips();
     if(!general&&host.codec?.update){
-     const replacement=await host.codec.update(copy(existing),summary,selectedParts?.slice());
+     const geometry=geometryEdit?.changed&&pose?{pose,screen:{...screen},crop:(await prepared)!}:undefined;
+     if(disposed||generation!==interaction)return;assertEdit(general);
+     const replacement=await host.codec.update(copy(existing),summary,selectedParts?.slice(),geometry);
      if(disposed||generation!==interaction)return;
      assertEdit(general);if(host.locked(existing.id))throw new Error(t('COMMENT_SUBMITTED: submitted evidence is immutable'));
      const all=host.feedback(),index=all.indexOf(existing);
@@ -219,10 +236,44 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const disposers:(()=>void)[]=[];
  for(const [key,pane]of Object.entries(host.viewports)){
   const view=key as StageComment['viewport'],local=(e:PointerEvent)=>{const r=pane!.getBoundingClientRect();return {x:Math.max(0,Math.min(pane!.clientWidth,e.clientX-r.left-pane!.clientLeft)),y:Math.max(0,Math.min(pane!.clientHeight,e.clientY-r.top-pane!.clientTop))};};
-  const down=(e:PointerEvent)=>{if(e.button!==0||!e.isPrimary||(e.target as Element)?.closest?.('.stage-comment-ui,button,input'))return;if(enabled||!inline&&!list.hidden){try{assertCapture();}catch{return;}}if(!enabled||host.blocked())return;e.preventDefault();e.stopImmediatePropagation();cancel();const mode=host.pose(view)?.mode;if(!mode)return;const at=local(e),generation=interaction;pending={view,start:at,end:at,mode,id:e.pointerId,interaction:generation,settled:host.pause()};pending.settled.catch(e=>{if(interaction===generation&&!disposed)host.error(String(e));});pane!.setPointerCapture(e.pointerId);};
-  const move=(e:PointerEvent)=>{if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();pending.end=local(e);draftMark={view,mode:pending.mode,screen:region(pending.start,pending.end)};last='';};
-  const up=async(e:PointerEvent)=>{if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();const p=pending;pending=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);try{await p.settled;assertCapture();if(disposed||interaction!==p.interaction||!enabled)return;const r=Math.hypot(p.end.x-p.start.x,p.end.y-p.start.y)<4?region(p.start,p.start):region(p.start,p.end);openComposer(view,r,undefined,p.mode);}catch(error){host.error(String(error));cancel();}};
-  const abort=(e:PointerEvent)=>{if(pending?.view===view&&pending.id===e.pointerId)cancel();};
+  const down=(e:PointerEvent)=>{
+   if(e.button!==0||!e.isPrimary)return;
+   const target=e.target as Element,pin=host.codec?.geometry?target.closest<HTMLButtonElement>('.stage-comment-pin'):null;
+   const handle=target.closest<HTMLElement>('[data-comment-handle]')?.dataset.commentHandle;
+   if(geometryEdit?.view===view&&handle&&!e.shiftKey){
+    if(busy||host.blocked()||geometryEdit.id&&host.locked(geometryEdit.id))return;
+    try{assertEdit();}catch{return;}
+    e.preventDefault();e.stopImmediatePropagation();geometryDrag={id:e.pointerId,start:local(e),screen:{...geometryEdit.screen},handle};pane!.setPointerCapture(e.pointerId);return;
+   }
+   if(pin&&!host.blocked()){
+    if(!enabled)setOpen(true);if(!enabled)return;
+    try{assertCapture();}catch{return;}
+    e.preventDefault();e.stopImmediatePropagation();suppressPinClick=true;pinPress={id:e.pointerId,view,start:local(e),pin};pane!.setPointerCapture(e.pointerId);return;
+   }
+   if(target.closest('.stage-comment-ui,button,input')&&!(e.shiftKey&&handle&&host.codec?.geometry))return;
+   if(enabled||!inline&&!list.hidden){try{assertCapture();}catch{return;}}if(!enabled||host.blocked())return;e.preventDefault();e.stopImmediatePropagation();cancel();const mode=host.pose(view)?.mode;if(!mode)return;const at=local(e),generation=interaction;pending={view,start:at,end:at,mode,id:e.pointerId,interaction:generation,settled:host.pause()};pending.settled.catch(e=>{if(interaction===generation&&!disposed)host.error(String(e));});pane!.setPointerCapture(e.pointerId);};
+  const move=(e:PointerEvent)=>{
+   if(geometryDrag?.id===e.pointerId&&geometryEdit){
+    e.preventDefault();e.stopImmediatePropagation();const p=local(e),g=geometryDrag,r=g.screen,dx=p.x-g.start.x,dy=p.y-g.start.y;
+    let x=r.x,y=r.y,right=r.x+r.width,bottom=r.y+r.height;
+    if(g.handle==='move'){x=Math.max(0,Math.min(pane!.clientWidth-r.width,x+dx));y=Math.max(0,Math.min(pane!.clientHeight-r.height,y+dy));right=x+r.width;bottom=y+r.height;}
+    else {if(g.handle.includes('w'))x=Math.max(0,Math.min(right-1,x+dx));if(g.handle.includes('e'))right=Math.min(pane!.clientWidth,Math.max(x+1,right+dx));if(g.handle.includes('n'))y=Math.max(0,Math.min(bottom-1,y+dy));if(g.handle.includes('s'))bottom=Math.min(pane!.clientHeight,Math.max(y+1,bottom+dy));}
+    geometryEdit.update({x,y,width:right-x,height:bottom-y});return;
+   }
+   if(pinPress?.id===e.pointerId){
+    const p=pinPress,at=local(e);if(Math.hypot(at.x-p.start.x,at.y-p.start.y)<4)return;
+    e.preventDefault();e.stopImmediatePropagation();// Transfer the held pointer to new capture without releasing it.
+    const start=p.start;pinPress=null;cancel();const mode=host.pose(view)?.mode;if(!mode)return;
+    pending={view,start,end:at,mode,id:e.pointerId,interaction,settled:host.pause()};pending.settled.catch(error=>host.error(String(error)));
+   }
+   if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();pending.end=local(e);draftMark={view,mode:pending.mode,screen:region(pending.start,pending.end)};last='';};
+  const up=async(e:PointerEvent)=>{
+   if(geometryDrag?.id===e.pointerId){e.preventDefault();e.stopImmediatePropagation();geometryDrag=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);return;}
+   if(pinPress?.id===e.pointerId){e.preventDefault();e.stopImmediatePropagation();const pin=pinPress.pin;pinPress=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);pin.click();return;}
+   if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();const p=pending;pending=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);try{await p.settled;assertCapture();if(disposed||interaction!==p.interaction||!enabled)return;const r=Math.hypot(p.end.x-p.start.x,p.end.y-p.start.y)<4?region(p.start,p.start):region(p.start,p.end);openComposer(view,r,undefined,p.mode);}catch(error){host.error(String(error));cancel();}};
+  const abort=(e:PointerEvent)=>{if(pending?.view===view&&pending.id===e.pointerId||geometryDrag?.id===e.pointerId||pinPress?.id===e.pointerId)cancel();};
+  const suppressClick=(e:MouseEvent)=>{if(host.codec?.geometry&&(e.target as Element)?.closest('.stage-comment-pin')&&e.isTrusted&&e.detail>0&&suppressPinClick){suppressPinClick=false;e.preventDefault();e.stopImmediatePropagation();}};
+  pane!.addEventListener('click',suppressClick,true);disposers.push(()=>pane!.removeEventListener('click',suppressClick,true));
   pane!.addEventListener('pointerdown',down,true);pane!.addEventListener('pointermove',move,true);pane!.addEventListener('pointerup',up,true);pane!.addEventListener('pointercancel',abort,true);pane!.addEventListener('lostpointercapture',abort,true);
   disposers.push(()=>{pane!.removeEventListener('pointerdown',down,true);pane!.removeEventListener('pointermove',move,true);pane!.removeEventListener('pointerup',up,true);pane!.removeEventListener('pointercancel',abort,true);pane!.removeEventListener('lostpointercapture',abort,true);});
  }
@@ -234,11 +285,19 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  // capture there is nothing to place, so this per-frame loop skips it.
  const poses=new Map(all.length||draftMark||pending?[...layers.keys()].map(view=>[view,host.pose(view)]):[]);
  if(draftMark&&poses.get(draftMark.view)?.mode!==draftMark.mode||pending&&poses.get(pending.view)?.mode!==pending.mode)cancel();
- const signature=JSON.stringify([curLang(),refusal,all.map(({f,mark})=>[f.id,f.summary,mark!.mode,mark!.world]),[...poses].map(([view,p])=>[view,host.codec&&p?host.codec.signature(p):[p?.mode,p?.animation,p?.frame,p?.timeBasis,p?.time,p?.turn,p?.camera,p?.referenceId,p?.referenceHash]]),draftMark]);
+ if(geometryEdit&&(geometryEdit.id&&host.locked(geometryEdit.id)||JSON.stringify(poses.get(geometryEdit.view)?.camera)!==geometryEdit.camera))cancel();
+ const signature=JSON.stringify([geometryEdit?.screen,curLang(),refusal,all.map(({f,mark})=>[f.id,f.summary,mark!.mode,mark!.world]),[...poses].map(([view,p])=>[view,host.codec&&p?host.codec.signature(p):[p?.mode,p?.animation,p?.frame,p?.timeBasis,p?.time,p?.turn,p?.camera,p?.referenceId,p?.referenceHash]]),draftMark]);
  if(signature!==last){last=signature;for(const layer of layers.values())layer.replaceChildren();for(const [i,{f,mark:m}]of all.entries()){
   const mark=m!,pose=poses.get(mark.viewport),layer=layers.get(mark.viewport);if(refusal||!pose||!layer||(host.codec?!host.codec.matches(mark,pose,f):pose.mode!==mark.mode||pose.animation!==mark.animation||pose.sourceHash!==mark.sourceHash||pose.modelHash!==mark.modelHash||pose.referenceId!==mark.referenceId||pose.referenceHash!==mark.referenceHash||JSON.stringify(pose.frame)!==JSON.stringify(mark.frame)||JSON.stringify(pose.timeBasis??null)!==JSON.stringify(mark.timeBasis??null)||Math.abs((pose.time??0)-(mark.time??0))>1e-7||JSON.stringify(pose.turn)!==JSON.stringify((f.context as any)?.turn??null)))continue;
-  const a=projectMark(mark.world,pose.camera),b=projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera),r=region(a,b),box=rectElement(r),pin=document.createElement('button');pin.type='button';pin.className='stage-comment-pin stage-comment-ui';pin.textContent=String(i+1);pin.setAttribute('aria-label',`${t('Comment {0}:').replace('{0}',String(i+1))} ${f.summary}`);pin.title=f.summary;Object.assign(pin.style,{left:r.x+'px',top:r.y+'px'});pin.onclick=()=>openComment(f);layer.append(box,pin);
- }if(draftMark)layers.get(draftMark.view)?.append(rectElement(draftMark.screen));}};
+  const a=projectMark(mark.world,pose.camera),b=projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera),r=geometryEdit?.id===f.id?geometryEdit.screen:region(a,b),box=rectElement(r),pin=document.createElement('button');pin.type='button';pin.className='stage-comment-pin stage-comment-ui';pin.textContent=String(i+1);pin.setAttribute('aria-label',`${t('Comment {0}:').replace('{0}',String(i+1))} ${f.summary}`);pin.title=f.summary;Object.assign(pin.style,{left:r.x+'px',top:r.y+'px'});pin.onclick=()=>openComment(f);layer.append(box,pin);
+ }if(draftMark&&!geometryEdit)layers.get(draftMark.view)?.append(rectElement(draftMark.screen));
+ if(geometryEdit){
+  const {view,screen:r}=geometryEdit,layer=layers.get(view)!,box=rectElement(r);box.dataset.commentHandle='move';Object.assign(box.style,{pointerEvents:'auto',cursor:'move'});layer.append(box);
+  for(const [name,x,y]of [['nw',0,0],['n',.5,0],['ne',1,0],['e',1,.5],['se',1,1],['s',.5,1],['sw',0,1],['w',0,.5]] as const){
+   const handle=document.createElement('button');handle.type='button';handle.dataset.commentHandle=name;handle.className='stage-comment-ui';handle.setAttribute('aria-label',t('Resize comment area: {0}').replace('{0}',name));
+   Object.assign(handle.style,{position:'absolute',left:r.x+r.width*x+'px',top:r.y+r.height*y+'px',width:'12px',height:'12px',minWidth:'12px',minHeight:'12px',padding:'0',transform:'translate(-50%,-50%)',pointerEvents:'auto',cursor:name+'-resize',borderWidth:'2px',borderStyle:'solid',borderColor:'var(--link)',background:'var(--rv-panel)'});layer.append(handle);
+  }
+ }}};
  const paint=()=>{if(disposed)return;renderPins();raf=requestAnimationFrame(paint);};
  const offLang=onLang(()=>{if(disposed)return;updateRefusal();renderList();syncComposerLang?.();last='';renderPins();});
  refresh();paint();return {active:()=>enabled,draft:()=>!!pending||!!composer&&!composerReadOnly,refresh,dispose:()=>{disposed=true;ro?.disconnect();offLang();cancelAnimationFrame(raf);cancel();window.removeEventListener('blur',cancel);window.removeEventListener('resize',placeList);document.removeEventListener('keydown',key);for(const dispose of disposers)dispose();for(const layer of layers.values())layer.remove();toggle.onclick=null;list.remove();refusalNote.remove();}};

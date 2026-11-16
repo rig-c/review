@@ -150,7 +150,13 @@ export function bindPartsSubject(host:{
   finally{for(const bitmap of bitmaps)bitmap.close();if(navigation===token){busy=false;host.el('stage-layout').setAttribute('aria-busy','false');comments?.refresh();}}
  }
  const redraw=()=>{void paint().catch(()=>{});};
+ const commentRegion=(pose:PartsPose,screen:ReturnType<typeof region>)=>{
+  const frame=box(),a=unprojectMark(screen,pose.camera),b=unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},pose.camera);
+  const stable=(n:number)=>Math.abs(n-Math.round(n))<1e-6?Math.round(n):n;
+  return snapImageRegion(region({x:stable(a.x),y:stable(a.y)},{x:stable(b.x),y:stable(b.y)},{x:0,y:0,width:frame.w,height:frame.h}));
+ };
  const codec:CommentCodec<CommentRow,PartsPose>={
+  geometry:true,
   read:raw=>{try{const c=parsePartsIssue(raw,false,true,false),camera={space:'image' as const,center:c.view.camera.center,zoom:c.view.camera.zoom,viewport:c.view.camera.viewport,visible:{x:c.view.camera.center.x-c.view.camera.viewport.width/c.view.camera.zoom/2,y:c.view.camera.center.y-c.view.camera.viewport.height/c.view.camera.zoom/2,width:c.view.camera.viewport.width/c.view.camera.zoom,height:c.view.camera.viewport.height/c.view.camera.zoom}},r=c.view.mode==='assembled'?c.rigRegion:c.imageRegion!;return {mode:'parts',viewport:'rig',screen:region(projectMark(r,camera),projectMark({x:r.x+r.width,y:r.y+r.height},camera)),world:r,camera,crop:{...c.crop,png:c.crop.png??''},bookmark:c};}catch{return null;}},
   signature:pose=>[pose.sourceHash,pose.item.name,pose.item.imageHash,pose.view],
   matches:(_mark,pose,raw)=>{try{const c=parsePartsIssue(raw,false,true,false);return pose.sourceHash===c.sourceHash&&pose.view.mode===c.view.mode&&(assembled()||c.parts[0]?.name===pose.item.name);}catch{return false;}},
@@ -159,17 +165,25 @@ export function bindPartsSubject(host:{
    const visible=data.items.filter(item=>!hidden.has(item.name)),candidates=pose.view.mode==='assembled'?visible.map(item=>item.name):[];
    if(existing)return {selected:parsePartsIssue(existing,false,true,false).parts.map(part=>part.name),candidates};
    if(pose.view.mode==='item')return {selected:[pose.item.name],candidates};
-   const frame=box(),r=snapImageRegion(region(unprojectMark(screen,pose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},pose.camera),{x:0,y:0,width:frame.w,height:frame.h}));
+   const r=commentRegion(pose,screen);
    const hits=new Set<string>(),layers=visible.flatMap(box=>{const img=loaded.get(box.name);return img?[sourceAlpha(box,img)]:[];});
    const stepX=Math.max(1,r.width/32),stepY=Math.max(1,r.height/32);
    for(let y=r.y+.5;y<r.y+r.height;y+=stepY)for(let x=r.x+.5;x<r.x+r.width;x+=stepX){const hit=pickAssembly(layers,x,y);if(hit)hits.add(hit.name);}
    return {selected:visible.filter(item=>hits.has(item.name)).map(item=>item.name),candidates};
   },
   create:async(pose,_view,screen,crop,_bookmark,summary,parts)=>{
-   const frame=box(),r=snapImageRegion(region(unprojectMark(screen,pose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},pose.camera),{x:0,y:0,width:frame.w,height:frame.h})),single=pose.view.mode==='item';
+   const r=commentRegion(pose,screen),single=pose.view.mode==='item';
    return prepare({schema:'rig-review-parts-comment/2',id:crypto.randomUUID(),summary,sourceHash:data.sourceHash,parts:partsBinding(single?[pose.item.name]:parts??[]),rigRegion:single?{...r,x:r.x+pose.item.x,y:r.y+pose.item.y}:r,imageRegion:single?r:null,view:structuredClone(pose.view),crop,nativeCrop:null});
   },
-  update:(raw,summary,parts)=>{const existing=parsePartsIssue(raw,false,true,false);return prepare({...existing,summary,parts:existing.view.mode==='assembled'?partsBinding(parts??[]):existing.parts});},
+  update:(raw,summary,parts,geometry)=>{
+   const existing=parsePartsIssue(raw,false,true,false);let updated=existing;
+   if(geometry){
+    const {pose,screen,crop}=geometry,r=commentRegion(pose,screen),single=pose.view.mode==='item';
+    if(pose.sourceHash!==existing.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE');
+    updated={...existing,rigRegion:single?{...r,x:r.x+pose.item.x,y:r.y+pose.item.y}:r,imageRegion:single?r:null,view:structuredClone(pose.view),crop,nativeCrop:null};
+   }
+   return prepare({...updated,summary,parts:existing.view.mode==='assembled'?partsBinding(parts??[]):existing.parts});
+  },
  };
  const pose=():PartsPose|null=>{
   let camera=host.viewport.numericView().cameras.rig;const entry=item();if(!camera||!entry||busy||failed||disposed)return null;
