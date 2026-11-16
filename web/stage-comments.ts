@@ -5,7 +5,7 @@ import type {Feedback} from '../src/session.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
 import {drawnSlots,region,projectMark,unprojectMark,parseStageComment,feedbackTimingLabel,type MarkRegion,type MarkPoint,type StageComment} from '../src/stage-comment.ts';
 import {getLanguage as i18nLang,onLanguageChange as i18nOnChange,t as i18nT,tr as i18nTr} from './i18n.ts';
-import {textEntryFocused} from './view-controls.ts';
+import {panSpaceHeld,textEntryFocused} from './view-controls.ts';
 export interface CommentPose {
  mode:StageComment['mode'];camera:ControlNumericCamera;frame:StageComment['frame'];timeBasis?:StageComment['timeBasis'];time:number;animation:string|null;
  turn:unknown;sourceHash:string;modelHash:string|null;referenceHash:string|null;referenceId:string|null;frameReason?:string;
@@ -39,6 +39,7 @@ const t=(s:string)=>typeof i18nT==='function'?i18nT(s):s;
 const toEn=(s:string)=>typeof i18nTr==='function'?i18nTr(s,'en'):s;
 const onLang=(fn:()=>void)=>typeof i18nOnChange==='function'?i18nOnChange(fn):()=>{};
 const curLang=()=>typeof i18nLang==='function'?i18nLang():'en';
+const spaceHeld=()=>typeof panSpaceHeld==='function'&&panSpaceHeld();
 function rectElement(r:MarkRegion):HTMLDivElement{const node=document.createElement('div');node.className='stage-comment-region';Object.assign(node.style,{left:r.x+'px',top:r.y+'px',width:Math.max(2,r.width)+'px',height:Math.max(2,r.height)+'px'});return node;}
 async function crop(pose:CommentUiPose,r:MarkRegion):Promise<StageComment['crop']>{
  if(!pose.capture)throw new Error(t('COMMENT_CROP_UNAVAILABLE: viewport pixel source unavailable'));
@@ -212,7 +213,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     prepared=crop(pose,screen);prepared.catch(()=>{});last='';place();
    }};
   }
-  form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();setOpen(false);pane.focus();}};
+  form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cancel();renderPins();pane.focus();}};
   form.onsubmit=async e=>{e.preventDefault();if(busy)return;if(generation!==interaction||view&&host.pose(view)&&host.pose(view!)?.mode!==placementMode){cancel();return;}const summary=field.value.trim();if(!summary){field.focus();return;}try{
    if(selectedParts && !selectedParts.length)throw new Error(t('Select at least one part.'));
    if(existing){
@@ -253,7 +254,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  for(const [key,pane]of Object.entries(host.viewports)){
   const view=key as StageComment['viewport'],local=(e:PointerEvent)=>{const r=pane!.getBoundingClientRect();return {x:Math.max(0,Math.min(pane!.clientWidth,e.clientX-r.left-pane!.clientLeft)),y:Math.max(0,Math.min(pane!.clientHeight,e.clientY-r.top-pane!.clientTop))};};
   const down=(e:PointerEvent)=>{
-   if(e.button!==0||!e.isPrimary)return;
+   if(e.button!==0||!e.isPrimary||spaceHeld()){if(spaceHeld()&&(e.target as Element)?.closest?.('.stage-comment-pin'))suppressPinClick=true;return;}
    const target=e.target as Element,pin=host.codec?.geometry?target.closest<HTMLButtonElement>('.stage-comment-pin'):null;
    const handle=target.closest<HTMLElement>('[data-comment-handle]')?.dataset.commentHandle;
    if(geometryEdit?.view===view&&handle&&!e.shiftKey){
@@ -288,13 +289,13 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    if(pinPress?.id===e.pointerId){e.preventDefault();e.stopImmediatePropagation();const pin=pinPress.pin;pinPress=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);pin.click();return;}
    if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();const p=pending;pending=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);try{await p.settled;assertCapture();if(disposed||interaction!==p.interaction||!enabled)return;const r=Math.hypot(p.end.x-p.start.x,p.end.y-p.start.y)<4?region(p.start,p.start):region(p.start,p.end);openComposer(view,r,undefined,p.mode);}catch(error){host.error(String(error));cancel();}};
   const abort=(e:PointerEvent)=>{if(pending?.view===view&&pending.id===e.pointerId||geometryDrag?.id===e.pointerId||pinPress?.id===e.pointerId)cancel();};
-  const suppressClick=(e:MouseEvent)=>{if(host.codec?.geometry&&(e.target as Element)?.closest('.stage-comment-pin')&&e.isTrusted&&e.detail>0&&suppressPinClick){suppressPinClick=false;e.preventDefault();e.stopImmediatePropagation();}};
+  const suppressClick=(e:MouseEvent)=>{if((e.target as Element)?.closest('.stage-comment-pin')&&e.isTrusted&&e.detail>0&&(suppressPinClick||spaceHeld())){suppressPinClick=false;e.preventDefault();e.stopImmediatePropagation();}};
   pane!.addEventListener('click',suppressClick,true);disposers.push(()=>pane!.removeEventListener('click',suppressClick,true));
   pane!.addEventListener('pointerdown',down,true);pane!.addEventListener('pointermove',move,true);pane!.addEventListener('pointerup',up,true);pane!.addEventListener('pointercancel',abort,true);pane!.addEventListener('lostpointercapture',abort,true);
   disposers.push(()=>{pane!.removeEventListener('pointerdown',down,true);pane!.removeEventListener('pointermove',move,true);pane!.removeEventListener('pointerup',up,true);pane!.removeEventListener('pointercancel',abort,true);pane!.removeEventListener('lostpointercapture',abort,true);});
  }
- const key=(e:KeyboardEvent)=>{if(host.shortcutActive&&!host.shortcutActive())return;if(e.key==='Escape'&&(pending||composer||(enabled||!inline&&!list.hidden)&&!host.shortcutBlocked?.()&&!textEntryFocused(e.target))){e.preventDefault();setOpen(false);return;}if(e.defaultPrevented||e.repeat||e.ctrlKey||e.metaKey||e.altKey||textEntryFocused(e.target)||host.shortcutBlocked?.())return;if(e.key.toLowerCase()==='c'){e.preventDefault();setOpen(inline?true:list.hidden);}};
- window.addEventListener('blur',cancel);window.addEventListener('resize',placeList);document.addEventListener('keydown',key);toggle.onclick=()=>setOpen(inline?true:list.hidden);
+ const key=(e:KeyboardEvent)=>{if(host.shortcutActive&&!host.shortcutActive())return;if(e.key==='Escape'&&(pending||composer||pinPress)){e.preventDefault();cancel();renderPins();return;}if(e.defaultPrevented||e.repeat||e.ctrlKey||e.metaKey||e.altKey||textEntryFocused(e.target)||host.shortcutBlocked?.())return;if(e.key.toLowerCase()==='c'){e.preventDefault();setOpen(inline?!enabled:list.hidden);}};
+ window.addEventListener('blur',cancel);window.addEventListener('resize',placeList);document.addEventListener('keydown',key);toggle.onclick=(e?:MouseEvent)=>{if(e?.detail)toggle.blur?.();setOpen(inline?!enabled:list.hidden);};
  const ro=typeof ResizeObserver==='function'?new ResizeObserver(()=>{if(!disposed&&!list.hidden)placeList();}):null;if(ro){try{ro.observe(host.toolbar);if(workspace)ro.observe(workspace);}catch{}}
  const renderPins=()=>{if(disposed)return;if(enabled&&host.hasPicture?.()===false){cancel();setCapture(false);}if(!list.hidden)placeList();const refusal=updateRefusal();if(refusal&&(enabled||pending||composer&&!composerReadOnly&&!composerGeneral)){cancel();setCapture(false);host.error(refusal);}const all=host.feedback().map(f=>({f,mark:readMark(f)})).filter(x=>x.mark);
  // #356: a pose reads the pane's size (a forced layout after the played frame's writes); with no mark, draft or pending
