@@ -91,6 +91,10 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const jump = async (row: Row): Promise<boolean> => {
   const mark = readMark(row);if (!mark) return false;
   cancel();const generation = interaction, request = ++jumpGeneration;
+  // Editing a mark already visible in this parts view must not replay its navigation bookmark.
+  const pose=host.pose(mark.viewport);
+  if(host.codec?.geometry&&pose&&host.codec.matches(mark,pose,row)){last='';return true;}
+
   hiddenPanes ??= Object.values(host.viewports).map(pane => ({pane: pane!, visibility: pane!.style.visibility}));
   try {
    for (const {pane} of hiddenPanes) pane.style.visibility = 'hidden';
@@ -142,7 +146,16 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   const field=document.createElement('input');field.type='text';field.maxLength=1000;field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');field.value=existing?.summary??'';
   if(locked||initialRefusal){field.readOnly=true;field.setAttribute('aria-readonly','true');}
   const hint=document.createElement('small');hint.textContent=composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels';hint.textContent=t(hint.textContent);const error=document.createElement('p');error.setAttribute('role','alert');form.append(field,hint,error);
-  const place=()=>{if(general)return;const w=form.offsetWidth||294,h=form.offsetHeight||132;Object.assign(form.style,{left:Math.max(4,Math.min(screen.x+screen.width+8,pane.clientWidth-w-4))+'px',top:Math.max(4,Math.min(screen.y+screen.height+8,pane.clientHeight-h-4))+'px'});};
+  const place=()=>{if(general)return;
+   if(host.codec?.geometry){
+    const right=pane.clientWidth-screen.x-screen.width-12,left=screen.x-12,available=Math.max(left,right);
+    if(available>=160){
+     const width=Math.min(286,available);form.style.width=width+'px';const height=form.offsetHeight||132;
+     Object.assign(form.style,{left:(right>=left?screen.x+screen.width+8:screen.x-width-8)+'px',top:Math.max(4,Math.min(screen.y,pane.clientHeight-height-4))+'px'});return;
+    }
+    form.style.width='';
+   }
+   const w=form.offsetWidth||294,h=form.offsetHeight||132;Object.assign(form.style,{left:Math.max(4,Math.min(screen.x+screen.width+8,pane.clientWidth-w-4))+'px',top:Math.max(4,Math.min(screen.y+screen.height+8,pane.clientHeight-h-4))+'px'});};
   let removeBtn:HTMLButtonElement|null=null,errorSource='';
   if(existing&&!locked){
    const remove=removeBtn=document.createElement('button');remove.type='button';remove.className='stage-comment-delete';remove.textContent=t('Delete');
@@ -243,14 +256,14 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    if(geometryEdit?.view===view&&handle&&!e.shiftKey){
     if(busy||host.blocked()||geometryEdit.id&&host.locked(geometryEdit.id))return;
     try{assertEdit();}catch{return;}
-    e.preventDefault();e.stopImmediatePropagation();geometryDrag={id:e.pointerId,start:local(e),screen:{...geometryEdit.screen},handle};pane!.setPointerCapture(e.pointerId);return;
+    e.preventDefault();e.stopImmediatePropagation();suppressPinClick=true;geometryDrag={id:e.pointerId,start:local(e),screen:{...geometryEdit.screen},handle};pane!.setPointerCapture(e.pointerId);return;
    }
    if(pin&&!host.blocked()){
     if(!enabled)setOpen(true);if(!enabled)return;
     try{assertCapture();}catch{return;}
     e.preventDefault();e.stopImmediatePropagation();suppressPinClick=true;pinPress={id:e.pointerId,view,start:local(e),pin};pane!.setPointerCapture(e.pointerId);return;
    }
-   if(target.closest('.stage-comment-ui,button,input')&&!(e.shiftKey&&handle&&host.codec?.geometry))return;
+   if(target.closest('.stage-comment-ui,button,input')&&!(e.shiftKey&&handle&&host.codec?.geometry)){if(host.codec?.geometry)e.stopImmediatePropagation();return;}
    if(enabled||!inline&&!list.hidden){try{assertCapture();}catch{return;}}if(!enabled||host.blocked())return;e.preventDefault();e.stopImmediatePropagation();cancel();const mode=host.pose(view)?.mode;if(!mode)return;const at=local(e),generation=interaction;pending={view,start:at,end:at,mode,id:e.pointerId,interaction:generation,settled:host.pause()};pending.settled.catch(e=>{if(interaction===generation&&!disposed)host.error(String(e));});pane!.setPointerCapture(e.pointerId);};
   const move=(e:PointerEvent)=>{
    if(geometryDrag?.id===e.pointerId&&geometryEdit){
@@ -287,12 +300,25 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  if(draftMark&&poses.get(draftMark.view)?.mode!==draftMark.mode||pending&&poses.get(pending.view)?.mode!==pending.mode)cancel();
  if(geometryEdit&&(geometryEdit.id&&host.locked(geometryEdit.id)||JSON.stringify(poses.get(geometryEdit.view)?.camera)!==geometryEdit.camera))cancel();
  const signature=JSON.stringify([geometryEdit?.screen,curLang(),refusal,all.map(({f,mark})=>[f.id,f.summary,mark!.mode,mark!.world]),[...poses].map(([view,p])=>[view,host.codec&&p?host.codec.signature(p):[p?.mode,p?.animation,p?.frame,p?.timeBasis,p?.time,p?.turn,p?.camera,p?.referenceId,p?.referenceHash]]),draftMark]);
- if(signature!==last){last=signature;for(const layer of layers.values())layer.replaceChildren();for(const [i,{f,mark:m}]of all.entries()){
+ if(signature!==last){last=signature;for(const layer of layers.values())layer.replaceChildren();const occupied=new Map<StageComment['viewport'],{x:number;y:number;width:number;height:number}[]>();for(const [i,{f,mark:m}]of all.entries()){
   const mark=m!,pose=poses.get(mark.viewport),layer=layers.get(mark.viewport);if(refusal||!pose||!layer||(host.codec?!host.codec.matches(mark,pose,f):pose.mode!==mark.mode||pose.animation!==mark.animation||pose.sourceHash!==mark.sourceHash||pose.modelHash!==mark.modelHash||pose.referenceId!==mark.referenceId||pose.referenceHash!==mark.referenceHash||JSON.stringify(pose.frame)!==JSON.stringify(mark.frame)||JSON.stringify(pose.timeBasis??null)!==JSON.stringify(mark.timeBasis??null)||Math.abs((pose.time??0)-(mark.time??0))>1e-7||JSON.stringify(pose.turn)!==JSON.stringify((f.context as any)?.turn??null)))continue;
   const a=projectMark(mark.world,pose.camera),b=projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera),r=geometryEdit?.id===f.id?geometryEdit.screen:region(a,b),box=rectElement(r),pin=document.createElement('button');pin.type='button';pin.className='stage-comment-pin stage-comment-ui';pin.textContent=String(i+1);pin.setAttribute('aria-label',`${t('Comment {0}:').replace('{0}',String(i+1))} ${f.summary}`);pin.title=f.summary;Object.assign(pin.style,{left:r.x+'px',top:r.y+'px'});pin.onclick=()=>openComment(f);layer.append(box,pin);
+  if(host.codec?.geometry){
+   const pane=host.viewports[mark.viewport]!,width=pin.offsetWidth||24,height=pin.offsetHeight||24,placed=occupied.get(mark.viewport)??[];
+   if(!occupied.has(mark.viewport)){
+    occupied.set(mark.viewport,placed);
+    if(geometryEdit?.view===mark.viewport){const r=geometryEdit.screen;for(const [x,y]of [[0,0],[.5,0],[1,0],[1,.5],[1,1],[.5,1],[0,1],[0,.5]])placed.push({x:r.x+r.width*x!,y:r.y+r.height*y!,width:12,height:12});}
+   }
+   const clamp=(n:number,size:number,limit:number)=>Math.max(size/2,Math.min(limit-size/2,n));
+   const clear=(x:number,y:number)=>placed.every(p=>Math.abs(p.x-x)>=(p.width+width)/2+2||Math.abs(p.y-y)>=(p.height+height)/2+2);
+   let x=clamp(r.x,width,pane.clientWidth),y=clamp(r.y,height,pane.clientHeight),distance=Infinity;
+   if(!clear(x,y))for(let py=height/2;py<=pane.clientHeight-height/2;py+=height+4)for(let px=width/2;px<=pane.clientWidth-width/2;px+=width+4){const d=(px-r.x)**2+(py-r.y)**2;if(d<distance&&clear(px,py)){x=px;y=py;distance=d;}}
+   placed.push({x,y,width,height});Object.assign(pin.style,{left:x+'px',top:y+'px'});
+  }
+
  }if(draftMark&&!geometryEdit)layers.get(draftMark.view)?.append(rectElement(draftMark.screen));
  if(geometryEdit){
-  const {view,screen:r}=geometryEdit,layer=layers.get(view)!,box=rectElement(r);box.dataset.commentHandle='move';Object.assign(box.style,{pointerEvents:'auto',cursor:'move'});layer.append(box);
+  const {view,screen:r}=geometryEdit,layer=layers.get(view)!,box=rectElement(r);box.dataset.commentHandle='move';Object.assign(box.style,{pointerEvents:'auto',cursor:'move'});layer.prepend(box);
   for(const [name,x,y]of [['nw',0,0],['n',.5,0],['ne',1,0],['e',1,.5],['se',1,1],['s',.5,1],['sw',0,1],['w',0,.5]] as const){
    const handle=document.createElement('button');handle.type='button';handle.dataset.commentHandle=name;handle.className='stage-comment-ui';handle.setAttribute('aria-label',t('Resize comment area: {0}').replace('{0}',name));
    Object.assign(handle.style,{position:'absolute',left:r.x+r.width*x+'px',top:r.y+r.height*y+'px',width:'12px',height:'12px',minWidth:'12px',minHeight:'12px',padding:'0',transform:'translate(-50%,-50%)',pointerEvents:'auto',cursor:name+'-resize',borderWidth:'2px',borderStyle:'solid',borderColor:'var(--link)',background:'var(--rv-panel)'});layer.append(handle);

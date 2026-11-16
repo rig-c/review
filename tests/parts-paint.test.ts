@@ -34,7 +34,7 @@ async function harness(withPainting=false){
  const loaded=new Map(),assemblyAlpha=new Map();
  const {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,pickAssembly,paintingRectangle,defaultPartsComparison,t,createImageBitmap,parsePartsIssue,assertPartsIssueBinding,snapImageRegion,unprojectMark,region,EMIT_UNPINNED_CREATE_FIELDS}=deps;
  const sourceItems=()=>new Map(data.items.map(item=>[item.name,item]));
- const hidden=new Set(),item=()=>data.items.find(entry=>entry.name===selected),assembled=()=>!solo,box=()=>assembled()?{x:0,y:0,w:data.rigSize[0],h:data.rigSize[1]}:item();
+ const hidden=new Set(),item=()=>data.items.find(entry=>entry.name===selected)??data.items[0],assembled=()=>!solo,box=()=>assembled()?{x:0,y:0,w:data.rigSize[0],h:data.rigSize[1]}:item();
  ${alphaBody}
  ${body}
  ${regionBody}
