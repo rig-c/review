@@ -204,7 +204,10 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   if(view&&pose&&host.codec?.geometry&&!composerReadOnly){
    geometryEdit={view,screen:{...screen},id:existing?.id,changed:false,camera:JSON.stringify(pose.camera),update:next=>{
     const a=unprojectMark(next,pose.camera),b=unprojectMark({x:next.x+next.width,y:next.y+next.height},pose.camera);
-    screen=region(projectMark({x:Math.round(a.x),y:Math.round(a.y)},pose.camera),projectMark({x:Math.round(b.x),y:Math.round(b.y)},pose.camera));draftMark={view,mode:placementMode!,screen};geometryEdit!.screen=screen;geometryEdit!.changed=true;
+    let x=Math.round(a.x),y=Math.round(a.y),right=Math.round(b.x),bottom=Math.round(b.y);
+    if(right<=x){if(geometryDrag?.handle.includes('w'))x=right-1;else right=x+1;}
+    if(bottom<=y){if(geometryDrag?.handle.includes('n'))y=bottom-1;else bottom=y+1;}
+    screen=region(projectMark({x,y},pose.camera),projectMark({x:right,y:bottom},pose.camera));draftMark={view,mode:placementMode!,screen};geometryEdit!.screen=screen;geometryEdit!.changed=true;
     if(!partsTouched){selectedParts=host.codec?.chips?.(pose,screen)?.selected.slice();syncChips();}
     prepared=crop(pose,screen);prepared.catch(()=>{});last='';place();
    }};
@@ -303,8 +306,9 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  if(signature!==last){last=signature;for(const layer of layers.values())layer.replaceChildren();const occupied=new Map<StageComment['viewport'],{x:number;y:number;width:number;height:number}[]>();for(const [i,{f,mark:m}]of all.entries()){
   const mark=m!,pose=poses.get(mark.viewport),layer=layers.get(mark.viewport);if(refusal||!pose||!layer||(host.codec?!host.codec.matches(mark,pose,f):pose.mode!==mark.mode||pose.animation!==mark.animation||pose.sourceHash!==mark.sourceHash||pose.modelHash!==mark.modelHash||pose.referenceId!==mark.referenceId||pose.referenceHash!==mark.referenceHash||JSON.stringify(pose.frame)!==JSON.stringify(mark.frame)||JSON.stringify(pose.timeBasis??null)!==JSON.stringify(mark.timeBasis??null)||Math.abs((pose.time??0)-(mark.time??0))>1e-7||JSON.stringify(pose.turn)!==JSON.stringify((f.context as any)?.turn??null)))continue;
   const a=projectMark(mark.world,pose.camera),b=projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera),r=geometryEdit?.id===f.id?geometryEdit.screen:region(a,b),box=rectElement(r),pin=document.createElement('button');pin.type='button';pin.className='stage-comment-pin stage-comment-ui';pin.textContent=String(i+1);pin.setAttribute('aria-label',`${t('Comment {0}:').replace('{0}',String(i+1))} ${f.summary}`);pin.title=f.summary;Object.assign(pin.style,{left:r.x+'px',top:r.y+'px'});pin.onclick=()=>openComment(f);layer.append(box,pin);
-  if(host.codec?.geometry){
-   const pane=host.viewports[mark.viewport]!,width=pin.offsetWidth||24,height=pin.offsetHeight||24,placed=occupied.get(mark.viewport)??[];
+  const pane=host.viewports[mark.viewport]!;
+  if(host.codec?.geometry&&r.x>=0&&r.y>=0&&r.x<=pane.clientWidth&&r.y<=pane.clientHeight){
+   const width=pin.offsetWidth||24,height=pin.offsetHeight||24,placed=occupied.get(mark.viewport)??[];
    if(!occupied.has(mark.viewport)){
     occupied.set(mark.viewport,placed);
     if(geometryEdit?.view===mark.viewport){const r=geometryEdit.screen;for(const [x,y]of [[0,0],[.5,0],[1,0],[1,.5],[1,1],[.5,1],[0,1],[0,.5]])placed.push({x:r.x+r.width*x!,y:r.y+r.height*y!,width:12,height:12});}

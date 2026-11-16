@@ -13,7 +13,7 @@ await mkdir(out,{recursive:true});
 const report:any[]=[],failures:string[]=[];
 async function wait(p:InputCdpSession,e:string){const until=Date.now()+10000;while(Date.now()<until){if(await p.evaluate(e))return;await Bun.sleep(30);}throw Error('WAIT '+e);}
 async function check(name:string,run:()=>Promise<void>){try{await run();report.push({name,pass:true});}catch(e){failures.push(name+': '+e);report.push({name,pass:false,error:String(e)});}await writeFile(join(out,'report.json'),JSON.stringify(report,null,2));}
-for(const lang of (Bun.argv.includes('--pilot-only')?[]:Bun.argv.includes('--red')?['en']:['en','ko']) as ('en'|'ko')[])for(const zoom of (Bun.argv.includes('--red')?['native-one']:['native-one','fit'])){
+for(const lang of (Bun.argv.includes('--pilot-only')?[]:Bun.argv.includes('--red')?['en']:['en','ko']) as ('en'|'ko')[])for(const zoom of (Bun.argv.includes('--red')||Bun.argv.includes('--min-only')?['native-one']:['native-one','fit'])){
  const f=await scriptedJobWindowFixture({c5Parts:'no-mesh'}),profile=await mkdtemp('/tmp/review891-');let p:InputCdpSession|undefined,control:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
  try{
   // Scale the existing public fixture for native gestures before publication.
@@ -35,10 +35,17 @@ for(const lang of (Bun.argv.includes('--pilot-only')?[]:Bun.argv.includes('--red
    await mouse('mouseMoved',a,0);await mouse('mousePressed',a,1);await mouse('mouseMoved',b,1);await mouse('mouseReleased',b,0);await Bun.sleep(80);
   }
   async function sourceDrag(a:{x:number;y:number},b:{x:number;y:number}){const c=await camera();await drag({x:c.x+a.x*c.z,y:c.y+a.y*c.z},{x:c.x+b.x*c.z,y:c.y+b.y*c.z});}
-  async function save(text:string){await page.evaluate(`(()=>{const field=document.querySelector('.stage-comment-composer input');field.value=${JSON.stringify(text)};field.focus();})()`);assert.ok(control);await control('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'});await control('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await wait(page,`!document.querySelector('.stage-comment-composer')`);}
+  async function save(text:string){await page.evaluate(`(()=>{const field=document.querySelector('.stage-comment-composer input');field.focus();field.select();})()`);assert.ok(control);await control('Input.insertText',{text});await control('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'});await control('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await wait(page,`!document.querySelector('.stage-comment-composer')`);}
   async function escape(){assert.ok(control);await control('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await control('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});}
   async function open(id:string){await escape();await click(page,`[data-comment-id="${id}"] .stage-comment-summary`);await wait(page,`!!document.querySelector('.stage-comment-composer')`);await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);}
   async function handle(name:string,dx:number,dy:number){const r=await page.evaluate<any>(`(()=>{const n=document.querySelector('[data-comment-handle="${name}"]');if(!n)return null;const r=n.getBoundingClientRect();for(const y of [.5,.3,.7,.2,.8])for(const x of [.5,.3,.7,.2,.8]){const point={x:r.left+r.width*x,y:r.top+r.height*y};if(document.elementFromPoint(point.x,point.y)===n)return point;}throw Error('No unobscured ${name} handle');})()`);assert.ok(r,'handle '+name);await drag(r,{x:r.x+dx,y:r.y+dy});}
+  async function minimumPixel(){await check(lang+' '+zoom+' high zoom native-pixel minimum',async()=>{
+   await escape();await click(page,'#native-one');for(let i=0;i<10;i++)await click(page,'#zoom-in');await click(page,'#stage-comment');assert.ok((await camera()).z>=8);
+   await sourceDrag({x:153,y:113},{x:157,y:117});await wait(page,`!!document.querySelector('.stage-comment-composer')`);await handle('se',-100,-100);await save('minimum new');const fresh=await last();assert.ok(fresh.rigRegion.width>=1&&fresh.rigRegion.height>=1);assert.ok(fresh.parts.length>0,'shrinking a new comment retains its chips');
+   await sourceDrag({x:163,y:113},{x:167,y:117});await wait(page,`!!document.querySelector('.stage-comment-composer')`);await save('minimum existing seed');const previous=await last();await open(previous.id);await handle('se',-100,-100);await save('minimum existing');const edited=await last();assert.equal(edited.id,previous.id);assert.ok(edited.rigRegion.width>=1&&edited.rigRegion.height>=1);
+   report.push({name:'native minimum evidence '+lang+zoom,zoom:(await camera()).z,newRegion:fresh.rigRegion,existingRegion:edited.rigRegion});
+  });}
+  if(Bun.argv.includes('--min-only')){await minimumPixel();continue;}
   {
    await escape();await click(page,'#'+zoom);await click(page,'#stage-comment');
    await sourceDrag({x:60,y:60},{x:120,y:110});await wait(page,`!!document.querySelector('.stage-comment-composer')`);await save('seed '+lang+zoom);const seed=await last(),id=seed.id;
@@ -67,6 +74,7 @@ for(const lang of (Bun.argv.includes('--pilot-only')?[]:Bun.argv.includes('--red
    });
    await check(lang+' '+zoom+' bar8 crop',async()=>{await open(id);await handle('s',0,-5);await save('fresh crop');const a=await last();assert.notEqual(a.crop.sha256,seed.crop.sha256);const decoded=PNG.sync.read(Buffer.from(a.crop.png.split(',')[1],'base64'));assert.equal(decoded.width,a.crop.width);assert.equal(decoded.height,a.crop.height);assert.equal(a.imageRegion,null);assert.equal(a.nativeCrop,null);report.push({name:'crop binding '+lang+zoom,region:a.rigRegion,crop:{width:a.crop.width,height:a.crop.height,hash:a.crop.sha256},camera:a.view.camera});});
   }
+  await minimumPixel();
   await check(lang+' '+zoom+' bar8 item crop source pixels',async()=>{
    await escape();if(!await page.evaluate(`document.querySelector('[data-part-list] button[data-slot="body"]').getAttribute('aria-pressed')==='true'`))await click(page,'[data-part-list] button[data-slot="body"]');await wait(page,`!document.getElementById('part-solo').disabled`);await click(page,'#part-solo');await wait(page,`document.getElementById('parts-canvas').width===200`);await click(page,'#fit');await click(page,'#stage-comment');
    await sourceDrag({x:35,y:35},{x:65,y:65});await wait(page,`!!document.querySelector('.stage-comment-composer')`);await save('item crop seed');const original=await last();await open(original.id);await handle('se',10,10);await save('item crop resized');const issue=await last(),r=issue.imageRegion;
@@ -100,7 +108,7 @@ async function pilotCase(lang:'en'|'ko'){
   const pins=()=>page.evaluate<any[]>(`[...document.querySelectorAll('.stage-comment-pin')].map((n,i)=>{const r=n.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {i,text:n.textContent,rect:r.toJSON(),hittable:n===hit||n.contains(hit)};})`);
   async function drag(a:{x:number;y:number},b:{x:number;y:number}){await page.mouse('mouseMoved',a.x,a.y);await page.mouse('mousePressed',a.x,a.y);await page.mouse('mouseMoved',b.x,b.y);await page.mouse('mouseReleased',b.x,b.y);await settle();}
   async function escape(){assert.ok(control);for(const type of ['keyDown','keyUp'])await control('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await settle();}
-  async function save(summary:string){await page.evaluate(`(()=>{const n=document.querySelector('.stage-comment-composer input');n.value=${JSON.stringify(summary)};n.focus();})()`);assert.ok(control);await control('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'});await control('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await wait(page,`!document.querySelector('.stage-comment-composer')`);await settle();}
+  async function save(summary:string){await page.evaluate(`(()=>{const n=document.querySelector('.stage-comment-composer input');n.focus();n.select();})()`);assert.ok(control);await control('Input.insertText',{text:summary});await control('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'});await control('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await wait(page,`!document.querySelector('.stage-comment-composer')`);await settle();}
   await click(page,'#fit');if(!await page.evaluate(`document.getElementById('camera-sync').checked`))await click(page,'#camera-sync');await click(page,'#stage-comment');await settle();const initial=await camera();
   assert.ok(initial.every((c:any)=>c.zoom<=.4&&c.zoom>0));assert.equal(await page.evaluate(`document.querySelector('#view-menu [data-view="compare"]').getAttribute('aria-pressed')`),'true');assert.equal(await page.evaluate(`document.getElementById('camera-sync').checked`),true);assert.equal(await page.evaluate(`document.querySelectorAll('[data-part-list] button').length`),22);
   const points=await page.evaluate<any>(`(()=>{const c=document.getElementById('parts-canvas'),r=c.getBoundingClientRect(),z=r.width/c.width;return {a:{x:r.left+1000*z,y:r.top+600*z},b:{x:r.left+1300*z,y:r.top+900*z}};})()`);
@@ -130,6 +138,6 @@ async function pilotCase(lang:'en'|'ko'){
   await writeFile(join(out,'report.json'),JSON.stringify(report,null,2));
  }finally{await p?.close();await f.close();await rm(profile,{recursive:true,force:true});}
 }
-if(!Bun.argv.includes('--red'))for(const lang of ['en','ko'] as const)await pilotCase(lang);
+if(!Bun.argv.includes('--red')&&!Bun.argv.includes('--min-only'))for(const lang of ['en','ko'] as const)await pilotCase(lang);
 console.log('COMMENT_AREA_EDIT_891 '+JSON.stringify({checks:report.filter(x=>'pass'in x).length,failures}));
 assert.deepEqual(failures,[]);
