@@ -213,7 +213,7 @@ export function bindPartsSubject(host:{
   select:(name:string|null)=>{selected=name;if(name===null)solo=false;redraw();host.selectionChanged();},isolate:(value:boolean)=>{solo=value;redraw();host.selectionChanged();},
   show:(name:string,value:boolean)=>{if(value)hidden.delete(name);else hidden.add(name);redraw();},
   differenceAvailable:()=>data.differenceAvailable&&!!data.painting&&!failed,
-  comparison:()=>comparison,setComparison:async(mode:PartsComparison['mode'])=>{const next:PartsComparison=mode==='difference'?{mode,opacity:comparison.opacity,threshold:0}:{mode,opacity:comparison.opacity};comparison=next;try{await paint();return !disposed&&comparison===next;}catch{return false;}},
+  comparison:()=>comparison,setComparison:async(mode:PartsComparison['mode'])=>{const next:PartsComparison=mode==='difference'?{mode,opacity:comparison.opacity,threshold:0}:{mode,opacity:comparison.opacity};comparison=next;const navigation=token+1;try{await paint();return !disposed&&navigation===token&&comparison===next;}catch{return false;}},
   opacity:(value:number)=>{comparison.opacity=value;redraw();},paint,redraw,
   async ready(){if(data.painting)host.viewport.state.cameraSync=true;await paint();},
   dispose(){disposed=true;++token;comments?.dispose();images.clear();loaded.clear();assemblyAlpha.clear();},
