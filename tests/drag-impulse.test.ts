@@ -45,9 +45,9 @@ function stage(bind:BindPan){
  // Registered in the order the page registers them: the inspection's stage pick, then the viewport pan.
  bindStagePick({stage:viewport as unknown as HTMLElement,project,frame:()=>frame,enabled:()=>true,held:()=>false,selectable:()=>true,select:slot=>selected.push(slot),paint:()=>{}});
  bind(viewport,(dx,dy)=>pans.push([dx,dy]),()=>true,{threshold:CLICK_SLOP_PX,move:(dx,dy)=>{const impulse=dragImpulse(dx,dy,SCALE);if(impulse)player.moved(impulse);}});
- const at=(type:string,x:number,y:number)=>viewport.dispatchEvent(Object.assign(new Event(type,{cancelable:true}),{pointerType:'mouse',pointerId:1,isPrimary:true,button:type==='pointermove'?-1:0,buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
+ const at=(type:string,x:number,y:number,button=0)=>viewport.dispatchEvent(Object.assign(new Event(type,{cancelable:true}),{pointerType:'mouse',pointerId:1,isPrimary:true,button:type==='pointermove'?-1:button,buttons:type==='pointerup'?0:button===2?2:1,clientX:x,clientY:y}));
  /** Press at the arm, walk the relative steps, release where the last step ends. */
- const gesture=(steps:readonly (readonly [number,number])[])=>{let x=ARM.x,y=ARM.y;at('pointerdown',x,y);for(const [dx,dy] of steps){x+=dx;y+=dy;at('pointermove',x,y);}at('pointerup',x,y);};
+ const gesture=(steps:readonly (readonly [number,number])[],button=0)=>{let x=ARM.x,y=ARM.y;at('pointerdown',x,y,button);for(const [dx,dy] of steps){x+=dx;y+=dy;at('pointermove',x,y,button);}at('pointerup',x,y,button);};
  return {gesture,moved,pans,selected};
 }
 
@@ -74,10 +74,14 @@ test('#331: one line over the whole gesture: out past it and back is a drag, not
  expect(s.moved).toEqual([{x:2.5,y:0},{x:-2.5,y:0}]);expect(s.selected).toEqual([]);
 });
 
-test('#331: a press made with Space held pans only',async()=>{
+test('#331: a press made with Space held pans only, and right-drag pans only with or without Space held (#897)',async()=>{
  const pan=await panBinder(),s=stage(pan.bind);
  pan.space(true);s.gesture([[40,0],[40,0]]);pan.space(false);
- expect(s.moved).toEqual([]);expect(s.pans).toEqual([[40,0],[40,0]]);
+ expect(s.moved).toEqual([]);expect(s.pans).toEqual([[40,0],[40,0]]);expect(s.selected).toEqual([]);
+ s.gesture([[30,10]],2);
+ expect(s.moved).toEqual([]);expect(s.pans).toEqual([[40,0],[40,0],[30,10]]);expect(s.selected).toEqual([]);
+ pan.space(true);s.gesture([[-20,15]],2);pan.space(false);
+ expect(s.moved).toEqual([]);expect(s.pans).toEqual([[40,0],[40,0],[30,10],[-20,15]]);expect(s.selected).toEqual([]);
  s.gesture([[40,0]]);expect(s.moved).toEqual([{x:5,y:0}]);
 });
 
@@ -95,7 +99,7 @@ test('#331: the rig view carries its player, the comparison carries both sides, 
  expect(entry).toContain('bindNavigation(rigPanCarry(');
  expect(main).toContain("target==='rig'?carryRig:undefined,");
  expect(main).toContain('const impulse=dragImpulse(dx,dy,rigScale);if(impulse&&player)player.moved(impulse);');
- expect(compare).toContain("viewport.bindNavigation(target=>target==='reference'?undefined:carryBoth,()=>!comments?.active())");
+ expect(compare).toContain("viewport.bindNavigation(target=>target==='reference'?undefined:carryBoth,panOnly=>!comments?.active()||!!panOnly)");
  expect(compare).toContain("for(const side of ['a','b'] as const){const impulse=dragImpulse(dx,dy,rigScales[side]);if(impulse)players[side]?.moved(impulse);}");
  // The retired Drag to trail toggle left no second drag handler behind.
  for(const source of [main,entry,pair,compare,await readFile(new URL('../web/compare-picked-tools.ts',import.meta.url),'utf8'),await readFile(new URL('../web/index.html',import.meta.url),'utf8')])expect(source).not.toContain('drag-trail');

@@ -58,7 +58,8 @@ export function bindAppearance(control:HTMLSelectElement,initial:ThemePreference
 export function syncStageLayout(area:Pick<HTMLElement,'clientWidth'|'clientHeight'|'dataset'>):boolean {const next=stageOrientation(area.clientWidth,area.clientHeight);if(area.dataset.orientation===next)return false;area.dataset.orientation=next;return true;}
 export function bindStageLayout(area:HTMLElement,changed:()=>void):()=>void {
  const render=()=>{if(syncStageLayout(area))changed();};
- const observer=new ResizeObserver(render);observer.observe(area);render();return ()=>observer.disconnect();
+ const contextMenu=(event:Event)=>{if(!(event.target instanceof Element&&event.target.closest('.stage-comment-composer,input,textarea,select,[contenteditable]:not([contenteditable="false"])')))event.preventDefault();};
+ const observer=new ResizeObserver(render);observer.observe(area);area.addEventListener?.('contextmenu',contextMenu);render();return ()=>{observer.disconnect();area.removeEventListener?.('contextmenu',contextMenu);};
 }
 /** Single-key layer toggles. Free of Space (pan), Enter (frame entry), arrows/Home/End (tabs, separators, part list). */
 export const layerShortcuts=Object.freeze([
@@ -204,8 +205,11 @@ export function createViewControls(options:ViewControlsOptions) {
  return {zoomButtons,zoomGroup,syncLabel,value,nativeOne,viewSwitch,get viewModeIds(){return [...modes.keys()];},setMode,setDisabled,replaceViewSwitch};
 }
 
+export function panSpaceHeld():boolean {return panSpace;}
 // Nested or separately disposed pan binders must not restore another binder's override.
 const panVideoOverrides=new WeakMap<HTMLVideoElement,{owners:number;value:string;priority:string}>();
+let panSpace=false;
+const panSpaceOwners=new Set<object>();
 /**
  * A drag that also carries the rig (#331): once the press has travelled more than `threshold` px from where it went down
  * (the click/drag line, the same one a stage click reads), each move is handed to `move` as well as panned. The first
@@ -213,8 +217,9 @@ const panVideoOverrides=new WeakMap<HTMLVideoElement,{owners:number;value:string
  * with Space held is a pan only, and a press that never passes the threshold is a click and carries nothing.
  */
 export interface PanCarry {threshold:number;move:(dx:number,dy:number)=>void}
-export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,enabled:()=>boolean=()=>true,carry?:PanCarry,pinch?:(factor:number,at:ViewPoint,delta:ViewPoint)=>void):()=>void {
+export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,enabled:(panOnly?:boolean)=>boolean=()=>true,carry?:PanCarry,pinch?:(factor:number,at:ViewPoint,delta:ViewPoint)=>void):()=>void {
  let pointer:number|null=null,x=0,y=0,space=false,press:{x:number;y:number;far:boolean}|null=null;
+ const owner={};
  const touches=new Map<number,ViewPoint>();let pinching=false;const pair=()=>{const [a,b]=[...touches.values()];return a&&b?{distance:Math.hypot(a.x-b.x,a.y-b.y),center:{x:(a.x+b.x)/2,y:(a.y+b.y)/2}}:null;};
  const videos=new Set<HTMLVideoElement>();
  const releaseVideo=(video:HTMLVideoElement)=>{
@@ -231,15 +236,15 @@ export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,en
   }
  };
  const observer=new MutationObserver(()=>{if(space)syncVideos();});
- const releaseSpace=()=>{space=false;observer.disconnect();for(const video of videos)releaseVideo(video);videos.clear();};
+ const releaseSpace=()=>{space=false;panSpaceOwners.delete(owner);panSpace=panSpaceOwners.size>0;observer.disconnect();for(const video of videos)releaseVideo(video);videos.clear();};
  const releasePointer=()=>{const id=pointer;pointer=null;press=null;delete viewport.dataset.panning;if(id!==null&&viewport.hasPointerCapture(id))viewport.releasePointerCapture(id);};
- const keyDown=(event:KeyboardEvent)=>{if(event.code==='Space'&&enabled()&&!(event.target instanceof Element&&event.target.closest('input,textarea,select,button'))){
-  if(!space){space=true;syncVideos();observer.observe(viewport,{childList:true,subtree:true,attributes:true,attributeFilter:['controls']});}event.preventDefault();
+ const keyDown=(event:KeyboardEvent)=>{if(event.code==='Space'&&enabled(true)&&!(event.target instanceof Element&&event.target.closest('input,textarea,select,button'))){
+  if(!space){space=true;panSpaceOwners.add(owner);panSpace=true;syncVideos();observer.observe(viewport,{childList:true,subtree:true,attributes:true,attributeFilter:['controls']});}event.preventDefault();
  }};
  const keyUp=(event:KeyboardEvent)=>{if(event.code==='Space')releaseSpace();};const blur=()=>{for(const id of touches.keys())if(viewport.hasPointerCapture(id))viewport.releasePointerCapture(id);touches.clear();pinching=false;releaseSpace();releasePointer();};
- const start=(event:PointerEvent)=>{if(enabled()&&pinch&&event.pointerType==='touch'&&!(event.target as Element)?.closest?.('button,input,select,textarea,a,[data-viewport-action]')){touches.set(event.pointerId,{x:event.clientX,y:event.clientY});if(touches.size===2){pointer=null;press=null;delete viewport.dataset.panning;pinching=true;viewport.setPointerCapture(event.pointerId);event.preventDefault();return;}}if(!enabled()||!event.isPrimary||event.button!==0)return;const target=event.target;if(target instanceof Element&&(target.closest('button,input,select,textarea,a,[data-viewport-action]')||target.closest('video[controls]')&&!space))return;pointer=event.pointerId;x=event.clientX;y=event.clientY;press=carry&&!space?{x,y,far:false}:null;viewport.setPointerCapture(pointer);viewport.dataset.panning='true';event.preventDefault();};
+ const start=(event:PointerEvent)=>{if(enabled(false)&&pinch&&event.pointerType==='touch'&&!(event.target as Element)?.closest?.('button,input,select,textarea,a,[data-viewport-action]')){touches.set(event.pointerId,{x:event.clientX,y:event.clientY});if(touches.size===2){pointer=null;press=null;delete viewport.dataset.panning;pinching=true;viewport.setPointerCapture(event.pointerId);event.preventDefault();return;}}const right=event.button===2,panOnly=space||panSpace||right;if(!enabled(panOnly)||!event.isPrimary||event.button!==0&&!right)return;const target=event.target,onPin=panOnly&&target instanceof Element&&!!target.closest('.stage-comment-pin,[data-comment-handle]');if(target instanceof Element&&(!onPin&&target.closest('button,input,select,textarea,a,[data-viewport-action],.stage-comment-composer')||target.closest('video[controls]')&&!panOnly))return;pointer=event.pointerId;x=event.clientX;y=event.clientY;press=carry&&!panOnly?{x,y,far:false}:null;viewport.setPointerCapture(pointer);viewport.dataset.panning='true';event.preventDefault();};
  const drag=(event:PointerEvent)=>{
-  if(touches.has(event.pointerId)){const before=pair();touches.set(event.pointerId,{x:event.clientX,y:event.clientY});const after=pair();if(pinching){if(enabled()&&before&&after&&before.distance>0&&after.distance>0){const r=viewport.getBoundingClientRect();pinch?.(after.distance/before.distance,{x:before.center.x-r.left,y:before.center.y-r.top},{x:after.center.x-before.center.x,y:after.center.y-before.center.y});}event.preventDefault();return;}}
+  if(touches.has(event.pointerId)){const before=pair();touches.set(event.pointerId,{x:event.clientX,y:event.clientY});const after=pair();if(pinching){if(enabled(false)&&before&&after&&before.distance>0&&after.distance>0){const r=viewport.getBoundingClientRect();pinch?.(after.distance/before.distance,{x:before.center.x-r.left,y:before.center.y-r.top},{x:after.center.x-before.center.x,y:after.center.y-before.center.y});}event.preventDefault();return;}}
   if(event.pointerId!==pointer)return;const dx=event.clientX-x,dy=event.clientY-y;x=event.clientX;y=event.clientY;move(dx,dy);event.preventDefault();
   if(!press||!carry)return;
   if(press.far)carry.move(dx,dy);
@@ -247,8 +252,9 @@ export function bindPan(viewport:HTMLElement,move:(dx:number,dy:number)=>void,en
  };
  const end=(event:PointerEvent)=>{touches.delete(event.pointerId);if(event.pointerType==='touch'&&viewport.hasPointerCapture(event.pointerId))viewport.releasePointerCapture(event.pointerId);if(touches.size===0)pinching=false;if(event.pointerId===pointer)releasePointer();};
  const native=(event:DragEvent)=>event.preventDefault();
- window.addEventListener('blur',blur);document.addEventListener('keydown',keyDown,true);window.addEventListener('keyup',keyUp,true);viewport.addEventListener('pointerdown',start);viewport.addEventListener('pointermove',drag);viewport.addEventListener('pointerup',end);viewport.addEventListener('pointercancel',end);viewport.addEventListener('lostpointercapture',end);viewport.addEventListener('dragstart',native);
- return ()=>{blur();window.removeEventListener('blur',blur);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);viewport.removeEventListener('pointerdown',start);viewport.removeEventListener('pointermove',drag);viewport.removeEventListener('pointerup',end);viewport.removeEventListener('pointercancel',end);viewport.removeEventListener('lostpointercapture',end);viewport.removeEventListener('dragstart',native);};
+ const contextMenu=(event:Event)=>{if(!(event.target instanceof Element&&event.target.closest('.stage-comment-composer,input,textarea,select,[contenteditable]:not([contenteditable="false"])')))event.preventDefault();};
+ window.addEventListener('blur',blur);document.addEventListener('keydown',keyDown,true);window.addEventListener('keyup',keyUp,true);viewport.addEventListener('pointerdown',start);viewport.addEventListener('pointermove',drag);viewport.addEventListener('pointerup',end);viewport.addEventListener('pointercancel',end);viewport.addEventListener('lostpointercapture',end);viewport.addEventListener('dragstart',native);viewport.addEventListener('contextmenu',contextMenu);
+ return ()=>{blur();window.removeEventListener('blur',blur);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);viewport.removeEventListener('pointerdown',start);viewport.removeEventListener('pointermove',drag);viewport.removeEventListener('pointerup',end);viewport.removeEventListener('pointercancel',end);viewport.removeEventListener('lostpointercapture',end);viewport.removeEventListener('dragstart',native);viewport.removeEventListener('contextmenu',contextMenu);};
 }
 
 /** A discovered row; the block adapter supplies nodes, never another activation implementation. */

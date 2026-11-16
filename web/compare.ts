@@ -438,7 +438,7 @@ function bind(): void {
   // #331: a plain drag on either rig pans and carries both rigs, each by its own root scale, so A and B take the same
   // stimulus; the reference pane only pans, as the Family viewer's does.
   const carryBoth={threshold:CLICK_SLOP_PX,move:(dx:number,dy:number)=>{for(const side of ['a','b'] as const){const impulse=dragImpulse(dx,dy,rigScales[side]);if(impulse)players[side]?.moved(impulse);}}};
-  viewDisposers.push(viewport.bindNavigation(target=>target==='reference'?undefined:carryBoth,()=>!comments?.active()));
+  viewDisposers.push(viewport.bindNavigation(target=>target==='reference'?undefined:carryBoth,panOnly=>!comments?.active()||!!panOnly));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlays(false);};
   input('idle-repeat').onchange=()=>{renderIdle();if(canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));};
   el('inspector-feedback').addEventListener('focusin',()=>{idleHeld=true;const current=lastPresented?.time;stop();if(current!==undefined&&!seeking)void seekTo(current);});

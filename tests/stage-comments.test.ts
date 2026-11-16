@@ -133,7 +133,7 @@ function commentUI(feedback:any[]=[],options:{general?:boolean;changedImpl?:()=>
  doc.getElementById=(id:string)=>id==='stage-comment'?toggle:null;
  doc.documentElement=new Node();
  const prevGetComputedStyle=(globalThis as any).getComputedStyle;
- for(const [k,v]of Object.entries({document:doc,window:win,requestAnimationFrame:(f:Function)=>{next=f;return 1;},cancelAnimationFrame:()=>{},getComputedStyle:()=>({getPropertyValue:()=>'#3b82f6',backgroundColor:'rgb(20, 24, 32)',backgroundImage:'none',backgroundSize:'auto',backgroundPosition:'0% 0%',display:'block',visibility:'visible',opacity:'1',filter:'none',transformOrigin:'0px 0px',transform:'matrix(1, 0, 0, 1, 0, 0)',zIndex:'0',width:'100px',height:'100px',mixBlendMode:'normal'})})){saved.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;}
+ for(const [k,v]of Object.entries({document:doc,window:win,Element:Node,MutationObserver:class{observe(){}disconnect(){}},requestAnimationFrame:(f:Function)=>{next=f;return 1;},cancelAnimationFrame:()=>{},getComputedStyle:()=>({getPropertyValue:()=>'#3b82f6',backgroundColor:'rgb(20, 24, 32)',backgroundImage:'none',backgroundSize:'auto',backgroundPosition:'0% 0%',display:'block',visibility:'visible',opacity:'1',filter:'none',transformOrigin:'0px 0px',transform:'matrix(1, 0, 0, 1, 0, 0)',zIndex:'0',width:'100px',height:'100px',mixBlendMode:'normal'})})){saved.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;}
  let pose:any={mode:'animate',camera:mark({sourceHash:'a'.repeat(64)}).camera,frame:{index:0,basis:'producer'},time:0,animation:'idle',turn:null,sourceHash:'a'.repeat(64),modelHash:null,referenceHash:null,referenceId:null,rig:'probe'};
  const tool=bindStageComments({general:options.general?{create:(summary:string)=>({id:crypto.randomUUID(),summary}),matches:(row:any)=>!row.target}:undefined,toolbar:toolbar as any,listHost:options.inline?side as any:undefined,openList:options.openList,viewports:options.noPicture?{}:{rig:pane as any},pose:()=>pose,pause:async()=>{},bookmark:()=>mark({sourceHash:'a'.repeat(64)}).bookmark,restore:async()=>{restores++;await options.restoreImpl?.();},feedback:()=>feedback,locked:options.locked??(()=>false),add:(f:any)=>feedback.push(f),changed:()=>{changes++;return options.changedImpl?.();},error:(m:string)=>errors.push(m),blocked:()=>false,codec:options.codec});
  const event=(extra:any={})=>({button:0,isPrimary:true,pointerId:7,clientX:50,clientY:50,target:new Node(),preventDefault(){},stopImmediatePropagation(){},...extra});
@@ -262,19 +262,22 @@ for(const inline of [false,true])test('#276 Bar 2 '+(inline?'inline':'overlay')+
   expect(ui.list().children[0]!.textContent).toBe('Comments');
   if(inline)expect(ui.list().children[1]!.textContent).toBe('No comments yet.');
 
-  // The inline top entry always reveals the list and enables capture; Escape ends capture.
+  // The top button and C toggle capture; Escape with nothing open keeps capture and the list as they are (#897).
   ui.toggle.onclick?.();
   expect(ui.tool.active()).toBe(true);
   expect(ui.list().hidden).toBe(false);
   expect(ui.toggle.getAttribute('aria-pressed')).toBe('true');
   expect(ui.toggle.getAttribute('aria-expanded')).toBe('true');
   ui.toggle.onclick?.();
-  expect(ui.tool.active()).toBe(inline);
+  expect(ui.tool.active()).toBe(false);
   expect(ui.list().hidden).toBe(!inline);
   ui.key('c');
   expect(ui.tool.active()).toBe(true);
   expect(ui.list().hidden).toBe(false);
   ui.escape();
+  expect(ui.tool.active()).toBe(true);
+  expect(ui.list().hidden).toBe(false);
+  ui.key('c');
   expect(ui.tool.active()).toBe(false);
   expect(ui.list().hidden).toBe(!inline);
 
@@ -299,8 +302,11 @@ for(const inline of [false,true])test('#276 Bar 2 '+(inline?'inline':'overlay')+
   expect(rowButtons).toHaveLength(1);
   expect(item.children.some(n=>n.textContent==='Edit'||n.textContent==='Delete')).toBe(false);
 
-  // Escape ends capture: pins stay visible and restore the existing comment.
+  // Turn comment mode off via toggle: pins stay visible and restore the existing comment (#897).
   ui.escape();
+  expect(ui.tool.active()).toBe(true);
+  expect(ui.list().hidden).toBe(false);
+  ui.toggle.onclick?.();
   expect(ui.tool.active()).toBe(false);
   expect(ui.list().hidden).toBe(!inline);
   ui.tick();
@@ -623,7 +629,7 @@ test('#715 native general comments use the same composer for multiple rows, edit
 
 for(const noPicture of [false,true])test('#828 top entry and C reveal the existing list; image-free subjects never enter pin mode '+noPicture,()=>{
  let opens=0;const ui=commentUI([],{inline:true,general:true,noPicture,openList:()=>{opens++;}});
- try{ui.toggle.onclick?.();expect(opens).toBe(1);expect(ui.tool.active()).toBe(!noPicture);ui.key('c');expect(opens).toBe(2);expect(ui.tool.active()).toBe(!noPicture);expect(ui.list().children.some(node=>node.textContent==='Add general comment')).toBe(true);expect(ui.list().children[0]!.textContent).toBe('Comments');}finally{ui.cleanup();}
+ try{ui.toggle.onclick?.();expect(opens).toBe(1);expect(ui.tool.active()).toBe(!noPicture);if(!noPicture){ui.key('c');expect(ui.tool.active()).toBe(false);}ui.key('c');expect(opens).toBe(2);expect(ui.tool.active()).toBe(!noPicture);expect(ui.list().children.some(node=>node.textContent==='Add general comment')).toBe(true);expect(ui.list().children[0]!.textContent).toBe('Comments');}finally{ui.cleanup();}
 });
 
 test('#848 comment save waits for the host draft transaction before closing the composer',async()=>{
@@ -668,4 +674,91 @@ test('#848 general comment ignores a second submit while the draft write is pend
   expect(ui.list().children).not.toContain(composer);
   expect(ui.errors).toEqual([]);
  }finally{release();await Promise.all([first,second]);ui.cleanup();}
+});
+
+import {bindPan,panSpaceHeld} from '../web/view-controls.ts';
+test('#897 Escape keeps comment mode and list open in all four cases, and Space-drag / right-drag pan through shared Space state',async()=>{
+ const rows:any[]=[],lockedIds=new Set<string>();
+ const canvas=createCanvas(100,100);(canvas as any).getBoundingClientRect=()=>({left:0,top:0,width:100,height:100});
+ const ui=commentUI(rows,{locked:id=>lockedIds.has(id),canvasFactory:()=>realCanvasNode(100,100)});
+ (ui.pane as any).querySelectorAll=()=>[];
+ ui.pose.capture={pane:ui.pane,images:true,canvas,backend:'canvas2d'};
+ const pans:[number,number][]=[];
+ const disposePan=bindPan(ui.pane as any,(dx,dy)=>pans.push([dx,dy]),panOnly=>!ui.tool.active()||!!panOnly);
+ try{
+  ui.toggle.onclick?.();
+  expect(ui.tool.active()).toBe(true);
+  expect(ui.list().hidden).toBe(false);
+  // 1. Escape with nothing open leaves mode on.
+  ui.escape();
+  expect(ui.tool.active()).toBe(true);
+  expect(ui.list().hidden).toBe(false);
+  // 2. Escape on a pending drag drops the drag and keeps mode on.
+  ui.down();
+  expect(ui.tool.draft()).toBe(true);
+  ui.escape();
+  expect(ui.tool.draft()).toBe(false);
+  expect(ui.tool.active()).toBe(true);
+  expect(ui.list().hidden).toBe(false);
+  // 3. Escape on a new draft drops the draft and keeps mode on (both form and document Escape).
+  ui.down();await ui.up();
+  let composer=ui.pane.children.find(n=>n.className.includes('stage-comment-composer'))!;
+  expect(composer).toBeDefined();
+  composer.onkeydown!({key:'Escape',preventDefault(){},stopPropagation(){}});
+  expect(ui.pane.children.some(n=>n.className.includes('stage-comment-composer'))).toBe(false);
+  expect(ui.tool.active()).toBe(true);
+  expect(ui.list().hidden).toBe(false);
+  // Save one comment, then test editable and read-only Escape.
+  ui.down();await ui.up();
+  composer=ui.pane.children.find(n=>n.className.includes('stage-comment-composer'))!;
+  composer.children[0]!.value='Original summary';
+  await composer.onsubmit!({preventDefault(){}});
+  expect(rows).toHaveLength(1);
+  const item=ui.list().children.find(n=>n.className==='stage-comment-item')!;
+  await item.children[0]!.onclick!();
+  composer=ui.pane.children.find(n=>n.className.includes('stage-comment-composer'))!;
+  composer.children[0]!.value='Unsaved edit';
+  ui.escape();
+  expect(ui.pane.children.some(n=>n.className.includes('stage-comment-composer'))).toBe(false);
+  expect(rows[0].summary).toBe('Original summary');
+  expect(ui.tool.active()).toBe(true);
+  expect(ui.list().hidden).toBe(false);
+  lockedIds.add(rows[0].id);
+  await item.children[0]!.onclick!();
+  composer=ui.pane.children.find(n=>n.className.includes('stage-comment-composer'))!;
+  expect(composer.children[0]!.readOnly).toBe(true);
+  ui.escape();
+  expect(ui.pane.children.some(n=>n.className.includes('stage-comment-composer'))).toBe(false);
+  expect(ui.tool.active()).toBe(true);
+  expect(ui.list().hidden).toBe(false);
+  // Space-drag and right-drag pan in comment mode without creating a mark, and clicking a pin after releasing Space still opens it even when pointer capture prevented a pin-targeted click on the Space-drag.
+  lockedIds.clear();
+  const pin=ui.pane.children.find(n=>n.className==='stage-comment-layer')!.children.find(n=>n.className.includes('stage-comment-pin'))!;
+  const pinTarget={closest:(sel:string)=>sel.includes('.stage-comment-pin')||sel.includes('button')?pin:null};
+  (globalThis.document as any).dispatch('keydown',{key:' ',code:'Space',target:{},preventDefault(){}});
+  expect(panSpaceHeld()).toBe(true);
+  ui.pane.dispatch('pointerdown',{button:0,isPrimary:true,pointerId:11,clientX:10,clientY:10,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+  ui.pane.dispatch('pointermove',{button:-1,isPrimary:true,pointerId:11,clientX:35,clientY:25,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+  await ui.pane.emit('pointerup',{button:0,isPrimary:true,pointerId:11,clientX:35,clientY:25,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+  (globalThis.window as any).dispatch('keyup',{key:' ',code:'Space'});
+  expect(panSpaceHeld()).toBe(false);
+  expect(pans).toEqual([[25,15]]);
+  expect(ui.tool.draft()).toBe(false);
+  // Next ordinary click on that pin (after bindPan pointer capture swallowed the Space-drag's pin click target) is not suppressed.
+  ui.pane.dispatch('pointerdown',{button:0,isPrimary:true,pointerId:13,clientX:10,clientY:10,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+  await ui.pane.emit('pointerup',{button:0,isPrimary:true,pointerId:13,clientX:10,clientY:10,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+  let pinClickStopped=false;
+  ui.pane.dispatch('click',{isTrusted:true,detail:1,target:pinTarget,preventDefault(){pinClickStopped=true;},stopImmediatePropagation(){pinClickStopped=true;}});
+  expect(pinClickStopped).toBe(false);
+  // Right-drag without Space and with Space.
+  for(const hold of [false,true]){
+   if(hold)(globalThis.document as any).dispatch('keydown',{key:' ',code:'Space',target:{},preventDefault(){}});
+   ui.pane.dispatch('pointerdown',{button:2,isPrimary:true,pointerId:12,clientX:35,clientY:25,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+   ui.pane.dispatch('pointermove',{button:-1,isPrimary:true,pointerId:12,clientX:20,clientY:15,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+   await ui.pane.emit('pointerup',{button:2,isPrimary:true,pointerId:12,clientX:20,clientY:15,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+   if(hold)(globalThis.window as any).dispatch('keyup',{key:' ',code:'Space'});
+  }
+  expect(pans).toEqual([[25,15],[-15,-10],[-15,-10]]);
+  expect(rows).toHaveLength(1);
+ }finally{disposePan();ui.cleanup();}
 });
