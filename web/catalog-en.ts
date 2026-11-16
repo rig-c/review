@@ -164,6 +164,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "interview.delegate": "Delegate",
   "interview.open": "Open interview",
   "interview.close": "Close interview",
+  "interview.noteLabel": "Your note (optional)",
+  "interview.notePlaceholder": "Anything the choices don't cover",
   "PARTS_DIFFERENCE_PROVENANCE: declared path, lowercase SHA-256 and lanczos3-rgb-opaque required": "PARTS_DIFFERENCE_PROVENANCE: declared path, lowercase SHA-256 and lanczos3-rgb-opaque required",
   "PARTS_DIFFERENCE_PATH: literal portable inside-package path required": "PARTS_DIFFERENCE_PATH: literal portable inside-package path required",
   "PARTS_DIFFERENCE_PATH: declared painting must be readable inside the package": "PARTS_DIFFERENCE_PATH: declared painting must be readable inside the package",

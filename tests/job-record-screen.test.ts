@@ -204,7 +204,12 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   const radios=[...entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')],identities=radios.map(input=>({name:input.name,value:input.value}));
   for(const input of radios){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
   entry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='  직접 입력\n';
-  expect(entry.form.querySelector('textarea[name="note"]')).toBeNull();
+  const noteInput=entry.form.querySelector<HTMLTextAreaElement>('textarea[name="note"]')!;
+  expect(noteInput).not.toBeNull();
+  expect(noteInput.maxLength).toBe(10000);
+  expect(noteInput.getAttribute('maxlength')).toBe('10000');
+  expect(entry.form.querySelector(`label[for="${noteInput.id}"]`)?.textContent).toBe('interview.noteLabel');
+  expect(noteInput.value).toBe('');
   entry.dirty=true;drafts.saveDraft();
   const saved=JSON.parse(store.get(drafts.localDraftKey(f.display))!);
   expect(saved.forms[0].controls.filter((input:{name:string})=>input.name.startsWith('choice.'))).toEqual([{name:'choice.topology',value:'topology_other'},{name:'choice.detail_level',value:'density_auto'}]);
@@ -222,8 +227,17 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   expect([...finalized.form.querySelectorAll<HTMLInputElement>('input[type=radio]')].filter(input=>input.checked).map(input=>input.value)).toEqual([answered.act.value.selections[0].optionId,'density_auto']);
   expect(finalized.dirty).toBe(false);
   expect(finalized.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(true);
+  expect(finalized.form.querySelector('textarea[name="note"]')).toBeNull();
+  expect(finalized.form.querySelector('.interview-note')).toBeNull();
   restored.form.dataset.interviewAnswered='true';restored.form.dispatchEvent(new Event('change'));
   expect(restored.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(true);
+  expect(restored.form.querySelector('textarea[name="note"]')).toBeNull();
+  // #901: a saved non-empty note round-trips into pre.interview-note when answered and accepts up to 10,000 characters.
+  const note10000='가'.repeat(5000)+'b'.repeat(5000);
+  const answeredWithNote={...answered,act:{...answered.act,value:{...answered.act.value,note:note10000}}};
+  const finalizedWithNote=formFor(answeredWithNote,inspection,deps);
+  expect(finalizedWithNote.form.querySelector('textarea[name="note"]')).toBeNull();
+  expect(finalizedWithNote.form.querySelector('.interview-note')?.textContent).toBe(note10000);
  }finally{inspection?.dispose();dom.restore();await f.close();}
 });
 

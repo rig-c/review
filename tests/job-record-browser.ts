@@ -549,14 +549,18 @@ try {
   for (const name of optionDom.selectNames) {
     await click(page,`form[data-job-ask="${picksAsk.askId}"] input[type="radio"][name="${name}"][value="keep"]`);
   }
-  // R2 / #764: no new Note field; an existing note is read-only and carried unchanged.
+  // R2 / #901: one optional note textarea per editable question set; an existing note prefills it and shows as pre.interview-note when read-only.
   const sourceProject=JSON.parse(await readFile(join(recordRoot,'project.json'),'utf8'));
   const existingNote=sourceProject.interview.waypoints.find((row:{id:string})=>row.id==='bones')?.guide?.choice?.note??'';
-  assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"],input[name="note"]').length`),0);
-  if(existingNote)assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${picksAsk.askId}"] .interview-note').textContent`),existingNote);
+  assert.equal(await page.evaluate(`document.querySelectorAll('input[name="note"]').length`),0);
+  assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').length`),1);
+  assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').value`),existingNote);
+  assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] .interview-note').length`),0);
   const picksSubmitStatus = await submitForm(picksAsk.askId);
   assert.equal(picksSubmitStatus.statusKey, 'job.saved');
   assert.equal(picksSubmitStatus.statusText, catalog['job.saved']);
+  assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').length`),0);
+  if(existingNote)assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${picksAsk.askId}"] .interview-note').textContent`),existingNote);
   await writeFile(join(output, `record-option-set-${language}.png`), await page.screenshot());
   await record('option-set-submitted', { optionDom, optionRoutes, picksSubmitStatus });
 
