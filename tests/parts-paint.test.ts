@@ -15,6 +15,7 @@ async function harness(withPainting=false){
  const source=await readFile(new URL('../web/parts-viewport-provider.ts',import.meta.url),'utf8'),start=source.indexOf(' async function paint():Promise<void>{'),end=source.indexOf(' const redraw=',start);
  const body=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end));
  const alphaStart=source.indexOf(' const sourceAlpha='),alphaEnd=source.indexOf('\n const painting=',alphaStart),alphaBody=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(alphaStart,alphaEnd));
+ const regionStart=source.indexOf(' const commentRegion='),regionEnd=source.indexOf(' const codec:',regionStart),regionBody=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(regionStart,regionEnd));
  const chipsStart=source.indexOf('  chips:(pose,screen,existing)=>{'),chipsEnd=source.indexOf('  create:async',chipsStart),chipsBody=new Bun.Transpiler({loader:'ts'}).transformSync('const chips='+source.slice(chipsStart+'  chips:'.length,chipsEnd).trim().replace(/,$/,''));
  const frameStart=source.indexOf('  frameSize:(target:CameraTarget):PartsFrame|null=>{'),frameEnd=source.indexOf('  image:',frameStart),frameBody=new Bun.Transpiler({loader:'ts'}).transformSync('const frameSize='+source.slice(frameStart+'  frameSize:'.length,frameEnd).trim().replace(/,$/,''));
  const poseStart=source.indexOf(' const pose=():PartsPose|null=>{'),poseEnd=source.indexOf(' comments=bindStageComments',poseStart),poseBody=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(poseStart,poseEnd));
@@ -33,9 +34,10 @@ async function harness(withPainting=false){
  const loaded=new Map(),assemblyAlpha=new Map();
  const {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,pickAssembly,paintingRectangle,defaultPartsComparison,t,createImageBitmap,parsePartsIssue,assertPartsIssueBinding,snapImageRegion,unprojectMark,region,EMIT_UNPINNED_CREATE_FIELDS}=deps;
  const sourceItems=()=>new Map(data.items.map(item=>[item.name,item]));
- const hidden=new Set(),item=()=>data.items.find(entry=>entry.name===selected),assembled=()=>!solo,box=()=>assembled()?{x:0,y:0,w:data.rigSize[0],h:data.rigSize[1]}:item();
+ const hidden=new Set(),item=()=>data.items.find(entry=>entry.name===selected)??data.items[0],assembled=()=>!solo,box=()=>assembled()?{x:0,y:0,w:data.rigSize[0],h:data.rigSize[1]}:item();
  ${alphaBody}
  ${body}
+ ${regionBody}
  ${chipsBody}
  ${frameBody}
  ${poseBody}
