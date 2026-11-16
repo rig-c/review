@@ -114,7 +114,7 @@ export function locateInstalledParts(starts: readonly string[] = [process.cwd()]
 
 export function classifyConfigReference(at: string): ConfigReferenceKind | null {
   if (at === 'requirements') return 'requirements';
-  if (at === 'motion.animations_from' || at === 'generation.control.skeleton' || /^assemble\.occluders\[\d+\]\.image$/.test(at)) return 'file';
+  if (at === 'motion.animations_from' || at === 'generation.control.skeleton' || /^assemble\.occluders\[\d+\]\.image$/.test(at) || /^assemble\.edited_parts\.receipts\[\d+\]\.file$/.test(at)) return 'file';
   if (/^assemble\.occluders\[\d+\]\.plate$/.test(at)) return 'plate';
   return null;
 }
