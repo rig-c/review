@@ -324,14 +324,21 @@ The four-stage navigator preserves this entry and its explicit save behavior. Co
 
 **Comment · C (n)** uses the same capture toggle, dragged region, composer and pins as the rig stage.
 The **Issues** list stays visible in the side panel while C opens or closes capture. While capture is
-on, drag within the rig pane away from existing pins and controls to mark a region. Close capture to
-pan. Enter adds the issue,
+on, drag within the rig pane, including from an existing pin, to mark a new region; clicking a pin
+opens its comment. Keep controls clear and close capture to pan. Enter adds the issue,
 and **Save sign-off** persists the verdict. Escape cancels the composer or capture while the inline
 list stays visible. Rows and pins use the same edit, delete and jump actions.
+For an editable saved comment opened in the composer, eight handles resize its area and dragging its
+interior moves it; Enter saves text and geometry, Escape reverts the edit, and Shift+drag starts a
+new area over the selected area or its handles. Tags are recomputed after resize or move only until
+a chip is touched in this edit; reopening a saved comment keeps its chosen tags.
 
-Select an issue row or pin after reopening to restore its item or assembled view, both cameras,
-background, alpha, footprints, mesh and painting comparison. Atlas inspection remains read only for
-pointed comments. Joined compiled Stage 1 refuses issue authoring with
+Opening a source-bound issue row or pin keeps the current view and camera when its source and view
+mode match the screen and, in item view, it names the same part. Otherwise, a valid issue restores
+its saved item or assembled mode, mesh, painting comparison and any recorded layer visibility,
+then writes the saved rig camera (adjusted for the part placement in item view with painting).
+The reference camera aligns only when camera sync is currently on; stale source or part bindings
+are refused. Atlas inspection remains read only for pointed comments. Joined compiled Stage 1 refuses issue authoring with
 `PARTS_JOINED_ISSUE_UNSUPPORTED` and directs the reviewer to the standing live job route. Its
 zero-issue approval path remains available.
 
@@ -457,8 +464,10 @@ frontmost visible nontransparent art within the marked region. Review the chips 
 visible parts as needed. At least one referenced part is required, and the rig-space region must
 remain inside their combined bounding box. Editing chips or wording validates and prepares the
 candidate through the same source-bound crop pipeline before replacing the existing issue. A rejected
-edit preserves the existing issue. Restoring an issue restores assembled view and highlights its
-referenced parts. Assembly visibility stays temporary and is excluded from saved issues and verdicts.
+edit preserves the existing issue. Opening an assembled issue keeps an already matching assembled
+view and shows its referenced parts as selected chips; a valid issue from a different context
+restores its saved assembled view as described above. Assembly visibility stays temporary and is
+excluded from saved issues and verdicts.
 
 With `--painting`, the reference pane and Overlay use the same whole-canvas visual mapping described
 above. Without painting the reference names `PARTS_REFERENCE_UNAVAILABLE`. Atlas assembly is disabled
