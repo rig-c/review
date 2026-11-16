@@ -1,5 +1,29 @@
 # Changelog
 
+## 4.2.0
+
+A job can now open a draft whose parts include owner-edited part files. A handoff it refuses now says why. The accepted look is held by named style tokens, and six screen bugs are fixed.
+
+### Added
+
+* A handoff whose parts config lists edited part receipt files (`assemble.edited_parts.receipts[i].file`) is accepted. Each receipt file is bound by sha256, then kept and sealed the same way as an occluder image (#888, closes #887).
+* The accepted review look (spacing, bar heights, accents, the flat stage and type) is now a set of named style tokens, and a guard test holds it (#885, closes #883).
+
+### Fixed
+
+* When `job open` refuses a source because its handoff failed, the `JOB_SOURCE_MISMATCH` message now carries the handoff's own code, the config path and the detail. Before, the message was empty. Other errors are unchanged (#888, closes #887).
+* The top-bar language choice shows as En or Kr on the same line as the mode buttons (#874, closes #873).
+* A package checkpoint comment is saved before its comment box closes, so a reconnect no longer loses it (#878, closes #848).
+* Selecting a part switches the chest editor to that part (#879, closes #847). The browser gate now runs all of its browser suites (closes #842).
+* Unsubmitted comments in ordinary parts mode survive a reload (#880, closes #821).
+* Changing an answer in a long interview keeps the panel's scroll position and focus (#881, closes #875).
+* The compare page's zoom controls use the same order and names as the other main views (#886, closes #884).
+
+### Changed
+
+* After publishing, the release workflow runs the installed main-path smoke on the version it just published (#877).
+* Two flaky tests are fixed: the checkpoint wire reconnect setup is idempotent, and the close-grace test no longer times two processes (#876, closes #870; #882, closes #836).
+
 ## 4.1.0
 
 Pending asks move into a shared row beneath the top bar with direct verdict actions, a top-bar Comment entry, full-body bottom-panel tabs with a Question tab for pictured questions, and preserved part selection and camera framing across in-place rebuilds.
