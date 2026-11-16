@@ -36,6 +36,7 @@ test('#887 edited_parts receipt file bound in draft config_inputs opens, publish
         path: relative(f.root, file).split('\\').join('/'), sha256,
       }))});
     const request = await f.publishRequest();
+    if (request.verb !== 'publish') throw new Error('Expected publication request');
     const result = await (await f.call({...request, result: {...request.result,
       path: relative(f.root, original.input).split('\\').join('/')}})).json();
     expect(result.error).toBeUndefined();
