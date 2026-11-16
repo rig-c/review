@@ -188,7 +188,8 @@ export function createJobFront(options: {
             });
             return new Response(body, { headers: { ...headers, 'Content-Type': 'application/x-ndjson' } });
         }
-        if (url.search && !(route === '' && ['?lang=en', '?lang=ko'].includes(url.search))) {
+        const partsDifferenceQuery = /^publications\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/instances\/[a-f0-9]{64}\/api\/stage-parts\/difference\/(0|[1-9]\d*)$/.test(route);
+        if (url.search && !partsDifferenceQuery && !(route === '' && ['?lang=en', '?lang=ko'].includes(url.search))) {
             return failure('JOB_REQUEST_INVALID', 400);
         }
         const instance = /^publications\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/instances\/([a-f0-9]{64})\/(.*)$/.exec(route);
@@ -436,8 +437,14 @@ export function retainedPublicationRoutes(session: JobSession) {
                 if(difference&&parts){
                     const url=new URL(request.url),threshold=url.searchParams.get('threshold'),footprints=url.searchParams.get('footprints');
                     if(!threshold||!/^\d{1,3}$/.test(threshold)||!['true','false'].includes(footprints??''))return failure('JOB_REQUEST_INVALID',400);
-                    const raster=await partsDifference(parts,Number(difference[1]),Number(threshold),footprints==='true'),png=new PNG({width:raster.width,height:raster.height});png.data=Buffer.from(raster.data);
-                    return new Response(request.method==='HEAD'?null:new Uint8Array(PNG.sync.write(png)),{headers:{...headers,'Content-Type':'image/png','X-Difference-Count':String(raster.count),'X-Difference-Covered':String(raster.covered),'X-Difference-Compared':String(raster.compared)}});
+                    try {
+                        const raster=await partsDifference(parts,Number(difference[1]),Number(threshold),footprints==='true'),png=new PNG({width:raster.width,height:raster.height});png.data=Buffer.from(raster.data);
+                        return new Response(request.method==='HEAD'?null:new Uint8Array(PNG.sync.write(png)),{headers:{...headers,'Content-Type':'image/png','X-Difference-Count':String(raster.count),'X-Difference-Covered':String(raster.covered),'X-Difference-Compared':String(raster.compared)}});
+                    } catch (error) {
+                        const code = error instanceof Error ? /^(PARTS_DIFFERENCE_UNAVAILABLE|PARTS_DIFFERENCE_PNG):/.exec(error.message)?.[1] : undefined;
+                        if (code) return failure(code, 400);
+                        throw error;
+                    }
                 }
                 const part = /^api\/stage-parts\/(image|page)\/(0|[1-9]\d*)$/.exec(path);
                 if (part && parts) {

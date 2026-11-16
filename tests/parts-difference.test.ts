@@ -68,9 +68,13 @@ test('#390 repair: footprint Off ignores fractional front geometry; On refuses e
  const box={x:0,y:0,w:1,h:1},raster={width:1,height:1,data:Uint8Array.from([10,20,30,255])},front={box:{...box,x:.5},raster};
  expect(differencePixels(raster,box,raster,[front],0,false).count).toBe(0);expect(()=>differencePixels(raster,box,raster,[front],0,true)).toThrow('PARTS_DIFFERENCE_ALIGNMENT');
 }));
-test('#390 repair: footprint Off ignores unsupported front encoding; On refuses exact operand encoding',()=>fixture(async root=>{
- await writeDifferencePackage(root,true);const path=join(root,'parts/front.png'),png=PNG.sync.read(await readFile(path));await writeFile(path,PNG.sync.write(png,{colorType:2}));const pkg=await loadPartsView(root);
+test('#390 repair: footprint Off ignores undecodable front PNG; On refuses it by name',()=>fixture(async root=>{
+ await writeDifferencePackage(root,true);const path=join(root,'parts/front.png'),bytes=await readFile(path);await writeFile(path,bytes.subarray(0,33));const pkg=await loadPartsView(root);
  expect((await partsDifference(pkg,0,0,false)).count).toBe(81);await expect(partsDifference(pkg,0,0,true)).rejects.toThrow('PARTS_DIFFERENCE_PNG');
+}));
+test('#896 valid RGB front operands normalize from their original bytes for footprint comparison',()=>fixture(async root=>{
+ await writeDifferencePackage(root,true);const path=join(root,'parts/front.png'),png=PNG.sync.read(await readFile(path));await writeFile(path,PNG.sync.write(png,{colorType:2}));const pkg=await loadPartsView(root);
+ expect((await partsDifference(pkg,0,0,false)).count).toBe(81);expect((await partsDifference(pkg,0,0,true)).count).toBe(1);
 }));
 
 test('#390 refuses a directory as the declared painting path', () => fixture(async root => {
