@@ -386,7 +386,7 @@ function renderCheckpoint(): void {
 }
 
 function setView(value: typeof view): void {view=value;renderLayout();}
-function chooseInspectionView(id:string):void {
+async function chooseInspectionView(id:string):Promise<void> {
  if(activeInterviewImages){const image=activeInterviewImages[Number(id.replace('interview-image-',''))];if(id.startsWith('interview-image-')&&image){activeInterviewImage=image;void showReference('',image);}return;}
  if(!partsSubject){
   if(id==='difference'){
@@ -407,8 +407,9 @@ function chooseInspectionView(id:string):void {
   return;
  }
  const overlay=document.getElementById('parts-overlay') as HTMLInputElement;
+ const subject=partsSubject;
+ if(!await subject.setComparison(id==='difference'?'difference':overlay.checked?'overlay':'part')||partsSubject!==subject)return;
  if(id==='difference')overlay.checked=false;
- partsSubject.setComparison(id==='difference'?'difference':overlay.checked?'overlay':'part');
  setView(id==='difference'?'rig':id as SingleLayout);
 }
 /** Availability follows the actual loaded image and declared native rig canvas, never a resized reference. */

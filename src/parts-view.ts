@@ -1130,10 +1130,9 @@ export async function partsDifference(pkg: PartsViewPackage, index: number, thre
   }
   const decode = async (path: string) => {
     const bytes = await readFile(path);
-    if (bytes[24] !== 8 || bytes[25] !== 6) {
-      refuse('PARTS_DIFFERENCE_PNG', 'exact RGBA8 operands required');
-    }
-    return PNG.sync.read(bytes);
+    // pngjs normalizes valid PNG colour types and bit depths from the bound bytes.
+    try { return PNG.sync.read(bytes); }
+    catch { return refuse('PARTS_DIFFERENCE_PNG', 'decodable PNG operands required'); }
   };
   const painting = await decode(pkg.paintingInRig!.abs);
   const part = await decode(pkg.imagePaths[index]!);

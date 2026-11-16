@@ -89,6 +89,8 @@ export function bindPartsSubject(host:{
  let selected:string|null=null,solo=false,comparison:PartsComparison=defaultPartsComparison(),token=0,disposed=false,busy=false,failed=false;
  let drawnFrame:{w:number;h:number}|null=null,drawnReferenceFrame:{w:number;h:number}|null=null;
  let drawnRegion:Box|null=null,drawnSolo=false;
+ let drawnComparison:PartsComparison|null=null;
+ let drawnNavigation:{selected:string|null;solo:boolean;hidden:string[]}|null=null;
  let original:Promise<HTMLImageElement>|null=null,comments:ReturnType<typeof bindStageComments<CommentRow,PartsPose>>|null=null;
  const makeCanvas=(w:number,h:number)=>Object.assign(document.createElement('canvas'),{width:w,height:h});
  const item=()=>data.items.find(item=>item.name===selected)??data.items[0]!;
@@ -143,10 +145,14 @@ export function bindPartsSubject(host:{
    const selectionChanged=drawnRegion?.name!==referenceBox?.name||drawnSolo!==!assembled();
    drawnRegion=referenceBox;drawnSolo=!assembled();
    if(reference){host.referenceCanvas.width=reference.width;host.referenceCanvas.height=reference.height;host.referenceCanvas.getContext('2d')!.drawImage(reference,0,0);drawnReferenceFrame={w:reference.width,h:reference.height};}
-   drawnFrame={w:frame.w,h:frame.h};failed=false;host.drawn({state:'loaded'});host.el('rig-empty').hidden=true;host.el('rig-label').textContent=t(assembled()?'Assembled parts':'Selected part');
+   drawnFrame={w:frame.w,h:frame.h};drawnComparison={...comparison};drawnNavigation={selected,solo,hidden:[...hidden]};failed=false;host.drawn({state:'loaded'});host.el('rig-empty').hidden=true;host.el('rig-label').textContent=t(assembled()?'Assembled parts':'Selected part');
    if(data.painting&&host.viewport.state.cameraSync&&selectionChanged)host.viewport.requestFit();
    host.viewport.fitCamera();comments?.refresh();
-  }catch(error){if(!disposed&&navigation===token){failed=true;drawnFrame=null;drawnReferenceFrame=null;host.drawn({state:'failed',reason:error instanceof Error?error.message:'PARTS_PAINT_FAILED'});host.canvas.getContext('2d')?.clearRect(0,0,host.canvas.width,host.canvas.height);host.referenceCanvas.getContext('2d')?.clearRect(0,0,host.referenceCanvas.width,host.referenceCanvas.height);host.message(error instanceof Error?error.message:'PARTS_PAINT_FAILED',true);throw error;}}
+  }catch(error){if(!disposed&&navigation===token){
+   if(comparison.mode==='difference'&&drawnComparison&&drawnFrame&&drawnNavigation){comparison={...drawnComparison};selected=drawnNavigation.selected;solo=drawnNavigation.solo;hidden.clear();for(const name of drawnNavigation.hidden)hidden.add(name);host.selectionChanged();host.drawn({state:'loaded'});}
+   else{failed=true;drawnFrame=null;drawnReferenceFrame=null;host.drawn({state:'failed',reason:error instanceof Error?error.message:'PARTS_PAINT_FAILED'});host.canvas.getContext('2d')?.clearRect(0,0,host.canvas.width,host.canvas.height);host.referenceCanvas.getContext('2d')?.clearRect(0,0,host.referenceCanvas.width,host.referenceCanvas.height);}
+   host.message(error instanceof Error?error.message:'PARTS_PAINT_FAILED',true);throw error;
+  }}
   finally{for(const bitmap of bitmaps)bitmap.close();if(navigation===token){busy=false;host.el('stage-layout').setAttribute('aria-busy','false');comments?.refresh();}}
  }
  const redraw=()=>{void paint().catch(()=>{});};
@@ -207,7 +213,7 @@ export function bindPartsSubject(host:{
   select:(name:string|null)=>{selected=name;if(name===null)solo=false;redraw();host.selectionChanged();},isolate:(value:boolean)=>{solo=value;redraw();host.selectionChanged();},
   show:(name:string,value:boolean)=>{if(value)hidden.delete(name);else hidden.add(name);redraw();},
   differenceAvailable:()=>data.differenceAvailable&&!!data.painting&&!failed,
-  comparison:()=>comparison,setComparison:(mode:PartsComparison['mode'])=>{comparison=mode==='difference'?{mode,opacity:comparison.opacity,threshold:0}:{mode,opacity:comparison.opacity};redraw();},
+  comparison:()=>comparison,setComparison:async(mode:PartsComparison['mode'])=>{const next:PartsComparison=mode==='difference'?{mode,opacity:comparison.opacity,threshold:0}:{mode,opacity:comparison.opacity};comparison=next;try{await paint();return !disposed&&comparison===next;}catch{return false;}},
   opacity:(value:number)=>{comparison.opacity=value;redraw();},paint,redraw,
   async ready(){if(data.painting)host.viewport.state.cameraSync=true;await paint();},
   dispose(){disposed=true;++token;comments?.dispose();images.clear();loaded.clear();assemblyAlpha.clear();},
