@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.3.0
+
+In parts mode, a comment area can now be started on a pin, and a saved area can be resized and moved. Opening a comment keeps the view you are on.
+
+### Added
+
+* Dragging from a parts pin draws a new area; a short press still opens the comment (#892, closes #891).
+* An open parts comment you can edit shows eight handles and a move surface. Enter saves the new area with the text, Escape discards it, and Shift+drag draws a new area. The part tags follow the new area until you change a tag yourself (#892, closes #891).
+
+### Changed
+
+* Opening a comment that matches the current screen keeps the current camera instead of jumping to the saved one (#892, closes #891).
+* CI and release use the tree-verdict action at core 149bca5, so a tag release on a main commit can reuse the main verdict for the same tree (#890).
+
 ## 4.2.0
 
 A job can now open a draft whose parts include owner-edited part files. A handoff it refuses now says why. The accepted look is held by named style tokens, and six screen bugs are fixed.
