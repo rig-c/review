@@ -18,7 +18,7 @@ test('#896 parts job admits only Difference queries and compares decoded bound R
     expect(actual.data).toEqual(Buffer.from(expected.data));
     expect(response.headers.get('x-difference-count')).toBe(String(expected.count));
     expect(f.operand[25]).toBe(2);
-    expect(await readFile(join(f.packageRoot, 'edited/body.png'))).toEqual(f.operand);
+    expect(await readFile(join(f.packageRoot, 'edited/body.png'))).toEqual(Buffer.from(f.operand));
     const retained = f.host.session.retainedSource(f.publication.publicationId);
     expect(retained.seals.some(file => file.path === 'out/edited/body.png')).toBe(true);
     for (const path of ['stage-parts', 'stage-parts/image/0', 'review', 'stage-parts/difference/00']) {
@@ -70,6 +70,6 @@ test('#896 decoder failure remains a named internal PNG refusal without changing
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({ok: false, error: {code: 'PARTS_DIFFERENCE_PNG', message: 'PARTS_DIFFERENCE_PNG'}});
     } finally {decode.mockRestore();}
-    expect(await readFile(join(f.packageRoot, 'parts/body.png'))).toEqual(f.operand);
+    expect(await readFile(join(f.packageRoot, 'parts/body.png'))).toEqual(Buffer.from(f.operand));
   } finally {await f.close();}
 });
