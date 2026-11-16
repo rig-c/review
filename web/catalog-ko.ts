@@ -164,6 +164,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "interview.delegate": "위임",
   "interview.open": "인터뷰 열기",
   "interview.close": "인터뷰 닫기",
+  "interview.noteLabel": "의견 (선택)",
+  "interview.notePlaceholder": "선택지로 다 말하지 못한 점을 적어 주세요",
   "PARTS_DIFFERENCE_PROVENANCE: declared path, lowercase SHA-256 and lanczos3-rgb-opaque required": "PARTS_DIFFERENCE_PROVENANCE: 선언된 경로, 소문자 SHA-256, lanczos3-rgb-opaque가 필요해요.",
   "PARTS_DIFFERENCE_PATH: literal portable inside-package path required": "PARTS_DIFFERENCE_PATH: 패키지 안의 이식 가능한 리터럴 경로가 필요해요.",
   "PARTS_DIFFERENCE_PATH: declared painting must be readable inside the package": "PARTS_DIFFERENCE_PATH: 선언된 원화를 패키지 안에서 읽을 수 있어야 해요.",

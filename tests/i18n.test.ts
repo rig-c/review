@@ -1145,7 +1145,7 @@ test('#764 joined interview submits retained notes byte-exact, omits absent note
     const form=dialog.querySelectorAll('form')[0]! as TestElement&{reportValidity():boolean};form.reportValidity=()=>true;
     const radio=form.querySelectorAll('input')[0]! as TestElement&{checked:boolean};radio.checked=true;
     for(const language of ['en','ko'] as const){setLanguagePreference(language);
-     expect(form.querySelectorAll('.interview-note').map(node=>node.textContent)).toEqual(item.expected===undefined?[]:[item.expected]);
+     expect(form.querySelectorAll('.interview-note').map(node=>node.textContent)).toEqual(item.expected?[item.expected]:[]);
      expect(form.querySelectorAll('textarea').every(node=>(node as any).name!=='note')).toBe(true);
     }
     expect(JSON.stringify(question)).toBe(before);
@@ -1154,7 +1154,7 @@ test('#764 joined interview submits retained notes byte-exact, omits absent note
     expect(posted!.note).toBe(item.expected);
     if(item.expected!==undefined)expect(Buffer.from(posted!.note as string)).toEqual(Buffer.from(item.expected));
     dispose();dispose=await mount();
-    expect(dialog.querySelectorAll('.interview-note').map((node:TestElement)=>node.textContent)).toEqual(item.expected===undefined?[]:[item.expected]);
+    expect(dialog.querySelectorAll('.interview-note').map((node:TestElement)=>node.textContent)).toEqual(item.expected?[item.expected]:[]);
    }finally{dispose?.();}
   }
  }finally{globalThis.fetch=previousFetch;setLanguagePreference(preference);if(previousDocument)Object.defineProperty(globalThis,'document',previousDocument);else delete (globalThis as any).document;}
@@ -1195,7 +1195,7 @@ test('#764 joined UI preserves planted notes through the real route, picks file 
     dispose=await mount();
     const form=dialog.querySelectorAll('form')[0]! as TestElement&{reportValidity():boolean};form.reportValidity=()=>true;
     const radio=form.querySelectorAll('input')[0]! as TestElement&{checked:boolean};radio.checked=true;
-    expect(form.querySelectorAll('.interview-note').map(node=>node.textContent)).toEqual(note===undefined?[]:[note]);
+    expect(form.querySelectorAll('.interview-note').map(node=>node.textContent)).toEqual(note?[note]:[]);
     expect(form.querySelectorAll('textarea').every(node=>(node as any).name!=='note')).toBe(true);
     await form.onsubmit!({preventDefault(){}});expect(posts).toBe(1);
     const file=await readFile(join(fixture.root,'picks',question.ref.sha256+'.json'),'utf8'),stored=JSON.parse(file);
@@ -1207,11 +1207,46 @@ test('#764 joined UI preserves planted notes through the real route, picks file 
     if(note!==undefined){expect(Buffer.from(stored.note)).toEqual(Buffer.from(note));expect(Buffer.from(reloaded.note)).toEqual(Buffer.from(note));}
     else expect(file).not.toContain('"note":');
     dispose();dispose=await mount();
-    expect(dialog.querySelectorAll('.interview-note').map((node:TestElement)=>node.textContent)).toEqual(note===undefined?[]:[note]);
+    expect(dialog.querySelectorAll('.interview-note').map((node:TestElement)=>node.textContent)).toEqual(note?[note]:[]);
     expect(await Promise.all(inputs.map(path=>readFile(join(fixture.root,path))))).toEqual(baseline);
    }finally{dispose?.();context?.stop();await fixture.close();}
   }
  }finally{globalThis.fetch=previousFetch;if(previousDocument)Object.defineProperty(globalThis,'document',previousDocument);else delete (globalThis as any).document;}
+});
+
+test('#901 editable interview question set renders one optional note textarea in EN/KO and switches to pre.interview-note when read-only',async()=>{
+ const set=await Bun.file(new URL('./fixtures/interview-open-725/evidence/options.json',import.meta.url)).json();
+ const preference=getLanguagePreference();
+ try{
+  const {doc}=makeTestDoc(),ask=set.asks[0],option=ask.options.find((option:any)=>option.kind==='value')!;
+  const savedNote='Prefilled note\n둘째 줄 의견';
+  const question={ref:{path:'evidence/options.json',sha256:'b'.repeat(64)},set,editable:true,images:[],hasParts:false,
+   saved:{spec:'rig-review/interview-picks@1',set:{path:'evidence/options.json',sha256:'b'.repeat(64)},answered_at:'2026-11-16T00:00:00Z',picks:[{ask:ask.id,option_id:option.id}],note:savedNote}};
+  const entry=createInterviewForm({question:question as never,id:'interview-answer-ask-1',answered:false,images:[],node:(tag,key)=>{const node=doc.createElement(tag);if(key)node.textContent=t(key);return node;}});
+  try{
+   const form=entry.form as unknown as TestElement;
+   for(const [language,labelText,placeholderText] of [['en','Your note (optional)',"Anything the choices don't cover"],['ko','의견 (선택)','선택지로 다 말하지 못한 점을 적어 주세요']] as const){
+    setLanguagePreference(language);entry.localize();
+    const notes=form.querySelectorAll('textarea').filter(node=>(node as any).name==='note');
+    expect(notes).toHaveLength(1);
+    const note=notes[0]! as TestElement&{id:string;value:string;maxLength:number;placeholder:string};
+    expect(note.id).toBe('interview-answer-ask-1-note');
+    expect(note.value).toBe(savedNote);
+    expect(note.maxLength).toBe(10000);
+    expect(note.getAttribute('maxlength')).toBe('10000');
+    expect(note.placeholder).toBe(placeholderText);
+    const labels=form.querySelectorAll('label').filter(node=>node.getAttribute('for')===note.id);
+    expect(labels).toHaveLength(1);
+    expect(labels[0]!.textContent).toBe(labelText);
+    expect(form.querySelectorAll('.interview-note')).toHaveLength(0);
+    expect(entry.read().note).toBe(savedNote);
+   }
+   entry.form.dataset.interviewAnswered='true';
+   entry.localize();
+   expect(form.querySelectorAll('textarea').filter(node=>(node as any).name==='note')).toHaveLength(0);
+   expect(form.querySelectorAll('.interview-note').map(node=>node.textContent)).toEqual([savedNote]);
+  }finally{entry.dispose();}
+ }finally{setLanguagePreference(preference);}
 });
 
 test('#764 shared interview preserves resolved Auto/Other pending state and historical note immutability',async()=>{

@@ -222,7 +222,8 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   const node:InterviewText=(tag,key)=>{const result=options.node?options.node(tag,key):element(tag,key===undefined?undefined:t(key));if(key!==undefined)copy.set(result,key);return result;};
   const form=options.form??make('form'),fields=options.fieldset??make('fieldset');
   if(!options.fieldset)form.append(fields);
-  form.className='interview-answer interview-grid';form.dataset.interviewAnswered=String(options.answered??Boolean(question.saved||question.answer));
+  const joined=options.id.startsWith('joined-interview-');
+  form.className='interview-answer interview-grid';form.dataset.interviewAnswered=String(options.answered??Boolean((joined&&question.saved)||question.answer));
   fields.className='interview-answer-fields';fields.id=options.id;fields.disabled=!question.editable;
   const heading=make('h3',question.set.question);fields.append(heading);
   const historical=question.answer?.choice as {picks?:Picks['picks'];note?:string}|undefined;
@@ -236,7 +237,14 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
     const answer=interviewAskGroup(item,{text:node,name:'choice.'+item.id,otherName:'other.'+item.id,pick,pendingHidden});
     fields.append(answer.group);return {item,answer};
   });
-  if(retainedNote!==undefined){const note=make('pre',retainedNote);note.className='interview-note';fields.append(note);}
+  const noteId=options.id+'-note',noteLabel=node('label','interview.noteLabel'),noteInput=make('textarea'),noteView=make('pre');
+  noteLabel.htmlFor=noteId;noteLabel.setAttribute('for',noteId);
+  noteInput.id=noteId;noteInput.setAttribute('id',noteId);noteInput.name='note';noteInput.setAttribute('name','note');
+  noteInput.maxLength=10000;noteInput.setAttribute('maxlength','10000');noteInput.value=retainedNote??'';
+  noteView.className='interview-note';
+  const readOnly=()=>!question.editable||joined||form.dataset.interviewAnswered==='true',editableOnInit=!readOnly();
+  if(editableOnInit)fields.append(noteLabel,noteInput);
+  else if(retainedNote){noteView.textContent=retainedNote;fields.append(noteView);}
   const context=make('div');context.id=options.id+'-source';context.className='interview-image-context';
   if(options.source)context.append(options.source);
   context.append(node('h2',question.hasParts?'interview.parts':'interview.source'));
@@ -250,6 +258,12 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   const showImage=(index:number)=>{view?.dispose();view?.element.remove();view=interviewImageView(options.images,index,showImage,context);art.append(view.element);};
   const refresh=()=>preserveScrollAndFocus(fields,()=>{
     submit.hidden=!question.editable||form.dataset.interviewAnswered==='true';
+    noteInput.placeholder=t('interview.notePlaceholder');noteInput.setAttribute('placeholder',noteInput.placeholder);
+    if(readOnly()&&noteInput.parentElement){
+      noteLabel.remove();
+      if(noteInput.value){noteView.textContent=noteInput.value;if(typeof noteInput.replaceWith==='function')noteInput.replaceWith(noteView);else{noteInput.remove();fields.append(noteView);}}
+      else noteInput.remove();
+    }
     provenance.textContent=t('interview.provenance',[question.set.drafted_by,question.set.drafted_at]);
     const questions=typeof options.questions==='function'?options.questions():options.questions;
     const items=questions?.map((item,index)=>({...item,answered:index===(options.selected??0)?form.dataset.interviewAnswered==='true':item.answered}))??[{label:question.set.question+' · '+question.set.id,answered:form.dataset.interviewAnswered==='true'}];
@@ -264,6 +278,6 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   form.addEventListener('input',refresh);form.addEventListener('change',refresh);form.addEventListener('job-form-language',localize);
   try{if(!options.mainView&&options.images.length)showImage(0);else{art.hidden=true;fields.append(context);}fields.append(submit);refresh();}catch(error){dispose();throw error;}
   return {form,fieldset:fields,submit,status,retainedNote,
-    read:()=>jobInterviewValue(question.set.question,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),retainedNote??''),
+    read:()=>jobInterviewValue(question.set.question,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),editableOnInit?noteInput.value:(retainedNote??'')),
     localize,dispose};
 }

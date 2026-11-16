@@ -530,10 +530,12 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .interview-answer .interview-bottom-resize{grid-row:3}
 .interview-image-context{grid-row:4;overflow:auto;min-height:0;padding:var(--space-2)}
 .interview-answer-fields{grid-column:3;grid-row:1;min-height:0;overflow:auto;border:0;padding:0 var(--space-1)!important}
-.interview-answer-fields>h3{margin:var(--space-1) 0 var(--space-2)}
-.interview-answer .interview-pending{margin:var(--space-2) 0;line-height:1.3}
-.interview-answer .interview-ask{min-width:0;margin:var(--space-2) 0!important;padding-top:var(--space-1)!important}
+.interview-answer-fields>h3{margin:var(--space-1) 0}
+.interview-answer .interview-pending{margin:var(--space-1) 0;line-height:1.3}
+.interview-answer .interview-ask{min-width:0;margin:var(--space-1) 0!important;padding-top:var(--space-1)!important}
+.interview-answer legend{margin-bottom:var(--space-1)}
 .interview-answer .interview-option{line-height:1.25}
+.interview-answer label:not(.interview-option),.interview-answer button[type=submit]{margin-top:var(--space-1)}
 .interview-answer textarea:not([hidden]){min-height:3rem;height:3rem;margin:var(--space-1) 0}
 .interview-answer>p[role=status]{grid-column:1 / -1;grid-row:2;margin:var(--space-1)}
 .interview-delegate{justify-self:start;font-size:var(--font-size-meta);color:var(--fg-muted)}
