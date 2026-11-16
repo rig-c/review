@@ -36,8 +36,8 @@ test('#887 edited_parts receipt file bound in draft config_inputs opens, publish
         path: relative(f.root, file).split('\\').join('/'), sha256,
       }))});
     const request = await f.publishRequest();
-    request.result.path = relative(f.root, original.input).split('\\').join('/');
-    const result = await (await f.call(request)).json();
+    const result = await (await f.call({...request, result: {...request.result,
+      path: relative(f.root, original.input).split('\\').join('/')}})).json();
     expect(result.error).toBeUndefined();
     expect(result.ok).toBe(true);
     const retained = f.session.retainedSource(result.value.publicationId);
@@ -59,5 +59,20 @@ test('#887 edited_parts receipt directory refuses by its config reference name',
     await expect(loadReview(join(f.root, 'out'))).rejects.toThrow(
       'HANDOFF_INPUT_INVALID config assemble.edited_parts.receipts[0].file:');
     await expect(loadReview(join(f.root, 'out'))).rejects.toThrow('is not a regular file');
+  } finally { await f.close(); }
+});
+
+test('#887 publication failure surfaces the malformed receipt reference and original HANDOFF detail', async () => {
+  const f = await jobFixture();
+  try {
+    await mkdir(join(f.root, 'out/edited/torso.png'), {recursive: true});
+    await writeFile(join(f.root, 'out/config.json'), JSON.stringify({assemble: {
+      edited_parts: {dir: 'edited', receipts: [{file: 'torso.png'}]},
+    }}));
+    const result = await (await f.call(await f.publishRequest())).json();
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('JOB_SOURCE_MISMATCH');
+    expect(result.error.message).toContain('HANDOFF_INPUT_INVALID config assemble.edited_parts.receipts[0].file:');
+    expect(result.error.message).toContain('is not a regular file');
   } finally { await f.close(); }
 });

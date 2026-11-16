@@ -18,6 +18,7 @@ import type {
 } from './job-contract.ts';
 import { checkedPath, jsonObject, readProject, readRegular, type InterviewQuestion, type InterviewSet } from './interview-project.ts';
 import { loadReview } from './manifest.ts';
+import { HandoffError } from './handoff.ts';
 import { openKey } from './open.ts';
 import { assertReviewUnchanged } from './reference.ts';
 import {
@@ -1324,7 +1325,9 @@ export async function prepareJobSource(options: {
   try {
     const target = checkedPath(root.path, request.result.path, lstatSync(join(root.path, request.result.path)).isDirectory());
     review = await loadReview(target);
-  } catch { throw new JobError('JOB_SOURCE_MISMATCH'); }
+  } catch (error) {
+    throw new JobError('JOB_SOURCE_MISMATCH', error instanceof HandoffError ? error.message : undefined);
+  }
   const wanted = new Map<string, string | null>();
   function add(path: string, sha256: string | null = null): void {
     jobPath(path);
