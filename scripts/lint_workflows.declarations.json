@@ -14,7 +14,7 @@
       "guard": {
         "job": "tree-verdict",
         "step": "reuse",
-        "uses": "rig-c/core/.github/actions/tree-verdict@08b45c6fbd3664a0dc77050c04b7359d2346f7a6",
+        "uses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
         "sourceWorkflow": ".github/workflows/check.yml",
         "declaration": "scripts/tree-verdict.json"
       }
@@ -38,7 +38,7 @@
           },
           "verdictStep": "reuse",
           "declaration": "scripts/tree-verdict.json",
-          "actionUses": "rig-c/core/.github/actions/tree-verdict@08b45c6fbd3664a0dc77050c04b7359d2346f7a6",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
           "evidenceEnv": "TREE_VERDICT_PATH",
           "invocations": [
             {
@@ -61,7 +61,7 @@
           },
           "verdictStep": "reuse",
           "declaration": "scripts/tree-verdict.json",
-          "actionUses": "rig-c/core/.github/actions/tree-verdict@08b45c6fbd3664a0dc77050c04b7359d2346f7a6",
+          "actionUses": "rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f",
           "evidenceEnv": "TREE_VERDICT_PATH",
           "invocations": [
             {
