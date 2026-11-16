@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.4.0
+
+In a parts job, the Difference view works again, and a failed Difference keeps the view you were on. Comment mode now stays on until you turn it off, and you can pan while it is on.
+
+### Fixed
+
+* In a parts job, Difference no longer fails with `JOB_REQUEST_INVALID`. An edited part saved as 8-bit RGB is decoded and compared too (#898, closes #896).
+* A failed Difference paint keeps the last picture, selection and hidden layers, so you can go back to Side by side without a reload (#898, closes #896).
+
+### Changed
+
+* Comment mode turns on and off only with its button or C. Escape now cancels the open draft or edit and leaves the mode on (#899, closes #897).
+* Holding Space and dragging, or dragging with the right mouse button, pans the view, also in comment mode. The browser menu no longer opens on the view, but text fields keep it (#899, closes #897).
+
 ## 4.3.0
 
 In parts mode, a comment area can now be started on a pin, and a saved area can be resized and moved. Opening a comment keeps the view you are on.
