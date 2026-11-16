@@ -255,6 +255,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   const view=key as StageComment['viewport'],local=(e:PointerEvent)=>{const r=pane!.getBoundingClientRect();return {x:Math.max(0,Math.min(pane!.clientWidth,e.clientX-r.left-pane!.clientLeft)),y:Math.max(0,Math.min(pane!.clientHeight,e.clientY-r.top-pane!.clientTop))};};
   const down=(e:PointerEvent)=>{
    if(e.button!==0||!e.isPrimary||spaceHeld()){if(spaceHeld()&&(e.target as Element)?.closest?.('.stage-comment-pin'))suppressPinClick=true;return;}
+   suppressPinClick=false;
    const target=e.target as Element,pin=host.codec?.geometry?target.closest<HTMLButtonElement>('.stage-comment-pin'):null;
    const handle=target.closest<HTMLElement>('[data-comment-handle]')?.dataset.commentHandle;
    if(geometryEdit?.view===view&&handle&&!e.shiftKey){

@@ -304,7 +304,7 @@ for(const lang of (redMode?['en']:['en','ko']) as ('en'|'ko')[]){
     return {x:r.left+r.width/2,y:r.top+r.height/2};
    })()`);
 
-   // Bar 2: In comment mode, a left drag with Space held pans the camera, creates no mark, does not open a pin under the pointer, and leaves no pending area.
+   // Bar 2: In comment mode, a left drag with Space held pans the camera, creates no mark, does not open a pin under the pointer, leaves no pending area, and after releasing Space clicking that pin opens it.
    await check(`${kind} ${lang} bar2 space left-drag pan over pin`,async()=>{
     await resetMode();
     const startAt=await pinCenter(),before=await panPos();
@@ -317,13 +317,18 @@ for(const lang of (redMode?['en']:['en','ko']) as ('en'|'ko')[]){
     const after=await panPos(),s=await modeState();
     assert.ok(Math.abs(after.x-before.x-36)<=2&&Math.abs(after.y-before.y-22)<=2,`Space+left-drag panned camera (before=${JSON.stringify(before)}, after=${JSON.stringify(after)})`);
     assert.equal(s.items,1,'creates no mark');
-    assert.equal(s.composer,false,'pin under pointer does not open');
+    assert.equal(s.composer,false,'pin under pointer does not open during Space-drag');
     assert.equal(s.regions,1,'no pending area remains after release');
     assert.equal(s.active,true,'comment mode stays on');
-    return {delta:{dx:after.x-before.x,dy:after.y-before.y},state:s};
+    await click(p,`#${screen!.viewportId} .stage-comment-pin`);
+    await settle();
+    const openedAfterSpaceDrag=await modeState();
+    assert.equal(openedAfterSpaceDrag.composer,true,'clicking pin after releasing Space opens it');
+    await pressKey('Escape');
+    return {delta:{dx:after.x-before.x,dy:after.y-before.y},openedAfterSpaceDrag:openedAfterSpaceDrag.composer,state:s};
    });
 
-   // Bar 3a: In comment mode, a right-button drag without Space held pans, creates no mark, does not open a pin, and leaves no pending area.
+   // Bar 3a: In comment mode, a right-button drag without Space held pans, creates no mark, does not open a pin, leaves no pending area, and clicking that pin afterward opens it.
    await check(`${kind} ${lang} bar3 right-drag pan without space over pin`,async()=>{
     await resetMode();
     const startAt=await pinCenter(),before=await panPos();
@@ -331,10 +336,15 @@ for(const lang of (redMode?['en']:['en','ko']) as ('en'|'ko')[]){
     const after=await panPos(),s=await modeState();
     assert.ok(Math.abs(after.x-before.x+30)<=2&&Math.abs(after.y-before.y-18)<=2,`Right-drag panned camera (before=${JSON.stringify(before)}, after=${JSON.stringify(after)})`);
     assert.equal(s.items,1,'creates no mark');
-    assert.equal(s.composer,false,'pin under pointer does not open');
+    assert.equal(s.composer,false,'pin under pointer does not open during right-drag');
     assert.equal(s.regions,1,'no pending area remains after release');
     assert.equal(s.active,true,'comment mode stays on');
-    return {delta:{dx:after.x-before.x,dy:after.y-before.y},state:s};
+    await click(p,`#${screen!.viewportId} .stage-comment-pin`);
+    await settle();
+    const openedAfterRightDrag=await modeState();
+    assert.equal(openedAfterRightDrag.composer,true,'clicking pin after right-drag opens it');
+    await pressKey('Escape');
+    return {delta:{dx:after.x-before.x,dy:after.y-before.y},openedAfterRightDrag:openedAfterRightDrag.composer,state:s};
    });
 
    // Bar 3b (owner's exact sentence): In comment mode, Space held + right-button drag pans.

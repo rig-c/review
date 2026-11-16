@@ -731,22 +731,31 @@ test('#897 Escape keeps comment mode and list open in all four cases, and Space-
   expect(ui.pane.children.some(n=>n.className.includes('stage-comment-composer'))).toBe(false);
   expect(ui.tool.active()).toBe(true);
   expect(ui.list().hidden).toBe(false);
-  // Space-drag and right-drag pan in comment mode without creating a mark.
+  // Space-drag and right-drag pan in comment mode without creating a mark, and clicking a pin after releasing Space still opens it even when pointer capture prevented a pin-targeted click on the Space-drag.
+  lockedIds.clear();
+  const pin=ui.pane.children.find(n=>n.className==='stage-comment-layer')!.children.find(n=>n.className.includes('stage-comment-pin'))!;
+  const pinTarget={closest:(sel:string)=>sel.includes('.stage-comment-pin')||sel.includes('button')?pin:null};
   (globalThis.document as any).dispatch('keydown',{key:' ',code:'Space',target:{},preventDefault(){}});
   expect(panSpaceHeld()).toBe(true);
-  ui.pane.dispatch('pointerdown',{button:0,isPrimary:true,pointerId:11,clientX:10,clientY:10,target:{closest:()=>null},preventDefault(){},stopImmediatePropagation(){}});
-  ui.pane.dispatch('pointermove',{button:-1,isPrimary:true,pointerId:11,clientX:35,clientY:25,target:{closest:()=>null},preventDefault(){},stopImmediatePropagation(){}});
-  await ui.pane.emit('pointerup',{button:0,isPrimary:true,pointerId:11,clientX:35,clientY:25,target:{closest:()=>null},preventDefault(){},stopImmediatePropagation(){}});
+  ui.pane.dispatch('pointerdown',{button:0,isPrimary:true,pointerId:11,clientX:10,clientY:10,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+  ui.pane.dispatch('pointermove',{button:-1,isPrimary:true,pointerId:11,clientX:35,clientY:25,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+  await ui.pane.emit('pointerup',{button:0,isPrimary:true,pointerId:11,clientX:35,clientY:25,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
   (globalThis.window as any).dispatch('keyup',{key:' ',code:'Space'});
   expect(panSpaceHeld()).toBe(false);
   expect(pans).toEqual([[25,15]]);
   expect(ui.tool.draft()).toBe(false);
+  // Next ordinary click on that pin (after bindPan pointer capture swallowed the Space-drag's pin click target) is not suppressed.
+  ui.pane.dispatch('pointerdown',{button:0,isPrimary:true,pointerId:13,clientX:10,clientY:10,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+  await ui.pane.emit('pointerup',{button:0,isPrimary:true,pointerId:13,clientX:10,clientY:10,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+  let pinClickStopped=false;
+  ui.pane.dispatch('click',{isTrusted:true,detail:1,target:pinTarget,preventDefault(){pinClickStopped=true;},stopImmediatePropagation(){pinClickStopped=true;}});
+  expect(pinClickStopped).toBe(false);
   // Right-drag without Space and with Space.
   for(const hold of [false,true]){
    if(hold)(globalThis.document as any).dispatch('keydown',{key:' ',code:'Space',target:{},preventDefault(){}});
-   ui.pane.dispatch('pointerdown',{button:2,isPrimary:true,pointerId:12,clientX:35,clientY:25,target:{closest:()=>null},preventDefault(){},stopImmediatePropagation(){}});
-   ui.pane.dispatch('pointermove',{button:-1,isPrimary:true,pointerId:12,clientX:20,clientY:15,target:{closest:()=>null},preventDefault(){},stopImmediatePropagation(){}});
-   await ui.pane.emit('pointerup',{button:2,isPrimary:true,pointerId:12,clientX:20,clientY:15,target:{closest:()=>null},preventDefault(){},stopImmediatePropagation(){}});
+   ui.pane.dispatch('pointerdown',{button:2,isPrimary:true,pointerId:12,clientX:35,clientY:25,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+   ui.pane.dispatch('pointermove',{button:-1,isPrimary:true,pointerId:12,clientX:20,clientY:15,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
+   await ui.pane.emit('pointerup',{button:2,isPrimary:true,pointerId:12,clientX:20,clientY:15,target:pinTarget,preventDefault(){},stopImmediatePropagation(){}});
    if(hold)(globalThis.window as any).dispatch('keyup',{key:' ',code:'Space'});
   }
   expect(pans).toEqual([[25,15],[-15,-10],[-15,-10]]);
