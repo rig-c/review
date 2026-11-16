@@ -13,6 +13,8 @@ import {createJobFront} from '../src/job-front.ts';
 import {jobHash} from '../src/job-api.ts';
 import {parseCommentsAct, projectComments, type JobComment} from '../src/job-host.ts';
 import commentsLegacy from './fixtures/comments-contract-legacy.json';
+import {JobSession} from '../src/job-session.ts';
+import {JobError, JobStore} from '../src/job-store.ts';
 
 const permutedFeedbackComment = (): JobComment => ({
   anchor: {category: 'defect', target: {name: 'sleeve', kind: 'slot'}, frameEnd: 3, frameStart: 3, id: 'permuted-feedback'},
@@ -106,6 +108,138 @@ test('#646 rig-still-new-version: prepared raw reader/CLI reuse existing still b
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
 async function fixture() { const f = await jobFixture(); fixtures.push(f); return f; }
+
+async function subscriptionDeadline<Value>(pending: Promise<Value>): Promise<Value> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([pending, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('Job subscription exceeded 1500ms')), 1500);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+test('#900 scalar job revision observes publish and sealClose without loading documents', async () => {
+  const f = await fixture(), store = new JobStore(f.state, {readonly: true});
+  const get = spyOn(store, 'get');
+  try {
+    const initial = store.revision(f.session.jobId);
+    let missing: unknown;
+    try { store.revision('missing-job'); } catch (error) { missing = error; }
+    expect(missing).toBeInstanceOf(JobError);
+    expect(missing).toMatchObject({code: 'JOB_UNKNOWN'});
+    await f.publish();
+    const published = store.revision(f.session.jobId);
+    expect(published).toBeGreaterThan(initial);
+    const response = await f.call({...f.base(), verb: 'close', expectedGeneration: f.session.status().generation,
+      idempotencyKey: '900-revision-close', reason: 'synthetic revision control'});
+    expect((await response.json()).ok).toBe(true);
+    expect(store.revision(f.session.jobId)).toBeGreaterThan(published);
+    expect(get).not.toHaveBeenCalled();
+  } finally { get.mockRestore(); store.close(); }
+  let closed: unknown;
+  try { store.revision(f.session.jobId); } catch (error) { closed = error; }
+  expect(closed).toBeInstanceOf(JobError);
+  expect(closed).toMatchObject({code: 'JOB_STORAGE_FAILED'});
+});
+
+test('#900 an already waiting subscription sees an independent attachment publish, ask and close', async () => {
+  const f = await fixture(), abort = new AbortController();
+  const iterator = f.ports.subscribeJob({jobId: f.session.jobId, after: null, signal: abort.signal})[Symbol.asyncIterator]();
+  let pending = iterator.next();
+  let attached: JobSession | undefined;
+  try {
+    // Start the empty owner wait before adopting the independent writer connection.
+    await Bun.sleep(0);
+    attached = JobSession.openReadOnly({root: f.root, stateDir: f.state, fingerprint: 'f'.repeat(64),
+      reviewer: {id: 'declared-owner', role: 'owner'}, readPublished: async () => f.getContext(),
+      partsEnumerator: f.partsEnumerator}, f.session.jobId);
+    const ports = createJobHostPorts(attached, f.origin);
+    const call = async (body: unknown) => (await ports.handleJobApi(new Request(f.origin + `/jobs/${f.session.jobId}/api`, {
+      method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + f.credentials.agent},
+      body: JSON.stringify(body),
+    }))).json();
+    const published = await call(await f.publishRequest());
+    expect(published.ok).toBe(true);
+    expect(f.session.status().publication?.publicationId).toBe(published.value.publicationId);
+    const first = await subscriptionDeadline(pending);
+    expect(first.done).toBe(false);
+    expect(first.value).toMatchObject({type: 'published', publication: {publicationId: published.value.publicationId}});
+    pending = iterator.next();
+    await Bun.sleep(0);
+    const asked = await call({...f.base(), verb: 'ask', expectedGeneration: attached.status().generation,
+      idempotencyKey: '900-attached-ask', publicationId: published.value.publicationId,
+      subject: {kind: 'checkpoint', checkpointId: 'step-one'}});
+    expect(asked.ok).toBe(true);
+    const second = await subscriptionDeadline(pending);
+    expect(second.done).toBe(false);
+    expect(second.value).toMatchObject({type: 'pending', ask: {askId: asked.value.askId}});
+    expect(second.value?.cursor).not.toBe(first.value?.cursor);
+    pending = iterator.next();
+    await Bun.sleep(0);
+    const closed = await call({...f.base(), verb: 'close', expectedGeneration: attached.status().generation,
+      idempotencyKey: '900-attached-close', reason: 'synthetic attachment control'});
+    expect(closed.ok).toBe(true);
+    expect((await subscriptionDeadline(pending)).value).toMatchObject({type: 'closed'});
+    pending = iterator.next();
+    expect(await subscriptionDeadline(pending)).toEqual({done: true, value: undefined});
+  } finally {
+    abort.abort();
+    await pending.catch(() => {});
+    await iterator.return?.();
+    attached?.dispose();
+  }
+});
+
+test('#900 idle subscriptions poll scalar revisions, clean up on abort and leave agent next unpolled', async () => {
+  const f = await fixture(), abort = new AbortController(), agentAbort = new AbortController();
+  const get = spyOn(JobStore.prototype, 'get'), revision = spyOn(JobStore.prototype, 'revision');
+  const iterator = f.ports.subscribeJob({jobId: f.session.jobId, after: null, signal: abort.signal})[Symbol.asyncIterator]();
+  const pending = iterator.next();
+  let agent: ReturnType<typeof f.call> | undefined;
+  try {
+    await Bun.sleep(0);
+    const reads = get.mock.calls.length, probes = revision.mock.calls.length;
+    await Bun.sleep(600);
+    expect(revision.mock.calls.length).toBeGreaterThan(probes);
+    expect(get.mock.calls.length).toBe(reads);
+    abort.abort();
+    expect(await subscriptionDeadline(pending)).toEqual({done: true, value: undefined});
+    const stopped = revision.mock.calls.length;
+    await Bun.sleep(300);
+    expect(revision.mock.calls.length).toBe(stopped);
+    agent = f.call({...f.base(), verb: 'next', after: null, waitMs: 1000}, f.credentials.agent, agentAbort.signal);
+    await Bun.sleep(300);
+    expect(revision.mock.calls.length).toBe(stopped);
+    agentAbort.abort();
+    expect((await (await agent).json()).error.code).toBe('JOB_REQUEST_INVALID');
+  } finally {
+    abort.abort(); agentAbort.abort();
+    await pending.catch(() => {});
+    await iterator.return?.();
+    await agent?.catch(() => {});
+    get.mockRestore(); revision.mockRestore();
+  }
+});
+
+test('#900 a revision polling storage failure rejects the subscription and stops its timer', async () => {
+  const f = await fixture(), abort = new AbortController();
+  const revision = spyOn(JobStore.prototype, 'revision');
+  const iterator = f.ports.subscribeJob({jobId: f.session.jobId, after: null, signal: abort.signal})[Symbol.asyncIterator]();
+  const pending = iterator.next();
+  try {
+    await Bun.sleep(0);
+    revision.mockImplementation(() => { throw new JobError('JOB_STORAGE_FAILED'); });
+    await expect(subscriptionDeadline(pending)).rejects.toMatchObject({code: 'JOB_STORAGE_FAILED'});
+    const stopped = revision.mock.calls.length;
+    await Bun.sleep(300);
+    expect(revision.mock.calls.length).toBe(stopped);
+  } finally {
+    abort.abort();
+    await pending.catch(() => {});
+    await iterator.return?.();
+    revision.mockRestore();
+  }
+});
 
 async function consumerCLI(locator: string, actId: string, grant: string, destination?: string) {
   const args = [process.execPath, join(import.meta.dir, '../src/entry.ts'), 'session', 'fetch-act',

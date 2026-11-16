@@ -1,4 +1,5 @@
 /** Lane B's frozen-port fake. This proves window behavior, never backend authority. */
+import assert from 'node:assert/strict';
 import { JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_API_SCHEMA } from '../../src/job-contract.ts';
 import type { ActV3, DisplayPublicationV3, EventV3, JobAct, JobDisplayPublication, JobDisplayReceipt, JobEvent, JobHostPorts, JobPendingAsk, JobPublication, JobResult, JobSourceBinding, JobEnabledActKind, JobActValues, JobCommentsAct, PendingAskV3, } from '../../src/job-contract.ts';
 export function fixturePublication(index = 1): JobDisplayPublication {
@@ -217,7 +218,7 @@ import {writeComparisonPackage} from './parts-comparison-package.ts';
 /** Declared synthetic visual/producer context over a real retained Create question.
  * It proves window transport, not Create #184 or Parts' enumerator/writer acceptance.
  */
-export async function scriptedJobWindowFixture(options: {c5Parts?: 'mesh' | 'no-mesh'} = {}) {
+export async function scriptedJobWindowFixture(options: {c5Parts?: 'mesh' | 'no-mesh'; attachedPublisher?: boolean} = {}) {
     const f = await realJobWindowFixture();
     await joinedVerdictFixture(f.input.root, '2-rigging-answers');
     f.input.setRecordPath('project.json');
@@ -267,17 +268,35 @@ export async function scriptedJobWindowFixture(options: {c5Parts?: 'mesh' | 'no-
     };
     f.input.setPartsReferences(context.parts.images.map(({path, role}) => ({path, role})));
     f.input.setContext(context);
+    let attached: Awaited<ReturnType<typeof startJobHost>> | undefined;
+    if (options.attachedPublisher) {
+        try {
+            attached = await startJobHost(f.hostOptions);
+            assert.equal(attached.reused, true, 'publisher reuses the ordinary owner host');
+            assert.notEqual(attached.session, f.host.session, 'publisher has an independent attached session');
+            assert.equal(attached.session.jobId, f.host.session.jobId);
+        } catch (error) {attached?.stop(); await f.close(); throw error;}
+    }
     let generation = 0;
     let sequence = 0;
+    let publishResponseAt: number | null = null;
     async function agent(verb: 'publish' | 'ask' | 'next' | 'close', value: Record<string, unknown>) {
         const mutation = verb === 'next' ? {} : {expectedGeneration: generation, idempotencyKey: 'window-' + ++sequence};
-        const response = await f.call({schema: JOB_API_SCHEMA, jobId: f.host.session.jobId,
-            requestId: randomUUID(), verb, ...mutation, ...value});
+        const body = {schema: JOB_API_SCHEMA, jobId: f.host.session.jobId,
+            requestId: randomUUID(), verb, ...mutation, ...value};
+        // Create's publishPending writes through its attachment's local ports, not owner HTTP.
+        const response = attached ? await attached.ports.handleJobApi(new Request(f.locator + '/api', {
+            method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + f.credentials.agent},
+            body: JSON.stringify(body),
+        })) : await f.call(body);
+        if (verb === 'publish') publishResponseAt = performance.now();
         const result = await response.json();
         generation = result.generation;
         return result;
     }
     return {...f, question, packageRoot,
+        publishResponseAt: () => publishResponseAt,
+        async close() {try {attached?.stop();} finally {await f.close();}},
         async publish(stage: 'parts' | 'rig' | 'direction', revision: string = stage, options?: {stripShortAnimation?: boolean}) {
             await agent('next', {after: null, waitMs: 0});
             const model = structuredClone(originalModel);
