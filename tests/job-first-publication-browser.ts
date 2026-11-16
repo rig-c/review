@@ -78,9 +78,13 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
   const ready = `document.body.dataset.ready==='true' && !document.body.inert &&
     !!document.querySelector('#rig-viewport') && !!document.querySelector('[data-part-list] button')`;
   async function screen(label: string, publication: JobPublication) {
+    const catalog = lang === 'en' ? enCatalog : koCatalog;
+    // Attached ask completion precedes owner-stream delivery; await the actual verdict controls.
     await wait(label, () => page!.evaluate<boolean>(`(${ready}) &&
       document.querySelector('#provenance-full')?.textContent.includes(${JSON.stringify(publication.source.sourceHash)}) &&
-      !!document.querySelector('#save:not(:disabled)')`));
+      !!document.querySelector('#save:not(:disabled)') &&
+      document.querySelector('#save')?.textContent===${JSON.stringify(catalog['Approve'])} &&
+      document.querySelector('#request-changes')?.textContent===${JSON.stringify(catalog['Request changes'])}`));
     const state = await page!.evaluate<{language: string; title: string; sourceHash: string; parts: string[];
       counts: number[]; approve: string; changes: string; pending: string}>(`(()=>({
       language:document.documentElement.lang,title:document.querySelector('#package-title').textContent,
@@ -91,7 +95,6 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
       pending:document.querySelector('#review-status').value
     }))()`);
     cases.push({label, state});
-    const catalog = lang === 'en' ? enCatalog : koCatalog;
     assert.equal(state.language, lang);
     assert.equal(state.title, 'out', 'existing parts title uses the fixture package basename');
     assert.equal(state.sourceHash, publication.source.sourceHash);
