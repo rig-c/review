@@ -93,13 +93,16 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
       document.querySelector('#request-changes')?.textContent===${JSON.stringify(catalog['Request changes'])} &&
       document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog[stage==='parts'?'Check the parts and meshes.':'Check the rig and motion.'])}`));
     const state = await page!.evaluate<{language: string; title: string; sourceHash: string; parts: string[];
-      counts: number[]; approve: string; changes: string; pending: string}>(`(()=>({
+      counts: number[]; approve: string; changes: string; pending: string; message: string; layoutState: string; partStatus: string}>(`(()=>({
       language:document.documentElement.lang,title:document.querySelector('#package-title').textContent,
       sourceHash:JSON.parse(document.querySelector('#provenance-full').textContent).sourceHash,
       parts:[...document.querySelectorAll('[data-part-list] button[data-slot]')].map(n=>n.dataset.slot),
       counts:['#app','.topbar','.layout','#rig-viewport','#zoom-in','#zoom-out','#fit','#native-one','#view-menu','#save','#request-changes'].map(s=>document.querySelectorAll(s).length),
       approve:document.querySelector('#save').textContent,changes:document.querySelector('#request-changes').textContent,
-      pending:document.querySelector('#review-status').value
+      pending:document.querySelector('#review-status').value,
+      message:document.querySelector('#message').textContent,
+      layoutState:document.querySelector('#layout-state').textContent,
+      partStatus:document.querySelector('[data-part-status]').textContent
     }))()`);
     cases.push({label, state});
     assert.equal(state.language, lang);
@@ -110,6 +113,10 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
     assert.equal(state.approve, catalog['Approve']);
     assert.equal(state.changes, catalog['Request changes']);
     assert.equal(state.pending, 'pending', 'opening does not approve');
+    const readyMessage = catalog[stage === 'parts' ? 'Parts ready. Source files remain unchanged.' : 'Record review status and structured feedback while preserving sources. Motion is read only.'];
+    assert.ok([publication.label, readyMessage].includes(state.message), 'status line shows the post-publication message');
+    assert.equal(state.layoutState, catalog['Side by side']);
+    assert.equal(state.partStatus, stage === 'parts' ? (lang === 'en' ? '2 parts' : '파츠 2개') : (lang === 'en' ? '1 declared slots · 1 results' : '선언된 슬롯 1개 · 결과 1개'));
     await writeFile(join(out, label + '.png'), await page!.screenshot());
   }
   try {
@@ -194,12 +201,20 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
         window.__review904Rects=window.__review904GeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};});
         return {counts:selectors.map(selector=>document.querySelectorAll(selector).length),rects:window.__review904Rects,
           verdicts:['#save','#request-changes','#review-status','#workspace-pending-ask'].filter(selector=>document.querySelector(selector)?.checkVisibility()),
-          prompt:document.querySelector('#workspace-ask-headline').textContent};
-      })()` ) as {counts:number[];rects:{width:number;height:number}[];verdicts:string[];prompt:string};
+          prompt:document.querySelector('#workspace-ask-headline').textContent,
+          message:document.querySelector('#message').textContent,
+          layoutState:document.querySelector('#layout-state').textContent,
+          partStatus:document.querySelector('[data-part-status]').textContent,
+          loadingText:[...document.querySelectorAll('#app *')].filter(node=>node.checkVisibility()&&node.children.length===0&&/Loading|불러오는 중/.test(node.textContent??'')).map(node=>node.id||node.tagName)};
+      })()` ) as {counts:number[];rects:{width:number;height:number}[];verdicts:string[];prompt:string;message:string;layoutState:string;partStatus:string;loadingText:string[]};
       assert.ok(waiting.counts.every(count=>count===1),'one existing shared frame while empty');
       assert.ok(waiting.rects.every(rect=>rect.width>0&&rect.height>0),'frame is laid out while empty');
       assert.deepEqual(waiting.verdicts,[],'no verdict or answer controls before publication');
       assert.equal(waiting.prompt,catalog['job.waiting']);
+      assert.equal(waiting.message,'','status line is empty while waiting for the first publication');
+      assert.equal(waiting.layoutState,'','layout readout is empty while waiting for the first publication');
+      assert.equal(waiting.partStatus,'','parts status is empty while waiting for the first publication');
+      assert.deepEqual(waiting.loadingText,[],'no visible loading text while waiting');
       await writeFile(join(out,'waiting.png'),await page.screenshot());
       cases.push({label: 'zero-publications-open', waiting, document: initialDocument, stream: {...initialStream}});
       await save('RUNNING');
@@ -227,11 +242,17 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
           sameNodes:window.__review904Frame.every(({selector,node})=>document.querySelector(selector)===node),
           rects:window.__review904GeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};}),
           prompt:document.querySelector('#workspace-ask-headline').textContent,
-          visible:document.querySelector('#workspace-ask-headline').checkVisibility()
-        }))()` ) as {sameNodes:boolean;rects:unknown[];prompt:string;visible:boolean};
+          visible:document.querySelector('#workspace-ask-headline').checkVisibility(),
+          message:document.querySelector('#message').textContent,
+          layoutState:document.querySelector('#layout-state').textContent,
+          partStatus:document.querySelector('[data-part-status]').textContent
+        }))()` ) as {sameNodes:boolean;rects:unknown[];prompt:string;visible:boolean;message:string;layoutState:string;partStatus:string};
         assert.equal(filled.sameNodes,true,'first publication fills the original shell, viewport and bottom panel nodes');
         assert.deepEqual(filled.rects,waiting.rects,'shared frame does not jump on first publication');
         assert.equal(filled.prompt,catalog['job.waiting'],'no fabricated ask between publication and the actual pending subject');
+        assert.ok([publication.label,catalog[stage==='parts'?'Parts ready. Source files remain unchanged.':'Record review status and structured feedback while preserving sources. Motion is read only.']].includes(filled.message));
+        assert.equal(filled.layoutState,catalog['Side by side']);
+        assert.equal(filled.partStatus,stage==='parts'?(lang==='en'?'2 parts':'파츠 2개'):(lang==='en'?'1 declared slots · 1 results':'선언된 슬롯 1개 · 결과 1개'));
         cases.push({label:'published-without-ask',filled});
         await writeFile(join(out,'published-without-ask.png'),await page.screenshot());
       } catch (error) {
@@ -368,6 +389,7 @@ async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'interview-picks',alr
    await Bun.sleep(25);
   }throw signal.reason;});
   assert.equal(await page.evaluate(`['#save','#request-changes','#workspace-pending-ask'].some(selector=>document.querySelector(selector)?.checkVisibility())`),false);
+  assert.deepEqual(await page.evaluate(`['#message','#layout-state','[data-part-status]'].map(s=>document.querySelector(s)?.textContent)`),['','','']);
   await page.evaluate(`window.__review904RecordFrame=['.topbar','.layout','#stage-layout','#rig-viewport','.inspector','#workspace-act-row'].map(selector=>({selector,node:document.querySelector(selector)}));window.__review904RecordGeometryNodes=window.__review904RecordFrame.filter(({selector})=>selector!=='#rig-viewport');window.__review904RecordRects=window.__review904RecordGeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};})`);
   await writeFile(join(out,'waiting.png'),await page.screenshot());
   fixture.deliver();
@@ -376,6 +398,8 @@ async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'interview-picks',alr
    if(await page!.evaluate(`document.body.dataset.ready==='true'&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(prompt)}&&!!document.querySelector('form[data-job-ask] fieldset:not(:disabled)')`))return;
    await Bun.sleep(25);
   }throw signal.reason;});
+  assert.equal(await page.evaluate(`document.querySelector('#message')?.textContent`),catalog['This request has no picture.']);
+  assert.equal(await page.evaluate(`document.querySelector('[data-part-status]')?.textContent`),catalog['No compiled rig catalog available']);
   if(!alreadyPublished){
     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
     const frame=await page.evaluate<{sameNodes:boolean;rects:unknown[];originalRects:unknown[]}>(`(()=>({
@@ -423,14 +447,19 @@ async function ackRetry(lang:'en'|'ko'){
   assert.ok(send);await send('Fetch.enable',{patterns:[{urlPattern:'*/ui/displayed',requestStage:'Request'}]});
   await page.setViewport(1600,1000);const owner=new URL(fixture.host.ownerUrl);owner.searchParams.set('lang',lang);await page.goto(owner.href);
   await wait('initial waiting',()=>page!.evaluate(`document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['job.waiting'])}`));
+  assert.deepEqual(await page.evaluate(`['#message','#layout-state','[data-part-status]'].map(s=>document.querySelector(s)?.textContent)`),['','','']);
   await page.evaluate(`window.__review904RetryDocument=crypto.randomUUID()`);const documentId=await page.evaluate('window.__review904RetryDocument');
   await fixture.publish('parts','failed-ack-904');
   await wait('ack rollback rearmed',async()=>refused&&await page!.evaluate(`!document.body.dataset.ready&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['job.waiting'])}`));
   assert.equal(await page.evaluate(`['#save','#request-changes'].some(selector=>document.querySelector(selector)?.checkVisibility())`),false);
+  assert.deepEqual(await page.evaluate(`['#message','#layout-state','[data-part-status]'].map(s=>document.querySelector(s)?.textContent)`),['','','']);
   await writeFile(join(out,'waiting-after-failed-ack.png'),await page.screenshot());
   const publication=await fixture.publish('parts','retry-904');await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
   const frozen=await jobInputHashes(fixture.input.root);
   await wait('retry ready',()=>page!.evaluate(`document.body.dataset.ready==='true'&&document.querySelector('#save:not(:disabled)')?.checkVisibility()&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['Check the parts and meshes.'])}`));
+  assert.ok([publication.label,catalog['Parts ready. Source files remain unchanged.']].includes(await page.evaluate(`document.querySelector('#message')?.textContent`)));
+  assert.equal(await page.evaluate(`document.querySelector('#layout-state')?.textContent`),catalog['Side by side']);
+  assert.equal(await page.evaluate(`document.querySelector('[data-part-status]')?.textContent`),lang==='en'?'2 parts':'파츠 2개');
   assert.ok(ackRequests>=2);assert.equal(await page.evaluate('window.__review904RetryDocument'),documentId);
   assert.equal(await page.evaluate(`JSON.parse(document.querySelector('#provenance-full').textContent).sourceHash`),publication.source.sourceHash);
   assert.equal((await fixture.next()).events.some(event=>event.type==='act'),false);
