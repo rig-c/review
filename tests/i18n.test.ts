@@ -990,7 +990,7 @@ test('#294: dynamic compound strings, optional-suffix templates, and cloth/eye-r
   expect(inheritOptChain.textContent).toBe('hairback_r0_ (체인) · normal');
 
   // Verify #294 Row 2: cloth panel state line
-  expect(clothState.textContent).toBe('설치된 리더가 허용하는 태그 3개 · bottomwear: 설정에 파츠 0개 (없음), 체인 0개 · 빌드 방식: rig --config · 적용: CLOTH_KEYPOINTS_UNDECLARED: 천(Cloth) 레시피 적용은 인물의 키포인트로부터 신체 본을 배치하는 rig-parts propose를 실행합니다. 키포인트가 없으면 초안이 설정의 신체 본을 이동시키므로 rig-review open <dir> --config <path> --keypoints <file> 또는 review.json "producer" 블록의 "keypoints"로 키포인트 파일을 선언하세요');
+  expect(clothState.textContent).toBe('설치된 리더가 허용하는 태그 3개 · bottomwear: 설정에 파츠 0개 (없음), 체인 0개 · 빌드 방식: rig --config · 적용: CLOTH_KEYPOINTS_UNDECLARED: 천(Cloth) 레시피 적용은 인물의 키포인트로부터 신체 본을 배치하는 rig-parts propose를 실행해요. 키포인트가 없으면 초안이 설정의 신체 본을 이동시키므로 rig-review open <dir> --config <path> --keypoints <file> 또는 review.json "producer" 블록의 "keypoints"로 키포인트 파일을 선언하세요');
   expect(clothStateDecl.textContent).toBe('설치된 리더가 허용하는 태그 3개 · back hair: 설정에 파츠 1개 (hair_back), 체인 2개 · 빌드 방식: rig --config');
   expect(clothTagOpt.textContent).toBe('bottomwear (레시피 없음)');
 
@@ -1109,7 +1109,7 @@ test('unsupported interview kind copy retains its named code and meaning in Engl
  const key = interviewErrors[code];
  expect(key).toBe(code);
  expect(enCatalog[code]).toBe('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: This option context kind is unsupported.');
- expect(koCatalog[code]).toBe('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: 지원하지 않는 선택지 문맥 유형입니다.');
+ expect(koCatalog[code]).toBe('INTERVIEW_CONTEXT_KIND_UNSUPPORTED: 지원하지 않는 선택지 문맥 유형이에요.');
  for (const language of ['en', 'ko'] as const) {
   const message = t(key!, undefined, language);
   expect(message).toStartWith(code + ': ');

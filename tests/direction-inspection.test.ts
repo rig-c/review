@@ -135,7 +135,7 @@ test('joined Made correction refusal uses the direction catalog ID in both langu
   expect(refusal?.[1]).toBe('direction.cameraApplyUnavailable');
   const id = refusal![1]!;
   expect(t(id, undefined, 'en')).toBe('CAMERA_APPLY_UNSUPPORTED · Camera Apply is unavailable.');
-  expect(t(id, undefined, 'ko')).toBe('CAMERA_APPLY_UNSUPPORTED · 카메라 적용을 지원하지 않습니다.');
+  expect(t(id, undefined, 'ko')).toBe('CAMERA_APPLY_UNSUPPORTED · 카메라 적용을 지원하지 않아요.');
 });
 
  test('direction summary uses authored take, camera and optional joined post version in EN/KO', async () => {
