@@ -3474,7 +3474,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.time": "검사 시간 (초)",
   "job.title": "실시간 리뷰 작업",
   "job.updated": "{0}에서 {1}(으)로 업데이트되었습니다.",
-  "job.waiting": "게시된 결과를 기다리고 있습니다.",
+  "job.waiting": "게시된 결과를 기다리고 있어요.",
   "job.wholeRig": "전체 리그",
   "job.zoomIn": "확대",
   "job.zoomOut": "축소",

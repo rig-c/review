@@ -72,7 +72,7 @@ test('invalid supplied operation and serialized operation record keep their time
 test('#858 actual swap preserves the entire numeric camera when equal-stage builds have different first drawn bounds',async()=>{
  const swap=main.slice(main.indexOf('async function swapRig('),main.indexOf('\n/**\n * Mesh Apply'));
  // Keep the actual provider construction and framing callback from main, including future fixes.
- const wiringStart=main.includes('const viewportProvider=')?'const viewportProvider=':'const viewport=createViewportController(';
+ const wiringStart=main.includes('let viewportProvider=')?'let viewportProvider=':main.includes('const viewportProvider=')?'const viewportProvider=':'const viewport=createViewportController(';
  const wiring=main.slice(main.indexOf(wiringStart),main.indexOf('const {fitCamera,paneFrame,'));
  const framingDeclaration=main.match(/const rebuildFramingBoxes=[^;]+;/)?.[0]??'';
  const run=async(resized:boolean,removed:boolean)=>{

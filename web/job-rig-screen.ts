@@ -290,8 +290,19 @@ export function createJobRigScreen(options: {
     for(const [id,entry]of record.forms){const ask=state.pending.find(ask=>ask.askId===id);entry.fieldset.disabled=entry.submitting||ask?.status!=='pending'||state.preparing||state.closed||!state.receipt||!options.access.capability;}
     screen?.recordForms?.([...record.forms.values()].map(entry=>entry.form));
   }
+  /** Mount the shared composition before source data exists; the first paint resumes it. */
+  async function waiting():Promise<void> {
+      let attached!:()=>void,failed!:(error:unknown)=>void;
+      const ready=new Promise<void>((resolve,reject)=>{attached=resolve;failed=reject;});
+      setRigHost({waiting:true,access:{base:location.pathname,key:options.pageId,capability:options.access.capability,
+        route:()=>{throw new Error('JOB_DISPLAY_MISMATCH');},headers:init=>options.access.headers(init)},
+        read:()=>Promise.reject(new Error('JOB_DISPLAY_MISMATCH')),
+        submit:async()=>{throw new Error('JOB_ACT_SOURCE_STALE');},
+        attach:value=>{screen=value;attached();},displayed:()=>{},failed});
+      await options.load();await ready;
+  }
   return {
-    prepare,
+    prepare,waiting,
     mounted: () => mounted,
     report:(error:unknown,fallback?:string)=>screen?.message(options.refusal(error,fallback),true,jobSubmissionRefusal(error).title),
     commit(prepared: JobRigScreenPrepared) {
@@ -309,15 +320,21 @@ export function createJobRigScreen(options: {
       let candidate:{dispose?():void}|undefined,finished=false,recovery:Promise<void>|null=null;
       const rollback=():Promise<void>=>{
         if(finished)return recovery??Promise.resolve();finished=true;
-        if(candidate?.dispose)candidate.dispose();else if(screen!==previous)screen?.dispose?.();screen=previous;
+        if(filling)screen?.dispose?.();else if(candidate?.dispose)candidate.dispose();else if(screen!==previous)screen?.dispose?.();screen=previous;
         options.host.replaceChildren(...previousNodes);setRigHost(previousHost);document.title=previousTitle;
         if(previousUrl)history.replaceState(null,'',previousUrl);
         if(document.body){if(previousReady===null)document.body.removeAttribute('data-ready');else document.body.setAttribute('data-ready',previousReady);document.body.inert=previousInert??false;}
-        recovery=Promise.resolve(previous?.resume?.());return recovery;
+        // Filling consumes the waiting screen's one-shot continuation. Recreate that same shared
+        // composition after disposing its mutated candidate, so the next transaction can fill it again.
+        if(filling){screen=null;recovery=waiting();}
+        else recovery=Promise.resolve(previous?.resume?.());
+        return recovery;
       };
-      transition={rollback,finalize(){if(finished)return;finished=true;previous?.dispose?.();}};
+      const filling=!!previousHost?.waiting&&!!previous?.publish;
+      transition={rollback,finalize(){if(finished)return;finished=true;if(!filling)previous?.dispose?.();}};
       try {
-        setRigHost(host(prepared, ready,navigation));
+        const nextHost=host(prepared,ready,navigation);setRigHost(nextHost);
+        if(filling){previous!.publish!(nextHost);await shown;if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');return;}
         const app = document.createElement('div');app.id = 'app';
         options.host.replaceChildren(app);document.body?.removeAttribute('data-ready');
         const loaded=await options.load();

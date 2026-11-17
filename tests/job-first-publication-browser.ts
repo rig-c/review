@@ -1,6 +1,7 @@
 /** #900 direct Bun script; ordinary Nova only. Existing synthetic scripted inputs,
  * real owner stream and independent attached publisher's local ports, as in Create.
- * No waiting UI, producer or pilot claim. Prior pure-HTTP results remain separate receipts.
+ * Also covers #904: the empty shared frame fills in place, with bilingual top prompt text.
+ * Synthetic fixture only; real Create/public wind rehearsal is a separate receipt.
  * Run: bun tests/job-first-publication-browser.ts --out artifacts/job-first-publication-900
  */
 import assert from 'node:assert/strict';
@@ -8,6 +9,7 @@ import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
@@ -16,7 +18,7 @@ import {koCatalog} from '../web/catalog-ko.ts';
 import type {JobPublication} from '../src/job-contract.ts';
 
 const arg = (key: string) => {const i = Bun.argv.indexOf(key); return i < 0 ? undefined : Bun.argv[i + 1];};
-const output = resolve(arg('--out') ?? 'artifacts/job-first-publication-900');
+const output = resolve(arg('--out') ?? 'artifacts/job-first-publication-904');
 const language = arg('--lang') ?? 'both';
 const observeWaitExpiry = Bun.argv.includes('--observe-wait-expiry');
 assert.ok(['both', 'en', 'ko'].includes(language));
@@ -25,10 +27,13 @@ await mkdir(output, {recursive: true});
 
 type Stream = {requestId: string; requestedAt: number; responseAt?: number; firstDataAt?: number;
   status?: number; bytes: number; ended: boolean; buffer: string};
-async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publication') {
-  const out = join(output, timing, lang);
+async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publication',stage:'parts'|'rig') {
+  const catalog=lang==='en'?enCatalog:koCatalog;
+  assert.equal(enCatalog['job.waiting'],'Waiting for a published result.');
+  assert.equal(koCatalog['job.waiting'],'게시된 결과를 기다리고 있어요.');
+  const out = join(output,stage,timing,lang);
   await mkdir(out, {recursive: true});
-  const fixture = await scriptedJobWindowFixture({c5Parts: 'mesh', attachedPublisher: true});
+  const fixture = await scriptedJobWindowFixture({...(stage==='parts'?{c5Parts:'mesh' as const}:{}),attachedPublisher:true});
   const profile = await mkdtemp(join(tmpdir(), 'review-900-browser-'));
   let page: InputCdpSession | undefined;
   let command: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
@@ -40,7 +45,7 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
   let loadEvents = 0;
   let phase = 'setup';
   let latency: Record<string, unknown> | undefined;
-  const observe = () => ({language: lang, timing, publisher: 'independent attachment local ports', phase, cases, requests, responses, streams,
+  const observe = () => ({language: lang, timing,stage, publisher: 'independent attachment local ports', phase, cases, requests, responses, streams,
     streamEvents, exceptions, diagnostics, documents, loadEvents, latency, observeWaitExpiry});
   const save = async (status: string, error?: unknown) => writeFile(join(out, 'observations.json'),
     JSON.stringify({status, ...observe(), ...(error ? {error: String(error), stack: error instanceof Error ? error.stack : undefined} : {})}, null, 2) + '\n');
@@ -82,9 +87,11 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
     // Attached ask completion precedes owner-stream delivery; await the actual verdict controls.
     await wait(label, () => page!.evaluate<boolean>(`(${ready}) &&
       document.querySelector('#provenance-full')?.textContent.includes(${JSON.stringify(publication.source.sourceHash)}) &&
-      !!document.querySelector('#save:not(:disabled)') &&
+      !!document.querySelector('#save:not(:disabled)') && document.querySelector('#save')?.checkVisibility() &&
+      document.querySelector('#request-changes')?.checkVisibility() &&
       document.querySelector('#save')?.textContent===${JSON.stringify(catalog['Approve'])} &&
-      document.querySelector('#request-changes')?.textContent===${JSON.stringify(catalog['Request changes'])}`));
+      document.querySelector('#request-changes')?.textContent===${JSON.stringify(catalog['Request changes'])} &&
+      document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog[stage==='parts'?'Check the parts and meshes.':'Check the rig and motion.'])}`));
     const state = await page!.evaluate<{language: string; title: string; sourceHash: string; parts: string[];
       counts: number[]; approve: string; changes: string; pending: string}>(`(()=>({
       language:document.documentElement.lang,title:document.querySelector('#package-title').textContent,
@@ -96,9 +103,9 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
     }))()`);
     cases.push({label, state});
     assert.equal(state.language, lang);
-    assert.equal(state.title, 'out', 'existing parts title uses the fixture package basename');
+    assert.equal(state.title,stage==='parts'?'out':'Synthetic first-publication-904','existing source title');
     assert.equal(state.sourceHash, publication.source.sourceHash);
-    assert.deepEqual(state.parts.sort(), ['body', 'front']);
+    if(stage==='parts')assert.deepEqual(state.parts.sort(),['body','front']);else assert.ok(state.parts.includes('mesh'));
     assert.ok(state.counts.every(count => count === 1), 'one existing shared screen and control set');
     assert.equal(state.approve, catalog['Approve']);
     assert.equal(state.changes, catalog['Request changes']);
@@ -111,9 +118,10 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
     let publication: JobPublication | undefined;
     let frozen: Awaited<ReturnType<typeof jobInputHashes>> | undefined;
     if (timing === 'already-published') {
-      publication = await fixture.publish('parts', 'first-publication-900');
-      await fixture.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+      publication = await fixture.publish(stage, 'first-publication-904');
+      await fixture.ask(publication,stage==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:'rig-review'});
       frozen = await jobInputHashes(fixture.input.root);
+      assert.ok(fixture.host.session.status().publication,'positive control has an actual publication before navigation');
     }
     page = await launchCdpSession(profile, {sendDeadlineMs: 20_000, async onEvent(event, send) {
       command = send;
@@ -176,10 +184,27 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
     if (timing === 'first-publication') {
       assert.equal(fixture.host.session.status().publication, null, 'still ZERO while page and stream are open');
       assert.equal(await page.evaluate(`!!document.querySelector('[data-part-list] button')`), false);
-      cases.push({label: 'zero-publications-open', document: initialDocument, stream: {...initialStream}});
+      await wait('waiting-frame',()=>page!.evaluate<boolean>(`document.documentElement.lang===${JSON.stringify(lang)} &&
+        document.querySelector('#workspace-ask-headline')?.checkVisibility() &&
+        document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['job.waiting'])}`));
+      const waiting=await page.evaluate(`(()=>{
+        const selectors=['#app','.topbar','.layout','#stage-layout','.inspector','#rig-viewport','#workspace-ask-headline','#workspace-act-row'];
+        window.__review904Frame=selectors.map(selector=>({selector,node:document.querySelector(selector)}));
+        window.__review904GeometryNodes=window.__review904Frame.filter(({selector})=>['.topbar','.layout','#stage-layout','.inspector','#workspace-act-row'].includes(selector));
+        window.__review904Rects=window.__review904GeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};});
+        return {counts:selectors.map(selector=>document.querySelectorAll(selector).length),rects:window.__review904Rects,
+          verdicts:['#save','#request-changes','#review-status','#workspace-pending-ask'].filter(selector=>document.querySelector(selector)?.checkVisibility()),
+          prompt:document.querySelector('#workspace-ask-headline').textContent};
+      })()` ) as {counts:number[];rects:{width:number;height:number}[];verdicts:string[];prompt:string};
+      assert.ok(waiting.counts.every(count=>count===1),'one existing shared frame while empty');
+      assert.ok(waiting.rects.every(rect=>rect.width>0&&rect.height>0),'frame is laid out while empty');
+      assert.deepEqual(waiting.verdicts,[],'no verdict or answer controls before publication');
+      assert.equal(waiting.prompt,catalog['job.waiting']);
+      await writeFile(join(out,'waiting.png'),await page.screenshot());
+      cases.push({label: 'zero-publications-open', waiting, document: initialDocument, stream: {...initialStream}});
       await save('RUNNING');
       const publishStartedAt = performance.now();
-      publication = await fixture.publish('parts', 'first-publication-900');
+      publication = await fixture.publish(stage, 'first-publication-904');
       const publicationReturnedAt = performance.now();
       const responseAt = fixture.publishResponseAt();
       assert.ok(responseAt !== null, 'fixture records the actual publish API response return');
@@ -198,6 +223,17 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
         latency.mountLatencyUpperBoundMs = Number(latency.mountedAt) - publishStartedAt;
         latency.mountLatencyLowerBoundMs = Number(latency.mountedAt) - publicationReturnedAt;
         assert.ok(Number(latency.mountLatencyUpperBoundMs) <= 5000, 'mount within five seconds of publish start');
+        const filled=await page.evaluate(`(()=>({
+          sameNodes:window.__review904Frame.every(({selector,node})=>document.querySelector(selector)===node),
+          rects:window.__review904GeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};}),
+          prompt:document.querySelector('#workspace-ask-headline').textContent,
+          visible:document.querySelector('#workspace-ask-headline').checkVisibility()
+        }))()` ) as {sameNodes:boolean;rects:unknown[];prompt:string;visible:boolean};
+        assert.equal(filled.sameNodes,true,'first publication fills the original shell, viewport and bottom panel nodes');
+        assert.deepEqual(filled.rects,waiting.rects,'shared frame does not jump on first publication');
+        assert.equal(filled.prompt,catalog['job.waiting'],'no fabricated ask between publication and the actual pending subject');
+        cases.push({label:'published-without-ask',filled});
+        await writeFile(join(out,'published-without-ask.png'),await page.screenshot());
       } catch (error) {
         latency.failedAt = performance.now();
         latency.failureElapsedFromStartMs = Number(latency.failedAt) - publishStartedAt;
@@ -232,10 +268,24 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
         throw error; // Eventual recovery never changes the original five-second RED.
       }
       assert.ok(initialStream.bytes > 0, 'actual data arrived on the already-open response');
-      await fixture.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
+      await fixture.ask(publication,stage==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:'rig-review'});
     }
     assert.ok(publication && frozen);
+    if(timing==='first-publication'){
+      await screen('just-published',publication);
+      await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+      const pendingFrame=await page.evaluate<{sameNodes:boolean;rects:unknown[];originalRects:unknown[];prompt:string}>(`(()=>({
+        sameNodes:window.__review904Frame.every(({selector,node})=>document.querySelector(selector)===node),
+        rects:window.__review904GeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};}),
+        originalRects:window.__review904Rects,prompt:document.querySelector('#workspace-ask-headline').textContent
+      }))()`);
+      cases.push({label:'actual-pending-frame-after-ask',pendingFrame});await save('RUNNING');
+      assert.equal(pendingFrame.sameNodes,true,'actual pending prompt/verdict keeps the original shared nodes');
+      assert.deepEqual(pendingFrame.rects,pendingFrame.originalRects,'actual pending prompt/verdict does not move or resize the original frame');
+      await writeFile(join(out,'actual-pending-frame.png'),await page.screenshot());
+    }
     await screen('opened-screen', publication);
+    if(timing==='already-published')await unchangedPublishedHeight(page,out);
     assert.equal(await page.evaluate('window.__review900Document'), marker, 'publication mounted in the same document');
     assert.equal(documents.at(-1)?.loaderId, initialDocument.loaderId, 'no navigation to mount');
     assert.equal(loadEvents, initialLoads, 'no reload to mount');
@@ -258,7 +308,7 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
     assert.deepEqual(await jobInputHashes(fixture.input.root), frozen, 'inspection leaves producer inputs unchanged');
     assert.deepEqual(exceptions, [], 'no runtime exceptions');
     await save('PASS');
-    return {language: lang, timing, status: 'PASS'};
+    return {language: lang, timing,stage, status: 'PASS'};
   } catch (error) {
     await save('RED', error);
     if (page) {
@@ -267,7 +317,7 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
         language:document.documentElement.lang,ready:document.body.dataset.ready,text:document.body.innerText,
         app:document.querySelector('#app')?.innerHTML,marker:window.__review900Document})`)).catch(() => {});
     }
-    return {language: lang, timing, status: 'RED', error: String(error)};
+    return {language: lang, timing,stage, status: 'RED', error: String(error)};
   } finally {
     await page?.close();
     await fixture.close();
@@ -275,10 +325,133 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
   }
 }
 
+
+
+/** Positive existing-publication control: same page/prompt, one test-only CSS declaration removed then restored. */
+async function unchangedPublishedHeight(page:InputCdpSession,out:string){
+ await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+ const sample=()=>page.evaluate<{row:{height:number};prompt:string;viewport:number[];answers:{id:string;text:string}[];barMinHeight:string;controlHeight:string}>(`(()=>{
+  const row=document.querySelector('#workspace-act-row'),bar=document.querySelector('#workspace-review-act');
+  return {row:row.getBoundingClientRect().toJSON(),prompt:document.querySelector('#workspace-ask-headline').textContent,
+    viewport:[innerWidth,innerHeight],answers:[...row.querySelectorAll('#save,#request-changes,#workspace-pending-ask')].filter(node=>node.checkVisibility()).map(node=>({id:node.id,text:node.textContent})),
+    barMinHeight:getComputedStyle(bar).minHeight,controlHeight:getComputedStyle(document.documentElement).getPropertyValue('--control-height').trim()};
+ })()`);
+ const finalBefore=await sample();assert.ok(finalBefore.row.height>0&&finalBefore.answers.length>0,'positive control has a visible pending publication and answer');let baseline:Awaited<ReturnType<typeof sample>>|undefined;
+ try{
+  console.log('ACT_ROW_BASELINE_OVERRIDE_BEGIN '+JSON.stringify({out,method:'same page; test-only min-height:initial override; no source mutation'}));
+  await page.evaluate(`(()=>{const style=document.createElement('style');style.id='review904-baseline-height';style.textContent='.workspace-act-row .workspace-act-bar{min-height:initial!important}';document.head.append(style);})()`);
+  await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);baseline=await sample();
+  await writeFile(join(out,'already-published-before-minheight.png'),await page.screenshot());
+ }finally{await page.evaluate(`document.getElementById('review904-baseline-height')?.remove()`);}
+ await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);const final=await sample();
+ await writeFile(join(out,'already-published-height-control.json'),JSON.stringify({method:'same-page controlled style override, baseline min-height:initial (old CSS default) then restored final declaration',finalBefore,baseline,final},null,2));
+ assert.ok(baseline);assert.ok(['auto','0px'].includes(baseline.barMinHeight),'baseline uses the CSS initial minimum, not the new control-height minimum');assert.equal(final.barMinHeight,final.controlHeight);
+ assert.equal(final.prompt,baseline.prompt);assert.deepEqual(final.viewport,baseline.viewport);assert.deepEqual(final.answers,baseline.answers);
+ assert.equal(final.row.height,baseline.row.height,'STOP_AFTER_PUBLICATION_HEIGHT_CHANGED');assert.deepEqual(final,finalBefore,'final style restored without state drift');
+ console.log('ACT_ROW_BASELINE_OVERRIDE_RESTORED '+JSON.stringify({out,before:baseline.row.height,after:final.row.height}));
+ await writeFile(join(out,'already-published-after-minheight.png'),await page.screenshot());
+}
+
+/** Retained record routes with publication delivery held until the normal owner page is open. */
+async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'interview-picks',alreadyPublished=false){
+ const out=join(output,'record',alreadyPublished?'already-published':'first-publication',kind,lang);await mkdir(out,{recursive:true});
+ const fixture=await recordScreenFixture(kind,false,undefined,undefined,false,true,undefined,false,!alreadyPublished);
+ const profile=await mkdtemp(join(tmpdir(),'review-904-record-'));let page:InputCdpSession|undefined;
+ const catalog=lang==='en'?enCatalog:koCatalog,prompt=catalog[kind==='checkpoint'?'Review this checkpoint.':'Answer these questions.'];
+ try{
+  const frozen=await jobInputHashes(fixture.root),owner=new URL(fixture.ownerUrl);owner.searchParams.set('lang',lang);
+  if(alreadyPublished)assert.ok(fixture.session.status().publication,'positive control has publication before navigation');
+  page=await launchCdpSession(profile);await page.setViewport(1600,1000);await page.goto(owner.href);
+  if(!alreadyPublished){
+  await withDeadline('904.record.waiting',20000,async signal=>{while(!signal.aborted){
+   if(await page!.evaluate(`document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['job.waiting'])}`))return;
+   await Bun.sleep(25);
+  }throw signal.reason;});
+  assert.equal(await page.evaluate(`['#save','#request-changes','#workspace-pending-ask'].some(selector=>document.querySelector(selector)?.checkVisibility())`),false);
+  await page.evaluate(`window.__review904RecordFrame=['.topbar','.layout','#stage-layout','#rig-viewport','.inspector','#workspace-act-row'].map(selector=>({selector,node:document.querySelector(selector)}));window.__review904RecordGeometryNodes=window.__review904RecordFrame.filter(({selector})=>selector!=='#rig-viewport');window.__review904RecordRects=window.__review904RecordGeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};})`);
+  await writeFile(join(out,'waiting.png'),await page.screenshot());
+  fixture.deliver();
+  }else assert.ok(fixture.session.status().publication,'positive control starts with an actual retained publication');
+  await withDeadline('904.record.filled',20000,async signal=>{while(!signal.aborted){
+   if(await page!.evaluate(`document.body.dataset.ready==='true'&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(prompt)}&&!!document.querySelector('form[data-job-ask] fieldset:not(:disabled)')`))return;
+   await Bun.sleep(25);
+  }throw signal.reason;});
+  if(!alreadyPublished){
+    await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    const frame=await page.evaluate<{sameNodes:boolean;rects:unknown[];originalRects:unknown[]}>(`(()=>({
+      sameNodes:window.__review904RecordFrame.every(({selector,node})=>node===document.querySelector(selector)),
+      rects:window.__review904RecordGeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};}),
+      originalRects:window.__review904RecordRects
+    }))()`);
+    await writeFile(join(out,'actual-pending-frame.json'),JSON.stringify(frame,null,2));
+    assert.equal(frame.sameNodes,true);assert.deepEqual(frame.rects,frame.originalRects,'record actual pending prompt keeps the original shared frame');
+  }else await unchangedPublishedHeight(page,out);
+  assert.equal(await page.evaluate(`['#save','#request-changes'].some(selector=>document.querySelector(selector)?.checkVisibility())`),false);
+  await writeFile(join(out,'just-published.png'),await page.screenshot());
+  assert.equal(fixture.submissions.length,0);assert.deepEqual(await jobInputHashes(fixture.root),frozen);
+  await writeFile(join(out,'observations.json'),JSON.stringify({status:'PASS',lang,kind,prompt,delivery:'retained record publication through existing fixture stream',submissions:0},null,2));
+  return {language:lang,kind,alreadyPublished,status:'PASS'};
+ }catch(error){
+  await writeFile(join(out,'observations.json'),JSON.stringify({status:'RED',lang,kind,error:String(error)},null,2));
+  if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});
+  return {language:lang,kind,alreadyPublished,status:'RED',error:String(error)};
+ }finally{await page?.close();await fixture.close();await rm(profile,{recursive:true,force:true});}
+}
+
+
+/** Refuse one real displayed-ack response, then retry through a later publication on the same stream. */
+async function ackRetry(lang:'en'|'ko'){
+ const out=join(output,'ack-retry',lang);await mkdir(out,{recursive:true});
+ const fixture=await scriptedJobWindowFixture({c5Parts:'mesh',attachedPublisher:true});
+ const profile=await mkdtemp(join(tmpdir(),'review-904-retry-')),catalog=lang==='en'?enCatalog:koCatalog;
+ let page:InputCdpSession|undefined,send:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
+ let refused=false,ackRequests=0;const exceptions:unknown[]=[];
+ const wait=async(label:string,condition:()=>Promise<boolean>)=>withDeadline('904.retry.'+label,20000,async signal=>{
+  while(!signal.aborted){if(await condition())return;await Bun.sleep(25);}throw signal.reason;
+ });
+ try{
+  page=await launchCdpSession(profile,{async onEvent(event,command){
+   send=command;if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);
+   if(event.method!=='Fetch.requestPaused')return;
+   const request=event.params as {requestId:string;request:{url:string}};
+   ackRequests++;
+   if(!refused){refused=true;await command('Fetch.fulfillRequest',{requestId:request.requestId,responseCode:409,
+    responseHeaders:[{name:'Content-Type',value:'application/json'}],
+    body:Buffer.from(JSON.stringify({ok:false,error:{code:'JOB_DISPLAY_MISMATCH',message:'planted displayed ack failure'}})).toString('base64')});}
+   else await command('Fetch.continueRequest',{requestId:request.requestId});
+  }});
+  assert.ok(send);await send('Fetch.enable',{patterns:[{urlPattern:'*/ui/displayed',requestStage:'Request'}]});
+  await page.setViewport(1600,1000);const owner=new URL(fixture.host.ownerUrl);owner.searchParams.set('lang',lang);await page.goto(owner.href);
+  await wait('initial waiting',()=>page!.evaluate(`document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['job.waiting'])}`));
+  await page.evaluate(`window.__review904RetryDocument=crypto.randomUUID()`);const documentId=await page.evaluate('window.__review904RetryDocument');
+  await fixture.publish('parts','failed-ack-904');
+  await wait('ack rollback rearmed',async()=>refused&&await page!.evaluate(`!document.body.dataset.ready&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['job.waiting'])}`));
+  assert.equal(await page.evaluate(`['#save','#request-changes'].some(selector=>document.querySelector(selector)?.checkVisibility())`),false);
+  await writeFile(join(out,'waiting-after-failed-ack.png'),await page.screenshot());
+  const publication=await fixture.publish('parts','retry-904');await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
+  const frozen=await jobInputHashes(fixture.input.root);
+  await wait('retry ready',()=>page!.evaluate(`document.body.dataset.ready==='true'&&document.querySelector('#save:not(:disabled)')?.checkVisibility()&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['Check the parts and meshes.'])}`));
+  assert.ok(ackRequests>=2);assert.equal(await page.evaluate('window.__review904RetryDocument'),documentId);
+  assert.equal(await page.evaluate(`JSON.parse(document.querySelector('#provenance-full').textContent).sourceHash`),publication.source.sourceHash);
+  assert.equal((await fixture.next()).events.some(event=>event.type==='act'),false);
+  assert.deepEqual(await jobInputHashes(fixture.input.root),frozen);assert.deepEqual(exceptions,[]);
+  await writeFile(join(out,'retry-filled.png'),await page.screenshot());
+  await writeFile(join(out,'observations.json'),JSON.stringify({status:'PASS',lang,ackRequests,refused,retry:publication.publicationId},null,2));
+  return {language:lang,timing:'ack-retry',status:'PASS'};
+ }catch(error){
+  await writeFile(join(out,'observations.json'),JSON.stringify({status:'RED',lang,ackRequests,refused,error:String(error),exceptions},null,2));
+  if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});
+  return {language:lang,timing:'ack-retry',status:'RED',error:String(error)};
+ }finally{await page?.close();await fixture.close();await rm(profile,{recursive:true,force:true});}
+}
+
 const results = [];
 // Preserve normal-open/reload observations even when the late-publication case is RED.
 for (const timing of ['already-published', 'first-publication'] as const) {
-  for (const lang of languages) results.push(await run(lang, timing));
+  for(const stage of ['parts','rig'] as const)for(const lang of languages)results.push(await run(lang,timing,stage));
 }
+for(const lang of languages)results.push(await ackRetry(lang));
+for(const kind of ['checkpoint','interview-picks'] as const)for(const lang of languages)results.push(await recordFill(lang,kind));
+for(const lang of languages)results.push(await recordFill(lang,'interview-picks',true));
 await writeFile(join(output, 'results.json'), JSON.stringify(results, null, 2) + '\n');
 assert.equal(results.filter(result => result.status === 'RED').length, 0, JSON.stringify(results));
