@@ -641,7 +641,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
 
   const timingText = {
    en: '0.25 s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)',
-   ko: '0.25초 (초 기준) · 프레임을 사용할 수 없음: 현재 시간에 명시적 프로듀서 프레임 인덱스가 없습니다 (COMMENT_FRAME_UNAVAILABLE)',
+   ko: '0.25초 (초 기준) · 프레임을 사용할 수 없음: 현재 시간에 명시적 프로듀서 프레임 인덱스가 없어요 (COMMENT_FRAME_UNAVAILABLE)',
   };
   for(const lang of ['en','ko'] as const){
    const row=runProposalSurface(rpSource,true,lang);
@@ -1024,7 +1024,7 @@ test('#294: dynamic compound strings, optional-suffix templates, and cloth/eye-r
   expect(meshMaxInf.placeholder).toBe('없음');
   expect(cutsFront.textContent).toBe('앞');
   expect(cutsBack.textContent).toBe('뒤');
-  expect(retargetErr.textContent).toBe('RETARGET_PRODUCER_NOT_INSTALLED: 패키지 또는 리뷰 옆에 @rig-c/pose가 설치되어 있지 않으며 리뷰가 직접 설치하지 않습니다 — bun add -d @rig-c/pose');
+  expect(retargetErr.textContent).toBe('RETARGET_PRODUCER_NOT_INSTALLED: 패키지 또는 리뷰 옆에 @rig-c/pose가 설치되어 있지 않으며 리뷰가 직접 설치하지 않아요 — bun add -d @rig-c/pose');
   expect(chestErr.textContent).toBe('CHEST_REGION_VALUE_INVALID: 윤곽 허용 오차(contour tolerance)');
 
   // Full Korean DOM scan must pass with zero violations
