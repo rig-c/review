@@ -142,7 +142,7 @@ test('Bar 4: live language switching updates DOM text, rich hints, attributes, a
 
   // Error code stays unchanged beside translated detail.
   expect(tr('PREFERENCES_LANGUAGE: expected system, en or ko','ko'))
-   .toBe('PREFERENCES_LANGUAGE: system, en 또는 ko여야 합니다');
+   .toBe('PREFERENCES_LANGUAGE: system, en 또는 ko여야 해요');
   expect(tr('ANIMATION_BONE_NO_TRACK: unknown bone "root"','ko'))
    .toBe('ANIMATION_BONE_NO_TRACK: 알 수 없는 본 "root"');
 
@@ -158,7 +158,7 @@ test('Bar 4: live language switching updates DOM text, rich hints, attributes, a
   expect(tr('Select bone root','ko')).toBe('본 root 선택');
   expect(tr('Select bone hair_front','ko')).toBe('본 hair_front 선택');
   expect(tr('Remeshed hair_front: 40 → 42 (remesh.json) · Reset returns to the inspected build','ko'))
-   .toBe('hair_front 리메시됨: 40 → 42 (remesh.json) · 초기화 시 점검 중인 빌드로 돌아갑니다');
+   .toBe('hair_front 리메시됨: 40 → 42 (remesh.json) · 초기화 시 점검 중인 빌드로 돌아가요');
 
   // Build a minimal DOM tree exercising plain text, attributes, rich hint HTML, rig identifiers, reviewer comment, and active controls.
   const attrs=new Map<string,string>([
@@ -234,7 +234,7 @@ test('Bar 4: live language switching updates DOM text, rich hints, attributes, a
 
   expect((fakeDoc.documentElement as {lang:string}).lang).toBe('ko');
   expect(textNode.nodeValue).toBe('리뷰 작성');
-  expect(statusNode.nodeValue).toBe('hair_front 리메시됨: 40 → 42 (remesh.json) · 초기화 시 점검 중인 빌드로 돌아갑니다');
+  expect(statusNode.nodeValue).toBe('hair_front 리메시됨: 40 → 42 (remesh.json) · 초기화 시 점검 중인 빌드로 돌아가요');
   // Rig bone identifier in <option value="root"> stays 'root', while <label>root</label> translates.
   expect(boneOptionNode.nodeValue).toBe('root');
   expect(labelRootNode.nodeValue).toBe('루트');

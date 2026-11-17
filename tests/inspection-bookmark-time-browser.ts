@@ -32,7 +32,7 @@ const drafts=`Object.entries(localStorage).filter(([k])=>k.startsWith('rig-revie
 try{
  await page.setViewport(1440,1000);
  for(const lang of ['en','ko']){
-  const refusal=lang==='ko'?'저장된 점검 시간이 선택된 클립/레퍼런스 범위를 벗어났습니다':'Saved inspection time is outside the selected clip/reference';
+  const refusal=lang==='ko'?'저장된 점검 시간이 선택된 클립/레퍼런스 범위를 벗어났어요':'Saved inspection time is outside the selected clip/reference';
   const url=`http://127.0.0.1:${proxy.port}/?lang=${lang}#cap=${cap}`;
   await page.goto(url);await wait('window.__bookmarkReading?.()&&!window.__bookmarkReading().restoring&&!document.getElementById("play").disabled');
   await page.evaluate(`document.querySelector('[data-mode="playback"]').click();document.querySelector('[data-part-list] button[data-slot="lantern"]').click();if(!window.__bookmarkReading().playing)document.getElementById('play').click()`);
