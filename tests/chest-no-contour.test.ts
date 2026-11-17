@@ -151,7 +151,7 @@ test('#342 REBUILD_PART_NOT_CONTOUR reads as a statement about the rig first, th
  const shown=outcomeLine({status:'refused',error:line,producerLine:null}).text;
  expect(shown).toBe(reviewerRefusal(line));
  expect(shown.split('\n')).toEqual(["This part is not a contour mesh, so chest regions and bust motion cannot be rebuilt on it. The builder chooses each part's mesh kind in the config. Nothing is wrong with this rig.",line]);
- expect(tr(shown,'ko').split('\n')).toEqual(['이 파츠는 윤곽(contour) 메시가 아니어서 흉부 영역과 가슴 움직임을 다시 빌드할 수 없어요. 파츠마다 메시 종류는 빌더가 설정에서 정해요. 이 리그에는 문제가 없어요.','REBUILD_PART_NOT_CONTOUR: 설정 meshes.neck은(는) 윤곽 항목이 아닙니다. 영역은 윤곽 메시에만 적용됩니다']);
+ expect(tr(shown,'ko').split('\n')).toEqual(['이 파츠는 윤곽(contour) 메시가 아니어서 흉부 영역과 가슴 움직임을 다시 빌드할 수 없어요. 파츠마다 메시 종류는 빌더가 설정에서 정해요. 이 리그에는 문제가 없어요.','REBUILD_PART_NOT_CONTOUR: 설정 meshes.neck은(는) 윤곽 항목이 아니에요. 영역은 윤곽 메시에만 적용돼요']);
  // Other refusals stay verbatim.
  expect(reviewerRefusal('REBUILD_BUSY: an Apply is still running')).toBe('REBUILD_BUSY: an Apply is still running');
 });
