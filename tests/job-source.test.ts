@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from 'bun:test';
 import { cp, mkdir, readFile, rename, symlink, truncate, unlink, writeFile } from 'node:fs/promises';
+import {readFileSync, writeFileSync} from 'node:fs';
 import { dirname, join } from 'node:path';
+import {fileURLToPath} from 'node:url';
 import { JobSession } from '../src/job-session.ts';
 import { jobFixture, jobInputHashes, syntheticJobParts } from './helpers/job-api-fixture.ts';
 import { joinedVerdictFixture } from './helpers/joined-verdict-fixture.ts';
@@ -51,6 +53,195 @@ test('#646 Parts extraction preserves native version/manifest/row validation pre
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
 async function fixture(options?: Parameters<typeof jobFixture>[0]) { const f = await jobFixture(options); fixtures.push(f); return f; }
+
+// A synthetic installed producer above each cwd exercises parser discovery, not
+// arbitrary config discovery: the package's own handoff remains authoritative.
+async function cwdProducer(base: string, includeMotion: boolean) {
+  const dir = join(base, 'node_modules/@rig-c/parts');
+  await mkdir(join(dir, 'src'), {recursive: true});
+  await writeFile(join(dir, 'package.json'), JSON.stringify({name: '@rig-c/parts', version: '2.38.1'}));
+  await writeFile(join(dir, 'src/config.ts'), `exports.configFileReferences = raw => ${includeMotion
+    ? "[{at:'motion.animations_from',value:raw.motion.animations_from,set:()=>{}}]" : '[]'};`);
+}
+
+test('#915 publication and stored replay ignore the publisher cwd without rebinding neutral identities', async () => {
+  const f = await fixture({plain: true}), cwd = process.cwd();
+  const neutral = join(f.scratch, 'neutral'), producer = join(f.scratch, 'producer'), nested = join(producer, 'shell');
+  await mkdir(neutral); await mkdir(nested, {recursive: true});
+  await writeFile(join(f.root, 'config.json'), JSON.stringify({motion: {animations_from: 'clips.json'}}));
+  await writeFile(join(f.root, 'clips.json'), '{}');
+  await writeFile(join(producer, 'config.json'), '{}');
+  await cwdProducer(f.root, true); await cwdProducer(producer, false);
+  const {loadReview} = await import('../src/manifest.ts');
+  try {
+    process.chdir(neutral);
+    const legacy = await loadReview(join(f.root, 'out'));
+    const first = await f.publish();
+    expect(first.source.sourceHash).toBe(legacy.sourceHash);
+    process.chdir(f.root);
+    const project = await f.publish();
+    process.chdir(nested);
+    const second = await f.publish();
+    for (const value of [project, second]) {
+      expect(value.source.sourceHash).toBe(first.source.sourceHash);
+      expect(value.instanceKey).toBe(first.instanceKey);
+    }
+    expect(await f.ports.readPublication(f.session.jobId, first.publicationId)).toMatchObject({ok: true});
+    f.session.dispose();
+    const replay = new JobSession({root: f.root, stateDir: f.state, fingerprint: 'f'.repeat(64),
+      reviewer: {id: 'declared-owner', role: 'owner'}, partsEnumerator: f.partsEnumerator});
+    try {
+      expect(replay.status().publication?.source.sourceHash).toBe(first.source.sourceHash);
+      await replay.readPublicationResponse(first.publicationId, async retained => {
+        expect(retained.source.sourceHash).toBe(legacy.sourceHash);
+        if (!retained.manifestPath) throw new Error('Expected retained package manifest');
+        expect(await readFile(retained.manifestPath, 'utf8')).toContain('viewport-387-public');
+        return new Response(null);
+      });
+    } finally { replay.dispose(); }
+  } finally { process.chdir(cwd); }
+});
+
+async function createOwnInstallFixture(f: Awaited<ReturnType<typeof jobFixture>>) {
+  const create = join(f.scratch, 'create'), modules = join(create, 'node_modules');
+  const reviewInstall = join(modules, '@rig-c/review'), neutral = join(f.scratch, 'neutral');
+  await mkdir(reviewInstall, {recursive: true}); await mkdir(neutral);
+  // A disposable installed tree, not a source checkout: Create owns both dependencies.
+  await cp(new URL('../src', import.meta.url), join(reviewInstall, 'src'), {recursive: true});
+  await cp(new URL('../web', import.meta.url), join(reviewInstall, 'web'), {recursive: true});
+  await cp(new URL('../package.json', import.meta.url), join(reviewInstall, 'package.json'));
+  await mkdir(join(modules, '@napi-rs'), {recursive: true});
+  for (const name of ['pngjs', '@rig-c/play', '@napi-rs/canvas']) {
+    await symlink(fileURLToPath(new URL('../node_modules/' + name, import.meta.url)), join(modules, name));
+  }
+  await cwdProducer(create, false);
+  await writeFile(join(modules, '@rig-c/parts/src/config.ts'),
+    "exports.configFileReferences = raw => [{at:'assemble.edited_parts.receipts[0].file',value:'edited/torso.png',set:()=>{}}];");
+  await mkdir(join(f.root, 'out/edited'));
+  await writeFile(join(f.root, 'out/edited/torso.png'), await readFile(join(f.root, 'out/rigid.png')));
+  await writeFile(join(f.root, 'out/config.json'), JSON.stringify({assemble: {
+    edited_parts: {dir: 'edited', receipts: [{file: 'torso.png'}]},
+  }}));
+  return {modules, reviewInstall, neutral};
+}
+
+test('#915 Create own-install Parts resolves and seals config references from a neutral cwd', async () => {
+  const f = await fixture({plain: true}), cwd = process.cwd();
+  const {modules, reviewInstall, neutral} = await createOwnInstallFixture(f);
+  const {findInstalledParts} = await import('../src/handoff.ts');
+  expect(findInstalledParts([f.root])).toBeNull();
+  const installed = await import(join(reviewInstall, 'src/manifest.ts'));
+  const {JobSession: InstalledSession} = await import(join(reviewInstall, 'src/job-session.ts'));
+  const {createJobHostPorts} = await import(join(reviewInstall, 'src/job-api.ts'));
+  const session = new InstalledSession({root: f.root, stateDir: join(f.scratch, 'installed-state'),
+    fingerprint: 'f'.repeat(64), reviewer: {id: 'declared-owner', role: 'owner'}});
+  try {
+    process.chdir(neutral);
+    const review = await installed.loadJobReview(join(f.root, 'out'), f.root);
+    expect(findInstalledParts(review.handoff.starts)).toBe(join(modules, '@rig-c/parts'));
+    expect(review.reviewedSource.handoff.files.some((file: {path: string}) => file.path === 'edited/torso.png')).toBe(true);
+    const ports = createJobHostPorts(session, f.origin), request = await f.publishRequest();
+    const response = await ports.handleJobApi(new Request(`${f.origin}/jobs/${session.jobId}/api`, {
+      method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + session.hostCredentials().agent},
+      body: JSON.stringify({...request, jobId: session.jobId}),
+    }));
+    const result = await response.json();
+    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
+    const retained = session.retainedSource(result.value.publicationId);
+    expect(retained.seals.some((file: {path: string}) => file.path === 'out/edited/torso.png')).toBe(true);
+  } finally { process.chdir(cwd); session.dispose(); }
+});
+
+test('#915 legacy neutral edited-receipt publication refuses a changed retained identity with detail', async () => {
+  const f = await fixture({plain: true}), cwd = process.cwd();
+  const {reviewInstall, neutral} = await createOwnInstallFixture(f);
+  const manifestPath = join(reviewInstall, 'src/manifest.ts');
+  const current = await readFile(manifestPath, 'utf8');
+  // A synthetic old installation reproduces the old neutral-cwd lookup only.
+  // The repository's sources and the retained inputs are never patched.
+  const legacy = current.replace(
+    "handoffStarts: [root, fileURLToPath(new URL('..', import.meta.url))]",
+    'handoffStarts: []');
+  expect(legacy).not.toBe(current);
+  const request = await f.publishRequest();
+  const script = `
+    const {JobSession}=await import(${JSON.stringify(join(reviewInstall, 'src/job-session.ts'))});
+    const {createJobHostPorts}=await import(${JSON.stringify(join(reviewInstall, 'src/job-api.ts'))});
+    process.chdir(${JSON.stringify(neutral)});
+    const session=new JobSession({root:${JSON.stringify(f.root)},stateDir:${JSON.stringify(join(f.scratch, 'legacy-state'))},
+      fingerprint:'f'.repeat(64),reviewer:{id:'declared-owner',role:'owner'}});
+    try {
+      const origin=${JSON.stringify(f.origin)},ports=createJobHostPorts(session,origin);
+      const result=await (await ports.handleJobApi(new Request(origin+'/jobs/'+session.jobId+'/api',{
+        method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.hostCredentials().agent},
+        body:JSON.stringify({...${JSON.stringify(request)},jobId:session.jobId})}))).json();
+      if(!result.ok)throw new Error(JSON.stringify(result));
+      console.log(JSON.stringify({jobId:session.jobId,publication:result.value}));
+    }finally{session.dispose();}`;
+  let child: ReturnType<typeof Bun.spawnSync>;
+  await writeFile(manifestPath, legacy);
+  try { child = Bun.spawnSync([process.execPath, '-e', script], {stdout: 'pipe', stderr: 'pipe'}); }
+  finally { await writeFile(manifestPath, current); }
+  expect(child.exitCode).toBe(0);
+  if (!child.stdout) throw new Error('Expected captured legacy publication');
+  const baseline = JSON.parse(child.stdout.toString());
+  const {JobSession: InstalledSession} = await import(join(reviewInstall, 'src/job-session.ts'));
+  const {retainedPublicationRoutes} = await import(join(reviewInstall, 'src/job-front.ts'));
+  const session = new InstalledSession({root: f.root, stateDir: join(f.scratch, 'legacy-state'),
+    fingerprint: 'f'.repeat(64), reviewer: {id: 'declared-owner', role: 'owner'}});
+  try {
+    process.chdir(neutral);
+    const retained = session.retainedSource(baseline.publication.publicationId);
+    expect(retained.seals.some((file: {path: string}) => file.path === 'out/edited/torso.png')).toBe(false);
+    const response = await retainedPublicationRoutes(session)(baseline.jobId, baseline.publication.publicationId,
+      baseline.publication.instanceKey, 'api/review', new Request(f.origin + '/api/review'));
+    const result = await response.json();
+    expect(response.status).toBe(409);
+    expect(result.error.code).toBe('JOB_SOURCE_UNRETAINABLE');
+    expect(result.error.message).toContain(`requires stored ${baseline.publication.instanceKey}`);
+    expect(result.error.message).toContain('(handoff config.json)');
+    const found = result.error.message.match(/snapshot reload instanceKey ([a-f0-9]{64})/);
+    expect(found).not.toBeNull();
+    expect(found[1]).not.toBe(baseline.publication.instanceKey);
+    expect(session.status().publication).toEqual(baseline.publication);
+  } finally { process.chdir(cwd); session.dispose(); }
+});
+
+test('#915 snapshot refusal reaches CLI output with found/required hashes and handoff', async () => {
+  const f = await fixture({plain: true, afterDirectorySync: path => {
+    if (path.includes('/snapshots/') && !path.endsWith('/out')) {
+      const manifest = join(path, 'out/review.json');
+      const value = JSON.parse(readFileSync(manifest, 'utf8'));
+      value.title = 'Synthetic snapshot drift';
+      writeFileSync(manifest, JSON.stringify(value));
+    }
+  }});
+  await writeFile(join(f.root, 'config.json'), '{}');
+  const {loadReview} = await import('../src/manifest.ts');
+  const live = await loadReview(join(f.root, 'out'), {cwd: f.root});
+  const {jobCommand} = await import('../src/job-cli.ts');
+  const {jobHash} = await import('../src/job-api.ts');
+  const output: string[] = [], exit = process.exitCode;
+  try {
+    await jobCommand(['publish', `${f.origin}/jobs/${f.session.jobId}`, '--generation', '0', '--key', 'drift',
+      '--result', 'out', '--freeze-hold', 'held', '--record', 'record.json', '--record-hash',
+      jobHash(await readFile(join(f.root, 'record.json')))], {
+      agentCapability: f.credentials.agent, write: value => output.push(value),
+      fetch: (async (_input: RequestInfo | URL, init?: RequestInit) =>
+        f.ports.handleJobApi(new Request(`${f.origin}/jobs/${f.session.jobId}/api`, init))) as typeof fetch,
+    });
+    const result = JSON.parse(output[0]);
+    expect(process.exitCode).toBe(1);
+    expect(result.error.code).toBe('JOB_SOURCE_UNRETAINABLE');
+    expect(result.error.message).toContain(`requires live ${live.sourceHash}`);
+    expect(result.error.message).toContain('handoff snapshot ../config.json, live ../config.json');
+    const found = result.error.message.match(/sourceHash ([a-f0-9]{64})/);
+    expect(found).not.toBeNull();
+    expect(found[1]).not.toBe(live.sourceHash);
+    expect(f.session.status().generation).toBe(0);
+  } finally { process.exitCode = exit ?? 0; }
+});
 
 test('source root containment refuses symlink inputs and state inside source before creating state', async () => {
   const f = await fixture();

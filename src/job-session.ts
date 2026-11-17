@@ -10,12 +10,11 @@ import {
 import { bindJobAsk, bindJobRecordAsk, finalizeJobAct, parseUISubmission, prepareJobRecordAct, prepareJobStill } from './job-act.ts';
 import { isRecordSource, parseRecordSource, parseCommentsAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
-  assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
+  assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
   type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
 } from './job-source.ts';
 import { JobError, JobStore, jobCropReferences, type JobSnapshotOwner, type StoredJob } from './job-store.ts';
 import { canonicalStatePath } from './state-dir.ts';
-import { loadReview } from './manifest.ts';
 import { loadPartsView } from './parts-view.ts';
 import { validateStoredPartsComment } from './parts-comment-crops.ts';
 import { commentPartsIssues } from './parts-comment.ts';
@@ -693,7 +692,7 @@ export class JobSession {
               assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals,
                 retained.snapshotIdentity, 'JOB_ACT_SOURCE_STALE');
               try {
-                const review = await loadReview(retained.manifestPath);
+                const review = await loadRetainedJobReview(retained, this.attestation().fingerprint);
                 const painting = review.handoff?.source;
                 const sealedPainting = painting && retained.seals.some(file =>
                   file.path === relative(retained.snapshotRoot, painting).split(sep).join('/')) ? painting : undefined;

@@ -5,10 +5,10 @@ import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-che
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
 import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion } from './job-api.ts';
 import { JobSession } from './job-session.ts';
-import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, type JobRootIdentity } from './job-source.ts';
+import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, loadRetainedJobReview, type JobRootIdentity } from './job-source.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
 import { JobError, JobStore, jobCropReferences } from './job-store.ts';
-import { loadReview, safeFile, packagePath, type ReviewPackage } from './manifest.ts';
+import { safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 import { serveReference, assertReviewUnchanged } from './reference.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
 import { loadPartsView, partsViewJson, partsDifference, servedImage, type PartsViewPackage } from './parts-view.ts';
@@ -331,7 +331,7 @@ export function retainedPublicationRoutes(session: JobSession) {
                 let pending = views.get(publicationId);
                 if (!pending) {
                     pending = (async () => {
-                        const review = await loadReview(retained.manifestPath);
+                        const review = await loadRetainedJobReview(retained, session.attestation().fingerprint);
                         const partsRoot = retained.source.parts
                             ? dirname(join(retained.snapshotRoot, retained.source.parts.manifest.path)) : null;
                         // Forward only retained producer files. Discovery never reads the live draft.
@@ -466,7 +466,8 @@ export function retainedPublicationRoutes(session: JobSession) {
             const code = error instanceof JobError ? error.code :
                 error instanceof Error && error.message.startsWith('PARTS_COMMENT_STALE_SOURCE:')
                     ? 'PARTS_COMMENT_STALE_SOURCE' : 'JOB_SOURCE_MISMATCH';
-            const message = error instanceof JobError && /^(CHECKPOINT_EVIDENCE|PLAN_TEXT)_[A-Z_]+$/.test(error.message)
+            const message = error instanceof JobError && (/^(CHECKPOINT_EVIDENCE|PLAN_TEXT)_[A-Z_]+$/.test(error.message) ||
+                error.code === 'JOB_SOURCE_UNRETAINABLE' && error.message.startsWith('snapshot reload '))
                 ? error.message : undefined;
             return failure(code, errorStatus[code as JobErrorCode] ?? 409, undefined, message);
         }
