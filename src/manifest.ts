@@ -1,6 +1,7 @@
 import {readSceneInspection,scenePlateBytes,type SceneInspection} from './scene-inspection.ts';
 import {DIRECTION_MAX_BYTES, readDirectionInspection, type DirectionInspection} from './direction-inspection.ts';
 import {discoverTurnDials} from './turn-pad.ts';
+import {fileURLToPath} from 'node:url';
 import { createHash } from 'node:crypto';
 import { toolVersions } from './versions.ts';
 import type { FeedbackCatalog } from './feedback-validation.ts';
@@ -37,6 +38,8 @@ export interface ReviewPackage { scene?:SceneInspection; direction?:DirectionIns
   viewOnly?: boolean;
   /** Logical working directory passed at load/open time for resolving an external producer (`options.cwd`). */
   cwd?: string;
+  /** Explicit producer lookup roots, retained for source revalidation. */
+  handoffStarts?: readonly string[];
   /** #329: the handoff's source painting, served at a fixed route by its pinned hash; absent when the handoff knows none. */
   sourcePainting?: SourcePainting }
 function fail(field: string, expected: string): never { throw new Error(`${field}: expected ${expected}`); }
@@ -100,7 +103,7 @@ export function parseManifest(input: unknown): ReviewManifest {
   return manifest;
 }
 /** `options.handoff` are the explicit `--config …` flags; they win over the manifest block and discovery. */
-export async function loadReview(input: string, options: { handoff?: HandoffFlags; cwd?: string } = {}): Promise<ReviewPackage> {
+export async function loadReview(input: string, options: { handoff?: HandoffFlags; cwd?: string; handoffStarts?: readonly string[] } = {}): Promise<ReviewPackage> {
   const inputPath=await realpath(resolve(input));const directory=(await stat(inputPath)).isDirectory();
   if(directory){try{await stat(resolve(inputPath,'review.json'));return loadReview(resolve(inputPath,'review.json'),options);}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
     // #149: a rig-parts build root without a model of its own opens as its check package, exactly as opening check/ does.
@@ -132,7 +135,7 @@ export async function loadReview(input: string, options: { handoff?: HandoffFlag
   }
   const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let modelMetadata:Record<string,unknown>|null=null;let directionInput:unknown;
   // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
-  const {handoff,reason:handoffReason}=await resolveHandoff(root,manifest.producer,options.handoff,{starts:[options.cwd??process.cwd()]});
+  const {handoff,reason:handoffReason}=await resolveHandoff(root,manifest.producer,options.handoff,{starts:options.handoffStarts??[options.cwd??process.cwd()]});
   // #329: the source painting the handoff knows is the first reference, outside the package's own files.
   const painting=sourcePainting(manifest,handoff,directory);
   let scene:SceneInspection|undefined;
@@ -165,7 +168,7 @@ export async function loadReview(input: string, options: { handoff?: HandoffFlag
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
   const direction=manifest.direction?readDirectionInspection(directionInput,{path:manifest.direction,sha256:fileHashes.get(manifest.direction)!},reviewedSource.rig):undefined;
   const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations:modelAnimations(modelMetadata),clock:report?.clock??null,clockAnimation:report?.animation??null,...(discoverTurnDials(modelMetadata).length?{turnDials:discoverTurnDials(modelMetadata)}:{})};
-  return {...(scene?{scene}:{}),...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{}),...(options.cwd?{cwd:options.cwd}:{})};
+  return {...(scene?{scene}:{}),...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{}),...(options.cwd?{cwd:options.cwd}:{}),...(options.handoffStarts?{handoffStarts:options.handoffStarts}:{})};
 }
 
 /** #329: the reference id and served path of the handoff's source painting; the path is a name, never a package file. */
@@ -186,6 +189,11 @@ function sourcePainting(manifest:ReviewManifest,handoff:Handoff|null,folder:bool
   if(folder)manifest.checkpoints.unshift({id:reference.id,title:'Inspect '+reference.label,reference:reference.id,workspace:'motion'});
   return {id:reference.id,path:record.path,sha256:record.sha256};
 }
+/** Job lookup is fixed to its designation and this Review install, never the operator's shell. */
+export function loadJobReview(input: string, root: string): Promise<ReviewPackage> {
+  return loadReview(input, {cwd: root, handoffStarts: [root, fileURLToPath(new URL('..', import.meta.url))]});
+}
+
 /**
  * #149: the `check/` package of a rig-parts build root ({@link isBuildRoot}), when the folder has neither of the two
  * adapter model paths itself (a folder that does keeps opening as before). Fixed names, no search.

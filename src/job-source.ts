@@ -17,7 +17,7 @@ import type {
   RecordReaderInput, RecordResult, RecordSource, RecordSubject,
 } from './job-contract.ts';
 import { checkedPath, jsonObject, readProject, readRegular, type InterviewQuestion, type InterviewSet } from './interview-project.ts';
-import { loadReview } from './manifest.ts';
+import { loadJobReview } from './manifest.ts';
 import { HandoffError } from './handoff.ts';
 import { openKey } from './open.ts';
 import { assertReviewUnchanged } from './reference.ts';
@@ -64,6 +64,18 @@ export interface JobPublishedContext {
   readonly subjects: readonly JobSubject[];
   readonly partIds: readonly string[];
   readonly files: readonly JobFileIdentity[];
+}
+
+/** Reload only the identity recorded for this publication; old bindings are never relabelled. */
+export async function loadRetainedJobReview(retained: JobRetainedSource, fingerprint: string) {
+  const review = await loadJobReview(retained.manifestPath, retained.root.path);
+  const found = openKey({mode: 'single', p: {...review, sourceHash: retained.source.sourceHash},
+    inputs: {input: join(retained.root.path, relative(retained.snapshotRoot, retained.manifestPath))},
+    contentHash: retained.source.sourceHash, selection: null}, fingerprint);
+  if (found !== retained.instanceKey) throw new JobError('JOB_SOURCE_UNRETAINABLE',
+    `snapshot reload instanceKey ${found} requires stored ${retained.instanceKey} ` +
+    `(handoff ${review.handoff?.record.config.path ?? 'none'})`);
+  return review;
 }
 
 export type JobPublicationReader = (input: {
@@ -1321,10 +1333,11 @@ export async function prepareJobSource(options: {
   const declared = publishedIdentities(context);
   const evidence = checkpointEvidenceFields(context, context.plan, context.subjects, declared);
   checkpointEvidenceMetadata(root.path, evidence.checkpointEvidence);
-  let review: Awaited<ReturnType<typeof loadReview>>;
+  let review: Awaited<ReturnType<typeof loadJobReview>>;
   try {
     const target = checkedPath(root.path, request.result.path, lstatSync(join(root.path, request.result.path)).isDirectory());
-    review = await loadReview(target);
+    // Resolve producer references from the designated job root for both copies.
+    review = await loadJobReview(target, root.path);
   } catch (error) {
     throw new JobError('JOB_SOURCE_MISMATCH', error instanceof HandoffError ? error.message : undefined);
   }
@@ -1388,9 +1401,12 @@ export async function prepareJobSource(options: {
       options.afterDirectorySync?.(directory);
     }
     await assertReviewUnchanged(review);
-    const retained = await loadReview(join(snapshotRoot, request.result.path));
+    const retained = await loadJobReview(join(snapshotRoot, request.result.path), root.path);
     if (retained.sourceHash !== review.sourceHash || requestDigest(retained.reviewedSource) !== requestDigest(review.reviewedSource)) {
-      throw new JobError('JOB_SOURCE_UNRETAINABLE');
+      throw new JobError('JOB_SOURCE_UNRETAINABLE',
+        `snapshot reload sourceHash ${retained.sourceHash} requires live ${review.sourceHash}; ` +
+        `reviewedSource digest ${requestDigest(retained.reviewedSource)} requires ${requestDigest(review.reviewedSource)} ` +
+        `(handoff snapshot ${retained.handoff?.record.config.path ?? 'none'}, live ${review.handoff?.record.config.path ?? 'none'})`);
     }
     const originalIdentity = (file: { path: string; sha256: string } | null): JobFileIdentity | null => file && ({
       path: rootRelative(root.path, resolve(review.root, file.path)), sha256: file.sha256,
