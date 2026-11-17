@@ -52,7 +52,7 @@ import {mountRigInspector,bindInspectorBlocks,activeBlocksUI,restoreActiveBlocks
 import {connectControl} from './control.ts';
 import {connectLiveWindow} from './live-connection.ts';
 import {pageInstanceAccess,readOnlyReason} from './instance-access.ts';
-import {rigHost,type RigHostStage} from './rig-host.ts';
+import {rigHost,type RigHost,type RigHostStage} from './rig-host.ts';
 import {controlComparison,type ControlCommand,type ControlInspection,type ControlView} from '../src/control.ts';
 import {singleEligibility,videoReferenceAt,type InputState,type SingleLayout} from '../src/comparison-eligibility.ts';
 import {parseBookmark,connectInspectionPersistence,serializableView,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
@@ -111,8 +111,9 @@ const option = (value: string, label: string) => { const item = document.createE
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 // Capability is consumed before shell composition or any URL-dependent binding.
 // A live job (#709) hosts this screen for a rig subject: its routes, its session and its submit.
-const host=rigHost(),access=host?.access??pageInstanceAccess();
-const partsOnly=host?.subject==='parts'||screenRoot.dataset.reviewScreen==='parts';
+let host=rigHost(),access=host?.access??pageInstanceAccess();
+let partsOnly=host?.subject==='parts'||screenRoot.dataset.reviewScreen==='parts';
+let firstPublicationPrompt=!!host?.waiting;
 const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
 const rigStatusBar=mountStatusBar({
  message:'Loading local review package…',
@@ -166,8 +167,11 @@ let sceneComposite:ReturnType<typeof bindScenePlates>|undefined;
 const activeScene=()=>sceneComposite&&data.direction&&(!stageSource||stageSource.url===inspectedModel?.url)?data.direction:undefined;
 const sceneBox=()=>{const direction=activeScene();return direction?takeSample(direction,time).box:null;};
 const rebuildFramingBoxes=new WeakMap<ModelAssets,PoseBounds>();
-const viewportProvider=partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>target==='reference'&&activeInterviewImage&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',framingBox:()=>sceneBox()??(assets?rebuildFramingBoxes.get(assets)??null:null),el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,raster:rigRaster},viewportState);
-const viewport=createViewportController(viewportProvider,viewportState);
+let viewportProvider=partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>target==='reference'&&activeInterviewImage&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',framingBox:()=>sceneBox()??(assets?rebuildFramingBoxes.get(assets)??null:null),el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,raster:rigRaster},viewportState);
+// The first publication selects the existing provider without replacing the empty viewport.
+const viewport=createViewportController(new Proxy(viewportProvider,{get:(_target,key)=>{
+ const value=Reflect.get(viewportProvider,key,viewportProvider);return typeof value==='function'?value.bind(viewportProvider):value;
+}}),viewportState);
 const {fitCamera,paneFrame,availableCamera,alignCameras,renderCameraControls,setCameraSync,cameraAction,updateCamera,fitActiveCamera}=viewport;
 // First, before any URL use: take the `#cap=` handoff into memory/session storage and strip it.
 if(!host)connectLiveWindow(access);
@@ -1266,16 +1270,43 @@ function bind(): void {
 }
 
 /** The one shell and block binding, for either subject. */
-function bindWorkspace(hasModel=false):void {
+function bindWorkspace(hasModel=false,empty=false):void {
+  if(!workspace){
   workspace=bindWorkspaceUI({root:screenRoot,regions:{layout:screenRoot.querySelector<HTMLElement>('.layout')!,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
+  }
+  if(empty)return;
   bindReviewDialog();
   screenRoot.querySelector<HTMLElement>('.inspector-body')!.append(questionPanel);
   inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel&&!partsOnly)?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{syncQuestionImage();workspace?.refresh();persistence?.save();}});
 }
 async function start(): Promise<void> {
   try {
+    if(host?.waiting){
+      bindWorkspace(false,true);
+      el('rig-pane').hidden=false;el('reference-pane').hidden=false;
+      for(const id of ['package-title','revision','rig-empty','reference-empty','dirty'])text(id,'');
+      const controls=[...screenRoot.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')]
+        .filter(control=>control.id!=='settings-language').map(control=>({control,disabled:control.disabled}));
+      for(const {control}of controls)control.disabled=true;
+      for(const control of [button('save'),requestChanges,select('review-status'),screenRoot.querySelector<HTMLElement>('label[for="review-status"]')!])control.hidden=true;
+      askHeadline.hidden=false;setSourceText(askHeadline,t('job.waiting',undefined,'en'));rigInspector.act.hidden=false;rigInspector.syncActRow();
+      await workspace?.settle();if(disposed)return;
+      const next=await new Promise<RigHost>((resolve,reject)=>{
+        lifecycle.signal.addEventListener('abort',()=>reject(new Error('JOB_PRELOAD_CANCELLED')),{once:true});
+        host!.attach({publish:resolve,stage:()=>null,redraw:()=>{},
+          message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:()=>{},dispose:disposeScreen});
+      });
+      if(disposed)return;
+      host=next;access=next.access;partsOnly=next.subject==='parts';
+      for(const {control,disabled}of controls)control.disabled=disabled;
+      if(partsOnly){
+        partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);el('reference-content').append(partsReference);
+        viewportProvider=createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,
+          frameSize:target=>target==='reference'&&activeInterviewImage&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:partsSubject?.frameSize(target)??null},viewportState);
+      }
+    }
     if(host?.record&&!host.record.hasPicture){await startRecord();return;}
     let writes: { capabilityRequired: boolean; control?: boolean };
     const opened=await api<ReviewResponse|PartsSubjectEntry|InterviewSubjectEntry>('/api/review');
@@ -1326,7 +1357,7 @@ async function start(): Promise<void> {
       await restorePublicationNavigation();document.body.dataset.ready='true';
       host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});showInspector(data.manifest.model?'playback':'rig');host.displayed();
     }
-  } catch (error) { message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
+  } catch (error) { if(disposed)return;message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
 }
 /** Parts have a verdict and image-space pixels, never fabricated model/session fields. */
 async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,writes:{capabilityRequired:boolean}):Promise<void>{
@@ -1563,7 +1594,8 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  const requests:Record<string,string>={'parts-verdict':'Check the parts and meshes.','interview-picks':'Answer these questions.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.','review-verdict:image-review':'Check these images.','checkpoint':'Review this checkpoint.','signoff':'Approve this stage.','reopen':'Review the reopened stage.'};
  const labels=subjects.map(subject=>requests[subject.kind+':'+subject.stage]??requests[subject.kind]).filter((label):label is string=>!!label);
  pendingAnswers=subjects;
- askHeadline.hidden=false;setSourceText(askHeadline,labels.join(' · ')||'Nothing is waiting for your answer.');
+ askHeadline.hidden=false;setSourceText(askHeadline,labels.join(' · ')||(firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
+ if(subjects.length)firstPublicationPrompt=false;
  renderDraftState();
 }
 /** Answer controls compose the existing act bar and submit handlers; act payloads stay unchanged. */
@@ -1577,10 +1609,9 @@ function renderAnswerControls():void {
  const save=button('save');
  if((host||subjects.some(subject=>subject.kind==='interview-picks'))&&subjects.length&&!rigInspector.actBar.saveState())rigInspector.actBar.setSaveState({kind:'unsaved',text:'Not submitted'});
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
- save.hidden=!verdict;save.classList.toggle('primary',verdict&&!(subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0));
+ save.classList.toggle('primary',verdict&&!(subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0));
  requestChanges.classList.toggle('primary',verdict&&subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0);
- requestChanges.hidden=!verdict;
- rigAsk.hidden=!dialog;rigAsk.classList.toggle('primary',dialog);
+ rigAsk.classList.toggle('primary',dialog);
  const kind=subjects.find(subject=>!subject.kind.endsWith('verdict'))?.kind;
  setSourceText(rigAsk,kind==='signoff'?'Approve…':kind==='interview-picks'||readable?'Answer…':'Review…');
  rigAsk.disabled=(!enabled&&!readable)||(enabled&&blocked);
@@ -1597,7 +1628,9 @@ function renderAnswerControls():void {
   requestChanges.onclick=()=>{if(requestChanges.disabled)return;if(parts){void save.onclick?.call(save,new PointerEvent('click'));}else{session.status='changes-requested';select('review-status').value=session.status;void verdictSubmit?.(new MouseEvent('click'));}};
  }
  for(const root of [recordDialog,...questionForms])for(const control of root?.querySelectorAll<HTMLButtonElement>('button[type="submit"]')??[])control.disabled=blocked||verdict;
- if(host){rigInspector.answersRendered=true;rigInspector.act.hidden=subjects.length===0;rigInspector.syncActRow?.();}
+ // The waiting row is already visible: finish labels, state and handlers before revealing any answer.
+ save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;rigAsk.hidden=!dialog||firstPublicationPrompt;
+ if(host){rigInspector.answersRendered=true;rigInspector.act.hidden=subjects.length===0&&!firstPublicationPrompt;rigInspector.syncActRow?.();}
 }
 let verdictSubmit:((event:MouseEvent)=>unknown)|null=null;
 /** The rig pane for a live job's still (#709): the job binds and copies it, this screen keeps its view. */

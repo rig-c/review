@@ -294,8 +294,8 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    }
   }
   if(mode==='rig'){
-   // Fail the first hosted metadata clone before any answer renderer. Restore the
-   // native immediately; this is a synthetic read refusal, not a product hook.
+   // Fail the first hosted metadata clone while #904's waiting row is visible and
+   // answers are absent. Restore the native immediately; this remains a synthetic read refusal.
    await control('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{
     const native=window.structuredClone;
     const probe=window.__earlyActReadProbe={documentToken:Date.now()+':'+Math.random(),installed:true,calls:[],triggered:0,errors:[]};
@@ -312,9 +312,14 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
     }).observe(document,{childList:true,subtree:true,attributes:true});
     window.structuredClone=function(value,...args){
      const row=document.getElementById('workspace-act-row');
-     const call={rowPresent:!!row,rowHidden:row?.hidden??null,hasManifest:!!value?.manifest,hasSourceHash:!!value?.sourceHash};
+     const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden]');
+     const headline=document.getElementById('workspace-ask-headline');
+     const call={rowPresent:!!row,rowHidden:row?.hidden??null,rowVisible:visible(row),
+      answersAbsent:![...(row?.querySelectorAll('#save,#request-changes,#workspace-pending-ask')??[])].some(visible),
+      waitingPrompt:visible(headline)&&headline.textContent.trim()===${JSON.stringify((language==='ko'?koCatalog:enCatalog)['job.waiting'])},
+      hasManifest:!!value?.manifest,hasSourceHash:!!value?.sourceHash};
      if(probe.calls.length<100)probe.calls.push(call);
-     if(call.rowHidden&&call.hasManifest&&call.hasSourceHash){
+     if(call.rowVisible&&call.answersAbsent&&call.waitingPrompt&&call.hasManifest&&call.hasSourceHash){
       window.structuredClone=native;probe.triggered++;probe.trigger=call;window.__earlyActReadRefused=true;throw Error('JOB_VISUAL_UNAVAILABLE');
      }
      return native.call(this,value,...args);
@@ -332,7 +337,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    const probe:any=await page.evaluate(`window.__earlyActReadProbe`);
    assert.equal(typeof probe.documentToken,'string');assert.notEqual(probe.documentToken,blankToken,'early refusal runs in a fresh document');
    assert.equal(probe.installed,true);assert.equal(probe.triggered,1);
-   assert.deepEqual(probe.trigger,{rowPresent:true,rowHidden:true,hasManifest:true,hasSourceHash:true});
+   assert.deepEqual(probe.trigger,{rowPresent:true,rowHidden:false,rowVisible:true,answersAbsent:true,waitingPrompt:true,hasManifest:true,hasSourceHash:true});
    await writeFile(join(out,'early-refusal-probe.json'),JSON.stringify(probe,null,2)+'\n');
    const refusal:any=await page.evaluate(`window.__earlyActRowRefusal`);
    assert.equal(refusal.rowVisible,true);assert.equal(refusal.messageVisible,true);assert.deepEqual(refusal.controls,[]);

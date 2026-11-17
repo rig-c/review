@@ -578,7 +578,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-act-row{grid-row:2;min-width:0;border-bottom:1px solid var(--border);background:var(--active-bg);padding:var(--space-3) var(--space-6)}
 #app:has(>.workspace-act-row)>.layout{grid-row:3}
 #app:has(>.workspace-act-row)>.status-bar{grid-row:4}
-.workspace-act-row .workspace-act-bar{margin:0;width:100%;flex-wrap:nowrap;gap:var(--space-3)}
+.workspace-act-row .workspace-act-bar{margin:0;width:100%;min-height:var(--control-height);flex-wrap:nowrap;gap:var(--space-3)}
 .workspace-act-row #workspace-ask-headline{flex:1 1 0;min-width:0;font-size:var(--font-size-headline);font-weight:var(--font-weight-medium);font-variant-numeric:tabular-nums;color:var(--fg-strong);white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row #workspace-pending-ask{order:2;flex:none}
 .workspace-act-row .review-dialog-actions{min-width:0;gap:var(--space-2);justify-content:flex-end}

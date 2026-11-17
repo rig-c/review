@@ -1653,6 +1653,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
         changed(state){rigScreen.changed(state);if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.error);},
     }});
     const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);for(const form of host.querySelectorAll('form.interview-answer'))form.dispatchEvent(new Event('job-form-language'));});
+    await rigScreen.waiting();
     startJobWindowEvents({access,signal:abort.signal,event:event=>window.event(event),refused:error=>report(error,'JOB_STREAM_FAILED')});
     const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();const modal=modalState();for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();localize();globalThis.removeEventListener('pagehide',stop);};
     globalThis.addEventListener('pagehide',stop,{once:true});return stop;

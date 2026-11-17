@@ -8,8 +8,9 @@ import {createJobWindow} from '../web/job-session.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import type {PendingAskV3,ActV3} from '../src/job-contract.ts';
 
+const originalLocation=Object.getOwnPropertyDescriptor(globalThis,'location');
 const originalDocument=Object.getOwnPropertyDescriptor(globalThis,'document');
-afterEach(()=>{setRigHost(null);if(originalDocument)Object.defineProperty(globalThis,'document',originalDocument);else Reflect.deleteProperty(globalThis,'document');});
+afterEach(()=>{setRigHost(null);if(originalLocation)Object.defineProperty(globalThis,'location',originalLocation);else Reflect.deleteProperty(globalThis,'location');if(originalDocument)Object.defineProperty(globalThis,'document',originalDocument);else Reflect.deleteProperty(globalThis,'document');});
 function prepared(index:number,parts=false):JobRigScreenPrepared {
  const display=fixturePublication(index),source=display.publication.source;
  return {jobRigScreen:true,display,entry:'http://127.0.0.1:4318'+display.routes.entry,checkpoints:new Set(),
@@ -226,4 +227,40 @@ test('#784 reference video startup reuses media readiness without forcing a new 
   const calls:string[]=[],video={readyState:ready,seeking:ready===0,currentTime:0},scope={player:null,video,time:0,lifecycle:new AbortController(),referenceInput:{state:'pending'},waitReferenceMetadata:async()=>{calls.push('metadata');video.readyState=Math.max(1,video.readyState);},mediaReady:async(_video:unknown,event:string)=>{calls.push(event);if(event==='loadeddata')video.readyState=2;else video.seeking=false;},setReferenceInput(value:{state:string}){scope.referenceInput=value;}};
   await run(scope);expect(scope.referenceInput.state).toBe('loaded');expect(video.currentTime).toBe(0);expect(calls).toEqual(ready===0?['metadata','loadeddata','seeked']:['metadata']);
  }
+});
+
+for(const failure of ['prepare','paint','ack'] as const)test('#904 first '+failure+' failure restores an empty host and retries the same publication',async()=>{
+ let nodes:unknown[]=[{id:'app'}],loads=0,disposals=0,fail=true,acks=0;
+ Object.defineProperty(globalThis,'location',{configurable:true,value:{pathname:'/jobs/window-fixture/'}});
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{title:'Waiting',createElement:()=>({id:''})}});
+ let window:ReturnType<typeof createJobWindow<JobRigScreenPrepared>>;
+ const candidate=prepared(1);
+ const screen=createJobRigScreen({host:{get childNodes(){return nodes;},replaceChildren(...next:unknown[]){nodes=next;}} as unknown as HTMLElement,
+  pageId:'page',access:{capability:'fixture',headers:()=>new Headers()},window:{state:()=>window.state(),submit:input=>window.submit(input)},
+  routes:display=>({entry:'http://127.0.0.1'+display.routes.entry,api:path=>path}),refusal:String,translate:key=>key,
+  async load(){
+   loads++;const host=rigHost()!;expect(host.waiting).toBe(true);let consumed=false,disposed=false;
+   const dispose=()=>{if(!disposed){disposed=true;disposals++;}};
+   host.attach({stage:()=>null,redraw(){},message(){},dispose,publish(next){
+    if(consumed)throw Error('waiting continuation already consumed');consumed=true;
+    next.attach({stage:()=>null,redraw(){},message(){},dispose});
+    if(fail&&failure==='paint')next.failed(Error('planted first paint failure'));else next.displayed();
+   }});
+  }});
+ window=createJobWindow({jobId:'window-fixture',pageId:'page',transport:{
+  readPublication:async()=>({ok:true,value:candidate.display}),
+  acknowledge:async()=>{acks++;return fail&&failure==='ack'?{ok:false,error:{code:'JOB_DISPLAY_MISMATCH',message:'planted ack'}}:{ok:true,value:{publicationId:candidate.display.publication.publicationId,pageId:'page',displayedNonce:'retry-nonce'}};},
+  submit:async()=>{throw Error('inspection cannot submit');}},adapter:{
+   prepare:async()=>{if(fail&&failure==='prepare')throw Error('planted preparation failure');return candidate;},captureDraft:()=>null,
+   commit:value=>screen.commit(value),painted:(value,signal)=>screen.painted(value,signal),discard(){},changed(){}
+  }});
+ await screen.waiting();const waitingNodes=nodes;
+ await window.replace(candidate.display.publication);
+ expect(window.state().displayed).toBeNull();expect(window.state().receipt).toBeNull();expect(screen.mounted()).toBeNull();expect(rigHost()!.waiting).toBe(true);
+ expect(loads).toBe(failure==='prepare'?1:2);expect(disposals).toBe(failure==='prepare'?0:1);
+ fail=false;await window.replace(candidate.display.publication);
+ expect(window.state().error).toBeNull();expect(window.state().receipt?.displayedNonce).toBe('retry-nonce');
+ expect(screen.mounted()).toBe(candidate);expect(rigHost()!.access.key).toBe(candidate.display.publication.instanceKey);
+ expect(nodes).toEqual(waitingNodes);expect(loads).toBe(failure==='prepare'?1:2);expect(acks).toBe(failure==='ack'?2:1);
+ window.stop();
 });

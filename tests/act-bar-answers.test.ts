@@ -11,7 +11,7 @@ function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  const save=control(),requestChanges=control(),rigAsk=control(),select=control(),label=control(),submit=control();
  let state:{kind:string;text:string}|null=null;const rigInspector={act:{hidden:true},actBar:{saveState:()=>state,setSaveState:(value:{kind:string;text:string})=>{state=value;}}};
  const calls:string[]=[],session={feedbackWarnings:[],status:'pending'};
- const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
+ const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,firstPublicationPrompt:false,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
   questionForms:[],session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
   recordDialog:{querySelector:(selector:string)=>selector==='fieldset:not(:disabled)'?{disabled:false}:null,querySelectorAll:()=>[submit]},
   button:()=>save,select:()=>select,document:{querySelector:()=>label},
@@ -107,4 +107,30 @@ for(const sample of [
  const env={host:{...(sample.record?{record:{hasPicture:true}}:{}),pendingSubjects:()=>sample.subjects,reviewState:()=> 'Reviewing'},pendingAnswers:sample.subjects,liveIssueCount:()=>0,saving:false,draftConflict:false,draftStatus:null,answerSaved:sample.saved,actReadOnly:null,dirty:false,renderAnswerControls(){},rigInspector:{actBar:{setSaveState(state:{text:string}){nodes.dirty.textContent=state.text;}},act:{hidden:false}},sourceTextContent:(node:{textContent:string})=>node.textContent,el:(id:keyof typeof nodes)=>nodes[id],text:(id:keyof typeof nodes,value:string)=>{nodes[id].textContent=value;}};
  const render=new Function('env',`with(env){${script};return renderDraftState;}`)(env);render();
  const footerText=()=>nodes.message.textContent;expect(footerText()).toBe(sample.expected);
+});
+
+// A first publication with no ask must not invent an answer or emphasise a verdict.
+test('#904 first publication keeps its waiting row until an actual subject arrives',()=>{
+ const h=harness([]);h.env.firstPublicationPrompt=true;h.render();
+ expect(h.rigInspector.act.hidden).toBe(false);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);
+ expect(h.save.classList.values.has('primary')).toBe(false);expect(h.requestChanges.classList.values.has('primary')).toBe(false);
+});
+
+for(const kind of ['review-verdict','parts-verdict','signoff','interview-picks','checkpoint'])test('#904 synchronous reveal prepares '+kind+' labels and keeps pending controls hidden under the waiting prompt',()=>{
+ const h=harness([{kind,stage:'rig-review'}]);h.rigInspector.act.hidden=false;
+ const controls=[['save',h.save],['request-changes',h.requestChanges],['workspace-pending-ask',h.rigAsk]] as const;
+ const reveals:{id:string;text:string;disabled:boolean}[]=[];
+ for(const [id,node]of controls){
+  let hidden=true;
+  Object.defineProperty(node,'hidden',{configurable:true,get:()=>hidden,set(value:boolean){hidden=value;if(!value)reveals.push({id,text:node.textContent,disabled:node.disabled});}});
+ }
+ h.save.textContent='Submit review';h.requestChanges.textContent='';h.rigAsk.textContent='';
+ h.env.firstPublicationPrompt=true;h.render();
+ expect(reveals).toEqual([]);expect(controls.every(([,node])=>node.hidden)).toBe(true);
+ // Execute the real renderer from the legacy initial labels after the actual subject has been written.
+ h.save.textContent='Submit review';h.requestChanges.textContent='';h.rigAsk.textContent='';
+ h.env.firstPublicationPrompt=false;h.render();
+ const verdict=kind.endsWith('verdict');
+ expect(reveals).toEqual(verdict?[{id:'save',text:'Approve',disabled:false},{id:'request-changes',text:'Request changes',disabled:true}]:
+  [{id:'workspace-pending-ask',text:kind==='signoff'?'Approve…':kind==='interview-picks'?'Answer…':'Review…',disabled:false}]);
 });

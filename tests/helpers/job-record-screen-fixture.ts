@@ -14,7 +14,7 @@ import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixt
 import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'reopen'|'interview-picks';
-export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false){
+export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false,deferDelivery=false){
  const scratch=await mkdtemp(join(tmpdir(),'review-750-')),root=join(scratch,'input');await mkdir(root);
  let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root,{boundParts,questionImages,longInterview}):createSyntheticPlanRecordWorkspace(root,{subjects:[
   {kind:'checkpoint',checkpointId:'step_layout'},{kind:'signoff',stage:signoffStage},{kind:'reopen',stage:'plan-approved'},
@@ -40,11 +40,11 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
  // The prior rig is retained before the synthetic producer advances into pending options.
  if(kind==='interview-picks'&&picture)workspace=createSyntheticOptionRecordWorkspace(root,{questionImages,longInterview});
  const publication=await call({verb:'publish',expectedGeneration:session.status().generation,idempotencyKey:'record',result:workspace.result,freeze:{kind:'producer-held',holdId:'synthetic-record',record:workspace.record}});
- const display=session.displayPublication(publication.publicationId);fake.publish(display);
+ const display=session.displayPublication(publication.publicationId);if(!deferDelivery)fake.publish(display);
  const subject=workspace.context.subjects.find(subject=>subject.kind===kind)!;
  if(!subject)throw new Error('SYNTHETIC_750_SUBJECT_MISSING');
  const ask:PendingAskV3={askId:'ask-'+kind,publicationId:publication.publicationId,source:publication.source,subject,status:'pending'};
- fake.pending(ask,publication.generation);
+ if(!deferDelivery)fake.pending(ask,publication.generation);
  if(backdrop)fake.pending({askId:'historical-incompatible',publicationId:backdrop.publication.publicationId,source:backdrop.publication.source,subject:{kind:'signoff',stage:'plan-approved'},status:'pending'},publication.generation);
  const files:string[]=[],submissions:UISubmissionV3[]=[];
  const ports={...fake.ports,async commitUIAct(_job:string,request:Request){
@@ -60,6 +60,7 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
   return body;
  }});
  return {scratch,root,session,origin,display,ask,backdrop,workspace,reader,fake,files,submissions,ports,
+  deliver(){fake.publish(display);fake.pending(ask,publication.generation);},
   ownerUrl:origin+`/jobs/${session.jobId}/#cap=${credentials.ui}`,
   mode(value:string){mode=value;},output(path:string){writeRoot=path;},
   async metadata(){return await (await fetch(origin+display.routes.apiBase+'review')).json();},
