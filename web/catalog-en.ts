@@ -3529,7 +3529,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "JOB_PUBLICATION_UNKNOWN": "JOB_PUBLICATION_UNKNOWN",
   "JOB_SNAPSHOT_RECLAIMED": "JOB_SNAPSHOT_RECLAIMED",
   "JOB_RECORD_INCOMPLETE": "JOB_RECORD_INCOMPLETE",
-  "JOB_RECORD_MOVED": "JOB_RECORD_MOVED",
+  "JOB_RECORD_MOVED": "This review has been updated since you opened this page. Reload the page, or wait for the operator to reopen the review.",
   "JOB_REQUEST_INVALID": "JOB_REQUEST_INVALID",
   "JOB_API_SCHEMA_MISMATCH": "JOB_API_SCHEMA_MISMATCH",
   "JOB_STORED_SCHEMA_MISMATCH": "JOB_STORED_SCHEMA_MISMATCH",
