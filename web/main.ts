@@ -1286,7 +1286,10 @@ async function start(): Promise<void> {
     if(host?.waiting){
       bindWorkspace(false,true);
       el('rig-pane').hidden=false;el('reference-pane').hidden=false;
-      for(const id of ['package-title','revision','rig-empty','reference-empty','dirty'])text(id,'');
+      const partStatus=screenRoot.querySelector<HTMLElement>('[data-part-status]')!;
+      const loadingCopy=[['message',sourceTextContent(el('message'))],['layout-state',sourceTextContent(el('layout-state'))]] as const,partStatusCopy=sourceTextContent(partStatus);
+      for(const id of ['package-title','revision','rig-empty','reference-empty','dirty','message','layout-state'])text(id,'');
+      setSourceText(partStatus,'');
       const controls=[...screenRoot.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')]
         .filter(control=>control.id!=='settings-language').map(control=>({control,disabled:control.disabled}));
       for(const {control}of controls)control.disabled=true;
@@ -1300,6 +1303,8 @@ async function start(): Promise<void> {
       });
       if(disposed)return;
       host=next;access=next.access;partsOnly=next.subject==='parts';
+      for(const [id,value]of loadingCopy)text(id,value);
+      setSourceText(partStatus,partStatusCopy);
       for(const {control,disabled}of controls)control.disabled=disabled;
       if(partsOnly){
         partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);el('reference-content').append(partsReference);
