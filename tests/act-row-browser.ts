@@ -266,7 +266,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
     }
    }
    await click(page,'#save');
-   await wait(page,`document.getElementById('workspace-act-row').hidden&&!document.getElementById('dirty').hidden`);
+   await wait(page,`document.getElementById('workspace-act-row').hidden&&!document.getElementById('dirty').hidden&&document.getElementById('dirty').dataset.saveState==='saved'`);
    const submitted:any=await capture(page,out,'submitted');assert.equal(submitted.rowVisible,false);
    if(mode!=='embedded-rig')assert.deepEqual(submitted.states,['dirty']);
    const catalog=language==='en'?enCatalog:koCatalog;
