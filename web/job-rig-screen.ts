@@ -10,6 +10,7 @@ import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
 import {checkpointNoteComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
 import {createJobRigSubmission, freezeJobRigStage} from './job-rig-capture.ts';
 import {setRigHost, rigHost, type RigHost, type RigHostScreen, type RigHostCommit, type RigHostNavigation} from './rig-host.ts';
+import {setSourceAttribute, setSourceText, sourceAttribute, sourceTextContent} from './i18n.ts';
 import type {InstanceAccess} from './instance-access.ts';
 
 /** The shared screen hosts model packages and parts drafts; records have their own shared host seam. */
@@ -104,7 +105,14 @@ export function createJobRigScreen(options: {
   load(): Promise<unknown>;
 }) {
   let mounted: JobRigScreenPrepared | null = null, screen: RigHostScreen | null = null, drawGeneration = 0;
+  let lastMessage: [text: string, error?: boolean, diagnostic?: string] = ['', false];
+  let streamReport: {message: [text: string, error?: boolean, diagnostic?: string]; footer: {source: string; title: string; sourceTitle: string | null; error: boolean} | null; header: {source: string; error: boolean} | null; applied: string} | null = null;
   let transition:{rollback():Promise<void>;finalize():void}|null=null;
+  const say=(text:string,error?:boolean,diagnostic?:string,title?:string)=>{
+    streamReport=null;lastMessage=[text,error,diagnostic];screen?.message(text,error,diagnostic);
+    const notice=title!==undefined&&typeof document!=='undefined'?document.getElementById?.('message'):null;
+    if(notice)notice.title=title!;
+  };
   const attempts = new Map<string, {key: string; submissionId: string; rig: ReturnType<typeof createJobRigSubmission>; commit: Omit<RigHostCommit, 'at'>}>();
   async function prepare(display: DisplayPublicationV3, signal: AbortSignal, backdropOnly=false): Promise<JobRigScreenPrepared | null> {
     if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
@@ -246,7 +254,7 @@ export function createJobRigScreen(options: {
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
-        attach:value=>{screen=value;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
+        attach:value=>{screen=value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
         displayed:()=>ready.resolve(),failed:error=>ready.reject(error)};
     }
     if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
@@ -277,7 +285,7 @@ export function createJobRigScreen(options: {
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },
       submit,
-      attach: value => {screen = value;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
+      attach: value => {screen = value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
       displayed: () => ready.resolve(),
       failed: error => ready.reject(error)};
   }
@@ -304,7 +312,25 @@ export function createJobRigScreen(options: {
   return {
     prepare,waiting,
     mounted: () => mounted,
-    report:(error:unknown,fallback?:string)=>screen?.message(options.refusal(error,fallback),true,jobSubmissionRefusal(error).title),
+    report(error:unknown,fallback?:string):void {
+      const text=options.refusal(error,fallback),title=jobSubmissionRefusal(error).title;
+      if(fallback!=='JOB_STREAM_FAILED'){say(text,true,title);return;}
+      const footer=typeof document!=='undefined'?document.getElementById?.('message'):null,header=typeof document!=='undefined'?document.getElementById?.('review-message'):null;
+      if(!streamReport||(footer&&(footer.textContent??'')!==streamReport.applied)){
+        streamReport={message:footer?[sourceTextContent(footer),footer.classList?.contains('error')??false,footer.title||undefined]:lastMessage,
+          footer:footer?{source:sourceTextContent(footer),title:footer.title,sourceTitle:sourceAttribute(footer,'title'),error:footer.classList?.contains('error')??false}:null,
+          header:header?{source:sourceTextContent(header),error:header.classList?.contains('error')??false}:null,applied:''};
+      }
+      screen?.message(text,true,title);streamReport.applied=footer?footer.textContent??text:text;
+    },
+    clearReport():void {
+      if(!streamReport)return;
+      const current=streamReport,footer=typeof document!=='undefined'?document.getElementById?.('message'):null,header=typeof document!=='undefined'?document.getElementById?.('review-message'):null;
+      streamReport=null;if(footer&&(footer.textContent??'')!==current.applied)return;
+      screen?.message(...current.message);
+      if(current.footer&&footer){setSourceText(footer,current.footer.source);if(current.footer.sourceTitle!==null)setSourceAttribute(footer,'title',current.footer.sourceTitle);footer.title=current.footer.title;footer.classList?.toggle('error',current.footer.error);}
+      if(current.header&&header){setSourceText(header,current.header.source);header.classList?.toggle('error',current.header.error);}
+    },
     commit(prepared: JobRigScreenPrepared) {
       const previous=mounted;mounted=prepared;
       return {async rollback(){try{await transition?.rollback();}finally{transition=null;mounted=previous;}},finalize(){try{transition?.finalize();}finally{transition=null;if(previous!==prepared){const modal=previous?.record??previous?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();}}}};
@@ -346,16 +372,16 @@ export function createJobRigScreen(options: {
     /** Unsupported asks stay on the shared screen with a named explanation. */
     changed(state: {readonly pending: readonly PendingAskV3[]; readonly closed: boolean; readonly preparing?:boolean; readonly error?:string|null; readonly errorOrigin?:string; readonly previousLabel?:string|null; readonly displayed?:DisplayPublicationV3|null}): void {
       if (!mounted) return;
-      if(mounted.record){screen?.pendingSubjects?.(pendingSubjects());refreshRecordForms();if(mounted.refusal){screen?.message(options.translate('job.refusal.'+mounted.refusal),true);const notice=document.getElementById('message');if(notice)notice.title=mounted.refusal;}if(state.closed)screen?.message(options.translate('job.closed'),true);return;}
+      if(mounted.record){screen?.pendingSubjects?.(pendingSubjects());refreshRecordForms();if(mounted.refusal)say(options.translate('job.refusal.'+mounted.refusal),true,undefined,mounted.refusal);if(state.closed)say(options.translate('job.closed'),true);return;}
       const refusal=jobRigScreenRefusal(mounted.display,state.pending,mounted.checkpoints);
-      if(refusal){screen?.message(options.translate('job.refusal.'+refusal),true);const notice=document.getElementById('message');if(notice)notice.title=refusal;return;}
+      if(refusal){say(options.translate('job.refusal.'+refusal),true,undefined,refusal);return;}
       screen?.pendingSubjects?.(pendingSubjects());
       refreshRecordForms();
-      if(state.error)screen?.message(options.translate('job.failed')+' · '+options.refusal(state.error),true,jobSubmissionRefusal(new Error(state.error,{cause:state.errorOrigin})).title);
-      else if (state.closed) screen?.message(options.translate('job.closed'), true);
+      if(state.error)say(options.translate('job.failed')+' · '+options.refusal(state.error),true,jobSubmissionRefusal(new Error(state.error,{cause:state.errorOrigin})).title);
+      else if (state.closed) say(options.translate('job.closed'), true);
       else if(!state.preparing&&state.displayed?.publication.publicationId===mounted.display.publication.publicationId){
         const label=state.previousLabel?options.translate('job.updated',[state.previousLabel,mounted.display.publication.label]):mounted.display.publication.label;
-        screen?.message(label+(screen.incompatible?.()?' · '+options.translate('job.incompatible'):''));
+        say(label+(screen?.incompatible?.()?' · '+options.translate('job.incompatible'):''));
       }
     },
   };

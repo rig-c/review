@@ -514,7 +514,7 @@ export function createJobWindowTransport(access: JobWindowAccess, fetcher: typeo
     };
 }
 /** Bounded newline events. Reconnects resume after the last fully parsed event. */
-export async function* jobWindowEvents(access: JobWindowAccess, after: string | null, signal: AbortSignal, fetcher: typeof fetch = fetch): AsyncGenerator<EventV3> {
+export async function* jobWindowEvents(access: JobWindowAccess, after: string | null, signal: AbortSignal, fetcher: typeof fetch = fetch, connected?: () => void): AsyncGenerator<EventV3> {
     const path = 'events' + (after === null ? '' : '?after=' + encodeURIComponent(after));
     const response = await fetcher(access.route(path), { signal, headers: access.headers() });
     if (!response.ok || !response.body)
@@ -524,6 +524,7 @@ export async function* jobWindowEvents(access: JobWindowAccess, after: string | 
     let buffered = '';
     const limit = 1024 * 1024;
     try {
+        if (!signal.aborted) connected?.();
         for (;;) {
             const next = await reader.read();
             if (next.done) {
@@ -598,11 +599,13 @@ export function startJobWindowEvents(options: {
     signal: AbortSignal;
     event(value: EventV3): void;
     refused(error: unknown): void;
+    connected?(): void;
     fetcher?: typeof fetch;
 }) {
     let cursor: string | null = null;
     let reader: AbortController | null = null;
     let wake: (() => void) | null = null;
+    let failed = false;
     const stopped = () => { reader?.abort(); wake?.(); };
     options.signal.addEventListener('abort', stopped, {once: true});
     function wait(milliseconds?: number): Promise<void> {
@@ -619,14 +622,22 @@ export function startJobWindowEvents(options: {
                 const current = new AbortController();
                 reader = current;
                 try {
-                    for await (const event of jobWindowEvents(options.access, cursor, current.signal, options.fetcher)) {
+                    for await (const event of jobWindowEvents(options.access, cursor, current.signal, options.fetcher, () => {
+                        if (failed && !current.signal.aborted && !options.signal.aborted) {
+                            failed = false;
+                            options.connected?.();
+                        }
+                    })) {
                         // Only complete, delivered events advance replay, including a final event racing hide.
                         options.event(event);
                         cursor = event.cursor;
                         if (event.type === 'closed') return;
                     }
                 } catch (error) {
-                    if (!current.signal.aborted && !options.signal.aborted) options.refused(error);
+                    if (!current.signal.aborted && !options.signal.aborted) {
+                        failed = true;
+                        options.refused(error);
+                    }
                 } finally { reader = null; }
                 if (!options.signal.aborted && !current.signal.aborted) await wait(500);
             }
@@ -1642,19 +1653,20 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),refusal:jobWindowRefusal,formDependencies:dependencies,
         window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),
         routes:display=>jobPublicationRoutes(display,location.origin),load:async()=>(await import('./main.ts')).mountRigScreen()});
-    let bootstrapNotice:HTMLElement|null=null;
-    const report=(error:unknown,fallback?:string)=>{if(rigScreen.mounted()){rigScreen.report(error,fallback);return;}if(!bootstrapNotice){bootstrapNotice=node('p');bootstrapNotice.setAttribute('role','status');bootstrapNotice.setAttribute('translate','no');host.prepend(bootstrapNotice);}bootstrapNotice.textContent=jobWindowRefusal(error,fallback);const code=error instanceof Error?error.message:error;bootstrapNotice.title=typeof code==='string'&&/^[A-Z][A-Z0-9_]*$/.test(code)&&Object.hasOwn(enCatalog,code)&&Object.hasOwn(koCatalog,code)?code:fallback??'JOB_WINDOW_FAILED';};
+    let bootstrapNotice:HTMLElement|null=null,bootstrapStream=false,bootstrapPrior:{text:string;title:string}|null=null;
+    const report=(error:unknown,fallback?:string)=>{const stream=fallback==='JOB_STREAM_FAILED';if(rigScreen.mounted()){rigScreen.report(error,fallback);return;}if(!bootstrapNotice){bootstrapNotice=node('p');bootstrapNotice.setAttribute('role','status');bootstrapNotice.setAttribute('translate','no');host.prepend(bootstrapNotice);}const text=jobWindowRefusal(error,fallback),code=error instanceof Error?error.message:error,title=typeof code==='string'&&/^[A-Z][A-Z0-9_]*$/.test(code)&&Object.hasOwn(enCatalog,code)&&Object.hasOwn(koCatalog,code)?code:fallback??'JOB_WINDOW_FAILED';if(stream)bootstrapStream=true;else{bootstrapStream=false;bootstrapPrior={text,title};}bootstrapNotice.textContent=text;bootstrapNotice.title=title;};
+    const clear=()=>{rigScreen.clearReport?.();if(!bootstrapStream)return;bootstrapStream=false;if(bootstrapPrior&&bootstrapNotice){bootstrapNotice.textContent=bootstrapPrior.text;bootstrapNotice.title=bootstrapPrior.title;return;}if(bootstrapNotice){bootstrapNotice.textContent='';bootstrapNotice.title='';bootstrapNotice.remove?.();bootstrapNotice=null;}};
     const window=createJobWindow<JobRigScreenPrepared|null>({jobId:access.jobId,pageId,transport,adapter:{
         async prepare(display,signal){return rigScreen.prepare(display,signal);},
         captureDraft(){drafts.saveDraft();const forms=modalState()?.forms;const dirty=forms?[...forms].filter(([,entry])=>entry.dirty):[];return dirty.length?dirty.map(([askId,entry])=>({askId,value:entry.read()})):null;},
         commit:prepared=>prepared?rigScreen.commit(prepared):{rollback(){},finalize(){}},
         async painted(prepared,signal){if(stopped||signal.aborted)return;if(prepared)await rigScreen.painted(prepared,signal);},
         discard:prepared=>{const modal=prepared?.record??prepared?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();},
-        changed(state){rigScreen.changed(state);if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.error);},
+        changed(state){rigScreen.changed(state);if(!state.error&&rigScreen.mounted())bootstrapPrior=null;if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.error);},
     }});
     const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);for(const form of host.querySelectorAll('form.interview-answer'))form.dispatchEvent(new Event('job-form-language'));});
     await rigScreen.waiting();
-    startJobWindowEvents({access,signal:abort.signal,event:event=>window.event(event),refused:error=>report(error,'JOB_STREAM_FAILED')});
+    startJobWindowEvents({access,signal:abort.signal,event:event=>window.event(event),refused:error=>report(error,'JOB_STREAM_FAILED'),connected:clear});
     const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();const modal=modalState();for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();localize();globalThis.removeEventListener('pagehide',stop);};
     globalThis.addEventListener('pagehide',stop,{once:true});return stop;
 }
