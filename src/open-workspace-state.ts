@@ -1,5 +1,6 @@
 import {createHmac, randomUUID} from 'node:crypto';
 import {lstat, mkdir, rename, unlink, writeFile} from 'node:fs/promises';
+import type {Stats} from 'node:fs';
 import {isAbsolute, join} from 'node:path';
 import {appRoot} from './build.ts';
 import {readOpenStatus, running, smallJson} from './open.ts';
@@ -10,10 +11,13 @@ import {WORKSPACE_BODY_LIMIT, WORKSPACE_SCHEMA, WORKSPACE_TARGETS_SCHEMA, WORKSP
 
 export function workspaceError(code: string): Error {return new Error(code);}
 
-export async function assertPrivate(path: string, directory: boolean) {
-  const info = await lstat(path);
+function assertPrivateInfo(info: Stats, directory: boolean) {
   if (!(directory ? info.isDirectory() : info.isFile()) || (info.mode & 0o077) !== 0 ||
       typeof process.getuid === 'function' && info.uid !== process.getuid() || !directory && info.nlink !== 1) throw workspaceError('WORKSPACE_STATE_INVALID');
+}
+
+export async function assertPrivate(path: string, directory: boolean) {
+  assertPrivateInfo(await lstat(path), directory);
 }
 
 export async function workspaceDirectory(stateDir: string) {
@@ -24,7 +28,12 @@ export async function workspaceDirectory(stateDir: string) {
 }
 
 export async function readPrivate(path: string): Promise<unknown | null> {
-  try {await assertPrivate(path, false); return await smallJson(path);}
+  try {
+    const info = await lstat(path);
+    // lstat can finish with nlink=0 during unlink. Establish that the path still
+    // opens before validating that snapshot; a vanished path remains ENOENT.
+    return await smallJson(path, () => assertPrivateInfo(info, false));
+  }
   catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw workspaceError('WORKSPACE_STATE_INVALID');}
 }
 
