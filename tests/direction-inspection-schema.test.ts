@@ -22,7 +22,7 @@ test('readDirectionInspection preserves rig-create/direction@1 acceptance and in
     timing: v1Doc.timing.keys,
   });
 
-  for (const schema of ['rig-create/direction@0', 'rig-create/direction@3', 'rig-create/scene@1', undefined]) {
+  for (const schema of ['rig-create/direction@0', 'rig-create/direction@4', 'rig-create/scene@1', undefined]) {
     expect(() => readDirectionInspection({ ...v1Doc, schema }, v1File, v1Doc.rig.model)).toThrow('DIRECTION_SCHEMA');
   }
   expect(() => readDirectionInspection(v1Doc, v1File, null)).toThrow('DIRECTION_MODEL_MISMATCH');

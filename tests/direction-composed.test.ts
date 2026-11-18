@@ -50,7 +50,9 @@ test('#933 refuses an @3 model that is not the inspected model, by name', () => 
     expect(() => readDirectionInspection(doc, file, inspected)).toThrow('DIRECTION_MODEL_MISMATCH');
   // An @3 document carrying only the @1/@2 rig.model binding is not an @3 document.
   const {model: _, ...legacy} = doc;
-  expect(() => readDirectionInspection({...legacy, rig: {version: 1, model}}, file, model)).toThrow('DIRECTION_SCHEMA');
+  expect(() => readDirectionInspection({...legacy, rig: {version: 1, model}}, file, model)).toThrow(
+    'DIRECTION_SCHEMA: rig-create/direction@3 requires a top-level model',
+  );
 });
 
 async function composedPackage(manifest?: (value: Record<string, unknown>) => void) {
