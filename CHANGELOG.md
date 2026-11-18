@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.6.0
+
+A review package can now carry a `rig-create/direction@3` post: a take that is the composed model's own `idle`, with no camera, timing or scene.
+
+**Read before upgrading:**
+
+* **`rig-create/direction@3` is a new accepted schema.** `readDirectionInspection` reads its top-level `model` (`path`, `sha256`) and `take.duration` and `take.loop`, and nothing else in the document. `@1` and `@2` are read as before.
+* **The `DIRECTION_SCHEMA` message changed.** The code is the same; the text now lists `@1`, `@2` and `@3`. An `@3` document without a top-level `model` is also refused as `DIRECTION_SCHEMA`.
+* **An `@3` package must not declare `scene`.** One that does is refused as `SCENE_SOURCE_MISMATCH` before any scene bytes are parsed. An `@3` model that is not the inspected model is refused as `DIRECTION_MODEL_MISMATCH`.
+* **`DirectionInspection` gains an optional `composed?: true`.** For `@3`, `camera.keys` and `timing` are empty arrays. Nothing changes in the value for `@1` or `@2`.
+* **Known, not in this version:** an `@3` post's `take.loop: false` is shown in the title, but playback follows the Repeat idle checkbox. A paused seek to the same time is not repeatable (#935, open).
+
+### Added
+
+* A `rig-create/direction@3` post opens and plays the model's `idle` through the ordinary idle loop, with no seek at the wrap, so physics carries across the loop point. Its direction panel shows the title "Direction vN · N s · loop" and leaves out the legacy-take row and the two camera rows. `@1` and `@2` screens are unchanged (#936, closes #933).
+
 ## 4.5.0
 
 An editable interview question set now takes an optional note. A job page opened before the first publication shows the shared frame and fills in place, and continuous direction playback no longer jumps at the loop point of a looping take.
