@@ -232,6 +232,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "scene.plateDimensions": "SCENE_PLATE_DIMENSIONS: {0}",
   "scene.canvasRequired": "SCENE_REQUIRED: 캔버스 렌더러가 필요해요.",
   "direction.summary": "연출{0} · {1}초 · {2} · {3}",
+  "direction.composed": "연출{0} · {1}초 · {2}",
   "direction.loop": "반복",
   "direction.once": "한 번",
   "direction.fixedCamera": "카메라 고정",

@@ -16,23 +16,32 @@ export interface DirectionInspection {
   };
   postVersion?: number;
   rigVersion: number;
+  /**
+   * rig-create/direction@3: the take is the composed model's own `idle`, played at the model stage.
+   * @3 authors no camera, timing or scene, so its camera and timing key lists are empty.
+   */
+  composed?: true;
   camera: { space: 'rig-world-y-up'; keys: { time: number; easing: string; box: { x: number; y: number; width: number; height: number } }[] };
   take: { duration: number; loop: boolean };
   timing: { time: number; source_time: number; easing: string }[];
 }
 
 /**
- * Read the inspection subset of Create's rig-create/direction@1 or rig-create/direction@2.
- * Scene bytes are inspected separately when the manifest declares them.
- * Create validates scene, project history and citations.
+ * Read the inspection subset of Create's rig-create/direction@1, @2 or @3.
+ * Scene bytes are inspected separately when the manifest declares them; @3 has no scene.
+ * Create validates scene, compose, acceptance, project history and citations.
  */
 export function readDirectionInspection(value: unknown, file: Binding, model: Binding | null): DirectionInspection {
   const doc = object(value, 'direction');
-  if (doc.schema !== 'rig-create/direction@1' && doc.schema !== 'rig-create/direction@2')
-    throw new Error('DIRECTION_SCHEMA: expected rig-create/direction@1 or rig-create/direction@2');
+  const composed = doc.schema === 'rig-create/direction@3';
+  if (doc.schema !== 'rig-create/direction@1' && doc.schema !== 'rig-create/direction@2' && !composed)
+    throw new Error('DIRECTION_SCHEMA: expected rig-create/direction@1, rig-create/direction@2 or rig-create/direction@3');
   const rig = object(doc.rig, 'direction.rig');
-  const binding = object(rig.model, 'direction.rig.model');
-  const path = packagePath(binding.path, 'direction.rig.model.path');
+  // @3 binds the compiled model at the top level; @1/@2 bind it under rig.
+  if (composed && (!doc.model || typeof doc.model !== 'object')) throw new Error('DIRECTION_SCHEMA: rig-create/direction@3 requires a top-level model');
+  const field = composed ? 'direction.model' : 'direction.rig.model';
+  const binding = object(composed ? doc.model : rig.model, field);
+  const path = packagePath(binding.path, field + '.path');
   if (!model || path !== model.path || binding.sha256 !== model.sha256)
     throw new Error('DIRECTION_MODEL_MISMATCH: expected the inspected model path and SHA-256');
   const rigVersion = numberField(rig.version, 'direction.rig.version', 1);
@@ -40,6 +49,7 @@ export function readDirectionInspection(value: unknown, file: Binding, model: Bi
   const take = object(doc.take, 'direction.take');
   const duration = numberField(take.duration, 'direction.take.duration');
   if (duration === 0 || typeof take.loop !== 'boolean') throw new Error('DIRECTION_SCHEMA: expected positive duration and loop boolean');
+  if (composed) return { file, model, rigVersion, composed: true, camera: { space: 'rig-world-y-up', keys: [] }, take: { duration, loop: take.loop }, timing: [] };
   const camera = object(doc.camera, 'direction.camera');
   const timing = object(doc.timing, 'direction.timing');
   if (camera.space !== 'rig-world-y-up') throw new Error('DIRECTION_SCHEMA: expected rig-world-y-up camera');

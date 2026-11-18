@@ -232,6 +232,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "scene.plateDimensions": "SCENE_PLATE_DIMENSIONS: {0}",
   "scene.canvasRequired": "SCENE_REQUIRED: canvas renderer required.",
   "direction.summary": "Direction{0} · {1} s · {2} · {3}",
+  "direction.composed": "Direction{0} · {1} s · {2}",
   "direction.loop": "loop",
   "direction.once": "once",
   "direction.fixedCamera": "fixed camera",
