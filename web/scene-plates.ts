@@ -112,6 +112,37 @@ export function takeSample(direction:DirectionInspection,time:number):{box:Scene
  for(const key of ['x','y','width','height'] as const)box[key]+=(camera.b.box[key]-box[key])*camera.mix;
  return {box,sourceTime:timing.a.source_time+(timing.b.source_time-timing.a.source_time)*timing.mix};
 }
+
+/** Advance authored source deltas, splitting at timing keys and take wraps, without replaying physics. */
+export function advanceTake(player:RigPlayer,direction:DirectionInspection,from:number,steps:readonly number[]):void{
+ // Source deltas are already retimed by the take, rather than wall-time steps to scale again.
+ const timeScale=player.timeScale;player.timeScale=1;
+ try{
+ const duration=direction.take.duration,clipDuration=player.entry(0)?.duration??0;
+ const start=takeSample(direction,0).sourceTime,end=takeSample(direction,duration).sourceTime,span=end-start;
+ // Only equal source phases join continuously. A partial-clip restart is an authored jump.
+ const continuous=span===0||(clipDuration>0&&span>0&&Math.abs(span-Math.round(span/clipDuration)*clipDuration)<=1e-9);
+ let at=from;
+ for(const step of steps){
+  let remaining=step;
+  while(remaining>0){
+   if(at>=duration){if(!direction.take.loop)break;if(!continuous)player.seek(start);at=0;}
+   const index=direction.timing.findIndex(key=>key.time>at),key=direction.timing[index<0?direction.timing.length-1:Math.max(0,index-1)]!;
+   const boundary=direction.timing[index]?.time??duration,to=Math.min(at+remaining,boundary,duration),elapsed=to-at;
+   const before=takeSample(direction,at).sourceTime,after=takeSample(direction,to).sourceTime;
+   const delta=after-before;
+   if(key.easing==='hold'||delta===0){
+    // Authored holds freeze the track, while the existing held-step API lets physics settle.
+    const held=player.held;player.hold(true);try{player.advance(elapsed);}finally{player.hold(held);}
+    if(after!==before)player.seek(after);
+   }else if(delta>0)player.advance(delta);
+   else player.seek(after); // The current direction reader rejects reverse keys; never advance a negative delta.
+   remaining=to===at+remaining?0:remaining-elapsed;at=to;
+   if(at===duration&&direction.take.loop){if(!continuous)player.seek(start);at=0;}
+  }
+ }
+ }finally{player.timeScale=timeScale;}
+}
 /** Load only the byte identities already validated by the package reader; never follow a scene URL. */
 export async function loadScenePlates(scene:SceneInspection,url:(path:string)=>string):Promise<Map<string,HTMLImageElement>>{
  const images=new Map<string,HTMLImageElement>();
