@@ -1310,6 +1310,280 @@ describe('standalone event subscription lifetime', () => {
         } finally {stop.abort(); await subscription.done; h.front.stop();}
         expect(requests[0]!.aborted).toBe(true);
     });
+    test('#906 stream notice stays while reconnects fail and clears once a reconnect reader opens with no new event', async () => {
+        const source = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+        const start = source.indexOf('export async function mountJobScreen(');
+        const body = source.slice(start).replace('export async function mountJobScreen', 'async function mountJobScreen').replace("await import('./i18n.ts')", 'i18nDouble');
+        const run = new Function('environment', `with(environment){${new Bun.Transpiler({loader: 'ts'}).transformSync(body)};return mountJobScreen;}`);
+        for (const surface of ['bootstrap', 'rig', 'record'] as const) {
+            const originalFetch = globalThis.fetch, originalDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+            let attempts = 0, delivered = 0, down = true, notice: any = null;
+            const hostChildren: any[] = [];
+            const makeNode = (initial = '') => {
+                const classes = new Set<string>();
+                const el: any = {
+                    textContent: initial, title: initial, dataset: {},
+                    setAttribute() {}, getAttribute: () => null,
+                    classList: {
+                        contains: (name: string) => classes.has(name),
+                        toggle: (name: string, force?: boolean) => {
+                            const on = force ?? !classes.has(name);
+                            if (on) classes.add(name); else classes.delete(name);
+                            return on;
+                        },
+                    },
+                    remove() { const idx = hostChildren.indexOf(el); if (idx >= 0) hostChildren.splice(idx, 1); },
+                };
+                return el;
+            };
+            const footer = makeNode(surface === 'record' ? 'Not submitted' : surface === 'rig' ? 'Rig 1' : '');
+            const header = makeNode(surface === 'rig' ? 'Rig 1' : '');
+            const doc = {
+                createElement: () => { notice = makeNode(); return notice; },
+                getElementById: (id: string) => surface === 'bootstrap' ? null : id === 'message' ? footer : id === 'review-message' ? header : null,
+            };
+            Object.defineProperty(globalThis, 'document', {configurable: true, writable: true, value: doc});
+            globalThis.fetch = (async () => {
+                attempts++;
+                if (down) {
+                    if (attempts === 2) throw new Error('network down');
+                    return new Response('unavailable', {status: 503});
+                }
+                return new Response(new ReadableStream<Uint8Array>({start() {}}));
+            }) as unknown as typeof fetch;
+            let stop: (() => void) | undefined;
+            try {
+                const screen = createJobRigScreen({
+                    host: {replaceChildren() {}} as unknown as HTMLElement,
+                    pageId: 'page-906', access: {capability: 'cap', headers: () => new Headers()},
+                    window: {state: () => ({pending: [], receipt: null, generation: 1, preparing: false, closed: false}), submit: async () => ({ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}})},
+                    routes: display => jobPublicationRoutes(display, 'http://127.0.0.1'),
+                    translate: key => key, refusal: jobWindowRefusal,
+                    async load() {
+                        const host = rigHost()!;
+                        host.attach({
+                            stage: () => null, redraw() {},
+                            message(value, error = false, diagnostic) {
+                                footer.textContent = value; footer.title = diagnostic ?? value; footer.classList.toggle('error', error);
+                                header.textContent = value; header.classList.toggle('error', error);
+                            },
+                        });
+                        host.displayed();
+                    },
+                });
+                if (surface !== 'bootstrap') {
+                    const display = fixturePublication(1), pub = display.publication;
+                    const prepared = {jobRigScreen: true as const, display, entry: 'http://127.0.0.1' + display.routes.entry, checkpoints: new Set<string>(), ...(surface === 'record' ? {record: {inspection: {display, dispose() {}} as unknown as JobPreparedInspection, forms: new Map(), picture: null}} : {review: {manifest: {id: 'pkg', title: 'Pkg', revision: '1', references: [], checkpoints: [], authoring: []}, reviewedSource: {runtimeVersion: '1'}, sourceHash: pub.source.sourceHash}})} as unknown as import('../web/job-rig-screen.ts').JobRigScreenPrepared;
+                    screen.commit(prepared);
+                    await screen.painted(prepared, new AbortController().signal);
+                    if (surface === 'rig') screen.changed({pending: [], closed: false, preparing: false, displayed: display});
+                    else { footer.textContent = 'Not submitted'; footer.title = 'Not submitted'; footer.classList.toggle('error', false); header.textContent = ''; header.classList.toggle('error', false); }
+                }
+                const environment = {
+                    enCatalog, koCatalog, document: doc, sessionStorage: {}, localStorage: {},
+                    location: {href: 'http://127.0.0.1/jobs/window-fixture/', origin: 'http://127.0.0.1'},
+                    history: {replaceState() {}}, crypto, AbortController, URL,
+                    jobWindowAccess: () => jobWindowAccess('http://127.0.0.1/jobs/window-fixture/', null, () => {}),
+                    i18nDouble: {onLanguageChange: () => () => {}, t: (key: string) => key},
+                    t: (key: string) => key, createJobFormHelpers: () => ({}), createJobFormDrafts: () => ({saveDraft() {}}),
+                    createJobWindowTransport: () => ({}),
+                    createJobRigScreen: () => ({...screen, waiting: async () => {}}),
+                    createJobWindow: () => ({stop() {}, state: () => ({}), event() { delivered++; }}),
+                    startJobWindowEvents, assertJobAskSource() {}, jobCheckpointContext, jobPublicationRoutes,
+                    jobWindowRefusal, globalThis: {addEventListener() {}, removeEventListener() {}},
+                };
+                stop = await run(environment)({
+                    prepend(node: any) { if (!hostChildren.includes(node)) hostChildren.unshift(node); },
+                    querySelectorAll: () => [],
+                });
+                for (const expectedAttempt of [1, 2, 3]) {
+                    await settled(() => attempts >= expectedAttempt);
+                    if (surface === 'bootstrap') {
+                        expect(hostChildren).toHaveLength(1);
+                        expect(notice.textContent).toBe('JOB_STREAM_FAILED');
+                        expect(notice.title).toBe('JOB_STREAM_FAILED');
+                    } else {
+                        expect(footer.textContent).toBe('JOB_STREAM_FAILED');
+                        expect(footer.classList.contains('error')).toBe(true);
+                        expect(header.textContent).toBe('JOB_STREAM_FAILED');
+                        expect(header.classList.contains('error')).toBe(true);
+                    }
+                }
+                down = false;
+                const beforeRestore = attempts;
+                await settled(() => attempts > beforeRestore);
+                await Bun.sleep(10);
+                expect(delivered).toBe(0);
+                if (surface === 'bootstrap') {
+                    expect(hostChildren).toHaveLength(0);
+                    expect(notice.textContent).toBe('');
+                    expect(notice.title).toBe('');
+                } else if (surface === 'rig') {
+                    expect(footer.textContent).toBe('Rig 1');
+                    expect(footer.classList.contains('error')).toBe(false);
+                    expect(header.textContent).toBe('Rig 1');
+                    expect(header.classList.contains('error')).toBe(false);
+                } else {
+                    expect(footer.textContent).toBe('Not submitted');
+                    expect(footer.classList.contains('error')).toBe(false);
+                    expect(header.textContent).toBe('');
+                    expect(header.classList.contains('error')).toBe(false);
+                }
+            } finally {
+                stop?.();
+                setRigHost(null);
+                globalThis.fetch = originalFetch;
+                if (originalDoc) Object.defineProperty(globalThis, 'document', originalDoc);
+                else delete (globalThis as {document?: unknown}).document;
+            }
+        }
+    }, 10_000);
+    test('#906 reconnect never clears a non-stream notice from a transaction error or submit refusal', async () => {
+        const source = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+        const start = source.indexOf('export async function mountJobScreen(');
+        const body = source.slice(start).replace('export async function mountJobScreen', 'async function mountJobScreen').replace("await import('./i18n.ts')", 'i18nDouble');
+        const run = new Function('environment', `with(environment){${new Bun.Transpiler({loader: 'ts'}).transformSync(body)};return mountJobScreen;}`);
+        for (const kind of ['bootstrap-tx-during', 'bootstrap-tx-before', 'rig-tx', 'record-tx', 'submit-during', 'submit-before'] as const) {
+            const originalFetch = globalThis.fetch, originalDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+            let attempts = 0, down = true, notice: any = null, adapter: any = null;
+            const hostChildren: any[] = [];
+            const makeNode = (initial = '') => {
+                const classes = new Set<string>();
+                const el: any = {
+                    textContent: initial, title: initial, dataset: {},
+                    setAttribute() {}, getAttribute: () => null,
+                    classList: {
+                        contains: (name: string) => classes.has(name),
+                        toggle: (name: string, force?: boolean) => {
+                            const on = force ?? !classes.has(name);
+                            if (on) classes.add(name); else classes.delete(name);
+                            return on;
+                        },
+                    },
+                    remove() { const idx = hostChildren.indexOf(el); if (idx >= 0) hostChildren.splice(idx, 1); },
+                };
+                return el;
+            };
+            const isBootstrap = kind.startsWith('bootstrap');
+            const footer = makeNode('Publication 1'), header = makeNode('Publication 1');
+            const doc = {
+                createElement: () => { notice = makeNode(); return notice; },
+                getElementById: (id: string) => isBootstrap ? null : id === 'message' ? footer : id === 'review-message' ? header : null,
+            };
+            Object.defineProperty(globalThis, 'document', {configurable: true, writable: true, value: doc});
+            let gate!: () => void;
+            const firstAttemptHold = new Promise<void>(resolve => { gate = resolve; });
+            globalThis.fetch = (async () => {
+                attempts++;
+                if (attempts === 1 && (kind === 'bootstrap-tx-before' || kind === 'submit-before')) await firstAttemptHold;
+                if (down) return new Response('unavailable', {status: 503});
+                return new Response(new ReadableStream<Uint8Array>({start() {}}));
+            }) as unknown as typeof fetch;
+            let stop: (() => void) | undefined;
+            try {
+                const screen = createJobRigScreen({
+                    host: {replaceChildren() {}} as unknown as HTMLElement,
+                    pageId: 'page-906', access: {capability: 'cap', headers: () => new Headers()},
+                    window: {state: () => ({pending: [], receipt: null, generation: 1, preparing: false, closed: false}), submit: async () => ({ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}})},
+                    routes: display => jobPublicationRoutes(display, 'http://127.0.0.1'),
+                    translate: key => key, refusal: jobWindowRefusal,
+                    async load() {
+                        const host = rigHost()!;
+                        host.attach({
+                            stage: () => null, redraw() {},
+                            message(value, error = false, diagnostic) {
+                                footer.textContent = value; footer.title = diagnostic ?? value; footer.classList.toggle('error', error);
+                                header.textContent = value; header.classList.toggle('error', error);
+                            },
+                        });
+                        host.displayed();
+                    },
+                });
+                const display = fixturePublication(1), pub = display.publication;
+                if (!isBootstrap) {
+                    const prepared = {jobRigScreen: true as const, display, entry: 'http://127.0.0.1' + display.routes.entry, checkpoints: new Set<string>(), ...(kind === 'record-tx' ? {record: {inspection: {display, dispose() {}} as unknown as JobPreparedInspection, forms: new Map(), picture: null}} : {review: {manifest: {id: 'pkg', title: 'Pkg', revision: '1', references: [], checkpoints: [], authoring: []}, reviewedSource: {runtimeVersion: '1'}, sourceHash: pub.source.sourceHash}})} as unknown as import('../web/job-rig-screen.ts').JobRigScreenPrepared;
+                    screen.commit(prepared);
+                    await screen.painted(prepared, new AbortController().signal);
+                    screen.changed({pending: [], closed: false, preparing: false, displayed: display});
+                }
+                const environment = {
+                    enCatalog, koCatalog, document: doc, sessionStorage: {}, localStorage: {},
+                    location: {href: 'http://127.0.0.1/jobs/window-fixture/', origin: 'http://127.0.0.1'},
+                    history: {replaceState() {}}, crypto, AbortController, URL,
+                    jobWindowAccess: () => jobWindowAccess('http://127.0.0.1/jobs/window-fixture/', null, () => {}),
+                    i18nDouble: {onLanguageChange: () => () => {}, t: (key: string) => key},
+                    t: (key: string) => key, createJobFormHelpers: () => ({}), createJobFormDrafts: () => ({saveDraft() {}}),
+                    createJobWindowTransport: () => ({}),
+                    createJobRigScreen: () => ({...screen, waiting: async () => {}}),
+                    createJobWindow: (options: any) => { adapter = options.adapter; return {stop() {}, state: () => ({}), event() {}}; },
+                    startJobWindowEvents, assertJobAskSource() {}, jobCheckpointContext, jobPublicationRoutes,
+                    jobWindowRefusal, globalThis: {addEventListener() {}, removeEventListener() {}},
+                };
+                stop = await run(environment)({
+                    prepend(node: any) { if (!hostChildren.includes(node)) hostChildren.unshift(node); },
+                    querySelectorAll: () => [],
+                });
+                if (kind === 'bootstrap-tx-before') {
+                    adapter.changed({error: new Error('JOB_CAPABILITY_REQUIRED')});
+                    expect(notice.title).toBe('JOB_CAPABILITY_REQUIRED');
+                    gate();
+                    await settled(() => attempts >= 1 && notice.title === 'JOB_STREAM_FAILED');
+                } else if (kind === 'submit-before') {
+                    footer.textContent = 'Review was not submitted: stale';
+                    footer.title = 'JOB_ACT_SOURCE_STALE · client: submission';
+                    footer.classList.toggle('error', true);
+                    header.textContent = 'Review was not submitted: stale';
+                    header.classList.toggle('error', true);
+                    gate();
+                    await settled(() => attempts >= 1 && footer.textContent === 'JOB_STREAM_FAILED');
+                } else {
+                    await settled(() => attempts >= 1);
+                    if (kind === 'bootstrap-tx-during') {
+                        adapter.changed({error: new Error('JOB_CAPABILITY_REQUIRED')});
+                    } else if (kind === 'rig-tx') {
+                        adapter.changed({pending: [], closed: false, error: 'JOB_VISUAL_UNAVAILABLE', errorOrigin: 'client: prepare'});
+                    } else if (kind === 'record-tx') {
+                        adapter.changed({pending: [], closed: false, error: 'JOB_CAPABILITY_REQUIRED'});
+                    } else if (kind === 'submit-during') {
+                        footer.textContent = 'Review was not submitted: stale';
+                        footer.title = 'JOB_ACT_SOURCE_STALE · client: submission';
+                        footer.classList.toggle('error', true);
+                        header.textContent = 'Review was not submitted: stale';
+                        header.classList.toggle('error', true);
+                    }
+                }
+                down = false;
+                const beforeRestore = attempts;
+                await settled(() => attempts > beforeRestore);
+                await Bun.sleep(10);
+                if (isBootstrap) {
+                    expect(hostChildren).toHaveLength(1);
+                    expect(notice.title).toBe('JOB_CAPABILITY_REQUIRED');
+                    expect(notice.textContent).toBe(jobWindowRefusal(new Error('JOB_CAPABILITY_REQUIRED')));
+                } else if (kind === 'rig-tx') {
+                    expect(footer.textContent).toContain('job.failed');
+                    expect(footer.classList.contains('error')).toBe(true);
+                    expect(header.classList.contains('error')).toBe(true);
+                } else if (kind === 'record-tx') {
+                    expect(footer.textContent).toBe(jobWindowRefusal('JOB_CAPABILITY_REQUIRED'));
+                    expect(footer.classList.contains('error')).toBe(true);
+                    expect(header.classList.contains('error')).toBe(true);
+                } else {
+                    expect(footer.textContent).toBe('Review was not submitted: stale');
+                    expect(footer.title).toBe('JOB_ACT_SOURCE_STALE · client: submission');
+                    expect(footer.classList.contains('error')).toBe(true);
+                    expect(header.textContent).toBe('Review was not submitted: stale');
+                    expect(header.classList.contains('error')).toBe(true);
+                }
+            } finally {
+                stop?.();
+                setRigHost(null);
+                globalThis.fetch = originalFetch;
+                if (originalDoc) Object.defineProperty(globalThis, 'document', originalDoc);
+                else delete (globalThis as {document?: unknown}).document;
+            }
+        }
+    }, 10_000);
 });
 
 import type {RigPlayer} from '@rig-c/play';
@@ -1318,7 +1592,8 @@ import {createRigViewportProvider} from '../web/rig-viewport-provider.ts';
 import {mountViewportPair} from '../web/viewport-pair.ts';
 import * as i18nModule from '../web/i18n.ts';
 import {recordJobRigDraw, jobRigDrawState} from '../web/job-rig-capture.ts';
-import {isJobRigScreen} from '../web/job-rig-screen.ts';
+import {createJobRigScreen, isJobRigScreen} from '../web/job-rig-screen.ts';
+import {rigHost, setRigHost} from '../web/rig-host.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {advancePlayback} from '../web/playback-clock.ts';
