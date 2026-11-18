@@ -1,5 +1,5 @@
 import {hasTransientQuestionImage} from './interview-panel.ts';
-import {bindScenePlates,loadScenePlates,takeSample} from './scene-plates.ts';
+import {advanceTake,bindScenePlates,loadScenePlates,takeSample} from './scene-plates.ts';
 import type {SceneInspection} from '../src/scene-inspection.ts';
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
 import {mountJobScreen,joinedInterviewForms,mediaReady,jobSubmissionRefusal} from './job-session.ts';
@@ -824,7 +824,7 @@ function tickPlaying(now: number): void {
   const stepped = next.steps.reduce((sum, step) => sum + step, 0);
   // The wrap does what the replaced seek(0) did besides the player: restart the wind clock and re-hold the reference at the wrapped time.
   if (next.wrapped) { stopAudio(); clipMoved({ kind: 'replay' }); if (video) { if (video.readyState >= 1) holdVideoReference(video, referenceGeneration); void video.play().catch(error => { pause(); message(errorText(error), true); }); } }
-  if (player && player.current && next.steps.length) { try { const direction=activeScene();if(direction){stepEnvironment(stepped);drawRig(()=>{player!.seek(takeSample(direction,time).sourceTime);player!.draw();});}else{stepEnvironment(stepped); drawRig(()=>{ for (const step of next.steps) player!.advance(step); player!.draw(); });} } catch (error) { pause(); message(errorText(error), true); } }
+  if (player && player.current && next.steps.length) { try { const direction=activeScene();if(direction){stepEnvironment(stepped);drawRig(()=>{advanceTake(player!,direction,previous,next.steps);player!.draw();});}else{stepEnvironment(stepped); drawRig(()=>{ for (const step of next.steps) player!.advance(step); player!.draw(); });} } catch (error) { pause(); message(errorText(error), true); } }
   if (video && video.readyState >= 1 && time > video.duration) { if (referenceInput.state !== 'out-of-domain') holdVideoReference(video, referenceGeneration); } else if (video && referenceInput.state === 'loaded' && Math.abs(video.currentTime - time) > .15) video.currentTime = time;
   if (input('sync-audio').checked) for (const cue of activeCues()) if (cueDue(cue.time, previous, next, duration)) void audition(cue.clip);
   renderSequenceFrame(); renderTransport(); if (next.ended) pause(); lastFrame = now;
