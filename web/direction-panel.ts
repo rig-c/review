@@ -31,8 +31,11 @@ export function directionRows(view: DirectionView): { key: string; values?: stri
       : { key: 'direction.authoredUnavailable' },
     ...(joined ? [{ key: 'direction.joined', values: [String(joined.postVersion), joined.projectModel.path,
       joined.packageRoot, joined.projectHash, joined.packageSourceHash] }] : []),
-    ...(model?.inspected&&view.scene?[{key:'direction.planes',values:[t(view.scene.plates.length===2?'direction.threePlanes':'direction.twoPlanes')]}]:[{ key: 'direction.runtimeCameraUnavailable' }]),
-    { key: 'direction.cameraApplyUnavailable' },
+    // direction@3 authors no camera: its take is the composed model's idle at the model stage (owner ruling, #933).
+    ...(view.authored?.composed ? [] : [
+      ...(model?.inspected&&view.scene?[{key:'direction.planes',values:[t(view.scene.plates.length===2?'direction.threePlanes':'direction.twoPlanes')]}]:[{ key: 'direction.runtimeCameraUnavailable' }]),
+      { key: 'direction.cameraApplyUnavailable' },
+    ]),
   ];
 }
 
@@ -40,13 +43,14 @@ export function directionRows(view: DirectionView): { key: string; values?: stri
 export function directionSummary(view: DirectionView, language?: 'en' | 'ko'): string {
   const authored = view.model?.inspected ? view.authored : undefined;
   if (!authored) return t('direction.title', undefined, language);
+  const post=authored.joined?.postVersion??authored.postVersion;
+  const version = post ? ` v${post}` : '';
+  const repeat = t(authored.take.loop ? 'direction.loop' : 'direction.once', undefined, language);
+  if (authored.composed) return t('direction.composed', [version, String(authored.take.duration), repeat], language);
   const first = authored.camera.keys[0]!.box;
   const fixed = authored.camera.keys.every(({ box }) =>
     box.x === first.x && box.y === first.y && box.width === first.width && box.height === first.height);
-  const post=authored.joined?.postVersion??authored.postVersion;
-  const version = post ? ` v${post}` : '';
-  return t('direction.summary', [version, String(authored.take.duration),
-    t(authored.take.loop ? 'direction.loop' : 'direction.once', undefined, language),
+  return t('direction.summary', [version, String(authored.take.duration), repeat,
     t(fixed ? 'direction.fixedCamera' : 'direction.movingCamera', undefined, language)], language);
 }
 
@@ -74,7 +78,7 @@ export function bindDirectionPanel(before: HTMLElement, read: () => DirectionVie
     if (host.hidden) return;
     const view = read();
     title.textContent = directionSummary(view);
-    const rows = [...directionRows(view),...(!view.scene&&view.authored?[{key:view.authored.scene?'direction.noScene':'direction.legacyTake'}]:[])].map(({ key, values }) => {
+    const rows = [...directionRows(view),...(!view.scene&&view.authored&&!view.authored.composed?[{key:view.authored.scene?'direction.noScene':'direction.legacyTake'}]:[])].map(({ key, values }) => {
       const row = document.createElement('li');
       row.textContent = t(key, values);
       return row;
