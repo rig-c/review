@@ -73,10 +73,32 @@ test('C4 job browser runtime graph excludes the server manifest and Node imports
 });
 
 test('window refusals retain registered codes and bound arbitrary runtime prose', () => {
-    expect(jobWindowRefusal(new Error('INTERVIEW_OPTIONS_STALE'))).toBe(t('INTERVIEW_OPTIONS_STALE'));
-    expect(jobWindowRefusal(new Error('Unregistered runtime detail /private/path'))).toBe(t('JOB_WINDOW_FAILED'));
-    expect(jobWindowRefusal(new Error('UNREGISTERED_MACHINE_CODE'), 'JOB_VISUAL_UNAVAILABLE')).toBe(t('JOB_VISUAL_UNAVAILABLE'));
-    expect(jobWindowRefusal(null, 'JOB_ACT_INVALID')).toBe(t('JOB_ACT_INVALID'));
+    const originalError = console.error;
+    const calls: unknown[][] = [];
+    console.error = (...args: unknown[]) => { calls.push(args); };
+    try {
+        expect(jobWindowRefusal(new Error('INTERVIEW_OPTIONS_STALE'))).toBe(t('INTERVIEW_OPTIONS_STALE'));
+        expect(jobWindowRefusal('JOB_CAPABILITY_REQUIRED')).toBe(t('JOB_CAPABILITY_REQUIRED'));
+        expect(calls).toEqual([]);
+
+        const boom = new Error('boom');
+        expect(jobWindowRefusal(boom)).toBe(t('JOB_WINDOW_FAILED'));
+        expect(calls).toEqual([['[job-window]', 'JOB_WINDOW_FAILED', boom]]);
+        expect((calls[0]![2] as Error).name).toBe('Error');
+        expect((calls[0]![2] as Error).message).toBe('boom');
+        expect(typeof (calls[0]![2] as Error).stack).toBe('string');
+
+        calls.length = 0;
+        const machine = new Error('UNREGISTERED_MACHINE_CODE');
+        expect(jobWindowRefusal(machine, 'JOB_VISUAL_UNAVAILABLE')).toBe(t('JOB_VISUAL_UNAVAILABLE'));
+        expect(calls).toEqual([['[job-window]', 'JOB_VISUAL_UNAVAILABLE', machine]]);
+
+        calls.length = 0;
+        expect(jobWindowRefusal(null, 'JOB_ACT_INVALID')).toBe(t('JOB_ACT_INVALID'));
+        expect(calls).toEqual([['[job-window]', 'JOB_ACT_INVALID', null]]);
+    } finally {
+        console.error = originalError;
+    }
 });
 function deferred<Value>() {
     let resolve!: (value: Value) => void;
@@ -1584,6 +1606,209 @@ describe('standalone event subscription lifetime', () => {
             }
         }
     }, 10_000);
+    test('#941 uncatalogued errors log once with [job-window], fallback code and the Error instance across bootstrap report, mounted rig/record screen and formFor submit', async () => {
+        const source = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+        const start = source.indexOf('export async function mountJobScreen(');
+        const body = source.slice(start).replace('export async function mountJobScreen', 'async function mountJobScreen').replace("await import('./i18n.ts')", 'i18nDouble');
+        const run = new Function('environment', `with(environment){${new Bun.Transpiler({loader: 'ts'}).transformSync(body)};return mountJobScreen;}`);
+        const originalError = console.error;
+        const calls: unknown[][] = [];
+        console.error = (...args: unknown[]) => { calls.push(args); };
+        try {
+            for (const surface of ['bootstrap', 'rig', 'record'] as const) {
+                const originalDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+                let notice: any = null;
+                const hostChildren: any[] = [];
+                const makeNode = (initial = '') => {
+                    const classes = new Set<string>();
+                    const el: any = {
+                        textContent: initial, title: initial, dataset: {},
+                        setAttribute() {}, getAttribute: () => null,
+                        classList: {
+                            contains: (name: string) => classes.has(name),
+                            toggle: (name: string, force?: boolean) => {
+                                const on = force ?? !classes.has(name);
+                                if (on) classes.add(name); else classes.delete(name);
+                                return on;
+                            },
+                        },
+                        remove() { const idx = hostChildren.indexOf(el); if (idx >= 0) hostChildren.splice(idx, 1); },
+                    };
+                    return el;
+                };
+                const footer = makeNode('Publication 1'), header = makeNode('Publication 1');
+                const doc = {
+                    createElement: () => { notice = makeNode(); return notice; },
+                    getElementById: (id: string) => surface === 'bootstrap' ? null : id === 'message' ? footer : id === 'review-message' ? header : null,
+                };
+                Object.defineProperty(globalThis, 'document', {configurable: true, writable: true, value: doc});
+                const fixture = createJobWindowFixture();
+                let nextPrepareError: Error | null = null;
+                let stop: (() => void) | undefined;
+                try {
+                    const screen = createJobRigScreen({
+                        host: {replaceChildren() {}} as unknown as HTMLElement,
+                        pageId: 'page-941', access: {capability: 'cap', headers: () => new Headers()},
+                        window: {state: () => ({pending: [], receipt: null, generation: 1, preparing: false, closed: false}), submit: async () => ({ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}})},
+                        routes: display => jobPublicationRoutes(display, 'http://127.0.0.1'),
+                        translate: key => key, refusal: jobWindowRefusal,
+                        async load() {
+                            const host = rigHost()!;
+                            host.attach({
+                                stage: () => null, redraw() {},
+                                message(value, error = false, diagnostic) {
+                                    footer.textContent = value; footer.title = diagnostic ?? value; footer.classList.toggle('error', error);
+                                    header.textContent = value; header.classList.toggle('error', error);
+                                },
+                            });
+                            host.displayed();
+                        },
+                    });
+                    const display1 = fixturePublication(1), pub1 = display1.publication;
+                    if (surface !== 'bootstrap') {
+                        const prepared = {jobRigScreen: true as const, display: display1, entry: 'http://127.0.0.1' + display1.routes.entry, checkpoints: new Set<string>(), ...(surface === 'record' ? {record: {inspection: {display: display1, dispose() {}} as unknown as JobPreparedInspection, forms: new Map(), picture: null}} : {review: {manifest: {id: 'pkg', title: 'Pkg', revision: '1', references: [], checkpoints: [], authoring: []}, reviewedSource: {runtimeVersion: '1'}, sourceHash: pub1.source.sourceHash}})} as unknown as import('../web/job-rig-screen.ts').JobRigScreenPrepared;
+                        screen.commit(prepared);
+                        await screen.painted(prepared, new AbortController().signal);
+                        screen.changed({pending: [], closed: false, preparing: false, displayed: display1});
+                    }
+                    let activeWindow: ReturnType<typeof createJobWindow> | undefined;
+                    const request = (reqBody: unknown) => new Request('http://127.0.0.1:4318/jobs/window-fixture/ui/displayed', {
+                        method: 'POST', headers: {'content-type': 'application/json', origin: 'http://127.0.0.1:4318'},
+                        body: JSON.stringify(reqBody),
+                    });
+                    const transport = {
+                        readPublication: (publicationId: string) => fixture.ports.readPublication(fixture.jobId, publicationId),
+                        acknowledge: (reqBody: unknown) => fixture.ports.ackDisplayed(fixture.jobId, request(reqBody)),
+                        submit: (reqBody: unknown) => fixture.ports.commitUIAct(fixture.jobId, request(reqBody)),
+                    };
+                    const environment = {
+                        enCatalog, koCatalog, document: doc, sessionStorage: {}, localStorage: {},
+                        location: {href: 'http://127.0.0.1/jobs/window-fixture/', origin: 'http://127.0.0.1'},
+                        history: {replaceState() {}}, crypto, AbortController, URL,
+                        jobWindowAccess: () => jobWindowAccess('http://127.0.0.1/jobs/window-fixture/', null, () => {}),
+                        i18nDouble: {onLanguageChange: () => () => {}, t: (key: string) => key},
+                        t, createJobFormHelpers: () => ({}), createJobFormDrafts: () => ({saveDraft() {}}),
+                        createJobWindowTransport: () => transport,
+                        createJobRigScreen: () => ({
+                            ...screen, waiting: async () => {},
+                            async prepare() { if (nextPrepareError) throw nextPrepareError; return null; },
+                        }),
+                        createJobWindow: (opts: any) => { activeWindow = createJobWindow(opts); return activeWindow; },
+                        startJobWindowEvents: () => ({done: Promise.resolve()}),
+                        assertJobAskSource() {}, jobCheckpointContext, jobPublicationRoutes,
+                        jobWindowRefusal, globalThis: {addEventListener() {}, removeEventListener() {}},
+                    };
+                    stop = await run(environment)({
+                        prepend(node: any) { if (!hostChildren.includes(node)) hostChildren.unshift(node); },
+                        querySelectorAll: () => [],
+                    });
+
+                    calls.length = 0;
+                    const uncatalogued = new TypeError('boom-' + surface);
+                    nextPrepareError = uncatalogued;
+                    const display2 = fixturePublication(2);
+                    fixture.publish(display2);
+                    activeWindow!.event(fixture.events.at(-1)!);
+                    await activeWindow!.settled();
+
+                    expect(activeWindow!.state().error).toBe('boom-' + surface);
+                    expect(activeWindow!.state().failure).toBe(uncatalogued);
+                    expect(calls).toEqual([['[job-window]', 'JOB_WINDOW_FAILED', uncatalogued]]);
+                    expect((calls[0]![2] as Error).name).toBe('TypeError');
+                    expect((calls[0]![2] as Error).message).toBe('boom-' + surface);
+                    expect(typeof (calls[0]![2] as Error).stack).toBe('string');
+                    if (surface === 'bootstrap') {
+                        expect(notice.textContent).toBe(t('JOB_WINDOW_FAILED'));
+                        expect(notice.title).toBe('JOB_WINDOW_FAILED');
+                    } else if (surface === 'rig') {
+                        expect(footer.textContent).toBe('job.failed · ' + t('JOB_WINDOW_FAILED'));
+                    } else {
+                        expect(footer.textContent).toBe(t('JOB_WINDOW_FAILED'));
+                    }
+
+                    calls.length = 0;
+                    nextPrepareError = new Error('JOB_CAPABILITY_REQUIRED');
+                    const display3 = fixturePublication(3);
+                    fixture.publish(display3);
+                    activeWindow!.event(fixture.events.at(-1)!);
+                    await activeWindow!.settled();
+                    expect(calls).toEqual([]);
+                    if (surface === 'bootstrap') {
+                        expect(notice.textContent).toBe(t('JOB_CAPABILITY_REQUIRED'));
+                        expect(notice.title).toBe('JOB_CAPABILITY_REQUIRED');
+                    } else if (surface === 'rig') {
+                        expect(footer.textContent).toBe('job.failed · ' + t('JOB_CAPABILITY_REQUIRED'));
+                    } else {
+                        expect(footer.textContent).toBe(t('JOB_CAPABILITY_REQUIRED'));
+                    }
+                } finally {
+                    stop?.();
+                    setRigHost(null);
+                    if (originalDoc) Object.defineProperty(globalThis, 'document', originalDoc);
+                    else delete (globalThis as {document?: unknown}).document;
+                }
+            }
+
+            // formFor submit catch path (JOB_ACT_INVALID fallback)
+            const display = fixturePublication(1);
+            const act = fixtureAct('signoff');
+            Object.assign(display, {publication: {...display.publication, source: act.source}});
+            const ask: PendingAskV3 = {
+                askId: act.askId, publicationId: display.publication.publicationId,
+                source: act.source, status: 'pending', subject: {kind: 'signoff', stage: 'plan-approved'},
+            };
+            const makeEl = (tag: string, key?: string): any => {
+                const children: any[] = [];
+                return {
+                    tagName: tag.toUpperCase(), dataset: key ? {jobText: key} : {}, textContent: key ? t(key) : '',
+                    title: '', disabled: false, classList: {add() {}}, style: {},
+                    setAttribute() {}, addEventListener() {}, dispatchEvent() { return true; },
+                    reportValidity() { return true; },
+                    append(...nodes: any[]) { children.push(...nodes); },
+                    prepend(...nodes: any[]) { children.unshift(...nodes); },
+                    querySelectorAll() { return []; },
+                    children,
+                };
+            };
+            let submitFailure: Error = new RangeError('boom-submit');
+            const helpers = prepareJobForms.helpers(makeEl, t);
+            const entry = prepareJobForms.formFor(
+                ask,
+                {display, metadata: {manifest: {checkpoints: []}}} as unknown as JobPreparedInspection,
+                {
+                    node: makeEl, translate: t,
+                    helpers: {...helpers, assertJobAskSource() {}, jobCheckpointContext},
+                    draftStorage: () => ({getItem: () => null}),
+                    localDraftKey: () => 'draft', saveDraft() {},
+                    access: {capability: 'cap'}, pageId: 'page-941',
+                    window: {
+                        state: () => ({
+                            receipt: {publicationId: display.publication.publicationId, pageId: 'page-941', displayedNonce: 'nonce'},
+                            preparing: false, closed: false, generation: 1, pending: [ask],
+                        }),
+                        submit: async () => { throw submitFailure; },
+                    },
+                },
+            );
+            const statusNode = (entry.form as any).children.at(-1);
+            calls.length = 0;
+            await (entry.form as any).onsubmit({preventDefault() {}});
+            expect(statusNode.dataset.jobText).toBe('JOB_ACT_INVALID');
+            expect(statusNode.textContent).toBe(t('JOB_ACT_INVALID'));
+            expect(calls).toEqual([['[job-window]', 'JOB_ACT_INVALID', submitFailure]]);
+            expect((calls[0]![2] as Error).name).toBe('RangeError');
+            expect((calls[0]![2] as Error).message).toBe('boom-submit');
+
+            calls.length = 0;
+            submitFailure = new Error('JOB_RECORD_MOVED');
+            await (entry.form as any).onsubmit({preventDefault() {}});
+            expect(statusNode.dataset.jobText).toBe('JOB_RECORD_MOVED');
+            expect(statusNode.textContent).toBe(t('JOB_RECORD_MOVED'));
+            expect(calls).toEqual([]);
+        } finally {
+            console.error = originalError;
+        }
+    });
 });
 
 import type {RigPlayer} from '@rig-c/play';
