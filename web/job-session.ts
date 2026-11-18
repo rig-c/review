@@ -37,6 +37,7 @@ export function jobWindowRefusal(error: unknown, fallback = 'JOB_WINDOW_FAILED')
         Object.hasOwn(enCatalog, message) && Object.hasOwn(koCatalog, message)) {
         return t(message);
     }
+    console.error('[job-window]', fallback, error);
     return t(fallback);
 }
 /** Submission copy and its diagnostic title share the existing catalog refusal registry. */
@@ -91,6 +92,7 @@ export interface JobWindowState {
     readonly closed: boolean;
     readonly error: string | null;
     readonly errorOrigin?: string;
+    readonly failure?: unknown;
     readonly previousLabel: string | null;
     readonly pending: readonly JobWindowAsk[];
     readonly retainedDrafts: readonly JobRetainedDraft[];
@@ -202,6 +204,7 @@ export function createJobWindow<Prepared>(options: {
     let closed = false;
     let error: string | null;
     let errorOrigin: string | undefined;
+    let failure: unknown;
     error = null;
     let previousLabel: string | null = null;
     let intent = 0;
@@ -210,7 +213,7 @@ export function createJobWindow<Prepared>(options: {
     let queue = Promise.resolve();
     function state(): JobWindowState {
         return {
-            generation, displayed, receipt, preparing, closed, error, previousLabel, ...(errorOrigin ? {errorOrigin} : {}),
+            generation, displayed, receipt, preparing, closed, error, previousLabel, ...(errorOrigin ? {errorOrigin} : {}), ...(failure !== undefined ? {failure} : {}),
             pending: [...pending.values()], retainedDrafts: [...retainedDrafts],
         };
     }
@@ -225,6 +228,7 @@ export function createJobWindow<Prepared>(options: {
         preparing = true;
         error = null;
         errorOrigin = undefined;
+        failure = undefined;
         changed();
         queue = queue.then(async () => {
             if (revision !== intent || stopped)
@@ -311,10 +315,11 @@ export function createJobWindow<Prepared>(options: {
                     error = 'JOB_WINDOW_CLEANUP_FAILED';
                 }
             }
-            catch (failure) {
+            catch (caught) {
                 if (revision === intent && !stopped) {
-                    error = failure instanceof Error ? failure.message : 'JOB_DISPLAY_MISMATCH';
-                    errorOrigin = failure instanceof Error && typeof failure.cause === 'string' ? failure.cause : undefined;
+                    error = caught instanceof Error ? caught.message : 'JOB_DISPLAY_MISMATCH';
+                    failure = caught instanceof Error ? caught : undefined;
+                    errorOrigin = caught instanceof Error && typeof caught.cause === 'string' ? caught.cause : undefined;
                 }
             }
             finally {
@@ -1662,7 +1667,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
         commit:prepared=>prepared?rigScreen.commit(prepared):{rollback(){},finalize(){}},
         async painted(prepared,signal){if(stopped||signal.aborted)return;if(prepared)await rigScreen.painted(prepared,signal);},
         discard:prepared=>{const modal=prepared?.record??prepared?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();},
-        changed(state){rigScreen.changed(state);if(!state.error&&rigScreen.mounted())bootstrapPrior=null;if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.error);},
+        changed(state){rigScreen.changed(state);if(!state.error&&rigScreen.mounted())bootstrapPrior=null;if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.failure??state.error);},
     }});
     const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);for(const form of host.querySelectorAll('form.interview-answer'))form.dispatchEvent(new Event('job-form-language'));});
     await rigScreen.waiting();

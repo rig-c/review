@@ -370,14 +370,14 @@ export function createJobRigScreen(options: {
       }catch(error){await rollback();throw error;}
     },
     /** Unsupported asks stay on the shared screen with a named explanation. */
-    changed(state: {readonly pending: readonly PendingAskV3[]; readonly closed: boolean; readonly preparing?:boolean; readonly error?:string|null; readonly errorOrigin?:string; readonly previousLabel?:string|null; readonly displayed?:DisplayPublicationV3|null}): void {
+    changed(state: {readonly pending: readonly PendingAskV3[]; readonly closed: boolean; readonly preparing?:boolean; readonly error?:string|null; readonly errorOrigin?:string; readonly failure?:unknown; readonly previousLabel?:string|null; readonly displayed?:DisplayPublicationV3|null}): void {
       if (!mounted) return;
       if(mounted.record){screen?.pendingSubjects?.(pendingSubjects());refreshRecordForms();if(mounted.refusal)say(options.translate('job.refusal.'+mounted.refusal),true,undefined,mounted.refusal);if(state.closed)say(options.translate('job.closed'),true);return;}
       const refusal=jobRigScreenRefusal(mounted.display,state.pending,mounted.checkpoints);
       if(refusal){say(options.translate('job.refusal.'+refusal),true,undefined,refusal);return;}
       screen?.pendingSubjects?.(pendingSubjects());
       refreshRecordForms();
-      if(state.error)say(options.translate('job.failed')+' · '+options.refusal(state.error),true,jobSubmissionRefusal(new Error(state.error,{cause:state.errorOrigin})).title);
+      if(state.error)say(options.translate('job.failed')+' · '+options.refusal(state.failure??state.error),true,jobSubmissionRefusal(new Error(state.error,{cause:state.errorOrigin})).title);
       else if (state.closed) say(options.translate('job.closed'), true);
       else if(!state.preparing&&state.displayed?.publication.publicationId===mounted.display.publication.publicationId){
         const label=state.previousLabel?options.translate('job.updated',[state.previousLabel,mounted.display.publication.label]):mounted.display.publication.label;
