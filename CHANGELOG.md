@@ -1,5 +1,33 @@
 # Changelog
 
+## 4.5.0
+
+An editable interview question set now takes an optional note. A job page opened before the first publication shows the shared frame and fills in place, and continuous direction playback no longer jumps at the loop point of a looping take.
+
+**Read before upgrading:**
+
+* **The Korean copy changed register throughout.** Every Korean catalog string now uses 해요체, so every KO string a screen shows may differ from 4.4.0. English is unchanged (#911).
+* **A job's source identity is computed differently.** Job publication now resolves Parts from the designated job root, then from Review's own install, and never from the publisher's working directory. Some older records that were published from a neutral working directory without a project-local Parts get a different identity. Reloading such a record now refuses with `JOB_SOURCE_UNRETAINABLE`, which names the found and the required identity and the handoff, instead of silently rebinding (#915).
+* **Continuous direction playback changed; scrub and seek did not.** Playback now advances the take through its source deltas instead of seeking every frame, so physics carries across a whole-clip loop point. A partial-clip wrap, explicit scrubbing and the first frame still seek and replay physics from rest (#930).
+
+### Added
+
+* An editable interview question set has an optional note field, saved as the act's `note`. A non-empty note shows read-only once the question is answered or closed (#903, closes #901).
+
+### Fixed
+
+* Physics strands on a looping take no longer jump at the loop point during continuous playback. Hold keys freeze the track and let physics settle (#931, closes #930).
+* Job source identity no longer depends on the publisher's working directory (#917, closes #915).
+* A job page opened before the first publication mounts when an attached session publishes, without a reload (#905, closes #900).
+* Before the first publication, the job page shows the shared workspace frame and the waiting prompt on the top line (#912, closes #904), with the loading status lines empty until publication (#918, closes #913).
+* A stage act refused with `JOB_RECORD_MOVED` now says that the review was updated and how to recover, in English and Korean (#910, closes #908).
+* Opening a workspace no longer fails with `WORKSPACE_STATE_INVALID` when it reads `host.json` while the host is shutting down (#926, closes #894).
+* A stale `JOB_STREAM_FAILED` notice clears once the event stream reconnects; notices written while it was down stay (#927, closes #906).
+
+### Changed
+
+* The Korean catalog uses 해요체 throughout (#916, #919, #920, #921, #922, #924, #925; #911).
+
 ## 4.4.0
 
 In a parts job, the Difference view works again, and a failed Difference keeps the view you were on. Comment mode now stays on until you turn it off, and you can pan while it is on.
