@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {allocateWorkspaceLayout,bindWorkspaceDrawer,bindWorkspaceSeparator,InspectorScrollMemory,parseInspectorScroll,workspaceMinimums,type ScrollScheduler,type WorkspacePanel} from '../web/workspace-layout.ts';
+import {allocateWorkspaceLayout,bindWorkspaceDrawer,bindWorkspaceSeparator,InspectorScrollMemory,parseInspectorScroll,SETTLE_FRAME_TIMEOUT_MS,settleAnimationFrames,workspaceMinimums,type ScrollScheduler,type WorkspacePanel} from '../web/workspace-layout.ts';
 import {defaultWorkspacePanels,panelBounds,type WorkspacePanels} from '../web/workspace-preferences.ts';
 /** Drawn separator thickness the allocator charges; every expectation below derives from it. */
 const gap=workspaceMinimums.separator;
@@ -109,4 +109,27 @@ test('a separator follows its side, not its saved field name',()=>{
  const element=new LayoutElement();let desired=260;
  const binding=bindWorkspaceSeparator({element:element as unknown as HTMLElement,panel:'rightWidth',side:'left',controls:'parts',label:'Resize parts',events:null,desired:()=>desired,range:()=>({min:180,max:600,value:desired,enabled:true}),resize:value=>{desired=value;}});
  element.emit('keydown',{key:'ArrowRight'});expect(desired).toBe(268);element.emit('pointerdown',{pointerId:1,isPrimary:true,button:0,clientX:100});element.emit('pointermove',{pointerId:1,clientX:130});expect(desired).toBe(298);element.emit('pointerup',{pointerId:1});binding.dispose();
+});
+
+test('#941 settleAnimationFrames resolves on the second frame without waiting for the timer, or by the timer when frames never fire',async()=>{
+ const oldSet=Object.getOwnPropertyDescriptor(globalThis,'setTimeout'),oldClear=Object.getOwnPropertyDescriptor(globalThis,'clearTimeout');
+ let timerId=0;const timers=new Map<number,{callback:()=>void;ms:number}>();
+ Object.defineProperty(globalThis,'setTimeout',{value:(callback:()=>void,ms=0)=>{timers.set(++timerId,{callback,ms});return timerId;},configurable:true,writable:true});
+ Object.defineProperty(globalThis,'clearTimeout',{value:(id:number)=>{timers.delete(id);},configurable:true,writable:true});
+ try{
+  const framesWin=scheduler();let firstResolved=false;
+  const first=settleAnimationFrames(SETTLE_FRAME_TIMEOUT_MS,framesWin.value).then(()=>{firstResolved=true;});
+  expect(timers.size).toBe(1);expect([...timers.values()][0]!.ms).toBe(250);expect(framesWin.size()).toBe(1);expect(firstResolved).toBe(false);
+  framesWin.frame();await Promise.resolve();expect(firstResolved).toBe(false);expect(timers.size).toBe(1);expect(framesWin.size()).toBe(1);
+  framesWin.frame();await first;expect(firstResolved).toBe(true);expect(timers.size).toBe(0);expect(framesWin.size()).toBe(0);
+
+  const silentFrames=scheduler();let secondResolved=false;
+  const second=settleAnimationFrames(SETTLE_FRAME_TIMEOUT_MS,silentFrames.value).then(()=>{secondResolved=true;});
+  expect(timers.size).toBe(1);expect(silentFrames.size()).toBe(1);expect(secondResolved).toBe(false);
+  for(const [id,{callback}]of [...timers]){timers.delete(id);callback();}
+  await second;expect(secondResolved).toBe(true);expect(timers.size).toBe(0);expect(silentFrames.size()).toBe(0);
+ }finally{
+  if(oldSet)Object.defineProperty(globalThis,'setTimeout',oldSet);else Reflect.deleteProperty(globalThis,'setTimeout');
+  if(oldClear)Object.defineProperty(globalThis,'clearTimeout',oldClear);else Reflect.deleteProperty(globalThis,'clearTimeout');
+ }
 });

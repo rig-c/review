@@ -1,6 +1,6 @@
 /** Browser workspace presentation. Source selection, player clocks and review decisions stay with the page. */
 import {WorkspacePreferenceStore,panelBounds,type WorkspaceLanguage,type WorkspacePanels,type WorkspacePreferences,type WorkspaceTheme} from './workspace-preferences.ts';
-import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,workspaceMinimums,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange} from './workspace-layout.ts';
+import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,settleAnimationFrames,workspaceMinimums,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange} from './workspace-layout.ts';
 import {bindDomI18n,getLinkLanguage,resolveLanguage,setLanguagePreference,setLinkLanguage,tr,onLanguageChange} from './i18n.ts';
 import {panelMake,actionButton,labelledControl} from './view-controls.ts';
 
@@ -250,7 +250,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  const observer=new ResizeObserver(schedule);observer.observe(layout);for(const node of [...stack.children])if(node!==stage)observer.observe(node);for(const tab of tabs)observer.observe(panelFor(tab));
  const resumed=()=>{if(!document.hidden)store.refresh();};document.addEventListener('visibilitychange',resumed);schedule();
  return {defaults:()=>store.get(),beforeTab:capture,afterTab:restore,scroll:()=>{capture();return JSON.stringify(memory.snapshot());},restoreScroll(value){if(typeof value!=='string')return;memory.replace(JSON.parse(value));restore();},revealInspector,refresh:schedule,element:id=>require(id,true)??null,
-  async settle(){if(disposed)return;if(frame){cancelAnimationFrame(frame);frame=0;}apply();await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));if(!disposed)apply();},
+  async settle(){if(disposed)return;if(frame){cancelAnimationFrame(frame);frame=0;}apply();await settleAnimationFrames();if(!disposed)apply();},
   dispose(){if(disposed)return;capture();disposed=true;if(frame)cancelAnimationFrame(frame);observer.disconnect();document.removeEventListener('visibilitychange',resumed);unsubscribe();for(const binding of bindings)binding.dispose();for(const dispose of disposers)dispose();for(const dialog of Object.values(dialogs)){if(dialog.open)dialog.close();dialog.remove();}memory.dispose();store.dispose();}
  };
 }
