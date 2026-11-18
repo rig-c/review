@@ -84,6 +84,16 @@ export function parseInspectorScroll(value:unknown):InspectorScrollSnapshot {
  for(const [tab,raw]of Object.entries(value)){if(!validTab(tab)||!raw||typeof raw!=='object'||Array.isArray(raw))throw new Error('INSPECTOR_SCROLL: unknown tab or malformed offset');const o=raw as Record<string,unknown>;if(Object.keys(o).some(key=>key!=='x'&&key!=='y')||![o.x,o.y].every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=10000000))throw new Error('INSPECTOR_SCROLL: finite nonnegative x/y <=10000000 required');result[tab]={x:o.x as number,y:o.y as number};}return result;
 }
 const scrollScheduler:ScrollScheduler={request:callback=>typeof requestAnimationFrame==='function'?requestAnimationFrame(callback):Number(setTimeout(callback,0)),cancel:handle=>typeof cancelAnimationFrame==='function'?cancelAnimationFrame(handle):clearTimeout(handle)};
+export const SETTLE_FRAME_TIMEOUT_MS=250;
+/** Wait for two animation frames, or a bounded timer when the view delivers no frames. */
+export function settleAnimationFrames(timeoutMs=SETTLE_FRAME_TIMEOUT_MS,scheduler:ScrollScheduler=scrollScheduler):Promise<void> {
+ return new Promise<void>(resolve=>{
+  let settled=false,first:number|null=null,second:number|null=null;
+  const finish=()=>{if(settled)return;settled=true;clearTimeout(timer);if(first!==null)scheduler.cancel(first);if(second!==null)scheduler.cancel(second);resolve();};
+  const timer=setTimeout(finish,timeoutMs);
+  first=scheduler.request(()=>{first=null;if(!settled)second=scheduler.request(()=>{second=null;finish();});});
+ });
+}
 /** One instance per source draft. Capture BEFORE hiding a tab; restore AFTER activation.
  * Two frame boundaries settle layout, and later content can explicitly restore again.
  * Clamping never overwrites the remembered desired offsets with a temporary empty extent.

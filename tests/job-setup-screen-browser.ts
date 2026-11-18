@@ -9,7 +9,7 @@ import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts
 const index=Bun.argv.indexOf('--out'),out=resolve(index<0?'artifacts/setup-screen-796':Bun.argv[index+1]!);await mkdir(out,{recursive:true});
 const fixture=await scriptedJobWindowFixture();let page:InputCdpSession|undefined;let command:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
 const profile=await mkdtemp(join(tmpdir(),'review796-setup-'));const errors:unknown[]=[];
-async function wait(expression:string){const end=Date.now()+20000;while(Date.now()<end){if(await page!.evaluate(expression))return;await Bun.sleep(25);}throw new Error('SETUP_SCREEN_WAIT '+expression);}
+async function wait(expression:string,timeoutMs=20000){const end=Date.now()+timeoutMs;while(Date.now()<end){if(await page!.evaluate(expression))return;await Bun.sleep(25);}throw new Error('SETUP_SCREEN_WAIT '+expression);}
 try{
  const publication=await fixture.publish('rig');await fixture.ask(publication,{kind:'review-verdict',stage:'rig-review'});
  page=await launchCdpSession(profile,{sendDeadlineMs:10000,onEvent(event,send){command=send;if(event.method==='Runtime.exceptionThrown')errors.push(event.params);}});await page.setViewport(1600,1000);await page.goto(fixture.host.ownerUrl);
@@ -26,7 +26,13 @@ try{
  await Bun.sleep(150);
  const state:any=await page.evaluate(`({message:document.querySelector('#message').textContent,time:document.querySelector('#scrub').value,clock:document.querySelector('#time-label').textContent,source:document.querySelector('#source-hash').textContent})`);
  const refused=state.message.includes('seek is defined for a single animation');
- await writeFile(join(out,'observations.json'),JSON.stringify({fixture:'synthetic source-bound owner draft; real shared screen',sourceHash:publication.source.sourceHash,expectedRefusal:Bun.argv.includes('--expect-refusal'),refused,state,errors},null,2));await writeFile(join(out,'screen.png'),await page.screenshot());
  assert.equal(refused,Bun.argv.includes('--expect-refusal'));assert.deepEqual(errors,[]);
  if(!refused)assert.ok(Math.abs(Number(state.time)-.375)<.001);
+ // #941: a pane that delivers no animation frames must still leave the waiting state and show the publication's controls.
+ await command!('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{let id=0;window.__silentRafCalls=0;window.requestAnimationFrame=()=>{window.__silentRafCalls++;return ++id;};window.cancelAnimationFrame=()=>{};})()`});
+ await page.goto('about:blank');await page.goto(fixture.host.ownerUrl);
+ await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')&&document.querySelector('#workspace-ask-headline')?.textContent==='Check the rig and motion.'&&!!document.querySelector('#save:not(:disabled)')&&document.querySelector('#save')?.checkVisibility()&&document.querySelector('#request-changes')?.checkVisibility()`,5000);
+ const silentRaf:any=await page.evaluate(`({calls:window.__silentRafCalls,headline:document.querySelector('#workspace-ask-headline')?.textContent,animation:document.querySelector('#animation-select')?.value,saveDisabled:document.querySelector('#save')?.disabled,requestChangesHidden:document.querySelector('#request-changes')?.hidden})`);
+ assert.ok(silentRaf.calls>0);assert.equal(silentRaf.headline,'Check the rig and motion.');assert.equal(silentRaf.animation,'');assert.equal(silentRaf.saveDisabled,false);assert.equal(silentRaf.requestChangesHidden,false);assert.deepEqual(errors,[]);
+ await writeFile(join(out,'observations.json'),JSON.stringify({fixture:'synthetic source-bound owner draft; real shared screen',sourceHash:publication.source.sourceHash,expectedRefusal:Bun.argv.includes('--expect-refusal'),refused,state,silentRaf,errors},null,2));await writeFile(join(out,'screen.png'),await page.screenshot());
 }finally{await page?.close();await fixture.close();await rm(profile,{recursive:true,force:true});}

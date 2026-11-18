@@ -5,7 +5,7 @@ import type {InterviewSubjectEntry} from '../src/joined-project.ts';
 import {mountJobScreen,joinedInterviewForms,mediaReady,jobSubmissionRefusal} from './job-session.ts';
 import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding} from '../src/parts-comment.ts';
 import type {JobForm} from './job-session.ts';
-import {bindWorkspaceDrawer} from './workspace-layout.ts';
+import {bindWorkspaceDrawer,settleAnimationFrames} from './workspace-layout.ts';
 import {captureRigRestStill,rigRestCanvas} from './job-rig-capture.ts';
 import {createPartsViewportProvider,bindPartsSubject,paintRigDifference,type PartsSubjectEntry,type PartsSubjectSession} from './parts-viewport-provider.ts';
 import {rigWorkspaceMarkup,rigFeedbackMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
@@ -1877,7 +1877,7 @@ async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,pr
  if(selection.inspector)showInspector(selection.inspector,false);syncStageLayout(el('stage-layout'));
  // Mode changes schedule workspace layout and resize observers. Settle them
  // while restoration is held, before measuring/applying the saved pane camera.
- await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));if(signal.aborted)throw new Error('Inspection restore superseded');fitCamera();
+ await settleAnimationFrames();if(signal.aborted)throw new Error('Inspection restore superseded');fitCamera();
  const camera=bookmark.view.cameras.rig,ref=bookmark.view.cameras.reference,rigViewport=el('rig-viewport'),referenceViewport=el('reference-viewport');
  const nextZoom=camera&&player&&rigViewport.clientWidth&&rigViewport.clientHeight?restoredZoom(camera,viewport.state.rigScale/viewport.state.zoom,rigViewport.clientWidth,rigViewport.clientHeight):camera?.zoom??null;
  const nextReferenceZoom=ref&&referenceSize&&referenceViewport.clientWidth&&referenceViewport.clientHeight?restoredZoom(ref,viewport.state.referenceScale/viewport.state.referenceZoom,referenceViewport.clientWidth,referenceViewport.clientHeight):ref?.zoom??null;
