@@ -11,12 +11,13 @@ import type {JobRetainedRecordSource} from '../../src/job-source.ts';
 import {createJobFront, jobWindowResources, retainedPublicationRoutes} from '../../src/job-front.ts';
 import {JOB_API_V3_SCHEMA, type DisplayPublicationV3, type PendingAskV3, type UISubmissionV3, type RecordSignoffStage} from '../../src/job-contract.ts';
 import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixture.ts';
-import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './job-record-fixture.ts';
+import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader,type PostPictureCase} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'reopen'|'interview-picks';
-export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false,deferDelivery=false){
+export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false,deferDelivery=false,postPicture?:PostPictureCase){
  const scratch=await mkdtemp(join(tmpdir(),'review-750-')),root=join(scratch,'input');await mkdir(root);
- let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root,{boundParts,questionImages,longInterview}):createSyntheticPlanRecordWorkspace(root,{subjects:[
+ let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root,{boundParts,questionImages:postPicture==='legacy'?false:questionImages,longInterview,postPicture,
+  ...(postPicture?{questionId:'post_timing',setId:'post-picture'}:{})}):createSyntheticPlanRecordWorkspace(root,{subjects:[
   {kind:'checkpoint',checkpointId:'step_layout'},{kind:'signoff',stage:signoffStage},{kind:'reopen',stage:'plan-approved'},
  ]});
  const reader=createSyntheticRecordReader({onOption:()=>workspace.context as never,onPlan:()=>workspace.context as never});

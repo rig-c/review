@@ -1072,6 +1072,9 @@ Pre-cutoff currentness-only exceptions display `INTERVIEW_OPTIONS_SCENE_LEGACY`
 without blocking the legacy interview. Full scene image and registration checks
 remain producer checks.
 
+A `scenes[]` entry's `by` is the literal `agent` or a human name, and the rig
+signoff comparison still establishes the human acceptance the scene rests on.
+
 [Review #555](https://github.com/rig-c/review/issues/555) carries scene
 interview history and legacy warnings through standing job publications under
 `JobPublication.interview` (`rig-review/job-interview@1`, `null` for non-Create

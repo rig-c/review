@@ -1478,11 +1478,15 @@ function showRecordComments(preserveInspector=false):void {
 /** Publications without a picture reuse the empty main view; no model is manufactured. */
 async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  if(!host?.record&&!interview)throw new Error('JOB_DISPLAY_MISMATCH');
- const unavailable=interview?'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.':'This request has no picture.';
+ const missingPicture=host?.record?.missingPicture;
+ const unavailable=interview?'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.':
+  missingPicture==='rig'?'This question refers to a rig version that this publication does not include.':
+  missingPicture==='scene'?'This question refers to a scene that this publication does not include.':
+  'This request has no picture.';
  readOnly=tr(interview?'MODEL_UNAVAILABLE':'JOB_REVIEW_READ_ONLY');
  if(!interview)actReadOnly=readOnlyReason(access,true,host?.ownerActAccess);
  bindWorkspace();bindInspector(true);rigInput={state:'absent'};referenceInput={state:'absent'};renderLayout();
- parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??unavailable,!!actReadOnly);
+ parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??(host?.record?.scenePicture?'':unavailable),!!actReadOnly);
  text('package-title',interview?.label??host!.record!.label);text('revision','');text('source-hash',`source ${(interview?.sourceHash??host!.record!.sourceHash).slice(0,12)}`);
  el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty',unavailable);
  for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')){control.disabled=true;setSourceAttribute(control,'title',unavailable);}

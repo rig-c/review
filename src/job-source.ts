@@ -16,7 +16,7 @@ import type {
   RecordFreeze, RecordOptionResult, RecordPlanResult, RecordPublicationReader, RecordPublishedContext,
   RecordReaderInput, RecordResult, RecordSource, RecordSubject,
 } from './job-contract.ts';
-import { checkedPath, jsonObject, readProject, readRegular, type InterviewQuestion, type InterviewSet } from './interview-project.ts';
+import { checkedPath, inspectSceneQuestion, jsonObject, readProject, readRegular, type InterviewQuestion, type InterviewSet } from './interview-project.ts';
 import { loadJobReview } from './manifest.ts';
 import { HandoffError } from './handoff.ts';
 import { openKey } from './open.ts';
@@ -918,7 +918,17 @@ function decodeRetainedRecordProject(
     const set = validateOptionSetStructure(rawSet, questionId, setId, matches[0]!.allowedStages);
     const images: InterviewQuestion['images'] = [];
     const ctx = asPlainObject(rawSet.context);
-    if (ctx && Array.isArray(ctx.files)) {
+    if (ctx?.kind === 'scene') {
+      try {
+        const scene = inspectSceneQuestion(project, ctx, set, Date.now(), ref => {
+          if (sealMap.get(ref.path) !== ref.sha256) throw new JobError('JOB_SOURCE_MISMATCH');
+          return jsonObject(readClosureFileBytes(snapshotRoot, ref));
+        });
+        if (scene.images.every(({ref}) => sealMap.get(ref.path) === ref.sha256)) images.push(...scene.images);
+      } catch {
+        // A record can still be answered when its bound scene cannot be displayed.
+      }
+    } else if (ctx && Array.isArray(ctx.files)) {
       for (const rawFile of ctx.files) {
         const fileObj = asPlainObject(rawFile);
         if (!fileObj || typeof fileObj.path !== 'string' || typeof fileObj.sha256 !== 'string') {
@@ -964,6 +974,9 @@ function decodeRetainedRecordProject(
         editable: true,
         images,
         hasParts: hasBoundParts,
+        ...(ctx?.kind === 'scene' && images.length ? {scenePicture: true as const} : {}),
+        ...(set.stage === 'post-interview' && !images.length && (ctx?.kind === 'rig' || ctx?.kind === 'scene')
+          ? {missingPicture: ctx.kind} : {}),
       }],
       optionSetFile: ref,
     };

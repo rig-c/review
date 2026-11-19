@@ -28,7 +28,7 @@ export interface InterviewDiagnostic {
   code: 'INTERVIEW_OPTIONS_STALE' | 'INTERVIEW_OPTIONS_SCENE_LEGACY';
   question: string; record: string; ref: SetRef; at?: string;
 }
-export interface InterviewQuestion {ref: SetRef; set: InterviewSet; editable: boolean; images: Image[]; hasParts: boolean; partsUnavailable?: boolean; answer?: RecordData}
+export interface InterviewQuestion {ref: SetRef; set: InterviewSet; editable: boolean; images: Image[]; hasParts: boolean; partsUnavailable?: boolean; scenePicture?: true; missingPicture?: 'rig' | 'scene'; answer?: RecordData}
 export const digest = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
 export const object = (v: unknown): RecordData => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as RecordData : {};
 const records = (v: unknown) => Array.isArray(v) ? v.map(object) : [];
@@ -174,30 +174,38 @@ function contextAt(project: RecordData, stage: string, at: number): unknown {
     config: object(rig.provenance).config, parts: draft.parts};
 }
 
+/** Resolve the same question-level plates for project and retained record readers. */
+export function inspectSceneQuestion(project: RecordData, ctx: RecordData, set: InterviewSet,
+  at: number, read: (ref: SetRef) => RecordData): {images: Image[]; hasParts: false; legacy: boolean} {
+  const drafted = date(set.drafted_at);
+  if (set.stage !== 'post-interview' || !Number.isFinite(at) || drafted > at ||
+      reopened(project, set.stage, drafted, at)) return stale(set.id);
+  let legacy = false;
+  let scene: RecordData = {};
+  for (const instant of [drafted, at]) {
+    const selected = sceneAt(project, instant, read);
+    if (!selected || !equal(selected.context, ctx)) return stale(set.id);
+    if (!selected.current) {
+      if (drafted >= Date.parse('2026-11-08T00:00:00Z')) return stale(set.id);
+      legacy = true;
+    }
+    scene = selected.document;
+  }
+  const images = records(scene.plates).map(plate => ({
+    ref: {path: plate.path as string, sha256: plate.sha256 as string}, name: plate.role as string, type: 'image/png',
+  }));
+  return {images, hasParts: false, legacy};
+}
+
 function inspectContext(root: string, project: RecordData, raw: RecordData, set: InterviewSet, at: number, fresh: boolean): {
   images: Image[]; hasParts: boolean; partsUnavailable?: boolean; legacy?: boolean;
 } {
-  const drafted = date(set.drafted_at);
   const ctx = object(raw.context);
-  if (!Number.isFinite(at) || drafted > at || reopened(project, set.stage, drafted, at)) return stale(set.id);
   if (ctx.kind === 'scene') {
-    if (set.stage !== 'post-interview') return stale(set.id);
-    let legacy = false;
-    let scene: RecordData = {};
-    for (const instant of [drafted, at]) {
-      const selected = sceneAt(project, instant, ref => jsonObject(boundBytes(root, ref)));
-      if (!selected || !equal(selected.context, ctx)) return stale(set.id);
-      if (!selected.current) {
-        if (drafted >= Date.parse('2026-11-08T00:00:00Z')) return stale(set.id);
-        legacy = true;
-      }
-      scene = selected.document;
-    }
-    const images = records(scene.plates).map(plate => ({
-      ref: {path: plate.path as string, sha256: plate.sha256 as string}, name: plate.role as string, type: 'image/png',
-    }));
-    return {images, hasParts: false, legacy};
+    return inspectSceneQuestion(project, ctx, set, at, ref => jsonObject(boundBytes(root, ref)));
   }
+  const drafted = date(set.drafted_at);
+  if (!Number.isFinite(at) || drafted > at || reopened(project, set.stage, drafted, at)) return stale(set.id);
   const expected = contextAt(project, set.stage, drafted);
   const historicalInputs = !fresh && set.stage === 'interview';
   const matches = historicalInputs ? ctx.kind === 'inputs' && records(ctx.files).length > 0 &&

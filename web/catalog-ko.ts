@@ -3621,6 +3621,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Parts raster drawn · Canvas2D": "파츠 래스터 그려짐 · Canvas2D",
   "Parts images · no compiled rig loaded": "파츠 이미지 · 컴파일된 리그 로드 안 됨",
   "Parts ready. Source files remain unchanged.": "파츠 준비 완료. 원본 파일은 변경되지 않아요.",
+  "This question refers to a rig version that this publication does not include.": "이 질문이 가리키는 리그 버전이 이번 게시에 들어 있지 않아요.",
+  "This question refers to a scene that this publication does not include.": "이 질문이 가리키는 장면이 이번 게시에 들어 있지 않아요.",
   "This request has no picture.": "이 요청에는 그림이 없어요.",
   "The selected part has no chest regions. The chest editor keeps its current part.": "선택한 파츠에는 가슴 영역이 없어요. 가슴 편집기는 지금 파츠를 그대로 둬요.",
   'Resize comment area: {0}': '코멘트 영역 크기를 조절해요: {0}',
