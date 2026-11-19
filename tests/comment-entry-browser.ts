@@ -8,8 +8,8 @@ import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {commentFixture} from './helpers/parts-comments-package.ts';
-import {parseCommentsAct,projectComments} from '../src/job-host.ts';
-import type {JobCommentsAct,JobDisplayReceipt,JobPendingAsk,JobPublication,JobResult} from '../src/job-contract.ts';
+import {parseCommentsAct,parseContextCommentsAct,projectComments} from '../src/job-host.ts';
+import {JOB_COMMENT_CONTEXT_ACT_SCHEMA,JOB_COMMENTS_ACT_SCHEMA,type JobCommentsAct,type JobContextCommentsAct,type JobDisplayReceipt,type JobPendingAsk,type JobPublication,type JobResult} from '../src/job-contract.ts';
 import {parseStageComment} from '../src/stage-comment.ts';
 import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
@@ -135,14 +135,17 @@ async function addPartsPin(page:InputCdpSession,wait:Wait,text:string) {
   await saveComment(page,wait,text);
 }
 
-async function readFinalVerdict(live:LiveVerdict):Promise<JobCommentsAct> {
+async function readFinalVerdict(live:LiveVerdict,expectContext=false):Promise<JobCommentsAct|JobContextCommentsAct> {
   const {fixture,ask,publication,kind,verdict}=live;
   const end=Date.now()+20_000;
   while(Date.now()<end){
     const events=(await fixture.next()).events.flatMap(event=>event.type==='act'&&event.act.askId===ask.askId?[event.act]:[]);
     assert.ok(events.length<=1,'one explicit verdict produces at most one act');
     if(events.length){
-      const act=parseCommentsAct(events[0]);
+      const eventAct=events[0]!;
+      assert.equal(eventAct.schema,expectContext?JOB_COMMENT_CONTEXT_ACT_SCHEMA:JOB_COMMENTS_ACT_SCHEMA,
+        `${kind} ${verdict}: unexpected verdict schema`);
+      const act=expectContext?parseContextCommentsAct(eventAct):parseCommentsAct(eventAct);
       assert.equal(act.publicationId,publication.publicationId);
       assert.equal(act.source.sourceHash,publication.source.sourceHash);
       assert.equal(act.authority.channel,'review-ui');
@@ -242,7 +245,7 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:Reload,
   if(pinned)await wait(`document.querySelectorAll('#rig-viewport .stage-comment-pin').length===1`);
   await capture('comments');
   await click(page,verdict==='approved'?'#save':'#request-changes');
-  const act=await readFinalVerdict(live);
+  const act=await readFinalVerdict(live,pinned&&kind==='rig');
   await wait(`document.querySelector('#save')?.hidden===true`);
   assert.equal(await page.evaluate<boolean>(generalEntryVisible),false,'general verdict entry disappears when only the non-verdict ask remains');
   assert.ok(fixture.host.session.status().pending.some(pending=>pending.askId===otherAsk.askId));
@@ -261,11 +264,17 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:Reload,
       assert.equal(mark.sourceHash,act.source.sourceHash);
       assert.ok('model' in act.source&&act.source.model);
       assert.equal(mark.modelHash,act.source.model.sha256);
+      assert.equal(act.schema,JOB_COMMENT_CONTEXT_ACT_SCHEMA);
+      const context=act.value.comments[0]?.context;
+      assert.deepEqual(context?.subject,{ask:ask.subject,sourceHash:act.source.sourceHash,selector:act.source.selector});
+      assert.equal(context?.mode,mark.mode);
+      assert.deepEqual(context?.region,mark.world);
     }
   }
-  const projected=projectComments(comments);
+  const signedComments=comments.map(({text,anchor})=>({text,...anchor===undefined?{}:{anchor}}));
+  const projected=projectComments(signedComments);
   const generalProjection='[general]\n'+general.join('\n\n[general]\n');
-  assert.equal(projected,pinned?projectComments(comments.slice(0,1))+'\n\n'+generalProjection:generalProjection);
+  assert.equal(projected,pinned?projectComments(signedComments.slice(0,1))+'\n\n'+generalProjection:generalProjection);
   const readback={initial,restored,notices,rows:expectedRows,act,projected};
   await writeFile(join(out,'verdict.json'),JSON.stringify(readback,null,2)+'\n');
   return readback;

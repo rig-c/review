@@ -1,9 +1,11 @@
 import {afterEach, expect, setSystemTime, spyOn, test} from 'bun:test';
 import * as crypto from 'node:crypto';
+import {mkdir, readFile} from 'node:fs/promises';
+import {join} from 'node:path';
 import {finalizeJobAct} from '../src/job-act.ts';
-import {commentsActForEmission, jobHash, parseCommentsAct} from '../src/job-api.ts';
-import {feedbackItemComments, projectComments} from '../src/stage-comment.ts';
-import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
+import {jobHash, parseCommentsAct, parseContextCommentsAct} from '../src/job-api.ts';
+import {jobCommand} from '../src/job-cli.ts';
+import {feedbackItemComments, parseStageComment, projectComments} from '../src/stage-comment.ts';
 import type {JobPendingAsk, JobUIActValues, JobUISubmission, PendingAskV3} from '../src/job-contract.ts';
 import type {JobRetainedSource} from '../src/job-source.ts';
 import type {Feedback} from '../src/session.ts';
@@ -50,7 +52,7 @@ test('#746 absent feedback keeps all four pre-edit deterministic envelope bytes,
   } finally {uuid.mockRestore(); setSystemTime();}
 });
 
-test('#746 decision → daemon → stored export preserves ordered pointed and time-only comments, including anchor.context', async () => {
+test('#746 decision → daemon → stored export preserves ordered pointed and time-only comments, including act@7 context', async () => {
   const f = await fixture(), publication = await f.publish();
   const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'}), page = await f.display(publication);
   const rows = feedbackFor(publication.source as unknown as typeof baseline.source), snapshot = structuredClone(rows);
@@ -66,14 +68,31 @@ test('#746 decision → daemon → stored export preserves ordered pointed and t
     capture: rigStillCapture(publication, ask, page).capture};
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
   if (!saved.ok) throw new Error(saved.error.code);
-  const act = parseCommentsAct(saved.value), comments = feedbackItemComments(snapshot);
-  expect(act.schema).toBe('rig-review/act@6');
-  expect(act.value.comments).toEqual(comments);
-  expect(projectComments(act.value.comments)).toBe(decision.value.words);
-  expect(f.session.readActExport(act.actId, false).toString()).toBe(JSON.stringify(act));
-  expect(EMIT_UNPINNED_CREATE_FIELDS).toBe(false);
-  expect(commentsActForEmission(act)).toEqual(act);
-  expect(act.value.comments.every(comment => !Object.hasOwn(comment, 'context'))).toBe(true);
+  expect(saved.value.schema).toBe('rig-review/act@7');
+  const act = parseContextCommentsAct(saved.value), comments = feedbackItemComments(snapshot);
+  const selector = publication.source.selector;
+  const [point, timed] = (snapshot as unknown as typeof marked.feedback).map(row => parseStageComment(row.context.comment));
+  if (!selector || !point?.frame || !timed) throw new Error('missing fixture evidence');
+  const subject = {ask: ask.subject, sourceHash: publication.source.sourceHash, selector};
+  expect(act.value.comments).toEqual([
+    {...comments[0]!, context: {subject, mode: 'animate', tab: 'playback', region: point.world,
+      camera: point.camera, frame: point.frame}},
+    {...comments[1]!, context: {subject, mode: 'animate', tab: 'playback', region: timed.world, camera: timed.camera}},
+  ]);
+  expect(projectComments(act.value.comments.map(({context: _context, ...comment}) => comment))).toBe(decision.value.words);
+  const bytes = f.session.readActExport(act.actId, false);
+  expect(bytes.toString()).toBe(JSON.stringify(act));
+  if (!act.still) throw new Error('missing rig still');
+  const directory = join(f.scratch, 'consumer-still');
+  await mkdir(directory);
+  const chunks: Buffer[] = [];
+  await jobCommand(['fetch-act', f.origin + '/jobs/' + f.session.jobId, '--act', act.actId, '--still-out', directory], {
+    consumerCapability: f.session.writerGrant().fetchCapability,
+    fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch,
+    writeBytes(chunk) {chunks.push(Buffer.from(chunk)); return chunk.length;},
+  });
+  expect(Buffer.concat(chunks).equals(bytes)).toBe(true);
+  expect(jobHash(await readFile(join(directory, act.still.path)))).toBe(act.still.sha256);
   expect(act.value.comments[1]!.anchor).toMatchObject({frameStart: null, frameEnd: null,
     context: {frame: null, interval: null, comment: {frame: null, timeBasis: {basis: 'seconds'}}}});
   expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input)))).toEqual(saved);
@@ -168,11 +187,12 @@ test('#831 rig appends ordered general comments after the existing #746 feedback
     value: {...value, words: 'Compatibility words must not become a duplicate comment'}}));
   if (!saved.ok) throw new Error(saved.error.code);
   const bytes = f.session.readActExport(saved.value.actId, false).toString();
-  const act = parseCommentsAct(JSON.parse(bytes));
+  const act = parseContextCommentsAct(JSON.parse(bytes));
   expect(act.kind).toBe('review-verdict');
-  expect(act.value).toEqual({stage: 'rig-review', verdict: 'changes-requested',
+  const signed = act.value.comments.map(({context: _context, ...comment}) => comment);
+  expect({...act.value, comments: signed}).toEqual({stage: 'rig-review', verdict: 'changes-requested',
     comments: [...pinned, {text: general[0]}, {text: general[1]}]});
-  expect(projectComments(act.value.comments)).toBe(projectComments(pinned) + '\n\n[general]\n' + general.join('\n\n[general]\n'));
+  expect(projectComments(signed)).toBe(projectComments(pinned) + '\n\n[general]\n' + general.join('\n\n[general]\n'));
   expect(JSON.stringify(act)).toBe(bytes);
 });
 
