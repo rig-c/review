@@ -246,7 +246,7 @@ test('legacy and previous-draft comments round-trip through writers and both pub
   expect(() => parseContextCommentsAct({...contextAct, source: legacySource})).toThrow('JOB_ACT_INVALID');
   const forged = {...current.retained, source: {...current.retained.source,
     previousDraft: {...previousDraft, draft: {...previousDraft.draft, revision: 'a'.repeat(64)}}}};
-  expect(() => current.write(comparison, forged)).toThrow('JOB_SOURCE_MISMATCH');
+  expect(() => current.write(comparison, forged)).toThrow('JOB_ACT_SOURCE_STALE');
   const {previousDraft: _unused, ...legacyContext} = context;
   f.setContext(legacyContext);
   const legacy = await partsAct(f), old = legacy.write(painting);
