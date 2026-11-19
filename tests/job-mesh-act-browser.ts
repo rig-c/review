@@ -93,8 +93,10 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
       }
     }
     if (mode !== 'no-mesh') {
+      await click(screen, '[data-mode="rig"]');
       await wait("!!document.querySelector('[data-part-list] button[data-slot=mesh]')");
       await click(screen, '[data-part-list] button[data-slot=mesh]');
+      await wait("!document.querySelector('#mesh-edit').hidden");
       await click(screen, '#mesh-edit');
       await wait("!document.querySelector('#mesh-editor-bar').hidden");
       assert.equal(await screen.evaluate<boolean>("document.querySelector('#mesh-apply').disabled"), true);
