@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
-  type ActV3, type JobAct, type JobCommentsAct, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
+  type ActV3, type JobAct, type JobComment, type JobCommentsAct, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
   type JobMeshEdit, type PendingAskV3, type RecordAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
 } from './job-contract.ts';
@@ -31,6 +31,12 @@ function words(value: unknown): string {
   return value;
 }
 
+/** The writer's output must decode through the public @6 decoder; its refusal is JOB_ACT_INVALID. */
+function commentsAct(act: JobCommentsAct): JobCommentsAct {
+  parseCommentsAct(act);
+  return act;
+}
+
 function hasMeshSubmission(kind: unknown, value: unknown): boolean {
   if (value === null || typeof value !== 'object' || !Object.hasOwn(value, 'meshEdits')) return false;
   const {stage, verdict} = value as {stage?: unknown; verdict?: unknown};
@@ -38,12 +44,6 @@ function hasMeshSubmission(kind: unknown, value: unknown): boolean {
     throw new JobError('JOB_ACT_INVALID');
   }
   return true;
-}
-
-/** The writer's output must decode through the public @6 decoder; its refusal is JOB_ACT_INVALID. */
-function commentsAct(act: JobCommentsAct): JobCommentsAct {
-  parseCommentsAct(act);
-  return act;
 }
 
 function validateRetainedMeshEdits(retained: JobRetainedSource, edits: readonly JobMeshEdit[]): void {
@@ -76,6 +76,15 @@ function validateRetainedMeshEdits(retained: JobRetainedSource, edits: readonly 
       throw new JobError('JOB_ACT_INVALID');
     }
   }
+}
+
+function generalComments(value: unknown): JobComment[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new JobError('JOB_ACT_INVALID');
+  return Array.from(value, (text: unknown) => {
+    if (typeof text !== 'string') throw new JobError('JOB_ACT_INVALID');
+    return {text};
+  });
 }
 
 function choice<Value extends string>(value: unknown, allowed: readonly Value[]): Value {
@@ -593,7 +602,7 @@ export function finalizeJobAct(options: {
       } });
     }
     case 'parts-verdict': {
-      const value = jobObject(submission.value, ['verdict', 'issues', 'words']);
+      const value = jobObject(submission.value, ['verdict', 'issues', 'words', 'general']);
       const verdict = choice(value.verdict, ['approved', 'changes-requested'] as const);
       if (
         !Array.isArray(value.issues) ||
@@ -633,12 +642,15 @@ export function finalizeJobAct(options: {
           selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, { kind: 'draft' }>,
           parts: source.parts!,
         },
-        value: { verdict, comments: [...partsIssueComments(issues), ...noteComments(words(value.words))] },
+        value: {
+          verdict,
+          comments: [...partsIssueComments(issues), ...noteComments(words(value.words)), ...generalComments(value.general)],
+        },
       });
     }
     case 'review-verdict': {
       const value = jobObject(submission.value, ['stage', 'verdict', 'words',
-        ...(ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ? ['feedback', 'meshEdits'] : [])]);
+        ...(ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ? ['feedback', 'general', 'meshEdits'] : [])]);
       if (ask.subject.kind !== 'review-verdict' || ask.subject.stage === 'image-review' || value.stage !== ask.subject.stage) throw new JobError('JOB_ACT_INVALID');
       if (ask.subject.stage === 'rig-review') {
         const verdict = choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const);
@@ -656,7 +668,7 @@ export function finalizeJobAct(options: {
         } catch { throw new JobError('JOB_ACT_INVALID'); }
         const act = {...comments, kind: 'review-verdict' as const,
           source: {...source, model: source.model!, selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, {kind: 'rig'}>},
-          value: {stage: 'rig-review' as const, verdict, comments: verdictComments},
+          value: {stage: 'rig-review' as const, verdict, comments: [...verdictComments, ...generalComments(value.general)]},
           still: options.still};
         if (meshEdits) return meshEditsActForEmission({...act, value: {...act.value, meshEdits}}, emitUnpinned);
         return commentsAct(act);

@@ -66,28 +66,33 @@ function sorted(value: unknown): unknown {
   if (data !== value) return value;
   return Object.fromEntries(Object.keys(data).sort().map(key => [key, sorted(data[key])]));
 }
-function current(project: Data, scene: Data, at: number): boolean {
+/** Resolve the operative human acceptance and its package record from the project alone. */
+export function acceptedRigReview(project: Data, versionNumber: unknown, at: number) {
   const live = records(project.versions).map((version, index) => ({version, index})).filter(({version}) =>
     version.kind === 'rig' && date(version.at) <= at && !coveringChange(project, 'rig-review', date(version.at) - 1, at));
   const latest = live.sort((a, b) => Number(b.version.n) - Number(a.version.n))[0];
-  if (!latest || latest.version.n !== object(scene.rig).version) return false;
+  if (!latest || latest.version.n !== versionNumber) return undefined;
   const {version, index} = latest;
   const verdicts = records(version.verdicts);
   const operative = verdicts.map((verdict, index) => ({verdict, index})).filter(({verdict}) =>
     verdict.review === 'rig-review' && human(verdict.by) && verdict.verdict !== 'provisional' && date(verdict.at) <= at).at(-1);
-  if (!operative || operative.verdict.verdict !== 'accepted') return false;
+  if (!operative || operative.verdict.verdict !== 'accepted') return undefined;
   const signature = records(project.signoffs).filter(signoff => signoff.stage === 'rig-review' && signoff.checkpoint === null &&
     human(signoff.by) && date(signoff.at) <= at && object(signoff.target).version === version.n &&
     !coveringChange(project, 'rig-review', date(signoff.at) - 1, at)).reverse().sort((a, b) => date(b.at) - date(a.at))[0];
-  if (!signature) return false;
+  if (!signature) return undefined;
   const target = object(signature.target), pkg = object(version.review_package);
   const packageHash = createHash('sha256').update(JSON.stringify(sorted({config: pkg.config, files: pkg.files}))).digest('hex');
   if (target.verdict !== `versions[${index}].verdicts[${operative.index}]` ||
-      !equal(target.review_package, {path: `versions[${index}].review_package`, sha256: packageHash})) return false;
-  return equal(object(scene.rig).acceptance, {
-    signoff: {stage: signature.stage, checkpoint: signature.checkpoint, at: signature.at},
-    verdict: target.verdict, review_package: target.review_package,
-  });
+      !equal(target.review_package, {path: `versions[${index}].review_package`, sha256: packageHash})) return undefined;
+  return {
+    pkg,
+    acceptance: {
+      signoff: {stage: signature.stage, checkpoint: signature.checkpoint, at: signature.at},
+      verdict: target.verdict,
+      review_package: target.review_package,
+    },
+  };
 }
 
 export function sceneAt(project: Data, at: number, read: (ref: SetRef) => Data) {
@@ -96,7 +101,7 @@ export function sceneAt(project: Data, at: number, read: (ref: SetRef) => Data) 
   const entries = records(project.scenes);
   for (const [index, entry] of entries.entries()) {
     if (!closed(entry, ['n', 'path', 'sha256', 'at', 'by']) || entry.n !== index + 1 ||
-        entry.path !== `evidence/scene/s${index + 1}.json` || !hash(entry.sha256) || !human(entry.by) ||
+        entry.path !== `evidence/scene/s${index + 1}.json` || !hash(entry.sha256) || !(entry.by === 'agent' || human(entry.by)) ||
         typeof entry.at !== 'string' || !entry.at.endsWith('Z') || !Number.isFinite(date(entry.at))) return stale();
   }
   const candidate = entries.filter(entry => date(entry.at) <= at).at(-1);
@@ -105,5 +110,7 @@ export function sceneAt(project: Data, at: number, read: (ref: SetRef) => Data) 
   let scene: Data;
   try {scene = read(reference);} catch {return stale();}
   if (!sceneDocumentShape(scene, candidate.n)) return stale();
-  return {context: {kind: 'scene', scene: reference}, current: current(project, scene, at), document: scene};
+  const rig = object(scene.rig);
+  const accepted = acceptedRigReview(project, rig.version, at);
+  return {context: {kind: 'scene', scene: reference}, current: equal(rig.acceptance, accepted?.acceptance), document: scene};
 }

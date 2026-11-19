@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { PNG } from 'pngjs';
 import type {
@@ -59,6 +59,110 @@ export interface SyntheticOptionWorkspace {
   readonly context: OptionContext;
 }
 
+export const SYNTHETIC_RIG_ROOT = 'derived/review/v3';
+export const SYNTHETIC_RIG_MODEL = 'build/skeleton.model.json';
+export const SYNTHETIC_RIG_PAGE = 'build/skeleton.png';
+export const SYNTHETIC_RIG_RGB = [239, 17, 157] as const;
+export const rigPictureCases = [
+  'bound-rig', 'rig-unsealed-build-row', 'rig-build-hash', 'rig-signoff-hash',
+  'rig-signoff-path', 'rig-unlisted-page', 'rig-handoff', 'rig-outputs', 'rig-pre-closure',
+  'rig-missing-version', 'rig-missing-version-field', 'rig-retained-model-hash',
+] as const;
+type RigPictureCase = typeof rigPictureCases[number];
+export type PostPictureCase = 'scene' | 'unsealed-scene' | 'rig' | 'legacy' | RigPictureCase;
+
+function rigPictureFixture(root: string, variant: RigPictureCase) {
+  const signoffAt = '2026-10-31T00:00:00.000Z';
+  const config = writeWorkspaceFile(root, 'rig/config.json', '{}');
+  const packageConfig = writeWorkspaceFile(root, SYNTHETIC_RIG_ROOT + '/config.json', '{}');
+  // The public viewport fixture has one drawn mesh. Pack its single used region into one synthetic page.
+  const model = JSON.parse(readFileSync(new URL('../fixtures/viewport-387/package/skeleton.model.json', import.meta.url), 'utf8'));
+  const page = model.pages.find((entry: {name: string}) => entry.name === 'mesh.png');
+  const still = model.animations.find((clip: {name: string}) => clip.name === 'still');
+  if (!page || !still) throw new Error('Synthetic #929 fixture needs the viewport mesh page and static clip');
+  model.pages = [{...page, name: 'skeleton.png'}];
+  model.images = model.images.filter((entry: {region: string}) => entry.region === 'mesh')
+    .map((entry: object) => ({...entry, page: 'skeleton.png'}));
+  model.animations = [{...still, name: 'idle'}];
+  model.editorOrder.animations = ['idle'];
+  const png = new PNG({width: page.width, height: page.height});
+  for (let i = 0; i < png.data.length; i += 4) png.data.set([...SYNTHETIC_RIG_RGB, 255], i);
+  const build = (path: string, bytes: Buffer | string) => writeWorkspaceFile(root, SYNTHETIC_RIG_ROOT + '/out/' + path, bytes);
+  // Create #642 lists all five rows, including the three that playback does not fetch.
+  const buildFiles = [
+    build('check/build/run.json', '{"synthetic":true}'),
+    build('check/build/skeleton.atlas', 'skeleton.png\nsize: 20, 20\n\n'),
+    build('check/build/skeleton.json', '{"bones":[{"name":"root"}]}'),
+    build('check/' + SYNTHETIC_RIG_MODEL, JSON.stringify(model)),
+    build('check/' + SYNTHETIC_RIG_PAGE, PNG.sync.write(png)),
+  ];
+  const hazard = variant === 'rig-handoff' ? [
+    build('check/config.json', '{}'),
+    build('parts.json', '{}'),
+    build('rig/rig.json', '{}'),
+    packageConfig,
+  ] : [];
+  const files = [
+    packageConfig,
+    ...buildFiles.filter(row => variant !== 'rig-unlisted-page' || !row.path.endsWith(SYNTHETIC_RIG_PAGE)),
+  ].map(row => ({
+    path: row.path.slice(SYNTHETIC_RIG_ROOT.length + 1),
+    sha256: variant === 'rig-build-hash' && row.path.endsWith(SYNTHETIC_RIG_MODEL) ? '1'.repeat(64) : row.sha256,
+  }));
+  const reviewPackage = {config: files[0]!, from: 'synthetic', files, open: 'out/check'};
+  // Hash the canonical {config, files} shape independently of the production validator.
+  const packageHash = jobHash(JSON.stringify({config: reviewPackage.config, files: reviewPackage.files}));
+  const outputs = files.filter(row => row.path.endsWith(SYNTHETIC_RIG_MODEL));
+  const outputBinding = {path: 'versions[1].outputs', sha256: jobHash(JSON.stringify(outputs))};
+  const target = {version: 3, verdict: 'versions[1].verdicts[0]', ...(variant === 'rig-outputs'
+    ? {outputs: outputBinding}
+    : {review_package: {path: variant === 'rig-signoff-path' ? 'versions[0].review_package' : 'versions[1].review_package',
+      sha256: variant === 'rig-signoff-hash' ? '2'.repeat(64) : packageHash}})};
+  const versions = [
+    {kind: 'rig', n: 2, at: '2026-10-30T00:00:00.000Z'},
+    {kind: 'rig', n: 3, at: signoffAt, provenance: {config},
+      ...(variant === 'rig-outputs' ? {outputs} : {review_package: reviewPackage}),
+      verdicts: [{review: 'rig-review', by: 'synthetic-owner', at: signoffAt, verdict: 'accepted'}]},
+  ];
+  const parts = {path: 'derived/drafts/synthetic', files: []};
+  return {
+    context: {kind: 'rig', ...(variant === 'rig-missing-version-field' ? {} : {rig_version: 3}), signoff_at: signoffAt, config, parts},
+    files: [config, ...hazard, ...buildFiles.filter(row => variant !== 'rig-outputs' && variant !== 'rig-pre-closure' &&
+      (variant !== 'rig-unsealed-build-row' || !row.path.endsWith('/run.json')))],
+    versions: variant === 'rig-missing-version' ? versions.slice(0,1) : versions,
+    signoffs: [{stage: 'rig-review', checkpoint: null, at: signoffAt, by: 'synthetic-owner', target}],
+  };
+}
+
+function postPictureFixture(root: string, variant: PostPictureCase | undefined) {
+  if (variant === 'rig') {
+    const config = writeWorkspaceFile(root,'rig/config.json','{}');
+    return {context:{kind:'rig',rig_version:1,signoff_at:'2026-10-31T00:00:00Z',
+      config,parts:{path:'derived/drafts/synthetic',files:[]}},files:[config]};
+  }
+  if (!variant || variant === 'legacy') return null;
+  if (variant !== 'scene' && variant !== 'unsealed-scene') return rigPictureFixture(root, variant);
+  const plate = writeWorkspaceFile(root,'evidence/plate.png',makeSyntheticPngBytes(17,91,203));
+  const model = {path:'rig/model.json',sha256:'1'.repeat(64)};
+  const box = {x:0,y:0,width:2,height:2};
+  const reviewPackage = {config:model,files:[]};
+  const acceptanceTarget = {version:1,verdict:'versions[0].verdicts[0]',
+    review_package:{path:'versions[0].review_package',sha256:jobHash(JSON.stringify(reviewPackage))}};
+  const signature = {stage:'rig-review',checkpoint:null,at:'2026-10-31T00:00:00Z'};
+  const document = {schema:'rig-create/scene@1',n:1,rig:{version:1,model,animation:{name:'idle'},
+    acceptance:{signoff:signature,verdict:acceptanceTarget.verdict,review_package:acceptanceTarget.review_package}},
+    frame:{space:'rig-world-y-up',stage:box},
+    plates:[{...plate,role:'background',width:2,height:2,rect:box,registered:{kind:'input',ref:'plate'}}],
+    layers:['background','rig']};
+  const sceneFile = writeWorkspaceFile(root,'evidence/scene/s1.json',JSON.stringify(document));
+  const scene = {n:1,...sceneFile};
+  const scenes = [{...scene,at:signature.at,by:'agent'}];
+  const signoffs = [{...signature,by:'synthetic-owner',target:acceptanceTarget}];
+  const versions = [{kind:'rig',n:1,at:signature.at,review_package:reviewPackage,
+    verdicts:[{review:'rig-review',by:'synthetic-owner',at:signature.at,verdict:'accepted'}]}];
+  return {context:{kind:'scene',scene},scenes,signoffs,versions,files:variant==='scene'?[sceneFile,plate]:[sceneFile]};
+}
+
 export function createSyntheticOptionRecordWorkspace(
   root: string,
   options?: {
@@ -68,12 +172,14 @@ export function createSyntheticOptionRecordWorkspace(
     readonly includeHistoricalSignoff?: boolean;
     readonly boundParts?: boolean;
     readonly questionImages?: boolean;
+    readonly postPicture?: PostPictureCase;
     readonly longInterview?: boolean;
   },
 ): SyntheticOptionWorkspace {
   const questionId = options?.questionId ?? 'rig_type';
   const setId = options?.setId ?? 'set_rig_type_01';
-  const stage = options?.stage ?? 'interview';
+  const stage = options?.stage ?? (options?.postPicture ? 'post-interview' : 'interview');
+  const post = postPictureFixture(root, options?.postPicture);
 
   const inputImage = writeWorkspaceFile(root, 'inputs/reference.png', makeSyntheticPngBytes(40, 160, 220));
   const inputSpec = writeWorkspaceFile(
@@ -92,11 +198,11 @@ export function createSyntheticOptionRecordWorkspace(
     question: questionId,
     stage,
     drafted_by: 'ai',
-    drafted_at: '2026-11-01T00:00:00.000Z',
-    context: options?.boundParts ? {kind:'parts',draft_id:'synthetic',parts:{path:'derived/drafts/synthetic',files:boundFiles}} : {
+    drafted_at: post && 'scenes' in post ? '2026-11-09T00:00:00.000Z' : '2026-11-01T00:00:00.000Z',
+    context: post?.context ?? (options?.boundParts ? {kind:'parts',draft_id:'synthetic',parts:{path:'derived/drafts/synthetic',files:boundFiles}} : {
       kind: 'inputs',
       files: options?.questionImages===false ? [inputSpec] : [inputImage, inputSpec],
-    },
+    }),
     assembly: { rule: 'merge' },
     asks: [
       {
@@ -426,6 +532,8 @@ export function createSyntheticOptionRecordWorkspace(
   const projectDoc: Record<string, unknown> = {
     schema: 'rig-create/project@0',
     name: 'Synthetic Option Project',
+    ...(post && 'scenes' in post ? {scenes:post.scenes} : {}),
+    ...(post?.versions ? {versions:post.versions,signoffs:post.signoffs} : {}),
     inputs: [inputImage, inputSpec],
     interview: {
       framing: framingItems,
@@ -448,7 +556,7 @@ export function createSyntheticOptionRecordWorkspace(
 
   const recordIdentity = writeWorkspaceFile(root, 'project.json', JSON.stringify(projectDoc, null, 2) + '\n');
   const record: ProjectRecord = { path: 'project.json', sha256: recordIdentity.sha256 };
-  const files = [inputImage, inputSpec, optionSetFile, record, ...boundFiles].sort((a, b) =>
+  const files = [inputImage, inputSpec, optionSetFile, record, ...boundFiles, ...(post?.files ?? [])].sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
   const result: RecordOptionResult = { kind: 'option-set', questionId, setId };

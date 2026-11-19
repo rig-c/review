@@ -12,6 +12,7 @@ import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, posix } from 'node:path';
 import { isBuildRoot, parseHandoffDeclaration, resolveHandoff, type Handoff, type HandoffDeclaration, type HandoffFlags, type HandoffRecord } from './handoff.ts';
 import { parsePanelComposition, type JobPanelComposition } from './job-contract.ts';
+import { checkedPath } from './interview-project.ts';
 export { isPanelComponent, parsePanelComposition } from './job-contract.ts';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -102,28 +103,52 @@ export function parseManifest(input: unknown): ReviewManifest {
   for(const c of manifest.checkpoints) if(c.axis){const a=manifest.axes.find(a=>a.id===c.axis!.id);if(!a)fail(`checkpoint ${c.id}.axis`,'declared axis id');if(c.axis.value<a.min||c.axis.value>a.max)fail(`checkpoint ${c.id}.axis.value`,`number in [${a.min}, ${a.max}]`);}
   return manifest;
 }
-/** `options.handoff` are the explicit `--config …` flags; they win over the manifest block and discovery. */
-export async function loadReview(input: string, options: { handoff?: HandoffFlags; cwd?: string; handoffStarts?: readonly string[] } = {}): Promise<ReviewPackage> {
+export const BUILD_MODEL_PATH = 'build/skeleton.model.json';
+interface ReviewLoadOptions {
+  /** Explicit producer flags take precedence over discovery. False disables producer lookup. */
+  handoff?: HandoffFlags | false;
+  cwd?: string;
+  handoffStarts?: readonly string[];
+  /** Load only the adapter's build model and its sealed page images. */
+  sealedPlayback?: ReadonlyMap<string, string>;
+}
+export async function loadReview(input: string, options: ReviewLoadOptions = {}): Promise<ReviewPackage> {
+  const {sealedPlayback}=options;
   const inputPath=await realpath(resolve(input));const directory=(await stat(inputPath)).isDirectory();
-  if(directory){try{await stat(resolve(inputPath,'review.json'));return loadReview(resolve(inputPath,'review.json'),options);}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
+  if(sealedPlayback&&(!directory||options.handoff!==false||inputPath!==resolve(input)))fail('sealed playback','literal folder with handoff disabled');
+  if(directory&&!sealedPlayback){try{await stat(resolve(inputPath,'review.json'));return loadReview(resolve(inputPath,'review.json'),options);}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
     // #149: a rig-parts build root without a model of its own opens as its check package, exactly as opening check/ does.
     const check=await buildCheckPackage(inputPath);if(check)return loadReview(check,options);}
   const manifestPath=inputPath;const root=directory?inputPath:await realpath(dirname(inputPath));
-  const manifest=directory?await folderManifest(root):parseManifest(JSON.parse(await readFile(manifestPath,'utf8')));
+  const manifest=directory?await folderManifest(root,!!sealedPlayback):parseManifest(JSON.parse(await readFile(manifestPath,'utf8')));
+  const assetFile=async(path:string):Promise<string>=>{
+    if(sealedPlayback&&!sealedPlayback.has(path))fail(path,'sealed playback file');
+    const literal=sealedPlayback?checkedPath(root,path):undefined;
+    const full=await safeFile(root,path);
+    if(literal!==undefined&&full!==literal)fail(path,'file without symlinks');
+    return full;
+  };
   const files = new Set([...(directory?[]:[relative(root,manifestPath)]),...manifest.references.map(v=>v.path),...manifest.authoring.map(v=>v.path),...manifest.audio.clips.map(v=>v.path)]);
   if(manifest.direction)files.add(manifest.direction);
   if(manifest.sets)files.add(manifest.sets);
   const rootFile=async(name:string):Promise<string|undefined>=>{try{await safeFile(root,name);return name;}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw e;}};
   const authoringPath=(name:string):string|undefined=>{const paths=manifest.authoring.filter(v=>posix.basename(v.path)===name);return paths.length===1?paths[0].path:undefined;};
   const rigPath=manifest.model??await rootFile('skeleton.json')??authoringPath('skeleton.json')??await rootFile('skeleton.skel')??authoringPath('skeleton.skel');
-  const motionPath=manifest.motion??await rootFile('motion.json')??authoringPath('motion.json');
+  const motionPath=sealedPlayback?undefined:manifest.motion??await rootFile('motion.json')??authoringPath('motion.json');
   if(rigPath)files.add(rigPath);if(motionPath)files.add(motionPath);
   let modelBytesHash:string|null=null;
   if(manifest.model) {
-    files.add(manifest.model); const bytes=await readFile(await safeFile(root,manifest.model));modelBytesHash=createHash('sha256').update(bytes).digest('hex');const model = object(JSON.parse(bytes.toString('utf8')),'model');
+    files.add(manifest.model); const bytes=await readFile(await assetFile(manifest.model));modelBytesHash=createHash('sha256').update(bytes).digest('hex');
+    if(sealedPlayback&&modelBytesHash!==sealedPlayback.get(manifest.model))fail(manifest.model,'sealed playback hash');
+    const model = object(JSON.parse(bytes.toString('utf8')),'model');
     if(model.spec !== 'rigc-compiled/3') fail('model.spec','rigc-compiled/3, produced by a gated rigc build');
     if(!Array.isArray(model.pages)) fail('model.pages','array');
-    for(const page of model.pages) { const p = object(page,'model.pages[]'); const name = string(p.name,'model.pages[].name'); if(isAbsolute(name)||/[:\\%?#\x00-\x1f]/.test(name)||name.split('/').some(v=>!v))fail('model.pages[].name','literal relative model page path'); files.add(packagePath(posix.join(posix.dirname(manifest.model),name),'model page resolved inside package')); }
+    for(const page of model.pages) {
+      const p = object(page,'model.pages[]'); const name = string(p.name,'model.pages[].name');
+      if(isAbsolute(name)||/[:\\%?#\x00-\x1f]/.test(name)||name.split('/').some(v=>!v))fail('model.pages[].name','literal relative model page path');
+      if(sealedPlayback&&!/\.(png|jpe?g|webp)$/i.test(packagePath(name,'model.pages[].name')))fail('model.pages[].name','literal build page image');
+      files.add(packagePath(posix.join(posix.dirname(manifest.model),name),'model page resolved inside package'));
+    }
   }
   for(const r of manifest.references.filter(r=>r.type==='pose')) {
     const pose=object(JSON.parse(await readFile(await safeFile(root,r.path),'utf8')),`pose ${r.id}`);
@@ -135,7 +160,8 @@ export async function loadReview(input: string, options: { handoff?: HandoffFlag
   }
   const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let modelMetadata:Record<string,unknown>|null=null;let directionInput:unknown;
   // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
-  const {handoff,reason:handoffReason}=await resolveHandoff(root,manifest.producer,options.handoff,{starts:options.handoffStarts??[options.cwd??process.cwd()]});
+  const {handoff,reason:handoffReason}=options.handoff===false?{handoff:null,reason:null}:
+    await resolveHandoff(root,manifest.producer,options.handoff,{starts:options.handoffStarts??[options.cwd??process.cwd()]});
   // #329: the source painting the handoff knows is the first reference, outside the package's own files.
   const painting=sourcePainting(manifest,handoff,directory);
   let scene:SceneInspection|undefined;
@@ -155,8 +181,9 @@ export async function loadReview(input: string, options: { handoff?: HandoffFlag
     for(const path of sceneBytes.keys())files.add(path);
   }
   const hash = createHash('sha256');hash.update(JSON.stringify(manifest));hash.update('\0');const fileHashes=new Map<string,string>();
-  for(const p of [...files].sort()) { const full=await safeFile(root,p); const before=await stat(full); hash.update(p);hash.update('\0');hash.update(String(before.size));hash.update('\0'); const fileHash=createHash('sha256');const metadataChunks:Buffer[]=[];const isDirection=p===manifest.direction;let bytesRead=0;
+  for(const p of [...files].sort()) { const full=await assetFile(p); const before=await stat(full); hash.update(p);hash.update('\0');hash.update(String(before.size));hash.update('\0'); const fileHash=createHash('sha256');const metadataChunks:Buffer[]=[];const isDirection=p===manifest.direction;let bytesRead=0;
     if(isDirection&&before.size>DIRECTION_MAX_BYTES)throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');for await(const chunk of createReadStream(full)){hash.update(chunk);fileHash.update(chunk);if(isDirection&&(bytesRead+=chunk.length)>DIRECTION_MAX_BYTES)throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');if(p===reportPath||p===manifest.model||isDirection)metadataChunks.push(chunk);}fileHashes.set(p,fileHash.digest('hex'));if(sceneBytes.has(p)&&createHash('sha256').update(sceneBytes.get(p)!).digest('hex')!==fileHashes.get(p))throw new Error('SCENE_SOURCE_MISMATCH: '+p); const after=await stat(full); if(before.size!==after.size||before.mtimeMs!==after.mtimeMs) throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`);
+    if(sealedPlayback&&fileHashes.get(p)!==sealedPlayback.get(p))fail(p,'sealed playback hash');
     // The parser and package hash consume the same bytes, never two file reads.
     if(p===manifest.model){if(fileHashes.get(p)!==modelBytesHash)throw new Error(`Model ${p} changed while hashing; retry with stable package inputs`);modelMetadata=object(JSON.parse(Buffer.concat(metadataChunks).toString('utf8')),'model');}
     if(isDirection)directionInput=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));
@@ -164,7 +191,7 @@ export async function loadReview(input: string, options: { handoff?: HandoffFlag
   }
   if(painting){hash.update(SOURCE_PAINTING_ID);hash.update('\0');hash.update(painting.sha256);hash.update('\0');}
   // #192: the root is `check/` whether the folder or its review.json was opened, so the build root is kept either way.
-  const buildRoot=basename(root)==='check'&&await isBuildRoot(dirname(root))?dirname(root):undefined;
+  const buildRoot=!sealedPlayback&&basename(root)==='check'&&await isBuildRoot(dirname(root))?dirname(root):undefined;
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
   const direction=manifest.direction?readDirectionInspection(directionInput,{path:manifest.direction,sha256:fileHashes.get(manifest.direction)!},reviewedSource.rig):undefined;
   const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations:modelAnimations(modelMetadata),clock:report?.clock??null,clockAnimation:report?.animation??null,...(discoverTurnDials(modelMetadata).length?{turnDials:discoverTurnDials(modelMetadata)}:{})};
@@ -199,7 +226,7 @@ export function loadJobReview(input: string, root: string): Promise<ReviewPackag
  * adapter model paths itself (a folder that does keeps opening as before). Fixed names, no search.
  */
 export async function buildCheckPackage(dir:string):Promise<string|null>{
-  for(const candidate of ['skeleton.model.json','build/skeleton.model.json']){try{await lstat(resolve(dir,candidate));return null;}catch(e){if(!['ENOENT','ENOTDIR'].includes((e as NodeJS.ErrnoException).code??''))throw e;}}
+  for(const candidate of ['skeleton.model.json',BUILD_MODEL_PATH]){try{await lstat(resolve(dir,candidate));return null;}catch(e){if(!['ENOENT','ENOTDIR'].includes((e as NodeJS.ErrnoException).code??''))throw e;}}
   return await isBuildRoot(dir)?resolve(dir,'check'):null;
 }
 /** Same text for every command; `root` lets the open launcher name the refused input. */
@@ -207,13 +234,15 @@ export class UnrecognizedOutputError extends Error {
   constructor(readonly root:string){super('Output folder: no recognized skeleton.*, build/skeleton.model.json, rig-parts build root (check/build/skeleton.model.json), motion.json, report.json, source video, pose sequence or contact strip');}
 }
 /** An adapter over an existing output directory; never writes a manifest there. */
-async function folderManifest(root:string):Promise<ReviewManifest>{
+async function folderManifest(root:string,playbackOnly=false):Promise<ReviewManifest>{
   const entries=(await readdir(root,{withFileTypes:true})).filter(v=>v.isFile()||v.isSymbolicLink()).map(v=>v.name).sort();
+  if(playbackOnly&&entries.length)fail('output folder','build playback without top-level files');
   const has=(name:string)=>entries.includes(name);const references:Reference[]=[];
-  let model:string|undefined;
+  // Sealed playback validates the fixed model through assetFile before any lookup.
+  let model:string|undefined=playbackOnly?BUILD_MODEL_PATH:undefined;
   // These are named layouts, not a recursive search. Check existence separately
   // so an existing broken symlink is refused rather than treated as absent.
-  for(const candidate of ['skeleton.model.json','build/skeleton.model.json']){
+  for(const candidate of playbackOnly?[]:['skeleton.model.json',BUILD_MODEL_PATH]){
     try{await lstat(resolve(root,candidate));}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')continue;throw e;}
     await safeFile(root,candidate);model=candidate;break;
   }

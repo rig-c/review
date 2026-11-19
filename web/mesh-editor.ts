@@ -91,6 +91,7 @@ export interface MeshEditorHost {
  project:()=>OverlayProject|null;
  mapping:()=>CropWorldMapping;
  inspector:()=>string|undefined;
+ readonly readOnly?:boolean;
  /** The selected slot's setup-space source, or the refusal that names why there is none. */
  source:(slot?:string)=>SourceResult;
  /** Hold the stage still under the setup-pose overlay. */
@@ -198,11 +199,12 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   }
   const held=scanJobDraft()?.result;
   const visible=meshEditVisible(host.inspector());toggle.hidden=!visible;
+  if(host.readOnly)toggle.disabled=true;
   if(!visible&&active){setActive(false);return;}
   if(!host.applied()&&note.startsWith('Applied mesh edit ')){appliedOutcome='';note='';noteError=false;}
   toggle.setAttribute('aria-pressed',String(active));bar.hidden=!active;
   for(const button of bar.querySelectorAll<HTMLButtonElement>('[data-mesh-mode]'))button.setAttribute('aria-pressed',String(button.dataset.meshMode===mode));
-  node<HTMLButtonElement>('mesh-undo').disabled=!session?.canUndo();node<HTMLButtonElement>('mesh-redo').disabled=!session?.canRedo();node<HTMLButtonElement>('mesh-reset').disabled=!session?.canUndo()&&!session?.ops().length&&!host.applied();apply.disabled=applying||!!host.job;
+  node<HTMLButtonElement>('mesh-undo').disabled=!session?.canUndo();node<HTMLButtonElement>('mesh-redo').disabled=!session?.canRedo();node<HTMLButtonElement>('mesh-reset').disabled=!session?.canUndo()&&!session?.ops().length&&!host.applied();apply.disabled=!!host.readOnly||applying||!!host.job;
   if(!session){status.textContent=host.applied()&&appliedOutcome?appliedOutcome:'';status.classList.toggle('error',noteError);return;}
   const s=session.source,count=session.ops().length;
   const summary=`${note?note+' · ':''}${count} op${count===1?'':'s'} · setup pose · ${MESH_EDIT_PREVIEW_NOTE} · ${mode?hint[mode]:'no sub-mode — Escape again leaves mesh edit'} · Space-drag pans`;
@@ -253,7 +255,7 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  const leave=()=>{active=false;mode=null;session=null;drag=null;preview=null;pending=null;hover=null;selected.clear();note='';delete host.pane.dataset.meshHover;delete host.pane.dataset.meshMode;};
  const setActive=(on:boolean)=>{if(!on){leave();sync();host.changed();return;}void enter();};
  const enter=async()=>{
-  if(entering)return;entering=true;
+  if(host.readOnly||entering)return;entering=true;
   try{
    const result=host.source();if(!result.ok){leave();sync();host.message(result.code,true);host.changed();return;}
    const modelHash=job?.modelHash(),mapping=job?host.mapping():null;
@@ -286,7 +288,7 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  // #135: the delta goes to the producer (`rig-parts remesh --delta`) through the host's shared runner; a built revision
  // loads in place and the editor re-reads its setup mesh; a refusal shows the producer's line verbatim and keeps the delta.
  apply.addEventListener('click',()=>{
-  if(!session||applying||host.job)return;
+  if(host.readOnly||!session||applying||host.job)return;
   if(!session.ops().length){say(MESH_EDIT_NOTHING_PENDING,true);return;}
   const doc=meshEditDocument(session);applying=true;say(`Applying ${doc.ops.length} op(s) on ${doc.slot}: remesh --delta, compile…`);
   void (async()=>{
