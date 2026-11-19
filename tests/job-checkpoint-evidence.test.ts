@@ -756,6 +756,7 @@ for (const mutation of bindingMutations) test(`pinned package recheck: ${mutatio
       writeFileSync(held, Buffer.concat([original, Buffer.from('!')]));
       break;
     case 'same size and restored mtime': {
+      // A size/mtime shortcut would miss this change and incorrectly return HTTP 200.
       writeFileSync(held, different);
       utimesSync(held, time, time);
       const after = statSync(held);
