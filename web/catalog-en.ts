@@ -3616,6 +3616,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Original part image · {name}": "Original part image · {name}",
   "Source image SHA-256 · {hash}": "Source image SHA-256 · {hash}",
   "Select a part to inspect its original image source.": "Select a part to inspect its original image source.",
+  "There is no compiled rig yet, so the mesh tools and tabs are unavailable.": "There is no compiled rig yet, so the mesh tools and tabs are unavailable.",
   "Parts raster drawn · Canvas2D": "Parts raster drawn · Canvas2D",
   "Parts images · no compiled rig loaded": "Parts images · no compiled rig loaded",
   "Parts ready. Source files remain unchanged.": "Parts ready. Source files remain unchanged.",
