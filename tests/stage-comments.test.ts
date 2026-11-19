@@ -1,3 +1,4 @@
+import {boxesIntersect} from '../web/label-placement.ts';
 import {rigWorkspaceMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readFile,readdir} from 'node:fs/promises';
@@ -766,10 +767,11 @@ test('#897 Escape keeps comment mode and list open in all four cases, and Space-
 test('#895 actual placement tries aligned top/bottom and never jumps when every placement covers the held pointer',async()=>{
  const source=await readFile('web/stage-comments.ts','utf8'),start=source.indexOf('  const place=()=>'),end=source.indexOf('  let removeBtn:',start);
  expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
- const placeSource=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end));
+ const handleStart=source.indexOf('const resizeHandles='),handleEnd=source.indexOf('\n',handleStart);
+ const placeSource=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(handleStart,handleEnd)+'\n'+source.slice(start,end));
  const run=(screen:{x:number;y:number;width:number;height:number},pane:{clientWidth:number;clientHeight:number},geometryDrag:unknown=null,style:Record<string,string>={})=>{
   const form={style,offsetWidth:286,offsetHeight:132,getBoundingClientRect:()=>({width:286})};
-  new Function('host','form','pane','screen','general','geometryDrag','workspace',placeSource+';place();')({codec:{geometry:true}},form,pane,screen,false,geometryDrag,null);
+  new Function('host','form','pane','screen','general','geometryDrag','workspace','boxesIntersect',placeSource+';place();')({codec:{geometry:true}},form,pane,screen,false,geometryDrag,null,boxesIntersect);
   return form.style;
  };
  const above=run({x:150,y:350,width:300,height:80},{clientWidth:600,clientHeight:500});
