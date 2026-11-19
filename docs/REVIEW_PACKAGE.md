@@ -1601,8 +1601,9 @@ string `skin/slot/attachment` with at most one entry per `(skin, slot, attachmen
   The whole-number counts come from the stored entry's `uvs.length / 2`,
   `triangles.length / 3` and `hull`. `hash` is 64 lowercase hex characters.
   `frame` is exactly `{width, height}`, the positive finite model stage size.
-  `positions` contains one unrounded finite `[x, y]` pair per source vertex in
-  stored vertex order, before any operation. It has exactly `vertexCount` pairs.
+  `positions` is a dense `[number, number][]` with exactly one pair per source
+  vertex, in attachment vertex order. Each pair stores the finite, unrounded
+  setup position before any operation.
 - `ops` contains 1 to 300 operations, replayed in order. Each operation has
   exactly the keys in its shape: `{op:"move", v, from, to}`, `{op:"add", at, onEdge?}`,
   `{op:"remove", v}`, `{op:"edge", a, b}` or `{op:"unedge", a, b}`. `v`, `a`, `b`
@@ -1623,10 +1624,11 @@ document's setup values with no selected skin. Playback, the page's skin,
 controls and other page state do not enter the setup read. The replay contract
 requires undeformed setup geometry, where each displayed source vertex equals
 `uv × size + origin`. Review records the displayed positions. Before any op,
-the consumer checks that `source.frame` matches its rig size and compares every
-`source.positions` entry with its own position at the same vertex index. It
-refuses by name at the first difference greater than `1e-3` crop px, giving the
-vertex index, position found and position required. This check applies to all
+Parts checks `source.frame` against its rig size and refuses a position count
+that differs from its source vertex count. It compares each coordinate of
+`source.positions` with its own at the same vertex index, within 0.001 crop px.
+It refuses at the first vertex outside that tolerance and reports its index,
+the position found and the position required. This check applies to all
 edits, including edits with no `move`. The consumer can replay in either
 coordinate space and can reproduce the undeformed positions without Play.
 

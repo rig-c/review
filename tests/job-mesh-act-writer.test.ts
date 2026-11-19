@@ -24,7 +24,7 @@ test('#952 the writer gates mesh edits and replays only against the retained att
     const model = JSON.parse(await readFile(join(retained.snapshotRoot, ask.source.model!.path), 'utf8'));
     const entry = model.skins.find((skin: {name: string}) => skin.name === 'default').attachments.mesh.mesh;
     const editor = new MeshEditSession({slot: 'mesh', attachment: 'mesh', skin: 'default',
-      vertices: [[48, 42], [48, 22], [68, 22], [68, 42]], triangles: entry.triangles,
+      vertices: [[48.12345678912345, 42.00000000000001], [48, 22], [68, 22], [68, 42]], triangles: entry.triangles,
       hull: entry.hull, hash: jobHash(attachmentHashText(entry))});
     expect(editor.addVertex([60.12345, 29.56789])).toMatchObject({ok: true, changed: true});
     const edit = meshEditActValue(editor, {width: model.stage.width, height: model.stage.height});
@@ -45,6 +45,9 @@ test('#952 the writer gates mesh edits and replays only against the retained att
     const act = parseMeshEditsAct(finalize());
     expect(act.value.comments).toEqual([]);
     expect(act.value.meshEdits).toEqual(submission.value.meshEdits);
+    const serialized = parseMeshEditsAct(JSON.parse(JSON.stringify(act)));
+    expect(serialized.value.meshEdits?.[0]?.edit.source.positions).toEqual([...editor.source.vertices]);
+    expect(serialized.value.meshEdits?.[0]?.edit.source.frame).toEqual({width: model.stage.width, height: model.stage.height});
     expect(parseMeshEditsAct(finalize({...submission.value, words: 'please revise'})).value.comments)
       .toEqual([{text: 'please revise'}]);
     expect(() => finalize({...submission.value, verdict: 'approved'})).toThrow('JOB_ACT_INVALID');
