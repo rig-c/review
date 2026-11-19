@@ -1223,6 +1223,11 @@ export type RecordAct = Pick<JobLegacyAct,
 export type SourceV3 = JobSourceBinding | RecordSource;
 export type ActV3 = JobAct | RecordAct;
 
+/**
+ * `recordPublication`, `recordActSchema` and `askBatch` describe the host, not the current head.
+ * `ask-batch` applies only to a record-retained head publication; a package head refuses `JOB_REQUEST_INVALID`,
+ * so a consumer checks the publication's mode as well as the flag (#972).
+ */
 export interface JobCapabilitiesV3 extends JobCapabilities {
   readonly recordPublication: true;
   readonly recordActSchema: typeof JOB_RECORD_ACT_SCHEMA;
