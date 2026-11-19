@@ -668,7 +668,8 @@ test('#606 literal package/record canonical, durable, replay and export compatib
   const expected = {...golden606, samples, publicExports: [...golden606.publicExports.filter(name => name !== 'startJobHub'),
     'JOB_COMMENTS_ACT_SCHEMA', 'PARTS_COMMENTS_VERDICT_SCHEMA', 'REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA', 'REVIEW_COMMENTS_SESSION_SCHEMA',
     'parseCommentsAct', 'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'parseCommentsSession', 'projectComments', 'projectSelectedCommentsFeedback',
-    'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct', 'JOB_PREVIOUS_DRAFT_SCHEMA',
+    'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
+    'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct', 'JOB_PREVIOUS_DRAFT_SCHEMA',
   ].sort()};
   expect(actual).toEqual(expected);
   for (const [name, sample] of Object.entries(actual.samples)) {

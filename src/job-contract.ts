@@ -18,6 +18,7 @@ import type { CompareFeedback, CompareSession } from './compare-session.ts';
 import type { MarkRegion } from './stage-comment.ts';
 import type { PartsVerdict } from './parts-view.ts';
 import type { ControlNumericCamera, ControlPart } from './control.ts';
+import type { MeshOp, Vec } from './mesh-edit.ts';
 
 export const JOB_API_SCHEMA = 'rig-review/job-api@2' as const;
 export const JOB_API_V3_SCHEMA = 'rig-review/job-api@3' as const;
@@ -32,6 +33,8 @@ export const JOB_PARTS_VERDICT_ACT_SCHEMA = 'rig-review/act@5' as const;
 export const JOB_COMMENTS_ACT_SCHEMA = 'rig-review/act@6' as const;
 /** @6 plus an optional per-comment `context`. Emitted only behind EMIT_UNPINNED_CREATE_FIELDS (#714). */
 export const JOB_COMMENT_CONTEXT_ACT_SCHEMA = 'rig-review/act@7' as const;
+/** @7 plus a mesh payload on a compiled rig's Request changes (#952). */
+export const JOB_MESH_EDITS_ACT_SCHEMA = 'rig-review/act@8' as const;
 export const REVIEW_COMMENTS_SESSION_SCHEMA = 'rig-review-session/2' as const;
 export const REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA = 'rig-review-compare-session/2' as const;
 export const PARTS_COMMENTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/5' as const;
@@ -94,6 +97,49 @@ export type JobContextCommentsAct = {
   [Kind in keyof JobCommentsActValues]: Omit<Extract<JobCommentsAct, { readonly kind: Kind }>, 'schema' | 'value'> & {
     readonly schema: typeof JOB_COMMENT_CONTEXT_ACT_SCHEMA;
     readonly value: Omit<JobCommentsActValues[Kind], 'comments'> & { readonly comments: readonly JobContextComment[] };
+  }
+}[keyof JobCommentsActValues];
+
+export interface JobMeshEditValue {
+  readonly slot: string;
+  readonly skin: string;
+  readonly attachment: string;
+  readonly basis: 'setup';
+  readonly source: {
+    readonly vertexCount: number;
+    readonly triangleCount: number;
+    readonly hullLength: number;
+    /** SHA-256 of JSON.stringify(entry) in the retained model's stored key order. */
+    readonly hash: JobSha256;
+    readonly frame: {readonly width: number; readonly height: number};
+    /** Unrounded displayed setup positions in rig canvas crop px, in source vertex order. */
+    readonly positions: readonly Vec[];
+  };
+  readonly ops: readonly MeshOp[];
+}
+
+export interface JobMeshEdit {
+  readonly edit: JobMeshEditValue;
+  readonly sha256: JobSha256;
+}
+
+type JobRigMeshEditsAct = Omit<Extract<JobContextCommentsAct, {kind: 'review-verdict'}>, 'schema' | 'source' | 'value' | 'still'> & {
+  readonly schema: typeof JOB_MESH_EDITS_ACT_SCHEMA;
+  readonly source: JobRigReviewAct['source'];
+  readonly still: JobRigStill;
+  readonly value: {
+    readonly stage: 'rig-review';
+    readonly verdict: 'changes-requested';
+    readonly comments: readonly JobContextComment[];
+    readonly meshEdits: readonly JobMeshEdit[];
+  };
+};
+
+/** Decoder grammar for @8, whose writer emits it only when mesh edits are present. */
+export type JobMeshEditsAct = JobRigMeshEditsAct | {
+  [Kind in keyof JobCommentsActValues]: Omit<Extract<JobContextCommentsAct, {kind: Kind}>, 'schema' | 'value'> & {
+    readonly schema: typeof JOB_MESH_EDITS_ACT_SCHEMA;
+    readonly value: Extract<JobContextCommentsAct, {kind: Kind}>['value'] & {readonly meshEdits?: never};
   }
 }[keyof JobCommentsActValues];
 export type ReviewCommentsSession = Omit<ReviewSession, 'schema' | 'feedback' | 'checkpoints'> & {
@@ -193,6 +239,7 @@ export const JOB_RECORD_ACT_KINDS = [
   'reopen',
 ] as const;
 
+/** Standalone asks and acts for these kinds remain disabled. */
 export const JOB_RESERVED_ACT_KINDS = ['described-correction', 'mesh-edit'] as const;
 export type JobEnabledActKind = typeof JOB_ENABLED_ACT_KINDS[number];
 export type RecordActKind = typeof JOB_RECORD_ACT_KINDS[number];
@@ -208,16 +255,6 @@ export const JOB_PLAN_BOUND_SIGNOFF_STAGES = [
 /** Record-only approval stages; not part of the public job-host runtime exports. */
 export const JOB_RECORD_SIGNOFF_STAGES = [...JOB_PLAN_BOUND_SIGNOFF_STAGES, 'direction-review', 'interview'] as const;
 
-/** Reserved kinds have no accepted value shape and cannot be asked or submitted.
- * Described correction awaits the joint Create #182 context allowlist.
- * Mesh edit awaits the joint Parts #1159 freeze. Proposal 6ff03ec9 discusses
- * slot/attachment/skin identity, setup basis, vertex/triangle/hull counts and
- * at most 300 closed move/add/remove/edge/unedge operations in crop pixels.
- * The exact attachment bytes behind source.hash and the canonical payload
- * digest replacing delta_sha256 are UNRESOLVED. This contract defines neither.
- * A future submitted mesh act must carry human UI authority, time, exact rig
- * revision/source and recomputable provenance. Drafts are never consumer acts.
- */
 export const JOB_CONSUMER_AUTH_MODE = 'writer-owned-sibling-fetch-capability' as const;
 
 /** Hex digests, opaque IDs/cursors and timestamps require runtime validation.
@@ -519,6 +556,7 @@ export type JobUIActValues = Omit<JobActValues, 'checkpoint' | 'parts-verdict' |
       readonly stage: 'rig-review';
       readonly feedback?: readonly Feedback[];
       readonly general?: readonly string[];
+      readonly meshEdits?: readonly JobMeshEdit[];
     });
 };
 
@@ -587,8 +625,8 @@ export type JobPartsVerdictAct = Omit<Extract<JobLegacyAct, {kind: 'parts-verdic
 };
 
 /** Historical @2 acts remain readable without being backfilled or relabelled.
- * Fresh checkpoint, parts, rig/post verdict and signoff acts are written as act@6. */
-export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct | JobCommentsAct;
+ * Fresh checkpoint, parts, rig/post verdict and signoff acts use @6, with @8 gated for mesh edits. */
+export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct | JobCommentsAct | JobRigMeshEditsAct;
 
 /** Authenticated browser provenance. The daemon validates identity and hashes PNG bytes. */
 export interface JobRigCapture {

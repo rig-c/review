@@ -414,6 +414,27 @@ preserve capability, origin, size, cancellation and replay checks.
 
 - Breaking, 4.0.0 (#806): remove `startJobHub` and its `JobHubOptions`, `JobHubJobOptions`, `JobHubJob` and `JobOwnerHub` types; the uncalled semantic-job hub is deleted.
 
+## Mesh-edit act compatibility
+
+`rig-review/act@8` is additive to the managed-host act contract. Consumers
+narrow on `schema`. @8 uses the @7 envelope and comment rules, with optional
+`value.meshEdits` restricted to a `review-verdict` at `stage: "rig-review"` with
+`verdict: "changes-requested"`. An edited request may carry an empty comments
+array. Acts without edits keep their existing emission and validation rules.
+Existing @2–@7 decoder entry points, accepted shapes and historical bytes
+retain their contracts. The API version, reviewer and consumer grant, and
+reserved standalone `mesh-edit` kind keep their current contracts. The legacy
+`rig-review-mesh-edit/1` export and `--delta` input keep their existing formats.
+
+Review ships the @8 decoder with emission disabled. Create pins a Review
+release that can decode @8 and builds its relay before Review opens the
+emission gate. A live submission carrying edits while the gate is closed
+refuses `JOB_ACT_KIND_DISABLED`. Older decoders refuse the new schema with
+`JOB_ACT_INVALID`. The rollout and the consumer's required hash, frame and
+position checks are part of the [act@8 wire contract](REVIEW_PACKAGE.md#mesh-edits-on-request-changes-act8).
+The host facade adds `parseMeshEditsAct`, `JOB_MESH_EDITS_ACT_SCHEMA` and
+the three mesh edit types listed below.
+
 ## Named export inventory
 
 The backend rig-still extension retains the original twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill` and `JobPartsVerdictAct` at act@5 (`PartsVerdictValue` with pointed `issues` and `words`, while preserving `JobLegacyPartsVerdictValue` at act@2 for historical acts). The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobPartsVerdictAct`, `JobLegacyPartsVerdictValue`, `PartsVerdictValue`, `JobPanelComposition`, `PanelComponent`, `JobRigStill` and `JobRigCapture` exports, [Review #563](https://github.com/rig-c/review/issues/563) adds five type-only exports (`JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`, `JobHostAttachField` and `JobHostAttachFailure`), and [Review #555](https://github.com/rig-c/review/issues/555) adds four type-only interview diagnostic exports (`JobInterviewJson`, `JobInterviewRecord`, `JobInterviewDiagnostic` and `JobInterviewDiagnostics`). [Review #588](https://github.com/rig-c/review/issues/588) activates record mode when `readRecordPublished` and `recordReaderId` are supplied to a host or session (`publicationMode: 'record-and-package'`), serving `rig-review/job-api@3` (`JOB_API_V3_SCHEMA`), `rig-review/act@4` (`JOB_RECORD_ACT_SCHEMA`) and normal owner URL model-free record inspection while keeping default package-only hosts and exact `package-only` `job-ui/<jobId>.json` descriptor bytes at @2 and enforcing `publicationMode` / `recordReaderId` reuse compatibility across ordinary reuse and strict `reuseOnly` attachment. It exports six additional record-mode runtime symbols (`JOB_API_V3_SCHEMA`, `JOB_RECORD_ACT_SCHEMA`, `JOB_RECORD_READER_ID`, `parseRecordAct`, `prepareJobRecordAct` and `prepareJobRecordSource`, for eighteen runtime exports total) and the V3/record type surface listed below. The rig and parts-verdict act revision constants, transport limits and the internal `POST /jobs/<jobId>/host` helper remain internal to their modules. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend) and [Model-free record mode and source seam](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
@@ -490,6 +511,7 @@ values from the frozen semantic contract.
 - `prepareJobRecordSource`
 - `parseCommentsAct`
 - `parseContextCommentsAct`
+- `parseMeshEditsAct`
 - `projectComments`
 - `parseCommentsSession`
 - `parseCommentsCompareSession`
@@ -497,6 +519,7 @@ values from the frozen semantic contract.
 - `projectSelectedCommentsFeedback`
 - `JOB_COMMENTS_ACT_SCHEMA`
 - `JOB_COMMENT_CONTEXT_ACT_SCHEMA`
+- `JOB_MESH_EDITS_ACT_SCHEMA`
 - `REVIEW_COMMENTS_SESSION_SCHEMA`
 - `REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA`
 - `PARTS_COMMENTS_VERDICT_SCHEMA`
@@ -666,6 +689,9 @@ without aliases or copied wire shapes.
 - `JobCommentContext`
 - `JobContextComment`
 - `JobContextCommentsAct`
+- `JobMeshEditValue`
+- `JobMeshEdit`
+- `JobMeshEditsAct`
 - `ReviewCommentsSession`
 - `CompareCommentsSession`
 - `PartsCommentsVerdict`
