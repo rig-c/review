@@ -2236,7 +2236,7 @@ async function loadRebuildStatus():Promise<RebuildStatusView|null> {
  // #315: a config polygon the editor cannot read as an ellipse is named, never shown as an empty row.
  const refused=chestSeed(chestStatusForPart(rebuildStatus,chestFormPart)).refusals;if(refused.length)chestEditor?.notify(refused.join(' · '),true,refused);
  // #342: a rig with no contour mesh disables the chest tools before use and says why in words about the rig.
- const noContour=noContourReason(rebuildStatus);chestEditor?.unavailable(sealedRecordRigReadOnly()??noContour?.text??null);
+ const noContour=noContourReason(rebuildStatus);chestEditor?.unavailable(noContour?.text??null);
  if(noContour)chestEditor?.notify(noContour.text,false,noContour.lines);else if(!rebuildStatus.available)chestEditor?.notify(rebuildStatus.reason,!rebuildStatus.viewOnly);
  renderHandoff(rebuildStatus);refreshPhysics();
  retargetPanel?.load(rebuildStatus.retarget??null,rebuildStatus.reason);
