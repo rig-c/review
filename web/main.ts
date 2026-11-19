@@ -280,7 +280,12 @@ function message(value: string, error = false, footerOnly = false, diagnostic?: 
   // A view readout (a Difference count) is not the act's state, so it stays in the footer only.
   if (footerOnly) return;
   // The modal makes the footer inert; the review dialog repeats the latest message for its reader.
-  text('review-message', value); el('review-message').classList.toggle('error', error);
+  const reviewMessage=el('review-message');
+  if(reviewMessage.dataset?.partsPinRefusal){
+    if(!error)return;
+    delete reviewMessage.dataset.partsPinRefusal;
+  }
+  text('review-message', value); reviewMessage.classList.toggle('error', error);
   if(host&&error&&rigInspector.act.hidden&&!rigInspector.answersRendered){
     for(const node of rigInspector.act.querySelectorAll<HTMLElement>('#save,#review-status,label[for="review-status"]'))node.hidden=true;
     rigInspector.act.hidden=false;
@@ -1677,8 +1682,10 @@ function renderAnswerControls():void {
    if(!notice.classList.contains('error')){
     setSourceText(notice,pinRefusal);
     notice.classList.add('error');
+    notice.dataset.partsPinRefusal='true';
    }
-  }else if(sourceTextContent(notice)===pinRefusal){
+  }else if(notice.dataset.partsPinRefusal){
+   delete notice.dataset.partsPinRefusal;
    setSourceText(notice,'');
    notice.classList.remove('error');
   }
