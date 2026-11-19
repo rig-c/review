@@ -178,6 +178,17 @@ test('#963 a replayed batch returns the same asks without reading the publisher 
     const conflict = await fixture.call({ verb: 'ask-batch', expectedGeneration: generation, idempotencyKey: 'replay',
       publicationId: fixture.publicationId, subjects: subjects.slice(0, 2) });
     expect(conflict).toMatchObject({ ok: false, error: { code: 'JOB_IDEMPOTENCY_CONFLICT' } });
+
+    // Each ask inside the stored batch receipt is a durable copy: evidence its publication does not carry refuses.
+    const store = fixture.store as unknown as JobStore<{ replays: Record<string, { value: { asks: { source: object }[] } }> }>;
+    store.update(fixture.session.jobId, null, current => {
+      const data = structuredClone(current.data);
+      Object.assign(data.replays['agent:replay'].value.asks[1].source, { checkpointEvidence: [] });
+      return { data };
+    });
+    const tampered = await fixture.call({ verb: 'ask-batch', expectedGeneration: generation, idempotencyKey: 'replay',
+      publicationId: fixture.publicationId, subjects });
+    expect(tampered).toMatchObject({ ok: false, error: { code: 'JOB_SOURCE_MISMATCH' } });
   } finally { await fixture.dispose(); }
 });
 

@@ -93,7 +93,12 @@ function assertStoredEvidence(data: JobData): void {
     if (event.type === 'pending') assertStoredEvidenceCopy(event.ask, data);
     if (event.type === 'act') assertStoredEvidenceCopy(event.act, data);
   }
-  for (const replay of Object.values(data.replays)) assertStoredEvidenceCopy(replay.value, data);
+  for (const replay of Object.values(data.replays)) {
+    // An ask-batch receipt wraps its asks; each one is a durable copy like a single ask's receipt.
+    const asks = (replay.value as {asks?: unknown} | null)?.asks;
+    if (Array.isArray(asks)) for (const ask of asks) assertStoredEvidenceCopy(ask, data);
+    else assertStoredEvidenceCopy(replay.value, data);
+  }
 }
 
 function hasStoredEvidence(source: object | undefined): boolean {
