@@ -59,10 +59,21 @@ test('[SYNTHETIC] record aggregate cap control catches the planted bypass mutant
       expect({ exit, stderr }).toEqual({ exit: 0, stderr: '' });
       expect(result.result).toEqual({
         ok: false,
-        error: { code: 'JOB_SOURCE_UNRETAINABLE', message: 'JOB_SOURCE_UNRETAINABLE' },
+        error: {
+          code: 'JOB_SOURCE_UNRETAINABLE',
+          message: `retained source bytes ${result.measuredBytes} exceed the ${128 * 1024}-byte limit`,
+        },
       });
       expect(result.readerPhases).toEqual(['inventory']);
       expect(result.snapshotsUnchanged).toBe(true);
+      const overFiles = lines.find(line => line.stage === 'over-files-result');
+      expect(overFiles?.result).toEqual({
+        ok: false,
+        error: {
+          code: 'JOB_SOURCE_UNRETAINABLE',
+          message: 'retained source files 7 exceed the 6-file limit',
+        },
+      });
     }
     console.log(
       JSON.stringify({

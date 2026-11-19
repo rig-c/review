@@ -721,7 +721,9 @@ function readProjectRecordBytes(root: string, record: ProjectRecord, allowLegacy
     throw new JobError(allowLegacySchema ? 'JOB_SOURCE_UNRETAINABLE' : 'JOB_RECORD_MOVED');
   }
   if (!stat.isFile()) throw new JobError(allowLegacySchema ? 'JOB_SOURCE_UNRETAINABLE' : 'JOB_RECORD_MOVED');
-  if (stat.size > maxProjectBytes) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+  if (stat.size > maxProjectBytes) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', `project record bytes ${stat.size} exceed the ${maxProjectBytes}-byte limit`);
+  }
   let bytes: Buffer;
   try {
     bytes = sourceBytes(root, record.path);
@@ -755,7 +757,10 @@ function readClosureFileBytes(root: string, file: JobFileIdentity): Buffer {
   } catch {
     throw new JobError('JOB_SOURCE_UNRETAINABLE');
   }
-  if (!stat.isFile() || stat.size > maxFileBytes) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+  if (!stat.isFile()) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+  if (stat.size > maxFileBytes) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', `retained source file bytes ${stat.size} exceed the ${maxFileBytes}-byte limit`);
+  }
   let bytes: Buffer;
   try {
     bytes = sourceBytes(root, file.path);
@@ -1010,7 +1015,7 @@ export async function prepareJobRecordSource(options: {
   );
   assertRecord(root, record);
   if (inventory.files.length > maxSourceFiles) {
-    throw new JobError('JOB_SOURCE_UNRETAINABLE');
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', `retained source files ${inventory.files.length} exceed the ${maxSourceFiles}-file limit`);
   }
   checkpointEvidenceMetadata(root.path, inventory.checkpointEvidence);
   const snapshotRoot = join(options.stateRoot, 'snapshots', randomUUID());
@@ -1026,7 +1031,9 @@ export async function prepareJobRecordSource(options: {
     for (const file of inventory.files) {
       const bytes = readClosureFileBytes(root.path, file);
       retainedBytes += bytes.length;
-      if (retainedBytes > maxSourceBytes) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+      if (retainedBytes > maxSourceBytes) {
+        throw new JobError('JOB_SOURCE_UNRETAINABLE', `retained source bytes ${retainedBytes} exceed the ${maxSourceBytes}-byte limit`);
+      }
       const destination = join(snapshotRoot, file.path);
       await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
       const handle = await open(destination, 'wx', 0o600);
@@ -1363,7 +1370,9 @@ export async function prepareJobSource(options: {
   for (const file of questionFiles.optional) {
     if (!wanted.has(file.path)) add(file.path, file.sha256);
   }
-  if (wanted.size > maxSourceFiles) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+  if (wanted.size > maxSourceFiles) {
+    throw new JobError('JOB_SOURCE_UNRETAINABLE', `retained source files ${wanted.size} exceed the ${maxSourceFiles}-file limit`);
+  }
   const snapshotRoot = join(options.stateRoot, 'snapshots', randomUUID());
   const seals: JobFileIdentity[] = [];
   let snapshotIdentity: {dev: number; ino: number} | null = null;
@@ -1380,7 +1389,9 @@ export async function prepareJobSource(options: {
     for (const [path, expected] of [...wanted].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
       const bytes = parts.bytes.get(path) ?? sourceBytes(root.path, path), sha256 = jobHash(bytes);
       size += bytes.length;
-      if (size > maxSourceBytes) throw new JobError('JOB_SOURCE_UNRETAINABLE');
+      if (size > maxSourceBytes) {
+        throw new JobError('JOB_SOURCE_UNRETAINABLE', `retained source bytes ${size} exceed the ${maxSourceBytes}-byte limit`);
+      }
       if (expected && sha256 !== expected) throw new JobError(path === record?.path ? 'JOB_RECORD_MOVED' : 'JOB_SOURCE_MISMATCH');
       const destination = join(snapshotRoot, path);
       await mkdir(dirname(destination), { recursive: true, mode: 0o700 });

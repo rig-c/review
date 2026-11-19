@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -8,6 +8,7 @@ import {
   type PlanContext,
 } from '../src/job-contract.ts';
 import {
+  jobFailure,
   jobHash,
   recordInstanceKey,
   recordSourceDigest,
@@ -533,6 +534,111 @@ describe('Review #561 model-free record source preparation (SYNTHETIC reader fix
         readRecordPublished: mismatchedPlanReader.reader,
       }),
     ).rejects.toMatchObject({ code: 'JOB_SOURCE_MISMATCH' });
+
+    // Closure single-file byte limit (stat.size > maxFileBytes) names measured bytes and limit
+    const bigClosurePath = join(workRoot, 'inputs/oversized-closure.bin');
+    writeFileSync(bigClosurePath, '');
+    truncateSync(bigClosurePath, 64 * 1024 * 1024 + 1);
+    const oversizedClosureReader = createSyntheticRecordReader({
+      onOption: () => ({
+        ...fixture.context,
+        files: [
+          ...fixture.files,
+          { path: 'inputs/oversized-closure.bin', sha256: 'b'.repeat(64) },
+        ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+      }),
+    });
+    let oversizedClosureErr: unknown;
+    try {
+      await prepareJobRecordSource({
+        root,
+        stateRoot,
+        fingerprint: 'fp',
+        request: {
+          freeze: { kind: 'producer-held', holdId: 'hold_1', record: fixture.record },
+          result: fixture.result,
+        },
+        readRecordPublished: oversizedClosureReader.reader,
+      });
+    } catch (error) {
+      oversizedClosureErr = error;
+    }
+    rmSync(bigClosurePath);
+    expect(jobFailure(oversizedClosureErr)).toEqual({
+      ok: false,
+      error: {
+        code: 'JOB_SOURCE_UNRETAINABLE',
+        message: `retained source file bytes ${64 * 1024 * 1024 + 1} exceed the ${64 * 1024 * 1024}-byte limit`,
+      },
+    });
+
+    // Project record byte limit (stat.size > maxProjectBytes) names measured bytes and limit
+    const bigProjectRoot = makeTempDir('review-793-big-project-');
+    const bigProjectPath = join(bigProjectRoot, 'project.json');
+    writeFileSync(bigProjectPath, '');
+    truncateSync(bigProjectPath, 8 * 1024 * 1024 + 1);
+    let bigProjectErr: unknown;
+    try {
+      await prepareJobRecordSource({
+        root: captureJobRoot(bigProjectRoot),
+        stateRoot,
+        fingerprint: 'fp',
+        request: {
+          freeze: {
+            kind: 'producer-held',
+            holdId: 'hold_1',
+            record: { path: 'project.json', sha256: 'd'.repeat(64) },
+          },
+          result: fixture.result,
+        },
+        readRecordPublished: reader,
+      });
+    } catch (error) {
+      bigProjectErr = error;
+    }
+    expect(jobFailure(bigProjectErr)).toEqual({
+      ok: false,
+      error: {
+        code: 'JOB_SOURCE_UNRETAINABLE',
+        message: `project record bytes ${8 * 1024 * 1024 + 1} exceed the ${8 * 1024 * 1024}-byte limit`,
+      },
+    });
+  });
+
+  test('[SYNTHETIC] over-limit project.json refuses with measured bytes and limit', () => {
+    const bigProjectRoot = makeTempDir('review-793-big-project-only-');
+    const stateRoot = makeTempDir('review-793-big-project-state-');
+    const fixture = createSyntheticOptionRecordWorkspace(bigProjectRoot);
+    const bigProjectPath = join(bigProjectRoot, 'project.json');
+    truncateSync(bigProjectPath, 8 * 1024 * 1024 + 1);
+    const { reader } = createSyntheticRecordReader({
+      onOption: () => structuredClone(fixture.context),
+    });
+    return expect(
+      prepareJobRecordSource({
+        root: captureJobRoot(bigProjectRoot),
+        stateRoot,
+        fingerprint: 'fp',
+        request: {
+          freeze: {
+            kind: 'producer-held',
+            holdId: 'hold_1',
+            record: fixture.record,
+          },
+          result: fixture.result,
+        },
+        readRecordPublished: reader,
+      }).then(
+        () => ({ ok: true as const }),
+        error => jobFailure(error),
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'JOB_SOURCE_UNRETAINABLE',
+        message: `project record bytes ${8 * 1024 * 1024 + 1} exceed the ${8 * 1024 * 1024}-byte limit`,
+      },
+    });
   });
 
   test('[SYNTHETIC] verifyJobRecordSourceFresh re-evaluates both reader phases and maps ask vs finalize refusals', async () => {

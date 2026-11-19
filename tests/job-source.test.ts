@@ -561,6 +561,15 @@ test('C4 refuses symlink leaves, symlink parents, special paths and byte/row/rol
     expect((await refused([{path: 'parts/base.png', role}])).message).toBe('PARTS_REFERENCE_SET_MISMATCH row=0');
   }
   expect((await refused(Array.from({length: 4097}, () => ({path: 'parts/base.png', role: 'part'})))).message).toBe('PARTS_REFERENCE_LIMIT');
+  f.setContext({...f.getContext(), parts: null, files: Array.from({length: 4096}, (_, i) => ({
+    path: `extra/file-${i}.bin`, sha256: 'a'.repeat(64),
+  }))});
+  const overFilesResponse = await (await f.call(await f.publishRequest())).json();
+  expect(overFilesResponse.ok).toBe(false);
+  expect(overFilesResponse.error).toEqual({
+    code: 'JOB_SOURCE_UNRETAINABLE',
+    message: 'retained source files 4102 exceed the 4096-file limit',
+  });
 });
 
 test('C4 preserves the public manifest reader refusal name', async () => {
