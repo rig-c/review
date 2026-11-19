@@ -738,6 +738,9 @@ for (const mutation of bindingMutations) test(`pinned package recheck: ${mutatio
   const publication = await f.publish();
   const retained = f.session.retainedSource(publication.publicationId);
   const held = join(retained.snapshotRoot, 'out', member);
+  const time = new Date('2024-01-01T00:00:00Z');
+  utimesSync(held, time, time);
+  const before = statSync(held);
   const route = retainedPublicationRoutes(f.session);
   const request = () => route(f.session.jobId, publication.publicationId, publication.instanceKey,
     'api/review', new Request('http://127.0.0.1/api/review'));
@@ -745,9 +748,6 @@ for (const mutation of bindingMutations) test(`pinned package recheck: ${mutatio
   expect(initial.status).toBe(200);
   await initial.text();
 
-  const time = new Date('2024-01-01T00:00:00Z');
-  utimesSync(held, time, time);
-  const before = statSync(held);
   switch (mutation) {
     case 'removed':
       unlinkSync(held);
