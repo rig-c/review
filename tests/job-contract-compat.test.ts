@@ -40,9 +40,11 @@ test('#557/#588 control public job-host retains its runtime exports, record-mode
     'projectComments', 'projectSelectedCommentsFeedback',
     // #714: the act@7 decoder and its schema constant.
     'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
+    // #914: the publisher's previous-draft support marker.
+    'JOB_PREVIOUS_DRAFT_SCHEMA',
   ].sort();
   expect(legacyRuntimeExports).toHaveLength(16);
-  expect(expectedRuntimeExports).toHaveLength(28);
+  expect(expectedRuntimeExports).toHaveLength(29);
   expect(Object.keys(publicHost).sort()).toEqual(expectedRuntimeExports);
   for (const name of expectedRuntimeExports) {
     const missing = new Set(Object.keys(publicHost));
@@ -59,6 +61,7 @@ test('#557/#588 control public job-host retains its runtime exports, record-mode
   expect(publicHost.JOB_RECORD_READER_ID).toBe('rig-create/publication-reader/2');
   expect(publicHost.JOB_COMMENTS_ACT_SCHEMA).toBe('rig-review/act@6');
   expect(publicHost.JOB_COMMENT_CONTEXT_ACT_SCHEMA).toBe('rig-review/act@7');
+  expect(publicHost.JOB_PREVIOUS_DRAFT_SCHEMA).toBe('rig-review-previous-draft/1');
   const _c2Types: [
     JobPartsVerdictAct['schema'],
     PartsVerdictValue['verdict'],
