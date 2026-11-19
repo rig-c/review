@@ -80,11 +80,18 @@ type HeldMode = typeof HELD_MODES[number];
 const isHeld = (mode: string): mode is HeldMode => (HELD_MODES as readonly string[]).includes(mode);
 
 /** Act bytes with only the per-fixture identities (ids, time, reviewer) replaced, so two runs compare byte for byte. */
+// The still is what the person saw, so a visible mesh preview changes it here exactly as it does on main,
+// where Edit Mesh is also open on the job rig screen. Anchor ids are fresh per run. Both are replaced; every other
+// byte of the act must match the run without a held draft.
 function fixtureNeutralAct(raw: string): string {
   const act = JSON.parse(raw) as {actId: string; jobId: string; askId: string; publicationId: string; at: string;
-    authority: {reviewer: {id: string}}};
+    authority: {reviewer: {id: string}}; still?: {path: string; sha256: string};
+    value: {comments?: {anchor?: {id?: string}}[]}};
   const identities: [string, string][] = [[act.actId, 'ACT'], [act.jobId, 'JOB'], [act.askId, 'ASK'],
-    [act.publicationId, 'PUBLICATION'], [act.at, 'AT'], [act.authority.reviewer.id, 'REVIEWER']];
+    [act.publicationId, 'PUBLICATION'], [act.at, 'AT'], [act.authority.reviewer.id, 'REVIEWER'],
+    ...(act.still ? [[act.still.path, 'STILL_PATH'], [act.still.sha256, 'STILL_SHA256']] as [string, string][] : []),
+    ...(act.value.comments ?? []).flatMap((comment, index): [string, string][] =>
+      comment.anchor?.id ? [[comment.anchor.id, 'ANCHOR_' + index]] : [])];
   return identities.reduce((text, [value, token]) => text.split(JSON.stringify(value)).join(JSON.stringify('<' + token + '>')), raw);
 }
 
