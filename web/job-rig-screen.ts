@@ -224,10 +224,10 @@ export function createJobRigScreen(options: {
     if(directionWords!==undefined)for(const decision of decisions)if(decision.kind==='review-verdict'&&decision.value.stage==='direction-review')decision.value.words=directionWords;
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     const rigChanges=decisions.find(decision=>decision.kind==='review-verdict'&&decision.value.stage==='rig-review'&&decision.value.verdict==='changes-requested');
-    const meshDraft=rigChanges?.kind==='review-verdict'?await screen?.meshEdits?.():null;
+    // Gate off: a held mesh draft is not read or sent; the verdict goes as on main and the draft stays in the page.
+    const meshDraft=EMIT_UNPINNED_CREATE_FIELDS&&rigChanges?.kind==='review-verdict'?await screen?.meshEdits?.():null;
     if(rigChanges?.kind==='review-verdict'){
       if(meshDraft?.edits.length){
-        if(!EMIT_UNPINNED_CREATE_FIELDS)throw new Error('JOB_ACT_KIND_DISABLED');
         const edits=meshDraft.edits.map(edit=>({key:draftKey(edit),edit}));
         edits.sort((a,b)=>a.key<b.key?-1:a.key>b.key?1:0);
         rigChanges.value.meshEdits=await Promise.all(edits.map(async ({edit})=>({edit,sha256:await sha256Hex(canonicalJson(edit))})));

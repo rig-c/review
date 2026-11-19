@@ -9,7 +9,7 @@ import {PNG} from 'pngjs';
 import {canonicalJson} from '../src/canonical-json.ts';
 import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 import {jobBodyLimit, jobHash, parseCommentsAct, parseMeshEditsAct} from '../src/job-api.ts';
-import {JOB_API_SCHEMA} from '../src/job-contract.ts';
+import {JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
@@ -18,6 +18,10 @@ import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.t
 
 const repository = fileURLToPath(new URL('..', import.meta.url));
 const serving = Bun.argv.includes('--serve');
+const gateIndex = Bun.argv.indexOf('--gate');
+// --serve --gate off serves the real (gate-off) source; the default --serve keeps the gate-on shadow copy.
+const servedGate = gateIndex < 0 ? 'on' : Bun.argv[gateIndex + 1];
+if (servedGate !== 'on' && servedGate !== 'off') throw new Error('--gate takes on or off');
 const outputIndex = Bun.argv.indexOf('--out');
 const output = resolve(outputIndex < 0 ? 'artifacts/job-mesh-act-952' : Bun.argv[outputIndex + 1]!);
 
@@ -70,8 +74,24 @@ async function createFixture(largeCapture = false) {
   }
 }
 
-async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-only' | 'gate-off' | 'no-mesh' | 'stale-draft') {
+/** Gate off: a verdict with a held mesh draft, and the same steps without the draft (`-baseline`). */
+const HELD_MODES = ['held-changes', 'held-changes-baseline', 'held-approve', 'held-approve-baseline'] as const;
+type HeldMode = typeof HELD_MODES[number];
+const isHeld = (mode: string): mode is HeldMode => (HELD_MODES as readonly string[]).includes(mode);
+
+/** Act bytes with only the per-fixture identities (ids, time, reviewer) replaced, so two runs compare byte for byte. */
+function fixtureNeutralAct(raw: string): string {
+  const act = JSON.parse(raw) as {actId: string; jobId: string; askId: string; publicationId: string; at: string;
+    authority: {reviewer: {id: string}}};
+  const identities: [string, string][] = [[act.actId, 'ACT'], [act.jobId, 'JOB'], [act.askId, 'ASK'],
+    [act.publicationId, 'PUBLICATION'], [act.at, 'AT'], [act.authority.reviewer.id, 'REVIEWER']];
+  return identities.reduce((text, [value, token]) => text.split(JSON.stringify(value)).join(JSON.stringify('<' + token + '>')), raw);
+}
+
+async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-only' | 'gate-off' | 'no-mesh' | 'stale-draft' | HeldMode) {
   const largeCapture = mode === 'mesh-only';
+  const held = isHeld(mode), approve = mode === 'held-approve' || mode === 'held-approve-baseline';
+  const baseline = mode.endsWith('-baseline');
   const fixture = await createFixture(largeCapture);
   const profile = await mkdtemp(join(tmpdir(), 'review-952-chrome-'));
   const directory = join(output, language, mode === 'stale-draft' ? `stale-draft-${EMIT_UNPINNED_CREATE_FIELDS ? 'open' : 'closed'}` : mode);
@@ -119,7 +139,18 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
     await wait("!!document.querySelector('#rig-root canvas') && !!document.querySelector('#save:not([hidden]):not(:disabled)')");
     assert.equal(await screen.evaluate<string>('document.documentElement.lang'), language);
     assert.equal(await screen.evaluate<boolean>("document.querySelector('#request-changes').disabled"), true);
-    if (mode === 'with-comment' || mode === 'no-mesh' || mode === 'stale-draft') {
+    async function latestAct() {
+      const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
+        requestId: randomUUID(), verb: 'next', after: null, waitMs: 0});
+      const result = await response.json() as import('../src/job-contract.ts').JobResult<import('../src/job-contract.ts').JobNextValue>;
+      assert.ok(result.ok);
+      const acts = result.value.events.flatMap(event => event.type === 'act' ? [event.act] : []);
+      assert.equal(acts.length, 1);
+      const raw = fixture.host.session.readActExport(acts[0]!.actId, false).toString();
+      assert.equal(raw, JSON.stringify(acts[0]));
+      return raw;
+    }
+    if (mode === 'with-comment' || mode === 'no-mesh' || mode === 'stale-draft' || (held && !approve)) {
       await click(screen, '#stage-comment');
       await pointer('#rig-viewport');
       await wait("!!document.querySelector('.stage-comment-composer input')");
@@ -160,9 +191,11 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
         await writeFile(join(directory, 'stale-status.json'), JSON.stringify({text}));
       } else {
         await click(screen, '#mesh-mode-create');
-        await pointer('#rig-overlay');
-        await wait("document.querySelector('#mesh-edit-draft').value.includes('\"op\":\"add\"')");
-        await writeFile(join(directory, 'edited.png'), await screen.screenshot());
+        if (!baseline) {
+          await pointer('#rig-overlay');
+          await wait("document.querySelector('#mesh-edit-draft').value.includes('\"op\":\"add\"')");
+          await writeFile(join(directory, 'edited.png'), await screen.screenshot());
+        }
       }
     }
     if (mode === 'gate-off') {
@@ -174,6 +207,32 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
       assert.ok(bar.text.includes(catalog['job.submit.JOB_ACT_KIND_DISABLED']));
       assert.equal(Object.keys(fixture.host.session.status().pending.filter(ask => ask.status === 'answered')).length, 0);
       await writeFile(join(directory, 'refusal.json'), JSON.stringify(bar, null, 2));
+    } else if (held) {
+      // HQ ruling: with act@8 gated off, a held draft never blocks the verdict; it is not sent and stays in the page.
+      const disabled = (language === 'ko' ? koCatalog : enCatalog)['job.submit.JOB_ACT_KIND_DISABLED'];
+      const draft = "document.querySelector('#mesh-edit-draft').value";
+      const status = "document.querySelector('#mesh-editor-status').innerText";
+      if (!baseline) await wait(`${status}.includes(${JSON.stringify(disabled)})`);
+      const before = await screen.evaluate<string>(draft);
+      assert.equal(before.includes('"op":"add"'), !baseline);
+      assert.equal((await screen.evaluate<string>(status)).includes(disabled), !baseline);
+      const button = approve ? '#save' : '#request-changes';
+      await wait(`!document.querySelector(${JSON.stringify(button)}).disabled`);
+      await click(screen, button);
+      await wait("document.querySelector('#workspace-act-row').hidden");
+      const raw = await latestAct();
+      assert.ok(!raw.includes('meshEdits'));
+      const act = parseCommentsAct(JSON.parse(raw));
+      assert.equal(act.schema, JOB_COMMENTS_ACT_SCHEMA);
+      assert.equal(act.kind, 'review-verdict');
+      assert.equal(act.value.verdict, approve ? 'approved' : 'changes-requested');
+      assert.deepEqual(act.value.comments.map(comment => comment.text), approve ? [] : ['Adjust the mesh']);
+      assert.equal(await screen.evaluate<string>(draft), before);
+      if (!baseline && await screen.evaluate<boolean>("!document.querySelector('#mesh-editor-bar').hidden")) {
+        assert.ok((await screen.evaluate<string>(status)).includes(disabled));
+      }
+      await writeFile(join(directory, 'act.json'), raw);
+      await writeFile(join(directory, 'act-neutral.json'), fixtureNeutralAct(raw));
     } else {
       await wait("!document.querySelector('#request-changes').disabled");
       if (mode === 'with-comment') {
@@ -186,14 +245,7 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
       }
       await click(screen, '#request-changes');
       await wait("document.querySelector('#workspace-act-row').hidden");
-      const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
-        requestId: randomUUID(), verb: 'next', after: null, waitMs: 0});
-      const result = await response.json() as import('../src/job-contract.ts').JobResult<import('../src/job-contract.ts').JobNextValue>;
-      assert.ok(result.ok);
-      const acts = result.value.events.flatMap(event => event.type === 'act' ? [event.act] : []);
-      assert.equal(acts.length, 1);
-      const raw = fixture.host.session.readActExport(acts[0]!.actId, false).toString();
-      assert.equal(raw, JSON.stringify(acts[0]));
+      const raw = await latestAct();
       if (mode === 'no-mesh' || mode === 'stale-draft') {
         const act = parseCommentsAct(JSON.parse(raw));
         assert.equal(act.kind, 'review-verdict');
@@ -268,12 +320,13 @@ async function runWithFixtureGate() {
   }
 }
 
-if (serving && EMIT_UNPINNED_CREATE_FIELDS) {
+if (serving && (EMIT_UNPINNED_CREATE_FIELDS || servedGate === 'off')) {
   const fixture = await createFixture();
   let stop!: () => void;
   const stopped = new Promise<void>(resolve => { stop = resolve; });
   process.on('SIGINT', stop);
   try {
+    console.log(EMIT_UNPINNED_CREATE_FIELDS ? 'GATE on (act@8 mesh edits are sent)' : 'GATE off (a held mesh draft is not sent)');
     console.log('EN ' + fixture.owner('en'));
     console.log('KO ' + fixture.owner('ko'));
     await stopped;
@@ -286,7 +339,13 @@ if (serving && EMIT_UNPINNED_CREATE_FIELDS) {
   }
 } else {
   if (!serving) for (const language of ['en', 'ko'] as const) {
-    for (const mode of ['no-mesh', 'gate-off', 'stale-draft'] as const) await runBrowser(language, mode);
+    for (const mode of ['no-mesh', 'gate-off', 'stale-draft', ...HELD_MODES] as const) await runBrowser(language, mode);
+    for (const verdict of ['changes', 'approve'] as const) {
+      const neutral = (mode: string) => readFile(join(output, language, mode, 'act-neutral.json'), 'utf8');
+      assert.equal(await neutral(`held-${verdict}`), await neutral(`held-${verdict}-baseline`),
+        `${language} ${verdict}: a held draft changed the act bytes`);
+      console.log('MESH_ACT_952_HELD_EQUAL', language, verdict);
+    }
   }
   await runWithFixtureGate();
 }
