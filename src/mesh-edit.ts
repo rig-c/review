@@ -269,6 +269,12 @@ export function meshEditDocument(session: MeshEditSession): MeshEditDocument {
     ops: session.ops(),
   };
 }
+
+/** Live act payload uses the same delta as the standalone export, with its source geometry bound. */
+export function meshEditActValue(session: MeshEditSession, frame: {width: number; height: number}) {
+  const {schema, units, preview, source, ...edit} = meshEditDocument(session);
+  return {...edit, source: {...source, frame: {...frame}, positions: session.source.vertices.map(([x, y]): Vec => [x, y])}};
+}
 /**
  * The delta's bytes: what Download JSON saves and what Apply · Rebuild (#135) writes as the producer's
  * `mesh-edit.json`, so the binding's `file.sha256` and the applied record's `deltaSha256` name the same bytes.
