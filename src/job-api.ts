@@ -42,6 +42,8 @@ export type {
 
 export const jobBodyLimit = 256 * 1024;
 export const jobWaitLimitMs = 30_000;
+/** Subjects one `ask-batch` request may list (#963). */
+export const jobAskBatchLimit = 64;
 const requestDeadlineMs = 10_000;
 
 export function jobHash(value: string | Uint8Array): string {
@@ -282,7 +284,7 @@ export function parseJobRequest(
 ): JobAgentRequest | JobFetchActRequest | AgentRequestV3 | FetchActRequestV3 {
   const item = jobObject(value, [
     'schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey',
-    'result', 'freeze', 'publicationId', 'subject', 'after', 'waitMs', 'reason', 'actId',
+    'result', 'freeze', 'publicationId', 'subject', 'subjects', 'after', 'waitMs', 'reason', 'actId',
   ]);
   const targetSchema = mode === 'package-only' || mode === 'record-and-package'
     ? jobApiSchemaForMode(mode)
@@ -329,17 +331,25 @@ export function parseJobRequest(
       }
       case 'ask': {
         jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey', 'publicationId', 'subject']);
-        const isReopenSubject =
-          item.subject !== null &&
-          typeof item.subject === 'object' &&
-          !Array.isArray(item.subject) &&
-          (item.subject as { kind?: unknown }).kind === 'reopen';
         return {
           ...mutation,
           verb: 'ask',
           publicationId: jobId(item.publicationId),
-          subject: isReopenSubject ? parseRecordSubject(item.subject) : parseJobSubject(item.subject),
+          subject: parseAskSubjectV3(item.subject),
         };
+      }
+      case 'ask-batch': {
+        jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey', 'publicationId', 'subjects']);
+        const listed = item.subjects;
+        if (!Array.isArray(listed) || listed.length < 1 || listed.length > jobAskBatchLimit) throw new JobError('JOB_REQUEST_INVALID');
+        const seen = new Map<string, number>();
+        const subjects = Array.from(listed, (value: unknown, index) => atSubject(index, () => {
+          const subject = parseAskSubjectV3(value), digest = requestDigest(subject), first = seen.get(digest);
+          if (first !== undefined) throw new JobError('JOB_REQUEST_INVALID', `duplicate of subjects[${first}]`);
+          seen.set(digest, index);
+          return subject;
+        }));
+        return { ...mutation, verb: 'ask-batch', publicationId: jobId(item.publicationId), subjects };
       }
       case 'close':
         jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey', 'reason']);
@@ -381,6 +391,23 @@ export function parseJobRequest(
       return { ...mutation, verb: 'close', reason: jobText(item.reason, 1024) };
   }
   throw new JobError('JOB_REQUEST_INVALID');
+}
+
+/** The single V3 `ask` subject parser; `ask-batch` parses each listed subject through it. */
+function parseAskSubjectV3(value: unknown): JobSubject | RecordSubject {
+  const isReopenSubject =
+    value !== null && typeof value === 'object' && !Array.isArray(value) && (value as { kind?: unknown }).kind === 'reopen';
+  return isReopenSubject ? parseRecordSubject(value) : parseJobSubject(value);
+}
+
+/** `ask-batch` refuses with the subject's own code, its message prefixed by the subject's request index. */
+export function atSubject<Value>(index: number, fn: () => Value): Value {
+  try {
+    return fn();
+  } catch (error) {
+    if (error instanceof JobError) throw new JobError(error.code, `subjects[${index}]: ${error.message}`);
+    throw error;
+  }
 }
 
 export function parseJobRequestV3(value: unknown): AgentRequestV3 | FetchActRequestV3 {

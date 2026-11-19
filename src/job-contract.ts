@@ -1021,6 +1021,17 @@ export type AskRequestV3 = Omit<JobAskRequest, 'schema' | 'subject'> & {
   readonly subject: JobSubject | RecordSubject;
 };
 
+/** One request that asks every listed subject of the head record publication (#963). */
+export type AskBatchRequestV3 = Omit<AskRequestV3, 'verb' | 'subject'> & {
+  readonly verb: 'ask-batch';
+  readonly subjects: readonly (JobSubject | RecordSubject)[];
+};
+
+/** `asks[i]` answers `subjects[i]` of the request. */
+export interface AskBatchValueV3 {
+  readonly asks: readonly PendingAskV3[];
+}
+
 export type NextRequestV3 = Omit<JobNextRequest, 'schema'> & {
   readonly schema: typeof JOB_API_V3_SCHEMA;
 };
@@ -1032,6 +1043,7 @@ export type CloseRequestV3 = Omit<JobCloseRequest, 'schema'> & {
 export type AgentRequestV3 =
   | PublishRequestV3
   | AskRequestV3
+  | AskBatchRequestV3
   | NextRequestV3
   | CloseRequestV3;
 
@@ -1214,11 +1226,13 @@ export type ActV3 = JobAct | RecordAct;
 export interface JobCapabilitiesV3 extends JobCapabilities {
   readonly recordPublication: true;
   readonly recordActSchema: typeof JOB_RECORD_ACT_SCHEMA;
+  readonly askBatch: true;
 }
 
 export const JOB_CAPABILITIES_V3: JobCapabilitiesV3 = Object.freeze({
   recordPublication: true,
   recordActSchema: JOB_RECORD_ACT_SCHEMA,
+  askBatch: true,
 });
 
 export interface PendingAskV3 extends Omit<JobPendingAsk, 'subject' | 'source'> {
@@ -1260,6 +1274,7 @@ export interface NextValueV3 {
 export interface ResponseValuesV3 {
   readonly publish: PublicationV3;
   readonly ask: PendingAskV3;
+  readonly 'ask-batch': AskBatchValueV3;
   readonly next: NextValueV3;
   readonly close: { readonly status: 'closed'; readonly cursor: JobCursor | null };
   readonly 'fetch-act': ActV3;
@@ -1283,6 +1298,8 @@ export type JobProjectRecord = ProjectRecord;
 export type JobRecordFreeze = RecordFreeze;
 export type JobPublishRequestV3 = PublishRequestV3;
 export type JobAskRequestV3 = AskRequestV3;
+export type JobAskBatchRequestV3 = AskBatchRequestV3;
+export type JobAskBatchValueV3 = AskBatchValueV3;
 export type JobNextRequestV3 = NextRequestV3;
 export type JobCloseRequestV3 = CloseRequestV3;
 export type JobAgentRequestV3 = AgentRequestV3;

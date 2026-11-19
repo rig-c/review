@@ -616,6 +616,8 @@ without aliases or copied wire shapes.
 - `JobPublishResultV3`
 - `JobAskRequest`
 - `JobAskRequestV3`
+- `JobAskBatchRequestV3`
+- `JobAskBatchValueV3`
 - `JobNextRequest`
 - `JobNextRequestV3`
 - `JobCloseRequest`
@@ -712,7 +714,9 @@ A consumer checks the thirty runtime exports and every listed type, including
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and
 the comments decoder types and the record-mode `JobRecordAct` / `JobActV3` / `JobPlanSource` /
-`JobFetchActRequestV3` / `JobRecordHostHooks` surface, through `@rig-c/review/job-host`.
+`JobFetchActRequestV3` / `JobRecordHostHooks` / `JobCapabilitiesV3` / `JobAskBatchRequestV3` /
+`JobAskBatchValueV3` surface, through `@rig-c/review/job-host`. The consumer also
+proves that `JobCapabilitiesV3` carries `askBatch: true`.
 TypeScript checks the installed consumer and the runtime checks the full owner
 resources, retained publication, semantic ports, declared hooks, enumerator
 version/row carriage, ordinary reuse, strict `reuseOnly: {expected}` attachment
