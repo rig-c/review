@@ -225,7 +225,6 @@ export function parseUISubmission(
   if (!allowed) {
     throw new JobError('JOB_ACT_INVALID');
   }
-  hasMeshSubmission(item.kind, item.value);
   if (item.capture !== undefined && (item.kind !== 'review-verdict' ||
     (item.value as {stage?: unknown} | null)?.stage !== 'rig-review')) throw new JobError('JOB_REQUEST_INVALID');
   return item as unknown as UISubmissionV3;
