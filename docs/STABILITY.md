@@ -724,7 +724,11 @@ A consumer checks the thirty-one runtime exports and every listed type, includin
 the comments decoder types and the record-mode `JobRecordAct` / `JobActV3` / `JobPlanSource` /
 `JobFetchActRequestV3` / `JobRecordHostHooks` / `JobCapabilitiesV3` / `JobAskBatchRequestV3` /
 `JobAskBatchValueV3` surface, through `@rig-c/review/job-host`. The consumer also
-proves that `JobCapabilitiesV3` carries `askBatch: true`.
+proves that `JobCapabilitiesV3` carries `askBatch: true`. In `JobCapabilitiesV3`,
+`recordPublication`, `recordActSchema` and `askBatch` describe the host rather
+than the current head: `ask-batch` applies only to a record-retained head
+publication and a package head refuses `JOB_REQUEST_INVALID`, so a consumer
+checks the publication's mode as well as the flag.
 TypeScript checks the installed consumer and the runtime checks the full owner
 resources, retained publication, semantic ports, declared hooks, enumerator
 version/row carriage, ordinary reuse, strict `reuseOnly: {expected}` attachment

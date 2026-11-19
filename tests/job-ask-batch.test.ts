@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect, test } from 'bun:test';
 import { JobSession } from '../src/job-session.ts';
 import { createJobHostPorts, jobAskBatchLimit, parseJobRequestV3 } from '../src/job-api.ts';
-import { JOB_API_V3_SCHEMA, JOB_CAPABILITIES_V3, type PendingAskV3 } from '../src/job-contract.ts';
+import { JOB_API_V3_SCHEMA, JOB_CAPABILITIES_V3, type NextValueV3, type PendingAskV3 } from '../src/job-contract.ts';
 import type { JobStore } from '../src/job-store.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
 import { createSyntheticPlanRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
@@ -215,6 +215,9 @@ test('#963 a package-retained head refuses ask-batch with JOB_REQUEST_INVALID an
     const original = await f.publishRequest() as unknown as { result: object };
     const publication = await session.execute({ ...original, schema: JOB_API_V3_SCHEMA, jobId: session.jobId, expectedGeneration: 0,
       result: { ...original.result, kind: 'package' } } as never, new AbortController().signal) as { publicationId: string };
+    const next = await session.execute({ schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'next', verb: 'next',
+      after: null, waitMs: 0 }, new AbortController().signal) as NextValueV3;
+    expect((next.capabilities as { askBatch?: boolean } | undefined)?.askBatch).toBe(true);
     const generation = session.status().generation;
     const refused = session.execute({ schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'batch', verb: 'ask-batch',
       expectedGeneration: generation, idempotencyKey: 'batch', publicationId: publication.publicationId,
