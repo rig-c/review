@@ -147,7 +147,8 @@ export function createJobRigScreen(options: {
           picture = {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints:new Set(),parts};
         }
         if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
-        const forms = prepareJobForms(display, options.window.state().pending, ask => formFor(ask, inspection, {...options.formDependencies!,interviewMainView:!!picture}),!!picture);
+        const questionMainView = !!picture || !!inspection.interview?.questions.some(question => question.scenePicture);
+        const forms = prepareJobForms(display, options.window.state().pending, ask => formFor(ask, inspection, {...options.formDependencies!,interviewMainView:questionMainView}),questionMainView);
         return {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints:new Set(),record:{inspection,forms,picture}};
       } catch(error) {inspection.dispose();throw error;}
     }
@@ -247,10 +248,11 @@ export function createJobRigScreen(options: {
     const review = prepared.review;
     if(prepared.record){
       const record=prepared.record,backdrop=record.picture?host(record.picture,ready):null;
+      const question=record.inspection.interview?.questions[0];
       return {...(backdrop?.subject?{subject:backdrop.subject}:{}),access:{...(backdrop?.access??access),capability:null,
         headers:init=>{const headers=options.access.headers(init);headers.delete('X-Review-Capability');return headers;}},
         ownerActAccess:{capability:options.access.capability},
-        record:{publicationId:prepared.display.publication.publicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
+        record:{publicationId:prepared.display.publication.publicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,missingPicture:question?.missingPicture,scenePicture:question?.scenePicture},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
@@ -293,7 +295,8 @@ export function createJobRigScreen(options: {
   function refreshRecordForms():void {
     const record=mounted?.record??mounted?.modals,deps=options.formDependencies;if(!record||!deps)return;
     const state=options.window.state(),display=record.inspection.display;
-    const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,mounted!.checkpoints)),ask=>{const previous=record.forms.get(ask.askId),saved=state.pending.find(item=>item.askId===ask.askId);if(previous&&saved?.act?.kind==='interview-picks'&&ask.status==='answered'&&!previous.submitting&&previous.form.dataset.interviewAnswered!=='true'){previous.dispose?.();return formFor(saved,record.inspection,{...deps,interviewMainView:!!mounted?.record?.picture});}return previous??formFor(saved??ask,record.inspection,{...deps,interviewMainView:!!mounted?.record?.picture});},!!mounted?.record?.picture);
+    const questionMainView = !!mounted?.record?.picture || !!record.inspection.interview?.questions.some(question => question.scenePicture);
+    const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,mounted!.checkpoints)),ask=>{const previous=record.forms.get(ask.askId),saved=state.pending.find(item=>item.askId===ask.askId);if(previous&&saved?.act?.kind==='interview-picks'&&ask.status==='answered'&&!previous.submitting&&previous.form.dataset.interviewAnswered!=='true'){previous.dispose?.();return formFor(saved,record.inspection,{...deps,interviewMainView:questionMainView});}return previous??formFor(saved??ask,record.inspection,{...deps,interviewMainView:questionMainView});},questionMainView);
     for(const [id,entry]of next)record.forms.set(id,entry);
     for(const [id,entry]of record.forms){const ask=state.pending.find(ask=>ask.askId===id);entry.fieldset.disabled=entry.submitting||ask?.status!=='pending'||state.preparing||state.closed||!state.receipt||!options.access.capability;}
     screen?.recordForms?.([...record.forms.values()].map(entry=>entry.form));

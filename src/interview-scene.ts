@@ -96,7 +96,7 @@ export function sceneAt(project: Data, at: number, read: (ref: SetRef) => Data) 
   const entries = records(project.scenes);
   for (const [index, entry] of entries.entries()) {
     if (!closed(entry, ['n', 'path', 'sha256', 'at', 'by']) || entry.n !== index + 1 ||
-        entry.path !== `evidence/scene/s${index + 1}.json` || !hash(entry.sha256) || !human(entry.by) ||
+        entry.path !== `evidence/scene/s${index + 1}.json` || !hash(entry.sha256) || !(entry.by === 'agent' || human(entry.by)) ||
         typeof entry.at !== 'string' || !entry.at.endsWith('Z') || !Number.isFinite(date(entry.at))) return stale();
   }
   const candidate = entries.filter(entry => date(entry.at) <= at).at(-1);
