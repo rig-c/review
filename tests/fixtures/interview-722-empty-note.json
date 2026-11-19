@@ -5,5 +5,6 @@
   "functionSha256": "62b4628d1c2bc6c5e8bdce052e564fc1a7788d4f0290edc0a8996d3e66eeeec5",
   "scope": "Original 60d7f17 jobInterviewValue called with empty note; option-set source Other and auto IDs unchanged",
   "expectedValueBytes": "{\"questionId\":\"rig_type\",\"selections\":[{\"itemId\":\"topology\",\"optionId\":\"topology_other\",\"otherText\":\"  Custom topology · 직접 입력\\n\"},{\"itemId\":\"detail_level\",\"optionId\":\"density_auto\",\"otherText\":null}],\"note\":\"\"}",
-  "writerSourceSha256": "3ee57c282d89431c8640bc1508e3df75935ee7252f4773e0add6b7d6b772e82d"
+  "writerSourceSha256": "3ee57c282d89431c8640bc1508e3df75935ee7252f4773e0add6b7d6b772e82d",
+  "recordWriterSourceSha256": "3eb69de9b3bf055fee545745eb408a3ed7371d0e39a9402626b471c66555f393"
 }
