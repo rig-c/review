@@ -420,18 +420,18 @@ preserve capability, origin, size, cancellation and replay checks.
 narrow on `schema`. @8 uses the @7 envelope and comment rules, with optional
 `value.meshEdits` restricted to a `review-verdict` at `stage: "rig-review"` with
 `verdict: "changes-requested"`. An edited request may carry an empty comments
-array. Acts without edits keep their existing emission and validation rules.
+array. Rig verdicts without edits use @7 when a comment carries top-level
+`context` and @6 otherwise.
 Existing @2–@7 decoder entry points, accepted shapes and historical bytes
 retain their contracts. The API version, reviewer and consumer grant, and
 reserved standalone `mesh-edit` kind keep their current contracts. The legacy
 `rig-review-mesh-edit/1` export and `--delta` input keep their existing formats.
 
-Review ships the @8 decoder with emission disabled. Create pins a Review
-release that can decode @8 and builds its relay before Review opens the
-emission gate. A live submission carrying edits while the gate is closed
-refuses `JOB_ACT_KIND_DISABLED`. Older decoders refuse the new schema with
-`JOB_ACT_INVALID`. The rollout and the consumer's required hash, frame and
-position checks are part of the [act@8 wire contract](REVIEW_PACKAGE.md#mesh-edits-on-request-changes-act8).
+Starting in 4.8.0, Review emits @8 for eligible submissions carrying edits.
+Create versions below 1.13.0 must not run with Review 4.8.0. Create's exact Review
+dependency pin normally prevents this pairing. Review decoders older than 4.7.0
+refuse @8 with `JOB_ACT_INVALID`. The consumer's required hash, frame and position
+checks are part of the [act@8 wire contract](REVIEW_PACKAGE.md#mesh-edits-on-request-changes-act8).
 The host facade adds `parseMeshEditsAct`, `JOB_MESH_EDITS_ACT_SCHEMA` and
 the three mesh edit types listed below.
 
@@ -448,14 +448,14 @@ See [Comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
 (`rig-review/act@7`), for thirty runtime exports total, plus the type-only
 `JobCommentContext`, `JobContextComment` and `JobContextCommentsAct`. The change
 is additive: `parseCommentsAct`, `JobComment` and `JobCommentsAct` keep their @6
-shapes, and @2–@6 decode unchanged. Review does not emit @7 until Create pins a
-Review version that reads it. See [Comment context (act@7)](REVIEW_PACKAGE.md#comment-context-act7).
+shapes, and @2–@6 decode unchanged. Starting in 4.8.0, the comments writer
+uses @7 when a comment carries top-level `context`. See [Comment context (act@7)](REVIEW_PACKAGE.md#comment-context-act7).
 
 [Review #713](https://github.com/rig-c/review/issues/713) turns on the act@6
 writers. `JobAct` widens to `JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct |
 JobCommentsAct`, so `JobActV3`, `JobEvent`, `JobEventV3`, `JobNextValue`,
 `JobNextValueV3` and `JobHostPorts.commitUIAct` admit fresh act@6 values. No
-export is added or removed, and `JobComment` is unchanged. Fresh UI checkpoint,
+export is added or removed, and `JobComment` is unchanged. With that change, fresh UI checkpoint,
 parts-verdict, rig and direction review-verdict and signoff acts are
 `rig-review/act@6`. Image-review verdicts and interview picks stay at act@2, and
 record acts stay at act@4. Consumers narrow on `schema`. A consumer's
@@ -471,10 +471,11 @@ existing `feedbackItemComments` mapper and act@6 decoder. It preserves entry
 order, text, IDs, frames, target, category and `anchor.context` (including point,
 crop, bookmark and valid time-only null-frame evidence). `words` supplies the
 legacy general comment only when `feedback` is absent.
-Direction and image submissions retain their previous closed shapes. The
-written act stays act@6, historical words-only acts still parse, and the
-act@7 top-level `comment.context` emission gate remains off. There are no new
-exports or schemas. See [Comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
+Direction and image submissions retain their previous closed shapes. Review
+originally wrote this mapping as act@6. Starting in 4.8.0, pinned rig stage
+comments can also carry the top-level context described above. Historical
+words-only acts still parse.
+See [Comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
 
 The `rig-review` verdict and `parts-verdict` accept optional
 `general: readonly string[]` on their UI submission values. The writer appends
@@ -486,7 +487,12 @@ Request changes verdict still requires a pinned issue, and approval still
 requires zero issues.
 The existing act@6 decoder checks the combined comment count, text and signed
 projection. Omitting `general` preserves the existing mapping and serialized
-act bytes. The finalized act schema and exports are unchanged. [Review #831](https://github.com/rig-c/review/issues/831).
+act bytes. Adding `general` by itself keeps the existing schema selection.
+[Review #831](https://github.com/rig-c/review/issues/831).
+
+Starting in 4.8.0, fresh assembled Parts issues carry `view.visibleLayers`
+with the complete source-bound visible set. Readers still accept historical
+anchors without that field. See [Comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
 
 [Review #914](https://github.com/rig-c/review/issues/914) adds
 `JOB_PREVIOUS_DRAFT_SCHEMA` (`rig-review-previous-draft/1`) and the

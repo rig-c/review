@@ -59,7 +59,6 @@ import {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,pickAssembly,type
 import {bindStageComments,type CommentCodec,type CommentUiPose,type CommentRow} from './stage-comments.ts';
 import {parsePartsIssue,assertPartsIssueBinding,snapImageRegion,type PartsIssue} from '../src/parts-comment.ts';
 import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
-import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 /** U5 uses the same native raster paint path as a parts subject, with the whole rig as one operand. */
 export function paintRigDifference(canvas:HTMLCanvasElement,still:HTMLCanvasElement,painting:HTMLImageElement) {
  assertOriginalPaintingSize(painting.naturalWidth,painting.naturalHeight,[still.width,still.height],1);
@@ -110,7 +109,6 @@ export function bindPartsSubject(host:{
  const partsBinding=(names:readonly string[])=>names.map(name=>{const entry=data.items.find(item=>item.name===name);if(!entry?.imageHash)throw new Error('PARTS_COMMENT_PART_MISMATCH');return {name,imageHash:entry.imageHash};});
  const sourceItems=()=>new Map(data.items.map(item=>[item.name,{...item,imageHash:item.imageHash!}]));
  async function prepare(issue:PartsIssue):Promise<PartsIssue>{
-  if(!EMIT_UNPINNED_CREATE_FIELDS&&Object.hasOwn(issue.view,'visibleLayers')){const {visibleLayers:_ignored,...view}=issue.view;issue={...issue,view};}
   const bound=parsePartsIssue(issue,false,false,false);assertPartsIssueBinding(bound,sourceItems(),data.sourceHash);
   const response=await host.request(`${host.base}/comment`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(bound)});
   if(disposed)throw new Error('PARTS_COMMENT_STALE_SOURCE');return parsePartsIssue((await response.json()).comment,true,false,false);
@@ -208,7 +206,7 @@ export function bindPartsSubject(host:{
  const pose=():PartsPose|null=>{
   let camera=host.viewport.numericView().cameras.rig;const entry=item();if(!camera||!entry||busy||failed||disposed)return null;
   if(data.painting&&!assembled())camera={...camera,center:{x:camera.center.x-entry.x,y:camera.center.y-entry.y},visible:{...camera.visible,x:camera.visible.x-entry.x,y:camera.visible.y-entry.y}};
-  return {mode:'parts',item:entry,sourceHash:data.sourceHash,camera,view:{mode:assembled()?'assembled':'item',camera:{zoom:camera.zoom,center:camera.center,viewport:camera.viewport},cameraSync:host.viewport.state.cameraSync,referenceCamera:null,background:'checker',alpha:false,footprints:false,mesh:host.mesh(),comparison:{...comparison},...(assembled()&&EMIT_UNPINNED_CREATE_FIELDS?{visibleLayers:partsBinding(data.items.filter(item=>!hidden.has(item.name)).map(item=>item.name))}:{})},capture:{pane:host.el('rig-viewport'),root:host.el('rig-root'),images:true,canvas:host.canvas,backend:'canvas2d',nearest:true}};
+  return {mode:'parts',item:entry,sourceHash:data.sourceHash,camera,view:{mode:assembled()?'assembled':'item',camera:{zoom:camera.zoom,center:camera.center,viewport:camera.viewport},cameraSync:host.viewport.state.cameraSync,referenceCamera:null,background:'checker',alpha:false,footprints:false,mesh:host.mesh(),comparison:{...comparison},...(assembled()?{visibleLayers:partsBinding(data.items.filter(item=>!hidden.has(item.name)).map(item=>item.name))}:{})},capture:{pane:host.el('rig-viewport'),root:host.el('rig-root'),images:true,canvas:host.canvas,backend:'canvas2d',nearest:true}};
  };
  comments=bindStageComments<CommentRow,PartsPose>({general:host.recordComments||host.generalComments?{
   create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('schema' in row),

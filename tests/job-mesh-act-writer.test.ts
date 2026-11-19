@@ -14,7 +14,7 @@ useTemporaryReviewState();
 
 const bind = (edit: JobMeshEditValue) => ({edit, sha256: jobHash(canonicalJson(edit))});
 
-test('#952 the writer gates mesh edits and replays only against the retained attachment', async () => {
+test('#977 the writer stores mesh edits and replays only against the retained attachment', async () => {
   const fixture = await jobFixture();
   try {
     const publication = await fixture.publish();
@@ -36,13 +36,14 @@ test('#952 the writer gates mesh edits and replays only against the retained att
     const options = {jobId: fixture.session.jobId, ask, retained,
       reviewer: {id: 'owner', role: 'owner'} as const, still: prepareJobStill(submission, ask, retained).still};
     const finalize = (value: JobUISubmission['value'] = submission.value) =>
-      finalizeJobAct({...options, submission: {...submission, value} as JobUISubmission, emitUnpinned: true});
-    const refused = await fixture.ports.commitUIAct(fixture.session.jobId, fixture.uiRequest(submission));
-    expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.error.code).toBe('JOB_ACT_KIND_DISABLED');
-    expect(fixture.session.status().pending.find(row => row.askId === ask.askId)?.status).toBe('pending');
-
-    const act = parseMeshEditsAct(finalize());
+      finalizeJobAct({...options, submission: {...submission, value} as JobUISubmission});
+    const saved = await fixture.ports.commitUIAct(fixture.session.jobId, fixture.uiRequest(submission));
+    expect(saved).toMatchObject({ok: true, value: {schema: 'rig-review/act@8'}});
+    if (!saved.ok) throw new Error(saved.error.code);
+    const act = parseMeshEditsAct(saved.value);
+    expect(fixture.session.status().pending.some(row => row.askId === ask.askId)).toBe(false);
+    expect(fixture.session.readActExport(act.actId, false).toString()).toBe(JSON.stringify(act));
+    expect(await fixture.ports.commitUIAct(fixture.session.jobId, fixture.uiRequest(submission))).toEqual(saved);
     expect(act.value.comments).toEqual([]);
     expect(act.value.meshEdits).toEqual(submission.value.meshEdits);
     const serialized = parseMeshEditsAct(JSON.parse(JSON.stringify(act)));

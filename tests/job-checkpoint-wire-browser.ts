@@ -11,7 +11,8 @@ import {join} from 'node:path';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
-import type {JobNextValue, JobPendingAsk, JobSubject} from '../src/job-contract.ts';
+import {JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, type JobNextValue, type JobPendingAsk, type JobSubject} from '../src/job-contract.ts';
+import {parseContextCommentsAct} from '../src/job-api.ts';
 import {projectComments,feedbackItemComments,parseStageComment} from '../src/stage-comment.ts';
 import type {Feedback} from '../src/session.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
@@ -444,6 +445,7 @@ try {
     await wait(`document.querySelector('form[data-job-ask="${cpAsk.askId}"] [role="status"]')?.dataset.jobText==='job.saved'`,'checkpoint saved');
     const cpEvents=await nextEvents(),cpActEvent=cpEvents.events.find(e=>e.type==='act'&&e.act.askId===cpAsk.askId);
     assert.ok(cpActEvent?.type==='act'&&cpActEvent.act.kind==='checkpoint');
+    assert.equal(cpActEvent.act.schema,JOB_COMMENTS_ACT_SCHEMA);
     assert.deepEqual(cpActEvent.act.value,{checkpointId:'meshes',planStepId:'inspect-body',outcome:'pass',comments:[{text:expectedCommentWords,anchor:{checkpointId:'meshes',planStepId:'inspect-body'}}]});
     assert.equal(cpActEvent.act.source.sourceHash,rig.source.sourceHash);
     await record('checkpoint-act-committed',cpActEvent.act);
@@ -455,12 +457,20 @@ try {
     await click(page,'#save');
     let verdictActEvent:Extract<JobNextValue['events'][number],{type:'act'}>|undefined;
     await until(async()=>{verdictActEvent=(await nextEvents()).events.find((e):e is Extract<JobNextValue['events'][number],{type:'act'}>=>e.type==='act'&&e.act.askId===verdictAsk.askId);return !!verdictActEvent;},'verdict act');
-    assert.ok(verdictActEvent?.act.kind==='review-verdict'&&verdictActEvent.act.schema==='rig-review/act@6');
-    assert.ok(verdictActEvent.act.still);
-    assert.equal(verdictActEvent.act.still.camera,'fixed');
-    assert.equal(verdictActEvent.act.source.sourceHash,rig.source.sourceHash);
-    assert.deepEqual((verdictActEvent.act.value as {comments:unknown}).comments,feedbackItemComments([{...comment,summary:commentText}]));
-    await record('canonical-verdict-committed',verdictActEvent.act);
+    assert.ok(verdictActEvent);
+    assert.equal(verdictActEvent.act.schema,JOB_COMMENT_CONTEXT_ACT_SCHEMA,'the pinned rig verdict carries comment context');
+    const verdictAct=parseContextCommentsAct(verdictActEvent.act);
+    assert.ok(verdictAct.kind==='review-verdict'&&verdictAct.still);
+    assert.equal(verdictAct.still.camera,'fixed');
+    assert.equal(verdictAct.source.sourceHash,rig.source.sourceHash);
+    assert.equal(verdictAct.value.comments.length,1);
+    const {context,...signedComment}=verdictAct.value.comments[0]!;
+    assert.deepEqual([signedComment],feedbackItemComments([{...comment,summary:commentText}]));
+    assert.deepEqual(context?.subject,{ask:verdictAsk.subject,sourceHash:rig.source.sourceHash,selector:verdictAct.source.selector});
+    assert.equal(context?.mode,mark.mode);
+    assert.deepEqual(context?.region,mark.world);
+    assert.deepEqual(context?.camera,mark.camera);
+    await record('canonical-verdict-committed',verdictAct);
 
     // Reconnect and new publication still exercise the shared overlay and actual source binding.
     const cpAsk2=await ask(rig,{kind:'checkpoint',checkpointId:'step-one',planStepId:'step-one'});

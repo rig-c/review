@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Read before upgrading:**
+
+* **Review 4.8.0 requires Create 1.13.0 or later.** Do not run Create versions below 1.13.0 with Review 4.8.0. Create's exact Review dependency pin normally prevents this pairing. Review can now emit `rig-review/act@7` when a comment carries top-level `context` and `rig-review/act@8` when a rig Request changes carries `meshEdits`. Fresh assembled Parts issues include `view.visibleLayers`. Historical acts retain their readers, and standalone `described-correction` and `mesh-edit` remain reserved (#977).
+
 ## 4.7.0
 
 A record-mode job host can now ask several record subjects in one `ask-batch` request, and advertises it as `capabilities.askBatch: true`. The parts Difference can compare with the previous accepted draft a publication carries, a post-interview question page shows its sealed scene plates and signed rig, and live rig and parts verdicts take general comments. Mesh edits on Request changes (act@8) are present but not sent in this release.
