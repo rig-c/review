@@ -22,6 +22,7 @@ import {koCatalog} from '../web/catalog-ko.ts';
 interface HeldRigReadback {style:string;animation:string;time:string;playing:boolean;frame:string;viewport:{width:number;height:number};visibleBounds:unknown;numeric:unknown}
 const argument=(key:string)=>{const i=Bun.argv.indexOf(key);return i<0?undefined:Bun.argv[i+1];};
 const rigFitOnly=Bun.argv.includes('--rig-fit-only');
+const headlineOnly=Bun.argv.includes('--headline-only');
 const output=resolve(argument('--out')??'artifacts/parts-setup-737');await mkdir(output,{recursive:true});
 const root=await mkdtemp(join(tmpdir(),'parts-setup-737-'));process.env.RIG_REVIEW_STATE_DIR=join(root,'state');
 let page:InputCdpSession|undefined;
@@ -88,7 +89,26 @@ async function inspect(name:string,pkg:PartsViewPackage,expectedDifference:boole
 }
 try{
  page=await launchCdpSession(join(root,'profile'));await page.setViewport(1600,1000);
- if(!rigFitOnly){const difference=join(root,'declared-public-fixture');await writeDifferencePackage(difference,true);await inspect('declared-public-fixture',await loadPartsView(difference,{painting:join(difference,'painting.png')}),true);
+ if(!rigFitOnly){
+  for(const mode of ['job','standalone']as const)for(const mesh of ['mesh','no-mesh']as const){
+   const fixture=await scriptedJobWindowFixture({c5Parts:mesh});
+   try{
+    const publication=await fixture.publish('parts');await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
+    const dir=join(root,'headline-'+mesh);if(mode==='standalone')await writeMeshPackage(dir);
+    if(mode==='standalone'&&mesh==='no-mesh'){await rm(join(dir,'rig.json'));await rm(join(dir,'mesh_report.json'));}
+    const pkg=mode==='standalone'?await loadPartsView(dir):null;
+    const server=pkg?await startPartsServer(pkg,{port:0,exitOnClose:false}):null;if(server)servers.push(server);
+    for(const lang of ['en','ko']as const){
+     await page.goto(server?`http://127.0.0.1:${server.port}/?lang=${lang}`:fixture.locator+'/?lang='+lang+'#cap='+fixture.credentials.ui);await settled();
+     const measured:{headline:string;detailNote:{visible:boolean;text:string};controls:unknown[];visibleText:unknown[]}=await page.evaluate(`({headline:document.querySelector('#workspace-ask-headline')?.textContent,detailNote:{visible:document.querySelector('#detail-note').checkVisibility(),text:document.querySelector('#detail-note').textContent},controls:Array.from(document.querySelectorAll('[data-block-target],.view-tools input,.view-tools button,#layer-mesh,#layer-bones,#layer-regions,#edit-mesh'),n=>({id:n.id,target:n.getAttribute('data-block-target'),disabled:n.disabled,visible:n.checkVisibility(),text:n.textContent,title:n.title})),visibleText:Array.from(document.querySelectorAll('[id]'),n=>({id:n.id,text:n.childElementCount?null:n.textContent,visible:n.checkVisibility()})).filter(n=>n.visible&&n.text?.trim())})`);
+     report[mode+'-'+mesh+'-'+lang]=measured;await writeFile(join(output,'headline-measurements.json'),JSON.stringify(report,null,2));await shot('headline-'+mode+'-'+mesh+'-'+lang);
+     assert.equal((measured as {headline:string}).headline,(lang==='en'?enCatalog:koCatalog)[mesh==='mesh'?'Check the parts and meshes.':'Check the parts.'],'HEADLINE_923 '+mode+' '+mesh+' '+lang);
+    }
+   }finally{await fixture.close();}
+  }
+  console.log('HEADLINE_923_PASS cases=8');
+ }
+ if(!headlineOnly&&!rigFitOnly){const difference=join(root,'declared-public-fixture');await writeDifferencePackage(difference,true);await inspect('declared-public-fixture',await loadPartsView(difference,{painting:join(difference,'painting.png')}),true);
  const mesh=join(root,'mesh-public-fixture');await writeMeshPackage(mesh);await inspect('mesh-public-fixture',await loadPartsView(mesh),false);}
  const wind=argument('--wind'),rig=argument('--rig');
  if(wind&&rig){
@@ -112,7 +132,7 @@ try{
  if(!rigFitOnly&&positive&&original)await inspect('positive',await loadPartsView(positive,{painting:original,paintingRoot:dirname(original)}),true);
  const negative=argument('--negative-review');
  if(!rigFitOnly&&negative){const reviewed=await loadReview(negative),server=await startServer(reviewed,{port:0,exitOnClose:false,viewOnly:true});servers.push(server);const projection=await (await fetch(`http://127.0.0.1:${server.port}/api/review`)).json();assert.equal(projection.manifest.references.length,36);assert.equal(projection.manifest.references[0].label,'Original painting · painting.png');report.negativeProjection={references:projection.manifest.references.length,first:projection.manifest.references[0]};await inspect('negative',await loadPartsView(reviewed.handoff!.parts!,{painting:reviewed.handoff!.source!,paintingRoot:reviewed.root,rig:join(reviewed.handoff!.parts!,'rig/rig.json'),meshReport:join(reviewed.handoff!.parts!,'rig/mesh_report.json')}),false);}
- if(!rigFitOnly&&!Bun.argv.includes('--skip-job'))for(const lang of ['en','ko']as const){
+ if(!headlineOnly&&!rigFitOnly&&!Bun.argv.includes('--skip-job'))for(const lang of ['en','ko']as const){
   const fixture=await scriptedJobWindowFixture({c5Parts:'mesh'});
   try{
    const publication=await fixture.publish('parts');await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});await fixture.ask(publication,{kind:'signoff',stage:'plan-approved'});

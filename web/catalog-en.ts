@@ -3228,6 +3228,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Frame ranges require an explicit producer frame. Leave both fields empty for this seconds-only comment.": "Frame ranges require an explicit producer frame. Leave both fields empty for this seconds-only comment.",
   "Exact correction text (UTF-8 file)": "Exact correction text (UTF-8 file)",
   "Add correction": "Add correction",
+  "Check the parts.": "Check the parts.",
   "Check the parts and meshes.": "Check the parts and meshes.",
   "Answer these questions.": "Answer these questions.",
   "Check the rig and motion.": "Check the rig and motion.",

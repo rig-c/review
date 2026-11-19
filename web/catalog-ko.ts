@@ -3228,6 +3228,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Frame ranges require an explicit producer frame. Leave both fields empty for this seconds-only comment.": "프레임 범위에는 명시적 프로듀서 프레임이 필요해요. 초 기준 코멘트는 두 필드를 비워 두세요.",
   "Exact correction text (UTF-8 file)": "정확한 수정 문구 (UTF-8 파일)",
   "Add correction": "수정 기록 추가",
+  "Check the parts.": "파츠를 확인해 주세요.",
   "Check the parts and meshes.": "파츠와 메시를 확인해 주세요.",
   "Answer these questions.": "이 질문에 답해 주세요.",
   "Check the rig and motion.": "리그와 모션을 확인해 주세요.",
