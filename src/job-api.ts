@@ -27,6 +27,7 @@ import { validatePngCrop, validatePngCropMetadata } from './comment-crops.ts';
 import {parseJobPartsIdentity} from './job-source.ts';
 import {parseControlPart, parseControlView} from './control.ts';
 import {EMIT_UNPINNED_CREATE_FIELDS} from './create-pin-gate.ts';
+import {canonicalJson} from './canonical-json.ts';
 
 export type {
   JobInterviewJson,
@@ -43,17 +44,9 @@ export function jobHash(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-/** Private replay digests only. This is not a mesh payload/source hash format. */
+/** Private replay digest. Preserve the original serializer for persisted request identity. */
 export function requestDigest(value: unknown): string {
-  const sorted = (item: unknown): unknown => {
-    if (Array.isArray(item)) return item.map(sorted);
-    if (item !== null && typeof item === 'object') {
-      return Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
-        .map(([key, child]) => [key, sorted(child)]));
-    }
-    return item;
-  };
-  return jobHash(JSON.stringify(sorted(value)));
+  return jobHash(canonicalJson(value));
 }
 
 export function sameCapability(given: string | null, expected: string): boolean {
