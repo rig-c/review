@@ -88,7 +88,9 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const setCapture=(value:boolean)=>{value=value&&host.hasPicture?.()!==false;enabled=value;toggle.setAttribute('aria-pressed',String(value||!inline&&!list.hidden));for(const pane of Object.values(host.viewports))pane!.classList.toggle('stage-comment-mode',value);};
  const cancel=()=>{++interaction;const previous=pending??(geometryDrag&&geometryEdit?{view:geometryEdit.view,id:geometryDrag.id}:pinPress);geometryEdit=null;geometryDrag=null;pinPress=null;pending=null;if(previous){const pane=host.viewports[previous.view];if(pane?.hasPointerCapture(previous.id))pane.releasePointerCapture(previous.id);}composer?.remove();composer=null;composerReadOnly=false;composerGeneral=false;syncComposerLang=null;draftMark=null;last='';};
  const assertCapture=()=>{const reason=updateRefusal();if(reason){cancel();setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
- const assertEdit=(general=false)=>{const reason=general?(host.general?.refusal?.()??(host.general?.available?.()===false?t('JOB_ACT_NOTHING_TO_SUBMIT'):null)):updateRefusal();if(reason){setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
+ const generalRefusal=()=>host.general?.refusal?.()??null;
+ const assertWritable=(reason:string|null)=>{if(reason){setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
+ const assertEdit=(general=false)=>assertWritable(general?(generalRefusal()??(host.general?.available?.()===false?t('JOB_ACT_NOTHING_TO_SUBMIT'):null)):updateRefusal());
  let jumpGeneration = 0;
  let hiddenPanes: {pane: HTMLElement; visibility: string}[] | null = null;
  const jump = async (row: Row): Promise<boolean> => {
@@ -139,15 +141,17 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  }};
  const refresh=()=>{last='';renderList();renderPins();};
  const openComposer=(view:StageComment['viewport']|null,screen:MarkRegion,existing?:Row,placementMode=view?host.pose(view)?.mode:undefined)=>{
-  const general=view===null; if(general&&(!host.general||host.general.available?.()===false))return;
+  const general=view===null;
+  const generalAvailable=!general||host.general?.available?.()!==false;
+  if(general&&(!host.general||(!existing&&!generalAvailable)))return;
   if(!existing){try{general?assertEdit(true):assertCapture();}catch{return;}}
   const currentMode=view?host.pose(view)?.mode:undefined;
   if(!general&&(!placementMode||currentMode&&currentMode!==placementMode)){cancel();return;}
-  const locked=!!existing&&host.locked(existing.id),initialRefusal=existing?(general?host.general?.refusal?.()??null:updateRefusal()):null;
+  const locked=!!existing&&host.locked(existing.id),initialRefusal=existing?(general?generalRefusal():updateRefusal()):null;
   if(existing&&!initialRefusal&&host.blocked()){host.error(t('COMMENT_BUSY: wait for inspection'));return;}
-  geometryEdit=null;composer?.remove();composerReadOnly=locked||!!initialRefusal;composerGeneral=general;draftMark=view?{view,mode:placementMode!,screen}:null;const generation=interaction;const pane=view?host.viewports[view]!:list,form=composer=document.createElement('form');form.className='stage-comment-composer stage-comment-ui';form.setAttribute('aria-label',t('Comment composer'));if(general)form.style.position='relative';
+  geometryEdit=null;composer?.remove();composerReadOnly=locked||!!initialRefusal||!generalAvailable;composerGeneral=general;draftMark=view?{view,mode:placementMode!,screen}:null;const generation=interaction;const pane=view?host.viewports[view]!:list,form=composer=document.createElement('form');form.className='stage-comment-composer stage-comment-ui';form.setAttribute('aria-label',t('Comment composer'));if(general)form.style.position='relative';
   const field=document.createElement('input');field.type='text';field.maxLength=1000;field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');field.value=existing?.summary??'';
-  if(locked||initialRefusal){field.readOnly=true;field.setAttribute('aria-readonly','true');}
+  if(composerReadOnly){field.readOnly=true;field.setAttribute('aria-readonly','true');}
   const hint=document.createElement('small');hint.textContent=composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels';hint.textContent=t(hint.textContent);const error=document.createElement('p');error.setAttribute('role','alert');form.append(field,hint,error);
   const place=()=>{if(general)return;
    if(host.codec?.geometry){
@@ -219,7 +223,8 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    remove.onclick=()=>{
     if(busy)return;
     try{
-     assertEdit(general);if(host.locked(existing.id))throw new Error(t('COMMENT_SUBMITTED: submitted evidence is immutable'));
+     if(general)assertWritable(generalRefusal());else assertEdit();
+     if(host.locked(existing.id))throw new Error(t('COMMENT_SUBMITTED: submitted evidence is immutable'));
      const all=(general?host.general?.rows:undefined)??host.feedback(),index=all.findIndex(x=>x.id===existing.id);if(index>=0)all.splice(index,1);
      cancel();host.changed();refresh();
     }catch(e){errorSource=toEn(e instanceof Error?e.message:String(e));error.textContent=t(errorSource);place();}

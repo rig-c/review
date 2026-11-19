@@ -1638,28 +1638,31 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
 /** Answer controls compose the existing act bar and submit handlers. */
 function renderAnswerControls():void {
  const subjects=host?.pendingSubjects?.()??pendingAnswers;
- const verdict=subjects.some(subject=>subject.kind==='review-verdict'||subject.kind==='parts-verdict');
+ const parts=subjects.some(subject=>subject.kind==='parts-verdict');
+ const verdict=parts||subjects.some(subject=>subject.kind==='review-verdict');
  const dialog=subjects.some(subject=>!subject.kind.endsWith('verdict'))&&!verdict;
  const readable=questionForms.some(form=>form.dataset.interviewAnswered==='true')||!!recordDialog?.querySelector('form.interview-answer[data-interview-answered=true] fieldset:disabled');
  const enabled=questionForms.some(form=>!form.querySelector('fieldset')?.disabled)||!!recordDialog?.querySelector('fieldset:not(:disabled)');
  const blocked=saving||draftConflict||!!actReadOnly||!!host?.unavailable;
  const save=button('save');
+ const hasPinnedPart=parts&&liveIssueCount()>0;
+ const needsPinnedPart=parts&&!!host?.verdictComments?.rows.length&&!hasPinnedPart;
+ const pinRefusal='Request changes needs at least one comment pinned to a part.';
  if((host||subjects.some(subject=>subject.kind==='interview-picks'))&&subjects.length&&!rigInspector.actBar.saveState())rigInspector.actBar.setSaveState({kind:'unsaved',text:'Not submitted'});
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
- save.classList.toggle('primary',verdict&&!(subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0));
- requestChanges.classList.toggle('primary',verdict&&subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0);
+ save.classList.toggle('primary',verdict&&!hasPinnedPart);
+ requestChanges.classList.toggle('primary',hasPinnedPart);
  rigAsk.classList.toggle('primary',dialog);
  const kind=subjects.find(subject=>!subject.kind.endsWith('verdict'))?.kind;
  setSourceText(rigAsk,kind==='signoff'?'Approve…':kind==='interview-picks'||readable?'Answer…':'Review…');
  rigAsk.disabled=(!enabled&&!readable)||(enabled&&blocked);
  if(verdict){
-  const parts=subjects.some(subject=>subject.kind==='parts-verdict'),count=host?.direction?recordComments.length:liveIssueCount();
-  const needsPinnedPart=parts&&!!host?.verdictComments?.rows.length&&count===0;
+  const count=host?.direction?recordComments.length:liveIssueCount();
   setSourceText(save,'Approve');setSourceText(requestChanges,'Request changes');
   save.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||(parts&&(partsAnswerBlocked()||count>0));
   requestChanges.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||count===0||(parts&&partsAnswerBlocked());
   setSourceAttribute(save,'title',parts&&count>0?'Remove the flagged parts comments before approving.':'');
-  setSourceAttribute(requestChanges,'title',needsPinnedPart?'Request changes needs at least one comment pinned to a part.':count===0?'Add a comment where changes are needed.':'');
+  setSourceAttribute(requestChanges,'title',needsPinnedPart?pinRefusal:count===0?'Add a comment where changes are needed.':'');
   if(!parts){
    save.onclick=event=>{session.status='approved';select('review-status').value=session.status;return verdictSubmit?.(event);};
   }
@@ -1668,6 +1671,18 @@ function renderAnswerControls():void {
  for(const root of [recordDialog,...questionForms])for(const control of root?.querySelectorAll<HTMLButtonElement>('button[type="submit"]')??[])control.disabled=blocked||verdict;
  // The waiting row is already visible: finish labels, state and handlers before revealing any answer.
  save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;rigAsk.hidden=!dialog||firstPublicationPrompt;
+ if(host?.verdictComments){
+  const notice=el('review-message');
+  if(needsPinnedPart&&!save.hidden&&!save.disabled){
+   if(!notice.classList.contains('error')){
+    setSourceText(notice,pinRefusal);
+    notice.classList.add('error');
+   }
+  }else if(sourceTextContent(notice)===pinRefusal){
+   setSourceText(notice,'');
+   notice.classList.remove('error');
+  }
+ }
  if(host){rigInspector.answersRendered=true;rigInspector.act.hidden=subjects.length===0&&!firstPublicationPrompt;rigInspector.syncActRow?.();}
 }
 let verdictSubmit:((event:MouseEvent)=>unknown)|null=null;

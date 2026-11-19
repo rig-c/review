@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,rm,writeFile,readFile,copyFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
+import {randomUUID} from 'node:crypto';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
+import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {commentFixture} from './helpers/parts-comments-package.ts';
 import {parseCommentsAct,projectComments} from '../src/job-host.ts';
-import type {JobCommentsAct,JobPendingAsk,JobPublication} from '../src/job-contract.ts';
+import type {JobCommentsAct,JobDisplayReceipt,JobPendingAsk,JobPublication,JobResult} from '../src/job-contract.ts';
 import {parseStageComment} from '../src/stage-comment.ts';
 import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
@@ -26,8 +28,10 @@ function readFilter<T extends string>(flag:string,choices:readonly T[]):T|undefi
 }
 const subjectFilter=readFilter('--subject',['rig','parts'] as const);
 const languageFilter=readFilter('--lang',['en','ko'] as const);
+const towerCheck=readFilter('--tower-check',['parts-message','closed-draft'] as const);
 const sourceOnly=Bun.argv.includes('--source-only');
-if(sourceOnly&&subjectFilter)throw new Error('--source-only cannot be combined with --subject');
+if(sourceOnly&&(subjectFilter||towerCheck))throw new Error('--source-only cannot be combined with --subject or --tower-check');
+if(towerCheck==='parts-message'&&subjectFilter==='rig')throw new Error('--tower-check parts-message requires the Parts subject');
 const at=Bun.argv.indexOf('--out'),output=resolve(at<0?'artifacts/comment-entry-828':Bun.argv[at+1]!);
 await mkdir(output,{recursive:true});
 const observations:unknown[]=[];
@@ -38,6 +42,7 @@ type PageCommand = (method:string,params?:Record<string,unknown>)=>Promise<unkno
 type MainFrame = {id:string;loaderId:string};
 type ReloadPage = {sessionId:string;send:PageCommand;frame:MainFrame;loads:number;beforeUnload:number;lost?:string};
 type Capture = (name:string)=>Promise<void>;
+type Reload = (expected?:string,reportName?:string)=>Promise<void>;
 type LivePublication = {kind:'rig'|'parts';fixture:Awaited<ReturnType<typeof scriptedJobWindowFixture>>;
   publication:JobPublication;verdict:Verdict};
 type LiveVerdict = LivePublication & {ask:JobPendingAsk;otherAsk:JobPendingAsk};
@@ -45,6 +50,10 @@ type CommentEntryState = {videoDeclared:boolean;language:string;top:boolean;pane
   general:boolean;generalCount:number;listRect:{y:number;height:number};checkpointHidden:boolean;stripHidden:boolean;
   stripBlocked:boolean;noSourceFilesHidden:boolean;name:string};
 type DecisionControls = {approve:{label:string;disabled:boolean};changes:{label:string;disabled:boolean;title:string;aria:string|null}};
+type DecisionNotice = {text:string;visible:boolean;inViewport:boolean;unclipped:boolean;footerText:string;
+  bounds:{left:number;top:number;right:number;bottom:number;width:number;height:number}|null;
+  clientSize:[number,number]|null;scrollSize:[number,number]|null};
+type GeneralDraftRow = {id:string;summary:string};
 type SourceOnlyExport = {status:number;body:{plan:{binding:{packages:{reviewedSource:{rig:unknown}}[]}};rendering:unknown}};
 
 const generalButton = '[data-comment-general]';
@@ -77,6 +86,19 @@ async function readDecisions(page:InputCdpSession) {
     const approve=document.querySelector('#save'),changes=document.querySelector('#request-changes');
     return {approve:{label:approve.textContent.trim(),disabled:approve.disabled},
       changes:{label:changes.textContent.trim(),disabled:changes.disabled,title:changes.title,aria:changes.getAttribute('aria-label')}};
+  })()`);
+}
+
+async function readDecisionNotice(page:InputCdpSession) {
+  return page.evaluate<DecisionNotice>(`(()=>{
+    const notice=document.querySelector('#workspace-act-row #review-message');
+    const rect=notice?.getBoundingClientRect();
+    return {text:notice?.innerText.trim()??'',visible:!!notice?.checkVisibility({visibilityProperty:true,opacityProperty:true}),
+      inViewport:!!rect&&rect.width>0&&rect.height>0&&rect.left>=0&&rect.top>=0&&rect.right<=innerWidth&&rect.bottom<=innerHeight,
+      unclipped:!!notice&&notice.scrollWidth<=notice.clientWidth+1&&notice.scrollHeight<=notice.clientHeight+1,
+      bounds:rect?.toJSON()??null,clientSize:notice?[notice.clientWidth,notice.clientHeight]:null,
+      scrollSize:notice?[notice.scrollWidth,notice.scrollHeight]:null,
+      footerText:document.querySelector('#message')?.innerText.trim()??''};
   })()`);
 }
 
@@ -138,7 +160,7 @@ async function readFinalVerdict(live:LiveVerdict):Promise<JobCommentsAct> {
   throw new Error('COMMENT_ENTRY_FINAL_VERDICT '+kind+' '+verdict);
 }
 
-async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Promise<void>,capture:Capture,live:LiveVerdict,lang:Language,out:string) {
+async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:Reload,capture:Capture,live:LiveVerdict,lang:Language,out:string) {
   const {kind,verdict,fixture,ask,otherAsk}=live,ko=lang==='ko';
   const general=[ko?'수정한 일반 의견':'Edited general comment',ko?'두 번째 일반 의견':'Second general comment'];
   const generalLabel=ko?'일반 코멘트':'General comment';
@@ -165,6 +187,15 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Pro
   await add(general[1]!);
   const expectedRows=general.map((text,index)=>`${index+1} · ${generalLabel} · ${text}`);
   assert.deepEqual(await rows(),expectedRows);
+  const noticePath=join(out,'parts-request-changes-notice.json');
+  const notices:Partial<Record<'beforeReload'|'afterReload'|'afterPin',DecisionNotice>>={};
+  const checkPinNotice=async(phase:'beforeReload'|'afterReload')=>{
+    const notice=notices[phase]=await readDecisionNotice(page);
+    await writeFile(noticePath,JSON.stringify(notices,null,2)+'\n');
+    assert.equal(notice.text,pinRequired,'the pin requirement is displayed beside the decision controls '+phase);
+    assert.ok(notice.visible&&notice.inViewport&&notice.unclipped,JSON.stringify(notice));
+  };
+  if(kind==='parts')await checkPinNotice('beforeReload');
   await capture('general-before-reload');
 
   await reload();
@@ -180,6 +211,8 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Pro
     assert.equal(restored.changes.disabled,true);
     assert.equal(restored.changes.title,pinRequired,'the existing Request changes control explains the required pin');
     assert.equal(restored.changes.label,initial.changes.label);
+    await checkPinNotice('afterReload');
+    await capture('parts-pin-required');
     await page.evaluate(`document.querySelector('#request-changes').click()`);
     assert.equal((await fixture.next()).events.some(event=>event.type==='act'&&event.act.askId===ask.askId),false,'Parts Request changes without a pin creates no act');
     assert.ok(fixture.host.session.status().pending.some(pending=>pending.askId===ask.askId));
@@ -190,6 +223,9 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Pro
   if(pinned&&kind==='parts'){
     const original=ko?'처음 파츠 핀':'Original Parts pin';
     await addPartsPin(page,wait,original);
+    const afterPinNotice=notices.afterPin=await readDecisionNotice(page);
+    await writeFile(noticePath,JSON.stringify(notices,null,2)+'\n');
+    assert.ok(!afterPinNotice.text.includes(pinRequired),'the pin requirement clears when the first pin is saved');
     const pinRow=await page.evaluate<string|undefined>(`[...document.querySelectorAll('${summary}')]
       .find(node=>node.textContent.endsWith(${JSON.stringify(original)}))?.closest('[data-comment-id]')?.dataset.commentId`);
     assert.ok(pinRow,'the saved pin has its own comment row');
@@ -230,17 +266,95 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Pro
   const projected=projectComments(comments);
   const generalProjection='[general]\n'+general.join('\n\n[general]\n');
   assert.equal(projected,pinned?projectComments(comments.slice(0,1))+'\n\n'+generalProjection:generalProjection);
-  const readback={initial,restored,rows:expectedRows,act,projected};
+  const readback={initial,restored,notices,rows:expectedRows,act,projected};
   await writeFile(join(out,'verdict.json'),JSON.stringify(readback,null,2)+'\n');
   return readback;
 }
 
-async function run(kind:string,lang:Language,picture=true,verdict:Verdict='approved'){
+/** Finalize via a separate client's real display receipt and UI act port. Only the observed page owns the draft. */
+async function finalizeElsewhere(live:LiveVerdict) {
+  const {fixture,publication,ask,kind}=live;
+  const displayed=await fixture.ui('displayed',{pageId:randomUUID(),publicationId:publication.publicationId,sourceHash:publication.source.sourceHash});
+  const ack=await displayed.json() as JobResult<JobDisplayReceipt>;
+  assert.ok(displayed.ok&&ack.ok,JSON.stringify(ack));
+  const payload=kind==='parts'?
+    {kind:'parts-verdict',value:{verdict:'approved',words:'',issues:[]}}:
+    {kind:'review-verdict',value:{stage:'rig-review',verdict:'approved',words:''},capture:rigStillCapture(publication,ask,ack.value).capture};
+  const response=await fixture.ui('acts',{...ack.value,askId:ask.askId,submissionId:randomUUID(),
+    expectedGeneration:fixture.host.session.status().generation,...payload});
+  const committed=await response.json() as JobResult<unknown>;
+  assert.ok(response.ok&&committed.ok,JSON.stringify(committed));
+  const act=await readFinalVerdict(live);
+  assert.deepEqual(parseCommentsAct(committed.value),act);
+  assert.deepEqual(act.value.comments,[],'the other client did not submit this page’s draft');
+  return {pageId:ack.value.pageId,act};
+}
+
+async function exerciseClosedDraft(page:InputCdpSession,wait:Wait,reload:Reload,capture:Capture,live:LiveVerdict,lang:Language,out:string) {
+  const {fixture,publication,ask,otherAsk}=live;
+  const scope=`rig-review-verdict-comments/1:${publication.publicationId}:${publication.source.sourceHash}`;
+  const readDraft=()=>page.evaluate<GeneralDraftRow[]|null>(`JSON.parse(localStorage.getItem(${JSON.stringify(scope)}))?.comments??null`);
+  const rowIds=()=>page.evaluate<string[]>(`[...document.querySelectorAll('#stage-comment-list [data-comment-id]')].map(row=>row.dataset.commentId)`);
+  const text=lang==='ko'?['남겨 둘 초안','지울 초안']:['Draft to keep','Draft to delete'];
+  for(const comment of text){
+    await clickComment(page,generalButton);
+    await saveComment(page,wait,comment);
+  }
+  const draft=await readDraft();
+  assert.ok(draft,'the browser saved a publication-scoped draft before the verdict');
+  assert.deepEqual(draft.map(row=>row.summary),text);
+  const [keep,remove]=draft;
+  assert.ok(keep&&remove&&keep.id!==remove.id);
+  assert.deepEqual(await rowIds(),[keep.id,remove.id]);
+  const rowSelector=`[data-comment-id=${JSON.stringify(remove.id)}] .stage-comment-summary`;
+  const catalog=lang==='ko'?koCatalog:enCatalog;
+  const closed=`document.querySelector('#save')?.hidden===true&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['Approve this stage.'])}`;
+
+  const elsewhere=await finalizeElsewhere(live);
+  await wait(closed);
+  assert.equal(await page.evaluate<boolean>(generalEntryVisible),false,'finalization in another client removes Add in the open page');
+  await reload(closed,'reload-finalized');
+  await click(page,'#stage-comment');
+  assert.equal(await page.evaluate<boolean>(generalEntryVisible),false,'closed verdict still offers no Add after reload');
+  assert.deepEqual(await rowIds(),[keep.id,remove.id],'closed verdict does not hide locally saved draft rows');
+  assert.deepEqual(await readDraft(),draft);
+
+  await clickComment(page,rowSelector);
+  const editor=await page.evaluate<{readOnly:boolean;value:string;canDelete:boolean}|null>(`(()=>{
+    const form=document.querySelector('${composer}'),field=form?.querySelector('input'),remove=form?.querySelector('.stage-comment-delete');
+    return field?{readOnly:field.readOnly,value:field.value,canDelete:!!remove&&!remove.disabled&&remove.checkVisibility()}:null;
+  })()`);
+  await writeFile(join(out,'closed-draft.json'),JSON.stringify({elsewhere,draft,editor},null,2)+'\n');
+  assert.deepEqual(editor,{readOnly:true,value:remove.summary,canDelete:true},'a closed verdict draft can be inspected and deleted');
+  await capture('closed-draft-readonly');
+  await page.evaluate(`(()=>{const form=document.querySelector('${composer}');form.querySelector('input').value='attempted edit';form.requestSubmit();})()`);
+  assert.deepEqual(await readDraft(),draft,'the read-only composer cannot overwrite a saved draft');
+  assert.deepEqual(await rowIds(),[keep.id,remove.id]);
+
+  // Reopen the original row before using Delete so the forced submit above cannot supply its value.
+  await clickComment(page,rowSelector);
+  await clickComment(page,`${composer} .stage-comment-delete`);
+  assert.deepEqual(await rowIds(),[keep.id]);
+  assert.deepEqual(await readDraft(),[keep],'Delete persists the other draft row only');
+  await reload(closed,'reload-deleted');
+  await click(page,'#stage-comment');
+  assert.equal(await page.evaluate<boolean>(generalEntryVisible),false);
+  const afterReload=await readDraft();
+  assert.deepEqual(afterReload,[keep]);
+  assert.deepEqual(await rowIds(),[keep.id],'the deleted draft row stays gone after reload');
+  assert.deepEqual(await readFinalVerdict(live),elsewhere.act,'local cleanup never changes the committed verdict');
+  assert.ok(fixture.host.session.status().pending.some(pending=>pending.askId===otherAsk.askId&&pending.askId!==ask.askId));
+  const readback={elsewhere,draft,editor,afterReload};
+  await writeFile(join(out,'closed-draft.json'),JSON.stringify(readback,null,2)+'\n');
+  return readback;
+}
+
+async function run(kind:string,lang:Language,picture=true,verdict:Verdict='approved',closedDraft=false){
  const profile=await mkdtemp(join(tmpdir(),'review828-'));
  let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  let livePublication:LivePublication|undefined,cdp:ReloadPage|undefined;
  let phase='open';
- const out=join(output,kind+(picture?'':'-empty')+(verdict==='approved'?'':'-changes'),lang);await mkdir(out,{recursive:true});
+ const out=join(output,kind+(picture?'':'-empty')+(closedDraft?'-finalized-elsewhere':verdict==='approved'?'':'-changes'),lang);await mkdir(out,{recursive:true});
  try{
   let url:string,hasVideo=false;
   if(kind==='source-only'||kind==='standalone'){
@@ -307,7 +421,7 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
   assert.equal(state.general,generalExpected,kind+' general comment entry visibility');
   assert.equal(state.generalCount,Number(generalExpected),kind+' general comment entry count');
   if(live){
-   const reload=async()=>{
+   const reload:Reload=async(expected=`!!document.querySelector('${generalButton}')`,reportName='reload')=>{
     assert.ok(page&&cdp,'initial top-level CDP session and loader');
     const active=cdp,before={frame:active.frame,loads:active.loads,beforeUnload:active.beforeUnload};
     phase='reload';
@@ -320,7 +434,7 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
      await Bun.sleep(25);
     }
     assert.equal(active.frame.id,before.frame.id,'reload stays in the original top-level frame');
-    await wait(`!Object.hasOwn(window,'__commentEntryBeforeReload')&&document.readyState==='complete'&&${ready}&&!!document.querySelector('${generalButton}')`);
+    await wait(`!Object.hasOwn(window,'__commentEntryBeforeReload')&&document.readyState==='complete'&&${ready}&&(${expected})`);
     phase='activate-reloaded-page';
     await active.send('Page.bringToFront');
     const document=await page.evaluate<{visibility:string;focused:boolean;origin:string;path:string;lang:string}>(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve({visibility:document.visibilityState,focused:document.hasFocus(),origin:location.origin,path:location.pathname,lang:document.documentElement.lang}))))`);
@@ -328,7 +442,7 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
     assert.equal(document.origin,target.origin);
     assert.equal(document.path,target.pathname);
     assert.equal(document.lang,lang);
-    await writeFile(join(out,'reload.json'),JSON.stringify({sessionId:active.sessionId,before,
+    await writeFile(join(out,reportName+'.json'),JSON.stringify({sessionId:active.sessionId,before,
       after:{frame:active.frame,loads:active.loads,beforeUnload:active.beforeUnload},document},null,2)+'\n');
     phase='verify-restored-comments';
    };
@@ -337,8 +451,9 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
     await writeFile(join(out,name+'.png'),await page!.screenshot());
     phase=name==='comments'?'submit-verdict':'before-reload';
    };
-   const readback=await exerciseLiveVerdict(page,wait,reload,capture,live,lang,out);
-   observations.push({kind,lang,picture,verdict,...state,readback});return;
+   const readback=closedDraft?await exerciseClosedDraft(page,wait,reload,capture,live,lang,out):
+    await exerciseLiveVerdict(page,wait,reload,capture,live,lang,out);
+   observations.push({kind,lang,picture,verdict,closedDraft,...state,readback});return;
   }
   if(state.general){await page.evaluate(`document.querySelector('[data-comment-general]').click()`);await wait(`!!document.querySelector('#stage-comment-list .stage-comment-composer input')`);}
   await writeFile(join(out,'comments.png'),await page.screenshot());
@@ -355,11 +470,12 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
 }
 for(const lang of languageFilter?[languageFilter]:['en','ko'] as const){
   if(sourceOnly){await run('source-only',lang);continue;}
-  if(subjectFilter){
-    for(const verdict of ['approved','changes-requested'] as const)await run(subjectFilter,lang,true,verdict);
-    continue;
+  if(towerCheck==='parts-message'){await run('parts',lang,true,'changes-requested');continue;}
+  for(const kind of subjectFilter?[subjectFilter]:['rig','parts'] as const){
+    if(!towerCheck)for(const verdict of ['approved','changes-requested'] as const)await run(kind,lang,true,verdict);
+    await run(kind,lang,true,'approved',true);
   }
-  for(const kind of ['rig','parts'])for(const verdict of ['approved','changes-requested'] as const)await run(kind,lang,true,verdict);
+  if(subjectFilter||towerCheck)continue;
   for(const kind of ['standalone','standalone-parts'])await run(kind,lang);
   if(Bun.argv.includes('--live-verdicts'))continue;
   for(const kind of ['direction','signoff','checkpoint','interview-picks'])await run(kind,lang);
