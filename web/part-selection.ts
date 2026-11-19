@@ -184,7 +184,7 @@ const key=this.viewKey();if(!force&&key===this.selectionKey)return;this.selectio
   if(this.images){
    const selected=this.images.items.find(item=>item.name===this.images!.selected());
    setSourceText(nodes.title,selected?.name??'Assembled parts');
-   setSourceText(nodes.info,selected?t('Original part image · {name}',{name:selected.name}):'Select a part to inspect its original image source.');
+   setSourceText(nodes.info,`${selected?t('Original part image · {name}',{name:selected.name}):t('Select a part to inspect its original image source.')}${selected?' · ':' '}${t('There is no compiled rig yet, so some tools and tabs are unavailable.')}`);
    setSourceText(nodes.declarations,selected?.imageHash?t('Source image SHA-256 · {hash}',{hash:selected.imageHash}):'');
    nodes.declarations.hidden=!selected?.imageHash;
    for(const node of [nodes.bounds,nodes.unavailable,nodes.feedback,nodes.status])node.hidden=true;

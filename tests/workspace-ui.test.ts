@@ -634,7 +634,7 @@ test('#678 rig caller regions preserve the legacy shell DOM, labels, drawers and
 
 test('#809 pending ask heading uses full subject sentences in EN/KO and names the absence of an ask',async()=>{
  const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start),raw:{text:string;title:string;hidden:boolean}={text:'',title:'',hidden:false};
- let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','setSourceAttribute','renderDraftState','t','let pendingAnswers=[],firstPublicationPrompt=false;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},(_:unknown,_key:string,value:string)=>{raw.title=value;},()=>{statusRefreshes++;},t);
+ let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','setSourceAttribute','renderDraftState','t','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},(_:unknown,_key:string,value:string)=>{raw.title=value;},()=>{statusRefreshes++;},t);
  render([]);expect(raw.hidden).toBe(false);expect(t(raw.text,undefined,'en')).toBe('Nothing is waiting for your answer.');expect(t(raw.text,undefined,'ko')).toBe('답변을 기다리는 요청이 없어요.');
  render([{kind:'review-verdict',stage:'rig-review'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
  expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Review this checkpoint.');
@@ -659,7 +659,7 @@ test('#743 workspace owns detached portal lookup, settles redocking, and dispose
 test('#904 waiting prompt never guesses a rig subject for model-free record and interview publications',async()=>{
  const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
  for(const subject of [{kind:'interview-picks'},{kind:'checkpoint'},{kind:'signoff'}]){
-  const raw={hidden:true,text:''};const scope={askHeadline:raw,firstPublicationPrompt:true,pendingAnswers:[],t,
+  const raw={hidden:true,text:''};const scope={askHeadline:raw,firstPublicationPrompt:true,pendingAnswers:[],partsSubject:null,t,
    setSourceText:(_:unknown,value:string)=>{raw.text=value;},renderDraftState(){}};
   const render=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return renderPendingSubjects;}`)(scope);
   render([]);expect(t(raw.text,undefined,'en')).toBe(enCatalog['job.waiting']);expect(t(raw.text,undefined,'ko')).toBe(koCatalog['job.waiting']);
