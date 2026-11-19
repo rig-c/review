@@ -11,15 +11,18 @@
  * inspected build, and the local draft keeps the applied delta (edits over the revision are not written to it).
  */
 import type {CropWorldMapping} from '../src/chest-regions.ts';
+import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
+import type {JobMeshEditValue} from '../src/job-contract.ts';
 import {readStoredSetupMesh,setupModel} from '../src/setup-mesh.ts';
 import {
  MESH_EDIT_CODES,MESH_EDIT_NO_MESH,MESH_EDIT_PREVIEW_NOTE,MESH_EDIT_RIG_UNAVAILABLE,MESH_EDIT_SELECT_SLOT,MeshEditSession,affineOf,applyAffine,applyMeshOps,attachmentHashText,draftOps,hitMesh,
- invertAffine,meshEditDocument,parseMeshDraft,screenDeltaToCrop,verticesInBox,writeMeshDraft,type MeshEditDocument,type MeshEditResult,type MeshOp,type MeshSource,
+ draftKey,invertAffine,meshEditActValue,meshEditDocument,parseMeshDraft,screenDeltaToCrop,verticesInBox,writeMeshDraft,type MeshEditDocument,type MeshEditResult,type MeshOp,type MeshSource,
  type MeshView,type ScreenPoint,type Vec,
 } from '../src/mesh-edit.ts';
 import type {OverlayMeshEdit,OverlayPoint,OverlayProject} from './rig-overlays.ts';
 import type {SetupPose} from './setup-pose.ts';
 import {textEntryFocused} from './view-controls.ts';
+import {setSourceAttribute,setSourceText,t} from './i18n.ts';
 
 export type MeshMode='modify'|'create'|'delete'|'edges';
 export const meshModes:readonly MeshMode[]=['modify','create','delete','edges'];
@@ -89,11 +92,13 @@ export interface MeshEditorHost {
  mapping:()=>CropWorldMapping;
  inspector:()=>string|undefined;
  /** The selected slot's setup-space source, or the refusal that names why there is none. */
- source:()=>SourceResult;
+ source:(slot?:string)=>SourceResult;
  /** Hold the stage still under the setup-pose overlay. */
  pause:()=>void;
  changed:()=>void;
  download:(document:MeshEditDocument)=>void;
+ /** Live jobs keep the editor but send rig-review edits via the verdict. */
+ job?:{slots:()=>readonly string[]}|'read-only';
  /** Apply · Rebuild (#135): send the delta through the shared runner; `built` when the revision is on the stage. Lines stream to `line`. */
  apply:(document:MeshEditDocument,line:(text:string)=>void)=>Promise<{built:boolean;text:string;error:boolean}>;
  /** Whether the stage holds a revision this editor's Apply built. */
@@ -104,14 +109,54 @@ export interface MeshEditorHost {
  confirm:(text:string)=>boolean;
  token:(name:string)=>string;
 }
-export interface MeshEditor {active:()=>boolean;overlay:()=>OverlayMeshEdit|null;sync:()=>void;selectionChanged:()=>void;dispose:()=>void;session:()=>MeshEditSession|null;mode:()=>MeshMode|null;statusNote:()=>string;setStatusNote:(text:string,error?:boolean)=>void}
+export interface MeshEditor {active:()=>boolean;overlay:()=>OverlayMeshEdit|null;sync:()=>void;selectionChanged:()=>void;dispose:()=>void;session:()=>MeshEditSession|null;mode:()=>MeshMode|null;statusNote:()=>string;setStatusNote:(text:string,error?:boolean)=>void;hasJobEdits:()=>boolean;jobEdits:()=>Promise<JobMeshEditValue[]>}
 
 type Drag={pointer:number;start:ScreenPoint;ids:number[];base:MeshView;ops:MeshOp[]}|{pointer:number;start:ScreenPoint;box:ScreenPoint;add:boolean};
 
 export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  const node=<T extends HTMLElement>(id:string)=>document.getElementById(id) as T;
  const toggle=node<HTMLButtonElement>('mesh-edit'),bar=node<HTMLElement>('mesh-editor-bar'),status=node<HTMLElement>('mesh-editor-status'),draft=node<HTMLTextAreaElement>('mesh-edit-draft');
+ const apply=node<HTMLButtonElement>('mesh-apply');
  const chestToggle=document.getElementById('chest-edit') as HTMLButtonElement|null;
+ const job=typeof host.job==='object'?host.job:null;
+ const jobDrafts=job?new Map<string,{session:MeshEditSession;frame:{width:number;height:number}}>() : null;
+ let jobDraftText=draft.value;
+ const jobSessions=()=>jobDraftText===draft.value?jobDrafts:null;
+ const hasJobEdits=()=>{
+  if(!job)return false;
+  const sessions=jobSessions();
+  return Array.from(sessions?.values()??[]).some(({session})=>session.canUndo())||
+   Object.entries(parseMeshDraft(draft.value).entries).some(([key,entry])=>entry.ops.length>0&&!sessions?.has(key));
+ };
+ /** Restore any attachment that has not been opened since reload against the displayed model. */
+ const jobEdits=async():Promise<JobMeshEditValue[]>=>{
+  if(!job)return [];
+  const sessions=jobSessions(),stored=parseMeshDraft(draft.value);
+  const edits=Array.from(sessions?.values()??[]).filter(({session})=>session.canUndo()).map(({session,frame})=>meshEditActValue(session,frame));
+  const keys=Object.keys(stored.entries).filter(key=>stored.entries[key]!.ops.length>0&&!sessions?.has(key));
+  if(!keys.length)return edits;
+  const mapping=host.mapping();
+  if(!mapping.available)throw new Error('JOB_ACT_SOURCE_STALE');
+  const frame={width:mapping.crop.w,height:mapping.crop.h},sources=new Map<string,Extract<SourceResult,{ok:true}>>();
+  for(const slot of job.slots()){
+   if(!keys.some(key=>key.includes(`/${slot}/`)))continue;
+   const result=host.source(slot);
+   if(!result.ok)continue;
+   const key=draftKey(result.source);
+   if(!keys.includes(key))continue;
+   if(sources.has(key))throw new Error('JOB_ACT_SOURCE_STALE');
+   sources.set(key,result);
+  }
+  if(sources.size!==keys.length)throw new Error('JOB_ACT_SOURCE_STALE');
+  const restored=await Promise.all(Array.from(sources.values(),async result=>{
+   const source={...result.source,hash:await sha256Hex(attachmentHashText(result.entry))};
+   const ops=draftOps(stored,source);
+   if(!ops?.length)throw new Error('JOB_ACT_SOURCE_STALE');
+   return meshEditActValue(new MeshEditSession(source,ops),frame);
+  }));
+  return [...edits,...restored];
+ };
+ if(host.job)status.style.whiteSpace='normal';
  let active=false,entering=false,applying=false,mode:MeshMode|null=null,session:MeshEditSession|null=null,space=false,drag:Drag|null=null,pending:number|null=null,hover:ReturnType<typeof hitMesh>=null,note='',noteError=false,appliedOutcome='';
  let preview:MeshView|null=null;const selected=new Set<number>();
  const view=()=>preview??session?.view()??null;
@@ -126,23 +171,32 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   edges:'click vertex A then start vertex B to add a constraint edge · click a constraint edge to remove it'.replace('start ',''),
  };
  const sync=()=>{
+  if(jobDrafts&&jobDraftText!==draft.value){
+   jobDraftText=draft.value;jobDrafts.clear();
+   if(active){void reenter();return;}
+  }
   const visible=meshEditVisible(host.inspector());toggle.hidden=!visible;
   if(!visible&&active){setActive(false);return;}
   if(!host.applied()&&note.startsWith('Applied mesh edit ')){appliedOutcome='';note='';noteError=false;}
   toggle.setAttribute('aria-pressed',String(active));bar.hidden=!active;
   for(const button of bar.querySelectorAll<HTMLButtonElement>('[data-mesh-mode]'))button.setAttribute('aria-pressed',String(button.dataset.meshMode===mode));
-  node<HTMLButtonElement>('mesh-undo').disabled=!session?.canUndo();node<HTMLButtonElement>('mesh-redo').disabled=!session?.canRedo();node<HTMLButtonElement>('mesh-reset').disabled=!session?.canUndo()&&!session?.ops().length&&!host.applied();node<HTMLButtonElement>('mesh-apply').disabled=applying;
+  node<HTMLButtonElement>('mesh-undo').disabled=!session?.canUndo();node<HTMLButtonElement>('mesh-redo').disabled=!session?.canRedo();node<HTMLButtonElement>('mesh-reset').disabled=!session?.canUndo()&&!session?.ops().length&&!host.applied();apply.disabled=applying||!!host.job;
   if(!session){status.textContent=host.applied()&&appliedOutcome?appliedOutcome:'';status.classList.toggle('error',noteError);return;}
   const s=session.source,count=session.ops().length;
-  status.textContent=`${note?note+' · ':''}${count} op${count===1?'':'s'} · setup pose · ${MESH_EDIT_PREVIEW_NOTE} · ${mode?hint[mode]:'no sub-mode — Escape again leaves mesh edit'} · Space-drag pans`;
-  status.title=`${s.slot} / ${s.skin} / ${s.attachment} · ${s.vertices.length} vertices · ${s.triangles.length/3} triangles · hull ${s.hull} · ${status.textContent}`;
+  const summary=`${note?note+' · ':''}${count} op${count===1?'':'s'} · setup pose · ${MESH_EDIT_PREVIEW_NOTE} · ${mode?hint[mode]:'no sub-mode — Escape again leaves mesh edit'} · Space-drag pans`;
+  const reason=host.job==='read-only'?'JOB_REVIEW_READ_ONLY':!job?null:!EMIT_UNPINNED_CREATE_FIELDS&&hasJobEdits()?
+   t('job.submit.JOB_ACT_KIND_DISABLED',undefined,'en'):'In a job, press Request changes to send this edit; the producer rebuilds it.';
+  const readout=reason?`${reason} · ${summary}`:summary;
+  const title=`${s.slot} / ${s.skin} / ${s.attachment} · ${s.vertices.length} vertices · ${s.triangles.length/3} triangles · hull ${s.hull} · ${readout}`;
+  if(host.job){setSourceText(status,readout);setSourceAttribute(status,'title',title);}
+  else{status.textContent=readout;status.title=title;}
   status.classList.toggle('error',noteError);
   if(mode)host.pane.dataset.meshMode=mode;else delete host.pane.dataset.meshMode;
  };
  const say=(text:string,error=false)=>{if(text.startsWith('Applied mesh edit '))appliedOutcome=text;else if(!text)appliedOutcome='';note=text;noteError=error;if(text)host.message(text,error);sync();};
  const setStatusNote=(text:string,error=false)=>{appliedOutcome=text.startsWith('Applied mesh edit ')?text:'';note=text;noteError=error;sync();};
  // While a delta revision is on the stage the draft keeps the delta that built it: edits over the revision are not written.
- const persist=()=>{if(!session||host.applied())return;const text=writeMeshDraft(parseMeshDraft(draft.value),session.source,session.ops());if(text.length>32768){say('MESH_EDIT_DRAFT_LIMIT: the local draft is full — download the JSON; edits after this are not kept on reload',true);return;}draft.value=text;draft.dispatchEvent(new Event('input',{bubbles:true}));};
+ const persist=()=>{if(!session||host.applied())return;const text=writeMeshDraft(parseMeshDraft(draft.value),session.source,session.ops());if(text.length>32768){say('MESH_EDIT_DRAFT_LIMIT: the local draft is full — download the JSON; edits after this are not kept on reload',true);return;}draft.value=text;jobDraftText=text;draft.dispatchEvent(new Event('input',{bubbles:true}));};
  /** Reports a step: a refusal by its code, a no-op by its reason, a change by what it did. */
  const after=(result:MeshEditResult,what:()=>string)=>{
   if(!result.ok)say(result.code,true);
@@ -158,8 +212,13 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   if(entering)return;entering=true;
   try{
    const result=host.source();if(!result.ok){leave();sync();host.message(result.code,true);host.changed();return;}
+   const mapping=jobDrafts?host.mapping():null;
    const hash=await sha256Hex(attachmentHashText(result.entry)),source:MeshSource={...result.source,hash};
-   const restored=draftOps(parseMeshDraft(draft.value),source);session=new MeshEditSession(source,restored??[]);
+   if(jobDrafts&&jobDraftText!==draft.value){jobDraftText=draft.value;jobDrafts.clear();}
+   const key=draftKey(source),prior=jobDrafts?.get(key);
+   const restored=prior?.session.source.hash===hash?prior.session.ops():draftOps(parseMeshDraft(draft.value),source);
+   session=new MeshEditSession(source,restored??[]);
+   if(mapping?.available)jobDrafts?.set(key,{session,frame:{width:mapping.crop.w,height:mapping.crop.h}});
    if(chestToggle?.getAttribute('aria-pressed')==='true')chestToggle.click();
    host.pause();active=true;mode='modify';selected.clear();pending=null;note=host.applied()&&appliedOutcome?appliedOutcome:restored?.length?`restored ${restored.length} draft op${restored.length===1?'':'s'}`:'';noteError=false;
    sync();host.changed();
@@ -181,8 +240,8 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  node<HTMLButtonElement>('mesh-download').addEventListener('click',()=>{if(session)host.download(meshEditDocument(session));});
  // #135: the delta goes to the producer (`rig-parts remesh --delta`) through the host's shared runner; a built revision
  // loads in place and the editor re-reads its setup mesh; a refusal shows the producer's line verbatim and keeps the delta.
- node<HTMLButtonElement>('mesh-apply').addEventListener('click',()=>{
-  if(!session||applying)return;
+ apply.addEventListener('click',()=>{
+  if(!session||applying||host.job)return;
   if(!session.ops().length){say(MESH_EDIT_NOTHING_PENDING,true);return;}
   const doc=meshEditDocument(session);applying=true;say(`Applying ${doc.ops.length} op(s) on ${doc.slot}: remesh --delta, compile…`);
   void (async()=>{
@@ -303,6 +362,7 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
  sync();
  return {
   active:()=>active,overlay,sync,selectionChanged,session:()=>session,mode:()=>mode,statusNote:()=>note||appliedOutcome,setStatusNote,
+  hasJobEdits,jobEdits,
   dispose:()=>{observer.disconnect();chestObserver.disconnect();host.pane.removeEventListener('pointerdown',down,true);host.pane.removeEventListener('pointermove',move,true);for(const type of ['pointerup','pointercancel'] as const)host.pane.removeEventListener(type,end,true);document.removeEventListener('keydown',keyDown,true);window.removeEventListener('keyup',keyUp,true);window.removeEventListener('blur',blur);},
  };
 }

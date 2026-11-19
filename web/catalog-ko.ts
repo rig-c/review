@@ -19,6 +19,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.refusal.JOB_MODEL_MISSING": "이 요청에는 컴파일된 모델이 없어요. 제작 도구에서 컴파일된 모델을 게시한 후 리그 판정을 요청해야 해요.",
   "JOB_ASK_UNSUPPORTED": "JOB_ASK_UNSUPPORTED",
   "job.refusal.JOB_ASK_UNSUPPORTED": "이 요청에 맞는 소스 또는 체크포인트 연결 정보가 없어요. 제작 도구에서 해당 소스와 계획 연결 정보를 게시한 후 다시 요청해야 해요.",
+  "In a job, press Request changes to send this edit; the producer rebuilds it.": "잡에서는 수정 요청으로 이 편집을 보내 주세요. 리빌드는 프로듀서가 해요.",
   "Comment · C": "코멘트 · C",
 
   "project.json": "project.json",
@@ -3510,6 +3511,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "client: preload": "client: preload",
   "{0} {1} \u00b7 {2} bytes \u00b7 HTTP {3}": "{0} {1} \u00b7 {2} bytes \u00b7 HTTP {3}",
   "job.submit.refused": "요청이 거절됐어요 — 리뷰를 새로고침하고 대기 중인 요청을 확인한 뒤 다시 제출해 주세요.",
+  "job.submit.JOB_ACT_KIND_DISABLED": "아직 잡에서는 메시 편집을 제출할 수 없어요.",
   "job.submit.JOB_ACT_NOTHING_TO_SUBMIT": "판정이 선택되지 않았어요 — 승인, 수정 요청 또는 체크포인트 결과를 선택해 주세요.",
   "job.submit.JOB_STILL_CAPTURE_FAILED": "리그 이미지를 캡처하지 못했어요 — 리그가 다 그려질 때까지 기다린 뒤 다시 제출해 주세요.",
   "job.submit.JOB_STILL_BINDING_MISMATCH": "표시된 프레임이나 원본이 바뀌었어요 — 현재 리그가 로드될 때까지 기다린 뒤 다시 제출해 주세요.",

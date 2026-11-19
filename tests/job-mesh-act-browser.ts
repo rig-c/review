@@ -1,0 +1,205 @@
+/** Ordinary Nova browser proof, or an interactive loopback fixture with --serve. */
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {canonicalJson} from '../src/canonical-json.ts';
+import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
+import {jobHash, parseCommentsAct, parseMeshEditsAct} from '../src/job-api.ts';
+import {JOB_API_SCHEMA} from '../src/job-contract.ts';
+import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
+import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
+
+const repository = fileURLToPath(new URL('..', import.meta.url));
+const serving = Bun.argv.includes('--serve');
+const outputIndex = Bun.argv.indexOf('--out');
+const output = resolve(outputIndex < 0 ? 'artifacts/job-mesh-act-952' : Bun.argv[outputIndex + 1]!);
+
+async function createFixture() {
+  const fixture = await realJobWindowFixture();
+  try {
+    const path = join(fixture.input.root, 'out/skeleton.model.json');
+    const model = await Bun.file(path).json();
+    // Match the editor's crop mapping without mutating the checked-in viewport fixture.
+    model.stage.x = -model.stage.width / 2;
+    model.bones.find((bone: {name: string}) => bone.name === 'mesh').y = 24;
+    await writeFile(path, JSON.stringify(model));
+    const publication = await fixture.publish();
+    const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
+      requestId: randomUUID(), verb: 'ask', expectedGeneration: fixture.host.session.status().generation,
+      idempotencyKey: 'mesh-952', publicationId: publication.publicationId,
+      subject: {kind: 'review-verdict', stage: 'rig-review'}});
+    const result = await response.json();
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const entry = model.skins.find((skin: {name: string}) => skin.name === 'default').attachments.mesh.mesh;
+    const owner = (language: 'en' | 'ko') => {
+      const url = new URL(fixture.host.ownerUrl);
+      url.searchParams.set('lang', language);
+      return url.href;
+    };
+    return {...fixture, owner, entry, stage: model.stage as {width: number; height: number}};
+  } catch (error) {
+    await fixture.close();
+    throw error;
+  }
+}
+
+async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-only' | 'gate-off' | 'no-mesh') {
+  const fixture = await createFixture();
+  const profile = await mkdtemp(join(tmpdir(), 'review-952-chrome-'));
+  const directory = join(output, language, mode);
+  await mkdir(directory, {recursive: true});
+  let page: InputCdpSession | undefined;
+  try {
+    page = await launchCdpSession(profile);
+    const screen = page;
+    await screen.setViewport(1440, 1000);
+    await screen.goto(fixture.owner(language), language);
+    async function wait(expression: string) {
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        if (await screen.evaluate<boolean>(expression)) return;
+        await Bun.sleep(40);
+      }
+      throw new Error(expression + ' | ' + await screen.evaluate<string>("document.querySelector('#message')?.textContent ?? ''"));
+    }
+    async function point(selector: string) {
+      return screen.evaluate<{x: number; y: number}>(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+        return {x:r.left+r.width*.54,y:r.top+r.height*.49};})()`);
+    }
+    async function pointer(selector: string) {
+      const {x, y} = await point(selector);
+      await screen.mouse('mouseMoved', x, y);
+      await screen.mouse('mousePressed', x, y);
+      await screen.mouse('mouseReleased', x, y);
+    }
+    await wait("!!document.querySelector('#rig-root canvas') && !!document.querySelector('#save:not([hidden]):not(:disabled)')");
+    assert.equal(await screen.evaluate<string>('document.documentElement.lang'), language);
+    assert.equal(await screen.evaluate<boolean>("document.querySelector('#request-changes').disabled"), true);
+    if (mode === 'with-comment' || mode === 'no-mesh') {
+      await click(screen, '#stage-comment');
+      await pointer('#rig-viewport');
+      await wait("!!document.querySelector('.stage-comment-composer input')");
+      await screen.evaluate<void>(`(()=>{const form=document.querySelector('.stage-comment-composer');
+        form.querySelector('input').value='Adjust the mesh';form.requestSubmit();})()`);
+      await wait("!document.querySelector('.stage-comment-composer') && !document.querySelector('#request-changes').disabled");
+      if (await screen.evaluate<boolean>("document.querySelector('#stage-comment').getAttribute('aria-pressed')==='true'")) {
+        await click(screen, '#stage-comment');
+      }
+    }
+    if (mode !== 'no-mesh') {
+      await wait("!!document.querySelector('[data-part-list] button[data-slot=mesh]')");
+      await click(screen, '[data-part-list] button[data-slot=mesh]');
+      await click(screen, '#mesh-edit');
+      await wait("!document.querySelector('#mesh-editor-bar').hidden");
+      assert.equal(await screen.evaluate<boolean>("document.querySelector('#mesh-apply').disabled"), true);
+      await click(screen, '#mesh-mode-create');
+      await pointer('#rig-overlay');
+      await wait("document.querySelector('#mesh-edit-draft').value.includes('\"op\":\"add\"')");
+      await writeFile(join(directory, 'edited.png'), await screen.screenshot());
+    }
+    if (mode === 'gate-off') {
+      const bar = await screen.evaluate<{text: string; disabled: boolean}>(`({
+        text:document.querySelector('#mesh-editor-status').innerText,disabled:document.querySelector('#request-changes').disabled})`);
+      assert.equal(bar.disabled, true);
+      const catalog = language === 'ko' ? koCatalog : enCatalog;
+      assert.ok(bar.text.includes(catalog['job.submit.JOB_ACT_KIND_DISABLED']));
+      assert.equal(Object.keys(fixture.host.session.status().pending.filter(ask => ask.status === 'answered')).length, 0);
+      await writeFile(join(directory, 'refusal.json'), JSON.stringify(bar, null, 2));
+    } else {
+      await wait("!document.querySelector('#request-changes').disabled");
+      await click(screen, '#request-changes');
+      await wait("document.querySelector('#workspace-act-row').hidden");
+      const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
+        requestId: randomUUID(), verb: 'next', after: null, waitMs: 0});
+      const result = await response.json() as import('../src/job-contract.ts').JobResult<import('../src/job-contract.ts').JobNextValue>;
+      assert.ok(result.ok);
+      const acts = result.value.events.flatMap(event => event.type === 'act' ? [event.act] : []);
+      assert.equal(acts.length, 1);
+      const raw = fixture.host.session.readActExport(acts[0]!.actId, false).toString();
+      assert.equal(raw, JSON.stringify(acts[0]));
+      if (mode === 'no-mesh') {
+        const act = parseCommentsAct(JSON.parse(raw));
+        assert.equal(act.kind, 'review-verdict');
+        assert.equal(act.value.comments[0]?.text, 'Adjust the mesh');
+      } else {
+        const act = parseMeshEditsAct(JSON.parse(raw));
+        assert.deepEqual(act.value.comments.map(comment => comment.text), mode === 'with-comment' ? ['Adjust the mesh'] : []);
+        assert.equal(act.value.meshEdits?.length, 1);
+        const {edit, sha256} = act.value.meshEdits![0]!;
+        const expected = [[48, 50], [48, 30], [68, 30], [68, 50]];
+        assert.equal(edit.source.positions.length, expected.length);
+        for (const [index, position] of edit.source.positions.entries()) {
+          for (const axis of [0, 1] as const) assert.ok(Math.abs(position[axis] - expected[index]![axis]!) < 1e-3);
+        }
+        assert.deepEqual(edit.source.frame, {width: fixture.stage.width, height: fixture.stage.height});
+        assert.equal(edit.source.hash, jobHash(JSON.stringify(fixture.entry)));
+        assert.equal(edit.ops.length, 1);
+        assert.equal(edit.ops[0]?.op, 'add');
+        assert.equal(sha256, jobHash(canonicalJson(edit)));
+      }
+      await writeFile(join(directory, 'act.json'), raw);
+    }
+    console.log('MESH_ACT_952_PASS', language, mode);
+  } catch (error) {
+    if (page) await writeFile(join(directory, 'failure.png'), await page.screenshot()).catch(() => {});
+    throw error;
+  } finally {
+    try { await page?.close(); } finally {
+      await fixture.close();
+      await rm(profile, {recursive: true, force: true});
+    }
+  }
+}
+
+async function runWithFixtureGate() {
+  const shadow = await mkdtemp(join(tmpdir(), 'review-952-gate-'));
+  try {
+    for (const directory of ['src', 'web', 'tests']) {
+      await cp(join(repository, directory), join(shadow, directory), {recursive: true});
+    }
+    await symlink(join(repository, 'node_modules'), join(shadow, 'node_modules'), 'dir');
+    await cp(join(repository, 'package.json'), join(shadow, 'package.json'));
+    const gate = join(shadow, 'src/create-pin-gate.ts');
+    const source = await readFile(gate, 'utf8');
+    const off = 'export const EMIT_UNPINNED_CREATE_FIELDS = false;';
+    assert.ok(source.includes(off));
+    await writeFile(gate, source.replace(off, 'export const EMIT_UNPINNED_CREATE_FIELDS = true;'));
+    const child = Bun.spawn([process.execPath, join(shadow, 'tests/job-mesh-act-browser.ts'), '--out', output,
+      ...(serving ? ['--serve'] : [])], {cwd: shadow, stdout: 'inherit', stderr: 'inherit'});
+    const stop = () => child.kill('SIGINT');
+    if (serving) process.on('SIGINT', stop);
+    try { assert.equal(await child.exited, 0); }
+    finally { if (serving) process.off('SIGINT', stop); }
+  } finally {
+    await rm(shadow, {recursive: true, force: true});
+  }
+}
+
+if (serving && EMIT_UNPINNED_CREATE_FIELDS) {
+  const fixture = await createFixture();
+  let stop!: () => void;
+  const stopped = new Promise<void>(resolve => { stop = resolve; });
+  process.on('SIGINT', stop);
+  try {
+    console.log('EN ' + fixture.owner('en'));
+    console.log('KO ' + fixture.owner('ko'));
+    await stopped;
+  } finally {
+    try { await fixture.close(); } finally { process.off('SIGINT', stop); }
+  }
+} else if (EMIT_UNPINNED_CREATE_FIELDS) {
+  for (const language of ['en', 'ko'] as const) {
+    for (const mode of ['mesh-only', 'with-comment'] as const) await runBrowser(language, mode);
+  }
+} else {
+  if (!serving) for (const language of ['en', 'ko'] as const) {
+    for (const mode of ['no-mesh', 'gate-off'] as const) await runBrowser(language, mode);
+  }
+  await runWithFixtureGate();
+}
