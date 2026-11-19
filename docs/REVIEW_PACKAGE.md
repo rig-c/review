@@ -1173,8 +1173,8 @@ verdict. It verifies each retained Parts `assemble` recomposite against its
 bound hash and seals the original bytes. It omits the declaration when no
 qualifying draft, retained composite or bound hash is available. Review
 validates the declared ID with `jobId` and the revision as lowercase SHA-256.
-The labelled select in the secondary toolbar shows the previous ID and the
-first 12 revision characters. When that operand is selected, its title shows
+The labelled select in the secondary toolbar shows the previous ID.
+When that operand is selected, its title shows
 the ID and full revision. Resolution of the accepted draft stays with the
 publisher. [Publisher confirmation](https://github.com/rig-c/review/issues/914#issuecomment-7001422013)
 

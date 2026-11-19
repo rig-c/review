@@ -21,7 +21,9 @@ type OperandControl = {
   disabled: boolean;
   accessibleLabels: string[];
   title: string;
-  options: {value: string; label: string; disabled: boolean}[];
+  parentIsOperandRow: boolean;
+  sameRowAsOperandControls: boolean;
+  options: {value: string; label: string; title: string; disabled: boolean}[];
 };
 type DifferenceReadback = {
   path: string; operand: string | null; threshold: string | null; footprints: string | null;
@@ -68,6 +70,12 @@ function operandControl(page: InputCdpSession) {
     const node = document.querySelector(${JSON.stringify(operandSelector)});
     if (!node) return null;
     const labels = [...node.labels];
+    const row = document.querySelector('.workspace-secondary-toolbar');
+    const controlLabel = node.parentElement;
+    const overlayLabel = document.getElementById('parts-overlay')?.parentElement;
+    const opacityLabel = document.getElementById('parts-opacity')?.parentElement;
+    const rect = controlLabel?.getBoundingClientRect();
+    const peerRects = [overlayLabel, opacityLabel].map(peer => peer?.getBoundingClientRect()).filter(Boolean);
     return {value:node.value, visible:node.checkVisibility(), disabled:node.disabled,
       accessibleLabels:labels.map(label=>{
         const copy=label.cloneNode(true);
@@ -75,7 +83,11 @@ function operandControl(page: InputCdpSession) {
         return copy.textContent.trim();
       }),
       title:node.title,
-      options:[...node.options].map(option=>({value:option.value,label:option.label,disabled:option.disabled}))};
+      parentIsOperandRow:!!row && controlLabel?.parentElement === row
+        && overlayLabel?.parentElement === row && opacityLabel?.parentElement === row,
+      sameRowAsOperandControls:!!rect && peerRects.length === 2
+        && peerRects.every(peer => Math.abs((peer.top + peer.height / 2) - (rect.top + rect.height / 2)) <= 4),
+      options:[...node.options].map(option=>({value:option.value,label:option.label,title:option.title,disabled:option.disabled}))};
   })()`);
 }
 
@@ -96,14 +108,19 @@ function assertPaintingReads(reads: DifferenceReadback[]) {
 }
 
 function assertPreviousIdentity(control: OperandControl, fixture: Fixture, lang: Language) {
+  assert.equal(control.parentIsOperandRow, true, 'operand control must sit directly in the existing operand row');
+  assert.equal(control.sameRowAsOperandControls, true, 'operand control must share the operand row with Overlay and opacity');
   assert.deepEqual(control.accessibleLabels, [lang === 'ko' ? '비교 대상' : 'Compare with']);
   const choice = control.options.find(option => option.value === 'previous-draft');
   assert.ok(choice && !choice.disabled, 'the previous draft option is available');
   const draft = fixture.previousDraft?.draft;
   assert.ok(draft);
   const previous = lang === 'ko' ? '이전 승인 초안' : 'Previous accepted draft';
-  assert.equal(choice.label, `${previous} · ${draft.id} · ${draft.revision.slice(0, 12)}`);
+  assert.equal(choice.label, `${previous} · ${draft.id}`);
+  assert.equal(choice.label.includes(draft.revision.slice(0, 12)), false, 'option label must not carry the hash prefix');
+  assert.equal(choice.title, `${draft.id} · ${draft.revision}`);
   assert.equal(control.title, `${draft.id} · ${draft.revision}`);
+  assert.equal(control.title.includes(draft.revision.slice(0, 12)), true, 'tooltip must carry the hash prefix');
 }
 
 async function selectPrevious(page: InputCdpSession) {
@@ -275,8 +292,11 @@ async function runCase(page: InputCdpSession, lang: Language, variant: Case) {
     assert.equal(await thresholdControls(page), 0, 'Parts Difference keeps the fixed threshold without an input');
 
     if (variant === 'both') {
+      assert.equal(control.parentIsOperandRow, true, 'operand control must sit directly in the existing operand row');
+      assert.equal(control.sameRowAsOperandControls, true, 'operand control must share the operand row with Overlay and opacity');
       assert.equal(control.value, 'painting');
       assert.equal(control.disabled, false);
+      assert.equal(control.title, '');
       assertPaintingReads(await differenceReads(page));
       const before = (await differenceReads(page)).length;
       await selectPrevious(page);

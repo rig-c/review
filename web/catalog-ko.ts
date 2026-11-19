@@ -3410,7 +3410,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "--by: launch only; incompatible with export or correction options": "--by: 실행 전용 옵션이라 내보내기 또는 수정 인계 옵션과 함께 쓸 수 없어요",
   "Painting comparison": "원화 비교",
   "Compare with": "비교 대상",
-  "Previous accepted draft · {0} · {1}": "이전 승인 초안 · {0} · {1}",
+  "Previous accepted draft · {0}": "이전 승인 초안 · {0}",
   "Overlay": "오버레이",
   "Part opacity": "파츠 불투명도",
   "PARTS_COMPARISON_UNAVAILABLE: original painting required": "PARTS_COMPARISON_UNAVAILABLE: 원본 원화가 필요해요",
