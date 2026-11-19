@@ -663,8 +663,11 @@ export function buildVerdict(
     if (c.view.comparison?.mode === 'overlay' && !pkg.painting) {
       refuse('PARTS_COMPARISON_UNAVAILABLE', 'original painting required');
     }
-    if (c.view.comparison?.mode === 'difference' && !pkg.paintingInRig) {
-      refuse('PARTS_DIFFERENCE_UNAVAILABLE', 'declared painting_in_rig required');
+    if (c.view.comparison?.mode === 'difference') {
+      if (c.view.comparison.operand === 'previous-draft') {
+        refuse('PARTS_DIFFERENCE_UNAVAILABLE', 'bound previous draft required');
+      }
+      if (!pkg.paintingInRig) refuse('PARTS_DIFFERENCE_UNAVAILABLE', 'declared painting_in_rig required');
     }
     if (pkg.mode !== 'parts') {
       refuse('PARTS_COMMENT_UNAVAILABLE', 'original part required');
@@ -1017,6 +1020,7 @@ export async function readPartsVerdictJson(pkg: PartsViewPackage): Promise<strin
 export function partsViewJson(
   pkg: PartsViewPackage,
   saved: { verdict: PartsVerdict | null; stale: VerdictStale; legacy?: LegacyPartsVerdictView | null },
+  previousDraft?: {readonly id:string;readonly revision:string},
 ) {
   return {
     schema: 'rig-review-parts-view/1',
@@ -1024,6 +1028,7 @@ export function partsViewJson(
     title: pkg.title,
     rigSize: pkg.rigSize,
     differenceAvailable: !!pkg.paintingInRig,
+    ...(previousDraft ? {previousDraft} : {}),
     painting: pkg.painting ? { sha256: pkg.painting.sha256, width: pkg.painting.width, height: pkg.painting.height } : null,
     sourceHash: verdictSource(pkg).sha256,
     items: pkg.items.map(item => ({
@@ -1119,6 +1124,21 @@ export function exportPartsVerdict(
 }
 
 /** Numeric comparison is decoded from bound original PNG bytes on the server, never browser pixels. */
+function decodeDifferencePng(bytes: Buffer): PNG {
+  // pngjs normalizes valid PNG colour types and bit depths from the bound bytes.
+  try { return PNG.sync.read(bytes); }
+  catch { return refuse('PARTS_DIFFERENCE_PNG', 'decodable PNG operands required'); }
+}
+
+export function previousDraftDifference(pkg: PartsViewPackage, current: Buffer, previous: Buffer, threshold: number) {
+  if (pkg.mode !== 'parts' || !pkg.rigSize) {
+    return refuse('PARTS_DIFFERENCE_UNAVAILABLE', 'declared rig canvas required');
+  }
+  const [w, h] = pkg.rigSize;
+  return differencePixels(decodeDifferencePng(current), {x:0,y:0,w,h}, decodeDifferencePng(previous),
+    [], threshold, false, 'previous-draft');
+}
+
 export async function partsDifference(pkg: PartsViewPackage, index: number, threshold: number, footprints: boolean) {
   await assertPartsUnchanged(pkg);
   if (!pkg.paintingInRig) {
@@ -1128,12 +1148,7 @@ export async function partsDifference(pkg: PartsViewPackage, index: number, thre
   if (pkg.mode !== 'parts' || !Number.isInteger(index) || !item) {
     refuse('PARTS_DIFFERENCE_UNAVAILABLE', 'known original part required');
   }
-  const decode = async (path: string) => {
-    const bytes = await readFile(path);
-    // pngjs normalizes valid PNG colour types and bit depths from the bound bytes.
-    try { return PNG.sync.read(bytes); }
-    catch { return refuse('PARTS_DIFFERENCE_PNG', 'decodable PNG operands required'); }
-  };
+  const decode = async (path: string) => decodeDifferencePng(await readFile(path));
   const painting = await decode(pkg.paintingInRig!.abs);
   const part = await decode(pkg.imagePaths[index]!);
   const fronts = footprints

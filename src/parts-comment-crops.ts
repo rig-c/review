@@ -2,12 +2,14 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { PNG } from 'pngjs';
+import type { JobPreviousDraft } from './job-contract.ts';
 import { parsePartsIssue, assertPartsIssueBinding, type PartsIssue } from './parts-comment.ts';
 import { validatePngCrop, storePngCrop, readPngCrop, type PngCrop } from './comment-crops.ts';
 import { assertPartsUnchanged, partsDifference, verdictSource, type PartsViewPackage } from './parts-view.ts';
 
 export interface PartsCommentBindingOptions {
   readonly sourceHash?: string;
+  readonly previousDraft?: JobPreviousDraft;
 }
 
 export async function preparePartsComment(
@@ -58,9 +60,19 @@ async function resolvePartsComment(
     throw new Error('PARTS_COMPARISON_UNAVAILABLE: original painting required');
   }
   if (c.view.comparison?.mode === 'difference') {
-    for (const part of c.parts) {
-      const item = itemMap.get(part.name)!;
-      await partsDifference(pkg, item.index, c.view.comparison.threshold, c.view.footprints);
+    if (c.view.comparison.operand === 'previous-draft') {
+      if (c.view.mode !== 'assembled' || c.view.footprints) {
+        throw new Error('PARTS_COMPARISON_INVALID: previous draft requires an assembled view without footprints');
+      }
+      // The job caller checks the snapshot seals around this validation.
+      if (!options?.sourceHash || !options.previousDraft) {
+        throw new Error('PARTS_DIFFERENCE_UNAVAILABLE: bound previous draft required');
+      }
+    } else {
+      for (const part of c.parts) {
+        const item = itemMap.get(part.name)!;
+        await partsDifference(pkg, item.index, c.view.comparison.threshold, c.view.footprints);
+      }
     }
   }
   const partBuffers = new Map<string, Buffer>();
