@@ -1,5 +1,6 @@
 import {resolvePartsPaintingInRig} from './parts-view.ts';
 import {checkpointEvidenceFields, checkpointEvidenceMetadata} from './job-checkpoint-evidence.ts';
+import {previousDraftFields} from './job-previous-draft.ts';
 import { randomUUID } from 'node:crypto';
 import { type Dirent, lstatSync, readdirSync, realpathSync, type Stats } from 'node:fs';
 import { mkdir, open, rm, writeFile } from 'node:fs/promises';
@@ -11,7 +12,7 @@ import {
 } from './job-contract.ts';
 import type {
   JobCheckpointEvidence, JobFileIdentity, JobInterviewDiagnostics, JobInterviewRecord, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
-  JobSelector, JobSourceBinding, JobSubject, JobPlanTextProjection, JobPlanTextStep,
+  JobPreviousDraft, JobSelector, JobSourceBinding, JobSubject, JobPlanTextProjection, JobPlanTextStep,
   OptionContext, OptionSource, PackageResultV3, PlanContext, PlanSource, ProjectRecord, PublishRequestV3,
   RecordFreeze, RecordOptionResult, RecordPlanResult, RecordPublicationReader, RecordPublishedContext,
   RecordReaderInput, RecordResult, RecordSource, RecordSubject,
@@ -58,6 +59,7 @@ export interface JobRootIdentity {
  */
 export interface JobPublishedContext {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
+  readonly previousDraft?: JobPreviousDraft;
   readonly selector: JobSelector | null;
   readonly plan: JobPlanIdentity | null;
   readonly parts: JobPartsIdentity | null;
@@ -85,7 +87,7 @@ export type JobPublicationReader = (input: {
 }) => Promise<JobPublishedContext>;
 
 export interface JobRetainedSource {
-  /** Private base preimage for evidence-aware durable validation, absent historically. */
+  /** Private base preimage for optional declarations. Keeps its historical key. */
   readonly checkpointEvidencePackageHash?: string;
   readonly root: JobRootIdentity;
   readonly record: JobFileIdentity | null;
@@ -184,11 +186,32 @@ function rootRelative(root: string, absolute: string): string {
   return jobPath(path);
 }
 
-function sourceBytes(root: string, path: string): Buffer {
+function sourceBytes(root: string, path: string, bound?: {limit: number; refusal: string}): Buffer {
   const file = checkedPath(root, jobPath(path));
-  const before = lstatSync(file), bytes = readRegular(file, maxFileBytes), after = lstatSync(file);
+  const before = lstatSync(file);
+  if (bound && before.size > bound.limit) throw new JobError('JOB_SOURCE_UNRETAINABLE', bound.refusal);
+  const bytes = readRegular(file, bound?.limit ?? maxFileBytes), after = lstatSync(file);
   if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
       before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new JobError('JOB_SOURCE_MISMATCH');
+  return bytes;
+}
+
+/** Read and hash the exact bytes the caller will consume, including on a cache hit at the front. */
+export function readPreviousDraftBytes(root: string, file: JobFileIdentity, operand: 'current' | 'previous' | 'diff'): Buffer {
+  let bytes: Buffer;
+  try {
+    if (realpathSync(root) !== root) throw new Error('Noncanonical previous draft root');
+    bytes = sourceBytes(root, file.path, {limit: operand === 'diff' ? 1024 * 1024 : maxFileBytes,
+      refusal: `PREVIOUS_DRAFT_LIMIT operand=${operand}`});
+  } catch (error) {
+    if (error instanceof JobError && error.code === 'JOB_SOURCE_UNRETAINABLE') throw error;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new JobError('JOB_SOURCE_MISMATCH', `PREVIOUS_DRAFT_MISSING operand=${operand} path=${JSON.stringify(file.path)}`);
+    }
+    const detail = error instanceof JobError ? `PREVIOUS_DRAFT_HASH_MISMATCH operand=${operand}` : 'PREVIOUS_DRAFT_INVALID';
+    throw new JobError('JOB_SOURCE_MISMATCH', detail);
+  }
+  if (jobHash(bytes) !== file.sha256) throw new JobError('JOB_SOURCE_MISMATCH', `PREVIOUS_DRAFT_HASH_MISMATCH operand=${operand}`);
   return bytes;
 }
 
@@ -247,7 +270,7 @@ function referenceRow(raw: unknown, row: number, hashed: boolean): JobPartsFileR
 }
 
 /** Reuse the official-reference PNG admission and decoded-size bound for generic sidecar operands. */
-function assertPartsReferencePng(data: Buffer, detail: string): void {
+function assertPartsReferencePng(data: Buffer, detail: string): {width: number; height: number} {
   if (data.length < 33 || !data.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) ||
     data.readUInt32BE(8) !== 13 || data.toString('ascii', 12, 16) !== 'IHDR') {
     throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_PNG_INVALID ${detail}`);
@@ -259,6 +282,60 @@ function assertPartsReferencePng(data: Buffer, detail: string): void {
   }
   try { PNG.sync.read(data); }
   catch { throw new JobError('JOB_SOURCE_MISMATCH', `PARTS_REFERENCE_PNG_INVALID ${detail}`); }
+  return {width, height};
+}
+
+/** The caller has already bounded and sealed the bytes. Parts owns the document's internal shape. */
+function assertPreviousDraftDiff(bytes: Buffer, composites: JobPreviousDraft['composites']): void {
+  const invalid = () => new JobError('JOB_SOURCE_MISMATCH', 'PREVIOUS_DRAFT_DIFF_INVALID');
+  let document: ReturnType<typeof jsonObject>;
+  try { document = jsonObject(bytes); }
+  catch { throw invalid(); }
+  if (document.schema !== 'rig-parts-draft-diff/1') throw invalid();
+  const missing = new Set([composites.current.sha256, composites.previous.sha256]);
+  const pending: unknown[] = [document];
+  while (pending.length && missing.size) {
+    const value = pending.pop();
+    if (typeof value === 'string') missing.delete(value);
+    else if (value !== null && typeof value === 'object') {
+      for (const child of Object.values(value)) pending.push(child);
+    }
+  }
+  if (missing.size) throw invalid();
+}
+
+function admitPreviousDraftAssets(root: string, declaration: JobPreviousDraft, manifestBytes: Buffer | undefined): Map<string, Buffer> {
+  const size = manifestBytes && jsonObject(manifestBytes).rig_size;
+  if (!Array.isArray(size) || size.length !== 2 || !size.every(n => Number.isSafeInteger(n) && n > 0)) {
+    throw new JobError('JOB_SOURCE_MISMATCH', 'PREVIOUS_DRAFT_INVALID');
+  }
+  const admitted = new Map<string, Buffer>();
+  for (const operand of ['current', 'previous'] as const) {
+    const file = declaration.composites[operand], detail = `operand=${operand}`;
+    const bytes = readPreviousDraftBytes(root, file, operand);
+    let dimensions: ReturnType<typeof assertPartsReferencePng>;
+    try {
+      // Parts writes noninterlaced RGBA8. pngjs uses bounded inflate for that encoding.
+      if (bytes[24] !== 8 || bytes[25] !== 6 || bytes[28] !== 0) throw new Error('format');
+      dimensions = assertPartsReferencePng(bytes, detail);
+    } catch (error) {
+      if (error instanceof JobError && error.code === 'JOB_SOURCE_UNRETAINABLE') {
+        throw new JobError('JOB_SOURCE_UNRETAINABLE', `PREVIOUS_DRAFT_LIMIT ${detail}`);
+      }
+      throw new JobError('JOB_SOURCE_MISMATCH', `PREVIOUS_DRAFT_PNG_INVALID ${detail}`);
+    }
+    if (dimensions.width !== size[0] || dimensions.height !== size[1]) {
+      throw new JobError('JOB_SOURCE_MISMATCH',
+        `PREVIOUS_DRAFT_SIZE ${detail} expected=${size.join('x')} received=${dimensions.width}x${dimensions.height}`);
+    }
+    admitted.set(file.path, bytes);
+  }
+  if (declaration.diff) {
+    const bytes = readPreviousDraftBytes(root, declaration.diff, 'diff');
+    assertPreviousDraftDiff(bytes, declaration.composites);
+    admitted.set(declaration.diff.path, bytes);
+  }
+  return admitted;
 }
 
 function partsIdentityHeader(value: unknown): {raw: Record<string, unknown>; version: string} {
@@ -1217,7 +1294,7 @@ export async function verifyJobRecordSourceFresh(options: {
 /** Preserve the existing composite preimage, conditionally appending the declaration. */
 function packageSourceDigest(packageSourceHash: string, record: JobFileIdentity | null,
   source: Pick<JobModelSourceBinding, 'selector' | 'plan' | 'parts'>, files: readonly JobFileIdentity[],
-  evidence: {readonly checkpointEvidence?: readonly JobCheckpointEvidence[]}): string {
+  evidence: Pick<JobModelSourceBinding, 'checkpointEvidence' | 'previousDraft'>): string {
   return jobHash(JSON.stringify({schema: 'rig-review-job-source/2', packageSourceHash, record,
     selector: source.selector, plan: source.plan, parts: source.parts, files, ...evidence}));
 }
@@ -1276,6 +1353,7 @@ export async function prepareJobSource(options: {
   if ('kind' in options.request.result) {
     assertJobApiSchema(options.request.schema, JOB_API_V3_SCHEMA);
     if (options.request.result.kind !== 'package') {
+      // The record reader owns both context reads. The package reader is never invoked here.
       return prepareJobRecordSource({
         root: options.root,
         stateRoot: options.stateRoot,
@@ -1337,6 +1415,7 @@ export async function prepareJobSource(options: {
     throw new JobError('JOB_SOURCE_UNRETAINABLE', 'CREATE_PUBLICATION_CONTRACT_UNAVAILABLE');
   }
   if (requestDigest(context.selector) !== requestDigest(request.result.selector)) throw new JobError('JOB_SOURCE_MISMATCH');
+  const previous = previousDraftFields(context, context.selector, context.files);
   const declared = publishedIdentities(context);
   const evidence = checkpointEvidenceFields(context, context.plan, context.subjects, declared);
   checkpointEvidenceMetadata(root.path, evidence.checkpointEvidence);
@@ -1382,12 +1461,14 @@ export async function prepareJobSource(options: {
     const info = lstatSync(snapshotRoot);
     snapshotIdentity = {dev: info.dev, ino: info.ino};
     const parts = await prepareParts(root.path, snapshotRoot, context.parts, declared, options.partsEnumerator);
+    const previousAssets = previous.previousDraft && admitPreviousDraftAssets(root.path, previous.previousDraft,
+      parts.identity ? parts.bytes.get(parts.identity.manifest.path) : undefined);
     for (const [path, bytes] of parts.bytes) add(path, jobHash(bytes));
     if (wanted.size > maxSourceFiles) throw new JobError('JOB_SOURCE_UNRETAINABLE', 'PARTS_REFERENCE_LIMIT');
     let size = 0;
     const directories = new Set([snapshotRoot, dirname(snapshotRoot), options.stateRoot]);
     for (const [path, expected] of [...wanted].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
-      const bytes = parts.bytes.get(path) ?? sourceBytes(root.path, path), sha256 = jobHash(bytes);
+      const bytes = previousAssets?.get(path) ?? parts.bytes.get(path) ?? sourceBytes(root.path, path), sha256 = jobHash(bytes);
       size += bytes.length;
       if (size > maxSourceBytes) {
         throw new JobError('JOB_SOURCE_UNRETAINABLE', `retained source bytes ${size} exceed the ${maxSourceBytes}-byte limit`);
@@ -1423,9 +1504,9 @@ export async function prepareJobSource(options: {
       path: rootRelative(root.path, resolve(review.root, file.path)), sha256: file.sha256,
     });
     checkpointEvidenceMetadata(snapshotRoot, evidence.checkpointEvidence);
-    const modelSource: Omit<JobModelSourceBinding, 'checkpointEvidence'> = {
+    const modelSource: JobModelSourceBinding = {
       sourceHash: project || context.plan || context.parts ? packageSourceDigest(review.sourceHash, record,
-        {selector: context.selector, plan: context.plan, parts: parts.identity}, seals, evidence) : review.sourceHash,
+        {selector: context.selector, plan: context.plan, parts: parts.identity}, seals, {...evidence, ...previous}) : review.sourceHash,
       projectHash: project?.hash ?? null,
       package: { id: review.manifest.id, revision: review.manifest.revision },
       selector: context.selector,
@@ -1433,7 +1514,7 @@ export async function prepareJobSource(options: {
       direction: originalIdentity(review.direction?.file ?? null),
       optionSet: null, appliedResult: null, plan: context.plan, parts: parts.identity,
     };
-    let source: JobSourceBinding = {...modelSource, ...evidence};
+    const source: JobSourceBinding = {...modelSource, ...evidence, ...previous};
     const boundReview = { ...review, sourceHash: source.sourceHash };
     const sealedByPath = new Map(seals.map(seal => [seal.path, seal.sha256]));
     const retainedInterview = project
@@ -1453,7 +1534,7 @@ export async function prepareJobSource(options: {
       : null;
     const prepared: JobRetainedSource = {
       root, record, seals, snapshotRoot, snapshotIdentity,
-      ...(evidence.checkpointEvidence ? {checkpointEvidencePackageHash: review.sourceHash} : {}),
+      ...(source.checkpointEvidence || source.previousDraft ? {checkpointEvidencePackageHash: review.sourceHash} : {}),
       manifestPath: retained.manifestPath,
       source,
       instanceKey: openKey({ mode: 'single', p: boundReview, inputs: { input: review.manifestPath },
@@ -1475,7 +1556,7 @@ export async function prepareJobSource(options: {
     };
     await options.afterSnapshot?.();
     assertJobSourceCurrent(prepared);
-    if (source.checkpointEvidence) assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity);
+    if (source.checkpointEvidence || source.previousDraft) assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity);
     return prepared;
   } catch (error) {
     if (snapshotIdentity) await removeOwnedJobSnapshot(options.stateRoot, {snapshotRoot, ...snapshotIdentity});
@@ -1484,7 +1565,7 @@ export async function prepareJobSource(options: {
   }
 }
 
-/** Authenticate the optional extension without opening live files or reclaimed snapshots. */
+/** Authenticate optional declarations without opening live files or reclaimed snapshots. */
 export function assertStoredCheckpointEvidence(retained: JobRetainedSourceV3): void {
   if (!retained.source || typeof retained.source !== 'object' || Array.isArray(retained.source)) {
     throw new JobError('JOB_SOURCE_MISMATCH');
@@ -1492,20 +1573,26 @@ export function assertStoredCheckpointEvidence(retained: JobRetainedSourceV3): v
   const hasEvidence = 'checkpointEvidence' in retained.source;
   if (isRetainedRecordSource(retained)) {
     const parsed = parseRecordSource(retained.source);
-    if (!hasEvidence && !('checkpointEvidence' in retained.context)) return;
+    if (!hasEvidence && !('checkpointEvidence' in retained.context) && !('previousDraft' in retained.context)) return;
     const context = parseRecordPublishedContext(retained.context, retained.result, retained.record);
     if (requestDigest(parsed.checkpointEvidence ?? null) !== requestDigest(context.checkpointEvidence ?? null) ||
         requestDigest(parsed.subjects) !== requestDigest(retained.subjects) ||
         requestDigest(parsed.files) !== requestDigest(retained.seals)) throw new JobError('JOB_SOURCE_MISMATCH');
     return;
   }
-  if (!hasEvidence && !('checkpointEvidencePackageHash' in retained)) return;
   const source = retained.source;
-  if (!hasEvidence || !retained.record) throw new JobError('JOB_SOURCE_MISMATCH');
+  const hasPreviousDraft = 'previousDraft' in source;
+  if (!hasEvidence && !hasPreviousDraft && !('checkpointEvidencePackageHash' in retained)) return;
+  if (!(hasEvidence || hasPreviousDraft) || !retained.record || (hasPreviousDraft && !source.parts)) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
   const evidence = checkpointEvidenceFields(source, source.plan, retained.subjects, retained.seals);
+  const previous = previousDraftFields(source, source.selector, retained.seals);
   const packageSourceHash = jobSha(retained.checkpointEvidencePackageHash);
-  const expected = packageSourceDigest(packageSourceHash, retained.record, source, retained.seals, evidence);
-  if (expected !== source.sourceHash || requestDigest(evidence.checkpointEvidence) !== requestDigest(source.checkpointEvidence)) {
+  const expected = packageSourceDigest(packageSourceHash, retained.record, source, retained.seals, {...evidence, ...previous});
+  if (expected !== source.sourceHash ||
+      requestDigest(evidence.checkpointEvidence ?? null) !== requestDigest(source.checkpointEvidence ?? null) ||
+      requestDigest(previous.previousDraft ?? null) !== requestDigest(source.previousDraft ?? null)) {
     throw new JobError('JOB_SOURCE_MISMATCH');
   }
 }

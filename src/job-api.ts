@@ -1,4 +1,5 @@
 import {checkpointEvidenceFields} from './job-checkpoint-evidence.ts';
+import {previousDraftFields} from './job-previous-draft.ts';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
   JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PARTS_ENUMERATOR_RANGE,
@@ -415,7 +416,7 @@ export function exactObject(
   return item;
 }
 
-function parseFileRow(value: unknown, code: JobErrorCode): JobFileIdentity {
+export function parseFileRow(value: unknown, code: JobErrorCode): JobFileIdentity {
   const item = exactObject(value, ['path', 'sha256'], code);
   return asCode(() => ({ path: jobPath(item.path), sha256: jobSha(item.sha256) }), code);
 }
@@ -710,6 +711,7 @@ export function parseRecordPublishedContext(
 ): OptionContext | PlanContext {
   const selection = parseRecordResult(result);
   const checkedRecord = record === undefined ? undefined : parseProjectRecord(record, 'JOB_SOURCE_MISMATCH');
+  if (value && typeof value === 'object') previousDraftFields(value, null);
   const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH', ['checkpointEvidence']);
   const label = asCode(() => jobText(item.label), 'JOB_SOURCE_MISMATCH');
   const parts = parseRecordPartsIdentity(item.parts, 'JOB_SOURCE_MISMATCH');
@@ -1218,6 +1220,11 @@ function parseCommentAnchor(raw: unknown, text: string, source?: SourceV3 | stri
   if ('schema' in item) {
     commentsObject(item, ['schema', 'id', 'parts', 'sourceHash', 'rigRegion', 'imageRegion', 'view', 'crop', 'nativeCrop']);
     const issue = parsePartsIssue({...item, summary: text}, true, false, false);
+    const comparison = issue.view.comparison;
+    if (comparison?.mode === 'difference' && comparison.operand === 'previous-draft' &&
+        (issue.view.mode !== 'assembled' || !source || typeof source === 'string' || 'record' in source || !source.previousDraft)) {
+      throw new JobError('JOB_ACT_INVALID');
+    }
     if (issue.crop.png !== undefined) validatePngCrop(issue.crop as Parameters<typeof validatePngCrop>[0]);
     if (sourceHash && issue.sourceHash !== sourceHash) throw new JobError('JOB_ACT_SOURCE_STALE');
     if (source && typeof source !== 'string' && !('record' in source)) {
@@ -1364,11 +1371,13 @@ function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
     return record;
   }
   const common = ['sourceHash', 'projectHash', 'package', 'direction', 'optionSet', 'appliedResult', 'plan', 'parts'];
-  const item = commentsObject(raw, [...common, 'selector', 'model'], ['checkpointEvidence']);
+  const item = commentsObject(raw, [...common, 'selector', 'model'], ['checkpointEvidence', 'previousDraft']);
   jobSha(item.sourceHash); if (item.projectHash !== null) jobSha(item.projectHash);
   const pkg = commentsObject(item.package, ['id', 'revision']); jobText(pkg.id); jobText(pkg.revision);
   for (const key of ['direction', 'model']) if (item[key] !== null) parseFileRow(item[key], 'JOB_ACT_INVALID');
-  parseJobSelector(item.selector);
+  const selector = parseJobSelector(item.selector);
+  const previousDraft = previousDraftFields(item, selector);
+  if (previousDraft.previousDraft && item.parts === null) throw new JobError('JOB_ACT_INVALID');
   if (item.optionSet !== null) {
     const set = commentsObject(item.optionSet, ['id', 'sha256']); jobId(set.id); jobSha(set.sha256);
   }

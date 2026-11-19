@@ -14,6 +14,7 @@ import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueC
 import type { Feedback } from './session.ts';
 import { validatePicks } from './interview-picks.ts';
 import {
+  assertStoredCheckpointEvidence,
   isRetainedRecordSource,
   type JobRetainedRecordSource,
   type JobRetainedSource,
@@ -491,6 +492,7 @@ export function finalizeJobAct(options: {
   };
   if (ask.status !== 'pending') throw new JobError('JOB_ASK_SUPERSEDED');
   if (submission.kind !== ask.subject.kind || submission.publicationId !== ask.publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
+  if ('previousDraft' in retained.source) assertStoredCheckpointEvidence(retained);
   const source = bindJobAsk(ask.subject, retained);
   if (requestDigest(source) !== requestDigest(ask.source)) throw new JobError('JOB_ACT_SOURCE_STALE');
   if (!reviewer.id || !['owner', 'delegate'].includes(reviewer.role)) throw new JobError('JOB_AUTHORITY_REFUSED');
