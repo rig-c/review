@@ -94,7 +94,8 @@ try {
   assert.equal(result.ok, false, 'AGGREGATE_REFUSAL_REQUIRED');
   assert.equal(response.status, 409);
   assert.deepEqual(result.error, {code: 'JOB_SOURCE_UNRETAINABLE', message: mode === 'referenced'
-    ? 'PARTS_REFERENCE_LIMIT row=2 role=part path="parts/c.png"' : 'JOB_SOURCE_UNRETAINABLE'});
+    ? 'PARTS_REFERENCE_LIMIT row=2 role=part path="parts/c.png"'
+    : `retained source bytes ${baselineBytes + extra.length} exceed the ${limit}-byte limit`});
   assert.equal(headUnchanged, true, 'AGGREGATE_HEAD_CHANGED');
 } finally {
   await f.close();

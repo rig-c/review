@@ -24,8 +24,12 @@ Bun.plugin({
       assert.equal(path, sourcePath);
       loads++;
       const declaration = 'const maxSourceBytes = 256 * 1024 * 1024;';
+      const filesDeclaration = 'const maxSourceFiles = 4096;';
       assert.equal(original.split(declaration).length, 2);
-      let contents = original.replace(declaration, `const maxSourceBytes = ${limit};`);
+      assert.equal(original.split(filesDeclaration).length, 2);
+      let contents = original
+        .replace(declaration, `const maxSourceBytes = ${limit};`)
+        .replace(filesDeclaration, 'const maxSourceFiles = 6;');
       for (const legacyPredicate of ['total > maxSourceBytes', 'size > maxSourceBytes']) {
         assert.equal(contents.split(legacyPredicate).length, 2);
       }
@@ -59,6 +63,7 @@ Bun.plugin({
 
 // Dynamic import is deliberately after registration so prepareJobRecordSource loads through the plugin.
 const { captureJobRoot, prepareJobRecordSource } = await import('../../src/job-source.ts');
+const { jobFailure } = await import('../../src/job-api.ts');
 const { JobError } = await import('../../src/job-store.ts');
 const {
   createSyntheticOptionRecordWorkspace,
@@ -115,6 +120,11 @@ try {
   );
   const retainedBytes = baselineBytes + extra.length;
   assert.ok(retainedBytes > limit, 'RECORD_AGGREGATE_OVERLIMIT_MUST_EXCEED');
+  let measuredBytes = 0;
+  for (const row of activeFiles) {
+    measuredBytes += (await readFile(join(workRoot, row.path))).length;
+    if (measuredBytes > limit) break;
+  }
 
   const inputDigestBefore = await Promise.all(
     activeFiles.map(async row => ({ path: row.path, sha256: hash(await readFile(join(workRoot, row.path))) })),
@@ -167,6 +177,7 @@ try {
       baselineBytes,
       extraBytes: extra.length,
       retainedBytes,
+      measuredBytes,
       readerPhases,
       snapshotsUnchanged,
       originalSha256,
@@ -178,10 +189,42 @@ try {
   assert.equal(outcome.ok, false, 'RECORD_AGGREGATE_REFUSAL_REQUIRED');
   assert.deepEqual(outcome.error, {
     code: 'JOB_SOURCE_UNRETAINABLE',
-    message: 'JOB_SOURCE_UNRETAINABLE',
+    message: `retained source bytes ${measuredBytes} exceed the ${limit}-byte limit`,
   });
   assert.deepEqual(readerPhases, ['inventory']);
   assert.equal(snapshotsUnchanged, true, 'RECORD_AGGREGATE_SNAPSHOT_LEAKED');
+
+  // File-count limit (inventory.files.length > maxSourceFiles) with lowered maxSourceFiles = 6
+  const extraFiles = Array.from({ length: 3 }, (_, index) =>
+    writeWorkspaceFile(workRoot, `inputs/count-extra-${index}.bin`, 'x'),
+  );
+  activeFiles = [...fixture.files, ...extraFiles].sort((a, b) =>
+    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+  );
+  assert.equal(activeFiles.length, 7);
+  let overFilesOutcome: ReturnType<typeof jobFailure> | null = null;
+  try {
+    await prepareJobRecordSource({
+      root,
+      stateRoot,
+      fingerprint,
+      request: {
+        freeze: { kind: 'producer-held', holdId: 'hold_rec_agg_files', record: fixture.record },
+        result: fixture.result,
+      },
+      readRecordPublished: reader,
+    });
+  } catch (err) {
+    overFilesOutcome = jobFailure(err);
+  }
+  assert.deepEqual(overFilesOutcome, {
+    ok: false,
+    error: {
+      code: 'JOB_SOURCE_UNRETAINABLE',
+      message: 'retained source files 7 exceed the 6-file limit',
+    },
+  });
+  console.log(JSON.stringify({ stage: 'over-files-result', result: overFilesOutcome }));
 } finally {
   rmSync(workRoot, { recursive: true, force: true });
   rmSync(stateRoot, { recursive: true, force: true });

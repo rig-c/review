@@ -43,6 +43,12 @@ for (const mode of ['referenced', 'retained']) {
       } else {
         expect({exit, stderr}).toEqual({exit: 0, stderr: ''});
         expect(result.result.ok).toBe(false);
+        expect(result.result.error).toEqual({
+          code: 'JOB_SOURCE_UNRETAINABLE',
+          message: mode === 'referenced'
+            ? 'PARTS_REFERENCE_LIMIT row=2 role=part path="parts/c.png"'
+            : `retained source bytes ${result.retainedBytes} exceed the ${128 * 1024}-byte limit`,
+        });
         expect(result.headUnchanged).toBe(true);
       }
       console.log(JSON.stringify({mode, variant, exit, originalSha256: original,
