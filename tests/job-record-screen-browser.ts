@@ -358,7 +358,10 @@ async function postQuestionPictureChecks(){
     await wait(`document.body.dataset.ready==='true' && !!document.querySelector('form.interview-answer fieldset:not(:disabled)')`, '929 '+variant+' '+language);
     const observation:{variant:string;language:string;sha256?:string}={variant,language};
     if(variant==='scene'){
-     await wait(`document.querySelector('#reference-content img')?.naturalWidth===2`,'929 scene plate');
+     await wait(`(()=>{
+      const image=document.querySelector('#reference-content img'),rect=image?.getBoundingClientRect();
+      return image?.naturalWidth===2&&rect.width>0&&rect.height>0&&getComputedStyle(image).visibility==='visible';
+     })()`,'929 painted scene plate');
      const image=await page!.evaluate<{src:string;visible:boolean;background:number[]}>(`(()=>{
       const image=document.querySelector('#reference-content img'),canvas=document.createElement('canvas');
       canvas.width=canvas.height=2;
