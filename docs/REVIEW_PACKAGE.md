@@ -1274,7 +1274,9 @@ The manifest and complete retained image rows enter the composite source hash. L
 
 <a id="preparatory-model-free-record-contract-and-source-seam"></a>
 
-`src/job-contract.ts`, `src/job-api.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-session.ts`, `src/job-front.ts`, `src/job-host.ts` and `web/job-session.ts` implement and export the active model-free record mode (`rig-review/job-api@3` and `rig-review/act@4`). When a host or session is started with `readRecordPublished` and a non-empty `recordReaderId` (`publicationMode: 'record-and-package'`), `createJobHostPorts` and `JobSession` serve `option-set`, `plan` and `package` publications, `ask`, `next` (`JOB_CAPABILITIES_V3`), `fetch-act` (`rig-review/act@4` for record acts alongside `rig-review/act@2` and `rig-review/act@3` for package acts) and `close` under `rig-review/job-api@3`. On the normal owner URL (`/jobs/<jobId>/?#cap=...`), `retainedPublicationRoutes` serves retained record publications without invoking `loadReview` or synthesizing a fake `manifest` or `source.package` (`api/review` returns `{recordSource, sourceHash, capabilities, feedbackCatalog: {slots: null}}`, and `api/interview` serves retained `option-set` questions and sealed option images), while `prepareJobInspection` and `createJobWindow` render model-free `option-set` and `plan` inspection panels and submit human decisions that finalize `rig-review/act@4` acts (preserving existing `JOB_VISUAL_UNAVAILABLE` / `MODEL_UNAVAILABLE` behavior for package publications). `@rig-c/review/job-host` exports `JOB_API_V3_SCHEMA`, `JOB_RECORD_ACT_SCHEMA`, `JOB_RECORD_READER_ID`, `parseRecordAct`, `prepareJobRecordAct`, `prepareJobRecordSource` and the V3/record type surface (`JobRecordAct`, `JobActV3`, `JobPlanSource`, `JobFetchActRequestV3`, `JobRecordHostHooks`, `JobDisplayPublicationV3`, `DisplayPublicationV3` and companion types). [Review #561](https://github.com/rig-c/review/issues/561), [Review #588](https://github.com/rig-c/review/issues/588), [Review #586](https://github.com/rig-c/review/issues/586).
+`src/job-contract.ts`, `src/job-api.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-session.ts`, `src/job-front.ts`, `src/job-host.ts` and `web/job-session.ts` implement and export the active model-free record mode (`rig-review/job-api@3` and `rig-review/act@4`). When a host or session is started with `readRecordPublished` and a non-empty `recordReaderId` (`publicationMode: 'record-and-package'`), `createJobHostPorts` and `JobSession` serve `option-set`, `plan` and `package` publications, `ask`, `next` (`JOB_CAPABILITIES_V3`), `fetch-act` (`rig-review/act@4` for record acts alongside `rig-review/act@2` and `rig-review/act@3` for package acts) and `close` under `rig-review/job-api@3`. On the normal owner URL (`/jobs/<jobId>/?#cap=...`), `retainedPublicationRoutes` serves retained record publications with `recordSource` and the publication's `sourceHash`. `api/review` defaults to model-free metadata, and `api/interview` serves retained `option-set` questions and sealed option images. `prepareJobInspection` and `createJobWindow` render model-free `option-set` and `plan` inspection panels and submit human decisions that finalize `rig-review/act@4` acts (preserving existing `JOB_VISUAL_UNAVAILABLE` / `MODEL_UNAVAILABLE` behavior for package publications). `@rig-c/review/job-host` exports `JOB_API_V3_SCHEMA`, `JOB_RECORD_ACT_SCHEMA`, `JOB_RECORD_READER_ID`, `parseRecordAct`, `prepareJobRecordAct`, `prepareJobRecordSource` and the V3/record type surface (`JobRecordAct`, `JobActV3`, `JobPlanSource`, `JobFetchActRequestV3`, `JobRecordHostHooks`, `JobDisplayPublicationV3`, `DisplayPublicationV3` and companion types). [Review #561](https://github.com/rig-c/review/issues/561), [Review #588](https://github.com/rig-c/review/issues/588), [Review #586](https://github.com/rig-c/review/issues/586).
+
+A post-interview option set with a `rig` context can also show the accepted rig as its question picture. Review resolves the version and verifies the operative human rig-review signoff's package hash from sealed `project.json`. It requires matching publication seals for every recorded `out/check/build/` row under `derived/review/v<n>/`, then opens the retained `out/check` with the folder adapter and producer handoff disabled. Only the bound compiled model and its page images are exposed through the existing assets route. On success, `api/review` includes the rig manifest and model metadata alongside the same record identity, and `api/interview` omits `missingPicture`. Historical records without this closure, including rigs signed against `outputs`, retain the model-free response and existing missing-picture message. A failed closure check uses the same fallback and leaves the question answerable. [Review #929](https://github.com/rig-c/review/issues/929).
 
 `JOB_API_SCHEMA` (`rig-review/job-api@2`), `JOB_ACT_SCHEMA` (`rig-review/act@2`), `JOB_CAPABILITIES` (`{}`) and default hosts started without `readRecordPublished` (`publicationMode: 'package-only'`) preserve their existing package-only behavior and exact `job-ui/<jobId>.json` descriptor bytes, and reject `rig-review/job-api@3` or tagged record publish requests with HTTP 400 (`JOB_REQUEST_INVALID` / `JOB_API_SCHEMA_MISMATCH`), leaving generation and committed head unchanged. Host startup validates `readRecordPublished`, `recordReaderId` and `publicationMode` on cold start, ordinary reuse and strict `reuseOnly` attachment (`JOB_HOST_OPTION_ID_INVALID` on mismatched hook/ID pairing; `JOB_HOST_REUSE_MISMATCH` on `publicationMode`, `apiSchema`, `actSchema` or `recordReaderId` drift so a package-only listener and a record-mode listener or two different record readers never silently substitute for one another). Satisfied prerequisites are [Review #563](https://github.com/rig-c/review/issues/563) (closed), [Create #277](https://github.com/rig-c/create/issues/277) (closed), [Create #279](https://github.com/rig-c/create/issues/279) (closed), [Create #285](https://github.com/rig-c/create/issues/285) (closed), [Create #286](https://github.com/rig-c/create/issues/286) (closed) and the real Review EN/KO fixture loop proved in [Review #590](https://github.com/rig-c/review/issues/590). Remaining external and cross-repository gates are [Create #278](https://github.com/rig-c/create/issues/278) (open writer consumer fetch, ingest and freeze integration), [Create #317](https://github.com/rig-c/create/issues/317) (waiting on [Review #588](https://github.com/rig-c/review/issues/588) activation) and HQ exact-head sign-off.
 
@@ -1499,16 +1501,25 @@ The decoders and consumer projections are read-only. Since [Review #713](https:/
 rig and direction review-verdict and signoff acts as act@6. The UI submission
 keeps its existing `words` and `issues` fields. [Review #746](https://github.com/rig-c/review/issues/746)
 adds optional `feedback: Feedback[]` beside required `words` only for the
-`rig-review` verdict submission. When present, including an empty list, it is
-the complete comment list: `feedbackItemComments` maps each row's `summary` to
-`text` and retains its `id`, frames, target, category and `anchor.context`.
-The existing decoder validates every mapped comment, its evidence and the
-whole scalar bound; malformed or blank rows refuse rather than falling back to
-`words`. The act bar sends a detached feedback list when comments exist and
-keeps `words` as their projection. It omits `feedback` when there are no comments.
-Absent `feedback` retains the previous written bytes and words-only mapping.
-Direction and image verdict submissions do not accept `feedback`. The written
-act remains act@6; historical words-only acts retain their readers.
+`rig-review` verdict submission. When present, including an empty list,
+`feedback` supplies the pinned comments and suppresses the `words` fallback.
+`feedbackItemComments` maps each row's `summary` to `text` and retains its
+`id`, frames, target, category and `anchor.context`. The decoder refuses
+malformed or blank rows. The act bar sends a detached feedback list when there
+are pinned comments and keeps `words` as their projection. It omits `feedback`
+when there are no pinned comments. With `feedback` absent, nonblank `words`
+still supplies one general comment. Direction and image verdict submissions
+keep their existing closed shapes.
+
+Only the `rig-review` verdict and `parts-verdict` accept optional
+`general: readonly string[]` in their UI submission values. Each string becomes
+an anchorless `{text}` entry, appended verbatim in list order after the comments
+produced by the existing fields. For parts verdicts, nonblank `words` still
+produces a comment after the pinned `issues` and before `general`. Parts Request
+changes still requires a pinned issue, and approval still requires zero issues. The existing decoder
+validates the combined comment count, text, evidence and signed projection.
+Omitting `general` preserves the existing written bytes. The writer emits
+act@6 and historical words-only acts retain their readers. [Review #831](https://github.com/rig-c/review/issues/831).
 
 Pointed marks, inline crops, bookmarks and valid time-only null frames remain
 inside the existing `anchor.context`. This is distinct from act@7's top-level

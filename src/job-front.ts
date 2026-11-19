@@ -5,7 +5,8 @@ import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-che
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
 import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion } from './job-api.ts';
 import { JobSession } from './job-session.ts';
-import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, loadRetainedJobReview, readPreviousDraftBytes, type JobRootIdentity } from './job-source.ts';
+import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, loadRetainedJobReview, loadRetainedRecordRig, readPreviousDraftBytes, type JobRootIdentity } from './job-source.ts';
+import { checkedPath } from './interview-project.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
 import { JobError, JobStore, jobCropReferences } from './job-store.ts';
 import { safeFile, packagePath, type ReviewPackage } from './manifest.ts';
@@ -259,8 +260,59 @@ export function retainedPublicationRoutes(session: JobSession) {
                 const sealedFile = async (relativePath: string) => {
                     const seal = retained.seals.find(file => file.path === relativePath);
                     if (!seal) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                    let literal: string | undefined;
+                    if (isRetainedRecordSource(retained)) {
+                        try {literal = checkedPath(retained.snapshotRoot, relativePath);}
+                        catch {return failure('JOB_SOURCE_UNRETAINABLE', 404);}
+                    }
                     const file = await safeFile(retained.snapshotRoot, relativePath);
+                    if (literal !== undefined && literal !== file)
+                        return failure('JOB_SOURCE_UNRETAINABLE', 404);
                     return serveReference(request, file, seal.sha256, headers);
+                };
+                const reviewMetadata = (review: ReviewPackage | null) => json({
+                    ...checkpointEvidenceMetadata(retained.snapshotRoot, retained.source.checkpointEvidence),
+                    ...(isRetainedRecordSource(retained) ? {recordSource: retained.source} : {}),
+                    sourceHash: retained.source.sourceHash,
+                    assetsBase: display.routes.assetsBase,
+                    ...(review ? {
+                        manifest: review.manifest,
+                        reviewedSource: review.reviewedSource,
+                        initialAnimation: null,
+                        setsHash: review.setsHash,
+                        direction: review.direction && {...review.direction, ...(retained.source.selector?.kind==='post'?{postVersion:retained.source.selector.version}:{})},
+                        scene: review.scene,
+                        referenceHashes: review.referenceHashes,
+                        sourcePainting: review.sourcePainting && {...review.sourcePainting, url: '/review-painting'},
+                    } : {}),
+                    feedbackCatalog: review?.feedbackCatalog ?? {slots: null},
+                    capabilities: {playback: !!review?.manifest.model,
+                        interview: questions.length > 0 || (retained.interview?.records.length ?? 0) > 0 ||
+                            (retained.interview?.diagnostics.length ?? 0) > 0,
+                        preRig: retained.source.selector?.kind === 'draft', modeling: false, motion: false, feedback: true, audio: false},
+                });
+                const interviewMetadata = (rigPicture = false) => {
+                    const interview = isRetainedRecordSource(retained) ? undefined :
+                        retained.interview !== undefined ? retained.interview : display.publication.interview;
+                    return json({
+                        questions: questions.map(question => ({...question,
+                            ...(rigPicture && question.missingPicture === 'rig' ? {missingPicture: undefined} : {}),
+                            images: question.images.map((image, index) => ({name: image.name,
+                                url: `/api/interview/image/${question.ref.sha256}/${index}`})),
+                        })),
+                        ...(interview === undefined ? {} : {interview}),
+                    });
+                };
+                const interview = /^api\/interview\/image\/([a-f0-9]{64})\/(0|[1-9]\d*)$/.exec(path);
+                const interviewImage = (match: RegExpExecArray) => {
+                    const image = retained.questions.find(question => question.ref.sha256 === match[1])?.images[Number(match[2])];
+                    return image ? sealedFile(image.ref.path) : failure('JOB_SOURCE_UNRETAINABLE', 404);
+                };
+                const reviewAsset = (review: ReviewPackage | null) => {
+                    if (!review) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                    const asset = packagePath(decodeURIComponent(path.slice('assets/'.length)));
+                    if (!review.files.has(asset)) return failure('JOB_SOURCE_UNRETAINABLE', 404);
+                    return sealedFile(relative(retained.snapshotRoot, join(review.root, asset)).split('\\').join('/'));
                 };
                 const evidenceRoute = /^api\/checkpoint-evidence\/([A-Za-z0-9][A-Za-z0-9._-]*)\/(table|tiles\/(0|[1-9]\d*))$/.exec(path);
                 if (evidenceRoute) {
@@ -297,36 +349,22 @@ export function retainedPublicationRoutes(session: JobSession) {
                         const file = servedImage(parts, image[1] as 'image'|'page', Number(image[2]));
                         return file ? await sealedFile(relative(retained.snapshotRoot,file).split('\\').join('/')) : failure('JOB_SOURCE_UNRETAINABLE',404);
                     }
-                    if (path === 'api/review') {
-                        return json({
-                            ...checkpointEvidenceMetadata(retained.snapshotRoot, retained.source.checkpointEvidence),
-                            recordSource: retained.source,
-                            sourceHash: retained.source.sourceHash,
-                            assetsBase: display.routes.assetsBase,
-                            capabilities: {
-                                playback: false,
-                                interview: retained.questions.length > 0,
-                                preRig: false,
-                                modeling: false,
-                                motion: false,
-                                feedback: true,
-                                audio: false,
-                            },
-                            feedbackCatalog: {slots: null},
-                        });
+                    if (path === 'api/review' || path === 'api/interview' || path.startsWith('assets/')) {
+                        let review: ReviewPackage | null = null;
+                        if (!question) {
+                            let pending = views.get(publicationId);
+                            if (!pending) {
+                                pending = loadRetainedRecordRig(retained).then(review => ({review, parts: null}));
+                                views.set(publicationId, pending);
+                            }
+                            ({review} = await pending);
+                        }
+                        if (path === 'api/review') return reviewMetadata(review);
+                        if (path === 'api/interview') return interviewMetadata(!!review);
+                        try {return await reviewAsset(review);}
+                        catch {return failure('JOB_SOURCE_UNRETAINABLE', 404);}
                     }
-                    if (path === 'api/interview') {
-                        return json({questions: questions.map(question => ({...question,
-                            images: question.images.map((image, index) => ({name: image.name,
-                                url: `/api/interview/image/${question.ref.sha256}/${index}`})),
-                        }))});
-                    }
-                    const interview = /^api\/interview\/image\/([a-f0-9]{64})\/(0|[1-9]\d*)$/.exec(path);
-                    if (interview) {
-                        const image = retained.questions.find(question => question.ref.sha256 === interview[1])?.images[Number(interview[2])];
-                        if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
-                        return await sealedFile(image.ref.path);
-                    }
+                    if (interview) return await interviewImage(interview);
                     return failure('JOB_REQUEST_INVALID', 404);
                 }
                 let pending = views.get(publicationId);
@@ -369,43 +407,9 @@ export function retainedPublicationRoutes(session: JobSession) {
                 if (retained.checkpointEvidencePackageHash !== undefined && retained.checkpointEvidencePackageHash !== review.sourceHash) {
                     throw new JobError('JOB_SOURCE_MISMATCH');
                 }
-                if (path === 'api/review') {
-                    return json({
-                        ...checkpointEvidenceMetadata(retained.snapshotRoot, retained.source.checkpointEvidence),
-                        manifest: review.manifest,
-                        sourceHash: retained.source.sourceHash,
-                        reviewedSource: review.reviewedSource,
-                        initialAnimation: null,
-                        setsHash: review.setsHash,
-                        direction: review.direction && {...review.direction, ...(retained.source.selector?.kind==='post'?{postVersion:retained.source.selector.version}:{})},
-                        scene: review.scene,
-                        referenceHashes: review.referenceHashes,
-                        sourcePainting: review.sourcePainting && {...review.sourcePainting, url: '/review-painting'},
-                        feedbackCatalog: review.feedbackCatalog,
-                        assetsBase: display.routes.assetsBase,
-                        capabilities: {playback: !!review.manifest.model,
-                            interview: retained.questions.length > 0 ||
-                                (retained.interview?.records.length ?? 0) > 0 ||
-                                (retained.interview?.diagnostics.length ?? 0) > 0,
-                            preRig: retained.source.selector?.kind === 'draft', modeling: false, motion: false, feedback: true, audio: false},
-                    });
-                }
-                if (path === 'api/interview') {
-                    const interview = retained.interview !== undefined ? retained.interview : display.publication.interview;
-                    return json({
-                        questions: questions.map(question => ({...question,
-                            images: question.images.map((image, index) => ({name: image.name,
-                                url: `/api/interview/image/${question.ref.sha256}/${index}`})),
-                        })),
-                        ...(interview === undefined ? {} : {interview}),
-                    });
-                }
-                const interview = /^api\/interview\/image\/([a-f0-9]{64})\/(0|[1-9]\d*)$/.exec(path);
-                if (interview) {
-                    const image = retained.questions.find(question => question.ref.sha256 === interview[1])?.images[Number(interview[2])];
-                    if (!image) return failure('JOB_SOURCE_UNRETAINABLE', 404);
-                    return await sealedFile(image.ref.path);
-                }
+                if (path === 'api/review') return reviewMetadata(review);
+                if (path === 'api/interview') return interviewMetadata();
+                if (interview) return await interviewImage(interview);
                 if (crop) {
                     if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);
                     if (request.headers.get('origin') !== new URL(request.url).origin)
@@ -476,11 +480,7 @@ export function retainedPublicationRoutes(session: JobSession) {
                 if (path === 'review-painting' && review.sourcePainting && review.handoff?.source) {
                     return await sealedFile(relative(retained.snapshotRoot, review.handoff.source).split('\\').join('/'));
                 }
-                if (path.startsWith('assets/')) {
-                    const asset = packagePath(decodeURIComponent(path.slice('assets/'.length)));
-                    if (!review.files.has(asset)) return failure('JOB_SOURCE_UNRETAINABLE', 404);
-                    return await sealedFile(relative(retained.snapshotRoot, join(review.root, asset)).split('\\').join('/'));
-                }
+                if (path.startsWith('assets/')) return await reviewAsset(review);
                 return failure('JOB_REQUEST_INVALID', 404);
             });
         } catch (error) {

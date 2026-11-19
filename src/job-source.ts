@@ -18,7 +18,8 @@ import type {
   RecordReaderInput, RecordResult, RecordSource, RecordSubject,
 } from './job-contract.ts';
 import { checkedPath, inspectSceneQuestion, jsonObject, readProject, readRegular, type InterviewQuestion, type InterviewSet } from './interview-project.ts';
-import { loadJobReview } from './manifest.ts';
+import { acceptedRigReview } from './interview-scene.ts';
+import { BUILD_MODEL_PATH, loadJobReview, loadReview } from './manifest.ts';
 import { HandoffError } from './handoff.ts';
 import { openKey } from './open.ts';
 import { assertReviewUnchanged } from './reference.ts';
@@ -630,15 +631,13 @@ function validateOptionSetStructure(
   return raw as unknown as InterviewSet;
 }
 
-export function assertRetainedSnapshotIntact(
+function assertRetainedSnapshotRoot(
   snapshotRoot: string,
-  seals: readonly JobFileIdentity[],
-  snapshotIdentity?: { readonly dev: number; readonly ino: number },
+  snapshotIdentity: JobRetainedSourceV3['snapshotIdentity'],
   refusalCode: 'JOB_SOURCE_UNRETAINABLE' | 'JOB_ACT_SOURCE_STALE' = 'JOB_SOURCE_UNRETAINABLE',
 ): void {
-  let rootInfo: Stats;
   try {
-    rootInfo = lstatSync(snapshotRoot);
+    const rootInfo = lstatSync(snapshotRoot);
     if (!rootInfo.isDirectory() || realpathSync(snapshotRoot) !== snapshotRoot || (rootInfo.mode & 0o077) !== 0) {
       throw new Error('Invalid snapshot directory');
     }
@@ -648,6 +647,15 @@ export function assertRetainedSnapshotIntact(
   } catch {
     throw new JobError(refusalCode);
   }
+}
+
+export function assertRetainedSnapshotIntact(
+  snapshotRoot: string,
+  seals: readonly JobFileIdentity[],
+  snapshotIdentity?: { readonly dev: number; readonly ino: number },
+  refusalCode: 'JOB_SOURCE_UNRETAINABLE' | 'JOB_ACT_SOURCE_STALE' = 'JOB_SOURCE_UNRETAINABLE',
+): void {
+  assertRetainedSnapshotRoot(snapshotRoot, snapshotIdentity, refusalCode);
   const expectedFiles = new Map<string, string>();
   const expectedDirs = new Set<string>(['']);
   for (const seal of seals) {
@@ -840,6 +848,53 @@ function readClosureFileBytes(root: string, file: JobFileIdentity): Buffer {
   return bytes;
 }
 
+/** Optional picture for a record question. Resolve it anew from sealed inputs after a host restart. */
+export async function loadRetainedRecordRig(retained: JobRetainedRecordSource) {
+  const {source, snapshotRoot} = retained;
+  if (source.subject !== 'option-set' || !retained.questions.some(question => question.set.stage === 'post-interview')) return null;
+  try {
+    assertRetainedSnapshotRoot(snapshotRoot, retained.snapshotIdentity);
+    const seals = new Map(retained.seals.map(({path, sha256}) => [path, sha256]));
+    const published = new Map(source.files.map(({path, sha256}) => [path, sha256]));
+    const isBound = (path: string, hash: string) => seals.get(path) === hash && published.get(path) === hash;
+    const {record, optionSetFile} = source;
+    if (record.sha256 !== source.projectHash || !isBound(record.path, record.sha256) ||
+        !isBound(optionSetFile.path, optionSetFile.sha256)) return null;
+    const set = jsonObject(readClosureFileBytes(snapshotRoot, optionSetFile));
+    const context = asPlainObject(set.context);
+    if (set.stage !== 'post-interview' || context?.kind !== 'rig') return null;
+    const version = context.rig_version;
+    if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1 ||
+        typeof set.drafted_at !== 'string' || typeof context.signoff_at !== 'string') return null;
+    const drafted = Date.parse(set.drafted_at), signed = Date.parse(context.signoff_at), now = Date.now();
+    if (!(signed <= drafted && drafted <= now)) return null;
+    const {project} = readProjectRecordBytes(snapshotRoot, record);
+    const accepted = acceptedRigReview(project, version, now);
+    if (!accepted || accepted.acceptance.signoff.at !== context.signoff_at || !Array.isArray(accepted.pkg.files)) return null;
+    const config = jobObject(accepted.pkg.config, ['path', 'sha256']);
+    jobPath(config.path);
+    jobSha(config.sha256);
+
+    const packageCheck = 'out/check';
+    const check = `derived/review/v${version}/${packageCheck}`;
+    const build = `${packageCheck}/${posix.dirname(BUILD_MODEL_PATH)}/`;
+    const sealedPlayback = new Map<string, string>();
+    for (const value of accepted.pkg.files) {
+      const row = asPlainObject(value);
+      if (!row || typeof row.path !== 'string') return null;
+      if (!row.path.startsWith(build)) continue;
+      const path = jobPath(row.path.slice(packageCheck.length + 1)), sha256 = jobSha(row.sha256);
+      if (sealedPlayback.has(path) || !isBound(`${check}/${path}`, sha256)) return null;
+      sealedPlayback.set(path, sha256);
+    }
+    if (!sealedPlayback.has(BUILD_MODEL_PATH)) return null;
+    return await loadReview(checkedPath(snapshotRoot, check, true), {handoff: false, sealedPlayback});
+  } catch {
+    // Picture failures leave the sealed questionnaire available to answer.
+    return null;
+  }
+}
+
 /** Delivery-only projection through the existing retained record reader. */
 export function projectRetainedPlanText(retained: JobRetainedSourceV3): JobPlanTextProjection | undefined {
   const {source, record} = retained;
@@ -996,7 +1051,7 @@ function decodeRetainedRecordProject(
       } catch {
         // A record can still be answered when its bound scene cannot be displayed.
       }
-    } else if (ctx && Array.isArray(ctx.files)) {
+    } else if (ctx && ctx.kind !== 'rig' && Array.isArray(ctx.files)) {
       for (const rawFile of ctx.files) {
         const fileObj = asPlainObject(rawFile);
         if (!fileObj || typeof fileObj.path !== 'string' || typeof fileObj.sha256 !== 'string') {

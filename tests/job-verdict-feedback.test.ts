@@ -142,6 +142,40 @@ test('#746 a present empty list means zero comments, while the act bar omits fee
   expect(parseCommentsAct(saved.value).value.comments).toEqual([]);
 });
 
+test('#831 rig appends ordered general comments after the existing #746 feedback and still validates words', async () => {
+  const f = await fixture(), publication = await f.publish();
+  const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'}), page = await f.display(publication);
+  const feedback = feedbackFor(publication.source as unknown as typeof baseline.source);
+  const general = ['  원문 그대로 🚀  ', 'Another line\nwith a break'] as const;
+  const generation = f.session.status().generation;
+  const input = {...page, askId: ask.askId, expectedGeneration: generation, kind: 'review-verdict',
+    capture: rigStillCapture(publication, ask, page).capture};
+  const value = {stage: 'rig-review', verdict: 'changes-requested', feedback, general};
+  const pinned = feedbackItemComments(feedback);
+  const projectedPinUnits = projectComments(pinned).length;
+  const overflow = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, submissionId: 'mixed-overflow',
+    value: {...value, words: '', general: ['x'.repeat(10_000 - projectedPinUnits - '\n\n[general]\n'.length + 1)]}}));
+  expect(overflow).toMatchObject({ok: false, error: {code: 'JOB_ACT_INVALID'}});
+  expect(f.session.status().generation).toBe(generation);
+  for (const words of [undefined, null, 1, 'x'.repeat(10001)]) {
+    const rejected = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input,
+      submissionId: 'invalid-words-' + typeof words, value: {...value, words}}));
+    expect(rejected).toMatchObject({ok: false, error: {code: 'JOB_ACT_INVALID'}});
+    expect(f.session.status().generation).toBe(generation);
+  }
+
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, submissionId: 'mixed-rig-831',
+    value: {...value, words: 'Compatibility words must not become a duplicate comment'}}));
+  if (!saved.ok) throw new Error(saved.error.code);
+  const bytes = f.session.readActExport(saved.value.actId, false).toString();
+  const act = parseCommentsAct(JSON.parse(bytes));
+  expect(act.kind).toBe('review-verdict');
+  expect(act.value).toEqual({stage: 'rig-review', verdict: 'changes-requested',
+    comments: [...pinned, {text: general[0]}, {text: general[1]}]});
+  expect(projectComments(act.value.comments)).toBe(projectComments(pinned) + '\n\n[general]\n' + general.join('\n\n[general]\n'));
+  expect(JSON.stringify(act)).toBe(bytes);
+});
+
 test('#746 decisions never answer direction or image verdicts with rig feedback', () => {
   for (const stage of ['direction-review', 'image-review'] as const) {
     const ask = {askId: stage, publicationId: 'publication', status: 'pending', subject: {kind: 'review-verdict', stage}} as PendingAskV3;

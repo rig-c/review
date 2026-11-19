@@ -445,15 +445,27 @@ runtime reader. Historical act@2–@5 bytes keep their readers.
 [Review #746](https://github.com/rig-c/review/issues/746) adds optional
 `feedback: readonly Feedback[]` to `JobUIActValues['review-verdict']` only when
 `stage` is `rig-review`; `stage`, `verdict` and required `words` remain.
-A present list, including `[]`, supplies the complete comments through the
+A present list, including `[]`, supplies the pinned comments through the
 existing `feedbackItemComments` mapper and act@6 decoder. It preserves entry
 order, text, IDs, frames, target, category and `anchor.context` (including point,
-crop, bookmark and valid time-only null-frame evidence). `words` is not appended
-as another comment. Without `feedback`, serialized output bytes stay unchanged.
+crop, bookmark and valid time-only null-frame evidence). `words` supplies the
+legacy general comment only when `feedback` is absent.
 Direction and image submissions retain their previous closed shapes. The
 written act stays act@6, historical words-only acts still parse, and the
 act@7 top-level `comment.context` emission gate remains off. There are no new
 exports or schemas. See [Comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
+
+The `rig-review` verdict and `parts-verdict` accept optional
+`general: readonly string[]` on their UI submission values. The writer appends
+each string verbatim as `{text}` after the comments produced by the existing
+fields. `words` remains required. On rig verdicts it supplies the legacy general
+comment only when `feedback` is absent. On parts verdicts nonblank `words` still
+produces one comment after the pinned `issues` and before `general`. A parts
+Request changes verdict still requires a pinned issue, and approval still
+requires zero issues.
+The existing act@6 decoder checks the combined comment count, text and signed
+projection. Omitting `general` preserves the existing mapping and serialized
+act bytes. The finalized act schema and exports are unchanged. [Review #831](https://github.com/rig-c/review/issues/831).
 
 [Review #914](https://github.com/rig-c/review/issues/914) adds
 `JOB_PREVIOUS_DRAFT_SCHEMA` (`rig-review-previous-draft/1`) and the

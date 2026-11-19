@@ -83,6 +83,7 @@ interface PartsPose extends CommentUiPose {item:Item;sourceHash:string;view:Part
 export function bindPartsSubject(host:{
  data:PartsSubjectData;canvas:HTMLCanvasElement;referenceCanvas:HTMLCanvasElement;viewport:ViewportController;
  el:ViewportProvider['el'];toolbar:HTMLElement;commentsHost:HTMLElement;openComments?:()=>void;hasPicture?:()=>boolean;issues:PartsIssue[];recordComments?:CommentRow[];
+ generalComments?:{rows:CommentRow[];available:()=>boolean};submitting?:()=>boolean;
  request:(path:string,init?:RequestInit)=>Promise<Response>;base:string;paintingPath:string;
  mesh:()=>boolean;restoreMesh:(on:boolean)=>void;images:()=>boolean;changed:()=>void|Promise<void>;selectionChanged:()=>void;locked:(id:string)=>boolean;refusal:()=>string|null;drawn:(input:{state:'loaded'}|{state:'failed';reason:string})=>void;message:ViewportProvider['message'];
 }) {
@@ -209,9 +210,12 @@ export function bindPartsSubject(host:{
   if(data.painting&&!assembled())camera={...camera,center:{x:camera.center.x-entry.x,y:camera.center.y-entry.y},visible:{...camera.visible,x:camera.visible.x-entry.x,y:camera.visible.y-entry.y}};
   return {mode:'parts',item:entry,sourceHash:data.sourceHash,camera,view:{mode:assembled()?'assembled':'item',camera:{zoom:camera.zoom,center:camera.center,viewport:camera.viewport},cameraSync:host.viewport.state.cameraSync,referenceCamera:null,background:'checker',alpha:false,footprints:false,mesh:host.mesh(),comparison:{...comparison},...(assembled()&&EMIT_UNPINNED_CREATE_FIELDS?{visibleLayers:partsBinding(data.items.filter(item=>!hidden.has(item.name)).map(item=>item.name))}:{})},capture:{pane:host.el('rig-viewport'),root:host.el('rig-root'),images:true,canvas:host.canvas,backend:'canvas2d',nearest:true}};
  };
- comments=bindStageComments<CommentRow,PartsPose>({general:host.recordComments?{create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('schema' in row)}:undefined,toolbar:host.toolbar,listHost:host.commentsHost,openList:host.openComments,hasPicture:host.hasPicture,toggle:host.el<HTMLButtonElement>('stage-comment'),viewports:{rig:host.el('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
+ comments=bindStageComments<CommentRow,PartsPose>({general:host.recordComments||host.generalComments?{
+  create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('schema' in row),
+  ...(host.generalComments?{...host.generalComments,refusal:host.refusal}:{}),
+ }:undefined,toolbar:host.toolbar,listHost:host.commentsHost,openList:host.openComments,hasPicture:host.hasPicture,toggle:host.el<HTMLButtonElement>('stage-comment'),viewports:{rig:host.el('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
   restore:async raw=>{const issue=parsePartsIssue(raw,false,true,false);assertPartsIssueBinding(issue,sourceItems(),data.sourceHash);selected=issue.view.mode==='item'?issue.parts[0]!.name:null;solo=issue.view.mode==='item';comparison=issue.view.comparison??defaultPartsComparison();host.restoreMesh(issue.view.mesh);if(issue.view.visibleLayers){const visible=new Set(issue.view.visibleLayers.map(part=>part.name));hidden.clear();for(const item of data.items)if(!visible.has(item.name))hidden.add(item.name);}await paint();host.viewport.writeCamera('rig',data.painting&&solo?{...issue.view.camera,center:{x:issue.view.camera.center.x+item().x,y:issue.view.camera.center.y+item().y}}:issue.view.camera);host.viewport.activateCamera('rig');if(host.viewport.state.cameraSync)host.viewport.alignCameras();host.viewport.fitCamera();host.selectionChanged();},
-  feedback:()=>host.recordComments??host.issues,locked:host.locked,refusal:host.refusal,add:row=>{if(host.recordComments)host.recordComments.push(row);else host.issues.push(row as PartsIssue);},changed:host.changed,error:host.message,blocked:()=>busy||failed||disposed,busy:()=>busy,codec});
+  feedback:()=>host.recordComments??host.issues,locked:host.locked,refusal:host.refusal,add:row=>{if(host.recordComments)host.recordComments.push(row);else host.issues.push(row as PartsIssue);},changed:host.changed,error:host.message,blocked:()=>busy||failed||disposed||!!host.submitting?.(),busy:()=>busy,codec});
  return {
   frameSize:(target:CameraTarget):PartsFrame|null=>{
    const frame=target==='rig'?drawnFrame:drawnReferenceFrame;if(!frame||!data.painting||!data.rigSize)return frame;

@@ -56,7 +56,26 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
    return {ok:true as const,value:act};
   }catch(error){await mkdir(writeRoot,{recursive:true});await writeFile(join(writeRoot,mode+'.refusal.json'),JSON.stringify({error:String(error),input},null,2)+'\n');return {ok:false as const,error:{code:'JOB_ACT_INVALID',message:String(error)}};}
  }};
- front=createJobFront({origin,ports:ports as typeof fake.ports,publication:retainedPublicationRoutes(session),resource:async name=>{
+ const routes=retainedPublicationRoutes(session);
+ let rigPictureSuppressed=false;
+ front=createJobFront({origin,ports:ports as typeof fake.ports,async publication(...args){
+  const [,publicationId,,path,request]=args;
+  const response=await routes(...args);
+  if(!rigPictureSuppressed||publicationId!==display.publication.publicationId||request.method!=='GET'||!response.ok||
+    (path!=='api/review'&&path!=='api/interview'))return response;
+  // Change only the presentation. The fixture replays the same pending ask on a fresh page.
+  const body=await response.json();
+  if(path==='api/review'){
+   for(const key of ['manifest','reviewedSource','initialAnimation','setsHash','direction','scene','referenceHashes','sourcePainting'])delete body[key];
+   body.capabilities.playback=false;
+   body.feedbackCatalog={slots:null};
+  }else{
+   const question=body.questions.find((item:{set:{id:string;question:string}})=>
+    subject.kind==='interview-picks'&&item.set.id===subject.setId&&item.set.question===subject.questionId);
+   question.missingPicture='rig';
+  }
+  return Response.json(body,{headers:response.headers});
+ },resource:async name=>{
   const body=await resources(name);
   return body;
  }});
@@ -64,6 +83,7 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
   deliver(){fake.publish(display);fake.pending(ask,publication.generation);},
   ownerUrl:origin+`/jobs/${session.jobId}/#cap=${credentials.ui}`,
   mode(value:string){mode=value;},output(path:string){writeRoot=path;},
+  suppressRigPicture(){if(postPicture!=='bound-rig')throw new Error('SYNTHETIC_929_BOUND_RIG_REQUIRED');rigPictureSuppressed=true;},
   async metadata(){return await (await fetch(origin+display.routes.apiBase+'review')).json();},
   async close(){front?.stop();await server.stop(true);session.dispose();await rm(scratch,{recursive:true,force:true});},
  };

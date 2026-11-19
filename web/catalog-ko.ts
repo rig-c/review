@@ -8,6 +8,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Review\u2026": "검토하기",
   "Nothing is waiting for your answer.": "답변을 기다리는 요청이 없어요.",
   "Add a comment where changes are needed.": "고칠 곳에 코멘트를 달아 주세요",
+  "Request changes needs at least one comment pinned to a part.": "수정 요청에는 파츠에 고정한 코멘트가 하나 이상 필요해요.",
   "Remove the flagged parts comments before approving.": "승인하려면 수정 요청한 파츠 코멘트를 먼저 지워 주세요.",
   "Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.": "저장해 둔 초안을 불러오지 못했어요. 초안은 지워지지 않았어요. 내려받거나 버린 뒤에 제출해 주세요.",
   "Saved draft downloaded \u00b7 not submitted": "저장해 둔 초안을 내려받았어요 · 아직 제출하지 않았어요",
