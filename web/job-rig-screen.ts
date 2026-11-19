@@ -121,11 +121,17 @@ export function createJobRigScreen(options: {
       if (!options.formDependencies) throw new Error('JOB_ACT_KIND_DISABLED');
       const inspection = await prepareJobInspection(display, signal);
       try {
-        let previous = display.publication.previousPublicationId, picture:JobRigScreenPrepared|null = null;
+        const {entry} = options.routes(display);
+        const {manifest, reviewedSource} = inspection.metadata;
+        let picture: JobRigScreenPrepared | null = manifest?.model && reviewedSource?.rig
+          ? {jobRigScreen:true, display, entry, checkpoints:new Set(), review:{...inspection.metadata, manifest, reviewedSource}}
+          : null;
+        const missingBoundRig = inspection.interview?.questions.some(question => question.missingPicture === 'rig');
+        let previous = missingBoundRig ? null : display.publication.previousPublicationId;
         const jobId=jobPublicationRoutes(display,location.origin).jobId;
         const seen = new Set([display.publication.publicationId]);
         let generation = display.publication.generation;
-        while (previous) {
+        while (!picture && previous) {
           if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
           if (seen.has(previous) || !options.readPublication) throw new Error('JOB_DISPLAY_MISMATCH');
           seen.add(previous);
@@ -139,17 +145,17 @@ export function createJobRigScreen(options: {
           if (jobRigScreenSubject(candidate.publication.source)) {picture = await prepare(candidate, signal, true);break;}
           previous = candidate.publication.previousPublicationId;
         }
-        if (!picture && inspection.interview?.questions.some(question => question.hasParts)) {
+        if (!picture && !missingBoundRig && inspection.interview?.questions.some(question => question.hasParts)) {
           const response = await fetch(options.routes(display).api('stage-parts'), {signal});
           if (!response.ok) throw new Error('JOB_VISUAL_UNAVAILABLE');
           const parts = await response.json() as PartsSubjectData;
           if (parts.sourceHash !== source.sourceHash || parts.mode !== 'parts') throw new Error('JOB_DISPLAY_MISMATCH');
-          picture = {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints:new Set(),parts};
+          picture = {jobRigScreen:true,display,entry,checkpoints:new Set(),parts};
         }
         if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
         const questionMainView = !!picture || !!inspection.interview?.questions.some(question => question.scenePicture);
         const forms = prepareJobForms(display, options.window.state().pending, ask => formFor(ask, inspection, {...options.formDependencies!,interviewMainView:questionMainView}),questionMainView);
-        return {jobRigScreen:true,display,entry:options.routes(display).entry,checkpoints:new Set(),record:{inspection,forms,picture}};
+        return {jobRigScreen:true,display,entry,checkpoints:new Set(),record:{inspection,forms,picture}};
       } catch(error) {inspection.dispose();throw error;}
     }
     if (!jobRigScreenSubject(source)) {

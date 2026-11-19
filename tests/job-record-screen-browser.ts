@@ -7,10 +7,13 @@ import {existsSync} from 'node:fs';
 import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
+import {PNG} from 'pngjs';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {withDeadline} from './helpers/walk-deadline.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {recordScreenFixture,type RecordScreenKind} from './helpers/job-record-screen-fixture.ts';
+import {SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_RGB} from './helpers/job-record-fixture.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {buildWeb} from '../src/build.ts';
 import {prepareJobRecordAct} from '../src/job-act.ts';
@@ -26,6 +29,7 @@ const freshParts=Bun.argv.includes('--fresh-parts');
 const narrowQuestionResize=Bun.argv.includes('--question-narrow-resize');
 const followup839=Bun.argv.includes('--followup-839');
 const postQuestionPictures=Bun.argv.includes('--post-question-pictures');
+const boundRigPictureOnly=Bun.argv.includes('--bound-rig-picture');
 const baseline=await Bun.file(new URL('./fixtures/interview-722-empty-note.json',import.meta.url)).json();
 async function assertLastAskPickKeepsScrollAndFocus(mode:'dialog'|'pictureless'|'question-tab'){
  const scrollBefore=await page!.evaluate<number>(`(()=>{
@@ -400,12 +404,192 @@ async function postQuestionPictureChecks(){
  console.log('929_BROWSER_PASS '+JSON.stringify(observations));
 }
 
+async function boundRigPictureChecks(){
+ const viewport = {width:1440,height:900};
+ await page!.setViewport(viewport.width,viewport.height);
+ const observations: Record<string,unknown>[] = [];
+ const samePublicationParity: Record<string,unknown>[] = [];
+ const expectedValue = {
+  questionId:'post_timing',
+  selections:[
+   {itemId:'topology',optionId:'topology_other',otherText:'  Custom topology · 직접 입력\n'},
+   {itemId:'detail_level',optionId:'density_auto',otherText:null},
+  ],
+  note:'  Keep the idle · 원문 유지\n',
+ };
+ const values: string[] = [];
+ for (const variant of ['bound-rig','rig-signoff-hash'] as const) for (const language of ['en','ko'] as const) {
+  const out = join(output,'bound-rig-picture',variant,language);
+  await mkdir(out,{recursive:true});
+  const fixture = await recordScreenFixture('interview-picks',false,out,undefined,false,true,undefined,false,false,variant);
+  const catalog = language === 'ko' ? koCatalog : enCatalog;
+  const selector = `form[data-job-ask="${fixture.ask.askId}"]`;
+  try {
+   const publication = fixture.display.publication;
+   assert.equal(publication.previousPublicationId,null);
+   const retained = fixture.session.retainedSourceV3(publication.publicationId);
+   const before = await jobInputHashes(fixture.root), retainedBefore = await jobInputHashes(retained.snapshotRoot);
+   const url = new URL(fixture.ownerUrl);
+   url.searchParams.set('lang',language);
+   const capturedActs: Buffer[] = [];
+   const pageIds: string[] = [];
+   for (const suppressed of variant === 'bound-rig' ? [false,true] : [false]) {
+    const pictured = variant === 'bound-rig' && !suppressed;
+    const visit = pictured ? 'with-rig' : 'without-rig';
+    const attempt = capturedActs.length;
+    const priorAcknowledgments = fixture.fake.acknowledgments.length;
+    await page!.goto('about:blank');
+    if (suppressed) fixture.suppressRigPicture();
+    await page!.goto(url.href);
+    await wait(`document.body.dataset.ready==='true'&&!!document.querySelector(${JSON.stringify(selector+'[data-interview-answered="false"] fieldset:not(:disabled)')})`,
+     variant+' '+language+' '+visit+' ready');
+    await withDeadline('929 '+variant+' '+language+' '+visit+' receipt',20_000,async signal=>{
+     while(fixture.fake.acknowledgments.length===priorAcknowledgments){
+      signal.throwIfAborted();
+      await Bun.sleep(25);
+     }
+    });
+    assert.equal(await page!.evaluate('document.documentElement.lang'),language);
+    const ack = fixture.fake.acknowledgments.at(-1)?.body as {sourceHash?:string;pageId?:string;publicationId?:string} | undefined;
+    assert.equal(ack?.sourceHash,publication.source.sourceHash);
+    assert.equal(ack?.publicationId,publication.publicationId);
+    assert.ok(ack?.pageId && !pageIds.includes(ack.pageId),'each visit has a new displayed receipt');
+    pageIds.push(ack.pageId);
+    assert.equal(fixture.submissions.length,attempt,'opening did not answer the ask');
+
+    let paintedPixels = 0;
+    let missingPicture: string | null = null;
+    if (pictured) {
+     const actualRig = catalog['@rig-c/play · Actual rig'];
+     await wait(`document.querySelector('#player-state')?.textContent===${JSON.stringify(actualRig)}&&
+      document.querySelector('#animation-select')?.value==='idle'&&
+      document.querySelector('#rig-empty')?.hidden===true&&
+      !!document.querySelector('#workspace-interview-answer ${selector}')&&
+      !!document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target=question][aria-selected=true]')`,
+     '929 bound rig, idle and Question');
+     const stage = await page!.evaluate<{left:number;top:number;right:number;bottom:number}>(`document.getElementById('rig-viewport').getBoundingClientRect().toJSON()`);
+     const screen = await page!.screenshot();
+     await writeFile(join(out,'question-'+visit+'.png'),screen);
+     const png = PNG.sync.read(Buffer.from(screen)), scale = png.width / viewport.width;
+     for (let y=Math.max(0,Math.ceil(stage.top*scale)); y<Math.min(png.height,Math.floor(stage.bottom*scale)); y++) {
+      for (let x=Math.max(0,Math.ceil(stage.left*scale)); x<Math.min(png.width,Math.floor(stage.right*scale)); x++) {
+       const pixel = (y*png.width+x)*4;
+       if (SYNTHETIC_RIG_RGB.every((value,channel) => Math.abs(png.data[pixel+channel]!-value)<=3)) paintedPixels++;
+      }
+     }
+     assert.ok(paintedPixels>=16,'the visible rig viewport contains the sealed mesh page color');
+    } else {
+     missingPicture = await page!.evaluate<string>(`document.querySelector('#rig-empty').textContent`);
+     assert.equal(missingPicture,catalog['This question refers to a rig version that this publication does not include.']);
+     await writeFile(join(out,'question-'+visit+'.png'),await page!.screenshot());
+     if (!await page!.evaluate(`!!document.querySelector(${JSON.stringify('dialog[open] '+selector)})`)) {
+      await click(page!,'#workspace-pending-ask');
+     }
+     await wait(`!!document.querySelector(${JSON.stringify('dialog[open] '+selector)})`,'929 model-free answer dialog');
+    }
+    const assetRequests = await page!.evaluate<string[]>(`performance.getEntriesByType('resource')
+     .map(entry=>new URL(entry.name).pathname).filter(path=>path.includes('/assets/'))`);
+    const base = fixture.display.routes.assetsBase;
+    assert.deepEqual([...new Set(assetRequests)].sort(),pictured ? [base+SYNTHETIC_RIG_MODEL,base+SYNTHETIC_RIG_PAGE].sort() : []);
+    assert.equal(await page!.evaluate(`(()=>{
+     const form=document.querySelector(${JSON.stringify(selector)});
+     return !form.querySelector('input:checked')&&[...form.querySelectorAll('textarea')].every(field=>field.value==='');
+    })()`),true,'each fresh page starts with an empty answer');
+    for (const selection of expectedValue.selections) {
+     await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' input[value="'+selection.optionId+'"]')}).click()`);
+    }
+    await page!.evaluate(`(()=>{
+     const form=document.querySelector(${JSON.stringify(selector)});
+     for(const [name,value] of Object.entries(${JSON.stringify({'other.topology':expectedValue.selections[0]!.otherText,note:expectedValue.note})})){
+      const field=form.querySelector('textarea[name="'+name+'"]');
+      field.value=value;field.dispatchEvent(new Event('input',{bubbles:true}));
+     }
+     form.querySelector('button[type=submit]').scrollIntoView({block:'center'});
+     return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    })()`);
+    const controls = await page!.evaluate<{
+     inspection:{id:string;text:string;enabled:boolean}[];
+     answer:{id:string;text:string;enabled:boolean};
+     verdictEnabled:boolean;
+     editEnabled:boolean;
+     edits:{id:string;text:string;enabled:boolean}[];
+    }>(`(()=>{
+     const enabled=node=>!!node&&node.getClientRects().length>0&&getComputedStyle(node).visibility==='visible'&&
+      !node.matches(':disabled,[aria-disabled="true"]')&&!node.closest('[inert]');
+     const control=(node,id=node.id)=>({id,text:node.textContent.trim()||node.getAttribute('aria-label')||'',enabled:enabled(node)});
+     const inspection=[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(node=>
+      control(node.id==='view-menu'?node.querySelector('summary'):node,node.id));
+     const edits=[...document.querySelectorAll('#mesh-edit,#mesh-apply,#chest-edit,#bust-apply,[data-animation-apply]')]
+      .map(node=>control(node,node.id||'data-animation-apply'));
+     return {
+      inspection,answer:control(document.querySelector(${JSON.stringify(selector+' button[type=submit]')})),
+      verdictEnabled:[...document.querySelectorAll('#save,#request-changes,#review-status')].some(enabled),
+      editEnabled:edits.some(control=>control.enabled),edits,
+     };
+    })()`);
+    assert.deepEqual(controls.inspection.map(control=>control.id),['zoom-in','zoom-out','fit','native-one','view-menu']);
+    assert.ok(controls.inspection.every(control=>control.text.length>0));
+    assert.equal(controls.answer.text,catalog['interview.save']);
+    assert.equal(controls.answer.enabled,true);
+    assert.equal(controls.verdictEnabled,false);
+    assert.equal(controls.editEnabled,false,JSON.stringify(controls.edits));
+    await click(page!,selector+' button[type=submit]');
+    await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'`,'929 answer saved');
+    assert.equal(fixture.submissions.length,attempt+1);
+    assert.equal(fixture.files.length,attempt+1);
+    const submission = fixture.submissions[attempt]!;
+    if (submission.kind !== 'interview-picks') throw new Error('Expected an interview-picks submission');
+    assert.equal(submission.pageId,ack.pageId);
+    assert.equal(submission.publicationId,publication.publicationId);
+    assert.equal(submission.askId,fixture.ask.askId);
+    assert.equal(submission.displayedNonce,`nonce-${publication.publicationId}-${ack.pageId}`);
+    const actPath = fixture.files[attempt]!;
+    assert.equal(actPath,fixture.files[0],'the fixture writer uses the same act path on both visits');
+    const bytes = await readFile(actPath), act = parseRecordAct(JSON.parse(bytes.toString('utf8')));
+    // Keep the first raw bytes before the second visit overwrites the fixture writer's file.
+    capturedActs.push(bytes);
+    await writeFile(join(out,'act-'+visit+'.json'),bytes);
+    assert.equal(act.kind,'interview-picks');
+    assert.deepEqual(act.source,publication.source);
+    assert.deepEqual(act.value,expectedValue);
+    values.push(JSON.stringify(act.value));
+    const expected = prepareJobRecordAct({
+     jobId:fixture.session.jobId,submission:{...submission,value:expectedValue},ask:fixture.ask,
+     retained:retained as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},
+     actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z',
+    });
+    assert.deepEqual(bytes,Buffer.from(JSON.stringify(expected)));
+    assert.deepEqual(await jobInputHashes(fixture.root),before);
+    assert.deepEqual(await jobInputHashes(retained.snapshotRoot),retainedBefore);
+    observations.push({variant,language,visit,suppressed,paintedPixels,missingPicture,assetRequests,controls,sourceHash:publication.source.sourceHash,
+     actBytes:bytes.length,actSha256:sha(bytes),actValueSha256:sha(JSON.stringify(act.value)),fullActMatchesSourceOracle:true});
+   }
+   if (variant === 'bound-rig') {
+    assert.equal(capturedActs.length,2);
+    assert.notEqual(fixture.submissions[0]!.submissionId,fixture.submissions[1]!.submissionId);
+    assert.deepEqual(capturedActs[0],capturedActs[1],language+' full act bytes on the same sealed publication');
+    samePublicationParity.push({language,publicationId:publication.publicationId,sourceHash:publication.source.sourceHash,
+     actSha256:sha(capturedActs[0]!),actBytes:capturedActs[0]!.length,distinctPages:pageIds.length,fullActBytesEqual:true});
+   }
+  } finally {
+   await page!.goto('about:blank');
+   await fixture.close();
+  }
+ }
+ assert.equal(new Set(values).size,1,'pictured and signoff-mismatch acts carry identical answer bytes in EN and KO');
+ assert.deepEqual(exceptions,[]);
+ const result = {observations,samePublicationParity};
+ await writeFile(join(output,'bound-rig-picture.json'),JSON.stringify(result,null,2)+'\n');
+ console.log('929_BOUND_RIG_BROWSER_PASS '+JSON.stringify(result));
+}
+
 try{
  // Reuse the shared launcher's browser discovery and process policy without a suite-local wrapper.
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
- if(postQuestionPictures){await command!('Runtime.enable');await postQuestionPictureChecks();}
+ if(boundRigPictureOnly){await command!('Runtime.enable');await boundRigPictureChecks();}
+ else if(postQuestionPictures){await command!('Runtime.enable');await postQuestionPictureChecks();}
  else if(followup839){holdImages=false;await followupQuestionChecks();}else{
  if(completedPicture){holdImages=false;await questionTabChecks();}
  if(!completedPicture){
@@ -510,7 +694,11 @@ try{
  }
  }
  await longInterviewScrollChecks(false);
- if(!interviewOnly&&!freshParts){await command!('Runtime.enable');await postQuestionPictureChecks();}
+ if(!interviewOnly&&!freshParts){
+  await command!('Runtime.enable');
+  await postQuestionPictureChecks();
+  await boundRigPictureChecks();
+ }
  }
  assert.equal(exceptions.length,0,'no browser exceptions');
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
