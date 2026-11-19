@@ -316,7 +316,7 @@ export function draftOps(draft: MeshEditDraft, source: MeshSource): MeshOp[] | n
   const entry = draft.entries[draftKey(source)]; if (!entry || entry.hash !== source.hash) return null;
   try { applyMeshOps(source, entry.ops); return entry.ops; } catch { return null; }
 }
-export function writeMeshDraft(draft: MeshEditDraft, source: MeshSource, ops: readonly MeshOp[]): string {
+export function writeMeshDraft(draft: MeshEditDraft, source: Pick<MeshSource, 'slot' | 'skin' | 'attachment' | 'hash'>, ops: readonly MeshOp[]): string {
   const entries = { ...draft.entries }; const key = draftKey(source);
   if (ops.length) entries[key] = { hash: source.hash, ops: ops.map(op => structuredClone(op)) }; else delete entries[key];
   return Object.keys(entries).length ? JSON.stringify({ schema: MESH_EDIT_DRAFT_SCHEMA, entries }) : '';
