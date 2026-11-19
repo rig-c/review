@@ -6,6 +6,10 @@ import {createJobHostPorts, jobBodyLimit} from '../src/job-api.ts';
 import {jobRigScreenDecisions} from '../web/job-rig-screen.ts';
 import {PNG} from 'pngjs';
 
+// The 10.8 MB DPR 2 case took up to twice as long as DPR 1 on Nova.
+// CI's 2.8 s DPR 1 result puts the DPR 2 estimate at 5.6 s before headroom.
+const dpr2TimeoutMs = 8_000;
+
 for (const ratio of [1, 2]) test(`#785 24-slot idle verdict with signoff pending and synthetic DPR ${ratio} capture through the owner front`, async () => {
   const f = await jobFixture({scratchParent: process.env.TMPDIR});
   let front: ReturnType<typeof createJobFront> | undefined;
@@ -52,4 +56,4 @@ for (const ratio of [1, 2]) test(`#785 24-slot idle verdict with signoff pending
   } finally {
     front.stop(); await server.stop(true); await f.close();
   }
-});
+}, ratio === 2 ? dpr2TimeoutMs : undefined);
