@@ -4,12 +4,13 @@ import {fixturePublication} from './helpers/job-window-fixture.ts';
 import {parseManifest} from '../src/manifest.ts';
 import {jobHash} from '../src/job-api.ts';
 import {expect,test} from 'bun:test';
-import {readFile} from 'node:fs/promises';
+import {readFile,writeFile} from 'node:fs/promises';
 import {createJobRigScreen} from '../web/job-rig-screen.ts';
 import {rigHost,setRigHost} from '../web/rig-host.ts';
 import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jobPublicationRoutes,prepareJobForms,prepareJobInspection,type JobFormDependencies} from '../web/job-session.ts';
 import type {DisplayPublicationV3,PendingAskV3,UISubmissionV3} from '../src/job-contract.ts';
 import {recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
+import {rigPictureCases,SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_ROOT} from './helpers/job-record-fixture.ts';
 
 async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'='checkpoint',boundParts=false){
  const f=await recordScreenFixture(kind,picture,undefined,undefined,boundParts),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
@@ -455,4 +456,125 @@ test.each(['scene','unsealed-scene','rig','legacy'] as const)('#929 projects onl
    expect(question!.missingPicture).toBe(variant==='legacy'?undefined:variant==='rig'?'rig':'scene');
   }
  }finally{await fixture.close();}
+});
+
+test.each(rigPictureCases)('#929 variant B resolves the rig picture for %s', async variant => {
+ const fixture = await recordScreenFixture('interview-picks',false,undefined,undefined,false,true,undefined,false,false,variant);
+ try {
+  const {publication,routes} = fixture.display;
+  const base = fixture.origin + routes.apiBase;
+  const assets = fixture.origin + routes.assetsBase;
+  const build = SYNTHETIC_RIG_ROOT + '/out/check/';
+  const source = publication.source;
+  if (!('record' in source)) throw new Error('Expected a record publication');
+  expect(publication.previousPublicationId).toBeNull();
+  expect(fixture.reader.calls.map(call => call.phase)).toEqual(['inventory','retained']);
+  if (variant === 'rig-retained-model-hash') {
+   // Change only the retained bytes after publication, before either view route can cache a result.
+   const retained = fixture.session.retainedSourceV3(publication.publicationId);
+   const modelPath = build+SYNTHETIC_RIG_MODEL, retainedPath = retained.snapshotRoot+'/'+modelPath;
+   const modelHash = source.files.find(row => row.path === modelPath)!.sha256;
+   const bytes = await readFile(retainedPath);
+   expect(retained.seals.find(row => row.path === modelPath)?.sha256).toBe(modelHash);
+   expect(jobHash(bytes)).toBe(modelHash);
+   const changed = Buffer.concat([bytes,Buffer.from('\n')]);
+   expect(jobHash(changed)).not.toBe(modelHash);
+   await writeFile(retainedPath,changed);
+  }
+  const interview = await fetch(base+'interview');
+  expect(interview.status).toBe(200);
+  const {questions:[question]} = await interview.json();
+  expect(question).toMatchObject({editable:true,images:[],set:{question:'post_timing',id:'post-picture'}});
+  const review = await fetch(base+'review');
+  expect(review.status).toBe(200);
+  const metadata = await review.json();
+  expect(metadata.recordSource).toEqual(publication.source);
+  expect(metadata.sourceHash).toBe(publication.source.sourceHash);
+  if (variant !== 'bound-rig') {
+   expect(question.missingPicture).toBe('rig');
+   expect(metadata.capabilities.playback).toBe(false);
+   expect(Object.hasOwn(metadata,'manifest')).toBe(false);
+   expect(Object.hasOwn(metadata,'reviewedSource')).toBe(false);
+   for (const path of [SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,'config.json']) {
+    const refused = await fetch(assets+path);
+    expect(refused.status).toBe(404);
+    expect((await refused.json()).error.code).toBe('JOB_SOURCE_UNRETAINABLE');
+   }
+   return;
+  }
+  const modelHash = source.files.find(row => row.path === build+SYNTHETIC_RIG_MODEL)!.sha256;
+  expect(Object.hasOwn(question,'missingPicture')).toBe(false);
+  expect(metadata.capabilities).toMatchObject({playback:true,interview:true,preRig:false});
+  expect(metadata.manifest).toMatchObject({model:SYNTHETIC_RIG_MODEL,references:[]});
+  expect(metadata.reviewedSource).toMatchObject({
+   rig:{path:SYNTHETIC_RIG_MODEL,sha256:modelHash},
+  });
+  expect(metadata.reviewedSource.handoff).toBeUndefined();
+  expect(metadata.capabilities.modeling).toBe(false);
+  expect(source.files.filter(row => row.path.startsWith(build+'build/')).map(row => row.path.slice(build.length)))
+   .toEqual(['build/run.json','build/skeleton.atlas','build/skeleton.json',SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE]);
+  for (const path of [SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE]) {
+   const response = await fetch(assets+path);
+   expect(response.status).toBe(200);
+   expect(jobHash(Buffer.from(await response.arrayBuffer())))
+    .toBe(source.files.find(row => row.path === build+path)!.sha256);
+  }
+  for (const path of ['build/unsealed.png','config.json']) {
+   const refused = await fetch(assets+path);
+   expect(refused.status).toBe(404);
+   expect((await refused.json()).error.code).toBe('JOB_SOURCE_UNRETAINABLE');
+  }
+  fixture.suppressRigPicture();
+  const suppressed = await fixture.metadata();
+  expect(suppressed.recordSource).toEqual(source);
+  expect(suppressed.sourceHash).toBe(source.sourceHash);
+  expect(suppressed.capabilities.playback).toBe(false);
+  expect(Object.hasOwn(suppressed,'manifest')).toBe(false);
+  expect(Object.hasOwn(suppressed,'reviewedSource')).toBe(false);
+  const suppressedInterview = await (await fetch(base+'interview')).json();
+  expect(suppressedInterview.questions).toEqual([{...question,missingPicture:'rig'}]);
+ } finally { await fixture.close(); }
+});
+
+test.each(['none','record','model','version','partial'] as const)('#929 client verifies the record rig binding (%s)', async plant => {
+ const fixture = await recordScreenFixture('interview-picks',false,undefined,undefined,false,true,undefined,false,false,'bound-rig');
+ const dom = await recordScreenDom();
+ const originalFetch = globalThis.fetch;
+ const assetRequests: string[] = [];
+ try {
+  dom.set('location',{origin:fixture.origin});
+  dom.set('fetch',async (...args: Parameters<typeof fetch>) => {
+   const path = new URL(String(args[0])).pathname;
+   if (path.startsWith(fixture.display.routes.assetsBase)) assetRequests.push(path);
+   const response = await originalFetch(...args);
+   if (path.endsWith('/api/review') && plant !== 'version') {
+    const body = await response.json();
+    if (plant === 'record') body.recordSource.projectHash = '0'.repeat(64);
+    if (plant === 'model') body.reviewedSource.rig.sha256 = '0'.repeat(64);
+    if (plant === 'partial') delete body.manifest;
+    return Response.json(body);
+   }
+   if (path.endsWith('/api/interview') && plant === 'version') {
+    const body = await response.json();
+    body.questions[0].set.context.rig_version = 2;
+    return Response.json(body);
+   }
+   return response;
+  });
+  const prepared = prepareJobInspection(fixture.display,new AbortController().signal);
+  if (plant === 'none') {
+   const ready = await prepared;
+   try {
+    expect(ready.metadata.manifest?.model).toBe(SYNTHETIC_RIG_MODEL);
+    expect(ready.assets).toBeNull();
+    expect(ready.player).toBeNull();
+   } finally { ready.dispose(); }
+  } else {
+   await expect(prepared).rejects.toThrow('JOB_DISPLAY_MISMATCH');
+  }
+  expect(assetRequests).toEqual([]);
+ } finally {
+  dom.restore();
+  await fixture.close();
+ }
 });

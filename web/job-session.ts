@@ -656,6 +656,7 @@ import type { ModelAssets, RigPlayer } from '@rig-c/play';
 import type { PartInspection } from './part-selection.ts';
 import type { Checkpoint, ReviewManifest, ReviewedSource } from '../src/manifest.ts';
 import type { DirectionInspection } from '../src/direction-inspection.ts';
+import type { SceneInspection } from '../src/scene-inspection.ts';
 import type { FeedbackCatalog } from '../src/feedback-validation.ts';
 import type { InterviewQuestion } from '../src/interview-project.ts';
 type JobCheckpointEvidenceMetadata = Omit<JobCheckpointEvidence, 'tiles' | 'table'> & {
@@ -669,9 +670,11 @@ export interface JobInspectionMetadata {
     recordSource?: undefined;
     sourceHash: string;
     reviewedSource: ReviewedSource;
+    assetsBase?: string;
     setsHash?: string;
     initialAnimation?: string | null;
     direction?: DirectionInspection;
+    scene?: SceneInspection;
     referenceHashes?: Record<string, string>;
     sourcePainting?: {
         id: string;
@@ -686,28 +689,15 @@ export interface JobInspectionMetadata {
     };
     feedbackCatalog: Pick<FeedbackCatalog, 'slots'> & Partial<Pick<FeedbackCatalog, 'bones'>>;
 }
-export interface JobRecordInspectionMetadata {
-    checkpointEvidence?: readonly JobCheckpointEvidenceMetadata[];
-    planText?: JobPlanTextProjection;
-    manifest?: undefined;
+export interface JobRecordInspectionMetadata extends Omit<JobInspectionMetadata, 'recordSource' | 'manifest' | 'reviewedSource'> {
     recordSource: RecordSource;
-    sourceHash: string;
-    reviewedSource?: undefined;
-    setsHash?: undefined;
-    initialAnimation?: null;
-    direction?: undefined;
-    referenceHashes?: undefined;
-    sourcePainting?: undefined;
-    capabilities: {
-        interview?: boolean;
-        preRig?: boolean;
-        playback: boolean;
-    };
-    feedbackCatalog: Pick<FeedbackCatalog, 'slots'> & Partial<Pick<FeedbackCatalog, 'bones'>>;
+    manifest?: ReviewManifest;
+    reviewedSource?: ReviewedSource;
 }
 export type JobInspectionMetadataV3 = JobInspectionMetadata | JobRecordInspectionMetadata;
 type JobInterview = {
-    questions: (Omit<InterviewQuestion, 'images'> & {
+    questions: (Omit<InterviewQuestion, 'images' | 'set'> & {
+        set: InterviewQuestion['set'] & {context?: {kind?: unknown; rig_version?: unknown}};
         images: {
             name: string;
             url: string;
@@ -888,8 +878,10 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
     const routes = jobPublicationRoutes(display, location.origin);
     const metadata = await jobJson<JobInspectionMetadataV3>(routes.api('review'), signal);
     const publishedSource = display.publication.source;
-    if (isRecordSource(publishedSource)) {
-        if (!metadata.recordSource || metadata.manifest !== undefined || metadata.reviewedSource !== undefined ||
+    const record = isRecordSource(publishedSource);
+    const recordRig = record && (metadata.manifest !== undefined || metadata.reviewedSource !== undefined);
+    if (record) {
+        if (!metadata.recordSource || !metadata.capabilities || (!recordRig && metadata.capabilities.playback) ||
             metadata.sourceHash !== publishedSource.sourceHash ||
             sourceSnapshot(metadata.recordSource) !== sourceSnapshot(publishedSource)) {
             throw new Error('JOB_DISPLAY_MISMATCH');
@@ -969,6 +961,34 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
     }
     try {
         const interview = metadata.capabilities.interview ? await jobJson<JobInterview>(routes.api('interview'), signal) : null;
+        if (recordRig) {
+            const {manifest, reviewedSource} = metadata;
+            const model = reviewedSource?.rig;
+            if (publishedSource.subject !== 'option-set' || metadata.assetsBase !== display.routes.assetsBase ||
+                metadata.capabilities.playback !== true || metadata.capabilities.interview !== true || metadata.capabilities.preRig ||
+                !manifest || manifest.schema !== 'rig-review/1' || !reviewedSource || !model || model.path !== 'build/skeleton.model.json' ||
+                manifest.model !== model.path || reviewedSource.packageRevision !== manifest.revision ||
+                reviewedSource.motion !== null || reviewedSource.handoff !== undefined || metadata.initialAnimation != null ||
+                metadata.direction || metadata.scene || metadata.sourcePainting || metadata.setsHash ||
+                manifest.motion || manifest.sets || manifest.direction || manifest.scene || manifest.producer ||
+                [manifest.references, manifest.checkpoints, manifest.authoring, manifest.axes, manifest.audio?.clips, manifest.audio?.cues]
+                    .some(rows => !Array.isArray(rows) || rows.length !== 0) ||
+                !Array.isArray(interview?.questions) || interview.questions.length !== 1) {
+                throw new Error('JOB_DISPLAY_MISMATCH');
+            }
+            const [question] = interview.questions;
+            const context = question?.set?.context;
+            if (!question?.set || question.set.stage !== 'post-interview' || question.editable !== true ||
+                question.set.id !== publishedSource.selection.setId || question.set.question !== publishedSource.selection.questionId ||
+                sourceSnapshot(question.ref) !== sourceSnapshot(publishedSource.optionSetFile) || question.missingPicture !== undefined ||
+                question.hasParts || question.scenePicture || !Array.isArray(question.images) || question.images.length ||
+                !context || context.kind !== 'rig' || typeof context.rig_version !== 'number' ||
+                !Number.isSafeInteger(context.rig_version) || context.rig_version < 1 ||
+                !publishedSource.files.some(file =>
+                    file.path === `derived/review/v${context.rig_version}/out/check/${model.path}` && file.sha256 === model.sha256)) {
+                throw new Error('JOB_DISPLAY_MISMATCH');
+            }
+        }
         if (interview?.interview !== undefined && display.publication.interview !== undefined &&
             sourceSnapshot(interview.interview) !== sourceSnapshot(display.publication.interview)) {
             throw new Error('JOB_DISPLAY_MISMATCH');
@@ -1142,7 +1162,8 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         const failed = preloaded.find(result => result.status === 'rejected');
         if (failed?.status === 'rejected')
             throw failed.reason;
-        if (!formsOnly && metadata.manifest?.model) {
+        // A record's bound rig is drawn by the shared workspace. This inspection prepares its forms.
+        if (!formsOnly && !recordRig && metadata.manifest?.model) {
             const runtime = await import('@rig-c/play');
             const modelUrl = routes.asset(metadata.manifest.model);
             const modelHash = metadata.reviewedSource!.rig!.sha256;
@@ -1418,6 +1439,8 @@ export interface JobFormDependencies {
             }
             interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:deps.interviewMainView,
                 images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered'});
+            if (deps.interviewMainView && prepared.metadata.recordSource && prepared.metadata.manifest?.model)
+                interviewForm.form.dataset.interviewMain = '';
             disposeInterview=interviewForm.dispose;read=interviewForm.read;
             submitKey = 'interview.save';
         }
