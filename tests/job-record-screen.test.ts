@@ -435,3 +435,24 @@ test('#839 disposed workspace cannot re-enter the transient image while tabs unr
  const run=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return syncQuestionImage;}`)(scope);
  run();run();expect(released).toBe(1);expect(scope.releaseInterview).toBeNull();
 });
+
+test.each(['scene','unsealed-scene','rig','legacy'] as const)('#929 projects only a sealed question picture for %s', async variant => {
+ const fixture=await recordScreenFixture('interview-picks',false,undefined,undefined,false,true,undefined,false,false,variant);
+ try {
+  const base=fixture.origin+fixture.display.routes.apiBase;
+  const response=await fetch(base+'interview');
+  expect(response.status).toBe(200);
+  const {questions:[question]}=await response.json() as {questions:{images:{name:string;url:string}[];scenePicture?:true;missingPicture?:string}[]};
+  expect(question).toBeDefined();
+  if(variant==='scene'){
+   expect(question!.scenePicture).toBe(true);
+   expect(question!.images.map(image=>image.name)).toEqual(['background']);
+   const image=await fetch(base+'interview/image/'+question!.images[0]!.url.split('/').slice(-2).join('/'));
+   expect(image.status).toBe(200);
+   expect(Buffer.from(await image.arrayBuffer())).toEqual(await readFile(fixture.root+'/evidence/plate.png'));
+  }else{
+   expect(question!.images).toEqual([]);
+   expect(question!.missingPicture).toBe(variant==='legacy'?undefined:variant==='rig'?'rig':'scene');
+  }
+ }finally{await fixture.close();}
+});

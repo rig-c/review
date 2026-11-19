@@ -59,6 +59,30 @@ export interface SyntheticOptionWorkspace {
   readonly context: OptionContext;
 }
 
+export type PostPictureCase = 'scene' | 'unsealed-scene' | 'rig' | 'legacy';
+
+function postPictureFixture(root: string, variant: PostPictureCase | undefined) {
+  if (variant === 'rig') {
+    const config = writeWorkspaceFile(root,'rig/config.json','{}');
+    return {context:{kind:'rig',rig_version:1,signoff_at:'2026-10-31T00:00:00Z',
+      config,parts:{path:'derived/drafts/synthetic',files:[]}},files:[config]};
+  }
+  if (variant !== 'scene' && variant !== 'unsealed-scene') return null;
+  const plate = writeWorkspaceFile(root,'evidence/plate.png',makeSyntheticPngBytes(17,91,203));
+  const model = {path:'rig/model.json',sha256:'1'.repeat(64)};
+  const box = {x:0,y:0,width:2,height:2};
+  const document = {schema:'rig-create/scene@1',n:1,rig:{version:1,model,animation:{name:'idle'},
+    acceptance:{signoff:{stage:'rig-review',checkpoint:null,at:'2026-10-31T00:00:00Z'},
+      verdict:'versions[0].verdicts[0]',review_package:{path:'versions[0].review_package',sha256:'2'.repeat(64)}}},
+    frame:{space:'rig-world-y-up',stage:box},
+    plates:[{...plate,role:'background',width:2,height:2,rect:box,registered:{kind:'input',ref:'plate'}}],
+    layers:['background','rig']};
+  const sceneFile = writeWorkspaceFile(root,'evidence/scene/s1.json',JSON.stringify(document));
+  const scene = {n:1,...sceneFile};
+  const scenes = [{...scene,at:'2026-10-31T00:00:00Z',by:'synthetic-owner'}];
+  return {context:{kind:'scene',scene},scenes,files:variant==='scene'?[sceneFile,plate]:[sceneFile]};
+}
+
 export function createSyntheticOptionRecordWorkspace(
   root: string,
   options?: {
@@ -68,12 +92,14 @@ export function createSyntheticOptionRecordWorkspace(
     readonly includeHistoricalSignoff?: boolean;
     readonly boundParts?: boolean;
     readonly questionImages?: boolean;
+    readonly postPicture?: PostPictureCase;
     readonly longInterview?: boolean;
   },
 ): SyntheticOptionWorkspace {
   const questionId = options?.questionId ?? 'rig_type';
   const setId = options?.setId ?? 'set_rig_type_01';
-  const stage = options?.stage ?? 'interview';
+  const stage = options?.stage ?? (options?.postPicture ? 'post-interview' : 'interview');
+  const post = postPictureFixture(root, options?.postPicture);
 
   const inputImage = writeWorkspaceFile(root, 'inputs/reference.png', makeSyntheticPngBytes(40, 160, 220));
   const inputSpec = writeWorkspaceFile(
@@ -93,10 +119,10 @@ export function createSyntheticOptionRecordWorkspace(
     stage,
     drafted_by: 'ai',
     drafted_at: '2026-11-01T00:00:00.000Z',
-    context: options?.boundParts ? {kind:'parts',draft_id:'synthetic',parts:{path:'derived/drafts/synthetic',files:boundFiles}} : {
+    context: post?.context ?? (options?.boundParts ? {kind:'parts',draft_id:'synthetic',parts:{path:'derived/drafts/synthetic',files:boundFiles}} : {
       kind: 'inputs',
       files: options?.questionImages===false ? [inputSpec] : [inputImage, inputSpec],
-    },
+    }),
     assembly: { rule: 'merge' },
     asks: [
       {
@@ -426,6 +452,7 @@ export function createSyntheticOptionRecordWorkspace(
   const projectDoc: Record<string, unknown> = {
     schema: 'rig-create/project@0',
     name: 'Synthetic Option Project',
+    ...(post?.scenes ? {scenes:post.scenes} : {}),
     inputs: [inputImage, inputSpec],
     interview: {
       framing: framingItems,
@@ -448,7 +475,7 @@ export function createSyntheticOptionRecordWorkspace(
 
   const recordIdentity = writeWorkspaceFile(root, 'project.json', JSON.stringify(projectDoc, null, 2) + '\n');
   const record: ProjectRecord = { path: 'project.json', sha256: recordIdentity.sha256 };
-  const files = [inputImage, inputSpec, optionSetFile, record, ...boundFiles].sort((a, b) =>
+  const files = [inputImage, inputSpec, optionSetFile, record, ...boundFiles, ...(post?.files ?? [])].sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
   const result: RecordOptionResult = { kind: 'option-set', questionId, setId };

@@ -25,6 +25,7 @@ const completedPicture=Bun.argv.includes('--completed-picture')||Bun.argv.includ
 const freshParts=Bun.argv.includes('--fresh-parts');
 const narrowQuestionResize=Bun.argv.includes('--question-narrow-resize');
 const followup839=Bun.argv.includes('--followup-839');
+const postQuestionPictures=Bun.argv.includes('--post-question-pictures');
 const baseline=await Bun.file(new URL('./fixtures/interview-722-empty-note.json',import.meta.url)).json();
 async function assertLastAskPickKeepsScrollAndFocus(mode:'dialog'|'pictureless'|'question-tab'){
  const scrollBefore=await page!.evaluate<number>(`(()=>{
@@ -90,6 +91,7 @@ const sha=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('
 const profile=await mkdtemp(join(tmpdir(),'review-750-browser-'));
 let page:InputCdpSession|undefined,command:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
 let holdImages=false;const pausedImages:string[]=[];
+const consoleErrors:unknown[]=[];
 const exceptions:unknown[]=[],mutations:{method:string;path:string}[]=[],cases:unknown[]=[];
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('750_BROWSER_TIMEOUT '+label);}
 
@@ -344,12 +346,63 @@ async function followupQuestionChecks(){
  await writeFile(join(output,'followup-result.json'),JSON.stringify(result,null,2));console.log('839_FOLLOWUP_RESULT '+JSON.stringify(result));if(!result.passed)process.exitCode=1;
 }
 
+async function postQuestionPictureChecks(){
+ await page!.setViewport(1440,900);
+ const observations:{variant:string;language:string;sha256?:string}[]=[];
+ for(const variant of ['scene','unsealed-scene','rig','legacy'] as const){
+  const fixture=await recordScreenFixture('interview-picks',false,undefined,undefined,false,true,undefined,false,false,variant);
+  try{
+   for(const language of ['en','ko'] as const){
+    const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
+    await page!.goto('about:blank');await page!.goto(url.href);
+    await wait(`document.body.dataset.ready==='true' && !!document.querySelector('form.interview-answer fieldset:not(:disabled)')`, '929 '+variant+' '+language);
+    const observation:{variant:string;language:string;sha256?:string}={variant,language};
+    if(variant==='scene'){
+     await wait(`document.querySelector('#reference-content img')?.naturalWidth===2`,'929 scene plate');
+     const image=await page!.evaluate<{src:string;visible:boolean;background:number[]}>(`(()=>{
+      const image=document.querySelector('#reference-content img'),canvas=document.createElement('canvas');
+      canvas.width=canvas.height=2;
+      const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);
+      const rect=image.getBoundingClientRect();
+      return {src:image.currentSrc,visible:rect.width>0&&rect.height>0&&getComputedStyle(image).visibility==='visible',
+        background:[...ctx.getImageData(0,0,1,1).data]};
+     })()`);
+     assert.ok(image.visible);
+     assert.deepEqual(image.background,[17,91,203,255]);
+     assert.ok(new URL(image.src).pathname.startsWith(fixture.display.routes.apiBase+'interview/image/'));
+     const response=await fetch(image.src);
+     assert.equal(response.status,200);
+     observation.sha256=sha(new Uint8Array(await response.arrayBuffer()));
+     assert.equal(observation.sha256,sha(await readFile(join(fixture.root,'evidence/plate.png'))));
+    }else{
+     const key=variant==='legacy'?'This request has no picture.':variant==='rig'?
+      'This question refers to a rig version that this publication does not include.':
+      'This question refers to a scene that this publication does not include.';
+     const text=await page!.evaluate<string>(`document.querySelector('#rig-empty').textContent`);
+     assert.equal(text,(language==='en'?enCatalog:koCatalog)[key]);
+    }
+    await writeFile(join(output,variant+'-'+language+'.png'),await page!.screenshot());
+    observations.push(observation);
+   }
+  }catch(error){
+   const state=await page!.evaluate<{url:string;ready?:string;text:string}>(`({url:location.pathname,ready:document.body?.dataset.ready,text:document.body?.innerText.slice(0,3000)})`);
+   await writeFile(join(output,variant+'-failure.json'),JSON.stringify({...state,consoleErrors},null,2)+'\n');
+   await writeFile(join(output,variant+'-failure.png'),await page!.screenshot());
+   throw error;
+  }finally{await page!.goto('about:blank');await fixture.close();}
+ }
+ assert.equal(exceptions.length,0);
+ await writeFile(join(output,'post-question-pictures.json'),JSON.stringify(observations,null,2)+'\n');
+ console.log('929_BROWSER_PASS '+JSON.stringify(observations));
+}
+
 try{
  // Reuse the shared launcher's browser discovery and process policy without a suite-local wrapper.
- page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
+ page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
- if(followup839){holdImages=false;await followupQuestionChecks();}else{
+ if(postQuestionPictures){await command!('Runtime.enable');await postQuestionPictureChecks();}
+ else if(followup839){holdImages=false;await followupQuestionChecks();}else{
  if(completedPicture){holdImages=false;await questionTabChecks();}
  if(!completedPicture){
  for(const [width,height] of (interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]])){
@@ -453,6 +506,7 @@ try{
  }
  }
  await longInterviewScrollChecks(false);
+ if(!interviewOnly&&!freshParts){await command!('Runtime.enable');await postQuestionPictureChecks();}
  }
  assert.equal(exceptions.length,0,'no browser exceptions');
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
