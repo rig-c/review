@@ -20,6 +20,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "JOB_ASK_UNSUPPORTED": "JOB_ASK_UNSUPPORTED",
   "job.refusal.JOB_ASK_UNSUPPORTED": "This request lacks a supported source or checkpoint mapping. The producer must publish the matching source and plan mapping before asking again.",
   "In a job, press Request changes to send this edit; the producer rebuilds it.": "In a job, press Request changes to send this edit; the producer rebuilds it.",
+  "job.mesh.staleDraft": "Some saved mesh edits could not be restored on this model and will be left out.",
   "Comment · C": "Comment · C",
 
   "project.json": "project.json",

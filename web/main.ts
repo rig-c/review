@@ -1217,7 +1217,7 @@ function bind(): void {
   verdictSubmit=button('save').onclick as ((event:MouseEvent)=>unknown)|null;
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),source:meshSource,pause,
-   job:host?(host.record||host.direction?'read-only':{slots:()=>data.feedbackCatalog.slots??[]}):undefined,changed:()=>{if(host)renderAnswerControls();redrawOverlay(false);},download:doc=>{void exportMesh(doc);},
+   job:host?(host.record||host.direction||!host.access.capability?'read-only':{slots:()=>data.feedbackCatalog.slots??[],modelHash:()=>inspectionSourceState==='ready'&&chestMapping.available?stageModelHash:null}):undefined,changed:()=>{if(host)renderAnswerControls();redrawOverlay(false);},download:doc=>{void exportMesh(doc);},
    apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(tr(text)),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
   weightsView=bindWeightsView({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,inspector:()=>selectedInspector(),slot:()=>parts?.value()?.slot??stageDraftSelection?.slot??null,
    model:()=>hasStageModel()?partModel??undefined:null,setup:slot=>assets?setupPoseMesh(assets,partModel,slot,document.createElement('div')):null,changed:()=>redrawOverlay(false),
@@ -1364,7 +1364,7 @@ async function start(): Promise<void> {
       if(!player&&(data.manifest.model||referenceInput.state!=='loaded'))throw new Error('JOB_VISUAL_UNAVAILABLE');
       await restorePublicationNavigation();document.body.dataset.ready='true';
       const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
-        hasMeshEdits:()=>!!meshEditor?.hasJobEdits(),meshEdits:async()=>meshEditor?.jobEdits()??[]};
+        hasMeshEdits:()=>!!meshEditor?.hasJobEdits(),meshEdits:async()=>meshEditor?.jobEdits()??null};
       host.attach(screen);showInspector(data.manifest.model?'playback':'rig');host.displayed();
     }
   } catch (error) { if(disposed)return;message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }

@@ -4,7 +4,7 @@ import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
  * window. The job stays the transport: same asks, act kinds, still, displayed-ack and submission idempotency.
  * Rig verdicts use the act bar; supported approval and interview asks use the shared ask dialog. */
-import type {ActV3, DisplayPublicationV3, JobMeshEdit, JobMeshEditValue, JobResult, JobUISubmission, PendingAskV3, SourceV3, UISubmissionV3} from '../src/job-contract.ts';
+import {JOB_MESH_EDITS_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobMeshEdit,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
 import {canonicalJson} from '../src/canonical-json.ts';
 import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 import {draftKey} from '../src/mesh-edit.ts';
@@ -12,7 +12,7 @@ import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
 import {checkpointNoteComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
 import {createJobRigSubmission, freezeJobRigStage} from './job-rig-capture.ts';
-import {sha256Hex} from './mesh-editor.ts';
+import {sha256Hex,type JobMeshDraftSubmission} from './mesh-editor.ts';
 import {setRigHost, rigHost, type RigHost, type RigHostScreen, type RigHostCommit, type RigHostNavigation} from './rig-host.ts';
 import {setSourceAttribute, setSourceText, sourceAttribute, sourceTextContent} from './i18n.ts';
 import type {InstanceAccess} from './instance-access.ts';
@@ -90,7 +90,7 @@ export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'c
 interface ReviewJson {manifest: ReviewManifest; reviewedSource: ReviewedSource; sourceHash: string}
 export interface JobRigMeshScreen extends RigHostScreen {
   hasMeshEdits?(): boolean;
-  meshEdits?(): Promise<readonly JobMeshEditValue[]>;
+  meshEdits?(): Promise<JobMeshDraftSubmission|null>;
 }
 export interface JobRigMeshHost extends RigHost {
   canSubmitMeshEdits?(): boolean;
@@ -216,12 +216,14 @@ export function createJobRigScreen(options: {
     if(directionWords!==undefined)for(const decision of decisions)if(decision.kind==='review-verdict'&&decision.value.stage==='direction-review')decision.value.words=directionWords;
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     const rigChanges=decisions.find(decision=>decision.kind==='review-verdict'&&decision.value.stage==='rig-review'&&decision.value.verdict==='changes-requested');
-    if(rigChanges?.kind==='review-verdict'&&screen?.hasMeshEdits?.()){
-      if(!EMIT_UNPINNED_CREATE_FIELDS)throw new Error('JOB_ACT_KIND_DISABLED');
-      const edits=(await screen.meshEdits?.()??[]).map(edit=>({key:draftKey(edit),edit}));
-      edits.sort((a,b)=>a.key<b.key?-1:a.key>b.key?1:0);
-      if(!edits.length)throw new Error('JOB_ACT_SOURCE_STALE');
-      rigChanges.value.meshEdits=await Promise.all(edits.map(async ({edit})=>({edit,sha256:await sha256Hex(canonicalJson(edit))})));
+    const meshDraft=rigChanges?.kind==='review-verdict'?await screen?.meshEdits?.():null;
+    if(rigChanges?.kind==='review-verdict'){
+      if(meshDraft?.edits.length){
+        if(!EMIT_UNPINNED_CREATE_FIELDS)throw new Error('JOB_ACT_KIND_DISABLED');
+        const edits=meshDraft.edits.map(edit=>({key:draftKey(edit),edit}));
+        edits.sort((a,b)=>a.key<b.key?-1:a.key>b.key?1:0);
+        rigChanges.value.meshEdits=await Promise.all(edits.map(async ({edit})=>({edit,sha256:await sha256Hex(canonicalJson(edit))})));
+      }
       const latest=options.window.state();
       if(mounted!==prepared||latest.preparing||latest.receipt?.displayedNonce!==state.receipt.displayedNonce)throw new Error('JOB_ACT_SOURCE_STALE');
     }
@@ -241,6 +243,11 @@ export function createJobRigScreen(options: {
       const result = await options.window.submit(frozen);
       if (!result.ok) throw new Error(result.error.code, {cause: (result.error as {cause?: unknown}).cause});
       attempts.delete(ask.askId);
+      const act=result.value;
+      if(decision===rigChanges&&rigChanges.kind==='review-verdict'&&meshDraft&&act.schema===JOB_MESH_EDITS_ACT_SCHEMA&&act.kind==='review-verdict'&&act.value.meshEdits){
+        const accepted=new Set(act.value.meshEdits.map(row=>row.sha256));
+        meshDraft.clear(rigChanges.value.meshEdits?.filter(row=>accepted.has(row.sha256)).map(row=>row.edit)??[]);
+      }
       await committed({...current.commit, at: result.value.at});
     }
     return options.translate('job.saved');
