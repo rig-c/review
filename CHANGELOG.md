@@ -1,5 +1,39 @@
 # Changelog
 
+## 4.7.0
+
+A record-mode job host can now ask several record subjects in one `ask-batch` request, and advertises it as `capabilities.askBatch: true`. The parts Difference can compare with the previous accepted draft a publication carries, a post-interview question page shows its sealed scene plates and signed rig, and live rig and parts verdicts take general comments. Mesh edits on Request changes (act@8) are present but not sent in this release.
+
+**Read before upgrading:**
+
+* **`ask-batch` is a new `rig-review/job-api@3` verb.** It takes 1 to 64 subjects of the head record publication, each parsed like the single `ask` subject, and answers `{asks}` with `asks[i]` for `subjects[i]`. Review checks the source's freshness once for the whole batch, then creates every ask in one transaction; each ask writes its own `pending` event and moves the generation by 1. The batch is all or none: a subject's refusal keeps its code and its message starts with `subjects[<i>]: `. A repeated subject, zero or more than 64 subjects, or a package head refuse `JOB_REQUEST_INVALID`; a non-head publication refuses `JOB_ACT_SOURCE_STALE`. One idempotency key replays the whole batch. Single `ask` and finalize are unchanged (#965, closes #963).
+* **Detect `ask-batch` from `capabilities.askBatch: true` in the `next` reply, never by sending the verb.** Only a record-mode host (`publicationMode: 'record-and-package'`) advertises it; a package-only host's capabilities are unchanged. An older Review answers the unknown verb with `JOB_REQUEST_INVALID`. The request and reply are typed `JobAskBatchRequestV3` and `JobAskBatchValueV3`, and `JobCapabilitiesV3` gains `askBatch: true`; all three are types through `@rig-c/review/job-host`. `ask-batch` adds no runtime export (#965).
+* **Mesh edits on Request changes (`rig-review/act@8`) are in this release, but emission is off.** `EMIT_UNPINNED_CREATE_FIELDS` in `src/create-pin-gate.ts` is `false`. With the gate off, a live job writes the same act as 4.6.0 (act@6 for a rig verdict): Approve and a Request changes with a comment go through as before, a mesh draft held in the page is not sent and stays in the page, and the mesh panel says "This version cannot submit mesh edits in jobs." A mesh-only Request changes stays disabled. A submission that carries `meshEdits` is refused `JOB_ACT_KIND_DISABLED`. A consumer receives no act@8 from this release; a later release turns emission on after Create pins a Review that reads act@8 (#962, closes #952).
+* **Three new runtime exports through `@rig-c/review/job-host`, from 28 to 31.** `parseMeshEditsAct` and `JOB_MESH_EDITS_ACT_SCHEMA` (`rig-review/act@8`) decode act@8 (#962), and `JOB_PREVIOUS_DRAFT_SCHEMA` (`rig-review-previous-draft/1`) tells a publisher it may send `previousDraft` (#957). New types: `JobMeshEditValue`, `JobMeshEdit`, `JobMeshEditsAct` and `JobPreviousDraft`. A consumer that asserts the exact export list must add the three names. Decoders older than 4.7.0 refuse act@8 with `JOB_ACT_INVALID`.
+* **A draft publication may carry an optional `previousDraft` context.** A publisher sends it only when the installed Review exports `JOB_PREVIOUS_DRAFT_SCHEMA`. Its two composites (and optional diff file) must be sealed in the publication's `files`; a bad declaration refuses with a `PREVIOUS_DRAFT_*` detail under `JOB_SOURCE_MISMATCH`, or under `JOB_SOURCE_UNRETAINABLE` for a limit. The finalized parts act may carry `source.previousDraft`, and a pointed comment made in that comparison carries `view.comparison.operand: 'previous-draft'`. Both keys appear only when the publication carried `previousDraft`; publications and acts without it are unchanged (#957, closes #914).
+* **Rig-review and parts verdict submissions take an optional `general: readonly string[]`.** The writer appends each text as an anchorless comment after the existing ones. The finalized act stays act@6, and without `general` its bytes are unchanged (#956, closes #831).
+* **`JOB_SOURCE_UNRETAINABLE` size and file-count refusals now carry a message** naming the measured bytes or file count and the limit, such as `retained source bytes N exceed the L-byte limit`. The code and the limits are unchanged (#946, closes #793).
+
+### Added
+
+* `ask-batch` asks several record subjects with one freshness check: five subjects cost 2 publisher reads, where five single `ask` calls cost 10 (#965, closes #963).
+* In the assembled parts Difference, a "Compare with" choice switches between the original painting (the default) and the previous accepted draft, named by its id and revision. It is shown only when the publication carries `previousDraft`. The previous-draft comparison covers the whole canvas and includes alpha, so a removed silhouette or an alpha-only change shows. Single-part Difference still compares with the painting (#957, closes #914).
+* On a live job's rig and parts verdicts, the Add general comment entry is available. Drafts survive a reload and clear after a successful submission. A parts Request changes still needs at least one comment pinned to a part; with only general comments, the page says so next to the decision buttons. A general-only parts Approve is allowed (#956, closes #831).
+* Edit mesh on a live job's rig verdict can send its edits with Request changes once emission is on. In this release the edits stay in the page (see above) (#962, closes #952).
+
+### Fixed
+
+* A post-interview question page shows its sealed scene plates as question images. When a question binds a rig version or a scene that the publication does not carry, the empty-picture line says so (#953, #929).
+* A post-interview question page whose option set binds a rig version draws that signed rig from the record's sealed build rows. On that picture the viewport controls and Save work; verdict controls, Chest regions, Edit mesh and Apply · Rebuild are unavailable, and opening or answering approves no rig (#959, #929).
+* The open comment composer no longer covers the comment area's eight resize handles. When the stage pane has no free position, the composer moves elsewhere in the main area (#948, closes #895).
+* A parts verdict with no part mesh reads "Check the parts." instead of "Check the parts and meshes.", and the parts tab's hint line says that there is no compiled rig yet, so some tools and tabs are unavailable (#944, closes #923).
+* A job page in a view that never delivers animation frames, such as a background tab, no longer waits forever on the waiting notice: the layout settle falls back to a 250 ms timer (#943, #941).
+* When the job page falls back to a refusal code such as `JOB_WINDOW_FAILED`, it logs the underlying error with its stack to the console. The notice is unchanged (#942, #941).
+
+### Changed
+
+* `JOB_SOURCE_UNRETAINABLE` size and file-count refusals name what was measured and the limit (#946, closes #793).
+
 ## 4.6.0
 
 A review package can now carry a `rig-create/direction@3` post: a take that is the composed model's own `idle`, with no camera, timing or scene.
