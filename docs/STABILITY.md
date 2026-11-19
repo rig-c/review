@@ -502,6 +502,14 @@ with the keys absent keep their existing contract. The Review-to-publisher
 pin gate applies in its existing direction. See
 [Previous accepted draft Difference](REVIEW_PACKAGE.md#previous-accepted-draft-difference).
 
+[Review #957](https://github.com/rig-c/review/issues/957) adds the previous-draft
+constant `JOB_PREVIOUS_DRAFT_SCHEMA` (`rig-review-previous-draft/1`), for twenty-nine runtime exports total after the 4.0.0 removal of `startJobHub` and `assertJobImageSetCapability`, plus the type-only `JobPreviousDraft`.
+
+[Review #962](https://github.com/rig-c/review/issues/962) adds the act@8 decoder
+`parseMeshEditsAct` and its constant `JOB_MESH_EDITS_ACT_SCHEMA`
+(`rig-review/act@8`), for thirty-one runtime exports total, plus the type-only
+`JobMeshEditValue`, `JobMeshEdit` and `JobMeshEditsAct`.
+
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
@@ -709,7 +717,7 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer checks the thirty runtime exports and every listed type, including
+A consumer checks the thirty-one runtime exports and every listed type, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and
