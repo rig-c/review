@@ -8,6 +8,7 @@ import type {InspectionBookmark} from './inspection-persistence.ts';
 import type {ControlView} from '../src/control.ts';
 import type {InstanceAccess} from './instance-access.ts';
 import type {JobRigStage} from './job-rig-capture.ts';
+import type {CommentRow} from './stage-comments.ts';
 
 /** The rig pane as the screen holds it now, for the job's still. */
 export type RigHostStage = Omit<JobRigStage, 'source' | 'presentation'> & {
@@ -43,11 +44,12 @@ export interface RigHost {
   readonly subject?:'parts';
   readonly unavailable?:string;
   readonly direction?:{readonly publicationId:string;readonly sourceHash:string};
+  readonly verdictComments?:{readonly publicationId:string;readonly sourceHash:string;readonly rows:CommentRow[];readonly available:()=>boolean};
   readonly navigation?:RigHostNavigation;
   /** Derived from the displayed subject's finalized verdict; never a mode or another subject's act. */
   reviewState?(issues:number,sending:boolean):string;
   readonly record?:{readonly publicationId?:string;readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean};
-  submitParts?(issues:readonly PartsIssue[]):Promise<string>;
+  submitParts?(issues:readonly PartsIssue[], general?:readonly string[]):Promise<string>;
   readonly access: InstanceAccess;
   /** UI act authority is separate from a retained backdrop's immutable source access. */
   readonly ownerActAccess?: Pick<InstanceAccess, 'capability'>;
@@ -56,7 +58,7 @@ export interface RigHost {
   /** A read the host answers itself, or undefined to fetch it from the subject's routes. */
   read(path: string, method: string): Promise<unknown> | undefined;
   /** The act bar's Submit review: the session's decisions go out as the pending asks' acts. */
-  submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionWords?:string): Promise<string>;
+  submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionWords?:string, general?:readonly string[]): Promise<string>;
   attach(screen: RigHostScreen): void;
   /** The first rig draw is on screen (or the open failed): the job acknowledges the display after it. */
   displayed(): void;

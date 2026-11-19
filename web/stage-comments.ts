@@ -31,7 +31,7 @@ interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=Commen
  bookmark:()=>unknown;restore:(bookmark:unknown,timeOnly?:boolean)=>Promise<void>;
  feedback:()=>Row[];locked:(id:string)=>boolean;
  add:(feedback:Row,side?:'a'|'b')=>void;changed:()=>void|Promise<void>;error:(message:string)=>void;
- general?:{create:(summary:string)=>Row;matches:(row:Row)=>boolean};
+ general?:{create:(summary:string)=>Row;matches:(row:Row)=>boolean;rows?:Row[];available?:()=>boolean;refusal?:()=>string|null};
  refusal?:()=>string|null;blocked:()=>boolean;busy?:()=>boolean;busyError?:(message:string)=>void;shortcutBlocked?:()=>boolean;shortcutActive?:()=>boolean;codec?:CommentCodec<Row,Pose>;
 }
 const markOf=(f:Feedback):StageComment|null=>{try{const c=f.context as Record<string,unknown>|undefined;return c?.comment?parseStageComment(c.comment):null;}catch{return null;}};
@@ -88,7 +88,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const setCapture=(value:boolean)=>{value=value&&host.hasPicture?.()!==false;enabled=value;toggle.setAttribute('aria-pressed',String(value||!inline&&!list.hidden));for(const pane of Object.values(host.viewports))pane!.classList.toggle('stage-comment-mode',value);};
  const cancel=()=>{++interaction;const previous=pending??(geometryDrag&&geometryEdit?{view:geometryEdit.view,id:geometryDrag.id}:pinPress);geometryEdit=null;geometryDrag=null;pinPress=null;pending=null;if(previous){const pane=host.viewports[previous.view];if(pane?.hasPointerCapture(previous.id))pane.releasePointerCapture(previous.id);}composer?.remove();composer=null;composerReadOnly=false;composerGeneral=false;syncComposerLang=null;draftMark=null;last='';};
  const assertCapture=()=>{const reason=updateRefusal();if(reason){cancel();setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
- const assertEdit=(general=false)=>{const reason=general?null:updateRefusal();if(reason){setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
+ const assertEdit=(general=false)=>{const reason=general?(host.general?.refusal?.()??(host.general?.available?.()===false?t('JOB_ACT_NOTHING_TO_SUBMIT'):null)):updateRefusal();if(reason){setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
  let jumpGeneration = 0;
  let hiddenPanes: {pane: HTMLElement; visibility: string}[] | null = null;
  const jump = async (row: Row): Promise<boolean> => {
@@ -131,7 +131,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   setCapture(layers.size>0);for(const view of layers.keys())host.pose(view);
  };
  const openComment=async(f:Row)=>{const mark=readMark(f);if(!mark){if(host.general?.matches(f))openComposer(null,{x:0,y:0,width:0,height:0},f);return;}if(list.hidden)setOpen(true);if(list.hidden)return;if(await jump(f)){const reason=updateRefusal();setCapture(!reason&&!host.blocked());const pose=host.pose(mark.viewport),screen=host.codec?.geometry&&pose?region(projectMark(mark.world,pose.camera),projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera)):mark.screen;openComposer(mark.viewport,screen,f,pose?.mode??mark.mode);}};
- const renderList=()=>{placeList();list.setAttribute('aria-label',t('Comments'));list.replaceChildren();const title=document.createElement('strong');title.textContent=t('Comments');list.append(title);const rawReason=host.refusal?.()??null,reason=rawReason?t(rawReason):null;if(reason){const note=document.createElement('small');note.className='stage-comment-refusal-note';note.title=reason;note.textContent=reason;Object.assign(note.style,{display:'block',marginTop:'4px',maxWidth:'100%',whiteSpace:inline?'normal':'nowrap',overflow:'hidden',textOverflow:'ellipsis'});list.append(note);}if(host.general){const add=document.createElement('button');add.type='button';add.textContent=t('Add general comment');add.dataset.commentGeneral='';add.onclick=()=>openComposer(null,{x:0,y:0,width:0,height:0});list.append(add);}const all=host.feedback().filter(f=>readMark(f)||host.general?.matches(f));toggle.textContent=t(host.busy?.()?'Comment · C ({0}) · Rendering':'Comment · C ({0})').replace('{0}',String(all.length));if(!all.length){const empty=document.createElement('p');empty.textContent=t(inline?'No comments yet.':reason?'Read only · Escape closes':'Mark a point or region, then type. Enter saves · Escape cancels.');list.append(empty);}for(const [i,f]of all.entries()){
+ const renderList=()=>{placeList();list.setAttribute('aria-label',t('Comments'));list.replaceChildren();const title=document.createElement('strong');title.textContent=t('Comments');list.append(title);const rawReason=host.refusal?.()??null,reason=rawReason?t(rawReason):null;if(reason){const note=document.createElement('small');note.className='stage-comment-refusal-note';note.title=reason;note.textContent=reason;Object.assign(note.style,{display:'block',marginTop:'4px',maxWidth:'100%',whiteSpace:inline?'normal':'nowrap',overflow:'hidden',textOverflow:'ellipsis'});list.append(note);}if(host.general&&host.general.available?.()!==false){const add=document.createElement('button');add.type='button';add.textContent=t('Add general comment');add.dataset.commentGeneral='';add.onclick=()=>openComposer(null,{x:0,y:0,width:0,height:0});list.append(add);}const all=host.feedback().filter(f=>readMark(f)||host.general?.matches(f));if(host.general?.rows)all.push(...host.general.rows);toggle.textContent=t(host.busy?.()?'Comment · C ({0}) · Rendering':'Comment · C ({0})').replace('{0}',String(all.length));if(!all.length){const empty=document.createElement('p');empty.textContent=t(inline?'No comments yet.':reason?'Read only · Escape closes':'Mark a point or region, then type. Enter saves · Escape cancels.');list.append(empty);}for(const [i,f]of all.entries()){
   const mark=readMark(f),row=document.createElement('div');row.className='stage-comment-item';row.dataset.commentId=f.id;
   const go=document.createElement('button');go.type='button';go.className='stage-comment-summary';go.textContent=!mark?`${i+1} · ${t('General comment')} · ${f.summary}`:host.codec?`${i+1} · ${host.codec.label(f,mark)}`:`${i+1} · ${mark.mode.toUpperCase()} · ${mark.viewport.toUpperCase()} · ${mark.frame?`F${mark.frame.index} (${mark.frame.basis})`:t(feedbackTimingLabel(f as unknown as Feedback))} · ${f.summary}`;go.onclick=()=>openComment(f);row.append(go);
   if(host.locked(f.id)){const submitted=document.createElement('span');submitted.textContent=t('Submitted');row.append(submitted);}
@@ -139,11 +139,11 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  }};
  const refresh=()=>{last='';renderList();renderPins();};
  const openComposer=(view:StageComment['viewport']|null,screen:MarkRegion,existing?:Row,placementMode=view?host.pose(view)?.mode:undefined)=>{
-  const general=view===null; if(general&&!host.general)return;
+  const general=view===null; if(general&&(!host.general||host.general.available?.()===false))return;
   if(!existing){try{general?assertEdit(true):assertCapture();}catch{return;}}
   const currentMode=view?host.pose(view)?.mode:undefined;
   if(!general&&(!placementMode||currentMode&&currentMode!==placementMode)){cancel();return;}
-  const locked=!!existing&&host.locked(existing.id),initialRefusal=existing&&!general?updateRefusal():null;
+  const locked=!!existing&&host.locked(existing.id),initialRefusal=existing?(general?host.general?.refusal?.()??null:updateRefusal()):null;
   if(existing&&!initialRefusal&&host.blocked()){host.error(t('COMMENT_BUSY: wait for inspection'));return;}
   geometryEdit=null;composer?.remove();composerReadOnly=locked||!!initialRefusal;composerGeneral=general;draftMark=view?{view,mode:placementMode!,screen}:null;const generation=interaction;const pane=view?host.viewports[view]!:list,form=composer=document.createElement('form');form.className='stage-comment-composer stage-comment-ui';form.setAttribute('aria-label',t('Comment composer'));if(general)form.style.position='relative';
   const field=document.createElement('input');field.type='text';field.maxLength=1000;field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');field.value=existing?.summary??'';
@@ -220,7 +220,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     if(busy)return;
     try{
      assertEdit(general);if(host.locked(existing.id))throw new Error(t('COMMENT_SUBMITTED: submitted evidence is immutable'));
-     const all=host.feedback(),index=all.findIndex(x=>x.id===existing.id);if(index>=0)all.splice(index,1);
+     const all=(general?host.general?.rows:undefined)??host.feedback(),index=all.findIndex(x=>x.id===existing.id);if(index>=0)all.splice(index,1);
      cancel();host.changed();refresh();
     }catch(e){errorSource=toEn(e instanceof Error?e.message:String(e));error.textContent=t(errorSource);place();}
    };
@@ -285,7 +285,9 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
      if(index<0)return;
      all.splice(index,1,replacement);
     }else existing.summary=summary;
-   }else if(general){assertEdit(true);host.add(host.general!.create(summary));
+   }else if(general){
+    assertEdit(true);const row=host.general!.create(summary);
+    if(host.general!.rows)host.general!.rows.push(row);else host.add(row);
    }else{
     assertCapture();if(!pose||!host.codec&&!pose.frame&&!pose.timeBasis)throw new Error(t(pose?.frameReason??'COMMENT_FRAME_UNAVAILABLE: provide an explicit producer clock or a decoded reference frame index'));
     busy=true;field.disabled=true;syncChips();
