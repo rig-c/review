@@ -1439,8 +1439,16 @@ export interface JobFormDependencies {
             }
             interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:deps.interviewMainView,
                 images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered'});
-            if (deps.interviewMainView && prepared.metadata.recordSource && prepared.metadata.manifest?.model)
+            if (deps.interviewMainView && prepared.metadata.recordSource) {
                 interviewForm.form.dataset.interviewMain = '';
+                if (!question.images.length && !prepared.metadata.manifest?.model) {
+                    fields.prepend(node('p', question.missingPicture === 'rig'
+                        ? 'This question refers to a rig version that this publication does not include.'
+                        : question.missingPicture === 'scene'
+                            ? 'This question refers to a scene that this publication does not include.'
+                            : 'This request has no picture.'));
+                }
+            }
             disposeInterview=interviewForm.dispose;read=interviewForm.read;
             submitKey = 'interview.save';
         }

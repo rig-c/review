@@ -34,7 +34,7 @@ const baseline=await Bun.file(new URL('./fixtures/interview-722-empty-note.json'
 async function assertLastAskPickKeepsScrollAndFocus(mode:'dialog'|'pictureless'|'question-tab'){
  const scrollBefore=await page!.evaluate<number>(`(()=>{
   const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=form.closest('#workspace-interview-answer[data-question-image-active="true"]')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
+  const panel=form.closest('#workspace-interview-answer')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
   const firstOption=form.querySelector('fieldset.interview-ask:last-of-type label.interview-option');
   const pr=panel.getBoundingClientRect(),or=firstOption.getBoundingClientRect();
   panel.scrollTop=Math.max(0,Math.min(panel.scrollHeight-panel.clientHeight,panel.scrollTop+(or.top-pr.top)-4));
@@ -45,7 +45,7 @@ async function assertLastAskPickKeepsScrollAndFocus(mode:'dialog'|'pictureless'|
  await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
  const afterOther=await page!.evaluate<{scrollTop:number;active:boolean}>(`(()=>{
   const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=form.closest('#workspace-interview-answer[data-question-image-active="true"]')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
+  const panel=form.closest('#workspace-interview-answer')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
   const other=form.querySelector('input[type=radio][name="choice.cloth_sim"][value="cloth_sim_other"]');
   return {scrollTop:panel.scrollTop,active:document.activeElement===other};
  })()`);
@@ -55,7 +55,7 @@ async function assertLastAskPickKeepsScrollAndFocus(mode:'dialog'|'pictureless'|
  await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
  const afterBaked=await page!.evaluate<{scrollHeight:number;clientHeight:number;scrollTop:number;active:boolean}>(`(()=>{
   const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=form.closest('#workspace-interview-answer[data-question-image-active="true"]')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
+  const panel=form.closest('#workspace-interview-answer')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
   const baked=form.querySelector('input[type=radio][name="choice.cloth_sim"][value="cloth_baked"]');
   return {scrollHeight:panel.scrollHeight,clientHeight:panel.clientHeight,scrollTop:panel.scrollTop,active:document.activeElement===baked};
  })()`);
@@ -81,8 +81,12 @@ async function longInterviewScrollChecks(questionTab:boolean){
      const before=await jobInputHashes(fixture.root),url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
      await page!.setViewport(1600,1000);holdImages=false;await page!.goto('about:blank');await page!.goto(url.href);
      await wait(`!!document.querySelector('form[data-job-ask="ask-interview-picks"] fieldset:not(:disabled)')`,'875 long dialog receipt');
-     if(!await page!.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page!,'#workspace-pending-ask');
-     await wait(`!!document.querySelector('#job-record-asks[open] form[data-job-ask="ask-interview-picks"] fieldset:not(:disabled)')`,'875 long dialog open');
+     if(questionImages){
+      if(!await page!.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page!,'#workspace-pending-ask');
+      await wait(`!!document.querySelector('#job-record-asks[open] form[data-job-ask="ask-interview-picks"] fieldset:not(:disabled)')`,'875 long dialog open');
+     }else{
+      await wait(`!!document.querySelector('#workspace-interview-answer form[data-job-ask="ask-interview-picks"] fieldset:not(:disabled)')&&!!document.querySelector('[data-block-target=question][aria-selected=true]')`,'875 pictureless question tab open');
+     }
      await assertLastAskPickKeepsScrollAndFocus(questionImages?'dialog':'pictureless');
      assert.deepEqual(await jobInputHashes(fixture.root),before);
     }finally{await page!.goto('about:blank');await fixture.close();}
@@ -372,6 +376,67 @@ async function followupQuestionChecks(){
  await writeFile(join(output,'followup-result.json'),JSON.stringify(result,null,2));console.log('839_FOLLOWUP_RESULT '+JSON.stringify(result));if(!result.passed)process.exitCode=1;
 }
 
+async function assertNoPictureQuestionTab(reason:string,catalog:Record<string,string>,selector='form.interview-answer'){
+ const state=await page!.evaluate<{
+  tabOpen:boolean;
+  tabLabel:string;
+  formInTab:boolean;
+  tabHasReason:boolean;
+  controls:{id:string;kind:string;ownLabel:string;accessibleName:string;ariaDescription:string|null;title:string|null}[];
+ }>(`(()=>{
+  const tab=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target="question"][role="tab"][aria-selected="true"]');
+  const tabRect=tab?.getBoundingClientRect();
+  const panel=document.querySelector('#workspace-interview-answer:not([hidden])');
+  const form=panel?.querySelector(${JSON.stringify(selector)});
+  const formRect=form?.getBoundingClientRect();
+  const declaredLabels={
+   'idle-blink-marker':${JSON.stringify(catalog['Blink time'])},
+   'play':${JSON.stringify(catalog['Play'])},
+   'report-previous':${JSON.stringify(catalog['Previous event page'])},
+   'report-next':${JSON.stringify(catalog['Next event page'])},
+  };
+  const nodes=[...document.querySelectorAll('.inspector [role="tab"]:disabled,.inspector input[type="checkbox"]:disabled:not([aria-hidden="true"]),.workspace-secondary-toolbar input[type="checkbox"]:disabled,.inspector button:not([role="tab"]):disabled,.workspace-secondary-toolbar button:disabled')];
+  const controls=nodes.map(control=>{
+   const labelledBy=control.getAttribute('aria-labelledby');
+   const byText=labelledBy?labelledBy.split(/\\s+/).map(id=>document.getElementById(id)?.textContent?.trim()??'').filter(Boolean).join(' '):'';
+   const wrapping=control.closest('label'),explicit=control.id?document.querySelector('label[for="'+control.id+'"]'):null;
+   const ownLabel=(declaredLabels[control.id]||byText||(control.tagName==='BUTTON'?(control.childElementCount?control.childNodes[0]?.textContent:control.textContent):(wrapping?(wrapping.querySelector('span')?.textContent??[...wrapping.childNodes].find(n=>n.nodeType===3&&n.nodeValue?.trim())?.nodeValue):explicit?.textContent))||'').trim();
+   const accessibleName=(byText||control.getAttribute('aria-label')||control.textContent||control.getAttribute('title')||'').trim();
+   const kind=control.getAttribute('role')==='tab'?'tab':control.tagName==='INPUT'?'checkbox':'button';
+   return {id:control.id||control.tagName.toLowerCase(),kind,ownLabel,accessibleName,ariaDescription:control.getAttribute('aria-description'),title:control.getAttribute('title')};
+  });
+  return {
+   tabOpen:!!tab&&!!tabRect&&tabRect.width>0&&tabRect.height>0,
+   tabLabel:tab?.textContent?.trim()??'',
+   formInTab:!!form&&!!formRect&&formRect.width>0&&formRect.height>0,
+   tabHasReason:!!panel&&panel.textContent.includes(${JSON.stringify(reason)}),
+   controls,
+  };
+ })()`);
+ assert.equal(state.tabOpen,true,'#955 Question tab is visible and selected on no-picture question page');
+ assert.equal(state.tabLabel,catalog['Question'],'#955 Question tab label');
+ assert.equal(state.formInTab,true,'#955 Question tab holds the question form');
+ assert.equal(state.tabHasReason,true,'#955 Question tab states the missing-picture absence sentence');
+ assert.ok(state.controls.some(c=>c.kind==='tab')&&state.controls.some(c=>c.kind==='checkbox')&&state.controls.some(c=>c.kind==='button'),'#955 unavailable tabs, checkboxes, and buttons are present');
+ for(const control of state.controls){
+  assert.ok(control.ownLabel.length>0,`#955 ${control.kind}#${control.id} has its own visible label`);
+  assert.equal(control.accessibleName,control.ownLabel,`#955 ${control.kind}#${control.id} accessible name is its own label`);
+  assert.notEqual(control.accessibleName,reason,`#955 ${control.kind}#${control.id} accessible name is not the missing-picture reason`);
+  assert.equal(control.ariaDescription,reason,`#955 ${control.kind}#${control.id} aria-description is the missing-picture reason`);
+  assert.notEqual(control.title,reason,`#955 ${control.kind}#${control.id} title is not the missing-picture reason`);
+ }
+ const ax=await command!('Accessibility.getFullAXTree') as {nodes?:{ignored?:boolean;role?:{value?:string};name?:{value?:string};description?:{value?:string};properties?:{name:string;value?:{value?:unknown}}[]}[]};
+ const axNodes=ax.nodes??[];
+ assert.equal(axNodes.some(node=>['tab','checkbox','button'].includes(node.role?.value??'')&&node.name?.value===reason),false,'#955 no tab, checkbox, or button in AXTree uses the missing-picture reason as its accessible name');
+ const axDisabled=axNodes.filter(node=>!node.ignored&&['tab','checkbox','button'].includes(node.role?.value??'')&&node.properties?.some(p=>p.name==='disabled'&&p.value?.value===true)&&node.description?.value===reason);
+ assert.ok(axDisabled.length>=3,'#955 AXTree reports visible disabled controls with aria-description');
+ for(const node of axDisabled){
+  assert.ok((node.name?.value?.trim().length??0)>0,'#955 AXTree node has non-empty accessible name');
+  assert.notEqual(node.name?.value,reason,'#955 AXTree accessible name is own label, not the missing-picture reason');
+  assert.equal(node.description?.value,reason,'#955 AXTree description is the missing-picture reason');
+ }
+}
+
 async function postQuestionPictureChecks(){
  await page!.setViewport(1440,900);
  const observations:{variant:string;language:string;sha256?:string}[]=[];
@@ -408,8 +473,10 @@ async function postQuestionPictureChecks(){
      const key=variant==='legacy'?'This request has no picture.':variant==='rig'?
       'This question refers to a rig version that this publication does not include.':
       'This question refers to a scene that this publication does not include.';
+     const catalog=language==='en'?enCatalog:koCatalog;
      const text=await page!.evaluate<string>(`document.querySelector('#rig-empty').textContent`);
-     assert.equal(text,(language==='en'?enCatalog:koCatalog)[key]);
+     assert.equal(text,catalog[key]);
+     await assertNoPictureQuestionTab(catalog[key],catalog);
     }
     await writeFile(join(output,variant+'-'+language+'.png'),await page!.screenshot());
     observations.push(observation);
@@ -503,11 +570,8 @@ async function boundRigPictureChecks(){
     } else {
      missingPicture = await page!.evaluate<string>(`document.querySelector('#rig-empty').textContent`);
      assert.equal(missingPicture,catalog['This question refers to a rig version that this publication does not include.']);
+     await assertNoPictureQuestionTab(missingPicture,catalog,selector);
      await writeFile(join(out,'question-'+visit+'.png'),await page!.screenshot());
-     if (!await page!.evaluate(`!!document.querySelector(${JSON.stringify('dialog[open] '+selector)})`)) {
-      await click(page!,'#workspace-pending-ask');
-     }
-     await wait(`!!document.querySelector(${JSON.stringify('dialog[open] '+selector)})`,'929 model-free answer dialog');
     }
     const assetRequests = await page!.evaluate<string[]>(`performance.getEntriesByType('resource')
      .map(entry=>new URL(entry.name).pathname).filter(path=>path.includes('/assets/'))`);

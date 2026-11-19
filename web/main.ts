@@ -1532,10 +1532,21 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??(host?.record?.scenePicture?'':unavailable),!!actReadOnly);
  text('package-title',interview?.label??host!.record!.label);text('revision','');text('source-hash',`source ${(interview?.sourceHash??host!.record!.sourceHash).slice(0,12)}`);
  el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty',unavailable);
- for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')){control.disabled=true;setSourceAttribute(control,'title',unavailable);}
+ for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button')){
+  if(control===rigInspector.collapse||(!interview&&control===rigInspector.comments.button))continue;
+  control.disabled=true;control.removeAttribute('title');
+  const toggleLabel=control.closest('label.layer-toggle');if(toggleLabel)toggleLabel.removeAttribute('title');
+  if(!control.hasAttribute('aria-label')&&!control.hasAttribute('aria-labelledby')&&control.getAttribute('aria-hidden')!=='true'){
+   const wrappingLabel=control.closest('label'),explicitLabel=control.id?document.querySelector<HTMLLabelElement>(`label[for="${control.id}"]`):null;
+   const labelNode=control instanceof HTMLButtonElement?(control.childElementCount?control.childNodes[0]??null:control):wrappingLabel?(wrappingLabel.querySelector('span')??[...wrappingLabel.childNodes].find(node=>node.nodeType===3&&node.nodeValue?.trim())??null):explicitLabel;
+   const labelText=sourceTextContent(labelNode).trim();
+   if(labelText)setSourceAttribute(control,'aria-label',labelText);
+  }
+  setSourceAttribute(control,'aria-description',unavailable);
+ }
  if(interview){
   button('stage-comment').hidden=true;
-  button('save').disabled=true;setSourceAttribute(button('save'),'title',unavailable);
+  button('save').disabled=true;setSourceAttribute(button('save'),'aria-description',unavailable);
   const label=()=>{setSourceText(rigAsk,t('interview.title'));recordDialog?.setAttribute('aria-label',t('interview.title'));};
   label();viewDisposers.push(onLanguageChange(label));
   viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,t('interview.title'),true)));
