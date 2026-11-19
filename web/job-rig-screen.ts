@@ -112,6 +112,7 @@ export function createJobRigScreen(options: {
   formDependencies?:JobFormDependencies;
   refusal(error: unknown, fallback?: string): string;
   translate(key: string,values?:readonly (string|number)[]): string;
+  confirm?(text: string): boolean;
   /** Imports the rig composition once the host is set. */
   load(): Promise<unknown>;
 }) {
@@ -232,6 +233,7 @@ export function createJobRigScreen(options: {
       }
       const latest=options.window.state();
       if(mounted!==prepared||latest.preparing||latest.receipt?.displayedNonce!==state.receipt.displayedNonce)throw new Error('JOB_ACT_SOURCE_STALE');
+      if(rigChanges.value.meshEdits?.length&&options.confirm&&!options.confirm(options.translate('Send this Request changes with {0} mesh edit(s) to the producer?',[rigChanges.value.meshEdits.length])))return '';
     }
     for (const decision of decisions) {
       const key = JSON.stringify(decision.value);
