@@ -6,6 +6,7 @@ import type {ControlNumericCamera} from '../src/control.ts';
 import {drawnSlots,region,projectMark,unprojectMark,parseStageComment,feedbackTimingLabel,type MarkRegion,type MarkPoint,type StageComment} from '../src/stage-comment.ts';
 import {getLanguage as i18nLang,onLanguageChange as i18nOnChange,t as i18nT,tr as i18nTr} from './i18n.ts';
 import {panSpaceHeld,textEntryFocused} from './view-controls.ts';
+import {boxesIntersect} from './label-placement.ts';
 export interface CommentPose {
  mode:StageComment['mode'];camera:ControlNumericCamera;frame:StageComment['frame'];timeBasis?:StageComment['timeBasis'];time:number;animation:string|null;
  turn:unknown;sourceHash:string;modelHash:string|null;referenceHash:string|null;referenceId:string|null;frameReason?:string;
@@ -40,6 +41,7 @@ const toEn=(s:string)=>typeof i18nTr==='function'?i18nTr(s,'en'):s;
 const onLang=(fn:()=>void)=>typeof i18nOnChange==='function'?i18nOnChange(fn):()=>{};
 const curLang=()=>typeof i18nLang==='function'?i18nLang():'en';
 const spaceHeld=()=>typeof panSpaceHeld==='function'&&panSpaceHeld();
+const resizeHandles=[['nw',0,0],['n',.5,0],['ne',1,0],['e',1,.5],['se',1,1],['s',.5,1],['sw',0,1],['w',0,.5]] as const;
 function rectElement(r:MarkRegion):HTMLDivElement{const node=document.createElement('div');node.className='stage-comment-region';Object.assign(node.style,{left:r.x+'px',top:r.y+'px',width:Math.max(2,r.width)+'px',height:Math.max(2,r.height)+'px'});return node;}
 async function crop(pose:CommentUiPose,r:MarkRegion):Promise<StageComment['crop']>{
  if(!pose.capture)throw new Error(t('COMMENT_CROP_UNAVAILABLE: viewport pixel source unavailable'));
@@ -149,12 +151,66 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   const hint=document.createElement('small');hint.textContent=composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels';hint.textContent=t(hint.textContent);const error=document.createElement('p');error.setAttribute('role','alert');form.append(field,hint,error);
   const place=()=>{if(general)return;
    if(host.codec?.geometry){
+    const previousPlacement={position:form.style.position,left:form.style.left,top:form.style.top,width:form.style.width,height:form.style.height,maxWidth:form.style.maxWidth,maxHeight:form.style.maxHeight,zIndex:form.style.zIndex};
+    Object.assign(form.style,{position:'absolute',height:'',maxWidth:'',maxHeight:'',zIndex:''});
     const right=pane.clientWidth-screen.x-screen.width-12,left=screen.x-12,available=Math.max(left,right);
+    let x:number,y:number;
     if(available>=160){
      const width=Math.min(286,available);form.style.width=width+'px';const height=form.offsetHeight||132;
-     Object.assign(form.style,{left:(right>=left?screen.x+screen.width+8:screen.x-width-8)+'px',top:Math.max(4,Math.min(screen.y,pane.clientHeight-height-4))+'px'});return;
+     x=right>=left?screen.x+screen.width+8:screen.x-width-8;y=Math.max(4,Math.min(screen.y,pane.clientHeight-height-4));
+    }else{
+     form.style.width='';const w=form.offsetWidth||294,h=form.offsetHeight||132;
+     x=Math.max(4,Math.min(screen.x+screen.width+8,pane.clientWidth-w-4));y=Math.max(4,Math.min(screen.y+screen.height+8,pane.clientHeight-h-4));
     }
-    form.style.width='';
+    const w=form.getBoundingClientRect().width||form.offsetWidth||294,h=form.offsetHeight||132,radius=7;
+    const clampX=(v:number)=>Math.max(4,Math.min(v,pane.clientWidth-w-4)),clampY=(v:number)=>Math.max(4,Math.min(v,pane.clientHeight-h-4));
+    const outside=(p:{x:number;y:number})=>!boxesIntersect({...p,w,h},{x:screen.x-radius,y:screen.y-radius,w:screen.width+2*radius,h:screen.height+2*radius});
+    const handles=resizeHandles;
+    const points=handles.map(([name,dx,dy])=>({name,x:screen.x+screen.width*dx,y:screen.y+screen.height*dy}));
+    const covers=(p:{x:number;y:number},at:{x:number;y:number})=>boxesIntersect({...p,w,h},{x:at.x-radius,y:at.y-radius,w:2*radius,h:2*radius});
+    const pointer=geometryDrag&&(geometryDrag.handle==='move'?{x:geometryDrag.start.x+screen.x-geometryDrag.screen.x,y:geometryDrag.start.y+screen.y-geometryDrag.screen.y}:points.find(p=>p.name===geometryDrag!.handle));
+    const candidates=[{x,y},...[
+     [right>=left?screen.x-w-8:screen.x+screen.width+8,screen.y],
+     [screen.x,screen.y+screen.height+8],[screen.x,screen.y-h-8],
+    ].map(([cx,cy])=>({x:clampX(cx!),y:clampY(cy!)}))];
+    // A held handle must never acquire the composer under its pointer.
+    const usable=(p:{x:number;y:number})=>!pointer||!covers(p,pointer);
+    let chosen=candidates.find(p=>outside(p)&&usable(p));
+    if(!chosen){
+     // Handle edges partition all possible placements into constant hit-count cells,
+     // including the interior of a large area. Boundaries suffice; no pixel scan.
+     const xs=[x,4,pane.clientWidth-w-4,...points.flatMap(p=>[p.x-radius-w,p.x+radius])].map(clampX);
+     const ys=[y,4,pane.clientHeight-h-4,...points.flatMap(p=>[p.y-radius-h,p.y+radius])].map(clampY);
+     candidates.push(...xs.flatMap(cx=>ys.map(cy=>({x:cx,y:cy}))).sort((a,b)=>Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y)));
+     const safe=candidates.filter(usable);
+     const pool=safe.length?safe:candidates;
+     chosen=pool.reduce((best,p)=>points.filter(at=>covers(p,at)).length<points.filter(at=>covers(best,at)).length?p:best,pool[0]!);
+    }
+    if(points.some(at=>covers(chosen!,at))&&workspace){
+     const origin=pane.getBoundingClientRect(),main=workspace.getBoundingClientRect();
+     const ox=origin.left+pane.clientLeft,oy=origin.top+pane.clientTop;
+     const minX=Math.max(4,main.left+4)-ox,minY=Math.max(4,main.top+4)-oy;
+     const maxX=Math.min(window.innerWidth-4,main.right-4)-ox-w,maxY=Math.min(window.innerHeight-4,main.bottom-4)-oy-h;
+     if(maxX>=minX&&maxY>=minY){
+      const cx=(v:number)=>Math.max(minX,Math.min(v,maxX)),cy=(v:number)=>Math.max(minY,Math.min(v,maxY));
+      const acts=[...document.querySelectorAll<HTMLElement>('#workspace-act-row,.workspace-act-bar,#save,#request-changes,#submit')].filter(n=>!n.hidden&&n.getClientRects().length).map(n=>{const r=n.getBoundingClientRect();return {x:r.left-ox,y:r.top-oy,width:r.width,height:r.height};});
+      const blocksAct=(p:{x:number;y:number})=>acts.some(r=>boxesIntersect({...p,w,h},{x:r.x,y:r.y,w:r.width,h:r.height}));
+      const xs=[x,minX,maxX,...points.flatMap(p=>[p.x-radius-w,p.x+radius]),...acts.flatMap(r=>[r.x-w,r.x+r.width])].map(cx);
+      const ys=[y,minY,maxY,...points.flatMap(p=>[p.y-radius-h,p.y+radius]),...acts.flatMap(r=>[r.y-h,r.y+r.height])].map(cy);
+      const expanded=[...candidates.map(p=>({x:cx(p.x),y:cy(p.y)})),...xs.flatMap(px=>ys.map(py=>({x:px,y:py}))).sort((a,b)=>Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y))].filter(usable);
+      const zero=expanded.filter(p=>!points.some(at=>covers(p,at))),clear=zero.filter(p=>!blocksAct(p));
+      const pool=clear.length?clear:zero.length?zero:expanded;
+      if(pool.length){
+       const mainChoice=pool.reduce((best,p)=>points.filter(at=>covers(p,at)).length<points.filter(at=>covers(best,at)).length?p:best,pool[0]!);
+       if(zero.length||points.filter(at=>covers(mainChoice,at)).length<points.filter(at=>covers(chosen!,at)).length){
+        Object.assign(form.style,{position:'fixed',left:mainChoice.x+ox+'px',top:mainChoice.y+oy+'px',width:w+'px',height:h+'px',maxWidth:w+'px',maxHeight:h+'px',zIndex:'30'});return;
+       }
+      }
+     }
+    }
+    // Only after the main search also fails may a held pointer keep its origin.
+    if(pointer&&!candidates.some(usable)){Object.assign(form.style,previousPlacement);return;}
+    Object.assign(form.style,{left:chosen.x+'px',top:chosen.y+'px'});return;
    }
    const w=form.offsetWidth||294,h=form.offsetHeight||132;Object.assign(form.style,{left:Math.max(4,Math.min(screen.x+screen.width+8,pane.clientWidth-w-4))+'px',top:Math.max(4,Math.min(screen.y+screen.height+8,pane.clientHeight-h-4))+'px'});};
   let removeBtn:HTMLButtonElement|null=null,errorSource='';
@@ -313,7 +369,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    const width=pin.offsetWidth||24,height=pin.offsetHeight||24,placed=occupied.get(mark.viewport)??[];
    if(!occupied.has(mark.viewport)){
     occupied.set(mark.viewport,placed);
-    if(geometryEdit?.view===mark.viewport){const r=geometryEdit.screen;for(const [x,y]of [[0,0],[.5,0],[1,0],[1,.5],[1,1],[.5,1],[0,1],[0,.5]])placed.push({x:r.x+r.width*x!,y:r.y+r.height*y!,width:12,height:12});}
+    if(geometryEdit?.view===mark.viewport){const r=geometryEdit.screen;for(const [,x,y]of resizeHandles)placed.push({x:r.x+r.width*x!,y:r.y+r.height*y!,width:12,height:12});}
    }
    const clamp=(n:number,size:number,limit:number)=>Math.max(size/2,Math.min(limit-size/2,n));
    const clear=(x:number,y:number)=>placed.every(p=>Math.abs(p.x-x)>=(p.width+width)/2+2||Math.abs(p.y-y)>=(p.height+height)/2+2);
@@ -325,7 +381,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  }if(draftMark&&!geometryEdit)layers.get(draftMark.view)?.append(rectElement(draftMark.screen));
  if(geometryEdit){
   const {view,screen:r}=geometryEdit,layer=layers.get(view)!,box=rectElement(r);box.dataset.commentHandle='move';Object.assign(box.style,{pointerEvents:'auto',cursor:'move'});layer.prepend(box);
-  for(const [name,x,y]of [['nw',0,0],['n',.5,0],['ne',1,0],['e',1,.5],['se',1,1],['s',.5,1],['sw',0,1],['w',0,.5]] as const){
+  for(const [name,x,y]of resizeHandles){
    const handle=document.createElement('button');handle.type='button';handle.dataset.commentHandle=name;handle.className='stage-comment-ui';handle.setAttribute('aria-label',t('Resize comment area: {0}').replace('{0}',name));
    Object.assign(handle.style,{position:'absolute',left:r.x+r.width*x+'px',top:r.y+r.height*y+'px',width:'12px',height:'12px',minWidth:'12px',minHeight:'12px',padding:'0',transform:'translate(-50%,-50%)',pointerEvents:'auto',cursor:name+'-resize',borderWidth:'2px',borderStyle:'solid',borderColor:'var(--link)',background:'var(--rv-panel)'});layer.append(handle);
   }

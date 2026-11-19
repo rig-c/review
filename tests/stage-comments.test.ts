@@ -1,3 +1,4 @@
+import {boxesIntersect} from '../web/label-placement.ts';
 import {rigWorkspaceMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {expect,test} from 'bun:test';
 import {readFile,readdir} from 'node:fs/promises';
@@ -761,4 +762,25 @@ test('#897 Escape keeps comment mode and list open in all four cases, and Space-
   expect(pans).toEqual([[25,15],[-15,-10],[-15,-10]]);
   expect(rows).toHaveLength(1);
  }finally{disposePan();ui.cleanup();}
+});
+
+test('#895 actual placement tries aligned top/bottom and never jumps when every placement covers the held pointer',async()=>{
+ const source=await readFile('web/stage-comments.ts','utf8'),start=source.indexOf('  const place=()=>'),end=source.indexOf('  let removeBtn:',start);
+ expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
+ const handleStart=source.indexOf('const resizeHandles='),handleEnd=source.indexOf('\n',handleStart);
+ const placeSource=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(handleStart,handleEnd)+'\n'+source.slice(start,end));
+ const run=(screen:{x:number;y:number;width:number;height:number},pane:{clientWidth:number;clientHeight:number},geometryDrag:unknown=null,style:Record<string,string>={})=>{
+  const form={style,offsetWidth:286,offsetHeight:132,getBoundingClientRect:()=>({width:286})};
+  new Function('host','form','pane','screen','general','geometryDrag','workspace','boxesIntersect',placeSource+';place();')({codec:{geometry:true}},form,pane,screen,false,geometryDrag,null,boxesIntersect);
+  return form.style;
+ };
+ const above=run({x:150,y:350,width:300,height:80},{clientWidth:600,clientHeight:500});
+ expect(above.left).toBe('150px');expect(above.top).toBe('210px');
+ const below=run({x:150,y:50,width:300,height:80},{clientWidth:600,clientHeight:500});
+ expect(below.top).toBe('138px');
+ // The rectangle fits the stage, but every permitted origin covers this held point.
+ const screen={x:140,y:60,width:60,height:40},pane={clientWidth:366,clientHeight:140},style={left:'40px',top:'4px'};
+ const held=run(screen,pane,{handle:'move',start:{x:170,y:80},screen:{...screen}},style);
+ expect(held.left).toBe('40px');expect(held.top).toBe('4px');
+ console.log('COMMENT_PLACEMENT_POINTER_IMPOSSIBLE '+JSON.stringify({pane,composer:{width:286,height:132},pointer:{x:170,y:80},action:'kept existing position'}));
 });
