@@ -101,19 +101,19 @@ try{
     for(const lang of ['en','ko']as const){
      await page.goto(server?`http://127.0.0.1:${server.port}/?lang=${lang}`:fixture.locator+'/?lang='+lang+'#cap='+fixture.credentials.ui);await settled();
      const measured:{headline:string;detailNote:{visible:boolean;text:string};controls:unknown[];visibleText:unknown[]}=await page.evaluate(`({headline:document.querySelector('#workspace-ask-headline')?.textContent,detailNote:{visible:document.querySelector('#detail-note').checkVisibility(),text:document.querySelector('#detail-note').textContent},controls:Array.from(document.querySelectorAll('[data-block-target],.view-tools input,.view-tools button,#layer-mesh,#layer-bones,#layer-regions,#edit-mesh'),n=>({id:n.id,target:n.getAttribute('data-block-target'),disabled:n.disabled,visible:n.checkVisibility(),text:n.textContent,title:n.title})),visibleText:Array.from(document.querySelectorAll('[id]'),n=>({id:n.id,text:n.childElementCount?null:n.textContent,visible:n.checkVisibility()})).filter(n=>n.visible&&n.text?.trim())})`);
-     const sentence=lang==='en'?'There is no compiled rig yet, so the mesh tools and tabs are unavailable.':'아직 컴파일된 리그가 없어서 메시 도구와 탭은 쓸 수 없어요.';
+     const sentence=lang==='en'?'There is no compiled rig yet, so some tools and tabs are unavailable.':'아직 컴파일된 리그가 없어서 일부 도구와 탭은 쓸 수 없어요.';
      const hintProbe=`(()=>{const hint=document.querySelector('#selected-part p.hint');return {visible:hint.checkVisibility(),text:hint.textContent}})()`;
      const unselected:{visible:boolean;text:string}=await page.evaluate<{visible:boolean;text:string}>(hintProbe);
      assert.equal(unselected.visible,true,'ITEM2_923 unselected visible '+mode+' '+mesh+' '+lang);
-     assert.ok(unselected.text.includes(sentence),'ITEM2_923 unselected sentence '+mode+' '+mesh+' '+lang);
+     assert.equal(unselected.text,(lang==='en'?'Select a part to inspect its original image source.':'파츠를 선택하여 원본 이미지 출처를 확인하세요.')+' '+sentence,'ITEM2_923 unselected exact '+mode+' '+mesh+' '+lang);
      assert.ok(!unselected.text.includes('PARTS_RIG_UNAVAILABLE'));
      await shot('item2-unselected-'+mode+'-'+mesh+'-'+lang);
-     await part((pkg?.items[0]?.name)??await page.evaluate<string>(`document.querySelector('[data-part-list] button[data-slot]').dataset.slot`));
+     const partName:string=(pkg?.items[0]?.name)??await page.evaluate<string>(`document.querySelector('[data-part-list] button[data-slot]').dataset.slot`);
+     await part(partName);
      const selected:{visible:boolean;text:string}=await page.evaluate<{visible:boolean;text:string}>(hintProbe);
      assert.equal(selected.visible,true,'ITEM2_923 selected visible '+mode+' '+mesh+' '+lang);
-     assert.ok(selected.text.includes(sentence),'ITEM2_923 selected sentence '+mode+' '+mesh+' '+lang);
+     assert.equal(selected.text,(lang==='en'?'Original part image · ':'원본 파츠 이미지 · ')+partName+' · '+sentence,'ITEM2_923 selected exact '+mode+' '+mesh+' '+lang);
      assert.ok(!selected.text.includes('PARTS_RIG_UNAVAILABLE'));
-     assert.ok(selected.text.includes((lang==='en'?'Original part image · ':'원본 파츠 이미지 · ')));
      report['item2-'+mode+'-'+mesh+'-'+lang]={unselected,selected};
      await shot('item2-selected-'+mode+'-'+mesh+'-'+lang);
      report[mode+'-'+mesh+'-'+lang]=measured;await writeFile(join(output,'headline-measurements.json'),JSON.stringify(report,null,2));await shot('headline-'+mode+'-'+mesh+'-'+lang);
@@ -132,7 +132,7 @@ try{
    const compiled=await startServer(await loadReview(rig),{port:0,exitOnClose:false,viewOnly:true});servers.push(compiled);
    await page.goto(`http://127.0.0.1:${compiled.port}/?lang=${lang}`);await wait(`!!document.querySelector('#rig-root canvas')&&document.querySelector('#player-state')?.textContent.includes('@rig-c/play')`,'wind rig');await click(page,'[data-mode="playback"]');await page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
    await wait(`!!document.querySelector('#stage-comment-list')`,'rig comments bound');
-   assert.ok(!(await page.evaluate<string>(`document.querySelector('#selected-part').textContent`)).includes(lang==='en'?'There is no compiled rig yet, so the mesh tools and tabs are unavailable.':'아직 컴파일된 리그가 없어서 메시 도구와 탭은 쓸 수 없어요.'),'ITEM2_923 compiled rig has no sentence '+lang);
+   assert.ok(!(await page.evaluate<string>(`document.querySelector('#selected-part').textContent`)).includes(lang==='en'?'There is no compiled rig yet, so some tools and tabs are unavailable.':'아직 컴파일된 리그가 없어서 일부 도구와 탭은 쓸 수 없어요.'),'ITEM2_923 compiled rig has no sentence '+lang);
    if(await page.evaluate(`document.querySelector('#play').textContent==='Ⅱ'`))await click(page,'#play');
    await page.evaluate(`(()=>{const input=document.querySelector('#scrub');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);await page.evaluate('document.fonts.ready');await page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
    const heldReadback:string=`(()=>{const numeric=JSON.parse(document.querySelector('#view-coordinates').textContent);return {style:document.querySelector('#rig-root').style.cssText,animation:document.querySelector('#animation-select').value,time:document.querySelector('#scrub').value,playing:document.querySelector('#play').textContent==='Ⅱ',frame:document.querySelector('#frame-label').textContent,viewport:{width:document.querySelector('#rig-viewport').clientWidth,height:document.querySelector('#rig-viewport').clientHeight},visibleBounds:numeric.cameras.rig?.visible,numeric}})()`;

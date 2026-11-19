@@ -3616,7 +3616,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Original part image · {name}": "원본 파츠 이미지 · {name}",
   "Source image SHA-256 · {hash}": "원본 이미지 SHA-256 · {hash}",
   "Select a part to inspect its original image source.": "파츠를 선택하여 원본 이미지 출처를 확인하세요.",
-  "There is no compiled rig yet, so the mesh tools and tabs are unavailable.": "아직 컴파일된 리그가 없어서 메시 도구와 탭은 쓸 수 없어요.",
+  "There is no compiled rig yet, so some tools and tabs are unavailable.": "아직 컴파일된 리그가 없어서 일부 도구와 탭은 쓸 수 없어요.",
   "Parts raster drawn · Canvas2D": "파츠 래스터 그려짐 · Canvas2D",
   "Parts images · no compiled rig loaded": "파츠 이미지 · 컴파일된 리그 로드 안 됨",
   "Parts ready. Source files remain unchanged.": "파츠 준비 완료. 원본 파일은 변경되지 않아요.",
