@@ -21,8 +21,15 @@ const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 const hosts: JobOwnerHost[] = [];
 const servers: ReturnType<typeof Bun.serve>[] = [];
 const originalFetch = globalThis.fetch;
+let pendingPrivateEntry: Promise<void> | undefined;
 
 afterEach(async () => {
+  // Bun can time out the callback while its fixture work is still running.
+  if (pendingPrivateEntry) {
+    const settled = pendingPrivateEntry;
+    pendingPrivateEntry = undefined;
+    await settled;
+  }
   globalThis.fetch = originalFetch;
   for (const server of servers.splice(0)) server.stop(true);
   for (const host of hosts.splice(0)) host.stop();
@@ -1316,11 +1323,15 @@ test('CP1 real recovery-required SQLite journal refuses without recovery or boot
   expect(await stateImage(options.stateDir)).toEqual(before);
 });
 
-test('CP1 private entry, missing control, schema and stored-document refusals preserve bytes', async () => {
+async function checkPrivateEntryRefusals(f: Awaited<ReturnType<typeof jobFixture>>) {
+  const options = baseOptions(f), owner = await startJobHost(options);
+  const expected = owner.attachment!;
+  owner.stop();
+
+  const store = join(options.stateDir, 'jobs.sqlite'), control = join(options.stateDir, 'job-ui'), record = join(control, expected.jobId + '.json');
+  // Each strict refusal starts from the same stopped host and pristine store.
+  const pristineStore = await readFile(store);
   for (const target of ['state', 'store', 'control', 'record', 'missing-control', 'missing-job', 'schema', 'missing-schema', 'oversized-document', 'missing-table', 'record-symlink', 'store-hardlink']) {
-    const f = await createFixture(), options = baseOptions(f), owner = await startJobHost(options); hosts.push(owner);
-    const expected = owner.attachment!; owner.stop();
-    const store = join(options.stateDir, 'jobs.sqlite'), control = join(options.stateDir, 'job-ui'), record = join(control, expected.jobId + '.json');
     const entries: Record<string, string> = {state: options.stateDir, store, control, record};
     let expectedError: Record<string, unknown> = {code: 'JOB_HOST_ATTACH_REFUSED', reason: 'read', phase: ['control', 'record', 'record-symlink'].includes(target) ? 'record' : 'state'};
     let restore: (() => Promise<void>) | undefined;
@@ -1336,6 +1347,7 @@ test('CP1 private entry, missing control, schema and stored-document refusals pr
     } else if (target === 'store-hardlink') {
       require('node:fs').linkSync(store, store + '.link'); restore = () => unlink(store + '.link');
     } else {
+      restore = () => writeFile(store, pristineStore);
       const db = new Database(store);
       try {
         if (target === 'missing-job') {db.query('DELETE FROM jobs WHERE job_id=?').run(expected.jobId); expectedError = {code: 'JOB_HOST_ATTACH_REFUSED', reason: 'missing', phase: 'state'};}
@@ -1352,6 +1364,19 @@ test('CP1 private entry, missing control, schema and stored-document refusals pr
       expect(await stateImage(options.stateDir)).toEqual(before);
     } finally {await restore?.();}
   }
+}
+
+test('CP1 private entry, missing control, schema and stored-document refusals preserve bytes', () => {
+  const work = (async () => {
+    const f = await jobFixture();
+    try {
+      await checkPrivateEntryRefusals(f);
+    } finally {
+      await f.close();
+    }
+  })();
+  pendingPrivateEntry = work.catch(() => {});
+  return work;
 });
 
 test('CP1 ordinary reuse ignores unavailable added metadata and retains callback timing and descriptor bytes', async () => {
