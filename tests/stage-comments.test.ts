@@ -769,7 +769,7 @@ test('#895 actual placement tries aligned top/bottom and never jumps when every 
  const placeSource=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end));
  const run=(screen:{x:number;y:number;width:number;height:number},pane:{clientWidth:number;clientHeight:number},geometryDrag:unknown=null,style:Record<string,string>={})=>{
   const form={style,offsetWidth:286,offsetHeight:132,getBoundingClientRect:()=>({width:286})};
-  new Function('host','form','pane','screen','general','geometryDrag',placeSource+';place();')({codec:{geometry:true}},form,pane,screen,false,geometryDrag);
+  new Function('host','form','pane','screen','general','geometryDrag','workspace',placeSource+';place();')({codec:{geometry:true}},form,pane,screen,false,geometryDrag,null);
   return form.style;
  };
  const above=run({x:150,y:350,width:300,height:80},{clientWidth:600,clientHeight:500});

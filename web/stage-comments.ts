@@ -79,7 +79,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const updateRefusal=()=>{const raw=host.refusal?.()??null,reason=raw?t(raw):null,prev=refusalNote.textContent||'',nextTitle=reason??t(originalTitle);toggle.disabled=!!host.busy?.();toggle.setAttribute('aria-busy',String(toggle.disabled));if(toggle.title!==nextTitle)toggle.title=nextTitle;if(refusalNote.title!==(reason??''))refusalNote.title=reason??'';if(refusalNote.textContent!==(reason??''))refusalNote.textContent=reason??'';refusalNote.hidden=!reason;if(!list.hidden&&(reason??'')!==prev)renderList();return reason;};
  const layers=new Map<StageComment['viewport'],HTMLDivElement>();for(const [key,pane]of Object.entries(host.viewports)){const layer=document.createElement('div');layer.className='stage-comment-layer';pane!.append(layer);layers.set(key as StageComment['viewport'],layer);}
  let enabled=false,disposed=false,pending:{view:StageComment['viewport'];start:MarkPoint;end:MarkPoint;mode:string;id:number;interaction:number;settled:Promise<void>}|null=null,composer:HTMLFormElement|null=null,composerReadOnly=false,composerGeneral=false,syncComposerLang:(()=>void)|null=null,draftMark:{view:StageComment['viewport'];mode:string;screen:MarkRegion}|null=null,busy=false,last='',raf=0,interaction=0;
- let geometryEdit:{view:StageComment['viewport'];screen:MarkRegion;id?:string;update:(screen:MarkRegion)=>void;changed:boolean;camera:string}|null=null;
+ let geometryEdit:{view:StageComment['viewport'];screen:MarkRegion;id?:string;update:(screen:MarkRegion)=>void;changed:boolean;camera:string;reposition:()=>void}|null=null;
  let geometryDrag:{id:number;start:MarkPoint;screen:MarkRegion;handle:string}|null=null;
  let suppressPinClick=false;
  let pinPress:{id:number;view:StageComment['viewport'];start:MarkPoint;pin:HTMLButtonElement}|null=null;
@@ -149,6 +149,8 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   const hint=document.createElement('small');hint.textContent=composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels';hint.textContent=t(hint.textContent);const error=document.createElement('p');error.setAttribute('role','alert');form.append(field,hint,error);
   const place=()=>{if(general)return;
    if(host.codec?.geometry){
+    const previousPlacement={position:form.style.position,left:form.style.left,top:form.style.top,width:form.style.width,height:form.style.height,maxWidth:form.style.maxWidth,maxHeight:form.style.maxHeight,zIndex:form.style.zIndex};
+    Object.assign(form.style,{position:'absolute',height:'',maxWidth:'',maxHeight:'',zIndex:''});
     const right=pane.clientWidth-screen.x-screen.width-12,left=screen.x-12,available=Math.max(left,right);
     let x:number,y:number;
     if(available>=160){
@@ -179,12 +181,33 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
      const ys=[y,4,pane.clientHeight-h-4,...points.flatMap(p=>[p.y-radius-h,p.y+radius])].map(clampY);
      candidates.push(...xs.flatMap(cx=>ys.map(cy=>({x:cx,y:cy}))).sort((a,b)=>Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y)));
      const safe=candidates.filter(usable);
-     // If every position covers the held pointer, moving cannot help; keep the
-     // existing position rather than jumping there from a different side.
-     if(pointer&&!safe.length)return;
      const pool=safe.length?safe:candidates;
      chosen=pool.reduce((best,p)=>points.filter(at=>covers(p,at)).length<points.filter(at=>covers(best,at)).length?p:best,pool[0]!);
     }
+    if(points.some(at=>covers(chosen!,at))&&workspace){
+     const origin=pane.getBoundingClientRect(),main=workspace.getBoundingClientRect();
+     const ox=origin.left+pane.clientLeft,oy=origin.top+pane.clientTop;
+     const minX=Math.max(4,main.left+4)-ox,minY=Math.max(4,main.top+4)-oy;
+     const maxX=Math.min(window.innerWidth-4,main.right-4)-ox-w,maxY=Math.min(window.innerHeight-4,main.bottom-4)-oy-h;
+     if(maxX>=minX&&maxY>=minY){
+      const cx=(v:number)=>Math.max(minX,Math.min(v,maxX)),cy=(v:number)=>Math.max(minY,Math.min(v,maxY));
+      const acts=[...workspace.querySelectorAll<HTMLElement>('#workspace-act-row button,.workspace-act-bar button,#submit,#approve,#request-changes')].filter(n=>!n.hidden&&n.getClientRects().length).map(n=>{const r=n.getBoundingClientRect();return {x:r.left-ox,y:r.top-oy,width:r.width,height:r.height};});
+      const blocksAct=(p:{x:number;y:number})=>acts.some(r=>p.x<r.x+r.width&&p.x+w>r.x&&p.y<r.y+r.height&&p.y+h>r.y);
+      const xs=[x,minX,maxX,...points.flatMap(p=>[p.x-radius-w,p.x+radius]),...acts.flatMap(r=>[r.x-w,r.x+r.width])].map(cx);
+      const ys=[y,minY,maxY,...points.flatMap(p=>[p.y-radius-h,p.y+radius]),...acts.flatMap(r=>[r.y-h,r.y+r.height])].map(cy);
+      const expanded=[...candidates.map(p=>({x:cx(p.x),y:cy(p.y)})),...xs.flatMap(px=>ys.map(py=>({x:px,y:py}))).sort((a,b)=>Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y))].filter(usable);
+      const zero=expanded.filter(p=>!points.some(at=>covers(p,at))),clear=zero.filter(p=>!blocksAct(p));
+      const pool=clear.length?clear:zero.length?zero:expanded;
+      if(pool.length){
+       const mainChoice=pool.reduce((best,p)=>points.filter(at=>covers(p,at)).length<points.filter(at=>covers(best,at)).length?p:best,pool[0]!);
+       if(zero.length||points.filter(at=>covers(mainChoice,at)).length<points.filter(at=>covers(chosen!,at)).length){
+        Object.assign(form.style,{position:'fixed',left:mainChoice.x+ox+'px',top:mainChoice.y+oy+'px',width:w+'px',height:h+'px',maxWidth:w+'px',maxHeight:h+'px',zIndex:'50'});return;
+       }
+      }
+     }
+    }
+    // Only after the main search also fails may a held pointer keep its origin.
+    if(pointer&&!candidates.some(usable)){Object.assign(form.style,previousPlacement);return;}
     Object.assign(form.style,{left:chosen.x+'px',top:chosen.y+'px'});return;
    }
    const w=form.offsetWidth||294,h=form.offsetHeight||132;Object.assign(form.style,{left:Math.max(4,Math.min(screen.x+screen.width+8,pane.clientWidth-w-4))+'px',top:Math.max(4,Math.min(screen.y+screen.height+8,pane.clientHeight-h-4))+'px'});};
@@ -201,8 +224,9 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    };
    form.append(remove);
   }
-  // Capture all view context now; camera or dial changes while typing cannot rebind the mark.
-  const pose=view?host.pose(view):null,bookmark=general?null:copy(host.bookmark()),turn=pose?.turn===undefined?null:copy(pose.turn);
+  // Bind source/world context now. Camera navigation may refresh pose to
+  // reproject the same world region; only an explicit geometry edit changes it.
+  let pose=view?host.pose(view):null;const bookmark=general?null:copy(host.bookmark()),turn=pose?.turn===undefined?null:copy(pose.turn);
   const initialParts = pose ? host.codec?.chips?.(pose, screen, existing) : undefined;
   let selectedParts = initialParts?.selected.slice(),partsTouched=!!existing;
   const chipBox = initialParts ? document.createElement('div') : null;
@@ -234,7 +258,17 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   let prepared=general?Promise.resolve(null):previous?Promise.resolve(previous.crop):pose?crop(pose,screen):Promise.reject(new Error('COMMENT_VIEW_UNAVAILABLE'));
   prepared.catch(()=>{});
   if(view&&pose&&host.codec?.geometry&&!composerReadOnly){
-   geometryEdit={view,screen:{...screen},id:existing?.id,changed:false,camera:JSON.stringify(pose.camera),update:next=>{
+   geometryEdit={view,screen:{...screen},id:existing?.id,changed:false,camera:JSON.stringify(pose.camera),reposition:()=>{
+    const next=host.pose(view),previous=pose;if(!next||!previous)return;
+    if(next.mode!==previous.mode||next.sourceHash!==previous.sourceHash||existing&&!host.codec!.matches(readMark(existing)!,next,existing)){cancel();return;}
+    if(JSON.stringify(next.camera)!==geometryEdit!.camera){
+     const world=region(unprojectMark(screen,previous.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},previous.camera));
+     pose=next;screen=region(projectMark(world,next.camera),projectMark({x:world.x+world.width,y:world.y+world.height},next.camera));geometryEdit!.screen=screen;geometryEdit!.camera=JSON.stringify(next.camera);
+     if(geometryEdit!.changed){prepared=crop(next,screen);prepared.catch(()=>{});}last='';
+    }
+    place();
+   },update:next=>{
+    if(!pose)return;
     const a=unprojectMark(next,pose.camera),b=unprojectMark({x:next.x+next.width,y:next.y+next.height},pose.camera);
     let x=Math.round(a.x),y=Math.round(a.y),right=Math.round(b.x),bottom=Math.round(b.y);
     if(right<=x){if(geometryDrag?.handle.includes('w'))x=right-1;else right=x+1;}
@@ -333,6 +367,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  // #356: a pose reads the pane's size (a forced layout after the played frame's writes); with no mark, draft or pending
  // capture there is nothing to place, so this per-frame loop skips it.
  const poses=new Map(all.length||draftMark||pending?[...layers.keys()].map(view=>[view,host.pose(view)]):[]);
+ geometryEdit?.reposition();
  if(draftMark&&poses.get(draftMark.view)?.mode!==draftMark.mode||pending&&poses.get(pending.view)?.mode!==pending.mode)cancel();
  if(geometryEdit&&(geometryEdit.id&&host.locked(geometryEdit.id)||JSON.stringify(poses.get(geometryEdit.view)?.camera)!==geometryEdit.camera))cancel();
  const signature=JSON.stringify([geometryEdit?.screen,curLang(),refusal,all.map(({f,mark})=>[f.id,f.summary,mark!.mode,mark!.world]),[...poses].map(([view,p])=>[view,host.codec&&p?host.codec.signature(p):[p?.mode,p?.animation,p?.frame,p?.timeBasis,p?.time,p?.turn,p?.camera,p?.referenceId,p?.referenceHash]]),draftMark]);
