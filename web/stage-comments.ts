@@ -150,11 +150,42 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   const place=()=>{if(general)return;
    if(host.codec?.geometry){
     const right=pane.clientWidth-screen.x-screen.width-12,left=screen.x-12,available=Math.max(left,right);
+    let x:number,y:number;
     if(available>=160){
      const width=Math.min(286,available);form.style.width=width+'px';const height=form.offsetHeight||132;
-     Object.assign(form.style,{left:(right>=left?screen.x+screen.width+8:screen.x-width-8)+'px',top:Math.max(4,Math.min(screen.y,pane.clientHeight-height-4))+'px'});return;
+     x=right>=left?screen.x+screen.width+8:screen.x-width-8;y=Math.max(4,Math.min(screen.y,pane.clientHeight-height-4));
+    }else{
+     form.style.width='';const w=form.offsetWidth||294,h=form.offsetHeight||132;
+     x=Math.max(4,Math.min(screen.x+screen.width+8,pane.clientWidth-w-4));y=Math.max(4,Math.min(screen.y+screen.height+8,pane.clientHeight-h-4));
     }
-    form.style.width='';
+    const w=form.getBoundingClientRect().width||form.offsetWidth||294,h=form.offsetHeight||132,radius=7;
+    const clampX=(v:number)=>Math.max(4,Math.min(v,pane.clientWidth-w-4)),clampY=(v:number)=>Math.max(4,Math.min(v,pane.clientHeight-h-4));
+    const outside=(p:{x:number;y:number})=>p.x+w<=screen.x-radius||p.x>=screen.x+screen.width+radius||p.y+h<=screen.y-radius||p.y>=screen.y+screen.height+radius;
+    const handles=[['nw',0,0],['n',.5,0],['ne',1,0],['e',1,.5],['se',1,1],['s',.5,1],['sw',0,1],['w',0,.5]] as const;
+    const points=handles.map(([name,dx,dy])=>({name,x:screen.x+screen.width*dx,y:screen.y+screen.height*dy}));
+    const covers=(p:{x:number;y:number},at:{x:number;y:number})=>p.x<at.x+radius&&p.x+w>at.x-radius&&p.y<at.y+radius&&p.y+h>at.y-radius;
+    const pointer=geometryDrag&&(geometryDrag.handle==='move'?{x:geometryDrag.start.x+screen.x-geometryDrag.screen.x,y:geometryDrag.start.y+screen.y-geometryDrag.screen.y}:points.find(p=>p.name===geometryDrag!.handle));
+    const candidates=[{x,y},...[
+     [right>=left?screen.x-w-8:screen.x+screen.width+8,screen.y],
+     [screen.x,screen.y+screen.height+8],[screen.x,screen.y-h-8],
+    ].map(([cx,cy])=>({x:clampX(cx!),y:clampY(cy!)}))];
+    // A held handle must never acquire the composer under its pointer.
+    const usable=(p:{x:number;y:number})=>!pointer||!covers(p,pointer);
+    let chosen=candidates.find(p=>outside(p)&&usable(p));
+    if(!chosen){
+     // Handle edges partition all possible placements into constant hit-count cells,
+     // including the interior of a large area. Boundaries suffice; no pixel scan.
+     const xs=[x,4,pane.clientWidth-w-4,...points.flatMap(p=>[p.x-radius-w,p.x+radius])].map(clampX);
+     const ys=[y,4,pane.clientHeight-h-4,...points.flatMap(p=>[p.y-radius-h,p.y+radius])].map(clampY);
+     candidates.push(...xs.flatMap(cx=>ys.map(cy=>({x:cx,y:cy}))).sort((a,b)=>Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y)));
+     const safe=candidates.filter(usable);
+     // If every position covers the held pointer, moving cannot help; keep the
+     // existing position rather than jumping there from a different side.
+     if(pointer&&!safe.length)return;
+     const pool=safe.length?safe:candidates;
+     chosen=pool.reduce((best,p)=>points.filter(at=>covers(p,at)).length<points.filter(at=>covers(best,at)).length?p:best,pool[0]!);
+    }
+    Object.assign(form.style,{left:chosen.x+'px',top:chosen.y+'px'});return;
    }
    const w=form.offsetWidth||294,h=form.offsetHeight||132;Object.assign(form.style,{left:Math.max(4,Math.min(screen.x+screen.width+8,pane.clientWidth-w-4))+'px',top:Math.max(4,Math.min(screen.y+screen.height+8,pane.clientHeight-h-4))+'px'});};
   let removeBtn:HTMLButtonElement|null=null,errorSource='';
