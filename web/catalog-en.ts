@@ -3622,6 +3622,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Parts raster drawn · Canvas2D": "Parts raster drawn · Canvas2D",
   "Parts images · no compiled rig loaded": "Parts images · no compiled rig loaded",
   "Parts ready. Source files remain unchanged.": "Parts ready. Source files remain unchanged.",
+  "This question refers to a rig version that this publication does not include.": "This question refers to a rig version that this publication does not include.",
+  "This question refers to a scene that this publication does not include.": "This question refers to a scene that this publication does not include.",
   "This request has no picture.": "This request has no picture.",
   "The selected part has no chest regions. The chest editor keeps its current part.": "The selected part has no chest regions. The chest editor keeps its current part.",
   'Resize comment area: {0}': 'Resize comment area: {0}',
