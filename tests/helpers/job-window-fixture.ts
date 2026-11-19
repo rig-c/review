@@ -173,9 +173,10 @@ import {startJobHost} from '../../src/job-front.ts';
 /** Normal full-host entry with explicitly synthetic, committed A fixture inputs. */
 export async function realJobWindowFixture(options: {
     reader?: boolean;
+    scratchParent?: string;
     installWriterBinding?: Parameters<typeof startJobHost>[0]['installWriterBinding'];
 } = {}) {
-    const input = await jobFixture();
+    const input = await jobFixture({scratchParent: options.scratchParent});
     const hostOptions = {root: input.root, stateDir: input.state, fingerprint: 'f'.repeat(64),
         reviewer: {id: 'declared-owner', role: 'owner' as const},
         partsEnumerator: input.partsEnumerator, partsEnumeratorId: 'synthetic-job-window-parts/1',
@@ -218,8 +219,8 @@ import {writeComparisonPackage} from './parts-comparison-package.ts';
 /** Declared synthetic visual/producer context over a real retained Create question.
  * It proves window transport, not Create #184 or Parts' enumerator/writer acceptance.
  */
-export async function scriptedJobWindowFixture(options: {c5Parts?: 'mesh' | 'no-mesh'; attachedPublisher?: boolean} = {}) {
-    const f = await realJobWindowFixture();
+export async function scriptedJobWindowFixture(options: {c5Parts?: 'mesh' | 'no-mesh'; attachedPublisher?: boolean; scratchParent?: string} = {}) {
+    const f = await realJobWindowFixture({scratchParent: options.scratchParent});
     await joinedVerdictFixture(f.input.root, '2-rigging-answers');
     f.input.setRecordPath('project.json');
     const question = readProject(f.input.root).questions.find(item => item.editable)!;

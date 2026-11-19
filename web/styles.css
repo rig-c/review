@@ -469,6 +469,8 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-main-toolbar #play{font-size:var(--font-size-compact);line-height:1;flex:none;width:var(--control-height);height:var(--control-height);padding:0}
 .workspace-secondary-toolbar>label{display:inline-flex;align-items:center;gap:var(--space-2);font-size:var(--font-size-meta);line-height:1.5}
 .workspace-secondary-toolbar>label input[type=checkbox]{margin:0}
+#parts-difference-operand-label{max-width:100%}
+#parts-difference-operand{width:auto;min-width:0}
 .workspace-main-toolbar .zoom-controls{padding-right:var(--space-1)}
 .workspace-bottom-tabs{display:flex;align-items:center;gap:var(--space-1);flex-wrap:nowrap}
 .workspace-bottom-tabs [aria-selected=true]{background:var(--rv-pressed-bg);border-color:var(--rv-pressed-border)}

@@ -57,7 +57,7 @@ import {PNG} from 'pngjs';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {
- startJobHost, JOB_CAPABILITIES, JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_ENABLED_ACT_KINDS,
+ startJobHost, JOB_CAPABILITIES, JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_PREVIOUS_DRAFT_SCHEMA, JOB_ENABLED_ACT_KINDS,
  JOB_RESERVED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_CONSUMER_AUTH_MODE, JOB_ERROR_CODES,
  type JobHostOptions, type JobOwnerHost, type JobSessionOptions, type JobSession, type JobWorkerOptions,
  type JobHostListenerIncarnation, type JobHostReuseBinding, type JobHostReuseExpectation, type JobHostAttachField, type JobHostAttachFailure,
@@ -67,7 +67,7 @@ import {
  type JobId, type JobPublicationId, type JobAskId, type JobActId, type JobCursor,
  type JobFileIdentity, type JobPlanStepIdentity, type JobPlanIdentity,
  type JobPartsManifestPath, type JobPartImagePath, type JobPartsIdentity,
- type JobPartsRole, type JobPartsFileReference, type JobPartsEnumerator, type JobSelector,
+ type JobPartsRole, type JobPartsFileReference, type JobPartsEnumerator, type JobPreviousDraft, type JobSelector,
  type JobSourceBinding, type JobReviewerBinding, type JobHumanAuthority, type JobVerdict,
  type JobPartOutcome, type JobReviewStage, type JobActValues, type JobUIActValues,
  type JobActSources, type JobAct, type JobSubject, type JobPendingAsk,
@@ -95,7 +95,7 @@ export type PublicTypes = [
  JobModelSourceBinding, JobModelReviewValue,
  JobEnabledActKind, JobReservedActKind, JobActKind, JobSha256, JobId, JobPublicationId,
  JobAskId, JobActId, JobCursor, JobFileIdentity, JobPlanStepIdentity, JobPlanIdentity,
- JobPartsManifestPath, JobPartImagePath, JobPartsIdentity, JobPartsRole, JobPartsFileReference, JobPartsEnumerator, JobSelector, JobSourceBinding,
+ JobPartsManifestPath, JobPartImagePath, JobPartsIdentity, JobPartsRole, JobPartsFileReference, JobPartsEnumerator, JobPreviousDraft, JobSelector, JobSourceBinding,
  JobReviewerBinding, JobHumanAuthority, JobVerdict, JobPartOutcome, JobReviewStage,
  JobActValues, JobUIActValues, JobActSources, JobAct, JobSubject, JobPendingAsk,
  JobInterviewJson, JobInterviewRecord, JobInterviewDiagnostic, JobInterviewDiagnostics,
@@ -119,7 +119,7 @@ function assert(ok: unknown, name: string): asserts ok {
 }
 assert(jobActAdmitsComments, 'JOB_ACT_ADMITS_COMMENTS');
 const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID', 'JOB_PARTS_ENUMERATOR_RANGE',
- 'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
+ 'JOB_PREVIOUS_DRAFT_SCHEMA', 'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
  'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordAct', 'prepareJobRecordSource',
  'JOB_COMMENTS_ACT_SCHEMA', 'REVIEW_COMMENTS_SESSION_SCHEMA', 'REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA',
  'PARTS_COMMENTS_VERDICT_SCHEMA', 'parseCommentsAct', 'projectComments', 'parseCommentsSession',
@@ -128,7 +128,7 @@ const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', '
  'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct'];
 assert(JSON.stringify(Object.keys(publicHost).sort()) === JSON.stringify(expectedExports.sort()), 'EXPORTS');
 assert(JOB_API_SCHEMA === 'rig-review/job-api@2' && JOB_ACT_SCHEMA === 'rig-review/act@2' &&
- JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <3.0.0', 'SCHEMAS');
+ JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <3.0.0' && JOB_PREVIOUS_DRAFT_SCHEMA === 'rig-review-previous-draft/1', 'SCHEMAS');
 assert(JOB_ENABLED_ACT_KINDS.length === 5 && JOB_RESERVED_ACT_KINDS.length === 2 &&
  JOB_PLAN_BOUND_SIGNOFF_STAGES.length === 3 && JOB_CONSUMER_AUTH_MODE === 'writer-owned-sibling-fetch-capability' &&
  JOB_ERROR_CODES.includes('JOB_CLOSED'), 'CONTRACT');

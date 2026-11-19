@@ -77,6 +77,7 @@ export type PartsSubjectData=ReturnType<typeof partsViewJson>;
 export interface PartsSubjectEntry {subject:'parts';parts:PartsSubjectData}
 export interface PartsSubjectSession {subject:'parts';issues:PartsIssue[]}
 type Item=PartsSubjectData['items'][number];
+type DifferenceOperand='painting'|'previous-draft';
 interface PartsPose extends CommentUiPose {item:Item;sourceHash:string;view:PartsIssue['view']}
 /** Source-specific pixels and evidence. Shell, list, toolbar, controller and act stay in main.ts. */
 export function bindPartsSubject(host:{
@@ -96,6 +97,8 @@ export function bindPartsSubject(host:{
  const makeCanvas=(w:number,h:number)=>Object.assign(document.createElement('canvas'),{width:w,height:h});
  const item=()=>data.items.find(item=>item.name===selected)??data.items[0]!;
  const assembled=()=>!solo||selected===null;
+ const paintingDifferenceAvailable=()=>data.differenceAvailable&&!!data.painting;
+ const previousDraftAvailable=()=>assembled()&&!!data.rigSize&&!!data.previousDraft;
  const box=():Box=>assembled()&&data.rigSize?{name:'',index:0,x:0,y:0,w:data.rigSize[0],h:data.rigSize[1]}:item();
  const loadImage=async(path:string):Promise<HTMLImageElement>=>{
   const image=await loadViewportImage(await host.request(path));
@@ -118,7 +121,8 @@ export function bindPartsSubject(host:{
   const bitmaps:ImageBitmap[]=[];
   try{
    if(data.mode!=='parts'||!data.items.length)throw new Error('PARTS_IMAGE_UNAVAILABLE');
-   const frame=box(),referenceBox=selected===null?null:item(),shown=assembled()?data.items.filter(item=>!hidden.has(item.name)):[item()];
+   const inAssembly=assembled(),settings=comparison;
+   const frame=box(),referenceBox=selected===null?null:item(),shown=inAssembly?data.items.filter(item=>!hidden.has(item.name)):[item()];
    const layers=await Promise.all(shown.map(async entry=>{const img=await image(entry);loaded.set(entry.name,img);return {box:entry,image:img};}));
    let reference:HTMLCanvasElement|null=null;
    if(data.painting&&data.rigSize){
@@ -127,10 +131,19 @@ export function bindPartsSubject(host:{
     if(referenceBox)paintPaintingCrop(reference.getContext('2d')!,original,paintingRectangle(referenceBox,data.rigSize,data.painting),referenceBox.w,referenceBox.h,'checker');
     else reference.getContext('2d')!.drawImage(original,0,0);
    }
+   if(disposed||navigation!==token)return;
    const raster=makeCanvas(frame.w,frame.h),ctx=raster.getContext('2d')!;
-   if(comparison.mode==='difference'){
+   if(settings.mode==='difference'){
+    const previous=settings.operand==='previous-draft';
+    if(previous&&!previousDraftAvailable())throw new Error('PARTS_DIFFERENCE_UNAVAILABLE');
+    const suffix=previous?'&operand=previous-draft':'';
     const differences=[];
-    for(const entry of shown){const response=await host.request(`${host.base}/difference/${entry.index}?threshold=${comparison.threshold}&footprints=false`);const bitmap=await createImageBitmap(await response.blob());bitmaps.push(bitmap);differences.push({box:assembled()?entry:{...entry,x:0,y:0},image:bitmap});}
+    for(const entry of previous?[frame]:shown){
+     const response=await host.request(`${host.base}/difference/${entry.index}?threshold=${settings.threshold}&footprints=false${suffix}`);
+     const bitmap=await createImageBitmap(await response.blob());
+     bitmaps.push(bitmap);
+     differences.push({box:inAssembly?entry:{...entry,x:0,y:0},image:bitmap});
+    }
     paintAssembly(ctx,frame.w,frame.h,differences,{bg:'checker',alpha:false,transparent:true});
    }else if(comparison.mode==='overlay'&&data.painting&&data.rigSize){
     const original=await painting();
@@ -214,10 +227,30 @@ export function bindPartsSubject(host:{
   },
   image:(index:number)=>{const entry=data.items.find(item=>item.index===index);if(!entry)return Promise.reject(new Error('PARTS_IMAGE_UNAVAILABLE'));return image(entry);},
   items:()=>data.items,sourceHash:()=>data.sourceHash,refreshComments:()=>comments?.refresh(),selected:()=>selected,solo:()=>solo,visible:(name:string)=>!hidden.has(name),issues:()=>host.issues,
-  select:(name:string|null)=>{selected=name;if(name===null)solo=false;redraw();host.selectionChanged();},isolate:(value:boolean)=>{solo=value;redraw();host.selectionChanged();},
+  select:(name:string|null)=>{selected=name;if(name===null)solo=false;redraw();host.selectionChanged();},
+  isolate:(value:boolean)=>{
+   solo=value;
+   if(!assembled()&&comparison.mode==='difference'&&comparison.operand==='previous-draft'){
+    const {opacity,threshold}=comparison;
+    comparison=paintingDifferenceAvailable()?{mode:'difference',opacity,threshold}:{mode:'part',opacity};
+   }
+   redraw();host.selectionChanged();
+  },
   show:(name:string,value:boolean)=>{if(value)hidden.delete(name);else hidden.add(name);redraw();},
-  differenceAvailable:()=>data.differenceAvailable&&!!data.painting&&!failed,
-  comparison:()=>comparison,setComparison:async(mode:PartsComparison['mode'])=>{const next:PartsComparison=mode==='difference'?{mode,opacity:comparison.opacity,threshold:0}:{mode,opacity:comparison.opacity};comparison=next;const navigation=token+1;try{await paint();return !disposed&&navigation===token&&comparison===next;}catch{return false;}},
+  differenceAvailable:()=>!failed&&(paintingDifferenceAvailable()||previousDraftAvailable()),
+  paintingDifferenceAvailable,previousDraftAvailable,
+  comparison:()=>comparison,
+  setComparison:async(mode:PartsComparison['mode'],operand?:DifferenceOperand)=>{
+   const paintingAvailable=paintingDifferenceAvailable();
+   const usePrevious=operand==='previous-draft'||(operand===undefined&&!paintingAvailable);
+   if(mode==='difference'&&!(usePrevious?previousDraftAvailable():paintingAvailable))return false;
+   const opacity=comparison.opacity;
+   const next:PartsComparison=mode==='difference'
+    ? {mode,opacity,threshold:0,...(usePrevious?{operand:'previous-draft' as const}:{})}
+    : {mode,opacity};
+   comparison=next;const navigation=token+1;
+   try{await paint();return !disposed&&navigation===token&&comparison===next;}catch{return false;}
+  },
   opacity:(value:number)=>{comparison.opacity=value;redraw();},paint,redraw,
   async ready(){if(data.painting)host.viewport.state.cameraSync=true;await paint();},
   dispose(){disposed=true;++token;comments?.dispose();images.clear();loaded.clear();assemblyAlpha.clear();},

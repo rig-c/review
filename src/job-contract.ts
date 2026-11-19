@@ -417,6 +417,16 @@ export interface JobPartsIdentity {
   }[];
 }
 
+export const JOB_PREVIOUS_DRAFT_SCHEMA = 'rig-review-previous-draft/1';
+
+/** Publisher-owned accepted draft and work-root-relative seals for its comparison. */
+export interface JobPreviousDraft {
+  readonly schema: typeof JOB_PREVIOUS_DRAFT_SCHEMA;
+  readonly draft: { readonly id: JobId; readonly revision: JobSha256 };
+  readonly composites: { readonly current: JobFileIdentity; readonly previous: JobFileIdentity };
+  readonly diff?: JobFileIdentity;
+}
+
 export type JobSelector =
   | { readonly kind: 'draft'; readonly id: string }
   | { readonly kind: 'rig'; readonly version: number }
@@ -428,6 +438,7 @@ export type JobSelector =
  */
 export interface JobModelSourceBinding {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
+  readonly previousDraft?: JobPreviousDraft;
   readonly subject?: never;
   readonly sourceHash: JobSha256;
   readonly projectHash: JobSha256 | null;

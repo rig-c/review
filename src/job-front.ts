@@ -5,14 +5,15 @@ import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-che
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
 import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion } from './job-api.ts';
 import { JobSession } from './job-session.ts';
-import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, loadRetainedJobReview, loadRetainedRecordRig, type JobRootIdentity } from './job-source.ts';
+import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, loadRetainedJobReview, loadRetainedRecordRig, readPreviousDraftBytes, type JobRootIdentity } from './job-source.ts';
 import { checkedPath } from './interview-project.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
 import { JobError, JobStore, jobCropReferences } from './job-store.ts';
 import { safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 import { serveReference, assertReviewUnchanged } from './reference.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
-import { loadPartsView, partsViewJson, partsDifference, servedImage, type PartsViewPackage } from './parts-view.ts';
+import type { DifferenceRaster } from './parts-comparison.ts';
+import { loadPartsView, partsViewJson, partsDifference, previousDraftDifference, servedImage, type PartsViewPackage } from './parts-view.ts';
 import { destinationDirectory, DestinationDirectoryError } from './destination-directory.ts';
 import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
 import { constants, openSync, closeSync, readSync, fstatSync, lstatSync, statSync, type Stats } from 'node:fs';
@@ -421,7 +422,9 @@ export function retainedPublicationRoutes(session: JobSession) {
                     assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals);
                     let comment;
                     try {
-                        comment = await preparePartsComment(parts, raw, false, {sourceHash: retained.source.sourceHash});
+                        comment = await preparePartsComment(parts, raw, false, {
+                            sourceHash: retained.source.sourceHash, previousDraft: retained.source.previousDraft,
+                        });
                     } catch (error) {
                         if (error instanceof JobError ||
                             error instanceof Error && error.message.startsWith('PARTS_COMMENT_STALE_SOURCE:')) throw error;
@@ -434,16 +437,34 @@ export function retainedPublicationRoutes(session: JobSession) {
                 }
                 if (path === 'api/stage-parts') {
                     if (!parts) return failure('JOB_SOURCE_UNRETAINABLE', 409);
-                    return json({...partsViewJson(parts, {verdict: null, stale: null}), sourceHash: retained.source.sourceHash,
+                    return json({...partsViewJson(parts, {verdict: null, stale: null}, retained.source.previousDraft?.draft), sourceHash: retained.source.sourceHash,
                         inspectionSourceHash: retained.source.sourceHash, readOnly: true});
                 }
                 const difference=/^api\/stage-parts\/difference\/(0|[1-9]\d*)$/.exec(path);
                 if(difference&&parts){
-                    const url=new URL(request.url),threshold=url.searchParams.get('threshold'),footprints=url.searchParams.get('footprints');
+                    const query=new URL(request.url).searchParams,threshold=query.get('threshold'),footprints=query.get('footprints');
+                    const operand=query.get('operand');
                     if(!threshold||!/^\d{1,3}$/.test(threshold)||!['true','false'].includes(footprints??''))return failure('JOB_REQUEST_INVALID',400);
+                    // The existing route's 0 address plus this operand names the whole canvas.
+                    if(operand!==null&&(operand!=='previous-draft'||difference[1]!=='0'||footprints!=='false'||query.size!==3))
+                        return failure('JOB_REQUEST_INVALID',400);
                     try {
-                        const raster=await partsDifference(parts,Number(difference[1]),Number(threshold),footprints==='true'),png=new PNG({width:raster.width,height:raster.height});png.data=Buffer.from(raster.data);
-                        return new Response(request.method==='HEAD'?null:new Uint8Array(PNG.sync.write(png)),{headers:{...headers,'Content-Type':'image/png','X-Difference-Count':String(raster.count),'X-Difference-Covered':String(raster.covered),'X-Difference-Compared':String(raster.compared)}});
+                        const previous=operand==='previous-draft'?retained.source.previousDraft:undefined;
+                        if(operand!==null&&!previous)return failure('PARTS_DIFFERENCE_UNAVAILABLE',400);
+                        const responseHeaders:Record<string,string>={...headers,'Content-Type':'image/png'};
+                        let raster:DifferenceRaster;
+                        if(previous){
+                            raster=previousDraftDifference(parts,readPreviousDraftBytes(retained.snapshotRoot,previous.composites.current,'current'),
+                                readPreviousDraftBytes(retained.snapshotRoot,previous.composites.previous,'previous'),Number(threshold));
+                        }else{
+                            const painting=await partsDifference(parts,Number(difference[1]),Number(threshold),footprints==='true');
+                            raster=painting;
+                            responseHeaders['X-Difference-Count']=String(painting.count);
+                            responseHeaders['X-Difference-Covered']=String(painting.covered);
+                            responseHeaders['X-Difference-Compared']=String(painting.compared);
+                        }
+                        const png=new PNG({width:raster.width,height:raster.height});png.data=Buffer.from(raster.data);
+                        return new Response(request.method==='HEAD'?null:new Uint8Array(PNG.sync.write(png)),{headers:responseHeaders});
                     } catch (error) {
                         const code = error instanceof Error ? /^(PARTS_DIFFERENCE_UNAVAILABLE|PARTS_DIFFERENCE_PNG):/.exec(error.message)?.[1] : undefined;
                         if (code) return failure(code, 400);
@@ -467,6 +488,7 @@ export function retainedPublicationRoutes(session: JobSession) {
                 error instanceof Error && error.message.startsWith('PARTS_COMMENT_STALE_SOURCE:')
                     ? 'PARTS_COMMENT_STALE_SOURCE' : 'JOB_SOURCE_MISMATCH';
             const message = error instanceof JobError && (/^(CHECKPOINT_EVIDENCE|PLAN_TEXT)_[A-Z_]+$/.test(error.message) ||
+                /^PREVIOUS_DRAFT_[A-Z_]+(?: |$)/.test(error.message) ||
                 error.code === 'JOB_SOURCE_UNRETAINABLE' && error.message.startsWith('snapshot reload '))
                 ? error.message : undefined;
             return failure(code, errorStatus[code as JobErrorCode] ?? 409, undefined, message);

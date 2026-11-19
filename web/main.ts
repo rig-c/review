@@ -448,7 +448,18 @@ function renderLayout():void {
  for(const id of controls.viewModeIds)if(id!=='difference')controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
  if(activeInterviewImages)controls.setMode('interview-image-'+activeInterviewImages.indexOf(activeInterviewImage!));
  else controls.setMode(rigDifference||partsSubject?.comparison().mode==='difference'?'difference':state.effective,state.effective??state.requested);
- if(partsSubject){controls.setDisabled('difference',partsSubject.differenceAvailable()&&rigInput.state==='loaded'&&referenceInput.state==='loaded'?null:tr('PARTS_DIFFERENCE_UNAVAILABLE: missing painting_in_rig declaration or painting_in_rig.json sidecar and its bound operand.'));if(partsSubject.comparison().mode==='difference')controls.setMode('difference');}
+ if(partsSubject){
+  const previousAvailable=partsSubject.previousDraftAvailable(),comparison=partsSubject.comparison();
+  const available=partsSubject.differenceAvailable()&&rigInput.state==='loaded'&&(previousAvailable||referenceInput.state==='loaded');
+  controls.setDisabled('difference',available?null:tr('PARTS_DIFFERENCE_UNAVAILABLE: missing painting_in_rig declaration or painting_in_rig.json sidecar and its bound operand.'));
+  if(comparison.mode==='difference')controls.setMode('difference');
+  const operand=screenRoot.querySelector<HTMLSelectElement>('#parts-difference-operand');
+  if(operand){
+   operand.parentElement!.hidden=!!activeInterviewImages||!previousAvailable||comparison.mode!=='difference';
+   operand.value=comparison.mode==='difference'?comparison.operand??'painting':'painting';
+   operand.title=operand.selectedOptions[0]?.title??'';
+  }
+ }
  if(!partsSubject){controls.setDisabled('difference',tr(rigDifferenceReason()??'')||null);if(rigDifference)controls.setMode('difference');}
  el('reference-pane').hidden=state.effective!=='compare'&&state.effective!=='reference';el('rig-pane').hidden=state.effective!=='compare'&&state.effective!=='rig';
  const shown={compare:'Side by side',reference:'Reference only',rig:'Rig only'};
@@ -1435,9 +1446,29 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  const overlayLabel=panelMake('label',{},overlay,tr('Overlay')),opacityLabel=panelMake('label',{},tr('Part opacity'),opacity);
  if(!subject.painting)for(const node of [overlayLabel,opacityLabel])setSourceAttribute(node,'title','PARTS_REFERENCE_UNAVAILABLE: supply --painting to compare the original painting');
  secondaryToolbar.append(overlayLabel,opacityLabel);
+ const previousDraft=subject.previousDraft;
+ if(previousDraft){
+  const paintingOption=option('painting',''),previousOption=option('previous-draft','');
+  paintingOption.disabled=!partsSubject.paintingDifferenceAvailable();
+  previousOption.title=`${previousDraft.id} · ${previousDraft.revision}`;
+  const operand=panelMake('select',{id:'parts-difference-operand',translate:false},paintingOption,previousOption);
+  const label=panelMake('label',{id:'parts-difference-operand-label',hidden:true},tr('Compare with'),operand);
+  const localizeOptions=()=>{
+   paintingOption.textContent=t('Original painting');
+   previousOption.textContent=t('Previous accepted draft · {0} · {1}',[previousDraft.id,previousDraft.revision.slice(0,12)]);
+  };
+  localizeOptions();viewDisposers.push(onLanguageChange(localizeOptions));
+  operand.onchange=()=>{
+   const bound=partsSubject;
+   if(!bound||label.hidden)return;
+   void bound.setComparison('difference',operand.value==='previous-draft'?'previous-draft':'painting')
+    .then(drawn=>{if(!drawn&&partsSubject===bound)renderLayout();});
+  };
+  secondaryToolbar.append(label);
+ }
  overlay.onchange=()=>{partsSubject?.setComparison(overlay.checked?'overlay':'part');if(overlay.checked){view='rig';renderLayout();}};
  opacity.oninput=()=>partsSubject?.opacity(Number(opacity.value));
- controls.setDisabled('difference',subject.differenceAvailable&&subject.painting?null:tr('PARTS_DIFFERENCE_UNAVAILABLE: missing painting_in_rig declaration or painting_in_rig.json sidecar and its bound operand.'));
+ controls.setDisabled('difference',partsSubject.differenceAvailable()?null:tr('PARTS_DIFFERENCE_UNAVAILABLE: missing painting_in_rig declaration or painting_in_rig.json sidecar and its bound operand.'));
  const reference=select('reference-select');reference.replaceChildren(option('',subject.painting?'Original painting':'No references supplied'));reference.disabled=true;
  el('package-context').removeAttribute('open');el('reference-empty').hidden=!!subject.painting;el('rig-overlay').hidden=true;
  const state=rigInspector.actBar;state.setSaveState({kind:actReadOnly?'read-only':'unsaved',text:actReadOnly??'Not submitted'});
