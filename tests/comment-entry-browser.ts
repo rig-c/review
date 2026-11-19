@@ -8,6 +8,7 @@ import {jobFixture} from './helpers/job-api-fixture.ts';
 import {commentFixture} from './helpers/parts-comments-package.ts';
 import {parseCommentsAct,projectComments} from '../src/job-host.ts';
 import type {JobCommentsAct,JobPendingAsk,JobPublication} from '../src/job-contract.ts';
+import {parseStageComment} from '../src/stage-comment.ts';
 import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
 import {startPartsServer} from '../src/parts-server.ts';
@@ -34,6 +35,9 @@ type Language = 'en' | 'ko';
 type Verdict = 'approved' | 'changes-requested';
 type Wait = (expression:string)=>Promise<void>;
 type PageCommand = (method:string,params?:Record<string,unknown>)=>Promise<unknown>;
+type MainFrame = {id:string;loaderId:string};
+type ReloadPage = {sessionId:string;send:PageCommand;frame:MainFrame;loads:number;beforeUnload:number;lost?:string};
+type Capture = (name:string)=>Promise<void>;
 type LivePublication = {kind:'rig'|'parts';fixture:Awaited<ReturnType<typeof scriptedJobWindowFixture>>;
   publication:JobPublication;verdict:Verdict};
 type LiveVerdict = LivePublication & {ask:JobPendingAsk;otherAsk:JobPendingAsk};
@@ -134,7 +138,7 @@ async function readFinalVerdict(live:LiveVerdict):Promise<JobCommentsAct> {
   throw new Error('COMMENT_ENTRY_FINAL_VERDICT '+kind+' '+verdict);
 }
 
-async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Promise<void>,live:LiveVerdict,lang:Language,out:string) {
+async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Promise<void>,capture:Capture,live:LiveVerdict,lang:Language,out:string) {
   const {kind,verdict,fixture,ask,otherAsk}=live,ko=lang==='ko';
   const general=[ko?'수정한 일반 의견':'Edited general comment',ko?'두 번째 일반 의견':'Second general comment'];
   const generalLabel=ko?'일반 코멘트':'General comment';
@@ -161,7 +165,7 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Pro
   await add(general[1]!);
   const expectedRows=general.map((text,index)=>`${index+1} · ${generalLabel} · ${text}`);
   assert.deepEqual(await rows(),expectedRows);
-  await writeFile(join(out,'general-before-reload.png'),await page.screenshot());
+  await capture('general-before-reload');
 
   await reload();
   await wait(`!!document.querySelector('#stage-comment:not(:disabled)')`);
@@ -181,9 +185,9 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Pro
     assert.ok(fixture.host.session.status().pending.some(pending=>pending.askId===ask.askId));
   }else assert.equal(restored.changes.disabled,false);
 
-  const pinned=kind==='parts'&&verdict==='changes-requested';
-  const pinText=ko?'수정한 파츠 핀':'Edited Parts pin';
-  if(pinned){
+  const pinned=verdict==='changes-requested';
+  const pinText=kind==='parts'?(ko?'수정한 파츠 핀':'Edited Parts pin'):(ko?'리그에 고정한 의견':'Pinned rig comment');
+  if(pinned&&kind==='parts'){
     const original=ko?'처음 파츠 핀':'Original Parts pin';
     await addPartsPin(page,wait,original);
     const pinRow=await page.evaluate<string|undefined>(`[...document.querySelectorAll('${summary}')]
@@ -194,9 +198,13 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Pro
     const controls=await readDecisions(page);
     assert.equal(controls.approve.disabled,true);
     assert.equal(controls.changes.disabled,false);
-    assert.equal(await page.evaluate<number>(`document.querySelectorAll('.stage-comment-pin').length`),1);
+  }else if(pinned){
+    await wait(`!!document.querySelector('#rig-root canvas')&&document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`);
+    await click(page,'#rig-viewport');
+    await saveComment(page,wait,pinText);
   }
-  await writeFile(join(out,'comments.png'),await page.screenshot());
+  if(pinned)await wait(`document.querySelectorAll('#rig-viewport .stage-comment-pin').length===1`);
+  await capture('comments');
   await click(page,verdict==='approved'?'#save':'#request-changes');
   const act=await readFinalVerdict(live);
   await wait(`document.querySelector('#save')?.hidden===true`);
@@ -206,9 +214,18 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Pro
   assert.deepEqual(comments.slice(pinned?1:0),general.map(text=>({text})));
   if(pinned){
     const anchor=comments[0]?.anchor;
-    assert.ok(anchor&&'schema' in anchor&&anchor.schema==='rig-review-parts-comment/2');
-    assert.equal(anchor.sourceHash,act.source.sourceHash);
     assert.equal(comments[0]?.text,pinText);
+    if(kind==='parts'){
+      assert.ok(anchor&&'schema' in anchor&&anchor.schema==='rig-review-parts-comment/2');
+      assert.equal(anchor.sourceHash,act.source.sourceHash);
+    }else{
+      assert.ok(anchor&&'target' in anchor&&anchor.context);
+      const mark=parseStageComment((anchor.context as {comment?:unknown}).comment);
+      assert.equal(mark.viewport,'rig');
+      assert.equal(mark.sourceHash,act.source.sourceHash);
+      assert.ok('model' in act.source&&act.source.model);
+      assert.equal(mark.modelHash,act.source.model.sha256);
+    }
   }
   const projected=projectComments(comments);
   const generalProjection='[general]\n'+general.join('\n\n[general]\n');
@@ -221,7 +238,8 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:()=>Pro
 async function run(kind:string,lang:Language,picture=true,verdict:Verdict='approved'){
  const profile=await mkdtemp(join(tmpdir(),'review828-'));
  let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
- let livePublication:LivePublication|undefined,sendPage:PageCommand|undefined;
+ let livePublication:LivePublication|undefined,cdp:ReloadPage|undefined;
+ let phase='open';
  const out=join(output,kind+(picture?'':'-empty')+(verdict==='approved'?'':'-changes'),lang);await mkdir(out,{recursive:true});
  try{
   let url:string,hasVideo=false;
@@ -249,10 +267,24 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
   }
   const target=new URL(url);target.searchParams.set('lang',lang);
   page=await launchCdpSession(join(profile,'chrome'),{sendDeadlineMs:20_000,async onEvent(event,send){
-   if(event.sessionId)sendPage=send;
-   if(event.method==='Page.javascriptDialogOpening'&&event.params?.type==='beforeunload')await send('Page.handleJavaScriptDialog',{accept:true});
+   if(event.method==='Page.frameNavigated'&&event.sessionId){
+    const frame=event.params?.frame as (MainFrame&{parentId?:string})|undefined;
+    if(frame?.id&&frame.loaderId&&!frame.parentId&&(!cdp||cdp.sessionId===event.sessionId)){
+     if(cdp)cdp.frame={id:frame.id,loaderId:frame.loaderId};
+     else cdp={sessionId:event.sessionId,send,frame:{id:frame.id,loaderId:frame.loaderId},loads:0,beforeUnload:0};
+    }
+   }
+   if(!cdp)return;
+   if(event.method==='Target.detachedFromTarget'&&event.params?.sessionId===cdp.sessionId)cdp.lost=event.method;
+   if(event.sessionId!==cdp.sessionId)return;
+   if(event.method==='Page.loadEventFired')cdp.loads++;
+   if(event.method==='Inspector.targetCrashed'||event.method==='Inspector.detached')cdp.lost=event.method;
+   if(event.method==='Page.javascriptDialogOpening'&&event.params?.type==='beforeunload'){
+    cdp.beforeUnload++;
+    await send('Page.handleJavaScriptDialog',{accept:true});
+   }
   }});await page.setViewport(1440,900);await page.goto(target.href,lang);
-  const wait:Wait=async expression=>{const end=Date.now()+20_000;while(Date.now()<end){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('COMMENT_ENTRY_WAIT '+expression);};
+  const wait:Wait=async expression=>{const end=Date.now()+20_000;while(Date.now()<end){assert.equal(cdp?.lost,undefined,'CDP page session remains attached');if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('COMMENT_ENTRY_WAIT '+expression);};
   await wait(`(${kind==='source-only'||kind==='standalone'}?!document.body.inert:document.body.dataset.ready==='true')&&!!document.querySelector('#stage-comment-list')`);
   await page.evaluate(`document.querySelector('dialog[open] .workspace-drawer-close')?.click()`);
   await page.evaluate(`(()=>{const tab=[...document.querySelectorAll('.workspace-bottom-tabs .block-row:not([hidden]) button')].find(n=>!n.hidden&&!n.disabled);tab?.click();})()`);
@@ -276,18 +308,49 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
   assert.equal(state.generalCount,Number(generalExpected),kind+' general comment entry count');
   if(live){
    const reload=async()=>{
-    assert.ok(page&&sendPage);
+    assert.ok(page&&cdp,'initial top-level CDP session and loader');
+    const active=cdp,before={frame:active.frame,loads:active.loads,beforeUnload:active.beforeUnload};
+    phase='reload';
     await page.evaluate(`window.__commentEntryBeforeReload=true`);
-    await sendPage('Page.reload');
-    await wait(`!window.__commentEntryBeforeReload&&${ready}&&!!document.querySelector('${generalButton}')`);
+    await active.send('Page.reload',{ignoreCache:false});
+    const deadline=Date.now()+20_000;
+    while(active.loads===before.loads||active.frame.loaderId===before.frame.loaderId){
+     assert.equal(active.lost,undefined,'reload keeps the CDP page session attached');
+     assert.ok(Date.now()<deadline,'COMMENT_ENTRY_RELOAD_LOAD_EVENT_OR_LOADER');
+     await Bun.sleep(25);
+    }
+    assert.equal(active.frame.id,before.frame.id,'reload stays in the original top-level frame');
+    await wait(`!Object.hasOwn(window,'__commentEntryBeforeReload')&&document.readyState==='complete'&&${ready}&&!!document.querySelector('${generalButton}')`);
+    phase='activate-reloaded-page';
+    await active.send('Page.bringToFront');
+    const document=await page.evaluate<{visibility:string;focused:boolean;origin:string;path:string;lang:string}>(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve({visibility:document.visibilityState,focused:document.hasFocus(),origin:location.origin,path:location.pathname,lang:document.documentElement.lang}))))`);
+    assert.equal(document.visibility,'visible');
+    assert.equal(document.origin,target.origin);
+    assert.equal(document.path,target.pathname);
+    assert.equal(document.lang,lang);
+    await writeFile(join(out,'reload.json'),JSON.stringify({sessionId:active.sessionId,before,
+      after:{frame:active.frame,loads:active.loads,beforeUnload:active.beforeUnload},document},null,2)+'\n');
+    phase='verify-restored-comments';
    };
-   const readback=await exerciseLiveVerdict(page,wait,reload,live,lang,out);
+   const capture:Capture=async name=>{
+    phase='capture-'+name;
+    await writeFile(join(out,name+'.png'),await page!.screenshot());
+    phase=name==='comments'?'submit-verdict':'before-reload';
+   };
+   const readback=await exerciseLiveVerdict(page,wait,reload,capture,live,lang,out);
    observations.push({kind,lang,picture,verdict,...state,readback});return;
   }
   if(state.general){await page.evaluate(`document.querySelector('[data-comment-general]').click()`);await wait(`!!document.querySelector('#stage-comment-list .stage-comment-composer input')`);}
   await writeFile(join(out,'comments.png'),await page.screenshot());
   observations.push({kind,lang,picture,...state});
- }catch(error){if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
+ }catch(error){
+  const failure={phase,error:error instanceof Error?error.message:String(error),cdp};
+  await writeFile(join(out,'failure.json'),JSON.stringify(failure,null,2)+'\n').catch(()=>{});
+  if(page&&!phase.startsWith('capture-')&&!cdp?.lost&&!failure.error.includes('Not attached to an active page')){
+   await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});
+  }
+  throw error;
+ }
  finally{await page?.close();await close?.();await rm(profile,{recursive:true,force:true});await writeFile(join(output,'observations.json'),JSON.stringify(observations,null,2)+'\n');}
 }
 for(const lang of languageFilter?[languageFilter]:['en','ko'] as const){
