@@ -88,6 +88,28 @@ async function longInterviewScrollChecks(questionTab:boolean){
 }
 const output=resolve(arg('--out')??'artifacts/record-screen-750');await mkdir(output,{recursive:true});
 const sha=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('hex');
+// Pin the 60d7f17 record writer and its local dependencies without the package verdict writer.
+const writerSource=await readFile(new URL('../src/job-act.ts',import.meta.url),'utf8');
+const recordWriterRanges=[
+ ['function words(', "/** The writer's output must decode"],
+ ['function choice<', 'function requirePlan('],
+ ['export function bindJobRecordAsk(', 'export function bindJobAsk(subject: JobSubject, retained: JobRetainedSource): JobSourceBinding;'],
+ ['function actObject<', '/** Only the authenticated UI host invokes this adapter.'],
+] as const;
+const recordWriterSource=recordWriterRanges.map(([startAnchor,endAnchor])=>{
+ const start=writerSource.indexOf(startAnchor);
+ const end=writerSource.indexOf(endAnchor);
+ assert.ok(start>=0,`RECORD_WRITER_PIN_START_ANCHOR_MISSING: ${startAnchor}`);
+ assert.ok(end>=0,`RECORD_WRITER_PIN_END_ANCHOR_MISSING: ${endAnchor}`);
+ assert.ok(end>start,`RECORD_WRITER_PIN_EMPTY_SECTION: ${startAnchor}`);
+ return writerSource.slice(start,end);
+}).join('');
+const recordWriterDefinitions=['words','choice','bindJobRecordAsk','actObject','actIdField','prepareJobRecordAct'];
+for(const name of recordWriterDefinitions){
+ assert.match(recordWriterSource,new RegExp(`^(?:export )?function ${name}(?:<|[(])`,'m'),
+  `RECORD_WRITER_PIN_DEFINITION_MISSING: ${name}`);
+}
+assert.equal(sha(recordWriterSource),baseline.recordWriterSourceSha256,'RECORD_WRITER_PIN_SHA256_MISMATCH');
 const profile=await mkdtemp(join(tmpdir(),'review-750-browser-'));
 let page:InputCdpSession|undefined,command:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
 let holdImages=false;const pausedImages:string[]=[];
@@ -213,7 +235,7 @@ async function questionTabChecks(){
    if(act.kind!=='interview-picks')throw Error('wrong act');
    assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
    const expected=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});
-   assert.equal(bytes,JSON.stringify(expected));assert.equal(sha(await readFile(new URL('../src/job-act.ts',import.meta.url))),baseline.writerSourceSha256);
+   assert.equal(bytes,JSON.stringify(expected));
    // The fixture server replays the committed act just as the real retained job stream does on reload.
    const pending=fixture.fake.events.find(event=>event.type==='pending'&&event.ask.askId===fixture.ask.askId);
    if(!pending||pending.type!=='pending')throw Error('missing pending fixture event');fixture.fake.events.push({type:'act',jobId:fixture.session.jobId,generation:fixture.display.publication.generation+2,cursor:String(fixture.fake.events.length+1),act});
@@ -266,7 +288,7 @@ async function picturelessPartsQuestionChecks(){
    assert.equal(savedFooter,await page!.evaluate<string>(`document.getElementById('dirty').textContent`),'footer agrees with actual rendered saved header');
    const readbackCopy=await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).textContent`);assert.equal(readbackCopy,(language==='en'?enCatalog:koCatalog)['job.saved']);await writeFile(join(out,'answered.png'),await page!.screenshot());
    const bytes=await readFile(join(out,'one-screen.json'),'utf8'),act=parseRecordAct(JSON.parse(bytes));assert.equal(act.kind,'interview-picks');if(act.kind!=='interview-picks')throw Error('wrong act');assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
-   const expected=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});assert.equal(bytes,JSON.stringify(expected));assert.equal(sha(await readFile(new URL('../src/job-act.ts',import.meta.url))),baseline.writerSourceSha256);
+   const expected=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});assert.equal(bytes,JSON.stringify(expected));
    fixture.fake.events.push({type:'act',jobId:fixture.session.jobId,generation:fixture.display.publication.generation+2,cursor:String(fixture.fake.events.length+1),act});
    await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#workspace-act-row').hidden`,'839 no-image saved reload');
    if(await page!.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page!,'#job-record-asks .workspace-drawer-close');
@@ -496,7 +518,7 @@ try{
      assert.ok(existsSync(path),'writer actually persisted '+mode);const act=parseRecordAct(JSON.parse(await readFile(path,'utf8')));
      assert.equal(act.at,'2026-11-08T12:00:00.000Z');
      if(act.kind==='interview-picks'){assert.equal(act.value.note,'');assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
-      const expectedAct=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});assert.equal(sha(await readFile(new URL('../src/job-act.ts',import.meta.url))),baseline.writerSourceSha256);assert.equal(await readFile(path,'utf8'),JSON.stringify(expectedAct),'full empty-note act bytes equal 60d7f17 serializer/writer control');observation.emptyNoteByteControl={sourceCommit:baseline.sourceCommit,valueBytes:baseline.expectedValueBytes,fullActByteEqual:true};assert.deepEqual(act.value.selections,[{itemId:'topology',optionId:'topology_other',otherText:'  Custom topology · 직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}]);}
+      const expectedAct=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});assert.equal(await readFile(path,'utf8'),JSON.stringify(expectedAct),'full empty-note act bytes equal 60d7f17 serializer/writer control');observation.emptyNoteByteControl={sourceCommit:baseline.sourceCommit,valueBytes:baseline.expectedValueBytes,fullActByteEqual:true};assert.deepEqual(act.value.selections,[{itemId:'topology',optionId:'topology_other',otherText:'  Custom topology · 직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}]);}
      else{assert.equal(act.value.words,'  Same reviewer words · 원문\n');if(act.kind==='checkpoint')assert.equal(act.value.outcome,'pass');if(act.kind==='signoff')assert.equal(act.value.decision,'approved');}
      await writeFile(join(out,mode+'-submitted.png'),await page.screenshot());
      await page.goto('about:blank');

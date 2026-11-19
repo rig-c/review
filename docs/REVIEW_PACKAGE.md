@@ -1401,16 +1401,25 @@ The decoders and consumer projections are read-only. Since [Review #713](https:/
 rig and direction review-verdict and signoff acts as act@6. The UI submission
 keeps its existing `words` and `issues` fields. [Review #746](https://github.com/rig-c/review/issues/746)
 adds optional `feedback: Feedback[]` beside required `words` only for the
-`rig-review` verdict submission. When present, including an empty list, it is
-the complete comment list: `feedbackItemComments` maps each row's `summary` to
-`text` and retains its `id`, frames, target, category and `anchor.context`.
-The existing decoder validates every mapped comment, its evidence and the
-whole scalar bound; malformed or blank rows refuse rather than falling back to
-`words`. The act bar sends a detached feedback list when comments exist and
-keeps `words` as their projection. It omits `feedback` when there are no comments.
-Absent `feedback` retains the previous written bytes and words-only mapping.
-Direction and image verdict submissions do not accept `feedback`. The written
-act remains act@6; historical words-only acts retain their readers.
+`rig-review` verdict submission. When present, including an empty list,
+`feedback` supplies the pinned comments and suppresses the `words` fallback.
+`feedbackItemComments` maps each row's `summary` to `text` and retains its
+`id`, frames, target, category and `anchor.context`. The decoder refuses
+malformed or blank rows. The act bar sends a detached feedback list when there
+are pinned comments and keeps `words` as their projection. It omits `feedback`
+when there are no pinned comments. With `feedback` absent, nonblank `words`
+still supplies one general comment. Direction and image verdict submissions
+keep their existing closed shapes.
+
+Only the `rig-review` verdict and `parts-verdict` accept optional
+`general: readonly string[]` in their UI submission values. Each string becomes
+an anchorless `{text}` entry, appended verbatim in list order after the comments
+produced by the existing fields. For parts verdicts, nonblank `words` still
+produces a comment after the pinned `issues` and before `general`. Parts Request
+changes still requires a pinned issue, and approval still requires zero issues. The existing decoder
+validates the combined comment count, text, evidence and signed projection.
+Omitting `general` preserves the existing written bytes. The writer emits
+act@6 and historical words-only acts retain their readers. [Review #831](https://github.com/rig-c/review/issues/831).
 
 Pointed marks, inline crops, bookmarks and valid time-only null frames remain
 inside the existing `anchor.context`. This is distinct from act@7's top-level

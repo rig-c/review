@@ -8,6 +8,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Review\u2026": "Review…",
   "Nothing is waiting for your answer.": "Nothing is waiting for your answer.",
   "Add a comment where changes are needed.": "Add a comment where changes are needed.",
+  "Request changes needs at least one comment pinned to a part.": "Request changes needs at least one comment pinned to a part.",
   "Remove the flagged parts comments before approving.": "Remove the flagged parts comments before approving.",
   "Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.": "Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.",
   "Saved draft downloaded \u00b7 not submitted": "Saved draft downloaded · not submitted",

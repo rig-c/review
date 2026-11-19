@@ -280,7 +280,12 @@ function message(value: string, error = false, footerOnly = false, diagnostic?: 
   // A view readout (a Difference count) is not the act's state, so it stays in the footer only.
   if (footerOnly) return;
   // The modal makes the footer inert; the review dialog repeats the latest message for its reader.
-  text('review-message', value); el('review-message').classList.toggle('error', error);
+  const reviewMessage=el('review-message');
+  if(reviewMessage.dataset?.partsPinRefusal){
+    if(!error)return;
+    delete reviewMessage.dataset.partsPinRefusal;
+  }
+  text('review-message', value); reviewMessage.classList.toggle('error', error);
   if(host&&error&&rigInspector.act.hidden&&!rigInspector.answersRendered){
     for(const node of rigInspector.act.querySelectorAll<HTMLElement>('#save,#review-status,label[for="review-status"]'))node.hidden=true;
     rigInspector.act.hidden=false;
@@ -320,7 +325,7 @@ function updateSavedState(): void {
 }
 
 /** C10: the act bar renders the latest local draft status; rig only classifies it. Nothing renders before the first status. */
-let liveIssueCount=()=>session?.feedback.length??0;
+let liveIssueCount=()=>(session?.feedback.length??0)+(host?.verdictComments?.rows.length??0);
 function renderDraftState(): void {
   const live=host?.reviewState?.(liveIssueCount(),saving);
   renderAnswerControls();
@@ -935,7 +940,7 @@ function isSubmittedFeedback(id:string):boolean {
 function renderProposals(): void {
   comments?.refresh();
   if(host?.direction){setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);return;}
-  const count=session.feedback.length;setSourceText(rigInspector.comments.button, `Comments (${count})`);
+  const count=session.feedback.length+(host?.verdictComments?.rows.length??0);setSourceText(rigInspector.comments.button, `Comments (${count})`);
   const area = el('proposal-list'); area.replaceChildren();
   const warnings = el('feedback-warnings'); warnings.hidden = session.feedbackWarnings.length === 0;
   const unchecked = session.feedback.map(f => appliedCheckRefusal((f.context as Record<string, unknown> | undefined)?.applied)).find(Boolean) ?? null;
@@ -1167,19 +1172,26 @@ function bind(): void {
     saving = true; updateSavedState(); const savedPayload = JSON.stringify(session);
     if (host) {
       let submissionFailure: ReturnType<typeof jobSubmissionRefusal> | null = null;
+      const generalRows = host.verdictComments?.rows;
+      const general = generalRows?.map(row=>row.summary);
       try {
         const sent = await host.submit(structuredClone(session), async committed => {
           submittedBaseline = {...submittedBaseline!, ...committed.review,
             checkpoints: {...submittedBaseline!.checkpoints, ...committed.checkpoints}, updatedAt: committed.at};
           session.updatedAt = committed.at;
+          if (generalRows && general?.length && committed.review) {
+            generalRows.splice(0,general.length);
+            persistRecordComments();
+          }
           const ids = new Set([...Object.keys(session.checkpoints), ...Object.keys(submittedBaseline.checkpoints)]);
           dirty = session.status !== submittedBaseline.status || JSON.stringify(session.feedback) !== JSON.stringify(submittedBaseline.feedback) ||
+            !!generalRows?.length ||
             [...ids].some(id => JSON.stringify(session.checkpoints[id] ?? {outcome: 'pending', note: ''}) !==
               JSON.stringify(submittedBaseline!.checkpoints[id] ?? {outcome: 'pending', note: ''}));
           if(host?.direction){for(const row of recordComments)submittedDirectionComments.add(row.id);try{localStorage.removeItem(recordCommentKey);}catch{}}
           await persistence?.submitted(submittedBaseline);
           comments?.refresh(); renderProposals();
-        },host.direction?recordCommentWords():undefined);
+        },host.direction?recordCommentWords():undefined,general);
         message(sent);
       } catch (error) {
         submissionFailure = jobSubmissionRefusal(error);
@@ -1367,6 +1379,7 @@ async function start(): Promise<void> {
 /** Parts have a verdict and image-space pixels, never fabricated model/session fields. */
 async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,writes:{capabilityRequired:boolean}):Promise<void>{
  const subject=opened.parts,issues=saved.issues;let partsBaseline=structuredClone(saved);const submittedIssues=new Set(host? saved.issues.map(issue=>issue.id):[]);
+ const generalRows=host?.verdictComments?.rows;
  liveIssueCount=()=>issues.length;
  if(!partsOnly)throw new Error('PARTS_SUBJECT_ENTRY_REQUIRED');
  readOnly=host?.record?tr('JOB_REVIEW_READ_ONLY'):readOnlyReason(access,writes.capabilityRequired);
@@ -1378,12 +1391,18 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   const response=await fetch(access.route(path),{...init,headers:access.headers(init?.headers)});
   if(!response.ok){const body=await response.json();throw new Error(typeof body.error==='string'?body.error:body.error?.code??'PARTS_PAINT_FAILED');}return response;
  };
- const changed=()=>{dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});renderDraftState();setSourceText(rigInspector.comments.button,`Comments (${issues.length})`);return persistence?.save();};
+ const showCommentCount=()=>setSourceText(rigInspector.comments.button,`Comments (${issues.length+(generalRows?.length??0)})`);
+ const changed=()=>{dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});renderDraftState();showCommentCount();return persistence?.save();};
  // A parts verdict is saved only over a drawn subject: until the first paint, or after a failed one, Save stays off.
  const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded'||draftConflict||!!persistence?.restoring();
  partsAnswerBlocked=saveBlocked;
  text('rig-empty','Loading package…');
- partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),openComments:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot),issues,...host?.record?{recordComments}:{},request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,changed:()=>{if(host?.record){recordCommentsChanged();return;}return changed();},selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
+ if(generalRows)restoreRecordComments();
+ partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),openComments:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot),issues,
+  ...(host?.record?{recordComments}:host?.verdictComments?{generalComments:host.verdictComments,submitting:()=>saving}:{}),
+  request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,
+  changed:()=>{if(host?.record){recordCommentsChanged();return;}if(generalRows)persistRecordComments();return changed();},
+  selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
  parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>openReview());
  const thumbnails=new PartThumbnails();viewDisposers.push(()=>thumbnails.dispose());
  parts.registerImages({thumbnail:(icon,item,glyph)=>thumbnails.showOriginal(icon,item,()=>partsSubject!.image(item.index),glyph),items:subject.items,selected:partsSubject.selected,solo:partsSubject.solo,visible:partsSubject.visible,select:partsSubject.select,isolate:partsSubject.isolate,show:partsSubject.show});
@@ -1414,12 +1433,14 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  button('save').disabled=saveBlocked();
  button('save').onclick=async()=>{
   if(saving||saveBlocked())return;saving=true;button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});renderDraftState();
-  const frozen=structuredClone(issues);
+  const frozen=structuredClone(issues),general=generalRows?.map(row=>row.summary);
   try{
-   if(host?.submitParts)message(await host.submitParts(frozen));
+   if(host?.submitParts)message(await host.submitParts(frozen,general));
    else await request(base+'/verdict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:frozen.length?'changes-requested':'approved',issues:frozen})});
+   if(generalRows&&general?.length){generalRows.splice(0,general.length);persistRecordComments();}
    if(disposed)return;
    if(host)for(const issue of frozen)submittedIssues.add(issue.id);
+   if(general?.length){partsSubject?.refreshComments();showCommentCount();}
    dirty=JSON.stringify(issues)!==JSON.stringify(frozen);partsBaseline={subject:'parts',issues:frozen};await persistence?.submitted(partsBaseline);if(disposed)return;state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
   }catch(error){message(errorText(error),true);state.setSaveState({kind:'failed',text:'Save failed.'});}
   finally{saving=false;button('save').disabled=saveBlocked();renderDraftState();}
@@ -1432,7 +1453,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   const binding:InspectionBinding={mode:'single',sourceHash:subject.sourceHash,rigs:[null]};
   const connection=await connectInspectionPersistence({scope:'parts:'+access.key+':'+access.base+':'+subject.sourceHash,binding,baseline:partsBaseline,session:()=>({subject:'parts' as const,issues}),reviewDirty:()=>dirty,
    recover:value=>{try{if(!value||typeof value!=='object')return null;const row=value as PartsSubjectSession;if(row.subject!=='parts'||!Array.isArray(row.issues)||row.issues.length>1000||Object.keys(row).some(key=>!['subject','issues'].includes(key)))return null;const items=new Map(subject.items.map(item=>[item.name,{...item,imageHash:item.imageHash!}]));const restored=row.issues.map(issue=>{const parsed=parsePartsIssue(issue,false,true,false);assertPartsIssueBinding(parsed,items,subject.sourceHash);return parsed;});if(new Set(restored.map(issue=>issue.id)).size!==restored.length)return null;return {subject:'parts' as const,issues:restored};}catch{return null;}},
-   restoreSession:(value,isDirty)=>{issues.splice(0,issues.length,...value.issues);dirty=isDirty;partsSubject?.refreshComments();setSourceText(rigInspector.comments.button,`Comments (${issues.length})`);text('dirty',isDirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',isDirty);state.setSaveState({kind:isDirty?'unsaved':'saved',text:isDirty?'Unsubmitted changes':'Submitted'});},
+   restoreSession:(value,isDirty)=>{issues.splice(0,issues.length,...value.issues);dirty=isDirty;partsSubject?.refreshComments();showCommentCount();text('dirty',isDirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',isDirty);state.setSaveState({kind:isDirty?'unsaved':'saved',text:isDirty?'Unsubmitted changes':'Submitted'});},
    bookmark:()=>({schema:'rig-review-inspection/1',binding,animation:null,time:null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:null,a:null,b:null,reference:null}},selection:{}}),
    // Parts comments carry their own explicit view restore. Opening never replays a selection or camera.
    restoreBookmark:async()=>{},
@@ -1440,6 +1461,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   if(disposed){connection.dispose();return;}persistence=connection;
  };
  await setupPartsPersistence();if(disposed)return;
+ if(generalRows?.length)changed();
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
  if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),pendingSubjects:renderPendingSubjects,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
 
@@ -1490,12 +1512,13 @@ const questionPanel=panelMake('section',{id:'workspace-interview-answer',classNa
 let questionForms:readonly HTMLElement[]=[];
 let questionFormBindings=new WeakSet<HTMLElement>();
 
-/** Reuse the form's publication binding for native record comments, without a package session. */
+/** Publication and source bind native comment drafts independently of inspection navigation. */
 function restoreRecordComments(form?:HTMLFormElement):void {
- if((!host?.record&&!host?.direction)||recordCommentKey)return;
- const publicationId=host?.direction?.publicationId??host?.record?.publicationId??form?.dataset.jobPublication,sourceHash=host?.direction?.sourceHash??host!.record!.sourceHash;
+ const binding=host?.direction??host?.verdictComments??host?.record;
+ if(!binding||recordCommentKey)return;
+ const publicationId=binding.publicationId??form?.dataset.jobPublication,sourceHash=binding.sourceHash;
  if(!publicationId)throw new Error('JOB_DISPLAY_MISMATCH');
- recordCommentKey='rig-review-record-comments/1:'+publicationId+':'+sourceHash;
+ recordCommentKey=(host?.verdictComments?'rig-review-verdict-comments/1:':'rig-review-record-comments/1:')+publicationId+':'+sourceHash;
  try {
   const saved=JSON.parse(localStorage.getItem(recordCommentKey)??'null');
   if(saved?.publicationId!==publicationId||saved?.sourceHash!==sourceHash||!Array.isArray(saved.comments)||saved.comments.length>1000)return;
@@ -1504,21 +1527,31 @@ function restoreRecordComments(form?:HTMLFormElement):void {
   for(const row of rows){
    if(!row||typeof row.id!=='string'||!row.id||ids.has(row.id)||typeof row.summary!=='string'||!row.summary.trim()||row.summary.length>1000)throw new Error('JOB_ACT_INVALID');
    ids.add(row.id);
+   if(host?.verdictComments&&('schema' in row||'target' in row))throw new Error('JOB_ACT_INVALID');
    if('schema' in row){const issue=parsePartsIssue(row,false,true,false),items=new Map((partsSubject?.items()??[]).map(item=>[item.name,{...item,imageHash:item.imageHash!}]));assertPartsIssueBinding(issue,items,partsSubject!.sourceHash());}
    else if('target' in row){const mark=parseStageComment((row.context as {comment?:unknown})?.comment);if((!host?.direction&&!host!.record!.hasPicture)||mark.sourceHash!==data.sourceHash)throw new Error('JOB_DISPLAY_MISMATCH');}
    else if(Object.keys(row).some(key=>key!=='id'&&key!=='summary'))throw new Error('JOB_ACT_INVALID');
   }
-  projectComments(rows.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
-  recordComments.push(...rows);
+  if(!host?.verdictComments)projectComments(rows.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
+  (host?.verdictComments?.rows??recordComments).push(...rows);
  }catch{/* A mismatched or invalid local draft has no authority. */}
 }
 /** Comments remain native rows locally; the old act field carries their scalar projection only. */
 function recordCommentWords():string {
  return projectComments(recordComments.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
 }
+function persistRecordComments():void {
+ const binding=host?.direction??host?.verdictComments??host?.record;
+ if(!binding||!recordCommentKey)return;
+ const comments=host?.verdictComments?.rows??recordComments;
+ try{
+  if(host?.verdictComments&&!comments.length)localStorage.removeItem(recordCommentKey);
+  else localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:binding.publicationId??recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication,sourceHash:binding.sourceHash,comments}));
+ }catch{/* In-memory comments remain bound to this host. */}
+}
 function recordCommentsChanged():void {
  if(!host?.record&&!host?.direction)return;
- try{if(recordCommentKey)localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:host?.direction?.publicationId??host?.record?.publicationId??recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication,sourceHash:host?.direction?.sourceHash??host!.record!.sourceHash,comments:recordComments}));}catch{/* In-memory comments remain bound to this host. */}
+ persistRecordComments();
  setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);
  renderAnswerControls();
  for(const form of recordDialog?.querySelectorAll('form[data-job-ask]')??[])form.dispatchEvent(new Event('input',{bubbles:true}));
@@ -1602,43 +1635,65 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {
  const requests:Record<string,string>={'parts-verdict':partsSubject?.items().some(item=>item.mesh)?'Check the parts and meshes.':'Check the parts.','interview-picks':'Answer these questions.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.','review-verdict:image-review':'Check these images.','checkpoint':'Review this checkpoint.','signoff':'Approve this stage.','reopen':'Review the reopened stage.'};
  const labels=subjects.map(subject=>requests[subject.kind+':'+subject.stage]??requests[subject.kind]).filter((label):label is string=>!!label);
+ const liveVerdict=(subject:{kind:string;stage?:string})=>
+  partsOnly?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review';
+ const refreshVerdictComments=host?.verdictComments&&pendingAnswers.some(liveVerdict)!==subjects.some(liveVerdict);
  pendingAnswers=subjects;
+ if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
  askHeadline.hidden=false;setSourceText(askHeadline,labels.join(' · ')||(firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
  if(subjects.length)firstPublicationPrompt=false;
  renderDraftState();
 }
-/** Answer controls compose the existing act bar and submit handlers; act payloads stay unchanged. */
+/** Answer controls compose the existing act bar and submit handlers. */
 function renderAnswerControls():void {
  const subjects=host?.pendingSubjects?.()??pendingAnswers;
- const verdict=subjects.some(subject=>subject.kind==='review-verdict'||subject.kind==='parts-verdict');
+ const parts=subjects.some(subject=>subject.kind==='parts-verdict');
+ const verdict=parts||subjects.some(subject=>subject.kind==='review-verdict');
  const dialog=subjects.some(subject=>!subject.kind.endsWith('verdict'))&&!verdict;
  const readable=questionForms.some(form=>form.dataset.interviewAnswered==='true')||!!recordDialog?.querySelector('form.interview-answer[data-interview-answered=true] fieldset:disabled');
  const enabled=questionForms.some(form=>!form.querySelector('fieldset')?.disabled)||!!recordDialog?.querySelector('fieldset:not(:disabled)');
  const blocked=saving||draftConflict||!!actReadOnly||!!host?.unavailable;
  const save=button('save');
+ const hasPinnedPart=parts&&liveIssueCount()>0;
+ const needsPinnedPart=parts&&!!host?.verdictComments?.rows.length&&!hasPinnedPart;
+ const pinRefusal='Request changes needs at least one comment pinned to a part.';
  if((host||subjects.some(subject=>subject.kind==='interview-picks'))&&subjects.length&&!rigInspector.actBar.saveState())rigInspector.actBar.setSaveState({kind:'unsaved',text:'Not submitted'});
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
- save.classList.toggle('primary',verdict&&!(subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0));
- requestChanges.classList.toggle('primary',verdict&&subjects.some(subject=>subject.kind==='parts-verdict')&&liveIssueCount()>0);
+ save.classList.toggle('primary',verdict&&!hasPinnedPart);
+ requestChanges.classList.toggle('primary',hasPinnedPart);
  rigAsk.classList.toggle('primary',dialog);
  const kind=subjects.find(subject=>!subject.kind.endsWith('verdict'))?.kind;
  setSourceText(rigAsk,kind==='signoff'?'Approve…':kind==='interview-picks'||readable?'Answer…':'Review…');
  rigAsk.disabled=(!enabled&&!readable)||(enabled&&blocked);
  if(verdict){
-  const parts=subjects.some(subject=>subject.kind==='parts-verdict'),count=host?.direction?recordComments.length:liveIssueCount();
+  const count=host?.direction?recordComments.length:liveIssueCount();
   setSourceText(save,'Approve');setSourceText(requestChanges,'Request changes');
   save.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||(parts&&(partsAnswerBlocked()||count>0));
   requestChanges.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||count===0||(parts&&partsAnswerBlocked());
   setSourceAttribute(save,'title',parts&&count>0?'Remove the flagged parts comments before approving.':'');
-  setSourceAttribute(requestChanges,'title',count===0?'Add a comment where changes are needed.':'');
+  setSourceAttribute(requestChanges,'title',needsPinnedPart?pinRefusal:count===0?'Add a comment where changes are needed.':'');
   if(!parts){
    save.onclick=event=>{session.status='approved';select('review-status').value=session.status;return verdictSubmit?.(event);};
   }
-  requestChanges.onclick=()=>{if(requestChanges.disabled)return;if(parts){void save.onclick?.call(save,new PointerEvent('click'));}else{session.status='changes-requested';select('review-status').value=session.status;void verdictSubmit?.(new MouseEvent('click'));}};
+  requestChanges.onclick=()=>{if(requestChanges.disabled)return;if(parts){if(liveIssueCount()===0)return;void save.onclick?.call(save,new PointerEvent('click'));}else{session.status='changes-requested';select('review-status').value=session.status;void verdictSubmit?.(new MouseEvent('click'));}};
  }
  for(const root of [recordDialog,...questionForms])for(const control of root?.querySelectorAll<HTMLButtonElement>('button[type="submit"]')??[])control.disabled=blocked||verdict;
  // The waiting row is already visible: finish labels, state and handlers before revealing any answer.
  save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;rigAsk.hidden=!dialog||firstPublicationPrompt;
+ if(host?.verdictComments){
+  const notice=el('review-message');
+  if(needsPinnedPart&&!save.hidden&&!save.disabled){
+   if(!notice.classList.contains('error')){
+    setSourceText(notice,pinRefusal);
+    notice.classList.add('error');
+    notice.dataset.partsPinRefusal='true';
+   }
+  }else if(notice.dataset.partsPinRefusal){
+   delete notice.dataset.partsPinRefusal;
+   setSourceText(notice,'');
+   notice.classList.remove('error');
+  }
+ }
  if(host){rigInspector.answersRendered=true;rigInspector.act.hidden=subjects.length===0&&!firstPublicationPrompt;rigInspector.syncActRow?.();}
 }
 let verdictSubmit:((event:MouseEvent)=>unknown)|null=null;
@@ -3114,7 +3169,11 @@ function commentCaptureRefusal():string|null {
 }
 function setupComments():void {
  if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.length;if(host?.direction)dirty=dirty||recordComments.length>0;}
- comments=bindStageComments<CommentRow,CommentPose>({general:host?.record||host?.direction?{create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row)}:undefined,listHost:el('comments-list-host'),openList:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?{}:{rig:el('rig-viewport'),reference:el('reference-viewport')},
+ if(host?.verdictComments){restoreRecordComments();if(host.verdictComments.rows.length)markDirty();}
+ comments=bindStageComments<CommentRow,CommentPose>({general:host?.record||host?.direction||host?.verdictComments?{
+  create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row),
+  ...(host.verdictComments?{rows:host.verdictComments.rows,available:host.verdictComments.available,refusal:()=>readOnly}:{}),
+ }:undefined,listHost:el('comments-list-host'),openList:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?{}:{rig:el('rig-viewport'),reference:el('reference-viewport')},
   pose:view=>{
    if(hasTransientQuestionImage(screenRoot))return null;
    if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;
@@ -3122,9 +3181,10 @@ function setupComments():void {
    return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;
   },
   pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:inspectionBookmark,restore:(b,timed)=>restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal,!!timed),feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
-  locked:host?.record?()=>false:host?.direction?id=>submittedDirectionComments.has(id):isSubmittedFeedback,add:f=>{if(host?.record||host?.direction)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(host?.record||host?.direction){recordCommentsChanged();if(host?.direction){markDirty();comments?.refresh();}return;}markDirty();renderProposals();return persistence?.save();},error:value=>message(value,true),
+  locked:host?.record?()=>false:host?.direction?id=>submittedDirectionComments.has(id):isSubmittedFeedback,add:f=>{if(host?.record||host?.direction)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(host?.record||host?.direction){recordCommentsChanged();if(host?.direction){markDirty();comments?.refresh();}return;}if(host?.verdictComments)persistRecordComments();markDirty();renderProposals();return persistence?.save();},error:value=>message(value,true),
   refusal:()=>host?.record&&!host.record.hasPicture?null:commentCaptureRefusal(),blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
  });
+ if(host?.verdictComments)renderProposals();
 }
 
 /** Open the existing precision instruments only after re-reading the same displayed draft binding. */

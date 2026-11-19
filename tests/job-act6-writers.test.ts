@@ -3,13 +3,13 @@ import {readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {jobRigScreenDecisions} from '../web/job-rig-screen.ts';
 import {feedbackItemComments} from '../src/stage-comment.ts';
-import {bindJobAsk, finalizeJobAct} from '../src/job-act.ts';
+import {bindJobAsk, finalizeJobAct, parseUISubmission} from '../src/job-act.ts';
 import {jobHash} from '../src/job-api.ts';
 import {parseCommentsAct, projectComments} from '../src/job-host.ts';
 import {checkpointNoteComments, noteComments, partsIssueComments} from '../src/feedback-export.ts';
 import type {JobComment, JobPendingAsk, JobUISubmission} from '../src/job-contract.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
-import {jobFixture} from './helpers/job-api-fixture.ts';
+import {jobFixture, syntheticJobParts} from './helpers/job-api-fixture.ts';
 import {rigStillInput} from './helpers/job-rig-still.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 import vendored from './fixtures/act6-projection-create-c8382ba5.json';
@@ -80,6 +80,9 @@ test('post direction verdict is written as act@6 and read back through the publi
   expect(parseCommentsAct(JSON.parse(JSON.stringify(act)))).toEqual(act as never);
   expect(() => finalizeJobAct({jobId: f.session.jobId, submission: {...submission,
     value: {...submission.value, feedback: []}} as JobUISubmission, ask, retained, reviewer})).toThrow('JOB_REQUEST_INVALID');
+  const withGeneral = parseUISubmission({...submission, value: {...submission.value, general: ['Rig/Parts only']}});
+  expect(() => finalizeJobAct({jobId: f.session.jobId, submission: withGeneral, ask, retained, reviewer}))
+    .toThrow('JOB_REQUEST_INVALID');
   const rows = [{id:'first',frameStart:0,frameEnd:1,target:{kind:'rig' as const,name:'fixture'},category:'defect' as const,summary:'first comment'},
     {id:'second',frameStart:null,frameEnd:null,target:{kind:'rig' as const,name:'fixture'},category:'defect' as const,summary:'second comment'}];
   const decision = jobRigScreenDecisions({status:'changes-requested',checkpoints:{},feedback:rows}, [ask], publication.publicationId)[0]!;
@@ -145,4 +148,52 @@ test('writer comments project to the bytes Create c8382ba5 computes (vendored fr
   const written = [...partsIssueComments([issue]), ...noteComments(vendoredNote!.text)];
   expect(written).toEqual(cases.partsIssuesAndNote!.comments);
   expect(projectComments(written)).toBe(cases.partsIssuesAndNote!.projected);
+});
+
+const generalNote = vendored.cases.partsIssuesAndNote.comments[1]!.text;
+const generalHeader = '[general]\n';
+const projectionLimit = 10_000;
+const boundaryUnits = projectionLimit - 2 * generalHeader.length - 2 - generalNote.length;
+const boundaryTail = '🚀'.repeat(Math.floor(boundaryUnits / 2)) + 'x'.repeat(boundaryUnits % 2);
+
+test.each([
+  {name: 'multiple notes', general: [generalNote, 'Second Parts comment']},
+  {name: 'exact projection limit', general: [generalNote, boundaryTail]},
+])('#831 Parts Approve accepts anchorless comments ($name)', async ({name, general}) => {
+  const f = await fixture();
+  await syntheticJobParts(f, {project: true});
+  const publication = await f.publish();
+  const ask = await f.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-draft'}), page = await f.display(publication);
+  const generation = f.session.status().generation;
+  const input = {...page, askId: ask.askId, expectedGeneration: generation, kind: 'parts-verdict'};
+  const approve = {verdict: 'approved', issues: [], words: ''};
+
+  if (name === 'exact projection limit') {
+    const invalid = [
+      {label: 'aggregate projection overflow', value: {...approve, general: [generalNote, boundaryTail + 'x']}},
+      {label: 'text omitted by a trim-and-filter implementation', value: {...approve, general: [' \t\n ']}},
+      {label: 'entry type', value: {...approve, general: ['valid', {text: 'object'}]}},
+      {label: 'list type', value: {...approve, general: 'not an array'}},
+      {label: 'count', value: {...approve, general: Array.from({length: 1001}, () => 'x')}},
+      {label: 'missing pinned issue', value: {...approve, verdict: 'changes-requested', general: [generalNote]}},
+    ];
+    for (const [index, {label, value}] of invalid.entries()) {
+      const rejected = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, submissionId: 'invalid-' + index, value}));
+      expect(rejected, label).toMatchObject({ok: false, error: {code: 'JOB_ACT_INVALID'}});
+      const status = f.session.status();
+      expect(status.generation, label).toBe(generation);
+      expect(status.pending.map(pending => pending.askId), label).toContain(ask.askId);
+    }
+  }
+
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input,
+    submissionId: 'general-parts-831', value: {...approve, general}}));
+  if (!saved.ok) throw new Error(saved.error.code);
+  roundTrip(f, saved.value);
+  const act = parseCommentsAct(saved.value);
+  expect(act.kind).toBe('parts-verdict');
+  expect(act.value).toEqual({verdict: 'approved', comments: general.map(text => ({text}))});
+  const projected = projectComments(act.value.comments);
+  expect(projected).toBe(generalHeader + general.join('\n\n' + generalHeader));
+  if (name === 'exact projection limit') expect(projected).toHaveLength(projectionLimit);
 });

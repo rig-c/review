@@ -454,6 +454,19 @@ test('parts-verdict UI save finalizes rig-review/act@6 with pointed Parts commen
   mutableInput.value.issues[0]!.rigRegion.x++;
   const isolated=await pending;
   expect(isolated.value).toEqual(expectedValue as never);
+  const mixedAsk = await f.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-draft'});
+  const general = ['  Parts general 한글  ', 'Another observation'] as const;
+  const mixed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, askId: mixedAsk.askId,
+    expectedGeneration: f.session.status().generation, submissionId: 'mixed-parts-831',
+    value: {...input.value, words: '', general}}));
+  if (!mixed.ok) throw new Error(mixed.error.code);
+  const mixedBytes = f.session.readActExport(mixed.value.actId, false).toString();
+  const mixedAct = parseCommentsAct(JSON.parse(mixedBytes));
+  const pinned = partsIssueComments(input.value.issues);
+  expect(mixedAct.kind).toBe('parts-verdict');
+  expect(mixedAct.value).toEqual({verdict: 'changes-requested', comments: [...pinned, {text: general[0]}, {text: general[1]}]});
+  expect(projectComments(mixedAct.value.comments)).toBe(projectComments(pinned) + '\n\n[general]\n' + general.join('\n\n[general]\n'));
+  expect(JSON.stringify(mixedAct)).toBe(mixedBytes);
   const secondAsk = await f.ask(publication, { kind: 'parts-verdict', draftId: 'synthetic-draft' });
   await writeFile(join(f.root, 'out/parts/depth.png'), 'changed depth only');
   const stale = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, askId: secondAsk.askId,

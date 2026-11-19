@@ -59,11 +59,11 @@ export function jobRigScreenRefusal(display:DisplayPublicationV3,pending:readonl
 
 export type JobRigScreenDecision =
   | {readonly ask: PendingAskV3; readonly kind: 'checkpoint'; readonly value: Extract<JobUISubmission, {kind: 'checkpoint'}>['value']}
-  | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review' | 'direction-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]}};
+  | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review' | 'direction-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]; general?: readonly string[]}};
 /** The act bar's decisions as the pending asks' values. `words` is the comments' projection (act@6's), or empty;
  * a decision still pending is not sent, so a pending ask is never answered with "pending". Checkpoints go first. */
 export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'checkpoints' | 'feedback'>,
-  pending: readonly PendingAskV3[], publicationId: string): JobRigScreenDecision[] {
+  pending: readonly PendingAskV3[], publicationId: string, general?: readonly string[]): JobRigScreenDecision[] {
   const open = pending.filter(ask => ask.publicationId === publicationId && ask.status === 'pending');
   const decisions: JobRigScreenDecision[] = [];
   for (const ask of open) {
@@ -78,7 +78,8 @@ export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'c
   if (verdict?.subject.kind === 'review-verdict' && verdict.subject.stage !== 'image-review' && session.status !== 'pending') {
     decisions.push({ask: verdict, kind: 'review-verdict', value: {stage: verdict.subject.stage, verdict: session.status,
       words: session.feedback.length ? projectComments(feedbackItemComments(session.feedback)) : '',
-      ...(verdict.subject.kind === 'review-verdict' && verdict.subject.stage === 'rig-review' && session.feedback.length ? {feedback: structuredClone(session.feedback)} : {})}});
+      ...(verdict.subject.stage === 'rig-review' && session.feedback.length ? {feedback: structuredClone(session.feedback)} : {}),
+      ...(verdict.subject.stage === 'rig-review' && general?.length ? {general: [...general]} : {})}});
   }
   return decisions;
 }
@@ -196,13 +197,13 @@ export function createJobRigScreen(options: {
     return freezeJobRigStage({...stage,source},ask.askId,++drawGeneration);
   }
 
-  async function submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionWords?:string): Promise<string> {
+  async function submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionWords?:string, general?:readonly string[]): Promise<string> {
     const prepared = mounted, state = options.window.state();
     if (!prepared || !state.receipt || state.preparing) throw new Error('JOB_ACT_SOURCE_STALE');
     if (state.closed) throw new Error('JOB_CLOSED');
     const refusal=jobRigScreenRefusal(prepared.display,state.pending,prepared.checkpoints);if(refusal)throw new Error(options.translate('job.refusal.'+refusal));
     if (!options.access.capability) throw new Error('JOB_CAPABILITY_REQUIRED');
-    const decisions=jobRigScreenDecisions(session, state.pending.filter(ask=>!prepared.modals?.forms.has(ask.askId)), prepared.display.publication.publicationId);
+    const decisions=jobRigScreenDecisions(session, state.pending.filter(ask=>!prepared.modals?.forms.has(ask.askId)), prepared.display.publication.publicationId, general);
     if(directionWords!==undefined)for(const decision of decisions)if(decision.kind==='review-verdict'&&decision.value.stage==='direction-review')decision.value.words=directionWords;
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     for (const decision of decisions) {
@@ -227,13 +228,14 @@ export function createJobRigScreen(options: {
   }
   const partsAttempts=new Map<string,{key:string;submissionId:string}>();
   /** One parts verdict act. A pending signoff remains independent and is never synthesized here. */
-  async function submitParts(issues:readonly PartsIssue[]):Promise<string>{
+  async function submitParts(issues:readonly PartsIssue[], general?:readonly string[]):Promise<string>{
     const prepared=mounted,state=options.window.state();
     if(!prepared?.parts||!state.receipt||state.preparing)throw new Error('JOB_ACT_SOURCE_STALE');
     if(state.closed)throw new Error('JOB_CLOSED');
     const ask=state.pending.find(ask=>ask.publicationId===prepared.display.publication.publicationId&&ask.status==='pending'&&ask.subject.kind==='parts-verdict');
     if(!ask)throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
-    const value={verdict:issues.length?'changes-requested' as const:'approved' as const,issues:structuredClone(issues),words:''},key=JSON.stringify(value);
+    const value={verdict:issues.length?'changes-requested' as const:'approved' as const,issues:structuredClone(issues),words:'',
+      ...(general?.length?{general:[...general]}:{})},key=JSON.stringify(value);
     let attempt=partsAttempts.get(ask.askId);if(!attempt||attempt.key!==key){attempt={key,submissionId:crypto.randomUUID()};partsAttempts.set(ask.askId,attempt);}
     const result=await options.window.submit({kind:'parts-verdict',publicationId:ask.publicationId,askId:ask.askId,pageId:options.pageId,displayedNonce:state.receipt.displayedNonce,expectedGeneration:state.generation,submissionId:attempt.submissionId,value});
     if(!result.ok)throw new Error(result.error.code);
@@ -260,7 +262,11 @@ export function createJobRigScreen(options: {
         displayed:()=>ready.resolve(),failed:error=>ready.reject(error)};
     }
     if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
-    return {access,pendingSubjects,navigation,...prepared.refusal?{unavailable:prepared.refusal}:{},...prepared.display.publication.source.direction?{direction:{publicationId:prepared.display.publication.publicationId,sourceHash:prepared.display.publication.source.sourceHash}}:{},
+    const {publicationId,source}=prepared.display.publication;
+    const binding={publicationId,sourceHash:source.sourceHash};
+    return {access,pendingSubjects,navigation,...prepared.refusal?{unavailable:prepared.refusal}:{},
+      ...(source.direction?{direction:binding}:jobRigScreenSubject(source)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
+        prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review')}}:{}),
       reviewState(issues,sending) {
         if(sending)return options.translate('job.parts.sending');
         const kind=prepared.parts?'parts-verdict':'review-verdict';
