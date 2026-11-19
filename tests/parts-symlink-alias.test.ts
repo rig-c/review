@@ -11,7 +11,24 @@ import {writePartsPackage} from './helpers/parts-package.ts';
 import {writeComparisonPackage} from './helpers/parts-comparison-package.ts';
 
 const roots: string[] = [];
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, {recursive: true, force: true}); });
+// A bun per-test timeout fails the test but does not stop its body (#969). Each test here
+// records its running body; afterEach asks it to stop at its next iteration and waits for it
+// before removing the arena, so a slow run fails as one timeout instead of leaking work and a
+// PARTS_VIEW_SOURCE_CHANGED from a deleted fixture into the next test.
+let running: Promise<unknown> | undefined, ended = false;
+const stopIfEnded = () => { if (ended) throw new Error('#969: the test already ended; its leftover body stops here'); };
+const aliasTest = (name: string, body: () => Promise<void>) => test(name, () => {
+  ended = false;
+  const run = body();
+  running = run.catch(() => undefined);
+  return run;
+});
+afterEach(async () => {
+  ended = true;
+  await running;
+  running = undefined;
+  for (const root of roots.splice(0)) await rm(root, {recursive: true, force: true});
+});
 async function fixture() {
   // Canonical setup plus an explicit link on EVERY OS, including Linux CI.
   const arena = await realpath(await mkdtemp(join(tmpdir(), 'parts-alias-')));
@@ -34,7 +51,7 @@ const expectedPaths = {
   flags: ['../build/rig/mesh_report.json', '../build/check/check.json'],
 };
 
-test('#472: painting aliases, including a lexical outside path to an inside file, preserve the physical portable verdict binding', async () => {
+aliasTest('#472: painting aliases, including a lexical outside path to an inside file, preserve the physical portable verdict binding', async () => {
   const f = await fixture(), entry = join(f.arena, 'outside-entry.png');
   await symlink(join(f.painting, 'painting.png'), entry);
   const canonical = await loadPartsView(f.painting, {painting: join(f.painting, 'painting.png')});
@@ -45,6 +62,7 @@ test('#472: painting aliases, including a lexical outside path to an inside file
     [f.painting, entry],
     [join(f.alias, 'painting'), entry],
   ]) {
+    stopIfEnded();
     const pkg = await loadPartsView(root!, {painting});
     expect(pkg.painting).toEqual(canonical.painting);
     expect(pkg.painting!.abs).toBe(join(f.painting, 'painting.png'));
@@ -59,7 +77,7 @@ test('#472: painting aliases, including a lexical outside path to an inside file
   }
 });
 
-test('#472: canonical and alias destinations/explicit flags serialize exactly the same files, flag paths and source hash', async () => {
+aliasTest('#472: canonical and alias destinations/explicit flags serialize exactly the same files, flag paths and source hash', async () => {
   const f = await fixture(), destination = join(f.out, 'v.json');
   const canonical = await loadPartsView(f.build, {verdict: destination}), source = verdictSource(canonical), before = await hashes(canonical);
   expect(source.files.map(file => file.path)).toEqual(expectedPaths.files);
@@ -67,6 +85,7 @@ test('#472: canonical and alias destinations/explicit flags serialize exactly th
   for (const root of [f.build, join(f.alias, 'build')]) {
     for (const verdict of [destination, join(f.alias, 'out/v.json')]) {
       for (const flagsRoot of [f.build, join(f.alias, 'build')]) {
+        stopIfEnded();
         const pkg = await loadPartsView(root, {verdict, meshReport: join(flagsRoot, 'rig/mesh_report.json'), check: join(flagsRoot, 'check/check.json')});
         expect(pkg.verdictPath).toBe(destination);
         expect(pkg.flagFiles).toEqual(canonical.flagFiles);
@@ -79,7 +98,7 @@ test('#472: canonical and alias destinations/explicit flags serialize exactly th
   }
 });
 
-test('#472: missing nested destination parents retain their suffix behind an alias and save/reload unchanged inputs', async () => {
+aliasTest('#472: missing nested destination parents retain their suffix behind an alias and save/reload unchanged inputs', async () => {
   const f = await fixture(), destination = join(f.out, 'not-yet/deep/v.json');
   const canonical = await loadPartsView(f.build, {verdict: destination}), before = await hashes(canonical);
   const pkg = await loadPartsView(join(f.alias, 'build'), {verdict: join(f.alias, 'out/not-yet/deep/v.json')});
@@ -93,7 +112,7 @@ test('#472: missing nested destination parents retain their suffix behind an ali
   expect(await hashes(pkg)).toEqual(before);
 });
 
-test('#472: genuine outside painting and inside-to-outside links refuse by name before PNG decoding', async () => {
+aliasTest('#472: genuine outside painting and inside-to-outside links refuse by name before PNG decoding', async () => {
   const f = await fixture(), outside = join(f.arena, 'outside.png');
   await writeFile(outside, 'deliberately not a PNG');
   await symlink(outside, join(f.painting, 'escape.png'));
@@ -107,7 +126,7 @@ test('#472: genuine outside painting and inside-to-outside links refuse by name 
   expect(await hashes(canonical)).toEqual(before);
 });
 
-test('#472: alias input destinations and output leaf links to inputs preserve the collision refusal and input bytes', async () => {
+aliasTest('#472: alias input destinations and output leaf links to inputs preserve the collision refusal and input bytes', async () => {
   const f = await fixture(), pkg = await loadPartsView(f.build), before = await hashes(pkg);
   const leaf = join(f.out, 'input-link.json');
   await symlink(join(f.build, 'rig/parts.json'), leaf);
@@ -118,7 +137,7 @@ test('#472: alias input destinations and output leaf links to inputs preserve th
   expect(await hashes(pkg)).toEqual(before);
 });
 
-test('#472: a verdict leaf link to ordinary output keeps its basename and never overwrites the link target', async () => {
+aliasTest('#472: a verdict leaf link to ordinary output keeps its basename and never overwrites the link target', async () => {
   const f = await fixture(), target = join(f.out, 'target.json'), leaf = join(f.out, 'leaf.json');
   const targetPkg = await loadPartsView(f.build, {verdict: target});
   await saveVerdict(targetPkg, await submission(targetPkg, 'original target'));
@@ -136,7 +155,7 @@ test('#472: a verdict leaf link to ordinary output keeps its basename and never 
   expect(await hashes(pkg)).toEqual(before);
 });
 
-test('#472: atlas verdict destinations and explicit flags also use physical paths', async () => {
+aliasTest('#472: atlas verdict destinations and explicit flags also use physical paths', async () => {
   const f = await fixture(), atlas = join(f.physical, 'atlas');
   await cp('examples/demo', atlas, {recursive: true});
   const canonical = await loadPartsView(atlas, {verdict: join(f.out, 'atlas.json'), check: join(f.build, 'check/check.json')});
@@ -149,7 +168,7 @@ test('#472: atlas verdict destinations and explicit flags also use physical path
   expect(await hashes(pkg)).toEqual(before);
 });
 
-test('#472: an explicitly designated rig alias remains a physical verdict input', async () => {
+aliasTest('#472: an explicitly designated rig alias remains a physical verdict input', async () => {
   const f = await fixture();
   await writeComparisonPackage(f.painting, true);
   const canonical = await loadPartsView(f.painting, {rig: join(f.painting, 'rig.json')});
