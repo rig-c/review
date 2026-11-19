@@ -209,8 +209,9 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   const reason=host.job==='read-only'?t('JOB_REVIEW_READ_ONLY'):!job?null:EMIT_UNPINNED_CREATE_FIELDS?
    t('In a job, press Request changes to send this edit; the producer rebuilds it.'):held?.edits.length?t('job.submit.JOB_ACT_KIND_DISABLED'):null;
   const readout=host.job?[reason,held?.stale?t('job.mesh.staleDraft'):null,tr(summary)].filter(Boolean).join(' · '):summary;
-  const geometry=`${s.slot} / ${s.skin} / ${s.attachment} · ${s.vertices.length} vertices · ${s.triangles.length/3} triangles · hull ${s.hull}`;
-  status.textContent=readout;status.title=`${host.job?tr(geometry):geometry} · ${readout}`;
+  status.textContent=readout;
+  status.title=t('{0} / {1} / {2} · {3} vertices · {4} triangles · hull {5} · {6}',
+   [s.slot,s.skin,s.attachment,s.vertices.length,s.triangles.length/3,s.hull,readout],host.job?undefined:'en');
   status.classList.toggle('error',noteError);
   if(mode)host.pane.dataset.meshMode=mode;else delete host.pane.dataset.meshMode;
  };
