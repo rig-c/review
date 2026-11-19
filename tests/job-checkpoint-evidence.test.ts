@@ -1,6 +1,6 @@
 import {afterEach, expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
-import {mkdtempSync, mkdirSync, realpathSync, rmSync, readFileSync, writeFileSync, symlinkSync, unlinkSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, realpathSync, rmSync, readFileSync, writeFileSync, symlinkSync, unlinkSync, statSync, utimesSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type {JobCheckpointEvidence, PlanContext, JobPublication, PublicationV3} from '../src/job-contract.ts';
@@ -717,4 +717,68 @@ for (const format of ['png', 'svg', 'SvG'] as const) test(`#636: ${format} origi
   } finally { writeFileSync(retainedPainting, painting); }
   expect(readFileSync(retainedPainting)).toEqual(Buffer.from(painting));
   expect(readFileSync(join(out, `painting.${format}`))).toEqual(Buffer.from(painting));
+});
+
+const bindingMutations = [
+  'removed', 'different size', 'same size and restored mtime', 'symlink escape',
+  'recreated with identical bytes', 'recreated with different bytes',
+] as const;
+
+for (const mutation of bindingMutations) test(`pinned package recheck: ${mutation}`, async () => {
+  const f = await packageFixture();
+  const out = join(f.root, 'out');
+  const manifestPath = join(out, 'review.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const member = 'binding-probe.bin';
+  const original = Buffer.from('original');
+  const different = Buffer.from('modified');
+  writeFileSync(join(out, member), original);
+  writeFileSync(manifestPath, JSON.stringify({...manifest,
+    authoring: [...(manifest.authoring ?? []), {id: 'binding-probe', label: 'Binding probe', path: member}]}));
+  const publication = await f.publish();
+  const retained = f.session.retainedSource(publication.publicationId);
+  const held = join(retained.snapshotRoot, 'out', member);
+  const route = retainedPublicationRoutes(f.session);
+  const request = () => route(f.session.jobId, publication.publicationId, publication.instanceKey,
+    'api/review', new Request('http://127.0.0.1/api/review'));
+  const initial = await request();
+  expect(initial.status).toBe(200);
+  await initial.text();
+
+  const time = new Date('2024-01-01T00:00:00Z');
+  utimesSync(held, time, time);
+  const before = statSync(held);
+  switch (mutation) {
+    case 'removed':
+      unlinkSync(held);
+      break;
+    case 'different size':
+      writeFileSync(held, Buffer.concat([original, Buffer.from('!')]));
+      break;
+    case 'same size and restored mtime': {
+      writeFileSync(held, different);
+      utimesSync(held, time, time);
+      const after = statSync(held);
+      expect(after.size).toBe(before.size);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+      break;
+    }
+    case 'symlink escape':
+      unlinkSync(held);
+      symlinkSync(join(out, member), held);
+      break;
+    case 'recreated with identical bytes':
+    case 'recreated with different bytes':
+      unlinkSync(held);
+      writeFileSync(held, mutation === 'recreated with identical bytes' ? original : different);
+      break;
+  }
+  const next = await request();
+  if (mutation === 'recreated with identical bytes') {
+    expect(next.status).toBe(200);
+    await next.text();
+  } else {
+    expect(next.status).toBe(409);
+    expect(await next.json()).toMatchObject({error: {code: 'JOB_SOURCE_MISMATCH'}});
+  }
 });
