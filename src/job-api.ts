@@ -1602,8 +1602,11 @@ export async function jobBody(request: Request, maximum = jobBodyLimit): Promise
       chunks.push(value);
     }
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+    if (value?.value != null && Object.hasOwn(value.value, 'meshEdits') &&
+        Buffer.byteLength(canonicalJson(value.value.meshEdits)) > jobBodyLimit) {
+      throw new JobError('JOB_BODY_LIMIT');
+    }
     if (size > jobBodyLimit) {
-      if (value?.value != null && Object.hasOwn(value.value, 'meshEdits')) throw new JobError('JOB_BODY_LIMIT');
       const hasCommentImages = ['parts-verdict', 'review-verdict', 'checkpoint', 'signoff', 'reopen'].includes(value?.kind) &&
         /"png":"data:image\/png;base64,/.test(JSON.stringify(value?.value));
       const rigCapture = value?.kind === 'review-verdict' && value?.value?.stage === 'rig-review' && value.capture;

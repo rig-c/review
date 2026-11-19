@@ -175,18 +175,23 @@ function bodyRequest(payload: unknown, byteLength: number): Request {
   });
 }
 
-test('#952 mesh submissions retain the 256 KiB cap even with rig capture or comment images', async () => {
+test('#952 limits canonical mesh bytes independently of the existing capture allowance', async () => {
   const value = {stage: 'rig-review', verdict: 'changes-requested',
     feedback: [{summary: '소매', context: {crop: {png: 'data:image/png;base64,AA=='}}}]};
-  const withMesh = {kind: 'review-verdict', value: {...value, meshEdits: [entry]}};
-  const withoutMesh = {kind: 'review-verdict', value};
-  await expect(jobBody(bodyRequest(withMesh, jobBodyLimit), jobCaptureBodyLimit)).resolves.toEqual(withMesh);
-  for (const payload of [withMesh, {...withMesh, capture: {png: 'data:image/png;base64,AA=='}}]) {
-    await expect(jobBody(bodyRequest(payload, jobBodyLimit + 1), jobCaptureBodyLimit)).rejects.toMatchObject({code: 'JOB_BODY_LIMIT'});
-  }
-  const captureOnly = {...withoutMesh, value: {...value, feedback: []}, capture: {png: 'data:image/png;base64,AA=='}};
-  for (const payload of [withoutMesh, captureOnly]) {
-    await expect(jobBody(bodyRequest(payload, jobBodyLimit + 1), jobCaptureBodyLimit)).resolves.toEqual(payload);
-    await expect(jobBody(bodyRequest(payload, jobBodyLimit + 1))).rejects.toMatchObject({code: 'JOB_BODY_LIMIT'});
-  }
+  const capture = {png: 'data:image/png;base64,' + 'A'.repeat(jobBodyLimit)};
+  const largeCapture = {kind: 'review-verdict', capture, value: {...value, meshEdits: [entry]}};
+  const request = (payload: unknown) => bodyRequest(payload, Buffer.byteLength(JSON.stringify(payload)));
+  await expect(jobBody(request(largeCapture), jobCaptureBodyLimit)).resolves.toEqual(largeCapture);
+  await expect(jobBody(request(largeCapture))).rejects.toMatchObject({code: 'JOB_BODY_LIMIT'});
+
+  const meshEdits = [{...entry, edit: {...entry.edit, attachment: ''}}];
+  const baseBytes = Buffer.byteLength(canonicalJson(meshEdits));
+  meshEdits[0]!.edit.attachment = 'x'.repeat(jobBodyLimit - baseBytes);
+  const atLimit = {...largeCapture, value: {...value, meshEdits}};
+  await expect(jobBody(request(atLimit), jobCaptureBodyLimit)).resolves.toEqual(atLimit);
+  meshEdits[0]!.edit.attachment += 'x';
+  await expect(jobBody(request(atLimit), jobCaptureBodyLimit)).rejects.toMatchObject({code: 'JOB_BODY_LIMIT'});
+
+  const commentImages = {kind: 'review-verdict', value};
+  await expect(jobBody(bodyRequest(commentImages, jobBodyLimit + 1), jobCaptureBodyLimit)).resolves.toEqual(commentImages);
 });

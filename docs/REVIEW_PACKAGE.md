@@ -1655,8 +1655,11 @@ Review ships the decoder with act@8 emission off behind
 An edited submission while emission is off refuses `JOB_ACT_KIND_DISABLED`.
 Create must pin a Review release that reads @8 and build its relay before
 emission opens. The release that opens the gate will be recorded here when it
-is known. Older decoders refuse act@8 with `JOB_ACT_INVALID`. The existing
-JSON request and finalized-act delivery limits apply without truncation.
+is known. Older decoders refuse act@8 with `JOB_ACT_INVALID`.
+Review refuses `JOB_BODY_LIMIT` if the canonical UTF-8 JSON of
+`value.meshEdits` exceeds 256 KiB. Rig stills and inline comment images
+retain their existing request allowances. Finalized-act delivery retains its
+existing limit. Review does not truncate edits.
 
 **Consumer relay.** Create fetches the finalized act with its existing grant
 and passes each `edit`, `actId`, act `source.sourceHash` and `sha256` in process
