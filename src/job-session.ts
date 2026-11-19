@@ -5,10 +5,10 @@ import {
   type ActV3, type AgentRequestV3, type EventV3, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayPublicationV3, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest, type JobFetchActRequestV3,
   type JobNextValue, type JobPendingAsk, type JobPublication, type JobPublicationMode, type JobReviewerBinding,
-  type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
+  type JobSubject, type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
 } from './job-contract.ts';
 import { bindJobAsk, bindJobRecordAsk, finalizeJobAct, parseUISubmission, prepareJobRecordAct, prepareJobStill } from './job-act.ts';
-import { isRecordSource, parseRecordSource, parseCommentsAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
+import { atSubject, isRecordSource, parseRecordSource, parseCommentsAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
   assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
   type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
@@ -420,6 +420,27 @@ export class JobSession {
     return event;
   }
 
+  /** The committed head's retained source, re-checked against the work root and its sealed snapshot. */
+  private headRetained(data: JobData, publicationId: string): JobRetainedSourceV3 {
+    if (data.head !== publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
+    const retained = data.publications[publicationId].retained;
+    assertJobSourceCurrent(retained);
+    if (isRetainedRecordSource(retained) || hasStoredEvidence(retained.source)) {
+      assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals, retained.snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE');
+    }
+    return retained;
+  }
+
+  /** Bind one subject to the retained source, store its pending ask and write its `pending` event. */
+  private addAsk(data: JobData, publicationId: string, subject: JobSubject | RecordSubject, retained: JobRetainedSourceV3): JobPendingAsk | PendingAskV3 {
+    const ask: JobPendingAsk | PendingAskV3 = isRetainedRecordSource(retained)
+      ? { askId: randomUUID(), publicationId, subject, source: bindJobRecordAsk(subject, retained), status: 'pending' }
+      : { askId: randomUUID(), publicationId, subject, source: bindJobAsk(subject, retained), status: 'pending' };
+    data.asks[ask.askId] = ask;
+    this.event(data, { type: 'pending', ask });
+    return ask;
+  }
+
   private notify(): void { for (const listener of this.listeners) listener(); }
 
   async execute(input: JobAgentRequest | AgentRequestV3 | JobFetchActRequest | JobFetchActRequestV3, signal: AbortSignal): Promise<unknown> {
@@ -519,6 +540,21 @@ export class JobSession {
             });
           }
         }
+      } else if (input.verb === 'ask-batch') {
+        // One freshness read for the whole batch; every subject binds and validates against it (#963).
+        if (current.data.head !== input.publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
+        const retained = current.data.publications[input.publicationId].retained;
+        if (!isRetainedRecordSource(retained)) throw new JobError('JOB_REQUEST_INVALID', 'ask-batch requires a record publication');
+        input.subjects.forEach((subject, index) => atSubject(index, () => bindJobRecordAsk(subject, retained)));
+        if (!this.options.readRecordPublished) {
+          throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Record publication requires a trusted record reader');
+        }
+        await verifyJobRecordSourceFresh({
+          retained,
+          readRecordPublished: this.options.readRecordPublished,
+          phase: 'ask',
+          subjects: input.subjects as readonly RecordSubject[],
+        });
       }
       if (signal.aborted) throw new JobError('JOB_REQUEST_INVALID', 'Request cancelled');
       current = this.current();
@@ -556,35 +592,17 @@ export class JobSession {
             break;
           }
           case 'ask': {
-            if (data.head !== input.publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
-            const retained = data.publications[input.publicationId].retained;
-            assertJobSourceCurrent(retained);
-            if (isRetainedRecordSource(retained) || hasStoredEvidence(retained.source)) {
-              assertRetainedSnapshotIntact(
-                retained.snapshotRoot,
-                retained.seals,
-                retained.snapshotIdentity,
-                'JOB_SOURCE_UNRETAINABLE',
-              );
-            }
-            const ask: JobPendingAsk | PendingAskV3 = isRetainedRecordSource(retained)
-              ? {
-                  askId: randomUUID(),
-                  publicationId: input.publicationId,
-                  subject: input.subject,
-                  source: bindJobRecordAsk(input.subject, retained),
-                  status: 'pending',
-                }
-              : {
-                  askId: randomUUID(),
-                  publicationId: input.publicationId,
-                  subject: input.subject,
-                  source: bindJobAsk(input.subject, retained),
-                  status: 'pending',
-                };
-            data.asks[ask.askId] = ask;
-            this.event(data, { type: 'pending', ask });
-            result = ask;
+            result = this.addAsk(data, input.publicationId, input.subject, this.headRetained(data, input.publicationId));
+            break;
+          }
+          case 'ask-batch': {
+            // One head/source/snapshot re-check, then every ask under its own generation and pending event.
+            const retained = this.headRetained(data, input.publicationId);
+            const asks = input.subjects.map((subject, index) => {
+              if (index > 0) data.generation++;
+              return atSubject(index, () => this.addAsk(data, input.publicationId, subject, retained));
+            });
+            result = { asks };
             break;
           }
         }

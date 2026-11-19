@@ -26,6 +26,7 @@ import { assertReviewUnchanged } from './reference.ts';
 import {
   assertEqualRecordContexts,
   assertJobApiSchema,
+  atSubject,
   buildRecordSource,
   isRecordSource,
   jobHash,
@@ -1259,6 +1260,8 @@ export async function verifyJobRecordSourceFresh(options: {
   readonly readRecordPublished?: RecordPublicationReader;
   readonly phase?: 'ask' | 'finalize';
   readonly subject?: RecordSubject;
+  /** `ask-batch`: every subject is validated against this one fresh read, refusing under its request index. */
+  readonly subjects?: readonly RecordSubject[];
 }): Promise<RecordSource> {
   const { retained } = options;
   const phase = options.phase ?? 'ask';
@@ -1346,6 +1349,7 @@ export async function verifyJobRecordSourceFresh(options: {
       throw error;
     }
   }
+  options.subjects?.forEach((subject, index) => atSubject(index, () => validateRecordAskSubject(subject, freshSource)));
   assertJobSourceCurrent(retained);
   return freshSource;
 }

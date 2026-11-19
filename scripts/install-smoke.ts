@@ -79,6 +79,7 @@ import {
  type JobApiResponse, type JobUISubmission, type JobDisplayAcknowledgment, type JobDisplayReceipt,
  type JobDisplayPublication, type JobHostPorts, type JobConsumerGrant,
  type JobRecordAct, type JobActV3, type JobPlanSource, type JobFetchActRequestV3, type JobRecordHostHooks,
+ type JobCapabilitiesV3, type JobAskBatchRequestV3, type JobAskBatchValueV3,
  type JobRecordReopenSubject, type JobRecordReopenValue, type JobUISubmissionV3,
  type RecordSignoffStage, type JobRecordSignoffSubject, type JobRecordSignoffValue,
  type JobComment, type JobCommentAnchor, type JobCommentFeedbackAnchor, type JobCommentPartsAnchor, type JobCommentImageAnchor,
@@ -104,6 +105,7 @@ export type PublicTypes = [
  JobUISubmission, JobDisplayAcknowledgment, JobDisplayReceipt, JobDisplayPublication,
  JobHostPorts, JobConsumerGrant,
  JobRecordAct, JobActV3, JobPlanSource, JobFetchActRequestV3, JobRecordHostHooks,
+ JobCapabilitiesV3, JobAskBatchRequestV3, JobAskBatchValueV3,
  JobRecordReopenSubject, JobRecordReopenValue, JobUISubmissionV3,
  JobComment, JobCommentAnchor, JobCommentFeedbackAnchor, JobCommentPartsAnchor, JobCommentImageAnchor,
  JobCommentsAct, JobCommentsActValues, ReviewCommentsSession, CompareCommentsSession, PartsCommentsVerdict,
@@ -112,10 +114,14 @@ export type PublicTypes = [
 // Review #713: JobAct admits fresh act@6 comments acts from the UI writers.
 export type JobActAdmitsComments = JobCommentsAct extends JobAct ? true : never;
 const jobActAdmitsComments: JobActAdmitsComments = true;
+// Review #963: a newer Create detects ask-batch through this capability, never by probing the verb.
+export type CapabilitiesAdvertiseAskBatch = JobCapabilitiesV3['askBatch'] extends true ? true : never;
+const capabilitiesAdvertiseAskBatch: CapabilitiesAdvertiseAskBatch = true;
 function assert(ok: unknown, name: string): asserts ok {
  if (!ok) throw new Error('SMOKE_PUBLIC_HOST_' + name);
 }
 assert(jobActAdmitsComments, 'JOB_ACT_ADMITS_COMMENTS');
+assert(capabilitiesAdvertiseAskBatch, 'CAPABILITIES_ADVERTISE_ASK_BATCH');
 const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID', 'JOB_PARTS_ENUMERATOR_RANGE',
  'JOB_PREVIOUS_DRAFT_SCHEMA', 'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
  'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordAct', 'prepareJobRecordSource',
