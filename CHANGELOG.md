@@ -1,10 +1,21 @@
 # Changelog
 
-## Unreleased
+## 4.8.0
+
+A live job now emits the three fields 4.7.0 held back: per-comment `context` on a rig verdict (`rig-review/act@7`), mesh edits on a rig Request changes (`rig-review/act@8`), and `view.visibleLayers` on an assembled Parts issue. `EMIT_UNPINNED_CREATE_FIELDS` and `src/create-pin-gate.ts` are removed.
 
 **Read before upgrading:**
 
-* **Review 4.8.0 requires Create 1.13.0 or later.** Do not run Create versions below 1.13.0 with Review 4.8.0. Create's exact Review dependency pin normally prevents this pairing. Review can now emit `rig-review/act@7` when a comment carries top-level `context` and `rig-review/act@8` when a rig Request changes carries `meshEdits`. Fresh assembled Parts issues include `view.visibleLayers`. Historical acts retain their readers, and standalone `described-correction` and `mesh-edit` remain reserved (#977).
+* **Review 4.8.0 requires Create 1.13.0 or later.** Do not run Create 1.12.0 or earlier with Review 4.8.0. Create 1.12.0 refuses every `rig-review/act@8` act at decode with `REVIEW_ACT_V8_UNSUPPORTED`, and its review-act decoder reads act@6 comments but not act@7, so an act whose comments carry `context` is refused as an unsupported schema. Create's exact Review dependency pin normally prevents this pairing. Historical acts keep their readers, and standalone `described-correction` and `mesh-edit` stay reserved (#977).
+* **A live rig verdict writes `rig-review/act@7` when a comment carries a stage mark.** The writer derives each comment's top-level `context` from the comment's existing stage mark: `subject` (the finalized ask, the source hash and the rig selector), `mode`, `tab`, `part` when one is selected, `region`, `camera`, and `frame` when one is set. A verdict whose comments carry no stage mark stays act@6 with unchanged bytes. The stored-act check and the CLI consumer decoder read act@7 (#978, closes #977).
+* **A rig Request changes with a mesh draft writes `rig-review/act@8` with `meshEdits`.** In 4.7.0 such a submission was refused `JOB_ACT_KIND_DISABLED` and the draft stayed in the page. The mesh panel now says "In a job, press Request changes to send this edit; the producer rebuilds it." and Request changes is available with a mesh draft and no comment (#978, closes #977).
+* **An assembled-mode Parts issue keeps `view.visibleLayers`**, the names of the parts shown when the comment was made. 4.7.0 stripped it. Single-part issues are unchanged (#978, closes #977).
+* **`JobCapabilitiesV3` describes the host, not the current head.** `recordPublication`, `recordActSchema` and `askBatch` are reported for a whole `record-and-package` host, and `ask-batch` still accepts only a record-retained head: a package head on the same host refuses it. Check the publication's mode as well as `capabilities.askBatch`. The type and the value are unchanged; this release documents the scope (#973, closes #972).
+
+### Changed
+
+* docs/STABILITY.md records 31 runtime exports through `@rig-c/review/job-host`, matching 4.7.0's list, and a test holds the documented count to `Object.keys` of the entry so the prose cannot drift again. The export list is unchanged (#971, closes #968).
+* docs/STABILITY.md and docs/REVIEW_PACKAGE.md no longer describe act@7 context, act@8 mesh edits or Parts `visibleLayers` as held behind a flag (#978).
 
 ## 4.7.0
 
