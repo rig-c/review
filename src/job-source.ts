@@ -1,5 +1,5 @@
 import {resolvePartsPaintingInRig} from './parts-view.ts';
-import {checkpointEvidenceFields, checkpointEvidenceMetadata} from './job-checkpoint-evidence.ts';
+import {checkpointEvidenceFields, checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-checkpoint-evidence.ts';
 import {previousDraftFields} from './job-previous-draft.ts';
 import { randomUUID } from 'node:crypto';
 import { type Dirent, lstatSync, readdirSync, realpathSync, type Stats } from 'node:fs';
@@ -186,11 +186,10 @@ function rootRelative(root: string, absolute: string): string {
   return jobPath(path);
 }
 
-function sourceBytes(root: string, path: string, bound?: {limit: number; refusal: string}): Buffer {
+function sourceBytes(root: string, path: string): Buffer {
   const file = checkedPath(root, jobPath(path));
   const before = lstatSync(file);
-  if (bound && before.size > bound.limit) throw new JobError('JOB_SOURCE_UNRETAINABLE', bound.refusal);
-  const bytes = readRegular(file, bound?.limit ?? maxFileBytes), after = lstatSync(file);
+  const bytes = readRegular(file, maxFileBytes), after = lstatSync(file);
   if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
       before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new JobError('JOB_SOURCE_MISMATCH');
   return bytes;
@@ -198,21 +197,12 @@ function sourceBytes(root: string, path: string, bound?: {limit: number; refusal
 
 /** Read and hash the exact bytes the caller will consume, including on a cache hit at the front. */
 export function readPreviousDraftBytes(root: string, file: JobFileIdentity, operand: 'current' | 'previous' | 'diff'): Buffer {
-  let bytes: Buffer;
-  try {
-    if (realpathSync(root) !== root) throw new Error('Noncanonical previous draft root');
-    bytes = sourceBytes(root, file.path, {limit: operand === 'diff' ? 1024 * 1024 : maxFileBytes,
-      refusal: `PREVIOUS_DRAFT_LIMIT operand=${operand}`});
-  } catch (error) {
-    if (error instanceof JobError && error.code === 'JOB_SOURCE_UNRETAINABLE') throw error;
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new JobError('JOB_SOURCE_MISMATCH', `PREVIOUS_DRAFT_MISSING operand=${operand} path=${JSON.stringify(file.path)}`);
-    }
-    const detail = error instanceof JobError ? `PREVIOUS_DRAFT_HASH_MISMATCH operand=${operand}` : 'PREVIOUS_DRAFT_INVALID';
-    throw new JobError('JOB_SOURCE_MISMATCH', detail);
-  }
-  if (jobHash(bytes) !== file.sha256) throw new JobError('JOB_SOURCE_MISMATCH', `PREVIOUS_DRAFT_HASH_MISMATCH operand=${operand}`);
-  return bytes;
+  const limit = operand === 'diff' ? 1024 * 1024 : maxFileBytes;
+  return readCheckpointEvidenceBytes(root, file, limit, failure => {
+    if (failure === 'limit') return new JobError('JOB_SOURCE_UNRETAINABLE', `PREVIOUS_DRAFT_LIMIT operand=${operand}`);
+    return new JobError('JOB_SOURCE_MISMATCH', failure === 'hash' ? `PREVIOUS_DRAFT_HASH_MISMATCH operand=${operand}`
+      : `PREVIOUS_DRAFT_MISSING operand=${operand} path=${JSON.stringify(file.path)}`);
+  });
 }
 
 function assertRecord(root: JobRootIdentity, record: JobFileIdentity | null): void {
@@ -244,15 +234,16 @@ export function assertJobSourceCurrent(
 }
 
 function publishedIdentities(context: JobPublishedContext): JobFileIdentity[] {
-  const files = [...context.files];
+  const files = context.files;
+  if (!Array.isArray(files)) throw new JobError('JOB_SOURCE_MISMATCH');
   const ids = new Set<string>();
   for (const step of context.plan?.steps ?? []) {
     if (ids.has(jobId(step.id))) throw new JobError('JOB_SOURCE_MISMATCH');
     ids.add(step.id);
     jobSha(step.hash);
   }
-  for (const file of files) { jobPath(file.path); jobSha(file.sha256); }
-  return files;
+  try { return Array.from(files, file => ({path: jobPath(file?.path), sha256: jobSha(file?.sha256)})); }
+  catch { throw new JobError('JOB_SOURCE_MISMATCH'); }
 }
 
 function referenceRow(raw: unknown, row: number, hashed: boolean): JobPartsFileReference & { sha256?: string } {
@@ -1415,8 +1406,8 @@ export async function prepareJobSource(options: {
     throw new JobError('JOB_SOURCE_UNRETAINABLE', 'CREATE_PUBLICATION_CONTRACT_UNAVAILABLE');
   }
   if (requestDigest(context.selector) !== requestDigest(request.result.selector)) throw new JobError('JOB_SOURCE_MISMATCH');
-  const previous = previousDraftFields(context, context.selector, context.files);
   const declared = publishedIdentities(context);
+  const previous = previousDraftFields(context, context.selector, declared);
   const evidence = checkpointEvidenceFields(context, context.plan, context.subjects, declared);
   checkpointEvidenceMetadata(root.path, evidence.checkpointEvidence);
   let review: Awaited<ReturnType<typeof loadJobReview>>;

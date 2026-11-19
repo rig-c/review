@@ -1,10 +1,11 @@
 import {afterEach, expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
-import {readFileSync, truncateSync, unlinkSync, writeFileSync} from 'node:fs';
+import {mkdirSync, readFileSync, symlinkSync, truncateSync, unlinkSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {PNG} from 'pngjs';
 import {finalizeJobAct} from '../src/job-act.ts';
 import {commentsActForEmission, createJobHostPorts, jobHash} from '../src/job-api.ts';
+import {readCheckpointEvidenceBytes} from '../src/job-checkpoint-evidence.ts';
 import type {JobUISubmission} from '../src/job-contract.ts';
 import {JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_PREVIOUS_DRAFT_SCHEMA, parseCommentsAct, parseContextCommentsAct,
   type JobPreviousDraft, type JobPublishedContext} from '../src/job-host.ts';
@@ -47,7 +48,8 @@ function withDiff({f, context, previousDraft}: Awaited<ReturnType<typeof fixture
 }
 
 const refusalPlants: {detail: string; plant: (setup: Awaited<ReturnType<typeof fixture>>) => JobPublishedContext}[] = [
-  {detail: 'INVALID', plant: s => withCurrent(s, {...s.previousDraft.composites.current, path: '../outside.png'})},
+  {detail: 'INVALID', plant: ({context, previousDraft}) => ({...context, previousDraft: {...previousDraft,
+    composites: {...previousDraft.composites, current: {...previousDraft.composites.current, path: '../outside.png'}}}})},
   {detail: 'SELECTOR', plant: ({context}) => ({...context, selector: {kind: 'rig', version: 1}})},
   {detail: 'SELF', plant: ({context, previousDraft}) => ({...context, previousDraft: {...previousDraft,
     draft: {...previousDraft.draft, id: 'synthetic-draft'}}})},
@@ -90,6 +92,52 @@ for (const {detail, plant} of refusalPlants) {
     await expectRefusal(setup.f, detail);
   });
 }
+
+for (const [label, badFiles] of [
+  ['null', null],
+  ['undefined', undefined],
+  ['non-array', {}],
+  ['null row', [null]],
+  ['traversal path', [{path: '../outside.png', sha256: '1'.repeat(64)}]],
+  ['invalid hash', [{path: 'outside.png', sha256: 'invalid'}]],
+] as const) {
+  test(`previous draft admission refuses malformed published files (${label}) before checking operand seals`, async () => {
+    const {f, context} = await fixture();
+    f.setContext({...context, files: badFiles as unknown as JobPublishedContext['files']});
+    const generation = f.session.status().generation;
+    const response = await f.call(await f.publishRequest());
+    expect(await response.json()).toMatchObject({ok: false, error: {code: 'JOB_SOURCE_MISMATCH', message: 'JOB_SOURCE_MISMATCH'}});
+    expect(f.session.status().generation).toBe(generation);
+  });
+}
+
+for (const replacement of ['in-root symlink', 'out-of-root symlink', 'directory'] as const) {
+  test(`previous draft admission reports ${replacement} as a missing operand`, async () => {
+    const {f, previousDraft} = await fixture();
+    const file = previousDraft.composites.current, path = join(f.root, file.path);
+    const bytes = readFileSync(path);
+    unlinkSync(path);
+    if (replacement === 'directory') mkdirSync(path);
+    else {
+      const target = join(replacement === 'in-root symlink' ? f.root : f.scratch, 'alternate.png');
+      writeFileSync(target, bytes);
+      symlinkSync(target, path);
+    }
+    await expectRefusal(f, `MISSING operand=current path=${JSON.stringify(file.path)}`);
+  });
+}
+
+test('the shared reader preserves checkpoint path, byte limit and hash refusals', async () => {
+  const {f, previousDraft} = await fixture();
+  const file = previousDraft.composites.current;
+  const pathRefused = {code: 'JOB_SOURCE_UNRETAINABLE', message: 'CHECKPOINT_EVIDENCE_PATH_REFUSED'};
+  const read = async (identity: typeof file, limit: number) => readCheckpointEvidenceBytes(f.root, identity, limit);
+  await expect(read(file, 1)).rejects.toMatchObject(pathRefused);
+  await expect(read({...file, path: 'missing.png'}, 1024)).rejects.toMatchObject(pathRefused);
+  await expect(read({...file, sha256: '1'.repeat(64)}, 1024)).rejects.toMatchObject({
+    code: 'JOB_SOURCE_MISMATCH', message: 'CHECKPOINT_EVIDENCE_HASH_MISMATCH',
+  });
+});
 
 test('previous draft declaration, decoded raster and diff each have a bound', async () => {
   const s = await fixture();
