@@ -1142,6 +1142,104 @@ or establish official Create writer acceptance.
 - **Create-published step IDs and hashes.** `JobPlanIdentity` holds `steps` (`id` and `hash`) published by [Create #184](https://github.com/rig-c/create/issues/184) for the displayed plan. Review retains these values without importing or recomputing Create's internal `stepHash`. Create validates them through its existing `steps` and `step_hashes` writer logic, with no separate plan revision hash or additional revision gate in this contract.
 - **C4 manifest-referenced parts PNG identity.** C4 binds the exact public `partsFileReferences(dir)` array from `@rig-c/parts/src/parts.ts`, whose contract is frozen at Parts 2.25.0. The trusted host resolves an installed version in `JOB_PARTS_ENUMERATOR_RANGE` (`>=2.25.0 <3.0.0`), supplies its actual version and official callback through `partsEnumerator`, and declares `partsEnumeratorId`. `JobPartsIdentity.enumeratorVersion` carries that actual version. Manifest paths are work-root-relative and image paths are relative to the manifest directory. Each image carries `path`, bounded-string `role` and raw-byte `sha256`. Review compares the claimed array positionally with the official array, preserving its role/order/duplicate semantics. Upstream roles include `part`, `alternate`, `depth`, `painting` and `figure_mask`. Review bounds shape and paths, refuses traversal/symlinks, decodes PNGs and hashes retained bytes. Missing references refuse with row, role and path, including a missing sibling figure mask when a render copy exists. Unreferenced extras stay outside this parts identity. Composite source hashes use `rig-review-job-source/2`. Create #184 production reader/projection and official-hook wiring remain pending.
 
+### Previous accepted draft Difference
+
+A trusted reader may declare optional `previousDraft` at the top level of a
+`draft` publication context, alongside `checkpointEvidence`. Its closed
+shape is the same in the publication declaration and the finalized act's
+optional `source.previousDraft` binding. Review includes it in the source
+digest with the sealed file identities. [Review #914 HQ sign](https://github.com/rig-c/review/issues/914#issuecomment-7001341100)
+
+```ts
+previousDraft?: {
+  schema: 'rig-review-previous-draft/1';
+  draft: {id: string; revision: string};
+  composites: {
+    current: {path: string; sha256: string};
+    previous: {path: string; sha256: string};
+  };
+  diff?: {path: string; sha256: string};
+}
+```
+
+The publisher selects the latest live `parts-review` signoff for the same
+project with a null checkpoint, a different draft ID and an approved recorded
+verdict. It verifies each retained Parts `assemble` recomposite against its
+bound hash and seals the original bytes. It omits the declaration when no
+qualifying draft, retained composite or bound hash is available. Review
+validates the declared ID with `jobId` and the revision as lowercase SHA-256.
+The labelled select in the secondary toolbar shows the previous ID and the
+first 12 revision characters. When that operand is selected, its title shows
+the ID and full revision. Resolution of the accepted draft stays with the
+publisher. [Publisher confirmation](https://github.com/rig-c/review/issues/914#issuecomment-7001422013)
+
+Both composites are straight-alpha RGBA8 PNGs at the current `rig_size`.
+Every declared path is work-root-relative and matches a path and SHA-256
+pair in the publication's `files` closure. Existing limits apply: 4,096
+files, 64 MiB per raw file or decoded RGBA raster, and 256 MiB total.
+The declaration is limited to 4 KiB and the optional `diff` to 1 MiB.
+Until Parts publishes its format under [Parts #1369](https://github.com/rig-c/parts/issues/1369),
+the fallback validator checks the `rig-parts-draft-diff/1` schema string
+and the binding to both declared composite hashes. Review displays no
+figures for this operand.
+
+In assembled Difference, Painting is the default when `painting_in_rig`
+is available. The Previous accepted draft operand is offered only when
+`previousDraft` is present. If only the previous draft is available,
+assembled Difference opens on that operand. Single-part Difference
+continues to use the painting. The existing Difference route uses
+`stage-parts/difference/0?threshold=<n>&footprints=false&operand=previous-draft`
+for the whole-canvas raster. The raster pairs native cells where either
+composite has nonzero alpha, using the maximum absolute channel delta over
+RGBA. New interactive Parts Difference comparisons use a fixed threshold of
+`0` for either operand. The workspace has no threshold input. The shared
+route and comparison record keep the integer `0–255` range, and the raster
+highlights deltas strictly greater than the threshold. Zoom, Fit, 1:1 and
+the view switch work as before. Review displays the raster as visual evidence
+and computes no figures for this operand. The reviewer submits their verdict
+through the existing act flow.
+The painting loop on pre-feature main `d82aff4`
+(`src/parts-comparison.ts:26–43`) skips cells with zero current alpha and
+takes the maximum RGB delta. Including either alpha and all four channels
+makes a removed silhouette or an alpha-only edit visible.
+
+Pointed comments made in this view carry
+`view.comparison: {mode: 'difference', opacity, threshold, operand: 'previous-draft'}`
+in their parts anchor. Other comments omit `operand`. Historical comments
+and publications without these optional keys retain their existing readers
+and behavior. The absence of `previousDraft` is a valid publication.
+
+Admission reports the following bounded details under `JOB_SOURCE_MISMATCH`,
+except for the limit refusal.
+
+| Detail | Condition |
+| --- | --- |
+| `PREVIOUS_DRAFT_INVALID` | Wrong keys or schema, or a malformed ID, revision or file identity. |
+| `PREVIOUS_DRAFT_SELECTOR` | The declaration is on a non-draft selector or a record publication. |
+| `PREVIOUS_DRAFT_SELF` | The previous ID equals the current draft ID. |
+| `PREVIOUS_DRAFT_UNSEALED operand=<current\|previous\|diff>` | A declared path and hash are absent from the sealed file closure. |
+| `PREVIOUS_DRAFT_MISSING operand=… path=…` | The declared file is absent. |
+| `PREVIOUS_DRAFT_HASH_MISMATCH operand=…` | The bytes differ from the declared hash. |
+| `PREVIOUS_DRAFT_PNG_INVALID operand=…` | A composite fails RGBA8 PNG validation. |
+| `PREVIOUS_DRAFT_SIZE operand=… expected=WxH received=WxH` | A composite differs from `rig_size`. |
+| `PREVIOUS_DRAFT_LIMIT operand=…` | A file or declaration exceeds a bound. The outer code is `JOB_SOURCE_UNRETAINABLE`. |
+| `PREVIOUS_DRAFT_DIFF_INVALID` | The optional file fails the schema-string or two-composite hash check. |
+
+The publisher emits this field only when installed Review exports
+`JOB_PREVIOUS_DRAFT_SCHEMA` with value `rig-review-previous-draft/1` from
+`@rig-c/review/job-host`. This is the publisher-to-Review capability rule.
+Both new act keys require an admitted `previousDraft`. That admission is
+their emission gate. The existing pin gate in `src/create-pin-gate.ts`
+governs Review-to-publisher emission separately. An older Review ignores
+the extra context key and treats the composite `files` rows as ordinary
+seals. On the pre-feature main
+`d82aff4`, the in-process `readPublished` seam is in
+`src/job-source.ts:1333–1335`, the context type at `:59–67`, and the
+named reads of `selector`, `files` and `plan` at `:1339–1340` and
+`:223–233`. `prepareJobSource` reads the known context fields without an
+exact-key check on the context. The nested `context.parts` check is at
+`:265`. [HQ compatibility and emission ruling](https://github.com/rig-c/review/issues/914#issuecomment-7001361948)
+
 ### Rig verdict still backend
 
 New rig-review verdicts use `rig-review/act@3` and a top-level `still` with `path`, `sha256`, `camera:"fixed"` and `frame`. The path is exactly `<sha256>.png`. Setup uses `frame:"setup"`. Numeric seconds require `animation` alongside the frame. Other new acts and historical rig acts retain act@2. `JOB_ACT_SCHEMA`, API@2, stored compatibility markers and the twelve public facade runtime exports retain their established values. The rig-specific revision constant is internal to the contract module. Public type exports include `JobRigReviewAct`, `JobRigStill` and `JobRigCapture`.

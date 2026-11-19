@@ -455,6 +455,20 @@ written act stays act@6, historical words-only acts still parse, and the
 act@7 top-level `comment.context` emission gate remains off. There are no new
 exports or schemas. See [Comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
 
+[Review #914](https://github.com/rig-c/review/issues/914) adds
+`JOB_PREVIOUS_DRAFT_SCHEMA` (`rig-review-previous-draft/1`) and the
+type-only `JobPreviousDraft`. A publisher may send the optional draft
+context field only when installed Review exports that constant. An older
+Review ignores the context key and handles its sealed files as ordinary
+file identities. The finalized parts act carries the same optional
+`source.previousDraft` binding, and a pointed parts comment in that
+comparison carries an optional `view.comparison.operand` of
+`'previous-draft'`. Both act keys require an admitted declaration.
+Legacy publications, source bindings and comments
+with the keys absent keep their existing contract. The Review-to-publisher
+pin gate applies in its existing direction. See
+[Previous accepted draft Difference](REVIEW_PACKAGE.md#previous-accepted-draft-difference).
+
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
@@ -481,6 +495,7 @@ values from the frozen semantic contract.
 - `JOB_RECORD_ACT_SCHEMA`
 - `JOB_RECORD_READER_ID`
 - `JOB_PARTS_ENUMERATOR_RANGE`
+- `JOB_PREVIOUS_DRAFT_SCHEMA`
 - `JOB_ENABLED_ACT_KINDS`
 - `JOB_RESERVED_ACT_KINDS`
 - `JOB_PLAN_BOUND_SIGNOFF_STAGES`
@@ -525,6 +540,7 @@ without aliases or copied wire shapes.
 - `JobSelector`
 - `JobSourceBinding`
 - `JobModelSourceBinding`
+- `JobPreviousDraft`
 - `JobCapabilities`
 - `JobCapabilitiesV3`
 - `JobModelReviewValue`
