@@ -322,6 +322,23 @@ async function wait(expression: string, what: string): Promise<void> {
   await until(() => page!.evaluate<boolean>(expression), what);
 }
 
+async function openPendingAsk(page: InputCdpSession): Promise<void> {
+  let state: 'open' | 'ready' | null = null;
+  await until(async () => {
+    state = await page.evaluate<'open' | 'ready' | null>(`(() => {
+      if (document.querySelector('#job-record-asks[open]')) return 'open';
+      const button = document.querySelector('#workspace-pending-ask');
+      if (!button || button.hidden || button.disabled) return null;
+      const rect = button.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return button.contains(hit) ? 'ready' : null;
+    })()`);
+    return state !== null;
+  }, 'pending ask dialog open or control ready');
+  if (state === 'ready') await click(page, '#workspace-pending-ask');
+}
+
 async function edit(selector: string, value: string): Promise<void> {
   await page!.evaluate(
     `(()=>{const node=document.querySelector(${JSON.stringify(selector)});if(!node)throw new Error('Missing '+${JSON.stringify(selector)});node.value=${JSON.stringify(value)};node.dispatchEvent(new Event('input',{bubbles:true}));node.dispatchEvent(new Event('change',{bubbles:true}));})()`,
@@ -335,7 +352,7 @@ async function submitForm(askId: string, checkpoint = false): Promise<{ statusTe
     `!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled`,
     `enabled form ${askId}`,
   );
-  if (!await page!.evaluate(`document.querySelector('#job-record-asks').open`)) await click(page!,'#workspace-pending-ask');
+  await openPendingAsk(page!);
   await wait(`(()=>{const dialog=document.querySelector('#job-record-asks[open]'),button=document.querySelector(${JSON.stringify(submitSelector)});return !!dialog&&!!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
   await page!.evaluate(`document.querySelector(${JSON.stringify(submitSelector)}).scrollIntoView({block:'center',inline:'nearest'})`);
   await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
@@ -544,7 +561,7 @@ try {
 
   // #809:92: Answer… opens the native dialog; a prepared hidden form is not a pointer target.
   await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('form[data-job-ask="${picksAsk.askId}"] fieldset:not(:disabled)')`,'interview owner ready');
-  if(!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page,'#workspace-pending-ask');
+  await openPendingAsk(page);
   await wait(`!!document.querySelector('#job-record-asks[open] form[data-job-ask="${picksAsk.askId}"]')`,'Answer dialog opened');
   for (const name of optionDom.selectNames) {
     await click(page,`form[data-job-ask="${picksAsk.askId}"] input[type="radio"][name="${name}"][value="keep"]`);
@@ -619,7 +636,7 @@ try {
   );
 
   // #715 / #796: shared title and native dialog replace the deleted job-panel/record wrapper.
-  if(!await page.evaluate(`document.querySelector('#job-record-asks').open`))await click(page,'#workspace-pending-ask');
+  await openPendingAsk(page);
   const planDom = await page.evaluate<{
     sentinel: string;
     lang: string;
