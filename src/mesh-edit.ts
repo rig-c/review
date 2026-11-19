@@ -269,6 +269,12 @@ export function meshEditDocument(session: MeshEditSession): MeshEditDocument {
     ops: session.ops(),
   };
 }
+
+/** Live act payload uses the same delta as the standalone export, with its source geometry bound. */
+export function meshEditActValue(session: MeshEditSession, frame: {width: number; height: number}) {
+  const {schema, units, preview, source, ...edit} = meshEditDocument(session);
+  return {...edit, source: {...source, frame: {...frame}, positions: session.source.vertices.map(([x, y]): Vec => [x, y])}};
+}
 /**
  * The delta's bytes: what Download JSON saves and what Apply · Rebuild (#135) writes as the producer's
  * `mesh-edit.json`, so the binding's `file.sha256` and the applied record's `deltaSha256` name the same bytes.
@@ -310,7 +316,7 @@ export function draftOps(draft: MeshEditDraft, source: MeshSource): MeshOp[] | n
   const entry = draft.entries[draftKey(source)]; if (!entry || entry.hash !== source.hash) return null;
   try { applyMeshOps(source, entry.ops); return entry.ops; } catch { return null; }
 }
-export function writeMeshDraft(draft: MeshEditDraft, source: MeshSource, ops: readonly MeshOp[]): string {
+export function writeMeshDraft(draft: MeshEditDraft, source: Pick<MeshSource, 'slot' | 'skin' | 'attachment' | 'hash'>, ops: readonly MeshOp[]): string {
   const entries = { ...draft.entries }; const key = draftKey(source);
   if (ops.length) entries[key] = { hash: source.hash, ops: ops.map(op => structuredClone(op)) }; else delete entries[key];
   return Object.keys(entries).length ? JSON.stringify({ schema: MESH_EDIT_DRAFT_SCHEMA, entries }) : '';

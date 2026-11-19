@@ -286,6 +286,8 @@ Edit Mesh's **Download JSON** (#80, setup space since #100) saves two files; nei
 
 `mesh-edit.binding.json` (`rig-review-mesh-edit-binding/1`) binds the delta: `file {name, sha256}`, the package source hash, the model and motion SHA-256, `attachment {slot, skin, name, sha256}` (the same `hash`), `exportedAt`, the viewer and runtime versions, `mapping` (the crop mapping's basis) and an evidence note. Apply · Rebuild (#135) sends the same document as `{part, delta, configHash}` (bounded to 64 KiB, same-origin); the server writes it with the download's bytes and runs `rig-parts remesh --delta mesh-edit.json --part <part>` over the handoff rig (`@rig-c/parts` 1.43.0 or later, else `MODELING_PRODUCER_TOO_OLD <found> 1.43.0`). The producer computes `source.hash` from its own rigc build of the input and refuses a mismatch (`REMESH_DELTA_SOURCE`), a non-setup basis (`REMESH_DELTA_BASIS`) and an op that does not replay (`REMESH_DELTA_OP`); each line is shown verbatim. A built revision's `context.applied` is `rig-review-applied/3`: `{schema, buildId, part, delta, deltaSha256, configHash, producer, compiler, line, op: "remesh", files, mesh?, modelHash}`. `deltaSha256` is the SHA-256 of the bytes written, which equal the download's `mesh-edit.json`.
 
+The live-job handoff uses [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8). Standalone `--delta` and its download format remain available for legacy callers.
+
 ## Historical feedback retrieval
 
 `feedback` and `feedback compare` first return the exact current-tool stored session, including an explicitly saved pending decision. A corrupt current record is refused rather than replaced with an older approval. Current-file reads use an explicit present/missing result, and the CLI rechecks current state before returning history so a concurrently saved pending review wins without relying on its timestamp. If the current file is absent, these CLI commands search prior saved submissions for the same immutable content. HTTP session reads and all saves retain their existing strict current-tool binding; history is not approval migration.
@@ -942,7 +944,7 @@ and exact draft skin/slot/attachment address, with named refusal if absent.
 
 ### Correction handoff
 
-For the active standing live-job cycle, see [Live job contract](#live-job-contract), [Create #182](https://github.com/rig-c/create/issues/182) and [Create #184](https://github.com/rig-c/create/issues/184). In the active cycle, agents do not build, parse, reshape or carry Review session, picks, verdict or applied-record storage files, while `described-correction` and `mesh-edit` remain reserved disabled act kinds (`JOB_ACT_KIND_DISABLED`). The file-based `--correction`, `--feedback-file`, reshaped feedback JSON and `--verbatim-file` flow below is retained as legacy/history documentation and is a bypass finding if used in the active cycle.
+For the active standing live-job cycle, see [Live job contract](#live-job-contract), [Create #182](https://github.com/rig-c/create/issues/182) and [Create #184](https://github.com/rig-c/create/issues/184). In the active cycle, agents do not build, parse, reshape or carry Review session, picks, verdict or applied-record storage files. `described-correction` and `mesh-edit` remain reserved as standalone act kinds (`JOB_ACT_KIND_DISABLED`). The live mesh handoff uses [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8). The file-based `--correction`, `--feedback-file`, reshaped feedback JSON and `--verbatim-file` flow below is retained as legacy/history documentation and is a bypass finding if used in the active cycle.
 
 The existing feedback context may carry `correction: {path, selector}` on a
 saved single-package item. The path is `described` or `made`. A selector names
@@ -1136,7 +1138,7 @@ or establish official Create writer acceptance.
 
 ### Act kinds, plan identity and parts identity
 
-- **Five enabled kinds and two reserved disabled kinds.** `JOB_ENABLED_ACT_KINDS` enables `'interview-picks'`, `'checkpoint'`, `'parts-verdict'`, `'review-verdict'` and `'signoff'`. `JOB_RESERVED_ACT_KINDS` reserves `'described-correction'` and `'mesh-edit'`, which have no accepted value shape in this contract and refuse with `JOB_ACT_KIND_DISABLED`. `described-correction` awaits the joint [Create #182](https://github.com/rig-c/create/issues/182) context allowlist. `mesh-edit` awaits the joint [Parts #1159](https://github.com/rig-c/parts/issues/1159) freeze (proposal `6ff03ec9` discusses slot, attachment and skin identity, setup basis, vertex, triangle and hull counts and at most 300 closed `move`, `add`, `remove`, `edge` and `unedge` operations in crop pixels, while the exact attachment bytes behind `source.hash` and the canonical payload digest replacing `delta_sha256` remain unresolved and undefined in C3 as in C2, and UI drafts are never consumer acts).
+- **Five enabled kinds and two reserved disabled kinds.** `JOB_ENABLED_ACT_KINDS` enables `'interview-picks'`, `'checkpoint'`, `'parts-verdict'`, `'review-verdict'` and `'signoff'`. `JOB_RESERVED_ACT_KINDS` reserves `'described-correction'` and `'mesh-edit'`. Asks and standalone acts of either kind refuse `JOB_ACT_KIND_DISABLED`. `described-correction` awaits the joint [Create #182](https://github.com/rig-c/create/issues/182) context allowlist. The jointly signed mesh value rides on the rig-review verdict under [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8).
 - **`interview-picks`.** `JobActValues['interview-picks']` carries `questionId`, ordered `selections` (`itemId`, `optionId`, nullable `otherText`) and `note`, with non-null `source.optionSet` (`id` and `sha256`).
 - **`checkpoint`.** `JobActValues['checkpoint']` carries `checkpointId`, `planStepId`, `outcome` restricted to `'pass'` or `'fail'` and required `words` as a `string`. `pending` stays in the UI draft only and never produces a finalized act. Only `'pass'` is eligible for Create's checkpoint sign-off writer, whereas `'fail'` is feedback or a named consumer refusal and never an approval write. `words` is preserved verbatim including empty or whitespace-only strings, matching Create's writer without adding a UI gate. In `JobSubject`, `checkpointId` defaults to the Create plan step ID and optional `planStepId` is required when the displayed Review checkpoint ID differs, matching [Create #184](https://github.com/rig-c/create/issues/184) without alias inference or browser trust. The browser supplies `checkpointId`, `outcome` and `words` only (`JobUIActValues['checkpoint']`), the daemon copies resolved `planStepId` from the validated ask and requires `source.plan`, and Create derives execution stage from its authoritative step phase and order without Review stamping a stage.
 - **`parts-verdict`.** `JobActValues['parts-verdict']` is `PartsVerdictValue` (`verdict` as `'approved'` or `'changes-requested'`, `issues` as `readonly PartsIssue[]` under `rig-review-parts-comment/2` — empty on `'approved'` and non-empty on `'changes-requested'`, bound to `source.sourceHash`, retained `partIds`, and `source.parts.images` hashes — and `words`), emitted in new finalized `rig-review/act@5` acts (`JobPartsVerdictAct`) and requiring non-null `source.projectHash`, a `draft` selector and `source.parts`. Historical `rig-review/act@2` `parts-verdict` acts remain in the `JobAct` union via `JobLegacyAct` with `value: JobLegacyPartsVerdictValue` (`verdict` as `'pending'`, `'approved'` or `'changes-requested'`, `parts` with `partId`, `part` outcome and note, `mesh` outcome and note with `JobPartOutcome` as `'pending'`, `'clean'` or `'flagged'`, and `words`).
@@ -1267,7 +1269,7 @@ The manifest and complete retained image rows enter the composite source hash. L
 
 - **Sibling binding ownership.** `JOB_CONSUMER_AUTH_MODE` is `'writer-owned-sibling-fetch-capability'` (`JobConsumerGrant` with `jobId`, `operation` set to `'fetch-act'`, `actKinds` and `lifetime` set to `'until-explicit-close'`). [Create #184](https://github.com/rig-c/create/issues/184) owns creation and path of a private writer-owned sibling binding outside `project.json` whose versioned record carries only the semantic job locator (Create's production reader/writer readback integration remains pending [Create #184](https://github.com/rig-c/create/issues/184)). The binding is never tracked in version control, never present in unstaged project output and never shipped in templates, public examples or fixtures.
 - **Agent isolation and capability lifecycle.** The consumer writer reads its own sibling binding directly. Agents never construct, parse or carry Review session, picks, verdict, applied-record or sibling-binding files. Actual separate-UID isolation remains required for Review's distinct state unreadability test (`JOB_AGENT_ISOLATION_HOLE`), and no same-user forger-resistance claim is made. The random per-job bearer capability grants finalized act fetch (`fetch-act`) only, via exact loopback routes and `Authorization`. Neither `next` nor `status` returns it, and human metadata alone never authenticates a fetch. The capability dies at explicit `close`, old project history cannot restore it, each new job incarnation receives a new grant, invalid grants refuse with `JOB_CAPABILITY_REQUIRED` or `JOB_AUTHORITY_REFUSED` and closed-job fetches refuse with `JOB_CLOSED`. No self-service grant API exists.
-- **Consumer deduplication and future in-process mesh consumption.** Consumer writers deduplicate `actId` before current-source checks, then validate each new source and atomically commit the writer result plus replay identity. Replaying an applied `actId` returns the existing record, while a new stale act refuses before mutation. Verdict, signoff and stage transition remain three separate consumer writes. Once `mesh-edit` is jointly frozen with [Parts #1159](https://github.com/rig-c/parts/issues/1159), Create will fetch a finalized mesh act and pass its typed value in process to Parts' public exported API owned by [Parts #1159](https://github.com/rig-c/parts/issues/1159), with Parts reading neither Review nor Create storage and taking no Create-project argument, while standalone `--delta` remains legacy outside this cycle.
+- **Consumer deduplication and in-process mesh consumption.** Verdict, signoff and stage transition remain separate consumer writes. For these writes, consumers deduplicate `actId` before checking the current source, then validate each new source and atomically commit the result with its replay identity. Replaying an applied `actId` returns the existing record. A new stale act refuses before mutation. The typed mesh relay uses per-edit identity as defined in [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8).
 - **Error codes.** `JOB_ERROR_CODES` enumerates the closed refusal set (`JOB_REQUEST_INVALID`, `JOB_BODY_LIMIT`, `JOB_LOOPBACK_REQUIRED`, `JOB_SAME_ORIGIN_REQUIRED`, `JOB_CAPABILITY_REQUIRED`, `JOB_AUTHORITY_REFUSED`, `JOB_UNKNOWN`, `JOB_CLOSED`, `JOB_GENERATION_STALE`, `JOB_IDEMPOTENCY_CONFLICT`, `JOB_FREEZE_REQUIRED`, `JOB_RECORD_INCOMPLETE`, `JOB_RECORD_MOVED`, `JOB_SOURCE_MISMATCH`, `JOB_SOURCE_UNRETAINABLE`, `JOB_ROOT_REPLACED`, `JOB_PUBLICATION_UNKNOWN`, `JOB_SNAPSHOT_RECLAIMED`, `JOB_ASK_INVALID`, `JOB_ASK_SUPERSEDED`, `JOB_ACT_UNKNOWN`, `JOB_ACT_INVALID`, `JOB_ACT_KIND_DISABLED`, `JOB_ACT_SOURCE_STALE`, `JOB_DISPLAY_MISMATCH`, `JOB_CURSOR_INVALID`, `JOB_STORAGE_FAILED`, `JOB_AGENT_ISOLATION_HOLE`), each returning bounded safe detail with no arbitrary worker text or private paths.
 
 ### Model-free record mode and source seam
@@ -1516,7 +1518,8 @@ malformed or blank rows. The act bar sends a detached feedback list when there
 are pinned comments and keeps `words` as their projection. It omits `feedback`
 when there are no pinned comments. With `feedback` absent, nonblank `words`
 still supplies one general comment. Direction and image verdict submissions
-keep their existing closed shapes.
+keep their existing closed shapes. The comments mapping by itself keeps the
+act@6 format.
 
 Only the `rig-review` verdict and `parts-verdict` accept optional
 `general: readonly string[]` in their UI submission values. Each string becomes
@@ -1525,13 +1528,12 @@ produced by the existing fields. For parts verdicts, nonblank `words` still
 produces a comment after the pinned `issues` and before `general`. Parts Request
 changes still requires a pinned issue, and approval still requires zero issues. The existing decoder
 validates the combined comment count, text, evidence and signed projection.
-Omitting `general` preserves the existing written bytes. The writer emits
-act@6 and historical words-only acts retain their readers. [Review #831](https://github.com/rig-c/review/issues/831).
+Omitting `general` preserves the existing written bytes. By itself, `general`
+keeps the writer at act@6, and historical words-only acts retain their readers. [Review #831](https://github.com/rig-c/review/issues/831).
 
 Pointed marks, inline crops, bookmarks and valid time-only null frames remain
 inside the existing `anchor.context`. This is distinct from act@7's top-level
 `comment.context`, which remains disabled by `EMIT_UNPINNED_CREATE_FIELDS`.
-No new field or decoder rule is added to the written act.
 
 For the words-only mapping, the daemon maps a nonblank note
 to one comment: anchored to the checkpoint for a checkpoint, general otherwise.
@@ -1541,7 +1543,7 @@ A note whose projection exceeds the 10,000-unit scalar bound refuses
 `JOB_ACT_INVALID`. The bound counts the stored `words`, and the `[label]\n`
 prefix is part of them, so a general note longer than 9,990 units refuses even
 though act@5 accepted it. Feedback is many comments, not one long note.
-Each written act must decode through `parseCommentsAct`.
+Each written act@6 must decode through `parseCommentsAct`.
 Image-review verdicts and interview picks stay at act@2, because Create refuses
 both under act@6. Record acts stay at act@4, because Create maps only a record
 checkpoint under act@6. Standalone save paths keep their existing versions.
@@ -1692,3 +1694,100 @@ Create refuses unknown fields, so Review emits @7 only when
 `EMIT_UNPINNED_CREATE_FIELDS` (`src/create-pin-gate.ts`) is true. It is false
 until the create tower confirms Create has pinned the Review version that reads
 @7. While it is false, writers drop every `context` and emit @6.
+
+### Mesh edits on Request changes (act@8)
+
+With a pending `review-verdict` ask at `stage: "rig-review"`, the existing
+**Request changes** control carries pending Edit Mesh operations with any review
+comments. `rig-review/act@8` extends the act@7 envelope and its validation with
+optional `value.meshEdits`, permitted only for `kind: "review-verdict"`,
+`stage: "rig-review"` and `verdict: "changes-requested"`. An act@8 request for
+changes may have `comments: []` when it carries a mesh edit. A request with
+neither a comment nor an edit refuses `JOB_ACT_INVALID`. Review emits @8 only
+when it carries edits. Rig verdicts without edits keep their act@6 or act@7
+format and rules. Edit Mesh remains unavailable for a `parts-verdict` subject
+without a compiled rig (`PARTS_RIG_UNAVAILABLE`).
+
+`meshEdits` is a nonempty array of exact `{edit, sha256}` objects, ordered by the
+string `skin/slot/attachment` with at most one entry per `(skin, slot, attachment)`.
+`JobMeshEditValue` has exactly these keys:
+
+- `slot`, `attachment` and `skin` are nonempty strings for the edited attachment
+  and its supplying table, as reported by Play's public setup identity. Linked
+  meshes are ineligible for editing.
+- `basis` is `"setup"`.
+- `source` is exactly `{vertexCount, triangleCount, hullLength, hash, frame, positions}`.
+  The whole-number counts come from the stored entry's `uvs.length / 2`,
+  `triangles.length / 3` and `hull`. `hash` is 64 lowercase hex characters.
+  `frame` is exactly `{width, height}`, the positive finite model stage size.
+  `positions` is a dense `[number, number][]` with exactly one pair per source
+  vertex, in attachment vertex order. Each pair stores the finite, unrounded
+  setup position before any operation.
+- `ops` contains 1 to 300 operations, replayed in order. Each operation has
+  exactly the keys in its shape: `{op:"move", v, from, to}`, `{op:"add", at, onEdge?}`,
+  `{op:"remove", v}`, `{op:"edge", a, b}` or `{op:"unedge", a, b}`. `v`, `a`, `b`
+  and both entries of `onEdge`, when present, are nonnegative whole-number
+  vertex IDs. `from`, `to` and `at` are finite `[x, y]` pairs. `from` is the
+  unrounded position immediately before the move. `to` and `at` are rounded to
+  0.01 px. Original IDs are attachment indices. An addition takes the next ID
+  and splits `onEdge` when provided. A removed ID is never reused. `unedge` can
+  remove only a constraint edge added by this edit. A vertex that ends a
+  constraint edge cannot be removed.
+
+**Coordinates and replay.** Positions use setup-pose crop pixels of the rig
+canvas, with top-left origin, x right and y down. For a stage with `x = -width/2`,
+`y = 0` and the drawn root at the world origin, Review maps Play's
+`readSetupMesh` world coordinates to `(world.x + width/2, height - world.y)`.
+Review reads setup identity from a fresh, never-played player at the model
+document's setup values with no selected skin. Playback, the page's skin,
+controls and other page state do not enter the setup read. The replay contract
+requires undeformed setup geometry, where each displayed source vertex equals
+`uv × size + origin`. Review records the displayed positions. Before any op,
+Parts checks `source.frame` against its rig size and refuses a position count
+that differs from its source vertex count. It compares each coordinate of
+`source.positions` with its own at the same vertex index, within 0.001 crop px.
+It refuses at the first vertex outside that tolerance and reports its index,
+the position found and the position required. This check applies to all
+edits, including edits with no `move`. The consumer can replay in either
+coordinate space and can reproduce the undeformed positions without Play.
+
+**Attachment hash and payload digest.** `source.hash` is the SHA-256 of the
+UTF-8 bytes of `JSON.stringify(entry)`, where `entry` is
+`skins[name=skin].attachments[slot][attachment]` in the hash-verified
+`skeleton.model.json` named by the act's `source.model`. Use plain `JSON.parse`
+and preserve the entry's stored key order. The producer recomputes the hash
+from the model its own build writes. These are the same attachment hash bytes
+used by the standalone `rig-review-mesh-edit/1` delta and draft. The `sha256`
+beside each `edit` is the SHA-256 of the canonical UTF-8 JSON bytes of the
+whole `edit`, including `source.positions`. Sort all object keys by UTF-16 code
+units, preserve array order, omit whitespace, use `JSON.stringify` string
+escaping and serialize numbers as ECMAScript `Number.prototype.toString`
+shortest round-trip text. The value contains no integer-like keys, negative
+zero or non-finite numbers. For this value domain the rule is RFC 8785 (JCS).
+
+**Review refusals and rollout.** Before writing the act, Review refuses with
+`JOB_ACT_INVALID` for invalid shape, digest mismatch, invalid ordering or
+duplicate identity, ineligible kind, stage or verdict, counts that differ from
+the stored entry, or an op that cannot replay over the stored topology. An
+attachment hash that differs from the retained displayed model refuses
+`JOB_ACT_SOURCE_STALE`. Existing browser `MESH_EDIT_*` refusals still apply.
+Review ships the decoder with act@8 emission off behind
+`EMIT_UNPINNED_CREATE_FIELDS` in `src/create-pin-gate.ts`.
+An edited submission while emission is off refuses `JOB_ACT_KIND_DISABLED`.
+Create must pin a Review release that reads @8 and build its relay before
+emission opens. The release that opens the gate will be recorded here when it
+is known. Older decoders refuse act@8 with `JOB_ACT_INVALID`.
+Review refuses `JOB_BODY_LIMIT` if the canonical UTF-8 JSON of
+`value.meshEdits` exceeds 256 KiB. Rig stills and inline comment images
+retain their existing request allowances. Finalized-act delivery retains its
+existing limit. Review does not truncate edits.
+
+**Consumer relay.** Create fetches the finalized act with its existing grant
+and passes each `edit`, `actId`, act `source.sourceHash` and `sha256` in process
+to the public Parts API. The identity for deduplication is
+`(actId, skin, slot, attachment)`. Parts recomputes both hashes and refuses a
+mismatch by name before any op. During replay it holds `move.from` to `1e-3`
+crop px and refuses the first op that does not replay by index. The API takes
+the edit and replay provenance without a Create-project argument or access
+to Review or Create storage. A mesh edit
+approves nothing. [HQ sign on Review #952](https://github.com/rig-c/review/issues/952#issuecomment-7001413869), [Parts #1159](https://github.com/rig-c/parts/issues/1159).

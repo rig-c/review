@@ -6,6 +6,7 @@ import type {InterviewSubjectEntry} from '../src/joined-project.ts';
 import {mountJobScreen,joinedInterviewForms,mediaReady,jobSubmissionRefusal} from './job-session.ts';
 import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding} from '../src/parts-comment.ts';
 import type {JobForm} from './job-session.ts';
+import type {JobRigMeshHost,JobRigMeshScreen} from './job-rig-screen.ts';
 import {bindWorkspaceDrawer,settleAnimationFrames} from './workspace-layout.ts';
 import {captureRigRestStill,rigRestCanvas} from './job-rig-capture.ts';
 import {createPartsViewportProvider,bindPartsSubject,paintRigDifference,type PartsSubjectEntry,type PartsSubjectSession} from './parts-viewport-provider.ts';
@@ -112,7 +113,7 @@ const option = (value: string, label: string) => { const item = document.createE
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 // Capability is consumed before shell composition or any URL-dependent binding.
 // A live job (#709) hosts this screen for a rig subject: its routes, its session and its submit.
-let host=rigHost(),access=host?.access??pageInstanceAccess();
+let host:JobRigMeshHost|null=rigHost(),access=host?.access??pageInstanceAccess();
 let partsOnly=host?.subject==='parts'||screenRoot.dataset.reviewScreen==='parts';
 let firstPublicationPrompt=!!host?.waiting;
 const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
@@ -1243,7 +1244,9 @@ function bind(): void {
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   const editRefusal=sealedRecordRigReadOnly();
   if(editRefusal)chestEditor.unavailable(editRefusal);
-  meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),readOnly:!!editRefusal,source:meshSource,pause,changed:()=>redrawOverlay(false),download:doc=>{void exportMesh(doc);},apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(tr(text)),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
+  meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),readOnly:!!editRefusal,source:meshSource,pause,
+   job:host?(host.record||host.direction||!host.access.capability?'read-only':{slots:()=>data.feedbackCatalog.slots??[],modelHash:()=>inspectionSourceState==='ready'&&chestMapping.available?stageModelHash:null}):undefined,changed:()=>{if(host)renderAnswerControls();redrawOverlay(false);},download:doc=>{void exportMesh(doc);},
+   apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(tr(text)),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
   weightsView=bindWeightsView({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,inspector:()=>selectedInspector(),slot:()=>parts?.value()?.slot??stageDraftSelection?.slot??null,
    model:()=>hasStageModel()?partModel??undefined:null,setup:slot=>assets?setupPoseMesh(assets,partModel,slot,document.createElement('div')):null,changed:()=>redrawOverlay(false),
    token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});
@@ -1390,7 +1393,9 @@ async function start(): Promise<void> {
       }
       if(!player&&(data.manifest.model||referenceInput.state!=='loaded'))throw new Error('JOB_VISUAL_UNAVAILABLE');
       await restorePublicationNavigation();document.body.dataset.ready='true';
-      host.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});showInspector(data.manifest.model?'playback':'rig');host.displayed();
+      const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
+        hasMeshEdits:()=>!!meshEditor?.hasJobEdits(),meshEdits:async()=>meshEditor?.jobEdits()??null};
+      host.attach(screen);showInspector(data.manifest.model?'playback':'rig');host.displayed();
     }
   } catch (error) { if(disposed)return;message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
 }
@@ -1705,11 +1710,12 @@ function renderAnswerControls():void {
  rigAsk.disabled=(!enabled&&!readable)||(enabled&&blocked);
  if(verdict){
   const count=host?.direction?recordComments.length:liveIssueCount();
+  const hasChanges=count>0||!!host?.canSubmitMeshEdits?.()&&subjects.some(subject=>subject.kind==='review-verdict'&&subject.stage==='rig-review');
   setSourceText(save,'Approve');setSourceText(requestChanges,'Request changes');
   save.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||(parts&&(partsAnswerBlocked()||count>0));
-  requestChanges.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||count===0||(parts&&partsAnswerBlocked());
+  requestChanges.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||!hasChanges||(parts&&partsAnswerBlocked());
   setSourceAttribute(save,'title',parts&&count>0?'Remove the flagged parts comments before approving.':'');
-  setSourceAttribute(requestChanges,'title',needsPinnedPart?pinRefusal:count===0?'Add a comment where changes are needed.':'');
+  setSourceAttribute(requestChanges,'title',needsPinnedPart?pinRefusal:hasChanges?'':'Add a comment where changes are needed.');
   if(!parts){
    save.onclick=event=>{session.status='approved';select('review-status').value=session.status;return verdictSubmit?.(event);};
   }
@@ -2217,9 +2223,9 @@ function boneSetup(document:unknown):BoneSetup {
 }
 /** Setup's mesh edit: the selected slot's actual mesh as a typed delta. A two-file client download; nothing reaches the session or the package. */
 /** Edit Mesh's source (#100): the selected slot's mesh in the model document at the setup pose (a never-played player's bones). */
-function meshSource(){
+function meshSource(slot=parts?.value()?.slot??stageDraftSelection?.slot??null){
  if(hasStageModel()&&!partModel)return {ok:false as const,code:'MESH_EDIT_RIG_UNAVAILABLE: the compiled model document is still loading'};
- return meshEditSource({slot:parts?.value()?.slot??stageDraftSelection?.slot??null,model:hasStageModel()?partModel:null,pose:slot=>assets?readSetupPose(assets,slot,document.createElement('div')):null,mapping:chestMapping});
+ return meshEditSource({slot,model:hasStageModel()?partModel:null,pose:slot=>assets?readSetupPose(assets,slot,document.createElement('div')):null,mapping:chestMapping});
 }
 async function exportMesh(doc:MeshEditDocument):Promise<void> {
  const text=meshEditText(doc),digest=await sha256Hex(text);

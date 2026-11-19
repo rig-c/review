@@ -3,12 +3,12 @@ import {
   JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
   type ActV3, type JobAct, type JobComment, type JobCommentsAct, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
-  type PendingAskV3, type RecordAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
+  type JobMeshEdit, type PendingAskV3, type RecordAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
 } from './job-contract.ts';
 import { parsePartsIssue, type PartsIssue } from './parts-comment.ts';
 import {
   isRecordSource, jobHash, jobId, jobInteger, jobObject,
-  parseCommentsAct, parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
+  meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
 } from './job-api.ts';
 import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueComments } from './feedback-export.ts';
 import type { Feedback } from './session.ts';
@@ -22,6 +22,9 @@ import {
 import { JobError } from './job-store.ts';
 import { checkedPath, readRegular } from './interview-project.ts';
 import {validatePngBytes} from './comment-crops.ts';
+import {EMIT_UNPINNED_CREATE_FIELDS} from './create-pin-gate.ts';
+import {applyMeshOps, attachmentHashText, MESH_EDIT_CODES} from './mesh-edit.ts';
+import {readStoredSetupMesh} from './setup-mesh.ts';
 
 function words(value: unknown): string {
   if (typeof value !== 'string' || value.length > 10_000) throw new JobError('JOB_ACT_INVALID');
@@ -32,6 +35,47 @@ function words(value: unknown): string {
 function commentsAct(act: JobCommentsAct): JobCommentsAct {
   parseCommentsAct(act);
   return act;
+}
+
+function hasMeshSubmission(kind: unknown, value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || !Object.hasOwn(value, 'meshEdits')) return false;
+  const {stage, verdict} = value as {stage?: unknown; verdict?: unknown};
+  if (kind !== 'review-verdict' || stage !== 'rig-review' || verdict !== 'changes-requested') {
+    throw new JobError('JOB_ACT_INVALID');
+  }
+  return true;
+}
+
+function validateRetainedMeshEdits(retained: JobRetainedSource, edits: readonly JobMeshEdit[]): void {
+  const binding = retained.source.model;
+  if (!binding) throw new JobError('JOB_ACT_SOURCE_STALE');
+  let model: {stage?: {width?: number; height?: number}};
+  try {
+    const bytes = readRegular(checkedPath(retained.snapshotRoot, binding.path), 64 * 1024 * 1024);
+    if (jobHash(bytes) !== binding.sha256) throw new Error('model hash differs');
+    model = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw new JobError('JOB_ACT_SOURCE_STALE');
+  }
+  for (const {edit} of edits) {
+    const read = readStoredSetupMesh(model, edit.slot, edit, MESH_EDIT_CODES);
+    if (!read.ok || jobHash(attachmentHashText(read.mesh.entry)) !== edit.source.hash) throw new JobError('JOB_ACT_SOURCE_STALE');
+    const {mesh} = read;
+    const {frame, positions, vertexCount, triangleCount, hullLength, hash} = edit.source;
+    const uvs = mesh.entry.uvs;
+    if (mesh.linked || !Array.isArray(uvs) || uvs.length !== vertexCount * 2 ||
+        mesh.vertices.length !== vertexCount || positions.length !== vertexCount ||
+        mesh.triangles.length !== triangleCount * 3 || mesh.hull !== hullLength ||
+        model.stage?.width !== frame.width || model.stage?.height !== frame.height) {
+      throw new JobError('JOB_ACT_INVALID');
+    }
+    try {
+      applyMeshOps({slot: edit.slot, attachment: edit.attachment, skin: edit.skin,
+        vertices: positions, triangles: mesh.triangles, hull: hullLength, hash}, edit.ops);
+    } catch {
+      throw new JobError('JOB_ACT_INVALID');
+    }
+  }
 }
 
 function generalComments(value: unknown): JobComment[] {
@@ -165,6 +209,9 @@ export function parseUISubmission(
     (recordEnabled && (JOB_RECORD_ACT_KINDS as readonly string[]).includes(kind));
   if (!allowed) {
     throw new JobError('JOB_ACT_INVALID');
+  }
+  if (hasMeshSubmission(item.kind, item.value) && !EMIT_UNPINNED_CREATE_FIELDS) {
+    throw new JobError('JOB_ACT_KIND_DISABLED');
   }
   if (item.capture !== undefined && (item.kind !== 'review-verdict' ||
     (item.value as {stage?: unknown} | null)?.stage !== 'rig-review')) throw new JobError('JOB_REQUEST_INVALID');
@@ -466,6 +513,7 @@ export function finalizeJobAct(options: {
   readonly still?: JobRigStill;
   readonly actId?: string;
   readonly at?: string;
+  readonly emitUnpinned?: boolean;
 }): ActV3;
 export function finalizeJobAct(options: {
   readonly jobId: string;
@@ -476,7 +524,15 @@ export function finalizeJobAct(options: {
   readonly still?: JobRigStill;
   readonly actId?: string;
   readonly at?: string;
+  readonly emitUnpinned?: boolean;
 }): ActV3 {
+  const meshSubmission = hasMeshSubmission(options.submission.kind, options.submission.value);
+  if (meshSubmission && (isRetainedRecordSource(options.retained) ||
+      options.ask.subject.kind !== 'review-verdict' || options.ask.subject.stage !== 'rig-review')) {
+    throw new JobError('JOB_ACT_INVALID');
+  }
+  const emitUnpinned = options.emitUnpinned ?? EMIT_UNPINNED_CREATE_FIELDS;
+  if (meshSubmission && !emitUnpinned) throw new JobError('JOB_ACT_KIND_DISABLED');
   if (isRetainedRecordSource(options.retained)) {
     return prepareJobRecordAct({
       jobId: options.jobId,
@@ -594,9 +650,15 @@ export function finalizeJobAct(options: {
     }
     case 'review-verdict': {
       const value = jobObject(submission.value, ['stage', 'verdict', 'words',
-        ...(ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ? ['feedback', 'general'] : [])]);
+        ...(ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ? ['feedback', 'general', 'meshEdits'] : [])]);
       if (ask.subject.kind !== 'review-verdict' || ask.subject.stage === 'image-review' || value.stage !== ask.subject.stage) throw new JobError('JOB_ACT_INVALID');
       if (ask.subject.stage === 'rig-review') {
+        const verdict = choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const);
+        let meshEdits: readonly JobMeshEdit[] | undefined;
+        if (meshSubmission) {
+          meshEdits = parseMeshEdits(value.meshEdits);
+          validateRetainedMeshEdits(retained, meshEdits);
+        }
         if (!options.still) throw new JobError('JOB_STILL_CAPTURE_FAILED');
         const note = words(value.words);
         if (value.feedback !== undefined && !Array.isArray(value.feedback)) throw new JobError('JOB_ACT_INVALID');
@@ -604,11 +666,12 @@ export function finalizeJobAct(options: {
         try {
           verdictComments = value.feedback === undefined ? noteComments(note) : feedbackItemComments(value.feedback as Feedback[]);
         } catch { throw new JobError('JOB_ACT_INVALID'); }
-        return commentsAct({...comments, kind: 'review-verdict',
+        const act = {...comments, kind: 'review-verdict' as const,
           source: {...source, model: source.model!, selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, {kind: 'rig'}>},
-          value: {stage: 'rig-review', verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const),
-            comments: [...verdictComments, ...generalComments(value.general)]},
-          still: options.still});
+          value: {stage: 'rig-review' as const, verdict, comments: [...verdictComments, ...generalComments(value.general)]},
+          still: options.still};
+        if (meshEdits) return meshEditsActForEmission({...act, value: {...act.value, meshEdits}}, emitUnpinned);
+        return commentsAct(act);
       }
       return commentsAct({ ...comments, kind: 'review-verdict', source: { ...source, model: source.model!,
         selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, { kind: 'rig' | 'post' }> }, value: {

@@ -5,10 +5,12 @@ import {
   JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PARTS_ENUMERATOR_RANGE,
   JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RECORD_SIGNOFF_STAGES, JOB_RECORD_ACT_SCHEMA, JOB_RECORD_INSTANCE_SCHEMA, JOB_RECORD_SOURCE_SCHEMA,
   JOB_RESERVED_ACT_KINDS,
+  JOB_MESH_EDITS_ACT_SCHEMA,
   type AgentRequestV3, type FetchActRequestV3, type JobAgentRequest, type JobApiSchema,
   type JobCheckpointEvidence, type JobDisplayAcknowledgment, type JobErrorCode, type JobFetchActRequest, type JobFileIdentity,
   type JobHostPorts, type JobHumanAuthority, type JobInterviewDiagnostic, type JobInterviewDiagnostics,
   type JobInterviewJson, type JobInterviewRecord, type JobPlanIdentity, type JobPublicationMode,
+  type JobAct, type JobMeshEdit, type JobMeshEditsAct, type JobMeshEditValue,
   type JobPublishRequest, type JobResult, type JobSelector, type JobSha256, type JobSubject,
   type OptionContext, type OptionSource, type PlanContext, type PlanSource, type ProjectRecord,
   type PublishRequestV3, type PublishResultV3, type RecordAct, type RecordFreeze,
@@ -28,6 +30,8 @@ import { validatePngCrop, validatePngCropMetadata } from './comment-crops.ts';
 import {parseJobPartsIdentity} from './job-source.ts';
 import {parseControlPart, parseControlView} from './control.ts';
 import {EMIT_UNPINNED_CREATE_FIELDS} from './create-pin-gate.ts';
+import {canonicalJson} from './canonical-json.ts';
+import {MESH_EDIT_MAX_OPS, type Vec} from './mesh-edit.ts';
 
 export type {
   JobInterviewJson,
@@ -46,17 +50,9 @@ export function jobHash(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-/** Private replay digests only. This is not a mesh payload/source hash format. */
+/** Private replay digest. Preserve the original serializer for persisted request identity. */
 export function requestDigest(value: unknown): string {
-  const sorted = (item: unknown): unknown => {
-    if (Array.isArray(item)) return item.map(sorted);
-    if (item !== null && typeof item === 'object') {
-      return Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
-        .map(([key, child]) => [key, sorted(child)]));
-    }
-    return item;
-  };
-  return jobHash(JSON.stringify(sorted(value)));
+  return jobHash(canonicalJson(value));
 }
 
 export function sameCapability(given: string | null, expected: string): boolean {
@@ -1432,12 +1428,104 @@ function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
 
 /** Public @6 decoder. The UI finalizers write checkpoint, parts, rig/post verdict and signoff acts at @6 (#713). */
 export function parseCommentsAct(raw: unknown): JobCommentsAct {
-  return decodeCommentsAct(raw, false) as JobCommentsAct;
+  return decodeCommentsAct(raw, JOB_COMMENTS_ACT_SCHEMA) as JobCommentsAct;
 }
 
 /** Public @7 decoder: the @6 rules plus an optional `context` on each comment. @6 input refuses. */
 export function parseContextCommentsAct(raw: unknown): JobContextCommentsAct {
-  return decodeCommentsAct(raw, true) as JobContextCommentsAct;
+  return decodeCommentsAct(raw, JOB_COMMENT_CONTEXT_ACT_SCHEMA) as JobContextCommentsAct;
+}
+
+/** Public @8 decoder. Model freshness and topology are checked by the writer. */
+export function parseMeshEditsAct(raw: unknown): JobMeshEditsAct {
+  return decodeCommentsAct(raw, JOB_MESH_EDITS_ACT_SCHEMA) as JobMeshEditsAct;
+}
+
+export function meshEditDigest(edit: JobMeshEditValue): JobSha256 {
+  return jobHash(canonicalJson(edit));
+}
+
+function meshNumber(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || Object.is(raw, -0)) throw new JobError('JOB_ACT_INVALID');
+  return raw;
+}
+
+function meshPair(raw: unknown, parse: (value: unknown) => number): Vec {
+  if (!Array.isArray(raw) || raw.length !== 2) throw new JobError('JOB_ACT_INVALID');
+  return [parse(raw[0]), parse(raw[1])];
+}
+
+function roundedMeshPair(raw: unknown): void {
+  const pair = meshPair(raw, meshNumber);
+  // A multiply-round-divide pass can change an already rounded large double.
+  if (pair.some(n => Number(n.toFixed(2)) !== n)) throw new JobError('JOB_ACT_INVALID');
+}
+
+const meshIndex = (raw: unknown): number => jobInteger(meshNumber(raw));
+
+function validateMeshOp(raw: unknown): void {
+  const op = (raw as {op?: unknown} | null)?.op;
+  switch (op) {
+    case 'move': {
+      const move = commentsObject(raw, ['op', 'v', 'from', 'to']);
+      meshIndex(move.v); meshPair(move.from, meshNumber); roundedMeshPair(move.to);
+      break;
+    }
+    case 'add': {
+      const add = commentsObject(raw, ['op', 'at'], ['onEdge']);
+      roundedMeshPair(add.at);
+      if (Object.hasOwn(add, 'onEdge')) meshPair(add.onEdge, meshIndex);
+      break;
+    }
+    case 'remove':
+      meshIndex(commentsObject(raw, ['op', 'v']).v);
+      break;
+    case 'edge':
+    case 'unedge': {
+      const edge = commentsObject(raw, ['op', 'a', 'b']);
+      meshIndex(edge.a); meshIndex(edge.b);
+      break;
+    }
+    default:
+      throw new JobError('JOB_ACT_INVALID');
+  }
+}
+
+function validateMeshEdit(raw: unknown): asserts raw is JobMeshEditValue {
+  const edit = commentsObject(raw, ['slot', 'skin', 'attachment', 'basis', 'source', 'ops']);
+  if (edit.basis !== 'setup' || [edit.slot, edit.skin, edit.attachment].some(name => typeof name !== 'string' || !name)) {
+    throw new JobError('JOB_ACT_INVALID');
+  }
+  const source = commentsObject(edit.source, ['vertexCount', 'triangleCount', 'hullLength', 'hash', 'frame', 'positions']);
+  const vertexCount = meshIndex(source.vertexCount);
+  meshIndex(source.triangleCount); meshIndex(source.hullLength); jobSha(source.hash);
+  const frame = commentsObject(source.frame, ['width', 'height']);
+  if (meshNumber(frame.width) <= 0 || meshNumber(frame.height) <= 0 ||
+      !Array.isArray(source.positions) || source.positions.length !== vertexCount) throw new JobError('JOB_ACT_INVALID');
+  for (const position of source.positions) meshPair(position, meshNumber);
+  if (!Array.isArray(edit.ops) || !edit.ops.length || edit.ops.length > MESH_EDIT_MAX_OPS) throw new JobError('JOB_ACT_INVALID');
+  for (const op of edit.ops) validateMeshOp(op);
+}
+
+/** Structures and digests only. The retained model is the writer's source of topology and freshness. */
+export function parseMeshEdits(raw: unknown): readonly JobMeshEdit[] {
+  return asCode(() => {
+    if (!Array.isArray(raw) || !raw.length) throw new JobError('JOB_ACT_INVALID');
+    const seen = new Set<string>();
+    let previousOrder: string | undefined;
+    for (const item of raw) {
+      const {edit, sha256} = commentsObject(item, ['edit', 'sha256']);
+      validateMeshEdit(edit);
+      const identity = [edit.skin, edit.slot, edit.attachment];
+      const order = identity.join('/'), key = JSON.stringify(identity);
+      if (seen.has(key) || (previousOrder !== undefined && order < previousOrder) || jobSha(sha256) !== meshEditDigest(edit)) {
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      seen.add(key);
+      previousOrder = order;
+    }
+    return structuredClone(raw) as JobMeshEdit[];
+  }, 'JOB_ACT_INVALID');
 }
 
 /** The comments act a writer sends. With EMIT_UNPINNED_CREATE_FIELDS off, contexts are dropped and @6 goes out. */
@@ -1450,10 +1538,23 @@ export function commentsActForEmission(act: JobCommentsAct | JobContextCommentsA
   return schema === JOB_COMMENTS_ACT_SCHEMA ? parseCommentsAct(next) : parseContextCommentsAct(next);
 }
 
-function decodeCommentsAct(raw: unknown, withContext: boolean): JobCommentsAct | JobContextCommentsAct {
+/** A writer must opt in to the Create pin gate before it can project mesh evidence. */
+export function meshEditsActForEmission(act: JobCommentsAct | (Extract<JobCommentsAct, {kind: 'review-verdict'}> & {
+  readonly value: {readonly meshEdits: readonly JobMeshEdit[]};
+}), emitMeshEdits: boolean): JobCommentsAct | Extract<JobAct, {schema: typeof JOB_MESH_EDITS_ACT_SCHEMA}> {
+  if (!Object.hasOwn(act.value, 'meshEdits')) {
+    parseCommentsAct(act);
+    return act;
+  }
+  if (!emitMeshEdits) throw new JobError('JOB_ACT_KIND_DISABLED');
+  return parseMeshEditsAct({...act, schema: JOB_MESH_EDITS_ACT_SCHEMA}) as Extract<JobAct, {schema: typeof JOB_MESH_EDITS_ACT_SCHEMA}>;
+}
+
+function decodeCommentsAct(raw: unknown, schema: JobCommentsAct['schema'] | JobContextCommentsAct['schema'] | JobMeshEditsAct['schema']):
+  JobCommentsAct | JobContextCommentsAct | JobMeshEditsAct {
   return asCode(() => {
     const item = commentsObject(raw, ['schema', 'actId', 'jobId', 'askId', 'publicationId', 'kind', 'authority', 'at', 'source', 'value'], ['still']);
-    if (item.schema !== (withContext ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA)) throw new JobError('JOB_ACT_INVALID');
+    if (item.schema !== schema) throw new JobError('JOB_ACT_INVALID');
     for (const key of ['actId', 'jobId', 'askId', 'publicationId']) jobId(item[key]);
     parseHumanAuthority(item.authority, 'JOB_ACT_INVALID');
     if (typeof item.at !== 'string' || !Number.isFinite(Date.parse(item.at))) throw new JobError('JOB_ACT_INVALID');
@@ -1465,8 +1566,9 @@ function decodeCommentsAct(raw: unknown, withContext: boolean): JobCommentsAct |
     };
     const keys = typeof item.kind === 'string' && Object.hasOwn(fields, item.kind) ? fields[item.kind] : undefined;
     if (!keys) throw new JobError('JOB_ACT_INVALID');
-    const value = commentsObject(item.value, keys);
-    const comments = withContext ? decodeComments(value.comments, source, true) : parseComments(value.comments, source);
+    const at8 = schema === JOB_MESH_EDITS_ACT_SCHEMA;
+    const value = commentsObject(item.value, keys, at8 && item.kind === 'review-verdict' ? ['meshEdits'] : []);
+    const comments = schema === JOB_COMMENTS_ACT_SCHEMA ? parseComments(value.comments, source) : decodeComments(value.comments, source, true);
     if (comments.some(comment => comment.anchor && 'side' in comment.anchor)) throw new JobError('JOB_ACT_INVALID');
     if ((comments as readonly JobContextComment[]).some(comment => comment.context?.subject &&
         comment.context.subject.ask.kind !== item.kind)) throw new JobError('JOB_ACT_INVALID');
@@ -1492,13 +1594,22 @@ function decodeCommentsAct(raw: unknown, withContext: boolean): JobCommentsAct |
     if ('record' in source) validateRecordAskSubject(item.kind === 'checkpoint' ? {kind: item.kind, checkpointId: value.checkpointId} :
       {kind: item.kind, stage: value.stage}, source);
     const rig = item.kind === 'review-verdict' && value.stage === 'rig-review';
+    let meshEdits: readonly JobMeshEdit[] | undefined;
+    if (at8 && Object.hasOwn(value, 'meshEdits')) {
+      if (!rig || value.verdict !== 'changes-requested') throw new JobError('JOB_ACT_INVALID');
+      meshEdits = parseMeshEdits(value.meshEdits);
+    }
+    if (at8 && item.kind === 'review-verdict' && value.verdict === 'changes-requested' && !comments.length && !meshEdits) {
+      throw new JobError('JOB_ACT_INVALID');
+    }
     if (rig) {
       const still = commentsObject(item.still, ['path', 'sha256', 'camera', 'frame'], ['animation']);
       if (still.path !== jobSha(still.sha256) + '.png' || still.camera !== 'fixed' ||
           (still.frame === 'setup' ? 'animation' in still : typeof still.frame !== 'number' || !Number.isFinite(still.frame) ||
             still.frame < 0 || typeof still.animation !== 'string' || !still.animation)) throw new JobError('JOB_ACT_INVALID');
     } else if ('still' in item) throw new JobError('JOB_ACT_INVALID');
-    return {...structuredClone(item), source, value: {...value, comments}} as unknown as JobCommentsAct | JobContextCommentsAct;
+    return {...structuredClone(item), source, value: {...value, comments, ...(meshEdits ? {meshEdits} : {})}} as unknown as
+      JobCommentsAct | JobContextCommentsAct | JobMeshEditsAct;
   }, 'JOB_ACT_INVALID');
 }
 
@@ -1527,11 +1638,15 @@ export async function jobBody(request: Request, maximum = jobBodyLimit): Promise
       chunks.push(value);
     }
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
-    const hasCommentImages = ['parts-verdict', 'review-verdict', 'checkpoint', 'signoff', 'reopen'].includes(value?.kind) &&
-      /"png":"data:image\/png;base64,/.test(JSON.stringify(value?.value));
-    const rigCapture = value?.kind === 'review-verdict' && value?.value?.stage === 'rig-review' && value.capture;
-    if (size > jobBodyLimit && !(maximum > jobBodyLimit && (rigCapture || hasCommentImages))) {
+    if (value?.value != null && Object.hasOwn(value.value, 'meshEdits') &&
+        Buffer.byteLength(canonicalJson(value.value.meshEdits)) > jobBodyLimit) {
       throw new JobError('JOB_BODY_LIMIT');
+    }
+    if (size > jobBodyLimit) {
+      const hasCommentImages = ['parts-verdict', 'review-verdict', 'checkpoint', 'signoff', 'reopen'].includes(value?.kind) &&
+        /"png":"data:image\/png;base64,/.test(JSON.stringify(value?.value));
+      const rigCapture = value?.kind === 'review-verdict' && value?.value?.stage === 'rig-review' && value.capture;
+      if (!(maximum > jobBodyLimit && (rigCapture || hasCommentImages))) throw new JobError('JOB_BODY_LIMIT');
     }
     return value;
   } catch (error) {

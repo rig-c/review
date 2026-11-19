@@ -85,6 +85,7 @@ import {
  type JobComment, type JobCommentAnchor, type JobCommentFeedbackAnchor, type JobCommentPartsAnchor, type JobCommentImageAnchor,
  type JobCommentsAct, type JobCommentsActValues, type ReviewCommentsSession, type CompareCommentsSession, type PartsCommentsVerdict,
  type JobCommentContext, type JobContextComment, type JobContextCommentsAct,
+ type JobMeshEditValue, type JobMeshEdit, type JobMeshEditsAct,
 } from '@rig-c/review/job-host';
 import * as publicHost from '@rig-c/review/job-host';
 
@@ -110,6 +111,7 @@ export type PublicTypes = [
  JobComment, JobCommentAnchor, JobCommentFeedbackAnchor, JobCommentPartsAnchor, JobCommentImageAnchor,
  JobCommentsAct, JobCommentsActValues, ReviewCommentsSession, CompareCommentsSession, PartsCommentsVerdict,
  JobCommentContext, JobContextComment, JobContextCommentsAct,
+ JobMeshEditValue, JobMeshEdit, JobMeshEditsAct,
 ];
 // Review #713: JobAct admits fresh act@6 comments acts from the UI writers.
 export type JobActAdmitsComments = JobCommentsAct extends JobAct ? true : never;
@@ -128,7 +130,8 @@ const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', '
  'JOB_COMMENTS_ACT_SCHEMA', 'REVIEW_COMMENTS_SESSION_SCHEMA', 'REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA',
  'PARTS_COMMENTS_VERDICT_SCHEMA', 'parseCommentsAct', 'projectComments', 'parseCommentsSession',
  'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'projectSelectedCommentsFeedback',
- 'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct'];
+ 'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
+ 'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct'];
 assert(JSON.stringify(Object.keys(publicHost).sort()) === JSON.stringify(expectedExports.sort()), 'EXPORTS');
 assert(JOB_API_SCHEMA === 'rig-review/job-api@2' && JOB_ACT_SCHEMA === 'rig-review/act@2' &&
  JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <3.0.0' && JOB_PREVIOUS_DRAFT_SCHEMA === 'rig-review-previous-draft/1', 'SCHEMAS');

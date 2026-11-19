@@ -20,6 +20,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.refusal.JOB_MODEL_MISSING": "This request has no compiled model. The producer must publish a compiled model before requesting a rig verdict.",
   "JOB_ASK_UNSUPPORTED": "JOB_ASK_UNSUPPORTED",
   "job.refusal.JOB_ASK_UNSUPPORTED": "This request lacks a supported source or checkpoint mapping. The producer must publish the matching source and plan mapping before asking again.",
+  "In a job, press Request changes to send this edit; the producer rebuilds it.": "In a job, press Request changes to send this edit; the producer rebuilds it.",
+  "job.mesh.staleDraft": "Some saved mesh edits could not be restored on this model and will be left out.",
   "Comment · C": "Comment · C",
 
   "project.json": "project.json",
@@ -3513,6 +3515,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "client: preload": "client: preload",
   "{0} {1} \u00b7 {2} bytes \u00b7 HTTP {3}": "{0} {1} \u00b7 {2} bytes \u00b7 HTTP {3}",
   "job.submit.refused": "The request was refused — refresh the review, check the pending request and try again.",
+  "job.submit.JOB_ACT_KIND_DISABLED": "This version cannot submit mesh edits in jobs.",
   "job.submit.JOB_ACT_NOTHING_TO_SUBMIT": "No decision was selected — choose Approved, Changes requested or a checkpoint outcome.",
   "job.submit.JOB_STILL_CAPTURE_FAILED": "The rig image could not be captured — wait for the rig to finish drawing and try again.",
   "job.submit.JOB_STILL_BINDING_MISMATCH": "The displayed frame or source changed — wait for the current rig to load and submit again.",

@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeSync} from 'node:fs';
 import {join} from 'node:path';
-import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit, jobActDeliveryLimit, jobResponseBodyLimit,
-  type JobAct, type JobCommentsAct, type JobAgentRequest, type JobNextRequest, type JobNextValue } from './job-contract.ts';
-import { assertJobApiSchema, jobFailure, jobHash, jobId, jobInteger, jobObject, jobWaitLimitMs, parseJobRequest, parseCommentsAct } from './job-api.ts';
+import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit, jobActDeliveryLimit, jobResponseBodyLimit,
+  type JobAct, type JobCommentsAct, type JobMeshEditsAct, type JobAgentRequest, type JobNextRequest, type JobNextValue } from './job-contract.ts';
+import { assertJobApiSchema, jobFailure, jobHash, jobId, jobInteger, jobObject, jobWaitLimitMs, parseJobRequest, parseCommentsAct, parseMeshEditsAct } from './job-api.ts';
 import { JobError } from './job-store.ts';
 import {validatePngBytes} from './comment-crops.ts';
 import {destinationDirectory} from './destination-directory.ts';
@@ -145,15 +145,15 @@ async function consumerBytes(stream: ReadableStream<Uint8Array> | null, maximum:
   }
 }
 
-type ConsumerAct = JobAct | JobCommentsAct;
+type ConsumerAct = JobAct | JobCommentsAct | JobMeshEditsAct;
 
 function parseConsumerAct(bytes: Buffer, job: string, actId: string): ConsumerAct {
   let value: unknown;
   try { value = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes)); }
   catch { throw new JobError('JOB_REQUEST_INVALID'); }
   const act = jobObject(value, ['schema', 'actId', 'jobId', 'askId', 'publicationId', 'kind', 'authority', 'at', 'source', 'value', 'still']);
-  if (act.schema === JOB_COMMENTS_ACT_SCHEMA) {
-    const comments = parseCommentsAct(act);
+  if (act.schema === JOB_COMMENTS_ACT_SCHEMA || act.schema === JOB_MESH_EDITS_ACT_SCHEMA) {
+    const comments = act.schema === JOB_MESH_EDITS_ACT_SCHEMA ? parseMeshEditsAct(act) : parseCommentsAct(act);
     if (comments.jobId !== job || comments.actId !== actId) throw new JobError('JOB_ACT_INVALID');
     return comments;
   }
