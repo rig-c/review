@@ -248,10 +248,11 @@ export function createJobRigScreen(options: {
     const review = prepared.review;
     if(prepared.record){
       const record=prepared.record,backdrop=record.picture?host(record.picture,ready):null;
+      const question=record.inspection.interview?.questions[0];
       return {...(backdrop?.subject?{subject:backdrop.subject}:{}),access:{...(backdrop?.access??access),capability:null,
         headers:init=>{const headers=options.access.headers(init);headers.delete('X-Review-Capability');return headers;}},
         ownerActAccess:{capability:options.access.capability},
-        record:{publicationId:prepared.display.publication.publicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,missingPicture:record.inspection.interview?.questions.find(question=>question.missingPicture)?.missingPicture},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
+        record:{publicationId:prepared.display.publication.publicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,missingPicture:question?.missingPicture,scenePicture:question?.scenePicture},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},

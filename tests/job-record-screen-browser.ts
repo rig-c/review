@@ -369,6 +369,7 @@ async function postQuestionPictureChecks(){
      })()`);
      assert.ok(image.visible);
      assert.deepEqual(image.background,[17,91,203,255]);
+     assert.equal(await page!.evaluate<string>(`document.querySelector('#message').textContent`),'');
      assert.ok(new URL(image.src).pathname.startsWith(fixture.display.routes.apiBase+'interview/image/'));
      const response=await fetch(image.src);
      assert.equal(response.status,200);
