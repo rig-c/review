@@ -502,10 +502,10 @@ with the keys absent keep their existing contract. The Review-to-publisher
 pin gate applies in its existing direction. See
 [Previous accepted draft Difference](REVIEW_PACKAGE.md#previous-accepted-draft-difference).
 
-[Review #957](https://github.com/rig-c/review/issues/957) adds the previous-draft
+[Review #914](https://github.com/rig-c/review/issues/914) adds the previous-draft
 constant `JOB_PREVIOUS_DRAFT_SCHEMA` (`rig-review-previous-draft/1`), for twenty-nine runtime exports total after the 4.0.0 removal of `startJobHub` and `assertJobImageSetCapability`, plus the type-only `JobPreviousDraft`.
 
-[Review #962](https://github.com/rig-c/review/issues/962) adds the act@8 decoder
+[Review #952](https://github.com/rig-c/review/issues/952) adds the act@8 decoder
 `parseMeshEditsAct` and its constant `JOB_MESH_EDITS_ACT_SCHEMA`
 (`rig-review/act@8`), for thirty-one runtime exports total, plus the type-only
 `JobMeshEditValue`, `JobMeshEdit` and `JobMeshEditsAct`.
