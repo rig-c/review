@@ -54,7 +54,7 @@ type AskTrigger={count:number;text:string;visible:boolean;hidden:boolean;disable
 type JoinedScreen={
  language:string;width:number;height:number;topbars:number;viewports:number;openDialogs:string[];modals:number;dialogViewers:number;
  forms:number;noteInputs:number;columns:string[];modelCanvas:number;modelReason:string;questionLabel:string;
- pendingAsk:AskTrigger|null;pendingRecordAsk:AskTrigger|null;actRowHidden:boolean;
+ pendingAsk:AskTrigger|null;pendingRecordAsk:AskTrigger|null;
  saveDisabled:boolean;commentHidden:boolean;controls:string[];imageModes:string[];
  drawerOpen:boolean;formInDrawer:boolean;inspectorCollapsed:boolean;
  rect:{left:number;top:number;right:number;bottom:number};
@@ -104,7 +104,6 @@ try{
     modelCanvas:document.querySelectorAll('#rig-root canvas').length,modelReason:document.getElementById('rig-empty').textContent,
     questionLabel:document.querySelector(${JSON.stringify(selectedTab)}).textContent.trim(),
     pendingAsk:askTrigger('workspace-pending-ask'),pendingRecordAsk:askTrigger('workspace-pending-record-ask'),
-    actRowHidden:document.getElementById('workspace-act-row').hidden,
     saveDisabled:document.getElementById('save').disabled,commentHidden:document.getElementById('stage-comment').hidden,
     controls:[...document.querySelectorAll('${sharedControls}')].map(node=>node.id),
     imageModes:[...document.querySelectorAll('#view-menu [data-view]')].map(node=>node.dataset.view),

@@ -263,6 +263,11 @@ async function assertPaintingPersists(previous:Painting){
 type StripState={tabs:{id:string;text:string;disabled:boolean}[];selected:string|null;selectedVisible:boolean;questionFirst:boolean;reportOverflow:boolean;actRowVisible:boolean;ordinaryPanelVisible:boolean};
 const stripState=()=>page!.evaluate<StripState>(`(()=>{const row=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])'),visible=n=>!!n&&!n.hidden&&n.getClientRects().length>0&&getComputedStyle(n).display!=='none';const buttons=[...row.querySelectorAll(':scope>button[role=tab]')],selected=row.querySelector('[aria-selected=true]');return {tabs:buttons.filter(visible).map(n=>({id:n.dataset.blockTarget,text:n.textContent,disabled:n.disabled})),selected:selected?.dataset.blockTarget??null,selectedVisible:visible(selected),questionFirst:buttons[0]?.dataset.blockTarget==='question',reportOverflow:!!row.querySelector('[data-block-target=report-panel][data-tab-overflow]'),actRowVisible:visible(document.querySelector('#workspace-act-row')),ordinaryPanelVisible:visible(document.querySelector('#selected-part'))};})()`);
 async function selectBlock(target:string){
+ if(target==='feedback'){
+  await click(page!,'#stage-comment');
+  await wait("!!document.querySelector('#inspector-feedback:not([hidden])')&&document.querySelector('#workspace-interview-answer').hidden",'986 Comments active');
+  return;
+ }
  const selector=`.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target="${target}"]`;
  if(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}).hasAttribute('data-tab-overflow')`)){
   await click(page!,'.workspace-bottom-tabs>.block-row:not([hidden]) .workspace-tabs-more');await click(page!,`.workspace-tabs-menu:not([hidden]) [data-block-more-target="${target}"]`);
@@ -902,7 +907,6 @@ async function liveQuestionDraftChecks(){
      observation.optionImagesShown=imageCount;
      const painting=await rememberPainting();
      await selectBlock('feedback');
-     assert.equal((await stripState()).selected,'feedback');
      await assertPaintingPersists(painting);
      await click(page!,'#workspace-pending-ask');await waitForQuestion(selector);
      await assertPaintingPersists(painting);
