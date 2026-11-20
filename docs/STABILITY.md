@@ -516,6 +516,35 @@ constant `JOB_PREVIOUS_DRAFT_SCHEMA` (`rig-review-previous-draft/1`), for twenty
 (`rig-review/act@8`), for thirty-one runtime exports total, plus the type-only
 `JobMeshEditValue`, `JobMeshEdit` and `JobMeshEditsAct`.
 
+### Host-bound act wait
+
+[Review #1005](https://github.com/rig-c/review/issues/1005) adds the host-bound
+finalized-act waiter `waitForJobAct`, for thirty-two runtime exports total, plus
+the type-only `JobActWaitOptions` and `JobActWaitOutcome`.
+
+```ts
+function waitForJobAct(host: JobOwnerHost, options: JobActWaitOptions): Promise<JobActWaitOutcome>;
+// options: {after: JobCursor | null; deadlineMs: number; signal?: AbortSignal}
+// outcome: {kind: 'act' | 'closed'; next: JobNextValue; cursor}
+//        | {kind: 'timeout'; code: 'JOB_NEXT_TIMEOUT'; next: JobNextValue | null; cursor}
+```
+
+It is the `rig-review session next --until act` loop, shared code rather than a
+copy, sent through `host.ports.handleJobApi` with the host's existing agent
+capability. `deadlineMs` is an integer from 1 to 600000. Each server `next`
+stays bounded to 30000 ms, and the wait advances the cursor through unrelated
+publication and ask events. `cursor` is the cursor to resume from. An invalid
+deadline refuses `JOB_REQUEST_INVALID` before any request. A refused `next`
+throws its `JobError` code. Abort rejects with the signal's reason and clears
+the wait's timers.
+
+A strict `reuseOnly` attachment opens its own read-only session, which the
+live host's in-process notifications never reach. Its `next` therefore watches
+the shared store's revision with the existing 250 ms subscribe watcher, so a
+finalized act the live host commits wakes it. A write that adds no deliverable
+event, such as a display receipt, keeps the wait open, and a refused save
+commits nothing. No API verb, act field or capability changes.
+
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
@@ -550,6 +579,7 @@ values from the frozen semantic contract.
 - `JOB_PLAN_BOUND_SIGNOFF_STAGES`
 - `JOB_CONSUMER_AUTH_MODE`
 - `JOB_ERROR_CODES`
+- `waitForJobAct`
 
 The exact type-only exports follow. Their existing definitions in
 `src/job-contract.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-session.ts`,
@@ -566,6 +596,8 @@ without aliases or copied wire shapes.
 - `JobSessionOptions`
 - `JobSession`
 - `JobWorkerOptions`
+- `JobActWaitOptions`
+- `JobActWaitOutcome`
 - `JobPublicationReader`
 - `JobPublishedContext`
 - `JobEnabledActKind`
@@ -723,7 +755,7 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer checks the thirty-one runtime exports and every listed type, including
+A consumer checks the thirty-two runtime exports and every listed type, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and

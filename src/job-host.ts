@@ -10,6 +10,8 @@ export type {
   JobHostAttachFailure,
 } from './job-front.ts';
 export type {JobSessionOptions, JobSession} from './job-session.ts';
+export {waitForJobAct} from './job-act-wait.ts';
+export type {JobActWaitOptions, JobActWaitOutcome} from './job-act-wait.ts';
 export type {JobWorkerOptions} from './job-worker.ts';
 export {prepareJobRecordSource} from './job-source.ts';
 export type {

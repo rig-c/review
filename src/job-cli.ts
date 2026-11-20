@@ -70,7 +70,7 @@ export function parseJobCLI(args: readonly string[]): { readonly endpoint: strin
   if (verb === 'next') {
     let waitMs = Number(values.get('wait-ms') ?? '0');
     if (values.has('until')) {
-      if (values.get('until') !== 'act' || !Number.isSafeInteger(waitMs) || waitMs < 1 || waitMs > 600_000) {
+      if (values.get('until') !== 'act' || !Number.isSafeInteger(waitMs) || waitMs < 1 || waitMs > jobActWaitLimitMs) {
         throw new JobError('JOB_REQUEST_INVALID');
       }
       waitUntilActMs = waitMs;
@@ -406,13 +406,30 @@ function nextValue(value: unknown, request: JobNextRequest): JobNextValue {
   return batch as unknown as JobNextValue;
 }
 
-async function waitForAct(endpoint: string, initial: JobNextRequest, waitMs: number, capability: string,
-  write: (text: string) => void, options: JobCLIOptions): Promise<void> {
+/** The longest whole act wait an agent may ask for; each server `next` stays within `jobWaitLimitMs`. */
+export const jobActWaitLimitMs = 600_000;
+
+/** Outcome of one bounded act wait. `value` is the verbatim accepted response envelope. */
+export type JobActWaitResult =
+  | {readonly kind: 'act' | 'closed'; readonly value: unknown; readonly batch: JobNextValue}
+  | {readonly kind: 'refused'; readonly value: unknown}
+  | {readonly kind: 'timeout'; readonly value: unknown; readonly batch: JobNextValue | null; readonly cursor: string | null};
+
+/** One `next` exchange. The transport must honour `signal` and return the response unread. */
+export type JobNextTransport = (request: JobNextRequest, signal: AbortSignal) => Promise<Response>;
+
+/**
+ * Transport-independent act wait shared by `job next --until act` and the host-bound
+ * `waitForJobAct`: cursor progression, one monotonic deadline, caller cancellation and
+ * the act / closed / refusal / timeout outcome. Caller cancellation rejects with its reason.
+ */
+export async function waitForActBatch(send: JobNextTransport, initial: JobNextRequest, waitMs: number,
+  signal?: AbortSignal): Promise<JobActWaitResult> {
   const controller = new AbortController();
   const timeout = new Error('JOB_NEXT_TIMEOUT');
-  const cancel = () => controller.abort(options.signal?.reason);
-  options.signal?.addEventListener('abort', cancel, {once: true});
-  if (options.signal?.aborted) cancel();
+  const cancel = () => controller.abort(signal?.reason);
+  signal?.addEventListener('abort', cancel, {once: true});
+  if (signal?.aborted) cancel();
   const deadline = performance.now() + waitMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expire = () => {
@@ -436,16 +453,13 @@ async function waitForAct(endpoint: string, initial: JobNextRequest, waitMs: num
   }
   let after = initial.after;
   let lastResponse: unknown;
+  let lastBatch: JobNextValue | null = null;
   try {
     for (;;) {
       const budget = remaining();
       const request = {...initial, after, waitMs: Math.max(0, Math.floor(Math.min(budget, jobWaitLimitMs)))};
       // A delayed transport must also dispose its body if cancellation won the race.
-      const pending = (options.fetch ?? fetch)(endpoint, {
-        method: 'POST', redirect: 'error', signal: controller.signal,
-        headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + capability},
-        body: JSON.stringify(request),
-      }).then(response => {
+      const pending = send(request, controller.signal).then(response => {
         if (controller.signal.aborted) {
           try { void response.body?.cancel().catch(() => {}); } catch {}
           controller.signal.throwIfAborted();
@@ -455,36 +469,42 @@ async function waitForAct(endpoint: string, initial: JobNextRequest, waitMs: num
       const response = await Promise.race([pending, interrupted]);
       const value = await readJobResponse(response, interrupted);
       remaining();
-      if (!response.ok || (value as {ok?: unknown}).ok === false) {
-        write(JSON.stringify(value));
-        process.exitCode = 1;
-        return;
-      }
+      if (!response.ok || (value as {ok?: unknown}).ok === false) return {kind: 'refused', value};
       const batch = nextValue(value, request);
       remaining();
-      if (batch.events.some(event => event.type === 'act')) {
-        write(JSON.stringify(value));
-        return;
-      }
-      if (batch.status === 'closed' || batch.events.some(event => event.type === 'closed')) {
-        write(JSON.stringify(value));
-        console.error('JOB_CLOSED');
-        process.exitCode = 1;
-        return;
-      }
+      if (batch.events.some(event => event.type === 'act')) return {kind: 'act', value, batch};
+      if (batch.status === 'closed' || batch.events.some(event => event.type === 'closed')) return {kind: 'closed', value, batch};
       lastResponse = value;
+      lastBatch = batch;
       after = batch.cursor;
     }
   } catch (error) {
     if (!controller.signal.aborted && performance.now() >= deadline) controller.abort(timeout);
     if (controller.signal.reason !== timeout) throw error;
-    if (lastResponse !== undefined) write(JSON.stringify(lastResponse));
-    console.error('JOB_NEXT_TIMEOUT');
-    process.exitCode = 3;
+    return {kind: 'timeout', value: lastResponse, batch: lastBatch, cursor: after};
   } finally {
     clearTimeout(timer);
-    options.signal?.removeEventListener('abort', cancel);
+    signal?.removeEventListener('abort', cancel);
   }
+}
+
+async function waitForAct(endpoint: string, initial: JobNextRequest, waitMs: number, capability: string,
+  write: (text: string) => void, options: JobCLIOptions): Promise<void> {
+  const result = await waitForActBatch((request, signal) => (options.fetch ?? fetch)(endpoint, {
+    method: 'POST', redirect: 'error', signal,
+    headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + capability},
+    body: JSON.stringify(request),
+  }), initial, waitMs, options.signal);
+  if (result.kind === 'timeout') {
+    if (result.value !== undefined) write(JSON.stringify(result.value));
+    console.error('JOB_NEXT_TIMEOUT');
+    process.exitCode = 3;
+    return;
+  }
+  write(JSON.stringify(result.value));
+  if (result.kind === 'act') return;
+  if (result.kind === 'closed') console.error('JOB_CLOSED');
+  process.exitCode = 1;
 }
 
 export async function jobCommand(args: readonly string[], options: JobCLIOptions = {}): Promise<void> {
