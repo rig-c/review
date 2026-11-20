@@ -1661,7 +1661,7 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
    unregisterQuestion=inspectorBlocks!.register({id:'question',panel:questionPanel,label:'Question',position:'first'});
    inspectorBlocks!.restore({rig:'question',playback:'question'});reveal();
   }
-  if(questionForms.every(form=>form.dataset.interviewAnswered==='true'))answerSaved=true;
+  if(questionForms.every(form=>form.dataset.interviewAnswered==='true')){answerSaved=true;firstPublicationPrompt=false;}
  }else{
   unregisterQuestion?.();unregisterQuestion=null;rigAsk.onclick=null;
  }

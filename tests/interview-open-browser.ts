@@ -146,6 +146,10 @@ try{
   }
   await writeFile(join(out,prefix+'-workspace.png'),await page.screenshot());
   await switchImage(0,32);
+  if(height===360){
+   await click(page,'#workspace-drawer-inspectorHeight .workspace-drawer-close');
+   await wait("!document.querySelector('#workspace-drawer-inspectorHeight[open]')");
+  }
   await click(page,'#workspace-pending-ask');
   await wait(`!!document.querySelector(${JSON.stringify(selectedTab)})&&${visibleImage}===32&&!document.querySelector('dialog:modal')`);
   cases.push({...state,firstImage:new URL(firstImage).pathname,secondImage:new URL(secondImage).pathname});

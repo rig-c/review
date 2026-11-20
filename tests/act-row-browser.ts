@@ -100,7 +100,12 @@ async function capture(page:InputCdpSession,out:string,name:string){
  await writeFile(join(out,name+'.png'),await page.screenshot());return state;
 }
 function assertPending(state:any,mode:Mode,width:number,expectedFooter?:string){
- if(mode==='rig'||mode==='parts')assert.equal(state.footerMessage,expectedFooter,'pending verdict preserves origin/main publication-label footer');
+ if(mode==='rig')assert.equal(state.footerMessage,expectedFooter,'pending Rig verdict preserves its publication label');
+ if(mode==='parts'){
+  const catalog=state.language==='ko'?koCatalog:enCatalog;
+  assert.ok([expectedFooter,catalog['Parts ready. Source files remain unchanged.']].includes(state.footerMessage),
+   'pending Parts verdict keeps its publication label or ready message');
+ }
  for(const part of state.footer){assert.ok(part.rect.left>=0&&part.rect.right<=width&&part.rect.top>=state.footer[0].rect.top&&part.rect.bottom<=state.footer[0].rect.bottom,'shown footer item inside viewport and footer: '+part.id);assert.ok(part.scrollWidth<=part.clientWidth+1&&part.scrollHeight<=part.clientHeight+1,'shown footer text fits: '+part.id);}
  assert.equal(state.bars,1);assert.equal(state.rows,1);assert.equal(state.rowVisible,true);assert.equal(state.direct,true);assert.equal(state.home,'workspace-act-row');
  assert.equal(state.headerVisible,mode!=='embedded-rig');
