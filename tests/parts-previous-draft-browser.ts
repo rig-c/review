@@ -15,13 +15,29 @@ import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.t
 type Language = 'en' | 'ko';
 type Fixture = Awaited<ReturnType<typeof partsDifferenceJobFixture>>;
 type Case = 'both' | 'painting-only' | 'previous-only';
+type OperandRowGeometry = {
+  viewportWidth: number;
+  viewportHeight: number;
+  selectTop: number;
+  overlayTop: number;
+  labelTop: number;
+  selectWidth: number;
+  selectClientWidth: number;
+  selectScrollWidth: number;
+  prefixScrollWidth: number;
+  prefixClientWidth: number;
+  sameRow: boolean;
+  prefixFitsInMinWidth: boolean;
+};
 type OperandControl = {
   value: string;
   visible: boolean;
   disabled: boolean;
   accessibleLabels: string[];
   title: string;
-  options: {value: string; label: string; disabled: boolean}[];
+  parentIsOperandRow: boolean;
+  sameRowAsOperandControls: boolean;
+  options: {value: string; label: string; title: string; disabled: boolean}[];
 };
 type DifferenceReadback = {
   path: string; operand: string | null; threshold: string | null; footprints: string | null;
@@ -68,6 +84,12 @@ function operandControl(page: InputCdpSession) {
     const node = document.querySelector(${JSON.stringify(operandSelector)});
     if (!node) return null;
     const labels = [...node.labels];
+    const row = document.querySelector('.workspace-secondary-toolbar');
+    const controlLabel = node.parentElement;
+    const overlayLabel = document.getElementById('parts-overlay')?.parentElement;
+    const opacityLabel = document.getElementById('parts-opacity')?.parentElement;
+    const rect = controlLabel?.getBoundingClientRect();
+    const peerRects = [overlayLabel, opacityLabel].map(peer => peer?.getBoundingClientRect()).filter(Boolean);
     return {value:node.value, visible:node.checkVisibility(), disabled:node.disabled,
       accessibleLabels:labels.map(label=>{
         const copy=label.cloneNode(true);
@@ -75,7 +97,11 @@ function operandControl(page: InputCdpSession) {
         return copy.textContent.trim();
       }),
       title:node.title,
-      options:[...node.options].map(option=>({value:option.value,label:option.label,disabled:option.disabled}))};
+      parentIsOperandRow:!!row && controlLabel?.parentElement === row
+        && overlayLabel?.parentElement === row && opacityLabel?.parentElement === row,
+      sameRowAsOperandControls:!!rect && peerRects.length === 2
+        && peerRects.every(peer => Math.abs((peer.top + peer.height / 2) - (rect.top + rect.height / 2)) <= 4),
+      options:[...node.options].map(option=>({value:option.value,label:option.label,title:option.title,disabled:option.disabled}))};
   })()`);
 }
 
@@ -84,6 +110,73 @@ function thresholdControls(page: InputCdpSession) {
     node.checkVisibility() && (/threshold/i.test(node.id) ||
       [node.getAttribute('aria-label'), ...[...node.labels??[]].map(label=>label.textContent)]
         .some(label=>/^(Threshold|임계값)$/i.test(label?.trim()??'')))).length`);
+}
+
+function operandRowGeometry(page: InputCdpSession, viewportWidth: number, viewportHeight: number, prefix: string) {
+  return page.evaluate<OperandRowGeometry>(`(() => {
+    const select = document.getElementById('parts-difference-operand');
+    const label = document.getElementById('parts-difference-operand-label');
+    const overlay = document.getElementById('parts-overlay')?.parentElement;
+    const selectRect = select.getBoundingClientRect();
+    const labelRect = label.getBoundingClientRect();
+    const overlayRect = overlay.getBoundingClientRect();
+    const cs = getComputedStyle(select);
+    const probe = document.createElement('span');
+    probe.style.cssText = 'flex:none;display:inline-block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;box-sizing:border-box;'
+      + 'font:' + cs.font + ';padding-left:' + cs.paddingLeft + ';padding-right:' + cs.paddingRight
+      + ';border-left:' + cs.borderLeft + ';border-right:' + cs.borderRight
+      + ';width:' + (cs.minWidth && cs.minWidth !== '0px' ? cs.minWidth : selectRect.width + 'px');
+    probe.textContent = ${JSON.stringify(prefix)};
+    document.body.append(probe);
+    const prefixScrollWidth = probe.scrollWidth;
+    const prefixClientWidth = probe.clientWidth;
+    const prefixFitsInMinWidth = prefixScrollWidth <= prefixClientWidth;
+    probe.remove();
+    return {
+      viewportWidth: ${viewportWidth},
+      viewportHeight: ${viewportHeight},
+      selectTop: Math.round(selectRect.top * 100) / 100,
+      overlayTop: Math.round(overlayRect.top * 100) / 100,
+      labelTop: Math.round(labelRect.top * 100) / 100,
+      selectWidth: Math.round(selectRect.width * 100) / 100,
+      selectClientWidth: select.clientWidth,
+      selectScrollWidth: select.scrollWidth,
+      prefixScrollWidth,
+      prefixClientWidth,
+      sameRow: Math.abs((overlayRect.top + overlayRect.height / 2) - (selectRect.top + selectRect.height / 2)) <= 4,
+      prefixFitsInMinWidth,
+    };
+  })()`);
+}
+
+async function measureOperandRowViewports(page: InputCdpSession, lang: Language, key: string, shot: (suffix: string) => Promise<void>) {
+  const prefix = lang === 'ko' ? '이전 승인 초안' : 'Previous accepted draft';
+  const sizes: [number, number][] = [[1024, 768], [1120, 800], [1280, 800]];
+  const measurements: Record<string, OperandRowGeometry> = {};
+  for (const [w, h] of sizes) {
+    await page.setViewport(w, h);
+    await page.evaluate<void>('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))');
+    measurements[`${w}x${h}`] = await operandRowGeometry(page, w, h, prefix);
+    await shot(`previous-${w}x${h}`);
+  }
+  let lo = 960, hi = 1600;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    await page.setViewport(mid, 800);
+    await page.evaluate<void>('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))');
+    const g = await operandRowGeometry(page, mid, 800, prefix);
+    if (g.sameRow) hi = mid;
+    else lo = mid + 1;
+  }
+  await page.setViewport(1600, 1000);
+  await page.evaluate<void>('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))');
+  report[key + '-row-geometry'] = {viewports: measurements, narrowestOneRowWidth: lo};
+  console.log('OPERAND_ROW_GEOMETRY ' + JSON.stringify({key, viewports: measurements, narrowestOneRowWidth: lo}));
+  if (lang === 'ko') {
+    assert.equal(measurements['1120x800']?.sameRow, true, 'KO operand select must stay on one row with Overlay at 1120x800');
+    assert.equal(measurements['1280x800']?.sameRow, true, 'KO operand select must stay on one row with Overlay at 1280x800');
+    assert.equal(measurements['1120x800']?.prefixFitsInMinWidth, true, 'min-width must show "이전 승인 초안" in full');
+  }
 }
 
 function assertPaintingReads(reads: DifferenceReadback[]) {
@@ -96,14 +189,19 @@ function assertPaintingReads(reads: DifferenceReadback[]) {
 }
 
 function assertPreviousIdentity(control: OperandControl, fixture: Fixture, lang: Language) {
+  assert.equal(control.parentIsOperandRow, true, 'operand control must sit directly in the existing operand row');
+  assert.equal(control.sameRowAsOperandControls, true, 'operand control must share the operand row with Overlay and opacity');
   assert.deepEqual(control.accessibleLabels, [lang === 'ko' ? '비교 대상' : 'Compare with']);
   const choice = control.options.find(option => option.value === 'previous-draft');
   assert.ok(choice && !choice.disabled, 'the previous draft option is available');
   const draft = fixture.previousDraft?.draft;
   assert.ok(draft);
   const previous = lang === 'ko' ? '이전 승인 초안' : 'Previous accepted draft';
-  assert.equal(choice.label, `${previous} · ${draft.id} · ${draft.revision.slice(0, 12)}`);
+  assert.equal(choice.label, `${previous} · ${draft.id}`);
+  assert.equal(choice.label.includes(draft.revision.slice(0, 12)), false, 'option label must not carry the hash prefix');
+  assert.equal(choice.title, `${draft.id} · ${draft.revision}`);
   assert.equal(control.title, `${draft.id} · ${draft.revision}`);
+  assert.equal(control.title.includes(draft.revision.slice(0, 12)), true, 'tooltip must carry the hash prefix');
 }
 
 async function selectPrevious(page: InputCdpSession) {
@@ -275,8 +373,11 @@ async function runCase(page: InputCdpSession, lang: Language, variant: Case) {
     assert.equal(await thresholdControls(page), 0, 'Parts Difference keeps the fixed threshold without an input');
 
     if (variant === 'both') {
+      assert.equal(control.parentIsOperandRow, true, 'operand control must sit directly in the existing operand row');
+      assert.equal(control.sameRowAsOperandControls, true, 'operand control must share the operand row with Overlay and opacity');
       assert.equal(control.value, 'painting');
       assert.equal(control.disabled, false);
+      assert.equal(control.title, '');
       assertPaintingReads(await differenceReads(page));
       const before = (await differenceReads(page)).length;
       await selectPrevious(page);
@@ -287,6 +388,7 @@ async function runCase(page: InputCdpSession, lang: Language, variant: Case) {
       assert.equal(selected.value, 'previous-draft');
       report[key + '-selected-control'] = selected;
       assertPreviousIdentity(selected, fixture, lang);
+      await measureOperandRowViewports(page, lang, key, shot);
       const newReads = (await differenceReads(page)).slice(before);
       assert.equal(newReads.length, 1, 'previous-draft uses one whole-canvas request');
       await assertPreviousRaster(page, newReads, key);
