@@ -124,6 +124,21 @@ test('Bar 2: checkWebHardcodedStrings passes on web/, lists every exemption with
  expect(resTs.violations.some(v=>v.file==='web/main.ts'&&v.kind==='ts-string'&&v.text==='Planted hardcoded status message')).toBe(true);
 });
 
+test('Bar 2 entity decoding: &amp;lt; decodes once to &lt;, while &lt; decodes to < and &amp; to &',()=>{
+ const res=checkWebHardcodedStrings([
+  {
+   path:'web/planted.html',
+   content:'<button type="button">Double &amp;lt; escaped</button><button type="button">Single &lt; tag</button><button type="button">Bare &amp; sign</button>',
+  },
+ ],{catalog:{},exemptions:[]});
+ expect(res.ok).toBe(false);
+ expect(res.violations.map(v=>v.text)).toEqual([
+  'Double &lt; escaped',
+  'Single < tag',
+  'Bare & sign',
+ ]);
+});
+
 test('first-visit browser language resolution picks ko for ko* and en for everything else, while explicit preference wins',()=>{
  expect(resolveLanguage('system',{languages:['ko-KR','en-US'],language:'ko-KR'})).toBe('ko');
  expect(resolveLanguage('system',{languages:['ko'],language:'ko'})).toBe('ko');
