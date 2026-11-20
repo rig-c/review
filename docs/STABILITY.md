@@ -816,3 +816,21 @@ the existing modal and record act shape. A declared subject and non-empty displa
 plan remain required. The record stage type has five members; the public package
 plan-bound list remains at three. Package interview signoffs and historical acts
 retain their existing nullable-plan behavior. No schema or runtime export changes.
+
+## Package manifest `frames` declaration
+
+`rig-review/1` manifests accept an optional `frames` field beside `model`: a
+literal package-relative path to a producer `rigc-frames/1` record inside the
+package. Review reads, validates and hashes the file only when `frames` is
+present, adds its path to `files`, and exposes the parsed record on the loaded
+package as `frames: {path, sha256, sets: [{animation, fps, written, stride,
+duration}]} | null` (`null` when the field is absent). Older manifests without
+`frames` load unchanged with the same `sourceHash` and no runtime or type export
+changes on `@rig-c/review/job-host`. Path validation reuses `packagePath` and
+`safeFile` (`..`, absolute paths, symlinks escaping the package and files
+missing from `sealedPlayback` refuse with the same messages as `model`). A
+declared file missing from the package, unreadable JSON, a `spec` other than
+`rigc-frames/1`, a malformed set field (`sets[].animation`, `fps`, `written`,
+`stride`, `duration`), or two sets naming the same animation refuses by name
+(`FRAMES_MISSING`, `FRAMES_JSON`, `FRAMES_SPEC`, `FRAMES_FIELD`,
+`FRAMES_DUPLICATE_ANIMATION`), never falling back silently.

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, writeFile, rm, symlink, mkdir, readdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, symlink, mkdir, readdir, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadReview, packagePath, parseManifest } from '../src/manifest.ts';
@@ -76,4 +76,123 @@ test('build model and build directory symlinks cannot escape the package',async(
 });
 test('discovered build pages may resolve inside the package but cannot escape it',async()=>{
  const root=await buildFolder();const model=join(root,'build/skeleton.model.json');await writeFile(join(root,'page.png'),'page');await writeFile(model,JSON.stringify({spec:'rigc-compiled/3',pages:[{name:'../page.png'}]}));expect((await loadReview(root)).files.has('page.png')).toBe(true);await writeFile(model,JSON.stringify({spec:'rigc-compiled/3',pages:[{name:'../../outside.png'}]}));await expect(loadReview(root)).rejects.toThrow('inside package');
+});
+
+function syntheticFramesRecord(){
+ return {
+  spec:'rigc-frames/1',
+  background:[0,0,0,0],
+  viewport:{x:-80,y:0,width:160,height:240,scale:1,pixelWidth:160,pixelHeight:240},
+  sets:[{dir:'idle',animation:'idle',fps:12,sampled:33,written:33,stride:1,duration:2.6667,physics:{stepped:true,fps:60},extraSetField:'kept'}],
+  extraTopField:'kept',
+ };
+}
+
+test('manifest frames field: absent loads as main with frames null and unchanged sourceHash',async()=>{
+ const parsed=parseManifest({schema:'rig-review/1',id:'x',title:'X',revision:'1'});
+ expect('frames' in parsed).toBe(false);
+ const demo=await loadReview('examples/demo/review.json');
+ expect(demo.frames).toBeNull();
+ expect(demo.sourceHash).toBe('9dfea04aee3349e43ffedd60b4e4393570ffcd829e29d28389daa33372a17b93');
+ const f=await fixture();
+ const pkg=await loadReview(f.path);
+ expect(pkg.frames).toBeNull();
+});
+
+test('manifest frames field: present and valid exposes record with path, sha256 and sets and hashes with source',async()=>{
+ const f=await fixture();
+ const rel='check/idle_frames/frames.json';
+ const abs=join(f.root,rel);
+ await mkdir(join(f.root,'check/idle_frames'),{recursive:true});
+ const raw=JSON.stringify(syntheticFramesRecord());
+ await writeFile(abs,raw);
+ await writeFile(f.path,JSON.stringify({...f.input,frames:rel}));
+ const pkg=await loadReview(f.path);
+ const sha256=createHash('sha256').update(raw).digest('hex');
+ expect(pkg.manifest.frames).toBe(rel);
+ expect(pkg.files.has(rel)).toBe(true);
+ expect(pkg.frames).toEqual({
+  path:rel,
+  sha256,
+  sets:[{animation:'idle',fps:12,written:33,stride:1,duration:2.6667}],
+ });
+ await writeFile(abs,raw+'\n');
+ const changed=await loadReview(f.path);
+ expect(changed.sourceHash).not.toBe(pkg.sourceHash);
+ expect(changed.frames?.sha256).not.toBe(sha256);
+});
+
+test('manifest frames field: refuses missing file, unreadable JSON, bad spec, wrong set field types and duplicate animations by name',async()=>{
+ const f=await fixture();
+ const rel='check/idle_frames/frames.json';
+ const abs=join(f.root,rel);
+ await mkdir(join(f.root,'check/idle_frames'),{recursive:true});
+ await writeFile(f.path,JSON.stringify({...f.input,frames:rel}));
+ await expect(loadReview(f.path)).rejects.toThrow('FRAMES_MISSING');
+
+ await writeFile(abs,'{not valid json');
+ await expect(loadReview(f.path)).rejects.toThrow('FRAMES_JSON');
+
+ await writeFile(abs,JSON.stringify({...syntheticFramesRecord(),spec:'rigc-frames/2'}));
+ await expect(loadReview(f.path)).rejects.toThrow('FRAMES_SPEC');
+
+ const baseSet=syntheticFramesRecord().sets[0]!;
+ const badDocs:unknown[]=[
+  'not-an-object',
+  {spec:'rigc-frames/1',sets:'not-an-array'},
+  {spec:'rigc-frames/1',sets:['not-an-object']},
+  {spec:'rigc-frames/1',sets:[{...baseSet,animation:''}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,animation:null}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,fps:0}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,fps:12.5}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,fps:'12'}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,written:-1}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,written:3.5}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,written:'33'}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,stride:0}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,stride:1.5}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,stride:'1'}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,duration:-0.1}]},
+  {spec:'rigc-frames/1',sets:[{...baseSet,duration:'2.6667'}]},
+ ];
+ for(const doc of badDocs){
+  await writeFile(abs,JSON.stringify(doc));
+  await expect(loadReview(f.path)).rejects.toThrow('FRAMES_FIELD');
+ }
+
+ await writeFile(abs,JSON.stringify({...syntheticFramesRecord(),sets:[baseSet,{...baseSet,dir:'idle-2'}]}));
+ await expect(loadReview(f.path)).rejects.toThrow('FRAMES_DUPLICATE_ANIMATION');
+});
+
+test('manifest frames field: path rules (.., absolute, not in files, symlink escape) refuse with the same messages model gets',async()=>{
+ for(const badPath of ['../frames.json','a/../frames.json','/tmp/frames.json','C:/frames.json']){
+  let modelErr='',framesErr='';
+  try{parseManifest({schema:'rig-review/1',id:'x',title:'X',revision:'1',model:badPath});}catch(e){modelErr=(e as Error).message;}
+  try{parseManifest({schema:'rig-review/1',id:'x',title:'X',revision:'1',frames:badPath});}catch(e){framesErr=(e as Error).message;}
+  expect(framesErr).toBe(modelErr.replace(/^model:/,'frames:'));
+ }
+
+ const f=await fixture();
+ const outside=await mkdtemp(join(tmpdir(),'review-frames-outside-'));dirs.push(outside);
+ await writeFile(join(outside,'frames.json'),JSON.stringify(syntheticFramesRecord()));
+ await writeFile(join(outside,'out.model.json'),JSON.stringify({spec:'rigc-compiled/3',pages:[]}));
+ await symlink(join(outside,'frames.json'),join(f.root,'frames.json'));
+ await symlink(join(outside,'out.model.json'),join(f.root,'out.model.json'));
+ await writeFile(f.path,JSON.stringify({...f.input,model:'out.model.json'}));
+ let modelSymErr='';
+ try{await loadReview(f.path);}catch(e){modelSymErr=(e as Error).message;}
+ await writeFile(f.path,JSON.stringify({...f.input,frames:'frames.json'}));
+ let framesSymErr='';
+ try{await loadReview(f.path);}catch(e){framesSymErr=(e as Error).message;}
+ expect(framesSymErr).toBe(modelSymErr.replace(/^out\.model\.json:/,'frames.json:'));
+
+ await rm(join(f.root,'frames.json'));
+ await rm(join(f.root,'out.model.json'));
+ await writeFile(f.path,JSON.stringify(f.input));
+ const plain=await loadReview(f.path);
+ expect(plain.files.has('frames.json')).toBe(false);
+
+ const sealedRoot=await realpath(await buildFolder());
+ await writeFile(join(sealedRoot,'build/skeleton.model.json'),JSON.stringify({spec:'rigc-compiled/3',pages:[]}));
+ await expect(loadReview(sealedRoot,{handoff:false,sealedPlayback:new Map()})).rejects.toThrow('build/skeleton.model.json: expected sealed playback file');
 });
