@@ -1,0 +1,95 @@
+{
+  "key": "assemble-fixture",
+  "assemble": {
+    "rig_scale": 1,
+    "plan": [
+      [
+        "face",
+        "full",
+        "face"
+      ],
+      [
+        "eye_r",
+        "full",
+        "eyewhite-r"
+      ],
+      [
+        "eye_l",
+        "full",
+        "eyewhite-l"
+      ],
+      [
+        "behind",
+        "full",
+        "legwear"
+      ],
+      [
+        "front",
+        "full",
+        "objects"
+      ]
+    ],
+    "extend_below_crop": [],
+    "project": "visible",
+    "seam": "near-white",
+    "occluders": [
+      {
+        "image": "occluder.png",
+        "sha256": "4577100c3f8b6d3a638d3d88f86dc6a967680c69a20c5105f80a14d0815f94aa",
+        "under": [
+          "behind"
+        ],
+        "over": [
+          "front"
+        ],
+        "rgb_within": 20
+      }
+    ],
+    "take": [
+      {
+        "run": "full",
+        "run_dir": "orig",
+        "st_input": "painting.png",
+        "tags": [
+          "objects"
+        ]
+      },
+      {
+        "run": "full",
+        "run_dir": "split-donor",
+        "st_input": "painting.png",
+        "part": "behind",
+        "tag": "legwear",
+        "occluder": 0
+      }
+    ]
+  },
+  "bones": [
+    {
+      "name": "anchor",
+      "parent": "root",
+      "at": [
+        0,
+        0
+      ]
+    }
+  ],
+  "meshes": {},
+  "regions": {
+    "face": "anchor",
+    "eye_r": "anchor",
+    "eye_l": "anchor",
+    "behind": "anchor",
+    "front": "anchor"
+  },
+  "motion": {
+    "duration": 1,
+    "tracks": []
+  },
+  "seethrough": {
+    "resolution": 128,
+    "steps": 1,
+    "seed": 0,
+    "offload": false
+  }
+}

@@ -6,6 +6,12 @@ import { join } from 'node:path';
 import { JobStore } from '../src/job-store.ts';
 import { Database } from 'bun:sqlite';
 import { jobFixture, jobInputHashes } from './helpers/job-api-fixture.ts';
+import { createHash } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
+import { JobSession } from '../src/job-session.ts';
+import { createJobHostPorts } from '../src/job-api.ts';
+import { JOB_API_V3_SCHEMA } from '../src/job-contract.ts';
+import { createSyntheticOptionRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 const stores: JobStore<unknown>[] = [];
@@ -342,4 +348,83 @@ test('oversized single events refuse before commit, while existing oversized eve
   database.close();
   const legacy = await (await f.call({ ...f.base(), verb: 'next', after: null, waitMs: 0 })).json();
   expect(legacy.error.code).toBe('JOB_BODY_LIMIT');
+});
+
+// #1022: an idempotent replay returns its stored receipt only while that receipt is still true.
+test('#1022 replay of a superseded publish or ask refuses by name and names the head; current and finalized replays are unchanged', async () => {
+  const f = await fixture();
+  const publishA = await f.publishRequest('publish-a');
+  const firstA = await (await f.call(publishA)).json();
+  const askA = { ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation, idempotencyKey: 'ask-a',
+    publicationId: firstA.value.publicationId, subject: { kind: 'checkpoint', checkpointId: 'step-one' } };
+  const firstAskA = await (await f.call(askA)).json();
+  expect(firstAskA.ok).toBe(true);
+  // Still current: the stored receipts come back exactly as before (the envelope reports the current generation, as on main).
+  const receipt = async (request: object) => { const {ok, value} = await (await f.call(request)).json(); return {ok, value}; };
+  expect(await receipt(publishA)).toEqual({ok: true, value: firstA.value});
+  expect(await receipt(askA)).toEqual({ok: true, value: firstAskA.value});
+
+  // An ask whose act was finalized keeps its stored receipt.
+  const signoffA = { ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation, idempotencyKey: 'ask-a-signoff',
+    publicationId: firstA.value.publicationId, subject: { kind: 'signoff', stage: 'plan-approved' } };
+  const firstSignoffA = await (await f.call(signoffA)).json();
+  const page = await f.display(firstA.value);
+  const committed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: firstSignoffA.value.askId,
+    expectedGeneration: f.session.status().generation, submissionId: 'signoff-a', kind: 'signoff',
+    value: { stage: 'plan-approved', decision: 'approved', words: '' } }));
+  expect(committed.ok).toBe(true);
+
+  // B replaces A before the checkpoint ask is answered.
+  const publicationB = await f.publish();
+  const head = 'head ' + publicationB.publicationId;
+  const publishReplay = await (await f.call(publishA)).json();
+  expect(publishReplay.ok).toBe(false);
+  expect(publishReplay.error.code).toBe('JOB_ACT_SOURCE_STALE');
+  expect(publishReplay.error.message).toBe(`publication ${firstA.value.publicationId} is superseded; ${head}`);
+  const askReplay = await (await f.call(askA)).json();
+  expect(askReplay.ok).toBe(false);
+  expect(askReplay.error.code).toBe('JOB_ASK_SUPERSEDED');
+  expect(askReplay.error.message).toBe(`ask ${firstAskA.value.askId} is superseded; ${head}`);
+  expect(await receipt(signoffA)).toEqual({ok: true, value: firstSignoffA.value});
+  // A refusal writes nothing and leaves B the head.
+  expect(f.session.status().publication?.publicationId).toBe(publicationB.publicationId);
+});
+
+// #1022 measured case: two option sets in one record, B replaces A, then a producer retry replays A's publish and ask.
+test('#1022 a byte-identical retry of a replaced option-set publish and ask refuses and names the head', async () => {
+  const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-1021-')), root = join(scratch, 'input');
+  directories.push(scratch);
+  await mkdir(root);
+  const b = createSyntheticOptionRecordWorkspace(root, { questionId: 'q_b', setId: 'set_b' });
+  const a = createSyntheticOptionRecordWorkspace(root, { questionId: 'q_a', setId: 'set_a' });
+  const project = JSON.parse(await readFile(join(root, 'project.json'), 'utf8'));
+  project.interview.framing = [{ id: 'q_a', pending_options: a.optionSetFile }, { id: 'q_b', pending_options: b.optionSetFile }];
+  const bytes = JSON.stringify(project, null, 2) + '\n';
+  await writeFile(join(root, 'project.json'), bytes);
+  const record = { path: 'project.json', sha256: createHash('sha256').update(bytes).digest('hex') };
+  const files = [a.inputImage, a.inputSpec, a.optionSetFile, b.optionSetFile, record].sort((x, y) => x.path < y.path ? -1 : 1);
+  const reader = createSyntheticRecordReader({ onOption: input => ({ ...(input.result.setId === 'set_a' ? a : b).context, files }) });
+  const session = new JobSession({ root, stateDir: join(scratch, 'state'), fingerprint: 'a'.repeat(64),
+    reviewer: { id: 'synthetic-owner', role: 'owner' }, publicationMode: 'record-and-package', readRecordPublished: reader.reader });
+  try {
+    const origin = 'http://127.0.0.1:19102', ports = createJobHostPorts(session, origin), agent = session.hostCredentials().agent;
+    const call = async (body: object) => (await ports.handleJobApi(new Request(origin + `/jobs/${session.jobId}/api`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + agent },
+      body: JSON.stringify({ schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'r', ...body }) }))).json();
+    const requests = (set: typeof a, key: string) => ({
+      publish: { verb: 'publish', expectedGeneration: session.status().generation, idempotencyKey: 'publish-' + key, result: set.result,
+        freeze: { kind: 'producer-held', holdId: key, record } },
+      ask: (publicationId: string) => ({ verb: 'ask', expectedGeneration: session.status().generation, idempotencyKey: 'ask-' + key,
+        publicationId, subject: set.context.subjects[0] }) });
+    const first = requests(a, 'a'), publishedA = await call(first.publish), askBodyA = first.ask(publishedA.value.publicationId);
+    const askedA = await call(askBodyA);
+    const second = requests(b, 'b'), publishedB = await call(second.publish);
+    expect((await call(second.ask(publishedB.value.publicationId))).ok).toBe(true);
+    const head = 'head ' + publishedB.value.publicationId;
+    expect(await call(first.publish)).toMatchObject({ ok: false, error: { code: 'JOB_ACT_SOURCE_STALE',
+      message: `publication ${publishedA.value.publicationId} is superseded; ${head}` } });
+    expect(await call(askBodyA)).toMatchObject({ ok: false, error: { code: 'JOB_ASK_SUPERSEDED',
+      message: `ask ${askedA.value.askId} is superseded; ${head}` } });
+    expect(session.status().pending.map(ask => ask.subject)).toEqual([b.context.subjects[0]]);
+  } finally { session.dispose(); }
 });

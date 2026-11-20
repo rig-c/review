@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.9.1
+
+The Parts devDependency moves to 2.47.0, so Review's tests and development producer read the split-take manifests that Parts 2.47.0 writes. No Review source behaviour changes.
+
+**Read before upgrading:**
+
+* **Release order is Parts, then Review, then Create.** Parts 2.47.0 stamps an occluder-split take's donor `meta.json` as the indexed field `assemble.take[i].meta`. A Parts 2.46.0 producer refuses such a manifest in its manifest reader with `PARTS_FIELD_TYPE` (`rig --parts`, `propose --parts` and `edited-part --parts` exit 1), and its `@rig-c/parts/assembly-reading` reports the unknown field as a changed assembly field, which sends a cloth Apply to a full `build`. Run Review against an installed `@rig-c/parts` 2.47.0 or later before reading a manifest that 2.47.0 wrote. Whole-layer takes and manifests with no split take read as before (#1019, closes #1016).
+* **Assemble existing stamped occluder-split takes again once with the same config**, as the Parts 2.47.0 notes say. Its producer refuses an older stamp that lacks the donor binding as `ASSEMBLY_CONFIG_STALE`, and its assembly reading names `assemble.take[i].meta` as the changed field. A cloth Apply in Review reads the stamp through that reading, so it takes the stale-stamp route from 4.9.0 and runs `build` for such a take.
+
+### Changed
+
+* `@rig-c/parts` devDependency 2.46.0 to 2.47.0. A new test reads a real 2.47.0 split-take manifest through the installed producer's manifest reader and Review's cloth assembly reading (#1019).
+
 ## 4.9.0
 
 An agent can now wait on a job host for a finalized act with `waitForJobAct`, and a strict attachment wakes when the live owner host commits. Cloth Apply reassembles parts when the assembly stamp is stale, Apply no longer refuses identical rigs over the run receipt's clock, and a page that has lost its access link says so.

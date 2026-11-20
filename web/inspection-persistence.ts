@@ -194,8 +194,9 @@ export class InspectionDraftStore {
  private priorKey:string|null=null;
  private pending:Promise<void>=Promise.resolve();
  recovery():string|null{return this.rawRecovery;}
+ migrated():boolean{return this.priorKey!==null;}
  readonly key:string;
- constructor(private readonly scope:string,private readonly binding:InspectionBinding,private readonly warn:(message:string)=>void,storage?:Storage,private readonly now:()=>number=Date.now,private readonly factory?:IDBFactory|null){
+ constructor(private readonly scope:string,private readonly binding:InspectionBinding,private readonly warn:(message:string)=>void,storage?:Storage,private readonly now:()=>number=Date.now,private readonly factory?:IDBFactory|null,private readonly legacyScopes:readonly string[]=[]){
   this.binding=structuredClone(binding);
   this.key=`${draftPrefix}${scope}:${binding.sourceHash}`;
   try{this.storage=storage??localStorage;this.storage.getItem(draftIndex);}catch{this.storage=null;warn('Local draft storage unavailable. Keep this page open or export feedback before leaving.');}
@@ -207,7 +208,7 @@ export class InspectionDraftStore {
   return times;
  }
  private evict():void{
-  const storage=this.storage!,now=this.now(),times=this.written();if(this.priorKey&&this.priorKey!==this.key){storage.removeItem(this.priorKey);times.delete(this.priorKey);}times.set(this.key,now);
+  const storage=this.storage!,now=this.now(),times=new Map(this.written());if(this.priorKey&&this.priorKey!==this.key){storage.removeItem(this.priorKey);times.delete(this.priorKey);}times.set(this.key,now);
   const old=[...times].filter(([key,time])=>key!==this.key&&now-time>protectedDraftMs).sort((a,b)=>a[1]-b[1]);
   for(const [key]of old){if(times.size<=maximumDrafts)break;storage.removeItem(key);times.delete(key);}
   storage.setItem(draftIndex,JSON.stringify(Object.fromEntries(times)));
@@ -262,6 +263,15 @@ export class InspectionDraftStore {
  read(canRecover?:(session:unknown)=>boolean):Promise<LocalInspectionDraft|null> {
   return this.ordered(async()=>{
    if(!this.storage)return null;try{const raw=this.storage.getItem(this.key);if(!raw){
+    for(const legacyScope of this.legacyScopes){
+     const candidateKey=`${draftPrefix}${legacyScope}:${this.binding.sourceHash}`;
+     if(candidateKey===this.key)continue;
+     const candidateRaw=this.storage.getItem(candidateKey);if(!candidateRaw)continue;
+     this.priorKey=candidateKey;this.rawRecovery=candidateRaw;
+     const parsed=await this.unpack(candidateRaw,candidateKey,this.binding);
+     this.rawRecovery=JSON.parse(candidateRaw).schema==='rig-review-local-draft/2'?JSON.stringify(parsed):candidateRaw;
+     return parsed;
+    }
     if(this.binding.mode==='compare'&&canRecover){
      const prefix=`${draftPrefix}${this.scope}:`,candidates=[...this.written().entries()].filter(([k])=>k!==this.key&&k.startsWith(prefix)).sort((a,b)=>b[1]-a[1]);
      for(const [candidateKey]of candidates){
@@ -320,6 +330,7 @@ export class InspectionDraftStore {
 interface PersistenceSession {id:string;revision:string;sourceHash:string;status:string;feedback:unknown[]}
 interface PersistenceAdapter<T> {
  recover?:(value:unknown,baseline:T)=>T|null;
+ legacyScopes?:readonly string[];
  scope:string;binding:InspectionBinding;baseline:T;session:()=>T;reviewDirty:()=>boolean;
  restoreSession:(value:T,dirty:boolean)=>void;bookmark:()=>InspectionBookmark;
  restoreBookmark:(bookmark:InspectionBookmark,signal:AbortSignal)=>Promise<void>;
@@ -335,7 +346,7 @@ export async function connectInspectionPersistence<T>(adapter:PersistenceAdapter
  let previousInert:boolean|null=null;
  const holdRestore=(value:boolean)=>{restoring=value;const body=document.body;if(value){if(body&&previousInert===null){previousInert=body.inert;body.inert=true;}}else if(body&&previousInert!==null){body.inert=previousInert;previousInert=null;}};
  let baseline=await sessionFingerprint(adapter.baseline);const status=adapter.onStatus,initialInputs=captureInputs();
- const store=new InspectionDraftStore(adapter.scope,adapter.binding,status);
+ const store=new InspectionDraftStore(adapter.scope,adapter.binding,status,undefined,Date.now,undefined,adapter.legacyScopes);
  const recover=adapter.recover??((value:unknown,baseline:T)=>recoverSession(value,baseline as T & PersistenceSession) as T|null);
  let draft=await store.read(session=>recover(session,adapter.baseline)!==null);
  const notices=[document.getElementById('draft-recovery'),document.getElementById('review-draft-recovery')].filter((node):node is HTMLElement=>node!==null);
@@ -377,7 +388,8 @@ export async function connectInspectionPersistence<T>(adapter:PersistenceAdapter
  if(raw&&!draft)appendAction('Discard unusable local draft',async()=>{await store.clear();conflict=false;adapter.onConflict(false);clearNotices();status('Unusable local draft discarded for this review only.');save();});
  let writes=Promise.resolve();
  restoring=false;
- if(draft&&!conflict&&draft.baseline!==baseline)save();
+ if(draft&&!conflict&&store.migrated())await save();
+ else if(draft&&!conflict&&draft.baseline!==baseline)save();
  function snapshot():LocalInspectionDraft {
   return structuredClone<LocalInspectionDraft>({schema:'rig-review-local-draft/1',sourceHash:adapter.binding.sourceHash,baseline,savedAt:new Date().toISOString(),reviewDirty:adapter.reviewDirty(),bookmark:parseBookmark(adapter.bookmark(),adapter.binding),inputs:captureInputs(),session:adapter.session(),ui:adapter.ui()});
  }
