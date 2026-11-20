@@ -213,7 +213,6 @@ test('#746 decisions never answer direction or image verdicts with rig feedback'
   expect(image.stage).toBe('image-review');
 });
 
-
 test.each(['approved', 'changes-requested'] as const)('#1011 finalizes draft verdict %s', async verdict => {
   const f = await fixture();
   await joinedVerdictFixture(f.root, '2-rigging-answers');
@@ -255,7 +254,7 @@ test('#1011 refuses unsupported stages and invalid rig draft bindings', () => {
   const source = {...baseline.source, direction: null, projectHash: 'a'.repeat(64),
     selector: {kind: 'draft', id: 'chain'}} as unknown as JobRetainedSource['source'];
   const subject = {kind: 'review-verdict', stage: 'rig-review'} as const;
-  const retained = {source, subjects: [subject]} as JobRetainedSource;
+  const retained = {source, subjects: [subject]} as unknown as JobRetainedSource;
   for (const stage of ['direction-review', 'image-review'] as const) {
     const ask = {...subject, stage};
     expect(() => bindJobAsk(ask, {...retained, subjects: [ask]})).toThrow(expect.objectContaining({
