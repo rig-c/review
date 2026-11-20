@@ -61,6 +61,7 @@ import {
  JOB_RESERVED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_CONSUMER_AUTH_MODE, JOB_ERROR_CODES,
  JOB_CHEST_LANDMARKS_ACT_SCHEMA, parseChestLandmarksAct, parseMeshEditsAct,
  type JobHostOptions, type JobOwnerHost, type JobSessionOptions, type JobSession, type JobWorkerOptions,
+ type JobActWaitOptions, type JobActWaitOutcome,
  type JobHostListenerIncarnation, type JobHostReuseBinding, type JobHostReuseExpectation, type JobHostAttachField, type JobHostAttachFailure,
  type JobPublicationReader, type JobPublishedContext, type JobCapabilities,
  type JobModelSourceBinding, type JobModelReviewValue,
@@ -93,6 +94,7 @@ import * as publicHost from '@rig-c/review/job-host';
 
 export type PublicTypes = [
  JobHostOptions, JobOwnerHost, JobSessionOptions, JobSession, JobWorkerOptions,
+ JobActWaitOptions, JobActWaitOutcome,
  JobHostListenerIncarnation, JobHostReuseBinding, JobHostReuseExpectation, JobHostAttachField, JobHostAttachFailure,
  JobPublicationReader, JobPublishedContext, JobCapabilities,
  JobModelSourceBinding, JobModelReviewValue,
@@ -134,7 +136,7 @@ const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', '
  'PARTS_COMMENTS_VERDICT_SCHEMA', 'parseCommentsAct', 'projectComments', 'parseCommentsSession',
  'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'projectSelectedCommentsFeedback',
  'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
- 'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct', 'JOB_CHEST_LANDMARKS_ACT_SCHEMA', 'parseChestLandmarksAct'];
+ 'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct', 'waitForJobAct', 'JOB_CHEST_LANDMARKS_ACT_SCHEMA', 'parseChestLandmarksAct'];
 assert(JSON.stringify(Object.keys(publicHost).sort()) === JSON.stringify(expectedExports.sort()), 'EXPORTS');
 assert(JOB_API_SCHEMA === 'rig-review/job-api@2' && JOB_ACT_SCHEMA === 'rig-review/act@2' &&
  JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <3.0.0' && JOB_PREVIOUS_DRAFT_SCHEMA === 'rig-review-previous-draft/1', 'SCHEMAS');

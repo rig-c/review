@@ -153,6 +153,8 @@ export class JobSession {
   private operations = 0;
   private disposed = false;
   private observedGeneration: number;
+  /** A strict attach shares the live host's store but not its in-process listeners. */
+  private readonly attached: boolean;
 
   /** Last durable generation successfully read by this session. Requires no I/O. */
   get lastObservedGeneration(): number { return this.observedGeneration; }
@@ -172,6 +174,7 @@ export class JobSession {
     }
     this.publicationMode = options.publicationMode ?? (options.readRecordPublished ? 'record-and-package' : 'package-only');
     this.apiSchema = jobApiSchemaForMode(this.publicationMode);
+    this.attached = readonlyTarget !== undefined;
     const root = captureJobRoot(options.root), state = canonicalStatePath(options.stateDir);
     if (within(root.path, state)) {
       throw new JobError('JOB_SOURCE_UNRETAINABLE', 'Job state must be outside the designated work root');
@@ -422,6 +425,25 @@ export class JobSession {
     return previous ?? null;
   }
 
+  /** A stored agent receipt is returned only while it is still true (#1022). A publication that is no longer the
+   * head, or an ask that is no longer pending and has no finalized act, refuses by name and names the head. */
+  private assertReplayCurrent(current: StoredJob<JobData>, verb: string, value: unknown): void {
+    const data = current.data, head = 'head ' + (data.head ?? 'none');
+    if (verb === 'publish') {
+      const publicationId = (value as {publicationId: string}).publicationId;
+      if (data.head !== publicationId) throw new JobError('JOB_ACT_SOURCE_STALE', `publication ${publicationId} is superseded; ${head}`);
+      return;
+    }
+    const asks = verb === 'ask' ? [value as {askId: string}] : verb === 'ask-batch' ? (value as {asks: {askId: string}[]}).asks : [];
+    asks.forEach((ask, index) => {
+      const status = data.asks[ask.askId]?.status;
+      if (status === 'pending' || status === 'answered') return;
+      const prefix = verb === 'ask-batch' ? `subjects[${index}]: ` : '';
+      if (!current.active) throw new JobError('JOB_CLOSED', `${prefix}ask ${ask.askId} ended when the job closed`);
+      throw new JobError('JOB_ASK_SUPERSEDED', `${prefix}ask ${ask.askId} is superseded; ${head}`);
+    });
+  }
+
   private active(current: StoredJob<JobData>, generation: number): void {
     if (!current.active) throw new JobError('JOB_CLOSED');
     if (current.data.generation !== generation) throw new JobError('JOB_GENERATION_STALE');
@@ -462,7 +484,8 @@ export class JobSession {
 
   async execute(input: JobAgentRequest | AgentRequestV3 | JobFetchActRequest | JobFetchActRequestV3, signal: AbortSignal): Promise<unknown> {
     if (input.jobId !== this.jobId) throw new JobError('JOB_UNKNOWN');
-    if (input.verb === 'next') return this.next(input.after, input.waitMs, signal);
+    // An attached session never sees the live host's notify(), so it watches shared writes like subscribe.
+    if (input.verb === 'next') return this.next(input.after, input.waitMs, signal, this.attached ? 'events' : false);
     if (input.verb === 'fetch-act') {
       const current = this.current();
       if (!current.active) throw new JobError('JOB_CLOSED');
@@ -475,6 +498,7 @@ export class JobSession {
     let current = this.current();
     const previous = this.replay(current.data, key, digest);
     if (previous) {
+      this.assertReplayCurrent(current, input.verb, previous.value);
       this.operations++;
       try {
         if (input.verb === 'close') await this.reclaimClosedSnapshots();
@@ -629,6 +653,7 @@ export class JobSession {
       }, fresh => {
         const raced = this.replay(fresh.data, key, digest);
         if (!raced) return false;
+        this.assertReplayCurrent(fresh, input.verb, raced.value);
         result = raced.value;
         return true;
       });
@@ -834,11 +859,16 @@ export class JobSession {
     };
   }
 
-  private async next(after: string | null, waitMs: number, signal: AbortSignal, observeWrites = false): Promise<JobNextValue | NextValueV3> {
+  /**
+   * `observeWrites` polls the shared store revision for commits from other sessions. `'revision'` (subscribe)
+   * wakes on any commit; `'events'` (an attached act wait) wakes only once a commit left an event to deliver.
+   */
+  private async next(after: string | null, waitMs: number, signal: AbortSignal,
+    observeWrites: false | 'revision' | 'events' = false): Promise<JobNextValue | NextValueV3> {
     if (waitMs < 0 || waitMs > jobWaitLimitMs || !Number.isSafeInteger(waitMs)) throw new JobError('JOB_REQUEST_INVALID');
     if (signal.aborted) throw new JobError('JOB_REQUEST_INVALID', 'Request cancelled');
     // Capture before reading events so a commit between the read and listener registration still wakes us.
-    const revision = observeWrites ? this.store.revision(this.jobId) : null;
+    let revision = observeWrites ? this.store.revision(this.jobId) : null;
     const ready = this.events(after);
     if (ready.status !== 'timeout' || !waitMs) return ready;
     await new Promise<void>((resolve, reject) => {
@@ -849,7 +879,14 @@ export class JobSession {
       const fail = (error: unknown) => { if (settled) return; settled = true; cleanup(); reject(error); };
       const abort = () => fail(new JobError('JOB_REQUEST_INVALID', 'Request cancelled'));
       const changed = () => {
-        try { if (this.store.revision(this.jobId) !== revision) finish(); }
+        try {
+          const observed = this.store.revision(this.jobId);
+          if (observed === revision) return;
+          if (observeWrites === 'revision') return finish();
+          // An act wait stays open across a write without a deliverable event (display receipt).
+          revision = observed;
+          if (this.events(after).status !== 'timeout') finish();
+        }
         catch (error) { fail(error); }
       };
       const timer = setTimeout(finish, waitMs);
@@ -872,7 +909,7 @@ export class JobSession {
     let after = input.after;
     while (!input.signal.aborted) {
       let value: JobNextValue | NextValueV3;
-      try { value = await this.next(after, jobWaitLimitMs, input.signal, true); }
+      try { value = await this.next(after, jobWaitLimitMs, input.signal, 'revision'); }
       catch (error) {
         if (input.signal.aborted && error instanceof JobError && error.code === 'JOB_REQUEST_INVALID') return;
         throw error;

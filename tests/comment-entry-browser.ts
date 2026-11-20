@@ -16,6 +16,7 @@ import {startServer} from '../src/server.ts';
 import {startPartsServer} from '../src/parts-server.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
+import {jobSourceDraftId} from '../web/job-session.ts';
 import {recordScreenFixture,type RecordScreenKind} from './helpers/job-record-screen-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
@@ -303,7 +304,7 @@ async function finalizeElsewhere(live:LiveVerdict) {
 
 async function exerciseClosedDraft(page:InputCdpSession,wait:Wait,reload:Reload,capture:Capture,live:LiveVerdict,lang:Language,out:string) {
   const {fixture,publication,ask,otherAsk}=live;
-  const scope=`rig-review-verdict-comments/1:${publication.publicationId}:${publication.source.sourceHash}`;
+  const scope=`rig-review-verdict-comments/1:${fixture.host.session.jobId}:${jobSourceDraftId(publication.source)}:${publication.source.sourceHash}`;
   const readDraft=()=>page.evaluate<GeneralDraftRow[]|null>(`JSON.parse(localStorage.getItem(${JSON.stringify(scope)}))?.comments??null`);
   const rowIds=()=>page.evaluate<string[]>(`[...document.querySelectorAll('#stage-comment-list [data-comment-id]')].map(row=>row.dataset.commentId)`);
   const text=lang==='ko'?['남겨 둘 초안','지울 초안']:['Draft to keep','Draft to delete'];

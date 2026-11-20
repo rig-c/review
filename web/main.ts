@@ -332,7 +332,7 @@ function renderDraftState(): void {
   const live=host?.reviewState?.(liveIssueCount(),saving);
   renderAnswerControls();
   if (draftStatus === null && !live && !answerSaved) return;
-  rigInspector.actBar.setSaveState({ kind: actReadOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftConflict ? 'Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.' : answerSaved ? 'Answer saved' : draftStatus&&/^(Saved local draft was not restored|Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus)?draftStatus:actReadOnly??live??draftStatus! });
+  rigInspector.actBar.setSaveState({ kind: actReadOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftConflict ? 'Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.' : answerSaved ? 'Answer saved' : draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus)?draftStatus:actReadOnly??live??draftStatus! });
   if(answerSaved&&!saving&&!draftConflict&&!dirty&&!actReadOnly&&(host?.record||!host)&&
       (host?.pendingSubjects?.()??pendingAnswers).every(subject=>subject.kind==='interview-picks')&&!el('message').classList.contains('error'))message(sourceTextContent(el('dirty')),false,true);
 }
@@ -340,12 +340,13 @@ function renderDraftState(): void {
 function renderProvenance(): void {
   const provenance = session.reviewedSource;
   text('provenance-version', provenance.packageRevision);
-  text('provenance-rig', provenance.rig ? provenance.rig.sha256.slice(0, 12) + '…' : 'Not supplied');
+  el('provenance-rig').textContent = provenance.rig ? provenance.rig.sha256.slice(0, 12) + '…' : t('Not supplied');
   el('provenance-motion').hidden = !provenance.motion;
   el('provenance-motion-missing').hidden = !!provenance.motion;
   text('provenance-motion', provenance.motion ? provenance.motion.sha256.slice(0, 12) + '…' : '');
   text('provenance-full', JSON.stringify({ sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: provenance }, null, 2));
 }
+viewDisposers.push(onLanguageChange(()=>{if(session)renderProvenance();}));
 
 function checkpointEntry(): ReviewSession['checkpoints'][string] | undefined {
   if (!checkpoint) return;
@@ -1423,17 +1424,17 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   if(!response.ok){const body=await response.json();throw new Error(typeof body.error==='string'?body.error:body.error?.code??'PARTS_PAINT_FAILED');}return response;
  };
  const showCommentCount=()=>setSourceText(rigInspector.comments.button,`Comments (${issues.length+(generalRows?.length??0)})`);
- const changed=()=>{dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});renderDraftState();showCommentCount();return persistence?.save();};
+ const changed=()=>{if(/^The source changed, so /.test(draftStatus??''))draftStatus=null;dirty=true;text('dirty','Unsubmitted changes');el('dirty').classList.add('dirty');parts?.refreshImages();rigInspector.actBar.setSaveState({kind:'unsaved',text:'Unsubmitted changes'});renderDraftState();showCommentCount();return persistence?.save();};
  // A parts verdict is saved only over a drawn subject: until the first paint, or after a failed one, Save stays off.
  const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded'||draftConflict||!!persistence?.restoring();
  partsAnswerBlocked=saveBlocked;
  text('rig-empty','Loading package…');
- if(generalRows)restoreRecordComments();
+ if(generalRows||host?.record)restoreRecordComments();
  partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),openComments:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot),issues,
   ...(host?.record?{recordComments}:host?.verdictComments?{generalComments:host.verdictComments,submitting:()=>saving}:{}),
   request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,
   changed:()=>{if(host?.record){recordCommentsChanged();return;}if(generalRows)persistRecordComments();return changed();},
-  selectionChanged:()=>parts?.refreshImages(),locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
+  selectionChanged:()=>{parts?.refreshImages();renderAnswerControls();},locked:id=>submittedIssues.has(id),refusal:()=>readOnly,drawn:state=>{rigInput=state;button('save').disabled=saveBlocked();renderAnswerControls();if(state.state==='failed')text('rig-empty',state.reason);text('renderer-state',state.state==='loaded'?'Parts raster drawn · Canvas2D':'Rendering failed');text('player-state',state.state==='loaded'?'Parts images · no compiled rig loaded':'Rig load failed');renderLayout();},message});
  parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>openReview());
  const thumbnails=new PartThumbnails();viewDisposers.push(()=>thumbnails.dispose());
  parts.registerImages({thumbnail:(icon,item,glyph)=>thumbnails.showOriginal(icon,item,()=>partsSubject!.image(item.index),glyph),items:subject.items,selected:partsSubject.selected,solo:partsSubject.solo,visible:partsSubject.visible,select:partsSubject.select,isolate:partsSubject.isolate,show:partsSubject.show});
@@ -1442,7 +1443,8 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  for(const control of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('#checkpoint-detail input,#proposal-panel input,#proposal-panel select,#proposal-panel button,#strip-panel input,#strip-panel select,#strip-panel button'))if(!control.closest('#comments-list-host')){control.disabled=true;setSourceAttribute(control,'title',unavailable);if(control instanceof HTMLInputElement&&control.name==='outcome')control.checked=false;}
  el('checkpoint-detail').hidden=true;
  text('detail-note',unavailable);text('checkpoint-note','');el('strip-panel').hidden=true;
- text('provenance-version','Parts package, before rigging');text('provenance-rig','Not supplied');text('provenance-motion','Not supplied');
+ const renderPartsProvenance=()=>{text('provenance-version','Parts package, before rigging');el('provenance-rig').textContent=t('Not supplied');el('provenance-motion').hidden=true;el('provenance-motion-missing').hidden=false;text('provenance-motion','');};
+ renderPartsProvenance();viewDisposers.push(onLanguageChange(renderPartsProvenance));
  text('provenance-full',JSON.stringify({subject:'parts',sourceHash:subject.sourceHash,painting:subject.painting,images:subject.items.map(({name,imageHash})=>({name,imageHash}))},null,2));
  text('source-files',`source ${subject.sourceHash}`);const provenanceHint=document.querySelector<HTMLElement>('.provenance>.hint');if(provenanceHint)setSourceText(provenanceHint,'Source files remain unchanged.');
  for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-block-target]'))if(!['selected-part','feedback'].includes(tab.dataset.blockTarget??'')){tab.disabled=true;setSourceAttribute(tab,'title',unavailable);}
@@ -1483,8 +1485,12 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
  button('save').disabled=saveBlocked();
  button('save').onclick=async()=>{
-  if(saving||saveBlocked())return;saving=true;button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});renderDraftState();
+  if(saving||saveBlocked())return;
+  if(partsSubject?.hasPendingComment()){if(!await partsSubject.commitDraft())return;}
+  if(saving||saveBlocked())return;
+  saving=true;button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});renderDraftState();
   const frozen=structuredClone(issues),general=generalRows?.map(row=>row.summary);
+  let submissionFailure:ReturnType<typeof jobSubmissionRefusal>|null=null,saveFailed=false;
   try{
    if(host?.submitParts)message(await host.submitParts(frozen,general));
    else await request(base+'/verdict',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:frozen.length?'changes-requested':'approved',issues:frozen})});
@@ -1493,8 +1499,8 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
    if(host)for(const issue of frozen)submittedIssues.add(issue.id);
    if(general?.length){partsSubject?.refreshComments();showCommentCount();}
    dirty=JSON.stringify(issues)!==JSON.stringify(frozen);partsBaseline={subject:'parts',issues:frozen};await persistence?.submitted(partsBaseline);if(disposed)return;state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
-  }catch(error){message(errorText(error),true);state.setSaveState({kind:'failed',text:'Save failed.'});}
-  finally{saving=false;button('save').disabled=saveBlocked();renderDraftState();}
+  }catch(error){saveFailed=true;if(host){submissionFailure=jobSubmissionRefusal(error);message(submissionFailure.text,true);}else{message(errorText(error),true);state.setSaveState({kind:'failed',text:'Save failed.'});}}
+  finally{saving=false;button('save').disabled=saveBlocked();renderDraftState();if(submissionFailure){state.setSaveState({kind:'failed',text:submissionFailure.text,title:submissionFailure.title});el('message').title=submissionFailure.title;}else if(saveFailed)state.setSaveState({kind:'failed',text:'Save failed.'});}
  };
  viewDisposers.push(viewport.bindControls(unitScaleMessage),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
@@ -1502,7 +1508,10 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  setupPartsPersistence=async()=>{
   if(host?.record)return;
   const binding:InspectionBinding={mode:'single',sourceHash:subject.sourceHash,rigs:[null]};
-  const connection=await connectInspectionPersistence({scope:'parts:'+access.key+':'+access.base+':'+subject.sourceHash,binding,baseline:partsBaseline,session:()=>({subject:'parts' as const,issues}),reviewDirty:()=>dirty,
+  const legacyPartsScope='parts:'+access.key+':'+access.base+':'+subject.sourceHash;
+  const partsDraftScope=host?.verdictComments?.jobId&&host?.verdictComments?.draftId?host.verdictComments.jobId+':'+host.verdictComments.draftId:access.key+':'+access.base;
+  const partsScope='parts:'+partsDraftScope+':'+subject.sourceHash;
+  const connection=await connectInspectionPersistence({scope:partsScope,legacyScopes:partsScope!==legacyPartsScope?[legacyPartsScope]:[],binding,baseline:partsBaseline,session:()=>({subject:'parts' as const,issues}),reviewDirty:()=>dirty,
    recover:value=>{try{if(!value||typeof value!=='object')return null;const row=value as PartsSubjectSession;if(row.subject!=='parts'||!Array.isArray(row.issues)||row.issues.length>1000||Object.keys(row).some(key=>!['subject','issues'].includes(key)))return null;const items=new Map(subject.items.map(item=>[item.name,{...item,imageHash:item.imageHash!}]));const restored=row.issues.map(issue=>{const parsed=parsePartsIssue(issue,false,true,false);assertPartsIssueBinding(parsed,items,subject.sourceHash);return parsed;});if(new Set(restored.map(issue=>issue.id)).size!==restored.length)return null;return {subject:'parts' as const,issues:restored};}catch{return null;}},
    restoreSession:(value,isDirty)=>{issues.splice(0,issues.length,...value.issues);dirty=isDirty;partsSubject?.refreshComments();showCommentCount();text('dirty',isDirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',isDirty);state.setSaveState({kind:isDirty?'unsaved':'saved',text:isDirty?'Unsubmitted changes':'Submitted'});},
    bookmark:()=>({schema:'rig-review-inspection/1',binding,animation:null,time:null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:null,a:null,b:null,reference:null}},selection:{}}),
@@ -1567,14 +1576,22 @@ let questionFormBindings=new WeakSet<HTMLElement>();
 function restoreRecordComments(form?:HTMLFormElement):void {
  const binding=host?.direction??host?.verdictComments??host?.record;
  if(!binding||recordCommentKey)return;
- const publicationId=binding.publicationId??form?.dataset.jobPublication,sourceHash=binding.sourceHash;
- if(!publicationId)throw new Error('JOB_DISPLAY_MISMATCH');
- recordCommentKey=(host?.verdictComments?'rig-review-verdict-comments/1:':'rig-review-record-comments/1:')+publicationId+':'+sourceHash;
- try {
-  const saved=JSON.parse(localStorage.getItem(recordCommentKey)??'null');
-  if(saved?.publicationId!==publicationId||saved?.sourceHash!==sourceHash||!Array.isArray(saved.comments)||saved.comments.length>1000)return;
-  const ids=new Set<string>();
-  const rows=saved.comments as CommentRow[];
+ const route=typeof access!=='undefined'?/^\/jobs\/([^/]+)\/publications\/([^/]+)\//.exec(access?.base??''):null;
+ const publicationId=binding.publicationId??form?.dataset.jobPublication??route?.[2],sourceHash=binding.sourceHash;
+ const jobId=binding.jobId??route?.[1],draftId=binding.draftId;
+ if(!publicationId&&(!jobId||!draftId))throw new Error('JOB_DISPLAY_MISMATCH');
+ const prefix=host?.verdictComments?'rig-review-verdict-comments/1:':'rig-review-record-comments/1:';
+ const scopePrefix=jobId&&draftId?`${prefix}${jobId}:${draftId}:`:null;
+ recordCommentKey=(scopePrefix??`${prefix}${publicationId}:`)+sourceHash;
+ const fallbackKey=publicationId?`${prefix}${publicationId}:${sourceHash}`:'';
+ const previousKey=binding.previousPublicationId?`${prefix}${binding.previousPublicationId}:${sourceHash}`:'';
+ const target=(host?.verdictComments?.rows??recordComments) as CommentRow[]&{knownIds?:Set<string>;storageBound?:boolean};
+ const knownIds=(target.knownIds??=new Set<string>());
+ const parseRows=(raw:string|null,expectedPub?:string):CommentRow[]|null=>{
+  const saved=JSON.parse(raw??'null');
+  if(!saved||saved.sourceHash!==sourceHash||!Array.isArray(saved.comments)||saved.comments.length>1000)return null;
+  if(expectedPub!==undefined?saved.publicationId!==expectedPub:(typeof saved.publicationId!=='string'||!saved.publicationId))return null;
+  const ids=new Set<string>(),rows=saved.comments as CommentRow[];
   for(const row of rows){
    if(!row||typeof row.id!=='string'||!row.id||ids.has(row.id)||typeof row.summary!=='string'||!row.summary.trim()||row.summary.length>1000)throw new Error('JOB_ACT_INVALID');
    ids.add(row.id);
@@ -1584,7 +1601,72 @@ function restoreRecordComments(form?:HTMLFormElement):void {
    else if(Object.keys(row).some(key=>key!=='id'&&key!=='summary'))throw new Error('JOB_ACT_INVALID');
   }
   if(!host?.verdictComments)projectComments(rows.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
-  (host?.verdictComments?.rows??recordComments).push(...rows);
+  return rows;
+ };
+ if(!target.storageBound&&typeof window!=='undefined'&&typeof window.addEventListener==='function'){
+  target.storageBound=true;
+  const onStorage=(event:Pick<StorageEvent,'key'|'newValue'>)=>{
+   if(!recordCommentKey||event.key!==recordCommentKey)return;
+   try{
+    const currentRaw=typeof localStorage.getItem==='function'?localStorage.getItem(recordCommentKey):event.newValue;
+    const incoming=currentRaw===null?[]:parseRows(currentRaw,scopePrefix?undefined:publicationId);
+    if(!incoming)return;
+    const incomingIds=new Set(incoming.map(row=>row.id));
+    const localUnsaved=target.filter(row=>!knownIds.has(row.id)&&!incomingIds.has(row.id));
+    target.splice(0,target.length,...incoming,...localUnsaved);
+    knownIds.clear();for(const row of incoming)knownIds.add(row.id);
+    if(typeof rigInspector!=='undefined'&&typeof setSourceText==='function'){
+     const count=host?.verdictComments?(typeof partsOnly!=='undefined'&&partsOnly?(partsSubject?.issues().length??0)+target.length:target.length):recordComments.length;
+     setSourceText(rigInspector.comments.button,`Comments (${count})`);
+    }
+    if(typeof comments!=='undefined')comments?.refresh();
+    if(typeof partsSubject!=='undefined')partsSubject?.refreshComments();
+    if(typeof renderProposals==='function'&&host?.verdictComments)renderProposals();
+    if(typeof renderAnswerControls==='function')renderAnswerControls();
+   }catch{/* Ignore malformed cross-tab storage payloads. */}
+  };
+  window.addEventListener('storage',onStorage,typeof lifecycle!=='undefined'?{signal:lifecycle.signal}:undefined);
+ }
+ try {
+  const primaryRaw=localStorage.getItem(recordCommentKey);
+  const fallbackRaw=primaryRaw===null&&fallbackKey&&fallbackKey!==recordCommentKey?localStorage.getItem(fallbackKey):null;
+  const previousRaw=primaryRaw===null&&fallbackRaw===null&&previousKey&&previousKey!==recordCommentKey?localStorage.getItem(previousKey):null;
+  const rows=primaryRaw!==null?parseRows(primaryRaw,scopePrefix?undefined:publicationId):
+   fallbackRaw!==null?parseRows(fallbackRaw,publicationId):
+   previousRaw!==null?parseRows(previousRaw,binding.previousPublicationId??undefined):null;
+  if(rows){
+   for(const row of rows){knownIds.add(row.id);if(!target.some(existing=>existing.id===row.id))target.push(row);}
+   if(primaryRaw===null&&typeof localStorage.removeItem==='function'){
+    persistRecordComments();
+    if(fallbackKey&&fallbackKey!==recordCommentKey)localStorage.removeItem(fallbackKey);
+    if(previousKey&&previousKey!==recordCommentKey)localStorage.removeItem(previousKey);
+   }
+   return;
+  }
+  if((scopePrefix||binding.previousPublicationId)&&typeof localStorage.length==='number'&&typeof localStorage.key==='function'){
+   const partsScopePrefix=jobId&&draftId?`rig-review-draft/1:parts:${jobId}:${draftId}:`:null;
+   let unsentCount=0;
+   for(let i=0;i<localStorage.length;i++){
+    const key=localStorage.key(i);
+    if(!key||key===recordCommentKey)continue;
+    if((scopePrefix&&key.startsWith(scopePrefix))||(binding.previousPublicationId&&key.startsWith(`${prefix}${binding.previousPublicationId}:`))){
+     const prior=JSON.parse(localStorage.getItem(key)??'null');
+     if(prior&&typeof prior.sourceHash==='string'&&prior.sourceHash!==sourceHash&&Array.isArray(prior.comments)&&prior.comments.length>0){
+      unsentCount+=prior.comments.length;
+     }
+    }else if(partsScopePrefix&&key.startsWith(partsScopePrefix)&&!key.endsWith(':'+sourceHash)){
+     const prior=JSON.parse(localStorage.getItem(key)??'null');
+     if(prior&&typeof prior.sourceHash==='string'&&prior.sourceHash!==sourceHash&&prior.reviewDirty&&Array.isArray(prior.session?.issues)&&prior.session.issues.length>0){
+      unsentCount+=prior.session.issues.length;
+     }
+    }
+   }
+   if(unsentCount>0){
+    const notice=`The source changed, so ${unsentCount} unsent comment(s) could not be carried over. Please add them again.`;
+    if(typeof draftStatus!=='undefined')draftStatus=notice;
+    if(typeof renderDraftState==='function')renderDraftState();
+   }
+  }
  }catch{/* A mismatched or invalid local draft has no authority. */}
 }
 /** Comments remain native rows locally; the old act field carries their scalar projection only. */
@@ -1594,17 +1676,40 @@ function recordCommentWords():string {
 function persistRecordComments():void {
  const binding=host?.direction??host?.verdictComments??host?.record;
  if(!binding||!recordCommentKey)return;
- const comments=host?.verdictComments?.rows??recordComments;
+ const comments=(host?.verdictComments?.rows??recordComments) as CommentRow[]&{knownIds?:Set<string>};
+ const knownIds=(comments.knownIds??=new Set<string>());
  try{
+  const raw=typeof localStorage.getItem==='function'?localStorage.getItem(recordCommentKey):null;
+  if(raw!==null){
+   const existing=JSON.parse(raw);
+   const storedRows:CommentRow[]=existing?.sourceHash===binding.sourceHash&&Array.isArray(existing.comments)
+    ?existing.comments.filter((row:CommentRow)=>row&&typeof row.id==='string'&&row.id&&typeof row.summary==='string'&&row.summary.trim()&&row.summary.length<=1000):[];
+   const storedIds=new Set(storedRows.map(row=>row.id));
+   const survivingLocal=comments.filter(row=>!knownIds.has(row.id)||storedIds.has(row.id));
+   const survivingIds=new Set(survivingLocal.map(row=>row.id));
+   const addedFromOther=storedRows.filter(row=>!knownIds.has(row.id)&&!survivingIds.has(row.id));
+   const kept=survivingLocal.filter(row=>knownIds.has(row.id));
+   const localNew=survivingLocal.filter(row=>!knownIds.has(row.id));
+   comments.splice(0,comments.length,...kept,...addedFromOther,...localNew);
+  }
+  knownIds.clear();for(const row of comments)knownIds.add(row.id);
+  const dialogPublication=typeof recordDialog!=='undefined'?recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication:undefined;
+  const activePub=binding.publicationId??dialogPublication;
+  const prefix=host?.verdictComments?'rig-review-verdict-comments/1:':'rig-review-record-comments/1:';
+  if(typeof localStorage.removeItem==='function'){
+   if(activePub&&`${prefix}${activePub}:${binding.sourceHash}`!==recordCommentKey)localStorage.removeItem(`${prefix}${activePub}:${binding.sourceHash}`);
+   if(binding.previousPublicationId&&`${prefix}${binding.previousPublicationId}:${binding.sourceHash}`!==recordCommentKey)localStorage.removeItem(`${prefix}${binding.previousPublicationId}:${binding.sourceHash}`);
+  }
   if(host?.verdictComments&&!comments.length)localStorage.removeItem(recordCommentKey);
-  else localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:binding.publicationId??recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication,sourceHash:binding.sourceHash,comments}));
+  else localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:activePub,sourceHash:binding.sourceHash,comments}));
  }catch{/* In-memory comments remain bound to this host. */}
 }
 function recordCommentsChanged():void {
  if(!host?.record&&!host?.direction)return;
+ if(/^The source changed, so /.test(draftStatus??''))draftStatus=null;
  persistRecordComments();
  setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);
- renderAnswerControls();
+ renderDraftState();
  for(const form of recordDialog?.querySelectorAll('form[data-job-ask]')??[])form.dispatchEvent(new Event('input',{bubbles:true}));
 }
 /** #834's transient reference viewport, owned only while the Question tab is selected. */
@@ -1705,7 +1810,9 @@ function renderAnswerControls():void {
  const enabled=questionForms.some(form=>!form.querySelector('fieldset')?.disabled)||!!recordDialog?.querySelector('fieldset:not(:disabled)');
  const blocked=saving||draftConflict||!!actReadOnly||!!host?.unavailable;
  const save=button('save');
- const hasPinnedPart=parts&&liveIssueCount()>0;
+ const pendingPartComment=parts&&typeof partsSubject!=='undefined'&&!!partsSubject?.hasPendingComment?.();
+ const pendingStageComment=!parts&&typeof comments!=='undefined'&&!!comments?.hasPendingComment?.();
+ const hasPinnedPart=parts&&(liveIssueCount()>0||pendingPartComment);
  const needsPinnedPart=parts&&!!host?.verdictComments?.rows.length&&!hasPinnedPart;
  const pinRefusal='Request changes needs at least one comment pinned to a part.';
  if((host||subjects.some(subject=>subject.kind==='interview-picks'))&&subjects.length&&!rigInspector.actBar.saveState())rigInspector.actBar.setSaveState({kind:'unsaved',text:'Not submitted'});
@@ -1717,7 +1824,7 @@ function renderAnswerControls():void {
  setSourceText(rigAsk,kind==='signoff'?'Approve…':kind==='interview-picks'||readable?'Answer…':'Review…');
  rigAsk.disabled=(!enabled&&!readable)||(enabled&&blocked);
  if(verdict){
-  const count=host?.direction?recordComments.length:liveIssueCount();
+  const count=(host?.direction?recordComments.length:liveIssueCount())+(pendingPartComment||pendingStageComment?1:0);
   const hasChanges=count>0||!!host?.canSubmitMeshEdits?.()&&subjects.some(subject=>subject.kind==='review-verdict'&&subject.stage==='rig-review');
   setSourceText(save,'Approve');setSourceText(requestChanges,'Request changes');
   save.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||(parts&&(partsAnswerBlocked()||count>0));
@@ -1727,7 +1834,7 @@ function renderAnswerControls():void {
   if(!parts){
    save.onclick=event=>{session.status='approved';select('review-status').value=session.status;return verdictSubmit?.(event);};
   }
-  requestChanges.onclick=()=>{if(requestChanges.disabled)return;if(parts){if(liveIssueCount()===0)return;void save.onclick?.call(save,new PointerEvent('click'));}else{session.status='changes-requested';select('review-status').value=session.status;void verdictSubmit?.(new MouseEvent('click'));}};
+  requestChanges.onclick=async()=>{if(requestChanges.disabled)return;if(parts){if(typeof partsSubject!=='undefined'&&partsSubject?.hasPendingComment?.()&&!await partsSubject.commitDraft())return;if(liveIssueCount()===0)return;void save.onclick?.call(save,new PointerEvent('click'));}else{if(typeof comments!=='undefined'&&comments?.hasPendingComment?.()&&!await comments.commitDraft())return;session.status='changes-requested';select('review-status').value=session.status;void verdictSubmit?.(new MouseEvent('click'));}};
  }
  for(const root of [recordDialog,...questionForms])for(const control of root?.querySelectorAll<HTMLButtonElement>('button[type="submit"]')??[])control.disabled=blocked||verdict;
  // The waiting row is already visible: finish labels, state and handlers before revealing any answer.
@@ -3239,7 +3346,7 @@ function setupComments():void {
    return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;
   },
   pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:inspectionBookmark,restore:(b,timed)=>restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal,!!timed),feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
-  locked:host?.record?()=>false:host?.direction?id=>submittedDirectionComments.has(id):isSubmittedFeedback,add:f=>{if(host?.record||host?.direction)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(host?.record||host?.direction){recordCommentsChanged();if(host?.direction){markDirty();comments?.refresh();}return;}if(host?.verdictComments)persistRecordComments();markDirty();renderProposals();return persistence?.save();},error:value=>message(value,true),
+  locked:host?.record?()=>false:host?.direction?id=>submittedDirectionComments.has(id):isSubmittedFeedback,add:f=>{if(host?.record||host?.direction)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(/^The source changed, so /.test(draftStatus??''))draftStatus=null;if(host?.record||host?.direction){recordCommentsChanged();if(host?.direction){markDirty();comments?.refresh();}return;}if(host?.verdictComments)persistRecordComments();markDirty();renderProposals();return persistence?.save();},draftChanged:()=>{if(typeof renderAnswerControls==='function')renderAnswerControls();},error:value=>message(value,true),
   refusal:()=>host?.record&&!host.record.hasPicture?null:commentCaptureRefusal(),blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
  });
  if(host?.verdictComments)renderProposals();
