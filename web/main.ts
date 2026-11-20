@@ -643,7 +643,7 @@ function renderFrameTransport(): void {
 function activeTransportClock() {
   if(activeScene())return null;
   const active = player && player.current !== animation ? '' : animation;
-  return transportClock({ clock: data.report?.clock, animation: data.report?.animation }, active, !!player, stageClock, stageModelHash);
+  return transportClock({ clock: data.report?.clock, animation: data.report?.animation, frameClocks: data.feedbackCatalog?.frameClocks }, active, !!player, stageClock, stageModelHash);
 }
 function activeFrameClock() { return activeScene()?null:activeTransportClock()?.clock ?? null; }
 

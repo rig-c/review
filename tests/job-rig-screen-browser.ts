@@ -23,6 +23,9 @@ import {fullyVisible, visibilityGeometry} from './helpers/walk-visibility.ts';
 
 const argument = (key: string) => {const at = Bun.argv.indexOf(key); return at < 0 ? undefined : Bun.argv[at + 1];};
 const autoStill=Bun.argv.includes('--auto-still');
+// #1018: `--pin-comment` pins one rig comment in Playback before the verdict; `--frames` also declares the producer's
+// frame record (the real `rigc render --fps 12` record of the fixture's 1 s `still`, set renamed to the `idle` copy).
+const pinComment=Bun.argv.includes('--pin-comment'),declareFrames=Bun.argv.includes('--frames');
 const verdict=(argument('--verdict')??'approved') as 'approved'|'changes-requested';
 const language = argument('--lang') ?? 'both';
 assert.ok(language === 'both' || language === 'en' || language === 'ko');
@@ -143,6 +146,15 @@ async function run(lang: 'en' | 'ko') {
     model.animations.push({...still, name: 'idle'});
     if (model.editorOrder?.animations) model.editorOrder.animations.push('idle');
     manifest.animations.push({id: 'idle', label: 'Synthetic static idle'});
+    if (declareFrames) {
+      const frames = JSON.parse(await readFile(new URL('./fixtures/frames-1018/still-12fps.frames.json', import.meta.url), 'utf8'));
+      assert.equal(frames.sets.length, 1);
+      assert.equal(still.duration, 1, 'the record was rendered from a 1 s still');
+      frames.sets[0] = {...frames.sets[0], dir: 'idle', animation: 'idle'};
+      await mkdir(join(fixture.input.root, 'out/check/idle_frames'), {recursive: true});
+      await writeFile(join(fixture.input.root, 'out/check/idle_frames/frames.json'), JSON.stringify(frames, null, 2) + '\n');
+      manifest.frames = 'check/idle_frames/frames.json';
+    }
     await writeFile(modelPath, JSON.stringify(model));
     await writeFile(manifestPath, JSON.stringify(manifest));
     const publication = await fixture.publish();
@@ -243,6 +255,30 @@ async function run(lang: 'en' | 'ko') {
       assert.equal(Number((beforeSubmit as any).time),0.375);
       await record('788-before-submit',beforeSubmit);
     }
+    if(pinComment){
+      await page.evaluate(`(()=>{document.querySelector('[data-mode="playback"]').click();
+        const scrub=document.getElementById('scrub');scrub.value='0.375';scrub.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await wait(`document.getElementById('animation-select').value==='idle'&&Number(document.getElementById('scrub').value)===0.375`, 'comment-pose');
+      await click(page, '#stage-comment');
+      const at = await page.evaluate<{x: number; y: number}>(`(()=>{const r=document.getElementById('rig-viewport').getBoundingClientRect();
+        return {x:r.left+r.width*.54,y:r.top+r.height*.49};})()`);
+      await page.mouse('mouseMoved', at.x, at.y);await page.mouse('mousePressed', at.x, at.y);await page.mouse('mouseReleased', at.x, at.y);
+      await wait("!!document.querySelector('.stage-comment-composer input')", 'comment-composer');
+      await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');
+        form.querySelector('input').value='Pinned frame check';form.requestSubmit();})()`);
+      await wait("!document.querySelector('.stage-comment-composer') && !!document.querySelector('#stage-comment-list .stage-comment-summary')", 'comment-added');
+      if (await page.evaluate<boolean>("document.getElementById('stage-comment').getAttribute('aria-pressed')==='true'")) await click(page, '#stage-comment');
+      const row = await page.evaluate<{rows: string[]; frameLabel: string; frameControlsHidden: boolean}>(`({rows:[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].map(n=>n.textContent),
+        frameLabel:document.getElementById('frame-label').textContent,frameControlsHidden:document.getElementById('frame-controls').hidden})`);
+      await record('comment-row', row);
+      assert.equal(row.rows.length, 1, 'one pinned comment row');
+      const timeOnly = catalog['{0} s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)']!.replace('{0}', '0.375');
+      if (declareFrames) {
+        assert.equal(row.rows[0], '1 · ANIMATE · RIG · F4 (producer) · Pinned frame check', 'the normal row, unchanged wording');
+        assert.ok(!row.rows[0]!.includes('COMMENT_FRAME_UNAVAILABLE'));
+      } else assert.equal(row.rows[0], '1 · ANIMATE · RIG · ' + timeOnly + ' · Pinned frame check', "today's time-only row");
+      await writeFile(join(out, 'comment-row.png'), await page.screenshot());
+    }
     // Use the screen's direct verdict button and trusted pointer submit. No /ui/acts call here.
     assert.equal(await page.evaluate(`document.getElementById('review-status').hidden`),true);
     const answerSelector=verdict==='approved'?'#save':'#request-changes';
@@ -273,7 +309,24 @@ async function run(lang: 'en' | 'ko') {
     assert.equal(act.authority.channel, 'review-ui');
     assert.equal(act.value.stage, 'rig-review');
     assert.equal(act.value.verdict, verdict);
-    assert.deepEqual(act.value.comments, []);
+    if (pinComment) {
+      assert.equal(act.value.comments.length, 1, 'the pinned comment reaches the act');
+      // A JobComment carries the human text and, for a pin, its feedback anchor.
+      const pinned = act.value.comments[0]!.anchor as unknown as {frameStart: number | null; context?: {comment?: {frame: unknown; time: number; animation: string | null; timeBasis?: unknown}}};
+      assert.equal(act.value.comments[0]!.text, 'Pinned frame check');
+      await record('act-comment', {frameStart: pinned.frameStart, frame: pinned.context?.comment?.frame, time: pinned.context?.comment?.time,
+        animation: pinned.context?.comment?.animation, timeBasis: pinned.context?.comment?.timeBasis ?? null});
+      assert.equal(pinned.context?.comment?.animation, 'idle');
+      assert.equal(pinned.context?.comment?.time, 0.375);
+      if (declareFrames) {
+        assert.deepEqual(pinned.context?.comment?.frame, {index: 4, basis: 'producer'});
+        assert.equal(pinned.frameStart, 4);
+        assert.equal(pinned.context?.comment?.timeBasis, undefined);
+      } else {
+        assert.equal(pinned.context?.comment?.frame, null);
+        assert.equal(pinned.frameStart, null);
+      }
+    } else assert.deepEqual(act.value.comments, []);
     assert.equal(act.still.camera, 'fixed');
     assert.match(act.still.sha256, /^[a-f0-9]{64}$/);
     assert.equal(act.still.path, act.still.sha256 + '.png');
