@@ -1298,7 +1298,9 @@ describe('standalone event subscription lifetime', () => {
             return new Response(new ReadableStream<Uint8Array>({
                 start(controller) {
                     if (first) {
-                        const rows = [fixture.events[0], progressLine(fixture.jobId, 1, 1)].map(value => JSON.stringify(value) + '\n').join('');
+                        const build = progressLine(fixture.jobId, 1, 1);
+                        const rows = [{...build, progress: null}, fixture.events[0], build]
+                            .map(value => JSON.stringify(value) + '\n').join('');
                         controller.enqueue(encoder.encode(rows + JSON.stringify(progressLine(fixture.jobId, 2, 1)).slice(0, 30)));
                         setTimeout(() => {disconnected++; controller.close(); finish();}, 0);
                     } else {
@@ -1321,9 +1323,11 @@ describe('standalone event subscription lifetime', () => {
             await subscription.done;
             expect(requests).toEqual([null, '1']);
             expect(received).toEqual(['1', '2', '3', '4', '5']);
-            expect(progress).toEqual([progressLine(fixture.jobId, 1, 1).progress, progressLine(fixture.jobId, 3, 3).progress,
+            // The first connection delivers its empty snapshot. Replay then clears the old build before publication 2.
+            expect(progress).toEqual([null, progressLine(fixture.jobId, 1, 1).progress,
+                null, progressLine(fixture.jobId, 3, 3).progress,
                 null, progressLine(fixture.jobId, 4, 4).progress, null]);
-            expect(progressAfter).toEqual(['1', '3', '4', '4', '4']);
+            expect(progressAfter).toEqual([undefined, '1', '1', '3', '4', '4', '4']);
             expect(fixture.events.map(event => event.type)).toEqual(['published', 'published', 'pending', 'act', 'closed']);
             expect(maximumActive).toBe(1); expect(active).toBe(0);
             expect(disconnected).toBe(1);
