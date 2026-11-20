@@ -1214,7 +1214,7 @@ function bind(): void {
           await persistence?.submitted(submittedBaseline);
           comments?.refresh(); renderProposals();
         },host.direction?recordCommentWords():undefined,general);
-        message(sent);
+        if (sent) message(sent);
       } catch (error) {
         submissionFailure = jobSubmissionRefusal(error);
         message(submissionFailure.text, true);
@@ -1464,7 +1464,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   const label=panelMake('label',{id:'parts-difference-operand-label',hidden:true},tr('Compare with'),operand);
   const localizeOptions=()=>{
    paintingOption.textContent=t('Original painting');
-   previousOption.textContent=t('Previous accepted draft · {0} · {1}',[previousDraft.id,previousDraft.revision.slice(0,12)]);
+   previousOption.textContent=t('Previous accepted draft · {0}',[previousDraft.id]);
   };
   localizeOptions();viewDisposers.push(onLanguageChange(localizeOptions));
   operand.onchange=()=>{
@@ -1545,13 +1545,24 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  readOnly=tr(interview?'MODEL_UNAVAILABLE':'JOB_REVIEW_READ_ONLY');
  if(!interview)actReadOnly=readOnlyReason(access,true,host?.ownerActAccess);
  bindWorkspace();bindInspector(true);rigInput={state:'absent'};referenceInput={state:'absent'};renderLayout();
- parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??(host?.record?.scenePicture?'':unavailable),!!actReadOnly);
+ parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??(host?.record?.questionPicture?'':unavailable),!!actReadOnly);
  text('package-title',interview?.label??host!.record!.label);text('revision','');text('source-hash',`source ${(interview?.sourceHash??host!.record!.sourceHash).slice(0,12)}`);
  el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty',unavailable);
- for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')){control.disabled=true;setSourceAttribute(control,'title',unavailable);}
+ for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button')){
+  if(control===rigInspector.collapse||(!interview&&control===rigInspector.comments.button))continue;
+  control.disabled=true;control.removeAttribute('title');
+  const toggleLabel=control.closest('label.layer-toggle');if(toggleLabel)toggleLabel.removeAttribute('title');
+  if(!control.hasAttribute('aria-label')&&!control.hasAttribute('aria-labelledby')&&control.getAttribute('aria-hidden')!=='true'){
+   const wrappingLabel=control.closest('label'),explicitLabel=control.id?document.querySelector<HTMLLabelElement>(`label[for="${control.id}"]`):null;
+   const labelNode=control instanceof HTMLButtonElement?(control.childElementCount?control.childNodes[0]??null:control):wrappingLabel?(wrappingLabel.querySelector('span')??[...wrappingLabel.childNodes].find(node=>node.nodeType===3&&node.nodeValue?.trim())??null):explicitLabel;
+   const labelText=sourceTextContent(labelNode).trim();
+   if(labelText)setSourceAttribute(control,'aria-label',labelText);
+  }
+  setSourceAttribute(control,'aria-description',unavailable);
+ }
  if(interview){
   button('stage-comment').hidden=true;
-  button('save').disabled=true;setSourceAttribute(button('save'),'title',unavailable);
+  button('save').disabled=true;setSourceAttribute(button('save'),'aria-description',unavailable);
   viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,'job.pending',true)));
   text('provenance-rig',unavailable);text('provenance-motion',unavailable);text('source-files','project.json');
  }else{restoreRecordComments();setupComments();showRecordComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}

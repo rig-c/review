@@ -21,6 +21,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "JOB_ASK_UNSUPPORTED": "JOB_ASK_UNSUPPORTED",
   "job.refusal.JOB_ASK_UNSUPPORTED": "이 요청에 맞는 소스 또는 체크포인트 연결 정보가 없어요. 제작 도구에서 해당 소스와 계획 연결 정보를 게시한 후 다시 요청해야 해요.",
   "In a job, press Request changes to send this edit; the producer rebuilds it.": "잡에서는 수정 요청으로 이 편집을 보내 주세요. 리빌드는 프로듀서가 해요.",
+  "Send this Request changes with {0} mesh edit(s) to the producer?": "메시 편집 {0}개를 담은 수정 요청을 보낼까요?",
   "job.mesh.staleDraft": "이 모델에서 복원하지 못한 메시 편집은 수정 요청에 포함하지 않아요.",
   "Comment · C": "코멘트 · C",
 
@@ -3410,7 +3411,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "--by: launch only; incompatible with export or correction options": "--by: 실행 전용 옵션이라 내보내기 또는 수정 인계 옵션과 함께 쓸 수 없어요",
   "Painting comparison": "원화 비교",
   "Compare with": "비교 대상",
-  "Previous accepted draft · {0} · {1}": "이전 승인 초안 · {0} · {1}",
+  "Previous accepted draft · {0}": "이전 승인 초안 · {0}",
   "Overlay": "오버레이",
   "Part opacity": "파츠 불투명도",
   "PARTS_COMPARISON_UNAVAILABLE: original painting required": "PARTS_COMPARISON_UNAVAILABLE: 원본 원화가 필요해요",

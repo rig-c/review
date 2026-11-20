@@ -327,7 +327,7 @@ async function openPendingAsk(page: InputCdpSession): Promise<void> {
   let state: 'open' | 'ready' | null = null;
   await until(async () => {
     state = await page.evaluate<'open' | 'ready' | null>(`(() => {
-      if (document.querySelector('#job-record-asks[open]')) return 'open';
+      if (document.querySelector('#job-record-asks[open]') || document.querySelector('#workspace-interview-answer:not([hidden]) form.interview-answer')) return 'open';
       const button = document.querySelector('#workspace-pending-ask');
       if (!button || button.hidden || button.disabled) return null;
       const rect = button.getBoundingClientRect();

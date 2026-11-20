@@ -556,6 +556,85 @@ async function followupQuestionChecks(){
  await writeFile(join(output,'followup-result.json'),JSON.stringify(result,null,2));console.log('839_FOLLOWUP_RESULT '+JSON.stringify(result));if(!result.passed)process.exitCode=1;
 }
 
+async function assertNoPictureQuestionTab(reason:string,catalog:Record<string,string>,selector='form.interview-answer'){
+ const state=await page!.evaluate<{
+  tabOpen:boolean;
+  tabLabel:string;
+  formInTab:boolean;
+  tabHasReason:boolean;
+  controls:{id:string;kind:string;ownLabel:string;accessibleName:string;ariaDescription:string|null;title:string|null}[];
+ }>(`(()=>{
+  const tab=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target="question"][role="tab"][aria-selected="true"]');
+  const tabRect=tab?.getBoundingClientRect();
+  const panel=document.querySelector('#workspace-interview-answer:not([hidden])');
+  const form=panel?.querySelector(${JSON.stringify(selector)});
+  const formRect=form?.getBoundingClientRect();
+  const declaredLabels={
+   'idle-blink-marker':${JSON.stringify(catalog['Blink time'])},
+   'play':${JSON.stringify(catalog['Play'])},
+   'report-previous':${JSON.stringify(catalog['Previous event page'])},
+   'report-next':${JSON.stringify(catalog['Next event page'])},
+  };
+  const nodes=[...document.querySelectorAll('.inspector [role="tab"]:disabled,.inspector input[type="checkbox"]:disabled:not([aria-hidden="true"]),.workspace-secondary-toolbar input[type="checkbox"]:disabled,.inspector button:not([role="tab"]):disabled,.workspace-secondary-toolbar button:disabled')];
+  const controls=nodes.map(control=>{
+   const labelledBy=control.getAttribute('aria-labelledby');
+   const byText=labelledBy?labelledBy.split(/\\s+/).map(id=>document.getElementById(id)?.textContent?.trim()??'').filter(Boolean).join(' '):'';
+   const wrapping=control.closest('label'),explicit=control.id?document.querySelector('label[for="'+control.id+'"]'):null;
+   const ownLabel=(declaredLabels[control.id]||byText||(control.tagName==='BUTTON'?(control.childElementCount?control.childNodes[0]?.textContent:control.textContent):(wrapping?(wrapping.querySelector('span')?.textContent??[...wrapping.childNodes].find(n=>n.nodeType===3&&n.nodeValue?.trim())?.nodeValue):explicit?.textContent))||'').trim();
+   const accessibleName=(byText||control.getAttribute('aria-label')||control.textContent||control.getAttribute('title')||'').trim();
+   const kind=control.getAttribute('role')==='tab'?'tab':control.tagName==='INPUT'?'checkbox':'button';
+   return {id:control.id||control.tagName.toLowerCase(),kind,ownLabel,accessibleName,ariaDescription:control.getAttribute('aria-description'),title:control.getAttribute('title')};
+  });
+  return {
+   tabOpen:!!tab&&!!tabRect&&tabRect.width>0&&tabRect.height>0,
+   tabLabel:tab?.textContent?.trim()??'',
+   formInTab:!!form&&!!formRect&&formRect.width>0&&formRect.height>0,
+   tabHasReason:!!panel&&panel.textContent.includes(${JSON.stringify(reason)}),
+   controls,
+  };
+ })()`);
+ assert.equal(state.tabOpen,true,'#955 Question tab is visible and selected on no-picture question page');
+ assert.equal(state.tabLabel,catalog['Question'],'#955 Question tab label');
+ assert.equal(state.formInTab,true,'#955 Question tab holds the question form');
+ assert.equal(state.tabHasReason,true,'#955 Question tab states the missing-picture absence sentence');
+ assert.ok(state.controls.some(c=>c.kind==='tab')&&state.controls.some(c=>c.kind==='checkbox')&&state.controls.some(c=>c.kind==='button'),'#955 unavailable tabs, checkboxes, and buttons are present');
+ for(const control of state.controls){
+  assert.ok(control.ownLabel.length>0,`#955 ${control.kind}#${control.id} has its own visible label`);
+  assert.equal(control.accessibleName,control.ownLabel,`#955 ${control.kind}#${control.id} accessible name is its own label`);
+  assert.notEqual(control.accessibleName,reason,`#955 ${control.kind}#${control.id} accessible name is not the missing-picture reason`);
+  assert.equal(control.ariaDescription,reason,`#955 ${control.kind}#${control.id} aria-description is the missing-picture reason`);
+  assert.notEqual(control.title,reason,`#955 ${control.kind}#${control.id} title is not the missing-picture reason`);
+ }
+ const ax=await command!('Accessibility.getFullAXTree') as {nodes?:{ignored?:boolean;role?:{value?:string};name?:{value?:string};description?:{value?:string};properties?:{name:string;value?:{value?:unknown}}[]}[]};
+ const axNodes=ax.nodes??[];
+ assert.equal(axNodes.some(node=>['tab','checkbox','button'].includes(node.role?.value??'')&&node.name?.value===reason),false,'#955 no tab, checkbox, or button in AXTree uses the missing-picture reason as its accessible name');
+ const axDisabled=axNodes.filter(node=>!node.ignored&&['tab','checkbox','button'].includes(node.role?.value??'')&&node.properties?.some(p=>p.name==='disabled'&&p.value?.value===true)&&node.description?.value===reason);
+ assert.ok(axDisabled.length>=3,'#955 AXTree reports visible disabled controls with aria-description');
+ for(const node of axDisabled){
+  assert.ok((node.name?.value?.trim().length??0)>0,'#955 AXTree node has non-empty accessible name');
+  assert.notEqual(node.name?.value,reason,'#955 AXTree accessible name is own label, not the missing-picture reason');
+  assert.equal(node.description?.value,reason,'#955 AXTree description is the missing-picture reason');
+ }
+}
+
+async function assertOriginalPainting(base: string, expectedHash: string) {
+ await wait(`(()=>{const image=document.querySelector('#reference-content img');
+  return !!image?.naturalWidth && image.checkVisibility() && image.getBoundingClientRect().width>0;
+ })()`,'955 original painting in the main view');
+ const image = await page!.evaluate<{src:string;rgba:number[]}>(`(()=>{
+  const image=document.querySelector('#reference-content img'),canvas=document.createElement('canvas');
+  canvas.width=canvas.height=2;
+  const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);
+  return {src:image.currentSrc,rgba:[...ctx.getImageData(0,0,1,1).data]};
+ })()`);
+ assert.deepEqual(image.rgba,[40,160,220,255]);
+ assert.ok(new URL(image.src).pathname.startsWith(base+'interview/image/'));
+ const response = await fetch(image.src);
+ assert.equal(response.status,200);
+ assert.equal(sha(new Uint8Array(await response.arrayBuffer())),expectedHash);
+ return expectedHash;
+}
+
 async function postQuestionPictureChecks(){
  await page!.setViewport(1440,900);
  const observations:{variant:string;language:string;sha256?:string}[]=[];
@@ -599,8 +678,12 @@ async function postQuestionPictureChecks(){
      const key=variant==='legacy'?'This request has no picture.':variant==='rig'?
       'This question refers to a rig version that this publication does not include.':
       'This question refers to a scene that this publication does not include.';
+     const catalog=language==='en'?enCatalog:koCatalog;
      const text=await page!.evaluate<string>(`document.querySelector('#rig-empty').textContent`);
-     assert.equal(text,(language==='en'?enCatalog:koCatalog)[key]);
+     assert.equal(text,catalog[key]);
+     if(variant!=='legacy') observation.sha256=await assertOriginalPainting(
+      fixture.display.routes.apiBase,sha(await readFile(join(fixture.root,'inputs/reference.png'))));
+     await assertNoPictureQuestionTab(catalog[key],catalog);
     }
     await writeFile(join(output,variant+'-'+language+'.png'),await page!.screenshot());
     observations.push(observation);
@@ -672,6 +755,7 @@ async function boundRigPictureChecks(){
 
     let paintedPixels = 0;
     let missingPicture: string | null = null;
+    let paintingSha256: string | undefined;
     if (pictured) {
      const actualRig = catalog['@rig-c/play · Actual rig'];
      await wait(`document.querySelector('#player-state')?.textContent===${JSON.stringify(actualRig)}&&
@@ -694,6 +778,9 @@ async function boundRigPictureChecks(){
     } else {
      missingPicture = await page!.evaluate<string>(`document.querySelector('#rig-empty').textContent`);
      assert.equal(missingPicture,catalog['This question refers to a rig version that this publication does not include.']);
+     await assertNoPictureQuestionTab(missingPicture,catalog,selector);
+     if (variant==='rig-signoff-hash') paintingSha256=await assertOriginalPainting(
+      fixture.display.routes.apiBase,sha(await readFile(join(fixture.root,'inputs/reference.png'))));
      await writeFile(join(out,'question-'+visit+'.png'),await page!.screenshot());
      await selectBlock('feedback');
      await click(page!,'#workspace-pending-ask');
@@ -763,7 +850,7 @@ async function boundRigPictureChecks(){
     assert.deepEqual(bytes,Buffer.from(JSON.stringify(expected)));
     assert.deepEqual(await jobInputHashes(fixture.root),before);
     assert.deepEqual(await jobInputHashes(retained.snapshotRoot),retainedBefore);
-    observations.push({variant,language,visit,suppressed,paintedPixels,missingPicture,assetRequests,controls,sourceHash:publication.source.sourceHash,
+    observations.push({variant,language,visit,suppressed,paintedPixels,paintingSha256,missingPicture,assetRequests,controls,sourceHash:publication.source.sourceHash,
      actBytes:bytes.length,actSha256:sha(bytes),actValueSha256:sha(JSON.stringify(act.value)),fullActMatchesSourceOracle:true});
    }
    if (variant === 'bound-rig') {

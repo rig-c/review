@@ -903,6 +903,15 @@ export async function loadRetainedRecordRig(retained: JobRetainedRecordSource) {
   }
 }
 
+/** Create declares the original painting as the first project input. */
+export function retainedRecordPainting(retained: JobRetainedRecordSource): Pick<InterviewQuestion['images'][number], 'ref' | 'name'> | null {
+  const {project} = readProjectRecordBytes(retained.snapshotRoot, retained.record);
+  const input = asPlainObject(Array.isArray(project.inputs) ? project.inputs[0] : null);
+  const seal = retained.seals.find(file => file.path === input?.path && file.sha256 === input?.sha256);
+  if (!seal || !/\.(png|jpe?g|webp|svg)$/i.test(seal.path)) return null;
+  return {ref: seal, name: posix.basename(seal.path)};
+}
+
 /** Delivery-only projection through the existing retained record reader. */
 export function projectRetainedPlanText(retained: JobRetainedSourceV3): JobPlanTextProjection | undefined {
   const {source, record} = retained;
