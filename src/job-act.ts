@@ -147,13 +147,8 @@ export function bindJobRecordAsk(subject: unknown, retained: JobRetainedRecordSo
       }
       return source;
     }
-    case 'reopen': {
-      if (source.subject !== 'plan') {
-        throw new JobError('JOB_ASK_INVALID');
-      }
-      return source;
-    }
   }
+  throw new JobError('JOB_ASK_INVALID');
 }
 
 export function bindJobAsk(subject: JobSubject, retained: JobRetainedSource): JobSourceBinding;
@@ -476,27 +471,8 @@ export function prepareJobRecordAct(options: {
         },
       });
     }
-    case 'reopen': {
-      if (boundSource.subject !== 'plan') throw new JobError('JOB_ACT_SOURCE_STALE');
-      const value = actObject(submission.value, ['stage', 'words']);
-      if (
-        !('stage' in value) ||
-        !('words' in value) ||
-        value.stage !== askSubject.stage
-      ) {
-        throw new JobError('JOB_ACT_INVALID');
-      }
-      return parseRecordAct({
-        ...envelope,
-        kind: 'reopen',
-        source: boundSource,
-        value: {
-          stage: askSubject.stage,
-          words: words(value.words),
-        },
-      });
-    }
   }
+  throw new JobError('JOB_ACT_INVALID');
 }
 
 /** Only the authenticated UI host invokes this adapter. All source and authority
@@ -560,7 +536,6 @@ export function finalizeJobAct(options: {
       at: options.at,
     });
   }
-  if ((options.submission.kind as string) === 'reopen') throw new JobError('JOB_ACT_INVALID');
   const { submission, ask, retained, reviewer } = options as {
     readonly jobId: string;
     readonly submission: JobUISubmission;

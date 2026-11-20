@@ -743,7 +743,7 @@ without aliases or copied wire shapes.
 - `JobRecordPicksSubject`
 - `JobRecordCheckpointSubject`
 - `JobRecordSignoffSubject`
-- `JobRecordReopenSubject`
+- `JobRecordReopenSubject` (read-only compatibility: old records and acts parse; new `reopen` asks refuse with `JOB_ASK_INVALID` and Review neither renders nor builds `reopen`, #989)
 - `JobRecordPlanSubject`
 - `JobRecordSubject`
 - `JobRecordContextBase`
@@ -758,7 +758,7 @@ without aliases or copied wire shapes.
 - `JobRecordSource`
 - `JobSourceV3`
 - `JobRecordSignoffValue`
-- `JobRecordReopenValue`
+- `JobRecordReopenValue` (read-only compatibility: exported for historical record and act decoders, #989)
 - `JobRecordUIActValues`
 - `JobRecordUISubmission`
 - `JobRetainedRecordSource`

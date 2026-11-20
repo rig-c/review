@@ -22,7 +22,7 @@ merge (R0). This documentation update adds no UI or public contract.
   owner, language and capability URLs. Routing does not widen grants or
   change API contracts. See [public stability](STABILITY.md).
 - **E3** Record publications are hosted over the existing inspection screen
-  (#754). Their checkpoint, signoff, reopen and interview forms open in a dialog.
+  (#754). Their checkpoint, signoff and interview forms open in a dialog.
   A record without a picture does not manufacture a model or package.
 - **Shipped:** #756 and hub/owner single-entry adoption F (#734) shipped in
   [2.13.0](../CHANGELOG.md#2130). The remaining job window and hub were removed in
@@ -176,7 +176,7 @@ inline Other text and per-question notes through the existing answer contract.
   the chosen mode. A tab change never submits it.
 - Parts submit the comments-based verdict; rig review retains its decision and
   submit action. Failed saves and drafts remain explicit.
-- **Shipped:** record checkpoint, signoff, reopen and interview asks open the
+- **Shipped:** record checkpoint, signoff and interview asks open the
   existing forms in a native dialog over this screen (#754), through the existing
   act button. No-picture records use an explicitly empty inspection workspace.
 - **Planned:** C (#715) completes record-modal feedback cleanup; #756 removes
@@ -212,7 +212,7 @@ These are subjects and hosts of the existing tool, not designs for new screens.
 | Rig package, including hosted rig | Shipped | Header Setup/Animate; shared rig/reference view; mode blocks + Comments; act bar |
 | Parts package, including hosted parts | Shipped (#745, #749, #751) | Same Setup workspace and parts list; original follows selection; comments verdict |
 | Two builds and a reference | Shipped, unchanged | Header Compare; existing A/B host and controls; card D PARKED |
-| Record checkpoint, signoff, reopen, interview | Shipped hosting (#754) | Existing screen with a dialog; no model fabricated for a record without a picture |
+| Record checkpoint, signoff, interview | Shipped hosting (#754) | Existing screen with a dialog; no model fabricated for a record without a picture |
 | Remaining interview-modal work | Planned B (#722) | Extend existing interview component |
 | Remaining record-modal feedback cleanup | Planned C (#715) | Move existing memo feedback to Comments without changing contracts |
 | Legacy job-window owner surfaces | #756 shipped in [2.13.0](../CHANGELOG.md#2130); remainder removed in [4.0.0](../CHANGELOG.md#400) | Existing shared inspection and record-dialog homes |

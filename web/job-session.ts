@@ -1402,7 +1402,7 @@ export interface JobFormDependencies {
         fields.append(source);
         const subject = ask.subject;
         if(subject.kind==='review-verdict')throw new Error('JOB_ACT_KIND_DISABLED');
-        const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff' || subject.kind === 'reopen';
+        const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff';
         if(commentOnly)fields.append(node('p','job.commentsFromWorkspace'));
         let retainedCommentWords='';
         const commentWords=()=>form.commentWords?.()??retainedCommentWords;
@@ -1488,20 +1488,6 @@ export interface JobFormDependencies {
             read = () => ({ stage: subject.stage, decision: 'approved', words: commentWords() });
             submitKey = 'job.signoff';
         }
-        else if (subject.kind === 'reopen') {
-            if (
-                !('record' in ask.source) ||
-                ask.source.subject !== 'plan' ||
-                typeof subject.stage !== 'string' ||
-                !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(subject.stage) ||
-                !ask.source.subjects.some(candidate => candidate.kind === 'reopen' && candidate.stage === subject.stage)
-            ) {
-                throw new Error('JOB_ASK_INVALID');
-            }
-            fields.title = subject.stage;
-            read = () => ({ stage: subject.stage, words: commentWords() });
-            submitKey = 'job.reopen';
-        }
         else {
             throw new Error('JOB_ACT_KIND_DISABLED');
         }
@@ -1549,8 +1535,8 @@ export interface JobFormDependencies {
                     }) =>
                         subject.kind === 'interview-picks' ? item.value?.questionId === subject.questionId :
                         subject.kind === 'checkpoint' ? item.value?.checkpointId === subject.checkpointId :
-                        (subject.kind === 'signoff' || subject.kind === 'reopen') && item.value?.stage === subject.stage &&
-                            !('outcome' in (item.value ?? {})) && (subject.kind === 'signoff') === ('decision' in (item.value ?? {}))
+                        subject.kind === 'signoff' && item.value?.stage === subject.stage &&
+                            !('outcome' in (item.value ?? {})) && 'decision' in (item.value ?? {})
                     )
                     : undefined);
                 if(commentOnly&&typeof original?.value?.words==='string'&&original.value.words.length<=10000)retainedCommentWords=original.value.words;
