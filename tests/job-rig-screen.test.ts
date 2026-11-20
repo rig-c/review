@@ -5,6 +5,10 @@ import {jobFixture} from './helpers/job-api-fixture.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {jobRigScreenDecisions, jobRigScreenRoute, jobRigScreenSubject, jobRigScreenAsk, jobRigScreenRefusal} from '../web/job-rig-screen.ts';
 import {checkpointNoteComments, feedbackItemComments} from '../src/stage-comment.ts';
+import {assertPartsIssueBinding, parsePartsIssue, snapImageRegion} from '../src/parts-comment.ts';
+import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
+import {tr} from '../web/i18n.ts';
 // The projector Create applies to act@6 comments: the public job-host export (Create c8382ba5 pins @rig-c/review 2.12.0).
 import {parseCommentsAct, projectComments} from '../src/job-host.ts';
 import legacy from './fixtures/comments-contract-legacy.json';
@@ -245,4 +249,196 @@ test('#798 direction reuses the Comments input gate without changing the rig ins
   expect(panel.style.display).toBe(preserveInspector?'none':'block');expect(collapse.disabled).toBe(preserveInspector);
  }
  expect(main).toContain('if(host?.direction)showRecordComments(true);else if(host?.record&&!data.manifest.model)showRecordComments();');
+});
+
+test('#992 record and verdict comment drafts survive reload, same-source republish, two-tab merge/delete, legacy fallback, and report changed-source drops',async()=>{
+ const main=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
+ const start=main.indexOf('function restoreRecordComments('),end=main.indexOf('function recordCommentsChanged(',start);
+ const code=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(start,end));
+ const store=new Map<string,string>();
+ const listeners=new Set<(event:{key:string|null;newValue:string|null})=>void>();
+ const storage={
+  get length(){return store.size;},
+  key:(index:number)=>[...store.keys()][index]??null,
+  getItem:(key:string)=>store.get(key)??null,
+  setItem:(key:string,value:string,sender?:unknown)=>{
+   store.set(key,value);
+   for(const fn of listeners)if((fn as {owner?:unknown}).owner!==sender)fn({key,newValue:value});
+  },
+  removeItem:(key:string,sender?:unknown)=>{
+   store.delete(key);
+   for(const fn of listeners)if((fn as {owner?:unknown}).owner!==sender)fn({key,newValue:null});
+  },
+ };
+ const makeTab=(binding:{jobId?:string;draftId?:string;publicationId:string;previousPublicationId?:string;sourceHash:string},verdict=false)=>{
+  const rows:{id:string;summary:string}[]=[],notices:{text:string;error:boolean}[]=[];
+  let storageHandler:((event:{key:string|null;newValue:string|null})=>void)|null=null;
+  const tabWindow={
+   addEventListener:(type:string,fn:(event:{key:string|null;newValue:string|null})=>void)=>{
+    if(type==='storage'){(fn as {owner?:unknown}).owner=tabWindow;storageHandler=fn;listeners.add(fn);}
+   },
+  };
+  const tabStorage={
+   get length(){return storage.length;},
+   key:storage.key,
+   getItem:storage.getItem,
+   setItem:(k:string,v:string)=>storage.setItem(k,v,tabWindow),
+   removeItem:(k:string)=>storage.removeItem(k,tabWindow),
+  };
+  const scope={
+   host:verdict?{verdictComments:{...binding,rows,available:()=>true}}:{record:{...binding,label:'Draft d1',hasPicture:false}},
+   access:{base:`/jobs/${binding.jobId??'job-1'}/publications/${binding.publicationId}/instances/${'a'.repeat(64)}/`},
+   recordCommentKey:'',
+   recordComments:rows,
+   draftStatus:null as string|null,
+   localStorage:tabStorage,
+   window:tabWindow,
+   select:()=>({value:'pending'}),
+   projectComments,
+   renderDraftState(){},
+   message:(text:string,error=false)=>{notices.push({text,error});},
+   comments:{refresh(){}},
+   partsSubject:null,
+   rigInspector:{comments:{button:{}}},
+   setSourceText(){},
+   renderAnswerControls(){},
+   renderProposals(){},
+  };
+  const api=new Function('scope',`with(scope){${code};return {restore:()=>restoreRecordComments(),persist:()=>persistRecordComments()};}`)(scope) as {restore():void;persist():void};
+  api.restore();
+  return {scope,rows,notices,persist:api.persist,deliverStorage:(event:{key:string|null;newValue:string|null})=>storageHandler?.(event)};
+ };
+
+ // Bar 1 (Reload) & Bar 2 (Republish, same job, draft and source hash)
+ const tab1=makeTab({jobId:'job-1',draftId:'d1',publicationId:'pub-1',sourceHash:'a'.repeat(64)});
+ tab1.rows.push({id:'c1',summary:'First judgment'},{id:'c2',summary:'Second judgment'});
+ tab1.persist();
+ const reloaded=makeTab({jobId:'job-1',draftId:'d1',publicationId:'pub-1',sourceHash:'a'.repeat(64)});
+ expect(reloaded.rows.map(r=>r.id)).toEqual(['c1','c2']);
+ const republished=makeTab({jobId:'job-1',draftId:'d1',publicationId:'pub-2',sourceHash:'a'.repeat(64)});
+ expect(republished.rows.map(r=>r.id)).toEqual(['c1','c2']);
+
+ // Bar 3 (Republish with a changed source hash: not shown as current, old rows stay in storage, notice path hit)
+ const changedSource=makeTab({jobId:'job-1',draftId:'d1',publicationId:'pub-3',sourceHash:'b'.repeat(64)});
+ expect(changedSource.rows).toEqual([]);
+ expect([...store.values()].some(raw=>raw.includes('First judgment')&&raw.includes('Second judgment'))).toBe(true);
+ const carryKey='The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.';
+ const expectedEn=enCatalog[carryKey]!.replace('{0}','2');
+ const expectedKo=koCatalog[carryKey]!.replace('{0}','2');
+ expect(changedSource.scope.draftStatus).toBe(expectedEn);
+ expect(tr(changedSource.scope.draftStatus!,'en')).toBe(expectedEn);
+ expect(tr(changedSource.scope.draftStatus!,'ko')).toBe(expectedKo);
+ expect(changedSource.scope.draftStatus).not.toContain('Saved local draft was not restored');
+
+ // Bar 4 (Two tabs: tab A adds c1, tab B adds c2, both survive in both tabs and after reload; removal in A does not come back from B)
+ const tabA=makeTab({jobId:'job-1',draftId:'d2',publicationId:'pub-4',sourceHash:'c'.repeat(64)});
+ const tabB=makeTab({jobId:'job-1',draftId:'d2',publicationId:'pub-4',sourceHash:'c'.repeat(64)});
+ tabA.rows.push({id:'c1',summary:'From tab A'});
+ tabA.persist();
+ tabB.rows.push({id:'c2',summary:'From tab B'});
+ tabB.persist();
+ expect(tabA.rows.map(r=>r.id)).toEqual(['c1','c2']);
+ expect(tabB.rows.map(r=>r.id)).toEqual(['c1','c2']);
+ const reloadBoth=makeTab({jobId:'job-1',draftId:'d2',publicationId:'pub-4',sourceHash:'c'.repeat(64)});
+ expect(reloadBoth.rows.map(r=>r.id)).toEqual(['c1','c2']);
+ // Remove c1 in tab A; it must not come back from tab B
+ tabA.rows.splice(0,1);
+ tabA.persist();
+ expect(tabA.rows.map(r=>r.id)).toEqual(['c2']);
+ expect(tabB.rows.map(r=>r.id)).toEqual(['c2']);
+ tabB.persist();
+ const reloadAfterDelete=makeTab({jobId:'job-1',draftId:'d2',publicationId:'pub-4',sourceHash:'c'.repeat(64)});
+ expect(reloadAfterDelete.rows.map(r=>r.id)).toEqual(['c2']);
+
+ // Bar 4b (Late/stale storage event from Tab A arrives after Tab B writes c2: both c1 and c2 survive)
+ const lateA=makeTab({jobId:'job-1',draftId:'d2-late',publicationId:'pub-4b',sourceHash:'c'.repeat(64)});
+ const lateB=makeTab({jobId:'job-1',draftId:'d2-late',publicationId:'pub-4b',sourceHash:'c'.repeat(64)});
+ lateA.rows.push({id:'c1',summary:'From tab A'});
+ const stalePayload=JSON.stringify({status:'pending',publicationId:'pub-4b',sourceHash:'c'.repeat(64),comments:[{id:'c1',summary:'From tab A'}]});
+ store.set(lateA.scope.recordCommentKey,stalePayload);
+ lateB.rows.push({id:'c2',summary:'From tab B'});
+ lateB.persist();
+ expect(lateB.rows.map(r=>r.id)).toEqual(['c1','c2']);
+ // Control (c9e6a46): parsing event.newValue directly replaced B's [c1,c2] with [c1]
+ expect(JSON.parse(stalePayload).comments.map((r:{id:string})=>r.id)).toEqual(['c1']);
+ lateB.deliverStorage({key:lateB.scope.recordCommentKey,newValue:stalePayload});
+ expect(lateB.rows.map(r=>r.id)).toEqual(['c1','c2']);
+
+ // Bar 5 & 5b (Existing per-publication drafts restore via fallback/previousPublicationId, retire legacy key, and deleting all + reload stays 0 rows)
+ for(const [verdict,usePrevious]of [[false,false],[true,false],[false,true],[true,true]] as const){
+  const prefix=verdict?'rig-review-verdict-comments/1:':'rig-review-record-comments/1:';
+  const hash=(verdict?'e':'d').repeat(64);
+  const legacyPub=usePrevious?'pub-prev-legacy':'pub-legacy';
+  const legacyKey=`${prefix}${legacyPub}:${hash}`;
+  const draftId=`d3-${verdict?'verdict':'record'}-${usePrevious?'prev':'cur'}`;
+  // Control (c9e6a46): if legacyKey was not retired and primary was removed when empty, reload resurrected legacy-1
+  store.set(legacyKey,JSON.stringify({
+   status:'pending',publicationId:legacyPub,sourceHash:hash,comments:[{id:'legacy-1',summary:'Legacy per-publication comment'}],
+  }));
+  const fallbackTab=makeTab({jobId:'job-1',draftId,publicationId:'pub-legacy',...(usePrevious?{previousPublicationId:legacyPub}:{}),sourceHash:hash},verdict);
+  expect(fallbackTab.rows).toEqual([{id:'legacy-1',summary:'Legacy per-publication comment'}]);
+  expect(store.has(legacyKey)).toBe(false);
+  fallbackTab.rows.splice(0,fallbackTab.rows.length);
+  fallbackTab.persist();
+  const reloadedAfterDelete=makeTab({jobId:'job-1',draftId,publicationId:'pub-legacy',...(usePrevious?{previousPublicationId:legacyPub}:{}),sourceHash:hash},verdict);
+  expect(reloadedAfterDelete.rows).toEqual([]);
+ }
+});
+
+test('#999 assembled box-pin comments clamp to intersecting bound parts, commit pending composer drafts on Request changes, and fail on da67304 control',()=>{
+ const items=new Map([
+  ['handwear_l',{name:'handwear_l',x:1165,y:292,w:755,h:274,imageHash:'a'.repeat(64)}],
+  ['objects',{name:'objects',x:1274,y:353,w:646,h:727,imageHash:'b'.repeat(64)}],
+ ]);
+ const sourceHash='c'.repeat(64);
+ // Reviewer draws a box over the sword grip (objects, y:353..1080) starting slightly above y=353 in empty canvas margin (y=315..520, x=1700..1920)
+ const rawDrag=snapImageRegion({x:1700,y:315,width:220,height:205});
+ const baseIssue={
+  schema:'rig-review-parts-comment/2' as const,
+  id:'box-pin-1',
+  summary:'Sword grip must go behind the left hand',
+  sourceHash,
+  parts:[{name:'objects',imageHash:'b'.repeat(64)}],
+  imageRegion:null,
+  view:{
+   mode:'assembled' as const,
+   camera:{zoom:1,center:{x:960,y:540},viewport:{width:1200,height:800}},
+   cameraSync:true,
+   referenceCamera:null,
+   background:'checker',
+   alpha:false,
+   footprints:false,
+   mesh:false,
+   comparison:{mode:'part' as const,opacity:0.5},
+   visibleLayers:[
+    {name:'handwear_l',imageHash:'a'.repeat(64)},
+    {name:'objects',imageHash:'b'.repeat(64)},
+   ],
+  },
+  crop:{path:`comment-crops/${'d'.repeat(64)}.png`,sha256:'d'.repeat(64),width:220,height:205},
+  nativeCrop:null,
+ };
+ // Control (da67304 / a41db7f): unclipped assembled drag region exceeds objects bounding box (y=315 < 353) and refuses save
+ expect(()=>{
+  const unclipped=parsePartsIssue({...baseIssue,rigRegion:rawDrag},false,false,false);
+  assertPartsIssueBinding(unclipped,items,sourceHash);
+ }).toThrow('PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds union of issue parts');
+
+ // Fixed path: intersecting union bounds of selected parts clamp the drag region to [1700..1920, 353..520]
+ const target=items.get('objects')!;
+ const clamped=snapImageRegion({
+  x:Math.max(target.x,rawDrag.x),
+  y:Math.max(target.y,rawDrag.y),
+  width:Math.min(target.x+target.w,rawDrag.x+rawDrag.width)-Math.max(target.x,rawDrag.x),
+  height:Math.min(target.y+target.h,rawDrag.y+rawDrag.height)-Math.max(target.y,rawDrag.y),
+ });
+ expect(clamped).toEqual({x:1700,y:353,width:220,height:167});
+ const bound=parsePartsIssue({...baseIssue,rigRegion:clamped},false,false,false);
+ expect(()=>assertPartsIssueBinding(bound,items,sourceHash)).not.toThrow();
+
+ // Refusal copy maps to existing catalog sentences in EN and KO
+ expect(tr('PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image','en')).toBe(enCatalog['PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image']);
+ expect(tr('PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image','ko')).toBe(koCatalog['PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image']);
+ expect(tr('Select at least one part.','en')).toBe(enCatalog['Select at least one part.']);
+ expect(tr('Select at least one part.','ko')).toBe(koCatalog['Select at least one part.']);
 });
