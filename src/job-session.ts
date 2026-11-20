@@ -640,6 +640,7 @@ export class JobSession {
       }, fresh => {
         const raced = this.replay(fresh.data, key, digest);
         if (!raced) return false;
+        this.assertReplayCurrent(fresh, input.verb, raced.value);
         result = raced.value;
         return true;
       });
