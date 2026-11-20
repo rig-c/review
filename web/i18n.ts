@@ -603,9 +603,7 @@ function isExemptElement(el: Element | null): boolean {
       cls.includes('animation-lane-label') ||
       cls.includes('animation-tree-bone-name') ||
       cls.includes('stage-comment-pin') ||
-      cls.includes('stage-hover-label') ||
-      // The interview modal localizes its own chrome and never rewrites agent-authored prompts or options (#708).
-      cls.includes('interview-modal')
+      cls.includes('stage-hover-label')
     ) {
       return true;
     }

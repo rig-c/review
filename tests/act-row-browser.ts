@@ -100,7 +100,12 @@ async function capture(page:InputCdpSession,out:string,name:string){
  await writeFile(join(out,name+'.png'),await page.screenshot());return state;
 }
 function assertPending(state:any,mode:Mode,width:number,expectedFooter?:string){
- if(mode==='rig'||mode==='parts')assert.equal(state.footerMessage,expectedFooter,'pending verdict preserves origin/main publication-label footer');
+ if(mode==='rig')assert.equal(state.footerMessage,expectedFooter,'pending Rig verdict preserves its publication label');
+ if(mode==='parts'){
+  const catalog=state.language==='ko'?koCatalog:enCatalog;
+  assert.ok([expectedFooter,catalog['Parts ready. Source files remain unchanged.']].includes(state.footerMessage),
+   'pending Parts verdict keeps its publication label or ready message');
+ }
  for(const part of state.footer){assert.ok(part.rect.left>=0&&part.rect.right<=width&&part.rect.top>=state.footer[0].rect.top&&part.rect.bottom<=state.footer[0].rect.bottom,'shown footer item inside viewport and footer: '+part.id);assert.ok(part.scrollWidth<=part.clientWidth+1&&part.scrollHeight<=part.clientHeight+1,'shown footer text fits: '+part.id);}
  assert.equal(state.bars,1);assert.equal(state.rows,1);assert.equal(state.rowVisible,true);assert.equal(state.direct,true);assert.equal(state.home,'workspace-act-row');
  assert.equal(state.headerVisible,mode!=='embedded-rig');
@@ -180,8 +185,10 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   await control('Fetch.enable',{patterns:[{urlPattern:'*assets/*',requestStage:'Response'},{urlPattern:'*review-painting*',requestStage:'Response'},{urlPattern:'*api/stage-parts/image/*',requestStage:'Response'}]});
   await page.goto(url,language);
   await wait(page,mode==='standalone'?`!!document.querySelector('#rig-root canvas')&&!document.body.inert`:`document.body.dataset.ready==='true'&&!document.body.inert&&!!document.querySelector('#workspace-ask-headline')?.textContent`);
-  // Interview auto-opens its existing dialog; inspect the row after the normal close action.
-  await page.evaluate(`document.querySelector('dialog[open] .workspace-drawer-close')?.click()`);
+  const questionSelected=`!!document.querySelector('[data-block-target=question][aria-selected=true]')`;
+  const recordDialogClosed=`!document.querySelector('#job-record-asks[open]')`;
+  const interviewReady=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('#workspace-interview-answer form.interview-answer fieldset:not(:disabled)')`;
+  if(mode==='interview')await wait(page,interviewReady);
   if(mode==='embedded-rig'){
    const embedding:{requestSearch:string;renderSearch:string;publicEmbeddedRoute:boolean}=await page.evaluate(`window.__embeddedActRowFixture`);
    assert.equal(embedding.requestSearch,'?lang='+language);
@@ -273,13 +280,16 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(await page.evaluate(`document.getElementById('dirty').textContent`),catalog['job.review.approved']);
   }else{
    assert.deepEqual(initial.answers.map((answer:any)=>answer.id),['workspace-pending-ask']);
-   await click(page,'#workspace-pending-ask');await wait(page,`!!document.querySelector('#job-record-asks[open]')`);
+   await click(page,'#workspace-pending-ask');await wait(page,mode==='interview'?interviewReady:`!!document.querySelector('#job-record-asks[open]')`);
    assert.equal(await page.evaluate(`document.getElementById('workspace-pending-ask').closest('#workspace-act-row')!==null`),true);
-   if(mode==='interview')await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#job-record-asks input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
-   await capture(page,out,'answer-dialog');
-   if(mode==='interview')await page.evaluate(`document.querySelector('#job-record-asks button[type=submit]')?.scrollIntoView({block:'nearest',inline:'nearest'})`);
-   await click(page,mode==='checkpoint'?'#job-record-asks button[data-job-text="Pass"]':'#job-record-asks button[type=submit]');
-   await wait(page,`!document.querySelector('#job-record-asks[open]')&&document.getElementById('review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`);
+   if(mode==='interview')await page.evaluate<void>(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#workspace-interview-answer input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
+   await capture(page,out,mode==='interview'?'answer-question':'answer-dialog');
+   const submit=mode==='interview'?'#workspace-interview-answer button[type=submit]':
+    mode==='checkpoint'?'#job-record-asks button[data-job-text="Pass"]':'#job-record-asks button[type=submit]';
+   if(mode==='interview')await page.evaluate<void>(`document.querySelector(${JSON.stringify(submit)}).scrollIntoView({block:'nearest',inline:'nearest'})`);
+   await click(page,submit);
+   const answerSaved=mode==='interview'?`${questionSelected}&&!!document.querySelector('#workspace-interview-answer form.interview-answer[data-interview-answered=true]')`:'true';
+   await wait(page,`${recordDialogClosed}&&${answerSaved}&&document.getElementById('review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`);
    const saved:any=await capture(page,out,'answer-saved');
    const savedState:{pending:boolean;row:{kind:string;text:string};dirty:{kind:string;text:string}}=await page.evaluate(`(()=>{
     const state=id=>{const n=document.getElementById(id);return {kind:n.dataset.saveState,text:n.textContent};};
@@ -290,7 +300,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    if(savedState.pending)assertPending(saved,mode,width,expectedPendingFooter);
    else{
     assert.equal(saved.rowVisible,false);assert.deepEqual(saved.states,['dirty']);assert.deepEqual(saved.answers,[]);assert.deepEqual(saved.primary,[]);
-    assert.deepEqual(savedState.dirty,savedState.row,'completed dialog keeps the exact saved state in its one visible state copy');
+    assert.deepEqual(savedState.dirty,savedState.row,'completed answer keeps the exact saved state in its one visible state copy');
    }
   }
   if(mode==='rig'){

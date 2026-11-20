@@ -173,7 +173,9 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:Reload,
   assert.equal(initial.approve.label,ko?'승인':'Approve');
   assert.equal(initial.changes.label,ko?'수정 요청':'Request changes');
   assert.equal(initial.changes.disabled,true);
-  assert.equal(initial.changes.title,ko?'고칠 곳에 코멘트를 달아 주세요':'Add a comment where changes are needed.');
+  assert.equal(initial.changes.title,kind==='rig'
+    ? (ko?'바꿀 곳에 코멘트나 편집을 남겨 주세요.':'Add a comment or an edit where changes are needed.')
+    : (ko?'고칠 곳에 코멘트를 달아 주세요':'Add a comment where changes are needed.'));
   assert.equal(await page.evaluate<string>(`document.querySelector('${generalButton}').textContent`),ko?'일반 코멘트 추가':'Add general comment');
 
   const add=async(text:string)=>{await clickComment(page,generalButton);await saveComment(page,wait,text);};
@@ -426,7 +428,13 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
    await writeFile(join(out,'source-only-export.json'),JSON.stringify({state,exported},null,2)+'\n');await writeFile(join(out,'source-only-export.png'),await page.screenshot());observations.push({kind,lang,picture,...state,exported});return;
   }
   assert.equal(state.checkpointHidden,true,'no supplied package checkpoint exposes no checkpoint controls');if(state.stripBlocked||!hasVideo)assert.equal(state.stripHidden,true,'strip without declared video or write capability is hidden');else assert.equal(state.stripHidden,false,'declared video keeps available strip controls visible');
-  assert.equal(state.language,lang);assert.equal(state.top,true);assert.equal(state.panel,true);assert.equal(state.bottomComments,0);assert.equal(state.pin,picture);assert.equal(state.name,lang==='ko'?'코멘트':'Comments');assert.ok(state.listRect.y>=0&&state.listRect.y+state.listRect.height<=900,'whole comment list visible before composition');
+  assert.equal(state.language,lang);assert.equal(state.top,true);assert.equal(state.panel,true);assert.equal(state.bottomComments,0);
+  if(kind==='interview-picks'){
+   await wait(`document.querySelector('#reference-pane')?.checkVisibility()&&document.querySelector('#reference-content img')?.naturalWidth>0&&
+    !!document.querySelector('#view-menu [data-view^="interview-image-"][aria-pressed="true"]')`);
+  }
+  // #986 keeps the question painting visible in Comments, where it cannot carry stage pins.
+  assert.equal(state.pin,picture&&kind!=='interview-picks',kind+' stage pin mode');assert.equal(state.name,lang==='ko'?'코멘트':'Comments');assert.ok(state.listRect.y>=0&&state.listRect.y+state.listRect.height<=900,'whole comment list visible before composition');
   const generalExpected=kind!=='standalone'&&kind!=='standalone-parts';
   assert.equal(state.general,generalExpected,kind+' general comment entry visibility');
   assert.equal(state.generalCount,Number(generalExpected),kind+' general comment entry count');
