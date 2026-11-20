@@ -165,11 +165,14 @@ try{
    fixture.input.setRecordPath('project.json');
    const [question]=readProject(fixture.input.root).questions;
    assert.ok(question?.editable);
+   const questionSubject={kind:'interview-picks',questionId:question.set.question,setId:question.set.id} as const;
+   const context=fixture.input.getContext();
+   fixture.input.setContext({...context,subjects:[...context.subjects,questionSubject],
+    files:[...context.files,...question.images.map(image=>image.ref)]});
    const before=await jobInputHashes(fixture.input.root),publication=await fixture.publish();
    const asks:PendingAskV3[]=[];
    // Deliver the text ask first to check that the Question takes the primary trigger on mixed load.
-   for(const subject of [{kind:'checkpoint',checkpointId:'step-one'},
-    {kind:'interview-picks',questionId:question.set.question,setId:question.set.id}] as const){
+   for(const subject of [{kind:'checkpoint',checkpointId:'step-one'},questionSubject] as const){
     const response=await fixture.call({...fixture.input.base(),verb:'ask',expectedGeneration:fixture.host.session.status().generation,
      idempotencyKey:randomUUID(),publicationId:publication.publicationId,subject});
     const result=await response.json() as JobApiResponse;
