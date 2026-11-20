@@ -196,3 +196,12 @@ test('#307: R and L circle labels anchor away from each other (R below-left, L b
  expect(boxesIntersect(stacked[0]!,stacked[1]!)).toBe(false);
  expect(stacked[1]!.y).toBeGreaterThanOrEqual(stacked[0]!.y+stacked[0]!.h);
 });
+
+test('the chest landmark tooltip names the click order in owner words, in both catalogs',async()=>{
+ const en='Click right apex, left apex, then cleavage; the two circles are derived from them';
+ expect(html()).toContain(`title="${en}"`);
+ const [enCat,koCat]=await Promise.all(['../web/catalog-en.ts','../web/catalog-ko.ts'].map(p=>readFile(new URL(p,import.meta.url),'utf8')));
+ expect(enCat).toContain(`${JSON.stringify(en)}: ${JSON.stringify(en)}`);
+ expect(koCat).toContain(`${JSON.stringify(en)}: ${JSON.stringify('오른쪽 끝, 왼쪽 끝, 가운데 골 순서로 찍으면 두 원을 만들어요')}`);
+ for(const text of [html(),enCat,koCat])expect(text).not.toContain('the producer derives both circles');
+});

@@ -670,6 +670,7 @@ test('#606 literal package/record canonical, durable, replay and export compatib
     'parseCommentsAct', 'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'parseCommentsSession', 'projectComments', 'projectSelectedCommentsFeedback',
     'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
     'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct', 'JOB_PREVIOUS_DRAFT_SCHEMA', 'waitForJobAct',
+    'JOB_CHEST_LANDMARKS_ACT_SCHEMA', 'parseChestLandmarksAct',
   ].sort()};
   expect(actual).toEqual(expected);
   for (const [name, sample] of Object.entries(actual.samples)) {

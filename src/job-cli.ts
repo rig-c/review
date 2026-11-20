@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeSync} from 'node:fs';
 import {join} from 'node:path';
-import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit, jobActDeliveryLimit, jobResponseBodyLimit,
+import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit, jobActDeliveryLimit, jobResponseBodyLimit,
   JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA,
   type JobAct, type JobMeshEditsAct, type JobAgentRequest, type JobApiSchema, type JobNextRequest, type JobNextRequestV3, type JobNextValue } from './job-contract.ts';
-import { assertJobApiSchema, jobFailure, jobHash, jobId, jobInteger, jobObject, jobWaitLimitMs, parseJobRequest, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, parseRecordAct } from './job-api.ts';
+import { assertJobApiSchema, jobFailure, jobHash, jobId, jobInteger, jobObject, jobWaitLimitMs, parseJobRequest, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, parseChestLandmarksAct, parseRecordAct } from './job-api.ts';
 import { JobError } from './job-store.ts';
 import {validatePngBytes} from './comment-crops.ts';
 import {destinationDirectory} from './destination-directory.ts';
@@ -152,6 +152,7 @@ const consumerCommentsDecoders = {
   [JOB_COMMENTS_ACT_SCHEMA]: parseCommentsAct,
   [JOB_COMMENT_CONTEXT_ACT_SCHEMA]: parseContextCommentsAct,
   [JOB_MESH_EDITS_ACT_SCHEMA]: parseMeshEditsAct,
+  [JOB_CHEST_LANDMARKS_ACT_SCHEMA]: parseChestLandmarksAct,
 } as const;
 
 function parseConsumerAct(bytes: Buffer, job: string, actId: string): ConsumerAct {
