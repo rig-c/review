@@ -8,7 +8,7 @@ import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, type JobNextValue, type JobPendingAsk} from '../src/job-contract.ts';
-import {parseCommentsAct} from '../src/job-api.ts';
+import {jobHash, parseCommentsAct} from '../src/job-api.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
 import type {LocalInspectionDraft} from '../web/inspection-persistence.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -16,7 +16,8 @@ import {koCatalog} from '../web/catalog-ko.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
-import {jobInputHashes, syntheticJobParts} from './helpers/job-api-fixture.ts';
+import {writeComparisonPackage} from './helpers/parts-comparison-package.ts';
+import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {withDeadline, walkCheckpoint} from './helpers/walk-deadline.ts';
 import {freshWalkReopen} from './helpers/walk-reopen.ts';
@@ -49,13 +50,6 @@ async function run(lang: 'en' | 'ko') {
   const observations: Record<string, unknown> = {language: lang, fixture: 'synthetic trusted-host job window, static idle'};
   const catalog = lang === 'ko' ? koCatalog : enCatalog;
   const fixture = await realJobWindowFixture();
-  if (draft) {
-    await joinedVerdictFixture(fixture.input.root, '2-rigging-answers');
-    await syntheticJobParts(fixture.input);
-    fixture.input.setRecordPath('project.json');
-    fixture.input.setContext({...fixture.input.getContext(), selector: draftSelector,
-      subjects: [{kind: 'review-verdict', stage: 'rig-review'}]});
-  }
   const profile = await mkdtemp(join(tmpdir(), 'review-709-browser-'));
   let page: InputCdpSession | undefined;
   let unexpectedDialog: string | undefined;
@@ -145,6 +139,21 @@ async function run(lang: 'en' | 'ko') {
   }
   try {
     // Modify only disposable synthetic input, before publication/freeze. The source fixture stays unchanged.
+    if (draft) {
+      await joinedVerdictFixture(fixture.input.root, '2-rigging-answers');
+      fixture.input.setRecordPath('project.json');
+      const packageRoot = join(fixture.input.root, 'out');
+      await writeComparisonPackage(packageRoot);
+      const references = ['parts/body.png', 'parts/front.png'].map(path => ({path, role: 'part'}));
+      fixture.input.setPartsReferences(references);
+      const images = await Promise.all(references.map(async image => ({
+        ...image, sha256: jobHash(await readFile(join(packageRoot, image.path))),
+      })));
+      const parts = {enumeratorVersion: fixture.input.partsEnumerator.version, images,
+        manifest: {path: 'out/parts.json', sha256: jobHash(await readFile(join(packageRoot, 'parts.json')))}};
+      fixture.input.setContext({...fixture.input.getContext(), selector: draftSelector, parts, partIds: ['body', 'front'],
+        subjects: [{kind: 'review-verdict', stage: 'rig-review'}]});
+    }
     const modelPath = join(fixture.input.root, 'out/skeleton.model.json');
     const manifestPath = join(fixture.input.root, 'out/review.json');
     const model = JSON.parse(await readFile(modelPath, 'utf8'));
