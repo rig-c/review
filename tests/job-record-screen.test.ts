@@ -113,7 +113,7 @@ test('#774 all shared publications keep one stream; cancellation never mounts an
   const stop=await run(environment)({append(){notices.push('append');},prepend(){notices.push('prepend');},querySelectorAll:()=>[]});
   expect(await adapter.prepare({},controller.signal)).toBe(prepared);await adapter.painted(prepared,controller.signal);expect(paints).toBe(1);
   adapter.changed({error:'fixture load failure'});expect(changed).toBe(1);expect(reports).toBe(mounted?0:0);expect(notices).toEqual(mounted?[]:['prepend']);
-  if(!mounted){expect(notice.title).toBe('JOB_WINDOW_FAILED');adapter.changed({error:new Error('JOB_CAPABILITY_REQUIRED')});expect(notice.title).toBe('JOB_CAPABILITY_REQUIRED');adapter.changed({error:'JOB_STREAM_FAILED'});expect(notice.title).toBe('JOB_STREAM_FAILED');}
+  if(!mounted){expect(notice.title).toBe('JOB_WINDOW_FAILED');adapter.changed({error:new Error('JOB_CAPABILITY_REQUIRED')});expect(notice.title).toBe('JOB_CAPABILITY_LINK_LOST');adapter.changed({error:'JOB_STREAM_FAILED'});expect(notice.title).toBe('JOB_STREAM_FAILED');}
   controller.abort();await adapter.painted(prepared,controller.signal);expect(paints).toBe(1);
   stop();expect(aborted).toBe(true);await adapter.painted(prepared,new AbortController().signal);expect(paints).toBe(1);expect(streams).toBe(1);stop();
  }
