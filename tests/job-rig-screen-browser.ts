@@ -203,50 +203,52 @@ async function run(lang: 'en' | 'ko') {
     assert.equal(initial.fullRigHash, publication.source.model!.sha256);
     assert.equal(initial.sourceHash, publication.source.sourceHash);
     assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'opening never answers the pending ask');
-    await click(page, '#fit');
-    const explicitFit = await settled('explicit-fit');
-    sameCamera(fresh, explicitFit, 'fresh open equals actual Fit');
-    await click(page, '#zoom-in');
-    await wait(`Math.abs((${cameraExpression}).zoom-${JSON.stringify(explicitFit.zoom)})>1e-5`, 'zoom-changed');
-    const zoomed = await camera();
-    await wait(`(${draftExpression}).some(({draft})=>draft.sourceHash===${JSON.stringify(publication.source.sourceHash)}&&
-      Math.abs(draft.bookmark.view.cameras.rig.zoom-${JSON.stringify(zoomed.zoom)})<1e-7)`, 'zoom-bookmark-saved');
-    const drafts = await page.evaluate<{key: string; draft: LocalInspectionDraft}[]>(draftExpression);
-    const saved = drafts.find(item => item.draft.sourceHash === publication.source.sourceHash)!;
-    assert.equal(saved.draft.reviewDirty, false, 'camera-only work is not an unsaved review');
-    await record('saved-zoom-bookmark', {zoomed, saved});
-    const savedUrl = await page.evaluate<string>('location.href');
-    assert.ok(new URL(savedUrl).hash.startsWith('#review='), 'the real persistence path generated the bookmark URL');
-    // Literal browser Reload while the current URL and local draft still contain the actual saved zoom.
-    assert.ok(pageCommand, 'the existing CDP event hook exposes the page-scoped sender');
-    const beforeReload = {loadEvents, document: documentLoads.at(-1)};
-    assert.ok(beforeReload.document, 'initial top-level loader observed');
-    await page.evaluate(`window.__jobRig709BeforeReload=true`);
-    await pageCommand('Page.reload', {ignoreCache: false});
-    await withDeadline('709.' + lang + '.reload-load-event', 20_000, async signal => {
-      while (!signal.aborted) {
-        assert.equal(unexpectedDialog, undefined, 'view-only Reload must not open an unsaved-review dialog');
-        if (loadEvents > beforeReload.loadEvents) return;
-        await Bun.sleep(25);
-      }
-      throw signal.reason;
-    });
-    await wait(`!Object.hasOwn(window,'__jobRig709BeforeReload') && (${readyExpression})`, 'reload-new-document');
-    const reloaded = await settled('actual-reload-fit');
-    sameCamera(reloaded, explicitFit, 'actual Reload of saved zoom settles at Fit');
-    assert.ok(Math.abs(reloaded.zoom - zoomed.zoom) > 1e-5, 'Reload did not retain the saved zoom');
-    assert.notEqual(documentLoads.at(-1)?.loaderId, beforeReload.document.loaderId, 'Reload replaced the document loader');
-    await record('actual-reload', {command: 'Page.reload', before: beforeReload, after: {loadEvents, document: documentLoads.at(-1)}});
-    assert.equal((await screen('reloaded-screen')).status, 'pending');
-    assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'Reload does not submit');
-    // Fresh document at the actual saved link; no fabricated bookmark or localStorage writes.
-    await freshWalkReopen(page, savedUrl, lang, '709.' + lang + '.bookmark-reopen', 1, mark, mark);
-    const reopened = await settled('bookmark-reopened-fit');
-    sameCamera(reopened, explicitFit, 'saved zoom must settle at Fit on hosted opening');
-    assert.ok(Math.abs(reopened.zoom - zoomed.zoom) > 1e-5, 'reopen did not retain the old zoom');
-    const afterReopen = await screen('reopened-screen');
-    assert.equal(afterReopen.status, 'pending');
-    assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'reopen does not submit');
+    if (!draft) {
+      await click(page, '#fit');
+      const explicitFit = await settled('explicit-fit');
+      sameCamera(fresh, explicitFit, 'fresh open equals actual Fit');
+      await click(page, '#zoom-in');
+      await wait(`Math.abs((${cameraExpression}).zoom-${JSON.stringify(explicitFit.zoom)})>1e-5`, 'zoom-changed');
+      const zoomed = await camera();
+      await wait(`(${draftExpression}).some(({draft})=>draft.sourceHash===${JSON.stringify(publication.source.sourceHash)}&&
+        Math.abs(draft.bookmark.view.cameras.rig.zoom-${JSON.stringify(zoomed.zoom)})<1e-7)`, 'zoom-bookmark-saved');
+      const drafts = await page.evaluate<{key: string; draft: LocalInspectionDraft}[]>(draftExpression);
+      const saved = drafts.find(item => item.draft.sourceHash === publication.source.sourceHash)!;
+      assert.equal(saved.draft.reviewDirty, false, 'camera-only work is not an unsaved review');
+      await record('saved-zoom-bookmark', {zoomed, saved});
+      const savedUrl = await page.evaluate<string>('location.href');
+      assert.ok(new URL(savedUrl).hash.startsWith('#review='), 'the real persistence path generated the bookmark URL');
+      // Literal browser Reload while the current URL and local draft still contain the actual saved zoom.
+      assert.ok(pageCommand, 'the existing CDP event hook exposes the page-scoped sender');
+      const beforeReload = {loadEvents, document: documentLoads.at(-1)};
+      assert.ok(beforeReload.document, 'initial top-level loader observed');
+      await page.evaluate(`window.__jobRig709BeforeReload=true`);
+      await pageCommand('Page.reload', {ignoreCache: false});
+      await withDeadline('709.' + lang + '.reload-load-event', 20_000, async signal => {
+        while (!signal.aborted) {
+          assert.equal(unexpectedDialog, undefined, 'view-only Reload must not open an unsaved-review dialog');
+          if (loadEvents > beforeReload.loadEvents) return;
+          await Bun.sleep(25);
+        }
+        throw signal.reason;
+      });
+      await wait(`!Object.hasOwn(window,'__jobRig709BeforeReload') && (${readyExpression})`, 'reload-new-document');
+      const reloaded = await settled('actual-reload-fit');
+      sameCamera(reloaded, explicitFit, 'actual Reload of saved zoom settles at Fit');
+      assert.ok(Math.abs(reloaded.zoom - zoomed.zoom) > 1e-5, 'Reload did not retain the saved zoom');
+      assert.notEqual(documentLoads.at(-1)?.loaderId, beforeReload.document.loaderId, 'Reload replaced the document loader');
+      await record('actual-reload', {command: 'Page.reload', before: beforeReload, after: {loadEvents, document: documentLoads.at(-1)}});
+      assert.equal((await screen('reloaded-screen')).status, 'pending');
+      assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'Reload does not submit');
+      // Fresh document at the actual saved link; no fabricated bookmark or localStorage writes.
+      await freshWalkReopen(page, savedUrl, lang, '709.' + lang + '.bookmark-reopen', 1, mark, mark);
+      const reopened = await settled('bookmark-reopened-fit');
+      sameCamera(reopened, explicitFit, 'saved zoom must settle at Fit on hosted opening');
+      assert.ok(Math.abs(reopened.zoom - zoomed.zoom) > 1e-5, 'reopen did not retain the old zoom');
+      const afterReopen = await screen('reopened-screen');
+      assert.equal(afterReopen.status, 'pending');
+      assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'reopen does not submit');
+    }
     let beforeSubmit:unknown;
     const inspectionExpression=`({camera:JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig,
       selected:[...document.querySelectorAll('[data-part-list] button[aria-pressed="true"]')].map(n=>({slot:n.dataset.slot,side:n.dataset.side})),
@@ -270,8 +272,6 @@ async function run(lang: 'en' | 'ko') {
         const button = document.querySelector(selector);
         return button && button.getClientRects().length > 0;
       })`, 'both-verdict-buttons');
-      await click(page, '[data-mode="rig"]');
-      await wait(`document.querySelector('[data-mode="rig"]').getAttribute('aria-pressed') === 'true'`, 'draft-setup-mode');
       if (!await page.evaluate<boolean>(`document.querySelector('#stage-comment').getAttribute('aria-pressed') === 'true'`)) {
         await click(page, '#stage-comment');
       }
