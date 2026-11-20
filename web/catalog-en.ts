@@ -3630,5 +3630,6 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "This question refers to a scene that this publication does not include.": "This question refers to a scene that this publication does not include.",
   "This request has no picture.": "This request has no picture.",
   "The selected part has no chest regions. The chest editor keeps its current part.": "The selected part has no chest regions. The chest editor keeps its current part.",
+  "The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.": "The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.",
   'Resize comment area: {0}': 'Resize comment area: {0}',
 };

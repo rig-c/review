@@ -3630,5 +3630,6 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "This question refers to a scene that this publication does not include.": "이 질문이 가리키는 장면이 이번 게시에 들어 있지 않아요.",
   "This request has no picture.": "이 요청에는 그림이 없어요.",
   "The selected part has no chest regions. The chest editor keeps its current part.": "선택한 파츠에는 가슴 영역이 없어요. 가슴 편집기는 지금 파츠를 그대로 둬요.",
+  "The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.": "원본이 바뀌어서 보내지 않은 코멘트 {0}개를 옮기지 못했어요. 다시 남겨 주세요.",
   'Resize comment area: {0}': '코멘트 영역 크기를 조절해요: {0}',
 };

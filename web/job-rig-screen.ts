@@ -270,7 +270,7 @@ export function createJobRigScreen(options: {
       ...(general?.length?{general:[...general]}:{})},key=JSON.stringify(value);
     let attempt=partsAttempts.get(ask.askId);if(!attempt||attempt.key!==key){attempt={key,submissionId:crypto.randomUUID()};partsAttempts.set(ask.askId,attempt);}
     const result=await options.window.submit({kind:'parts-verdict',publicationId:ask.publicationId,askId:ask.askId,pageId:options.pageId,displayedNonce:state.receipt.displayedNonce,expectedGeneration:state.generation,submissionId:attempt.submissionId,value});
-    if(!result.ok)throw new Error(result.error.code);
+    if(!result.ok)throw new Error(result.error.code,{cause:(result.error as {cause?:unknown}).cause});
     partsAttempts.delete(ask.askId);return options.translate('job.saved');
   }
   const pendingSubjects=()=>options.window.state().pending.filter(ask=>ask.publicationId===mounted?.display.publication.publicationId&&ask.status==='pending').map(ask=>ask.subject);

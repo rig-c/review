@@ -21,6 +21,8 @@ import type {JobRetainedRecordSource} from '../src/job-source.ts';
 import {parseRecordAct} from '../src/job-api.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
+import {partsDifferenceJobFixture,partsDifferenceOwnerUrl} from './helpers/parts-difference-job-fixture.ts';
+import {JOB_COMMENTS_ACT_SCHEMA} from '../src/job-contract.ts';
 
 const arg=(name:string)=>{const i=Bun.argv.indexOf(name);return i<0?undefined:Bun.argv[i+1];};
 const interviewOnly=Bun.argv.includes('--interview-only');
@@ -666,15 +668,28 @@ async function draftSurvivalChecks(){
   const ask3={...fixture.ask,askId:'ask-checkpoint-3',publicationId:pub3.publicationId,source:pub3.source};
   fixture.fake.publish(display3);fixture.fake.pending(ask3,pub3.generation);
   await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 3 changed source');
-  const bar3State=await page!.evaluate<{currentCount:number;oldRetained:boolean;message:string;dirty:string}>(`({
+  const carryKey='The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.';
+  const expectedCarryEn=enCatalog[carryKey]!.replace('{0}','1');
+  const expectedCarryKo=koCatalog[carryKey]!.replace('{0}','1');
+  const bar3State=await page!.evaluate<{currentCount:number;oldRetained:boolean;draftState:string;dirty:string}>(`({
    currentCount:document.querySelectorAll('#stage-comment-list .stage-comment-item').length,
    oldRetained:Object.entries(localStorage).some(([k,v])=>k.startsWith('rig-review-record-comments/1:')&&v.includes('c2 · from tab B')),
-   message:document.getElementById('message')?.textContent??'',
+   draftState:document.getElementById('review-draft-state')?.textContent??'',
    dirty:document.getElementById('dirty')?.textContent??'',
   })`);
   assert.equal(bar3State.currentCount,0);
   assert.equal(bar3State.oldRetained,true);
-  assert.equal(bar3State.message.includes('Saved local draft was not restored'),true);
+  assert.equal(bar3State.draftState,expectedCarryEn);
+  assert.equal(bar3State.dirty,expectedCarryEn);
+  const koUrl=new URL(fixture.ownerUrl);koUrl.searchParams.set('lang','ko');
+  await page!.goto('about:blank');await page!.goto(koUrl.href);
+  await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 3 changed source ko');
+  const bar3Ko=await page!.evaluate<{draftState:string;dirty:string}>(`({
+   draftState:document.getElementById('review-draft-state')?.textContent??'',
+   dirty:document.getElementById('dirty')?.textContent??'',
+  })`);
+  assert.equal(bar3Ko.draftState,expectedCarryKo);
+  assert.equal(bar3Ko.dirty,expectedCarryKo);
   // Bar 5: Existing per-publication drafts still restore (fallback)
   await page!.evaluate<void>(`(()=>{
    localStorage.clear();
@@ -686,8 +701,73 @@ async function draftSurvivalChecks(){
   await page!.goto('about:blank');await page!.goto(url.href);
   await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 5 fallback');
   assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c3 · legacy fallback']);
-  await writeFile(join(out,'draft-survival.json'),JSON.stringify({bar3State},null,2)+'\n');
-  console.log('992_DRAFT_SURVIVAL_PASS '+JSON.stringify(bar3State));
+
+  // #999 Bar: box-pin comment on parts-verdict draft page saves (even when box crosses part boundary into margin),
+  // displays catalog refusal sentence on status line when refused, survives reload, and is included in submitted act in EN and KO.
+  const parts999:Record<string,unknown>={};
+  for(const lang of ['en','ko'] as const){
+   const pf=await partsDifferenceJobFixture({scratchParent:out});
+   try{
+    const ask=await pf.ask(pf.publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
+    const pUrl=partsDifferenceOwnerUrl(pf,lang);
+    await page!.goto('about:blank');await page!.goto(pUrl);
+    await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'`,'999 parts ready '+lang);
+    await click(page!,'#stage-comment');
+    await wait(`document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`,'999 comment mode '+lang);
+    // Draw a box from (1.5, 1.5) to (10.5, 9.5) crossing body's top-left boundary (x=4, y=4) into empty margin (fails on da67304 with PARTS_COMMENT_OUT_OF_BOUNDS)
+    const [from,to]=await page!.evaluate<[{x:number;y:number},{x:number;y:number}]>(`(()=>{
+     const canvas=document.getElementById('parts-canvas'),rect=canvas.getBoundingClientRect();
+     return [[1.5,1.5],[10.5,9.5]].map(([x,y])=>({x:rect.left+x*rect.width/canvas.width,y:rect.top+y*rect.height/canvas.height}));
+    })()`);
+    await page!.mouse('mouseMoved',from.x,from.y);
+    await page!.mouse('mousePressed',from.x,from.y);
+    await page!.mouse('mouseMoved',to.x,to.y);
+    await page!.mouse('mouseReleased',to.x,to.y);
+    await wait(`!!document.querySelector('.stage-comment-composer input')`,'999 composer open '+lang);
+    const words=lang==='ko'?'검 손잡이가 손 뒤로 가야 함':'Sword grip must go behind the hand';
+    await page!.evaluate<void>(`(()=>{
+     const f=document.querySelector('.stage-comment-composer');
+     const input=f.querySelector('input');
+     input.value=${JSON.stringify(words)};
+     input.dispatchEvent(new Event('input',{bubbles:true}));
+    })()`);
+    // Refusal sentence check: deselect the part chip and attempt save -> status line shows catalog sentence
+    await click(page!,'.stage-comment-parts [data-comment-part="body"]');
+    await page!.evaluate<void>(`document.querySelector('.stage-comment-composer').requestSubmit()`);
+    const expectedRefusal=(lang==='ko'?koCatalog:enCatalog)['Select at least one part.']!;
+    await wait(`document.getElementById('message')?.textContent===${JSON.stringify(expectedRefusal)}&&document.getElementById('review-message')?.textContent===${JSON.stringify(expectedRefusal)}`,'999 refusal status line '+lang);
+    // Re-select the part chip (which replaces chip children) and press Enter / submit to save the box-pin comment
+    await click(page!,'.stage-comment-parts [data-comment-part="body"]');
+    assert.equal(await page!.evaluate<boolean>(`document.activeElement===document.querySelector('.stage-comment-composer input')`),true,'chip click restores focus to composer input');
+    await page!.evaluate<void>(`document.querySelector('.stage-comment-composer').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))`);
+    await wait(`!document.querySelector('.stage-comment-composer')&&document.querySelectorAll('.stage-comment-pin').length===1`,'999 box-pin saved '+lang);
+    // Reload survival on parts-verdict page
+    await page!.goto('about:blank');await page!.goto(pUrl);
+    await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'&&document.querySelectorAll('.stage-comment-pin').length===1`,'999 box-pin survives reload '+lang);
+    assert.equal(await page!.evaluate<boolean>(`[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].some(n=>n.textContent.includes(${JSON.stringify(words)}))`),true);
+    // Submit with Request changes (#request-changes) and verify the finalized act@6 parts-verdict includes the box-pin comment
+    await wait(`document.querySelector('#request-changes')?.checkVisibility()&&!document.querySelector('#request-changes').disabled`,'999 request changes enabled '+lang);
+    await click(page!,'#request-changes');
+    let submittedAct:any=null;
+    const deadline=Date.now()+15_000;
+    while(Date.now()<deadline){
+     const ev=(await pf.next()).events.find(e=>e.type==='act'&&e.act.askId===ask.askId);
+     if(ev?.type==='act'){submittedAct=ev.act;break;}
+     await Bun.sleep(50);
+    }
+    assert.ok(submittedAct,'999 finalized parts-verdict act '+lang);
+    assert.equal(submittedAct.schema,JOB_COMMENTS_ACT_SCHEMA);
+    assert.equal(submittedAct.kind,'parts-verdict');
+    assert.equal(submittedAct.value.verdict,'changes-requested');
+    assert.equal(submittedAct.value.comments.length,1);
+    assert.equal(submittedAct.value.comments[0].text,words);
+    assert.deepEqual(submittedAct.value.comments[0].anchor.parts.map((p:any)=>p.name),['body']);
+    assert.deepEqual(submittedAct.value.comments[0].anchor.rigRegion,{x:4,y:4,width:7,height:6});
+    parts999[lang]={actId:submittedAct.actId,verdict:submittedAct.value.verdict,text:submittedAct.value.comments[0].text,rigRegion:submittedAct.value.comments[0].anchor.rigRegion,refusal:expectedRefusal};
+   }finally{await pf.close();}
+  }
+  await writeFile(join(out,'draft-survival.json'),JSON.stringify({bar3State,bar3Ko,parts999},null,2)+'\n');
+  console.log('992_DRAFT_SURVIVAL_PASS '+JSON.stringify({bar3State,bar3Ko,parts999}));
  }finally{await fixture.close();}
 }
 

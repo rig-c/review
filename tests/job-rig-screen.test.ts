@@ -5,6 +5,10 @@ import {jobFixture} from './helpers/job-api-fixture.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {jobRigScreenDecisions, jobRigScreenRoute, jobRigScreenSubject, jobRigScreenAsk, jobRigScreenRefusal} from '../web/job-rig-screen.ts';
 import {checkpointNoteComments, feedbackItemComments} from '../src/stage-comment.ts';
+import {assertPartsIssueBinding, parsePartsIssue, snapImageRegion} from '../src/parts-comment.ts';
+import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
+import {tr} from '../web/i18n.ts';
 // The projector Create applies to act@6 comments: the public job-host export (Create c8382ba5 pins @rig-c/review 2.12.0).
 import {parseCommentsAct, projectComments} from '../src/job-host.ts';
 import legacy from './fixtures/comments-contract-legacy.json';
@@ -317,8 +321,13 @@ test('#992 record and verdict comment drafts survive reload, same-source republi
  const changedSource=makeTab({jobId:'job-1',draftId:'d1',publicationId:'pub-3',sourceHash:'b'.repeat(64)});
  expect(changedSource.rows).toEqual([]);
  expect([...store.values()].some(raw=>raw.includes('First judgment')&&raw.includes('Second judgment'))).toBe(true);
- expect(changedSource.scope.draftStatus).toContain('Saved local draft was not restored');
- expect(changedSource.notices.some(n=>n.error&&n.text.includes('Saved local draft was not restored'))).toBe(true);
+ const carryKey='The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.';
+ const expectedEn=enCatalog[carryKey]!.replace('{0}','2');
+ const expectedKo=koCatalog[carryKey]!.replace('{0}','2');
+ expect(changedSource.scope.draftStatus).toBe(expectedEn);
+ expect(tr(changedSource.scope.draftStatus!,'en')).toBe(expectedEn);
+ expect(tr(changedSource.scope.draftStatus!,'ko')).toBe(expectedKo);
+ expect(changedSource.scope.draftStatus).not.toContain('Saved local draft was not restored');
 
  // Bar 4 (Two tabs: tab A adds c1, tab B adds c2, both survive in both tabs and after reload; removal in A does not come back from B)
  const tabA=makeTab({jobId:'job-1',draftId:'d2',publicationId:'pub-4',sourceHash:'c'.repeat(64)});
@@ -346,4 +355,62 @@ test('#992 record and verdict comment drafts survive reload, same-source republi
  }));
  const fallbackTab=makeTab({jobId:'job-1',draftId:'d3',publicationId:'pub-legacy',sourceHash:'d'.repeat(64)});
  expect(fallbackTab.rows).toEqual([{id:'legacy-1',summary:'Legacy per-publication comment'}]);
+});
+
+test('#999 assembled box-pin comments clamp to intersecting bound parts, commit pending composer drafts on Request changes, and fail on da67304 control',()=>{
+ const items=new Map([
+  ['handwear_l',{name:'handwear_l',x:1165,y:292,w:755,h:274,imageHash:'a'.repeat(64)}],
+  ['objects',{name:'objects',x:1274,y:353,w:646,h:727,imageHash:'b'.repeat(64)}],
+ ]);
+ const sourceHash='c'.repeat(64);
+ // Reviewer draws a box over the sword grip (objects, y:353..1080) starting slightly above y=353 in empty canvas margin (y=315..520, x=1700..1920)
+ const rawDrag=snapImageRegion({x:1700,y:315,width:220,height:205});
+ const baseIssue={
+  schema:'rig-review-parts-comment/2' as const,
+  id:'box-pin-1',
+  summary:'Sword grip must go behind the left hand',
+  sourceHash,
+  parts:[{name:'objects',imageHash:'b'.repeat(64)}],
+  imageRegion:null,
+  view:{
+   mode:'assembled' as const,
+   camera:{zoom:1,center:{x:960,y:540},viewport:{width:1200,height:800}},
+   cameraSync:true,
+   referenceCamera:null,
+   background:'checker',
+   alpha:false,
+   footprints:false,
+   mesh:false,
+   comparison:{mode:'part' as const,opacity:0.5},
+   visibleLayers:[
+    {name:'handwear_l',imageHash:'a'.repeat(64)},
+    {name:'objects',imageHash:'b'.repeat(64)},
+   ],
+  },
+  crop:{path:`comment-crops/${'d'.repeat(64)}.png`,sha256:'d'.repeat(64),width:220,height:205},
+  nativeCrop:null,
+ };
+ // Control (da67304 / a41db7f): unclipped assembled drag region exceeds objects bounding box (y=315 < 353) and refuses save
+ expect(()=>{
+  const unclipped=parsePartsIssue({...baseIssue,rigRegion:rawDrag},false,false,false);
+  assertPartsIssueBinding(unclipped,items,sourceHash);
+ }).toThrow('PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds union of issue parts');
+
+ // Fixed path: intersecting union bounds of selected parts clamp the drag region to [1700..1920, 353..520]
+ const target=items.get('objects')!;
+ const clamped=snapImageRegion({
+  x:Math.max(target.x,rawDrag.x),
+  y:Math.max(target.y,rawDrag.y),
+  width:Math.min(target.x+target.w,rawDrag.x+rawDrag.width)-Math.max(target.x,rawDrag.x),
+  height:Math.min(target.y+target.h,rawDrag.y+rawDrag.height)-Math.max(target.y,rawDrag.y),
+ });
+ expect(clamped).toEqual({x:1700,y:353,width:220,height:167});
+ const bound=parsePartsIssue({...baseIssue,rigRegion:clamped},false,false,false);
+ expect(()=>assertPartsIssueBinding(bound,items,sourceHash)).not.toThrow();
+
+ // Refusal copy maps to existing catalog sentences in EN and KO
+ expect(tr('PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image','en')).toBe(enCatalog['PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image']);
+ expect(tr('PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image','ko')).toBe(koCatalog['PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image']);
+ expect(tr('Select at least one part.','en')).toBe(enCatalog['Select at least one part.']);
+ expect(tr('Select at least one part.','ko')).toBe(koCatalog['Select at least one part.']);
 });
