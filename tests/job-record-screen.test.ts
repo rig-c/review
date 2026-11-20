@@ -8,7 +8,7 @@ import {readFile,writeFile} from 'node:fs/promises';
 import {createJobRigScreen} from '../web/job-rig-screen.ts';
 import {rigHost,setRigHost} from '../web/rig-host.ts';
 import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jobPublicationRoutes,prepareJobForms,prepareJobInspection,type JobFormDependencies} from '../web/job-session.ts';
-import type {DisplayPublicationV3,PendingAskV3,UISubmissionV3} from '../src/job-contract.ts';
+import type {DisplayPublicationV3,PendingAskV3,RecordReopenSubject,UISubmissionV3} from '../src/job-contract.ts';
 import {recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {rigPictureCases,SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_ROOT} from './helpers/job-record-fixture.ts';
 
@@ -242,6 +242,26 @@ test('#722 real form saves only checked radios, restores Other with empty contra
  }finally{inspection?.dispose();dom.restore();await f.close();}
 });
 
+
+test('#989 reopen context displays literal stage and reason without changing the submitted value', async () => {
+ const h = await harness();
+ try {
+  const prepared = await h.screen.prepare(h.f.display, new AbortController().signal);
+  const inspection = prepared!.record!.inspection;
+  try {
+   const reason = 'Check <left sleeve>. 왼쪽 소매 확인';
+   const subject: RecordReopenSubject = {kind: 'reopen', stage: 'plan-approved', reason};
+   const entry = formFor({...h.f.ask, subject}, inspection, h.deps);
+   const stage = entry.form.querySelector('[data-job-reopen-stage]');
+   const explanation = entry.form.querySelector('[data-job-reopen-reason]');
+   expect(stage?.textContent).toBe('plan-approved');
+   expect(explanation?.textContent).toBe(reason);
+   expect(explanation?.getAttribute('translate')).toBe('no');
+   expect(entry.form.querySelectorAll('button[type=submit]')).toHaveLength(1);
+   expect(entry.read()).toEqual({stage: 'plan-approved', words: ''});
+  } finally { inspection.dispose(); }
+ } finally { await h.close(); }
+});
 
 // HQ 89f85831: projected prose is the label; source identities stay in tooltips.
 for (const language of ['en','ko'] as const) for (const rule of [1,2,3,4,5,6]) test(`#756 human text/title rule ${rule} (${language})`,async()=>{

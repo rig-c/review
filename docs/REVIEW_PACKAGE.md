@@ -1284,7 +1284,7 @@ A post-interview option set with a `rig` context can also show the accepted rig 
 | --- | --- |
 | `PublishResultV3` | `{kind, path, selector}` (`package`), `{kind, questionId, setId}` (`option-set`), `{kind}` (`plan`) |
 | `RecordFreeze` | `{kind: 'producer-held', holdId, record: {path: 'project.json', sha256}}` |
-| `RecordSubject` | `{kind: 'interview-picks', questionId, setId}`, `{kind: 'checkpoint', checkpointId}`, `{kind: 'signoff', stage}` (`plan-approved`, `rigging-interview`, `post-interview`, `direction-review`, `interview`), `{kind: 'reopen', stage}` |
+| `RecordSubject` | `{kind: 'interview-picks', questionId, setId}`, `{kind: 'checkpoint', checkpointId}`, `{kind: 'signoff', stage}` (`plan-approved`, `rigging-interview`, `post-interview`, `direction-review`, `interview`), `{kind: 'reopen', stage, reason?}` |
 | `RecordPublishedContext` | Required `['label', 'parts', 'inputs', 'files', 'plan', 'subjects']`, optional `checkpointEvidence` on plans |
 | `RecordPartsIdentity` | `['name', 'version', 'integrity']` |
 | `RecordSource` | Required `['sourceHash', 'projectHash', 'record', 'inputs', 'files', 'subject', 'selection', 'optionSet', 'optionSetFile', 'plan', 'subjects']`, optional `checkpointEvidence` on plans |
@@ -1303,6 +1303,26 @@ The read-only official reader returns the six-key `RecordPublishedContext` with 
 `interview-picks` records carry `plan: null` and remain valid for source preparation, ask binding and `rig-review/act@4` preparation. An inspection-only plan record with `plan: {steps: []}` and `subjects: []` is valid for source preparation and freshness checks, while plan `checkpoint` and `signoff` ask binding and `rig-review/act@4` preparation require non-empty `plan.steps` and declared subjects (`JOB_ASK_INVALID` / `JOB_ACT_INVALID`), and plan `reopen` ask binding and `rig-review/act@4` `{stage, words}` preparation require a declared `{kind: 'reopen', stage}` subject on a `plan` record source ([Review #586](https://github.com/rig-c/review/issues/586)). Focused unit tests cover synthetic reader doubles, normal owner URL model-free record inspection (`retainedPublicationRoutes` + `prepareJobInspection` + `createJobWindow`), and archive-backed reader-double evidence over extracted `2-rigging-answers.tar.gz` (`rig-review/job-api@3` and `rig-review/act@4` parsed by `parseRecordAct` using a local `readRecordPublished` reader double and synthetic parts integrity, distinct from official installed Create reader/consumer conformance under [Create #278](https://github.com/rig-c/create/issues/278) and [Create #317](https://github.com/rig-c/create/issues/317)).
 
 Record `interview` and `direction-review` signoffs use the existing signoff modal and are plan-bound like `post-interview`: the published record must declare the subject and contain non-empty `plan.steps`. Each approves the frozen record revision through its project/source hashes; no separate post-version selector or new ask/act field is carried. Existing stage values and act schemas are unchanged. The public package plan-bound stage list remains the original three stages; package `direction-review` signoffs and historical package acts continue to accept `plan: null`.
+
+### Record reopen reason
+
+A plan reader may attach `reason` to its `reopen` declaration (#989). It uses
+the same text bound as `close.reason`, a nonempty string of at most 1,024 UTF-16
+code units that excludes ASCII controls U+0000–U+001F and U+007F. Review
+preserves the text verbatim, compares it across reader phases and includes it
+in the record source hash. Each stage still has at most one reopen declaration.
+Without a reason, the declaration keeps its original two keys and digest bytes.
+
+Both `ask` and `ask-batch` accept this optional field on a reopen subject. A
+stage-only ask binds to the declared stage and keeps its original two-key
+subject in the response. If supplied, the reason must match the sealed
+declaration exactly. A missing stage or a reason mismatch refuses
+`JOB_ASK_INVALID`. Malformed reason text refuses `JOB_REQUEST_INVALID` in an
+ask and `JOB_SOURCE_MISMATCH` in a record context or source. Batch refusals keep
+the subject index. Replay identity includes the supplied ask fields.
+
+The bound record source carries the declaration into a finalized act. Reopen
+act values keep their existing `{stage, words}` or `{stage, comments}` shapes.
 
 ### Optional sealed checkpoint evidence
 

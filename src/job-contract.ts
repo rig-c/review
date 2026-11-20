@@ -1072,6 +1072,7 @@ export interface RecordSignoffSubject {
 export interface RecordReopenSubject {
   readonly kind: 'reopen';
   readonly stage: JobId;
+  readonly reason?: string;
 }
 
 export type RecordPlanSubject = RecordCheckpointSubject | RecordSignoffSubject | RecordReopenSubject;

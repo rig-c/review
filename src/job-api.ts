@@ -44,6 +44,7 @@ export const jobWaitLimitMs = 30_000;
 /** Subjects one `ask-batch` request may list (#963). */
 export const jobAskBatchLimit = 64;
 const requestDeadlineMs = 10_000;
+const maxJobReasonLength = 1024;
 
 export function jobHash(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex');
@@ -232,7 +233,8 @@ export function stripPackageResultKind(
 }
 
 export function parseRecordSubject(value: unknown): RecordSubject {
-  const item = jobObject(value, ['kind', 'questionId', 'setId', 'checkpointId', 'draftId', 'stage']);
+  const item = jobObject(value, ['kind', 'questionId', 'setId', 'checkpointId', 'draftId', 'stage', 'reason']);
+  if (item.kind !== 'reopen' && Object.hasOwn(item, 'reason')) throw new JobError('JOB_REQUEST_INVALID');
   if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(item.kind)) {
     throw new JobError('JOB_ACT_KIND_DISABLED');
   }
@@ -259,9 +261,11 @@ export function parseRecordSubject(value: unknown): RecordSubject {
       }
       return { kind: 'signoff', stage: stage as RecordSignoffStage };
     }
-    case 'reopen':
-      jobObject(item, ['kind', 'stage']);
-      return { kind: 'reopen', stage: jobId(item.stage) };
+    case 'reopen': {
+      jobObject(item, ['kind', 'stage', 'reason']);
+      const stage = jobId(item.stage);
+      return { kind: 'reopen', stage, ...(Object.hasOwn(item, 'reason') ? { reason: jobText(item.reason, maxJobReasonLength) } : {}) };
+    }
   }
 }
 
@@ -352,7 +356,7 @@ export function parseJobRequest(
       }
       case 'close':
         jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey', 'reason']);
-        return { ...mutation, verb: 'close', reason: jobText(item.reason, 1024) };
+        return { ...mutation, verb: 'close', reason: jobText(item.reason, maxJobReasonLength) };
     }
     throw new JobError('JOB_REQUEST_INVALID');
   }
@@ -387,7 +391,7 @@ export function parseJobRequest(
       return { ...mutation, verb: 'ask', publicationId: jobId(item.publicationId), subject: parseJobSubject(item.subject) };
     case 'close':
       jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey', 'reason']);
-      return { ...mutation, verb: 'close', reason: jobText(item.reason, 1024) };
+      return { ...mutation, verb: 'close', reason: jobText(item.reason, maxJobReasonLength) };
   }
   throw new JobError('JOB_REQUEST_INVALID');
 }
@@ -634,7 +638,7 @@ function parsePlanSubjects(
       const key = `reopen:${parsed.stage}`;
       if (seen.has(key)) throw new JobError(code);
       seen.add(key);
-      return { kind: 'reopen', stage: parsed.stage };
+      return parsed;
     }
     if (stepIds.size === 0) throw new JobError(code);
     const key = `signoff:${parsed.stage}`;
@@ -1074,11 +1078,18 @@ export function validateRecordAskSubject(subject: unknown, source: RecordSource)
   ) {
     throw new JobError('JOB_ASK_INVALID');
   }
+  if (parsed.kind === 'reopen') {
+    const declared = checkedSource.subjects.find(candidate => candidate.kind === 'reopen' && candidate.stage === parsed.stage);
+    if (declared?.kind !== 'reopen' || (parsed.reason !== undefined && parsed.reason !== declared.reason)) {
+      throw new JobError('JOB_ASK_INVALID');
+    }
+    // Stage-only asks and act values resolve to the sealed declaration for binding.
+    return declared;
+  }
   const declared = checkedSource.subjects.some(candidate =>
-    candidate.kind === parsed.kind &&
-    (candidate.kind === 'checkpoint'
-      ? candidate.checkpointId === (parsed as Extract<RecordPlanSubject, { kind: 'checkpoint' }>).checkpointId
-      : candidate.stage === (parsed as Extract<RecordPlanSubject, { kind: 'signoff' | 'reopen' }>).stage),
+    parsed.kind === 'checkpoint'
+      ? candidate.kind === 'checkpoint' && candidate.checkpointId === parsed.checkpointId
+      : candidate.kind === 'signoff' && candidate.stage === parsed.stage,
   );
   if (!declared) throw new JobError('JOB_ASK_INVALID');
   return parsed;

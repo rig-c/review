@@ -1489,6 +1489,20 @@ export interface JobFormDependencies {
                 throw new Error('JOB_ASK_INVALID');
             }
             fields.title = subject.stage;
+            if (subject.reason !== undefined) {
+                const stage = node('h3');
+                stage.dataset.jobReopenStage = '';
+                stage.textContent = subject.stage;
+                stage.setAttribute('translate', 'no');
+                stage.style.overflowWrap = 'anywhere';
+                const reason = node('p');
+                reason.dataset.jobReopenReason = '';
+                reason.textContent = subject.reason;
+                reason.setAttribute('translate', 'no');
+                reason.style.whiteSpace = 'pre-wrap';
+                reason.style.overflowWrap = 'anywhere';
+                fields.append(stage, reason);
+            }
             read = () => ({ stage: subject.stage, words: commentWords() });
             submitKey = 'job.reopen';
         }

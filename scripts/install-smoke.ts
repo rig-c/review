@@ -119,11 +119,19 @@ const jobActAdmitsComments: JobActAdmitsComments = true;
 // Review #963: a newer Create detects ask-batch through this capability, never by probing the verb.
 export type CapabilitiesAdvertiseAskBatch = JobCapabilitiesV3['askBatch'] extends true ? true : never;
 const capabilitiesAdvertiseAskBatch: CapabilitiesAdvertiseAskBatch = true;
+// Review #989: installed consumers can read an optional string on a reopen ask.
+const legacyReopen: JobRecordReopenSubject = {kind: 'reopen', stage: 'plan-approved'};
+const suppliedReason: JobRecordReopenSubject['reason'] = 'Review the revised plan';
+const explainedReopen: JobRecordReopenSubject = {...legacyReopen, reason: suppliedReason};
+const reopenReason: string | undefined = explainedReopen.reason;
+// @ts-expect-error A reopen reason only accepts text.
+const numericReason: JobRecordReopenSubject['reason'] = 42;
 function assert(ok: unknown, name: string): asserts ok {
  if (!ok) throw new Error('SMOKE_PUBLIC_HOST_' + name);
 }
 assert(jobActAdmitsComments, 'JOB_ACT_ADMITS_COMMENTS');
 assert(capabilitiesAdvertiseAskBatch, 'CAPABILITIES_ADVERTISE_ASK_BATCH');
+assert(legacyReopen.reason === undefined && reopenReason === suppliedReason, 'REOPEN_REASON_OPTIONAL_STRING');
 const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', 'JOB_API_V3_SCHEMA', 'JOB_ACT_SCHEMA', 'JOB_RECORD_ACT_SCHEMA', 'JOB_RECORD_READER_ID', 'JOB_PARTS_ENUMERATOR_RANGE',
  'JOB_PREVIOUS_DRAFT_SCHEMA', 'JOB_ENABLED_ACT_KINDS', 'JOB_RESERVED_ACT_KINDS', 'JOB_PLAN_BOUND_SIGNOFF_STAGES',
  'JOB_CONSUMER_AUTH_MODE', 'JOB_ERROR_CODES', 'parseRecordAct', 'prepareJobRecordAct', 'prepareJobRecordSource',

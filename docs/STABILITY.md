@@ -773,3 +773,14 @@ the existing modal and record act shape. A declared subject and non-empty displa
 plan remain required. The record stage type has five members; the public package
 plan-bound list remains at three. Package interview signoffs and historical acts
 retain their existing nullable-plan behavior. No schema or runtime export changes.
+
+## Record reopen reason
+
+The existing `JobRecordReopenSubject` type accepts an optional string
+`reason` in plan declarations and V3 ask subjects. Stage-only declarations
+and asks keep their existing serialized shape, source hashes and replay
+identity. A supplied ask reason binds to the verbatim text in the published
+declaration. The existing act schemas, reopen value fields and runtime export
+inventory retain their contracts. Review versions predating #989 still accept
+the stage-only shape and reject a subject carrying the new key. See the
+[record reopen reason contract](REVIEW_PACKAGE.md#record-reopen-reason).
