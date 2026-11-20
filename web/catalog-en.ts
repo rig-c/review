@@ -23,10 +23,10 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.refusal.JOB_ASK_UNSUPPORTED": "This request lacks a supported source or checkpoint mapping. The producer must publish the matching source and plan mapping before asking again.",
   "In a job, press Request changes to send this edit; the producer rebuilds it.": "In a job, press Request changes to send this edit; the producer rebuilds it.",
   "job.mesh.staleDraft": "Some saved mesh edits could not be restored on this model and will be left out.",
-  "job.chest.sendHint": "Use Request changes to send the edited landmarks to the producer for rebuilding.",
+  "job.chest.sendHint": "Press Request changes to rebuild with the edited landmarks.",
   "job.chest.placed": "{0} points placed · ready to send",
   "job.chest.circlesOff": "Use Landmarks to edit the chest in this job.",
-  "job.chest.unpublished": "Chest editing is unavailable. The producer must publish a bust spec for this attachment.",
+  "job.chest.unpublished": "Chest editing is unavailable: no bust spec was published for this part.",
   "Comment · C": "Comment · C",
 
   "project.json": "project.json",

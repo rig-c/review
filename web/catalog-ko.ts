@@ -23,10 +23,10 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.refusal.JOB_ASK_UNSUPPORTED": "이 요청에 맞는 소스 또는 체크포인트 연결 정보가 없어요. 제작 도구에서 해당 소스와 계획 연결 정보를 게시한 후 다시 요청해야 해요.",
   "In a job, press Request changes to send this edit; the producer rebuilds it.": "잡에서는 수정 요청으로 이 편집을 보내 주세요. 리빌드는 프로듀서가 해요.",
   "job.mesh.staleDraft": "이 모델에서 복원하지 못한 메시 편집은 수정 요청에 포함하지 않아요.",
-  "job.chest.sendHint": "수정 요청을 누르면 생산자가 편집한 랜드마크를 받아 다시 빌드해요.",
+  "job.chest.sendHint": "수정 요청을 누르면 편집한 랜드마크로 다시 빌드해요.",
   "job.chest.placed": "점 {0}개를 찍었어요 · 보낼 수 있어요",
   "job.chest.circlesOff": "이 잡에서는 랜드마크 모드로 가슴 영역을 편집해 주세요.",
-  "job.chest.unpublished": "이 어태치먼트의 가슴을 편집하려면 생산자가 bust 설정을 게시해야 해요.",
+  "job.chest.unpublished": "이 파츠는 가슴 설정이 게시되지 않아 편집할 수 없어요.",
   "Comment · C": "코멘트 · C",
 
   "project.json": "project.json",
