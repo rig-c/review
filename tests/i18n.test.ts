@@ -962,7 +962,7 @@ test('#294: dynamic compound strings, optional-suffix templates, and cloth/eye-r
  const handoffLine=doc.createElement('p');handoffLine.id='handoff-line';
  handoffLine.textContent='Handoff declared (open --config): ../../config.json sha256 afa4e7b240c6… · parts .. · baseline: not run — rig-parts rig exited 1 without a named refusal (0.1 s)';
  const lmPrompt=doc.createElement('span');lmPrompt.id='reference-label';
- lmPrompt.textContent='Click the part to place Apex R (then Apex L, Cleavage) · drag a marker to move it';
+ lmPrompt.textContent='Click the part to place right apex → left apex → cleavage, in that order; drag a marker to move it';
  const turnPadBtn=doc.createElement('button');turnPadBtn.id='turn-pad-body';
  turnPadBtn.title='model slider body_dial → bone body_dial, rotate, animation body_turn (compiled body_turn binding)';
  const selectedPartMeta=doc.createElement('p');selectedPartMeta.id='selected-part';
@@ -1025,7 +1025,7 @@ test('#294: dynamic compound strings, optional-suffix templates, and cloth/eye-r
   // Verify additional dynamic surfaces
   expect(reqState.textContent).toBe('리그 사양: 본 42개, 슬롯 19개, 메시 슬롯 6개, IK/트랜스폼 제약 조건 0개, 애니메이션 7개.');
   expect(handoffLine.textContent).toBe('핸드오프 선언됨 (open --config): ../../config.json sha256 afa4e7b240c6… · 파츠 .. · 베이스라인: 실행 안 됨 — rig-parts rig이(가) 지정된 거부 사유 없이 종료 코드 1(으)로 종료됨 (0.1초)');
-  expect(lmPrompt.textContent).toBe('파츠를 클릭하여 우측 정점(Apex R) (다음 왼쪽 정점(Apex L), 골(Cleavage)) 배치 · 마커를 드래그하여 이동');
+  expect(lmPrompt.textContent).toBe('파츠를 클릭해 오른쪽 끝 → 왼쪽 끝 → 가운데 골 순서로 찍고, 마커는 끌어서 옮겨요');
   expect(turnPadBtn.title).toBe('모델 슬라이더 body_dial → 본 body_dial, rotate, 애니메이션 body_turn (컴파일된 body_turn 바인딩)');
   expect(selectedPartMeta.textContent).toBe('확인된 공개 어태치먼트: default / hair_back. 선언됨: default / hair_back (mesh). 그려진 페이지: skeleton.png · 시퀀스 0');
   expect(boneEditorTitle.textContent).toBe('hip · 본 · 부모 root · bones[0]');

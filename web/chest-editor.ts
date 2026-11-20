@@ -213,10 +213,20 @@ function readJobLandmarks(fields:Record<string,string>,seed:JobChestLandmarkValu
  const spec=parseBustSpec(candidate,'bust',true);
  return {spec,derived:spec.cleavage?deriveBust({...spec,cleavage:spec.cleavage}):null};
 }
+/** Whole sentences per remaining set, so each one is a single catalog entry (no translated fragments). */
+const LANDMARK_NEXT:Readonly<Record<string,string>>={
+ "apex_r,apex_l,cleavage":"Click the part to place right apex → left apex → cleavage, in that order; drag a marker to move it",
+ "apex_r,apex_l":"Click the part to place right apex → left apex, in that order; drag a marker to move it",
+ "apex_r,cleavage":"Click the part to place right apex → cleavage, in that order; drag a marker to move it",
+ "apex_l,cleavage":"Click the part to place left apex → cleavage, in that order; drag a marker to move it",
+ apex_r:"Click the part to place the right apex (character's right, image left); drag its marker to move it",
+ apex_l:"Click the part to place the left apex (character's left, image right); drag its marker to move it",
+ cleavage:"Click the part to place the cleavage; drag its marker to move it",
+};
 /** The landmark bar's readout: the derived circles, the producer's refusal verbatim, or which click comes next. */
 export function landmarkReadout(result:LandmarkRead):{text:string;error:boolean} {
  if('error' in result)return {text:result.error,error:true};
- if('missing' in result)return {text:`Click the part to place ${LANDMARKS.find(l=>l.key===result.missing[0])!.tag}${result.missing.length>1?` (then ${result.missing.slice(1).map(k=>LANDMARKS.find(l=>l.key===k)!.tag).join(', ')})`:''} · drag a marker to move it`,error:false};
+ if('missing' in result)return {text:LANDMARK_NEXT[result.missing.join(',')]??LANDMARK_NEXT[result.missing[0]!]!,error:false};
  if(result.derived.refusal)return {text:result.derived.refusal,error:true};
  const [r,l]=result.derived.regions;
  return {text:`bust_r (${r.cx},${r.cy}) r ${r.r} band ${r.band} → ${r.bone} · bust_l (${l.cx},${l.cy}) r ${l.r} band ${l.band} → ${l.bone} · D ${result.derived.D.toFixed(2)} px · the producer derives these again`,error:false};
