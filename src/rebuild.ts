@@ -550,7 +550,7 @@ export interface ClothJob {
   wallMs: { propose: number | null; build: number | null };
 }
 /** #111: what a cloth Apply runs with — the handoff's painting and keypoints (absolute), parts.json and the reader's tags; never from the client. */
-export interface ClothPlan { source: string; keypoints: string; partsJson: unknown; targets: string[] }
+export interface ClothPlan { source: string; keypoints: string; partsJson: unknown; targets: string[]; namedAssembly?: BuildPlan | RebuildError }
 /**
  * The tags the installed reader accepts, read off its own source (`src/cloth.ts`'s `CLOTH_TARGETS`); when that text
  * does not state them, the tags the config's `cloth` block already declares (and `read: false`).
@@ -930,7 +930,7 @@ const assembledView = (plan: BuildPlan): AssembledView => ({
 
 /** Read the assembly stamp with the same installation that runs the producer CLI. */
 function clothAssemblyChanges(producer: InstalledTool, config: string, partsDir: string, manifest: unknown) {
-  if (!manifest || typeof manifest !== 'object' || !Object.hasOwn(manifest, 'assembly_config')) return { changes: [] };
+  if (!hasAssemblyConfig(manifest)) return { changes: [] };
   const root = realpathSync(producer.root), requireProducer = createRequire(join(root, 'package.json'));
   const reader = realpathSync(requireProducer.resolve('@rig-c/parts/assembly-reading'));
   if (!reader.startsWith(root + sep)) throw new Error('The installed producer does not supply @rig-c/parts/assembly-reading');
@@ -941,6 +941,7 @@ function clothAssemblyChanges(producer: InstalledTool, config: string, partsDir:
   const parts = readParts(join(partsDir, 'parts.json')) as ReturnType<typeof readParts> & { assembly_config?: { project_override?: string } };
   return { changes: assemblyConfigChanges(config, parts), project: parts.assembly_config?.project_override };
 }
+const hasAssemblyConfig = (manifest: unknown) => !!manifest && typeof manifest === 'object' && Object.hasOwn(manifest, 'assembly_config');
 /**
  * The build's inputs for a patch (`null` refusal line when the handoff declares no painting and full run): the painting
  * and the runs, and every config-relative file the patched config names for assemble, each resolved against the handoff
@@ -992,6 +993,7 @@ async function hashBuild(build: string, id: string, assetPrefix = '/rebuild'): P
 
 /** One rebuild at a time per review instance; finished jobs stay readable by id. */
 export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
+  const handoffBuildPlan = (config: JsonValue) => buildPlan(p.handoff!, config, abs => relative(p.root, abs).split(sep).join('/'));
   const assetPrefix = options.assetPrefix ?? '/rebuild', stripPrefix = options.stripPrefix ?? '/density-strip';
   const jobs = new Map<string, RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob>();
   let running: string | null = null;
@@ -1704,8 +1706,14 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         if (changes.length) {
           let rebuild: BuildPlan;
           try {
+            if (plan2.namedAssembly instanceof RebuildError) throw plan2.namedAssembly;
+            rebuild = await handoffBuildPlan(patched);
             assertNamedFilesHeld(input, written, [dir, ...options.starts]);
-            rebuild = await buildPlan(p.handoff!, patched, abs => relative(p.root, abs).split(sep).join('/'));
+            const held = newBuildFile(input as JsonValue, written as JsonValue);
+            if (held) throw new RebuildError('EDIT_PATCH_PATH_HELD', `${held} names a file the handoff config does not; a patch may not name a new file (review sends no path)`);
+            if (plan2.namedAssembly && rebuild.inputsHash !== plan2.namedAssembly.inputsHash) {
+              throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild');
+            }
           } catch (error) {
             if (!(error instanceof RebuildError)) throw error;
             push(`review: ${error.message}`);
@@ -1714,6 +1722,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
           c.route = 'build';
           job.assembled = assembledView(rebuild);
           op = await runBuild(push, 'the config propose wrote', rebuild, project);
+          if (op.exitCode === 0 && plan2.namedAssembly && (await handoffBuildPlan(patched)).inputsHash !== rebuild.inputsHash) {
+            throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild');
+          }
         } else {
           push(`review: ${producer.package} ${producer.version} rig --config config.json (the config propose wrote) → scratch rig`);
           op = await runTool(producer.bin, ['rig', '--config', 'config.json', '--parts', inputs.parts, '--out', 'rig', ...args], { cwd: dir, onLine: push });
@@ -1864,7 +1875,11 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (building) {
       const held = newBuildFile(original, patched);
       if (held) throw new RebuildError('EDIT_PATCH_PATH_HELD', `${held} names a file the handoff config does not; a patch may not name a new file (review sends no path)`);
-      plan = await buildPlan(p.handoff!, patched, abs => relative(p.root, abs).split(sep).join('/'));
+      plan = await handoffBuildPlan(patched);
+    } else if (clothPlan && p.handoff!.full && hasAssemblyConfig(clothPlan.partsJson) && buildNamedFiles(patched).length) {
+      // These assembly sidecars can sit outside the handoff's hashed run directories. Bind them before scratch reuse.
+      try { clothPlan.namedAssembly = await handoffBuildPlan(patched); }
+      catch (error) { if (!(error instanceof RebuildError)) throw error; clothPlan.namedAssembly = error; }
     }
     const route = patch.op.cmd === 'remesh' ? 'remesh' : clothing ? 'cloth' : building ? 'build' : patchRoute(patch.ops, resolved.producer.version);
     const baselineNow = route === 'retune' ? await settledBaseline() : null;
@@ -1872,7 +1887,8 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (op === 'rig' || op === 'build' || op === 'cloth') {
       try { assertWholeRigBaseline(await settledBaseline()); } catch (e) { if (e instanceof BaselineError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
     }
-    const id = patchId({ sourceHash: p.sourceHash, configHash: rebuildConfigIdentity(inputs), patch, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}`, op, ...(plan ? { buildInputs: plan.inputsHash } : {}), ...(world ? { environment: world.record.sha256 } : {}), ...(clothPlan ? { cloth: p.handoff!.record.keypoints!.sha256 } : {}) });
+    const buildIdentity = plan ?? clothPlan?.namedAssembly;
+    const id = patchId({ sourceHash: p.sourceHash, configHash: rebuildConfigIdentity(inputs), patch, producer: `${resolved.producer.package}@${resolved.producer.version}`, compiler: `${resolved.compiler.package}@${resolved.compiler.version}`, op, ...(buildIdentity && !(buildIdentity instanceof RebuildError) ? { buildInputs: buildIdentity.inputsHash } : {}), ...(world ? { environment: world.record.sha256 } : {}), ...(clothPlan ? { cloth: p.handoff!.record.keypoints!.sha256 } : {}) });
     const current = jobs.get(id);
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };

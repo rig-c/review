@@ -34,10 +34,11 @@ const fakeRigc=`const fs=require('fs'),path=require('path');const a=process.argv
 const out=f('--out');fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'skeleton.model.json'),JSON.stringify({spec:'rigc-compiled/3',pages:[{name:'skeleton.png'}]}));fs.writeFileSync(path.join(out,'skeleton.png'),'png');console.log('rigc: wrote');`;
 const sha=(bytes:string|Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 
-async function fixture(options:{limbs?:boolean;stamped?:boolean;full?:boolean}={}){
+async function fixture(options:{limbs?:boolean;stamped?:boolean;full?:boolean;namedCut?:boolean}={}){
  const root=await realpath(await mkdtemp(join(tmpdir(),'review-cloth-'))),pkg=join(root,'pkg'),out=join(pkg,'out'),rig=join(out,'rig');
  await mkdir(join(rig,'images'),{recursive:true});await mkdir(join(out,'parts'),{recursive:true});await mkdir(join(pkg,'layers/full'),{recursive:true});
- const config={key:'k',cloth:{bottomwear:{chains:1,links:2,wind:[1,2],gravity:[1,2]}},bones:[{name:'hip',parent:'root',at:[10,10]},{chain:'skirt0_',parent:'hip',points:[[10,20],[10,30]],tip:[10,40]}],meshes:{skirt:{grid:8,segments:['skirt0_']}},constraints:[{type:'physics',name:'c0',bone:'skirt0_0',wind:1}],...(options.limbs?{limbs:{}}:{})};
+ const config={key:'k',cloth:{bottomwear:{chains:1,links:2,wind:[1,2],gravity:[1,2]}},bones:[{name:'hip',parent:'root',at:[10,10]},{chain:'skirt0_',parent:'hip',points:[[10,20],[10,30]],tip:[10,40]}],meshes:{skirt:{grid:8,segments:['skirt0_']}},constraints:[{type:'physics',name:'c0',bone:'skirt0_0',wind:1}],...(options.limbs?{limbs:{}}:{}),...(options.namedCut?{assemble:{cuts:[{under:'under.png'}]}}:{})};
+ if(options.namedCut)await writeFile(join(pkg,'under.png'),'first cut input');
  await writeFile(join(pkg,'config.json'),JSON.stringify(config,null,1));
  await writeFile(join(out,'parts.json'),JSON.stringify({parts:[{name:'skirt',from:'full:bottomwear'}],...(options.stamped?{assembly_config:{project_override:'hidden'}}:{})}));await writeFile(join(out,'parts/skirt.png'),'png-skirt');
  for(const [name,text] of Object.entries({'rig.json':'{"bones":[]}','motion.json':'{}','mesh_report.json':'{}'}))await writeFile(join(rig,name),text);
@@ -166,6 +167,21 @@ test('#998: a stale assembly without a declared full run stops before rig',async
   expect(scratch).toEqual([]);
  }finally{await f.done();}
 });
+
+test('#998: changing a config-named assembly input invalidates cloth build reuse',async()=>{
+ const f=await fixture({stamped:true,namedCut:true});
+ try{
+  const ops:ConfigPatch['ops']=[{op:'replace',path:'/cloth/bottomwear/links',value:3}];
+  const first=await apply(f,ops);
+  expect(first.job.status).toBe('built');expect(first.job.cloth?.route).toBe('build');
+  expect(first.job.assembled?.inputs.named).toEqual([{field:'assemble.cuts[0].under',path:'under.png',sha256:sha('first cut input')}]);
+  await writeFile(join(f.pkg,'under.png'),'second cut input');
+  const second=await apply(f,ops);
+  expect(second.p.sourceHash).toBe(first.p.sourceHash);
+  expect(second.job.status).toBe('built');expect(second.job.id).not.toBe(first.job.id);expect(second.job.reused).toBe(false);
+  expect(second.job.assembled?.inputs.named).toEqual([{field:'assemble.cuts[0].under',path:'under.png',sha256:sha('second cut input')}]);
+ }finally{await f.done();}
+},15000);
 
 test('#111: a written config that differs outside the drafted sections is not built; a mixed patch is refused',async()=>{
  const f=await fixture();
