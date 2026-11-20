@@ -1,4 +1,4 @@
-/** Direct Bun script (not bun-test discovery). Run on ordinary Nova only, after implementation freeze.
+/** Direct Bun script (not bun-test discovery). Browser mode runs on ordinary Nova only. Serve mode opens the fixture locally.
  * Synthetic producer input; real owner UI, displayed acknowledgment, SQLite act and semantic next.
  * EN/KO run sequentially in fresh profiles. No producer/compiler acceptance claim.
  */
@@ -25,6 +25,9 @@ import {fullyVisible, visibilityGeometry} from './helpers/walk-visibility.ts';
 
 const argument = (key: string) => {const at = Bun.argv.indexOf(key); return at < 0 ? undefined : Bun.argv[at + 1];};
 const draft = Bun.argv.includes('--draft');
+const hintOff = Bun.argv.includes('--hint-off');
+const serve = Bun.argv.includes('--serve');
+assert.ok(draft || (!hintOff && !serve), '--hint-off and --serve require --draft');
 const draftComment = '초안의 이 부분을 수정해 주세요.';
 const draftSelector = {kind: 'draft', id: 'chain'} as const;
 const autoStill=Bun.argv.includes('--auto-still');
@@ -32,7 +35,7 @@ const verdict=(argument('--verdict')??'approved') as 'approved'|'changes-request
 const language = argument('--lang') ?? 'both';
 assert.ok(language === 'both' || language === 'en' || language === 'ko');
 const output = resolve(argument('--out') ?? 'artifacts/job-rig-screen-709');
-await mkdir(output, {recursive: true});
+assert.ok(!serve || language !== 'both', '--serve requires one language');
 
 // Read only the public numeric observation. No internal screen state, altered bundle or act injection.
 const cameraExpression = `JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig`;
@@ -45,7 +48,7 @@ const readyExpression = `!document.body.inert && !!document.querySelector('#stag
 
 async function run(lang: 'en' | 'ko') {
   const out = join(output, lang);
-  await mkdir(out, {recursive: true});
+  if (!serve) await mkdir(out, {recursive: true});
   const mark = walkCheckpoint(join(out, 'checkpoints.jsonl'));
   const observations: Record<string, unknown> = {language: lang, fixture: 'synthetic trusted-host job window, static idle'};
   const catalog = lang === 'ko' ? koCatalog : enCatalog;
@@ -152,7 +155,7 @@ async function run(lang: 'en' | 'ko') {
       const parts = {enumeratorVersion: fixture.input.partsEnumerator.version, images,
         manifest: {path: 'out/parts.json', sha256: jobHash(await readFile(join(packageRoot, 'parts.json')))}};
       fixture.input.setContext({...fixture.input.getContext(), selector: draftSelector, parts, partIds: ['body', 'front'],
-        subjects: [{kind: 'review-verdict', stage: 'rig-review'}]});
+        subjects: hintOff ? [] : [{kind: 'review-verdict', stage: 'rig-review'}]});
     }
     const modelPath = join(fixture.input.root, 'out/skeleton.model.json');
     const manifestPath = join(fixture.input.root, 'out/review.json');
@@ -166,14 +169,34 @@ async function run(lang: 'en' | 'ko') {
     await writeFile(modelPath, JSON.stringify(model));
     await writeFile(manifestPath, JSON.stringify(manifest));
     const publication = await fixture.publish();
-    const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
-      requestId: randomUUID(), verb: 'ask', expectedGeneration: fixture.host.session.status().generation,
-      idempotencyKey: '709-rig-' + lang, publicationId: publication.publicationId,
-      subject: {kind: 'review-verdict', stage: 'rig-review'}});
-    assert.equal(response.status, 200);
-    const asked = await response.json();
-    assert.equal(asked.ok, true);
-    const ask = asked.value as JobPendingAsk;
+    const display = fixture.host.session.displayPublication(publication.publicationId);
+    assert.equal(display.rigDraftVerdict === true, draft && !hintOff);
+    let ask: JobPendingAsk | undefined;
+    if (!hintOff) {
+      const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
+        requestId: randomUUID(), verb: 'ask', expectedGeneration: fixture.host.session.status().generation,
+        idempotencyKey: '709-rig-' + lang, publicationId: publication.publicationId,
+        subject: {kind: 'review-verdict', stage: 'rig-review'}});
+      assert.equal(response.status, 200);
+      const asked = await response.json();
+      assert.equal(asked.ok, true);
+      ask = asked.value as JobPendingAsk;
+    }
+    const owner = new URL(fixture.host.ownerUrl);
+    owner.searchParams.set('lang', lang);
+    if (serve) {
+      console.log(owner.href);
+      await new Promise<void>(resolve => {
+        const stop = () => {
+          process.off('SIGINT', stop);
+          process.off('SIGTERM', stop);
+          resolve();
+        };
+        process.on('SIGINT', stop);
+        process.on('SIGTERM', stop);
+      });
+      return;
+    }
     const before = await jobInputHashes(fixture.input.root);
     const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
     const retainedBefore = await jobInputHashes(retained.snapshotRoot);
@@ -192,9 +215,21 @@ async function run(lang: 'en' | 'ko') {
     }});
     await page.setViewport(1440, 1000);
     if(autoStill&&pageCommand)await pageCommand('Emulation.setDeviceMetricsOverride',{width:1920,height:1080,deviceScaleFactor:2,mobile:false});
-    const owner = new URL(fixture.host.ownerUrl);
-    owner.searchParams.set('lang', lang);
     await page.goto(owner.href, lang);
+    if (hintOff) {
+      await wait(`document.body.dataset.ready === 'true' && document.querySelector('#parts-canvas')?.width > 0`,
+        'hint-off-parts-ready');
+      const state = await page.evaluate<{language: string; verdictVisible: boolean}>(`({
+        language: document.documentElement.lang,
+        verdictVisible: ['#save','#request-changes'].some(selector => document.querySelector(selector)?.checkVisibility()),
+      })`);
+      assert.deepEqual(state, {language: lang, verdictVisible: false});
+      assert.equal((await next()).events.some(event => event.type === 'pending' || event.type === 'act'), false);
+      await writeFile(join(out, 'hint-off-parts.png'), await page.screenshot());
+      await record('result', {status: 'PASS', hintOff, ...state});
+      return;
+    }
+    assert.ok(ask);
     const fresh = await settled('fresh-fit');
     const initial = await screen('fresh-screen');
     assert.equal(initial.status, 'pending');
@@ -351,6 +386,7 @@ async function run(lang: 'en' | 'ko') {
       scope: 'synthetic retained rig; actual human UI submission; no upstream producer or owner R0 ruling claim'});
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (serve) throw error;
     await record('failure', {status: 'FAIL', message: message.replace(/#cap=[a-f0-9]+/gi, '#cap=REDACTED'), unexpectedDialog});
     if (page) await writeFile(join(out, 'failure.png'), await page.screenshot()).catch(() => {});
     throw error;
