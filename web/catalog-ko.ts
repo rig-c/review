@@ -1896,7 +1896,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "These controls show actual images, last-drawn mesh edges and named bone points for Build {0} ({1}). Setup tools apply changes only to Build {2} in a scratch build; on-disk packages stay immutable.": "이 컨트롤은 빌드 {0} ({1})의 실제 이미지, 마지막으로 그려진 메시 엣지 및 이름 지정된 본 포인트를 표시해요. 셋업 도구는 임시 빌드에서 빌드 {2}에만 변경을 적용하며 디스크의 패키지는 변경되지 않아요.",
   "These controls show actual images, last-drawn mesh edges and named bone points. Both builds use the fixed animation named above. This inspector does not author geometry or motion.": "이 컨트롤은 실제 이미지, 마지막으로 그려진 메시 엣지 및 이름 지정된 본 포인트를 표시해요. 두 빌드 모두 위에 표시된 고정 애니메이션을 사용해요. 이 인스펙터는 지오메트리나 모션을 직접 제작하지 않아요.",
   "This rebuild starts from the handoff and drops: {0}": "이 리빌드는 핸드오프에서 시작하며 다음 항목을 제외해요: {0}",
-  "Three clicks (right apex, left apex, cleavage); the producer derives both circles (contour.bust)": "세 번의 클릭(오른쪽 정점, 왼쪽 정점, 클리비지)으로 프로듀서가 두 원(contour.bust)을 도출해요",
+  "Click right apex, left apex, then cleavage; the two circles are derived from them": "오른쪽 끝, 왼쪽 끝, 가운데 골 순서로 찍으면 두 원을 만들어요",
   "Time (s)": "시간 (초)",
   "Timed out waiting for reference video seek / decoded-frame response.": "레퍼런스 비디오 탐색 / 디코딩된 프레임 응답 대기 시간이 초과됐어요.",
   "Timeline": "타임라인",

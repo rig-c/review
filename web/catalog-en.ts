@@ -1896,7 +1896,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "These controls show actual images, last-drawn mesh edges and named bone points for Build {0} ({1}). Setup tools apply changes only to Build {2} in a scratch build; on-disk packages stay immutable.": "These controls show actual images, last-drawn mesh edges and named bone points for Build {0} ({1}). Setup tools apply changes only to Build {2} in a scratch build; on-disk packages stay immutable.",
   "These controls show actual images, last-drawn mesh edges and named bone points. Both builds use the fixed animation named above. This inspector does not author geometry or motion.": "These controls show actual images, last-drawn mesh edges and named bone points. Both builds use the fixed animation named above. This inspector does not author geometry or motion.",
   "This rebuild starts from the handoff and drops: {0}": "This rebuild starts from the handoff and drops: {0}",
-  "Three clicks (right apex, left apex, cleavage); the producer derives both circles (contour.bust)": "Three clicks (right apex, left apex, cleavage); the producer derives both circles (contour.bust)",
+  "Click right apex, left apex, then cleavage; the two circles are derived from them": "Click right apex, left apex, then cleavage; the two circles are derived from them",
   "Time (s)": "Time (s)",
   "Timed out waiting for reference video seek / decoded-frame response.": "Timed out waiting for reference video seek / decoded-frame response.",
   "Timeline": "Timeline",
