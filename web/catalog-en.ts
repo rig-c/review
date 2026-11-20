@@ -1000,6 +1000,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Fresh meshes · {0}{1}": "Fresh meshes · {0}{1}",
   "From value": "From value",
   "Full provenance": "Full provenance",
+  "F{0} (producer)": "F{0} (producer)",
+  "F{0} (reference)": "F{0} (reference)",
   "F{0} / {1}{2}": "F{0} / {1}{2}",
   "F{0} maps to {1} s, outside the current reference range. The requested time was not changed.": "F{0} maps to {1} s, outside the current reference range. The requested time was not changed.",
   "F{0} · Explicit time {1} s{2}": "F{0} · Explicit time {1} s{2}",

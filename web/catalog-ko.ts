@@ -1000,6 +1000,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Fresh meshes · {0}{1}": "새 메시 · {0}{1}",
   "From value": "시작 값",
   "Full provenance": "전체 출처 정보",
+  "F{0} (producer)": "F{0} (프로듀서)",
+  "F{0} (reference)": "F{0} (레퍼런스)",
   "F{0} / {1}{2}": "F{0} / {1}{2}",
   "F{0} maps to {1} s, outside the current reference range. The requested time was not changed.": "F{0}은(는) {1}초에 매핑되며 현재 레퍼런스 범위를 벗어나요. 요청된 시간은 변경되지 않았어요.",
   "F{0} · Explicit time {1} s{2}": "F{0} · 명시적 시간 {1}초{2}",
