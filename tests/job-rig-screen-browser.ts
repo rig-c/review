@@ -7,8 +7,8 @@ import {randomUUID} from 'node:crypto';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, type JobNextValue, type JobPendingAsk} from '../src/job-contract.ts';
-import {jobHash, parseCommentsAct} from '../src/job-api.ts';
+import {JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, type JobNextValue, type JobPendingAsk} from '../src/job-contract.ts';
+import {jobHash, parseCommentsAct, parseContextCommentsAct} from '../src/job-api.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
 import type {LocalInspectionDraft} from '../web/inspection-persistence.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -271,7 +271,13 @@ async function run(lang: 'en' | 'ko') {
         return button && button.getClientRects().length > 0;
       })`, 'both-verdict-buttons');
       await click(page, '#stage-comment');
-      await click(page, '[data-comment-general]');
+      const point = await page.evaluate<{x: number; y: number}>(`(() => {
+        const rect = document.querySelector('#rig-viewport').getBoundingClientRect();
+        return {x: rect.left + rect.width * .54, y: rect.top + rect.height * .49};
+      })()`);
+      await page.mouse('mouseMoved', point.x, point.y);
+      await page.mouse('mousePressed', point.x, point.y);
+      await page.mouse('mouseReleased', point.x, point.y);
       await wait(`!!document.querySelector('.stage-comment-composer input')`, 'draft-comment-composer');
       await page.evaluate<void>(`(() => {
         const form = document.querySelector('.stage-comment-composer');
@@ -298,18 +304,27 @@ async function run(lang: 'en' | 'ko') {
     const event = acts[0]!;
     assert.ok(event.type === 'act' && event.act.kind === 'review-verdict');
     await writeFile(join(out, 'recorded-act.json'), JSON.stringify(event.act, null, 2) + '\n');
-    const act = parseCommentsAct(event.act);
+    const act = draft ? parseContextCommentsAct(event.act) : parseCommentsAct(event.act);
     assert.ok(act.kind === 'review-verdict');
     assert.ok(act.still);
-    assert.equal(act.schema, JOB_COMMENTS_ACT_SCHEMA);
+    assert.equal(act.schema, draft ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA);
     assert.equal(act.publicationId, publication.publicationId);
     assert.equal(act.source.sourceHash, publication.source.sourceHash);
     assert.equal(act.authority.actor, 'human');
     assert.equal(act.authority.channel, 'review-ui');
     assert.equal(act.value.stage, 'rig-review');
     assert.equal(act.value.verdict, verdict);
-    assert.deepEqual(act.value.comments, draft ? [{text: draftComment}] : []);
-    if (draft) assert.deepEqual(act.source.selector, draftSelector);
+    assert.equal(act.value.comments.length, draft ? 1 : 0);
+    if (draft) {
+      assert.deepEqual(act.source.selector, draftSelector);
+      const [comment] = act.value.comments;
+      assert.equal(comment?.text, draftComment);
+      assert.ok(comment?.anchor);
+      assert.ok('context' in comment);
+      assert.deepEqual((comment.context as import('../src/job-contract.ts').JobCommentContext).subject, {
+        ask: ask.subject, sourceHash: publication.source.sourceHash, selector: draftSelector,
+      });
+    }
     assert.equal(act.still.camera, 'fixed');
     assert.match(act.still.sha256, /^[a-f0-9]{64}$/);
     assert.equal(act.still.path, act.still.sha256 + '.png');
