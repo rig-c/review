@@ -21,6 +21,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "JOB_ASK_UNSUPPORTED": "JOB_ASK_UNSUPPORTED",
   "job.refusal.JOB_ASK_UNSUPPORTED": "This request lacks a supported source or checkpoint mapping. The producer must publish the matching source and plan mapping before asking again.",
   "In a job, press Request changes to send this edit; the producer rebuilds it.": "In a job, press Request changes to send this edit; the producer rebuilds it.",
+  "Send this Request changes with {0} mesh edit(s) to the producer?": "Send this Request changes with {0} mesh edit(s) to the producer?",
   "job.mesh.staleDraft": "Some saved mesh edits could not be restored on this model and will be left out.",
   "Comment · C": "Comment · C",
 
@@ -3410,7 +3411,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "--by: launch only; incompatible with export or correction options": "--by: launch only; incompatible with export or correction options",
   "Painting comparison": "Painting comparison",
   "Compare with": "Compare with",
-  "Previous accepted draft · {0} · {1}": "Previous accepted draft · {0} · {1}",
+  "Previous accepted draft · {0}": "Previous accepted draft · {0}",
   "Overlay": "Overlay",
   "Part opacity": "Part opacity",
   "PARTS_COMPARISON_UNAVAILABLE: original painting required": "PARTS_COMPARISON_UNAVAILABLE: original painting required",

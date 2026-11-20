@@ -1722,7 +1722,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     let stopped=false;
     const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource,jobCheckpointContext},draftStorage:()=>localStorage,...drafts,access,pageId,
         window:{state:()=>window.state(),submit:input=>window.submit(input)}};
-    const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),refusal:jobWindowRefusal,formDependencies:dependencies,
+    const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),confirm:text=>globalThis.confirm(i18n.tr(text)),refusal:jobWindowRefusal,formDependencies:dependencies,
         window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),
         routes:display=>jobPublicationRoutes(display,location.origin),load:async()=>(await import('./main.ts')).mountRigScreen()});
     let bootstrapNotice:HTMLElement|null=null,bootstrapStream=false,bootstrapPrior:{text:string;title:string}|null=null;

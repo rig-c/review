@@ -1208,7 +1208,7 @@ function bind(): void {
           await persistence?.submitted(submittedBaseline);
           comments?.refresh(); renderProposals();
         },host.direction?recordCommentWords():undefined,general);
-        message(sent);
+        if (sent) message(sent);
       } catch (error) {
         submissionFailure = jobSubmissionRefusal(error);
         message(submissionFailure.text, true);
@@ -1458,7 +1458,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   const label=panelMake('label',{id:'parts-difference-operand-label',hidden:true},tr('Compare with'),operand);
   const localizeOptions=()=>{
    paintingOption.textContent=t('Original painting');
-   previousOption.textContent=t('Previous accepted draft · {0} · {1}',[previousDraft.id,previousDraft.revision.slice(0,12)]);
+   previousOption.textContent=t('Previous accepted draft · {0}',[previousDraft.id]);
   };
   localizeOptions();viewDisposers.push(onLanguageChange(localizeOptions));
   operand.onchange=()=>{
