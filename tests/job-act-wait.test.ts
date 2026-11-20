@@ -176,7 +176,8 @@ test('#1005 the waiter refuses unbounded deadlines before any request and surfac
 });
 
 // Driven from the contract constant: a record kind added there without a fixture case fails here.
-for (const kind of JOB_RECORD_ACT_KINDS) {
+// A new reopen ask is refused (#989); old reopen acts still parse but no live one can be committed.
+for (const kind of JOB_RECORD_ACT_KINDS.filter(kind => kind !== 'reopen')) {
   test(`#1005 a record-and-package attachment resolves a live-committed ${kind} act@4`, async () => {
     const {attached, commit, cursor} = await recordAttachedPair(scratches, hosts, kind);
     const {host, requests} = counted(attached);
