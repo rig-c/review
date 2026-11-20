@@ -1,5 +1,5 @@
 /** #1004 step 0 plan fixture only. A loopback proxy in front of the joined workspace adds a mock
- * single-submit control to the served page. Nothing here is product code or a catalog string:
+ * single-submit control to the served page and hides the MODEL_UNAVAILABLE strip. Nothing here is product code or a catalog string:
  * the chip and the rule line are plan text for the owner's layout ruling, and the mock sends nothing. */
 
 export const PLAN_1004_SCRIPT = '/__plan-1004/mock.js';
@@ -18,9 +18,19 @@ function mockSource(labels: {en: string; ko: string}): string {
 const TEXT=${text},LABEL=${label};
 const lang=()=>document.documentElement.lang==='ko'?'ko':'en';
 let busy=false;
+// An interview-stage project has no compiled model (src/joined-project.ts:76-79), so the workspace shows a
+// MODEL_UNAVAILABLE strip. It is not part of the plan, so the fixture hides only those text leaves.
+function hideModelStrip(){
+ for(const node of document.querySelectorAll('[data-plan-1004-hidden]'))if(!node.textContent.startsWith('MODEL_UNAVAILABLE')){node.removeAttribute('data-plan-1004-hidden');node.style.removeProperty('display');}
+ for(const node of document.querySelectorAll('body *')){
+  if(node.childElementCount||node.closest('[data-plan-1004]')||!node.textContent.startsWith('MODEL_UNAVAILABLE'))continue;
+  if(!node.hasAttribute('data-plan-1004-hidden')){node.setAttribute('data-plan-1004-hidden','');node.style.setProperty('display','none','important');}
+ }
+}
 function place(){
  if(busy)return;busy=true;
  try{
+  hideModelStrip();
   const nav=document.querySelector('#workspace-interview-answer nav.interview-questions');
   let mock=document.querySelector('[data-plan-1004]');
   if(!nav){mock?.remove();return;}
@@ -48,7 +58,7 @@ function place(){
   if(mock.getAttribute('data-plan-total')!==String(rows.length))mock.setAttribute('data-plan-total',String(rows.length));
  }finally{busy=false;}
 }
-new MutationObserver(place).observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['data-answered','lang','hidden']});
+new MutationObserver(place).observe(document,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['data-answered','lang','hidden']});
 place();
 })();`;
 }

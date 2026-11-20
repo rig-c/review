@@ -6,7 +6,7 @@ import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
 import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join,resolve} from 'node:path';
+import {isAbsolute,join,resolve} from 'node:path';
 import {PNG} from 'pngjs';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
@@ -126,8 +126,8 @@ function fixtureUrl(ownerUrl:string,language:string){
  return url.href;
 }
 
-async function joinedFixture(plan?:{answered:number}){
- const fixture=await interviewOpenFixture(plan?4:1);
+async function joinedFixture(plan?:{answered:number;painting?:string}){
+ const fixture=await interviewOpenFixture(plan?4:1,plan?.painting);
  let host:Awaited<ReturnType<typeof startOpenWorkspace>>|undefined,proxy:ReturnType<typeof planMockProxy>|undefined;
  try{
   // Extend the public fixture with a visibly different second painting for a real menu switch.
@@ -183,9 +183,10 @@ if(Bun.argv.includes('--serve')){
  assert.ok(language==='en'||language==='ko','--lang must be en or ko');
  const kind=arg('--fixture')??'live';
  assert.ok(kind==='live'||kind==='joined'||kind==='joined-plan-1004'||kind==='pictureless','--fixture must be live, joined, joined-plan-1004 or pictureless');
- const answered=Number(arg('--answered')??'0');
+ const answered=Number(arg('--answered')??'0'),painting=arg('--painting');
+ assert.ok(painting===undefined||kind==='joined-plan-1004'&&isAbsolute(painting),'--painting takes an absolute PNG path with --fixture joined-plan-1004');
  assert.ok(kind!=='joined-plan-1004'||[0,2,4].includes(answered),'--answered must be 0, 2 or 4');
- const fixture=kind==='joined-plan-1004'?await joinedFixture({answered}):kind==='joined'?await joinedFixture():await recordScreenFixture('interview-picks',false,output,undefined,false,kind==='live');
+ const fixture=kind==='joined-plan-1004'?await joinedFixture({answered,...painting!==undefined?{painting}:{}}):kind==='joined'?await joinedFixture():await recordScreenFixture('interview-picks',false,output,undefined,false,kind==='live');
  try{
   console.log(fixtureUrl(fixture.ownerUrl,language));
   await new Promise<void>(resolve=>{process.once('SIGINT',resolve);process.once('SIGTERM',resolve);});
@@ -1054,6 +1055,8 @@ async function plan1004Checks(){
      submit:{text:submit.textContent,disabled:submit.disabled,visible:visible(submit)},inList:nav.firstElementChild===mock,
      inQuestionTab:!!document.querySelector('${questionRoot}')?.contains(mock)&&!!document.querySelector(${JSON.stringify(questionTab)})};})()`);
    const shown=await state();await writeFile(join(out,'plan.png'),await page!.screenshot());
+   // An interview-stage project has no compiled model; the fixture mock hides that strip, and nothing else.
+   assert.deepEqual(await page!.evaluate<{visible:boolean;hidden:number}>(`({visible:document.body.innerText.includes('MODEL_UNAVAILABLE'),hidden:document.querySelectorAll('[data-plan-1004-hidden]').length})`).then(v=>({visible:v.visible,hidden:v.hidden>0})),{visible:false,hidden:true});
    assert.deepEqual(shown.rows.map(row=>row.answered),[0,1,2,3].map(index=>index<answered));
    assert.deepEqual({chip:shown.chip,rule:shown.rule,disabled:shown.submit.disabled,submitVisible:shown.submit.visible,inList:shown.inList,inQuestionTab:shown.inQuestionTab},
     {chip:{text:PLAN_1004_TEXT[language].chip,visible:true,onScreen:true},rule:PLAN_1004_TEXT[language].rule,disabled:false,submitVisible:true,inList:true,inQuestionTab:true});
@@ -1076,6 +1079,28 @@ async function plan1004Checks(){
    cases.push(observation);
   }finally{await page!.goto('about:blank');await fixture.close();}
  }
+}
+
+/** #1004: one KO 2/4 screenshot with a local PNG passed through the serve-only `--painting` path. */
+async function plan1004PaintingCheck(painting:string){
+ const bytes=await readFile(painting),width=bytes.readUInt32BE(16),out=join(output,'plan-1004','ko','painting');
+ await mkdir(out,{recursive:true});
+ const fixture=await joinedFixture({answered:2,painting});
+ try{
+  const question=readProject(fixture.root).questions[2]!;
+  await page!.setViewport(1440,900);await page!.goto('about:blank');await page!.goto(fixtureUrl(fixture.ownerUrl,'ko'));
+  await waitForQuestion('form.interview-answer');
+  await wait(`document.querySelector('[data-plan-1004]')?.getAttribute('data-plan-answered')==='2'`,'1004 painting mock');
+  const shown=await readPainting(width);
+  assert.ok(new URL(shown.src).pathname.endsWith('/api/interview/image/'+question.ref.sha256+'/0'),shown.src);
+  assert.equal(question.images[0]!.name,'painting.png');
+  assert.equal(await page!.evaluate<boolean>(`document.body.innerText.includes('MODEL_UNAVAILABLE')`),false);
+  await writeFile(join(out,'plan.png'),await page!.screenshot());
+  const observation={language:'ko',answered:2,painting:{width,sha256:sha(bytes)},shown};
+  await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');
+  console.log('1004_PLAN_PAINTING '+JSON.stringify({width,src:new URL(shown.src).pathname}));
+  cases.push(observation);
+ }finally{await page!.goto('about:blank');await fixture.close();}
 }
 
 /** The waiting layout can dock the inspector before the first publication binds its Question tab. */
@@ -1127,7 +1152,7 @@ try{
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Runtime.enable');await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
- if(Bun.argv.includes('--plan-1004')){await plan1004Checks();assert.equal(exceptions.length,0,JSON.stringify(exceptions));assert.equal(consoleErrors.length,0,JSON.stringify(consoleErrors));console.log('1004_PLAN_PASS '+JSON.stringify({cases:cases.length,exceptions:exceptions.length,consoleErrors:consoleErrors.length}));}
+ if(Bun.argv.includes('--plan-1004')){await plan1004Checks();const painting=arg('--painting');if(painting)await plan1004PaintingCheck(painting);assert.equal(exceptions.length,0,JSON.stringify(exceptions));assert.equal(consoleErrors.length,0,JSON.stringify(consoleErrors));console.log('1004_PLAN_PASS '+JSON.stringify({cases:cases.length,exceptions:exceptions.length,consoleErrors:consoleErrors.length}));}
  else if(Bun.argv.includes('--first-question-drawer'))await firstQuestionInDrawer();
  else if(boundRigPictureOnly)await boundRigPictureChecks();
  else if(postQuestionPictures)await postQuestionPictureChecks();
