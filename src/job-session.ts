@@ -8,9 +8,9 @@ import {
   type JobSubject, type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
 } from './job-contract.ts';
 import { bindJobAsk, bindJobRecordAsk, finalizeJobAct, parseUISubmission, prepareJobRecordAct, prepareJobStill } from './job-act.ts';
-import { atSubject, isRecordSource, isRigDraftVerdictSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
+import { atSubject, isRecordSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
-  assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
+  assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, prepareJobSource, retainedRigDraftVerdict, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
   type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
 } from './job-source.ts';
 import { JobError, JobStore, jobCropReferences, type JobSnapshotOwner, type StoredJob } from './job-store.ts';
@@ -323,9 +323,7 @@ export class JobSession {
     const stored = current.data.publications[publicationId];
     if (!stored) throw new JobError('JOB_PUBLICATION_UNKNOWN');
     const base = `/jobs/${this.jobId}/publications/${publicationId}/instances/${stored.publication.instanceKey}/`;
-    const retained = stored.retained;
-    const rigDraftVerdict = !isRetainedRecordSource(retained) && isRigDraftVerdictSource(retained.source) &&
-      retained.subjects.some(subject => subject.kind === 'review-verdict' && subject.stage === 'rig-review');
+    const rigDraftVerdict = retainedRigDraftVerdict(stored.retained);
     return { publication: stored.publication, ...(rigDraftVerdict ? {rigDraftVerdict: true as const} : {}), routes: { entry: base, apiBase: base + 'api/', assetsBase: base + 'assets/' } };
   }
 
