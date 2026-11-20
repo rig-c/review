@@ -35,7 +35,6 @@ export function jobRigScreenAsk(display:DisplayPublicationV3,ask:PendingAskV3,ch
     try {prepareJobForms(display,[ask],()=>jobCheckpointContext(ask,[]));return true;}catch{return false;}
   }
   if(ask.subject.kind==='signoff'||ask.subject.kind==='interview-picks')return true;
-  if('record' in source)return ask.subject.kind==='reopen';
   return !!source.model&&jobRigScreenAnswers(ask,checkpoints)&&
     (ask.subject.kind!=='review-verdict'||ask.subject.stage===(source.direction?'direction-review':'rig-review'));
 }
@@ -165,8 +164,9 @@ export function createJobRigScreen(options: {
           picture = {jobRigScreen:true,display,entry,checkpoints:new Set(),parts};
         }
         if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
-        const forms = prepareJobForms(display, options.window.state().pending, ask => formFor(ask, inspection, options.formDependencies!),true);
-        return {jobRigScreen:true,display,entry,checkpoints:new Set(),record:{inspection,forms,picture}};
+        const checkpoints = new Set<string>();
+        const forms = prepareJobForms(display, options.window.state().pending.filter(ask => jobRigScreenAsk(display, ask, checkpoints)), ask => formFor(ask, inspection, options.formDependencies!),true);
+        return {jobRigScreen:true,display,entry,checkpoints,record:{inspection,forms,picture}};
       } catch(error) {inspection.dispose();throw error;}
     }
     if (!jobRigScreenSubject(source, display.rigDraftVerdict)) {

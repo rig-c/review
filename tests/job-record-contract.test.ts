@@ -2817,272 +2817,51 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
     expect(planSource.subjects).toContainEqual({ kind: 'reopen', stage: 'plan-approved' });
     expect(planSource.subjects).toContainEqual({ kind: 'reopen', stage: 'design-interview' });
 
-    // 3. Undeclared reopen stage refuses with JOB_ASK_INVALID
-    const undeclaredAskRes = await callApi({
-      schema: HOST_JOB_API_V3_SCHEMA,
-      jobId: host.session.jobId,
-      requestId: `req-586-${++seq}`,
-      verb: 'ask',
-      expectedGeneration: host.session.status().generation,
-      idempotencyKey: 'ask-undeclared-reopen-586',
-      publicationId: planPub.publicationId,
-      subject: { kind: 'reopen', stage: 'post-interview' },
-    });
-    expect(undeclaredAskRes.status).toBe(409);
-    expect(await undeclaredAskRes.json()).toMatchObject({
-      schema: HOST_JOB_API_V3_SCHEMA,
-      ok: false,
-      error: { code: 'JOB_ASK_INVALID' },
-    });
-
-    // 4. Moving project.json before ask refuses with JOB_RECORD_MOVED, then restoring allows ask
-    await writeFile(join(root, 'project.json'), Buffer.concat([originalProjectBytes, Buffer.from('\n')]));
-    const movedAskRes = await callApi({
-      schema: HOST_JOB_API_V3_SCHEMA,
-      jobId: host.session.jobId,
-      requestId: `req-586-${++seq}`,
-      verb: 'ask',
-      expectedGeneration: host.session.status().generation,
-      idempotencyKey: 'ask-moved-reopen-586',
-      publicationId: planPub.publicationId,
-      subject: { kind: 'reopen', stage: 'plan-approved' },
-    });
-    expect(movedAskRes.status).toBe(409);
-    expect(await movedAskRes.json()).toMatchObject({
-      schema: HOST_JOB_API_V3_SCHEMA,
-      ok: false,
-      error: { code: 'JOB_RECORD_MOVED' },
-    });
-    await writeFile(join(root, 'project.json'), originalProjectBytes);
-
-    // 5. Acknowledge display of plan publication
-    const ackRes = await host.ports.ackDisplayed(
-      host.session.jobId,
-      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/displayed`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Origin: host.origin,
-          'X-Review-Capability': credentials.ui,
-        },
-        body: JSON.stringify({
-          publicationId: planPub.publicationId,
-          pageId: 'page-plan-586',
-          sourceHash: planPub.source.sourceHash,
-        }),
-      }),
-    );
-    expect(ackRes.ok).toBe(true);
-    if (!ackRes.ok) throw new Error(ackRes.error.code);
-    const displayedNonce = ackRes.value.displayedNonce;
-
-    // 6. Verify display receipt and source currentness enforcement on finalize, plus verbatim words (empty, whitespace, non-empty)
-    const verbatimCases = [
-      { stage: 'plan-approved', words: '' },
-      { stage: 'design-interview', words: '  \n\t  ' },
-      { stage: 'plan-approved', words: 'Reopen plan-approved from live host\nsecond line' },
-    ] as const;
-
-    for (let idx = 0; idx < verbatimCases.length; idx++) {
-      const item = verbatimCases[idx]!;
+    // 3. Both undeclared and declared reopen stages refuse at ask with JOB_ASK_INVALID (#989 Bar 2)
+    for (const stage of ['post-interview', 'plan-approved', 'design-interview'] as const) {
+      const beforeGen = host.session.status().generation;
       const askRes = await callApi({
         schema: HOST_JOB_API_V3_SCHEMA,
         jobId: host.session.jobId,
         requestId: `req-586-${++seq}`,
         verb: 'ask',
-        expectedGeneration: host.session.status().generation,
-        idempotencyKey: `ask-reopen-live-${idx}`,
+        expectedGeneration: beforeGen,
+        idempotencyKey: `ask-reopen-refused-${stage}`,
         publicationId: planPub.publicationId,
-        subject: { kind: 'reopen', stage: item.stage },
+        subject: { kind: 'reopen', stage },
       });
-      expect(askRes.status).toBe(200);
-      const ask = ((await askRes.json()) as { value: publicJobHost.JobPendingAskV3 }).value;
-      expect(ask.subject).toEqual({ kind: 'reopen', stage: item.stage });
-
-      if (idx === 0) {
-        // Wrong displayedNonce refuses with JOB_DISPLAY_MISMATCH
-        const badNonceRes = await host.ports.commitUIAct(
-          host.session.jobId,
-          new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Origin: host.origin,
-              'X-Review-Capability': credentials.ui,
-            },
-            body: JSON.stringify({
-              publicationId: planPub.publicationId,
-              askId: ask.askId,
-              pageId: 'page-plan-586',
-              displayedNonce: '0'.repeat(64),
-              expectedGeneration: host.session.status().generation,
-              submissionId: 'sub-reopen-bad-nonce',
-              kind: 'reopen',
-              value: { stage: item.stage, words: item.words },
-            }),
-          }),
-        );
-        expect(badNonceRes).toEqual({
-          ok: false,
-          error: { code: 'JOB_DISPLAY_MISMATCH', message: 'JOB_DISPLAY_MISMATCH' },
-        });
-
-        // Mismatched stage or extra key in UI submission refuses with JOB_ACT_INVALID
-        for (const badValue of [
-          { stage: 'design-interview', words: 'wrong stage for this ask' },
-          { stage: item.stage, decision: 'reopened', words: 'extra key' },
-        ]) {
-          const badValueRes = await host.ports.commitUIAct(
-            host.session.jobId,
-            new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Origin: host.origin,
-                'X-Review-Capability': credentials.ui,
-              },
-              body: JSON.stringify({
-                publicationId: planPub.publicationId,
-                askId: ask.askId,
-                pageId: 'page-plan-586',
-                displayedNonce,
-                expectedGeneration: host.session.status().generation,
-                submissionId: `sub-reopen-bad-val-${ JSON.stringify(badValue).length }`,
-                kind: 'reopen',
-                value: badValue,
-              }),
-            }),
-          );
-          expect(badValueRes).toEqual({
-            ok: false,
-            error: { code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID' },
-          });
-        }
-
-        // Moving project.json or reader drift before finalize refuses with JOB_RECORD_MOVED / JOB_ACT_SOURCE_STALE
-        await writeFile(join(root, 'project.json'), Buffer.concat([originalProjectBytes, Buffer.from('\n')]));
-        const movedCommitRes = await host.ports.commitUIAct(
-          host.session.jobId,
-          new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Origin: host.origin,
-              'X-Review-Capability': credentials.ui,
-            },
-            body: JSON.stringify({
-              publicationId: planPub.publicationId,
-              askId: ask.askId,
-              pageId: 'page-plan-586',
-              displayedNonce,
-              expectedGeneration: host.session.status().generation,
-              submissionId: 'sub-reopen-moved',
-              kind: 'reopen',
-              value: { stage: item.stage, words: item.words },
-            }),
-          }),
-        );
-        expect(movedCommitRes.ok).toBe(false);
-        if (!movedCommitRes.ok) {
-          expect(movedCommitRes.error.code).toBe('JOB_RECORD_MOVED');
-        }
-        await writeFile(join(root, 'project.json'), originalProjectBytes);
-
-        tamperContextOnFinalize = true;
-        const staleCommitRes = await host.ports.commitUIAct(
-          host.session.jobId,
-          new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Origin: host.origin,
-              'X-Review-Capability': credentials.ui,
-            },
-            body: JSON.stringify({
-              publicationId: planPub.publicationId,
-              askId: ask.askId,
-              pageId: 'page-plan-586',
-              displayedNonce,
-              expectedGeneration: host.session.status().generation,
-              submissionId: 'sub-reopen-stale',
-              kind: 'reopen',
-              value: { stage: item.stage, words: item.words },
-            }),
-          }),
-        );
-        expect(staleCommitRes.ok).toBe(false);
-        if (!staleCommitRes.ok) {
-          expect(staleCommitRes.error.code).toBe('JOB_ACT_SOURCE_STALE');
-        }
-        tamperContextOnFinalize = false;
-      }
-
-      // Finalize valid reopen act and fetch via consumer grant (both JSON envelope and raw application/vnd.rig-review.act+json)
-      const commitRes = await host.ports.commitUIAct(
-        host.session.jobId,
-        new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Origin: host.origin,
-            'X-Review-Capability': credentials.ui,
-          },
-          body: JSON.stringify({
-            publicationId: planPub.publicationId,
-            askId: ask.askId,
-            pageId: 'page-plan-586',
-            displayedNonce,
-            expectedGeneration: host.session.status().generation,
-            submissionId: `sub-reopen-valid-${idx}`,
-            kind: 'reopen',
-            value: { stage: item.stage, words: item.words },
-          }),
-        }),
-      );
-      expect(commitRes.ok).toBe(true);
-      if (!commitRes.ok) throw new Error(commitRes.error.code);
-      const finalized = parseRecordActFromHost(commitRes.value);
-      expect(finalized.schema).toBe(HOST_JOB_RECORD_ACT_SCHEMA);
-      expect(finalized.kind).toBe('reopen');
-      expect(finalized.authority).toEqual({
-        actor: 'human',
-        channel: 'review-ui',
-        reviewer: { id: 'reviewer-live-586', role: 'owner' },
+      expect(askRes.status).toBe(409);
+      expect(await askRes.json()).toMatchObject({
+        schema: HOST_JOB_API_V3_SCHEMA,
+        ok: false,
+        error: { code: 'JOB_ASK_INVALID' },
       });
-      expect(finalized.source).toEqual(planSource);
-      expect(finalized.value).toEqual({ stage: item.stage, words: item.words });
-      expect(Object.keys(finalized.value).sort()).toEqual(['stage', 'words']);
+      expect(host.session.status().generation).toBe(beforeGen);
+    }
 
-      const fetchEnvelopeRes = await callApi(
-        {
-          schema: HOST_JOB_API_V3_SCHEMA,
-          jobId: host.session.jobId,
-          requestId: `req-586-${++seq}`,
-          verb: 'fetch-act',
-          actId: finalized.actId,
+    // 4. Stored reopen act@4 records with declared reopen subjects still decode unchanged via parseRecordAct (#989 Bar 3)
+    for (const item of [
+      { stage: 'plan-approved', words: '' },
+      { stage: 'design-interview', words: '  \n\t  ' },
+      { stage: 'plan-approved', words: 'Reopen plan-approved from live host\nsecond line' },
+    ] as const) {
+      const storedAct = {
+        schema: HOST_JOB_RECORD_ACT_SCHEMA,
+        actId: `act-stored-${item.stage}-${item.words.length}`,
+        jobId: host.session.jobId,
+        askId: `ask-stored-${item.stage}`,
+        publicationId: planPub.publicationId,
+        kind: 'reopen' as const,
+        authority: {
+          actor: 'human' as const,
+          channel: 'review-ui' as const,
+          reviewer: { id: 'reviewer-live-586', role: 'owner' as const },
         },
-        consumerGrant!.fetchCapability,
-      );
-      expect(fetchEnvelopeRes.status).toBe(200);
-      const fetchEnvelopeJson = await fetchEnvelopeRes.json();
-      expect(fetchEnvelopeJson.schema).toBe(HOST_JOB_API_V3_SCHEMA);
-      expect(fetchEnvelopeJson.ok).toBe(true);
-      expect(parseRecordActFromHost(fetchEnvelopeJson.value)).toEqual(finalized);
-
-      const fetchRawRes = await callApi(
-        {
-          schema: HOST_JOB_API_V3_SCHEMA,
-          jobId: host.session.jobId,
-          requestId: `req-586-${++seq}`,
-          verb: 'fetch-act',
-          actId: finalized.actId,
-        },
-        consumerGrant!.fetchCapability,
-        'application/vnd.rig-review.act+json',
-      );
-      expect(fetchRawRes.status).toBe(200);
-      expect(fetchRawRes.headers.get('content-type')).toContain('application/vnd.rig-review.act+json');
-      expect(parseRecordActFromHost(await fetchRawRes.json())).toEqual(finalized);
+        at: '2026-11-09T09:00:00.000Z',
+        source: planSource,
+        value: { stage: item.stage, words: item.words },
+      };
+      expect(parseRecordActFromHost(storedAct)).toEqual(storedAct);
     }
   } finally {
     host.stop();

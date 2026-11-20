@@ -196,14 +196,26 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
       subject: { kind: 'signoff', stage: 'rigging-interview' },
     });
     if (askSignoff.verb !== 'ask' || !askSignoff.ok) throw new Error('Preflight signoff ask failed');
-    const askReopen = await call({
-      verb: 'ask',
-      expectedGeneration: askSignoff.generation,
-      idempotencyKey: 'preflight-ask-reopen',
-      publicationId: pubPlan.value.publicationId,
-      subject: { kind: 'reopen', stage: 'plan-approved' },
+    const reopenRes = await fetch(`${host!.origin}/jobs/${host!.session.jobId}/api`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        schema: JOB_API_V3_SCHEMA,
+        jobId: host!.session.jobId,
+        requestId: randomUUID(),
+        verb: 'ask',
+        expectedGeneration: askSignoff.generation,
+        idempotencyKey: 'preflight-ask-reopen',
+        publicationId: pubPlan.value.publicationId,
+        subject: { kind: 'reopen', stage: 'plan-approved' },
+      }),
     });
-    if (askReopen.verb !== 'ask' || !askReopen.ok) throw new Error('Preflight reopen ask failed');
+    assert.equal(reopenRes.status, 409);
+    const askReopen = (await reopenRes.json()) as JobApiResponseV3;
+    assert.equal(askReopen.schema, JOB_API_V3_SCHEMA);
+    assert.equal(askReopen.ok, false);
+    if (askReopen.ok) throw new Error('Preflight reopen ask unexpectedly succeeded');
+    assert.equal(askReopen.error.code, 'JOB_ASK_INVALID');
   } finally {
     try {
       host?.stop();
@@ -224,9 +236,6 @@ const catalog = language === 'ko' ? koCatalog : enCatalog;
 const answeredLabel = language === 'ko' ? koCatalog['Answer saved'] : 'Answer saved';
 const output = argument('--out') ?? `evidence/job-record-${language}`;
 await mkdir(output, { recursive: true });
-
-// Cheap non-browser publish/ask setup check through the exact same reader fixture before launching Chromium.
-await runRecordBrowserPreflightSetupCheck();
 
 const scratch = await mkdtemp(join(realpathSync(tmpdir()), `review-job-record-browser-${language}-`));
 const profile = join(scratch, 'chrome');
@@ -656,25 +665,30 @@ try {
   assert.ok(askSignoff.verb === 'ask' && askSignoff.ok);
   const signoffAsk = askSignoff.value as JobPendingAskV3;
 
-  const askReopen = await callRecordApi({
-    verb: 'ask',
-    expectedGeneration: askSignoff.generation,
-    idempotencyKey: 'browser-ask-reopen',
-    publicationId: planPublication.publicationId,
-    subject: { kind: 'reopen', stage: 'plan-approved' },
+  const askReopenRes = await fetch(`${recordHost.origin}/jobs/${recordHost.session.jobId}/api`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentToken}` },
+    body: JSON.stringify({
+      schema: JOB_API_V3_SCHEMA,
+      jobId: recordHost.session.jobId,
+      requestId: randomUUID(),
+      verb: 'ask',
+      expectedGeneration: askSignoff.generation,
+      idempotencyKey: 'browser-ask-reopen',
+      publicationId: planPublication.publicationId,
+      subject: { kind: 'reopen', stage: 'plan-approved' },
+    }),
   });
-  assert.ok(askReopen.verb === 'ask' && askReopen.ok);
-  const reopenAsk = askReopen.value as JobPendingAskV3;
+  const askReopen = (await askReopenRes.json()) as JobApiResponseV3;
 
   await wait(
     `document.getElementById('package-title')?.textContent===${JSON.stringify(planPublication.label)} &&
      !!document.querySelector('form[data-job-ask=${JSON.stringify(cpAsk.askId)}]') &&
-     !!document.querySelector('form[data-job-ask=${JSON.stringify(signoffAsk.askId)}]') &&
-     !!document.querySelector('form[data-job-ask=${JSON.stringify(reopenAsk.askId)}]')`,
-    'plan displayed with checkpoint, signoff and reopen forms on normal owner URL',
+     !!document.querySelector('form[data-job-ask=${JSON.stringify(signoffAsk.askId)}]')`,
+    'plan displayed with checkpoint and signoff forms on normal owner URL',
   );
 
-  // #715 / #796: shared title and native dialog replace the deleted job-panel/record wrapper.
+  // #715 / #796 / #989: shared title and native dialog; a plan carrying reopen subjects renders no reopen form or button.
   await openPendingAsk(page);
   const planDom = await page.evaluate<{
     sentinel: string;
@@ -687,19 +701,20 @@ try {
     rigCanvasCount: number;
     cpFormHidden: boolean;
     signoffFormHidden: boolean;
-    reopenFormHidden: boolean;
+    reopenFormCount: number;
+    reopenButtonCount: number;
     cpStepText: string | null;
     signoffStageText: string | null;
-    reopenStageText: string | null;
-    reopenSubmitKey: string | null;
-    reopenSubmitText: string | null;
   }>(`(async()=>{
     const sourceBinding = await (await fetch(${JSON.stringify(`/jobs/${recordHost.session.jobId}/publications/${planPublication.publicationId}/instances/${planPublication.instanceKey}/api/review`)})).json().then(body=>body.recordSource);
     const stage = document.getElementById('stage-layout');
     const cpForm = document.querySelector('form[data-job-ask=${JSON.stringify(cpAsk.askId)}]');
     const signoffForm = document.querySelector('form[data-job-ask=${JSON.stringify(signoffAsk.askId)}]');
-    const reopenForm = document.querySelector('form[data-job-ask=${JSON.stringify(reopenAsk.askId)}]');
-    const reopenBtn = reopenForm?.querySelector('button[type="submit"]');
+    const forms = [...document.querySelectorAll('#job-record-asks form[data-job-ask]')];
+    const extraForms = forms.filter(f => f !== cpForm && f !== signoffForm);
+    const reopenButtons = [...document.querySelectorAll('#job-record-asks button')].filter(
+      b => b.dataset.jobText === 'job.reopen' || b.textContent === 'Reopen stage' || b.textContent === '단계 다시 열기',
+    );
     return {
       sentinel: globalThis.__jobRecordOwnerSentinel,
       lang: document.documentElement.lang,
@@ -711,12 +726,10 @@ try {
       rigCanvasCount: document.querySelectorAll('#rig-root canvas').length,
       cpFormHidden: !cpForm || cpForm.hidden,
       signoffFormHidden: !signoffForm || signoffForm.hidden,
-      reopenFormHidden: !reopenForm || reopenForm.hidden,
+      reopenFormCount: extraForms.length,
+      reopenButtonCount: reopenButtons.length,
       cpStepText: cpForm?.querySelector('.job-plan-steps summary')?.title??null,
       signoffStageText: signoffForm?.querySelector('fieldset')?.title??null,
-      reopenStageText: reopenForm?.querySelector('fieldset')?.title??null,
-      reopenSubmitKey: reopenBtn?.dataset.jobText ?? null,
-      reopenSubmitText: reopenBtn?.textContent ?? null,
     };
   })()`);
 
@@ -725,6 +738,11 @@ try {
   assert.equal(planDom.lang, language);
   assert.equal(planDom.headerTitle, planPublication.label);
   assert.deepEqual(planDom.sourceBinding, planPublication.source);
+  assert.equal(
+    planPublication.source.subjects.some(s => s.kind === 'reopen' && s.stage === 'plan-approved'),
+    true,
+    'plan publication still carries reopen subject',
+  );
   assert.equal(Object.hasOwn(planDom.sourceBinding, 'package'), false);
   assert.equal(Object.hasOwn(planDom.sourceBinding, 'model'), false);
   assert.equal(Object.hasOwn(planDom.sourceBinding, 'selector'), false);
@@ -734,15 +752,18 @@ try {
   assert.equal(planDom.rigCanvasCount, 0);
   assert.equal(planDom.cpFormHidden, false);
   assert.equal(planDom.signoffFormHidden, false);
-  assert.equal(planDom.reopenFormHidden, false);
+  assert.equal(planDom.reopenFormCount, 0, 'Bar 1: plan publication carrying reopen subjects renders no reopen form');
+  assert.equal(planDom.reopenButtonCount, 0, 'Bar 1: plan publication carrying reopen subjects renders no reopen button');
+  assert.equal(askReopenRes.status, 409, 'Bar 2: new reopen ask returns HTTP 409');
+  assert.equal(askReopen.ok, false);
+  if (askReopen.ok) throw new Error('Expected reopen ask to be refused');
+  assert.equal(askReopen.error.code, 'JOB_ASK_INVALID');
+  await runRecordBrowserPreflightSetupCheck();
   const expectedCpStep = planSteps.find(step => step.id === 'seethrough');
   assert.ok(expectedCpStep, 'declared seethrough step exists in planSteps');
   assert.ok(planDom.cpStepText?.includes(expectedCpStep.id));
   assert.ok(planDom.cpStepText?.includes(expectedCpStep.hash));
   assert.equal(planDom.signoffStageText, 'rigging-interview');
-  assert.equal(planDom.reopenStageText, 'plan-approved');
-  assert.equal(planDom.reopenSubmitKey, 'job.reopen');
-  assert.equal(planDom.reopenSubmitText, catalog['job.reopen']);
 
   const planInstanceBase = `/jobs/${recordHost.session.jobId}/publications/${planPublication.publicationId}/instances/${planPublication.instanceKey}`;
   const planRoutes = await page.evaluate<{
@@ -760,7 +781,7 @@ try {
   assert.equal(Object.hasOwn(planRoutes.reviewBody, 'reviewedSource'), false);
   assert.deepEqual(planRoutes.reviewBody.recordSource, planPublication.source);
 
-  // Submit checkpoint, signoff and reopen through actual DOM forms
+  // Submit checkpoint and signoff through actual DOM forms
   await edit(`form[data-job-ask="${cpAsk.askId}"] select[name="outcome"]`, 'pass');
   const checkpointWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
   assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"],input[name="note"]').length`),0);
@@ -773,62 +794,6 @@ try {
   assert.equal(signoffSubmitStatus.statusKey, 'saved');
   assert.equal(signoffSubmitStatus.statusText, answeredLabel);
 
-  const reopenVerbatimWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
-  await openPendingAsk(page);
-  await wait(`!!document.querySelector('#job-record-asks[open] form[data-job-ask="${reopenAsk.askId}"]')`,'reopen dialog opened');
-  // Scroll the reopen form/button into view within the forms container, wait painted rAF, assert visible bounds, and capture record-reopen-<lang>.png
-  const reopenVisibleBounds = await page.evaluate<{
-    viewportWidth: number;
-    viewportHeight: number;
-    formsHostScrollTop: number;
-    formsHostRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
-    formRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
-    buttonRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
-    statusRect: { top: number; bottom: number; left: number; right: number; width: number; height: number };
-  }>(`(async () => {
-    const formsHost = document.querySelector('#job-record-asks');
-    const form = document.querySelector('form[data-job-ask=${JSON.stringify(reopenAsk.askId)}]');
-    const button = form?.querySelector('button[type="submit"]');
-    const status = form?.querySelector('[role="status"]');
-    if (!formsHost || !form || !button || !status) {
-      throw new Error('Missing reopen form elements for visible bounds check');
-    }
-    button.scrollIntoView({ block: 'center', inline: 'nearest' });
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const rectOf = (el) => {
-      const r = el.getBoundingClientRect();
-      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height };
-    };
-    return {
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-      formsHostScrollTop: formsHost.scrollTop,
-      formsHostRect: rectOf(formsHost),
-      formRect: rectOf(form),
-      buttonRect: rectOf(button),
-      statusRect: rectOf(status),
-    };
-  })()`);
-  assert.ok(reopenVisibleBounds.buttonRect.width > 0 && reopenVisibleBounds.buttonRect.height > 0);
-  assert.ok(
-    reopenVisibleBounds.buttonRect.top >= reopenVisibleBounds.formsHostRect.top &&
-      reopenVisibleBounds.buttonRect.bottom <= reopenVisibleBounds.formsHostRect.bottom &&
-      reopenVisibleBounds.buttonRect.top >= 0 &&
-      reopenVisibleBounds.buttonRect.bottom <= reopenVisibleBounds.viewportHeight &&
-      reopenVisibleBounds.buttonRect.left >= 0 &&
-      reopenVisibleBounds.buttonRect.right <= reopenVisibleBounds.viewportWidth,
-    `reopen submit button must be visible inside forms container and viewport: ${JSON.stringify(reopenVisibleBounds)}`,
-  );
-  assert.ok(
-    reopenVisibleBounds.formRect.bottom > reopenVisibleBounds.formsHostRect.top &&
-      reopenVisibleBounds.formRect.top < reopenVisibleBounds.formsHostRect.bottom,
-    `reopen form must intersect visible forms container: ${JSON.stringify(reopenVisibleBounds)}`,
-  );
-  await writeFile(join(output, `record-reopen-${language}.png`), await page.screenshot());
-
-  const reopenSubmitStatus = await submitForm(reopenAsk.askId);
-  assert.equal(reopenSubmitStatus.statusKey, 'saved');
-  assert.equal(reopenSubmitStatus.statusText, answeredLabel);
   await wait(`!document.querySelector('#job-record-asks')`,'drawer removed after the final record act');
 
   await writeFile(join(output, `record-plan-${language}.png`), await page.screenshot());
@@ -845,7 +810,7 @@ try {
   const actEvents = nextRes.value.events.filter(
     (e): e is Extract<JobEventV3, { type: 'act' }> => e.type === 'act',
   );
-  assert.equal(actEvents.length, 4);
+  assert.equal(actEvents.length, 3);
 
   const fetchedActs: Record<string, JobRecordAct> = {};
   for (const event of actEvents) {
@@ -923,11 +888,7 @@ try {
     words: signoffWords,
   });
 
-  assert.equal(fetchedActs.reopen?.source.subject, 'plan');
-  assert.deepEqual(fetchedActs.reopen?.value, {
-    stage: 'plan-approved',
-    words: reopenVerbatimWords,
-  });
+  assert.equal(fetchedActs.reopen, undefined);
 
   assert.deepEqual(await jobInputHashes(recordRoot), beforeRecordHashes, 'supplied record project files remain immutable');
   await record('record-acts-verified', {
@@ -935,8 +896,6 @@ try {
     planRoutes,
     cpSubmitStatus,
     signoffSubmitStatus,
-    reopenSubmitStatus,
-    reopenVisibleBounds,
     acts: fetchedActs,
     readerPhasesCount: readerPhases.length,
   });
