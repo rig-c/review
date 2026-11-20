@@ -413,6 +413,25 @@ export class JobSession {
     return previous ?? null;
   }
 
+  /** A stored agent receipt is returned only while it is still true (#1022). A publication that is no longer the
+   * head, or an ask that is no longer pending and has no finalized act, refuses by name and names the head. */
+  private assertReplayCurrent(current: StoredJob<JobData>, verb: string, value: unknown): void {
+    const data = current.data, head = 'head ' + (data.head ?? 'none');
+    if (verb === 'publish') {
+      const publicationId = (value as {publicationId: string}).publicationId;
+      if (data.head !== publicationId) throw new JobError('JOB_ACT_SOURCE_STALE', `publication ${publicationId} is superseded; ${head}`);
+      return;
+    }
+    const asks = verb === 'ask' ? [value as {askId: string}] : verb === 'ask-batch' ? (value as {asks: {askId: string}[]}).asks : [];
+    asks.forEach((ask, index) => {
+      const status = data.asks[ask.askId]?.status;
+      if (status === 'pending' || status === 'answered') return;
+      const prefix = verb === 'ask-batch' ? `subjects[${index}]: ` : '';
+      if (!current.active) throw new JobError('JOB_CLOSED', `${prefix}ask ${ask.askId} ended when the job closed`);
+      throw new JobError('JOB_ASK_SUPERSEDED', `${prefix}ask ${ask.askId} is superseded; ${head}`);
+    });
+  }
+
   private active(current: StoredJob<JobData>, generation: number): void {
     if (!current.active) throw new JobError('JOB_CLOSED');
     if (current.data.generation !== generation) throw new JobError('JOB_GENERATION_STALE');
@@ -467,6 +486,7 @@ export class JobSession {
     let current = this.current();
     const previous = this.replay(current.data, key, digest);
     if (previous) {
+      this.assertReplayCurrent(current, input.verb, previous.value);
       this.operations++;
       try {
         if (input.verb === 'close') await this.reclaimClosedSnapshots();
@@ -620,6 +640,7 @@ export class JobSession {
       }, fresh => {
         const raced = this.replay(fresh.data, key, digest);
         if (!raced) return false;
+        this.assertReplayCurrent(fresh, input.verb, raced.value);
         result = raced.value;
         return true;
       });
