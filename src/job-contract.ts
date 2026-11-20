@@ -598,7 +598,7 @@ export interface JobActSources {
     readonly parts: JobPartsIdentity;
   };
   readonly 'review-verdict': (JobModelSourceBinding & {
-    readonly selector: Extract<JobSelector, { kind: 'rig' | 'post' }>;
+    readonly selector: Extract<JobSelector, { kind: 'rig' | 'post' | 'draft' }>;
     readonly model: JobFileIdentity;
   });
   readonly signoff: JobModelSourceBinding;
@@ -942,6 +942,8 @@ export interface JobDisplayReceipt {
 
 export interface JobDisplayPublication {
   readonly publication: JobPublication;
+  /** A declared rig draft verdict selects the rig screen even when parts are retained. */
+  readonly rigDraftVerdict?: true;
   /** Same-origin routes pinned to this publication and instance. No current alias. */
   readonly routes: {
     readonly entry: string;

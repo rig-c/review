@@ -12,7 +12,7 @@ import {
   type JobInterviewJson, type JobInterviewRecord, type JobPlanIdentity, type JobPublicationMode,
   type JobAct, type JobMeshEdit, type JobMeshEditsAct, type JobMeshEditValue,
   type JobChestLandmarkEdit, type JobChestLandmarksAct, type JobChestLandmarkValue, type JobPublishedChestLandmark,
-  type JobPublishRequest, type JobResult, type JobSelector, type JobSha256, type JobSubject,
+  type JobPublishRequest, type JobResult, type JobSelector, type JobSha256, type JobSourceBinding, type JobSubject,
   type OptionContext, type OptionSource, type PlanContext, type PlanSource, type ProjectRecord,
   type PublishRequestV3, type PublishResultV3, type RecordAct, type RecordFreeze,
   type RecordOptionResult, type RecordPartsIdentity, type RecordPicksSubject, type RecordPlanResult, type RecordPlanSubject,
@@ -1427,6 +1427,10 @@ function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
   return structuredClone(item) as unknown as Exclude<SourceV3, OptionSource>;
 }
 
+export function isRigDraftVerdictSource(source: JobSourceBinding): boolean {
+  return source.selector?.kind === 'draft' && !!source.model && !!source.projectHash && source.direction === null;
+}
+
 /** Public @6 decoder. The UI finalizers write checkpoint, parts, rig/post verdict and signoff acts at @6 (#713). */
 export function parseCommentsAct(raw: unknown): JobCommentsAct {
   return decodeCommentsAct(raw, JOB_COMMENTS_ACT_SCHEMA) as JobCommentsAct;
@@ -1645,7 +1649,7 @@ function decodeCommentsAct(raw: unknown, schema: CommentsWireAct['schema']): Com
       if ((value.verdict === 'approved') !== (issues === 0)) throw new JobError('JOB_ACT_INVALID');
     } else if (item.kind === 'review-verdict') {
       if ('record' in source || typeof value.verdict !== 'string' || !['pending', 'approved', 'changes-requested'].includes(value.verdict)) throw new JobError('JOB_ACT_INVALID');
-      if (!source.model || (value.stage === 'rig-review' ? source.selector?.kind !== 'rig' : value.stage !== 'direction-review' || source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ACT_INVALID');
+      if (!source.model || (value.stage === 'rig-review' ? source.selector?.kind !== 'rig' && !isRigDraftVerdictSource(source) : value.stage !== 'direction-review' || source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ACT_INVALID');
     } else {
       const stage = jobId(value.stage);
       if (item.kind === 'signoff' && value.decision !== 'approved') throw new JobError('JOB_ACT_INVALID');
