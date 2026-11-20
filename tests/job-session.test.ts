@@ -350,8 +350,8 @@ test('oversized single events refuse before commit, while existing oversized eve
   expect(legacy.error.code).toBe('JOB_BODY_LIMIT');
 });
 
-// #1021: an idempotent replay returns its stored receipt only while that receipt is still true.
-test('#1021 replay of a superseded publish or ask refuses by name and names the head; current and finalized replays are unchanged', async () => {
+// #1022: an idempotent replay returns its stored receipt only while that receipt is still true.
+test('#1022 replay of a superseded publish or ask refuses by name and names the head; current and finalized replays are unchanged', async () => {
   const f = await fixture();
   const publishA = await f.publishRequest('publish-a');
   const firstA = await (await f.call(publishA)).json();
@@ -390,8 +390,8 @@ test('#1021 replay of a superseded publish or ask refuses by name and names the 
   expect(f.session.status().publication?.publicationId).toBe(publicationB.publicationId);
 });
 
-// #1021 measured case: two option sets in one record, B replaces A, then a producer retry replays A's publish and ask.
-test('#1021 a byte-identical retry of a replaced option-set publish and ask refuses and names the head', async () => {
+// #1022 measured case: two option sets in one record, B replaces A, then a producer retry replays A's publish and ask.
+test('#1022 a byte-identical retry of a replaced option-set publish and ask refuses and names the head', async () => {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-1021-')), root = join(scratch, 'input');
   directories.push(scratch);
   await mkdir(root);

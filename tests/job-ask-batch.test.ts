@@ -232,7 +232,7 @@ test('#963 a package-retained head refuses ask-batch with JOB_REQUEST_INVALID an
   }
 });
 
-test('#1021 a replayed batch whose asks were superseded refuses by index and names the head', async () => {
+test('#1022 a replayed batch whose asks were superseded refuses by index and names the head', async () => {
   const fixture = await batchFixture('review-ask-batch-superseded-');
   try {
     const subjects = fixture.workspace.context.subjects.slice(0, 2);

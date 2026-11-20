@@ -413,7 +413,7 @@ export class JobSession {
     return previous ?? null;
   }
 
-  /** A stored agent receipt is returned only while it is still true (#1021). A publication that is no longer the
+  /** A stored agent receipt is returned only while it is still true (#1022). A publication that is no longer the
    * head, or an ask that is no longer pending and has no finalized act, refuses by name and names the head. */
   private assertReplayCurrent(current: StoredJob<JobData>, verb: string, value: unknown): void {
     const data = current.data, head = 'head ' + (data.head ?? 'none');
