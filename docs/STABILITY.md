@@ -517,6 +517,46 @@ constant `JOB_PREVIOUS_DRAFT_SCHEMA` (`rig-review-previous-draft/1`), for twenty
 (`rig-review/act@8`), for thirty-one runtime exports total, plus the type-only
 `JobMeshEditValue`, `JobMeshEdit` and `JobMeshEditsAct`.
 
+### Host-bound act wait
+
+[Review #1005](https://github.com/rig-c/review/issues/1005) adds the host-bound
+finalized-act waiter `waitForJobAct`, for thirty-two runtime exports total, plus
+the type-only `JobActWaitOptions` and `JobActWaitOutcome`.
+
+```ts
+function waitForJobAct(host: JobOwnerHost, options: JobActWaitOptions): Promise<JobActWaitOutcome>;
+// options: {after: JobCursor | null; deadlineMs: number; signal?: AbortSignal}
+// outcome: {kind: 'act' | 'closed'; next: JobNextValue | JobNextValueV3; cursor}
+//        | {kind: 'timeout'; code: 'JOB_NEXT_TIMEOUT'; next: JobNextValue | JobNextValueV3 | null; cursor}
+```
+
+The wait sends the host's own API schema. A package-only host gets
+`rig-review/job-api@2` and answers `JobNextValue` batches. A
+record-and-package host gets `rig-review/job-api@3`, as Create's agents send,
+and answers `JobNextValueV3` batches. An act row there may be a
+`rig-review/act@4` record act (`JobRecordAct`, checked with `parseRecordAct`)
+as well as a package act. The act's own `schema` picks the decoder, so
+`rig-review session next --until act` also accepts record acts from a record
+host. Its output and exit codes are unchanged.
+
+It is the `rig-review session next --until act` loop, shared code rather than a
+copy, sent through `host.ports.handleJobApi` with the host's existing agent
+capability. `deadlineMs` is an integer from 1 to 600000. Each server `next`
+stays bounded to 30000 ms, and the wait advances the cursor through unrelated
+publication and ask events. `cursor` is the cursor to resume from. An invalid
+deadline refuses `JOB_REQUEST_INVALID` before any request. A refused `next`
+throws its `JobError` code. Abort rejects with the signal's reason and clears
+the wait's timers. When an empty server window ends less than a millisecond
+before the deadline, the wait sends no zero-wait repeat and sits out the
+remainder. The CLI shares this.
+
+A strict `reuseOnly` attachment opens its own read-only session, which the
+live host's in-process notifications never reach. Its `next` therefore watches
+the shared store's revision with the existing 250 ms subscribe watcher, so a
+finalized act the live host commits wakes it. A write that adds no deliverable
+event, such as a display receipt, keeps the wait open, and a refused save
+commits nothing. No API verb, act field or capability changes.
+
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
@@ -551,6 +591,7 @@ values from the frozen semantic contract.
 - `JOB_PLAN_BOUND_SIGNOFF_STAGES`
 - `JOB_CONSUMER_AUTH_MODE`
 - `JOB_ERROR_CODES`
+- `waitForJobAct`
 
 The exact type-only exports follow. Their existing definitions in
 `src/job-contract.ts`, `src/job-source.ts`, `src/job-act.ts`, `src/job-session.ts`,
@@ -567,6 +608,8 @@ without aliases or copied wire shapes.
 - `JobSessionOptions`
 - `JobSession`
 - `JobWorkerOptions`
+- `JobActWaitOptions`
+- `JobActWaitOutcome`
 - `JobPublicationReader`
 - `JobPublishedContext`
 - `JobEnabledActKind`
@@ -728,7 +771,7 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer checks the thirty-one runtime exports and the existing managed-host types, including
+A consumer checks the thirty-two runtime exports and the existing managed-host types, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and
@@ -780,3 +823,21 @@ the existing modal and record act shape. A declared subject and non-empty displa
 plan remain required. The record stage type has five members; the public package
 plan-bound list remains at three. Package interview signoffs and historical acts
 retain their existing nullable-plan behavior. No schema or runtime export changes.
+
+## Package manifest `frames` declaration
+
+`rig-review/1` manifests accept an optional `frames` field beside `model`: a
+literal package-relative path to a producer `rigc-frames/1` record inside the
+package. Review reads, validates and hashes the file only when `frames` is
+present, adds its path to `files`, and exposes the parsed record on the loaded
+package as `frames: {path, sha256, sets: [{animation, fps, written, stride,
+duration}]} | null` (`null` when the field is absent). Older manifests without
+`frames` load unchanged with the same `sourceHash` and no runtime or type export
+changes on `@rig-c/review/job-host`. Path validation reuses `packagePath` and
+`safeFile` (`..`, absolute paths, symlinks escaping the package and files
+missing from `sealedPlayback` refuse with the same messages as `model`). A
+declared file missing from the package, unreadable JSON, a `spec` other than
+`rigc-frames/1`, a malformed set field (`sets[].animation`, `fps`, `written`,
+`stride`, `duration`), or two sets naming the same animation refuses by name
+(`FRAMES_MISSING`, `FRAMES_JSON`, `FRAMES_SPEC`, `FRAMES_FIELD`,
+`FRAMES_DUPLICATE_ANIMATION`), never falling back silently.

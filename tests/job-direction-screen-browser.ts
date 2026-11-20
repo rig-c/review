@@ -12,6 +12,7 @@ import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {projectComments,feedbackItemComments} from '../src/stage-comment.ts';
 import type {Feedback} from '../src/session.ts';
+import {jobSourceDraftId} from '../web/job-session.ts';
 const at=Bun.argv.indexOf('--out'),output=resolve(at<0?'artifacts/direction-screen-796':Bun.argv[at+1]!);await mkdir(output,{recursive:true});
 const hash=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 const profile=await mkdtemp(join(tmpdir(),'review796-direction-'));
@@ -83,7 +84,7 @@ try{
    const point:any=await page.evaluate(`(()=>{const r=document.querySelector('#rig-viewport').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
    await page.mouse('mousePressed',point.x,point.y);await page.mouse('mouseReleased',point.x,point.y);await composer('Direction spot · 연출 위치');
    await wait(`document.querySelectorAll('.stage-comment-item').length===2`);
-   const key='rig-review-record-comments/1:'+publication.publicationId+':'+publication.source.sourceHash;
+   const key='rig-review-record-comments/1:'+host.session.jobId+':'+jobSourceDraftId(publication.source)+':'+publication.source.sourceHash;
    const draft:any=await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)}))`);
    assert.deepEqual(draft.comments.map((row:any)=>row.summary),['Direction comment · 연출','Direction spot · 연출 위치']);
    assert.equal('target' in draft.comments[0],false);assert.ok(draft.comments[1].context.comment.crop.png);
