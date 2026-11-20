@@ -525,9 +525,18 @@ the type-only `JobActWaitOptions` and `JobActWaitOutcome`.
 ```ts
 function waitForJobAct(host: JobOwnerHost, options: JobActWaitOptions): Promise<JobActWaitOutcome>;
 // options: {after: JobCursor | null; deadlineMs: number; signal?: AbortSignal}
-// outcome: {kind: 'act' | 'closed'; next: JobNextValue; cursor}
-//        | {kind: 'timeout'; code: 'JOB_NEXT_TIMEOUT'; next: JobNextValue | null; cursor}
+// outcome: {kind: 'act' | 'closed'; next: JobNextValue | JobNextValueV3; cursor}
+//        | {kind: 'timeout'; code: 'JOB_NEXT_TIMEOUT'; next: JobNextValue | JobNextValueV3 | null; cursor}
 ```
+
+The wait sends the host's own API schema. A package-only host gets
+`rig-review/job-api@2` and answers `JobNextValue` batches. A
+record-and-package host gets `rig-review/job-api@3`, as Create's agents send,
+and answers `JobNextValueV3` batches. An act row there may be a
+`rig-review/act@4` record act (`JobRecordAct`, checked with `parseRecordAct`)
+as well as a package act. The act's own `schema` picks the decoder, so
+`rig-review session next --until act` also accepts record acts from a record
+host. Its output and exit codes are unchanged.
 
 It is the `rig-review session next --until act` loop, shared code rather than a
 copy, sent through `host.ports.handleJobApi` with the host's existing agent

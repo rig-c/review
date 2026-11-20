@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {JOB_API_SCHEMA, type JobCursor, type JobErrorCode, type JobNextValue} from './job-contract.ts';
+import {type JobCursor, type JobErrorCode, type JobNextValue, type JobNextValueV3} from './job-contract.ts';
 import {jobActWaitLimitMs, waitForActBatch} from './job-cli.ts';
 import type {JobOwnerHost} from './job-front.ts';
 import {JobError} from './job-store.ts';
@@ -13,11 +13,17 @@ export interface JobActWaitOptions {
   readonly signal?: AbortSignal;
 }
 
-/** The batch carrying the finalized act or the closure, and its cursor to resume from. */
+/**
+ * The batch carrying the finalized act or the closure, and its cursor to resume from. A
+ * package-only host answers `rig-review/job-api@2` batches (`JobNextValue`, package acts);
+ * a record-and-package host answers `@3` batches (`JobNextValueV3`), whose act rows may be
+ * `rig-review/act@4` record acts (`JobRecordAct`) as well as package acts.
+ */
+type JobActWaitBatch = JobNextValue | JobNextValueV3;
 export type JobActWaitOutcome =
-  | {readonly kind: 'act'; readonly next: JobNextValue; readonly cursor: JobCursor | null}
-  | {readonly kind: 'closed'; readonly next: JobNextValue; readonly cursor: JobCursor | null}
-  | {readonly kind: 'timeout'; readonly code: 'JOB_NEXT_TIMEOUT'; readonly next: JobNextValue | null; readonly cursor: JobCursor | null};
+  | {readonly kind: 'act'; readonly next: JobActWaitBatch; readonly cursor: JobCursor | null}
+  | {readonly kind: 'closed'; readonly next: JobActWaitBatch; readonly cursor: JobCursor | null}
+  | {readonly kind: 'timeout'; readonly code: 'JOB_NEXT_TIMEOUT'; readonly next: JobActWaitBatch | null; readonly cursor: JobCursor | null};
 
 /**
  * Wait on a started or strictly attached owner host until a finalized act, a closure or the
@@ -30,11 +36,12 @@ export async function waitForJobAct(host: JobOwnerHost, options: JobActWaitOptio
       (after !== null && typeof after !== 'string')) throw new JobError('JOB_REQUEST_INVALID');
   const jobId = host.session.jobId, endpoint = `${host.origin}/jobs/${jobId}/api`;
   const capability = host.session.hostCredentials().agent;
+  // The host's own API schema: job-api@3 on a record-and-package host, as Create's agents send.
   const result = await waitForActBatch((request, requestSignal) => host.ports.handleJobApi(new Request(endpoint, {
     method: 'POST', signal: requestSignal,
     headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + capability},
     body: JSON.stringify(request),
-  })), {schema: JOB_API_SCHEMA, verb: 'next', jobId, requestId: randomUUID(), after, waitMs: 0}, deadlineMs, signal);
+  })), {schema: host.session.apiSchema, verb: 'next', jobId, requestId: randomUUID(), after, waitMs: 0}, deadlineMs, signal);
   switch (result.kind) {
     case 'act': case 'closed': return {kind: result.kind, next: result.batch, cursor: result.batch.cursor};
     case 'timeout': return {kind: 'timeout', code: 'JOB_NEXT_TIMEOUT', next: result.batch, cursor: result.cursor};

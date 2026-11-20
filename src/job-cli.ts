@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import {closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeSync} from 'node:fs';
 import {join} from 'node:path';
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, jobRawActMediaType, jobStillByteLimit, jobActDeliveryLimit, jobResponseBodyLimit,
-  type JobAct, type JobMeshEditsAct, type JobAgentRequest, type JobNextRequest, type JobNextValue } from './job-contract.ts';
-import { assertJobApiSchema, jobFailure, jobHash, jobId, jobInteger, jobObject, jobWaitLimitMs, parseJobRequest, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct } from './job-api.ts';
+  JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA,
+  type JobAct, type JobMeshEditsAct, type JobAgentRequest, type JobApiSchema, type JobNextRequest, type JobNextRequestV3, type JobNextValue } from './job-contract.ts';
+import { assertJobApiSchema, jobFailure, jobHash, jobId, jobInteger, jobObject, jobWaitLimitMs, parseJobRequest, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, parseRecordAct } from './job-api.ts';
 import { JobError } from './job-store.ts';
 import {validatePngBytes} from './comment-crops.ts';
 import {destinationDirectory} from './destination-directory.ts';
@@ -336,7 +337,8 @@ async function fetchActCommand(args: readonly string[], options: JobCLIOptions):
   outputConsumerAct(bytes, png, act, destination, options);
 }
 
-async function readJobResponse(response: Response, interrupted?: Promise<never>): Promise<unknown> {
+async function readJobResponse(response: Response, interrupted?: Promise<never>,
+  schema: JobApiSchema = JOB_API_SCHEMA): Promise<unknown> {
   const reader = response.body?.getReader();
   if (!reader) throw new JobError('JOB_REQUEST_INVALID');
   const chunks: Uint8Array[] = [];
@@ -363,12 +365,12 @@ async function readJobResponse(response: Response, interrupted?: Promise<never>)
   let value: unknown;
   try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, size))); }
   catch { throw new JobError('JOB_REQUEST_INVALID'); }
-  assertJobApiSchema(value !== null && typeof value === 'object' ? (value as { schema?: unknown }).schema : undefined);
+  assertJobApiSchema(value !== null && typeof value === 'object' ? (value as { schema?: unknown }).schema : undefined, schema);
   return value;
 }
 
 /** Check the complete existing next batch before accepting its read cursor. */
-function nextValue(value: unknown, request: JobNextRequest): JobNextValue {
+function nextValue(value: unknown, request: JobNextRequest | JobNextRequestV3): JobNextValue {
   const result = jobObject(value, ['schema', 'verb', 'jobId', 'requestId', 'generation', 'ok', 'value']);
   if (result.ok !== true || result.verb !== 'next' || result.jobId !== request.jobId) throw new JobError('JOB_REQUEST_INVALID');
   jobInteger(result.generation);
@@ -383,6 +385,13 @@ function nextValue(value: unknown, request: JobNextRequest): JobNextValue {
     switch (event.type) {
       case 'act': {
         const actId = jobId((event.act as {actId?: unknown} | null)?.actId);
+        // A record-and-package host also finalizes record acts; the act's own schema picks the decoder.
+        if ((event.act as {schema?: unknown}).schema === JOB_RECORD_ACT_SCHEMA) {
+          const act = parseRecordAct(event.act);
+          if (act.jobId !== request.jobId || act.actId !== actId ||
+              !(JOB_RECORD_ACT_KINDS as readonly string[]).includes(act.kind)) throw new JobError('JOB_ACT_INVALID');
+          break;
+        }
         const act = parseConsumerAct(Buffer.from(JSON.stringify(event.act)), request.jobId, actId);
         if (!(JOB_ENABLED_ACT_KINDS as readonly string[]).includes(act.kind)) throw new JobError('JOB_ACT_INVALID');
         break;
@@ -416,14 +425,14 @@ export type JobActWaitResult =
   | {readonly kind: 'timeout'; readonly value: unknown; readonly batch: JobNextValue | null; readonly cursor: string | null};
 
 /** One `next` exchange. The transport must honour `signal` and return the response unread. */
-export type JobNextTransport = (request: JobNextRequest, signal: AbortSignal) => Promise<Response>;
+export type JobNextTransport = (request: JobNextRequest | JobNextRequestV3, signal: AbortSignal) => Promise<Response>;
 
 /**
  * Transport-independent act wait shared by `job next --until act` and the host-bound
  * `waitForJobAct`: cursor progression, one monotonic deadline, caller cancellation and
  * the act / closed / refusal / timeout outcome. Caller cancellation rejects with its reason.
  */
-export async function waitForActBatch(send: JobNextTransport, initial: JobNextRequest, waitMs: number,
+export async function waitForActBatch(send: JobNextTransport, initial: JobNextRequest | JobNextRequestV3, waitMs: number,
   signal?: AbortSignal): Promise<JobActWaitResult> {
   const controller = new AbortController();
   const timeout = new Error('JOB_NEXT_TIMEOUT');
@@ -470,7 +479,7 @@ export async function waitForActBatch(send: JobNextTransport, initial: JobNextRe
         return response;
       });
       const response = await Promise.race([pending, interrupted]);
-      const value = await readJobResponse(response, interrupted);
+      const value = await readJobResponse(response, interrupted, initial.schema);
       remaining();
       if (!response.ok || (value as {ok?: unknown}).ok === false) return {kind: 'refused', value};
       const batch = nextValue(value, request);

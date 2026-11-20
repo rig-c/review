@@ -575,6 +575,8 @@ An in-process agent holding a started or strict `reuseOnly` host runs the same w
 `waitForJobAct(host, {after, deadlineMs, signal})` from `@rig-c/review/job-host`. It resolves
 `{kind: 'act' | 'closed', next, cursor}` or `{kind: 'timeout', code: 'JOB_NEXT_TIMEOUT', next, cursor}`,
 where `next` is the last accepted batch or `null`, and throws a refused `next` by its `JobError` code.
+On a record-and-package host it speaks `rig-review/job-api@3`, and act rows may be `rig-review/act@4`
+record acts, which this CLI wait also accepts.
 A strict attachment's `next` watches the shared job store, so a finalized act committed by the live
 owner host wakes it within about 250 ms. A write that adds no event, such as a display receipt,
 keeps the wait open. See [Public API stability](STABILITY.md#host-bound-act-wait).

@@ -1,15 +1,20 @@
 import {afterEach, expect, spyOn, test} from 'bun:test';
 import {waitForJobAct, type JobOwnerHost} from '../src/job-host.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
-import {attachedPair as pair} from './helpers/job-attach-fixture.ts';
+import {attachedPair as pair, recordAttachedPair} from './helpers/job-attach-fixture.ts';
+import {rm} from 'node:fs/promises';
+import {jobCommand} from '../src/job-cli.ts';
+import {JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA} from '../src/job-contract.ts';
 
 // Every UI submission here is an explicitly synthetic test fixture. No real
 // owner's review or producer acceptance is represented by these acts.
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 const hosts: JobOwnerHost[] = [];
+const scratches: string[] = [];
 const attachedPair = () => pair(fixtures, hosts);
 afterEach(async () => {
   for (const host of hosts.splice(0)) host.stop();
+  for (const scratch of scratches.splice(0)) await rm(scratch, {recursive: true, force: true});
   for (const f of fixtures.splice(0)) await f.close();
 });
 
@@ -153,4 +158,83 @@ test('#1005 the waiter refuses unbounded deadlines before any request and surfac
   expect(requests).toHaveLength(0);
   await expect(waitForJobAct(host, {after: '00000000-0000-4000-8000-000000000000', deadlineMs: 100}))
     .rejects.toMatchObject({code: 'JOB_CURSOR_INVALID'});
+});
+
+// Driven from the contract constant: a record kind added there without a fixture case fails here.
+for (const kind of JOB_RECORD_ACT_KINDS) {
+  test(`#1005 a record-and-package attachment resolves a live-committed ${kind} act@4`, async () => {
+    const {attached, commit, cursor} = await recordAttachedPair(scratches, hosts, kind);
+    const {host, requests} = counted(attached);
+    const sent: string[] = [];
+    const probe: JobOwnerHost = {...host, ports: {...host.ports, async handleJobApi(request) {
+      sent.push(JSON.parse(await request.clone().text()).schema);
+      return host.ports.handleJobApi(request);
+    }}};
+    const started = performance.now();
+    const waiting = waitForJobAct(probe, {after: cursor, deadlineMs: 5000});
+    await Bun.sleep(100);
+    const saved = await commit();
+    if (!saved.ok) throw new Error(JSON.stringify(saved));
+    const outcome = await waiting;
+    expect(performance.now() - started).toBeLessThan(1500);
+    expect(outcome.kind).toBe('act');
+    if (outcome.kind !== 'act') throw new Error('unreachable');
+    const row = outcome.next.events[0] as {type: string; act: {schema: string; kind: string; actId: string}};
+    expect(row.type).toBe('act');
+    expect(row.act).toMatchObject({schema: JOB_RECORD_ACT_SCHEMA, kind, actId: saved.value.actId});
+    expect(sent).toEqual(['rig-review/job-api@3']);
+    expect(requests).toHaveLength(1);
+  });
+}
+
+test('#1005 a display receipt on a record host does not wake the attached waiter', async () => {
+  const {attached, display, cursor} = await recordAttachedPair(scratches, hosts, 'interview-picks');
+  const {host, requests} = counted(attached);
+  const waiting = waitForJobAct(host, {after: cursor, deadlineMs: 1000});
+  await Bun.sleep(100);
+  await display('page-two');
+  const outcome = await waiting;
+  expect(outcome).toMatchObject({kind: 'timeout', code: 'JOB_NEXT_TIMEOUT', cursor});
+  expect(requests).toHaveLength(1);
+});
+
+test('#1005 a malformed record act and an unknown act schema keep their JOB_ACT_INVALID refusal', async () => {
+  const {attached, commit, cursor, agentCall} = await recordAttachedPair(scratches, hosts, 'interview-picks');
+  expect((await commit()).ok).toBe(true);
+  const real = await agentCall(attached, {verb: 'next', after: cursor, waitMs: 0});
+  expect(real.value.events[0].act.schema).toBe(JOB_RECORD_ACT_SCHEMA);
+  const variants = {
+    'broken record value': (act: Record<string, unknown>) => ({...act, value: {...(act.value as object), selections: 'not-a-list'}}),
+    'unknown schema': (act: Record<string, unknown>) => ({...act, schema: 'rig-review/act@99'}),
+  };
+  for (const [name, mutate] of Object.entries(variants)) {
+    const envelope = structuredClone(real);
+    envelope.value.events[0].act = mutate(envelope.value.events[0].act);
+    const fake: JobOwnerHost = {...attached, ports: {...attached.ports, handleJobApi: async () => Response.json(envelope)}};
+    await expect(waitForJobAct(fake, {after: cursor, deadlineMs: 500}), name).rejects.toMatchObject({code: 'JOB_ACT_INVALID'});
+    const cliEnvelope = {...envelope, schema: 'rig-review/job-api@2'};
+    const out: string[] = [];
+    await expect(jobCommand(['next', `${attached.origin}/jobs/${attached.session.jobId}`, '--after', cursor, '--until', 'act', '--wait-ms', '500'],
+      {agentCapability: 'synthetic', fetch: (async () => Response.json(cliEnvelope)) as unknown as typeof fetch, write: text => out.push(text)}),
+      name).rejects.toMatchObject({code: 'JOB_ACT_INVALID'});
+    expect(out).toEqual([]);
+  }
+});
+
+test('#1005 job next --until act returns a finalized record act from a record-and-package host', async () => {
+  const {attached, commit, cursor} = await recordAttachedPair(scratches, hosts, 'interview-picks');
+  expect((await commit()).ok).toBe(true);
+  const out: string[] = [];
+  const fetcher = (async (url: string | URL | Request, init?: RequestInit) =>
+    attached.ports.handleJobApi(new Request(url, init))) as typeof fetch;
+  const previous = process.exitCode;
+  try {
+    await jobCommand(['next', `${attached.origin}/jobs/${attached.session.jobId}`, '--after', cursor, '--until', 'act', '--wait-ms', '2000'],
+      {agentCapability: attached.session.hostCredentials().agent, fetch: fetcher, write: text => out.push(text)});
+    expect(process.exitCode ?? 0).toBe(0);
+    expect(out).toHaveLength(1);
+    const envelope = JSON.parse(out[0]!);
+    expect(envelope.schema).toBe('rig-review/job-api@2');
+    expect(envelope.value.events.map((event: {act?: {schema: string}}) => event.act?.schema)).toEqual([JOB_RECORD_ACT_SCHEMA]);
+  } finally {process.exitCode = previous ?? 0;}
 });
