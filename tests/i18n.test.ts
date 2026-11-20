@@ -1460,22 +1460,6 @@ test('#743 live host notices and act status retain English source and render in 
  } finally { setLinkLanguage(link); setLanguagePreference(preference); }
 });
 
-test('#708 the interview modal is exempt from the page DOM translator: agent-authored option text stays verbatim in ko', () => {
- const preference = getLanguagePreference();
- try {
-  setLanguagePreference('ko');
-  const {doc, root} = makeTestDoc();
-  const modal = doc.createElement('dialog'); modal.className = 'workspace-drawer interview-modal';
-  const option = doc.createElement('strong'); option.textContent = 'Not drawn at current pose';
-  const outside = doc.createElement('strong'); outside.textContent = 'Not drawn at current pose';
-  modal.append(option); root.append(modal, outside);
-  applyDomI18n(doc as unknown as Document);
-  expect(option.textContent).toBe('Not drawn at current pose');
-  expect(outside.textContent).toBe('현재 포즈에서 그려지지 않음');
- } finally {setLanguagePreference(preference);}
-});
-
-
 test('#739 rig Difference pixel count translates and round-trips in the existing dynamic DOM path',()=>{
  const key='Difference: {0} of {1} pixels differ, compared where the rig draws · rest still vs original painting.';
  const english=t(key,[64,100],'en'),korean=t(key,[64,100],'ko');

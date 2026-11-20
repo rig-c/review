@@ -435,23 +435,18 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-cap.json`),JSON.stringify(cap,null,2)+'\n');
     await click(page,'#job-record-asks .workspace-drawer-close');
    }
-   if(kind==='interview-rig'||kind==='interview-parts'){
+   if(kind.startsWith('interview')){
     await wait(page,`!!document.querySelector('#workspace-interview-answer .interview-grid fieldset:not(:disabled)')&&!!document.querySelector('[data-block-target=question][aria-selected=true]')`,kind+' Question tab');
-    assert.equal(await page.evaluate(`document.querySelectorAll('#workspace-interview-answer form.interview-answer').length`),1);
-    assert.equal(await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`),false);
-    assert.equal(await page.evaluate(`document.querySelector('[data-block-target=question][aria-selected=true]').textContent`),(lang==='en'?enCatalog:koCatalog)['Question']);
+    assert.equal(await page.evaluate<number>(`document.querySelectorAll('#workspace-interview-answer form.interview-answer').length`),1);
+    assert.equal(await page.evaluate<boolean>(`!!document.querySelector('#job-record-asks[open]')`),false);
+    const catalog=lang==='en'?enCatalog:koCatalog;
+    assert.equal(await page.evaluate<string>(`document.querySelector('[data-block-target=question][aria-selected=true]').textContent`),catalog['Question']);
+    if(kind==='interview-standalone'){
+     const panel=await page.evaluate<{left:number;top:number;right:number;bottom:number;width:number;height:number}>(`document.querySelector('#workspace-interview-answer').getBoundingClientRect().toJSON()`);
+     assert.ok(panel.width>0&&panel.height>0&&panel.left>=0&&panel.top>=0&&panel.right<=width&&panel.bottom<=height);
+     assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-pending-ask').textContent`),catalog['interview.title']);
+    }
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-question.png`),await page.screenshot());
-   }else if(kind.startsWith('interview')){
-    await wait(page,`!!document.querySelector('#job-record-asks .interview-grid fieldset:not(:disabled)')`,kind+' form');
-    if(!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page,'#workspace-pending-ask');
-    await wait(page,`!!document.querySelector('#job-record-asks[open] .interview-grid')`,kind+' dialog');
-    const dialog:any=await page.evaluate<any>(`(()=>{const d=document.querySelector('#job-record-asks');return {title:d.getAttribute('aria-label'),focus:d.contains(document.activeElement),rect:d.getBoundingClientRect().toJSON(),forms:d.querySelectorAll('form.interview-answer').length};})()`);
-    assert.equal(dialog.focus,true);assert.equal(dialog.forms,1);
-    assert.ok(dialog.rect.left>=0&&dialog.rect.top>=0&&dialog.rect.right<=width&&dialog.rect.bottom<=height);
-    if(kind==='interview-standalone')assert.equal(dialog.title,(lang==='en'?enCatalog:koCatalog)['interview.title']);
-    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-dialog.png`),await page.screenshot());
-    await click(page,'#job-record-asks .workspace-drawer-close');
-    assert.equal(await page.evaluate(`document.activeElement.id`),'workspace-pending-ask');
    }
    if(kind==='standalone-many'){
     const list:any=await page.evaluate<any>(`(()=>{const list=document.querySelector('[data-part-list]'),help=list.nextElementSibling,whole=document.querySelector('[data-part-whole]');list.scrollTop=list.scrollHeight;return {whole:whole.getBoundingClientRect().toJSON(),row:list.firstElementChild.getBoundingClientRect().toJSON(),button:list.firstElementChild.querySelector('button').getBoundingClientRect().toJSON(),count:list.children.length,overflow:getComputedStyle(list).overflowY,border:getComputedStyle(list).borderBottomWidth,rect:list.getBoundingClientRect().toJSON(),last:list.lastElementChild.getBoundingClientRect().toJSON(),help:help.getBoundingClientRect().toJSON(),client:list.clientHeight,scroll:list.scrollHeight};})()`);

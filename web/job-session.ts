@@ -1359,7 +1359,6 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
 
 /** The answer builder owns no page shell, transport or draft collection. */
 export interface JobFormDependencies {
-    interviewMainView?:boolean;
     node: JobFormNode;
     translate: typeof import('./i18n.ts').t;
     helpers: ReturnType<typeof createJobFormHelpers> & {
@@ -1437,11 +1436,10 @@ export interface JobFormDependencies {
                 legacyNotice.dataset.record = legacyDiagnostic.record;
                 fields.prepend(legacyNotice);
             }
-            interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:deps.interviewMainView,
+            interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:true,
                 images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered'});
-            if (deps.interviewMainView && prepared.metadata.recordSource && prepared.metadata.manifest?.model)
-                interviewForm.form.dataset.interviewMain = '';
-            disposeInterview=interviewForm.dispose;read=interviewForm.read;
+            const offLanguage=onLanguageChange(interviewForm.localize);
+            disposeInterview=()=>{offLanguage();interviewForm.dispose();};read=interviewForm.read;
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
@@ -1604,10 +1602,10 @@ export async function joinedInterviewForms(access:InstanceAccess,present:(forms:
     const show=(index:number)=>{
         if(disposed)return;selected=index;
         const question=data.questions[index];
-        if(!question){const empty=node('section');empty.append(node('p','interview.empty'),interviewRecords(data.diagnostics,data.historical));present([empty]);return;}
+        if(!question){const empty=node('section');empty.dataset.interviewMain='';empty.append(node('p','interview.empty'),interviewRecords(data.diagnostics,data.historical));present([empty]);return;}
         let entry=forms.get(index);
         if(!entry){
-            entry=createInterviewForm({question,id:'joined-interview-'+question.ref.sha256,node,
+            entry=createInterviewForm({question,id:'joined-interview-'+question.ref.sha256,node,mainView:true,
                 images:question.images.map(image=>({name:image.name,src:access.route(image.url)})),
                 questions:()=>data.questions.map((item,i)=>({label:item.set.question+' · '+item.set.id+(item.editable?'':' · '+t('interview.history')),answered:forms.get(i)?.form.dataset.interviewAnswered==='true'||Boolean(item.saved||item.answer)})),
                 selected:index,onSelect:show,diagnostics:data.diagnostics,historical:data.historical});

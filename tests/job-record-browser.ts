@@ -345,18 +345,27 @@ async function edit(selector: string, value: string): Promise<void> {
   );
 }
 
-async function submitForm(askId: string, checkpoint = false): Promise<{ statusText: string; statusKey: string | null }> {
-  const selector = `form[data-job-ask=${JSON.stringify(askId)}]`;
-  const submitSelector=selector+(checkpoint?' button[data-job-text="Pass"]':' button[type="submit"]');
+async function submitForm(askId: string, kind: 'record' | 'checkpoint' | 'interview' = 'record'): Promise<{ statusText: string; statusKey: string | null }> {
+  const root = kind === 'interview' ? '#workspace-interview-answer' : '#job-record-asks';
+  const selector = `${root} form[data-job-ask=${JSON.stringify(askId)}]`;
+  const submitSelector=selector+(kind==='checkpoint'?' button[data-job-text="Pass"]':' button[type="submit"]');
   await wait(
     `!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled`,
     `enabled form ${askId}`,
   );
-  await openPendingAsk(page!);
-  await wait(`(()=>{const dialog=document.querySelector('#job-record-asks[open]'),button=document.querySelector(${JSON.stringify(submitSelector)});return !!dialog&&!!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
+  if (kind !== 'interview') await openPendingAsk(page!);
+  await wait(`(()=>{const button=document.querySelector(${JSON.stringify(submitSelector)});return !!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
+  if (kind !== 'interview') assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('#job-record-asks:modal')`), true);
   await page!.evaluate(`document.querySelector(${JSON.stringify(submitSelector)}).scrollIntoView({block:'center',inline:'nearest'})`);
   await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   await click(page!,submitSelector);
+  if (kind !== 'interview') {
+    await wait(`(()=>{const state=document.getElementById('dirty');return state?.textContent===${JSON.stringify(catalog['Answer saved'])}&&state.dataset.saveState==='saved';})()&&
+      !document.querySelector(${JSON.stringify(selector)})`, `submitted form ${askId} was pruned and Answer saved is shown`);
+    return page!.evaluate<{statusText: string; statusKey: string | null}>(`(()=>{
+      const state=document.getElementById('dirty');return {statusText:state.textContent,statusKey:state.dataset.saveState??null};
+    })()`);
+  }
   await wait(
     `document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled && document.querySelector(${JSON.stringify(selector)}).querySelector(':scope > [role="status"]').dataset.jobText === 'job.saved'`,
     `submitted form ${askId}`,
@@ -559,12 +568,23 @@ try {
     'captured api/interview questions for option-set publication',
   );
 
-  // #809:92: Answer… opens the native dialog; a prepared hidden form is not a pointer target.
-  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('form[data-job-ask="${picksAsk.askId}"] fieldset:not(:disabled)')`,'interview owner ready');
-  await openPendingAsk(page);
-  await wait(`!!document.querySelector('#job-record-asks[open] form[data-job-ask="${picksAsk.askId}"]')`,'Answer dialog opened');
+  // #986: the owner URL opens Question automatically, with the retained image in the shared main view.
+  const picksForm = `#workspace-interview-answer form[data-job-ask="${picksAsk.askId}"]`;
+  const selectedQuestion = '.block-row:not([hidden]) [data-block-target="question"][aria-selected="true"]';
+  const visiblePainting = `(()=>{const image=document.querySelector('#reference-content img');return image?.complete&&image.naturalWidth>0&&image.getBoundingClientRect().width>0?image.currentSrc:'';})()`;
+  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('${selectedQuestion}')&&document.querySelector('${picksForm} fieldset:not(:disabled)')?.getClientRects().length>0`,'interview owner ready in Question');
+  await wait(`Boolean(${visiblePainting})&&!!document.querySelector('#view-menu [data-view="interview-image-0"]')`,'retained option-set image visible in main view');
+  const paintingBeforeSave = await page.evaluate<string>(visiblePainting);
+  const interviewShell = await page.evaluate<{dialogOpen:boolean;dialogViewers:number;questionLabel:string}>(`({
+    dialogOpen:!!document.querySelector('dialog[open]'),
+    dialogViewers:document.querySelectorAll('dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,#view-menu)').length,
+    questionLabel:document.querySelector('${selectedQuestion}').textContent.trim(),
+  })`);
+  assert.deepEqual(interviewShell,{dialogOpen:false,dialogViewers:0,questionLabel:catalog['Question']});
   for (const name of optionDom.selectNames) {
-    await click(page,`form[data-job-ask="${picksAsk.askId}"] input[type="radio"][name="${name}"][value="keep"]`);
+    const choice = `${picksForm} input[type="radio"][name="${name}"][value="keep"]`;
+    await page.evaluate<void>(`document.querySelector(${JSON.stringify(choice)}).scrollIntoView({block:'center',inline:'nearest'})`);
+    await click(page,choice);
   }
   // R2 / #901: one optional note textarea per editable question set; an existing note prefills it and shows as pre.interview-note when read-only.
   const sourceProject=JSON.parse(await readFile(join(recordRoot,'project.json'),'utf8'));
@@ -573,13 +593,16 @@ try {
   assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').length`),1);
   assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').value`),existingNote);
   assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] .interview-note').length`),0);
-  const picksSubmitStatus = await submitForm(picksAsk.askId);
+  const picksSubmitStatus = await submitForm(picksAsk.askId, 'interview');
   assert.equal(picksSubmitStatus.statusKey, 'job.saved');
   assert.equal(picksSubmitStatus.statusText, catalog['job.saved']);
   assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').length`),0);
   if(existingNote)assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${picksAsk.askId}"] .interview-note').textContent`),existingNote);
+  const paintingAfterSave = await page.evaluate<string>(visiblePainting);
+  assert.equal(paintingAfterSave,paintingBeforeSave,'painting stays in the shared main view after the act is saved');
+  assert.equal(await page.evaluate<boolean>(`!!document.querySelector('${selectedQuestion}')&&!document.querySelector('dialog[open]')`),true);
   await writeFile(join(output, `record-option-set-${language}.png`), await page.screenshot());
-  await record('option-set-submitted', { optionDom, optionRoutes, picksSubmitStatus });
+  await record('option-set-submitted', { optionDom, optionRoutes, picksSubmitStatus, interviewShell, paintingBeforeSave, paintingAfterSave });
 
   // 2. Publish model-free plan via job-api@3 and ask checkpoint + signoff on the same standing owner window
   const pubPlan = await callRecordApi({
@@ -725,18 +748,17 @@ try {
   await edit(`form[data-job-ask="${cpAsk.askId}"] select[name="outcome"]`, 'pass');
   const checkpointWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
   assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"],input[name="note"]').length`),0);
-  const cpSubmitStatus = await submitForm(cpAsk.askId,true);
-  assert.equal(cpSubmitStatus.statusKey, 'job.saved');
-  assert.equal(cpSubmitStatus.statusText, catalog['job.saved']);
+  const cpSubmitStatus = await submitForm(cpAsk.askId,'checkpoint');
+  assert.equal(cpSubmitStatus.statusKey, 'saved');
+  assert.equal(cpSubmitStatus.statusText, catalog['Answer saved']);
 
   const signoffWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
   const signoffSubmitStatus = await submitForm(signoffAsk.askId);
-  assert.equal(signoffSubmitStatus.statusKey, 'job.saved');
-  assert.equal(signoffSubmitStatus.statusText, catalog['job.saved']);
+  assert.equal(signoffSubmitStatus.statusKey, 'saved');
+  assert.equal(signoffSubmitStatus.statusText, catalog['Answer saved']);
 
   const reopenVerbatimWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
-  await wait(`!document.querySelector('#workspace-pending-ask').hidden&&!document.querySelector('#workspace-pending-ask').disabled`,'pending reopen offered');
-  await click(page!,'#workspace-pending-ask');
+  await openPendingAsk(page);
   await wait(`!!document.querySelector('#job-record-asks[open] form[data-job-ask="${reopenAsk.askId}"]')`,'reopen dialog opened');
   // Scroll the reopen form/button into view within the forms container, wait painted rAF, assert visible bounds, and capture record-reopen-<lang>.png
   const reopenVisibleBounds = await page.evaluate<{
@@ -789,8 +811,9 @@ try {
   await writeFile(join(output, `record-reopen-${language}.png`), await page.screenshot());
 
   const reopenSubmitStatus = await submitForm(reopenAsk.askId);
-  assert.equal(reopenSubmitStatus.statusKey, 'job.saved');
-  assert.equal(reopenSubmitStatus.statusText, catalog['job.saved']);
+  assert.equal(reopenSubmitStatus.statusKey, 'saved');
+  assert.equal(reopenSubmitStatus.statusText, catalog['Answer saved']);
+  await wait(`!document.querySelector('#job-record-asks')`,'drawer removed after the final record act');
 
   await writeFile(join(output, `record-plan-${language}.png`), await page.screenshot());
 

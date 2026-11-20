@@ -151,9 +151,10 @@ for(const event of ['click','change'])secondaryToolbar.addEventListener(event,()
 const rigInspector=mountRigInspector(document,shell.actRow??undefined);
 if(host)rigInspector.act.hidden=true;
 const rigAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigAsk.type='button';
+const recordAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-record-ask',hidden:true,type:'button'});
 const askHeadline=panelMake('span',{id:'workspace-ask-headline',className:'workspace-act-ask',hidden:true});
 const requestChanges=panelMake('button',{id:'request-changes',type:'button',hidden:true});
-rigInspector.act.prepend(askHeadline,rigAsk);button('save').after(requestChanges);
+rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requestChanges);
 let pendingAnswers:readonly {kind:string;stage?:string}[]=[],answerSaved=false;
 let partsAnswerBlocked:()=>boolean=()=>false;
 mountViewportPair(el('stage-layout'));
@@ -1536,9 +1537,7 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  if(interview){
   button('stage-comment').hidden=true;
   button('save').disabled=true;setSourceAttribute(button('save'),'title',unavailable);
-  const label=()=>{setSourceText(rigAsk,t('interview.title'));recordDialog?.setAttribute('aria-label',t('interview.title'));};
-  label();viewDisposers.push(onLanguageChange(label));
-  viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,t('interview.title'),true)));
+  viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,'job.pending',true)));
   text('provenance-rig',unavailable);text('provenance-motion',unavailable);text('source-files','project.json');
  }else{restoreRecordComments();setupComments();showRecordComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
@@ -1548,6 +1547,9 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
 let recordDialog:HTMLDialogElement|null=null;
+let releaseRecordDrawer:(()=>void)|null=null;
+let recordDrawerTrigger:HTMLButtonElement|null=null;
+let unregisterQuestion:(()=>void)|null=null;
 let activeInterviewImages:readonly {name:string;src:string}[]|null=null;
 let activeInterviewImage:{name:string;src:string}|null=null;
 let releaseInterview:(()=>void)|null=null;
@@ -1599,13 +1601,16 @@ function recordCommentsChanged():void {
  renderAnswerControls();
  for(const form of recordDialog?.querySelectorAll('form[data-job-ask]')??[])form.dispatchEvent(new Event('input',{bubbles:true}));
 }
-/** #834's transient reference viewport, owned only while the Question tab is selected. */
+/** Keep the shared reference viewport bound while the interview form is mounted. */
 function syncQuestionImage():void {
  if(disposed){releaseInterview?.();releaseInterview=null;return;}
- const selected=questionForms.length>0&&inspectorBlocks?.state()[selectedInspector()??'rig']==='question';
- if(!selected){releaseInterview?.();releaseInterview=null;return;}
- if(releaseInterview)return;
- const images=(questionForms[0] as HTMLElement&{interviewImages?:readonly {name:string;src:string}[]}).interviewImages;
+ const form=questionForms[0] as (HTMLElement&{interviewImages?:readonly {name:string;src:string}[]})|undefined;
+ const images=form?.interviewImages;
+ if(activeInterviewImages&&images?.length===activeInterviewImages.length&&images.every((image,index)=>{
+  const previous=activeInterviewImages![index]!;
+  return previous.name===image.name&&previous.src===image.src;
+ }))return;
+ releaseInterview?.();releaseInterview=null;
  if(!images?.length)return;
  const previousView=view,previousCamera=structuredClone(viewport.state);viewport.cancelFit();
  const previousReferenceNodes=[...el('reference-content').childNodes],previousReferenceInput=referenceInput,previousReferenceSize=referenceSize;
@@ -1628,51 +1633,60 @@ function syncQuestionImage():void {
   if(!disposed){renderLayout();workspace?.refresh();}
   Object.assign(viewport.state,previousCamera);if(!disposed)fitCamera();
  };
+ if(sourceTextContent(el('message'))==='This request has no picture.')message(sourceTextContent(el('dirty')),false,true);
  void showReference('',activeInterviewImage);
 }
-/** Pictured backdrop forms use the existing bottom controller; other record forms retain their dialog. */
+/** Survey forms use the shared bottom tab. Pending text-only record forms use the drawer. */
 function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',standalone=false):void {
  if(standalone){pendingAnswers=[{kind:'interview-picks'}];}
  for(const form of forms){
   if(questionFormBindings.has(form))continue;questionFormBindings.add(form);
   form.addEventListener('submit',event=>{if(draftConflict||pendingAnswers.some(subject=>subject.kind.endsWith('verdict'))){event.preventDefault();event.stopImmediatePropagation();}},true);
-  form.addEventListener('job-answer-saved',()=>{answerSaved=true;recordDialog?.close();renderDraftState();},{once:true});
+  form.addEventListener('job-answer-saved',()=>{answerSaved=true;if(recordDialog?.contains(form))recordDialog.close();renderDraftState();},{once:true});
  }
  const questionTabForms=forms.filter(form=>form.dataset.interviewMain!==undefined);
- if(questionTabForms.length){
-  const added=!questionForms.length;
-  if(questionForms[0]!==questionTabForms[0]){releaseInterview?.();releaseInterview=null;}
-  for(const form of questionForms)if(!questionTabForms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
-  questionForms=questionTabForms;
-  for(const form of questionTabForms)if(form.parentElement!==questionPanel)questionPanel.append(form);
-  if(added){viewDisposers.push(inspectorBlocks!.register({id:'question',panel:questionPanel,label:'Question',position:'first'}));inspectorBlocks!.restore({rig:'question',playback:'question'});inspectorBlocks!.select(selectedInspector()??'rig','question');workspace?.revealInspector();}
-  syncQuestionImage();
-  if(questionTabForms.every(form=>form.dataset.interviewAnswered==='true'))answerSaved=true;
-  rigAsk.onclick=()=>{if(draftConflict)return;inspectorBlocks?.select(selectedInspector()??'rig','question');workspace?.revealInspector();};
+ for(const form of questionForms)if(!questionTabForms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
+ questionForms=questionTabForms;
+ if(questionForms.length){
+  for(const form of questionForms)if(form.parentElement!==questionPanel)questionPanel.append(form);
+  const reveal=()=>{inspectorBlocks?.select(selectedInspector()??'rig','question');workspace?.revealInspector();};
+  rigAsk.onclick=()=>{if(!draftConflict)reveal();};
+  if(!unregisterQuestion){
+   unregisterQuestion=inspectorBlocks!.register({id:'question',panel:questionPanel,label:'Question',position:'first'});
+   inspectorBlocks!.restore({rig:'question',playback:'question'});reveal();
+  }
+  if(questionForms.every(form=>form.dataset.interviewAnswered==='true'))answerSaved=true;
+ }else{
+  unregisterQuestion?.();unregisterQuestion=null;rigAsk.onclick=null;
  }
+ syncQuestionImage();
  forms=forms.filter(form=>!questionTabForms.includes(form));
- if(!forms.length&&!recordDialog){renderDraftState();return;}
+ if(!forms.length){
+  releaseRecordDrawer?.();releaseRecordDrawer=null;recordDrawerTrigger=null;
+  recordDialog?.remove();recordDialog=null;
+  renderDraftState();return;
+ }
  if(!recordDialog){
   recordDialog=panelMake('dialog',{id:'job-record-asks',className:'workspace-drawer'});recordDialog.setAttribute('aria-label',tr(label));
-  const close=panelMake('button',{className:'workspace-drawer-close',type:'button'},tr('Close'));recordDialog.append(close);app.append(recordDialog);
-  viewDisposers.push(bindWorkspaceDrawer({trigger:rigAsk,drawer:recordDialog,label:tr(label),close}));
-  viewDisposers.push(()=>{recordDialog?.close();recordDialog?.remove();recordDialog=null;});
+  recordDialog.append(panelMake('button',{className:'workspace-drawer-close',type:'button'},tr('Close')));app.append(recordDialog);
  }
- recordDialog.classList.toggle('interview-modal',forms.some(form=>form.classList.contains('interview-answer')));
- for(const form of recordDialog.querySelectorAll<HTMLFormElement>('form.interview-answer,form[data-job-ask]'))if(!forms.includes(form)){if(!standalone)form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
+ const trigger=questionForms.length?recordAsk:rigAsk;
+ if(recordDrawerTrigger!==trigger){
+  releaseRecordDrawer?.();recordDrawerTrigger=trigger;
+  releaseRecordDrawer=bindWorkspaceDrawer({trigger,drawer:recordDialog,label:tr(label),close:recordDialog.querySelector('button')!});
+ }
+ for(const form of recordDialog.querySelectorAll<HTMLFormElement>('form[data-job-ask]'))if(!forms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
  if(!standalone&&forms[0])restoreRecordComments(forms[0] as HTMLFormElement);
- const added=forms.filter(form=>!recordDialog!.contains(form));
  for(const form of forms){
   if(!standalone)(form as JobForm['form']).commentWords=()=>host?.record||host?.direction?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):projectComments(feedbackItemComments(session.feedback));
-  if(!recordDialog.contains(form)){if(!form.classList.contains('interview-answer'))form.style.overflow='auto';form.style.minHeight='0';recordDialog.append(form);}
+  if(!recordDialog.contains(form)){form.style.overflow='auto';form.style.minHeight='0';recordDialog.append(form);}
  }
  if(host?.record){
   for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
   setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);comments?.refresh();partsSubject?.refreshComments();
-  button('save').onclick=()=>rigAsk.click();
+  button('save').onclick=()=>trigger.click();
  }
  renderAnswerControls();
- if((standalone?added.length>0:added.some(form=>form.classList.contains('interview-answer')))&&!recordDialog.open)rigAsk.click();
 }
 /** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {
@@ -1693,8 +1707,9 @@ function renderAnswerControls():void {
  const parts=subjects.some(subject=>subject.kind==='parts-verdict');
  const verdict=parts||subjects.some(subject=>subject.kind==='review-verdict');
  const dialog=subjects.some(subject=>!subject.kind.endsWith('verdict'))&&!verdict;
- const readable=questionForms.some(form=>form.dataset.interviewAnswered==='true')||!!recordDialog?.querySelector('form.interview-answer[data-interview-answered=true] fieldset:disabled');
- const enabled=questionForms.some(form=>!form.querySelector('fieldset')?.disabled)||!!recordDialog?.querySelector('fieldset:not(:disabled)');
+ const readable=questionForms.some(form=>form.dataset.interviewAnswered==='true');
+ const questionEnabled=questionForms.some(form=>form.querySelector('fieldset:not(:disabled)'));
+ const recordEnabled=!!recordDialog?.querySelector('fieldset:not(:disabled)');
  const blocked=saving||draftConflict||!!actReadOnly||!!host?.unavailable;
  const save=button('save');
  const hasPinnedPart=parts&&liveIssueCount()>0;
@@ -1704,10 +1719,19 @@ function renderAnswerControls():void {
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
  save.classList.toggle('primary',verdict&&!hasPinnedPart);
  requestChanges.classList.toggle('primary',hasPinnedPart);
- rigAsk.classList.toggle('primary',dialog);
- const kind=subjects.find(subject=>!subject.kind.endsWith('verdict'))?.kind;
- setSourceText(rigAsk,kind==='signoff'?'Approve…':kind==='interview-picks'||readable?'Answer…':'Review…');
- rigAsk.disabled=(!enabled&&!readable)||(enabled&&blocked);
+ const questionPending=subjects.some(subject=>subject.kind==='interview-picks');
+ const recordKind=subjects.find(subject=>!subject.kind.endsWith('verdict')&&subject.kind!=='interview-picks')?.kind;
+ const recordTrigger=questionForms.length?recordAsk:rigAsk;
+ if(!questionPending||recordTrigger!==rigAsk){
+  setSourceText(recordTrigger,recordKind==='signoff'?'Approve…':'Review…');
+  recordTrigger.disabled=!recordEnabled||blocked;
+ }
+ if(questionPending||questionForms.length){
+  setSourceText(rigAsk,'Answer…');
+  rigAsk.disabled=(!questionEnabled&&!readable)||(questionEnabled&&blocked);
+ }
+ rigAsk.classList.toggle('primary',dialog&&(questionPending||recordTrigger===rigAsk));
+ recordAsk.classList.toggle('primary',dialog&&!questionPending&&!!recordKind);
  if(verdict){
   const count=host?.direction?recordComments.length:liveIssueCount();
   const hasChanges=count>0||!!host?.canSubmitMeshEdits?.()&&subjects.some(subject=>subject.kind==='review-verdict'&&subject.stage==='rig-review');
@@ -1723,7 +1747,8 @@ function renderAnswerControls():void {
  }
  for(const root of [recordDialog,...questionForms])for(const control of root?.querySelectorAll<HTMLButtonElement>('button[type="submit"]')??[])control.disabled=blocked||verdict;
  // The waiting row is already visible: finish labels, state and handlers before revealing any answer.
- save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;rigAsk.hidden=!dialog||firstPublicationPrompt;
+ save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;rigAsk.hidden=!dialog||firstPublicationPrompt||!questionPending&&recordTrigger!==rigAsk;
+ recordAsk.hidden=!dialog||firstPublicationPrompt||recordTrigger!==recordAsk||!recordKind;
  if(host?.verdictComments){
   const notice=el('review-message');
   if(needsPinnedPart&&!save.hidden&&!save.disabled){
@@ -1801,6 +1826,7 @@ async function resumeScreen():Promise<void> {
  }finally{screenRoot.inert=ready?wasInert:true;if(ready&&!disposed)document.body.dataset.ready='true';}
 }
 function disposeScreen():void {releaseInterview?.();releaseInterview=null;
+ releaseRecordDrawer?.();releaseRecordDrawer=null;recordDialog?.remove();recordDialog=null;
  if(disposed)return;suspendScreen();disposed=true;lifecycle.abort();
  comments?.dispose();partsSubject?.dispose();turnPad?.dispose();inspectorBlocks?.dispose();inspectorTabs?.dispose();
  workspace?.dispose();controlDispose?.();appearance?.dispose();rigInspector.actBar.dispose();shell.dispose();
