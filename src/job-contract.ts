@@ -31,7 +31,7 @@ export const JOB_RECORD_ACT_SCHEMA = 'rig-review/act@4' as const;
 export const JOB_PARTS_VERDICT_ACT_SCHEMA = 'rig-review/act@5' as const;
 /** Fresh checkpoint, parts-verdict, rig/post review-verdict and signoff writers. Image-review and interview-picks stay @2; record acts stay @4. */
 export const JOB_COMMENTS_ACT_SCHEMA = 'rig-review/act@6' as const;
-/** @6 plus an optional per-comment `context`. Emitted only behind EMIT_UNPINNED_CREATE_FIELDS (#714). */
+/** @6 plus an optional per-comment `context` (#714). */
 export const JOB_COMMENT_CONTEXT_ACT_SCHEMA = 'rig-review/act@7' as const;
 /** @7 plus a mesh payload on a compiled rig's Request changes (#952). */
 export const JOB_MESH_EDITS_ACT_SCHEMA = 'rig-review/act@8' as const;
@@ -625,8 +625,8 @@ export type JobPartsVerdictAct = Omit<Extract<JobLegacyAct, {kind: 'parts-verdic
 };
 
 /** Historical @2 acts remain readable without being backfilled or relabelled.
- * Fresh checkpoint, parts, rig/post verdict and signoff acts use @6, with @8 gated for mesh edits. */
-export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct | JobCommentsAct | JobRigMeshEditsAct;
+ * Fresh comments use @6, live rig comments carrying context use @7, and rig verdicts carrying mesh edits use @8. */
+export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct | JobCommentsAct | JobContextCommentsAct | JobRigMeshEditsAct;
 
 /** Authenticated browser provenance. The daemon validates identity and hashes PNG bytes. */
 export interface JobRigCapture {

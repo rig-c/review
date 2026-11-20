@@ -2,7 +2,6 @@ import {expect, test} from 'bun:test';
 import {parseCommentsAct, parseContextCommentsAct, parseRecordAct, projectComments,
   JOB_COMMENT_CONTEXT_ACT_SCHEMA} from '../src/job-host.ts';
 import {commentsActForEmission, jobHash} from '../src/job-api.ts';
-import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 import legacy from './fixtures/comments-contract-legacy.json';
 
 // Deliberately untyped: planted malformed packets go through the public decoder.
@@ -78,18 +77,11 @@ test('#714 @2-@6 decode byte-identically', () => {
   expect(jobHash(bytes)).toBe(AT6_SHA256);
 });
 
-test('#714 with EMIT_UNPINNED_CREATE_FIELDS off, Review emits no @7', () => {
-  expect(EMIT_UNPINNED_CREATE_FIELDS).toBe(false);
+test('#977 comment emission keeps context and uses @6 for context-free comments', () => {
   const withContext = parseContextCommentsAct(act(JOB_COMMENT_CONTEXT_ACT_SCHEMA,
     [{text: ' general\n', context}, {text: 'pinned', anchor, context: {tab: 'rig'}}]));
   const emitted = commentsActForEmission(withContext);
-  expect(emitted.schema).toBe('rig-review/act@6');
-  expect(JSON.stringify(emitted)).not.toContain('"context"');
-  expect(JSON.stringify(emitted)).toBe(JSON.stringify(at6));
+  expect(emitted.schema).toBe(JOB_COMMENT_CONTEXT_ACT_SCHEMA);
+  expect(JSON.stringify(emitted)).toBe(JSON.stringify(withContext));
   expect(JSON.stringify(commentsActForEmission(parseCommentsAct(structuredClone(at6))))).toBe(JSON.stringify(at6));
-  // The flag is the only switch: on, the same input goes out as @7 with its context.
-  const on = commentsActForEmission(withContext, true);
-  expect(on.schema).toBe(JOB_COMMENT_CONTEXT_ACT_SCHEMA);
-  expect(JSON.stringify(on)).toBe(JSON.stringify(withContext));
-  expect(commentsActForEmission(parseCommentsAct(structuredClone(at6)), true).schema).toBe('rig-review/act@6');
 });

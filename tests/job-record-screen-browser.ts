@@ -669,14 +669,60 @@ async function boundRigPictureChecks(){
  console.log('929_BOUND_RIG_BROWSER_PASS '+JSON.stringify(result));
 }
 
+/** The waiting layout can dock the inspector before the first publication binds its Question tab. */
+async function firstQuestionInDrawer(){
+ holdImages=false;
+ for(const language of ['en','ko'] as const){
+  const out=join(output,'first-question-drawer',language);
+  await mkdir(out,{recursive:true});
+  const fixture=await recordScreenFixture('interview-picks',false,out,undefined,false,true,undefined,false,true,'bound-rig');
+  const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
+  const body='#workspace-drawer-inspectorHeight > .inspector-body',panel=body+' > #workspace-interview-answer';
+  const errorsBefore=consoleErrors.length;
+  try{
+   await page!.setViewport(1000,320);
+   await page!.goto('about:blank');await page!.goto(url.href);
+   await wait(`!!document.querySelector('${body}')&&document.querySelector('#workspace-ask-headline')?.checkVisibility()`,'941 waiting inspector docked');
+   const before=await page!.evaluate<{inRoot:boolean;drawerBodies:number;height:number}>(`({
+    inRoot:!!document.querySelector('#app .inspector-body'),drawerBodies:document.querySelectorAll('${body}').length,height:innerHeight
+   })`);
+   assert.deepEqual(before,{inRoot:false,drawerBodies:1,height:320});
+   await writeFile(join(out,'before-delivery.json'),JSON.stringify(before));
+   fixture.deliver();
+   const options=panel+' form[data-job-ask] label.interview-option';
+   await withDeadline('941 first publication or refusal',20_000,async signal=>{
+    while(!signal.aborted){
+     if(consoleErrors.length>errorsBefore||await page!.evaluate<boolean>(`!!document.querySelector('${options}')`))return;
+     await Bun.sleep(30);
+    }
+    throw signal.reason;
+   });
+   const after=await page!.evaluate<{language:string;options:string[];drawerOpen:boolean}>(`({
+    language:document.documentElement.lang,
+    options:[...document.querySelectorAll('${options}')].filter(node=>node.checkVisibility()).map(node=>node.textContent.trim()),
+    drawerOpen:document.querySelector('#workspace-drawer-inspectorHeight').open
+   })`);
+   const errors=consoleErrors.slice(errorsBefore);
+   await writeFile(join(out,'after-delivery.json'),JSON.stringify({after,errors},null,2));
+   await writeFile(join(out,'first-load.png'),await page!.screenshot());
+   console.log('941_FIRST_QUESTION '+JSON.stringify({language,before,after,errors}));
+   assert.equal(errors.length,0,JSON.stringify(errors));
+   assert.equal(after.language,language);assert.equal(after.drawerOpen,true);
+   assert.ok(after.options.length>0,'first publication shows visible option labels in the inspector drawer');
+  }finally{await fixture.close();}
+ }
+}
+
 try{
  // Reuse the shared launcher's browser discovery and process policy without a suite-local wrapper.
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
- if(boundRigPictureOnly){await command!('Runtime.enable');await boundRigPictureChecks();}
+ if(Bun.argv.includes('--first-question-drawer')){await command!('Runtime.enable');await firstQuestionInDrawer();}
+ else if(boundRigPictureOnly){await command!('Runtime.enable');await boundRigPictureChecks();}
  else if(postQuestionPictures){await command!('Runtime.enable');await postQuestionPictureChecks();}
  else if(followup839){holdImages=false;await followupQuestionChecks();}else{
+ await firstQuestionInDrawer();
  if(completedPicture){holdImages=false;await questionTabChecks();}
  if(!completedPicture){
  for(const [width,height] of (interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]])){

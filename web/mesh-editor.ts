@@ -11,7 +11,6 @@
  * inspected build, and the local draft keeps the applied delta (edits over the revision are not written to it).
  */
 import type {CropWorldMapping} from '../src/chest-regions.ts';
-import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 import type {JobMeshEditValue} from '../src/job-contract.ts';
 import {readStoredSetupMesh,setupModel} from '../src/setup-mesh.ts';
 import {
@@ -208,8 +207,8 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   if(!session){status.textContent=host.applied()&&appliedOutcome?appliedOutcome:'';status.classList.toggle('error',noteError);return;}
   const s=session.source,count=session.ops().length;
   const summary=`${note?note+' · ':''}${count} op${count===1?'':'s'} · setup pose · ${MESH_EDIT_PREVIEW_NOTE} · ${mode?hint[mode]:'no sub-mode — Escape again leaves mesh edit'} · Space-drag pans`;
-  const reason=host.job==='read-only'?t('JOB_REVIEW_READ_ONLY'):!job?null:EMIT_UNPINNED_CREATE_FIELDS?
-   t('In a job, press Request changes to send this edit; the producer rebuilds it.'):held?.edits.length?t('job.submit.JOB_ACT_KIND_DISABLED'):null;
+  const reason=host.job==='read-only'?t('JOB_REVIEW_READ_ONLY'):job?
+   t('In a job, press Request changes to send this edit; the producer rebuilds it.'):null;
   const readout=host.job?[reason,held?.stale?t('job.mesh.staleDraft'):null,tr(summary)].filter(Boolean).join(' · '):summary;
   status.textContent=readout;
   status.title=t('{0} / {1} / {2} · {3} vertices · {4} triangles · hull {5} · {6}',

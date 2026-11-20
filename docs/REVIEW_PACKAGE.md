@@ -1233,9 +1233,7 @@ except for the limit refusal.
 The publisher emits this field only when installed Review exports
 `JOB_PREVIOUS_DRAFT_SCHEMA` with value `rig-review-previous-draft/1` from
 `@rig-c/review/job-host`. This is the publisher-to-Review capability rule.
-Both new act keys require an admitted `previousDraft`. That admission is
-their emission gate. The existing pin gate in `src/create-pin-gate.ts`
-governs Review-to-publisher emission separately. An older Review ignores
+Both act keys require an admitted `previousDraft`. An older Review ignores
 the extra context key and treats the composite `files` rows as ordinary
 seals. On the pre-feature main
 `d82aff4`, the in-process `readPublished` seam is in
@@ -1506,9 +1504,10 @@ strings and readers. There is no interview-picks arm or question/ask anchor in
 this extension. Technical configuration and search controls are outside it.
 
 The decoders and consumer projections are read-only. Since [Review #713](https://github.com/rig-c/review/issues/713)
-(HQ contract ruling), the UI finalizers write fresh checkpoint, parts-verdict,
-rig and direction review-verdict and signoff acts as act@6. The UI submission
-keeps its existing `words` and `issues` fields. [Review #746](https://github.com/rig-c/review/issues/746)
+(HQ contract ruling), the UI finalizers use act@6 as the base format for
+fresh checkpoint, parts-verdict, rig and direction review-verdict and signoff
+acts. The UI submission keeps its existing `words` and `issues` fields.
+[Review #746](https://github.com/rig-c/review/issues/746)
 adds optional `feedback: Feedback[]` beside required `words` only for the
 `rig-review` verdict submission. When present, including an empty list,
 `feedback` supplies the pinned comments and suppresses the `words` fallback.
@@ -1518,8 +1517,7 @@ malformed or blank rows. The act bar sends a detached feedback list when there
 are pinned comments and keeps `words` as their projection. It omits `feedback`
 when there are no pinned comments. With `feedback` absent, nonblank `words`
 still supplies one general comment. Direction and image verdict submissions
-keep their existing closed shapes. The comments mapping by itself keeps the
-act@6 format.
+keep their existing closed shapes.
 
 Only the `rig-review` verdict and `parts-verdict` accept optional
 `general: readonly string[]` in their UI submission values. Each string becomes
@@ -1528,12 +1526,13 @@ produced by the existing fields. For parts verdicts, nonblank `words` still
 produces a comment after the pinned `issues` and before `general`. Parts Request
 changes still requires a pinned issue, and approval still requires zero issues. The existing decoder
 validates the combined comment count, text, evidence and signed projection.
-Omitting `general` preserves the existing written bytes. By itself, `general`
-keeps the writer at act@6, and historical words-only acts retain their readers. [Review #831](https://github.com/rig-c/review/issues/831).
+Omitting `general` preserves the existing written bytes. Adding `general` by
+itself keeps the existing schema selection. Historical words-only acts retain
+their readers. [Review #831](https://github.com/rig-c/review/issues/831).
 
 Pointed marks, inline crops, bookmarks and valid time-only null frames remain
-inside the existing `anchor.context`. This is distinct from act@7's top-level
-`comment.context`, which remains disabled by `EMIT_UNPINNED_CREATE_FIELDS`.
+inside the existing `anchor.context`. [Comment context (act@7)](#comment-context-act7)
+defines the separate top-level `comment.context` field.
 
 For the words-only mapping, the daemon maps a nonblank note
 to one comment: anchored to the checkpoint for a checkpoint, general otherwise.
@@ -1609,9 +1608,8 @@ Anchors use existing source-bound fields without a new kind discriminator:
   `view.visibleLayers: {name, imageHash}[]` retains the complete visible set in
   source item order, bound to `sourceHash` and each loaded source image. Entries
   must be unique and source-bound before restoration replaces the hidden set.
-  Absent fields retain the historical restore branch and recorded bytes. Readers
-  accept both forms; fresh capture writes this field only when the shared
-  `EMIT_UNPINNED_CREATE_FIELDS` gate is enabled after Create confirms its parser pin.
+  Starting in 4.8.0, fresh assembled capture writes this field. Readers accept
+  both forms. Absence retains the historical restore branch and recorded bytes.
 - Named image: `name`, optionally the complete existing-field composition
   `imageRegion, crop, nativeCrop`. Names resolve in the sealed image set. Regions
   use nonnegative native-pixel integer origins, positive extents and at most
@@ -1690,10 +1688,11 @@ existing pin or restore path already carries:
 Each key reuses the decoder of the shape it copies. A `reopen` act has no ask
 subject, so its comments cannot carry `context.subject`.
 
-Create refuses unknown fields, so Review emits @7 only when
-`EMIT_UNPINNED_CREATE_FIELDS` (`src/create-pin-gate.ts`) is true. It is false
-until the create tower confirms Create has pinned the Review version that reads
-@7. While it is false, writers drop every `context` and emit @6.
+Starting in 4.8.0, the rig verdict writer takes top-level `context` from pinned
+stage-comment evidence and the bound ask and source. It uses @7 when at least
+one comment carries that context and @6 when none does. A rig verdict carrying
+mesh edits uses @8 as described below.
+See [Create compatibility](STABILITY.md#mesh-edit-act-compatibility).
 
 ### Mesh edits on Request changes (act@8)
 
@@ -1765,18 +1764,15 @@ escaping and serialize numbers as ECMAScript `Number.prototype.toString`
 shortest round-trip text. The value contains no integer-like keys, negative
 zero or non-finite numbers. For this value domain the rule is RFC 8785 (JCS).
 
-**Review refusals and rollout.** Before writing the act, Review refuses with
+**Review refusals.** Before writing the act, Review refuses with
 `JOB_ACT_INVALID` for invalid shape, digest mismatch, invalid ordering or
 duplicate identity, ineligible kind, stage or verdict, counts that differ from
 the stored entry, or an op that cannot replay over the stored topology. An
 attachment hash that differs from the retained displayed model refuses
 `JOB_ACT_SOURCE_STALE`. Existing browser `MESH_EDIT_*` refusals still apply.
-Review ships the decoder with act@8 emission off behind
-`EMIT_UNPINNED_CREATE_FIELDS` in `src/create-pin-gate.ts`.
-An edited submission while emission is off refuses `JOB_ACT_KIND_DISABLED`.
-Create must pin a Review release that reads @8 and build its relay before
-emission opens. The release that opens the gate will be recorded here when it
-is known. Older decoders refuse act@8 with `JOB_ACT_INVALID`.
+Starting in 4.8.0, eligible submissions carrying edits emit act@8. Review
+decoders older than 4.7.0 refuse act@8 with `JOB_ACT_INVALID`. See
+[Create compatibility](STABILITY.md#mesh-edit-act-compatibility).
 Review refuses `JOB_BODY_LIMIT` if the canonical UTF-8 JSON of
 `value.meshEdits` exceeds 256 KiB. Rig stills and inline comment images
 retain their existing request allowances. Finalized-act delivery retains its

@@ -6,7 +6,6 @@ import type {PartsSubjectData} from './parts-viewport-provider.ts';
  * Rig verdicts use the act bar; supported approval and interview asks use the shared ask dialog. */
 import {JOB_MESH_EDITS_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobMeshEdit,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
 import {canonicalJson} from '../src/canonical-json.ts';
-import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 import {draftKey} from '../src/mesh-edit.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
@@ -224,8 +223,7 @@ export function createJobRigScreen(options: {
     if(directionWords!==undefined)for(const decision of decisions)if(decision.kind==='review-verdict'&&decision.value.stage==='direction-review')decision.value.words=directionWords;
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     const rigChanges=decisions.find(decision=>decision.kind==='review-verdict'&&decision.value.stage==='rig-review'&&decision.value.verdict==='changes-requested');
-    // Gate off: a held mesh draft is not read or sent; the verdict goes as on main and the draft stays in the page.
-    const meshDraft=EMIT_UNPINNED_CREATE_FIELDS&&rigChanges?.kind==='review-verdict'?await screen?.meshEdits?.():null;
+    const meshDraft=rigChanges?.kind==='review-verdict'?await screen?.meshEdits?.():null;
     if(rigChanges?.kind==='review-verdict'){
       if(meshDraft?.edits.length){
         const edits=meshDraft.edits.map(edit=>({key:draftKey(edit),edit}));
@@ -327,7 +325,7 @@ export function createJobRigScreen(options: {
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },
       submit,
-      canSubmitMeshEdits:()=>EMIT_UNPINNED_CREATE_FIELDS&&!!screen?.hasMeshEdits?.(),
+      canSubmitMeshEdits:()=>!!screen?.hasMeshEdits?.(),
       attach: value => {screen = value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
       displayed: () => ready.resolve(),
       failed: error => ready.reject(error)};
