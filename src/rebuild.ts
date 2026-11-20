@@ -929,8 +929,8 @@ const assembledView = (plan: BuildPlan): AssembledView => ({
 });
 
 /** Read the assembly stamp with the same installation that runs the producer CLI. */
-function clothAssemblyChanges(producer: InstalledTool, config: string, partsDir: string, manifest: unknown) {
-  if (!hasAssemblyConfig(manifest)) return { changes: [] };
+function clothAssemblyChanges(producer: InstalledTool, config: string, partsDir: string, manifest: unknown): string[] {
+  if (!hasAssemblyConfig(manifest)) return [];
   const root = realpathSync(producer.root), requireProducer = createRequire(join(root, 'package.json'));
   const reader = realpathSync(requireProducer.resolve('@rig-c/parts/assembly-reading'));
   if (!reader.startsWith(root + sep)) throw new Error('The installed producer does not supply @rig-c/parts/assembly-reading');
@@ -938,8 +938,7 @@ function clothAssemblyChanges(producer: InstalledTool, config: string, partsDir:
   const { assemblyConfigChanges } = requireProducer(reader) as {
     assemblyConfigChanges(config: string, parts: ReturnType<typeof readParts>): string[];
   };
-  const parts = readParts(join(partsDir, 'parts.json')) as ReturnType<typeof readParts> & { assembly_config?: { project_override?: string } };
-  return { changes: assemblyConfigChanges(config, parts), project: parts.assembly_config?.project_override };
+  return assemblyConfigChanges(config, readParts(join(partsDir, 'parts.json')));
 }
 const hasAssemblyConfig = (manifest: unknown) => !!manifest && typeof manifest === 'object' && Object.hasOwn(manifest, 'assembly_config');
 /**
@@ -1662,12 +1661,12 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     /** #111: a cloth job whose written config declares limbs is built as `build` does; otherwise as `rig --config`. */
     const building = () => job.op === 'build' || job.cloth?.route === 'build';
     /** #115 (and #111's build route): assemble → rig → check on `config.json`, already written into the scratch directory. */
-    async function runBuild(push: (line: string) => void, what: string, { source, full, head }: BuildPlan, project?: string): Promise<ProcessResult> {
+    async function runBuild(push: (line: string) => void, what: string, { source, full, head }: BuildPlan): Promise<ProcessResult> {
       // #112: build forwards `--environment` to its check stage (rig-parts build --help, 1.48.0).
       if (world) await writeFile(join(dir, 'environment.json'), world.text, { mode: 0o600 });
-      push(`review: ${producer.package} ${producer.version} build --config config.json (${what}) --source <handoff source> --full <handoff full>${head ? ' --head <handoff head>' : ''}${project ? ` --project ${project}` : ''} --seam-pairs${world ? ` --environment environment.json (the exported schedule, ${world.record.steps} step(s), sha256 ${world.record.sha256.slice(0, 16)})` : ''} → scratch out (assemble → rig → check)`);
+      push(`review: ${producer.package} ${producer.version} build --config config.json (${what}) --source <handoff source> --full <handoff full>${head ? ' --head <handoff head>' : ''} --seam-pairs${world ? ` --environment environment.json (the exported schedule, ${world.record.steps} step(s), sha256 ${world.record.sha256.slice(0, 16)})` : ''} → scratch out (assemble → rig → check)`);
       // `--seam-pairs` (forwarded to check): the setup-pose seam split by pair on a pass too, so every Apply shows its `seam pair` lines.
-      built = await runTool(producer.bin, ['build', '--config', 'config.json', '--source', source, '--full', full, ...(head ? ['--head', head] : []), ...(project ? ['--project', project] : []), '--out', 'out', '--seam-pairs', ...(world ? ['--environment', 'environment.json'] : []), ...args], { cwd: dir, onLine: push });
+      built = await runTool(producer.bin, ['build', '--config', 'config.json', '--source', source, '--full', full, ...(head ? ['--head', head] : []), '--out', 'out', '--seam-pairs', ...(world ? ['--environment', 'environment.json'] : []), ...args], { cwd: dir, onLine: push });
       const readout = buildReadout(built.lines);
       // A check that ran and found a bar not met is check's judgment, kept beside the build (as for a `rig` patch):
       // build prints "stopped at check; N bar(s) not met" (a check that refused its input says "no later stage ran").
@@ -1702,7 +1701,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       let op: ProcessResult;
       if (c.route === 'build') op = await runBuild(push, 'the config propose wrote', plan!);
       else {
-        const { changes, project } = clothAssemblyChanges(producer, join(dir, 'config.json'), inputs.parts, plan2.partsJson);
+        const changes = clothAssemblyChanges(producer, join(dir, 'config.json'), inputs.parts, plan2.partsJson);
         if (changes.length) {
           let rebuild: BuildPlan;
           try {
@@ -1721,7 +1720,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
           }
           c.route = 'build';
           job.assembled = assembledView(rebuild);
-          op = await runBuild(push, 'the config propose wrote', rebuild, project);
+          op = await runBuild(push, 'the config propose wrote', rebuild);
           if (op.exitCode === 0 && plan2.namedAssembly && (await handoffBuildPlan(patched)).inputsHash !== rebuild.inputsHash) {
             throw new RebuildError('REBUILD_INPUTS_CHANGED', 'the package or its producer handoff changed during the rebuild');
           }

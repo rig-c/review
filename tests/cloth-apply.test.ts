@@ -40,7 +40,7 @@ async function fixture(options:{limbs?:boolean;stamped?:boolean;full?:boolean;na
  const config={key:'k',cloth:{bottomwear:{chains:1,links:2,wind:[1,2],gravity:[1,2]}},bones:[{name:'hip',parent:'root',at:[10,10]},{chain:'skirt0_',parent:'hip',points:[[10,20],[10,30]],tip:[10,40]}],meshes:{skirt:{grid:8,segments:['skirt0_']}},constraints:[{type:'physics',name:'c0',bone:'skirt0_0',wind:1}],...(options.limbs?{limbs:{}}:{}),...(options.namedCut?{assemble:{cuts:[{under:'under.png'}]}}:{})};
  if(options.namedCut)await writeFile(join(pkg,'under.png'),'first cut input');
  await writeFile(join(pkg,'config.json'),JSON.stringify(config,null,1));
- await writeFile(join(out,'parts.json'),JSON.stringify({parts:[{name:'skirt',from:'full:bottomwear'}],...(options.stamped?{assembly_config:{project_override:'hidden'}}:{})}));await writeFile(join(out,'parts/skirt.png'),'png-skirt');
+ await writeFile(join(out,'parts.json'),JSON.stringify({parts:[{name:'skirt',from:'full:bottomwear'}],...(options.stamped?{assembly_config:{sha256:sha('fixture stamp'),fields:[{name:'constraints.physics',sha256:sha('fixture field')}]}}:{})}));await writeFile(join(out,'parts/skirt.png'),'png-skirt');
  for(const [name,text] of Object.entries({'rig.json':'{"bones":[]}','motion.json':'{}','mesh_report.json':'{}'}))await writeFile(join(rig,name),text);
  await writeFile(join(rig,'images/skirt.png'),'png-skirt');
  await writeFile(join(pkg,'motion.json'),'{}');await writeFile(join(pkg,'painting.png'),'png-painting');await writeFile(join(pkg,'layers/full/a.png'),'png-a');
@@ -136,7 +136,7 @@ test('#998: a stale assembly switches cloth Apply to build and keeps the existin
   const calls=log.slice(log.findIndex(l=>l.startsWith('propose'))).filter(l=>!l.startsWith('check --rig baseline '));
   expect(calls).toEqual([
    expect.stringContaining('propose --parts '),
-   `build --config config.json --source ${join(f.pkg,'painting.png')} --full ${join(f.pkg,'layers/full')} --project hidden --out out --seam-pairs`,
+   `build --config config.json --source ${join(f.pkg,'painting.png')} --full ${join(f.pkg,'layers/full')} --out out --seam-pairs`,
   ]);
   const record=patchAppliedRecord(job);
   expect(record.assembled).toBeDefined();expect(()=>parseAppliedContext(record)).not.toThrow();
