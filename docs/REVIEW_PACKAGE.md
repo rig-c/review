@@ -1284,7 +1284,7 @@ A post-interview option set with a `rig` context can also show the accepted rig 
 | --- | --- |
 | `PublishResultV3` | `{kind, path, selector}` (`package`), `{kind, questionId, setId}` (`option-set`), `{kind}` (`plan`) |
 | `RecordFreeze` | `{kind: 'producer-held', holdId, record: {path: 'project.json', sha256}}` |
-| `RecordSubject` | `{kind: 'interview-picks', questionId, setId}`, `{kind: 'checkpoint', checkpointId}`, `{kind: 'signoff', stage}` (`plan-approved`, `rigging-interview`, `post-interview`, `direction-review`, `interview`), `{kind: 'reopen', stage}` |
+| `RecordSubject` | `{kind: 'interview-picks', questionId, setId}`, `{kind: 'checkpoint', checkpointId}`, `{kind: 'signoff', stage}` (`plan-approved`, `rigging-interview`, `post-interview`, `direction-review`, `interview`), `{kind: 'reopen', stage}` (read only: old records parse, Review neither asks nor renders it) |
 | `RecordPublishedContext` | Required `['label', 'parts', 'inputs', 'files', 'plan', 'subjects']`, optional `checkpointEvidence` on plans |
 | `RecordPartsIdentity` | `['name', 'version', 'integrity']` |
 | `RecordSource` | Required `['sourceHash', 'projectHash', 'record', 'inputs', 'files', 'subject', 'selection', 'optionSet', 'optionSetFile', 'plan', 'subjects']`, optional `checkpointEvidence` on plans |
@@ -1582,7 +1582,7 @@ option-set sources are excluded. Source capabilities remain consumer-owned.
 | `parts-verdict` | `verdict, comments` (`approved` or `changes-requested`) |
 | `review-verdict` | `stage, verdict, comments` (existing rig/direction/image stages and verdicts) |
 | `signoff` | `stage, decision, comments` (`approved`) |
-| `reopen` | `stage, comments` (existing declared record plan subject) |
+| `reopen` | `stage, comments` (read only: old records parse, Review neither asks nor renders it) |
 
 The declared plan/source/selector and ask eligibility checks remain applicable.
 The browser never supplies authoritative checkpoint-to-plan mapping. A Parts
@@ -1685,7 +1685,8 @@ existing pin or restore path already carries:
 | `camera` | numeric camera `{space, center, zoom, viewport, visible}` | StageComment `camera` |
 | `frame` | `{index, basis}` (`producer` or `reference`) | StageComment `frame` (absent when time-only) |
 
-Each key reuses the decoder of the shape it copies. A `reopen` act has no ask
+Each key reuses the decoder of the shape it copies. A `reopen` act is read only
+(old records parse, Review neither asks nor renders it) and has no ask
 subject, so its comments cannot carry `context.subject`.
 
 Starting in 4.8.0, the rig verdict writer takes top-level `context` from pinned

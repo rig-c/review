@@ -35,7 +35,6 @@ export function jobRigScreenAsk(display:DisplayPublicationV3,ask:PendingAskV3,ch
     try {prepareJobForms(display,[ask],()=>jobCheckpointContext(ask,[]));return true;}catch{return false;}
   }
   if(ask.subject.kind==='signoff'||ask.subject.kind==='interview-picks')return true;
-  if('record' in source)return ask.subject.kind==='reopen';
   return !!source.model&&jobRigScreenAnswers(ask,checkpoints)&&
     (ask.subject.kind!=='review-verdict'||ask.subject.stage===(source.direction?'direction-review':'rig-review'));
 }

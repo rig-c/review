@@ -1400,7 +1400,7 @@ export interface JobFormDependencies {
         fields.append(source);
         const subject = ask.subject;
         if(subject.kind==='review-verdict')throw new Error('JOB_ACT_KIND_DISABLED');
-        const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff' || subject.kind === 'reopen';
+        const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff';
         if(commentOnly)fields.append(node('p','job.commentsFromWorkspace'));
         let retainedCommentWords='';
         const commentWords=()=>form.commentWords?.()??retainedCommentWords;
@@ -1477,20 +1477,6 @@ export interface JobFormDependencies {
             if (ask.source.plan) fields.append(planTextList(ask.source.plan, prepared.metadata.planText));
             read = () => ({ stage: subject.stage, decision: 'approved', words: commentWords() });
             submitKey = 'job.signoff';
-        }
-        else if (subject.kind === 'reopen') {
-            if (
-                !('record' in ask.source) ||
-                ask.source.subject !== 'plan' ||
-                typeof subject.stage !== 'string' ||
-                !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(subject.stage) ||
-                !ask.source.subjects.some(candidate => candidate.kind === 'reopen' && candidate.stage === subject.stage)
-            ) {
-                throw new Error('JOB_ASK_INVALID');
-            }
-            fields.title = subject.stage;
-            read = () => ({ stage: subject.stage, words: commentWords() });
-            submitKey = 'job.reopen';
         }
         else {
             throw new Error('JOB_ACT_KIND_DISABLED');
