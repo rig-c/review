@@ -617,6 +617,22 @@ async function assertNoPictureQuestionTab(reason:string,catalog:Record<string,st
  }
 }
 
+/** The footer caption names the camera mode the Camera sync checkbox shows, before and after a toggle. */
+async function assertCameraCaptionFollowsSync(catalog:Record<string,string>) {
+ const read = () => page!.evaluate<{checked:boolean;caption:string}>(`({
+  checked:document.getElementById('camera-sync').checked,caption:document.getElementById('coordinates').textContent})`);
+ const expected = (checked:boolean) => catalog[checked
+  ? 'Cameras synchronized · drag to pan · scroll to zoom' : 'Independent cameras · drag to pan · scroll to zoom'];
+ const initial = await read();
+ assert.equal(initial.caption,expected(initial.checked),'#993 camera caption follows the camera-sync checkbox');
+ await click(page!,'#camera-sync');
+ await wait(`document.getElementById('camera-sync').checked===${!initial.checked}`,'#993 camera-sync toggled');
+ const toggled = await read();
+ assert.equal(toggled.caption,expected(toggled.checked),'#993 camera caption follows the camera-sync checkbox after a toggle');
+ await click(page!,'#camera-sync');
+ await wait(`document.getElementById('camera-sync').checked===${initial.checked}`,'#993 camera-sync restored');
+ assert.equal((await read()).caption,expected(initial.checked),'#993 camera caption follows the camera-sync checkbox after restore');
+}
 async function assertOriginalPainting(base: string, expectedHash: string) {
  await wait(`(()=>{const image=document.querySelector('#reference-content img');
   return !!image?.naturalWidth && image.checkVisibility() && image.getBoundingClientRect().width>0;
@@ -779,8 +795,11 @@ async function boundRigPictureChecks(){
      missingPicture = await page!.evaluate<string>(`document.querySelector('#rig-empty').textContent`);
      assert.equal(missingPicture,catalog['This question refers to a rig version that this publication does not include.']);
      await assertNoPictureQuestionTab(missingPicture,catalog,selector);
-     if (variant==='rig-signoff-hash') paintingSha256=await assertOriginalPainting(
-      fixture.display.routes.apiBase,sha(await readFile(join(fixture.root,'inputs/reference.png'))));
+     if (variant==='rig-signoff-hash') {
+      paintingSha256=await assertOriginalPainting(
+       fixture.display.routes.apiBase,sha(await readFile(join(fixture.root,'inputs/reference.png'))));
+      await assertCameraCaptionFollowsSync(catalog);
+     }
      await writeFile(join(out,'question-'+visit+'.png'),await page!.screenshot());
      await selectBlock('feedback');
      await click(page!,'#workspace-pending-ask');
