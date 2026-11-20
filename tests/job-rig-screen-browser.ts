@@ -270,11 +270,18 @@ async function run(lang: 'en' | 'ko') {
         const button = document.querySelector(selector);
         return button && button.getClientRects().length > 0;
       })`, 'both-verdict-buttons');
-      await click(page, '#stage-comment');
-      const point = await page.evaluate<{x: number; y: number}>(`(() => {
+      await click(page, '[data-mode="rig"]');
+      await wait(`document.querySelector('[data-mode="rig"]').getAttribute('aria-pressed') === 'true'`, 'draft-setup-mode');
+      if (!await page.evaluate<boolean>(`document.querySelector('#stage-comment').getAttribute('aria-pressed') === 'true'`)) {
+        await click(page, '#stage-comment');
+      }
+      await wait(`document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`, 'draft-comment-placement');
+      const point = await page.evaluate<{x: number; y: number; target: string}>(`(() => {
         const rect = document.querySelector('#rig-viewport').getBoundingClientRect();
-        return {x: rect.left + rect.width * .54, y: rect.top + rect.height * .49};
+        const x = rect.left + rect.width * .54, y = rect.top + rect.height * .49;
+        return {x, y, target: document.elementFromPoint(x, y)?.id ?? ''};
       })()`);
+      await record('draft-comment-placement', point);
       await page.mouse('mouseMoved', point.x, point.y);
       await page.mouse('mousePressed', point.x, point.y);
       await page.mouse('mouseReleased', point.x, point.y);
