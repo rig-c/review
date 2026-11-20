@@ -244,17 +244,21 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
         await click(screen, '#chest-edit');
         await wait("!!document.querySelector('#chest-editor-bar:not([hidden]) [data-bust-mode=landmarks][aria-pressed=true]')");
         const controls = await screen.evaluate<{
-          applyDisabled: boolean; circlesDisabled: boolean; status: string; readout: string;
+          applyDisabled: boolean; circlesDisabled: boolean; status: string; readout: string; readoutError: boolean;
         }>(`({
           applyDisabled: document.querySelector('#bust-apply').disabled,
           circlesDisabled: document.querySelector('[data-bust-mode=circles]').disabled,
           status: document.querySelector('#chest-editor-status').innerText,
-          readout: document.querySelector('#lm-derived').innerText
+          readout: document.querySelector('#lm-derived').textContent,
+          readoutError: document.querySelector('#lm-derived').classList.contains('error')
         })`);
         assert.equal(controls.applyDisabled, true);
         assert.equal(controls.circlesDisabled, true);
         assert.ok(controls.status.includes(catalog['job.chest.sendHint']), controls.status);
-        if (!chestSeed.bust.cleavage) assert.equal(controls.readout, catalog['job.chest.apexReadout']);
+        if (!chestSeed.bust.cleavage) {
+          assert.equal(controls.readout, '', 'Omitting cleavage leaves the derived-circle readout empty');
+          assert.equal(controls.readoutError, false);
+        }
         const seeded = await readLandmarkFields(screen);
         assert.deepEqual(seeded, {apex_r: ['50.25', '39.5'], apex_l: ['66.5', '39.5'],
           cleavage: chestSeed.bust.cleavage ? ['58.5', '38.25'] : ['', ''], alpha: '0.46', clearance: '2.6'});
