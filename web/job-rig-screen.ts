@@ -17,10 +17,10 @@ import {setSourceAttribute, setSourceText, sourceAttribute, sourceTextContent} f
 import type {InstanceAccess} from './instance-access.ts';
 
 /** The shared screen hosts model packages and parts drafts; records have their own shared host seam. */
-export function jobRigScreenSubject(source: SourceV3): boolean {
+export function jobRigScreenSubject(source: SourceV3, rigDraftVerdict = false): boolean {
   if ('record' in source) return false;
   if(source.selector?.kind==='draft'&&source.parts)return true;
-  return !!source.model && (source.direction ? source.selector?.kind === 'post' : source.selector === null || source.selector.kind === 'rig');
+  return !!source.model && (source.direction ? source.selector?.kind === 'post' : source.selector === null || source.selector.kind === 'rig' || (source.selector.kind === 'draft' && rigDraftVerdict));
 }
 /** The asks the rig screen's act bar answers: the rig verdict and checkpoints the package declares. */
 export function jobRigScreenAnswers(ask: Pick<PendingAskV3, 'subject'>, checkpoints: ReadonlySet<string>): boolean {
@@ -43,8 +43,8 @@ export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readon
   checkpoints: ReadonlySet<string>): boolean {
   const source=display.publication.source,id=display.publication.publicationId;
   if('record' in source)return false;
-  if(source.selector?.kind==='draft'&&source.parts)return true;
-  return (jobRigScreenSubject(source)||!source.model&&!source.parts)&&pending.every(ask=>
+  if(source.selector?.kind==='draft'&&source.parts&&!display.rigDraftVerdict)return true;
+  return (jobRigScreenSubject(source, display.rigDraftVerdict)||!source.model&&!source.parts)&&pending.every(ask=>
     ask.publicationId!==id||ask.status!=='pending'||jobRigScreenAsk(display,ask,checkpoints));
 }
 
@@ -54,7 +54,7 @@ export function jobRigScreenRefusal(display:DisplayPublicationV3,pending:readonl
   if('record' in source)return null;
   {
     if(source.selector?.kind==='post'&&!source.direction)return 'JOB_DIRECTION_MISSING';
-    if(source.selector?.kind==='draft'&&!source.parts)return 'JOB_PARTS_MISSING';
+    if(source.selector?.kind==='draft'&&!source.parts&&!display.rigDraftVerdict)return 'JOB_PARTS_MISSING';
     if(!source.model&&!source.parts&&!hasPicture&&!pending.some(ask=>ask.publicationId===display.publication.publicationId&&ask.status==='pending'&&ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,checkpoints)))return 'JOB_MODEL_MISSING';
   }
   return jobRigScreenRoute(display,pending,checkpoints)?null:'JOB_ASK_UNSUPPORTED';
@@ -159,7 +159,7 @@ export function createJobRigScreen(options: {
           if(jobPublicationRoutes(candidate,location.origin).jobId!==jobId)throw new Error('JOB_DISPLAY_MISMATCH');
           if (candidate.publication.publicationId !== previous || candidate.publication.generation >= generation) throw new Error('JOB_DISPLAY_MISMATCH');
           generation = candidate.publication.generation;
-          if (jobRigScreenSubject(candidate.publication.source)) {picture = await prepare(candidate, signal, true);break;}
+          if (jobRigScreenSubject(candidate.publication.source, candidate.rigDraftVerdict)) {picture = await prepare(candidate, signal, true);break;}
           previous = candidate.publication.previousPublicationId;
         }
         if (!picture && !missingBoundRig && inspection.interview?.questions.some(question => question.hasParts)) {
@@ -175,7 +175,7 @@ export function createJobRigScreen(options: {
         return {jobRigScreen:true,display,entry,checkpoints:new Set(),record:{inspection,forms,picture}};
       } catch(error) {inspection.dispose();throw error;}
     }
-    if (!jobRigScreenSubject(source)) {
+    if (!jobRigScreenSubject(source, display.rigDraftVerdict)) {
       if(!options.formDependencies)throw new Error('JOB_ACT_KIND_DISABLED');
       const inspection=await prepareJobInspection(display,signal,true);
       try {
@@ -195,7 +195,7 @@ export function createJobRigScreen(options: {
     const checkpoints = new Set(review.manifest.checkpoints.map(item => item.id));
     const refusal=backdropOnly?null:jobRigScreenRefusal(display,options.window.state().pending,checkpoints);
     let parts:PartsSubjectData|undefined;
-    if(source.selector?.kind==='draft'&&source.parts){
+    if(source.selector?.kind==='draft'&&source.parts&&!display.rigDraftVerdict){
       const response=await fetch(routes.api('stage-parts'),{signal});if(!response.ok)throw new Error('JOB_VISUAL_UNAVAILABLE');
       parts=await response.json() as PartsSubjectData;
       if(parts.sourceHash!==source.sourceHash||parts.mode!=='parts')throw new Error('JOB_DISPLAY_MISMATCH');
@@ -306,7 +306,7 @@ export function createJobRigScreen(options: {
     const {publicationId,source}=prepared.display.publication;
     const binding={...(jobId?{jobId}:{}),draftId,publicationId,previousPublicationId,sourceHash:source.sourceHash};
     return {access,pendingSubjects,navigation,...prepared.refusal?{unavailable:prepared.refusal}:{},
-      ...(source.direction?{direction:binding}:jobRigScreenSubject(source)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
+      ...(source.direction?{direction:binding}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
         prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review')}}:{}),
       reviewState(issues,sending) {
         if(sending)return options.translate('job.parts.sending');
