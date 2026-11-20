@@ -3411,7 +3411,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "--by: launch only; incompatible with export or correction options": "--by: launch only; incompatible with export or correction options",
   "Painting comparison": "Painting comparison",
   "Compare with": "Compare with",
-  "Previous accepted draft · {0} · {1}": "Previous accepted draft · {0} · {1}",
+  "Previous accepted draft · {0}": "Previous accepted draft · {0}",
   "Overlay": "Overlay",
   "Part opacity": "Part opacity",
   "PARTS_COMPARISON_UNAVAILABLE: original painting required": "PARTS_COMPARISON_UNAVAILABLE: original painting required",
