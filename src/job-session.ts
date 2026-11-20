@@ -8,7 +8,7 @@ import {
   type JobSubject, type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
 } from './job-contract.ts';
 import { bindJobAsk, bindJobRecordAsk, finalizeJobAct, parseUISubmission, prepareJobRecordAct, prepareJobStill } from './job-act.ts';
-import { atSubject, isRecordSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
+import { atSubject, isRecordSource, isRigDraftVerdictSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
   assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
   type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
@@ -323,7 +323,10 @@ export class JobSession {
     const stored = current.data.publications[publicationId];
     if (!stored) throw new JobError('JOB_PUBLICATION_UNKNOWN');
     const base = `/jobs/${this.jobId}/publications/${publicationId}/instances/${stored.publication.instanceKey}/`;
-    return { publication: stored.publication, routes: { entry: base, apiBase: base + 'api/', assetsBase: base + 'assets/' } };
+    const retained = stored.retained;
+    const rigDraftVerdict = !isRetainedRecordSource(retained) && isRigDraftVerdictSource(retained.source) &&
+      retained.subjects.some(subject => subject.kind === 'review-verdict' && subject.stage === 'rig-review');
+    return { publication: stored.publication, ...(rigDraftVerdict ? {rigDraftVerdict: true as const} : {}), routes: { entry: base, apiBase: base + 'api/', assetsBase: base + 'assets/' } };
   }
 
   /** Internal front seam. A count covers preparation and the entire file stream. */

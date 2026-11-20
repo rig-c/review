@@ -15,13 +15,17 @@ import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
-import {jobInputHashes} from './helpers/job-api-fixture.ts';
+import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
+import {jobInputHashes, syntheticJobParts} from './helpers/job-api-fixture.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {withDeadline, walkCheckpoint} from './helpers/walk-deadline.ts';
 import {freshWalkReopen} from './helpers/walk-reopen.ts';
 import {fullyVisible, visibilityGeometry} from './helpers/walk-visibility.ts';
 
 const argument = (key: string) => {const at = Bun.argv.indexOf(key); return at < 0 ? undefined : Bun.argv[at + 1];};
+const draft = Bun.argv.includes('--draft');
+const draftComment = '초안의 이 부분을 수정해 주세요.';
+const draftSelector = {kind: 'draft', id: 'chain'} as const;
 const autoStill=Bun.argv.includes('--auto-still');
 const verdict=(argument('--verdict')??'approved') as 'approved'|'changes-requested';
 const language = argument('--lang') ?? 'both';
@@ -45,6 +49,13 @@ async function run(lang: 'en' | 'ko') {
   const observations: Record<string, unknown> = {language: lang, fixture: 'synthetic trusted-host job window, static idle'};
   const catalog = lang === 'ko' ? koCatalog : enCatalog;
   const fixture = await realJobWindowFixture();
+  if (draft) {
+    await joinedVerdictFixture(fixture.input.root, '2-rigging-answers');
+    await syntheticJobParts(fixture.input);
+    fixture.input.setRecordPath('project.json');
+    fixture.input.setContext({...fixture.input.getContext(), selector: draftSelector,
+      subjects: [{kind: 'review-verdict', stage: 'rig-review'}]});
+  }
   const profile = await mkdtemp(join(tmpdir(), 'review-709-browser-'));
   let page: InputCdpSession | undefined;
   let unexpectedDialog: string | undefined;
@@ -245,6 +256,21 @@ async function run(lang: 'en' | 'ko') {
     }
     // Use the screen's direct verdict button and trusted pointer submit. No /ui/acts call here.
     assert.equal(await page.evaluate(`document.getElementById('review-status').hidden`),true);
+    if (draft) {
+      await wait(`['#save','#request-changes'].every(selector => {
+        const button = document.querySelector(selector);
+        return button && button.getClientRects().length > 0;
+      })`, 'both-verdict-buttons');
+      await click(page, '#stage-comment');
+      await click(page, '[data-comment-general]');
+      await wait(`!!document.querySelector('.stage-comment-composer input')`, 'draft-comment-composer');
+      await page.evaluate<void>(`(() => {
+        const form = document.querySelector('.stage-comment-composer');
+        form.querySelector('input').value = ${JSON.stringify(draftComment)};
+        form.requestSubmit();
+      })()`);
+      await wait(`!document.querySelector('.stage-comment-composer')`, 'draft-comment-saved');
+    }
     const answerSelector=verdict==='approved'?'#save':'#request-changes';
     await wait(`!document.querySelector(${JSON.stringify(answerSelector)}).disabled`, 'decision-ready');
     await screen('decision-screen');
@@ -273,7 +299,8 @@ async function run(lang: 'en' | 'ko') {
     assert.equal(act.authority.channel, 'review-ui');
     assert.equal(act.value.stage, 'rig-review');
     assert.equal(act.value.verdict, verdict);
-    assert.deepEqual(act.value.comments, []);
+    assert.deepEqual(act.value.comments, draft ? [{text: draftComment}] : []);
+    if (draft) assert.deepEqual(act.source.selector, draftSelector);
     assert.equal(act.still.camera, 'fixed');
     assert.match(act.still.sha256, /^[a-f0-9]{64}$/);
     assert.equal(act.still.path, act.still.sha256 + '.png');

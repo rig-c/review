@@ -2,7 +2,7 @@ import {afterEach, expect, setSystemTime, spyOn, test} from 'bun:test';
 import * as crypto from 'node:crypto';
 import {mkdir, readFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {finalizeJobAct} from '../src/job-act.ts';
+import {bindJobAsk, finalizeJobAct} from '../src/job-act.ts';
 import {jobHash, parseCommentsAct, parseContextCommentsAct} from '../src/job-api.ts';
 import {jobCommand} from '../src/job-cli.ts';
 import {feedbackItemComments, parseStageComment, projectComments} from '../src/stage-comment.ts';
@@ -10,7 +10,8 @@ import type {JobPendingAsk, JobUIActValues, JobUISubmission, PendingAskV3} from 
 import type {JobRetainedSource} from '../src/job-source.ts';
 import type {Feedback} from '../src/session.ts';
 import {jobRigScreenDecisions} from '../web/job-rig-screen.ts';
-import {jobFixture} from './helpers/job-api-fixture.ts';
+import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
+import {jobFixture, syntheticJobParts} from './helpers/job-api-fixture.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 import {noFeedbackBaseline as baseline, markedFeedback as marked} from './helpers/verdict-feedback-746.ts';
@@ -37,6 +38,7 @@ test('#746 absent feedback keeps all four pre-edit deterministic envelope bytes,
   const ask: JobPendingAsk = {askId: 'verdict-746', publicationId: 'publication-746',
     subject: {kind: 'review-verdict', stage: 'rig-review'}, source, status: 'pending'};
   const retained = {source, subjects: []} as unknown as JobRetainedSource;
+  expect(JSON.stringify(bindJobAsk(ask.subject, retained))).toBe(JSON.stringify(baseline.source));
   const uuid = spyOn(crypto, 'randomUUID').mockReturnValue(baseline.actId as `${string}-${string}-${string}-${string}-${string}`);
   setSystemTime(new Date(baseline.at));
   try {
@@ -209,4 +211,63 @@ test('#746 decisions never answer direction or image verdicts with rig feedback'
   const image: JobUIActValues['review-verdict'] = {stage: 'image-review', verdict: 'approved', words: '', feedback: []};
   expect(direction.stage).toBe('direction-review');
   expect(image.stage).toBe('image-review');
+});
+
+
+test.each(['approved', 'changes-requested'] as const)('#1011 finalizes draft verdict %s', async verdict => {
+  const f = await fixture();
+  await joinedVerdictFixture(f.root, '2-rigging-answers');
+  await syntheticJobParts(f);
+  f.setRecordPath('project.json');
+  const selector = {kind: 'draft', id: 'chain'} as const;
+  const subject = {kind: 'review-verdict', stage: 'rig-review'} as const;
+  f.setContext({...f.getContext(), selector, subjects: [subject]});
+  const publication = await f.publish();
+  const ask = await f.ask(publication, subject), page = await f.display(publication);
+  expect(ask.source).toEqual(publication.source);
+  expect(f.session.displayPublication(publication.publicationId).rigDraftVerdict).toBe(true);
+  const feedback = verdict === 'changes-requested'
+    ? feedbackFor(publication.source as unknown as typeof baseline.source).slice(0, 1) : [];
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
+    expectedGeneration: f.session.status().generation, submissionId: 'draft-verdict', kind: subject.kind,
+    value: {stage: subject.stage, verdict, words: '', feedback},
+    capture: rigStillCapture(publication, ask, page).capture}));
+  if (!saved.ok) throw new Error(JSON.stringify(saved.error));
+  const act = (feedback.length ? parseContextCommentsAct : parseCommentsAct)(saved.value);
+  if (act.kind !== 'review-verdict') throw new Error('Expected rig verdict');
+  expect(act.source).toEqual(publication.source);
+  expect(act.source.selector).toEqual(selector);
+  expect(act.source.projectHash).toMatch(/^[a-f0-9]{64}$/);
+  expect(act.source.model?.sha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(act.value.verdict).toBe(verdict);
+  expect(act.still).toBeDefined();
+  expect(act.value.comments).toHaveLength(feedback.length);
+  if (feedback.length) {
+    const comment = act.value.comments[0]!;
+    expect(comment.anchor).toBeDefined();
+    expect(('context' in comment ? comment.context as import('../src/job-contract.ts').JobCommentContext : undefined)?.subject)
+      .toEqual({ask: subject, selector, sourceHash: publication.source.sourceHash});
+  }
+  expect(f.session.readActExport(act.actId, false).toString()).toBe(JSON.stringify(act));
+});
+
+test('#1011 refuses unsupported stages and invalid rig draft bindings', () => {
+  const source = {...baseline.source, direction: null, projectHash: 'a'.repeat(64),
+    selector: {kind: 'draft', id: 'chain'}} as unknown as JobRetainedSource['source'];
+  const subject = {kind: 'review-verdict', stage: 'rig-review'} as const;
+  const retained = {source, subjects: [subject]} as JobRetainedSource;
+  for (const stage of ['direction-review', 'image-review'] as const) {
+    const ask = {...subject, stage};
+    expect(() => bindJobAsk(ask, {...retained, subjects: [ask]})).toThrow(expect.objectContaining({
+      code: 'JOB_ASK_INVALID', message: stage,
+    }));
+  }
+  for (const patch of [{selector: {kind: 'draft' as const, id: '../chain'}},
+    {selector: {...source.selector, kind: 'draft' as const, id: 'chain', version: 1}},
+    {model: null}, {projectHash: null}, {direction: source.model}]) {
+    expect(() => bindJobAsk(subject, {...retained, source: {...source, ...patch}}))
+      .toThrow(expect.objectContaining({code: 'JOB_ASK_INVALID'}));
+  }
+  expect(() => bindJobAsk(subject, {...retained, subjects: []}))
+    .toThrow(expect.objectContaining({code: 'JOB_ASK_INVALID'}));
 });
