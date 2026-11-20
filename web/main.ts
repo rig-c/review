@@ -340,12 +340,13 @@ function renderDraftState(): void {
 function renderProvenance(): void {
   const provenance = session.reviewedSource;
   text('provenance-version', provenance.packageRevision);
-  text('provenance-rig', provenance.rig ? provenance.rig.sha256.slice(0, 12) + '…' : 'Not supplied');
+  el('provenance-rig').textContent = provenance.rig ? provenance.rig.sha256.slice(0, 12) + '…' : t('Not supplied');
   el('provenance-motion').hidden = !provenance.motion;
   el('provenance-motion-missing').hidden = !!provenance.motion;
   text('provenance-motion', provenance.motion ? provenance.motion.sha256.slice(0, 12) + '…' : '');
   text('provenance-full', JSON.stringify({ sourceHash: session.sourceHash, referenceBinding:session.referenceBinding, reviewedSource: provenance }, null, 2));
 }
+viewDisposers.push(onLanguageChange(()=>{if(session)renderProvenance();}));
 
 function checkpointEntry(): ReviewSession['checkpoints'][string] | undefined {
   if (!checkpoint) return;
@@ -1435,7 +1436,8 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  for(const control of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('#checkpoint-detail input,#proposal-panel input,#proposal-panel select,#proposal-panel button,#strip-panel input,#strip-panel select,#strip-panel button'))if(!control.closest('#comments-list-host')){control.disabled=true;setSourceAttribute(control,'title',unavailable);if(control instanceof HTMLInputElement&&control.name==='outcome')control.checked=false;}
  el('checkpoint-detail').hidden=true;
  text('detail-note',unavailable);text('checkpoint-note','');el('strip-panel').hidden=true;
- text('provenance-version','Parts package, before rigging');text('provenance-rig','Not supplied');text('provenance-motion','Not supplied');
+ const renderPartsProvenance=()=>{text('provenance-version','Parts package, before rigging');el('provenance-rig').textContent=t('Not supplied');el('provenance-motion').hidden=true;el('provenance-motion-missing').hidden=false;text('provenance-motion','');};
+ renderPartsProvenance();viewDisposers.push(onLanguageChange(renderPartsProvenance));
  text('provenance-full',JSON.stringify({subject:'parts',sourceHash:subject.sourceHash,painting:subject.painting,images:subject.items.map(({name,imageHash})=>({name,imageHash}))},null,2));
  text('source-files',`source ${subject.sourceHash}`);const provenanceHint=document.querySelector<HTMLElement>('.provenance>.hint');if(provenanceHint)setSourceText(provenanceHint,'Source files remain unchanged.');
  for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-block-target]'))if(!['selected-part','feedback'].includes(tab.dataset.blockTarget??'')){tab.disabled=true;setSourceAttribute(tab,'title',unavailable);}
