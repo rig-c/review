@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {installSceneFixture,sceneHash} from './helpers/scene-inspection-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
+import {jobSourceDraftId} from '../web/job-session.ts';
 const at=Bun.argv.indexOf('--out'),out=resolve(at<0?'artifacts/scene-take-797':Bun.argv[at+1]!);
 await mkdir(out,{recursive:true});const profile=await mkdtemp(join(tmpdir(),'scene-take-797-'));
 let page:InputCdpSession|undefined;const errors:unknown[]=[],observations:unknown[]=[];
@@ -26,7 +27,7 @@ try{
    const {direction}=await installSceneFixture(join(f.input.root,'out'),{sourceStart});
    f.input.setContext({...f.input.getContext(),selector:{kind:'post',version:2,rigVersion:1},subjects:[{kind:'review-verdict',stage:'direction-review'}]});
    const publication=await f.publish();
-   const key='rig-review-record-comments/1:'+publication.publicationId+':'+publication.source.sourceHash;
+   const key='rig-review-record-comments/1:'+f.host.session.jobId+':'+jobSourceDraftId(publication.source)+':'+publication.source.sourceHash;
    const response=await f.call({...f.input.base(),verb:'ask',expectedGeneration:f.host.session.status().generation,idempotencyKey:'scene-ask',publicationId:publication.publicationId,subject:{kind:'review-verdict',stage:'direction-review'}});
    assert.equal((await response.json()).ok,true);
    const url=new URL(f.host.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href,language);

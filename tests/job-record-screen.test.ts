@@ -113,7 +113,7 @@ test('#774 all shared publications keep one stream; cancellation never mounts an
   const stop=await run(environment)({append(){notices.push('append');},prepend(){notices.push('prepend');},querySelectorAll:()=>[]});
   expect(await adapter.prepare({},controller.signal)).toBe(prepared);await adapter.painted(prepared,controller.signal);expect(paints).toBe(1);
   adapter.changed({error:'fixture load failure'});expect(changed).toBe(1);expect(reports).toBe(mounted?0:0);expect(notices).toEqual(mounted?[]:['prepend']);
-  if(!mounted){expect(notice.title).toBe('JOB_WINDOW_FAILED');adapter.changed({error:new Error('JOB_CAPABILITY_REQUIRED')});expect(notice.title).toBe('JOB_CAPABILITY_REQUIRED');adapter.changed({error:'JOB_STREAM_FAILED'});expect(notice.title).toBe('JOB_STREAM_FAILED');}
+  if(!mounted){expect(notice.title).toBe('JOB_WINDOW_FAILED');adapter.changed({error:new Error('JOB_CAPABILITY_REQUIRED')});expect(notice.title).toBe('JOB_CAPABILITY_LINK_LOST');adapter.changed({error:'JOB_STREAM_FAILED'});expect(notice.title).toBe('JOB_STREAM_FAILED');}
   controller.abort();await adapter.painted(prepared,controller.signal);expect(paints).toBe(1);
   stop();expect(aborted).toBe(true);await adapter.painted(prepared,new AbortController().signal);expect(paints).toBe(1);expect(streams).toBe(1);stop();
  }
@@ -239,6 +239,35 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   const finalizedWithNote=formFor(answeredWithNote,inspection,deps);
   expect(finalizedWithNote.form.querySelector('textarea[name="note"]')).toBeNull();
   expect(finalizedWithNote.form.querySelector('.interview-note')?.textContent).toBe(note10000);
+  // #992 Bar 2 & Bar 5: form drafts survive republish of the same job, draft and source hash, and restore from legacy per-publication keys.
+  const republishedDisplay:DisplayPublicationV3={...f.display,publication:{...f.display.publication,publicationId:'republished-publication-2',previousPublicationId:f.display.publication.publicationId,generation:f.display.publication.generation+1},routes:{entry:f.display.routes.entry.replace(f.display.publication.publicationId,'republished-publication-2'),apiBase:f.display.routes.apiBase.replace(f.display.publication.publicationId,'republished-publication-2'),assetsBase:f.display.routes.assetsBase.replace(f.display.publication.publicationId,'republished-publication-2')}};
+  const republishedAsk:PendingAskV3={...f.ask,askId:'republished-ask-2',publicationId:'republished-publication-2'};
+  const republishedRestored=formFor(republishedAsk,{...inspection,display:republishedDisplay},deps);
+  expect([...republishedRestored.form.querySelectorAll<HTMLInputElement>('input[type=radio]')].filter(input=>input.checked).map(input=>input.value)).toEqual(['topology_other','density_auto']);
+  expect(republishedRestored.read()).toEqual(entry.read());
+  expect(republishedRestored.dirty).toBe(true);
+  const legacySnapshot=store.get(drafts.localDraftKey(f.display))!;
+  store.clear();
+  store.set('rig-review-job-draft/1:'+f.session.jobId+':'+f.display.publication.publicationId+':'+f.display.publication.source.sourceHash,legacySnapshot);
+  const fallbackRestored=formFor(f.ask,inspection,deps);
+  expect(fallbackRestored.read()).toEqual(entry.read());
+  expect(fallbackRestored.dirty).toBe(true);
+  // Same-publication reconnect with an earlier pending ask for the same subject must match exact askId first.
+  forms.clear();store.clear();
+  const earlierAsk:PendingAskV3={...f.ask,askId:'earlier-unanswered-ask'};
+  const activeAsk:PendingAskV3={...f.ask,askId:'active-answered-ask'};
+  const earlierEntry=formFor(earlierAsk,inspection,deps);earlierEntry.dirty=true;forms.set(earlierAsk.askId,earlierEntry);
+  const activeEntry=formFor(activeAsk,inspection,deps);
+  for(const input of activeEntry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
+  activeEntry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='Exact ask match';
+  activeEntry.dirty=true;forms.set(activeAsk.askId,activeEntry);
+  drafts.saveDraft();
+  const multiSaved=JSON.parse(store.get(drafts.localDraftKey(f.display))!);
+  // Control (c9e6a46): single .find(item => item.askId === ask.askId || item.value?.questionId === subject.questionId) matched earlierAsk at index 0
+  const buggyMatch=multiSaved.forms.find((item:{askId:string;value?:{questionId?:string}})=>item.askId===activeAsk.askId||item.value?.questionId==='rig_type');
+  expect(buggyMatch.askId).toBe(earlierAsk.askId);
+  const activeRestored=formFor(activeAsk,inspection,deps);
+  expect(activeRestored.read()).toEqual(activeEntry.read());
  }finally{inspection?.dispose();dom.restore();await f.close();}
 });
 
@@ -357,7 +386,7 @@ test('#839 record parts pictures keep ordinary inspector eligibility without com
   expect(opened.subject).toBe('parts');expect(f.workspace.result.kind).toBe('option-set');
   let available:unknown='not-bound',inspector=false;
   const element={querySelector:()=>({append(){}}),parentElement:{},checked:false},defaults={defaultCameraSync:false,defaultIdleRepeat:false,theme:'system'};
-  const environment={questionPanel:{},host:{record:{hasPicture:true},ownerActAccess:null},partsOnly:true,data:undefined,screenRoot:element,shell:{language:{}},rigInspector:{strip:{},comments:{button:{},panel:{}}},viewport:{state:{}},appearance:null,workspace:null,inspectorBlocks:null,liveIssueCount:null,readOnly:null,actReadOnly:null,
+  const environment={questionPanel:{},host:{record:{hasPicture:true},ownerActAccess:null},partsOnly:true,data:undefined,screenRoot:element,shell:{language:{}},rigInspector:{body:{append(){}},strip:{},comments:{button:{},panel:{}}},viewport:{state:{}},appearance:null,workspace:null,inspectorBlocks:null,liveIssueCount:null,readOnly:null,actReadOnly:null,
    el:()=>element,input:()=>element,select:()=>element,text(){},document:{},tr:(key:string)=>key,readOnlyReason:()=>null,access:{},fitCamera(){},bindAppearance:()=>({}),bindReviewDialog(){},bindInspector(){inspector=true;},
    bindWorkspaceUI:()=>({defaults:()=>defaults}),bindInspectorBlocks:(options:{available:unknown})=>{available=options.available;return {};}};
   const run=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(gate+'\n'+parts)};return startParts;}`)(environment);

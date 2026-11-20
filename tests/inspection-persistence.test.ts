@@ -767,3 +767,34 @@ test('#821 parts opening ignores historical part and solo UI even on a pending d
  const read=new Function('saved',code);
  expect(read({part:'gap',solo:1})).toEqual({});expect(read({part:'front',solo:1})).toEqual({});
 });
+
+test('#992 pinned parts drafts stored under the legacy instance/route scope restore with crop references, retire the legacy key, and stay deleted after reload',async()=>{
+ const storage=new MemoryStorage(),idb=new DraftIDB();
+ const legacyScope=`parts:instance-key-1:/jobs/job-1/publications/pub-1/instances/instance-key-1/:${binding.sourceHash}`;
+ const newScope=`parts:job-1:draft-1:${binding.sourceHash}`;
+ const legacyStore=new InspectionDraftStore(legacyScope,binding,()=>{},storage,Date.now,idb.factory);
+ const value=partsCropDraft(2),original=structuredClone(value);
+ expect(await legacyStore.write(value)).toBe(true);
+ expect(storage.getItem(legacyStore.key)).not.toContain('data:image/png');
+ expect(idb.values.size).toBe(2);
+
+ // Control (c9e6a46): opening the new job/draft scope without legacyScopes returns null and loses the unsent pinned parts draft
+ const withoutFallback=new InspectionDraftStore(newScope,binding,()=>{},storage,Date.now,idb.factory);
+ expect(await withoutFallback.read()).toBeNull();
+
+ // Fixed: one-time legacy read restores the pinned parts rows and their stored IDB crop references, then retires the legacy key on write
+ const migratedStore=new InspectionDraftStore(newScope,binding,()=>{},storage,Date.now,idb.factory,[legacyScope]);
+ const restored=await migratedStore.read();
+ expect(restored).toEqual(original);
+ expect(migratedStore.migrated()).toBe(true);
+ expect(await migratedStore.write(restored!)).toBe(true);
+ expect(storage.getItem(legacyStore.key)).toBeNull();
+ expect(storage.getItem(migratedStore.key)).not.toBeNull();
+
+ // Deleting all restored pinned parts comments and reloading keeps 0 rows without resurrecting from the legacy key
+ const cleared:LocalInspectionDraft={...restored!,reviewDirty:false,session:{subject:'parts',issues:[]}};
+ expect(await migratedStore.write(cleared)).toBe(true);
+ const reloadedStore=new InspectionDraftStore(newScope,binding,()=>{},storage,Date.now,idb.factory,[legacyScope]);
+ const reloaded=await reloadedStore.read();
+ expect((reloaded?.session as {issues:unknown[]})?.issues).toEqual([]);
+});

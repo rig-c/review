@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {mkdir,mkdtemp,realpath,rm,writeFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {join,relative} from 'node:path';
 import {tmpdir} from 'node:os';
 import {isWriterText,producerHint,reachOf,writerText} from '../src/baseline-reach.ts';
 import {assertWholeRigBaseline,baselineLine,compareBaseline,type BaselineResult} from '../src/baseline.ts';
@@ -27,6 +27,49 @@ async function rigDir(root:string,name:string,docs:{rig:string;motion:string;rep
 }
 const show=(rel:string)=>`out/rig/${rel}`;
 const settled=(compared:Awaited<ReturnType<typeof compareBaseline>>):BaselineResult=>({schema:'rig-review-baseline/1',key:'k',producer:{package:'@rig-c/parts',version:'1.49.1'},line:'',exitCode:0,wallMs:1,...compared});
+
+test('#1000: rig reproduction compares receipt identity across clock and output directory changes',async()=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'review-run-receipt-')));
+ try{
+  const docs={rig:writerText(rigDoc([1,2,3])),motion:writerText(motionDoc),report:writerText(reportDoc(187))};
+  const baseline=await rigDir(root,'scratch/baseline',docs,'png-topwear');
+  const inspected=await rigDir(root,'package/out/rig',docs,'png-topwear');
+  const configPath=join(root,'package/config.json');
+  const stamp=(dir:string,time:string)=>({
+   spec:'rig-run/1',package:{name:'@rig-c/parts',version:'2.38.1'},command:'rig',
+   started_at:time,finished_at:time,config:{path:relative(dir,configPath),sha256:'a'.repeat(64)},
+   outputs:[{path:'rig.json',sha256:'b'.repeat(64)}],
+  });
+  const trusted=stamp(baseline,'2026-11-20T04:15:52.410Z');
+  const original=stamp(inspected,'2026-11-20T04:15:56.829Z');
+  await writeFile(join(baseline,'run.json'),writerText(trusted));
+  await writeFile(join(inspected,'run.json'),writerText(original));
+  const compare=()=>compareBaseline(baseline,inspected,show);
+  const reproduced=await compare();
+  expect(reproduced.status).toBe('reproduced');
+  expect(reproduced.hashes?.baseline.tree).not.toBe(reproduced.hashes?.inspected.tree);
+  expect(()=>assertWholeRigBaseline(settled(reproduced))).not.toThrow();
+
+  for(const receipt of [
+   {...original,package:{...original.package,version:'2.38.2'}},
+   {...original,config:{...original.config,path:'../../../other/config.json'}},
+   {...original,config:{...original.config,sha256:'c'.repeat(64)}},
+   {...original,outputs:[{path:'rig.json',sha256:'d'.repeat(64)}]},
+   {...original,inputs:{source:'other.png'}},
+  ]){
+   await writeFile(join(inspected,'run.json'),writerText(receipt));
+   const compared=await compare();
+   expect(()=>assertWholeRigBaseline(settled(compared))).toThrow('EDIT_BASELINE_MISMATCH: out/rig/run.json');
+  }
+
+  await writeFile(join(inspected,'run.json'),'invalid JSON');
+  expect((await compare()).firstDifference).toBe('out/rig/run.json');
+  await writeFile(join(inspected,'run.json'),writerText(original));
+  await writeFile(join(inspected,'images/topwear.png'),'png-topwear!');
+  const changed=await compare();
+  expect(()=>assertWholeRigBaseline(settled(changed))).toThrow('EDIT_BASELINE_MISMATCH: out/rig/images/topwear.png');
+ }finally{await rm(root,{recursive:true,force:true});}
+});
 
 test('#148: the writer\'s text is JSON.stringify(value, null, 1) and a closing newline; anything else is not',()=>{
  expect(writerText({a:[1,{b:2}]})).toBe('{\n "a": [\n  1,\n  {\n   "b": 2\n  }\n ]\n}\n');
