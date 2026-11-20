@@ -286,7 +286,8 @@ export interface ChestEditor {active:()=>boolean;flashing:(side:BustSide)=>boole
  rebuildState:(state:{busy:boolean;applied:boolean})=>void;
  /** #342: the toggle and Apply are disabled before use, naming the reason, when the rig has nothing to rebuild (null re-enables). */
  unavailable:(reason:string|null)=>void;
- restoreJobDraft:()=>void;
+ jobDraftText:()=>string|null;
+ restoreJobDraft:(text:string|null|undefined)=>void;
  syncJobTarget:()=>void;
  jobEdits:()=>JobChestDraftSubmission|null;
 }
@@ -304,9 +305,8 @@ function jobChestEdit(seed:JobPublishedChestLandmark,bust:BustLandmarks):JobChes
  return {slot,skin,attachment,basis,source:{hash,frame},bust};
 }
 
-/** Keep all edited attachments in the same source-scoped inspection draft as the shared form inputs. */
-function bindJobChestDraft(bar:HTMLElement,field:(id:string)=>HTMLInputElement|null,job:Exclude<ChestEditorHost['job'],'read-only'|undefined>){
- const saved=document.createElement('textarea');saved.id='chest-landmark-draft';saved.hidden=true;bar.append(saved);
+/** Keep all edited attachments in the source-scoped inspection draft's UI state. */
+function bindJobChestDraft(field:(id:string)=>HTMLInputElement|null,job:Exclude<ChestEditorHost['job'],'read-only'|undefined>){
  const snapshot=()=>Object.fromEntries(landmarkFieldIds.map(id=>[id,field(id)?.value??'']));
  const restore=(values:JobChestFields)=>{
   for(const key of landmarkNumbers){
@@ -321,7 +321,7 @@ function bindJobChestDraft(bar:HTMLElement,field:(id:string)=>HTMLInputElement|n
  let target:JobPublishedChestLandmark|undefined,drafts=new Map<string,JobChestFields>();
  const reset=()=>{
   if(!target)return;
-  drafts.delete(jobChestKey(target));saved.value=JSON.stringify([...drafts]);
+  drafts.delete(jobChestKey(target));
   restore(bustLandmarkFields(target.bust));
  };
  const bindTarget=(force=false)=>{
@@ -331,10 +331,10 @@ function bindJobChestDraft(bar:HTMLElement,field:(id:string)=>HTMLInputElement|n
   restore(next?drafts.get(jobChestKey(next))??bustLandmarkFields(next.bust):{});
   return true;
  };
- const restoreDraft=()=>{
+ const restoreDraft=(text:string|null|undefined)=>{
   drafts.clear();
   try{
-   const stored:unknown=JSON.parse(saved.value||'[]');
+   const stored:unknown=JSON.parse(text??'[]');
    if(Array.isArray(stored))for(const seed of job.seeds()){
     const key=jobChestKey(seed);
     const entry=stored.find(row=>Array.isArray(row)&&row[0]===key)?.[1];
@@ -345,7 +345,7 @@ function bindJobChestDraft(bar:HTMLElement,field:(id:string)=>HTMLInputElement|n
  };
  const changed=()=>{
   if(!target)return;
-  drafts.set(jobChestKey(target),snapshot());saved.value=JSON.stringify([...drafts]);
+  drafts.set(jobChestKey(target),snapshot());
  };
  const read=()=>target?readJobLandmarks(snapshot(),target):null;
  const edits=():JobChestDraftSubmission=>{
@@ -358,10 +358,10 @@ function bindJobChestDraft(bar:HTMLElement,field:(id:string)=>HTMLInputElement|n
   return {edits:pending.map(row=>row.edit),clear:accepted=>{
    const acknowledged=new Set(accepted.map(jobChestKey));
    for(const {key,values} of pending)if(acknowledged.has(key)&&drafts.get(key)===values)drafts.delete(key);
-   saved.value=JSON.stringify([...drafts]);bindTarget(true);
+   bindTarget(true);
   }};
  };
- return {bindTarget,restoreDraft,reset,changed,read,edits,target:()=>target};
+ return {bindTarget,restoreDraft,reset,changed,read,edits,target:()=>target,text:()=>drafts.size?JSON.stringify([...drafts]):null};
 }
 
 export function bindChestEditor(host:ChestEditorHost):ChestEditor {
@@ -372,7 +372,7 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  const log=node<HTMLElement>('chest-editor-log'),apply=node<HTMLButtonElement>('bust-apply'),reset=node<HTMLButtonElement>('bust-reset');
  // #345: optional, so a page without the detail block still binds.
  const markers=document.getElementById('chest-markers') as HTMLButtonElement|null,unavailableLine=document.getElementById('chest-unavailable');
- const job=typeof host.job==='object'?host.job:null,jobDraft=job?bindJobChestDraft(bar,field,job):null;
+ const job=typeof host.job==='object'?host.job:null,jobDraft=job?bindJobChestDraft(field,job):null;
  const circlesButton=node<HTMLButtonElement>('bust-mode-circles'),downloadButton=node<HTMLButtonElement>('bust-download');
  if(job){
   circlesButton.disabled=true;
@@ -559,7 +559,8 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
   noticeText:()=>notice?.text??'',
   rebuildState:(state)=>{busy=state.busy;apply.setAttribute('aria-busy',String(busy));reset.disabled=busy||!state.applied;gate();},
   unavailable:reason=>{blocked=reason;if(blocked&&active)setActive(false);gate();},
-  restoreJobDraft:()=>{if(jobDraft){jobDraft.restoreDraft();cancelGesture();sync();}},
+  jobDraftText:()=>jobDraft?.text()??null,
+  restoreJobDraft:text=>{if(jobDraft){jobDraft.restoreDraft(text);cancelGesture();sync();}},
   syncJobTarget:()=>{if(jobDraft?.bindTarget()){cancelGesture();sync();}},
   jobEdits:()=>{
    if(!jobDraft)return null;
