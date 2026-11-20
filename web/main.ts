@@ -164,7 +164,11 @@ let partsSubject:ReturnType<typeof bindPartsSubject>|null=null;
 let setupPartsPersistence:(()=>Promise<void>)|null=null;
 let rigDifference:{assets:ModelAssets;painting:HTMLImageElement;camera:ReturnType<typeof createViewportState>;hidden:Map<HTMLElement,boolean>;label:string;bookmark:InspectionBookmark}|null=null;
 let rigDifferenceFailure:string|null=null;
-const rigRaster={el,canvas:partsCanvas,message,reference:()=>null,frameSize:()=>({w:partsCanvas.width,h:partsCanvas.height}),active:()=>!!rigDifference};
+const rigRaster={el,canvas:partsCanvas,message,reference:()=>null,
+ frameSize:(target:CameraTarget)=>activeInterviewImage
+  ?target==='reference'&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:null
+  :{w:partsCanvas.width,h:partsCanvas.height},
+ active:()=>!!rigDifference||!!activeInterviewImage};
 if(partsOnly){partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);el('reference-content').append(partsReference);}
 let sceneComposite:ReturnType<typeof bindScenePlates>|undefined;
 const activeScene=()=>sceneComposite&&data.direction&&(!stageSource||stageSource.url===inspectedModel?.url)?data.direction:undefined;
@@ -541,6 +545,7 @@ async function showReference(id: string, bound?:{name:string;src:string}): Promi
   const content = el('reference-content'); content.replaceChildren();
   const reference = bound?{id:'',label:bound.name,type:'image' as const,path:''}:data.manifest.references.find(item => item.id === id);
   el('reference-empty').hidden = false;setReferenceInput(reference?{state:'pending'}:{state:'absent'});
+  if(bound)viewport.requestFit();
   if (!reference) { text('reference-empty', 'No reference supplied.'); text('reference-info', 'Add image, video or input-pose references to the package.'); return; }
   text('reference-label', reference.label + (reference.type === 'pose' ? ' · Static input pose' : ' · Reference'));
   text('reference-empty', 'Loading reference…');

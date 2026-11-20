@@ -111,7 +111,7 @@ try{
    await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#job-record-asks[open]')`,'reopen after reload');
    if(kind==='checkpoint')await page.evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(selector)});f.querySelector('select[name=outcome]').value='pass';f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
    await shot(out,'before-submit');await click(page,selector+' button[type=submit]');
-   await waitForRecordSaved(catalog['Answer saved'],`${kind} ${picture} ${language} saved in the topbar and its drawer removed`);
+   await waitForRecordSaved(language==='en'?'Answer saved':catalog['Answer saved'],`${kind} ${picture} ${language} saved in the topbar and its drawer removed`);
    const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);assert.notEqual(act.kind,'interview-picks');if(act.kind!=='interview-picks')assert.equal(act.value.words,expected);if(stageSignoff){assert.equal(act.kind,'signoff');assert.equal((act.value as {stage:string}).stage,signoffSubject.stage);assert.equal((act.value as {decision:string}).decision,'approved');}assert.equal('feedback' in act.value,false);assert.equal('comments' in act.value,false);
    await shot(out,'submitted');await page.evaluate(`(()=>{const d=JSON.parse(localStorage.getItem(${JSON.stringify(key)}));d.sourceHash='0'.repeat(64);localStorage.setItem(${JSON.stringify(key)},JSON.stringify(d));})()`);await page.goto('about:blank');await page.goto(url.href);if(picture){await wait(`globalThis.__access756==='pending'`,'reload capability');await page.evaluate(`globalThis.__releaseAccess756()`);}await wait(`!!document.querySelector('#stage-comment-list')&&!!document.querySelector(${JSON.stringify(selector)})`,'mismatched reload');assert.equal(await page.evaluate(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length`),0);
    assert.deepEqual(await jobInputHashes(fixture.root),before);const result={kind,picture,language,state,comments:draft.comments.length,sourceHash:act.source.sourceHash,sourceDraftRestored:true,mismatchedDraftRefused:true,pointedRefusedByReadOnly:picture==='parts',scalarOnly:true,words:expected,actPath:join(out,'one-screen.json')};cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('715_CASE_PASS '+kind+' '+picture+' '+language);
@@ -188,7 +188,7 @@ try{
     !!document.querySelector('${form} fieldset:not(:disabled)')&&!!document.querySelector('#job-record-asks ${checkpointForm} fieldset:not(:disabled)')&&
     ['${questionTrigger}','${recordTrigger}'].every(selector=>{const button=document.querySelector(selector);return button&&!button.hidden&&!button.disabled;})&&Boolean(${visiblePainting})`,'mixed Question and text triggers ready');
    assert.equal(await page.evaluate<boolean>(`!!document.querySelector('dialog[open]')`),false,'neither ask auto-opens a dialog');
-   const firstPainting=await page.evaluate<string>(visiblePainting);
+   const firstPainting:string=await page.evaluate(visiblePainting);
    await shot(out,'question');
    await click(page,awayTab);
    await wait(`document.querySelector('${awayTab}')?.getAttribute('aria-selected')==='true'&&document.querySelector('#workspace-interview-answer').hidden`,'different bottom tab selected');
@@ -222,7 +222,7 @@ try{
    await assertTextOnlyDialog();
    await click(page,`#job-record-asks ${checkpointForm} button[data-job-text="Pass"]`);
    const catalog=language==='en'?enCatalog:koCatalog;
-   await waitForRecordSaved(catalog['Answer saved'],'remaining checkpoint saved and its drawer removed');
+   await waitForRecordSaved(language==='en'?'Answer saved':catalog['Answer saved'],'remaining checkpoint saved and its drawer removed');
    assert.equal(await page.evaluate<boolean>(`!!document.querySelector(${JSON.stringify(selectedQuestion)})&&!!document.querySelector('${form}[data-interview-answered=true]')`),true);
    assert.equal(await page.evaluate<string>(visiblePainting),firstPainting);
    await shot(out,'question-saved');

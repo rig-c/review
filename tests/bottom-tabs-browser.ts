@@ -442,7 +442,7 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
     const catalog=lang==='en'?enCatalog:koCatalog;
     assert.equal(await page.evaluate<string>(`document.querySelector('[data-block-target=question][aria-selected=true]').textContent`),catalog['Question']);
     if(kind==='interview-standalone'){
-     const panel=await page.evaluate<{left:number;top:number;right:number;bottom:number;width:number;height:number}>(`document.querySelector('#workspace-interview-answer').getBoundingClientRect().toJSON()`);
+     const panel:{left:number;top:number;right:number;bottom:number;width:number;height:number}=await page.evaluate(`document.querySelector('#workspace-interview-answer').getBoundingClientRect().toJSON()`);
      assert.ok(panel.width>0&&panel.height>0&&panel.left>=0&&panel.top>=0&&panel.right<=width&&panel.bottom<=height);
      assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-pending-ask').textContent`),catalog['Answer…']);
     }

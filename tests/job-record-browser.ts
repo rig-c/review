@@ -221,6 +221,7 @@ const argument = (key: string) => {
 const language = argument('--lang') ?? 'en';
 assert.ok(language === 'en' || language === 'ko');
 const catalog = language === 'ko' ? koCatalog : enCatalog;
+const answeredLabel = language === 'ko' ? koCatalog['Answer saved'] : 'Answer saved';
 const output = argument('--out') ?? `evidence/job-record-${language}`;
 await mkdir(output, { recursive: true });
 
@@ -360,7 +361,7 @@ async function submitForm(askId: string, kind: 'record' | 'checkpoint' | 'interv
   await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   await click(page!,submitSelector);
   if (kind !== 'interview') {
-    await wait(`(()=>{const state=document.getElementById('dirty');return state?.textContent===${JSON.stringify(catalog['Answer saved'])}&&state.dataset.saveState==='saved';})()&&
+    await wait(`(()=>{const state=document.getElementById('dirty');return state?.textContent===${JSON.stringify(answeredLabel)}&&state.dataset.saveState==='saved';})()&&
       !document.querySelector(${JSON.stringify(selector)})`, `submitted form ${askId} was pruned and Answer saved is shown`);
     return page!.evaluate<{statusText: string; statusKey: string | null}>(`(()=>{
       const state=document.getElementById('dirty');return {statusText:state.textContent,statusKey:state.dataset.saveState??null};
@@ -765,12 +766,12 @@ try {
   assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"],input[name="note"]').length`),0);
   const cpSubmitStatus = await submitForm(cpAsk.askId,'checkpoint');
   assert.equal(cpSubmitStatus.statusKey, 'saved');
-  assert.equal(cpSubmitStatus.statusText, catalog['Answer saved']);
+  assert.equal(cpSubmitStatus.statusText, answeredLabel);
 
   const signoffWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
   const signoffSubmitStatus = await submitForm(signoffAsk.askId);
   assert.equal(signoffSubmitStatus.statusKey, 'saved');
-  assert.equal(signoffSubmitStatus.statusText, catalog['Answer saved']);
+  assert.equal(signoffSubmitStatus.statusText, answeredLabel);
 
   const reopenVerbatimWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
   await openPendingAsk(page);
@@ -827,7 +828,7 @@ try {
 
   const reopenSubmitStatus = await submitForm(reopenAsk.askId);
   assert.equal(reopenSubmitStatus.statusKey, 'saved');
-  assert.equal(reopenSubmitStatus.statusText, catalog['Answer saved']);
+  assert.equal(reopenSubmitStatus.statusText, answeredLabel);
   await wait(`!document.querySelector('#job-record-asks')`,'drawer removed after the final record act');
 
   await writeFile(join(output, `record-plan-${language}.png`), await page.screenshot());

@@ -1438,8 +1438,9 @@ export interface JobFormDependencies {
             }
             interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:true,
                 images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered'});
-            const offLanguage=onLanguageChange(interviewForm.localize);
-            disposeInterview=()=>{offLanguage();interviewForm.dispose();};read=interviewForm.read;
+            const {localize,dispose,read:readInterview}=interviewForm;
+            const offLanguage=onLanguageChange(localize);
+            disposeInterview=()=>{offLanguage();dispose();};read=readInterview;
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {

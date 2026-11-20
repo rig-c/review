@@ -82,7 +82,7 @@ try {
       await page.goto('about:blank');
       await page.goto(url.href);
       await waitForQuestion(formSelector, 'bar1 pictureless Question ' + language);
-      const pictureless = await page.evaluate<{empty: string; images: number; imageModes: number}>(`({
+      const pictureless: {empty: string; images: number; imageModes: number} = await page.evaluate(`({
         empty: document.querySelector('#rig-empty').textContent,
         images: document.querySelectorAll('#reference-content img').length,
         imageModes: document.querySelectorAll('#view-menu [data-view^="interview-image-"]').length,
@@ -261,12 +261,12 @@ try {
         return image?.complete && image.naturalWidth===2 && image.getBoundingClientRect().width>0 ? image.currentSrc : '';
       })()`;
       await wait(`Boolean(${visiblePainting})`, 'bar3 main painting before save ' + language);
-      const paintingBeforeSave = await page.evaluate<string>(visiblePainting);
+      const paintingBeforeSave: string = await page.evaluate(visiblePainting);
       await page.evaluate<void>(`document.querySelector('${selector} button[type="submit"]').scrollIntoView({block: 'center'})`);
       await click(page, `${selector} button[type="submit"]`);
       await wait(`document.querySelector('${selector} > [role="status"]')?.textContent===${JSON.stringify(catalog['job.saved'])}`, 'bar3 saved ' + language);
       await waitForQuestion(formSelector, 'bar3 Question stays selected after save ' + language, false);
-      const paintingAfterSave = await page.evaluate<string>(visiblePainting);
+      const paintingAfterSave: string = await page.evaluate(visiblePainting);
       assert.equal(paintingAfterSave, paintingBeforeSave, 'saving keeps the shared painting visible');
 
       const savedAct = parseRecordAct(JSON.parse(await readFile(join(noteOut, 'one-screen.json'), 'utf8')));
@@ -369,7 +369,7 @@ try {
 
     // 4. Bar 4: non-editable question shows disabled state with no textarea, and note as pre when present (and nothing when empty)
     const f4 = await interviewOpenFixture(2);
-    let server4: Awaited<ReturnType<typeof startServer>> | undefined;
+    let server4: {port?: number; stop(closeActiveConnections?: boolean): void} | undefined;
     let bar4: Record<string, unknown> = {};
     try {
       const project = f4.project as any;

@@ -84,7 +84,7 @@ try{
   await wait(`document.body.dataset.ready==='true'&&!!document.querySelector(${JSON.stringify(selectedTab)})&&!!document.querySelector('${questionPanel}:not([hidden]) form.interview-answer')`);
   await wait(`${visibleImage}===32`);
   if(height===360)await wait(`!!document.querySelector('#workspace-drawer-inspectorHeight[open] ${questionPanel}')`);
-  const state=await page.evaluate<JoinedScreen>(`(()=>{
+  const state:JoinedScreen=await page.evaluate(`(()=>{
    const panel=document.querySelector('${questionPanel}'),form=panel.querySelector('form.interview-answer');
    const drawer=document.querySelector('#workspace-drawer-inspectorHeight'),box=(drawer.open?drawer:panel).getBoundingClientRect();
    const askTrigger=id=>{
@@ -131,9 +131,9 @@ try{
   assert.ok(state.rect.left>=0&&state.rect.top>=0&&state.rect.right<=1600&&state.rect.bottom<=height);
   const prefix=language+(height===360?'-short':'');
   await writeFile(join(out,prefix+'-interview.png'),await page.screenshot());
-  const firstImage=await page.evaluate<string>(`document.querySelector('#reference-content img').currentSrc`);
+  const firstImage:string=await page.evaluate(`document.querySelector('#reference-content img').currentSrc`);
   await switchImage(1,48);
-  const secondImage=await page.evaluate<string>(`document.querySelector('#reference-content img').currentSrc`);
+  const secondImage:string=await page.evaluate(`document.querySelector('#reference-content img').currentSrc`);
   assert.ok(new URL(firstImage).pathname.endsWith('/api/interview/image/'+question.ref.sha256+'/0'));
   assert.ok(new URL(secondImage).pathname.endsWith('/api/interview/image/'+question.ref.sha256+'/1'));
   if(height===360)assert.equal(await page.evaluate<boolean>(`!!document.querySelector('#workspace-drawer-inspectorHeight[open]:not(:modal)')`),true);
