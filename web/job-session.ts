@@ -1525,8 +1525,8 @@ export interface JobFormDependencies {
                     }) =>
                         subject.kind === 'interview-picks' ? item.value?.questionId === subject.questionId :
                         subject.kind === 'checkpoint' ? item.value?.checkpointId === subject.checkpointId :
-                        (subject.kind === 'signoff' || subject.kind === 'reopen') && item.value?.stage === subject.stage &&
-                            !('outcome' in (item.value ?? {})) && (subject.kind === 'signoff') === ('decision' in (item.value ?? {}))
+                        subject.kind === 'signoff' && item.value?.stage === subject.stage &&
+                            !('outcome' in (item.value ?? {})) && 'decision' in (item.value ?? {})
                     )
                     : undefined);
                 if(commentOnly&&typeof original?.value?.words==='string'&&original.value.words.length<=10000)retainedCommentWords=original.value.words;
