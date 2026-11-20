@@ -1160,7 +1160,7 @@ export type OptionSource = RecordSourceBase & {
   readonly plan: null;
   readonly subjects: readonly RecordPicksSubject[];
   /** #1004: present only when the publication carries 2–64 sets; row i binds `selection.sets[i]`.
-   * The singular `optionSet`/`optionSetFile` keep naming the first set. */
+   * On a publication the singular `selection`/`optionSet`/`optionSetFile` name the first set; on an act they name the act's set. */
   readonly optionSets?: readonly RecordOptionSetBinding[];
 };
 

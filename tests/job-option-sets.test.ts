@@ -13,6 +13,8 @@ import {
 // Review #1004: one option-set publication carries 1..K sets, each ask binds its own set and an act for one set
 // leaves the other asks pending. Review-side synthetic reader only; no installed Create conformance claim.
 
+type RecordActOf = { value: { questionId: string }; source: Extract<PublicationV3['source'], { subject: 'option-set' }> };
+
 async function setsFixture(prefix: string, build: (root: string) => SyntheticOptionWorkspace,
   context?: (workspace: SyntheticOptionWorkspace) => OptionContext) {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), prefix));
@@ -24,8 +26,8 @@ async function setsFixture(prefix: string, build: (root: string) => SyntheticOpt
     reviewer: { id: 'synthetic-owner', role: 'owner' }, publicationMode: 'record-and-package', readRecordPublished: reader.reader });
   const origin = 'http://127.0.0.1:19004', ports = createJobHostPorts(session, origin), credentials = session.hostCredentials();
   let sequence = 0;
-  const call = async (body: object) => (await ports.handleJobApi(new Request(origin + `/jobs/${session.jobId}/api`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + credentials.agent },
+  const call = async (body: object, token = credentials.agent) => (await ports.handleJobApi(new Request(origin + `/jobs/${session.jobId}/api`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
     body: JSON.stringify({ schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'request-' + (++sequence), ...body }),
   }))).json();
   const publish = (result: object = workspace.result, idempotencyKey = 'publish') => call({ verb: 'publish',
@@ -92,8 +94,31 @@ test('#1004 K = 4 publishes four questions; two acts leave two asks pending, two
     expect(replay.ok).toBe(true);
 
     // Answer the other two later: two more acts, nothing pending.
-    for (const ask of [asks[1]!, asks[3]!]) expect((await fixture.answer(publication, ask)).ok).toBe(true);
+    const later = [await fixture.answer(publication, asks[1]!), await fixture.answer(publication, asks[3]!)];
+    for (const act of later) expect(act.ok).toBe(true);
     expect(fixture.session.status().pending).toEqual([]);
+
+    // Each of the four acts names its own set; subjects, optionSets and sourceHash stay the publication's.
+    const acts = [first[0], later[0], first[1], later[1]].map(act => act!.ok ? act!.value as unknown as RecordActOf : null);
+    for (const [index, act] of acts.entries()) {
+      const row = source.optionSets![index]!;
+      expect(act!.value.questionId).toBe(row.questionId);
+      expect(act!.source.selection).toEqual({ kind: 'option-set', questionId: row.questionId, setId: row.setId, sets: source.selection.sets });
+      expect(act!.source.optionSet).toEqual(row.optionSet);
+      expect(act!.source.optionSetFile).toEqual(row.optionSetFile);
+      expect(act!.source.optionSets).toEqual(source.optionSets);
+      expect(act!.source.subjects).toEqual(source.subjects);
+      expect(act!.source.sourceHash).toBe(source.sourceHash);
+      // Re-derivation: put set 0 back into the singular fields and the publication source returns.
+      expect({ ...act!.source, selection: source.selection, optionSet: source.optionSet, optionSetFile: source.optionSetFile }).toEqual(source);
+      expect(parseRecordAct(act)).toEqual(act as never);
+    }
+    expect(new Set(acts.map(act => act!.source.optionSet.id)).size).toBe(4);
+    // The consumer's read (fetch-act) returns the same per-set act.
+    const fetched = await fixture.call({ verb: 'fetch-act', actId: (acts[3] as unknown as { actId: string }).actId },
+      fixture.session.writerGrant().fetchCapability);
+    expect(fetched.ok).toBe(true);
+    expect(fetched.value).toEqual(acts[3]);
   } finally { await fixture.dispose(); }
 });
 
@@ -145,5 +170,37 @@ test('#1004 K = 1 keeps the source bytes recorded on main 199b43a (control)', as
     expect(publication.source.sourceHash).toBe('85a7e3edab3021115972d4fee6a48351c8177c51a9e107797f906ebb419663bd');
     expect(Object.keys(publication.source)).not.toContain('optionSets');
     expect((publication.source as { selection: object }).selection).toEqual({ kind: 'option-set', questionId: 'rig_type', setId: 'set_rig_type_01' });
+  } finally { await fixture.dispose(); }
+});
+
+test('#1004 an act whose set fields disagree is refused by name (JOB_ACT_INVALID)', async () => {
+  const fixture = await setsFixture('review-1004-act-', root => createSyntheticOptionSetsRecordWorkspace(root, { count: 4 }));
+  try {
+    const publication = (await fixture.publish()).value as PublicationV3;
+    const subjects = (publication.source as { subjects: readonly RecordSubject[] }).subjects;
+    const { asks } = (await fixture.call({ verb: 'ask-batch', expectedGeneration: fixture.session.status().generation,
+      idempotencyKey: 'batch', publicationId: publication.publicationId, subjects })).value as { asks: PendingAskV3[] };
+    const answered = await fixture.answer(publication, asks[2]!);
+    if (!answered.ok) throw new Error(answered.error.code);
+    const act = answered.value as unknown as RecordActOf & Record<string, unknown>;
+    const other = act.source.optionSets![1]!;
+    const refused = (mutate: (copy: typeof act) => void) => {
+      const copy = structuredClone(act); mutate(copy);
+      try { parseRecordAct(copy); return null; } catch (error) { return { code: (error as { code?: string }).code, message: (error as Error).message }; }
+    };
+    expect(refused(copy => { (copy.source as { optionSet: object }).optionSet = other.optionSet; }))
+      .toEqual({ code: 'JOB_ACT_INVALID', message: 'act optionSet does not name set constraints/rig-constraints-01' });
+    expect(refused(copy => { (copy.source as { optionSetFile: object }).optionSetFile = other.optionSetFile; }))
+      .toEqual({ code: 'JOB_ACT_INVALID', message: 'act optionSetFile is not the file of set constraints/rig-constraints-01' });
+    expect(refused(copy => { copy.value.questionId = 'meshes'; }))
+      .toEqual({ code: 'JOB_ACT_INVALID', message: 'value.questionId meshes is not the act set constraints/rig-constraints-01' });
+    // The pre-#1004 encoding (singular fields on set 0) for a set-3 answer also disagrees, so it refuses.
+    const first = act.source.optionSets![0]!;
+    expect(refused(copy => { Object.assign(copy.source, { selection: { ...copy.source.selection, questionId: first.questionId, setId: first.setId },
+      optionSet: first.optionSet, optionSetFile: first.optionSetFile }); }))
+      .toEqual({ code: 'JOB_ACT_INVALID', message: 'value.questionId constraints is not the act set bones/rig-bones-01' });
+    expect(refused(copy => { (copy.source.selection as { setId: string }).setId = 'rig-nowhere-01'; }))
+      .toEqual({ code: 'JOB_ACT_INVALID', message: 'act set constraints/rig-nowhere-01 is not published' });
+    expect(refused(() => {})).toBeNull();
   } finally { await fixture.dispose(); }
 });

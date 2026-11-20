@@ -1192,6 +1192,52 @@ function parseActWords(value: unknown, code: JobErrorCode): string {
   return value;
 }
 
+/** #1004: an act's source names that act's own set. At K >= 2 the singular `selection` (`questionId`/`setId`, with
+ * `sets` kept), `optionSet` and `optionSetFile` are re-pointed to the act's `optionSets` row; `subjects`, `optionSets`
+ * and `sourceHash` stay the publication's. One set is returned unchanged. */
+export function recordActSource(source: RecordSource, set: RecordOptionSetRef): RecordSource {
+  if (source.subject !== 'option-set' || !source.optionSets) return source;
+  const row = source.optionSets.find(item => item.questionId === set.questionId && item.setId === set.setId);
+  if (!row) throw new JobError('JOB_ACT_INVALID', `act set ${set.questionId}/${set.setId} is not published`);
+  return {
+    ...source,
+    selection: { kind: 'option-set', questionId: row.questionId, setId: row.setId, sets: source.selection.sets! },
+    optionSet: { id: row.optionSet.id, sha256: row.optionSet.sha256 },
+    optionSetFile: { path: row.optionSetFile.path, sha256: row.optionSetFile.sha256 },
+  };
+}
+
+/** The inverse for a received act at K >= 2: check that the per-act singular fields agree with the act's own
+ * `optionSets` row, then put set 0 back so the publication source (and its `sourceHash`) can be re-derived. */
+function publicationFormOfActSource(raw: unknown): { readonly raw: unknown; readonly set?: RecordOptionSetRef } {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { raw };
+  const item = raw as Record<string, unknown>;
+  const selection = item.selection as Record<string, unknown> | null | undefined;
+  const rows = item.optionSets;
+  if (item.subject !== 'option-set' || !Array.isArray(rows) || rows.length < 2 || !selection || typeof selection !== 'object' ||
+      typeof selection.questionId !== 'string' || typeof selection.setId !== 'string') return { raw };
+  const set = { questionId: selection.questionId, setId: selection.setId };
+  const named = `${set.questionId}/${set.setId}`;
+  const row = rows.find(entry => entry && typeof entry === 'object' &&
+    (entry as RecordOptionSetBinding).questionId === set.questionId && (entry as RecordOptionSetBinding).setId === set.setId) as
+    RecordOptionSetBinding | undefined;
+  if (!row) throw new JobError('JOB_ACT_INVALID', `act set ${named} is not published`);
+  const optionSet = item.optionSet as { id?: unknown; sha256?: unknown } | null;
+  const file = item.optionSetFile as { path?: unknown; sha256?: unknown } | null;
+  if (!optionSet || optionSet.id !== set.setId || optionSet.sha256 !== row.optionSet?.sha256) {
+    throw new JobError('JOB_ACT_INVALID', `act optionSet does not name set ${named}`);
+  }
+  if (!file || file.path !== row.optionSetFile?.path || file.sha256 !== row.optionSetFile?.sha256) {
+    throw new JobError('JOB_ACT_INVALID', `act optionSetFile is not the file of set ${named}`);
+  }
+  const first = rows[0] as RecordOptionSetBinding;
+  return {
+    set,
+    raw: { ...item, selection: { ...selection, questionId: first.questionId, setId: first.setId },
+      optionSet: first.optionSet, optionSetFile: first.optionSetFile },
+  };
+}
+
 export function parseRecordAct(value: unknown): RecordAct {
   const item = exactObject(
     value,
@@ -1206,13 +1252,18 @@ export function parseRecordAct(value: unknown): RecordAct {
   const authority = parseHumanAuthority(item.authority, 'JOB_ACT_INVALID');
   const at = asCode(() => jobText(item.at, 128), 'JOB_ACT_INVALID');
   if (Number.isNaN(Date.parse(at))) throw new JobError('JOB_ACT_INVALID');
-  const source = asCode(() => parseRecordSource(item.source), 'JOB_ACT_INVALID');
+  const received = publicationFormOfActSource(item.source);
+  const published = asCode(() => parseRecordSource(received.raw), 'JOB_ACT_INVALID');
+  const source = received.set ? recordActSource(published, received.set) : published;
 
   switch (item.kind) {
     case 'interview-picks': {
       if (source.subject !== 'option-set') throw new JobError('JOB_ACT_INVALID');
       const rawValue = exactObject(item.value, ['questionId', 'selections', 'note'], 'JOB_ACT_INVALID');
       const questionId = asCode(() => jobId(rawValue.questionId), 'JOB_ACT_INVALID');
+      if (received.set && questionId !== received.set.questionId) {
+        throw new JobError('JOB_ACT_INVALID', `value.questionId ${questionId} is not the act set ${received.set.questionId}/${received.set.setId}`);
+      }
       if (!optionSetRefs(source.selection).some(set => set.questionId === questionId) || !Array.isArray(rawValue.selections) ||
           rawValue.selections.length > maxRecordFiles) {
         throw new JobError('JOB_ACT_INVALID');

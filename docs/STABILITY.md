@@ -828,8 +828,11 @@ and `sourceHash` are unchanged. `JOB_ERROR_CODES` gains
 `JOB_OPTION_SET_DUPLICATE`, refused on publish when the reader declares two
 subjects for one set or `sets` names a set twice. Each ask binds one set, the
 asks of one publication stay pending together, and each answer finalizes one
-`interview-picks` act (`rig-review/act@4`, unchanged). No runtime or type export
-is added. See the [option-set contract](REVIEW_PACKAGE.md#option-sets).
+`interview-picks` act (`rig-review/act@4`). At K ≥ 2 that act's `selection`
+(`questionId`, `setId`), `optionSet` and `optionSetFile` name the act's own set,
+while `subjects`, `optionSets` and `sourceHash` stay the publication's; an act
+whose per-act fields disagree refuses `JOB_ACT_INVALID` by name. One set's act
+bytes are unchanged. No runtime or type export is added. See the [option-set contract](REVIEW_PACKAGE.md#option-sets).
 
 ## Package manifest `frames` declaration
 

@@ -9,7 +9,7 @@ import {
 import { parsePartsIssue, type PartsIssue } from './parts-comment.ts';
 import {
   isRecordSource, jobHash, jobId, jobInteger, jobObject,
-  commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
+  commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, recordActSource, requestDigest, validateRecordAskSubject,
 } from './job-api.ts';
 import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueComments } from './feedback-export.ts';
 import { hasStageComment, parseStageComment } from './stage-comment.ts';
@@ -424,7 +424,8 @@ export function prepareJobRecordAct(options: {
       return parseRecordAct({
         ...envelope,
         kind: 'interview-picks',
-        source: boundSource,
+        // #1004: the act's singular set fields name this ask's set.
+        source: recordActSource(boundSource, askSubject),
         value: { questionId: askSubject.questionId, selections, note },
       });
     }
