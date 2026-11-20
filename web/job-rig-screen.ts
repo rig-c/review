@@ -164,8 +164,9 @@ export function createJobRigScreen(options: {
         }
         if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
         const questionMainView = !!picture || !!inspection.interview?.questions.some(question => question.scenePicture);
-        const forms = prepareJobForms(display, options.window.state().pending, ask => formFor(ask, inspection, {...options.formDependencies!,interviewMainView:questionMainView}),questionMainView);
-        return {jobRigScreen:true,display,entry,checkpoints:new Set(),record:{inspection,forms,picture}};
+        const checkpoints = new Set<string>();
+        const forms = prepareJobForms(display, options.window.state().pending.filter(ask => jobRigScreenAsk(display, ask, checkpoints)), ask => formFor(ask, inspection, {...options.formDependencies!,interviewMainView:questionMainView}),questionMainView);
+        return {jobRigScreen:true,display,entry,checkpoints,record:{inspection,forms,picture}};
       } catch(error) {inspection.dispose();throw error;}
     }
     if (!jobRigScreenSubject(source)) {

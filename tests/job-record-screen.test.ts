@@ -86,6 +86,38 @@ test('#750 no picture, receipt rearm, new ask, dirty form identity and closed su
  }finally{await h.close();}
 });
 
+test('#989 a publication resumed with a historical pending reopen ask plus a signoff ask loads, shows only the signoff form and submits it',async()=>{
+ const h=await harness();try{
+  const signoffAsk:PendingAskV3={...h.f.ask,askId:'ask-signoff',subject:{kind:'signoff',stage:'plan-approved'}};
+  const reopenAsk:PendingAskV3={...h.f.ask,askId:'ask-reopen',subject:{kind:'reopen',stage:'plan-approved'}};
+  h.state.pending=[reopenAsk,signoffAsk];
+  let mountedForms:readonly HTMLElement[]=[];
+  h.options.load=async()=>{rigHost()!.attach({stage:()=>null,redraw(){},message(){},recordForms(forms){mountedForms=forms;}});rigHost()!.displayed();};
+  const ready=await h.screen.prepare(h.f.display,new AbortController().signal);
+  expect([...ready!.record!.forms.keys()]).toEqual(['ask-signoff']);
+  h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
+  h.state.receipt={publicationId:signoffAsk.publicationId,pageId:h.deps.pageId,displayedNonce:'resumed-nonce'};
+  h.screen.changed(h.state);
+  expect(ready!.record!.forms.size).toBe(1);
+  expect(ready!.record!.forms.has('ask-reopen')).toBe(false);
+  expect(mountedForms).toHaveLength(1);
+  const entry=ready!.record!.forms.get('ask-signoff')!;
+  expect(entry.fieldset.disabled).toBe(false);
+  entry.form.commentWords=()=>'[general]\nsignoff on resumed job';
+  await entry.form.onsubmit!({preventDefault(){}} as never);
+  expect(h.submitted).toEqual([{
+   kind:'signoff',
+   publicationId:signoffAsk.publicationId,
+   askId:'ask-signoff',
+   pageId:h.deps.pageId,
+   displayedNonce:'resumed-nonce',
+   expectedGeneration:h.state.generation,
+   submissionId:entry.submissionId,
+   value:{stage:'plan-approved',decision:'approved',words:'[general]\nsignoff on resumed job'},
+  }]);
+ }finally{await h.close();}
+});
+
 test('#750 record metadata mismatch refuses',async()=>{
  const h=await harness(),original=globalThis.fetch;try{
   globalThis.fetch=(async(input,init)=>{const response=await original(input,init);if(String(input).endsWith('/api/review')){const body=await response.json();body.sourceHash='f'.repeat(64);return Response.json(body);}return response;}) as typeof fetch;
