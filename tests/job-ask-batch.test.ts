@@ -231,3 +231,22 @@ test('#963 a package-retained head refuses ask-batch with JOB_REQUEST_INVALID an
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test('#1021 a replayed batch whose asks were superseded refuses by index and names the head', async () => {
+  const fixture = await batchFixture('review-ask-batch-superseded-');
+  try {
+    const subjects = fixture.workspace.context.subjects.slice(0, 2);
+    const generation = fixture.session.status().generation;
+    const first = await fixture.batch(subjects, 'superseded');
+    expect(first.ok).toBe(true);
+    const republished = await fixture.call({ verb: 'publish', expectedGeneration: fixture.session.status().generation, idempotencyKey: 'publish-again',
+      result: fixture.workspace.result, freeze: { kind: 'producer-held', holdId: 'synthetic', record: fixture.workspace.record } });
+    expect(republished.ok).toBe(true);
+    const before = fixture.snapshot();
+    const replayed = await fixture.call({ verb: 'ask-batch', expectedGeneration: generation, idempotencyKey: 'superseded',
+      publicationId: fixture.publicationId, subjects });
+    expect(replayed).toMatchObject({ ok: false, error: { code: 'JOB_ASK_SUPERSEDED',
+      message: `subjects[0]: ask ${first.value.asks[0].askId} is superseded; head ${republished.value.publicationId}` } });
+    expect(fixture.snapshot()).toEqual(before);
+  } finally { await fixture.dispose(); }
+});
