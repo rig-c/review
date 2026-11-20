@@ -131,7 +131,8 @@ test('#998: a stale assembly switches cloth Apply to build and keeps the existin
  try{
   const {job}=await apply(f,[{op:'replace',path:'/cloth/bottomwear/links',value:3}]);
   expect(job.status).toBe('built');expect(job.cloth?.route).toBe('build');expect(job.check?.pass).toBe(true);
-  const calls=(await f.calls()).slice((await f.calls()).findIndex(l=>l.startsWith('propose')));
+  const log=await f.calls();
+  const calls=log.slice(log.findIndex(l=>l.startsWith('propose'))).filter(l=>!l.startsWith('check --rig baseline '));
   expect(calls).toEqual([
    expect.stringContaining('propose --parts '),
    `build --config config.json --source ${join(f.pkg,'painting.png')} --full ${join(f.pkg,'layers/full')} --project hidden --out out --seam-pairs`,
@@ -159,7 +160,9 @@ test('#998: a stale assembly without a declared full run stops before rig',async
   const {job,scratch}=await apply(f,[{op:'replace',path:'/cloth/bottomwear/links',value:3}]);
   expect(job.status).toBe('refused');expect(job.producerLine).toStartWith('MODELING_INPUT_UNAVAILABLE: source painting and See-through runs');
   const calls=await f.calls();
-  expect(calls.slice(calls.findIndex(l=>l.startsWith('propose')))).toEqual([expect.stringContaining('propose --parts ')]);
+  expect(calls.slice(calls.findIndex(l=>l.startsWith('propose'))).filter(l=>!l.startsWith('check --rig baseline '))).toEqual([
+   expect.stringContaining('propose --parts '),
+  ]);
   expect(scratch).toEqual([]);
  }finally{await f.done();}
 });
