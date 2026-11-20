@@ -7,8 +7,8 @@ import {randomUUID} from 'node:crypto';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, type JobNextValue, type JobPendingAsk} from '../src/job-contract.ts';
-import {parseCommentsAct} from '../src/job-api.ts';
+import {JOB_API_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, type JobNextValue, type JobPendingAsk} from '../src/job-contract.ts';
+import {parseCommentsAct, parseContextCommentsAct} from '../src/job-api.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
 import type {LocalInspectionDraft} from '../web/inspection-persistence.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -299,10 +299,11 @@ async function run(lang: 'en' | 'ko') {
     const event = acts[0]!;
     assert.ok(event.type === 'act' && event.act.kind === 'review-verdict');
     await writeFile(join(out, 'recorded-act.json'), JSON.stringify(event.act, null, 2) + '\n');
-    const act = parseCommentsAct(event.act);
+    // A pinned comment carries its view context, which the act records as act@7.
+    const act = pinComment ? parseContextCommentsAct(event.act) : parseCommentsAct(event.act);
     assert.ok(act.kind === 'review-verdict');
     assert.ok(act.still);
-    assert.equal(act.schema, JOB_COMMENTS_ACT_SCHEMA);
+    assert.equal(act.schema, pinComment ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA);
     assert.equal(act.publicationId, publication.publicationId);
     assert.equal(act.source.sourceHash, publication.source.sourceHash);
     assert.equal(act.authority.actor, 'human');
