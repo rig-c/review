@@ -3524,6 +3524,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.submit.JOB_STILL_UNAVAILABLE": "보존된 리그 이미지를 사용할 수 없어요 — 현재 리그 리뷰를 다시 열고 제출해 주세요.",
   "job.submit.JOB_STILL_OUTPUT_FAILED": "리그 이미지를 저장하지 못했어요 — 호스트 담당자에게 출력 위치 확인을 요청해 주세요.",
   "Review was not submitted: {0}": "리뷰가 제출되지 않았어요: {0}",
+  "JOB_CAPABILITY_LINK_LOST": "이 페이지가 접근 링크를 잃었어요. 처음 받은 링크를 다시 열어 주세요.",
   "JOB_CAPABILITY_REQUIRED": "이 페이지의 접근 권한이 만료됐어요. 에이전트에게 작업을 다시 열어 달라고 요청해 주세요.",
   "JOB_CLOSED": "JOB_CLOSED",
   "JOB_CURSOR_INVALID": "JOB_CURSOR_INVALID",
