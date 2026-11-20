@@ -59,6 +59,7 @@ import {createHash} from 'node:crypto';
 import {
  startJobHost, JOB_CAPABILITIES, JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_PREVIOUS_DRAFT_SCHEMA, JOB_ENABLED_ACT_KINDS,
  JOB_RESERVED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_CONSUMER_AUTH_MODE, JOB_ERROR_CODES,
+ JOB_CHEST_LANDMARKS_ACT_SCHEMA, parseChestLandmarksAct, parseMeshEditsAct,
  type JobHostOptions, type JobOwnerHost, type JobSessionOptions, type JobSession, type JobWorkerOptions,
  type JobHostListenerIncarnation, type JobHostReuseBinding, type JobHostReuseExpectation, type JobHostAttachField, type JobHostAttachFailure,
  type JobPublicationReader, type JobPublishedContext, type JobCapabilities,
@@ -86,6 +87,7 @@ import {
  type JobCommentsAct, type JobCommentsActValues, type ReviewCommentsSession, type CompareCommentsSession, type PartsCommentsVerdict,
  type JobCommentContext, type JobContextComment, type JobContextCommentsAct,
  type JobMeshEditValue, type JobMeshEdit, type JobMeshEditsAct,
+ type JobChestLandmarkValue, type JobPublishedChestLandmark, type JobChestLandmarkEdit, type JobChestLandmarksAct,
 } from '@rig-c/review/job-host';
 import * as publicHost from '@rig-c/review/job-host';
 
@@ -112,6 +114,7 @@ export type PublicTypes = [
  JobCommentsAct, JobCommentsActValues, ReviewCommentsSession, CompareCommentsSession, PartsCommentsVerdict,
  JobCommentContext, JobContextComment, JobContextCommentsAct,
  JobMeshEditValue, JobMeshEdit, JobMeshEditsAct,
+ JobChestLandmarkValue, JobPublishedChestLandmark, JobChestLandmarkEdit, JobChestLandmarksAct,
 ];
 // Review #713: JobAct admits fresh act@6 comments acts from the UI writers.
 export type JobActAdmitsComments = JobCommentsAct extends JobAct ? true : never;
@@ -131,7 +134,7 @@ const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', '
  'PARTS_COMMENTS_VERDICT_SCHEMA', 'parseCommentsAct', 'projectComments', 'parseCommentsSession',
  'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'projectSelectedCommentsFeedback',
  'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
- 'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct'];
+ 'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct', 'JOB_CHEST_LANDMARKS_ACT_SCHEMA', 'parseChestLandmarksAct'];
 assert(JSON.stringify(Object.keys(publicHost).sort()) === JSON.stringify(expectedExports.sort()), 'EXPORTS');
 assert(JOB_API_SCHEMA === 'rig-review/job-api@2' && JOB_ACT_SCHEMA === 'rig-review/act@2' &&
  JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <3.0.0' && JOB_PREVIOUS_DRAFT_SCHEMA === 'rig-review-previous-draft/1', 'SCHEMAS');
@@ -256,6 +259,25 @@ try {
  assert(metadata.ok && data.sourceHash === published.value.source.sourceHash, 'RETAINED_METADATA');
  const model = await fetch(host.origin + display.value.routes.assetsBase + data.manifest.model);
  assert(model.ok && (await model.text()).length > 0, 'RETAINED_MODEL');
+ assert(JOB_CHEST_LANDMARKS_ACT_SCHEMA === 'rig-review/act@9' && !published.value.chestLandmarks, 'CHEST_SCHEMA');
+ // The object keys are already in canonical order. The decoder tests the installed wire surface.
+ const edit: JobChestLandmarkValue = {attachment: 'chest', basis: 'setup',
+  bust: {apex_l: [2, 1], apex_r: [1.00390625, 1]}, skin: 'default', slot: 'chest',
+  source: {frame: {height: 2, width: 3}, hash: 'a'.repeat(64)}};
+ const chestLandmarks = [{edit, sha256: sha256(Buffer.from(JSON.stringify(edit)))}];
+ const act: JobChestLandmarksAct = {schema: JOB_CHEST_LANDMARKS_ACT_SCHEMA, kind: 'review-verdict',
+  publicationId: published.value.publicationId, jobId: base.jobId, actId: 'smoke-act', askId: 'smoke-ask',
+  at: '2026-11-20T00:00:00.000Z', authority: {actor: 'human', channel: 'review-ui',
+   reviewer: {id: 'installed-public-owner', role: 'owner'}},
+  source: {...published.value.source, selector: {kind: 'rig', version: 1}, model: published.value.source.model!},
+  value: {stage: 'rig-review', verdict: 'changes-requested', comments: [], chestLandmarks},
+  still: {sha256: 'b'.repeat(64), path: 'b'.repeat(64) + '.png', camera: 'fixed', frame: 'setup'}};
+ const decoded = parseChestLandmarksAct(JSON.parse(JSON.stringify(act)));
+ assert(JSON.stringify(decoded.value.chestLandmarks) === JSON.stringify(chestLandmarks), 'CHEST_ACT_ROUND_TRIP');
+ let legacyRefused = false;
+ try {parseMeshEditsAct(act);}
+ catch (error) {legacyRefused = error instanceof Error && error.message === 'JOB_ACT_INVALID';}
+ assert(legacyRefused, 'CHEST_ACT_REFUSED_BY_MESH_DECODER');
  const next = await call({...base, verb: 'next', requestId: 'public-next', after: null, waitMs: 0});
  assert(next.ok && next.verb === 'next' && next.value.events[0]?.type === 'published', 'NEXT');
  assert(Object.keys(JOB_CAPABILITIES).length === 0, 'CAPABILITIES');

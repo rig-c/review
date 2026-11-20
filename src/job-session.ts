@@ -1,14 +1,14 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
-  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, jobActDeliveryLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
+  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, jobActDeliveryLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
   type ActV3, type AgentRequestV3, type EventV3, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayPublicationV3, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest, type JobFetchActRequestV3,
   type JobNextValue, type JobPendingAsk, type JobPublication, type JobPublicationMode, type JobReviewerBinding,
   type JobSubject, type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
 } from './job-contract.ts';
 import { bindJobAsk, bindJobRecordAsk, finalizeJobAct, parseUISubmission, prepareJobRecordAct, prepareJobStill } from './job-act.ts';
-import { atSubject, isRecordSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
+import { atSubject, isRecordSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, parseChestLandmarksAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
   assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
   type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
@@ -84,12 +84,12 @@ function assertStoredSchemas(data: JobData): void {
 function assertStoredEvidence(data: JobData): void {
   for (const stored of Object.values(data.publications)) {
     assertStoredCheckpointEvidence(stored.retained);
-    assertStoredEvidenceCopy(stored.publication, data);
+    assertStoredEvidenceCopy(stored.publication, data, true);
   }
   for (const ask of Object.values(data.asks)) assertStoredEvidenceCopy(ask, data);
   for (const act of Object.values(data.acts)) assertStoredEvidenceCopy(act, data);
   for (const event of data.events) {
-    if (event.type === 'published') assertStoredEvidenceCopy(event.publication, data);
+    if (event.type === 'published') assertStoredEvidenceCopy(event.publication, data, true);
     if (event.type === 'pending') assertStoredEvidenceCopy(event.ask, data);
     if (event.type === 'act') assertStoredEvidenceCopy(event.act, data);
   }
@@ -97,7 +97,7 @@ function assertStoredEvidence(data: JobData): void {
     // An ask-batch receipt wraps its asks; each one is a durable copy like a single ask's receipt.
     const asks = (replay.value as {asks?: unknown} | null)?.asks;
     if (Array.isArray(asks)) for (const ask of asks) assertStoredEvidenceCopy(ask, data);
-    else assertStoredEvidenceCopy(replay.value, data);
+    else assertStoredEvidenceCopy(replay.value, data, !!replay.value && typeof replay.value === 'object' && 'instanceKey' in replay.value);
   }
 }
 
@@ -105,11 +105,23 @@ function hasStoredEvidence(source: object | undefined): boolean {
   return !!source && ('checkpointEvidence' in source || 'previousDraft' in source);
 }
 
-function assertStoredEvidenceCopy(value: unknown, data: JobData): void {
+function needsSnapshotRecheck(retained: JobRetainedSourceV3): boolean {
+  return isRetainedRecordSource(retained) || hasStoredEvidence(retained.source) || retained.chestLandmarks !== undefined;
+}
+
+function assertStoredEvidenceCopy(value: unknown, data: JobData, publication = false): void {
   if (!value || typeof value !== 'object') return;
   const copy = value as {publicationId: string; source: JobPublication['source'] | PublicationV3['source']};
   const stored = data.publications[copy.publicationId];
   const bound = stored?.retained.source;
+  const seeds = stored && !isRetainedRecordSource(stored.retained) ? stored.retained.chestLandmarks : undefined;
+  if (publication || 'chestLandmarks' in copy) {
+    if (('chestLandmarks' in copy) !== (seeds !== undefined) ||
+        ('chestLandmarks' in copy && (!publication || requestDigest(copy.chestLandmarks ?? null) !== requestDigest(seeds)))) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+  }
+  if (seeds && requestDigest(copy.source ?? null) !== requestDigest(bound)) throw new JobError('JOB_SOURCE_MISMATCH');
   if (!('source' in value) && !hasStoredEvidence(bound)) return;
   if (!copy.source || typeof copy.source !== 'object' || Array.isArray(copy.source)) throw new JobError('JOB_SOURCE_MISMATCH');
   if (!hasStoredEvidence(copy.source) && !hasStoredEvidence(bound)) return;
@@ -430,7 +442,7 @@ export class JobSession {
     if (data.head !== publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
     const retained = data.publications[publicationId].retained;
     assertJobSourceCurrent(retained);
-    if (isRetainedRecordSource(retained) || hasStoredEvidence(retained.source)) {
+    if (needsSnapshotRecheck(retained)) {
       assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals, retained.snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE');
     }
     return retained;
@@ -572,7 +584,7 @@ export class JobSession {
         switch (input.verb) {
           case 'publish': {
             assertJobSourceCurrent(candidate!);
-            if (isRetainedRecordSource(candidate!) || hasStoredEvidence(candidate!.source)) {
+            if (needsSnapshotRecheck(candidate!)) {
               assertRetainedSnapshotIntact(
                 candidate!.snapshotRoot,
                 candidate!.seals,
@@ -584,6 +596,7 @@ export class JobSession {
               publicationId: randomUUID(), instanceKey: candidate!.instanceKey, generation: data.generation,
               source: candidate!.source, label: candidate!.label, previousPublicationId: data.head, visual: candidate!.visual,
               ...(!isRetainedRecordSource(candidate!) && candidate!.interview !== undefined ? { interview: candidate!.interview } : {}),
+              ...(!isRetainedRecordSource(candidate!) && candidate!.chestLandmarks ? {chestLandmarks: candidate!.chestLandmarks} : {}),
             };
             for (const ask of Object.values(data.asks)) {
               if (ask.status === 'pending') data.asks[ask.askId] = { ...ask, status: 'superseded' };
@@ -640,6 +653,7 @@ export class JobSession {
     if (storedAct.schema === JOB_COMMENTS_ACT_SCHEMA) parseCommentsAct(storedAct);
     if (storedAct.schema === JOB_COMMENT_CONTEXT_ACT_SCHEMA) parseContextCommentsAct(storedAct);
     if (storedAct.schema === JOB_MESH_EDITS_ACT_SCHEMA) parseMeshEditsAct(storedAct);
+    if (storedAct.schema === JOB_CHEST_LANDMARKS_ACT_SCHEMA) parseChestLandmarksAct(storedAct);
     const still = 'still' in storedAct ? storedAct.still : undefined;
     const actBytes = Buffer.from(JSON.stringify(storedAct));
     if (storedAct.schema !== JOB_RIG_REVIEW_ACT_SCHEMA && !still) {
@@ -764,7 +778,7 @@ export class JobSession {
       if (!ask) throw new JobError('JOB_ASK_INVALID');
       const retained = fresh.data.publications[input.publicationId].retained;
       assertJobSourceCurrent(retained);
-      if (isRetainedRecordSource(retained) || hasStoredEvidence(retained.source) || input.kind === 'parts-verdict') {
+      if (needsSnapshotRecheck(retained) || input.kind === 'parts-verdict') {
         assertRetainedSnapshotIntact(
           retained.snapshotRoot,
           retained.seals,

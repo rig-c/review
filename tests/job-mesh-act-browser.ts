@@ -6,10 +6,14 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {PNG} from 'pngjs';
 import {canonicalJson} from '../src/canonical-json.ts';
-import {jobBodyLimit, jobHash, parseContextCommentsAct, parseMeshEditsAct} from '../src/job-api.ts';
-import {JOB_API_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, type JobResponseValues, type JobResult} from '../src/job-contract.ts';
+import type {ControlNumericCamera} from '../src/control.ts';
+import {jobBodyLimit, jobHash, parseChestLandmarksAct, parseContextCommentsAct, parseMeshEditsAct} from '../src/job-api.ts';
+import {JOB_API_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA,
+  type JobChestLandmarkValue, type JobPublishedChestLandmark, type JobResponseValues, type JobResult} from '../src/job-contract.ts';
+import type {ReviewManifest} from '../src/manifest.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
+import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
@@ -19,30 +23,71 @@ if (Bun.argv.includes('--gate')) throw new Error('--gate has been removed. This 
 const outputIndex = Bun.argv.indexOf('--out');
 const output = resolve(outputIndex < 0 ? 'artifacts/job-mesh-act-952' : Bun.argv[outputIndex + 1]!);
 
-async function createFixture(largeCapture = false) {
-  const fixture = await realJobWindowFixture();
+type BrowserMode = 'with-comment' | 'mesh-only' | 'no-mesh' | 'stale-draft' | 'chest-only' | 'chest-optional' | 'chest-readonly';
+type BrowserFixtureModel = {
+  stage: {x: number; y: number; width: number; height: number};
+  bones: {name: string; parent?: string; x?: number; y?: number}[];
+  skins: {name: string; attachments: {mesh: {mesh: {vertices: {xy: number[]}}}}}[];
+  pages: {name: string; regions: object[]}[];
+  animations: {name: string; bones: {name: string; timelines: {name: string; keys: {time: number; value: number}[]}[]}[]}[];
+};
+
+const chestPoseX = 7;
+const correctedApex: [number, number] = [49, 41];
+
+async function createFixture(mode: BrowserMode) {
+  const seededChest = mode === 'chest-only' || mode === 'chest-optional';
+  let fetchCapability: string | undefined;
+  const fixture = await realJobWindowFixture(seededChest ? {
+    installWriterBinding: binding => { fetchCapability = binding.fetchCapability; },
+  } : {});
   try {
     const path = join(fixture.input.root, 'out/skeleton.model.json');
-    const model = await Bun.file(path).json();
+    const model: BrowserFixtureModel = await Bun.file(path).json();
     // Match the editor's crop mapping without mutating the checked-in viewport fixture.
     model.stage.x = -model.stage.width / 2;
-    const bone = model.bones.find((item: {name: string}) => item.name === 'mesh');
+    const bone = model.bones.find(item => item.name === 'mesh');
+    assert.ok(bone);
     bone.y = 24;
-    const entry = model.skins.find((skin: {name: string}) => skin.name === 'default').attachments.mesh.mesh;
-    if (largeCapture) {
+    const entry = model.skins.find(skin => skin.name === 'default')?.attachments.mesh.mesh;
+    assert.ok(entry);
+    if (mode === 'mesh-only') {
       // A larger textured mesh makes the real fixed-camera still exceed 256 KiB.
       Object.assign(bone, {x: 0, y: 32});
-      entry.vertices.xy = entry.vertices.xy.map((coordinate: number) => coordinate * 2.4);
+      entry.vertices.xy = entry.vertices.xy.map(coordinate => coordinate * 2.4);
       const size = 512, png = new PNG({width: size, height: size});
       let seed = 952;
       for (let i = 0; i < png.data.length; i++) {
         seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
         png.data[i] = i % 4 === 3 ? 255 : seed & 255;
       }
-      const page = model.pages.find((row: {name: string}) => row.name === 'mesh.png');
+      const page = model.pages.find(row => row.name === 'mesh.png');
+      assert.ok(page?.regions[0]);
       Object.assign(page, {width: size, height: size});
       Object.assign(page.regions[0], {width: size, height: size, originalWidth: size, originalHeight: size});
       await writeFile(join(fixture.input.root, 'out/mesh.png'), PNG.sync.write(png));
+    }
+    const {width, height} = model.stage;
+    let chestSeed: JobPublishedChestLandmark | undefined;
+    if (seededChest) {
+      // The carrier moves with a chest bone by a known amount at the paused inspection frame.
+      model.bones.splice(model.bones.indexOf(bone), 0, {name: 'chest', parent: 'root'});
+      bone.parent = 'chest';
+      const inspect = model.animations.find(animation => animation.name === 'inspect');
+      assert.ok(inspect);
+      inspect.bones.push({name: 'chest', timelines: [{name: 'translatex', keys: [{time: 0, value: 0},
+        {time: 0.5, value: chestPoseX}, {time: 1, value: 0}]}]});
+      const bust: JobPublishedChestLandmark['bust'] = {apex_r: [50.25, 39.5], apex_l: [66.5, 39.5],
+        ...(mode === 'chest-only' ? {cleavage: [58.5, 38.25]} : {}), alpha: 0.46, clearance: 2.6};
+      const configPath = 'out/mesh-config.json';
+      const config = JSON.stringify({meshes: {mesh: {contour: {bust}}}});
+      const configHash = jobHash(config);
+      await writeFile(join(fixture.input.root, configPath), config);
+      chestSeed = {slot: 'mesh', skin: 'default', attachment: 'mesh', basis: 'setup',
+        source: {hash: jobHash(JSON.stringify(entry)), frame: {width, height}, configHash}, bust};
+      const context = fixture.input.getContext();
+      fixture.input.setContext({...context, files: [...context.files, {path: configPath, sha256: configHash}],
+        chestLandmarks: [chestSeed]});
     }
     await writeFile(path, JSON.stringify(model));
     async function askForRig() {
@@ -56,21 +101,71 @@ async function createFixture(largeCapture = false) {
       return publication;
     }
     const publication = await askForRig();
+    assert.deepEqual(publication.chestLandmarks, chestSeed ? [chestSeed] : undefined);
     const owner = (language: 'en' | 'ko') => {
       const url = new URL(fixture.host.ownerUrl);
       url.searchParams.set('lang', language);
       return url.href;
     };
-    return {...fixture, owner, entry, publication, askForRig, stage: model.stage as {width: number; height: number}};
+    return {...fixture, owner, entry, publication, askForRig, stage: model.stage, chestSeed, fetchCapability};
   } catch (error) {
     await fixture.close();
     throw error;
   }
 }
 
-async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-only' | 'no-mesh' | 'stale-draft') {
+type LandmarkFields = {
+  apex_r: [string, string]; apex_l: [string, string]; cleavage: [string, string];
+  alpha: string; clearance: string;
+};
+
+function readLandmarkFields(screen: InputCdpSession): Promise<LandmarkFields> {
+  return screen.evaluate<LandmarkFields>(`(() => {
+    const value = id => document.getElementById('lm-' + id).value;
+    const point = key => [value(key + '-x'), value(key + '-y')];
+    return {apex_r: point('apex_r'), apex_l: point('apex_l'), cleavage: point('cleavage'),
+      alpha: value('alpha'), clearance: value('clearance')};
+  })()`);
+}
+
+async function placePosedApex(screen: InputCdpSession, stage: BrowserFixtureModel['stage']) {
+  await click(screen, '[data-mode="playback"]');
+  await screen.evaluate<void>(`(() => {
+    const animation = document.querySelector('#animation-select');
+    animation.value = 'inspect';
+    animation.dispatchEvent(new Event('change', {bubbles: true}));
+    const scrub = document.querySelector('#scrub');
+    scrub.value = '0.5';
+    scrub.dispatchEvent(new Event('input', {bubbles: true}));
+  })()`);
+  await click(screen, '[data-landmark="apex_r"]');
+  const {animation, time, camera, overlay} = await screen.evaluate<{
+    animation: string; time: number; camera: ControlNumericCamera | null;
+    overlay: {left: number; top: number; width: number; height: number};
+  }>(`(() => ({animation: document.querySelector('#animation-select').value,
+    time: Number(document.querySelector('#scrub').value),
+    camera: JSON.parse(document.querySelector('#view-coordinates').textContent).cameras.rig,
+    overlay: document.querySelector('#rig-overlay').getBoundingClientRect().toJSON()}))()`);
+  assert.equal(animation, 'inspect');
+  assert.equal(time, 0.5);
+  assert.equal(camera?.space, 'world');
+  // Project the known setup point plus the fixture's independently authored pose translation.
+  const scale = camera.viewport.width / camera.visible.width;
+  const worldX = stage.x + correctedApex[0] + chestPoseX;
+  const worldY = stage.y + stage.height - correctedApex[1];
+  const x = overlay.left + camera.viewport.width / 2 + (worldX - camera.center.x) * scale;
+  const y = overlay.top + camera.viewport.height / 2 - (worldY - camera.center.y) * scale;
+  assert.ok(x > overlay.left && x < overlay.left + overlay.width && y > overlay.top && y < overlay.top + overlay.height);
+  await screen.mouse('mouseMoved', x, y);
+  await screen.mouse('mousePressed', x, y);
+  await screen.mouse('mouseReleased', x, y);
+}
+
+async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
   const largeCapture = mode === 'mesh-only';
-  const fixture = await createFixture(largeCapture);
+  const fixture = await createFixture(mode);
+  const {chestSeed} = fixture;
+  const chestCase = !!chestSeed || mode === 'chest-readonly';
   const profile = await mkdtemp(join(tmpdir(), 'review-952-chrome-'));
   const directory = join(output, language, mode);
   await mkdir(directory, {recursive: true});
@@ -121,6 +216,8 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
     await wait("!!document.querySelector('#rig-root canvas') && !!document.querySelector('#save:not([hidden]):not(:disabled)')");
     assert.equal(await screen.evaluate<string>('document.documentElement.lang'), language);
     assert.equal(await screen.evaluate<boolean>("document.querySelector('#request-changes').disabled"), true);
+    const catalog = language === 'ko' ? koCatalog : enCatalog;
+    const inputHashes = chestCase ? await jobInputHashes(fixture.input.root) : null;
     async function latestAct() {
       const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
         requestId: randomUUID(), verb: 'next', after: null, waitMs: 0});
@@ -133,7 +230,66 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
       assert.equal(raw, JSON.stringify(act));
       return {act, raw};
     }
-    if (mode === 'with-comment' || mode === 'no-mesh' || mode === 'stale-draft') {
+    async function selectCarrier() {
+      await click(screen, '[data-mode="rig"]');
+      const carrier = '[data-part-list] button[data-slot=mesh]';
+      await wait(`!!document.querySelector(${JSON.stringify(carrier)})`);
+      await click(screen, carrier);
+    }
+    if (chestCase) {
+      await selectCarrier();
+      const requestDisabled = "document.querySelector('#request-changes').disabled";
+      if (chestSeed) {
+        await wait("!!document.querySelector('#chest-edit:not([hidden]):not(:disabled)')");
+        await click(screen, '#chest-edit');
+        await wait("!!document.querySelector('#chest-editor-bar:not([hidden]) [data-bust-mode=landmarks][aria-pressed=true]')");
+        const controls = await screen.evaluate<{
+          applyDisabled: boolean; circlesDisabled: boolean; status: string; readout: string;
+        }>(`({
+          applyDisabled: document.querySelector('#bust-apply').disabled,
+          circlesDisabled: document.querySelector('[data-bust-mode=circles]').disabled,
+          status: document.querySelector('#chest-editor-status').innerText,
+          readout: document.querySelector('#lm-derived').innerText
+        })`);
+        assert.equal(controls.applyDisabled, true);
+        assert.equal(controls.circlesDisabled, true);
+        assert.ok(controls.status.includes(catalog['job.chest.sendHint']), controls.status);
+        if (!chestSeed.bust.cleavage) assert.equal(controls.readout, catalog['job.chest.apexReadout']);
+        const seeded = await readLandmarkFields(screen);
+        assert.deepEqual(seeded, {apex_r: ['50.25', '39.5'], apex_l: ['66.5', '39.5'],
+          cleavage: chestSeed.bust.cleavage ? ['58.5', '38.25'] : ['', ''], alpha: '0.46', clearance: '2.6'});
+        assert.equal(await screen.evaluate<boolean>(requestDisabled), true, 'Published points alone are not a correction');
+        await writeFile(join(directory, 'seeded.png'), await screen.screenshot());
+        await placePosedApex(screen, fixture.stage);
+        const edited = await readLandmarkFields(screen);
+        assert.deepEqual(edited, {...seeded, apex_r: correctedApex.map(String)});
+        await wait(`!(${requestDisabled})`);
+        await writeFile(join(directory, 'posed-edited.png'), await screen.screenshot());
+        await writeFile(join(directory, 'landmarks.json'), JSON.stringify({controls, seeded, edited}));
+      } else {
+        await wait("!!document.querySelector('#chest-edit:not([hidden]):disabled')");
+        const readOnly = await screen.evaluate<{
+          reason: string; notice: string; editorHidden: boolean; applyDisabled: boolean;
+        }>(`({
+          reason: document.querySelector('#chest-edit').title,
+          notice: document.querySelector('#chest-unavailable').textContent,
+          editorHidden: document.querySelector('#chest-editor-bar').hidden,
+          applyDisabled: document.querySelector('#bust-apply').disabled
+        })`);
+        assert.equal(readOnly.reason, catalog['job.chest.unpublished']);
+        assert.equal(readOnly.notice, readOnly.reason);
+        assert.equal(readOnly.editorHidden, true);
+        assert.equal(readOnly.applyDisabled, true);
+        const fields = await readLandmarkFields(screen);
+        assert.deepEqual(fields.apex_r, ['', '']);
+        assert.deepEqual(fields.apex_l, ['', '']);
+        assert.deepEqual(fields.cleavage, ['', '']);
+        assert.equal(await screen.evaluate<boolean>(requestDisabled), true);
+        await writeFile(join(directory, 'read-only.png'), await screen.screenshot());
+        await writeFile(join(directory, 'read-only.json'), JSON.stringify({readOnly, fields}));
+      }
+    }
+    if (mode === 'with-comment' || mode === 'no-mesh' || mode === 'stale-draft' || mode === 'chest-readonly') {
       await click(screen, '#stage-comment');
       await pointer('#rig-viewport');
       await wait("!!document.querySelector('.stage-comment-composer input')");
@@ -153,15 +309,12 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
         draft.dispatchEvent(new Event('input',{bubbles:true}));
       })()`);
     }
-    if (mode !== 'no-mesh') {
-      await click(screen, '[data-mode="rig"]');
-      await wait("!!document.querySelector('[data-part-list] button[data-slot=mesh]')");
-      await click(screen, '[data-part-list] button[data-slot=mesh]');
+    if (!chestCase && mode !== 'no-mesh') {
+      await selectCarrier();
       await wait("!document.querySelector('#mesh-edit').hidden");
       await click(screen, '#mesh-edit');
       await wait("!document.querySelector('#mesh-editor-bar').hidden");
       assert.equal(await screen.evaluate<boolean>("document.querySelector('#mesh-apply').disabled"), true);
-      const catalog = language === 'ko' ? koCatalog : enCatalog;
       const hint = catalog['In a job, press Request changes to send this edit; the producer rebuilds it.'];
       if (mode === 'stale-draft') {
         await wait(`document.querySelector('#mesh-editor-status').innerText.includes(${JSON.stringify(catalog['job.mesh.staleDraft'])})`);
@@ -192,9 +345,34 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
     await wait("document.querySelector('#workspace-act-row').hidden");
     const {act: finalized, raw} = await latestAct();
     const meshExpected = mode === 'mesh-only' || mode === 'with-comment';
-    assert.equal(finalized.schema, meshExpected ? JOB_MESH_EDITS_ACT_SCHEMA : JOB_COMMENT_CONTEXT_ACT_SCHEMA,
+    const expectedSchema = chestSeed ? JOB_CHEST_LANDMARKS_ACT_SCHEMA : meshExpected ? JOB_MESH_EDITS_ACT_SCHEMA : JOB_COMMENT_CONTEXT_ACT_SCHEMA;
+    assert.equal(finalized.schema, expectedSchema,
       `${language} ${mode}: unexpected schema from the production writer`);
-    if (meshExpected) {
+    if (chestSeed) {
+      assert.ok(fixture.fetchCapability);
+      const response = await fetch(fixture.locator + '/api', {
+        method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + fixture.fetchCapability},
+        body: JSON.stringify({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId, requestId: randomUUID(),
+          verb: 'fetch-act', actId: finalized.actId}),
+      });
+      const fetched: JobResult<JobResponseValues['fetch-act']> = await response.json();
+      assert.ok(fetched.ok, JSON.stringify(fetched));
+      assert.deepEqual(fetched.value, finalized);
+      assert.throws(() => parseMeshEditsAct(fetched.value), /JOB_ACT_INVALID/);
+      const act = parseChestLandmarksAct(fetched.value);
+      assert.equal(act.kind, 'review-verdict');
+      assert.equal(act.value.stage, 'rig-review');
+      assert.equal(act.value.verdict, 'changes-requested');
+      assert.deepEqual(act.value.comments, []);
+      assert.equal(act.value.meshEdits, undefined);
+      assert.equal(act.publicationId, fixture.publication.publicationId);
+      assert.equal(act.source.sourceHash, fixture.publication.source.sourceHash);
+      assert.deepEqual(act.source.model, fixture.publication.source.model);
+      const {hash, frame} = chestSeed.source;
+      const edit: JobChestLandmarkValue = {...chestSeed, source: {hash, frame}, bust: {...chestSeed.bust, apex_r: correctedApex}};
+      assert.deepEqual(act.value.chestLandmarks, [{edit, sha256: jobHash(canonicalJson(edit))}]);
+      await writeFile(join(directory, 'submitted.png'), await screen.screenshot());
+    } else if (meshExpected) {
       const act = parseMeshEditsAct(finalized);
       assert.equal(act.kind, 'review-verdict');
       assert.equal(act.value.stage, 'rig-review');
@@ -220,7 +398,7 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
       if (largeCapture) {
         assert.ok(png.byteLength > jobBodyLimit, `still is only ${png.byteLength} bytes`);
         const path = join(fixture.input.root, 'out/review.json');
-        const manifest = await Bun.file(path).json();
+        const manifest: ReviewManifest = await Bun.file(path).json();
         await writeFile(path, JSON.stringify({...manifest, revision: 'same-mesh-next'}));
         const next = await fixture.askForRig();
         assert.notEqual(next.publicationId, fixture.publication.publicationId);
@@ -238,8 +416,9 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
       assert.deepEqual(act.value.comments.map(comment => comment.text), ['Adjust the mesh']);
       assert.equal(act.value.comments[0]?.context?.subject?.sourceHash, act.source.sourceHash);
     }
+    if (inputHashes) assert.deepEqual(await jobInputHashes(fixture.input.root), inputHashes, 'Owner actions preserve source bytes');
     await writeFile(join(directory, 'act.json'), raw);
-    console.log('MESH_ACT_952_PASS', language, mode);
+    console.log(chestCase ? 'CHEST_ACT_990_PASS' : 'MESH_ACT_952_PASS', language, mode);
   } catch (error) {
     if (page) await writeFile(join(directory, 'failure.png'), await page.screenshot()).catch(() => {});
     throw error;
@@ -252,7 +431,7 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
 }
 
 if (serving) {
-  const fixture = await createFixture();
+  const fixture = await createFixture('chest-only');
   let stop!: () => void;
   const stopped = new Promise<void>(resolve => { stop = resolve; });
   process.on('SIGINT', stop);
@@ -265,6 +444,8 @@ if (serving) {
   }
 } else {
   for (const language of ['en', 'ko'] as const) {
-    for (const mode of ['mesh-only', 'with-comment', 'no-mesh', 'stale-draft'] as const) await runBrowser(language, mode);
+    for (const mode of ['mesh-only', 'with-comment', 'no-mesh', 'stale-draft', 'chest-only', 'chest-optional', 'chest-readonly'] as const) {
+      await runBrowser(language, mode);
+    }
   }
 }

@@ -8,6 +8,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Review\u2026": "Review…",
   "Nothing is waiting for your answer.": "Nothing is waiting for your answer.",
   "Add a comment where changes are needed.": "Add a comment where changes are needed.",
+  "Add a comment or an edit where changes are needed.": "Add a comment or an edit where changes are needed.",
   "Request changes needs at least one comment pinned to a part.": "Request changes needs at least one comment pinned to a part.",
   "Remove the flagged parts comments before approving.": "Remove the flagged parts comments before approving.",
   "Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.": "Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.",
@@ -22,6 +23,10 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.refusal.JOB_ASK_UNSUPPORTED": "This request lacks a supported source or checkpoint mapping. The producer must publish the matching source and plan mapping before asking again.",
   "In a job, press Request changes to send this edit; the producer rebuilds it.": "In a job, press Request changes to send this edit; the producer rebuilds it.",
   "job.mesh.staleDraft": "Some saved mesh edits could not be restored on this model and will be left out.",
+  "job.chest.sendHint": "Use Request changes to send the edited landmarks to the producer for rebuilding.",
+  "job.chest.placed": "{0} points placed · ready to send",
+  "job.chest.circlesOff": "Use Landmarks to edit the chest in this job.",
+  "job.chest.unpublished": "Chest editing is unavailable. The producer must publish a bust spec for this attachment.",
   "Comment · C": "Comment · C",
 
   "project.json": "project.json",
