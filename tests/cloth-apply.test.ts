@@ -24,7 +24,9 @@ if(a[0]==='propose'){const text=fs.readFileSync(f('--cloth'),'utf8'),cfg=JSON.pa
  const links=cfg.cloth.bottomwear.links;cfg.constraints[0].wind=links;if(links===99)cfg.key='moved';
  fs.mkdirSync(f('--out'),{recursive:true});fs.writeFileSync(f('--write-config'),JSON.stringify(cfg,null,2)+'\\n');
  console.log('wrote '+f('--write-config')+': '+f('--cloth')+"'s text with constraints[\\"c0\\"] replaced spliced in from the draft; every other byte as read");process.exit(0);}
-if(a[0]==='rig'){copy(path.join(f('--parts'),'rig'),f('--out'));console.log('rig-parts rig: wrote');process.exit(0);}
+if(a[0]==='rig'){const parts=JSON.parse(fs.readFileSync(path.join(f('--parts'),'parts.json'),'utf8'));const config=JSON.parse(fs.readFileSync(f('--config'),'utf8'));
+ if(parts.assembly_config&&config.constraints[0].wind===3){console.log('FAIL  ASSEMBLY_CONFIG_STALE: config.constraints.physics');process.exit(1);}
+ copy(path.join(f('--parts'),'rig'),f('--out'));console.log('rig-parts rig: wrote');process.exit(0);}
 if(a[0]==='build'){const out=f('--out');copy(path.join(process.env.FAKE_PARTS,'rig'),path.join(out,'rig'));fs.copyFileSync(path.join(process.env.FAKE_PARTS,'parts.json'),path.join(out,'parts.json'));fs.mkdirSync(path.join(out,'check'),{recursive:true});fs.writeFileSync(path.join(out,'check','check.json'),JSON.stringify({PASS:true,TEXTURE_STRETCH:{status:'PASS'}}));console.log('[check] check: PASS; 1 of 1 bar(s) measured');console.log('build: PASS — the packed atlas is the artifact');process.exit(0);}
 if(a[0]==='check'){const out=f('--out');fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'check.json'),JSON.stringify({PASS:true,TEXTURE_STRETCH:{status:'PASS'}}));console.log('check: PASS; 1 of 1 bar(s) measured');process.exit(0);}
 process.exit(3);`;
@@ -32,31 +34,36 @@ const fakeRigc=`const fs=require('fs'),path=require('path');const a=process.argv
 const out=f('--out');fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'skeleton.model.json'),JSON.stringify({spec:'rigc-compiled/3',pages:[{name:'skeleton.png'}]}));fs.writeFileSync(path.join(out,'skeleton.png'),'png');console.log('rigc: wrote');`;
 const sha=(bytes:string|Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 
-async function fixture(options:{limbs?:boolean}={}){
+async function fixture(options:{limbs?:boolean;stamped?:boolean;full?:boolean}={}){
  const root=await realpath(await mkdtemp(join(tmpdir(),'review-cloth-'))),pkg=join(root,'pkg'),out=join(pkg,'out'),rig=join(out,'rig');
  await mkdir(join(rig,'images'),{recursive:true});await mkdir(join(out,'parts'),{recursive:true});await mkdir(join(pkg,'layers/full'),{recursive:true});
  const config={key:'k',cloth:{bottomwear:{chains:1,links:2,wind:[1,2],gravity:[1,2]}},bones:[{name:'hip',parent:'root',at:[10,10]},{chain:'skirt0_',parent:'hip',points:[[10,20],[10,30]],tip:[10,40]}],meshes:{skirt:{grid:8,segments:['skirt0_']}},constraints:[{type:'physics',name:'c0',bone:'skirt0_0',wind:1}],...(options.limbs?{limbs:{}}:{})};
  await writeFile(join(pkg,'config.json'),JSON.stringify(config,null,1));
- await writeFile(join(out,'parts.json'),JSON.stringify({parts:[{name:'skirt',from:'full:bottomwear'}]}));await writeFile(join(out,'parts/skirt.png'),'png-skirt');
+ await writeFile(join(out,'parts.json'),JSON.stringify({parts:[{name:'skirt',from:'full:bottomwear'}],...(options.stamped?{assembly_config:{project_override:'hidden'}}:{})}));await writeFile(join(out,'parts/skirt.png'),'png-skirt');
  for(const [name,text] of Object.entries({'rig.json':'{"bones":[]}','motion.json':'{}','mesh_report.json':'{}'}))await writeFile(join(rig,name),text);
  await writeFile(join(rig,'images/skirt.png'),'png-skirt');
  await writeFile(join(pkg,'motion.json'),'{}');await writeFile(join(pkg,'painting.png'),'png-painting');await writeFile(join(pkg,'layers/full/a.png'),'png-a');
  await writeFile(join(pkg,'keypoints.json'),JSON.stringify({spec:'rig-parts-keypoints/1'}));
  const parts=join(root,'node_modules/@rig-c/parts');
  await mkdir(join(parts,'bin'),{recursive:true});await mkdir(join(parts,'src'),{recursive:true});await mkdir(join(root,'node_modules/rig-c/bin'),{recursive:true});
- await writeFile(join(parts,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'1.49.1',bin:{'rig-parts':'./bin/rig-parts.cjs'}}));
+ await writeFile(join(parts,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'1.49.1',bin:{'rig-parts':'./bin/rig-parts.cjs'},exports:{'./assembly-reading':'./src/assembly-reading.ts','./*':'./*'}}));
+ if(options.stamped){
+  await writeFile(join(parts,'src/parts.ts'),"import {readFileSync} from 'node:fs'; export const readParts = (path: string) => JSON.parse(readFileSync(path, 'utf8'));");
+  await writeFile(join(parts,'src/assembly-reading.ts'),"import {readFileSync} from 'node:fs'; export const assemblyConfigChanges = (path: string) => JSON.parse(readFileSync(path, 'utf8')).constraints[0].wind === 3 ? ['constraints.physics'] : [];");
+ }
  await writeFile(join(parts,'bin/rig-parts.cjs'),fakeParts);
  await writeFile(join(parts,'src/cloth.ts'),`export const CLOTH_TARGETS = ['bottomwear', 'back hair', 'front hair'] as const;\n`);
  await writeFile(join(root,'node_modules/rig-c/package.json'),JSON.stringify({name:'rig-c',version:'2.64.1',bin:{rigc:'./bin/rigc.cjs'}}));
  await writeFile(join(root,'node_modules/rig-c/bin/rigc.cjs'),fakeRigc);
  process.env.FAKE_PARTS=out;
  const calls=async()=>{try{return (await readFile(join(parts,'bin/calls.log'),'utf8')).trim().split('\n').filter(Boolean);}catch{return [] as string[];}};
- return {root,pkg,out,state:join(root,'state'),config,calls,done:()=>rm(root,{recursive:true,force:true})};
+ if(options.full===false)await writeFile(join(pkg,'review.json'),JSON.stringify({schema:'rig-review/1',id:'cloth',title:'Cloth',revision:'1',motion:'motion.json',producer:{config:'config.json',parts:'out',source:'painting.png',keypoints:'keypoints.json'}}));
+ return {root,pkg,out,state:join(root,'state'),config,calls,full:options.full!==false,done:()=>rm(root,{recursive:true,force:true})};
 }
 const flags=(f:Awaited<ReturnType<typeof fixture>>,keypoints=true)=>({config:join(f.pkg,'config.json'),parts:f.out,source:join(f.pkg,'painting.png'),full:join(f.pkg,'layers/full'),...(keypoints?{keypoints:join(f.pkg,'keypoints.json')}:{})});
 const patchFor=(configSha:string,ops:ConfigPatch['ops']):ConfigPatch=>({schema:CONFIG_PATCH_SCHEMA,config_sha256:configSha,ops,producer:{name:'@rig-c/parts',version:'1.49.1'},op:{cmd:'rig',args:[]}});
 async function apply(f:Awaited<ReturnType<typeof fixture>>,ops:ConfigPatch['ops'],keypoints=true){
- const p=await loadReview(f.pkg,{handoff:flags(f,keypoints)}),server=await startServer(p,{port:0,stateDir:f.state,cwd:f.root}),base=`http://127.0.0.1:${server.port}`;
+ const p=await loadReview(f.pkg,f.full?{handoff:flags(f,keypoints)}:{}),server=await startServer(p,{port:0,stateDir:f.state,cwd:f.root}),base=`http://127.0.0.1:${server.port}`;
  try{
   const configSha=sha(await readFile(join(f.pkg,'config.json')));
   const started=await (await fetch(base+'/api/rebuild',{method:'POST',headers:{Origin:base,'Content-Type':'application/json'},body:JSON.stringify({patch:patchFor(configSha,ops)})})).json() as PatchJobView&{error?:string};
@@ -116,6 +123,44 @@ test('#111 Decision 2: a config that declares limbs builds the written config wi
   const calls=await f.calls();
   expect(calls.find(l=>l.startsWith('build'))).toBe(`build --config config.json --source ${join(f.pkg,'painting.png')} --full ${join(f.pkg,'layers/full')} --out out --seam-pairs`);
   expect(()=>parseAppliedContext(patchAppliedRecord(job))).not.toThrow();expect(patchAppliedRecord(job).assembled).toBeDefined();
+ }finally{await f.done();}
+});
+
+test('#998: a stale assembly switches cloth Apply to build and keeps the existing assembled record',async()=>{
+ const f=await fixture({stamped:true});
+ try{
+  const {job}=await apply(f,[{op:'replace',path:'/cloth/bottomwear/links',value:3}]);
+  expect(job.status).toBe('built');expect(job.cloth?.route).toBe('build');expect(job.check?.pass).toBe(true);
+  const calls=(await f.calls()).slice((await f.calls()).findIndex(l=>l.startsWith('propose')));
+  expect(calls).toEqual([
+   expect.stringContaining('propose --parts '),
+   `build --config config.json --source ${join(f.pkg,'painting.png')} --full ${join(f.pkg,'layers/full')} --project hidden --out out --seam-pairs`,
+  ]);
+  const record=patchAppliedRecord(job);
+  expect(record.assembled).toBeDefined();expect(()=>parseAppliedContext(record)).not.toThrow();
+ }finally{await f.done();}
+});
+
+test('#998: a fresh assembly keeps the rig route and leaves all source parts bytes intact',async()=>{
+ const f=await fixture({stamped:true,full:false});
+ try{
+  const files=['parts.json',...(await readdir(join(f.out,'parts'))).map(name=>join('parts',name))];
+  const hashes=()=>Promise.all(files.map(async name=>sha(await readFile(join(f.out,name)))));
+  const before=await hashes();
+  const {job}=await apply(f,[{op:'replace',path:'/cloth/bottomwear/links',value:4}]);
+  expect(job.status).toBe('built');expect(job.cloth?.route).toBe('rig');expect(job.assembled).toBeUndefined();
+  expect((await f.calls()).some(l=>l.startsWith('build'))).toBe(false);expect(await hashes()).toEqual(before);
+ }finally{await f.done();}
+});
+
+test('#998: a stale assembly without a declared full run stops before rig',async()=>{
+ const f=await fixture({stamped:true,full:false});
+ try{
+  const {job,scratch}=await apply(f,[{op:'replace',path:'/cloth/bottomwear/links',value:3}]);
+  expect(job.status).toBe('refused');expect(job.producerLine).toStartWith('MODELING_INPUT_UNAVAILABLE: source painting and See-through runs');
+  const calls=await f.calls();
+  expect(calls.slice(calls.findIndex(l=>l.startsWith('propose')))).toEqual([expect.stringContaining('propose --parts ')]);
+  expect(scratch).toEqual([]);
  }finally{await f.done();}
 });
 
