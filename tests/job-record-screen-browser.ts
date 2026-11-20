@@ -21,6 +21,9 @@ import type {JobRetainedRecordSource} from '../src/job-source.ts';
 import {parseRecordAct} from '../src/job-api.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
+import {partsDifferenceJobFixture,partsDifferenceOwnerUrl} from './helpers/parts-difference-job-fixture.ts';
+import {JOB_COMMENTS_ACT_SCHEMA} from '../src/job-contract.ts';
+import {jobWindowResources} from '../src/job-front.ts';
 
 const arg=(name:string)=>{const i=Bun.argv.indexOf(name);return i<0?undefined:Bun.argv[i+1];};
 const interviewOnly=Bun.argv.includes('--interview-only');
@@ -605,6 +608,216 @@ async function boundRigPictureChecks(){
  console.log('929_BOUND_RIG_BROWSER_PASS '+JSON.stringify(result));
 }
 
+async function draftSurvivalChecks(){
+ holdImages=false;
+ const out=join(output,'draft-survival');await mkdir(out,{recursive:true});
+ const lookRoot=resolve('evidence/look');
+ for(const lang of ['en','ko'] as const){
+  await mkdir(join(out,'look',lang),{recursive:true});
+  await mkdir(join(lookRoot,lang),{recursive:true});
+ }
+ const saveLook=async(lang:'en'|'ko',name:string)=>{
+  const png=await page!.screenshot();
+  await writeFile(join(out,'look',lang,name),png);
+  await writeFile(join(lookRoot,lang,name),png);
+ };
+ const fixture=await recordScreenFixture('checkpoint',false,out);
+ try{
+  const url=new URL(fixture.ownerUrl);url.searchParams.set('lang','en');
+  await page!.setViewport(1440,900);
+  await page!.goto('about:blank');await page!.goto(url.href);
+  await wait(`!!document.querySelector('#stage-comment-list')&&!!document.querySelector('form[data-job-ask="ask-checkpoint"] fieldset:not(:disabled)')`,'992 initial load');
+  const addGeneral=async(text:string,frameId?:string)=>{
+   const root=frameId?`document.getElementById(${JSON.stringify(frameId)}).contentDocument`:'document';
+   await page!.evaluate<void>(`${root}.querySelector('[data-comment-general]').click()`);
+   await wait(`!!${root}.querySelector('.stage-comment-composer input')`,'992 composer open');
+   await page!.evaluate<void>(`(()=>{const f=${root}.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(text)};f.requestSubmit();})()`);
+   await wait(`!${root}.querySelector('.stage-comment-composer')`,'992 composer saved');
+  };
+  const readRows=(frameId?:string)=>page!.evaluate<string[]>(`(()=>{const root=${frameId?`document.getElementById(${JSON.stringify(frameId)}).contentDocument`:'document'};return [...root.querySelectorAll('#stage-comment-list .stage-comment-summary')].map(n=>n.textContent);})()`);
+  // Bar 1: Reload
+  await addGeneral('c1 · reload survival');
+  assert.equal((await readRows()).length,1);
+  await page!.goto('about:blank');await page!.goto(url.href);
+  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&!!document.querySelector('form[data-job-ask="ask-checkpoint"] fieldset:not(:disabled)')`,'992 bar 1 reload');
+  assert.equal((await readRows())[0]?.endsWith('c1 · reload survival'),true);
+  // Bar 2: Republish, same job, draft and source hash
+  const pub2=await fixture.session.execute({schema:'rig-review/job-api@3',jobId:fixture.session.jobId,requestId:'992-republish-same',verb:'publish',expectedGeneration:fixture.session.status().generation,idempotencyKey:'992-republish-same',result:fixture.workspace.result,freeze:{kind:'producer-held',holdId:'992-hold-2',record:fixture.workspace.record}},new AbortController().signal) as {publicationId:string;generation:number;source:typeof fixture.display.publication.source};
+  const display2=fixture.session.displayPublication(pub2.publicationId);
+  const ask2={...fixture.ask,askId:'ask-checkpoint-2',publicationId:pub2.publicationId,source:pub2.source};
+  fixture.fake.publish(display2);fixture.fake.pending(ask2,pub2.generation);
+  await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-2"] fieldset:not(:disabled)')`,'992 bar 2 republish');
+  assert.equal((await readRows())[0]?.endsWith('c1 · reload survival'),true);
+  // Bar 4: Two tabs (tab A has c1, tab B adds c2, both survive in both tabs and after reload; removal in A does not come back from B)
+  await page!.evaluate<void>(`(()=>{
+   const [key,raw]=Object.entries(localStorage).find(([k])=>k.startsWith('rig-review-record-comments/1:'));
+   const saved=JSON.parse(raw);
+   const next=JSON.stringify({...saved,comments:[...saved.comments,{id:'c2-id',summary:'c2 · from tab B'}]});
+   localStorage.setItem(key,next);
+   window.dispatchEvent(new StorageEvent('storage',{key,newValue:next}));
+   // Deliver a late/stale storage event carrying only [c1] after [c1,c2] is in localStorage; both must survive.
+   window.dispatchEvent(new StorageEvent('storage',{key,newValue:raw}));
+  })()`);
+  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===2`,'992 bar 4 storage event pickup');
+  assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c1 · reload survival','c2 · from tab B']);
+  // Remove c1 in tab A; it must not come back on subsequent write or reload
+  await page!.evaluate<void>(`document.querySelector('#stage-comment-list .stage-comment-summary').click()`);
+  await wait(`!!document.querySelector('.stage-comment-composer .stage-comment-delete')`,'992 bar 4 delete button');
+  await page!.evaluate<void>(`document.querySelector('.stage-comment-composer .stage-comment-delete').click()`);
+  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1`,'992 bar 4 delete synced');
+  assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c2 · from tab B']);
+  await page!.goto('about:blank');await page!.goto(url.href);
+  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&!!document.querySelector('form[data-job-ask="ask-checkpoint-2"] fieldset:not(:disabled)')`,'992 bar 4 reload after delete');
+  assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c2 · from tab B']);
+  // Bar 3: Republish with a changed source hash
+  const updatedEvidence=await readFile(join(fixture.root,'plan/context-evidence.json'),'utf8')+'\n';
+  await writeFile(join(fixture.root,'plan/context-evidence.json'),updatedEvidence);
+  const updatedEvidenceHash=sha(updatedEvidence);
+  const planContext=fixture.workspace.context as unknown as {files:{path:string;sha256:string}[]};
+  planContext.files=planContext.files.map(f=>f.path==='plan/context-evidence.json'?{...f,sha256:updatedEvidenceHash}:f);
+  const pub3=await fixture.session.execute({schema:'rig-review/job-api@3',jobId:fixture.session.jobId,requestId:'992-republish-changed',verb:'publish',expectedGeneration:fixture.session.status().generation,idempotencyKey:'992-republish-changed',result:fixture.workspace.result,freeze:{kind:'producer-held',holdId:'992-hold-3',record:fixture.workspace.record}},new AbortController().signal) as {publicationId:string;generation:number;source:typeof fixture.display.publication.source};
+  assert.notEqual(pub3.source.sourceHash,pub2.source.sourceHash);
+  const display3=fixture.session.displayPublication(pub3.publicationId);
+  const ask3={...fixture.ask,askId:'ask-checkpoint-3',publicationId:pub3.publicationId,source:pub3.source};
+  fixture.fake.publish(display3);fixture.fake.pending(ask3,pub3.generation);
+  await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 3 changed source');
+  await page!.evaluate<void>(`document.querySelector('#job-record-asks')?.close()`);
+  await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+  const carryKey='The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.';
+  const expectedCarryEn=enCatalog[carryKey]!.replace('{0}','1');
+  const expectedCarryKo=koCatalog[carryKey]!.replace('{0}','1');
+  const bar3State=await page!.evaluate<{currentCount:number;oldRetained:boolean;draftState:string;dirty:string}>(`({
+   currentCount:document.querySelectorAll('#stage-comment-list .stage-comment-item').length,
+   oldRetained:Object.entries(localStorage).some(([k,v])=>k.startsWith('rig-review-record-comments/1:')&&v.includes('c2 · from tab B')),
+   draftState:document.getElementById('review-draft-state')?.textContent??'',
+   dirty:document.getElementById('dirty')?.textContent??'',
+  })`);
+  assert.equal(bar3State.currentCount,0);
+  assert.equal(bar3State.oldRetained,true);
+  assert.equal(bar3State.draftState,expectedCarryEn);
+  assert.equal(bar3State.dirty,expectedCarryEn);
+  await saveLook('en','changed-source.png');
+  const koUrl=new URL(fixture.ownerUrl);koUrl.searchParams.set('lang','ko');
+  await page!.goto('about:blank');await page!.goto(koUrl.href);
+  await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 3 changed source ko');
+  await page!.evaluate<void>(`document.querySelector('#job-record-asks')?.close()`);
+  await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+  const bar3Ko=await page!.evaluate<{draftState:string;dirty:string}>(`({
+   draftState:document.getElementById('review-draft-state')?.textContent??'',
+   dirty:document.getElementById('dirty')?.textContent??'',
+  })`);
+  assert.equal(bar3Ko.draftState,expectedCarryKo);
+  assert.equal(bar3Ko.dirty,expectedCarryKo);
+  await saveLook('ko','changed-source.png');
+  // Bar 5: Existing per-publication drafts still restore (fallback)
+  await page!.evaluate<void>(`(()=>{
+   localStorage.clear();
+   localStorage.setItem(${JSON.stringify(`rig-review-record-comments/1:${pub3.publicationId}:${pub3.source.sourceHash}`)},JSON.stringify({
+    status:'pending',publicationId:${JSON.stringify(pub3.publicationId)},sourceHash:${JSON.stringify(pub3.source.sourceHash)},
+    comments:[{id:'legacy-c1',summary:'c3 · legacy fallback'}],
+   }));
+  })()`);
+  await page!.goto('about:blank');await page!.goto(url.href);
+  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 5 fallback');
+  assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c3 · legacy fallback']);
+  // Deleting all comments restored from a legacy key and reloading must stay at 0 rows (never resurrect from legacy key).
+  await page!.evaluate<void>(`document.querySelector('#stage-comment-list .stage-comment-summary').click()`);
+  await wait(`!!document.querySelector('.stage-comment-composer .stage-comment-delete')`,'992 bar 5 legacy delete button');
+  await page!.evaluate<void>(`document.querySelector('.stage-comment-composer .stage-comment-delete').click()`);
+  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===0`,'992 bar 5 legacy deleted');
+  await page!.goto('about:blank');await page!.goto(url.href);
+  await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 5 reload after legacy delete');
+  assert.deepEqual(await readRows(),[]);
+
+  // #999 Bar: box-pin comment on parts-verdict draft page saves (even when box crosses part boundary into margin),
+  // displays catalog refusal sentence on status line when refused, survives reload, and is included in submitted act in EN and KO.
+  const parts999:Record<string,unknown>={};
+  for(const lang of ['en','ko'] as const){
+   const pf=await partsDifferenceJobFixture({scratchParent:out});
+   try{
+    const ask=await pf.ask(pf.publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
+    const pUrl=partsDifferenceOwnerUrl(pf,lang);
+    await page!.setViewport(1440,900);
+    await page!.goto('about:blank');await page!.goto(pUrl);
+    await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'`,'999 parts ready '+lang);
+    const drawEdgeBox=async(text:string)=>{
+     if(await page!.evaluate<boolean>(`!document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`))await click(page!,'#stage-comment');
+     await wait(`document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`,'999 comment mode '+lang);
+     // Draw a box from (1.5, 1.5) to (10.5, 9.5) crossing body's top-left boundary (x=4, y=4) into empty margin (fails on da67304 with PARTS_COMMENT_OUT_OF_BOUNDS)
+     const [from,to]=await page!.evaluate<[{x:number;y:number},{x:number;y:number}]>(`(()=>{
+      const canvas=document.getElementById('parts-canvas'),rect=canvas.getBoundingClientRect();
+      return [[1.5,1.5],[10.5,9.5]].map(([x,y])=>({x:rect.left+x*rect.width/canvas.width,y:rect.top+y*rect.height/canvas.height}));
+     })()`);
+     await page!.mouse('mouseMoved',from.x,from.y);
+     await page!.mouse('mousePressed',from.x,from.y);
+     await page!.mouse('mouseMoved',to.x,to.y);
+     await page!.mouse('mouseReleased',to.x,to.y);
+     await wait(`!!document.querySelector('.stage-comment-composer input')`,'999 composer open '+lang);
+     await page!.evaluate<void>(`(()=>{
+      const f=document.querySelector('.stage-comment-composer');
+      const input=f.querySelector('input');
+      input.value=${JSON.stringify(text)};
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+     })()`);
+    };
+    const words=lang==='ko'?'검 손잡이가 손 뒤로 가야 함':'Sword grip must go behind the hand';
+    await drawEdgeBox(words);
+    // Refusal sentence check: deselect the part chip and attempt save -> status line shows catalog sentence
+    await click(page!,'.stage-comment-parts [data-comment-part="body"]');
+    await page!.evaluate<void>(`document.querySelector('.stage-comment-composer').requestSubmit()`);
+    const expectedRefusal=(lang==='ko'?koCatalog:enCatalog)['Select at least one part.']!;
+    await wait(`document.getElementById('message')?.textContent===${JSON.stringify(expectedRefusal)}&&document.getElementById('review-message')?.textContent===${JSON.stringify(expectedRefusal)}`,'999 refusal status line '+lang);
+    // Re-select the part chip (which replaces chip children) and press Enter / submit to save the box-pin comment
+    await click(page!,'.stage-comment-parts [data-comment-part="body"]');
+    assert.equal(await page!.evaluate<boolean>(`document.activeElement===document.querySelector('.stage-comment-composer input')`),true,'chip click restores focus to composer input');
+    await page!.evaluate<void>(`document.querySelector('.stage-comment-composer').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))`);
+    await wait(`!document.querySelector('.stage-comment-composer')&&document.querySelectorAll('.stage-comment-pin').length===1`,'999 box-pin saved '+lang);
+    // Reload survival on parts-verdict page
+    await page!.goto('about:blank');await page!.goto(pUrl);
+    await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'&&document.querySelectorAll('.stage-comment-pin').length===1`,'999 box-pin survives reload '+lang);
+    assert.equal(await page!.evaluate<boolean>(`[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].some(n=>n.textContent.includes(${JSON.stringify(words)}))`),true);
+    if(await page!.evaluate<boolean>(`document.querySelector('#stage-comment')?.getAttribute('aria-pressed')!=='true'`))await click(page!,'#stage-comment');
+    await wait(`document.querySelector('#stage-comment-list .stage-comment-summary')?.checkVisibility()===true`,'999 comments panel visible '+lang);
+    await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+    await saveLook(lang,'box-pin-edge.png');
+    // Delete the saved comment so committed comments are 0, then reopen the composer with text to prove Request changes is enabled by the open composer and auto-commits on click.
+    await page!.evaluate<void>(`document.querySelector('#stage-comment-list .stage-comment-summary').click()`);
+    await wait(`!!document.querySelector('.stage-comment-composer .stage-comment-delete')`,'999 delete button '+lang);
+    await page!.evaluate<void>(`document.querySelector('.stage-comment-composer .stage-comment-delete').click()`);
+    await wait(`document.querySelectorAll('.stage-comment-pin').length===0&&document.querySelector('#request-changes')?.disabled===true`,'999 cleared before open-composer submit '+lang);
+    await drawEdgeBox(words);
+    await wait(`document.querySelector('#request-changes')?.checkVisibility()&&!document.querySelector('#request-changes').disabled`,'999 request changes enabled with open composer '+lang);
+    await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+    await saveLook(lang,'request-changes-open-composer.png');
+    // Click Request changes (#request-changes) directly while the composer is open and verify the comment commits and the act is sent
+    await click(page!,'#request-changes');
+    let submittedAct:any=null;
+    const deadline=Date.now()+15_000;
+    while(Date.now()<deadline){
+     const ev=(await pf.next()).events.find(e=>e.type==='act'&&e.act.askId===ask.askId);
+     if(ev?.type==='act'){submittedAct=ev.act;break;}
+     await Bun.sleep(50);
+    }
+    assert.ok(submittedAct,'999 finalized parts-verdict act '+lang);
+    await wait(`!document.querySelector('.stage-comment-composer')&&document.querySelectorAll('.stage-comment-pin').length===1&&document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1`,'999 open composer committed and act sent '+lang);
+    await wait(`document.querySelector('#stage-comment-list .stage-comment-summary')?.checkVisibility()===true`,'999 committed comment visible '+lang);
+    await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+    await saveLook(lang,'request-changes-open-composer-after.png');
+    assert.equal(submittedAct.schema,JOB_COMMENTS_ACT_SCHEMA);
+    assert.equal(submittedAct.kind,'parts-verdict');
+    assert.equal(submittedAct.value.verdict,'changes-requested');
+    assert.equal(submittedAct.value.comments.length,1);
+    assert.equal(submittedAct.value.comments[0].text,words);
+    assert.deepEqual(submittedAct.value.comments[0].anchor.parts.map((p:any)=>p.name),['body']);
+    assert.deepEqual(submittedAct.value.comments[0].anchor.rigRegion,{x:4,y:4,width:7,height:6});
+    parts999[lang]={actId:submittedAct.actId,verdict:submittedAct.value.verdict,text:submittedAct.value.comments[0].text,rigRegion:submittedAct.value.comments[0].anchor.rigRegion,refusal:expectedRefusal};
+   }finally{await pf.close();}
+  }
+  await writeFile(join(out,'draft-survival.json'),JSON.stringify({bar3State,bar3Ko,parts999},null,2)+'\n');
+  console.log('992_DRAFT_SURVIVAL_PASS '+JSON.stringify({bar3State,bar3Ko,parts999}));
+ }finally{await fixture.close();}
+}
+
 /** The waiting layout can dock the inspector before the first publication binds its Question tab. */
 async function firstQuestionInDrawer(){
  holdImages=false;
@@ -649,12 +862,63 @@ async function firstQuestionInDrawer(){
  }
 }
 
+if(Bun.argv.includes('--serve')){
+ const fixtureArg=arg('--fixture');
+ const serveScratch=await mkdtemp(join(tmpdir(),'review-750-serve-'));
+ const closers:(()=>Promise<void>)[]=[];
+ try{
+  if(!fixtureArg||fixtureArg==='draft-survival-changed-source'){
+   const baseResources=jobWindowResources();
+   let seedScript='';
+   const resources:ReturnType<typeof jobWindowResources>=async name=>{
+    const res=await baseResources(name);
+    if(name==='main.js'&&seedScript)return seedScript+'\n'+await new Response(res).text();
+    return res;
+   };
+   const fixture=await recordScreenFixture('checkpoint',false,serveScratch,'plan-approved',false,true,resources);
+   closers.push(()=>fixture.close());
+   const priorPub=fixture.display.publication;
+   const seedKey=`rig-review-record-comments/1:${fixture.session.jobId}:plan:${priorPub.source.sourceHash}`;
+   const seedVal=JSON.stringify({status:'pending',publicationId:priorPub.publicationId,sourceHash:priorPub.source.sourceHash,comments:[{id:'seed-c1',summary:'c1 · unsent comment before source hash change'}]});
+   seedScript=`try{if(!localStorage.getItem(${JSON.stringify(seedKey)}))localStorage.setItem(${JSON.stringify(seedKey)},${JSON.stringify(seedVal)});}catch{}`;
+   const updatedEvidence=await readFile(join(fixture.root,'plan/context-evidence.json'),'utf8')+'\n';
+   await writeFile(join(fixture.root,'plan/context-evidence.json'),updatedEvidence);
+   const updatedEvidenceHash=sha(updatedEvidence);
+   const planContext=fixture.workspace.context as unknown as {files:{path:string;sha256:string}[]};
+   planContext.files=planContext.files.map(f=>f.path==='plan/context-evidence.json'?{...f,sha256:updatedEvidenceHash}:f);
+   const pub2=await fixture.session.execute({schema:'rig-review/job-api@3',jobId:fixture.session.jobId,requestId:'serve-republish-changed',verb:'publish',expectedGeneration:fixture.session.status().generation,idempotencyKey:'serve-republish-changed',result:fixture.workspace.result,freeze:{kind:'producer-held',holdId:'serve-hold-2',record:fixture.workspace.record}},new AbortController().signal) as {publicationId:string;generation:number;source:typeof fixture.display.publication.source};
+   const display2=fixture.session.displayPublication(pub2.publicationId);
+   const ask2={...fixture.ask,askId:'ask-checkpoint-2',publicationId:pub2.publicationId,source:pub2.source};
+   fixture.fake.publish(display2);fixture.fake.pending(ask2,pub2.generation);
+   for(const lang of ['ko','en'] as const){
+    const u=new URL(fixture.ownerUrl);u.searchParams.set('lang',lang);
+    console.log(JSON.stringify({fixture:'draft-survival-changed-source',lang,url:u.href,pid:process.pid,priorSourceHash:priorPub.source.sourceHash,currentSourceHash:pub2.source.sourceHash,clicks:['1. Open URL ( optionally click Close / 닫기 on the checkpoint drawer to view the full Comments panel and footer #review-draft-state / #dirty ).']}));
+   }
+  }
+  if(!fixtureArg||fixtureArg==='parts-box-pin'){
+   const pf=await partsDifferenceJobFixture({scratchParent:serveScratch});
+   closers.push(()=>pf.close());
+   await pf.ask(pf.publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
+   for(const lang of ['ko','en'] as const){
+    console.log(JSON.stringify({fixture:'parts-box-pin',lang,url:partsDifferenceOwnerUrl(pf,lang),pid:process.pid,sourceHash:pf.publication.source.sourceHash,clicks:['1. Click + Comment (#stage-comment) and drag a box across the part edge.', '2. Type comment text in the open composer (Request changes / 수정 요청 enables immediately).', '3. Press Enter to save the clamped box pin, or click Request changes (#request-changes) directly while the composer is open.']}));
+   }
+  }
+  await new Promise<void>(resolve=>{process.once('SIGTERM',resolve);process.once('SIGINT',resolve);});
+ }finally{
+  for(const close of closers)await close();
+  await rm(serveScratch,{recursive:true,force:true});
+  await rm(profile,{recursive:true,force:true});
+ }
+ process.exit(0);
+}
+
 try{
  // Reuse the shared launcher's browser discovery and process policy without a suite-local wrapper.
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
- if(Bun.argv.includes('--first-question-drawer')){await command!('Runtime.enable');await firstQuestionInDrawer();}
+ if(Bun.argv.includes('--draft-survival')){await command!('Runtime.enable');await draftSurvivalChecks();}
+ else if(Bun.argv.includes('--first-question-drawer')){await command!('Runtime.enable');await firstQuestionInDrawer();}
  else if(boundRigPictureOnly){await command!('Runtime.enable');await boundRigPictureChecks();}
  else if(postQuestionPictures){await command!('Runtime.enable');await postQuestionPictureChecks();}
  else if(followup839){holdImages=false;await followupQuestionChecks();}else{

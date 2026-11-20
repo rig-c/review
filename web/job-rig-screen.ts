@@ -1,4 +1,4 @@
-import {formFor, jobCheckpointContext, jobPublicationRoutes, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
+import {formFor, jobCheckpointContext, jobPublicationRoutes, jobSourceDraftId, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
 import {commentPartsIssues,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
@@ -17,10 +17,10 @@ import {setSourceAttribute, setSourceText, sourceAttribute, sourceTextContent} f
 import type {InstanceAccess} from './instance-access.ts';
 
 /** The shared screen hosts model packages and parts drafts; records have their own shared host seam. */
-export function jobRigScreenSubject(source: SourceV3): boolean {
+export function jobRigScreenSubject(source: SourceV3, rigDraftVerdict = false): boolean {
   if ('record' in source) return false;
   if(source.selector?.kind==='draft'&&source.parts)return true;
-  return !!source.model && (source.direction ? source.selector?.kind === 'post' : source.selector === null || source.selector.kind === 'rig');
+  return !!source.model && (source.direction ? source.selector?.kind === 'post' : source.selector === null || source.selector.kind === 'rig' || (source.selector.kind === 'draft' && rigDraftVerdict));
 }
 /** The asks the rig screen's act bar answers: the rig verdict and checkpoints the package declares. */
 export function jobRigScreenAnswers(ask: Pick<PendingAskV3, 'subject'>, checkpoints: ReadonlySet<string>): boolean {
@@ -43,8 +43,8 @@ export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readon
   checkpoints: ReadonlySet<string>): boolean {
   const source=display.publication.source,id=display.publication.publicationId;
   if('record' in source)return false;
-  if(source.selector?.kind==='draft'&&source.parts)return true;
-  return (jobRigScreenSubject(source)||!source.model&&!source.parts)&&pending.every(ask=>
+  if(source.selector?.kind==='draft'&&source.parts&&!display.rigDraftVerdict)return true;
+  return (jobRigScreenSubject(source, display.rigDraftVerdict)||!source.model&&!source.parts)&&pending.every(ask=>
     ask.publicationId!==id||ask.status!=='pending'||jobRigScreenAsk(display,ask,checkpoints));
 }
 
@@ -54,7 +54,7 @@ export function jobRigScreenRefusal(display:DisplayPublicationV3,pending:readonl
   if('record' in source)return null;
   {
     if(source.selector?.kind==='post'&&!source.direction)return 'JOB_DIRECTION_MISSING';
-    if(source.selector?.kind==='draft'&&!source.parts)return 'JOB_PARTS_MISSING';
+    if(source.selector?.kind==='draft'&&!source.parts&&!display.rigDraftVerdict)return 'JOB_PARTS_MISSING';
     if(!source.model&&!source.parts&&!hasPicture&&!pending.some(ask=>ask.publicationId===display.publication.publicationId&&ask.status==='pending'&&ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,checkpoints)))return 'JOB_MODEL_MISSING';
   }
   return jobRigScreenRoute(display,pending,checkpoints)?null:'JOB_ASK_UNSUPPORTED';
@@ -153,7 +153,7 @@ export function createJobRigScreen(options: {
           if(jobPublicationRoutes(candidate,location.origin).jobId!==jobId)throw new Error('JOB_DISPLAY_MISMATCH');
           if (candidate.publication.publicationId !== previous || candidate.publication.generation >= generation) throw new Error('JOB_DISPLAY_MISMATCH');
           generation = candidate.publication.generation;
-          if (jobRigScreenSubject(candidate.publication.source)) {picture = await prepare(candidate, signal, true);break;}
+          if (jobRigScreenSubject(candidate.publication.source, candidate.rigDraftVerdict)) {picture = await prepare(candidate, signal, true);break;}
           previous = candidate.publication.previousPublicationId;
         }
         if (!picture && !missingBoundRig && inspection.interview?.questions.some(question => question.hasParts)) {
@@ -169,7 +169,7 @@ export function createJobRigScreen(options: {
         return {jobRigScreen:true,display,entry,checkpoints:new Set(),record:{inspection,forms,picture}};
       } catch(error) {inspection.dispose();throw error;}
     }
-    if (!jobRigScreenSubject(source)) {
+    if (!jobRigScreenSubject(source, display.rigDraftVerdict)) {
       if(!options.formDependencies)throw new Error('JOB_ACT_KIND_DISABLED');
       const inspection=await prepareJobInspection(display,signal,true);
       try {
@@ -189,7 +189,7 @@ export function createJobRigScreen(options: {
     const checkpoints = new Set(review.manifest.checkpoints.map(item => item.id));
     const refusal=backdropOnly?null:jobRigScreenRefusal(display,options.window.state().pending,checkpoints);
     let parts:PartsSubjectData|undefined;
-    if(source.selector?.kind==='draft'&&source.parts){
+    if(source.selector?.kind==='draft'&&source.parts&&!display.rigDraftVerdict){
       const response=await fetch(routes.api('stage-parts'),{signal});if(!response.ok)throw new Error('JOB_VISUAL_UNAVAILABLE');
       parts=await response.json() as PartsSubjectData;
       if(parts.sourceHash!==source.sourceHash||parts.mode!=='parts')throw new Error('JOB_DISPLAY_MISMATCH');
@@ -270,12 +270,15 @@ export function createJobRigScreen(options: {
       ...(general?.length?{general:[...general]}:{})},key=JSON.stringify(value);
     let attempt=partsAttempts.get(ask.askId);if(!attempt||attempt.key!==key){attempt={key,submissionId:crypto.randomUUID()};partsAttempts.set(ask.askId,attempt);}
     const result=await options.window.submit({kind:'parts-verdict',publicationId:ask.publicationId,askId:ask.askId,pageId:options.pageId,displayedNonce:state.receipt.displayedNonce,expectedGeneration:state.generation,submissionId:attempt.submissionId,value});
-    if(!result.ok)throw new Error(result.error.code);
+    if(!result.ok)throw new Error(result.error.code,{cause:(result.error as {cause?:unknown}).cause});
     partsAttempts.delete(ask.askId);return options.translate('job.saved');
   }
   const pendingSubjects=()=>options.window.state().pending.filter(ask=>ask.publicationId===mounted?.display.publication.publicationId&&ask.status==='pending').map(ask=>ask.subject);
   function host(prepared: JobRigScreenPrepared, ready: {resolve(): void; reject(error: unknown): void}, navigation?:RigHostNavigation): JobRigMeshHost {
     const base = new URL(prepared.entry).pathname;
+    const jobId = /^\/jobs\/([^/]+)\//.exec(base)?.[1];
+    const draftId = jobSourceDraftId(prepared.display.publication.source);
+    const previousPublicationId = prepared.display.publication.previousPublicationId;
     const access: InstanceAccess = {base, key: prepared.display.publication.instanceKey, capability: options.access.capability,
       route: path => {if (!path.startsWith('/') || path.startsWith('//')) throw new Error('Instance route must be app-absolute'); return base + path.slice(1);},
       headers: init => options.access.headers(init)};
@@ -286,7 +289,7 @@ export function createJobRigScreen(options: {
       return {...(backdrop?.subject?{subject:backdrop.subject}:{}),access:{...(backdrop?.access??access),capability:null,
         headers:init=>{const headers=options.access.headers(init);headers.delete('X-Review-Capability');return headers;}},
         ownerActAccess:{capability:options.access.capability},
-        record:{publicationId:prepared.display.publication.publicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,missingPicture:question?.missingPicture,scenePicture:question?.scenePicture},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
+        record:{...(jobId?{jobId}:{}),draftId,publicationId:prepared.display.publication.publicationId,previousPublicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,missingPicture:question?.missingPicture,scenePicture:question?.scenePicture},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
@@ -295,9 +298,9 @@ export function createJobRigScreen(options: {
     }
     if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
     const {publicationId,source}=prepared.display.publication;
-    const binding={publicationId,sourceHash:source.sourceHash};
+    const binding={...(jobId?{jobId}:{}),draftId,publicationId,previousPublicationId,sourceHash:source.sourceHash};
     return {access,pendingSubjects,navigation,...prepared.refusal?{unavailable:prepared.refusal}:{},
-      ...(source.direction?{direction:binding}:jobRigScreenSubject(source)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
+      ...(source.direction?{direction:binding}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
         prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review')}}:{}),
       reviewState(issues,sending) {
         if(sending)return options.translate('job.parts.sending');
