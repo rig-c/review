@@ -458,6 +458,9 @@ export async function waitForActBatch(send: JobNextTransport, initial: JobNextRe
     for (;;) {
       const budget = remaining();
       const request = {...initial, after, waitMs: Math.max(0, Math.floor(Math.min(budget, jobWaitLimitMs)))};
+      // An empty window that ended under a millisecond before the deadline would otherwise
+      // repeat zero-wait reads until it; sit out that remainder without another request.
+      if (!request.waitMs && lastBatch?.events.length === 0) await interrupted;
       // A delayed transport must also dispose its body if cancellation won the race.
       const pending = send(request, controller.signal).then(response => {
         if (controller.signal.aborted) {

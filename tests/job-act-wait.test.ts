@@ -1,4 +1,4 @@
-import {afterEach, expect, test} from 'bun:test';
+import {afterEach, expect, spyOn, test} from 'bun:test';
 import {join} from 'node:path';
 import {readFile} from 'node:fs/promises';
 import {JOB_API_SCHEMA, startJobHost, waitForJobAct, type JobHostOptions, type JobOwnerHost} from '../src/job-host.ts';
@@ -122,8 +122,9 @@ test('#1005 a display receipt write and a refused save neither wake the waiter n
   expect(refused.ok).toBe(false);
   const outcome = await waiting;
   expect(performance.now() - started).toBeGreaterThanOrEqual(1150);
-  // The one request was still open at the deadline, so no batch was accepted.
-  expect(outcome).toEqual({kind: 'timeout', code: 'JOB_NEXT_TIMEOUT', next: null, cursor});
+  // The one window either was still open at the deadline or ended empty just before it.
+  expect(outcome.kind === 'timeout' && outcome.code === 'JOB_NEXT_TIMEOUT' && outcome.cursor === cursor).toBe(true);
+  if (outcome.kind === 'timeout' && outcome.next) expect(outcome.next).toMatchObject({events: [], cursor, status: 'timeout'});
   // The deadline is inside one 30-second server window: exactly one next went out.
   expect(requests).toHaveLength(1);
 });
@@ -138,6 +139,32 @@ test('#1005 a deadline with no write sends one next and names JOB_NEXT_TIMEOUT',
     expect(outcome.cursor).toBe(cursor);
   }
   expect(requests).toHaveLength(1);
+});
+
+test('#1005 an empty window ending under a millisecond before the deadline sends no zero-wait repeat', async () => {
+  const {attached, cursor} = await attachedPair();
+  let clock = 1000;
+  const now = spyOn(performance, 'now').mockImplementation(() => clock);
+  const waits: number[] = [];
+  const host: JobOwnerHost = {...attached, ports: {...attached.ports, async handleJobApi(request) {
+    const body = JSON.parse(await request.text());
+    waits.push(body.waitMs);
+    // The first server window has elapsed: half a millisecond of the deadline is left, then it passes.
+    if (waits.length === 1) {
+      clock = 1299.5;
+      setTimeout(() => {clock = 1300;}, 50);
+    }
+    // A zero-wait spin can starve that timer, so a repeat also ends the deadline.
+    if (waits.length > 3) clock = 1300;
+    return attached.ports.handleJobApi(new Request(request.url, {method: 'POST', headers: request.headers,
+      body: JSON.stringify({...body, waitMs: 0})}));
+  }}};
+  try {
+    const outcome = await waitForJobAct(host, {after: cursor, deadlineMs: 300});
+    expect(outcome).toMatchObject({kind: 'timeout', code: 'JOB_NEXT_TIMEOUT', cursor,
+      next: {events: [], cursor, status: 'timeout'}});
+    expect(waits).toEqual([300]);
+  } finally {now.mockRestore();}
 });
 
 test('#1005 abort cancels the wait with its reason and leaves no timer behind', async () => {

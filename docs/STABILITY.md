@@ -536,7 +536,9 @@ stays bounded to 30000 ms, and the wait advances the cursor through unrelated
 publication and ask events. `cursor` is the cursor to resume from. An invalid
 deadline refuses `JOB_REQUEST_INVALID` before any request. A refused `next`
 throws its `JobError` code. Abort rejects with the signal's reason and clears
-the wait's timers.
+the wait's timers. When an empty server window ends less than a millisecond
+before the deadline, the wait sends no zero-wait repeat and sits out the
+remainder. The CLI shares this.
 
 A strict `reuseOnly` attachment opens its own read-only session, which the
 live host's in-process notifications never reach. Its `next` therefore watches
