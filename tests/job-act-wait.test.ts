@@ -119,31 +119,46 @@ test('#1005 an empty window ending under a millisecond before the deadline sends
 
 test('#1005 abort cancels the wait with its reason and leaves no timer behind', async () => {
   const {attached, cursor} = await attachedPair();
-  const timers = new Set<unknown>();
+  // Count only the wait's own timers: the waiter loop's (src/job-cli.ts) and those the attached
+  // session's next arms for this request. The live owner host's closure watcher (startJobHost's
+  // session.subscribe loop) re-arms its own 30000 ms window and 250 ms poll when its poll sees the
+  // fixture's display-receipt write, up to 250 ms later. Those timers belong to the owner host until
+  // it stops, and counting them made this bar flaky on #1012.
+  const timers = new Map<unknown, string>();
+  const session = attached.session as unknown as {next: (...args: unknown[]) => Promise<unknown>};
+  const realNext = session.next;
+  let inAttachedNext = false;
+  session.next = function (this: unknown, ...args: unknown[]) {
+    inAttachedNext = true;
+    try { return realNext.apply(this, args); } finally { inAttachedNext = false; }
+  };
+  const owned = () => inAttachedNext || /src\/job-cli\.ts/.test(new Error().stack ?? '');
   const realSet = globalThis.setTimeout, realClear = globalThis.clearTimeout;
   const realInterval = globalThis.setInterval, realClearInterval = globalThis.clearInterval;
+  const track = (id: unknown, kind: string) => { if (owned()) timers.set(id, kind); return id; };
   globalThis.setTimeout = ((handler: () => void, ms?: number) => {
-    const id = realSet(() => {timers.delete(id); handler();}, ms);
-    timers.add(id);
-    return id;
+    const id: ReturnType<typeof setTimeout> = realSet(() => {timers.delete(id); handler();}, ms);
+    return track(id, 'timeout ' + ms);
   }) as typeof setTimeout;
   globalThis.clearTimeout = ((id: ReturnType<typeof setTimeout>) => {timers.delete(id); realClear(id);}) as typeof clearTimeout;
-  globalThis.setInterval = ((handler: () => void, ms?: number) => {
-    const id = realInterval(handler, ms);
-    timers.add(id);
-    return id;
-  }) as typeof setInterval;
+  globalThis.setInterval = ((handler: () => void, ms?: number) => track(realInterval(handler, ms), 'interval ' + ms)) as typeof setInterval;
   globalThis.clearInterval = ((id: ReturnType<typeof setInterval>) => {timers.delete(id); realClearInterval(id);}) as typeof clearInterval;
   try {
     const controller = new AbortController();
     const waiting = waitForJobAct(attached, {after: cursor, deadlineMs: 5000, signal: controller.signal});
     await Bun.sleep(100);
-    expect(timers.size).toBeGreaterThan(0);
+    // The waiter's 5000 ms deadline, plus the attached next's window (the remaining budget) and its 250 ms revision poll.
+    const live = [...timers.values()];
+    expect(live).toHaveLength(3);
+    expect(live).toContain('timeout 5000');
+    expect(live).toContain('interval 250');
     controller.abort(new Error('synthetic explicit cancellation'));
     await expect(waiting).rejects.toThrow('synthetic explicit cancellation');
-    await Bun.sleep(20);
-    expect(timers.size).toBe(0);
+    // The waiter clears its deadline in its finally, and the aborted request signal clears the
+    // attached next's window and poll before the rejection is observed: no drain is needed.
+    expect([...timers.values()]).toEqual([]);
   } finally {
+    session.next = realNext;
     globalThis.setTimeout = realSet; globalThis.clearTimeout = realClear;
     globalThis.setInterval = realInterval; globalThis.clearInterval = realClearInterval;
   }
