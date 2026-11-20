@@ -929,7 +929,7 @@ const assembledView = (plan: BuildPlan): AssembledView => ({
 });
 
 /** Read the assembly stamp with the same installation that runs the producer CLI. */
-function clothAssemblyChanges(producer: InstalledTool, config: string, manifest: unknown): string[] {
+export function clothAssemblyChanges(producer: InstalledTool, config: string, manifest: unknown): string[] {
   if (!hasAssemblyConfig(manifest)) return [];
   const root = realpathSync(producer.root), requireProducer = createRequire(join(root, 'package.json'));
   const reader = realpathSync(requireProducer.resolve('@rig-c/parts/assembly-reading'));
