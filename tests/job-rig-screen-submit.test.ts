@@ -1,11 +1,18 @@
 import {expect, test, spyOn} from 'bun:test';
+import {readFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {RigPlayer} from '@rig-c/play';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
+import {rigStillCapture} from './helpers/job-rig-still.ts';
+import {loadSetupAssets, setupRoot} from './helpers/setup-mesh.ts';
 import {fixturePublication} from './helpers/job-window-fixture.ts';
-import {createJobRigScreen, type JobRigScreenPrepared} from '../web/job-rig-screen.ts';
+import {createJobRigScreen, type JobRigMeshScreen, type JobRigScreenPrepared} from '../web/job-rig-screen.ts';
 import {rigHost, setRigHost, type RigHost, type RigHostCommit} from '../web/rig-host.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
-import type {ActV3, DisplayPublicationV3, PendingAskV3, UISubmissionV3} from '../src/job-contract.ts';
+import type {ActV3, DisplayPublicationV3, JobMeshEditValue, PendingAskV3, UISubmissionV3} from '../src/job-contract.ts';
+import {jobHash, parseCommentsAct, parseMeshEditsAct} from '../src/job-api.ts';
+import {attachmentHashText, MeshEditSession, meshEditActValue} from '../src/mesh-edit.ts';
 import {parseManifest} from '../src/manifest.ts';
 import {setLanguagePreference} from '../web/i18n.ts';
 import {createJobFront} from '../src/job-front.ts';
@@ -282,4 +289,213 @@ for(const failure of ['abort','source-mismatch']as const)test(`#737 parts host p
   const preparation=host.prepare(display,controller.signal);await requested;if(failure==='abort')controller.abort();
   await expect(preparation).rejects.toThrow(failure==='abort'?'aborted':'JOB_DISPLAY_MISMATCH');expect(signals.length).toBe(2);expect(rigHost()).toBe(activeHost);
  }finally{globalThis.fetch=originalFetch;}
+});
+
+test('#966 mesh-carrying Request changes asks confirm once; Cancel sends nothing and leaves draft; OK sends act@8', async () => {
+  const f = await jobFixture(), originalReader = Object.getOwnPropertyDescriptor(globalThis, 'FileReader');
+  let loaded: Awaited<ReturnType<typeof loadSetupAssets>> | undefined;
+  let player: RigPlayer | undefined;
+  try {
+    const publication = await f.publish();
+    const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+    const page = await f.display(publication);
+    const retained = f.session.retainedSource(publication.publicationId);
+    const model = JSON.parse(await readFile(join(retained.snapshotRoot, ask.source.model!.path), 'utf8'));
+    loaded = await loadSetupAssets(model);
+    player = new RigPlayer(setupRoot(), loaded.assets, {mode: 'canvas'});
+    const doc = globalThis.document, create = doc.createElement.bind(doc);
+    doc.createElement = ((tag: string) => {
+      if (tag === 'div') return setupRoot();
+      const canvas = create(tag) as HTMLCanvasElement & {toBuffer(format: string): Buffer};
+      if (tag === 'canvas') canvas.toBlob = callback => callback(new Blob([new Uint8Array(canvas.toBuffer('image/png'))]));
+      return canvas;
+    }) as typeof doc.createElement;
+    class Reader {result: string | null = null; onload: (() => void) | null = null; onerror: (() => void) | null = null;
+      readAsDataURL(blob: Blob) {void blob.arrayBuffer().then(bytes => {this.result = 'data:image/png;base64,' + Buffer.from(bytes).toString('base64'); this.onload?.();}, () => this.onerror?.());}}
+    Object.defineProperty(globalThis, 'FileReader', {configurable: true, value: Reader});
+
+    const entry = model.skins.find((skin: {name: string}) => skin.name === 'default').attachments.mesh.mesh;
+    const editor = new MeshEditSession({slot: 'mesh', attachment: 'mesh', skin: 'default',
+      vertices: entry.vertices.xy.reduce((rows: [number, number][], value: number, i: number, xy: number[]) =>
+        (i % 2 === 0 ? [...rows, [value, xy[i + 1]!]] : rows), []),
+      triangles: entry.triangles, hull: entry.hull, hash: jobHash(attachmentHashText(entry))});
+    expect(editor.addVertex([60, 30])).toMatchObject({ok: true, changed: true});
+    const edit = meshEditActValue(editor, {width: model.stage.width, height: model.stage.height});
+    const requests: UISubmissionV3[] = [], acts: ActV3[] = [], prompts: string[] = [], cleared: JobMeshEditValue[][] = [];
+    let accept = false;
+    const initial = baseline();
+    initial.id = publication.source.package.id; initial.revision = publication.source.package.revision;
+    initial.sourceHash = publication.source.sourceHash;
+    const display = {publication} as unknown as DisplayPublicationV3;
+    const prepared: JobRigScreenPrepared = {jobRigScreen: true, display, entry: 'http://127.0.0.1:4318/retained/',
+      review: {manifest: parseManifest({schema: 'rig-review/1', id: initial.id, revision: initial.revision, title: 'Synthetic submission'}),
+        reviewedSource: initial.reviewedSource, sourceHash: initial.sourceHash}, checkpoints: new Set()};
+    const screen = createJobRigScreen({host: {classList: {remove() {}}, replaceChildren() {}} as unknown as HTMLElement,
+      pageId: page.pageId, access: {capability: 'synthetic-ui', headers: () => new Headers()},
+      confirm: text => {prompts.push(text); return accept;},
+      window: {
+        state: () => ({pending: f.session.status().pending as unknown as PendingAskV3[], receipt: page,
+          generation: f.session.status().generation, preparing: false, closed: false}),
+        async submit(input) {
+          requests.push(input);
+          const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+          if (result.ok) acts.push(result.value as ActV3);
+          return result;
+        },
+      }, routes: () => ({entry: prepared.entry, api: path => path}), refusal: error => String(error),
+      translate: (key, values) => values ? `${key}:${values.join(',')}` : key,
+      async load() {
+        rigHost()!.attach({
+          stage: () => ({pane: {clientWidth: 160, clientHeight: 128} as HTMLElement, paneHidden: false, root: setupRoot(),
+            player: player!, presentation: undefined, frameGeneration: player!.generation, camera: null, frame: null,
+            wholeRig: true, playing: false, posed: player!.posedFrame(null), assets: loaded!.assets}),
+          redraw() {}, message() {},
+          hasMeshEdits: () => cleared.length === 0,
+          meshEdits: async () => ({edits: [edit], stale: 0, clear: (items: readonly JobMeshEditValue[]) => {cleared.push([...items]);}}),
+        } as JobRigMeshScreen);
+        rigHost()!.displayed();
+      }});
+    screen.commit(prepared);
+    await screen.painted(prepared, new AbortController().signal);
+    const current = structuredClone(initial);
+    current.status = 'changes-requested';
+    current.feedback.push(structuredClone(comment));
+    const app = await mainSave(current, initial, rigHost()!);
+    await app.save();
+    expect(prompts).toEqual(['Send this Request changes with {0} mesh edit(s) to the producer?:1']);
+    expect(requests).toEqual([]);
+    expect(acts).toEqual([]);
+    expect(cleared).toEqual([]);
+    expect(app.state().dirty).toBe(true);
+    expect(app.state().readouts.dirty).toBe('Unsubmitted changes');
+    expect(app.state().saveStates).toEqual([]);
+    expect(app.state().messages).toEqual([]);
+    expect(app.locked(comment.id)).toBe(false);
+
+    accept = true;
+    await app.save();
+    expect(prompts).toHaveLength(2);
+    expect(requests).toHaveLength(1);
+    expect(acts).toHaveLength(1);
+    expect(parseMeshEditsAct(acts[0]!).value.meshEdits).toHaveLength(1);
+    expect(cleared).toEqual([[edit]]);
+    expect(app.state().dirty).toBe(false);
+    expect(app.state().messages.at(-1)).toBe('job.saved');
+    expect(app.locked(comment.id)).toBe(true);
+  } finally {
+    setRigHost(null);
+    player?.dispose();
+    loaded?.dispose();
+    if (originalReader) Object.defineProperty(globalThis, 'FileReader', originalReader);
+    else Reflect.deleteProperty(globalThis, 'FileReader');
+    await f.close();
+  }
+});
+
+for (const verdict of ['approved', 'changes-requested'] as const) test(`#966 ${verdict} without mesh edits never calls confirm and submits on one press`, async () => {
+  const f = await jobFixture(), originalReader = Object.getOwnPropertyDescriptor(globalThis, 'FileReader');
+  let loaded: Awaited<ReturnType<typeof loadSetupAssets>> | undefined;
+  let player: RigPlayer | undefined;
+  try {
+    const publication = await f.publish();
+    const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
+    const page = await f.display(publication), requests: UISubmissionV3[] = [], acts: ActV3[] = [], prompts: string[] = [];
+    const retained = f.session.retainedSource(publication.publicationId);
+    const model = JSON.parse(await readFile(join(retained.snapshotRoot, ask.source.model!.path), 'utf8'));
+    loaded = await loadSetupAssets(model);
+    player = new RigPlayer(setupRoot(), loaded.assets, {mode: 'canvas'});
+    const doc = globalThis.document, create = doc.createElement.bind(doc);
+    doc.createElement = ((tag: string) => {
+      if (tag === 'div') return setupRoot();
+      const canvas = create(tag) as HTMLCanvasElement & {toBuffer(format: string): Buffer};
+      if (tag === 'canvas') canvas.toBlob = callback => callback(new Blob([new Uint8Array(canvas.toBuffer('image/png'))]));
+      return canvas;
+    }) as typeof doc.createElement;
+    class Reader {result: string | null = null; onload: (() => void) | null = null; onerror: (() => void) | null = null;
+      readAsDataURL(blob: Blob) {void blob.arrayBuffer().then(bytes => {this.result = 'data:image/png;base64,' + Buffer.from(bytes).toString('base64'); this.onload?.();}, () => this.onerror?.());}}
+    Object.defineProperty(globalThis, 'FileReader', {configurable: true, value: Reader});
+
+    const initial = baseline();
+    initial.id = publication.source.package.id; initial.revision = publication.source.package.revision;
+    initial.sourceHash = publication.source.sourceHash;
+    const display = {publication} as unknown as DisplayPublicationV3;
+    const prepared: JobRigScreenPrepared = {jobRigScreen: true, display, entry: 'http://127.0.0.1:4318/retained/',
+      review: {manifest: parseManifest({schema: 'rig-review/1', id: initial.id, revision: initial.revision, title: 'Synthetic submission'}),
+        reviewedSource: initial.reviewedSource, sourceHash: initial.sourceHash}, checkpoints: new Set()};
+    const screen = createJobRigScreen({host: {classList: {remove() {}}, replaceChildren() {}} as unknown as HTMLElement,
+      pageId: page.pageId, access: {capability: 'synthetic-ui', headers: () => new Headers()},
+      confirm: text => {prompts.push(text); return false;},
+      window: {
+        state: () => ({pending: f.session.status().pending as unknown as PendingAskV3[], receipt: page,
+          generation: f.session.status().generation, preparing: false, closed: false}),
+        async submit(input) {
+          requests.push(input);
+          const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+          if (result.ok) acts.push(result.value as ActV3);
+          return result;
+        },
+      }, routes: () => ({entry: prepared.entry, api: path => path}), refusal: error => String(error), translate: key => key,
+      async load() {
+        rigHost()!.attach({
+          stage: () => ({pane: {clientWidth: 160, clientHeight: 128} as HTMLElement, paneHidden: false, root: setupRoot(),
+            player: player!, presentation: undefined, frameGeneration: player!.generation, camera: null, frame: null,
+            wholeRig: true, playing: false, posed: player!.posedFrame(null), assets: loaded!.assets}),
+          redraw() {}, message() {},
+          hasMeshEdits: () => false,
+          meshEdits: async () => ({edits: [], stale: 0, clear() {}}),
+        } as JobRigMeshScreen);
+        rigHost()!.displayed();
+      }});
+    screen.commit(prepared);
+    await screen.painted(prepared, new AbortController().signal);
+    const current = structuredClone(initial);
+    current.status = verdict;
+    if (verdict === 'changes-requested') current.feedback.push(structuredClone(comment));
+    const app = await mainSave(current, initial, rigHost()!);
+    await app.save();
+    expect(prompts).toEqual([]);
+    expect(requests).toHaveLength(1);
+    expect(acts).toHaveLength(1);
+    const committed = parseCommentsAct(acts[0]!);
+    expect(committed.kind === 'review-verdict' && committed.value.verdict).toBe(verdict);
+    expect(app.state().dirty).toBe(false);
+    expect(app.state().messages.at(-1)).toBe('job.saved');
+  } finally {
+    setRigHost(null);
+    player?.dispose();
+    loaded?.dispose();
+    if (originalReader) Object.defineProperty(globalThis, 'FileReader', originalReader);
+    else Reflect.deleteProperty(globalThis, 'FileReader');
+    await f.close();
+  }
+});
+
+test('#966 mountJobScreen passes translated confirm callback to createJobRigScreen', async () => {
+  const sessionSource = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+  const transpiler = new Bun.Transpiler({loader: 'ts'});
+  const live = sessionSource.indexOf('export async function mountJobScreen(');
+  const start = sessionSource.indexOf('    const rigScreen=createJobRigScreen(', live);
+  const end = sessionSource.indexOf('    let bootstrapNotice:', start);
+  const i18n = await import('../web/i18n.ts');
+  const prompts: string[] = [];
+  const options = new Function('createJobRigScreen', 'host', 'pageId', 'access', 'i18n', 't', 'jobWindowRefusal', 'dependencies',
+    'window', 'transport', 'jobPublicationRoutes', 'location', 'globalThis',
+    transpiler.transformSync(sessionSource.slice(start, end)) + ';return rigScreen;')(
+    (opts: {translate: typeof i18n.t; confirm: (text: string) => boolean}) => opts,
+    {}, 'page', {}, i18n, i18n.t, String, {}, {state() {}, submit() {}}, {readPublication() {}}, () => ({}), {origin: 'http://127.0.0.1'},
+    {confirm: (text: string) => {prompts.push(text); return false;}});
+  const english = options.translate('Send this Request changes with {0} mesh edit(s) to the producer?', [2]);
+  expect(english).toBe('Send this Request changes with 2 mesh edit(s) to the producer?');
+  try {
+    setLanguagePreference('en');
+    expect(options.confirm(english)).toBe(false);
+    setLanguagePreference('ko');
+    expect(options.confirm(english)).toBe(false);
+    expect(prompts).toEqual([
+      'Send this Request changes with 2 mesh edit(s) to the producer?',
+      '메시 편집 2개를 담은 수정 요청을 보낼까요?',
+    ]);
+  } finally {
+    setLanguagePreference('en');
+  }
 });
