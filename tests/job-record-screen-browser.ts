@@ -23,6 +23,7 @@ import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {partsDifferenceJobFixture,partsDifferenceOwnerUrl} from './helpers/parts-difference-job-fixture.ts';
 import {JOB_COMMENTS_ACT_SCHEMA} from '../src/job-contract.ts';
+import {jobWindowResources} from '../src/job-front.ts';
 
 const arg=(name:string)=>{const i=Bun.argv.indexOf(name);return i<0?undefined:Bun.argv[i+1];};
 const interviewOnly=Bun.argv.includes('--interview-only');
@@ -610,10 +611,20 @@ async function boundRigPictureChecks(){
 async function draftSurvivalChecks(){
  holdImages=false;
  const out=join(output,'draft-survival');await mkdir(out,{recursive:true});
+ const lookRoot=resolve('evidence/look');
+ for(const lang of ['en','ko'] as const){
+  await mkdir(join(out,'look',lang),{recursive:true});
+  await mkdir(join(lookRoot,lang),{recursive:true});
+ }
+ const saveLook=async(lang:'en'|'ko',name:string)=>{
+  const png=await page!.screenshot();
+  await writeFile(join(out,'look',lang,name),png);
+  await writeFile(join(lookRoot,lang,name),png);
+ };
  const fixture=await recordScreenFixture('checkpoint',false,out);
  try{
   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang','en');
-  await page!.setViewport(1600,1000);
+  await page!.setViewport(1440,900);
   await page!.goto('about:blank');await page!.goto(url.href);
   await wait(`!!document.querySelector('#stage-comment-list')&&!!document.querySelector('form[data-job-ask="ask-checkpoint"] fieldset:not(:disabled)')`,'992 initial load');
   const addGeneral=async(text:string,frameId?:string)=>{
@@ -670,6 +681,8 @@ async function draftSurvivalChecks(){
   const ask3={...fixture.ask,askId:'ask-checkpoint-3',publicationId:pub3.publicationId,source:pub3.source};
   fixture.fake.publish(display3);fixture.fake.pending(ask3,pub3.generation);
   await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 3 changed source');
+  await page!.evaluate<void>(`document.querySelector('#job-record-asks')?.close()`);
+  await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
   const carryKey='The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.';
   const expectedCarryEn=enCatalog[carryKey]!.replace('{0}','1');
   const expectedCarryKo=koCatalog[carryKey]!.replace('{0}','1');
@@ -683,15 +696,19 @@ async function draftSurvivalChecks(){
   assert.equal(bar3State.oldRetained,true);
   assert.equal(bar3State.draftState,expectedCarryEn);
   assert.equal(bar3State.dirty,expectedCarryEn);
+  await saveLook('en','changed-source.png');
   const koUrl=new URL(fixture.ownerUrl);koUrl.searchParams.set('lang','ko');
   await page!.goto('about:blank');await page!.goto(koUrl.href);
   await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 3 changed source ko');
+  await page!.evaluate<void>(`document.querySelector('#job-record-asks')?.close()`);
+  await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
   const bar3Ko=await page!.evaluate<{draftState:string;dirty:string}>(`({
    draftState:document.getElementById('review-draft-state')?.textContent??'',
    dirty:document.getElementById('dirty')?.textContent??'',
   })`);
   assert.equal(bar3Ko.draftState,expectedCarryKo);
   assert.equal(bar3Ko.dirty,expectedCarryKo);
+  await saveLook('ko','changed-source.png');
   // Bar 5: Existing per-publication drafts still restore (fallback)
   await page!.evaluate<void>(`(()=>{
    localStorage.clear();
@@ -720,27 +737,31 @@ async function draftSurvivalChecks(){
    try{
     const ask=await pf.ask(pf.publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
     const pUrl=partsDifferenceOwnerUrl(pf,lang);
+    await page!.setViewport(1440,900);
     await page!.goto('about:blank');await page!.goto(pUrl);
     await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'`,'999 parts ready '+lang);
-    await click(page!,'#stage-comment');
-    await wait(`document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`,'999 comment mode '+lang);
-    // Draw a box from (1.5, 1.5) to (10.5, 9.5) crossing body's top-left boundary (x=4, y=4) into empty margin (fails on da67304 with PARTS_COMMENT_OUT_OF_BOUNDS)
-    const [from,to]=await page!.evaluate<[{x:number;y:number},{x:number;y:number}]>(`(()=>{
-     const canvas=document.getElementById('parts-canvas'),rect=canvas.getBoundingClientRect();
-     return [[1.5,1.5],[10.5,9.5]].map(([x,y])=>({x:rect.left+x*rect.width/canvas.width,y:rect.top+y*rect.height/canvas.height}));
-    })()`);
-    await page!.mouse('mouseMoved',from.x,from.y);
-    await page!.mouse('mousePressed',from.x,from.y);
-    await page!.mouse('mouseMoved',to.x,to.y);
-    await page!.mouse('mouseReleased',to.x,to.y);
-    await wait(`!!document.querySelector('.stage-comment-composer input')`,'999 composer open '+lang);
+    const drawEdgeBox=async(text:string)=>{
+     if(await page!.evaluate<boolean>(`!document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`))await click(page!,'#stage-comment');
+     await wait(`document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`,'999 comment mode '+lang);
+     // Draw a box from (1.5, 1.5) to (10.5, 9.5) crossing body's top-left boundary (x=4, y=4) into empty margin (fails on da67304 with PARTS_COMMENT_OUT_OF_BOUNDS)
+     const [from,to]=await page!.evaluate<[{x:number;y:number},{x:number;y:number}]>(`(()=>{
+      const canvas=document.getElementById('parts-canvas'),rect=canvas.getBoundingClientRect();
+      return [[1.5,1.5],[10.5,9.5]].map(([x,y])=>({x:rect.left+x*rect.width/canvas.width,y:rect.top+y*rect.height/canvas.height}));
+     })()`);
+     await page!.mouse('mouseMoved',from.x,from.y);
+     await page!.mouse('mousePressed',from.x,from.y);
+     await page!.mouse('mouseMoved',to.x,to.y);
+     await page!.mouse('mouseReleased',to.x,to.y);
+     await wait(`!!document.querySelector('.stage-comment-composer input')`,'999 composer open '+lang);
+     await page!.evaluate<void>(`(()=>{
+      const f=document.querySelector('.stage-comment-composer');
+      const input=f.querySelector('input');
+      input.value=${JSON.stringify(text)};
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+     })()`);
+    };
     const words=lang==='ko'?'검 손잡이가 손 뒤로 가야 함':'Sword grip must go behind the hand';
-    await page!.evaluate<void>(`(()=>{
-     const f=document.querySelector('.stage-comment-composer');
-     const input=f.querySelector('input');
-     input.value=${JSON.stringify(words)};
-     input.dispatchEvent(new Event('input',{bubbles:true}));
-    })()`);
+    await drawEdgeBox(words);
     // Refusal sentence check: deselect the part chip and attempt save -> status line shows catalog sentence
     await click(page!,'.stage-comment-parts [data-comment-part="body"]');
     await page!.evaluate<void>(`document.querySelector('.stage-comment-composer').requestSubmit()`);
@@ -755,8 +776,18 @@ async function draftSurvivalChecks(){
     await page!.goto('about:blank');await page!.goto(pUrl);
     await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'&&document.querySelectorAll('.stage-comment-pin').length===1`,'999 box-pin survives reload '+lang);
     assert.equal(await page!.evaluate<boolean>(`[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].some(n=>n.textContent.includes(${JSON.stringify(words)}))`),true);
-    // Submit with Request changes (#request-changes) and verify the finalized act@6 parts-verdict includes the box-pin comment
-    await wait(`document.querySelector('#request-changes')?.checkVisibility()&&!document.querySelector('#request-changes').disabled`,'999 request changes enabled '+lang);
+    await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+    await saveLook(lang,'box-pin-edge.png');
+    // Delete the saved comment so committed comments are 0, then reopen the composer with text to prove Request changes is enabled by the open composer and auto-commits on click.
+    await page!.evaluate<void>(`document.querySelector('#stage-comment-list .stage-comment-summary').click()`);
+    await wait(`!!document.querySelector('.stage-comment-composer .stage-comment-delete')`,'999 delete button '+lang);
+    await page!.evaluate<void>(`document.querySelector('.stage-comment-composer .stage-comment-delete').click()`);
+    await wait(`document.querySelectorAll('.stage-comment-pin').length===0&&document.querySelector('#request-changes')?.disabled===true`,'999 cleared before open-composer submit '+lang);
+    await drawEdgeBox(words);
+    await wait(`document.querySelector('#request-changes')?.checkVisibility()&&!document.querySelector('#request-changes').disabled`,'999 request changes enabled with open composer '+lang);
+    await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+    await saveLook(lang,'request-changes-open-composer.png');
+    // Click Request changes (#request-changes) directly while the composer is open and verify the comment commits and the act is sent
     await click(page!,'#request-changes');
     let submittedAct:any=null;
     const deadline=Date.now()+15_000;
@@ -766,6 +797,9 @@ async function draftSurvivalChecks(){
      await Bun.sleep(50);
     }
     assert.ok(submittedAct,'999 finalized parts-verdict act '+lang);
+    await wait(`!document.querySelector('.stage-comment-composer')&&document.querySelectorAll('.stage-comment-pin').length===1&&document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1`,'999 open composer committed and act sent '+lang);
+    await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+    await saveLook(lang,'request-changes-open-composer-after.png');
     assert.equal(submittedAct.schema,JOB_COMMENTS_ACT_SCHEMA);
     assert.equal(submittedAct.kind,'parts-verdict');
     assert.equal(submittedAct.value.verdict,'changes-requested');
@@ -823,6 +857,56 @@ async function firstQuestionInDrawer(){
    assert.ok(after.options.length>0,'first publication shows visible option labels in the inspector drawer');
   }finally{await fixture.close();}
  }
+}
+
+if(Bun.argv.includes('--serve')){
+ const fixtureArg=arg('--fixture');
+ const serveScratch=await mkdtemp(join(tmpdir(),'review-750-serve-'));
+ const closers:(()=>Promise<void>)[]=[];
+ try{
+  if(!fixtureArg||fixtureArg==='draft-survival-changed-source'){
+   const baseResources=jobWindowResources();
+   let seedScript='';
+   const resources:ReturnType<typeof jobWindowResources>=async name=>{
+    const res=await baseResources(name);
+    if(name==='main.js'&&seedScript)return seedScript+'\n'+await new Response(res).text();
+    return res;
+   };
+   const fixture=await recordScreenFixture('checkpoint',false,serveScratch,'plan-approved',false,true,resources);
+   closers.push(()=>fixture.close());
+   const priorPub=fixture.display.publication;
+   const seedKey=`rig-review-record-comments/1:${fixture.session.jobId}:plan:${priorPub.source.sourceHash}`;
+   const seedVal=JSON.stringify({status:'pending',publicationId:priorPub.publicationId,sourceHash:priorPub.source.sourceHash,comments:[{id:'seed-c1',summary:'c1 · unsent comment before source hash change'}]});
+   seedScript=`try{if(!localStorage.getItem(${JSON.stringify(seedKey)}))localStorage.setItem(${JSON.stringify(seedKey)},${JSON.stringify(seedVal)});}catch{}`;
+   const updatedEvidence=await readFile(join(fixture.root,'plan/context-evidence.json'),'utf8')+'\n';
+   await writeFile(join(fixture.root,'plan/context-evidence.json'),updatedEvidence);
+   const updatedEvidenceHash=sha(updatedEvidence);
+   const planContext=fixture.workspace.context as unknown as {files:{path:string;sha256:string}[]};
+   planContext.files=planContext.files.map(f=>f.path==='plan/context-evidence.json'?{...f,sha256:updatedEvidenceHash}:f);
+   const pub2=await fixture.session.execute({schema:'rig-review/job-api@3',jobId:fixture.session.jobId,requestId:'serve-republish-changed',verb:'publish',expectedGeneration:fixture.session.status().generation,idempotencyKey:'serve-republish-changed',result:fixture.workspace.result,freeze:{kind:'producer-held',holdId:'serve-hold-2',record:fixture.workspace.record}},new AbortController().signal) as {publicationId:string;generation:number;source:typeof fixture.display.publication.source};
+   const display2=fixture.session.displayPublication(pub2.publicationId);
+   const ask2={...fixture.ask,askId:'ask-checkpoint-2',publicationId:pub2.publicationId,source:pub2.source};
+   fixture.fake.publish(display2);fixture.fake.pending(ask2,pub2.generation);
+   for(const lang of ['ko','en'] as const){
+    const u=new URL(fixture.ownerUrl);u.searchParams.set('lang',lang);
+    console.log(JSON.stringify({fixture:'draft-survival-changed-source',lang,url:u.href,pid:process.pid,priorSourceHash:priorPub.source.sourceHash,currentSourceHash:pub2.source.sourceHash,clicks:['1. Open URL ( optionally click Close / 닫기 on the checkpoint drawer to view the full Comments panel and footer #review-draft-state / #dirty ).']}));
+   }
+  }
+  if(!fixtureArg||fixtureArg==='parts-box-pin'){
+   const pf=await partsDifferenceJobFixture({scratchParent:serveScratch});
+   closers.push(()=>pf.close());
+   await pf.ask(pf.publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
+   for(const lang of ['ko','en'] as const){
+    console.log(JSON.stringify({fixture:'parts-box-pin',lang,url:partsDifferenceOwnerUrl(pf,lang),pid:process.pid,sourceHash:pf.publication.source.sourceHash,clicks:['1. Click + Comment (#stage-comment) and drag a box across the part edge.', '2. Type comment text in the open composer (Request changes / 수정 요청 enables immediately).', '3. Press Enter to save the clamped box pin, or click Request changes (#request-changes) directly while the composer is open.']}));
+   }
+  }
+  await new Promise<void>(resolve=>{process.once('SIGTERM',resolve);process.once('SIGINT',resolve);});
+ }finally{
+  for(const close of closers)await close();
+  await rm(serveScratch,{recursive:true,force:true});
+  await rm(profile,{recursive:true,force:true});
+ }
+ process.exit(0);
 }
 
 try{
