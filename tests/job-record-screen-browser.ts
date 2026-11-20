@@ -1036,7 +1036,7 @@ async function twoImageDrawerChecks(){
  }
 }
 
-type Plan1004State={rows:{label:string;answered:boolean;current:boolean}[];chip:{text:string;visible:boolean};rule:string;submit:{text:string;disabled:boolean;visible:boolean};afterList:boolean;inQuestionTab:boolean};
+type Plan1004State={rows:{label:string;answered:boolean;current:boolean}[];chip:{text:string;visible:boolean;onScreen:boolean;rect?:unknown};rule:string;submit:{text:string;disabled:boolean;visible:boolean};inList:boolean;inQuestionTab:boolean};
 /** #1004 step 0 plan fixture: K = 4 joined questions, the mock single submit and the partial-answer rule. */
 async function plan1004Checks(){
  for(const language of ['en','ko'] as const)for(const answered of [2,4] as const){
@@ -1046,29 +1046,29 @@ async function plan1004Checks(){
    const questions=readProject(fixture.root).questions;assert.equal(questions.length,4);
    await page!.setViewport(1440,900);await page!.goto('about:blank');await page!.goto(fixtureUrl(fixture.ownerUrl,language));
    await waitForQuestion('form.interview-answer');
-   await wait(`document.querySelectorAll('${questionRoot} nav.interview-questions button.interview-question').length===4&&document.querySelector('[data-plan-1004]')?.dataset.answered==='${answered}'`,'1004 list and mock');
+   await wait(`document.querySelectorAll('${questionRoot} nav.interview-questions button.interview-question').length===4&&document.querySelector('[data-plan-1004]')?.getAttribute('data-plan-answered')==='${answered}'`,'1004 list and mock');
    const state=()=>page!.evaluate<Plan1004State>(`(()=>{const visible=n=>!!n&&n.getClientRects().length>0&&getComputedStyle(n).visibility==='visible';
     const nav=document.querySelector('${questionRoot} nav.interview-questions'),mock=document.querySelector('[data-plan-1004]'),chip=mock.querySelector('[data-plan-1004-chip]'),submit=mock.querySelector('[data-plan-1004-submit]');
     return {rows:[...nav.querySelectorAll('button.interview-question')].map(b=>({label:b.textContent,answered:b.hasAttribute('data-answered'),current:b.getAttribute('aria-current')==='true'})),
-     chip:{text:chip.textContent,visible:visible(chip)},rule:mock.querySelector('[data-plan-1004-rule]').textContent,
-     submit:{text:submit.textContent,disabled:submit.disabled,visible:visible(submit)},afterList:mock.previousElementSibling===nav,
+     chip:{text:chip.textContent,visible:visible(chip),onScreen:(r=>r.top>=0&&r.bottom<=innerHeight&&r.left>=0&&r.right<=innerWidth)(chip.getBoundingClientRect())},rule:mock.querySelector('[data-plan-1004-rule]').textContent,
+     submit:{text:submit.textContent,disabled:submit.disabled,visible:visible(submit)},inList:nav.firstElementChild===mock,
      inQuestionTab:!!document.querySelector('${questionRoot}')?.contains(mock)&&!!document.querySelector(${JSON.stringify(questionTab)})};})()`);
-   const shown=await state();
+   const shown=await state();await writeFile(join(out,'plan.png'),await page!.screenshot());
    assert.deepEqual(shown.rows.map(row=>row.answered),[0,1,2,3].map(index=>index<answered));
-   assert.deepEqual({chip:shown.chip,rule:shown.rule,disabled:shown.submit.disabled,submitVisible:shown.submit.visible,afterList:shown.afterList,inQuestionTab:shown.inQuestionTab},
-    {chip:{text:PLAN_1004_TEXT[language].chip,visible:true},rule:PLAN_1004_TEXT[language].rule,disabled:false,submitVisible:true,afterList:true,inQuestionTab:true});
+   assert.deepEqual({chip:shown.chip,rule:shown.rule,disabled:shown.submit.disabled,submitVisible:shown.submit.visible,inList:shown.inList,inQuestionTab:shown.inQuestionTab},
+    {chip:{text:PLAN_1004_TEXT[language].chip,visible:true,onScreen:true},rule:PLAN_1004_TEXT[language].rule,disabled:false,submitVisible:true,inList:true,inQuestionTab:true});
    assert.equal(shown.submit.text,(language==='ko'?koCatalog:enCatalog)['Submit review']+` (${answered}/4)`);
    const selected=shown.rows.findIndex(row=>row.current);assert.equal(selected,answered===2?2:0);
    const painting=await readPainting(32);
    assert.ok(new URL(painting.src).pathname.endsWith('/api/interview/image/'+questions[selected]!.ref.sha256+'/0'),painting.src);
-   await writeFile(join(out,'plan.png'),await page!.screenshot());
    // Select another question in the existing list: the shared main view follows the selection.
    const other=answered===2?0:3;
-   await click(page!,`${questionRoot} nav.interview-questions li:nth-child(${other+1}) button`);
+   // The list column scrolls; the mock above it can push a row below the panel's default height.
+   await clickFormControl(`${questionRoot} nav.interview-questions li:nth-child(${other+1}) button`);
    await wait(`document.querySelector('${questionRoot} nav.interview-questions li:nth-child(${other+1}) button')?.getAttribute('aria-current')==='true'&&!!document.querySelector('[data-plan-1004]')`,'1004 select');
    const switched=await readPainting(32);
    assert.ok(new URL(switched.src).pathname.endsWith('/api/interview/image/'+questions[other]!.ref.sha256+'/0'),switched.src);
-   const after=await state();assert.equal(after.chip.visible,true);assert.equal(after.submit.text,shown.submit.text);
+   const after=await state();assert.equal(after.chip.visible,true);assert.equal(after.chip.onScreen,true);assert.equal(after.submit.text,shown.submit.text);
    await writeFile(join(out,'selected-'+(other+1)+'.png'),await page!.screenshot());
    const observation={language,answered,shown,selected:selected+1,painting:painting.src,switchedTo:other+1,switchedPainting:switched.src,after};
    await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');

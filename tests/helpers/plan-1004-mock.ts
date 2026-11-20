@@ -26,22 +26,26 @@ function place(){
   if(!nav){mock?.remove();return;}
   const rows=[...nav.querySelectorAll('button.interview-question')],answered=rows.filter(row=>row.hasAttribute('data-answered')).length;
   if(!mock){
-   mock=document.createElement('div');mock.dataset.plan1004='';mock.setAttribute('translate','no');
-   mock.style.cssText='display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:8px 0;padding:8px;border:1px dashed #c47f00;border-radius:6px';
-   const chip=document.createElement('span');chip.dataset.plan1004Chip='';
+   mock=document.createElement('div');mock.setAttribute('data-plan-1004','');mock.setAttribute('translate','no');
+   mock.style.cssText='display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin:0 0 6px;padding:6px;border:1px dashed #c47f00;border-radius:6px';
+   const chip=document.createElement('span');chip.setAttribute('data-plan-1004-chip','');
    chip.style.cssText='font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;background:#fff1cc;color:#5c3b00';
-   const button=document.createElement('button');button.type='button';button.dataset.plan1004Submit='';button.className='primary';
+   const button=document.createElement('button');button.type='button';button.setAttribute('data-plan-1004-submit','');button.className='primary';
    button.onclick=event=>event.preventDefault();
-   const rule=document.createElement('p');rule.dataset.plan1004Rule='';rule.style.cssText='flex-basis:100%;margin:0;font-size:12px';
+   const rule=document.createElement('p');rule.setAttribute('data-plan-1004-rule','');rule.style.cssText='flex-basis:100%;margin:0;font-size:11px;line-height:1.3';
    mock.append(chip,button,rule);
   }
-  if(mock.previousElementSibling!==nav)nav.after(mock);
+  // First in the list column: the form grid places no extra child, and the list is re-drawn on each refresh.
+  if(nav.firstElementChild!==mock)nav.prepend(mock);
   const copy=TEXT[lang()],chip=mock.querySelector('[data-plan-1004-chip]'),button=mock.querySelector('[data-plan-1004-submit]'),rule=mock.querySelector('[data-plan-1004-rule]');
   const title=LABEL[lang()]+' ('+answered+'/'+rows.length+')';
   if(chip.textContent!==copy.chip)chip.textContent=copy.chip;
   if(button.textContent!==title)button.textContent=title;
   if(rule.textContent!==copy.rule)rule.textContent=copy.rule;
-  button.disabled=answered===0;mock.dataset.answered=String(answered);mock.dataset.total=String(rows.length);
+  if(button.disabled!==(answered===0))button.disabled=answered===0;
+  // Own attributes sit outside the observer filter, so writing them cannot re-trigger place().
+  if(mock.getAttribute('data-plan-answered')!==String(answered))mock.setAttribute('data-plan-answered',String(answered));
+  if(mock.getAttribute('data-plan-total')!==String(rows.length))mock.setAttribute('data-plan-total',String(rows.length));
  }finally{busy=false;}
 }
 new MutationObserver(place).observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['data-answered','lang','hidden']});
@@ -52,8 +56,28 @@ place();
 /** Forward every request to the workspace, keeping it same-origin from the workspace's point of view. */
 export function planMockProxy(upstream: string, labels: {en: string; ko: string}) {
   const script = mockSource(labels), target = new URL(upstream);
-  const server = Bun.serve({hostname: '127.0.0.1', port: 0, idleTimeout: 0, async fetch(request) {
+  type Socket = {path: string; upstream?: WebSocket; queue: (string | ArrayBuffer | Uint8Array)[]};
+  const server = Bun.serve<Socket>({hostname: '127.0.0.1', port: 0, idleTimeout: 0,
+   // The workspace keeps its window alive over a `/api/live` WebSocket; relay it unchanged.
+   websocket: {
+    open(ws) {
+      const upstream = new WebSocket('ws://' + target.host + ws.data.path, {headers: {Origin: target.origin}} as never);
+      upstream.binaryType = 'arraybuffer';ws.data.upstream = upstream;
+      upstream.onopen = () => {for (const item of ws.data.queue.splice(0)) upstream.send(item);};
+      upstream.onmessage = event => ws.send(event.data as string | ArrayBuffer);
+      upstream.onclose = event => ws.close(event.code === 1005 || event.code === 1006 ? 1000 : event.code, event.reason);
+      upstream.onerror = () => ws.close();
+    },
+    message(ws, message) {
+      const upstream = ws.data.upstream;
+      if (upstream?.readyState === WebSocket.OPEN) upstream.send(message); else ws.data.queue.push(message);
+    },
+    close(ws) {ws.data.upstream?.close();},
+   },
+   async fetch(request, self) {
     const url = new URL(request.url);
+    if (request.headers.get('upgrade')?.toLowerCase() === 'websocket')
+      return self.upgrade(request, {data: {path: url.pathname + url.search, queue: []}}) ? undefined : new Response(null, {status: 400});
     if (url.pathname === PLAN_1004_SCRIPT)
       return new Response(script, {headers: {'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store'}});
     const headers = new Headers(request.headers);
