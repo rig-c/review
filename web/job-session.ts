@@ -1529,15 +1529,20 @@ export interface JobFormDependencies {
             if (ask.status !== 'answered' && validPublication &&
                 saved?.sourceHash === prepared.display.publication.source.sourceHash) {
                 assertJobAskSource({...ask, source: saved.source}, prepared.display);
-                const original = saved.forms?.find((item: {
+                const exact = saved.forms?.find((item: {
                     askId: string;
-                    value?: Record<string, unknown>;
-                }) => item.askId === ask.askId || (
-                    subject.kind === 'interview-picks' ? item.value?.questionId === subject.questionId :
-                    subject.kind === 'checkpoint' ? item.value?.checkpointId === subject.checkpointId :
-                    (subject.kind === 'signoff' || subject.kind === 'reopen') && item.value?.stage === subject.stage &&
-                        !('outcome' in (item.value ?? {})) && (subject.kind === 'signoff') === ('decision' in (item.value ?? {}))
-                ));
+                }) => item.askId === ask.askId);
+                const original = exact ?? (saved.publicationId !== prepared.display.publication.publicationId
+                    ? [...(saved.forms ?? [])].reverse().find((item: {
+                        askId: string;
+                        value?: Record<string, unknown>;
+                    }) =>
+                        subject.kind === 'interview-picks' ? item.value?.questionId === subject.questionId :
+                        subject.kind === 'checkpoint' ? item.value?.checkpointId === subject.checkpointId :
+                        (subject.kind === 'signoff' || subject.kind === 'reopen') && item.value?.stage === subject.stage &&
+                            !('outcome' in (item.value ?? {})) && (subject.kind === 'signoff') === ('decision' in (item.value ?? {}))
+                    )
+                    : undefined);
                 if(commentOnly&&typeof original?.value?.words==='string'&&original.value.words.length<=10000)retainedCommentWords=original.value.words;
                 for (const input of form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')) {
                     const restored = original?.controls?.find((item: {

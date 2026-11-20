@@ -252,6 +252,22 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   const fallbackRestored=formFor(f.ask,inspection,deps);
   expect(fallbackRestored.read()).toEqual(entry.read());
   expect(fallbackRestored.dirty).toBe(true);
+  // Same-publication reconnect with an earlier pending ask for the same subject must match exact askId first.
+  forms.clear();store.clear();
+  const earlierAsk:PendingAskV3={...f.ask,askId:'earlier-unanswered-ask'};
+  const activeAsk:PendingAskV3={...f.ask,askId:'active-answered-ask'};
+  const earlierEntry=formFor(earlierAsk,inspection,deps);earlierEntry.dirty=true;forms.set(earlierAsk.askId,earlierEntry);
+  const activeEntry=formFor(activeAsk,inspection,deps);
+  for(const input of activeEntry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
+  activeEntry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='Exact ask match';
+  activeEntry.dirty=true;forms.set(activeAsk.askId,activeEntry);
+  drafts.saveDraft();
+  const multiSaved=JSON.parse(store.get(drafts.localDraftKey(f.display))!);
+  // Control (c9e6a46): single .find(item => item.askId === ask.askId || item.value?.questionId === subject.questionId) matched earlierAsk at index 0
+  const buggyMatch=multiSaved.forms.find((item:{askId:string;value?:{questionId?:string}})=>item.askId===activeAsk.askId||item.value?.questionId==='rig_type');
+  expect(buggyMatch.askId).toBe(earlierAsk.askId);
+  const activeRestored=formFor(activeAsk,inspection,deps);
+  expect(activeRestored.read()).toEqual(activeEntry.read());
  }finally{inspection?.dispose();dom.restore();await f.close();}
 });
 

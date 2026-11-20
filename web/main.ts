@@ -1499,8 +1499,10 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  setupPartsPersistence=async()=>{
   if(host?.record)return;
   const binding:InspectionBinding={mode:'single',sourceHash:subject.sourceHash,rigs:[null]};
+  const legacyPartsScope='parts:'+access.key+':'+access.base+':'+subject.sourceHash;
   const partsDraftScope=host?.verdictComments?.jobId&&host?.verdictComments?.draftId?host.verdictComments.jobId+':'+host.verdictComments.draftId:access.key+':'+access.base;
-  const connection=await connectInspectionPersistence({scope:'parts:'+partsDraftScope+':'+subject.sourceHash,binding,baseline:partsBaseline,session:()=>({subject:'parts' as const,issues}),reviewDirty:()=>dirty,
+  const partsScope='parts:'+partsDraftScope+':'+subject.sourceHash;
+  const connection=await connectInspectionPersistence({scope:partsScope,legacyScopes:partsScope!==legacyPartsScope?[legacyPartsScope]:[],binding,baseline:partsBaseline,session:()=>({subject:'parts' as const,issues}),reviewDirty:()=>dirty,
    recover:value=>{try{if(!value||typeof value!=='object')return null;const row=value as PartsSubjectSession;if(row.subject!=='parts'||!Array.isArray(row.issues)||row.issues.length>1000||Object.keys(row).some(key=>!['subject','issues'].includes(key)))return null;const items=new Map(subject.items.map(item=>[item.name,{...item,imageHash:item.imageHash!}]));const restored=row.issues.map(issue=>{const parsed=parsePartsIssue(issue,false,true,false);assertPartsIssueBinding(parsed,items,subject.sourceHash);return parsed;});if(new Set(restored.map(issue=>issue.id)).size!==restored.length)return null;return {subject:'parts' as const,issues:restored};}catch{return null;}},
    restoreSession:(value,isDirty)=>{issues.splice(0,issues.length,...value.issues);dirty=isDirty;partsSubject?.refreshComments();showCommentCount();text('dirty',isDirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',isDirty);state.setSaveState({kind:isDirty?'unsaved':'saved',text:isDirty?'Unsubmitted changes':'Submitted'});},
    bookmark:()=>({schema:'rig-review-inspection/1',binding,animation:null,time:null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:null,a:null,b:null,reference:null}},selection:{}}),
@@ -1597,7 +1599,8 @@ function restoreRecordComments(form?:HTMLFormElement):void {
   const onStorage=(event:Pick<StorageEvent,'key'|'newValue'>)=>{
    if(!recordCommentKey||event.key!==recordCommentKey)return;
    try{
-    const incoming=event.newValue===null?[]:parseRows(event.newValue,scopePrefix?undefined:publicationId);
+    const currentRaw=typeof localStorage.getItem==='function'?localStorage.getItem(recordCommentKey):event.newValue;
+    const incoming=currentRaw===null?[]:parseRows(currentRaw,scopePrefix?undefined:publicationId);
     if(!incoming)return;
     const incomingIds=new Set(incoming.map(row=>row.id));
     const localUnsaved=target.filter(row=>!knownIds.has(row.id)&&!incomingIds.has(row.id));
@@ -1624,6 +1627,11 @@ function restoreRecordComments(form?:HTMLFormElement):void {
    previousRaw!==null?parseRows(previousRaw,binding.previousPublicationId??undefined):null;
   if(rows){
    for(const row of rows){knownIds.add(row.id);if(!target.some(existing=>existing.id===row.id))target.push(row);}
+   if(primaryRaw===null&&typeof localStorage.removeItem==='function'){
+    persistRecordComments();
+    if(fallbackKey&&fallbackKey!==recordCommentKey)localStorage.removeItem(fallbackKey);
+    if(previousKey&&previousKey!==recordCommentKey)localStorage.removeItem(previousKey);
+   }
    return;
   }
   if((scopePrefix||binding.previousPublicationId)&&typeof localStorage.length==='number'&&typeof localStorage.key==='function'){
@@ -1677,8 +1685,14 @@ function persistRecordComments():void {
   }
   knownIds.clear();for(const row of comments)knownIds.add(row.id);
   const dialogPublication=typeof recordDialog!=='undefined'?recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication:undefined;
+  const activePub=binding.publicationId??dialogPublication;
+  const prefix=host?.verdictComments?'rig-review-verdict-comments/1:':'rig-review-record-comments/1:';
+  if(typeof localStorage.removeItem==='function'){
+   if(activePub&&`${prefix}${activePub}:${binding.sourceHash}`!==recordCommentKey)localStorage.removeItem(`${prefix}${activePub}:${binding.sourceHash}`);
+   if(binding.previousPublicationId&&`${prefix}${binding.previousPublicationId}:${binding.sourceHash}`!==recordCommentKey)localStorage.removeItem(`${prefix}${binding.previousPublicationId}:${binding.sourceHash}`);
+  }
   if(host?.verdictComments&&!comments.length)localStorage.removeItem(recordCommentKey);
-  else localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:binding.publicationId??dialogPublication,sourceHash:binding.sourceHash,comments}));
+  else localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:activePub,sourceHash:binding.sourceHash,comments}));
  }catch{/* In-memory comments remain bound to this host. */}
 }
 function recordCommentsChanged():void {

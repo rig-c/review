@@ -644,6 +644,8 @@ async function draftSurvivalChecks(){
    const next=JSON.stringify({...saved,comments:[...saved.comments,{id:'c2-id',summary:'c2 · from tab B'}]});
    localStorage.setItem(key,next);
    window.dispatchEvent(new StorageEvent('storage',{key,newValue:next}));
+   // Deliver a late/stale storage event carrying only [c1] after [c1,c2] is in localStorage; both must survive.
+   window.dispatchEvent(new StorageEvent('storage',{key,newValue:raw}));
   })()`);
   await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===2`,'992 bar 4 storage event pickup');
   assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c1 · reload survival','c2 · from tab B']);
@@ -701,6 +703,14 @@ async function draftSurvivalChecks(){
   await page!.goto('about:blank');await page!.goto(url.href);
   await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 5 fallback');
   assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c3 · legacy fallback']);
+  // Deleting all comments restored from a legacy key and reloading must stay at 0 rows (never resurrect from legacy key).
+  await page!.evaluate<void>(`document.querySelector('#stage-comment-list .stage-comment-summary').click()`);
+  await wait(`!!document.querySelector('.stage-comment-composer .stage-comment-delete')`,'992 bar 5 legacy delete button');
+  await page!.evaluate<void>(`document.querySelector('.stage-comment-composer .stage-comment-delete').click()`);
+  await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===0`,'992 bar 5 legacy deleted');
+  await page!.goto('about:blank');await page!.goto(url.href);
+  await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 5 reload after legacy delete');
+  assert.deepEqual(await readRows(),[]);
 
   // #999 Bar: box-pin comment on parts-verdict draft page saves (even when box crosses part boundary into margin),
   // displays catalog refusal sentence on status line when refused, survives reload, and is included in submitted act in EN and KO.

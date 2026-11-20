@@ -270,11 +270,12 @@ test('#992 record and verdict comment drafts survive reload, same-source republi
    for(const fn of listeners)if((fn as {owner?:unknown}).owner!==sender)fn({key,newValue:null});
   },
  };
- const makeTab=(binding:{jobId?:string;draftId?:string;publicationId:string;sourceHash:string},verdict=false)=>{
+ const makeTab=(binding:{jobId?:string;draftId?:string;publicationId:string;previousPublicationId?:string;sourceHash:string},verdict=false)=>{
   const rows:{id:string;summary:string}[]=[],notices:{text:string;error:boolean}[]=[];
+  let storageHandler:((event:{key:string|null;newValue:string|null})=>void)|null=null;
   const tabWindow={
    addEventListener:(type:string,fn:(event:{key:string|null;newValue:string|null})=>void)=>{
-    if(type==='storage'){(fn as {owner?:unknown}).owner=tabWindow;listeners.add(fn);}
+    if(type==='storage'){(fn as {owner?:unknown}).owner=tabWindow;storageHandler=fn;listeners.add(fn);}
    },
   };
   const tabStorage={
@@ -305,7 +306,7 @@ test('#992 record and verdict comment drafts survive reload, same-source republi
   };
   const api=new Function('scope',`with(scope){${code};return {restore:()=>restoreRecordComments(),persist:()=>persistRecordComments()};}`)(scope) as {restore():void;persist():void};
   api.restore();
-  return {scope,rows,notices,persist:api.persist};
+  return {scope,rows,notices,persist:api.persist,deliverStorage:(event:{key:string|null;newValue:string|null})=>storageHandler?.(event)};
  };
 
  // Bar 1 (Reload) & Bar 2 (Republish, same job, draft and source hash)
@@ -349,12 +350,39 @@ test('#992 record and verdict comment drafts survive reload, same-source republi
  const reloadAfterDelete=makeTab({jobId:'job-1',draftId:'d2',publicationId:'pub-4',sourceHash:'c'.repeat(64)});
  expect(reloadAfterDelete.rows.map(r=>r.id)).toEqual(['c2']);
 
- // Bar 5 (Existing per-publication drafts still restore via fallback)
- store.set('rig-review-record-comments/1:pub-legacy:'+'d'.repeat(64),JSON.stringify({
-  status:'pending',publicationId:'pub-legacy',sourceHash:'d'.repeat(64),comments:[{id:'legacy-1',summary:'Legacy per-publication comment'}],
- }));
- const fallbackTab=makeTab({jobId:'job-1',draftId:'d3',publicationId:'pub-legacy',sourceHash:'d'.repeat(64)});
- expect(fallbackTab.rows).toEqual([{id:'legacy-1',summary:'Legacy per-publication comment'}]);
+ // Bar 4b (Late/stale storage event from Tab A arrives after Tab B writes c2: both c1 and c2 survive)
+ const lateA=makeTab({jobId:'job-1',draftId:'d2-late',publicationId:'pub-4b',sourceHash:'c'.repeat(64)});
+ const lateB=makeTab({jobId:'job-1',draftId:'d2-late',publicationId:'pub-4b',sourceHash:'c'.repeat(64)});
+ lateA.rows.push({id:'c1',summary:'From tab A'});
+ const stalePayload=JSON.stringify({status:'pending',publicationId:'pub-4b',sourceHash:'c'.repeat(64),comments:[{id:'c1',summary:'From tab A'}]});
+ store.set(lateA.scope.recordCommentKey,stalePayload);
+ lateB.rows.push({id:'c2',summary:'From tab B'});
+ lateB.persist();
+ expect(lateB.rows.map(r=>r.id)).toEqual(['c1','c2']);
+ // Control (c9e6a46): parsing event.newValue directly replaced B's [c1,c2] with [c1]
+ expect(JSON.parse(stalePayload).comments.map((r:{id:string})=>r.id)).toEqual(['c1']);
+ lateB.deliverStorage({key:lateB.scope.recordCommentKey,newValue:stalePayload});
+ expect(lateB.rows.map(r=>r.id)).toEqual(['c1','c2']);
+
+ // Bar 5 & 5b (Existing per-publication drafts restore via fallback/previousPublicationId, retire legacy key, and deleting all + reload stays 0 rows)
+ for(const [verdict,usePrevious]of [[false,false],[true,false],[false,true],[true,true]] as const){
+  const prefix=verdict?'rig-review-verdict-comments/1:':'rig-review-record-comments/1:';
+  const hash=(verdict?'e':'d').repeat(64);
+  const legacyPub=usePrevious?'pub-prev-legacy':'pub-legacy';
+  const legacyKey=`${prefix}${legacyPub}:${hash}`;
+  const draftId=`d3-${verdict?'verdict':'record'}-${usePrevious?'prev':'cur'}`;
+  // Control (c9e6a46): if legacyKey was not retired and primary was removed when empty, reload resurrected legacy-1
+  store.set(legacyKey,JSON.stringify({
+   status:'pending',publicationId:legacyPub,sourceHash:hash,comments:[{id:'legacy-1',summary:'Legacy per-publication comment'}],
+  }));
+  const fallbackTab=makeTab({jobId:'job-1',draftId,publicationId:'pub-legacy',...(usePrevious?{previousPublicationId:legacyPub}:{}),sourceHash:hash},verdict);
+  expect(fallbackTab.rows).toEqual([{id:'legacy-1',summary:'Legacy per-publication comment'}]);
+  expect(store.has(legacyKey)).toBe(false);
+  fallbackTab.rows.splice(0,fallbackTab.rows.length);
+  fallbackTab.persist();
+  const reloadedAfterDelete=makeTab({jobId:'job-1',draftId,publicationId:'pub-legacy',...(usePrevious?{previousPublicationId:legacyPub}:{}),sourceHash:hash},verdict);
+  expect(reloadedAfterDelete.rows).toEqual([]);
+ }
 });
 
 test('#999 assembled box-pin comments clamp to intersecting bound parts, commit pending composer drafts on Request changes, and fail on da67304 control',()=>{
