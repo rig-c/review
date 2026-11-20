@@ -571,6 +571,16 @@ file-only Save has the separate [save-notification contract](PARTS_VIEW.md#durab
 Waking this act wait requires a real finalized job act. Consumers use writer-owned `fetch-act` for
 the source-bound result and deduplicate by `actId`.
 
+An in-process agent holding a started or strict `reuseOnly` host runs the same wait with
+`waitForJobAct(host, {after, deadlineMs, signal})` from `@rig-c/review/job-host`. It resolves
+`{kind: 'act' | 'closed', next, cursor}` or `{kind: 'timeout', code: 'JOB_NEXT_TIMEOUT', next, cursor}`,
+where `next` is the last accepted batch or `null`, and throws a refused `next` by its `JobError` code.
+On a record-and-package host it speaks `rig-review/job-api@3`, and act rows may be `rig-review/act@4`
+record acts, which this CLI wait also accepts.
+A strict attachment's `next` watches the shared job store, so a finalized act committed by the live
+owner host wakes it within about 250 ms. A write that adds no event, such as a display receipt,
+keeps the wait open. See [Public API stability](STABILITY.md#host-bound-act-wait).
+
 - **One standing window and visual gate.** Every owner visual, question, choice, correction and verdict goes through one standing Review window/link plus one what-to-look-at line. Internal agent and HQ media stay internal and are never substituted for the owner handoff. When a required visual is missing (`visual.status` set to `'unavailable'` with a named `code`), the agent stops immediately and files a Create on-path Review card rather than falling back to chat text or images.
 - **Human UI vs agent verbs.** People submit through the Review browser UI (`actor` set to `'human'`, `channel` set to `'review-ui'`). Trusted host bootstrap declares `reviewer` (`id` and `role` as `'owner'` or `'delegate'`), which the browser UI cannot type or override. This binding records bootstrap-declared provenance rather than keyboard-user authentication, and Create maps `role` to its existing `by` authority. Agents use only `publish`, `ask`, `next` and `close` (`JobAgentRequest`), with `expectedGeneration` compare-and-swap (CAS) and `idempotencyKey` on mutations.
 - **Explicit producer-held freeze and explicit close.** Every `publish` request designates a root-relative `result` (`path` and `selector`, never a command) and carries an explicit producer-held freeze (`freeze.kind` set to `'producer-held'`, `holdId`, `record` as `JobFileIdentity` or `null` for a declared non-Create root) held until acknowledgment. Review validates retained bytes, detects a moved record (`JOB_RECORD_MOVED`, `JOB_RECORD_INCOMPLETE`, `JOB_FREEZE_REQUIRED`, `JOB_SOURCE_MISMATCH`, `JOB_SOURCE_UNRETAINABLE`, `JOB_ROOT_REPLACED`) and commits local generation CAS (`JOB_GENERATION_STALE`, `JOB_IDEMPOTENCY_CONFLICT`). The freeze assertion is a caller obligation rather than a lock Review can impose on independent writers. Review offers no watched-root or automatic-close guarantee, and only explicit `close` ends an active job.

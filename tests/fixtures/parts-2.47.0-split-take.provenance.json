@@ -1,0 +1,9 @@
+{
+  "producer": "@rig-c/parts@2.47.0",
+  "gitHead": "666db3239b944b0e70bcbcd75c78c164430cb950",
+  "fixtureSource": "https://raw.githubusercontent.com/rig-c/parts/666db3239b944b0e70bcbcd75c78c164430cb950/fixtures/occluder_chain.ts",
+  "control": "https://github.com/rig-c/parts/blob/666db3239b944b0e70bcbcd75c78c164430cb950/tools/check_take_layers.ts (runSplitTakeMetadataChecks, TK1392)",
+  "how": "writeChainInputs + writePlateRun + chainConfig with one whole-layer take and one occluder-split take, then the real assembleStage; two runs gave identical bytes. Kept: config.json and the files it names (painting.png, occluder.png, orig/, split-donor/) and the assembled parts.json; the plate run and parts/ images are not read by the assembly reading.",
+  "generatorSha256": "5afeef6803cc24dd6d62d04376a9e7458761e93bca79044dd5b18f0576f1efdf",
+  "partsJsonSha256": "b0bc3ad2bff6230b63384cc7a20a9feeca62d6373266564810be2852e7bfbfd4"
+}

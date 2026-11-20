@@ -1,0 +1,51 @@
+{
+  "width": 128,
+  "height": 128,
+  "layers": [
+    {
+      "name": "face",
+      "filename": "00_face.png",
+      "left": 0,
+      "top": 0,
+      "right": 128,
+      "bottom": 128,
+      "depth_median": 0.5
+    },
+    {
+      "name": "eyewhite-r",
+      "filename": "01_eyewhite-r.png",
+      "left": 0,
+      "top": 0,
+      "right": 128,
+      "bottom": 128,
+      "depth_median": 0.49
+    },
+    {
+      "name": "eyewhite-l",
+      "filename": "02_eyewhite-l.png",
+      "left": 0,
+      "top": 0,
+      "right": 128,
+      "bottom": 128,
+      "depth_median": 0.48
+    },
+    {
+      "name": "legwear",
+      "filename": "03_legwear.png",
+      "left": 0,
+      "top": 0,
+      "right": 128,
+      "bottom": 128,
+      "depth_median": 0.7
+    },
+    {
+      "name": "objects",
+      "filename": "04_objects.png",
+      "left": 0,
+      "top": 0,
+      "right": 128,
+      "bottom": 128,
+      "depth_median": 0.2
+    }
+  ]
+}
