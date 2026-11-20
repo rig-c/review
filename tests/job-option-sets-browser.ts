@@ -14,6 +14,7 @@ import {koCatalog} from '../web/catalog-ko.ts';
 const arg=(name:string)=>{const i=Bun.argv.indexOf(name);return i<0?undefined:Bun.argv[i+1];};
 const output=resolve(arg('--out')??'artifacts/job-option-sets-1004');await mkdir(output,{recursive:true});
 const root='#workspace-interview-answer';
+const headline=()=>page!.evaluate<string>(`document.querySelector('#workspace-ask-headline').textContent`);
 type ListState={forms:{ask:string;visible:boolean;answered:boolean;editable:boolean}[];rows:{answered:boolean;current:boolean}[];
  action:{text:string;disabled:boolean;first:boolean;visible:boolean}|null;actions:number};
 const profile=await mkdtemp(join(tmpdir(),'review-1004-browser-'));
@@ -60,6 +61,8 @@ try{
    assert.equal(before.forms.filter(f=>f.visible).length,1,JSON.stringify(before.forms));
    assert.deepEqual(before.rows.map(r=>r.answered),[true,true,false,false]);
    assert.deepEqual(before.action,{text:label(2),disabled:false,first:true,visible:true});
+   // The header says the interview sentence once for four pending asks (HQ ruling on #1004).
+   assert.equal(await headline(),catalog['Answer these questions.']);
    await writeFile(join(out,'before-2-of-4.png'),await page.screenshot());
    // Selecting another row shows that set's form; the list and its one submit stay at the top.
    await selectRow(0);
@@ -75,6 +78,7 @@ try{
    assert.deepEqual(after.forms.map(f=>[f.answered,f.editable]),[[true,false],[true,false],[false,true],[false,true]]);
    assert.deepEqual(after.rows.map(r=>r.answered),[true,true,false,false]);
    assert.deepEqual(after.action,{text:label(2),disabled:true,first:true,visible:true});
+   assert.equal(await headline(),catalog['Answer these questions.']);
    await writeFile(join(out,'after-partial-submit.png'),await page.screenshot());
    // Answer the remaining two later and submit: two more acts, nothing pending.
    for(const index of [2,3]){await selectRow(index);await answerShown();}
