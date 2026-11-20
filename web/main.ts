@@ -1208,7 +1208,7 @@ function bind(): void {
           await persistence?.submitted(submittedBaseline);
           comments?.refresh(); renderProposals();
         },host.direction?recordCommentWords():undefined,general);
-        message(sent);
+        if (sent) message(sent);
       } catch (error) {
         submissionFailure = jobSubmissionRefusal(error);
         message(submissionFailure.text, true);
