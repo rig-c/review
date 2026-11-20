@@ -544,7 +544,7 @@ try {
     reviewStatus: number;
     reviewBody: Record<string, unknown>;
     interviewStatus: number;
-    interviewBody: { questions?: Array<{ set?: { id?: string; question?: string } }> };
+    interviewBody: { questions?: Array<{ set?: { id?: string; question?: string }; images?: {name:string;url:string}[] }> };
   }>(`(async () => {
     const [reviewRes, interviewRes] = await Promise.all([
       fetch(${JSON.stringify(`${optionInstanceBase}/api/review`)}),
@@ -562,19 +562,34 @@ try {
   assert.equal(Object.hasOwn(optionRoutes.reviewBody, 'reviewedSource'), false);
   assert.deepEqual(optionRoutes.reviewBody.recordSource, optionPublication.source);
   assert.equal(optionRoutes.interviewStatus, 200, 'fetched api/interview payload for option-set publication');
-  assert.ok(
-    Array.isArray(optionRoutes.interviewBody.questions) &&
-      optionRoutes.interviewBody.questions.some(q => q.set?.id === 'chain-bones' && q.set?.question === 'bones'),
-    'captured api/interview questions for option-set publication',
-  );
+  assert.ok(Array.isArray(optionRoutes.interviewBody.questions),'captured api/interview questions for option-set publication');
+  const optionQuestion = optionRoutes.interviewBody.questions.find(q => q.set?.id === 'chain-bones' && q.set?.question === 'bones');
+  assert.ok(optionQuestion,'captured the matching chain-bones question');
+  assert.ok(Array.isArray(optionQuestion.images),'captured the matching question image inventory');
+  const optionImages = optionQuestion.images;
 
-  // #986: the owner URL opens Question automatically, with the retained image in the shared main view.
+  // #986: the owner URL opens Question automatically, with the shared main view reflecting the retained image inventory.
   const picksForm = `#workspace-interview-answer form[data-job-ask="${picksAsk.askId}"]`;
   const selectedQuestion = '.block-row:not([hidden]) [data-block-target="question"][aria-selected="true"]';
   const visiblePainting = `(()=>{const image=document.querySelector('#reference-content img');return image?.complete&&image.naturalWidth>0&&image.getBoundingClientRect().width>0?image.currentSrc:'';})()`;
+  const readOptionPicture = () => page!.evaluate<{painting:string;imageCount:number;imageModes:string[];emptyText:string;emptyVisible:boolean}>(`(()=>{
+    const empty=document.getElementById('rig-empty'),rect=empty.getBoundingClientRect();
+    return {painting:${visiblePainting},imageCount:document.querySelectorAll('#reference-content img').length,
+      imageModes:[...document.querySelectorAll('#view-menu [data-view^="interview-image-"]')].map(button=>button.dataset.view),
+      emptyText:empty.textContent,emptyVisible:rect.width>0&&rect.height>0&&getComputedStyle(empty).visibility==='visible'};
+  })()`);
   await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('${selectedQuestion}')&&document.querySelector('${picksForm} fieldset:not(:disabled)')?.getClientRects().length>0`,'interview owner ready in Question');
-  await wait(`Boolean(${visiblePainting})&&!!document.querySelector('#view-menu [data-view="interview-image-0"]')`,'retained option-set image visible in main view');
-  const paintingBeforeSave = await page.evaluate<string>(visiblePainting);
+  const firstImage = optionImages[0];
+  const expectedPainting = firstImage ? new URL(optionInstanceBase+firstImage.url,recordHost.origin).href : '';
+  if (firstImage) await wait(`${visiblePainting}===${JSON.stringify(expectedPainting)}`,'first retained option-set image visible in main view');
+  const optionPictureBeforeSave = await readOptionPicture();
+  assert.deepEqual(optionPictureBeforeSave.imageModes,optionImages.map((_,index)=>`interview-image-${index}`));
+  assert.equal(optionPictureBeforeSave.painting,expectedPainting);
+  if (!firstImage) {
+    assert.equal(optionPictureBeforeSave.imageCount,0);
+    assert.equal(optionPictureBeforeSave.emptyText,catalog['This request has no picture.']);
+    assert.equal(optionPictureBeforeSave.emptyVisible,true);
+  }
   const interviewShell = await page.evaluate<{dialogOpen:boolean;dialogViewers:number;questionLabel:string}>(`({
     dialogOpen:!!document.querySelector('dialog[open]'),
     dialogViewers:document.querySelectorAll('dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,#view-menu)').length,
@@ -598,11 +613,11 @@ try {
   assert.equal(picksSubmitStatus.statusText, catalog['job.saved']);
   assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').length`),0);
   if(existingNote)assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${picksAsk.askId}"] .interview-note').textContent`),existingNote);
-  const paintingAfterSave = await page.evaluate<string>(visiblePainting);
-  assert.equal(paintingAfterSave,paintingBeforeSave,'painting stays in the shared main view after the act is saved');
+  const optionPictureAfterSave = await readOptionPicture();
+  assert.deepEqual(optionPictureAfterSave,optionPictureBeforeSave,'the shared main view keeps the retained picture or blank fallback after save');
   assert.equal(await page.evaluate<boolean>(`!!document.querySelector('${selectedQuestion}')&&!document.querySelector('dialog[open]')`),true);
   await writeFile(join(output, `record-option-set-${language}.png`), await page.screenshot());
-  await record('option-set-submitted', { optionDom, optionRoutes, picksSubmitStatus, interviewShell, paintingBeforeSave, paintingAfterSave });
+  await record('option-set-submitted', { optionDom, optionRoutes, picksSubmitStatus, interviewShell, optionPictureBeforeSave, optionPictureAfterSave });
 
   // 2. Publish model-free plan via job-api@3 and ask checkpoint + signoff on the same standing owner window
   const pubPlan = await callRecordApi({

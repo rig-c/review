@@ -35,6 +35,10 @@ const visualRequests:{id:string;path:string;status?:number}[]=[];
 const errors:unknown[]=[],cases:unknown[]=[],commentPosts:string[]=[],actTransport:{method:string;path:string}[]=[];
 const dialogViewer='dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,#zoom-in,#zoom-out,#fit,#native-one,#view-menu)';
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(25);}throw new Error('715_WAIT '+label);}
+async function waitForRecordSaved(answeredLabel:string,label:string):Promise<void>{
+ await wait(`(()=>{const state=document.getElementById('dirty');return state?.textContent===${JSON.stringify(answeredLabel)}&&state.dataset.saveState==='saved';})()&&
+  !document.querySelector('#job-record-asks')`,label);
+}
 async function shot(out:string,name:string){await writeFile(join(out,name+'.png'),await page!.screenshot());}
 async function closeDialog(){await click(page!,'#job-record-asks .workspace-drawer-close');await wait(`!document.querySelector('#job-record-asks[open]')`,'dialog closed');assert.equal(await page!.evaluate(`document.activeElement.id`),'workspace-pending-ask');}
 async function assertTextOnlyDialog():Promise<void>{
@@ -106,7 +110,8 @@ try{
    await shot(out,'comments-restored');
    await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#job-record-asks[open]')`,'reopen after reload');
    if(kind==='checkpoint')await page.evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(selector)});f.querySelector('select[name=outcome]').value='pass';f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-   await shot(out,'before-submit');await click(page,selector+' button[type=submit]');await wait(`document.querySelector(${JSON.stringify(selector+' [role=status]')})?.textContent===${JSON.stringify(catalog['job.saved'])}`,'saved');
+   await shot(out,'before-submit');await click(page,selector+' button[type=submit]');
+   await waitForRecordSaved(catalog['Answer saved'],`${kind} ${picture} ${language} saved in the topbar and its drawer removed`);
    const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);assert.notEqual(act.kind,'interview-picks');if(act.kind!=='interview-picks')assert.equal(act.value.words,expected);if(stageSignoff){assert.equal(act.kind,'signoff');assert.equal((act.value as {stage:string}).stage,signoffSubject.stage);assert.equal((act.value as {decision:string}).decision,'approved');}assert.equal('feedback' in act.value,false);assert.equal('comments' in act.value,false);
    await shot(out,'submitted');await page.evaluate(`(()=>{const d=JSON.parse(localStorage.getItem(${JSON.stringify(key)}));d.sourceHash='0'.repeat(64);localStorage.setItem(${JSON.stringify(key)},JSON.stringify(d));})()`);await page.goto('about:blank');await page.goto(url.href);if(picture){await wait(`globalThis.__access756==='pending'`,'reload capability');await page.evaluate(`globalThis.__releaseAccess756()`);}await wait(`!!document.querySelector('#stage-comment-list')&&!!document.querySelector(${JSON.stringify(selector)})`,'mismatched reload');assert.equal(await page.evaluate(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length`),0);
    assert.deepEqual(await jobInputHashes(fixture.root),before);const result={kind,picture,language,state,comments:draft.comments.length,sourceHash:act.source.sourceHash,sourceDraftRestored:true,mismatchedDraftRefused:true,pointedRefusedByReadOnly:picture==='parts',scalarOnly:true,words:expected,actPath:join(out,'one-screen.json')};cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('715_CASE_PASS '+kind+' '+picture+' '+language);
@@ -217,8 +222,7 @@ try{
    await assertTextOnlyDialog();
    await click(page,`#job-record-asks ${checkpointForm} button[data-job-text="Pass"]`);
    const catalog=language==='en'?enCatalog:koCatalog;
-   await wait(`(()=>{const state=document.getElementById('dirty');return state?.textContent===${JSON.stringify(catalog['Answer saved'])}&&state.dataset.saveState==='saved';})()&&
-    !document.querySelector('#job-record-asks')`,'remaining checkpoint saved and its drawer removed');
+   await waitForRecordSaved(catalog['Answer saved'],'remaining checkpoint saved and its drawer removed');
    assert.equal(await page.evaluate<boolean>(`!!document.querySelector(${JSON.stringify(selectedQuestion)})&&!!document.querySelector('${form}[data-interview-answered=true]')`),true);
    assert.equal(await page.evaluate<string>(visiblePainting),firstPainting);
    await shot(out,'question-saved');

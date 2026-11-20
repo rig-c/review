@@ -444,7 +444,7 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
     if(kind==='interview-standalone'){
      const panel=await page.evaluate<{left:number;top:number;right:number;bottom:number;width:number;height:number}>(`document.querySelector('#workspace-interview-answer').getBoundingClientRect().toJSON()`);
      assert.ok(panel.width>0&&panel.height>0&&panel.left>=0&&panel.top>=0&&panel.right<=width&&panel.bottom<=height);
-     assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-pending-ask').textContent`),catalog['interview.title']);
+     assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-pending-ask').textContent`),catalog['Answer…']);
     }
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-question.png`),await page.screenshot());
    }

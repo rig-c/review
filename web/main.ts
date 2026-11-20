@@ -1548,6 +1548,7 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
 }
 let recordDialog:HTMLDialogElement|null=null;
 let releaseRecordDrawer:(()=>void)|null=null;
+viewDisposers.push(()=>{releaseRecordDrawer?.();releaseRecordDrawer=null;recordDialog?.remove();recordDialog=null;});
 let recordDrawerTrigger:HTMLButtonElement|null=null;
 let unregisterQuestion:(()=>void)|null=null;
 let activeInterviewImages:readonly {name:string;src:string}[]|null=null;
@@ -1826,7 +1827,6 @@ async function resumeScreen():Promise<void> {
  }finally{screenRoot.inert=ready?wasInert:true;if(ready&&!disposed)document.body.dataset.ready='true';}
 }
 function disposeScreen():void {releaseInterview?.();releaseInterview=null;
- releaseRecordDrawer?.();releaseRecordDrawer=null;recordDialog?.remove();recordDialog=null;
  if(disposed)return;suspendScreen();disposed=true;lifecycle.abort();
  comments?.dispose();partsSubject?.dispose();turnPad?.dispose();inspectorBlocks?.dispose();inspectorTabs?.dispose();
  workspace?.dispose();controlDispose?.();appearance?.dispose();rigInspector.actBar.dispose();shell.dispose();

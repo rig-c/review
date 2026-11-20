@@ -872,16 +872,18 @@ async function liveQuestionDraftChecks(){
      await withDeadline('986 held painting request',5_000,async signal=>{
       while(!pausedImages.length){signal.throwIfAborted();await Bun.sleep(25);}
      });
-     const paneRect=()=>page!.evaluate<Rect>(`document.querySelector('#reference-viewport').getBoundingClientRect().toJSON()`);
-     const loading=await paneRect();assert.ok(loading.width>0&&loading.height>0);
+     await waitForQuestion(selector);
+     const stageRect=()=>page!.evaluate<Rect>(`document.querySelector('#stage-layout').getBoundingClientRect().toJSON()`);
+     const loading=await stageRect();
+     assert.ok(loading.width>0&&loading.height>0,'the shared stage has space while the painting request is held');
      assert.equal(await page!.evaluate<number>(`document.querySelector('${paintingSelector}')?.naturalWidth??0`),0);
      await writeFile(join(out,'option-loading.png'),await page!.screenshot());
      holdImages=false;
      for(const requestId of pausedImages.splice(0))await command!('Fetch.continueRequest',{requestId});
-     await readPainting(2);
-     const loaded=await paneRect();
-     assert.deepEqual(loaded,loading,'painting load does not resize the shared viewport');
-     observation.imageLoading={loading,loaded};
+     const loadedPainting=await readPainting(2);
+     const loaded=await stageRect();
+     assert.deepEqual(loaded,loading,'painting load preserves the shared stage geometry');
+     observation.imageLoading={loading,loaded,loadedPainting};
      const imageCount=fixture.session.retainedSourceV3(fixture.ask.publicationId).questions.find(question=>question.set.id===fixture.ask.source.optionSet?.id)!.images.length;
      assert.ok(imageCount>0);
      assert.equal(await page!.evaluate<number>(`document.querySelectorAll('#view-menu [data-view^=interview-image-]').length`),imageCount);

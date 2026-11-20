@@ -50,13 +50,16 @@ const selectedTab='.block-row:not([hidden]) [data-block-target="question"][aria-
 const dialogViewer='dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,'+sharedControls+')';
 const visibleImage=`(()=>{const image=document.querySelector('#reference-content img'),box=image?.getBoundingClientRect();return image?.complete&&box.width>0&&box.height>0&&getComputedStyle(image).visibility==='visible'?image.naturalWidth:0;})()`;
 const imageWidth=`document.querySelector('#reference-content img').getBoundingClientRect().width`;
+type AskTrigger={count:number;text:string;visible:boolean;hidden:boolean;disabled:boolean;display:string;visibility:string;width:number;height:number};
 type JoinedScreen={
  language:string;width:number;height:number;topbars:number;viewports:number;openDialogs:string[];modals:number;dialogViewers:number;
  forms:number;noteInputs:number;columns:string[];modelCanvas:number;modelReason:string;questionLabel:string;
- triggers:string[];saveDisabled:boolean;commentHidden:boolean;controls:string[];imageModes:string[];
+ pendingAsk:AskTrigger|null;pendingRecordAsk:AskTrigger|null;actRowHidden:boolean;
+ saveDisabled:boolean;commentHidden:boolean;controls:string[];imageModes:string[];
  drawerOpen:boolean;formInDrawer:boolean;inspectorCollapsed:boolean;
  rect:{left:number;top:number;right:number;bottom:number};
 };
+let currentCase:{language:'en'|'ko';width:number;height:number;state?:JoinedScreen}|undefined;
 
 async function switchImage(index:number,width:number):Promise<void>{
  await click(page!,'#view-menu summary');
@@ -73,6 +76,7 @@ try{
  page=await launchCdpSession(profile,{onEvent:(event,send)=>{command=send;if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request)requests.push(new URL(request.url).pathname);if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Network.enable');
  for(const height of [1000,360])for(const language of ['en','ko'] as const){
+  currentCase={language,width:1600,height};
   await page.setViewport(1600,height);
   const catalog=language==='en'?enCatalog:koCatalog,url=new URL(host.record.origin+list.targets[0]!.entry);
   url.searchParams.set('lang',language);url.hash='cap='+targetCapability(host.record.ownerCapability,host.record.incarnation,prepared.key);
@@ -83,7 +87,14 @@ try{
   const state=await page.evaluate<JoinedScreen>(`(()=>{
    const panel=document.querySelector('${questionPanel}'),form=panel.querySelector('form.interview-answer');
    const drawer=document.querySelector('#workspace-drawer-inspectorHeight'),box=(drawer.open?drawer:panel).getBoundingClientRect();
-   const label=${JSON.stringify(catalog['interview.title'])};
+   const askTrigger=id=>{
+    const matches=document.querySelectorAll('#'+id),button=matches[0];
+    if(!button)return null;
+    const style=getComputedStyle(button),rect=button.getBoundingClientRect();
+    return {count:matches.length,text:button.textContent.trim(),hidden:button.hidden,disabled:button.disabled,
+     visible:rect.width>0&&rect.height>0&&style.visibility==='visible',display:style.display,visibility:style.visibility,
+     width:rect.width,height:rect.height};
+   };
    return {language:document.documentElement.lang,width:innerWidth,height:innerHeight,
     topbars:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,
     openDialogs:[...document.querySelectorAll('dialog[open]')].map(node=>node.id),
@@ -92,13 +103,15 @@ try{
     columns:[...form.children].filter(node=>['NAV','ASIDE','FIELDSET'].includes(node.tagName)).map(node=>node.tagName),
     modelCanvas:document.querySelectorAll('#rig-root canvas').length,modelReason:document.getElementById('rig-empty').textContent,
     questionLabel:document.querySelector(${JSON.stringify(selectedTab)}).textContent.trim(),
-    triggers:[...document.querySelectorAll('button')].filter(button=>button.textContent.trim()===label&&button.getClientRects().length>0&&getComputedStyle(button).visibility!=='hidden').map(button=>button.id),
+    pendingAsk:askTrigger('workspace-pending-ask'),pendingRecordAsk:askTrigger('workspace-pending-record-ask'),
+    actRowHidden:document.getElementById('workspace-act-row').hidden,
     saveDisabled:document.getElementById('save').disabled,commentHidden:document.getElementById('stage-comment').hidden,
     controls:[...document.querySelectorAll('${sharedControls}')].map(node=>node.id),
     imageModes:[...document.querySelectorAll('#view-menu [data-view]')].map(node=>node.dataset.view),
     drawerOpen:drawer.open,formInDrawer:drawer.contains(form),inspectorCollapsed:document.getElementById('workspace-inspector').dataset.collapsed==='true',
     rect:{left:box.left,top:box.top,right:box.right,bottom:box.bottom}};
   })()`);
+  currentCase.state=state;
   assert.equal(state.language,language);assert.equal(state.width,1600);assert.equal(state.height,height);
   assert.equal(state.commentHidden,true,'standalone interview hides the unbound comment entry');
   assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.modals,0);assert.equal(state.dialogViewers,0);
@@ -106,7 +119,10 @@ try{
   assert.deepEqual(state.columns,['NAV','FIELDSET']);
   assert.equal(await page.evaluate<string|null>(`document.querySelector('${questionPanel} pre.interview-note')?.textContent??null`),retainedNote);
   assert.equal(state.questionLabel,catalog['Question']);
-  assert.deepEqual(state.triggers,['workspace-pending-ask']);assert.equal(state.saveDisabled,true);
+  assert.ok(state.pendingAsk?.count===1&&state.pendingAsk.visible&&!state.pendingAsk.disabled&&!state.pendingAsk.hidden,
+   'expected a single visible and enabled #workspace-pending-ask '+JSON.stringify(currentCase));
+  assert.ok(!state.pendingRecordAsk?.visible,'unexpected visible #workspace-pending-record-ask '+JSON.stringify(currentCase));
+  assert.equal(state.saveDisabled,true);
   assert.equal(state.modelReason,catalog['MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.']);
   assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
   assert.deepEqual(state.imageModes,['interview-image-0','interview-image-1']);
@@ -135,10 +151,11 @@ try{
   await wait(`!!document.querySelector(${JSON.stringify(selectedTab)})&&${visibleImage}===32&&!document.querySelector('dialog:modal')`);
   cases.push({...state,firstImage:new URL(firstImage).pathname,secondImage:new URL(secondImage).pathname});
   await page.goto('about:blank');
+  currentCase=undefined;
  }
  const after={files:await jobInputHashes(f.root),entries:(await readdir(f.root,{recursive:true})).sort()};
  assert.deepEqual(after,before);assert.deepEqual(exceptions,[]);assert.deepEqual(mutations,[]);assert.ok(requests.some(path=>path.endsWith('/api/interview')));
  await writeFile(join(out,'result.json'),JSON.stringify({fixture:'synthetic interview-stage project; demo/build versions; no draft or review package',cases,sourceFilesBefore:before,sourceFilesAfter:after,sourceWrites:0,networkRequests:requests.length,exceptions,mutations},null,2)+'\n');
  console.log('725_BROWSER_PASS '+JSON.stringify({cases:cases.length,languages:['en','ko'],viewports:['1600x1000','1600x360'],sourceWrites:0,exceptions:exceptions.length}));
-}catch(error){await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,cases},null,2)+'\n');if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
+}catch(error){await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error),currentCase,exceptions,mutations,cases},null,2)+'\n');if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await host.stop();await f.close();await rm(profile,{recursive:true,force:true});}
