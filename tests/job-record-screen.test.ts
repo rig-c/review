@@ -79,10 +79,42 @@ test('#750 no picture, receipt rearm, new ask, dirty form identity and closed su
   const saved=[...h.store.values()][0]!;expect(saved).toContain('retained reviewer words');
   h.state.preparing=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);
   h.state.preparing=false;h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'rearmed'};
-  h.state.pending.push({...h.f.ask,askId:'later-signoff',subject:{kind:'signoff',stage:'plan-approved'}});h.screen.changed(h.state);
-  expect(ready!.record!.forms.size).toBe(2);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(entry.read()).toMatchObject({words:'[general]\nretained reviewer words'});expect(entry.fieldset.disabled).toBe(false);
+  h.state.pending.push({...h.f.ask,askId:'later-signoff',subject:{kind:'signoff',stage:'plan-approved'}},{...h.f.ask,askId:'ignored-reopen',subject:{kind:'reopen',stage:'plan-approved'}});h.screen.changed(h.state);
+  expect(ready!.record!.forms.size).toBe(2);expect(ready!.record!.forms.has('ignored-reopen')).toBe(false);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(entry.read()).toMatchObject({words:'[general]\nretained reviewer words'});expect(entry.fieldset.disabled).toBe(false);
   const restored=formFor(h.f.ask,ready!.record!.inspection,h.deps);restored.form.commentWords=entry.form.commentWords;expect(restored.read()).toEqual(entry.read());
   h.state.closed=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);await entry.form.onsubmit!({preventDefault(){}} as never);expect(h.submitted).toHaveLength(0);
+ }finally{await h.close();}
+});
+
+test('#989 a publication resumed with a historical pending reopen ask plus a signoff ask loads, shows only the signoff form and submits it',async()=>{
+ const h=await harness();try{
+  const signoffAsk:PendingAskV3={...h.f.ask,askId:'ask-signoff',subject:{kind:'signoff',stage:'plan-approved'}};
+  const reopenAsk:PendingAskV3={...h.f.ask,askId:'ask-reopen',subject:{kind:'reopen',stage:'plan-approved'}};
+  h.state.pending=[reopenAsk,signoffAsk];
+  let mountedForms:readonly HTMLElement[]=[];
+  h.options.load=async()=>{rigHost()!.attach({stage:()=>null,redraw(){},message(){},recordForms(forms){mountedForms=forms;}});rigHost()!.displayed();};
+  const ready=await h.screen.prepare(h.f.display,new AbortController().signal);
+  expect([...ready!.record!.forms.keys()]).toEqual(['ask-signoff']);
+  h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
+  h.state.receipt={publicationId:signoffAsk.publicationId,pageId:h.deps.pageId,displayedNonce:'resumed-nonce'};
+  h.screen.changed(h.state);
+  expect(ready!.record!.forms.size).toBe(1);
+  expect(ready!.record!.forms.has('ask-reopen')).toBe(false);
+  expect(mountedForms).toHaveLength(1);
+  const entry=ready!.record!.forms.get('ask-signoff')!;
+  expect(entry.fieldset.disabled).toBe(false);
+  entry.form.commentWords=()=>'[general]\nsignoff on resumed job';
+  await entry.form.onsubmit!({preventDefault(){}} as never);
+  expect(h.submitted).toEqual([{
+   kind:'signoff',
+   publicationId:signoffAsk.publicationId,
+   askId:'ask-signoff',
+   pageId:h.deps.pageId,
+   displayedNonce:'resumed-nonce',
+   expectedGeneration:h.state.generation,
+   submissionId:entry.submissionId,
+   value:{stage:'plan-approved',decision:'approved',words:'[general]\nsignoff on resumed job'},
+  }]);
  }finally{await h.close();}
 });
 
@@ -298,7 +330,10 @@ for (const language of ['en','ko'] as const) for (const rule of [1,2,3,4,5,6]) t
    expect(heading.textContent).toBe(descriptions[0]!);expect(heading.title).toBe((h.f.ask.subject as {checkpointId:string}).checkpointId);
    expect(form.textContent).not.toContain(plan.steps[0]!.id);expect(form.textContent).not.toContain(plan.steps[0]!.hash);
   }else if(rule===5){
-   for(const kind of ['signoff','reopen'] as const){const entry=formFor({...h.f.ask,subject:{kind,stage:'plan-approved'}},inspection,deps);expect(entry.form.textContent).not.toContain('plan-approved');expect(entry.fieldset.title).toBe('plan-approved');expect(entry.read()).toMatchObject({stage:'plan-approved',words:''});}
+   const entry=formFor({...h.f.ask,subject:{kind:'signoff',stage:'plan-approved'}},inspection,deps);expect(entry.form.textContent).not.toContain('plan-approved');expect(entry.fieldset.title).toBe('plan-approved');expect(entry.read()).toMatchObject({stage:'plan-approved',words:''});
+   expect(()=>formFor({...h.f.ask,subject:{kind:'reopen',stage:'plan-approved'}},inspection,deps)).toThrow('JOB_ACT_KIND_DISABLED');
+   expect('job.reopen' in enCatalog).toBe(false);expect('job.reopen' in koCatalog).toBe(false);
+   expect('Review the reopened stage.' in enCatalog).toBe(false);expect('Review the reopened stage.' in koCatalog).toBe(false);
   }else{
    const form=formFor(h.f.ask,inspection,deps).form,line=form.querySelector<HTMLElement>('.job-source')!;
    expect(line.textContent).toBe(h.f.display.publication.label);expect(line.title).toBe(source.sourceHash);
