@@ -11,6 +11,7 @@ import {
   JOB_PARTS_ENUMERATOR_RANGE,
 } from './job-contract.ts';
 import type {
+  JobChestLandmarkValue, JobErrorCode, JobPublication, JobPublishedChestLandmark,
   JobCheckpointEvidence, JobFileIdentity, JobInterviewDiagnostics, JobInterviewRecord, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
   JobPreviousDraft, JobSelector, JobSourceBinding, JobSubject, JobPlanTextProjection, JobPlanTextStep,
   OptionContext, OptionSource, PackageResultV3, PlanContext, PlanSource, ProjectRecord, PublishRequestV3,
@@ -22,6 +23,10 @@ import { acceptedRigReview } from './interview-scene.ts';
 import { BUILD_MODEL_PATH, loadJobReview, loadReview } from './manifest.ts';
 import { HandoffError } from './handoff.ts';
 import { openKey } from './open.ts';
+import { attachmentHashText, MESH_EDIT_CODES } from './mesh-edit.ts';
+import { readStoredSetupMesh } from './setup-mesh.ts';
+import { contourParts } from './rebuild.ts';
+import { parseBustSpec } from './chest-landmarks.ts';
 import { assertReviewUnchanged } from './reference.ts';
 import { isRigDraftVerdictSource,
   assertEqualRecordContexts,
@@ -37,6 +42,7 @@ import { isRigDraftVerdictSource,
   jobSha,
   jobText,
   parseJobInterviewDiagnostics,
+  parsePublishedChestLandmarks,
   parseRecordFreeze,
   parseRecordPublishedContext,
   parseRecordResult,
@@ -62,6 +68,7 @@ export interface JobRootIdentity {
 export interface JobPublishedContext {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
   readonly previousDraft?: JobPreviousDraft;
+  readonly chestLandmarks?: JobPublication['chestLandmarks'];
   readonly selector: JobSelector | null;
   readonly plan: JobPlanIdentity | null;
   readonly parts: JobPartsIdentity | null;
@@ -91,6 +98,7 @@ export type JobPublicationReader = (input: {
 export interface JobRetainedSource {
   /** Private base preimage for optional declarations. Keeps its historical key. */
   readonly checkpointEvidencePackageHash?: string;
+  readonly chestLandmarks?: JobPublication['chestLandmarks'];
   readonly root: JobRootIdentity;
   readonly record: JobFileIdentity | null;
   readonly seals: readonly JobFileIdentity[];
@@ -202,6 +210,50 @@ function sourceBytes(root: string, path: string): Buffer {
   if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
       before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new JobError('JOB_SOURCE_MISMATCH');
   return bytes;
+}
+
+/** Read the sealed model for both kinds of setup-space edit. */
+export function readJobEditModel(root: string, file: JobFileIdentity | null, code: JobErrorCode) {
+  try {
+    if (!file) throw new JobError(code);
+    const bytes = sourceBytes(root, file.path);
+    if (jobHash(bytes) !== file.sha256) throw new JobError(code);
+    return JSON.parse(bytes.toString('utf8')) as {stage?: {width?: number; height?: number}};
+  } catch {
+    throw new JobError(code);
+  }
+}
+
+export function readJobEditMesh(model: ReturnType<typeof readJobEditModel>, edit: Omit<JobChestLandmarkValue, 'bust'>,
+  stale: JobErrorCode, invalid: JobErrorCode) {
+  const read = readStoredSetupMesh(model, edit.slot, edit, MESH_EDIT_CODES);
+  if (!read.ok || jobHash(attachmentHashText(read.mesh.entry)) !== edit.source.hash) throw new JobError(stale);
+  const {width, height} = edit.source.frame;
+  if (read.mesh.linked || model.stage?.width !== width || model.stage?.height !== height) throw new JobError(invalid);
+  return read.mesh;
+}
+
+function assertPublishedChestLandmarks(root: string, modelFile: JobFileIdentity | null, configFiles: readonly JobFileIdentity[],
+  seeds: readonly JobPublishedChestLandmark[]): void {
+  const code = 'JOB_SOURCE_MISMATCH';
+  const model = readJobEditModel(root, modelFile, code);
+  const configs = new Map<string, ReturnType<typeof contourParts>>();
+  for (const seed of seeds) {
+    readJobEditMesh(model, seed, code, code);
+    const hash = seed.source.configHash;
+    let parts = configs.get(hash);
+    if (!parts) {
+      const file = configFiles.find(file => file.sha256 === hash);
+      if (!file) throw new JobError(code, 'Published chest landmarks require the retained source config');
+      const bytes = readCheckpointEvidenceBytes(root, file, maxFileBytes, () => new JobError(code));
+      parts = contourParts(new TextDecoder('utf-8', {fatal: true}).decode(bytes));
+      configs.set(hash, parts);
+    }
+    const contour = parts.find(part => part.name === seed.slot)?.entry.contour as {bust?: unknown} | undefined;
+    if (!contour || requestDigest(parseBustSpec(contour.bust, 'contour.bust', true)) !== requestDigest(seed.bust)) {
+      throw new JobError(code, 'Published chest landmarks differ from the retained source config');
+    }
+  }
 }
 
 /** Read and hash the exact bytes the caller will consume, including on a cache hit at the front. */
@@ -1373,7 +1425,7 @@ export async function verifyJobRecordSourceFresh(options: {
 /** Preserve the existing composite preimage, conditionally appending the declaration. */
 function packageSourceDigest(packageSourceHash: string, record: JobFileIdentity | null,
   source: Pick<JobModelSourceBinding, 'selector' | 'plan' | 'parts'>, files: readonly JobFileIdentity[],
-  evidence: Pick<JobModelSourceBinding, 'checkpointEvidence' | 'previousDraft'>): string {
+  evidence: Pick<JobModelSourceBinding, 'checkpointEvidence' | 'previousDraft'> & Pick<JobPublication, 'chestLandmarks'>): string {
   return jobHash(JSON.stringify({schema: 'rig-review-job-source/2', packageSourceHash, record,
     selector: source.selector, plan: source.plan, parts: source.parts, files, ...evidence}));
 }
@@ -1497,6 +1549,9 @@ export async function prepareJobSource(options: {
   const declared = publishedIdentities(context);
   const previous = previousDraftFields(context, context.selector, declared);
   const evidence = checkpointEvidenceFields(context, context.plan, context.subjects, declared);
+  const chestLandmarks = 'chestLandmarks' in context ? parsePublishedChestLandmarks(context.chestLandmarks) : undefined;
+  if (chestLandmarks && context.selector?.kind !== 'rig') throw new JobError('JOB_SOURCE_MISMATCH');
+  const chest = chestLandmarks ? {chestLandmarks} : {};
   checkpointEvidenceMetadata(root.path, evidence.checkpointEvidence);
   let review: Awaited<ReturnType<typeof loadJobReview>>;
   try {
@@ -1583,13 +1638,18 @@ export async function prepareJobSource(options: {
       path: rootRelative(root.path, resolve(review.root, file.path)), sha256: file.sha256,
     });
     checkpointEvidenceMetadata(snapshotRoot, evidence.checkpointEvidence);
+    const model = originalIdentity(review.reviewedSource.rig);
+    if (chestLandmarks) {
+      const handoffConfig = originalIdentity(review.handoff?.record.config ?? null);
+      assertPublishedChestLandmarks(snapshotRoot, model, handoffConfig ? [handoffConfig] : declared, chestLandmarks);
+    }
     const modelSource: JobModelSourceBinding = {
-      sourceHash: project || context.plan || context.parts ? packageSourceDigest(review.sourceHash, record,
-        {selector: context.selector, plan: context.plan, parts: parts.identity}, seals, {...evidence, ...previous}) : review.sourceHash,
+      sourceHash: project || context.plan || context.parts || chestLandmarks ? packageSourceDigest(review.sourceHash, record,
+        {selector: context.selector, plan: context.plan, parts: parts.identity}, seals, {...evidence, ...previous, ...chest}) : review.sourceHash,
       projectHash: project?.hash ?? null,
       package: { id: review.manifest.id, revision: review.manifest.revision },
       selector: context.selector,
-      model: originalIdentity(review.reviewedSource.rig),
+      model,
       direction: originalIdentity(review.direction?.file ?? null),
       optionSet: null, appliedResult: null, plan: context.plan, parts: parts.identity,
     };
@@ -1613,7 +1673,8 @@ export async function prepareJobSource(options: {
       : null;
     const prepared: JobRetainedSource = {
       root, record, seals, snapshotRoot, snapshotIdentity,
-      ...(source.checkpointEvidence || source.previousDraft ? {checkpointEvidencePackageHash: review.sourceHash} : {}),
+      ...(source.checkpointEvidence || source.previousDraft || chestLandmarks ? {checkpointEvidencePackageHash: review.sourceHash} : {}),
+      ...chest,
       manifestPath: retained.manifestPath,
       source,
       instanceKey: openKey({ mode: 'single', p: boundReview, inputs: { input: review.manifestPath },
@@ -1635,7 +1696,7 @@ export async function prepareJobSource(options: {
     };
     await options.afterSnapshot?.();
     assertJobSourceCurrent(prepared);
-    if (source.checkpointEvidence || source.previousDraft) assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity);
+    if (source.checkpointEvidence || source.previousDraft || chestLandmarks) assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity);
     return prepared;
   } catch (error) {
     if (snapshotIdentity) await removeOwnedJobSnapshot(options.stateRoot, {snapshotRoot, ...snapshotIdentity});
@@ -1651,6 +1712,7 @@ export function assertStoredCheckpointEvidence(retained: JobRetainedSourceV3): v
   }
   const hasEvidence = 'checkpointEvidence' in retained.source;
   if (isRetainedRecordSource(retained)) {
+    if ('chestLandmarks' in retained) throw new JobError('JOB_SOURCE_MISMATCH');
     const parsed = parseRecordSource(retained.source);
     if (!hasEvidence && !('checkpointEvidence' in retained.context) && !('previousDraft' in retained.context)) return;
     const context = parseRecordPublishedContext(retained.context, retained.result, retained.record);
@@ -1661,14 +1723,20 @@ export function assertStoredCheckpointEvidence(retained: JobRetainedSourceV3): v
   }
   const source = retained.source;
   const hasPreviousDraft = 'previousDraft' in source;
-  if (!hasEvidence && !hasPreviousDraft && !('checkpointEvidencePackageHash' in retained)) return;
-  if (!(hasEvidence || hasPreviousDraft) || !retained.record || (hasPreviousDraft && !source.parts)) {
+  const hasChest = 'chestLandmarks' in retained;
+  if (!hasEvidence && !hasPreviousDraft && !hasChest && !('checkpointEvidencePackageHash' in retained)) return;
+  if (!(hasEvidence || hasPreviousDraft || hasChest) || !retained.record || (hasPreviousDraft && !source.parts) ||
+      (hasChest && (source.selector?.kind !== 'rig' || !source.model))) {
     throw new JobError('JOB_SOURCE_MISMATCH');
   }
   const evidence = checkpointEvidenceFields(source, source.plan, retained.subjects, retained.seals);
   const previous = previousDraftFields(source, source.selector, retained.seals);
   const packageSourceHash = jobSha(retained.checkpointEvidencePackageHash);
-  const expected = packageSourceDigest(packageSourceHash, retained.record, source, retained.seals, {...evidence, ...previous});
+  const chest = hasChest ? {chestLandmarks: parsePublishedChestLandmarks(retained.chestLandmarks)} : {};
+  if (chest.chestLandmarks?.some(seed => !retained.seals.some(file => file.sha256 === seed.source.configHash))) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
+  const expected = packageSourceDigest(packageSourceHash, retained.record, source, retained.seals, {...evidence, ...previous, ...chest});
   if (expected !== source.sourceHash ||
       requestDigest(evidence.checkpointEvidence ?? null) !== requestDigest(source.checkpointEvidence ?? null) ||
       requestDigest(previous.previousDraft ?? null) !== requestDigest(source.previousDraft ?? null)) {

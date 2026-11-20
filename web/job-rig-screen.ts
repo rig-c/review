@@ -4,7 +4,7 @@ import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
  * window. The job stays the transport: same asks, act kinds, still, displayed-ack and submission idempotency.
  * Rig verdicts use the act bar; supported approval and interview asks use the shared ask dialog. */
-import {JOB_MESH_EDITS_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobMeshEdit,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
+import {JOB_CHEST_LANDMARKS_ACT_SCHEMA,JOB_MESH_EDITS_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobChestLandmarkEdit,type JobMeshEdit,type JobPublishedChestLandmark,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
 import {canonicalJson} from '../src/canonical-json.ts';
 import {draftKey} from '../src/mesh-edit.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
@@ -12,6 +12,7 @@ import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
 import {checkpointNoteComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
 import {createJobRigSubmission, freezeJobRigStage} from './job-rig-capture.ts';
 import {sha256Hex,type JobMeshDraftSubmission} from './mesh-editor.ts';
+import type {JobChestDraftSubmission} from './chest-editor.ts';
 import {setRigHost, rigHost, type RigHost, type RigHostScreen, type RigHostCommit, type RigHostNavigation} from './rig-host.ts';
 import {setSourceAttribute, setSourceText, sourceAttribute, sourceTextContent} from './i18n.ts';
 import type {InstanceAccess} from './instance-access.ts';
@@ -61,7 +62,7 @@ export function jobRigScreenRefusal(display:DisplayPublicationV3,pending:readonl
 
 export type JobRigScreenDecision =
   | {readonly ask: PendingAskV3; readonly kind: 'checkpoint'; readonly value: Extract<JobUISubmission, {kind: 'checkpoint'}>['value']}
-  | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review' | 'direction-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]; general?: readonly string[]; meshEdits?: readonly JobMeshEdit[]}};
+  | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review' | 'direction-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]; general?: readonly string[]; meshEdits?: readonly JobMeshEdit[]; chestLandmarks?: readonly JobChestLandmarkEdit[]}};
 /** The act bar's decisions as the pending asks' values. `words` is the comments' projection (act@6's), or empty;
  * a decision still pending is not sent, so a pending ask is never answered with "pending". Checkpoints go first. */
 export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'checkpoints' | 'feedback'>,
@@ -90,9 +91,11 @@ interface ReviewJson {manifest: ReviewManifest; reviewedSource: ReviewedSource; 
 export interface JobRigMeshScreen extends RigHostScreen {
   hasMeshEdits?(): boolean;
   meshEdits?(): Promise<JobMeshDraftSubmission|null>;
+  chestLandmarks?(): JobChestDraftSubmission|null;
 }
 export interface JobRigMeshHost extends RigHost {
   canSubmitMeshEdits?(): boolean;
+  readonly chestLandmarks?: readonly JobPublishedChestLandmark[];
 }
 export interface JobRigScreenPrepared {readonly jobRigScreen: true; readonly display: DisplayPublicationV3; readonly entry: string;
   readonly refusal?:string; readonly modals?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>}; readonly review?: ReviewJson; readonly record?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>;picture:JobRigScreenPrepared|null}; readonly parts?:PartsSubjectData; readonly checkpoints: ReadonlySet<string>}
@@ -224,6 +227,7 @@ export function createJobRigScreen(options: {
     if(directionWords!==undefined)for(const decision of decisions)if(decision.kind==='review-verdict'&&decision.value.stage==='direction-review')decision.value.words=directionWords;
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     const rigChanges=decisions.find(decision=>decision.kind==='review-verdict'&&decision.value.stage==='rig-review'&&decision.value.verdict==='changes-requested');
+    const chestDraft=rigChanges?.kind==='review-verdict'?screen?.chestLandmarks?.():null;
     const meshDraft=rigChanges?.kind==='review-verdict'?await screen?.meshEdits?.():null;
     if(rigChanges?.kind==='review-verdict'){
       if(meshDraft?.edits.length){
@@ -231,6 +235,7 @@ export function createJobRigScreen(options: {
         edits.sort((a,b)=>a.key<b.key?-1:a.key>b.key?1:0);
         rigChanges.value.meshEdits=await Promise.all(edits.map(async ({edit})=>({edit,sha256:await sha256Hex(canonicalJson(edit))})));
       }
+      if(chestDraft?.edits.length)rigChanges.value.chestLandmarks=await Promise.all(chestDraft.edits.map(async edit=>({edit,sha256:await sha256Hex(canonicalJson(edit))})));
       const latest=options.window.state();
       if(mounted!==prepared||latest.preparing||latest.receipt?.displayedNonce!==state.receipt.displayedNonce)throw new Error('JOB_ACT_SOURCE_STALE');
       if(rigChanges.value.meshEdits?.length&&options.confirm&&!options.confirm(options.translate('Send this Request changes with {0} mesh edit(s) to the producer?',[rigChanges.value.meshEdits.length])))return '';
@@ -252,9 +257,15 @@ export function createJobRigScreen(options: {
       if (!result.ok) throw new Error(result.error.code, {cause: (result.error as {cause?: unknown}).cause});
       attempts.delete(ask.askId);
       const act=result.value;
-      if(decision===rigChanges&&rigChanges.kind==='review-verdict'&&meshDraft&&act.schema===JOB_MESH_EDITS_ACT_SCHEMA&&act.kind==='review-verdict'&&act.value.meshEdits){
-        const accepted=new Set(act.value.meshEdits.map(row=>row.sha256));
-        meshDraft.clear(rigChanges.value.meshEdits?.filter(row=>accepted.has(row.sha256)).map(row=>row.edit)??[]);
+      if(decision===rigChanges&&rigChanges.kind==='review-verdict'&&act.kind==='review-verdict'){
+        if(meshDraft&&(act.schema===JOB_MESH_EDITS_ACT_SCHEMA||act.schema===JOB_CHEST_LANDMARKS_ACT_SCHEMA)&&act.value.meshEdits){
+          const accepted=new Set(act.value.meshEdits.map(row=>row.sha256));
+          meshDraft.clear(rigChanges.value.meshEdits?.filter(row=>accepted.has(row.sha256)).map(row=>row.edit)??[]);
+        }
+        if(chestDraft&&act.schema===JOB_CHEST_LANDMARKS_ACT_SCHEMA){
+          const accepted=new Set(act.value.chestLandmarks.map(row=>row.sha256));
+          chestDraft.clear(rigChanges.value.chestLandmarks?.filter(row=>accepted.has(row.sha256)).map(row=>row.edit)??[]);
+        }
       }
       await committed({...current.commit, at: result.value.at});
     }
@@ -302,6 +313,7 @@ export function createJobRigScreen(options: {
     const {publicationId,source}=prepared.display.publication;
     const binding={...(jobId?{jobId}:{}),draftId,publicationId,previousPublicationId,sourceHash:source.sourceHash};
     return {access,pendingSubjects,navigation,...prepared.refusal?{unavailable:prepared.refusal}:{},
+      chestLandmarks:prepared.display.publication.chestLandmarks,
       ...(source.direction?{direction:binding}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
         prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review')}}:{}),
       reviewState(issues,sending) {
@@ -330,7 +342,7 @@ export function createJobRigScreen(options: {
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },
       submit,
-      canSubmitMeshEdits:()=>!!screen?.hasMeshEdits?.(),
+      canSubmitMeshEdits:()=>!!(screen?.hasMeshEdits?.()||screen?.chestLandmarks?.()?.edits.length),
       attach: value => {screen = value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
       displayed: () => ready.resolve(),
       failed: error => ready.reject(error)};

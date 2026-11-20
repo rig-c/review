@@ -173,7 +173,9 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:Reload,
   assert.equal(initial.approve.label,ko?'승인':'Approve');
   assert.equal(initial.changes.label,ko?'수정 요청':'Request changes');
   assert.equal(initial.changes.disabled,true);
-  assert.equal(initial.changes.title,ko?'고칠 곳에 코멘트를 달아 주세요':'Add a comment where changes are needed.');
+  assert.equal(initial.changes.title,kind==='rig'
+    ? (ko?'바꿀 곳에 코멘트나 편집을 남겨 주세요.':'Add a comment or an edit where changes are needed.')
+    : (ko?'고칠 곳에 코멘트를 달아 주세요':'Add a comment where changes are needed.'));
   assert.equal(await page.evaluate<string>(`document.querySelector('${generalButton}').textContent`),ko?'일반 코멘트 추가':'Add general comment');
 
   const add=async(text:string)=>{await clickComment(page,generalButton);await saveComment(page,wait,text);};

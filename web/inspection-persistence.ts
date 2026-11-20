@@ -335,7 +335,8 @@ interface PersistenceAdapter<T> {
  restoreSession:(value:T,dirty:boolean)=>void;bookmark:()=>InspectionBookmark;
  restoreBookmark:(bookmark:InspectionBookmark,signal:AbortSignal)=>Promise<void>;
  ui:()=>Record<string,string|number|null>;restoreUI:(ui:Record<string,string|number|null>)=>void;
- afterInputs:()=>void;onConflict:(conflict:boolean)=>void;onStatus:(message:string)=>void;
+ /** Saved UI state accompanies restored inputs. Discard restores the initial inputs without saved UI state. */
+ afterInputs:(draft?:Pick<LocalInspectionDraft,'ui'>)=>void;onConflict:(conflict:boolean)=>void;onStatus:(message:string)=>void;
 }
 export interface PersistenceConnection {restored:boolean;restoring:()=>boolean;save:()=>Promise<void>;submitted:(session:unknown)=>Promise<void>;dispose:()=>void}
 const viewInputIds=new Set(['part-search','part-solo','camera-sync','appearance','layer-images','layer-mesh','layer-bones','animation-select','reference-select','person-select','axis-select','axis-value','scrub','frame-number','frame-scrub','time-input','frame-input','part-set']);
@@ -383,7 +384,7 @@ export async function connectInspectionPersistence<T>(adapter:PersistenceAdapter
  if(selected){try{await adapter.restoreBookmark(selected,new AbortController().signal);restored=true;}catch(error){status(`Inspection was not restored: ${error instanceof Error?error.message:String(error)}`);}}
  if(draft){
   const excluded=new Set(viewInputIds);if(conflict||!draft.reviewDirty){excluded.add('review-status');excluded.add('status');excluded.add('checkpoint-note');for(const key of Object.keys(draft.inputs))if(key.startsWith('radio:outcome:'))excluded.add(key);}
-  restoreInputs(draft.inputs,excluded);adapter.afterInputs();
+  restoreInputs(draft.inputs,excluded);adapter.afterInputs({ui:draft.ui});
  }
  if(raw&&!draft)appendAction('Discard unusable local draft',async()=>{await store.clear();conflict=false;adapter.onConflict(false);clearNotices();status('Unusable local draft discarded for this review only.');save();});
  let writes=Promise.resolve();
