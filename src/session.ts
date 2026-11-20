@@ -140,7 +140,7 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
   }
   const selected=animation??(typeof context.animation==='string'?context.animation:null);
   if(timed)validateTimedFeedbackSelection(p.feedbackCatalog,{target:feedback.target,animation:selected,time:comment!.time});
-  else validateFeedbackSelection((context.comment as any)?.frame?.basis==='reference'?{...p.feedbackCatalog,clock:null,clockAnimation:null}:p.feedbackCatalog,{...feedbackFrameInterval(feedback),target:feedback.target,animation:selected});
+  else validateFeedbackSelection((context.comment as any)?.frame?.basis==='reference'?{...p.feedbackCatalog,clock:null,clockAnimation:null,frameClocks:undefined}:p.feedbackCatalog,{...feedbackFrameInterval(feedback),target:feedback.target,animation:selected});
   return {...feedback,context:{...context,...(animation===undefined?{}:{animation}),interval} as Json};
 }
 export function readPackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string,turnDials?:readonly TurnDial[]):{feedback:Feedback;warning?:FeedbackWarning} {
