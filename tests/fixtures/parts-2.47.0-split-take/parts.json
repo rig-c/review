@@ -1,0 +1,227 @@
+{
+  "rig_size": [
+    128,
+    128
+  ],
+  "scale_rig_per_source": 1,
+  "painting_in_rig": {
+    "path": "painting_in_rig.png",
+    "sha256": "9a883c4a6ecd3cbc62d1da52036a1030b334f5c5c80901c5d0379a28e8f3e941",
+    "resample": "lanczos3-rgb-opaque"
+  },
+  "parts": [
+    {
+      "name": "face",
+      "from": "full:face",
+      "x": 2,
+      "y": 2,
+      "w": 8,
+      "h": 8,
+      "opaque_px": 64,
+      "provenance": {
+        "unchanged_layer_px": 64,
+        "hand_px": 0,
+        "automatic_px": 0,
+        "edits": [],
+        "automatic": []
+      },
+      "visible_px": 64,
+      "occluded_px": 0,
+      "projected_core_px": 64,
+      "source_px_taken": 64,
+      "visible_not_projected_px": 0,
+      "refused_drift_px": 0,
+      "merged_px": 0,
+      "seam_override_px": 0
+    },
+    {
+      "name": "eye_r",
+      "from": "full:eyewhite-r",
+      "x": 14,
+      "y": 2,
+      "w": 8,
+      "h": 8,
+      "opaque_px": 64,
+      "provenance": {
+        "unchanged_layer_px": 64,
+        "hand_px": 0,
+        "automatic_px": 0,
+        "edits": [],
+        "automatic": []
+      },
+      "visible_px": 64,
+      "occluded_px": 0,
+      "projected_core_px": 64,
+      "source_px_taken": 64,
+      "visible_not_projected_px": 0,
+      "refused_drift_px": 0,
+      "merged_px": 0,
+      "seam_override_px": 0
+    },
+    {
+      "name": "eye_l",
+      "from": "full:eyewhite-l",
+      "x": 26,
+      "y": 2,
+      "w": 8,
+      "h": 8,
+      "opaque_px": 64,
+      "provenance": {
+        "unchanged_layer_px": 64,
+        "hand_px": 0,
+        "automatic_px": 0,
+        "edits": [],
+        "automatic": []
+      },
+      "visible_px": 64,
+      "occluded_px": 0,
+      "projected_core_px": 64,
+      "source_px_taken": 64,
+      "visible_not_projected_px": 0,
+      "refused_drift_px": 0,
+      "merged_px": 0,
+      "seam_override_px": 0
+    },
+    {
+      "name": "behind",
+      "from": "full:legwear",
+      "taken_layers": [
+        {
+          "run": "full",
+          "tag": "legwear",
+          "run_dir": "split-donor",
+          "st_input": "painting.png",
+          "prompt_id": "generated-original",
+          "seed": 42,
+          "support_px": 7168,
+          "checked_px": 8320,
+          "differing_px": 0,
+          "split": {
+            "occluder": 0,
+            "image": "occluder.png",
+            "sha256": "4577100c3f8b6d3a638d3d88f86dc6a967680c69a20c5105f80a14d0815f94aa",
+            "covered_px": 2048,
+            "visible_px": 7168
+          }
+        }
+      ],
+      "x": 16,
+      "y": 16,
+      "w": 96,
+      "h": 96,
+      "opaque_px": 9216,
+      "provenance": {
+        "unchanged_layer_px": 9216,
+        "hand_px": 0,
+        "automatic_px": 0,
+        "edits": [],
+        "automatic": []
+      },
+      "visible_px": 7168,
+      "occluded_px": 2048,
+      "projected_core_px": 6768,
+      "source_px_taken": 6768,
+      "visible_not_projected_px": 400,
+      "refused_drift_px": 0,
+      "merged_px": 0,
+      "seam_override_px": 0
+    },
+    {
+      "name": "front",
+      "from": "full:objects",
+      "taken_layers": [
+        {
+          "run": "full",
+          "tag": "objects",
+          "run_dir": "orig",
+          "st_input": "painting.png",
+          "prompt_id": "generated-original",
+          "seed": 42,
+          "support_px": 2048,
+          "checked_px": 2448,
+          "differing_px": 0
+        }
+      ],
+      "x": 48,
+      "y": 32,
+      "w": 32,
+      "h": 64,
+      "opaque_px": 2048,
+      "provenance": {
+        "unchanged_layer_px": 2048,
+        "hand_px": 0,
+        "automatic_px": 0,
+        "edits": [],
+        "automatic": []
+      },
+      "visible_px": 2048,
+      "occluded_px": 0,
+      "projected_core_px": 2048,
+      "source_px_taken": 2048,
+      "visible_not_projected_px": 0,
+      "refused_drift_px": 0,
+      "merged_px": 0,
+      "seam_override_px": 0
+    }
+  ],
+  "assembly_config": {
+    "sha256": "d3b5c1828b4d493259488ced3acc6e3f26b22c84053513e8d7c107cd5a83c295",
+    "fields": [
+      {
+        "name": "assemble.ground",
+        "sha256": "945603a8f587786b463c3f94fce115c0fae88fac2728cc96ddf5981cf7f61741"
+      },
+      {
+        "name": "assemble.occluders",
+        "sha256": "19c8945b539275d540d21ee03fc0e3c5bc5e16389c9aa1b020ae6bc9b7605320"
+      },
+      {
+        "name": "assemble.plan",
+        "sha256": "e7c9c385ffef369e139a9daae79561a0ba0532ea0428d8ffa4829e71cee5ef42"
+      },
+      {
+        "name": "assemble.project",
+        "sha256": "360eba3dea9d274427418ff25f7bd95b06334ab950e84392b065125df9b6a027"
+      },
+      {
+        "name": "assemble.rig_scale",
+        "sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+      },
+      {
+        "name": "assemble.seam",
+        "sha256": "a0d5be81c805462411ef0c9cf0201bf836a8a799ef3dc9ab5a78efd309b64e88"
+      },
+      {
+        "name": "assemble.take",
+        "sha256": "98dbd6e11f6ad32863e37afc41bb8818eccdd254c63b76e483a772f81f0aad54"
+      },
+      {
+        "name": "assemble.take[1].meta",
+        "sha256": "6f23870af3451f1afc3d17dae9a9ba5950fa1faf177fd6ba6101ef8aaebe4593"
+      },
+      {
+        "name": "seethrough.resolution",
+        "sha256": "2747b7c718564ba5f066f0523b03e17f6a496b06851333d2d59ab6d863225848"
+      }
+    ]
+  },
+  "ghost_px": {
+    "full:eyewhite-l": 0,
+    "full:eyewhite-r": 0,
+    "full:face": 0,
+    "full:legwear": 0,
+    "full:objects": 0
+  },
+  "recomposite": {
+    "mean_abs": 0,
+    "within_limit": 8,
+    "within_share": 1,
+    "error_limit": 40,
+    "error_px": 0,
+    "covered_alpha": 128,
+    "uncovered_error_px": 0,
+    "hole_count": 0,
+    "holes_listed": 5,
+    "holes": []
+  }
+}
