@@ -1,6 +1,6 @@
-/** #750 ordinary Nova only. Real shipped UI paths and retained record reader/writer doubles.
- * Interview-only shared screen proof; approval modals are covered by job-record-modal-browser.ts.
- * EN/KO, interview picks, picture/empty, 1600x1000; no installed-producer conformance claim. */
+/** #750/#986 ordinary Nova browser checks for the shared Question panel and main viewport.
+ * The live-job fixture uses retained record reader/writer doubles and public synthetic assets.
+ * --serve starts a loopback fixture for interactive review without launching Chromium. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
@@ -12,9 +12,16 @@ import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
-import {recordScreenFixture,type RecordScreenKind} from './helpers/job-record-screen-fixture.ts';
+import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_RGB} from './helpers/job-record-fixture.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
+import {parseOpenInputs} from '../src/cli.ts';
+import {prepareOpenTarget} from '../src/open.ts';
+import {startOpenWorkspace} from '../src/open-workspace.ts';
+import {readProject} from '../src/interview-project.ts';
+import {targetCapability} from '../src/open-workspace-state.ts';
+import {WORKSPACE_SCHEMA,type WorkspaceList} from '../src/open-workspace-contract.ts';
 import {buildWeb} from '../src/build.ts';
 import {prepareJobRecordAct} from '../src/job-act.ts';
 import type {JobRetainedRecordSource} from '../src/job-source.ts';
@@ -33,11 +40,20 @@ const narrowQuestionResize=Bun.argv.includes('--question-narrow-resize');
 const followup839=Bun.argv.includes('--followup-839');
 const postQuestionPictures=Bun.argv.includes('--post-question-pictures');
 const boundRigPictureOnly=Bun.argv.includes('--bound-rig-picture');
+const workspace986=Bun.argv.includes('--workspace-986');
+const questionRoot='#workspace-interview-answer';
+const questionTab='[data-block-target=question][aria-selected=true]';
+const sharedControls=['zoom-in','zoom-out','fit','native-one','view-menu'];
+const controlSelector=sharedControls.map(id=>'#'+id).join(',');
+const dialogViewer='canvas,video,.viewport,.interview-view,.interview-viewport,.view-zoom,.zoom-controls,'+controlSelector;
+const paintingSelector='#reference-content img';
+const otherText='  Custom topology · 직접 입력\n';
+type Rect={x:number;y:number;width:number;height:number;left:number;top:number;right:number;bottom:number};
 const baseline=await Bun.file(new URL('./fixtures/interview-722-empty-note.json',import.meta.url)).json();
-async function assertLastAskPickKeepsScrollAndFocus(mode:'dialog'|'pictureless'|'question-tab'){
+async function assertLastAskPickKeepsScrollAndFocus(mode:string){
  const scrollBefore=await page!.evaluate<number>(`(()=>{
   const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=form.closest('#workspace-interview-answer')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
+  const panel=form.closest('#workspace-interview-answer');
   const firstOption=form.querySelector('fieldset.interview-ask:last-of-type label.interview-option');
   const pr=panel.getBoundingClientRect(),or=firstOption.getBoundingClientRect();
   panel.scrollTop=Math.max(0,Math.min(panel.scrollHeight-panel.clientHeight,panel.scrollTop+(or.top-pr.top)-4));
@@ -45,55 +61,39 @@ async function assertLastAskPickKeepsScrollAndFocus(mode:'dialog'|'pictureless'|
  })()`);
  assert.ok(scrollBefore>0,`#875 ${mode} panel scrolls before changing pick`);
  await click(page!,'form[data-job-ask="ask-interview-picks"] label.interview-option:has(input[value="cloth_sim_other"])');
- await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+ await page!.evaluate<void>(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
  const afterOther=await page!.evaluate<{scrollTop:number;active:boolean}>(`(()=>{
   const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=form.closest('#workspace-interview-answer')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
+  const panel=form.closest('#workspace-interview-answer');
   const other=form.querySelector('input[type=radio][name="choice.cloth_sim"][value="cloth_sim_other"]');
   return {scrollTop:panel.scrollTop,active:document.activeElement===other};
  })()`);
  assert.equal(afterOther.scrollTop,scrollBefore,`#875 ${mode} scrollTop unchanged after picking other in last ask`);
  assert.equal(afterOther.active,true,`#875 ${mode} document.activeElement unchanged after picking other in last ask`);
  await click(page!,'form[data-job-ask="ask-interview-picks"] label.interview-option:has(input[value="cloth_baked"])');
- await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
+ await page!.evaluate<void>(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
  const afterBaked=await page!.evaluate<{scrollHeight:number;clientHeight:number;scrollTop:number;active:boolean}>(`(()=>{
   const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=form.closest('#workspace-interview-answer')??(form.querySelector('.interview-view')?form.querySelector('.interview-answer-fields'):form);
+  const panel=form.closest('#workspace-interview-answer');
   const baked=form.querySelector('input[type=radio][name="choice.cloth_sim"][value="cloth_baked"]');
   return {scrollHeight:panel.scrollHeight,clientHeight:panel.clientHeight,scrollTop:panel.scrollTop,active:document.activeElement===baked};
  })()`);
  assert.equal(afterBaked.scrollTop,scrollBefore,`#875 ${mode} scrollTop unchanged after changing pick in last ask`);
  assert.equal(afterBaked.active,true,`#875 ${mode} document.activeElement unchanged after changing pick in last ask`);
 }
-async function longInterviewScrollChecks(questionTab:boolean){
+async function longInterviewScrollChecks(picturedBackdrop:boolean){
  for(const language of ['en','ko'] as const){
-  if(questionTab){
-   const fixture=await recordScreenFixture('interview-picks',true,undefined,undefined,false,true,undefined,true);
+  for(const questionImages of picturedBackdrop?[true]:[true,false]){
+   const fixture=await recordScreenFixture('interview-picks',picturedBackdrop,undefined,undefined,false,questionImages,undefined,true);
    try{
-    const before=await jobInputHashes(fixture.root),url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
-    await page!.setViewport(1440,900);await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
-    await page!.goto('about:blank');await page!.goto(url.href);
-    await wait(`!!document.querySelector('#workspace-interview-answer form[data-job-ask="ask-interview-picks"] fieldset:not(:disabled)')&&!!document.querySelector('[data-block-target=question][aria-selected=true]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'875 long question tab ready');
-    await assertLastAskPickKeepsScrollAndFocus('question-tab');
+    const before=await jobInputHashes(fixture.root),url=fixtureUrl(fixture.ownerUrl,language);
+    await page!.setViewport(1440,900);
+    await page!.goto('about:blank');await page!.goto(url);
+    await waitForQuestion(`form[data-job-ask="${fixture.ask.askId}"]`);
+    if(questionImages)await readPainting(2);
+    await assertLastAskPickKeepsScrollAndFocus(questionImages?'pictured question':'pictureless question');
     assert.deepEqual(await jobInputHashes(fixture.root),before);
    }finally{await page!.goto('about:blank');await fixture.close();}
-  }else{
-   for(const questionImages of [true,false] as const){
-    const fixture=await recordScreenFixture('interview-picks',false,undefined,undefined,false,questionImages,undefined,true);
-    try{
-     const before=await jobInputHashes(fixture.root),url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
-     await page!.setViewport(1600,1000);holdImages=false;await page!.goto('about:blank');await page!.goto(url.href);
-     await wait(`!!document.querySelector('form[data-job-ask="ask-interview-picks"] fieldset:not(:disabled)')`,'875 long dialog receipt');
-     if(questionImages){
-      if(!await page!.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page!,'#workspace-pending-ask');
-      await wait(`!!document.querySelector('#job-record-asks[open] form[data-job-ask="ask-interview-picks"] fieldset:not(:disabled)')`,'875 long dialog open');
-     }else{
-      await wait(`!!document.querySelector('#workspace-interview-answer form[data-job-ask="ask-interview-picks"] fieldset:not(:disabled)')&&!!document.querySelector('[data-block-target=question][aria-selected=true]')`,'875 pictureless question tab open');
-     }
-     await assertLastAskPickKeepsScrollAndFocus(questionImages?'dialog':'pictureless');
-     assert.deepEqual(await jobInputHashes(fixture.root),before);
-    }finally{await page!.goto('about:blank');await fixture.close();}
-   }
   }
  }
 }
@@ -121,18 +121,158 @@ for(const name of recordWriterDefinitions){
   `RECORD_WRITER_PIN_DEFINITION_MISSING: ${name}`);
 }
 assert.equal(sha(recordWriterSource),baseline.recordWriterSourceSha256,'RECORD_WRITER_PIN_SHA256_MISMATCH');
+function fixtureUrl(ownerUrl:string,language:string){
+ const url=new URL(ownerUrl);
+ url.searchParams.set('lang',language);
+ return url.href;
+}
+
+async function joinedFixture(){
+ const fixture=await interviewOpenFixture();
+ let host:Awaited<ReturnType<typeof startOpenWorkspace>>|undefined;
+ try{
+  // Extend the public fixture with a visibly different second painting for a real menu switch.
+  const optionPath=join(fixture.root,'evidence/options.json');
+  type ImageRef={path:string;sha256:string};
+  const options=JSON.parse(await readFile(optionPath,'utf8')) as {context:{files:ImageRef[]}};
+  const project=fixture.project as {inputs:ImageRef[];interview:{framing:{pending_options:ImageRef}[]}};
+  const alternate='<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240"><path fill="#e89220" d="M0 0h480v240H0z"/><circle cx="240" cy="120" r="80" fill="#254c88"/></svg>';
+  const ref={path:'alternate.svg',sha256:sha(alternate)};
+  await writeFile(join(fixture.root,ref.path),alternate);
+  options.context.files.push(ref);
+  project.inputs.push(ref);
+  const bytes=JSON.stringify(options);
+  await writeFile(optionPath,bytes);
+  project.interview.framing[0]!.pending_options.sha256=sha(bytes);
+  await writeFile(join(fixture.root,'project.json'),JSON.stringify(project));
+  const inputs=parseOpenInputs([fixture.root,'--project',fixture.root,'--picks-dir','picks']);
+  const prepared=await prepareOpenTarget(inputs,{stateDir:fixture.stateDir});
+  host=await startOpenWorkspace({stateDir:fixture.stateDir,fingerprint:prepared.fingerprint,port:0});
+  const {record}=host;
+  const registered=await fetch(record.origin+'/workspace/api/register',{method:'POST',
+   headers:{Authorization:'Bearer '+record.registrationCapability,'Content-Type':'application/json'},
+   body:JSON.stringify({schema:WORKSPACE_SCHEMA,incarnation:record.incarnation,
+    targets:[{key:prepared.key,contentHash:prepared.package.contentHash,cwd:prepared.cwd,viewOnly:false,inputs:prepared.package.inputs}]})});
+  assert.equal(registered.status,200);
+  const list=await (await fetch(record.origin+'/workspace/api/targets',{headers:{'X-Review-Capability':record.ownerCapability}})).json() as WorkspaceList;
+  assert.equal(list.targets.length,1);
+  const url=new URL(list.targets[0]!.entry,record.origin);
+  url.hash='cap='+targetCapability(record.ownerCapability,record.incarnation,prepared.key);
+  const running=host;
+  return {root:fixture.root,ownerUrl:url.href,async close(){try{await running.stop();}finally{await fixture.close();}}};
+ }catch(error){
+  try{await host?.stop();}finally{await fixture.close();}
+  throw error;
+ }
+}
+
+if(Bun.argv.includes('--serve')){
+ const language=arg('--lang')??'en';
+ assert.ok(language==='en'||language==='ko','--lang must be en or ko');
+ const kind=arg('--fixture')??'live';
+ assert.ok(kind==='live'||kind==='joined'||kind==='pictureless','--fixture must be live, joined or pictureless');
+ const fixture=kind==='joined'?await joinedFixture():await recordScreenFixture('interview-picks',false,output,undefined,false,kind==='live');
+ try{
+  console.log(fixtureUrl(fixture.ownerUrl,language));
+  await new Promise<void>(resolve=>{process.once('SIGINT',resolve);process.once('SIGTERM',resolve);});
+ }finally{await fixture.close();}
+ process.exit(0);
+}
+
 const profile=await mkdtemp(join(tmpdir(),'review-750-browser-'));
 let page:InputCdpSession|undefined,command:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
 let holdImages=false;const pausedImages:string[]=[];
 const consoleErrors:unknown[]=[];
 const exceptions:unknown[]=[],mutations:{method:string;path:string}[]=[],cases:unknown[]=[];
+let persistedActs=0;
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('750_BROWSER_TIMEOUT '+label);}
 
+async function waitForQuestion(form:string,answered=false){
+ const selector=questionRoot+' '+form+(answered?'[data-interview-answered=true] fieldset:disabled':' fieldset:not(:disabled)');
+ await wait(`document.body.dataset.ready==='true'&&!!document.querySelector(${JSON.stringify(selector)})&&document.querySelector(${JSON.stringify(questionTab)})?.getClientRects().length>0`,
+  '986 Question selected with '+(answered?'saved':'editable')+' form');
+}
+async function assertNoDialogViewer(){
+ const contents=await page!.evaluate<{id:string;open:boolean;modal:boolean;viewers:number}[]>(`[...document.querySelectorAll('dialog')].map(dialog=>({
+  id:dialog.id,open:dialog.open,modal:dialog.matches(':modal'),viewers:dialog.querySelectorAll(${JSON.stringify(dialogViewer)}).length
+ }))`);
+ assert.ok(contents.every(dialog=>dialog.viewers===0),JSON.stringify(contents));
+ return contents;
+}
+type Painting={src:string;width:number;height:number;visible:boolean;rect:Rect;scale:number;mode:string|null};
+const paintingState=()=>page!.evaluate<Painting>(`(()=>{
+ const image=document.querySelector('${paintingSelector}'),content=document.querySelector('#reference-content');
+ return {src:image.currentSrc,width:image.naturalWidth,height:image.naturalHeight,
+  visible:!!image.getClientRects().length&&getComputedStyle(image).visibility==='visible'&&!document.querySelector('#reference-pane').hidden,
+  rect:image.getBoundingClientRect().toJSON(),scale:new DOMMatrix(getComputedStyle(content).transform).a,
+  mode:document.querySelector('#view-menu [data-view][aria-pressed=true]')?.dataset.view??null};
+})()`);
+async function readPainting(width:number,index=0){
+ await wait(`document.querySelector('${paintingSelector}')?.naturalWidth===${width}&&
+  !!document.querySelector('#view-menu [data-view="interview-image-${index}"][aria-pressed=true]')&&
+  document.querySelector('${paintingSelector}').getBoundingClientRect().width>0`,'986 shared image '+index);
+ const state=await paintingState();
+ assert.ok(state.visible&&state.rect.height>0&&state.scale>0,JSON.stringify(state));
+ return state;
+}
+async function selectInterviewImage(index:number){
+ await click(page!,'#view-menu summary');
+ await click(page!,`#view-menu [data-view="interview-image-${index}"]`);
+}
+async function sharedCameraChecks(){
+ assert.deepEqual(await page!.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(controlSelector)})].map(control=>control.id)`),sharedControls);
+ await click(page!,'#fit');
+ const initialFit=await paintingState();
+ await click(page!,'#native-one');
+ const native=await paintingState();assert.ok(Math.abs(native.scale-1)<0.001,JSON.stringify(native));
+ await click(page!,'#zoom-in');
+ const enlarged=await paintingState();assert.ok(enlarged.rect.width>native.rect.width,JSON.stringify(enlarged));
+ await click(page!,'#zoom-out');
+ const reduced=await paintingState();assert.ok(Math.abs(reduced.scale-native.scale)<0.001,JSON.stringify(reduced));
+ await click(page!,'#fit');
+ const fit=await paintingState();assert.ok(Math.abs(fit.scale-initialFit.scale)<0.001,JSON.stringify({initialFit,fit}));
+ return {native,enlarged,reduced,fit};
+}
+async function clickFormControl(selector:string){
+ await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`);
+ await click(page!,selector);
+}
+async function answerInterview(form:string,note?:string){
+ for(const value of ['topology_other','density_auto'])await clickFormControl(form+` label.interview-option:has(input[value="${value}"])`);
+ await clickFormControl(form+' textarea[name="other.topology"]');
+ await command!('Input.insertText',{text:otherText});
+ if(note!==undefined){
+  await clickFormControl(form+' textarea[name="note"]');
+  await command!('Input.insertText',{text:note});
+ }
+}
+type RememberedPainting={state:Painting;personSelectSame:boolean;nodeSame:boolean};
+async function rememberPainting(){
+ await page!.evaluate<void>(`(()=>{globalThis.__986Painting=document.querySelector('${paintingSelector}');globalThis.__986PersonSelect=document.querySelector('#person-select');})()`);
+ return paintingState();
+}
+async function assertPaintingPersists(previous:Painting){
+ const state=await paintingState();
+ const identity=await page!.evaluate<Omit<RememberedPainting,'state'>>(`({
+  nodeSame:document.querySelector('${paintingSelector}')===globalThis.__986Painting,
+  personSelectSame:document.querySelector('#person-select')===globalThis.__986PersonSelect
+ })`);
+ assert.deepEqual(identity,{nodeSame:true,personSelectSame:true});
+ assert.ok(state.visible&&state.rect.width>0&&state.rect.height>0);
+ assert.equal(state.src,previous.src);
+ assert.equal(state.mode,previous.mode);
+ return {...identity,state};
+}
 type StripState={tabs:{id:string;text:string;disabled:boolean}[];selected:string|null;selectedVisible:boolean;questionFirst:boolean;reportOverflow:boolean;actRowVisible:boolean;ordinaryPanelVisible:boolean};
 const stripState=()=>page!.evaluate<StripState>(`(()=>{const row=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])'),visible=n=>!!n&&!n.hidden&&n.getClientRects().length>0&&getComputedStyle(n).display!=='none';const buttons=[...row.querySelectorAll(':scope>button[role=tab]')],selected=row.querySelector('[aria-selected=true]');return {tabs:buttons.filter(visible).map(n=>({id:n.dataset.blockTarget,text:n.textContent,disabled:n.disabled})),selected:selected?.dataset.blockTarget??null,selectedVisible:visible(selected),questionFirst:buttons[0]?.dataset.blockTarget==='question',reportOverflow:!!row.querySelector('[data-block-target=report-panel][data-tab-overflow]'),actRowVisible:visible(document.querySelector('#workspace-act-row')),ordinaryPanelVisible:visible(document.querySelector('#selected-part'))};})()`);
 async function selectBlock(target:string){
+ if(target==='feedback'){
+  await click(page!,'#stage-comment');
+  await wait("!!document.querySelector('#inspector-feedback:not([hidden])')&&document.querySelector('#workspace-interview-answer').hidden",'986 Comments active');
+  return;
+ }
  const selector=`.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target="${target}"]`;
- if(await page!.evaluate(`document.querySelector(${JSON.stringify(selector)}).hasAttribute('data-tab-overflow')`)){
+ if(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}).hasAttribute('data-tab-overflow')`)){
   await click(page!,'.workspace-bottom-tabs>.block-row:not([hidden]) .workspace-tabs-more');await click(page!,`.workspace-tabs-menu:not([hidden]) [data-block-more-target="${target}"]`);
  }else await click(page!,selector);
 }
@@ -169,31 +309,30 @@ async function questionTabChecks(){
    const tabs=async()=>(await stripState()).tabs;
    const beforeAskStrip=await stripState();if(ordinary)comparePartsStrip(beforeAskStrip,ordinary.state,false);else assert.equal(beforeAskStrip.tabs.length,10,'ten ordinary Animate tabs remain displayed');
    const awayTarget=picture==='parts'?'selected-part':'animation-dock';
-   // A non-default camera makes restoration stronger than a view-label check.
-   if(picture==='parts')await click(page!,'#native-one');await click(page!,'#zoom-in');
-   const viewExpression=`(()=>{const raw=document.querySelector('#view-coordinates').textContent;const numeric=raw?JSON.parse(raw):{cameraSync:document.querySelector('#camera-sync').checked,activeCamera:null,cameras:Object.fromEntries(['rig','reference'].map(key=>{const root=document.querySelector(key==='rig'?'#rig-root':'#reference-content'),pane=document.querySelector('#'+key+'-viewport'),scale=new DOMMatrix(getComputedStyle(root).transform);return [key,{space:'image',center:{x:(pane.clientWidth/2-parseFloat(root.style.left||'0'))/scale.a,y:(pane.clientHeight/2-parseFloat(root.style.top||'0'))/scale.d},zoom:scale.a}];}))};return {mode:document.querySelector('#view-menu [aria-pressed=true]')?.dataset.view,rigHidden:document.querySelector('#rig-pane').hidden,referenceHidden:document.querySelector('#reference-pane').hidden,reference:document.querySelector('#reference-select').value,referenceHTML:document.querySelector('#reference-content').innerHTML,cameraSync:numeric.cameraSync,activeCamera:numeric.activeCamera,cameras:Object.fromEntries(Object.entries(numeric.cameras).map(([key,camera])=>[key,camera?{space:camera.space,center:camera.center,zoom:camera.zoom}:null]))};})()`;
-   await page!.evaluate(`window.__questionOriginalReferenceNodes=[...document.querySelector('#reference-content').childNodes];window.__questionOriginalPersonSelect=document.querySelector('#person-select')`);
-   const originalView=await page!.evaluate(viewExpression),originalTabs=await tabs();
+   const originalTabs=await tabs();
    fixture.fake.pending(fixture.ask,fixture.display.publication.generation+1);
-   const selector=`form[data-job-ask="${fixture.ask.askId}"]`,root='#workspace-interview-answer';
-   await wait(`!!document.querySelector(${JSON.stringify(root+' '+selector+' fieldset:not(:disabled)')})&&!!document.querySelector('[data-block-target=question][aria-selected=true]')`,'839 load Question selected');
-   await wait(`document.querySelector('#reference-content img')?.naturalWidth===2`,'839 question picture');
-   assert.equal(await page!.evaluate('devicePixelRatio'),2);assert.equal(await page!.evaluate('innerWidth'),1440);
-   assert.equal(await page!.evaluate(`document.querySelector('[data-block-target=question][aria-selected=true]').textContent`),(language==='en'?enCatalog:koCatalog)['Question']);
+   const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
+   await waitForQuestion(selector);
+   const eventPainting=await readPainting(2);
+   await rememberPainting();
+   assert.equal(await page!.evaluate<number>('devicePixelRatio'),2);assert.equal(await page!.evaluate<number>('innerWidth'),1440);
+   assert.equal(await page!.evaluate<string>(`document.querySelector('${questionTab}').textContent`),(language==='en'?enCatalog:koCatalog)['Question']);
    const eventArrivalStrip=await stripState();assert.equal(eventArrivalStrip.tabs[0]!.id,'question');assert.deepEqual(eventArrivalStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs and enabled states retained');
    if(ordinary)comparePartsStrip(eventArrivalStrip,ordinary.state,true);
-   assert.equal(await page!.evaluate(`!!document.querySelector('dialog[open]')`),false);
+   assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
    await writeFile(join(out,'event-arrival.png'),await page!.screenshot());
-   await selectBlock(awayTarget);await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 event-arrival away');
-   const eventAwayStrip=await stripState();assert.equal(eventAwayStrip.actRowVisible,true);if(ordinary){comparePartsStrip(eventAwayStrip,ordinary.state,true);assert.equal(eventAwayStrip.ordinaryPanelVisible,true);}
-   assert.deepEqual(await page!.evaluate(viewExpression),originalView,'pre-ask view/reference/camera restored');
-   assert.equal(await page!.evaluate(`(()=>{const nodes=[...document.querySelector('#reference-content').childNodes];return nodes.length===window.__questionOriginalReferenceNodes.length&&nodes.every((node,i)=>node===window.__questionOriginalReferenceNodes[i])&&document.querySelector('#person-select')===window.__questionOriginalPersonSelect;})()`),true);
+   await selectBlock(awayTarget);
+   const eventAwayStrip=await stripState();assert.equal(eventAwayStrip.selected,awayTarget);assert.equal(eventAwayStrip.actRowVisible,true);
+   if(ordinary){comparePartsStrip(eventAwayStrip,ordinary.state,true);assert.equal(eventAwayStrip.ordinaryPanelVisible,true);}
+   await assertPaintingPersists(eventPainting);
    // The same genuine pending stream must select Question on initial navigation, not only event arrival.
    await page!.goto('about:blank');await page!.goto(url.href);
-   await wait(`!!document.querySelector(${JSON.stringify(root+' '+selector+' fieldset:not(:disabled)')})&&!!document.querySelector('[data-block-target=question][aria-selected=true]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 pending on page load');
+   await waitForQuestion(selector);
+   const pendingPainting=await readPainting(2);
+   await rememberPainting();
    const pendingStrip=await stripState();assert.equal(pendingStrip.tabs[0]!.id,'question');assert.deepEqual(pendingStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs retained on pending load');assert.equal(pendingStrip.selectedVisible,true);assert.equal(pendingStrip.questionFirst,true);
    if(ordinary)comparePartsStrip(pendingStrip,ordinary.state,true);
-   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),false,'pending interview save remains visible');
+   assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),false,'pending interview save remains visible');
    await writeFile(join(out,'load.png'),await page!.screenshot());
    let narrowStrip:StripState|undefined;
    if(picture===true&&narrowQuestionResize){
@@ -202,45 +341,45 @@ async function questionTabChecks(){
     narrowStrip=await stripState();assert.equal(narrowStrip.selectedVisible,true);assert.equal(narrowStrip.reportOverflow,true);assert.equal(narrowStrip.questionFirst,true);await writeFile(join(out,'narrow-900.png'),await page!.screenshot());
     await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});await wait(`innerWidth===1440&&document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])').clientWidth>1000`,'839 full strip restored');
    }
-   // Establish the previous review view on this document before checking identity/camera restoration.
-   await selectBlock(awayTarget);await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 pending load away');
-   if(picture==='parts')await click(page!,'#native-one');await click(page!,'#zoom-in');
-   await page!.evaluate(`window.__questionOriginalReferenceNodes=[...document.querySelector('#reference-content').childNodes];window.__questionOriginalPersonSelect=document.querySelector('#person-select')`);
-   const pendingPreviousView=await page!.evaluate(viewExpression);
-   await click(page!,'#workspace-pending-ask');await wait(`document.querySelector('#reference-content img')?.naturalWidth===2&&!!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 pending load return');
-   // Comments exists for both backdrop kinds, including parts whose source has no model blocks.
-   await selectBlock(awayTarget);await wait(`!document.querySelector('#workspace-interview-answer[data-question-image-active]')`,'839 restore previous view');
-   const awayStrip=await stripState();assert.equal(awayStrip.actRowVisible,true);if(ordinary){comparePartsStrip(awayStrip,ordinary.state,true);assert.equal(awayStrip.ordinaryPanelVisible,true);}
-   assert.deepEqual(await page!.evaluate(viewExpression),pendingPreviousView,'actual view/reference/camera restored');
-   assert.equal(await page!.evaluate(`(()=>{const nodes=[...document.querySelector('#reference-content').childNodes];return nodes.length===window.__questionOriginalReferenceNodes.length&&nodes.every((node,i)=>node===window.__questionOriginalReferenceNodes[i])&&document.querySelector('#person-select')===window.__questionOriginalPersonSelect;})()`),true,'prior reference node identity restored');
+   await selectBlock(awayTarget);
+   const awayStrip=await stripState();assert.equal(awayStrip.selected,awayTarget);assert.equal(awayStrip.actRowVisible,true);
+   if(ordinary){comparePartsStrip(awayStrip,ordinary.state,true);assert.equal(awayStrip.ordinaryPanelVisible,true);}
+   const awayPainting=await assertPaintingPersists(pendingPainting);
    await writeFile(join(out,'away.png'),await page!.screenshot());
+   await click(page!,'#workspace-pending-ask');await waitForQuestion(selector);
+   await assertPaintingPersists(pendingPainting);
+   assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
+   // Clicking the visible main painting cannot open a pointed comment composer.
+   await wait(`!document.querySelector('#rig-viewport.stage-comment-mode,#reference-viewport.stage-comment-mode')`,'839 question image refuses pin mode');
    await click(page!,'#stage-comment');
-   await click(page!,'#workspace-pending-ask');await wait(`!!document.querySelector('#workspace-interview-answer[data-question-image-active]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 return image');
-   // Return after the shipped Comment action enabled capture on the review backdrop.
-   await wait(`!document.querySelector('#rig-viewport.stage-comment-mode,#reference-viewport.stage-comment-mode')`,'839 transient image refuses pin mode');
-   const pinBox:any=await page!.evaluate(`document.querySelector('#reference-viewport').getBoundingClientRect().toJSON()`);
-   await page!.mouse('mousePressed',pinBox.x+pinBox.width/2,pinBox.y+pinBox.height/2);await page!.mouse('mouseReleased',pinBox.x+pinBox.width/2,pinBox.y+pinBox.height/2);
-   assert.equal(await page!.evaluate(`!!document.querySelector('.stage-comment-composer')`),false,'no pointed comment composer on transient question image');
+   await wait(`!document.querySelector('#rig-viewport.stage-comment-mode,#reference-viewport.stage-comment-mode')`,'839 comment action keeps pin mode unavailable');
+   await click(page!,'#reference-viewport');
+   assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('.stage-comment-composer')`),false,'no pointed comment composer on the question image');
+   await click(page!,'#workspace-pending-ask');await waitForQuestion(selector);
    await writeFile(join(out,'back.png'),await page!.screenshot());
-   await page!.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});for(const value of ['topology_other','density_auto'])form.querySelector('input[value="'+value+'"]').click();const other=form.querySelector('textarea[name="other.topology"]');other.value=${JSON.stringify('  Custom topology · 직접 입력\n')};other.dispatchEvent(new Event('input',{bubbles:true}));form.querySelector('button[type=submit]').scrollIntoView({block:'center'});})()`);
+   await answerInterview(selector);
+   await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).scrollIntoView({block:'center'})`);
    await click(page!,selector+' button[type=submit]');
    await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'&&document.querySelector('#dirty').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})&&document.querySelector('#workspace-act-row').hidden`,'839 answer saved');
-   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
-   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),true,'answered interview submit is absent from readback');
-   assert.equal(await page!.evaluate(`document.getElementById('message').textContent`),await page!.evaluate<string>(`document.getElementById('dirty').textContent`),'interview-only saved footer agrees with rendered saved header');
-   assert.deepEqual(await page!.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
-   assert.equal(await page!.evaluate(`['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)`),true,'completed answer controls hidden');
-   assert.equal(await page!.evaluate(`document.querySelector('#workspace-act-row').hidden`),true);
-   assert.deepEqual(await page!.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'single visible saved state');
+   assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
+   assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),true,'answered interview submit is absent from readback');
+   assert.equal(await page!.evaluate<string>(`document.getElementById('message').textContent`),await page!.evaluate<string>(`document.getElementById('dirty').textContent`),'interview-only saved footer agrees with rendered saved header');
+   assert.deepEqual(await page!.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
+   assert.equal(await page!.evaluate<boolean>(`['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)`),true,'completed answer controls hidden');
+   assert.equal(await page!.evaluate<boolean>(`document.querySelector('#workspace-act-row').hidden`),true);
+   assert.deepEqual(await page!.evaluate<string[]>(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'single visible saved state');
    const answeredStrip=await stripState();assert.equal(answeredStrip.tabs[0]!.id,'question');assert.deepEqual(answeredStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs retained after save');if(ordinary)comparePartsStrip(answeredStrip,ordinary.state,true);
    const savedFooter:string=await page!.evaluate<string>(`document.getElementById('message').textContent`);
    assert.equal(savedFooter,await page!.evaluate<string>(`document.getElementById('dirty').textContent`),'footer agrees with actual rendered saved header');
-   const readbackCopy=await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).textContent`);assert.equal(readbackCopy,(language==='en'?enCatalog:koCatalog)['job.saved']);
-   await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).scrollIntoView({block:'center'})`);await writeFile(join(out,'readback-status.png'),await page!.screenshot());
+   const readbackCopy=await page!.evaluate<string>(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).textContent`);assert.equal(readbackCopy,(language==='en'?enCatalog:koCatalog)['job.saved']);
+   await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).scrollIntoView({block:'center'})`);await writeFile(join(out,'readback-status.png'),await page!.screenshot());
+   const savedPainting=await assertPaintingPersists(pendingPainting);
    await selectBlock(awayTarget);if(ordinary){const savedAway=await stripState();comparePartsStrip(savedAway,ordinary.state,true);assert.equal(savedAway.ordinaryPanelVisible,true);}
+   await assertPaintingPersists(pendingPainting);
    await selectBlock('question');
-   await wait(`document.querySelector('#workspace-interview-answer[data-question-image-active]')&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 saved readback through Question tab');
-   await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
+   await waitForQuestion(selector,true);
+   await assertPaintingPersists(pendingPainting);
+   await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
    await writeFile(join(out,'answered.png'),await page!.screenshot());
    const bytes=await readFile(join(out,'one-screen.json'),'utf8'),act=parseRecordAct(JSON.parse(bytes));assert.equal(act.kind,'interview-picks');
    if(act.kind!=='interview-picks')throw Error('wrong act');
@@ -251,18 +390,19 @@ async function questionTabChecks(){
    const pending=fixture.fake.events.find(event=>event.type==='pending'&&event.ask.askId===fixture.ask.askId);
    if(!pending||pending.type!=='pending')throw Error('missing pending fixture event');fixture.fake.events.push({type:'act',jobId:fixture.session.jobId,generation:fixture.display.publication.generation+2,cursor:String(fixture.fake.events.length+1),act});
    await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 reload readback');
-   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
-   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),true,'answered interview submit is absent from readback');
-   assert.equal(await page!.evaluate(`document.getElementById('message').textContent`),await page!.evaluate<string>(`document.getElementById('dirty').textContent`),'interview-only saved footer agrees with rendered saved header');
-   assert.deepEqual(await page!.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
-   assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' textarea[name="other.topology"]')}).value`),'  Custom topology · 직접 입력\n');
-   assert.equal(await page!.evaluate(`document.querySelector('#workspace-act-row').hidden&&['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)`),true,'reloaded completed row and controls hidden');
-   assert.deepEqual(await page!.evaluate(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'reloaded single visible saved state');
-   assert.ok(await page!.evaluate(`document.querySelector('#dirty').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`));
-   await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
+   await waitForQuestion(selector,true);await readPainting(2);
+   assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
+   assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),true,'answered interview submit is absent from readback');
+   assert.equal(await page!.evaluate<string>(`document.getElementById('message').textContent`),await page!.evaluate<string>(`document.getElementById('dirty').textContent`),'interview-only saved footer agrees with rendered saved header');
+   assert.deepEqual(await page!.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
+   assert.equal(await page!.evaluate<string>(`document.querySelector(${JSON.stringify(selector+' textarea[name="other.topology"]')}).value`),'  Custom topology · 직접 입력\n');
+   assert.equal(await page!.evaluate<boolean>(`document.querySelector('#workspace-act-row').hidden&&['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)`),true,'reloaded completed row and controls hidden');
+   assert.deepEqual(await page!.evaluate<string[]>(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'reloaded single visible saved state');
+   assert.ok(await page!.evaluate<boolean>(`document.querySelector('#dirty').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`));
+   await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
    await writeFile(join(out,'reload.png'),await page!.screenshot());
    const reloadStrip=await stripState();assert.equal(reloadStrip.tabs[0]!.id,'question');assert.deepEqual(reloadStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs retained on readback reload');if(ordinary)comparePartsStrip(reloadStrip,ordinary.state,true);
-   const observation={originalView,pendingPreviousView,transientPinRefused:true,pendingOnLoad:true,picture,language,width:1440,height:900,dpr:2,originalTabs,ordinary,beforeAskStrip,eventArrivalStrip,eventAwayStrip,pendingStrip,awayStrip,answeredStrip,reloadStrip,narrowStrip,readbackCopy,savedFooter,sourceHash:fixture.display.publication.source.sourceHash,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));
+   const observation={eventPainting,pendingPainting,awayPainting,savedPainting,transientPinRefused:true,pendingOnLoad:true,picture,language,width:1440,height:900,dpr:2,originalTabs,ordinary,beforeAskStrip,eventArrivalStrip,eventAwayStrip,pendingStrip,awayStrip,answeredStrip,reloadStrip,narrowStrip,readbackCopy,savedFooter,sourceHash:fixture.display.publication.source.sourceHash,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);persistedActs++;await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));
    console.log('839_QUESTION_PASS '+JSON.stringify(observation));
    assert.deepEqual(await jobInputHashes(fixture.root),before);
   }finally{await fixture.close();}
@@ -271,7 +411,7 @@ async function questionTabChecks(){
  await longInterviewScrollChecks(true);
 }
 
-/** No option image changes the existing dialog, never the actual parts backdrop's capabilities. */
+/** A question without images leaves the published parts backdrop and its tabs available. */
 async function picturelessPartsQuestionChecks(){
  for(const language of ['en','ko'] as const){
   const fixture=await recordScreenFixture('interview-picks','parts',undefined,undefined,false,false),out=join(output,'parts-no-question-image',language),ordinary=ordinaryParts.get(language);
@@ -282,29 +422,35 @@ async function picturelessPartsQuestionChecks(){
    const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page!.goto('about:blank');await page!.goto(url.href);
    const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
    await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&!!document.querySelector(${JSON.stringify(selector+' fieldset:not(:disabled)')})`,'839 no-image question ready over real parts');
-   if(!await page!.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page!,'#workspace-pending-ask');
-   await wait(`!!document.querySelector(${JSON.stringify('#job-record-asks[open] '+selector+' fieldset:not(:disabled)')})`,'839 normal Answer opens no-image native dialog');
-   const dialogLayout=await page!.evaluate<any>(`(()=>{const dialog=document.querySelector('#job-record-asks[open]'),form=dialog?.querySelector(${JSON.stringify(selector)}),list=form?.querySelector('.interview-questions'),art=form?.querySelector('.interview-art'),fields=form?.querySelector('.interview-answer-fields'),context=fields?.querySelector('.interview-image-context'),code=context?.querySelector('code'),submit=fields?.querySelector('button[type=submit]'),status=form?.querySelector(':scope>[role=status]');if(!dialog||!form||!list||!art||!fields||!context||!code||!submit||!status)return null;const d=dialog.getBoundingClientRect(),l=list.getBoundingClientRect(),f=fields.getBoundingClientRect(),c=context.getBoundingClientRect(),s=submit.getBoundingClientRect(),st=status.getBoundingClientRect();return {width:d.width,height:d.height,left:d.left,right:d.right,artHidden:art.hidden,artRects:art.getClientRects().length,hasInterviewView:!!dialog.querySelector('.interview-view'),listBottom:l.bottom,fieldsTop:f.top,fieldsBottom:f.bottom,contextTop:c.top,contextBottom:c.bottom,submitTop:s.top,submitBottom:s.bottom,statusTop:st.top,codeText:code.textContent??'',contextVisible:context.getClientRects().length>0};})()`);
-   assert.ok(dialogLayout&&dialogLayout.width>0&&dialogLayout.width<=760&&Math.abs((dialogLayout.left+dialogLayout.right)/2-720)<=2,'pictureless dialog uses centered 760 px single-frame width');
-   assert.ok(dialogLayout.artHidden&&dialogLayout.artRects===0&&!dialogLayout.hasInterviewView&&dialogLayout.fieldsTop>=dialogLayout.listBottom-1&&dialogLayout.statusTop>=dialogLayout.fieldsBottom-1,'pictureless dialog stacks in one frame without an aside column or overlapping status row');
-   assert.ok(dialogLayout.contextVisible&&dialogLayout.codeText.includes('.json · ')&&dialogLayout.submitTop>=dialogLayout.contextBottom-1,'bound-source line sits inside the single frame above submit');
-   assert.equal(await page!.evaluate(`!!document.querySelector('#workspace-interview-answer[data-question-image-active]')`),false);await writeFile(join(out,'pending-native.png'),await page!.screenshot());
-   await click(page!,'#job-record-asks .workspace-drawer-close');const pendingStrip=await stripState();comparePartsStrip(pendingStrip,ordinary.state,false);assert.equal(pendingStrip.actRowVisible,true);await writeFile(join(out,'pending.png'),await page!.screenshot());
-   await selectBlock('selected-part');const awayStrip=await stripState();comparePartsStrip(awayStrip,ordinary.state,false);assert.equal(awayStrip.ordinaryPanelVisible,true);await writeFile(join(out,'away.png'),await page!.screenshot());
-   await click(page!,'#workspace-pending-ask');await wait(`!!document.querySelector('#job-record-asks[open]')`,'839 no-image native opener');
-   await page!.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});for(const value of ['topology_other','density_auto'])form.querySelector('input[value="'+value+'"]').click();const other=form.querySelector('textarea[name="other.topology"]');other.value=${JSON.stringify('  Custom topology · 직접 입력\n')};other.dispatchEvent(new Event('input',{bubbles:true}));form.querySelector('button[type=submit]').scrollIntoView({block:'center'});})()`);
-   await click(page!,selector+' button[type=submit]');await wait(`!document.querySelector('#job-record-asks[open]')&&document.querySelector('#workspace-act-row').hidden&&document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'`,'839 no-image saved');
-   const answeredStrip=await stripState();comparePartsStrip(answeredStrip,ordinary.state,false);assert.equal(answeredStrip.ordinaryPanelVisible,true);assert.equal(await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
+   await waitForQuestion(selector);
+   const pictureless=await page!.evaluate<{partVisible:boolean;imageModes:number;codeText:string;sourceAboveSubmit:boolean}>(`(()=>{
+    const canvas=document.querySelector('#parts-canvas'),form=document.querySelector(${JSON.stringify(selector)});
+    const context=form.querySelector('.interview-image-context'),submit=form.querySelector('button[type=submit]');
+    return {partVisible:canvas.getBoundingClientRect().width>0,imageModes:document.querySelectorAll('#view-menu [data-view^="interview-image-"]').length,
+     codeText:context.querySelector('code').textContent,sourceAboveSubmit:!!(context.compareDocumentPosition(submit)&Node.DOCUMENT_POSITION_FOLLOWING)};
+   })()`);
+   assert.equal(pictureless.partVisible,true);assert.equal(pictureless.imageModes,0);
+   assert.ok(pictureless.codeText.includes('.json · ')&&pictureless.sourceAboveSubmit,'bound-source line precedes submit');
+   assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
+   const pendingStrip=await stripState();comparePartsStrip(pendingStrip,ordinary.state,true);assert.equal(pendingStrip.actRowVisible,true);await writeFile(join(out,'pending.png'),await page!.screenshot());
+   await selectBlock('selected-part');const awayStrip=await stripState();comparePartsStrip(awayStrip,ordinary.state,true);assert.equal(awayStrip.ordinaryPanelVisible,true);await writeFile(join(out,'away.png'),await page!.screenshot());
+   await click(page!,'#workspace-pending-ask');await waitForQuestion(selector);
+   await answerInterview(selector);
+   await clickFormControl(selector+' button[type=submit]');
+   await waitForQuestion(selector,true);
+   const answeredStrip=await stripState();comparePartsStrip(answeredStrip,ordinary.state,true);assert.equal(answeredStrip.selected,'question');
+   assert.equal(await page!.evaluate<boolean>(`document.querySelector('#workspace-act-row').hidden`),true);
    const savedFooter:string=await page!.evaluate<string>(`document.getElementById('message').textContent`);
    assert.equal(savedFooter,await page!.evaluate<string>(`document.getElementById('dirty').textContent`),'footer agrees with actual rendered saved header');
-   const readbackCopy=await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).textContent`);assert.equal(readbackCopy,(language==='en'?enCatalog:koCatalog)['job.saved']);await writeFile(join(out,'answered.png'),await page!.screenshot());
+   const readbackCopy=await page!.evaluate<string>(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).textContent`);assert.equal(readbackCopy,(language==='en'?enCatalog:koCatalog)['job.saved']);await writeFile(join(out,'answered.png'),await page!.screenshot());
    const bytes=await readFile(join(out,'one-screen.json'),'utf8'),act=parseRecordAct(JSON.parse(bytes));assert.equal(act.kind,'interview-picks');if(act.kind!=='interview-picks')throw Error('wrong act');assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
    const expected=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});assert.equal(bytes,JSON.stringify(expected));
    fixture.fake.events.push({type:'act',jobId:fixture.session.jobId,generation:fixture.display.publication.generation+2,cursor:String(fixture.fake.events.length+1),act});
    await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#workspace-act-row').hidden`,'839 no-image saved reload');
-   if(await page!.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page!,'#job-record-asks .workspace-drawer-close');
-   const reloadStrip=await stripState();comparePartsStrip(reloadStrip,ordinary.state,false);assert.equal(reloadStrip.ordinaryPanelVisible,true);await writeFile(join(out,'reload.png'),await page!.screenshot());
-   const observation={picture:'parts',questionImages:false,language,sourceHash:fixture.display.publication.source.sourceHash,ordinary,pendingStrip,awayStrip,answeredStrip,reloadStrip,readbackCopy,savedFooter,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));console.log('839_NO_IMAGE_PARTS_PASS '+JSON.stringify(observation));
+   await waitForQuestion(selector,true);
+   assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
+   const reloadStrip=await stripState();comparePartsStrip(reloadStrip,ordinary.state,true);assert.equal(reloadStrip.selected,'question');await writeFile(join(out,'reload.png'),await page!.screenshot());
+   const observation={picture:'parts',questionImages:false,language,sourceHash:fixture.display.publication.source.sourceHash,ordinary,pendingStrip,awayStrip,answeredStrip,reloadStrip,readbackCopy,savedFooter,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);persistedActs++;await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));console.log('839_NO_IMAGE_PARTS_PASS '+JSON.stringify(observation));
    assert.deepEqual(await jobInputHashes(fixture.root),before);
   }finally{await fixture.close();}
  }
@@ -321,33 +467,63 @@ async function followupResources(root:string,identity:string){
  return async(name:'index.html'|'main.js'|'styles.css'):Promise<BodyInit>=>name==='main.js'?instrumented:await readFile(join(root,'web',name),'utf8');
 }
 
-/** Paired native-form route diagnosis and fresh-load geometry are independent results. */
+type RouteSnapshot={caught:{chain:{name:string;message:string;stack:string}[];at:number;ready?:string;dialogOpen:boolean}[];
+ ready?:string;dialogOpen:boolean;dialogConnected:boolean;questionSelected:boolean;partsWidth?:number;formReady:boolean;message?:string;bodyText:string};
+type RouteObservation={variant:string;language:string;sourceHash:string;fixture:string;events?:unknown;initial?:RouteSnapshot;afterAnswer?:RouteSnapshot;
+ saved?:RouteSnapshot;final?:RouteSnapshot|null;verdict?:string;originalFailure?:RouteSnapshot['caught'];downstream?:string;sourceImmutable?:boolean;error?:{message:string;stack?:string|null}};
+type Edges=Pick<Rect,'left'|'right'|'top'|'bottom'>;
+type StripRect=Edges&Pick<Rect,'width'|'height'>;
+type StripGeometry={selected:StripRect;activeRow:StripRect;strip:StripRect;viewport:StripRect;deltas:Record<'row'|'strip'|'viewport',Edges>;
+ insideRow:boolean;insideStrip:boolean;insideViewport:boolean;selectedId:string;questionFirst:boolean;reportOverflow:boolean;documentWidth:number;deviceScaleFactor:number};
+type GeometryObservation={picture:string;language:string;sourceHash:string;width:number;height:number;dpr:number;navigation:string;
+ originalState?:RouteSnapshot;geometry?:StripGeometry;sourceImmutable?:boolean;verdict?:string;error?:RouteObservation['error'];final?:RouteSnapshot|null};
+
+/** Preserve the frozen #839 native-form comparator and measure the current Question route. */
 async function followupQuestionChecks(){
  const mainRoot=process.env.RIG_REVIEW_839_MAIN_ROOT;assert.ok(mainRoot,'immutable main input supplied through nova-run --script');
- const variants=[{id:'main-38bb5f7',resource:await followupResources(mainRoot,'main-38bb5f7')},{id:'current-5011a1a',resource:await followupResources(resolve('.'),'current-5011a1a')}];
- const pairs:Record<string,any>[]=[],numeric:Record<string,any>[]=[];
- const snapshot=()=>page!.evaluate<any>(`({caught:globalThis.__839OriginalErrors??[],ready:document.body.dataset.ready,dialogOpen:!!document.querySelector('#job-record-asks[open]'),dialogConnected:!!document.querySelector('#job-record-asks')?.isConnected,partsWidth:document.querySelector('#parts-canvas')?.width,formReady:!!document.querySelector('form.interview-answer fieldset:not(:disabled)'),message:document.querySelector('#review-message')?.textContent,bodyText:document.body.innerText.slice(0,12000)})`);
+ const variants=[{id:'main-38bb5f7',legacy:true,resource:await followupResources(mainRoot,'main-38bb5f7')},
+  {id:'current',legacy:false,resource:await followupResources(resolve('.'),'current')}];
+ const pairs:RouteObservation[]=[],numeric:GeometryObservation[]=[];
+ const snapshot=()=>page!.evaluate<RouteSnapshot>(`({caught:globalThis.__839OriginalErrors??[],ready:document.body.dataset.ready,
+  dialogOpen:!!document.querySelector('#job-record-asks[open]'),dialogConnected:!!document.querySelector('#job-record-asks')?.isConnected,
+  questionSelected:!!document.querySelector('${questionTab}'),partsWidth:document.querySelector('#parts-canvas')?.width,
+  formReady:!!document.querySelector('form.interview-answer fieldset:not(:disabled)'),message:document.querySelector('#review-message')?.textContent,
+  bodyText:document.body.innerText.slice(0,12000)})`);
  for(const variant of variants)for(const language of ['en','ko'] as const){
   const out=join(output,'no-image-pair',variant.id,language);await mkdir(out,{recursive:true});
-  const fixture=await recordScreenFixture('interview-picks','parts',out,undefined,false,false,variant.resource),entry:Record<string,any>={variant:variant.id,language,sourceHash:fixture.display.publication.source.sourceHash,fixture:'Same retained parts backdrop and images-empty record path, including original event history'};
+  const fixture=await recordScreenFixture('interview-picks','parts',out,undefined,false,false,variant.resource),entry:RouteObservation={variant:variant.id,language,sourceHash:fixture.display.publication.source.sourceHash,fixture:'Same retained parts backdrop and images-empty record path, including original event history'};
   try{
    const before=await jobInputHashes(fixture.root),metadata=await (await fetch(fixture.origin+fixture.display.routes.apiBase+'interview')).json() as {questions:{images:unknown[]}[]};assert.equal(metadata.questions[0]!.images.length,0);
    entry.events=fixture.fake.events;await page!.setViewport(1440,900);await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
    const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page!.goto('about:blank');await page!.goto(url.href);
    await wait(`(globalThis.__839OriginalErrors?.length??0)>0||(document.body.dataset.ready==='true'&&!!document.querySelector('form.interview-answer fieldset:not(:disabled)'))`,'839 paired no-image original result');
    entry.initial=await snapshot();
+   const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
    if(!entry.initial.caught.length){
-    if(!entry.initial.dialogOpen)await click(page!,'#workspace-pending-ask');
-    await wait(`(globalThis.__839OriginalErrors?.length??0)>0||!!document.querySelector('#job-record-asks[open] form.interview-answer fieldset:not(:disabled)')`,'839 paired native Answer action');
+    if(variant.legacy){
+     if(!entry.initial.dialogOpen)await click(page!,'#workspace-pending-ask');
+     await wait(`(globalThis.__839OriginalErrors?.length??0)>0||!!document.querySelector('#job-record-asks[open] form.interview-answer fieldset:not(:disabled)')`,'839 frozen native Answer action');
+    }else{
+     await waitForQuestion(selector);
+     assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
+    }
     entry.afterAnswer=await snapshot();
    }
-   const state=entry.afterAnswer??entry.initial;entry.verdict=state.caught.length?'RED_ORIGINAL_REFUSAL':state.dialogOpen?'NATIVE_FORM_OPEN':'RED_NATIVE_FORM_ABSENT';
-   entry.originalFailure=state.caught;entry.downstream=state.caught.length?'SKIP_NO_IMAGE_ACTS_ORIGINAL_REFUSAL':'native form reachable; answer/save follows';
-   if(entry.verdict==='NATIVE_FORM_OPEN'){
-    const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
-    await page!.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});for(const value of ['topology_other','density_auto'])form.querySelector('input[value="'+value+'"]').click();const other=form.querySelector('textarea[name="other.topology"]');other.value=${JSON.stringify('  Custom topology · 직접 입력\n')};other.dispatchEvent(new Event('input',{bubbles:true}));form.querySelector('button[type=submit]').scrollIntoView({block:'center'});})()`);await click(page!,selector+' button[type=submit]');
-    await wait(`(globalThis.__839OriginalErrors?.length??0)>0||document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'`,'839 paired native save');entry.saved=await snapshot();
-    if(entry.saved.caught.length){entry.verdict='RED_ORIGINAL_REFUSAL';entry.originalFailure=entry.saved.caught;}else{const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));assert.equal(act.kind,'interview-picks');if(act.kind==='interview-picks')assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);entry.verdict='NATIVE_ANSWER_SAVED';}
+   const state=entry.afterAnswer??entry.initial;
+   const reachable=variant.legacy?state.dialogOpen:state.questionSelected&&!state.dialogOpen;
+   entry.verdict=state.caught.length?'RED_ORIGINAL_REFUSAL':reachable?'ANSWER_FORM_OPEN':'RED_ANSWER_FORM_ABSENT';
+   entry.originalFailure=state.caught;entry.downstream=state.caught.length?'SKIP_NO_IMAGE_ACTS_ORIGINAL_REFUSAL':'answer form reachable';
+   if(entry.verdict==='ANSWER_FORM_OPEN'){
+    await answerInterview(selector);
+    await clickFormControl(selector+' button[type=submit]');
+    await wait(`(globalThis.__839OriginalErrors?.length??0)>0||document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'`,'839 paired save');
+    entry.saved=await snapshot();
+    if(entry.saved.caught.length){entry.verdict='RED_ORIGINAL_REFUSAL';entry.originalFailure=entry.saved.caught;}
+    else{
+     const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));
+     assert.equal(act.kind,'interview-picks');assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
+     entry.verdict=variant.legacy?'NATIVE_ANSWER_SAVED':'QUESTION_ANSWER_SAVED';
+    }
    }
    assert.deepEqual(await jobInputHashes(fixture.root),before);entry.sourceImmutable=true;
   }catch(error){entry.verdict='RED_TEST_OR_ROUTE';entry.error={message:String(error),stack:error instanceof Error?error.stack:null};entry.final=await snapshot().catch(()=>null);}
@@ -356,26 +532,27 @@ async function followupQuestionChecks(){
  await writeFile(join(output,'no-image-pair.json'),JSON.stringify(pairs,null,2));
  for(const picture of [true,'parts'] as const)for(const language of ['en','ko'] as const){
   const out=join(output,'fresh-900',picture==='parts'?'parts':'rig',language);await mkdir(out,{recursive:true});
-  const fixture=await recordScreenFixture('interview-picks',picture,out,undefined,false,true,variants[1]!.resource),entry:Record<string,any>={picture:picture==='parts'?'parts':'rig',language,sourceHash:fixture.display.publication.source.sourceHash,width:900,height:900,dpr:2,navigation:'fresh about:blank then genuine pending owner URL at preconfigured width900; no post-navigation resize'};
+  const fixture=await recordScreenFixture('interview-picks',picture,out,undefined,false,true,variants[1]!.resource),entry:GeometryObservation={picture:picture==='parts'?'parts':'rig',language,sourceHash:fixture.display.publication.source.sourceHash,width:900,height:900,dpr:2,navigation:'fresh about:blank then genuine pending owner URL at preconfigured width900; no post-navigation resize'};
   try{
    // Keep only the actual active ask for this independent geometry measurement.
-   for(let i=fixture.fake.events.length-1;i>=0;i--)if(fixture.fake.events[i]!.type==='pending'&&(fixture.fake.events[i] as any).ask.askId==='historical-incompatible')fixture.fake.events.splice(i,1);
+   const historical=fixture.fake.events.findIndex(event=>event.type==='pending'&&event.ask.askId==='historical-incompatible');
+   if(historical>=0)fixture.fake.events.splice(historical,1);
    const before=await jobInputHashes(fixture.root);await page!.setViewport(900,900);await command!('Emulation.setDeviceMetricsOverride',{width:900,height:900,deviceScaleFactor:2,mobile:false});
    const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page!.goto('about:blank');await page!.goto(url.href);
    await wait(`(globalThis.__839OriginalErrors?.length??0)>0||(document.body.dataset.ready==='true'&&!!document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target=question][aria-selected=true]')&&document.querySelector('#reference-content img')?.naturalWidth===2)`,'839 fresh900 pending ready');
    entry.originalState=await snapshot();
    if(entry.originalState.caught.length)entry.verdict='RED_ORIGINAL_REFUSAL';
    else{
-    await page!.evaluate(`document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))`);
-    entry.geometry=await page!.evaluate<any>(`(()=>{const row=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])'),strip=document.querySelector('.workspace-bottom-tabs'),tab=row.querySelector('[data-block-target=question][aria-selected=true]'),rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};},selected=rect(tab),activeRow=rect(row),stripRect=rect(strip),viewport={left:0,top:0,right:innerWidth,bottom:innerHeight,width:innerWidth,height:innerHeight},deltas=b=>({left:selected.left-b.left,right:b.right-selected.right,top:selected.top-b.top,bottom:b.bottom-selected.bottom}),inside=b=>{const d=deltas(b);return selected.width>0&&selected.height>0&&Object.values(d).every(v=>v>=-0.5);};return {selected,activeRow,strip:stripRect,viewport,deltas:{row:deltas(activeRow),strip:deltas(stripRect),viewport:deltas(viewport)},insideRow:inside(activeRow),insideStrip:inside(stripRect),insideViewport:inside(viewport),selectedId:tab.dataset.blockTarget,questionFirst:[...row.querySelectorAll(':scope>button[role=tab]')][0]?.dataset.blockTarget==='question',reportOverflow:!!row.querySelector('[data-block-target=report-panel][data-tab-overflow]'),documentWidth:document.documentElement.scrollWidth,deviceScaleFactor:devicePixelRatio};})()`);
-    const g=entry.geometry;entry.verdict=g.viewport.width===900&&g.insideRow&&g.insideStrip&&g.insideViewport&&g.questionFirst&&(picture==='parts'||g.reportOverflow)?'FRESH_900_CONTAINED':'RED_FRESH_900_CLIPPED';
+    await page!.evaluate<void>(`document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))`);
+    entry.geometry=await page!.evaluate<StripGeometry>(`(()=>{const row=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])'),strip=document.querySelector('.workspace-bottom-tabs'),tab=row.querySelector('[data-block-target=question][aria-selected=true]'),rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};},selected=rect(tab),activeRow=rect(row),stripRect=rect(strip),viewport={left:0,top:0,right:innerWidth,bottom:innerHeight,width:innerWidth,height:innerHeight},deltas=b=>({left:selected.left-b.left,right:b.right-selected.right,top:selected.top-b.top,bottom:b.bottom-selected.bottom}),inside=b=>{const d=deltas(b);return selected.width>0&&selected.height>0&&Object.values(d).every(v=>v>=-0.5);};return {selected,activeRow,strip:stripRect,viewport,deltas:{row:deltas(activeRow),strip:deltas(stripRect),viewport:deltas(viewport)},insideRow:inside(activeRow),insideStrip:inside(stripRect),insideViewport:inside(viewport),selectedId:tab.dataset.blockTarget,questionFirst:[...row.querySelectorAll(':scope>button[role=tab]')][0]?.dataset.blockTarget==='question',reportOverflow:!!row.querySelector('[data-block-target=report-panel][data-tab-overflow]'),documentWidth:document.documentElement.scrollWidth,deviceScaleFactor:devicePixelRatio};})()`);
+    const g=entry.geometry;await readPainting(2);assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));entry.verdict=g.viewport.width===900&&g.insideRow&&g.insideStrip&&g.insideViewport&&g.questionFirst&&(picture==='parts'||g.reportOverflow)?'FRESH_900_CONTAINED':'RED_FRESH_900_CLIPPED';
    }
    assert.deepEqual(await jobInputHashes(fixture.root),before);entry.sourceImmutable=true;
   }catch(error){entry.verdict='RED_TEST_OR_ROUTE';entry.error={message:String(error),stack:error instanceof Error?error.stack:null};entry.final=await snapshot().catch(()=>null);}
   finally{await writeFile(join(out,'screen.png'),await page!.screenshot()).catch(()=>{});await writeFile(join(out,'geometry.json'),JSON.stringify(entry,null,2));numeric.push(entry);console.log('839_FRESH_900 '+JSON.stringify(entry));await page!.goto('about:blank');await fixture.close();}
  }
  await writeFile(join(output,'fresh-900.json'),JSON.stringify(numeric,null,2));
- const result={pairs:pairs.map(e=>({variant:e.variant,language:e.language,verdict:e.verdict})),numeric:numeric.map(e=>({picture:e.picture,language:e.language,verdict:e.verdict})),originalRefusals:pairs.filter(e=>e.verdict==='RED_ORIGINAL_REFUSAL').length,uncaughtExceptions:exceptions,passed:pairs.every(e=>e.verdict==='NATIVE_ANSWER_SAVED')&&numeric.every(e=>e.verdict==='FRESH_900_CONTAINED')&&exceptions.length===0};
+ const result={pairs:pairs.map(e=>({variant:e.variant,language:e.language,verdict:e.verdict})),numeric:numeric.map(e=>({picture:e.picture,language:e.language,verdict:e.verdict})),originalRefusals:pairs.filter(e=>e.verdict==='RED_ORIGINAL_REFUSAL').length,uncaughtExceptions:exceptions,passed:pairs.every(e=>e.verdict===(e.variant==='main-38bb5f7'?'NATIVE_ANSWER_SAVED':'QUESTION_ANSWER_SAVED'))&&numeric.every(e=>e.verdict==='FRESH_900_CONTAINED')&&exceptions.length===0};
  await writeFile(join(output,'followup-result.json'),JSON.stringify(result,null,2));console.log('839_FOLLOWUP_RESULT '+JSON.stringify(result));if(!result.passed)process.exitCode=1;
 }
 
@@ -440,6 +617,22 @@ async function assertNoPictureQuestionTab(reason:string,catalog:Record<string,st
  }
 }
 
+/** The footer caption names the camera mode the Camera sync checkbox shows, before and after a toggle. */
+async function assertCameraCaptionFollowsSync(catalog:Record<string,string>) {
+ const read = () => page!.evaluate<{checked:boolean;caption:string}>(`({
+  checked:document.getElementById('camera-sync').checked,caption:document.getElementById('coordinates').textContent})`);
+ const expected = (checked:boolean) => catalog[checked
+  ? 'Cameras synchronized · drag to pan · scroll to zoom' : 'Independent cameras · drag to pan · scroll to zoom'];
+ const initial = await read();
+ assert.equal(initial.caption,expected(initial.checked),'#993 camera caption follows the camera-sync checkbox');
+ await click(page!,'#camera-sync');
+ await wait(`document.getElementById('camera-sync').checked===${!initial.checked}`,'#993 camera-sync toggled');
+ const toggled = await read();
+ assert.equal(toggled.caption,expected(toggled.checked),'#993 camera caption follows the camera-sync checkbox after a toggle');
+ await click(page!,'#camera-sync');
+ await wait(`document.getElementById('camera-sync').checked===${initial.checked}`,'#993 camera-sync restored');
+ assert.equal((await read()).caption,expected(initial.checked),'#993 camera caption follows the camera-sync checkbox after restore');
+}
 async function assertOriginalPainting(base: string, expectedHash: string) {
  await wait(`(()=>{const image=document.querySelector('#reference-content img');
   return !!image?.naturalWidth && image.checkVisibility() && image.getBoundingClientRect().width>0;
@@ -467,7 +660,8 @@ async function postQuestionPictureChecks(){
    for(const language of ['en','ko'] as const){
     const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
     await page!.goto('about:blank');await page!.goto(url.href);
-    await wait(`document.body.dataset.ready==='true' && !!document.querySelector('form.interview-answer fieldset:not(:disabled)')`, '929 '+variant+' '+language);
+    await waitForQuestion('form.interview-answer');
+    assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
     const observation:{variant:string;language:string;sha256?:string}={variant,language};
     if(variant==='scene'){
      await wait(`(()=>{
@@ -490,6 +684,12 @@ async function postQuestionPictureChecks(){
      assert.equal(response.status,200);
      observation.sha256=sha(new Uint8Array(await response.arrayBuffer()));
      assert.equal(observation.sha256,sha(await readFile(join(fixture.root,'evidence/plate.png'))));
+     const painting=await rememberPainting();
+     await selectBlock('feedback');
+     await assertPaintingPersists(painting);
+     await click(page!,'#workspace-pending-ask');
+     await waitForQuestion('form.interview-answer');
+     await assertPaintingPersists(painting);
     }else{
      const key=variant==='legacy'?'This request has no picture.':variant==='rig'?
       'This question refers to a rig version that this publication does not include.':
@@ -553,15 +753,15 @@ async function boundRigPictureChecks(){
     await page!.goto('about:blank');
     if (suppressed) fixture.suppressRigPicture();
     await page!.goto(url.href);
-    await wait(`document.body.dataset.ready==='true'&&!!document.querySelector(${JSON.stringify(selector+'[data-interview-answered="false"] fieldset:not(:disabled)')})`,
-     variant+' '+language+' '+visit+' ready');
+    await waitForQuestion(selector+'[data-interview-answered=false]');
+    assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
     await withDeadline('929 '+variant+' '+language+' '+visit+' receipt',20_000,async signal=>{
      while(fixture.fake.acknowledgments.length===priorAcknowledgments){
       signal.throwIfAborted();
       await Bun.sleep(25);
      }
     });
-    assert.equal(await page!.evaluate('document.documentElement.lang'),language);
+    assert.equal(await page!.evaluate<string>('document.documentElement.lang'),language);
     const ack = fixture.fake.acknowledgments.at(-1)?.body as {sourceHash?:string;pageId?:string;publicationId?:string} | undefined;
     assert.equal(ack?.sourceHash,publication.source.sourceHash);
     assert.equal(ack?.publicationId,publication.publicationId);
@@ -595,30 +795,26 @@ async function boundRigPictureChecks(){
      missingPicture = await page!.evaluate<string>(`document.querySelector('#rig-empty').textContent`);
      assert.equal(missingPicture,catalog['This question refers to a rig version that this publication does not include.']);
      await assertNoPictureQuestionTab(missingPicture,catalog,selector);
-     if (variant==='rig-signoff-hash') paintingSha256=await assertOriginalPainting(
-      fixture.display.routes.apiBase,sha(await readFile(join(fixture.root,'inputs/reference.png'))));
+     if (variant==='rig-signoff-hash') {
+      paintingSha256=await assertOriginalPainting(
+       fixture.display.routes.apiBase,sha(await readFile(join(fixture.root,'inputs/reference.png'))));
+      await assertCameraCaptionFollowsSync(catalog);
+     }
      await writeFile(join(out,'question-'+visit+'.png'),await page!.screenshot());
+     await selectBlock('feedback');
+     await click(page!,'#workspace-pending-ask');
+     await waitForQuestion(selector);
     }
     const assetRequests = await page!.evaluate<string[]>(`performance.getEntriesByType('resource')
      .map(entry=>new URL(entry.name).pathname).filter(path=>path.includes('/assets/'))`);
     const base = fixture.display.routes.assetsBase;
     assert.deepEqual([...new Set(assetRequests)].sort(),pictured ? [base+SYNTHETIC_RIG_MODEL,base+SYNTHETIC_RIG_PAGE].sort() : []);
-    assert.equal(await page!.evaluate(`(()=>{
+    assert.equal(await page!.evaluate<boolean>(`(()=>{
      const form=document.querySelector(${JSON.stringify(selector)});
      return !form.querySelector('input:checked')&&[...form.querySelectorAll('textarea')].every(field=>field.value==='');
     })()`),true,'each fresh page starts with an empty answer');
-    for (const selection of expectedValue.selections) {
-     await page!.evaluate(`document.querySelector(${JSON.stringify(selector+' input[value="'+selection.optionId+'"]')}).click()`);
-    }
-    await page!.evaluate(`(()=>{
-     const form=document.querySelector(${JSON.stringify(selector)});
-     for(const [name,value] of Object.entries(${JSON.stringify({'other.topology':expectedValue.selections[0]!.otherText,note:expectedValue.note})})){
-      const field=form.querySelector('textarea[name="'+name+'"]');
-      field.value=value;field.dispatchEvent(new Event('input',{bubbles:true}));
-     }
-     form.querySelector('button[type=submit]').scrollIntoView({block:'center'});
-     return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-    })()`);
+    await answerInterview(selector,expectedValue.note);
+    await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).scrollIntoView({block:'center'})`);
     const controls = await page!.evaluate<{
      inspection:{id:string;text:string;enabled:boolean}[];
      answer:{id:string;text:string;enabled:boolean};
@@ -646,7 +842,7 @@ async function boundRigPictureChecks(){
     assert.equal(controls.verdictEnabled,false);
     assert.equal(controls.editEnabled,false,JSON.stringify(controls.edits));
     await click(page!,selector+' button[type=submit]');
-    await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'`,'929 answer saved');
+    await waitForQuestion(selector,true);
     assert.equal(fixture.submissions.length,attempt+1);
     assert.equal(fixture.files.length,attempt+1);
     const submission = fixture.submissions[attempt]!;
@@ -693,6 +889,243 @@ async function boundRigPictureChecks(){
  const result = {observations,samePublicationParity};
  await writeFile(join(output,'bound-rig-picture.json'),JSON.stringify(result,null,2)+'\n');
  console.log('929_BOUND_RIG_BROWSER_PASS '+JSON.stringify(result));
+}
+
+type RadioIdentity={name:string;value:string};
+type FormTarget={text:string;control:boolean;visible:boolean;hit:boolean;rect:Rect};
+type SurveyLayout={list:Rect;fields:Rect;progress:string;questions:number;optionCount:number;otherInputs:number;noteInputs:number;
+ submitButtons:number;allVisible:boolean;allHit:boolean;controlsReached:number;targets:FormTarget[];
+ scrollAncestors:{id:string;scrollHeight:number;clientHeight:number}[];documentScrollHeight:number;documentClientHeight:number};
+async function surveyLayout(selector:string){
+ return page!.evaluate<SurveyLayout>(`(()=>{
+  const panel=document.querySelector('${questionRoot}'),form=panel.querySelector(${JSON.stringify(selector)});
+  const fields=form.querySelector('.interview-answer-fields'),list=form.querySelector('.interview-questions');
+  const visible=node=>{
+   const r=node.getBoundingClientRect();
+   if(r.width<=0||r.height<=0||r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight)return false;
+   for(let parent=node.parentElement;parent;parent=parent.parentElement){
+    const style=getComputedStyle(parent),box=parent.getBoundingClientRect();
+    if(/auto|scroll|hidden|clip/.test(style.overflowY)&&(r.top<box.top-1||r.bottom>box.bottom+1))return false;
+    if(parent===panel)break;
+   }
+   return true;
+  };
+  const targets=[...fields.querySelectorAll('.interview-option,.interview-recommended,.interview-option span,.interview-delegate,textarea:not([hidden]),legend,button[type=submit]')].map(node=>{
+   node.scrollIntoView({block:'nearest'});
+   const r=node.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+   return {text:node.textContent||node.value,control:node.matches('label.interview-option,textarea:not([hidden]),button[type=submit]'),visible:visible(node),hit:!!hit&&node.contains(hit),rect:r.toJSON()};
+  });
+  panel.scrollTop=0;
+  const scrollAncestors=[];
+  for(let parent=fields;parent;parent=parent.parentElement){
+   if(/^(auto|scroll)$/.test(getComputedStyle(parent).overflowY))scrollAncestors.push({id:parent.id,scrollHeight:parent.scrollHeight,clientHeight:parent.clientHeight});
+   if(parent===panel)break;
+  }
+  return {list:list.getBoundingClientRect().toJSON(),fields:fields.getBoundingClientRect().toJSON(),progress:list.querySelector('p').textContent,
+   questions:list.querySelectorAll('.interview-question').length,optionCount:fields.querySelectorAll('.interview-option').length,
+   otherInputs:fields.querySelectorAll('textarea[name^="other."]:not([hidden])').length,noteInputs:form.querySelectorAll('textarea[name=note]').length,
+   submitButtons:fields.querySelectorAll('button[type=submit]:not([hidden])').length,
+   allVisible:targets.every(item=>item.visible),allHit:targets.every(item=>item.hit),controlsReached:targets.filter(item=>item.control&&item.visible&&item.hit).length,
+   targets,scrollAncestors,documentScrollHeight:Math.max(document.documentElement.scrollHeight,document.body.scrollHeight),documentClientHeight:document.documentElement.clientHeight};
+ })()`);
+}
+
+async function resizeQuestionPanel(){
+ const selector='.workspace-inspectorHeight[role=separator]';
+ const range=()=>page!.evaluate<{value:number;min:number;max:number}>(`(()=>{
+  const handle=document.querySelector('${selector}');
+  return {value:Number(handle.getAttribute('aria-valuenow')),min:Number(handle.getAttribute('aria-valuemin')),max:Number(handle.getAttribute('aria-valuemax'))};
+ })()`);
+ await click(page!,selector);
+ const before=await range();
+ assert.ok(before.max>before.min,'shared bottom separator offers a resize range');
+ const key=before.value<before.max?'ArrowUp':'ArrowDown',keyCode=key==='ArrowUp'?38:40;
+ await command!('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:keyCode,modifiers:8});
+ await command!('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:keyCode,modifiers:8});
+ const after=await range();
+ assert.ok(key==='ArrowUp'?after.value>before.value:after.value<before.value,JSON.stringify({before,after}));
+ return {before,after};
+}
+
+async function liveQuestionDraftChecks(){
+ const sizes=interviewOnly?[[1600,1000],[1440,900]] as const:[[1600,1000]] as const;
+ for(const [width,height] of sizes){
+  await page!.setViewport(width,height);
+  const fixture=await recordScreenFixture('interview-picks',false,undefined,undefined,freshParts);
+  const before=await jobInputHashes(fixture.root);
+  const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
+  try{
+   for(const language of ['en','ko'] as const){
+    const catalog=language==='en'?enCatalog:koCatalog,out=join(output,`${width}x${height}`,'interview-picks','empty',language);
+    await mkdir(out,{recursive:true});fixture.output(out);
+    const url=fixtureUrl(fixture.ownerUrl,language);
+    await page!.goto('about:blank');holdImages=!freshParts;
+    if(holdImages)await command!('Page.navigate',{url});
+    else await page!.goto(url);
+    await waitForQuestion(selector);
+    const dialogs=await assertNoDialogViewer();assert.ok(dialogs.every(dialog=>!dialog.open));
+    const screen=await page!.evaluate<{language:string;width:number;height:number;legacySeen:boolean;legacyForms:number;topbars:number;viewports:number;noPicture:string;emptyListText:string;saveState:string;controls:string[]}>(`({
+     language:document.documentElement.lang,width:innerWidth,height:innerHeight,legacySeen:globalThis.__record750legacySeen,
+     legacyForms:document.querySelectorAll('[data-job-forms]').length,topbars:document.querySelectorAll('.topbar').length,
+     viewports:document.querySelectorAll('#rig-viewport').length,noPicture:document.getElementById('rig-empty').textContent,
+     emptyListText:document.querySelector('[data-part-list]')?.textContent??'',saveState:document.getElementById('dirty').textContent,
+     controls:[...document.querySelectorAll(${JSON.stringify(controlSelector)})].map(node=>node.id)
+    })`);
+    assert.equal(screen.language,language);assert.equal(screen.width,width);assert.equal(screen.height,height);
+    assert.equal(screen.legacySeen,false);assert.equal(screen.legacyForms,0);assert.equal(screen.topbars,1);assert.equal(screen.viewports,1);
+    assert.deepEqual(screen.controls,sharedControls);
+    const observation:Record<string,unknown>={language,width,height,screen,dialogs,sourceHash:fixture.display.publication.source.sourceHash,
+     readerPhases:fixture.reader.calls.map(call=>call.phase),fixture:'synthetic trusted-host record reader and deterministic act writer'};
+    if(freshParts){
+     await wait(`document.getElementById('renderer-state')?.textContent===${JSON.stringify(catalog['Parts raster drawn · Canvas2D'])}`,'bound parts raster drawn');
+     assert.notEqual(screen.noPicture,catalog['This request has no picture.']);assert.equal(fixture.display.publication.previousPublicationId,null);
+     await wait(`document.querySelectorAll('[data-part-list] button').length>0`,'fresh parts list');
+    }else{
+     assert.equal(screen.emptyListText,'');assert.equal(screen.saveState,catalog['Not submitted']);
+     // Hold the image request while the editable Question form is already available.
+     await withDeadline('986 held painting request',5_000,async signal=>{
+      while(!pausedImages.length){signal.throwIfAborted();await Bun.sleep(25);}
+     });
+     await waitForQuestion(selector);
+     const stageRect=()=>page!.evaluate<Rect>(`document.querySelector('#stage-layout').getBoundingClientRect().toJSON()`);
+     const loading=await stageRect();
+     assert.ok(loading.width>0&&loading.height>0,'the shared stage has space while the painting request is held');
+     assert.equal(await page!.evaluate<number>(`document.querySelector('${paintingSelector}')?.naturalWidth??0`),0);
+     await writeFile(join(out,'option-loading.png'),await page!.screenshot());
+     holdImages=false;
+     for(const requestId of pausedImages.splice(0))await command!('Fetch.continueRequest',{requestId});
+     const loadedPainting=await readPainting(2);
+     const loaded=await stageRect();
+     assert.deepEqual(loaded,loading,'painting load preserves the shared stage geometry');
+     observation.imageLoading={loading,loaded,loadedPainting};
+     const imageCount=fixture.session.retainedSourceV3(fixture.ask.publicationId).questions.find(question=>question.set.id===fixture.ask.source.optionSet?.id)!.images.length;
+     assert.ok(imageCount>0);
+     assert.equal(await page!.evaluate<number>(`document.querySelectorAll('#view-menu [data-view^=interview-image-]').length`),imageCount);
+     for(let index=0;index<imageCount;index++){
+      await selectInterviewImage(index);
+      const painting=await readPainting(2,index);
+      assert.ok(new URL(painting.src).pathname.startsWith(fixture.display.routes.apiBase+'interview/image/'));
+      const pixel=await page!.evaluate<number[]>(`(()=>{
+       const canvas=document.createElement('canvas'),context=canvas.getContext('2d');
+       context.drawImage(document.querySelector('${paintingSelector}'),0,0);
+       return [...context.getImageData(0,0,1,1).data];
+      })()`);
+      assert.deepEqual(pixel,[40,160,220,255]);
+      await writeFile(join(out,'option-image-'+index+'.png'),await page!.screenshot());
+     }
+     observation.optionImagesShown=imageCount;
+     const painting=await rememberPainting();
+     await selectBlock('feedback');
+     await assertPaintingPersists(painting);
+     await click(page!,'#workspace-pending-ask');await waitForQuestion(selector);
+     await assertPaintingPersists(painting);
+     await writeFile(join(out,'backdrop.png'),await page!.screenshot());
+    }
+    await answerInterview(selector);
+    const identities=await page!.evaluate<RadioIdentity[]>(`Array.from(document.querySelectorAll(${JSON.stringify(selector+' input[type=radio]')}),input=>({name:input.name,value:input.value}))`);
+    await page!.goto('about:blank');await page!.goto(url);await waitForQuestion(selector);
+    const reopened=await page!.evaluate<{identities:RadioIdentity[];checked:string[];other:string;note:string|null;otherVisible:boolean;selects:number;recommended:number;delegates:number}>(`(()=>{
+     const form=document.querySelector(${JSON.stringify(selector)});
+     return {identities:[...form.querySelectorAll('input[type=radio]')].map(input=>({name:input.name,value:input.value})),
+      checked:[...form.querySelectorAll('input:checked')].map(input=>input.value),other:form.querySelector('textarea[name="other.topology"]').value,
+      note:form.querySelector('textarea[name=note]')?.value??null,otherVisible:!form.querySelector('textarea[name="other.topology"]').hidden,
+      selects:form.querySelectorAll('select').length,recommended:form.querySelectorAll('.interview-recommended').length,delegates:form.querySelectorAll('.interview-delegate').length};
+    })()`);
+    assert.deepEqual(reopened,{identities,checked:['topology_other','density_auto'],other:otherText,note:'',otherVisible:true,selects:0,recommended:2,delegates:2});
+    observation.reopened=reopened;assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
+    if(!freshParts){
+     await readPainting(2);
+     const layout=await surveyLayout(selector);
+     assert.equal(layout.questions,1,'both asks belong to the same question set');
+     assert.equal(layout.progress,catalog['interview.answered'].replace('{0}','0').replace('{1}','1'));
+     assert.equal(layout.optionCount,8);assert.equal(layout.otherInputs,1);assert.equal(layout.noteInputs,1);assert.equal(layout.submitButtons,1);
+     assert.ok(layout.fields.left>=layout.list.right-1,'the Question panel places the list and fields side by side');
+     assert.equal(layout.controlsReached,11,JSON.stringify(layout.targets.filter(item=>item.control)));
+     assert.equal(layout.allHit,true,JSON.stringify(layout.targets));assert.equal(layout.allVisible,true,JSON.stringify(layout.targets));
+     assert.ok(layout.documentScrollHeight<=layout.documentClientHeight+1);
+     assert.deepEqual(layout.scrollAncestors.filter(node=>node.scrollHeight>node.clientHeight+1).map(node=>node.id),['workspace-interview-answer']);
+     observation.layout=layout;
+     observation.resized=await resizeQuestionPanel();
+     await writeFile(join(out,'radio-cards.png'),await page!.screenshot());
+    }
+    const painting=freshParts?null:await rememberPainting();
+    observation['one-screenControls']=await page!.evaluate<RadioIdentity[]>(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked,'+selector+' textarea')})].map(input=>({name:input.name,value:input.value}))`);
+    const submit=selector+' button[type=submit]',status=selector+' > [role=status]';
+    await page!.evaluate<void>(`document.querySelector(${JSON.stringify(submit)}).scrollIntoView({block:'center'})`);
+    await writeFile(join(out,'one-screen-answered.png'),await page!.screenshot());
+    assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(submit)}).hidden`),false);
+    await click(page!,submit);
+    await waitForQuestion(selector,true);
+    await wait(`document.querySelector(${JSON.stringify(status)})?.textContent===${JSON.stringify(catalog['job.saved'])}`,'986 live answer saved');
+    if(painting)observation.savedPainting=await assertPaintingPersists(painting);
+    assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(submit)}).hidden`),true);
+    const footer=await page!.evaluate<string>(`document.getElementById('message').textContent`);
+    assert.equal(footer,await page!.evaluate<string>(`document.getElementById('dirty').textContent`));
+    observation.savedFooter=footer;
+    assert.equal(await page!.evaluate<string>(`document.querySelector(${JSON.stringify(selector+' .interview-questions>p')}).textContent`),
+     catalog['interview.answered'].replace('{0}','1').replace('{1}','1'),'progress counts the saved question');
+    const path=join(out,'one-screen.json');assert.ok(existsSync(path));
+    const bytes=await readFile(path,'utf8'),act=parseRecordAct(JSON.parse(bytes));
+    assert.equal(act.at,'2026-11-08T12:00:00.000Z');
+    if(act.kind!=='interview-picks')throw new Error('Expected interview-picks');
+    assert.equal(act.value.note,'');assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
+    const expected=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},
+     ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},
+     actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});
+    assert.equal(bytes,JSON.stringify(expected),'full empty-note act bytes equal 60d7f17 serializer/writer control');
+    observation.emptyNoteByteControl={sourceCommit:baseline.sourceCommit,valueBytes:baseline.expectedValueBytes,fullActByteEqual:true};
+    assert.deepEqual(act.value.selections,[{itemId:'topology',optionId:'topology_other',otherText},{itemId:'detail_level',optionId:'density_auto',otherText:null}]);
+    observation.persistedAct={bytes:Buffer.byteLength(bytes),oneScreenSha256:sha(bytes),oneScreenFile:path};
+    await writeFile(join(out,'one-screen-submitted.png'),await page!.screenshot());
+    await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');cases.push(observation);persistedActs++;
+    console.log('750_BROWSER_CASE_PASS '+language+' '+width+'x'+height+' bytes='+Buffer.byteLength(bytes));
+   }
+   assert.deepEqual(await jobInputHashes(fixture.root),before,'inspected source files remain immutable');
+  }finally{holdImages=false;for(const requestId of pausedImages.splice(0))await command!('Fetch.continueRequest',{requestId});await page!.goto('about:blank');await fixture.close();}
+ }
+ await longInterviewScrollChecks(false);
+}
+
+async function twoImageDrawerChecks(){
+ const sizes=[{width:1440,height:900},{width:900,height:410}] as const;
+ const form='form.interview-answer',drawer='#workspace-drawer-inspectorHeight';
+ for(const language of ['en','ko'] as const)for(const {width,height} of sizes){
+  const fixture=await joinedFixture(),out=join(output,'joined',language,`${width}x${height}`);
+  await mkdir(out,{recursive:true});
+  try{
+   const question=readProject(fixture.root).questions[0]!;
+   assert.deepEqual(question.images.map(image=>image.name),['source.svg','alternate.svg']);
+   const before=await jobInputHashes(fixture.root),url=fixtureUrl(fixture.ownerUrl,language);
+   await page!.setViewport(width,height);await page!.goto('about:blank');await page!.goto(url);
+   await waitForQuestion(form);
+   const first=await readPainting(32);
+   const screen=await page!.evaluate<{lang:string;width:number;height:number;modelCanvas:number;commentHidden:boolean;controls:string[]}>(`({
+    lang:document.documentElement.lang,width:innerWidth,height:innerHeight,modelCanvas:document.querySelectorAll('#rig-root canvas').length,
+    commentHidden:document.getElementById('stage-comment').hidden,
+    controls:[...document.querySelectorAll(${JSON.stringify(controlSelector)})].map(node=>node.id)
+   })`);
+   assert.deepEqual(screen,{lang:language,width,height,modelCanvas:0,commentHidden:true,controls:sharedControls});
+   const narrow=width===900,dialogs=await assertNoDialogViewer();
+   assert.deepEqual(dialogs.filter(dialog=>dialog.open).map(dialog=>({id:dialog.id,modal:dialog.modal})),
+    narrow?[{id:'workspace-drawer-inspectorHeight',modal:false}]:[]);
+   if(narrow){
+    assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('${drawer}[open]:not(:modal) ${questionRoot} ${form}')`),true);
+   }
+   await writeFile(join(out,'question.png'),await page!.screenshot());
+   // Click the main toolbar while the narrow drawer still holds the form.
+   await selectInterviewImage(1);
+   const alternate=await readPainting(480,1);
+   assert.notEqual(alternate.src,first.src);
+   assert.ok(new URL(alternate.src).pathname.endsWith('/api/interview/image/'+question.ref.sha256+'/1'));
+   if(narrow)assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('${drawer}[open]:not(:modal)')`),true);
+   const camera=narrow?null:await sharedCameraChecks();
+   await writeFile(join(out,'alternate.png'),await page!.screenshot());
+   assert.deepEqual(await jobInputHashes(fixture.root),before);
+   const observation={language,width,height,screen,dialogs,first,alternate,camera};
+   await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');
+   cases.push(observation);
+  }finally{await page!.goto('about:blank');await fixture.close();}
+ }
 }
 
 async function draftSurvivalChecks(){
@@ -919,7 +1352,7 @@ async function firstQuestionInDrawer(){
    await page!.setViewport(1000,320);
    await page!.goto('about:blank');await page!.goto(url.href);
    await wait(`!!document.querySelector('${body}')&&document.querySelector('#workspace-ask-headline')?.checkVisibility()`,'941 waiting inspector docked');
-   const before=await page!.evaluate<{inRoot:boolean;drawerBodies:number;height:number}>(`({
+   const before:{inRoot:boolean;drawerBodies:number;height:number}=await page!.evaluate(`({
     inRoot:!!document.querySelector('#app .inspector-body'),drawerBodies:document.querySelectorAll('${body}').length,height:innerHeight
    })`);
    assert.deepEqual(before,{inRoot:false,drawerBodies:1,height:320});
@@ -933,7 +1366,7 @@ async function firstQuestionInDrawer(){
     }
     throw signal.reason;
    });
-   const after=await page!.evaluate<{language:string;options:string[];drawerOpen:boolean}>(`({
+   const after:{language:string;options:string[];drawerOpen:boolean}=await page!.evaluate(`({
     language:document.documentElement.lang,
     options:[...document.querySelectorAll('${options}')].filter(node=>node.checkVisibility()).map(node=>node.textContent.trim()),
     drawerOpen:document.querySelector('#workspace-drawer-inspectorHeight').open
@@ -1003,125 +1436,23 @@ try{
  // Reuse the shared launcher's browser discovery and process policy without a suite-local wrapper.
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
- await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
- if(Bun.argv.includes('--draft-survival')){await command!('Runtime.enable');await draftSurvivalChecks();}
- else if(Bun.argv.includes('--first-question-drawer')){await command!('Runtime.enable');await firstQuestionInDrawer();}
- else if(boundRigPictureOnly){await command!('Runtime.enable');await boundRigPictureChecks();}
- else if(postQuestionPictures){await command!('Runtime.enable');await postQuestionPictureChecks();}
+ await command!('Runtime.enable');await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
+ if(Bun.argv.includes('--draft-survival'))await draftSurvivalChecks();
+ else if(Bun.argv.includes('--first-question-drawer'))await firstQuestionInDrawer();
+ else if(boundRigPictureOnly)await boundRigPictureChecks();
+ else if(postQuestionPictures)await postQuestionPictureChecks();
  else if(followup839){holdImages=false;await followupQuestionChecks();}else{
  await firstQuestionInDrawer();
- if(completedPicture){holdImages=false;await questionTabChecks();}
- if(!completedPicture){
- for(const [width,height] of (interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]])){
- await page.setViewport(width!,height!);
- for(const kind of ['interview-picks'] as RecordScreenKind[])for(const picture of [false] as readonly (boolean|'parts')[]){
-  const fixture=await recordScreenFixture(kind,picture,undefined,undefined,freshParts);const before=await jobInputHashes(fixture.root);
-  try{
-   for(const language of ['en','ko'] as const){
-    const out=join(output,width+'x'+height,kind,picture==='parts'?'parts':picture?'picture':'empty',language);await mkdir(out,{recursive:true});fixture.output(out);
-    const observation:Record<string,unknown>={kind,picture,language,width,height,sourceHash:fixture.display.publication.source.sourceHash,readerPhases:fixture.reader.calls.map(call=>call.phase),fixture:'synthetic trusted-host record reader and deterministic act writer'};
-    for(const mode of ['one-screen']){
-     fixture.mode(mode);const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);holdImages=true;await command!('Page.navigate',{url:url.href});
-     const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
-     await wait(`!!document.querySelector(${JSON.stringify(selector+' fieldset:not(:disabled)')})`,kind+'/'+mode+'/receipt');
-     if(mode==='one-screen'){
-      if(!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('dialog[open] '+${JSON.stringify(selector)})`,kind+'/dialog');
-      if(picture||freshParts)await wait(`!!document.querySelector('#rig-root canvas')`,kind+'/picture');
-      const state:any=await page.evaluate<any>(`(()=>{const dialog=document.querySelector('dialog[open]'),form=document.querySelector(${JSON.stringify(selector)}),box=dialog.getBoundingClientRect();return {language:document.documentElement.lang,width:innerWidth,height:innerHeight,legacySeen:globalThis.__record750legacySeen,legacyForms:document.querySelectorAll('[data-job-forms]').length,topbars:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,formInsideNativeDialog:!!form.closest('dialog[open]'),focusContained:dialog.contains(document.activeElement),dialogRect:{x:box.x,y:box.y,width:box.width,height:box.height},noPicture:document.getElementById('rig-empty').textContent,backgroundStatus:document.getElementById('message')?.textContent??'',emptyListText:document.querySelector('[data-part-list]')?.textContent??'',saveState:document.getElementById('dirty').textContent,controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(node=>node.id)};})()`);
-      assert.equal(state.language,language);assert.equal(state.width,width);assert.equal(state.height,height);assert.equal(state.legacySeen,false);assert.equal(state.legacyForms,0);assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.formInsideNativeDialog,true);assert.equal(state.focusContained,true);
-      assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
-      if(!picture&&!freshParts){assert.equal(state.noPicture,(language==='en'?enCatalog:koCatalog)['This request has no picture.']);assert.equal(state.backgroundStatus,state.noPicture);assert.equal(state.emptyListText,'');assert.equal(state.saveState,(language==='en'?enCatalog:koCatalog)['Not submitted']);}
-      assert.ok(state.dialogRect.x>=0&&state.dialogRect.y>=0&&state.dialogRect.x+state.dialogRect.width<=width!&&state.dialogRect.y+state.dialogRect.height<=height!);
-      if(freshParts){await wait(`document.getElementById('renderer-state')?.textContent===${JSON.stringify((language==='en'?enCatalog:koCatalog)['Parts raster drawn · Canvas2D'])}`,'bound parts raster drawn');assert.notEqual(state.noPicture,(language==='en'?enCatalog:koCatalog)['This request has no picture.']);assert.equal(fixture.display.publication.previousPublicationId,null);await wait(`document.querySelectorAll('[data-part-list] button').length>0`,'fresh parts list');}
-      if(!freshParts){
-      // Hold the option request to prove loading is no longer a screen-readiness gate.
-      const loading:any=await page.evaluate(`(()=>{const viewport=document.querySelector(${JSON.stringify(selector+' .interview-viewport')}),canvas=viewport.querySelector('canvas');return {rect:viewport.getBoundingClientRect().toJSON(),width:canvas.width,height:canvas.height,pixel:[...canvas.getContext('2d').getImageData(0,0,1,1).data]};})()`);
-      assert.deepEqual(loading.pixel,[0,0,0,0]);assert.equal(loading.width,300);assert.equal(loading.height,150);
-      assert.ok(pausedImages.length>0,'option request held while the drawer is usable');
-      await writeFile(join(out,'option-loading.png'),await page.screenshot());
-      holdImages=false;for(const requestId of pausedImages.splice(0))await command!('Fetch.continueRequest',{requestId});
-      await wait(`document.querySelector(${JSON.stringify(selector+' .interview-viewport canvas')})?.width===2`,'option loaded');
-      const loadedRect:any=await page.evaluate(`document.querySelector(${JSON.stringify(selector+' .interview-viewport')}).getBoundingClientRect().toJSON()`);
-      assert.deepEqual(loadedRect,loading.rect,'option load does not move or resize its viewport');
-      observation.imageLoading={...loading,loadedRect};
-      }
-      observation.screen=state;
-      await click(page,'dialog[open] .workspace-drawer-close');assert.equal(await page.evaluate(`document.activeElement.id==='workspace-pending-ask'&&document.getElementById('workspace-pending-ask').getAttribute('aria-expanded')==='false'`),true,'shared drawer returns focus to the existing act button');await writeFile(join(out,'backdrop.png'),await page.screenshot());
-      await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('dialog[open]')`,'reopen-modal');
-     }
-     if(kind==='interview-picks'){
-      if(!freshParts){
-      // #813 visit every bound option image through the existing interview view switch.
-      const imageCount = fixture.session.retainedSourceV3(fixture.ask.publicationId).questions
-       .find(question => question.set.id === fixture.ask.source.optionSet?.id)!.images.length;
-      assert.ok(imageCount > 0);
-      assert.equal(await page.evaluate(`document.querySelectorAll(${JSON.stringify(selector+' .interview-view [data-view]')}).length`), imageCount);
-      for (let index = 0; index < imageCount; index++) {
-       await page.evaluate(`document.querySelector(${JSON.stringify(selector+' .interview-view')}+' [data-view="'+${index}+'"]').click()`);
-       await wait(`(()=>{const canvas=document.querySelector(${JSON.stringify(selector+' .interview-viewport canvas')});return canvas?.width===2&&canvas.height===2&&canvas.getContext('2d').getImageData(0,0,1,1).data[3]===255;})()`, '813 option image '+index);
-       await writeFile(join(out,'option-image-'+index+'.png'),await page.screenshot());
-      }
-      observation.optionImagesShown=imageCount;
-      }
-      const draft=JSON.stringify({other:'  Custom topology · 직접 입력\n'});
-      await page.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)}),draft=${draft};for(const value of ['topology_other','density_auto'])form.querySelector('input[type=radio][value="'+value+'"]').click();const other=form.querySelector('textarea[name="other.topology"]');other.value=draft.other;other.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-      const identities:unknown=await page.evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(selector+' input[type=radio]')}),input=>({name:input.name,value:input.value}))`);
-      await page.goto(url.href);await wait(`!!document.querySelector(${JSON.stringify(selector+' fieldset:not(:disabled)')})`,'interview draft reopen');
-      const reopened:any=await page.evaluate(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});return {identities:[...form.querySelectorAll('input[type=radio]')].map(input=>({name:input.name,value:input.value})),checked:[...form.querySelectorAll('input:checked')].map(input=>input.value),other:form.querySelector('textarea[name="other.topology"]').value,note:form.querySelector('textarea[name="note"]')?.value??null,otherVisible:!form.querySelector('textarea[name="other.topology"]').hidden,selects:form.querySelectorAll('select').length,recommended:form.querySelectorAll('.interview-recommended').length,delegates:form.querySelectorAll('.interview-delegate').length,viewports:form.querySelectorAll('.interview-viewport').length,bottom:!!form.querySelector('.interview-bottom-resize[role=separator]')};})()`);
-      assert.deepEqual(reopened.identities,identities);assert.deepEqual(reopened.checked,['topology_other','density_auto']);assert.equal(reopened.other,'  Custom topology · 직접 입력\n');assert.equal(reopened.note,'');assert.equal(reopened.otherVisible,true);assert.equal(reopened.selects,0);assert.equal(reopened.recommended,2);assert.equal(reopened.delegates,2);if(!freshParts){assert.equal(reopened.viewports,1);assert.equal(reopened.bottom,true);}else{assert.equal(reopened.viewports,0);assert.deepEqual(reopened.checked,['topology_other','density_auto']);}observation.reopened=reopened;
-      if(!freshParts){
-      const layout:any=await page.evaluate<any>(`(()=>{
-       const form=document.querySelector(${JSON.stringify(selector)}),dialog=form.closest('dialog'),survey=form.querySelector('.interview-answer-fields'),art=form.querySelector('.interview-art'),list=form.querySelector('.interview-questions'),canScroll=/^(auto|scroll)$/.test(getComputedStyle(survey).overflowY);
-       const visible=node=>{const r=node.getBoundingClientRect();if(r.width<=0||r.height<=0||r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight)return false;for(let parent=node.parentElement;parent;parent=parent.parentElement){const style=getComputedStyle(parent),box=parent.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(style.overflowY)&&(r.top<box.top-1||r.bottom>box.bottom+1))return false;if(parent===dialog)break;}return true;};
-       const targets=[...survey.querySelectorAll('.interview-option,.interview-recommended,.interview-option span,.interview-delegate,textarea:not([hidden]),legend,button[type=submit]')];
-       const probed=targets.map(node=>{if(canScroll)node.scrollIntoView({block:'nearest'});const r=node.getBoundingClientRect(),hit=r.width>0&&r.height>0?document.elementFromPoint(r.left+r.width/2,r.top+r.height/2):null;return {text:node.textContent||node.value,control:node.matches('label.interview-option,textarea:not([hidden]),button[type=submit]'),visible:visible(node),hit:!!hit&&node.contains(hit),rect:r.toJSON()};});
-       survey.scrollTop=0;
-       const controls=probed.filter(item=>item.control),ancestors=[];for(let parent=survey;parent;parent=parent.parentElement){ancestors.push({tag:parent.tagName,answerFields:parent.matches('fieldset.interview-answer-fields'),scrollHeight:parent.scrollHeight,clientHeight:parent.clientHeight});if(parent===dialog)break;}
-       return {list:list.getBoundingClientRect().toJSON(),art:art.getBoundingClientRect().toJSON(),survey:survey.getBoundingClientRect().toJSON(),progress:list.querySelector('p').textContent,questions:list.querySelectorAll('.interview-question').length,optionCount:survey.querySelectorAll('.interview-option').length,otherInputs:survey.querySelectorAll('textarea[name^="other."]:not([hidden])').length,noteInputs:form.querySelectorAll('textarea[name=note]').length,submitButtons:survey.querySelectorAll('button[type=submit]:not([hidden])').length,allVisible:probed.every(item=>item.visible),allHit:probed.every(item=>item.hit),controlsReached:controls.filter(item=>item.visible&&item.hit).length,controlsTotal:controls.length,targets:probed,ancestors,page:{scrollHeight:Math.max(document.documentElement.scrollHeight,document.body.scrollHeight),clientHeight:document.documentElement.clientHeight}};
-      })()`);
-      assert.equal(layout.questions,1,'question list represents the source question/set, with both asks kept in one survey');assert.equal(layout.progress,(language==='en'?enCatalog:koCatalog)['interview.answered'].replace('{0}','0').replace('{1}','1'));assert.equal(layout.optionCount,8);assert.equal(layout.otherInputs,1);assert.equal(layout.noteInputs,1);assert.equal(layout.submitButtons,1);assert.ok(layout.art.x>=layout.list.right-1&&layout.survey.x>=layout.art.right-1,'approved list | image | survey columns');assert.equal(layout.controlsReached,11,'every option label, Other input, note and submit button scrolled into view and hit: '+JSON.stringify(layout.targets.filter((item:any)=>item.control)));assert.equal(layout.allHit,true,'every survey target hit by elementFromPoint: '+JSON.stringify(layout.targets));assert.equal(layout.allVisible,true,JSON.stringify(layout));assert.ok(layout.page.scrollHeight<=layout.page.clientHeight+1,'no page scrolling: '+JSON.stringify(layout.page));assert.ok(layout.ancestors.every((node:any)=>node.answerFields||node.scrollHeight<=node.clientHeight+1),'only fieldset.interview-answer-fields may scroll: '+JSON.stringify(layout.ancestors));observation.layout=layout;
-      const separatorSelector=selector+' .interview-bottom-resize';
-      const resize:any=await page.evaluate<any>(`(()=>{const separator=document.querySelector(${JSON.stringify(separatorSelector)}),before=Number(separator.getAttribute('aria-valuenow'));separator.focus();separator.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',shiftKey:true,bubbles:true}));return {before,after:Number(separator.getAttribute('aria-valuenow'))};})()`);assert.ok(resize.after>resize.before);observation.resized=resize;
-      await click(page,selector+' .zoom-controls>button:nth-child(1)');await click(page,selector+' .zoom-controls>button:nth-child(4)');await click(page,selector+' .zoom-controls>button:nth-child(3)');
-      await writeFile(join(out,'radio-cards.png'),await page.screenshot());
-      }
-      // Auto was restored by its original ID above. Submit that existing option, never a fabricated Delegate act.
-     }
-     const values=kind==='interview-picks'?await page.evaluate<any>(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked,'+selector+' textarea')})].map(input=>({name:input.name,value:input.value}))`):await page.evaluate<any>(`(()=>{const form=document.querySelector(${JSON.stringify(selector)});const note=form.querySelector('textarea[name="note"]');note.value='  Same reviewer words · 원문\\n';for(const select of form.querySelectorAll('select')){select.value=select.name==='outcome'?'pass':select.name==='choice.topology'?'topology_other':select.options[1].value;select.dispatchEvent(new Event('change',{bubbles:true}));}const other=form.querySelector('textarea[name="other.topology"]');if(other)other.value='  Custom topology · 직접 입력\\n';form.dispatchEvent(new Event('input',{bubbles:true}));return [...form.querySelectorAll('input[name],textarea[name],select[name]')].map(node=>({name:node.name,value:node.value}));})()`);
-     observation[mode+'Controls']=values;
-     await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type="submit"]')}).scrollIntoView({block:'center'});`);
-     await writeFile(join(out,mode+'-answered.png'),await page.screenshot());
-     assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),false,'pending interview submit remains visible');
-     await click(page,selector+' button[type="submit"]');
-     const path=join(out,mode+'.json');await wait(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')})?.textContent===${JSON.stringify((language==='en'?enCatalog:koCatalog)['job.saved'])}`,kind+'/'+mode+'/saved');
-     if(kind==='interview-picks'){assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),true,'saved interview submit hidden');const footer:string=await page.evaluate<string>(`document.getElementById('message').textContent`);assert.equal(footer,await page.evaluate<string>(`document.getElementById('dirty').textContent`),'interview-only footer equals actual rendered saved header');observation.savedFooter=footer;}
-     if(kind==='interview-picks')assert.equal(await page.evaluate(`document.querySelector(${JSON.stringify(selector+' .interview-questions>p')}).textContent`),(language==='en'?enCatalog:koCatalog)['interview.answered'].replace('{0}','1').replace('{1}','1'),'progress counts the saved question, not individual asks or an unsent draft');
-     assert.ok(existsSync(path),'writer actually persisted '+mode);const act=parseRecordAct(JSON.parse(await readFile(path,'utf8')));
-     assert.equal(act.at,'2026-11-08T12:00:00.000Z');
-     if(act.kind==='interview-picks'){assert.equal(act.value.note,'');assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
-      const expectedAct=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});assert.equal(await readFile(path,'utf8'),JSON.stringify(expectedAct),'full empty-note act bytes equal 60d7f17 serializer/writer control');observation.emptyNoteByteControl={sourceCommit:baseline.sourceCommit,valueBytes:baseline.expectedValueBytes,fullActByteEqual:true};assert.deepEqual(act.value.selections,[{itemId:'topology',optionId:'topology_other',otherText:'  Custom topology · 직접 입력\n'},{itemId:'detail_level',optionId:'density_auto',otherText:null}]);}
-     else{assert.equal(act.value.words,'  Same reviewer words · 원문\n');if(act.kind==='checkpoint')assert.equal(act.value.outcome,'pass');if(act.kind==='signoff')assert.equal(act.value.decision,'approved');}
-     await writeFile(join(out,mode+'-submitted.png'),await page.screenshot());
-     await page.goto('about:blank');
-    }
-    const one=await readFile(join(out,'one-screen.json'));observation.persistedAct={bytes:one.length,oneScreenSha256:sha(one),oneScreenFile:join(out,'one-screen.json')};
-    await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');cases.push(observation);
-    console.log('750_BROWSER_CASE_PASS '+kind+' '+(picture==='parts'?'parts':picture?'picture':'empty')+' '+language+' bytes='+(observation.persistedAct as {bytes:number}).bytes);
-   }
-   assert.deepEqual(await jobInputHashes(fixture.root),before,'inspected source files remain immutable');
-  }finally{await fixture.close();}
- }
- }
- await longInterviewScrollChecks(false);
- if(!interviewOnly&&!freshParts){
-  await command!('Runtime.enable');
+ if(!completedPicture||workspace986)await liveQuestionDraftChecks();
+ if(workspace986)await twoImageDrawerChecks();
+ if(completedPicture||workspace986)await questionTabChecks();
+ if(!interviewOnly&&!freshParts&&!completedPicture){
   await postQuestionPictureChecks();
   await boundRigPictureChecks();
  }
- }
  assert.equal(exceptions.length,0,'no browser exceptions');
  assert.ok(mutations.every(request=>/\/ui\/(?:displayed|acts)$/.test(request.path)),'no backdrop mutation requests');
- const result={cases:cases.length,persistedActs:cases.length,persistedByteComparisons:completedPicture?6:0,askKinds:1,languages:['en','ko'],backdrops:completedPicture?['rig','parts','parts-no-question-image']:freshParts?['bound-parts']:['empty'],viewports:completedPicture?(narrowQuestionResize?[[1440,900],[900,900]]:[[1440,900]]):interviewOnly?[[1600,1000],[1440,900]]:[[1600,1000]],...(completedPicture?{dpr:2}:{}),exceptions,mutations,browserWorkers:'shared launchCdpSession defaults'};
+ const result={cases:cases.length,persistedActs,persistedByteComparisons:persistedActs,languages:['en','ko'],workspace986,exceptions,mutations,browserWorkers:'shared launchCdpSession defaults'};
  await writeFile(join(output,'result.json'),JSON.stringify(result,null,2)+'\n');console.log('750_BROWSER_PASS '+JSON.stringify(result));
  }
 }catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,completedCases:cases},null,2)+'\n');if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}

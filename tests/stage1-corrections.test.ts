@@ -883,6 +883,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
   const mainScope:any={
    host:null,
    activeInterviewImages:null,
+   activeInterviewImage:null,
    partsOnly:false,
    controls:createRigViewControls(),
    refreshedBuilds,

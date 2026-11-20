@@ -495,7 +495,7 @@ test('#809 checkpoint answers reuse the form contract without the evidence grid'
 });
 
 test('#839 disposed workspace cannot re-enter the transient image while tabs unregister',async()=>{
- const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('function syncQuestionImage():void {'),end=source.indexOf('/** Pictured backdrop forms',start);
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('function syncQuestionImage():void {'),end=source.indexOf('/** Survey forms use the shared bottom tab.',start);
  let released=0;const scope={disposed:true,releaseInterview:()=>{released++;}};
  const run=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return syncQuestionImage;}`)(scope);
  run();run();expect(released).toBe(1);expect(scope.releaseInterview).toBeNull();

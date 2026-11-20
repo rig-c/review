@@ -398,7 +398,15 @@ async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'interview-picks',alr
    if(await page!.evaluate(`document.body.dataset.ready==='true'&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(prompt)}&&!!document.querySelector('form[data-job-ask] fieldset:not(:disabled)')`))return;
    await Bun.sleep(25);
   }throw signal.reason;});
-  assert.equal(await page.evaluate(`document.querySelector('#message')?.textContent`),catalog['This request has no picture.']);
+  if(kind==='interview-picks'){
+   await withDeadline('904.record.question-image',5000,async signal=>{while(!signal.aborted){
+    if(await page!.evaluate<boolean>(`!!document.querySelector('[data-block-target="question"][aria-selected="true"]')&&
+      document.querySelector('#reference-content img')?.naturalWidth===2&&!document.querySelector('#reference-pane').hidden`))return;
+    await Bun.sleep(25);
+   }throw signal.reason;});
+  }
+  assert.equal(await page.evaluate(`document.querySelector('#message')?.textContent`),
+   catalog[kind==='interview-picks'?'Not submitted':'This request has no picture.']);
   assert.equal(await page.evaluate(`document.querySelector('[data-part-status]')?.textContent`),catalog['No compiled rig catalog available']);
   if(!alreadyPublished){
     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
