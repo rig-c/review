@@ -437,6 +437,24 @@ async function assertNoPictureQuestionTab(reason:string,catalog:Record<string,st
  }
 }
 
+async function assertOriginalPainting(base: string, expectedHash: string) {
+ await wait(`(()=>{const image=document.querySelector('#reference-content img');
+  return !!image?.naturalWidth && image.checkVisibility() && image.getBoundingClientRect().width>0;
+ })()`,'955 original painting in the main view');
+ const image = await page!.evaluate<{src:string;rgba:number[]}>(`(()=>{
+  const image=document.querySelector('#reference-content img'),canvas=document.createElement('canvas');
+  canvas.width=canvas.height=2;
+  const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);
+  return {src:image.currentSrc,rgba:[...ctx.getImageData(0,0,1,1).data]};
+ })()`);
+ assert.deepEqual(image.rgba,[40,160,220,255]);
+ assert.ok(new URL(image.src).pathname.startsWith(base+'interview/image/'));
+ const response = await fetch(image.src);
+ assert.equal(response.status,200);
+ assert.equal(sha(new Uint8Array(await response.arrayBuffer())),expectedHash);
+ return expectedHash;
+}
+
 async function postQuestionPictureChecks(){
  await page!.setViewport(1440,900);
  const observations:{variant:string;language:string;sha256?:string}[]=[];
@@ -476,6 +494,8 @@ async function postQuestionPictureChecks(){
      const catalog=language==='en'?enCatalog:koCatalog;
      const text=await page!.evaluate<string>(`document.querySelector('#rig-empty').textContent`);
      assert.equal(text,catalog[key]);
+     if(variant!=='legacy') observation.sha256=await assertOriginalPainting(
+      fixture.display.routes.apiBase,sha(await readFile(join(fixture.root,'inputs/reference.png'))));
      await assertNoPictureQuestionTab(catalog[key],catalog);
     }
     await writeFile(join(output,variant+'-'+language+'.png'),await page!.screenshot());
@@ -548,6 +568,7 @@ async function boundRigPictureChecks(){
 
     let paintedPixels = 0;
     let missingPicture: string | null = null;
+    let paintingSha256: string | undefined;
     if (pictured) {
      const actualRig = catalog['@rig-c/play · Actual rig'];
      await wait(`document.querySelector('#player-state')?.textContent===${JSON.stringify(actualRig)}&&
@@ -571,6 +592,8 @@ async function boundRigPictureChecks(){
      missingPicture = await page!.evaluate<string>(`document.querySelector('#rig-empty').textContent`);
      assert.equal(missingPicture,catalog['This question refers to a rig version that this publication does not include.']);
      await assertNoPictureQuestionTab(missingPicture,catalog,selector);
+     if (variant==='rig-signoff-hash') paintingSha256=await assertOriginalPainting(
+      fixture.display.routes.apiBase,sha(await readFile(join(fixture.root,'inputs/reference.png'))));
      await writeFile(join(out,'question-'+visit+'.png'),await page!.screenshot());
     }
     const assetRequests = await page!.evaluate<string[]>(`performance.getEntriesByType('resource')
@@ -647,7 +670,7 @@ async function boundRigPictureChecks(){
     assert.deepEqual(bytes,Buffer.from(JSON.stringify(expected)));
     assert.deepEqual(await jobInputHashes(fixture.root),before);
     assert.deepEqual(await jobInputHashes(retained.snapshotRoot),retainedBefore);
-    observations.push({variant,language,visit,suppressed,paintedPixels,missingPicture,assetRequests,controls,sourceHash:publication.source.sourceHash,
+    observations.push({variant,language,visit,suppressed,paintedPixels,paintingSha256,missingPicture,assetRequests,controls,sourceHash:publication.source.sourceHash,
      actBytes:bytes.length,actSha256:sha(bytes),actValueSha256:sha(JSON.stringify(act.value)),fullActMatchesSourceOracle:true});
    }
    if (variant === 'bound-rig') {
