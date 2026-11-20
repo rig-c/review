@@ -335,7 +335,7 @@ async function openPendingAsk(page: InputCdpSession): Promise<void> {
   let state: 'open' | 'ready' | null = null;
   await until(async () => {
     state = await page.evaluate<'open' | 'ready' | null>(`(() => {
-      if (document.querySelector('#job-record-asks[open]')) return 'open';
+      if (document.querySelector('#job-record-asks[open]') || document.querySelector('#workspace-interview-answer:not([hidden]) form.interview-answer')) return 'open';
       const button = document.querySelector('#workspace-pending-ask');
       if (!button || button.hidden || button.disabled) return null;
       const rect = button.getBoundingClientRect();
@@ -362,7 +362,7 @@ async function submitForm(askId: string, checkpoint = false): Promise<{ statusTe
     `enabled form ${askId}`,
   );
   await openPendingAsk(page!);
-  await wait(`(()=>{const dialog=document.querySelector('#job-record-asks[open]'),button=document.querySelector(${JSON.stringify(submitSelector)});return !!dialog&&!!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
+  await wait(`(()=>{const host=document.querySelector('#job-record-asks[open],#workspace-interview-answer:not([hidden])'),button=document.querySelector(${JSON.stringify(submitSelector)});return !!host&&!!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
   await page!.evaluate(`document.querySelector(${JSON.stringify(submitSelector)}).scrollIntoView({block:'center',inline:'nearest'})`);
   await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   await click(page!,submitSelector);
@@ -568,12 +568,15 @@ try {
     'captured api/interview questions for option-set publication',
   );
 
-  // #809:92: Answer… opens the native dialog; a prepared hidden form is not a pointer target.
+  // #809:92 / #955: pictureless question page opens the Question tab directly.
   await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('form[data-job-ask="${picksAsk.askId}"] fieldset:not(:disabled)')`,'interview owner ready');
   await openPendingAsk(page);
-  await wait(`!!document.querySelector('#job-record-asks[open] form[data-job-ask="${picksAsk.askId}"]')`,'Answer dialog opened');
+  await wait(`!!document.querySelector('#workspace-interview-answer:not([hidden]) form[data-job-ask="${picksAsk.askId}"], #job-record-asks[open] form[data-job-ask="${picksAsk.askId}"]')`,'Answer form opened');
   for (const name of optionDom.selectNames) {
-    await click(page,`form[data-job-ask="${picksAsk.askId}"] input[type="radio"][name="${name}"][value="keep"]`);
+    const radioSelector = `form[data-job-ask="${picksAsk.askId}"] input[type="radio"][name="${name}"][value="keep"]`;
+    await page.evaluate(`document.querySelector(${JSON.stringify(radioSelector)}).scrollIntoView({block:'center',inline:'nearest'})`);
+    await page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+    await click(page, radioSelector);
   }
   // R2 / #901: one optional note textarea per editable question set; an existing note prefills it and shows as pre.interview-note when read-only.
   const sourceProject=JSON.parse(await readFile(join(recordRoot,'project.json'),'utf8'));

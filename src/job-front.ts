@@ -5,7 +5,7 @@ import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-che
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
 import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion } from './job-api.ts';
 import { JobSession } from './job-session.ts';
-import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, loadRetainedJobReview, loadRetainedRecordRig, readPreviousDraftBytes, retainedRigDraftVerdict, type JobRootIdentity } from './job-source.ts';
+import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, loadRetainedJobReview, loadRetainedRecordRig, retainedRecordPainting, readPreviousDraftBytes, retainedRigDraftVerdict, type JobRootIdentity } from './job-source.ts';
 import { checkedPath } from './interview-project.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
 import { JobError, JobStore, jobCropReferences } from './job-store.ts';
@@ -291,13 +291,13 @@ export function retainedPublicationRoutes(session: JobSession) {
                             (retained.interview?.diagnostics.length ?? 0) > 0,
                         preRig: retained.source.selector?.kind === 'draft' && !retainedRigDraftVerdict(retained), modeling: false, motion: false, feedback: true, audio: false},
                 });
-                const interviewMetadata = (rigPicture = false) => {
+                const interviewMetadata = (rigPicture = false, painting?: NonNullable<ReturnType<typeof retainedRecordPainting>>) => {
                     const interview = isRetainedRecordSource(retained) ? undefined :
                         retained.interview !== undefined ? retained.interview : display.publication.interview;
                     return json({
                         questions: questions.map(question => ({...question,
                             ...(rigPicture && question.missingPicture === 'rig' ? {missingPicture: undefined} : {}),
-                            images: question.images.map((image, index) => ({name: image.name,
+                            images: (painting && question.missingPicture ? [painting] : question.images).map((image, index) => ({name: image.name,
                                 url: `/api/interview/image/${question.ref.sha256}/${index}`})),
                         })),
                         ...(interview === undefined ? {} : {interview}),
@@ -349,7 +349,7 @@ export function retainedPublicationRoutes(session: JobSession) {
                         const file = servedImage(parts, image[1] as 'image'|'page', Number(image[2]));
                         return file ? await sealedFile(relative(retained.snapshotRoot,file).split('\\').join('/')) : failure('JOB_SOURCE_UNRETAINABLE',404);
                     }
-                    if (path === 'api/review' || path === 'api/interview' || path.startsWith('assets/')) {
+                    if (path === 'api/review' || path === 'api/interview' || path.startsWith('assets/') || interview) {
                         let review: ReviewPackage | null = null;
                         if (!question) {
                             let pending = views.get(publicationId);
@@ -360,11 +360,21 @@ export function retainedPublicationRoutes(session: JobSession) {
                             ({review} = await pending);
                         }
                         if (path === 'api/review') return reviewMetadata(review);
-                        if (path === 'api/interview') return interviewMetadata(!!review);
+                        if (path === 'api/interview' || interview) {
+                            const fallback = !review && questions.find(item => item.missingPicture);
+                            const painting = fallback ? retainedRecordPainting(retained) : null;
+                            if (fallback && !painting && !interview)
+                                return failure('JOB_SOURCE_UNRETAINABLE', 409);
+                            if (interview) {
+                                if (painting && fallback && interview[1] === fallback.ref.sha256 && interview[2] === '0')
+                                    return await sealedFile(painting.ref.path);
+                                return await interviewImage(interview);
+                            }
+                            return interviewMetadata(!!review, painting ?? undefined);
+                        }
                         try {return await reviewAsset(review);}
                         catch {return failure('JOB_SOURCE_UNRETAINABLE', 404);}
                     }
-                    if (interview) return await interviewImage(interview);
                     return failure('JOB_REQUEST_INVALID', 404);
                 }
                 let pending = views.get(publicationId);

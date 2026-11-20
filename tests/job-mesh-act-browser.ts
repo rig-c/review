@@ -77,7 +77,18 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
   let page: InputCdpSession | undefined;
   try {
     let send: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
-    page = await launchCdpSession(profile, {onEvent: (_event, command) => { send = command; }});
+    const dialogs: {type: string; message: string; accepted: boolean}[] = [];
+    let acceptNextDialog = true;
+    const catalog = language === 'ko' ? koCatalog : enCatalog;
+    const expectedConfirm = catalog['Send this Request changes with {0} mesh edit(s) to the producer?']!.replace('{0}', '1');
+    page = await launchCdpSession(profile, {onEvent: (event, command) => {
+      send = command;
+      if (event.method === 'Page.javascriptDialogOpening') {
+        const accept = acceptNextDialog;
+        dialogs.push({type: String(event.params?.type ?? ''), message: String(event.params?.message ?? ''), accepted: accept});
+        return command('Page.handleJavaScriptDialog', {accept}).then(() => {});
+      }
+    }});
     const screen = page;
     await screen.setViewport(largeCapture ? 2200 : 1440, largeCapture ? 1750 : 1000);
     if (mode === 'with-comment') {
@@ -161,7 +172,6 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
       await click(screen, '#mesh-edit');
       await wait("!document.querySelector('#mesh-editor-bar').hidden");
       assert.equal(await screen.evaluate<boolean>("document.querySelector('#mesh-apply').disabled"), true);
-      const catalog = language === 'ko' ? koCatalog : enCatalog;
       const hint = catalog['In a job, press Request changes to send this edit; the producer rebuilds it.'];
       if (mode === 'stale-draft') {
         await wait(`document.querySelector('#mesh-editor-status').innerText.includes(${JSON.stringify(catalog['job.mesh.staleDraft'])})`);
@@ -180,6 +190,25 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
       }
     }
     await wait("!document.querySelector('#request-changes').disabled");
+    const meshExpected = mode === 'mesh-only' || mode === 'with-comment';
+    if (meshExpected) {
+      const before = await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value");
+      assert.ok(before);
+      acceptNextDialog = false;
+      await click(screen, '#request-changes');
+      await wait("!document.querySelector('#request-changes').disabled");
+      assert.deepEqual(dialogs, [{type: 'confirm', message: expectedConfirm, accepted: false}]);
+      await writeFile(join(directory, 'confirm.png'), await screen.screenshot());
+      await writeFile(join(directory, 'confirm.json'), JSON.stringify(dialogs[0], null, 2) + '\n');
+      assert.equal(await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value"), before);
+      assert.equal(await screen.evaluate<boolean>("document.querySelector('#message').classList.contains('error')"), false);
+      const pending = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
+        requestId: randomUUID(), verb: 'next', after: null, waitMs: 0});
+      const pendingResult: JobResult<JobResponseValues['next']> = await pending.json();
+      assert.ok(pendingResult.ok, JSON.stringify(pendingResult));
+      assert.deepEqual(pendingResult.value.events.filter(event => event.type === 'act'), []);
+      acceptNextDialog = true;
+    }
     if (mode === 'with-comment') {
       const before = await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value");
       assert.ok(before);
@@ -190,8 +219,12 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
     }
     await click(screen, '#request-changes');
     await wait("document.querySelector('#workspace-act-row').hidden");
+    assert.deepEqual(dialogs, meshExpected ? [
+      {type: 'confirm', message: expectedConfirm, accepted: false},
+      ...(mode === 'with-comment' ? [{type: 'confirm', message: expectedConfirm, accepted: true}] : []),
+      {type: 'confirm', message: expectedConfirm, accepted: true},
+    ] : []);
     const {act: finalized, raw} = await latestAct();
-    const meshExpected = mode === 'mesh-only' || mode === 'with-comment';
     assert.equal(finalized.schema, meshExpected ? JOB_MESH_EDITS_ACT_SCHEMA : JOB_COMMENT_CONTEXT_ACT_SCHEMA,
       `${language} ${mode}: unexpected schema from the production writer`);
     if (meshExpected) {
@@ -228,6 +261,9 @@ async function runBrowser(language: 'en' | 'ko', mode: 'with-comment' | 'mesh-on
         await wait("!!document.querySelector('#save:not([hidden]):not(:disabled)') && !document.querySelector('#workspace-act-row').hidden");
         assert.equal(await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value"), '');
         assert.equal(await screen.evaluate<boolean>("document.querySelector('#request-changes').disabled"), true);
+        await click(screen, '#save');
+        await wait("document.querySelector('#workspace-act-row').hidden");
+        assert.equal(dialogs.length, 2);
       }
       await writeFile(join(directory, 'still-size.json'), JSON.stringify({bytes: png.byteLength}));
     } else {

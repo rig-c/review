@@ -813,10 +813,12 @@ export interface JobPreparedInspection {
     setupPose(setup?: boolean): void;
     dispose(): void;
 }
-async function jobBytes(url: string, signal: AbortSignal, maximum: number): Promise<Uint8Array<ArrayBuffer>> {
+async function jobBytes(url: string, signal: AbortSignal, maximum: number, refusal?: { status: number; code: string }): Promise<Uint8Array<ArrayBuffer>> {
     const response = await fetch(url, { signal });
-    if (!response.ok || !response.body)
-        throw new Error('JOB_PRELOAD_FAILED');
+    if (!response.ok || !response.body) {
+        void response.body?.cancel().catch(() => {});
+        throw new Error(response.status === refusal?.status ? refusal.code : 'JOB_PRELOAD_FAILED');
+    }
     const reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -847,8 +849,8 @@ async function jobDigest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
     return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
         .map(value => value.toString(16).padStart(2, '0')).join('');
 }
-async function jobJson<Value>(url: string, signal: AbortSignal): Promise<Value> {
-    const bytes = await jobBytes(url, signal, 2 * 1024 * 1024);
+async function jobJson<Value>(url: string, signal: AbortSignal, refusal?: { status: number; code: string }): Promise<Value> {
+    const bytes = await jobBytes(url, signal, 2 * 1024 * 1024, refusal);
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as Value;
 }
 export function mediaReady(media: HTMLVideoElement, name: 'loadeddata' | 'seeked', signal: AbortSignal): Promise<void> {
@@ -960,7 +962,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         }
     }
     try {
-        const interview = metadata.capabilities.interview ? await jobJson<JobInterview>(routes.api('interview'), signal) : null;
+        const interview = metadata.capabilities.interview ? await jobJson<JobInterview>(routes.api('interview'), signal, {status: 409, code: 'JOB_SOURCE_UNRETAINABLE'}) : null;
         if (recordRig) {
             const {manifest, reviewedSource} = metadata;
             const model = reviewedSource?.rig;
@@ -1439,8 +1441,16 @@ export interface JobFormDependencies {
             }
             interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:deps.interviewMainView,
                 images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered'});
-            if (deps.interviewMainView && prepared.metadata.recordSource && prepared.metadata.manifest?.model)
+            if (deps.interviewMainView && prepared.metadata.recordSource) {
                 interviewForm.form.dataset.interviewMain = '';
+                if ((question.missingPicture || !question.images.length) && !prepared.metadata.manifest?.model) {
+                    fields.prepend(node('p', question.missingPicture === 'rig'
+                        ? 'This question refers to a rig version that this publication does not include.'
+                        : question.missingPicture === 'scene'
+                            ? 'This question refers to a scene that this publication does not include.'
+                            : 'This request has no picture.'));
+                }
+            }
             disposeInterview=interviewForm.dispose;read=interviewForm.read;
             submitKey = 'interview.save';
         }
@@ -1698,7 +1708,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     let stopped=false;
     const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource,jobCheckpointContext},draftStorage:()=>localStorage,...drafts,access,pageId,
         window:{state:()=>window.state(),submit:input=>window.submit(input)}};
-    const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),refusal:jobWindowRefusal,formDependencies:dependencies,
+    const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),confirm:text=>globalThis.confirm(i18n.tr(text)),refusal:jobWindowRefusal,formDependencies:dependencies,
         window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),
         routes:display=>jobPublicationRoutes(display,location.origin),load:async()=>(await import('./main.ts')).mountRigScreen()});
     let bootstrapNotice:HTMLElement|null=null,bootstrapStream=false,bootstrapPrior:{text:string;title:string}|null=null;

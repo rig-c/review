@@ -516,10 +516,24 @@ test.each(['scene','unsealed-scene','rig','legacy'] as const)('#929 projects onl
    expect(image.status).toBe(200);
    expect(Buffer.from(await image.arrayBuffer())).toEqual(await readFile(fixture.root+'/evidence/plate.png'));
   }else{
-   expect(question!.images).toEqual([]);
+   expect(question!.images.map(image=>image.name)).toEqual(variant==='legacy'?[]:['reference.png']);
+   if(variant!=='legacy'){
+    const image=await fetch(base+'interview/image/'+question!.images[0]!.url.split('/').slice(-2).join('/'));
+    expect(image.status).toBe(200);
+    expect(Buffer.from(await image.arrayBuffer())).toEqual(await readFile(fixture.root+'/inputs/reference.png'));
+   }
    expect(question!.missingPicture).toBe(variant==='legacy'?undefined:variant==='rig'?'rig':'scene');
   }
  }finally{await fixture.close();}
+});
+
+test('#955 refuses a missing rig and an unsealed original painting', async () => {
+ const fixture = await recordScreenFixture('interview-picks',false,undefined,undefined,false,true,undefined,false,false,'rig-no-painting');
+ try {
+  const response = await fetch(fixture.origin + fixture.display.routes.apiBase + 'interview');
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ok:false,error:{code:'JOB_SOURCE_UNRETAINABLE'}});
+ } finally {await fixture.close();}
 });
 
 test.each(rigPictureCases)('#929 variant B resolves the rig picture for %s', async variant => {
@@ -548,7 +562,7 @@ test.each(rigPictureCases)('#929 variant B resolves the rig picture for %s', asy
   const interview = await fetch(base+'interview');
   expect(interview.status).toBe(200);
   const {questions:[question]} = await interview.json();
-  expect(question).toMatchObject({editable:true,images:[],set:{question:'post_timing',id:'post-picture'}});
+  expect(question).toMatchObject({editable:true,images:variant==='bound-rig'?[]:[{name:'reference.png'}],set:{question:'post_timing',id:'post-picture'}});
   const review = await fetch(base+'review');
   expect(review.status).toBe(200);
   const metadata = await review.json();
