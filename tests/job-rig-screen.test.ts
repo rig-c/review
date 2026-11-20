@@ -246,3 +246,104 @@ test('#798 direction reuses the Comments input gate without changing the rig ins
  }
  expect(main).toContain('if(host?.direction)showRecordComments(true);else if(host?.record&&!data.manifest.model)showRecordComments();');
 });
+
+test('#992 record and verdict comment drafts survive reload, same-source republish, two-tab merge/delete, legacy fallback, and report changed-source drops',async()=>{
+ const main=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
+ const start=main.indexOf('function restoreRecordComments('),end=main.indexOf('function recordCommentsChanged(',start);
+ const code=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(start,end));
+ const store=new Map<string,string>();
+ const listeners=new Set<(event:{key:string|null;newValue:string|null})=>void>();
+ const storage={
+  get length(){return store.size;},
+  key:(index:number)=>[...store.keys()][index]??null,
+  getItem:(key:string)=>store.get(key)??null,
+  setItem:(key:string,value:string,sender?:unknown)=>{
+   store.set(key,value);
+   for(const fn of listeners)if((fn as {owner?:unknown}).owner!==sender)fn({key,newValue:value});
+  },
+  removeItem:(key:string,sender?:unknown)=>{
+   store.delete(key);
+   for(const fn of listeners)if((fn as {owner?:unknown}).owner!==sender)fn({key,newValue:null});
+  },
+ };
+ const makeTab=(binding:{jobId?:string;draftId?:string;publicationId:string;sourceHash:string},verdict=false)=>{
+  const rows:{id:string;summary:string}[]=[],notices:{text:string;error:boolean}[]=[];
+  const tabWindow={
+   addEventListener:(type:string,fn:(event:{key:string|null;newValue:string|null})=>void)=>{
+    if(type==='storage'){(fn as {owner?:unknown}).owner=tabWindow;listeners.add(fn);}
+   },
+  };
+  const tabStorage={
+   get length(){return storage.length;},
+   key:storage.key,
+   getItem:storage.getItem,
+   setItem:(k:string,v:string)=>storage.setItem(k,v,tabWindow),
+   removeItem:(k:string)=>storage.removeItem(k,tabWindow),
+  };
+  const scope={
+   host:verdict?{verdictComments:{...binding,rows,available:()=>true}}:{record:{...binding,label:'Draft d1',hasPicture:false}},
+   access:{base:`/jobs/${binding.jobId??'job-1'}/publications/${binding.publicationId}/instances/${'a'.repeat(64)}/`},
+   recordCommentKey:'',
+   recordComments:rows,
+   draftStatus:null as string|null,
+   localStorage:tabStorage,
+   window:tabWindow,
+   select:()=>({value:'pending'}),
+   projectComments,
+   renderDraftState(){},
+   message:(text:string,error=false)=>{notices.push({text,error});},
+   comments:{refresh(){}},
+   partsSubject:null,
+   rigInspector:{comments:{button:{}}},
+   setSourceText(){},
+   renderAnswerControls(){},
+   renderProposals(){},
+  };
+  const api=new Function('scope',`with(scope){${code};return {restore:()=>restoreRecordComments(),persist:()=>persistRecordComments()};}`)(scope) as {restore():void;persist():void};
+  api.restore();
+  return {scope,rows,notices,persist:api.persist};
+ };
+
+ // Bar 1 (Reload) & Bar 2 (Republish, same job, draft and source hash)
+ const tab1=makeTab({jobId:'job-1',draftId:'d1',publicationId:'pub-1',sourceHash:'a'.repeat(64)});
+ tab1.rows.push({id:'c1',summary:'First judgment'},{id:'c2',summary:'Second judgment'});
+ tab1.persist();
+ const reloaded=makeTab({jobId:'job-1',draftId:'d1',publicationId:'pub-1',sourceHash:'a'.repeat(64)});
+ expect(reloaded.rows.map(r=>r.id)).toEqual(['c1','c2']);
+ const republished=makeTab({jobId:'job-1',draftId:'d1',publicationId:'pub-2',sourceHash:'a'.repeat(64)});
+ expect(republished.rows.map(r=>r.id)).toEqual(['c1','c2']);
+
+ // Bar 3 (Republish with a changed source hash: not shown as current, old rows stay in storage, notice path hit)
+ const changedSource=makeTab({jobId:'job-1',draftId:'d1',publicationId:'pub-3',sourceHash:'b'.repeat(64)});
+ expect(changedSource.rows).toEqual([]);
+ expect([...store.values()].some(raw=>raw.includes('First judgment')&&raw.includes('Second judgment'))).toBe(true);
+ expect(changedSource.scope.draftStatus).toContain('Saved local draft was not restored');
+ expect(changedSource.notices.some(n=>n.error&&n.text.includes('Saved local draft was not restored'))).toBe(true);
+
+ // Bar 4 (Two tabs: tab A adds c1, tab B adds c2, both survive in both tabs and after reload; removal in A does not come back from B)
+ const tabA=makeTab({jobId:'job-1',draftId:'d2',publicationId:'pub-4',sourceHash:'c'.repeat(64)});
+ const tabB=makeTab({jobId:'job-1',draftId:'d2',publicationId:'pub-4',sourceHash:'c'.repeat(64)});
+ tabA.rows.push({id:'c1',summary:'From tab A'});
+ tabA.persist();
+ tabB.rows.push({id:'c2',summary:'From tab B'});
+ tabB.persist();
+ expect(tabA.rows.map(r=>r.id)).toEqual(['c1','c2']);
+ expect(tabB.rows.map(r=>r.id)).toEqual(['c1','c2']);
+ const reloadBoth=makeTab({jobId:'job-1',draftId:'d2',publicationId:'pub-4',sourceHash:'c'.repeat(64)});
+ expect(reloadBoth.rows.map(r=>r.id)).toEqual(['c1','c2']);
+ // Remove c1 in tab A; it must not come back from tab B
+ tabA.rows.splice(0,1);
+ tabA.persist();
+ expect(tabA.rows.map(r=>r.id)).toEqual(['c2']);
+ expect(tabB.rows.map(r=>r.id)).toEqual(['c2']);
+ tabB.persist();
+ const reloadAfterDelete=makeTab({jobId:'job-1',draftId:'d2',publicationId:'pub-4',sourceHash:'c'.repeat(64)});
+ expect(reloadAfterDelete.rows.map(r=>r.id)).toEqual(['c2']);
+
+ // Bar 5 (Existing per-publication drafts still restore via fallback)
+ store.set('rig-review-record-comments/1:pub-legacy:'+'d'.repeat(64),JSON.stringify({
+  status:'pending',publicationId:'pub-legacy',sourceHash:'d'.repeat(64),comments:[{id:'legacy-1',summary:'Legacy per-publication comment'}],
+ }));
+ const fallbackTab=makeTab({jobId:'job-1',draftId:'d3',publicationId:'pub-legacy',sourceHash:'d'.repeat(64)});
+ expect(fallbackTab.rows).toEqual([{id:'legacy-1',summary:'Legacy per-publication comment'}]);
+});

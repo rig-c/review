@@ -1421,7 +1421,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  const saveBlocked=()=>!!readOnly||!!subject.legacyVerdict?.readOnly||rigInput.state!=='loaded'||draftConflict||!!persistence?.restoring();
  partsAnswerBlocked=saveBlocked;
  text('rig-empty','Loading package…');
- if(generalRows)restoreRecordComments();
+ if(generalRows||host?.record)restoreRecordComments();
  partsSubject=bindPartsSubject({data:subject,canvas:partsCanvas,referenceCanvas:partsReference,viewport,el,toolbar:primaryToolbar,commentsHost:el('comments-list-host'),openComments:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot),issues,
   ...(host?.record?{recordComments}:host?.verdictComments?{generalComments:host.verdictComments,submitting:()=>saving}:{}),
   request,base,paintingPath:host?'/review-painting':'/api/parts/painting',mesh:()=>layers.mesh,restoreMesh:on=>{layers.mesh=on;input('layer-mesh').checked=on;},images:()=>layers.images,
@@ -1495,7 +1495,8 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  setupPartsPersistence=async()=>{
   if(host?.record)return;
   const binding:InspectionBinding={mode:'single',sourceHash:subject.sourceHash,rigs:[null]};
-  const connection=await connectInspectionPersistence({scope:'parts:'+access.key+':'+access.base+':'+subject.sourceHash,binding,baseline:partsBaseline,session:()=>({subject:'parts' as const,issues}),reviewDirty:()=>dirty,
+  const partsDraftScope=host?.verdictComments?.jobId&&host?.verdictComments?.draftId?host.verdictComments.jobId+':'+host.verdictComments.draftId:access.key+':'+access.base;
+  const connection=await connectInspectionPersistence({scope:'parts:'+partsDraftScope+':'+subject.sourceHash,binding,baseline:partsBaseline,session:()=>({subject:'parts' as const,issues}),reviewDirty:()=>dirty,
    recover:value=>{try{if(!value||typeof value!=='object')return null;const row=value as PartsSubjectSession;if(row.subject!=='parts'||!Array.isArray(row.issues)||row.issues.length>1000||Object.keys(row).some(key=>!['subject','issues'].includes(key)))return null;const items=new Map(subject.items.map(item=>[item.name,{...item,imageHash:item.imageHash!}]));const restored=row.issues.map(issue=>{const parsed=parsePartsIssue(issue,false,true,false);assertPartsIssueBinding(parsed,items,subject.sourceHash);return parsed;});if(new Set(restored.map(issue=>issue.id)).size!==restored.length)return null;return {subject:'parts' as const,issues:restored};}catch{return null;}},
    restoreSession:(value,isDirty)=>{issues.splice(0,issues.length,...value.issues);dirty=isDirty;partsSubject?.refreshComments();showCommentCount();text('dirty',isDirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',isDirty);state.setSaveState({kind:isDirty?'unsaved':'saved',text:isDirty?'Unsubmitted changes':'Submitted'});},
    bookmark:()=>({schema:'rig-review-inspection/1',binding,animation:null,time:null,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:null,a:null,b:null,reference:null}},selection:{}}),
@@ -1560,14 +1561,22 @@ let questionFormBindings=new WeakSet<HTMLElement>();
 function restoreRecordComments(form?:HTMLFormElement):void {
  const binding=host?.direction??host?.verdictComments??host?.record;
  if(!binding||recordCommentKey)return;
- const publicationId=binding.publicationId??form?.dataset.jobPublication,sourceHash=binding.sourceHash;
- if(!publicationId)throw new Error('JOB_DISPLAY_MISMATCH');
- recordCommentKey=(host?.verdictComments?'rig-review-verdict-comments/1:':'rig-review-record-comments/1:')+publicationId+':'+sourceHash;
- try {
-  const saved=JSON.parse(localStorage.getItem(recordCommentKey)??'null');
-  if(saved?.publicationId!==publicationId||saved?.sourceHash!==sourceHash||!Array.isArray(saved.comments)||saved.comments.length>1000)return;
-  const ids=new Set<string>();
-  const rows=saved.comments as CommentRow[];
+ const route=typeof access!=='undefined'?/^\/jobs\/([^/]+)\/publications\/([^/]+)\//.exec(access?.base??''):null;
+ const publicationId=binding.publicationId??form?.dataset.jobPublication??route?.[2],sourceHash=binding.sourceHash;
+ const jobId=binding.jobId??route?.[1],draftId=binding.draftId;
+ if(!publicationId&&(!jobId||!draftId))throw new Error('JOB_DISPLAY_MISMATCH');
+ const prefix=host?.verdictComments?'rig-review-verdict-comments/1:':'rig-review-record-comments/1:';
+ const scopePrefix=jobId&&draftId?`${prefix}${jobId}:${draftId}:`:null;
+ recordCommentKey=(scopePrefix??`${prefix}${publicationId}:`)+sourceHash;
+ const fallbackKey=publicationId?`${prefix}${publicationId}:${sourceHash}`:'';
+ const previousKey=binding.previousPublicationId?`${prefix}${binding.previousPublicationId}:${sourceHash}`:'';
+ const target=(host?.verdictComments?.rows??recordComments) as CommentRow[]&{knownIds?:Set<string>;storageBound?:boolean};
+ const knownIds=(target.knownIds??=new Set<string>());
+ const parseRows=(raw:string|null,expectedPub?:string):CommentRow[]|null=>{
+  const saved=JSON.parse(raw??'null');
+  if(!saved||saved.sourceHash!==sourceHash||!Array.isArray(saved.comments)||saved.comments.length>1000)return null;
+  if(expectedPub!==undefined?saved.publicationId!==expectedPub:(typeof saved.publicationId!=='string'||!saved.publicationId))return null;
+  const ids=new Set<string>(),rows=saved.comments as CommentRow[];
   for(const row of rows){
    if(!row||typeof row.id!=='string'||!row.id||ids.has(row.id)||typeof row.summary!=='string'||!row.summary.trim()||row.summary.length>1000)throw new Error('JOB_ACT_INVALID');
    ids.add(row.id);
@@ -1577,7 +1586,58 @@ function restoreRecordComments(form?:HTMLFormElement):void {
    else if(Object.keys(row).some(key=>key!=='id'&&key!=='summary'))throw new Error('JOB_ACT_INVALID');
   }
   if(!host?.verdictComments)projectComments(rows.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
-  (host?.verdictComments?.rows??recordComments).push(...rows);
+  return rows;
+ };
+ if(!target.storageBound&&typeof window!=='undefined'&&typeof window.addEventListener==='function'){
+  target.storageBound=true;
+  const onStorage=(event:Pick<StorageEvent,'key'|'newValue'>)=>{
+   if(!recordCommentKey||event.key!==recordCommentKey)return;
+   try{
+    const incoming=event.newValue===null?[]:parseRows(event.newValue,scopePrefix?undefined:publicationId);
+    if(!incoming)return;
+    const incomingIds=new Set(incoming.map(row=>row.id));
+    const localUnsaved=target.filter(row=>!knownIds.has(row.id)&&!incomingIds.has(row.id));
+    target.splice(0,target.length,...incoming,...localUnsaved);
+    knownIds.clear();for(const row of incoming)knownIds.add(row.id);
+    if(typeof rigInspector!=='undefined'&&typeof setSourceText==='function'){
+     const count=host?.verdictComments?(typeof partsOnly!=='undefined'&&partsOnly?(partsSubject?.issues().length??0)+target.length:target.length):recordComments.length;
+     setSourceText(rigInspector.comments.button,`Comments (${count})`);
+    }
+    if(typeof comments!=='undefined')comments?.refresh();
+    if(typeof partsSubject!=='undefined')partsSubject?.refreshComments();
+    if(typeof renderProposals==='function'&&host?.verdictComments)renderProposals();
+    if(typeof renderAnswerControls==='function')renderAnswerControls();
+   }catch{/* Ignore malformed cross-tab storage payloads. */}
+  };
+  window.addEventListener('storage',onStorage,typeof lifecycle!=='undefined'?{signal:lifecycle.signal}:undefined);
+ }
+ try {
+  const primaryRaw=localStorage.getItem(recordCommentKey);
+  const fallbackRaw=primaryRaw===null&&fallbackKey&&fallbackKey!==recordCommentKey?localStorage.getItem(fallbackKey):null;
+  const previousRaw=primaryRaw===null&&fallbackRaw===null&&previousKey&&previousKey!==recordCommentKey?localStorage.getItem(previousKey):null;
+  const rows=primaryRaw!==null?parseRows(primaryRaw,scopePrefix?undefined:publicationId):
+   fallbackRaw!==null?parseRows(fallbackRaw,publicationId):
+   previousRaw!==null?parseRows(previousRaw,binding.previousPublicationId??undefined):null;
+  if(rows){
+   for(const row of rows){knownIds.add(row.id);if(!target.some(existing=>existing.id===row.id))target.push(row);}
+   return;
+  }
+  if((scopePrefix||binding.previousPublicationId)&&typeof localStorage.length==='number'&&typeof localStorage.key==='function'){
+   for(let i=0;i<localStorage.length;i++){
+    const key=localStorage.key(i);
+    if(!key||key===recordCommentKey)continue;
+    if((scopePrefix&&key.startsWith(scopePrefix))||(binding.previousPublicationId&&key.startsWith(`${prefix}${binding.previousPublicationId}:`))){
+     const prior=JSON.parse(localStorage.getItem(key)??'null');
+     if(prior&&typeof prior.sourceHash==='string'&&prior.sourceHash!==sourceHash&&Array.isArray(prior.comments)&&prior.comments.length>0){
+      const notice=`Saved local draft was not restored: ${'source hash differs'}. It remains in storage for recovery.`;
+      if(typeof draftStatus!=='undefined')draftStatus=notice;
+      if(typeof renderDraftState==='function')renderDraftState();
+      if(typeof message==='function')message(notice,true);
+      break;
+     }
+    }
+   }
+  }
  }catch{/* A mismatched or invalid local draft has no authority. */}
 }
 /** Comments remain native rows locally; the old act field carries their scalar projection only. */
@@ -1587,10 +1647,26 @@ function recordCommentWords():string {
 function persistRecordComments():void {
  const binding=host?.direction??host?.verdictComments??host?.record;
  if(!binding||!recordCommentKey)return;
- const comments=host?.verdictComments?.rows??recordComments;
+ const comments=(host?.verdictComments?.rows??recordComments) as CommentRow[]&{knownIds?:Set<string>};
+ const knownIds=(comments.knownIds??=new Set<string>());
  try{
+  const raw=typeof localStorage.getItem==='function'?localStorage.getItem(recordCommentKey):null;
+  if(raw!==null){
+   const existing=JSON.parse(raw);
+   const storedRows:CommentRow[]=existing?.sourceHash===binding.sourceHash&&Array.isArray(existing.comments)
+    ?existing.comments.filter((row:CommentRow)=>row&&typeof row.id==='string'&&row.id&&typeof row.summary==='string'&&row.summary.trim()&&row.summary.length<=1000):[];
+   const storedIds=new Set(storedRows.map(row=>row.id));
+   const survivingLocal=comments.filter(row=>!knownIds.has(row.id)||storedIds.has(row.id));
+   const survivingIds=new Set(survivingLocal.map(row=>row.id));
+   const addedFromOther=storedRows.filter(row=>!knownIds.has(row.id)&&!survivingIds.has(row.id));
+   const kept=survivingLocal.filter(row=>knownIds.has(row.id));
+   const localNew=survivingLocal.filter(row=>!knownIds.has(row.id));
+   comments.splice(0,comments.length,...kept,...addedFromOther,...localNew);
+  }
+  knownIds.clear();for(const row of comments)knownIds.add(row.id);
+  const dialogPublication=typeof recordDialog!=='undefined'?recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication:undefined;
   if(host?.verdictComments&&!comments.length)localStorage.removeItem(recordCommentKey);
-  else localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:binding.publicationId??recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication,sourceHash:binding.sourceHash,comments}));
+  else localStorage.setItem(recordCommentKey,JSON.stringify({status:select('review-status').value,publicationId:binding.publicationId??dialogPublication,sourceHash:binding.sourceHash,comments}));
  }catch{/* In-memory comments remain bound to this host. */}
 }
 function recordCommentsChanged():void {
