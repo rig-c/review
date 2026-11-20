@@ -1,4 +1,4 @@
-/** #987 owner readbacks against the shipped page stream and the committed Create archive. */
+/** #987 owner readbacks against the shipped page stream and the existing #929 sealed scene fixture. */
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {realpathSync} from 'node:fs';
@@ -7,12 +7,12 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {
   JOB_API_V3_SCHEMA, JOB_RECORD_READER_ID, startJobHost,
-  type JobAgentRequestV3, type JobApiResponseV3, type JobPendingAskV3, type JobProgressLineV3,
+  type JobAgentRequestV3, type JobApiResponseV3, type JobProgressLineV3,
 } from '@rig-c/review/job-host';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
-import {prepareBrowserRecordArchiveFixture} from './job-record-browser.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
+import {createSyntheticOptionRecordWorkspace, createSyntheticRecordReader} from './helpers/job-record-fixture.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
@@ -23,15 +23,14 @@ type RequestBody = {[V in Verb]: Omit<Extract<JobAgentRequestV3, {verb: V}>, 'sc
 type HeadlineReadback = {
   headline: string; translate: string | null; barVisible: boolean; actionVisible: boolean;
   whiteSpace: string | null; headlineElements: number;
-  painting: {width: number; height: number; sameNode: boolean} | null;
-  title: string; ready: boolean; editable: boolean; answered: boolean;
+  painting: {path: string; width: number; height: number; sameNode: boolean} | null;
+  title: string; ready: boolean; sameWorkspace: boolean; editable: boolean; answered: boolean;
 };
 
 const zeroProgressHeadline = 'Nothing is waiting for your answer.';
 // This literal already has a Korean catalog rendering. Agent text must keep its original bytes.
 const agentText = '  Check the parts.  ';
-const interview = {questionId: 'bones', setId: 'chain-bones'};
-const subject = {kind: 'interview-picks', ...interview} as const;
+const interview = {questionId: 'post_timing', setId: 'post-picture'};
 const argument = (key: string) => {
   const index = Bun.argv.indexOf(key);
   return index < 0 ? undefined : Bun.argv[index + 1];
@@ -39,7 +38,10 @@ const argument = (key: string) => {
 
 async function startFixture(scratch: string) {
   const root = join(scratch, 'record-project');
-  const {projectSha, readRecordPublished} = await prepareBrowserRecordArchiveFixture(root);
+  await mkdir(root, {recursive: true});
+  // Same pictured option set as #929, through the ordinary host so progress and acts use real ports.
+  const workspace = createSyntheticOptionRecordWorkspace(root, {...interview, postPicture: 'scene'});
+  const {reader: readRecordPublished} = createSyntheticRecordReader({onOption: () => workspace.context});
   const host = await startJobHost({root, stateDir: join(scratch, 'state'), fingerprint: 'a'.repeat(64),
     reviewer: {id: 'declared-record-owner', role: 'owner'}, publicationMode: 'record-and-package',
     readRecordPublished, recordReaderId: JOB_RECORD_READER_ID});
@@ -56,19 +58,18 @@ async function startFixture(scratch: string) {
     return result;
   }
   const next = () => agent({verb: 'next', after: null, waitMs: 0});
-  async function publish(target: 'option-set' | 'plan') {
-    const result = await agent({verb: 'publish', expectedGeneration: (await next()).generation, idempotencyKey: 'publish-' + target,
-      result: target === 'option-set' ? {kind: target, ...interview} : {kind: target},
-      freeze: {kind: 'producer-held', holdId: 'public-archive-' + target, record: {path: 'project.json', sha256: projectSha}}});
+  async function publishInterview(round: number) {
+    const result = await agent({verb: 'publish', expectedGeneration: (await next()).generation, idempotencyKey: 'publish-' + round,
+      result: workspace.result, freeze: {kind: 'producer-held', holdId: 'pictured-round-' + round, record: workspace.record}});
     assert.ok(result.verb === 'publish' && result.ok);
     return result;
   }
-  async function askInterview(): Promise<JobPendingAskV3> {
-    const publication = await publish('option-set');
-    const result = await agent({verb: 'ask', publicationId: publication.value.publicationId, subject,
-      expectedGeneration: publication.generation, idempotencyKey: 'ask-interview'});
+  async function askInterview(publication: Awaited<ReturnType<typeof publishInterview>>) {
+    const {publicationId} = publication.value;
+    const result = await agent({verb: 'ask', publicationId, subject: workspace.context.subjects[0]!,
+      expectedGeneration: publication.generation, idempotencyKey: 'ask-' + publicationId});
     assert.ok(result.verb === 'ask' && result.ok);
-    return result.value;
+    return result;
   }
   async function progress(seq: number, phase: 'ingest' | 'build' | 'measure') {
     const result = await agent({verb: 'progress', seq, phase, ...(phase === 'build' ? {text: agentText, step: {i: 2, n: 3}} : {})});
@@ -81,20 +82,23 @@ async function startFixture(scratch: string) {
     assert.ok(result.verb === 'next' && result.ok);
     return result.value.events.find(event => event.type === 'act' && event.act.askId === askId);
   }
-  return {host, root, publish, agent, askInterview, progress, readAnswer};
+  return {host, root, publishInterview, askInterview, progress, readAnswer};
 }
 
 const readScreen = (page: InputCdpSession, askId = '') => page.evaluate<HeadlineReadback>(`(() => {
   const headline = document.querySelector('#workspace-ask-headline');
   const form = document.querySelector(${JSON.stringify(`form[data-job-ask="${askId}"]`)});
-  const painting = [...document.querySelectorAll('#stage-layout img')].find(node => node.naturalWidth && node.checkVisibility());
+  const image = document.querySelector('#reference-content img');
+  const painting = image?.naturalWidth && image.checkVisibility() ? image : null;
   const visible = selector => !!document.querySelector(selector)?.checkVisibility();
   return {headline: headline?.textContent ?? '', translate: headline?.getAttribute('translate') ?? null,
     whiteSpace: headline ? getComputedStyle(headline).whiteSpace : null, headlineElements: headline?.childElementCount ?? 0,
     barVisible: visible('#workspace-act-row') && visible('#workspace-ask-headline'),
     actionVisible: ['#workspace-pending-ask', '#save', '#request-changes'].some(visible),
-    painting: painting ? {width: painting.naturalWidth, height: painting.naturalHeight, sameNode: painting === globalThis.__review987Painting} : null,
+    painting: painting ? {path: new URL(painting.currentSrc).pathname, width: painting.naturalWidth, height: painting.naturalHeight,
+      sameNode: painting === globalThis.__review987Painting} : null,
     title: document.querySelector('#package-title')?.textContent ?? '', ready: document.body.dataset.ready === 'true',
+    sameWorkspace: document.getElementById('app') === globalThis.__review987App,
     editable: !!form?.querySelector('fieldset:not(:disabled)'),
     answered: form?.dataset.interviewAnswered === 'true' && !!form?.querySelector('fieldset:disabled')};
 })()`);
@@ -178,26 +182,29 @@ async function runBrowser(language: Language, output: string, scratch: string) {
     await capture('first-load-progress', state => state.barVisible && !state.painting &&
       state.headline.startsWith(catalog['job.progress.phase.ingest'] + ' · '));
 
-    askId = (await fixture.askInterview()).askId;
+    const firstPublication = await fixture.publishInterview(1);
+    askId = (await fixture.askInterview(firstPublication)).value.askId;
     const frozen = await jobInputHashes(fixture.root);
     const form = `form[data-job-ask="${askId}"]`;
-    const pending = await capture('pending', state => state.barVisible && state.ready && state.editable &&
-      state.headline === catalog['Answer these questions.'] && !!state.painting);
-    const names = await page.evaluate<string[]>(`[...new Set([...document.querySelectorAll(${JSON.stringify(form + ' input[type="radio"]')})].map(node => node.name))]`);
-    assert.ok(names.length > 0);
-    for (const name of names) await clickForm(`${form} label.interview-option:has(input[name="${name}"][value="keep"])`);
+    const interviewCaption = (state: HeadlineReadback, publicationId: string) => state.barVisible && state.ready && state.editable &&
+      state.headline === catalog['Answer these questions.'] && state.painting?.width === 2 && state.painting.height === 2 &&
+      state.painting.path.includes('/publications/' + publicationId + '/') && state.painting.path.includes('/api/interview/image/');
+    const pending = await capture('pending', state => interviewCaption(state, firstPublication.value.publicationId));
+    const picks = ['biped_std', 'density_high'];
+    for (const value of picks) await clickForm(`${form} label.interview-option:has(input[value="${value}"])`);
     await clickForm(form + ' button[type="submit"]');
     const act = await observe('typed interview act', () => fixture.readAnswer(askId), event => !!event);
     assert.ok(act?.type === 'act' && act.act.kind === 'interview-picks');
     assert.equal(act.act.value.questionId, interview.questionId);
-    assert.equal(act.act.value.selections.length, names.length);
+    assert.deepEqual(act.act.value.selections.map(selection => selection.optionId), picks);
 
     const answered = (state: HeadlineReadback) => state.answered && !state.editable && !state.actionVisible &&
-      !!state.painting && state.painting.width === pending.painting?.width && state.painting.height === pending.painting?.height;
+      !!state.painting && state.painting.path === pending.painting?.path &&
+      state.painting.width === pending.painting?.width && state.painting.height === pending.painting?.height;
     await capture('old-agent', state => answered(state) && !state.barVisible &&
       state.headline === catalog[zeroProgressHeadline] && state.translate === null);
-    await page.evaluate(`globalThis.__review987Painting = [...document.querySelectorAll('#stage-layout img')]
-      .find(node => node.naturalWidth && node.checkVisibility()); void 0`);
+    await page.evaluate(`globalThis.__review987Painting = document.querySelector('#reference-content img');
+      globalThis.__review987App = document.getElementById('app'); void 0`);
     const receipt = await fixture.progress(2, 'build');
     const step = catalog['job.progress.step'].replace('{0}', '2').replace('{1}', '3');
     const phaseAndStep = catalog['job.progress.phase.build'] + ' · ' + step;
@@ -217,30 +224,28 @@ async function runBrowser(language: Language, output: string, scratch: string) {
     await capture('quiet', state => answered(state) && !!state.painting?.sameNode && state.barVisible && state.headline === quiet);
     assert.deepEqual(await jobInputHashes(fixture.root), frozen);
 
-    const publication = await fixture.publish('plan');
-    await capture('next-publication', state => state.ready && state.title === publication.value.label &&
+    const publication = await fixture.publishInterview(2);
+    assert.notEqual(publication.value.publicationId, firstPublication.value.publicationId);
+    await capture('next-publication', state => state.ready && !state.sameWorkspace && state.title === publication.value.label &&
       state.headline === catalog[zeroProgressHeadline] && state.translate === null && state.whiteSpace === firstLoad.whiteSpace);
-    const checkpoint = await fixture.agent({verb: 'ask', publicationId: publication.value.publicationId,
-      expectedGeneration: publication.generation, idempotencyKey: 'ask-checkpoint', subject: {kind: 'checkpoint', checkpointId: 'seethrough'}});
-    assert.ok(checkpoint.verb === 'ask' && checkpoint.ok);
-    askId = checkpoint.value.askId;
-    const checkpointCaption = (state: HeadlineReadback) => state.barVisible && state.actionVisible && state.editable &&
-      state.headline === catalog['Review this checkpoint.'] && state.translate === null;
-    await capture('checkpoint', checkpointCaption);
+    const secondAsk = await fixture.askInterview(publication);
+    askId = secondAsk.value.askId;
+    const pendingCaption = (state: HeadlineReadback) => interviewCaption(state, publication.value.publicationId) && state.translate === null;
+    await capture('second-pending', pendingCaption);
     const pendingUpdate = await fixture.progress(3, 'measure');
     const witness = async (name: string, earlierRequests?: ReadonlySet<string>) => {
       const observed = await observe(name, async () => seenProgress.find(({requestId, line}) =>
         !earlierRequests?.has(requestId) && line.progress?.seq === pendingUpdate.seq &&
         line.progress.at === pendingUpdate.at && line.progress.phase === 'measure' &&
-        line.progress.generation === checkpoint.generation), value => !!value);
+        line.progress.generation === secondAsk.generation), value => !!value);
       assert.ok(observed);
       progressReadbacks[name] = observed.line;
       await page!.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
       if (!earlierRequests) {
         const state = await read();
-        assert.ok(checkpointCaption(state), JSON.stringify(state));
+        assert.ok(pendingCaption(state), JSON.stringify(state));
       }
-      await capture(name, checkpointCaption);
+      await capture(name, pendingCaption);
     };
     await witness('pending-beats-live-progress');
     const earlierRequests = new Set(streams.keys());
@@ -264,11 +269,11 @@ async function serveOwner(language: Language, scratch: string) {
   process.once('SIGINT', stopOwner);
   process.once('SIGTERM', stopOwner);
   try {
-    const ask = await fixture.askInterview();
+    const ask = (await fixture.askInterview(await fixture.publishInterview(1))).value;
     const owner = new URL(fixture.host.ownerUrl);
     owner.searchParams.set('lang', language);
     console.log(owner.href);
-    console.log('Open the owner URL, select Keep for every question, then submit the answer. The bar shows building and goes quiet after 60 seconds. Ctrl-C stops the fixture.');
+    console.log('Open the owner URL, select Standard Biped and High Density in Question, then save the answer. The bar shows building and goes quiet after 60 seconds. Ctrl-C stops the fixture.');
     while (!stop.signal.aborted) {
       if (await fixture.readAnswer(ask.askId)) {
         await fixture.progress(1, 'build');
