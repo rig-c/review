@@ -776,6 +776,8 @@ async function draftSurvivalChecks(){
     await page!.goto('about:blank');await page!.goto(pUrl);
     await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'&&document.querySelectorAll('.stage-comment-pin').length===1`,'999 box-pin survives reload '+lang);
     assert.equal(await page!.evaluate<boolean>(`[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].some(n=>n.textContent.includes(${JSON.stringify(words)}))`),true);
+    await selectBlock('feedback');
+    await wait(`document.querySelector('#stage-comment-list .stage-comment-summary')?.checkVisibility()===true`,'999 comments panel visible '+lang);
     await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
     await saveLook(lang,'box-pin-edge.png');
     // Delete the saved comment so committed comments are 0, then reopen the composer with text to prove Request changes is enabled by the open composer and auto-commits on click.
@@ -783,6 +785,7 @@ async function draftSurvivalChecks(){
     await wait(`!!document.querySelector('.stage-comment-composer .stage-comment-delete')`,'999 delete button '+lang);
     await page!.evaluate<void>(`document.querySelector('.stage-comment-composer .stage-comment-delete').click()`);
     await wait(`document.querySelectorAll('.stage-comment-pin').length===0&&document.querySelector('#request-changes')?.disabled===true`,'999 cleared before open-composer submit '+lang);
+    await selectBlock('feedback');
     await drawEdgeBox(words);
     await wait(`document.querySelector('#request-changes')?.checkVisibility()&&!document.querySelector('#request-changes').disabled`,'999 request changes enabled with open composer '+lang);
     await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
@@ -798,6 +801,8 @@ async function draftSurvivalChecks(){
     }
     assert.ok(submittedAct,'999 finalized parts-verdict act '+lang);
     await wait(`!document.querySelector('.stage-comment-composer')&&document.querySelectorAll('.stage-comment-pin').length===1&&document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1`,'999 open composer committed and act sent '+lang);
+    await selectBlock('feedback');
+    await wait(`document.querySelector('#stage-comment-list .stage-comment-summary')?.checkVisibility()===true`,'999 committed comment visible '+lang);
     await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
     await saveLook(lang,'request-changes-open-composer-after.png');
     assert.equal(submittedAct.schema,JOB_COMMENTS_ACT_SCHEMA);
