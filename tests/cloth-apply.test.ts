@@ -47,10 +47,9 @@ async function fixture(options:{limbs?:boolean;stamped?:boolean;full?:boolean;na
  await writeFile(join(pkg,'keypoints.json'),JSON.stringify({spec:'rig-parts-keypoints/1'}));
  const parts=join(root,'node_modules/@rig-c/parts');
  await mkdir(join(parts,'bin'),{recursive:true});await mkdir(join(parts,'src'),{recursive:true});await mkdir(join(root,'node_modules/rig-c/bin'),{recursive:true});
- await writeFile(join(parts,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'1.49.1',bin:{'rig-parts':'./bin/rig-parts.cjs'},exports:{'./assembly-reading':'./src/assembly-reading.ts','./*':'./*'}}));
+ await writeFile(join(parts,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'1.49.1',bin:{'rig-parts':'./bin/rig-parts.cjs'},exports:{'./assembly-reading':'./src/assembly-reading.ts'}}));
  if(options.stamped){
-  await writeFile(join(parts,'src/parts.ts'),"import {readFileSync} from 'node:fs'; export const readParts = (path: string) => JSON.parse(readFileSync(path, 'utf8'));");
-  await writeFile(join(parts,'src/assembly-reading.ts'),"import {readFileSync} from 'node:fs'; export const assemblyConfigChanges = (path: string) => JSON.parse(readFileSync(path, 'utf8')).constraints[0].wind === 3 ? ['constraints.physics'] : [];");
+  await writeFile(join(parts,'src/assembly-reading.ts'),"import {readFileSync} from 'node:fs'; export const assemblyConfigChanges = (path: string, manifest: {assembly_config?: unknown}) => manifest.assembly_config && JSON.parse(readFileSync(path, 'utf8')).constraints[0].wind === 3 ? ['constraints.physics'] : [];");
  }
  await writeFile(join(parts,'bin/rig-parts.cjs'),fakeParts);
  await writeFile(join(parts,'src/cloth.ts'),`export const CLOTH_TARGETS = ['bottomwear', 'back hair', 'front hair'] as const;\n`);

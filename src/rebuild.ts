@@ -929,16 +929,16 @@ const assembledView = (plan: BuildPlan): AssembledView => ({
 });
 
 /** Read the assembly stamp with the same installation that runs the producer CLI. */
-function clothAssemblyChanges(producer: InstalledTool, config: string, partsDir: string, manifest: unknown): string[] {
+function clothAssemblyChanges(producer: InstalledTool, config: string, manifest: unknown): string[] {
   if (!hasAssemblyConfig(manifest)) return [];
   const root = realpathSync(producer.root), requireProducer = createRequire(join(root, 'package.json'));
   const reader = realpathSync(requireProducer.resolve('@rig-c/parts/assembly-reading'));
   if (!reader.startsWith(root + sep)) throw new Error('The installed producer does not supply @rig-c/parts/assembly-reading');
-  const { readParts } = requireProducer(join(root, 'src', 'parts.ts')) as typeof import('@rig-c/parts/src/parts.ts');
   const { assemblyConfigChanges } = requireProducer(reader) as {
-    assemblyConfigChanges(config: string, parts: ReturnType<typeof readParts>): string[];
+    assemblyConfigChanges(config: string, parts: unknown): string[];
   };
-  return assemblyConfigChanges(config, readParts(join(partsDir, 'parts.json')));
+  // The successful propose command has already validated its parts manifest.
+  return assemblyConfigChanges(config, manifest);
 }
 const hasAssemblyConfig = (manifest: unknown) => !!manifest && typeof manifest === 'object' && Object.hasOwn(manifest, 'assembly_config');
 /**
@@ -1701,7 +1701,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       let op: ProcessResult;
       if (c.route === 'build') op = await runBuild(push, 'the config propose wrote', plan!);
       else {
-        const changes = clothAssemblyChanges(producer, join(dir, 'config.json'), inputs.parts, plan2.partsJson);
+        const changes = clothAssemblyChanges(producer, join(dir, 'config.json'), plan2.partsJson);
         if (changes.length) {
           let rebuild: BuildPlan;
           try {
