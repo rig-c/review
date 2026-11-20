@@ -6,8 +6,10 @@
  * rebuilds the whole rig may run; otherwise the first differing path is named. Nothing is written into the package.
  */
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { object } from './manifest.ts';
 import type { Handoff } from './handoff.ts';
 import { isProducerFile, PRODUCER_DOCUMENTS, PRODUCER_IMAGES_DIR } from './producer-files.ts';
 import { firstRefusal, runTool, type InstalledTool } from './producer.ts';
@@ -29,6 +31,8 @@ export interface BaselineResult {
   line: string; exitCode: number | null; wallMs: number | null;
 }
 const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
+const RIG_RUN_RECEIPT = 'run.json';
+const RUN_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 async function present(path: string): Promise<boolean> { try { await lstat(path); return true; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e; } }
 
 /** A rig directory as {relative path: sha256}: its regular files and images/* (fixed places, not a search). */
@@ -45,9 +49,12 @@ export const treeHash = (tree: Record<string, string>) => sha256(JSON.stringify(
  * file the baseline wrote, and on the inspected side the producer's documents and images (`isProducerFile`; a file there
  * that rig never writes, such as a note, is not the producer's to reproduce).
  */
-export function firstDifference(baseline: Record<string, string>, inspected: Record<string, string>): string | null {
-  const own = Object.keys(inspected).filter(isProducerFile);
-  for (const path of [...new Set([...Object.keys(baseline), ...own])].sort()) if (baseline[path] !== inspected[path]) return path;
+export function firstDifference(baseline: Record<string, string>, inspected: Record<string, string>, runReceiptMatches?: boolean): string | null {
+  const own = Object.keys(inspected).filter(path => isProducerFile(path) || path === RIG_RUN_RECEIPT);
+  for (const path of [...new Set([...Object.keys(baseline), ...own])].sort()) {
+    const matches = path === RIG_RUN_RECEIPT && runReceiptMatches !== undefined ? runReceiptMatches : baseline[path] === inspected[path];
+    if (!matches) return path;
+  }
   if (!Object.keys(baseline).length) return 'rig.json';
   return null;
 }
@@ -96,9 +103,31 @@ export function assertWholeRigBaseline(result: BaselineResult | null): void {
 export const baselineKey = (sourceHash: string, handoff: Handoff, producer: InstalledTool, compiler: InstalledTool) =>
   sha256(JSON.stringify([BASELINE_SCHEMA, sourceHash, handoff.record, `${producer.package}@${producer.version}`, `${compiler.package}@${compiler.version}`]));
 
+/** A rig stamp's clock varies per run. Its config path is relative to the output directory. */
+async function runReceiptIdentity(dir: string, rawHash: string): Promise<unknown> {
+  try {
+    const bytes = await readFile(join(dir, RIG_RUN_RECEIPT));
+    if (sha256(bytes) !== rawHash) return null;
+    const { started_at, finished_at, ...receipt } = object(JSON.parse(bytes.toString('utf8')), RIG_RUN_RECEIPT);
+    if (receipt.spec !== 'rig-run/1' || receipt.command !== 'rig') return null;
+    if (![started_at, finished_at].every(time => typeof time === 'string' && RUN_TIMESTAMP.test(time))) return null;
+    const { path, ...config } = object(receipt.config, `${RIG_RUN_RECEIPT}.config`);
+    if (typeof path !== 'string' || !path || isAbsolute(path)) return null;
+    const outputDir = await realpath(dir), configPath = resolve(outputDir, path);
+    if (relative(outputDir, configPath).split(sep).join('/') !== path) return null;
+    return { ...receipt, config: { ...config, path: configPath } };
+  } catch { return null; }
+}
+
 /** Compare a finished `<dir>/baseline` with the inspected rig; `show` turns a rig-relative path into the package-relative one. */
 export async function compareBaseline(out: string, inspectedRig: string, show: (rel: string) => string, producerVersion: string | null = null): Promise<Pick<BaselineResult, 'status' | 'firstDifference' | 'hashes' | 'reach'>> {
-  const baseline = await rigTree(out), inspected = await rigTree(inspectedRig), first = firstDifference(baseline, inspected);
+  const [baseline, inspected] = await Promise.all([rigTree(out), rigTree(inspectedRig)]);
+  let runReceiptMatches: boolean | undefined;
+  if (baseline[RIG_RUN_RECEIPT] && inspected[RIG_RUN_RECEIPT]) {
+    const [a, b] = await Promise.all([runReceiptIdentity(out, baseline[RIG_RUN_RECEIPT]), runReceiptIdentity(inspectedRig, inspected[RIG_RUN_RECEIPT])]);
+    runReceiptMatches = a !== null && b !== null && isDeepStrictEqual(a, b);
+  }
+  const first = firstDifference(baseline, inspected, runReceiptMatches);
   // #148: a build the config does not reproduce says, per op, what the producer will still take.
   const reach = first === null ? null : await baselineReach(out, inspectedRig, baseline, inspected, show, reachOps(producerVersion));
   return { status: first === null ? 'reproduced' : 'not-reproduced', firstDifference: first === null ? null : show(first), hashes: { baseline: { rigJson: baseline['rig.json'] ?? null, tree: treeHash(baseline) }, inspected: { rigJson: inspected['rig.json'] ?? null, tree: treeHash(inspected) } }, reach };
@@ -135,8 +164,8 @@ export async function runBaseline(dir: string, key: string, handoff: Handoff, pr
 
 /**
  * The inspected build's own check (#108, HQ ruling): once the baseline reproduces the inspected rig, `rig-parts check`
- * runs on that baseline output — byte-identical to the inspected rig, so nothing reads or writes the package — into
- * `<baseline dir>/inspected-check/`, with Apply's default pack flags (`--page-edges free --pack-shape polygon`). The
+ * reads the baseline in scratch and writes to `<baseline dir>/inspected-check/` with Apply's default pack flags
+ * (`--page-edges free --pack-shape polygon`). The
  * summary is stored beside the baseline record (`inspected-check.json`) so a reload reads it instead of re-running.
  * It is what the physics readout's BEFORE line quotes while the inspected build is on the stage.
  */
