@@ -23,7 +23,7 @@ import { BUILD_MODEL_PATH, loadJobReview, loadReview } from './manifest.ts';
 import { HandoffError } from './handoff.ts';
 import { openKey } from './open.ts';
 import { assertReviewUnchanged } from './reference.ts';
-import {
+import { isRigDraftVerdictSource,
   assertEqualRecordContexts,
   assertJobApiSchema,
   atSubject,
@@ -132,6 +132,13 @@ export type JobRetainedSourceV3 = JobRetainedSource | JobRetainedRecordSource;
 export function isRetainedRecordSource(retained: JobRetainedSourceV3): retained is JobRetainedRecordSource {
   return 'kind' in retained && retained.kind === 'record';
 }
+
+/** Select rig inspection from the retained declaration before any ask arrives. */
+export function retainedRigDraftVerdict(retained: JobRetainedSourceV3): boolean {
+  return !isRetainedRecordSource(retained) && isRigDraftVerdictSource(retained.source) &&
+    retained.subjects.some(subject => subject.kind === 'review-verdict' && subject.stage === 'rig-review');
+}
+
 
 const maxSourceBytes = 256 * 1024 * 1024;
 const maxSourceFiles = 4096;

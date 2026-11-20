@@ -8,7 +8,7 @@ import {
 } from './job-contract.ts';
 import { parsePartsIssue, type PartsIssue } from './parts-comment.ts';
 import {
-  isRecordSource, jobHash, jobId, jobInteger, jobObject,
+  isRecordSource, isRigDraftVerdictSource, parseJobSelector, jobHash, jobId, jobInteger, jobObject,
   commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
 } from './job-api.ts';
 import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueComments } from './feedback-export.ts';
@@ -186,6 +186,14 @@ export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRet
           source.selector.id !== subject.draftId || !retained.partIds.length) throw new JobError('JOB_ASK_INVALID');
       return source;
     case 'review-verdict':
+      if (source.selector?.kind === 'draft') {
+        try { parseJobSelector(source.selector); }
+        catch { throw new JobError('JOB_ASK_INVALID', subject.stage); }
+        if (subject.stage !== 'rig-review' || !declared || !isRigDraftVerdictSource(source)) {
+          throw new JobError('JOB_ASK_INVALID', subject.stage);
+        }
+        return source;
+      }
       if (subject.stage === 'image-review' || !source.model || (subject.stage === 'rig-review' ? source.selector?.kind !== 'rig' :
         source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ASK_INVALID');
       return source;
@@ -670,7 +678,7 @@ export function finalizeJobAct(options: {
         if (!options.still) throw new JobError('JOB_STILL_CAPTURE_FAILED');
         const note = words(value.words);
         if (value.feedback !== undefined && !Array.isArray(value.feedback)) throw new JobError('JOB_ACT_INVALID');
-        const selector = source.selector as Extract<NonNullable<JobSourceBinding['selector']>, {kind: 'rig'}>;
+        const selector = source.selector as Extract<NonNullable<JobSourceBinding['selector']>, {kind: 'rig' | 'draft'}>;
         let verdictComments: readonly JobContextComment[];
         try {
           verdictComments = value.feedback === undefined ? noteComments(note) : rigVerdictFeedbackComments(value.feedback as Feedback[],
