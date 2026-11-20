@@ -36,6 +36,7 @@ import {
   jobPath,
   jobSha,
   jobText,
+  optionSetRefs,
   parseJobInterviewDiagnostics,
   parseRecordFreeze,
   parseRecordPublishedContext,
@@ -981,6 +982,7 @@ function decodeRetainedRecordProject(
 ): {
   readonly questions: readonly InterviewQuestion[];
   readonly optionSetFile: JobFileIdentity | null;
+  readonly optionSetFiles?: readonly JobFileIdentity[];
 } {
   const sealMap = new Map<string, string>();
   for (const seal of seals) {
@@ -994,9 +996,10 @@ function decodeRetainedRecordProject(
     if (context.plan !== null) {
       throw new JobError('JOB_SOURCE_MISMATCH');
     }
-    const { questionId, setId } = result;
     const interview = asPlainObject(project.interview);
     if (!interview) throw new JobError('JOB_SOURCE_MISMATCH');
+    // #1004: one question per published set, in set order; one set keeps the original single-question result.
+    const decodedSets = optionSetRefs(result).map(({ questionId, setId }) => {
     const collections = [
       [interview.framing, ['interview']],
       [interview.waypoints, ['interview', 'rigging-interview']],
@@ -1092,7 +1095,7 @@ function decodeRetainedRecordProject(
       } catch {hasBoundParts = false;}
     }
     return {
-      questions: [{
+      question: {
         ref,
         set,
         editable: true,
@@ -1101,8 +1104,14 @@ function decodeRetainedRecordProject(
         ...(ctx?.kind === 'scene' && images.length ? {scenePicture: true as const} : {}),
         ...(set.stage === 'post-interview' && !images.length && (ctx?.kind === 'rig' || ctx?.kind === 'scene')
           ? {missingPicture: ctx.kind} : {}),
-      }],
-      optionSetFile: ref,
+      } satisfies InterviewQuestion,
+      ref,
+    };
+    });
+    return {
+      questions: decodedSets.map(item => item.question),
+      optionSetFile: decodedSets[0]!.ref,
+      ...(result.sets ? { optionSetFiles: decodedSets.map(item => item.ref) } : {}),
     };
   }
 
@@ -1216,6 +1225,7 @@ export async function prepareJobRecordSource(options: {
             selection: result,
             context: retainedContext as OptionContext,
             optionSetFile: decoded.optionSetFile!,
+            ...(decoded.optionSetFiles ? { optionSetFiles: decoded.optionSetFiles } : {}),
           })
         : buildRecordSource({
             record,
@@ -1324,6 +1334,7 @@ export async function verifyJobRecordSourceFresh(options: {
           selection: retained.result,
           context: retainedContext as OptionContext,
           optionSetFile: decoded.optionSetFile!,
+            ...(decoded.optionSetFiles ? { optionSetFiles: decoded.optionSetFiles } : {}),
         })
       : buildRecordSource({
           record: retained.record,

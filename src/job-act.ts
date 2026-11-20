@@ -126,10 +126,12 @@ export function bindJobRecordAsk(subject: unknown, retained: JobRetainedRecordSo
       const question = retained.questions.find(
         item => item.editable && item.set.question === parsedSubject.questionId && item.set.id === parsedSubject.setId,
       );
+      // #1004: each set is bound by its own `optionSets` row; one set keeps the singular fields.
+      const bound = source.optionSets?.find(row => row.questionId === parsedSubject.questionId && row.setId === parsedSubject.setId) ?? source;
       if (
         !question ||
-        question.ref.path !== source.optionSetFile.path ||
-        question.ref.sha256 !== source.optionSet.sha256
+        question.ref.path !== bound.optionSetFile.path ||
+        question.ref.sha256 !== bound.optionSet.sha256
       ) {
         throw new JobError('JOB_ASK_INVALID');
       }

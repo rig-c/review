@@ -1571,6 +1571,14 @@ let activeInterviewImage:{name:string;src:string}|null=null;
 let releaseInterview:(()=>void)|null=null;
 const questionPanel=panelMake('section',{id:'workspace-interview-answer',className:'workspace-interview-panel',hidden:true});
 let questionForms:readonly HTMLElement[]=[];
+/** #1004: several question forms share the Question tab; the list shows one at a time. */
+let selectedQuestionAsk:string|undefined;
+questionPanel.addEventListener('job-question-select',event=>{selectedQuestionAsk=(event.target as HTMLElement).dataset.jobAsk;showQuestionForm();});
+function showQuestionForm():void {
+ const shown=questionForms.find(form=>form.dataset.jobAsk!==undefined&&form.dataset.jobAsk===selectedQuestionAsk)??questionForms.find(form=>form.dataset.interviewAnswered!=='true')??questionForms[0];
+ for(const form of questionForms)form.hidden=form!==shown;
+ syncQuestionImage();
+}
 let questionFormBindings=new WeakSet<HTMLElement>();
 
 /** Publication and source bind native comment drafts independently of inspection navigation. */
@@ -1716,7 +1724,7 @@ function recordCommentsChanged():void {
 /** Keep the shared reference viewport bound while the interview form is mounted. */
 function syncQuestionImage():void {
  if(disposed){releaseInterview?.();releaseInterview=null;return;}
- const form=questionForms[0] as (HTMLElement&{interviewImages?:readonly {name:string;src:string}[]})|undefined;
+ const form=(questionForms.find(item=>!item.hidden)??questionForms[0]) as (HTMLElement&{interviewImages?:readonly {name:string;src:string}[]})|undefined;
  const images=form?.interviewImages;
  if(activeInterviewImages&&images?.length===activeInterviewImages.length&&images.every((image,index)=>{
   const previous=activeInterviewImages![index]!;
@@ -1771,7 +1779,7 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
  }else{
   unregisterQuestion?.();unregisterQuestion=null;rigAsk.onclick=null;
  }
- syncQuestionImage();
+ showQuestionForm();
  forms=forms.filter(form=>!questionTabForms.includes(form));
  if(!forms.length){
   releaseRecordDrawer?.();releaseRecordDrawer=null;recordDrawerTrigger=null;

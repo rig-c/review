@@ -11,7 +11,7 @@ import type {JobRetainedRecordSource} from '../../src/job-source.ts';
 import {createJobFront, jobWindowResources, retainedPublicationRoutes} from '../../src/job-front.ts';
 import {JOB_API_V3_SCHEMA, type DisplayPublicationV3, type PendingAskV3, type UISubmissionV3, type RecordSignoffStage} from '../../src/job-contract.ts';
 import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixture.ts';
-import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader,type PostPictureCase} from './job-record-fixture.ts';
+import {createSyntheticOptionRecordWorkspace, createSyntheticOptionSetsRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader,type PostPictureCase} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'reopen'|'interview-picks';
 export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false,deferDelivery=false,postPicture?:PostPictureCase){
@@ -88,6 +88,39 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
   async close(){front?.stop();await server.stop(true);session.dispose();await rm(scratch,{recursive:true,force:true});},
  };
  }catch(error){front?.stop();await server.stop(true);session.dispose();await rm(scratch,{recursive:true,force:true});throw error;}
+}
+
+/** #1004: the real job page over a real session. One publication carries `count` rigging question sets and each set
+ * has its own pending ask. `answered` seeds that many unsent local drafts (the recommended pick of every prompt), so
+ * the page opens with the same partly answered list the owner ruled on. */
+export async function optionSetsJobFixture(options:{count:number;answered?:number;painting?:Buffer}){
+ const scratch=await mkdtemp(join(tmpdir(),'review-1004-')),root=join(scratch,'input');await mkdir(root);
+ const workspace=createSyntheticOptionSetsRecordWorkspace(root,{count:options.count,...options.painting?{painting:options.painting}:{}});
+ const reader=createSyntheticRecordReader({onOption:()=>structuredClone(workspace.context)});
+ const session=new JobSession({root,stateDir:join(scratch,'state'),fingerprint:'4'.repeat(64),reviewer:{id:'synthetic-owner',role:'owner'},
+  publicationMode:'record-and-package',readRecordPublished:reader.reader});
+ let front:ReturnType<typeof createJobFront>|undefined,seed='';
+ const server=Bun.serve({hostname:'127.0.0.1',port:0,idleTimeout:0,fetch:async request=>(await front?.fetch(request))??new Response(null,{status:404})});
+ const origin=`http://127.0.0.1:${server.port}`,ports=createJobHostPorts(session,origin),credentials=session.hostCredentials();
+ let sequence=0;
+ const call=async(body:object)=>{const response=await ports.handleJobApi(new Request(origin+`/jobs/${session.jobId}/api`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+credentials.agent},body:JSON.stringify({schema:JOB_API_V3_SCHEMA,jobId:session.jobId,requestId:'fixture-'+(++sequence),...body})}));const result=await response.json();if(!result.ok)throw new Error(JSON.stringify(result));return result.value;};
+ const close=async()=>{front?.stop();await server.stop(true);session.dispose();await rm(scratch,{recursive:true,force:true});};
+ try{
+  const publication=await call({verb:'publish',expectedGeneration:0,idempotencyKey:'publish',result:workspace.result,freeze:{kind:'producer-held',holdId:'synthetic-1004',record:workspace.record}});
+  const {asks}=await call({verb:'ask-batch',expectedGeneration:session.status().generation,idempotencyKey:'asks',publicationId:publication.publicationId,subjects:workspace.context.subjects}) as {asks:PendingAskV3[]};
+  const retained=session.retainedSourceV3(publication.publicationId) as JobRetainedRecordSource;
+  const forms=asks.slice(0,options.answered??0).map((ask,index)=>{const question=retained.questions[index]!;
+   const selections=question.set.asks.map(item=>({itemId:item.id,optionId:item.options.find(option=>option.recommended)!.id,otherText:null}));
+   return {askId:ask.askId,value:{questionId:question.set.question,selections,note:''},controls:[...selections.map(item=>({name:'choice.'+item.itemId,value:item.optionId})),{name:'note',value:''}]};});
+  if(forms.length){
+   const key=`rig-review-job-draft/1:${session.jobId}:${workspace.result.questionId}:${workspace.result.setId}:${publication.source.sourceHash}`;
+   const value=JSON.stringify({publicationId:publication.publicationId,sourceHash:publication.source.sourceHash,source:publication.source,label:publication.label,forms});
+   seed=`try{if(!localStorage.getItem(${JSON.stringify(key)}))localStorage.setItem(${JSON.stringify(key)},${JSON.stringify(value)});}catch{}`;
+  }
+  const resources=jobWindowResources();
+  front=createJobFront({origin,ports,publication:retainedPublicationRoutes(session),resource:async name=>name==='main.js'&&seed?seed+'\n'+await new Response(await resources(name)).text():resources(name)});
+  return {scratch,root,session,origin,workspace,publication,asks,call,ownerUrl:origin+`/jobs/${session.jobId}/#cap=${credentials.ui}`,close};
+ }catch(error){await close();throw error;}
 }
 
 /** Reuse the existing job-window DOM double, without registering its test suite. */

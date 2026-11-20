@@ -12,12 +12,10 @@ import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
-import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
+import {optionSetsJobFixture,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_RGB} from './helpers/job-record-fixture.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
-import {planMockProxy,PLAN_1004_TEXT} from './helpers/plan-1004-mock.ts';
-import {interviewPicksRecord} from '../web/interview-panel.ts';
 import {parseOpenInputs} from '../src/cli.ts';
 import {prepareOpenTarget} from '../src/open.ts';
 import {startOpenWorkspace} from '../src/open-workspace.ts';
@@ -129,12 +127,12 @@ function fixtureUrl(ownerUrl:string,language:string){
  return url.href;
 }
 
-async function joinedFixture(plan?:{answered:number;painting?:string}){
- const fixture=await interviewOpenFixture(plan?4:1,plan?.painting);
- let host:Awaited<ReturnType<typeof startOpenWorkspace>>|undefined,proxy:ReturnType<typeof planMockProxy>|undefined;
+async function joinedFixture(){
+ const fixture=await interviewOpenFixture();
+ let host:Awaited<ReturnType<typeof startOpenWorkspace>>|undefined;
  try{
   // Extend the public fixture with a visibly different second painting for a real menu switch.
-  if(!plan){const optionPath=join(fixture.root,'evidence/options.json');
+  {const optionPath=join(fixture.root,'evidence/options.json');
   type ImageRef={path:string;sha256:string};
   const options=JSON.parse(await readFile(optionPath,'utf8')) as {context:{files:ImageRef[]}};
   const project=fixture.project as {inputs:ImageRef[];interview:{framing:{pending_options:ImageRef}[]}};
@@ -161,22 +159,9 @@ async function joinedFixture(plan?:{answered:number;painting?:string}){
   const url=new URL(list.targets[0]!.entry,record.origin);
   url.hash='cap='+targetCapability(record.ownerCapability,record.incarnation,prepared.key);
   const running=host;
-  if(plan){
-   // #1004 plan: "answered" questions are saved through the real picks route, as a reviewer's per-question answer.
-   const base=record.origin+'/instances/'+prepared.key,capability=targetCapability(record.ownerCapability,record.incarnation,prepared.key);
-   for(const question of readProject(fixture.root).questions.slice(0,plan.answered)){
-    const picks=question.set.asks.map(item=>({ask:item.id,option_id:item.options.find(option=>option.recommended)!.id}));
-    const saved=await fetch(base+'/api/interview/picks',{method:'POST',headers:{Origin:record.origin,'Content-Type':'application/json','X-Review-Capability':capability},
-     body:JSON.stringify(interviewPicksRecord(question.ref,picks,undefined,'2026-11-20T00:00:00.000Z'))});
-    assert.equal(saved.status,200,await saved.text());
-   }
-   proxy=planMockProxy(record.origin,{en:enCatalog['Submit review']!,ko:koCatalog['Submit review']!});
-   const mocked=proxy;
-   return {root:fixture.root,ownerUrl:mocked.rewrite(url.href),async close(){try{mocked.stop();await running.stop();}finally{await fixture.close();}}};
-  }
   return {root:fixture.root,ownerUrl:url.href,async close(){try{await running.stop();}finally{await fixture.close();}}};
  }catch(error){
-  try{proxy?.stop();await host?.stop();}finally{await fixture.close();}
+  try{await host?.stop();}finally{await fixture.close();}
   throw error;
  }
 }
@@ -189,7 +174,8 @@ if(Bun.argv.includes('--serve')){
  const answered=Number(arg('--answered')??'0'),painting=arg('--painting');
  assert.ok(painting===undefined||kind==='joined-plan-1004'&&isAbsolute(painting),'--painting takes an absolute PNG path with --fixture joined-plan-1004');
  assert.ok(kind!=='joined-plan-1004'||[0,2,4].includes(answered),'--answered must be 0, 2 or 4');
- const fixture=kind==='joined-plan-1004'?await joinedFixture({answered,...painting!==undefined?{painting}:{}}):kind==='joined'?await joinedFixture():await recordScreenFixture('interview-picks',false,output,undefined,false,kind==='live');
+ // #1004: the real job page, K = 4 sets on one publication, `answered` drafts seeded (recommended picks).
+ const fixture=kind==='joined-plan-1004'?await optionSetsJobFixture({count:4,answered,...painting!==undefined?{painting:await readFile(painting)}:{}}):kind==='joined'?await joinedFixture():await recordScreenFixture('interview-picks',false,output,undefined,false,kind==='live');
  try{
   console.log(fixtureUrl(fixture.ownerUrl,language));
   await new Promise<void>(resolve=>{process.once('SIGINT',resolve);process.once('SIGTERM',resolve);});
@@ -1040,72 +1026,6 @@ async function twoImageDrawerChecks(){
  }
 }
 
-type Plan1004State={rows:{label:string;answered:boolean;current:boolean}[];chip:{text:string;visible:boolean;onScreen:boolean;rect?:unknown};rule:string;submit:{text:string;disabled:boolean;visible:boolean};inList:boolean;inQuestionTab:boolean};
-/** #1004 step 0 plan fixture: K = 4 joined questions, the mock single submit and the partial-answer rule. */
-async function plan1004Checks(){
- for(const language of ['en','ko'] as const)for(const answered of [2,4] as const){
-  const fixture=await joinedFixture({answered}),out=join(output,'plan-1004',language,answered+'-of-4');
-  await mkdir(out,{recursive:true});
-  try{
-   const questions=readProject(fixture.root).questions;assert.equal(questions.length,4);
-   await page!.setViewport(1440,900);await page!.goto('about:blank');await page!.goto(fixtureUrl(fixture.ownerUrl,language));
-   await waitForQuestion('form.interview-answer');
-   await wait(`document.querySelectorAll('${questionRoot} nav.interview-questions button.interview-question').length===4&&document.querySelector('[data-plan-1004]')?.getAttribute('data-plan-answered')==='${answered}'`,'1004 list and mock');
-   const state=()=>page!.evaluate<Plan1004State>(`(()=>{const visible=n=>!!n&&n.getClientRects().length>0&&getComputedStyle(n).visibility==='visible';
-    const nav=document.querySelector('${questionRoot} nav.interview-questions'),mock=document.querySelector('[data-plan-1004]'),chip=mock.querySelector('[data-plan-1004-chip]'),submit=mock.querySelector('[data-plan-1004-submit]');
-    return {rows:[...nav.querySelectorAll('button.interview-question')].map(b=>({label:b.textContent,answered:b.hasAttribute('data-answered'),current:b.getAttribute('aria-current')==='true'})),
-     chip:{text:chip.textContent,visible:visible(chip),onScreen:(r=>r.top>=0&&r.bottom<=innerHeight&&r.left>=0&&r.right<=innerWidth)(chip.getBoundingClientRect())},rule:mock.querySelector('[data-plan-1004-rule]').textContent,
-     submit:{text:submit.textContent,disabled:submit.disabled,visible:visible(submit)},inList:nav.firstElementChild===mock,
-     inQuestionTab:!!document.querySelector('${questionRoot}')?.contains(mock)&&!!document.querySelector(${JSON.stringify(questionTab)})};})()`);
-   const shown=await state();await writeFile(join(out,'plan.png'),await page!.screenshot());
-   // An interview-stage project has no compiled model; the fixture mock hides that strip, and nothing else.
-   assert.deepEqual(await page!.evaluate<{visible:boolean;hidden:number}>(`({visible:document.body.innerText.includes('MODEL_UNAVAILABLE'),hidden:document.querySelectorAll('[data-plan-1004-hidden]').length})`).then(v=>({visible:v.visible,hidden:v.hidden>0})),{visible:false,hidden:true});
-   assert.deepEqual(shown.rows.map(row=>row.answered),[0,1,2,3].map(index=>index<answered));
-   assert.deepEqual({chip:shown.chip,rule:shown.rule,disabled:shown.submit.disabled,submitVisible:shown.submit.visible,inList:shown.inList,inQuestionTab:shown.inQuestionTab},
-    {chip:{text:PLAN_1004_TEXT[language].chip,visible:true,onScreen:true},rule:PLAN_1004_TEXT[language].rule,disabled:false,submitVisible:true,inList:true,inQuestionTab:true});
-   assert.equal(shown.submit.text,(language==='ko'?koCatalog:enCatalog)['Submit review']+` (${answered}/4)`);
-   const selected=shown.rows.findIndex(row=>row.current);assert.equal(selected,answered===2?2:0);
-   const painting=await readPainting(32);
-   assert.ok(new URL(painting.src).pathname.endsWith('/api/interview/image/'+questions[selected]!.ref.sha256+'/0'),painting.src);
-   // Select another question in the existing list: the shared main view follows the selection.
-   const other=answered===2?0:3;
-   // The list column scrolls; the mock above it can push a row below the panel's default height.
-   await clickFormControl(`${questionRoot} nav.interview-questions li:nth-child(${other+1}) button`);
-   await wait(`document.querySelector('${questionRoot} nav.interview-questions li:nth-child(${other+1}) button')?.getAttribute('aria-current')==='true'&&!!document.querySelector('[data-plan-1004]')`,'1004 select');
-   const switched=await readPainting(32);
-   assert.ok(new URL(switched.src).pathname.endsWith('/api/interview/image/'+questions[other]!.ref.sha256+'/0'),switched.src);
-   const after=await state();assert.equal(after.chip.visible,true);assert.equal(after.chip.onScreen,true);assert.equal(after.submit.text,shown.submit.text);
-   await writeFile(join(out,'selected-'+(other+1)+'.png'),await page!.screenshot());
-   const observation={language,answered,shown,selected:selected+1,painting:painting.src,switchedTo:other+1,switchedPainting:switched.src,after};
-   await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');
-   console.log('1004_PLAN_CASE '+JSON.stringify({language,answered,selected:selected+1,switchedTo:other+1,submit:shown.submit.text,chip:shown.chip.text}));
-   cases.push(observation);
-  }finally{await page!.goto('about:blank');await fixture.close();}
- }
-}
-
-/** #1004: one KO 2/4 screenshot with a local PNG passed through the serve-only `--painting` path. */
-async function plan1004PaintingCheck(painting:string){
- const bytes=await readFile(painting),width=bytes.readUInt32BE(16),out=join(output,'plan-1004','ko','painting');
- await mkdir(out,{recursive:true});
- const fixture=await joinedFixture({answered:2,painting});
- try{
-  const question=readProject(fixture.root).questions[2]!;
-  await page!.setViewport(1440,900);await page!.goto('about:blank');await page!.goto(fixtureUrl(fixture.ownerUrl,'ko'));
-  await waitForQuestion('form.interview-answer');
-  await wait(`document.querySelector('[data-plan-1004]')?.getAttribute('data-plan-answered')==='2'`,'1004 painting mock');
-  const shown=await readPainting(width);
-  assert.ok(new URL(shown.src).pathname.endsWith('/api/interview/image/'+question.ref.sha256+'/0'),shown.src);
-  assert.equal(question.images[0]!.name,'painting.png');
-  assert.equal(await page!.evaluate<boolean>(`document.body.innerText.includes('MODEL_UNAVAILABLE')`),false);
-  await writeFile(join(out,'plan.png'),await page!.screenshot());
-  const observation={language:'ko',answered:2,painting:{width,sha256:sha(bytes)},shown};
-  await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');
-  console.log('1004_PLAN_PAINTING '+JSON.stringify({width,src:new URL(shown.src).pathname}));
-  cases.push(observation);
- }finally{await page!.goto('about:blank');await fixture.close();}
-}
-
 async function draftSurvivalChecks(){
  holdImages=false;
  const out=join(output,'draft-survival');await mkdir(out,{recursive:true});
@@ -1416,7 +1336,6 @@ try{
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Runtime.enable');await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
  if(Bun.argv.includes('--draft-survival'))await draftSurvivalChecks();
- else if(Bun.argv.includes('--plan-1004')){await plan1004Checks();const painting=arg('--painting');if(painting)await plan1004PaintingCheck(painting);assert.equal(exceptions.length,0,JSON.stringify(exceptions));assert.equal(consoleErrors.length,0,JSON.stringify(consoleErrors));console.log('1004_PLAN_PASS '+JSON.stringify({cases:cases.length,exceptions:exceptions.length,consoleErrors:consoleErrors.length}));}
  else if(Bun.argv.includes('--first-question-drawer'))await firstQuestionInDrawer();
  else if(boundRigPictureOnly)await boundRigPictureChecks();
  else if(postQuestionPictures)await postQuestionPictureChecks();
