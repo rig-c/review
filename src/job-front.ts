@@ -5,7 +5,7 @@ import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-che
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
 import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion } from './job-api.ts';
 import { JobSession } from './job-session.ts';
-import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, loadRetainedJobReview, loadRetainedRecordRig, readPreviousDraftBytes, type JobRootIdentity } from './job-source.ts';
+import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, loadRetainedJobReview, loadRetainedRecordRig, readPreviousDraftBytes, retainedRigDraftVerdict, type JobRootIdentity } from './job-source.ts';
 import { checkedPath } from './interview-project.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
 import { JobError, JobStore, jobCropReferences } from './job-store.ts';
@@ -289,7 +289,7 @@ export function retainedPublicationRoutes(session: JobSession) {
                     capabilities: {playback: !!review?.manifest.model,
                         interview: questions.length > 0 || (retained.interview?.records.length ?? 0) > 0 ||
                             (retained.interview?.diagnostics.length ?? 0) > 0,
-                        preRig: retained.source.selector?.kind === 'draft', modeling: false, motion: false, feedback: true, audio: false},
+                        preRig: retained.source.selector?.kind === 'draft' && !retainedRigDraftVerdict(retained), modeling: false, motion: false, feedback: true, audio: false},
                 });
                 const interviewMetadata = (rigPicture = false) => {
                     const interview = isRetainedRecordSource(retained) ? undefined :
