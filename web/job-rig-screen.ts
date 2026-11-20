@@ -1,4 +1,4 @@
-import {formFor, jobCheckpointContext, jobPublicationRoutes, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
+import {formFor, jobCheckpointContext, jobPublicationRoutes, jobSourceDraftId, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
 import {commentPartsIssues,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
@@ -6,7 +6,6 @@ import type {PartsSubjectData} from './parts-viewport-provider.ts';
  * Rig verdicts use the act bar; supported approval and interview asks use the shared ask dialog. */
 import {JOB_MESH_EDITS_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobMeshEdit,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
 import {canonicalJson} from '../src/canonical-json.ts';
-import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 import {draftKey} from '../src/mesh-edit.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
@@ -224,8 +223,7 @@ export function createJobRigScreen(options: {
     if(directionWords!==undefined)for(const decision of decisions)if(decision.kind==='review-verdict'&&decision.value.stage==='direction-review')decision.value.words=directionWords;
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     const rigChanges=decisions.find(decision=>decision.kind==='review-verdict'&&decision.value.stage==='rig-review'&&decision.value.verdict==='changes-requested');
-    // Gate off: a held mesh draft is not read or sent; the verdict goes as on main and the draft stays in the page.
-    const meshDraft=EMIT_UNPINNED_CREATE_FIELDS&&rigChanges?.kind==='review-verdict'?await screen?.meshEdits?.():null;
+    const meshDraft=rigChanges?.kind==='review-verdict'?await screen?.meshEdits?.():null;
     if(rigChanges?.kind==='review-verdict'){
       if(meshDraft?.edits.length){
         const edits=meshDraft.edits.map(edit=>({key:draftKey(edit),edit}));
@@ -272,12 +270,15 @@ export function createJobRigScreen(options: {
       ...(general?.length?{general:[...general]}:{})},key=JSON.stringify(value);
     let attempt=partsAttempts.get(ask.askId);if(!attempt||attempt.key!==key){attempt={key,submissionId:crypto.randomUUID()};partsAttempts.set(ask.askId,attempt);}
     const result=await options.window.submit({kind:'parts-verdict',publicationId:ask.publicationId,askId:ask.askId,pageId:options.pageId,displayedNonce:state.receipt.displayedNonce,expectedGeneration:state.generation,submissionId:attempt.submissionId,value});
-    if(!result.ok)throw new Error(result.error.code);
+    if(!result.ok)throw new Error(result.error.code,{cause:(result.error as {cause?:unknown}).cause});
     partsAttempts.delete(ask.askId);return options.translate('job.saved');
   }
   const pendingSubjects=()=>options.window.state().pending.filter(ask=>ask.publicationId===mounted?.display.publication.publicationId&&ask.status==='pending').map(ask=>ask.subject);
   function host(prepared: JobRigScreenPrepared, ready: {resolve(): void; reject(error: unknown): void}, navigation?:RigHostNavigation): JobRigMeshHost {
     const base = new URL(prepared.entry).pathname;
+    const jobId = /^\/jobs\/([^/]+)\//.exec(base)?.[1];
+    const draftId = jobSourceDraftId(prepared.display.publication.source);
+    const previousPublicationId = prepared.display.publication.previousPublicationId;
     const access: InstanceAccess = {base, key: prepared.display.publication.instanceKey, capability: options.access.capability,
       route: path => {if (!path.startsWith('/') || path.startsWith('//')) throw new Error('Instance route must be app-absolute'); return base + path.slice(1);},
       headers: init => options.access.headers(init)};
@@ -288,7 +289,7 @@ export function createJobRigScreen(options: {
       return {...(backdrop?.subject?{subject:backdrop.subject}:{}),access:{...(backdrop?.access??access),capability:null,
         headers:init=>{const headers=options.access.headers(init);headers.delete('X-Review-Capability');return headers;}},
         ownerActAccess:{capability:options.access.capability},
-        record:{publicationId:prepared.display.publication.publicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,missingPicture:question?.missingPicture,scenePicture:question?.scenePicture},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
+        record:{...(jobId?{jobId}:{}),draftId,publicationId:prepared.display.publication.publicationId,previousPublicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,missingPicture:question?.missingPicture,scenePicture:question?.scenePicture},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
@@ -297,7 +298,7 @@ export function createJobRigScreen(options: {
     }
     if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
     const {publicationId,source}=prepared.display.publication;
-    const binding={publicationId,sourceHash:source.sourceHash};
+    const binding={...(jobId?{jobId}:{}),draftId,publicationId,previousPublicationId,sourceHash:source.sourceHash};
     return {access,pendingSubjects,navigation,...prepared.refusal?{unavailable:prepared.refusal}:{},
       ...(source.direction?{direction:binding}:jobRigScreenSubject(source)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
         prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review')}}:{}),
@@ -327,7 +328,7 @@ export function createJobRigScreen(options: {
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },
       submit,
-      canSubmitMeshEdits:()=>EMIT_UNPINNED_CREATE_FIELDS&&!!screen?.hasMeshEdits?.(),
+      canSubmitMeshEdits:()=>!!screen?.hasMeshEdits?.(),
       attach: value => {screen = value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
       displayed: () => ready.resolve(),
       failed: error => ready.reject(error)};

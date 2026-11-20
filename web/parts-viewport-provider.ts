@@ -59,7 +59,6 @@ import {paintAssembly,paintMesh,paintOverlay,paintPaintingCrop,pickAssembly,type
 import {bindStageComments,type CommentCodec,type CommentUiPose,type CommentRow} from './stage-comments.ts';
 import {parsePartsIssue,assertPartsIssueBinding,snapImageRegion,type PartsIssue} from '../src/parts-comment.ts';
 import {projectMark,unprojectMark,region} from '../src/stage-comment.ts';
-import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 /** U5 uses the same native raster paint path as a parts subject, with the whole rig as one operand. */
 export function paintRigDifference(canvas:HTMLCanvasElement,still:HTMLCanvasElement,painting:HTMLImageElement) {
  assertOriginalPaintingSize(painting.naturalWidth,painting.naturalHeight,[still.width,still.height],1);
@@ -110,7 +109,6 @@ export function bindPartsSubject(host:{
  const partsBinding=(names:readonly string[])=>names.map(name=>{const entry=data.items.find(item=>item.name===name);if(!entry?.imageHash)throw new Error('PARTS_COMMENT_PART_MISMATCH');return {name,imageHash:entry.imageHash};});
  const sourceItems=()=>new Map(data.items.map(item=>[item.name,{...item,imageHash:item.imageHash!}]));
  async function prepare(issue:PartsIssue):Promise<PartsIssue>{
-  if(!EMIT_UNPINNED_CREATE_FIELDS&&Object.hasOwn(issue.view,'visibleLayers')){const {visibleLayers:_ignored,...view}=issue.view;issue={...issue,view};}
   const bound=parsePartsIssue(issue,false,false,false);assertPartsIssueBinding(bound,sourceItems(),data.sourceHash);
   const response=await host.request(`${host.base}/comment`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(bound)});
   if(disposed)throw new Error('PARTS_COMMENT_STALE_SOURCE');return parsePartsIssue((await response.json()).comment,true,false,false);
@@ -170,10 +168,17 @@ export function bindPartsSubject(host:{
   finally{for(const bitmap of bitmaps)bitmap.close();if(navigation===token){busy=false;host.el('stage-layout').setAttribute('aria-busy','false');comments?.refresh();}}
  }
  const redraw=()=>{void paint().catch(()=>{});};
- const commentRegion=(pose:PartsPose,screen:ReturnType<typeof region>)=>{
+ const commentRegion=(pose:PartsPose,screen:ReturnType<typeof region>,bounds?:{x:number;y:number;width:number;height:number})=>{
   const frame=box(),a=unprojectMark(screen,pose.camera),b=unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},pose.camera);
   const stable=(n:number)=>Math.abs(n-Math.round(n))<1e-6?Math.round(n):n;
-  return snapImageRegion(region({x:stable(a.x),y:stable(a.y)},{x:stable(b.x),y:stable(b.y)},{x:0,y:0,width:frame.w,height:frame.h}));
+  return snapImageRegion(region({x:stable(a.x),y:stable(a.y)},{x:stable(b.x),y:stable(b.y)},bounds??{x:0,y:0,width:frame.w,height:frame.h}));
+ };
+ const partsUnionBounds=(names:readonly string[]|undefined,r:ReturnType<typeof snapImageRegion>)=>{
+  const matched=(names??[]).flatMap(name=>{const entry=data.items.find(item=>item.name===name);return entry?[entry]:[];});
+  if(!matched.length)return undefined;
+  const minX=Math.min(...matched.map(i=>i.x)),minY=Math.min(...matched.map(i=>i.y));
+  const maxX=Math.max(...matched.map(i=>i.x+i.w)),maxY=Math.max(...matched.map(i=>i.y+i.h));
+  return r.x<maxX&&r.x+r.width>minX&&r.y<maxY&&r.y+r.height>minY?{x:minX,y:minY,width:maxX-minX,height:maxY-minY}:undefined;
  };
  const codec:CommentCodec<CommentRow,PartsPose>={
   geometry:true,
@@ -189,16 +194,22 @@ export function bindPartsSubject(host:{
    const hits=new Set<string>(),layers=visible.flatMap(box=>{const img=loaded.get(box.name);return img?[sourceAlpha(box,img)]:[];});
    const stepX=Math.max(1,r.width/32),stepY=Math.max(1,r.height/32);
    for(let y=r.y+.5;y<r.y+r.height;y+=stepY)for(let x=r.x+.5;x<r.x+r.width;x+=stepX){const hit=pickAssembly(layers,x,y);if(hit)hits.add(hit.name);}
+   if(!hits.size){
+    const overlaps=(entry:Item)=>entry.x<r.x+r.width&&entry.x+entry.w>r.x&&entry.y<r.y+r.height&&entry.y+entry.h>r.y;
+    const current=selected!==null?visible.find(entry=>entry.name===selected&&overlaps(entry)):undefined;
+    if(current)hits.add(current.name);
+    else for(const entry of visible)if(overlaps(entry))hits.add(entry.name);
+   }
    return {selected:visible.filter(item=>hits.has(item.name)).map(item=>item.name),candidates};
   },
   create:async(pose,_view,screen,crop,_bookmark,summary,parts)=>{
-   const r=commentRegion(pose,screen),single=pose.view.mode==='item';
+   const raw=commentRegion(pose,screen),single=pose.view.mode==='item',r=single?raw:commentRegion(pose,screen,partsUnionBounds(parts,raw));
    return prepare({schema:'rig-review-parts-comment/2',id:crypto.randomUUID(),summary,sourceHash:data.sourceHash,parts:partsBinding(single?[pose.item.name]:parts??[]),rigRegion:single?{...r,x:r.x+pose.item.x,y:r.y+pose.item.y}:r,imageRegion:single?r:null,view:structuredClone(pose.view),crop,nativeCrop:null});
   },
   update:(raw,summary,parts,geometry)=>{
    const existing=parsePartsIssue(raw,false,true,false);let updated=existing;
    if(geometry){
-    const {pose,screen,crop}=geometry,r=commentRegion(pose,screen),single=pose.view.mode==='item';
+    const {pose,screen,crop}=geometry,rawRegion=commentRegion(pose,screen),single=pose.view.mode==='item',r=single?rawRegion:commentRegion(pose,screen,partsUnionBounds(parts,rawRegion));
     if(pose.sourceHash!==existing.sourceHash)throw new Error('PARTS_COMMENT_STALE_SOURCE');
     updated={...existing,rigRegion:single?{...r,x:r.x+pose.item.x,y:r.y+pose.item.y}:r,imageRegion:single?r:null,view:structuredClone(pose.view),crop,nativeCrop:null};
    }
@@ -208,14 +219,14 @@ export function bindPartsSubject(host:{
  const pose=():PartsPose|null=>{
   let camera=host.viewport.numericView().cameras.rig;const entry=item();if(!camera||!entry||busy||failed||disposed)return null;
   if(data.painting&&!assembled())camera={...camera,center:{x:camera.center.x-entry.x,y:camera.center.y-entry.y},visible:{...camera.visible,x:camera.visible.x-entry.x,y:camera.visible.y-entry.y}};
-  return {mode:'parts',item:entry,sourceHash:data.sourceHash,camera,view:{mode:assembled()?'assembled':'item',camera:{zoom:camera.zoom,center:camera.center,viewport:camera.viewport},cameraSync:host.viewport.state.cameraSync,referenceCamera:null,background:'checker',alpha:false,footprints:false,mesh:host.mesh(),comparison:{...comparison},...(assembled()&&EMIT_UNPINNED_CREATE_FIELDS?{visibleLayers:partsBinding(data.items.filter(item=>!hidden.has(item.name)).map(item=>item.name))}:{})},capture:{pane:host.el('rig-viewport'),root:host.el('rig-root'),images:true,canvas:host.canvas,backend:'canvas2d',nearest:true}};
+  return {mode:'parts',item:entry,sourceHash:data.sourceHash,camera,view:{mode:assembled()?'assembled':'item',camera:{zoom:camera.zoom,center:camera.center,viewport:camera.viewport},cameraSync:host.viewport.state.cameraSync,referenceCamera:null,background:'checker',alpha:false,footprints:false,mesh:host.mesh(),comparison:{...comparison},...(assembled()?{visibleLayers:partsBinding(data.items.filter(item=>!hidden.has(item.name)).map(item=>item.name))}:{})},capture:{pane:host.el('rig-viewport'),root:host.el('rig-root'),images:true,canvas:host.canvas,backend:'canvas2d',nearest:true}};
  };
  comments=bindStageComments<CommentRow,PartsPose>({general:host.recordComments||host.generalComments?{
   create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('schema' in row),
   ...(host.generalComments?{...host.generalComments,refusal:host.refusal}:{}),
  }:undefined,toolbar:host.toolbar,listHost:host.commentsHost,openList:host.openComments,hasPicture:host.hasPicture,toggle:host.el<HTMLButtonElement>('stage-comment'),viewports:{rig:host.el('rig-viewport')},pose,pause:async()=>{},bookmark:()=>null,
   restore:async raw=>{const issue=parsePartsIssue(raw,false,true,false);assertPartsIssueBinding(issue,sourceItems(),data.sourceHash);selected=issue.view.mode==='item'?issue.parts[0]!.name:null;solo=issue.view.mode==='item';comparison=issue.view.comparison??defaultPartsComparison();host.restoreMesh(issue.view.mesh);if(issue.view.visibleLayers){const visible=new Set(issue.view.visibleLayers.map(part=>part.name));hidden.clear();for(const item of data.items)if(!visible.has(item.name))hidden.add(item.name);}await paint();host.viewport.writeCamera('rig',data.painting&&solo?{...issue.view.camera,center:{x:issue.view.camera.center.x+item().x,y:issue.view.camera.center.y+item().y}}:issue.view.camera);host.viewport.activateCamera('rig');if(host.viewport.state.cameraSync)host.viewport.alignCameras();host.viewport.fitCamera();host.selectionChanged();},
-  feedback:()=>host.recordComments??host.issues,locked:host.locked,refusal:host.refusal,add:row=>{if(host.recordComments)host.recordComments.push(row);else host.issues.push(row as PartsIssue);},changed:host.changed,error:host.message,blocked:()=>busy||failed||disposed||!!host.submitting?.(),busy:()=>busy,codec});
+  feedback:()=>host.recordComments??host.issues,locked:host.locked,refusal:host.refusal,add:row=>{if(host.recordComments)host.recordComments.push(row);else host.issues.push(row as PartsIssue);},changed:host.changed,draftChanged:host.selectionChanged,error:host.message,blocked:()=>busy||failed||disposed||!!host.submitting?.(),busy:()=>busy,codec});
  return {
   frameSize:(target:CameraTarget):PartsFrame|null=>{
    const frame=target==='rig'?drawnFrame:drawnReferenceFrame;if(!frame||!data.painting||!data.rigSize)return frame;
@@ -226,7 +237,7 @@ export function bindPartsSubject(host:{
    return {...frame,world:{box:{x:bounds.x,y:bounds.y,width:bounds.w,height:bounds.h},origin,scale}};
   },
   image:(index:number)=>{const entry=data.items.find(item=>item.index===index);if(!entry)return Promise.reject(new Error('PARTS_IMAGE_UNAVAILABLE'));return image(entry);},
-  items:()=>data.items,sourceHash:()=>data.sourceHash,refreshComments:()=>comments?.refresh(),selected:()=>selected,solo:()=>solo,visible:(name:string)=>!hidden.has(name),issues:()=>host.issues,
+  items:()=>data.items,sourceHash:()=>data.sourceHash,refreshComments:()=>comments?.refresh(),hasPendingComment:()=>!!comments?.hasPendingComment(),commitDraft:()=>comments?.commitDraft()??Promise.resolve(true),selected:()=>selected,solo:()=>solo,visible:(name:string)=>!hidden.has(name),issues:()=>host.issues,
   select:(name:string|null)=>{selected=name;if(name===null)solo=false;redraw();host.selectionChanged();},
   isolate:(value:boolean)=>{
    solo=value;

@@ -1,5 +1,53 @@
 # Changelog
 
+## 4.9.1
+
+The Parts devDependency moves to 2.47.0, so Review's tests and development producer read the split-take manifests that Parts 2.47.0 writes. No Review source behaviour changes.
+
+**Read before upgrading:**
+
+* **Release order is Parts, then Review, then Create.** Parts 2.47.0 stamps an occluder-split take's donor `meta.json` as the indexed field `assemble.take[i].meta`. A Parts 2.46.0 producer refuses such a manifest in its manifest reader with `PARTS_FIELD_TYPE` (`rig --parts`, `propose --parts` and `edited-part --parts` exit 1), and its `@rig-c/parts/assembly-reading` reports the unknown field as a changed assembly field, which sends a cloth Apply to a full `build`. Run Review against an installed `@rig-c/parts` 2.47.0 or later before reading a manifest that 2.47.0 wrote. Whole-layer takes and manifests with no split take read as before (#1019, closes #1016).
+* **Assemble existing stamped occluder-split takes again once with the same config**, as the Parts 2.47.0 notes say. Its producer refuses an older stamp that lacks the donor binding as `ASSEMBLY_CONFIG_STALE`, and its assembly reading names `assemble.take[i].meta` as the changed field. A cloth Apply in Review reads the stamp through that reading, so it takes the stale-stamp route from 4.9.0 and runs `build` for such a take.
+
+### Changed
+
+* `@rig-c/parts` devDependency 2.46.0 to 2.47.0. A new test reads a real 2.47.0 split-take manifest through the installed producer's manifest reader and Review's cloth assembly reading (#1019).
+
+## 4.9.0
+
+An agent can now wait on a job host for a finalized act with `waitForJobAct`, and a strict attachment wakes when the live owner host commits. Cloth Apply reassembles parts when the assembly stamp is stale, Apply no longer refuses identical rigs over the run receipt's clock, and a page that has lost its access link says so.
+
+**Read before upgrading:**
+
+* **New runtime export `waitForJobAct` through `@rig-c/review/job-host`, from 31 to 32.** `waitForJobAct(host, {after, deadlineMs, signal})` waits on a started or strictly attached owner host until a finalized act, a closure or the deadline. It returns `{kind: 'act' | 'closed', next, cursor}` or `{kind: 'timeout', code: 'JOB_NEXT_TIMEOUT', next, cursor}`, and a refused `next` throws its `JobError` code. It sends through the host's own ports with its existing agent capability; there is no new verb, act field, capability or auth path. New types: `JobActWaitOptions` and `JobActWaitOutcome`. A consumer that asserts the exact export list must add the name. `job next --until act` uses the same loop, and its output and exit codes are unchanged (#1008, closes #1005).
+* **A strict attachment's `next` now wakes on a finalized act committed by the live owner host**, before its `waitMs` ends. Before, it slept until the timeout, because it only heard its own session's notifications. A display receipt or a refused save does not wake it. `subscribe` is unchanged (#1008).
+* **The last-millisecond tail of a `next --until act` wait no longer spins.** After an empty batch the loop waits out the sub-millisecond remainder instead of sending several zero-wait `next` requests (#1008).
+* **A cloth Apply whose assembly stamp is stale now reassembles.** When the config propose wrote no longer matches the parts' stamp, as read by the installed producer's published `@rig-c/parts/assembly-reading`, the Apply runs `build` (assemble, rig, check) instead of `rig` over parts assembled for a different config. A fresh stamp stays on `rig`, as before. A producer that does not supply `@rig-c/parts/assembly-reading` (older than `@rig-c/parts` 2.46.0) fails that Apply with an error naming `@rig-c/parts/assembly-reading` when the parts manifest carries `assembly_config`. The parts devDependency is 2.46.0 (#1013, closes #998).
+
+### Fixed
+
+* An Apply over an identical rig is no longer refused `EDIT_BASELINE_MISMATCH: assembled/rig/rig/run.json`. The rig run receipt is compared field by field: only `started_at` and `finished_at` are ignored (each must still be a valid timestamp), `config.path` is compared as the file it resolves to, and every other field is compared exactly (#1001, closes #1000).
+* A job page with no access capability (a fresh tab on the stripped URL, or a reload where sessionStorage is denied) says "This page lost its access link. Open the original link again to restore access." instead of claiming access expired. A capability the host refused keeps the expired notice (#1006, closes #1002).
+* The Korean reviewed-source panel shows "제공되지 않음" instead of the English "Not supplied" for a missing rig or motion hash (#1010, closes #1009).
+* The record question page no longer throws `TypeError` on first load in a narrow window, where the inspector body is docked into the drawer (#988, for #941).
+
+## 4.8.0
+
+A live job now emits the three fields 4.7.0 held back: per-comment `context` on a rig verdict (`rig-review/act@7`), mesh edits on a rig Request changes (`rig-review/act@8`), and `view.visibleLayers` on an assembled Parts issue. `EMIT_UNPINNED_CREATE_FIELDS` and `src/create-pin-gate.ts` are removed.
+
+**Read before upgrading:**
+
+* **Review 4.8.0 requires Create 1.13.0 or later.** Do not run Create 1.12.0 or earlier with Review 4.8.0. Create 1.12.0 refuses every `rig-review/act@8` act at decode with `REVIEW_ACT_V8_UNSUPPORTED`, and its review-act decoder reads act@6 comments but not act@7, so an act whose comments carry `context` is refused as an unsupported schema. Create's exact Review dependency pin normally prevents this pairing. Historical acts keep their readers, and standalone `described-correction` and `mesh-edit` stay reserved (#977).
+* **A live rig verdict writes `rig-review/act@7` when a comment carries a stage mark.** The writer derives each comment's top-level `context` from the comment's existing stage mark: `subject` (the finalized ask, the source hash and the rig selector), `mode`, `tab`, `part` when one is selected, `region`, `camera`, and `frame` when one is set. A verdict whose comments carry no stage mark stays act@6 with unchanged bytes. The stored-act check and the CLI consumer decoder read act@7 (#978, closes #977).
+* **A rig Request changes with a mesh draft writes `rig-review/act@8` with `meshEdits`.** In 4.7.0 such a submission was refused `JOB_ACT_KIND_DISABLED` and the draft stayed in the page. The mesh panel now says "In a job, press Request changes to send this edit; the producer rebuilds it." and Request changes is available with a mesh draft and no comment (#978, closes #977).
+* **An assembled-mode Parts issue keeps `view.visibleLayers`**, the names of the parts shown when the comment was made. 4.7.0 stripped it. Single-part issues are unchanged (#978, closes #977).
+* **`JobCapabilitiesV3` describes the host, not the current head.** `recordPublication`, `recordActSchema` and `askBatch` are reported for a whole `record-and-package` host, and `ask-batch` still accepts only a record-retained head: a package head on the same host refuses it. Check the publication's mode as well as `capabilities.askBatch`. The type and the value are unchanged; this release documents the scope (#973, closes #972).
+
+### Changed
+
+* docs/STABILITY.md records 31 runtime exports through `@rig-c/review/job-host`, matching 4.7.0's list, and a test holds the documented count to `Object.keys` of the entry so the prose cannot drift again. The export list is unchanged (#971, closes #968).
+* docs/STABILITY.md and docs/REVIEW_PACKAGE.md no longer describe act@7 context, act@8 mesh edits or Parts `visibleLayers` as held behind a flag (#978).
+
 ## 4.7.0
 
 A record-mode job host can now ask several record subjects in one `ask-batch` request, and advertises it as `capabilities.askBatch: true`. The parts Difference can compare with the previous accepted draft a publication carries, a post-interview question page shows its sealed scene plates and signed rig, and live rig and parts verdicts take general comments. Mesh edits on Request changes (act@8) are present but not sent in this release.

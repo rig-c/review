@@ -173,7 +173,7 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
 }
 
 /** Compose the real rig acts into C6; all fields, submit nodes and their listeners retain identity. */
-export function mountRigInspector(root:Document=document,actHome?:HTMLElement):BottomPanel&{actBar:ActBar;answersRendered:boolean;syncActRow:()=>void;comments:{button:HTMLButtonElement;panel:HTMLElement}} {
+export function mountRigInspector(root:Document=document,actHome?:HTMLElement):BottomPanel&{body:HTMLElement;actBar:ActBar;answersRendered:boolean;syncActRow:()=>void;comments:{button:HTMLButtonElement;panel:HTMLElement}} {
  const inspector=root.querySelector<HTMLElement>('.inspector')!,body=inspector.querySelector<HTMLElement>('.inspector-body')!,heading=inspector.querySelector<HTMLElement>('.inspector-heading')!;
  const feedback=root.getElementById('inspector-feedback')!,dialog=root.getElementById('review-dialog')!;
  const [label,status,actions]=[feedback.querySelector<HTMLLabelElement>('label[for="review-status"]')!,root.getElementById('review-status')!,dialog.querySelector<HTMLElement>('.review-dialog-actions')!];
@@ -198,7 +198,7 @@ export function mountRigInspector(root:Document=document,actHome?:HTMLElement):B
   // still use this row once its caller has hidden every answer control.
   actHome.hidden=act.hidden||(!question&&!refusal);root.getElementById('dirty')!.hidden=!actHome.hidden;
  };
- return {...bottom,actBar,answersRendered:false,syncActRow,comments:{button:comment,panel:feedback}};
+ return {...bottom,body,actBar,answersRendered:false,syncActRow,comments:{button:comment,panel:feedback}};
 }
 
 export interface BottomPanel {

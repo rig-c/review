@@ -288,7 +288,7 @@ test('legacy and previous-draft comments round-trip through writers and both pub
   expect(act.source.previousDraft).toEqual(previousDraft);
   expect(act.value.comments[0]).toMatchObject({text: '  한글\nexact  ', anchor: {view: {comparison}}});
   const contextAct = parseContextCommentsAct({...act, schema: JOB_COMMENT_CONTEXT_ACT_SCHEMA});
-  expect(commentsActForEmission(contextAct, false)).toEqual(act);
+  expect(commentsActForEmission(contextAct)).toEqual(act);
   const {previousDraft: _removed, ...legacySource} = act.source;
   expect(() => parseCommentsAct({...act, source: legacySource})).toThrow('JOB_ACT_INVALID');
   expect(() => parseContextCommentsAct({...contextAct, source: legacySource})).toThrow('JOB_ACT_INVALID');

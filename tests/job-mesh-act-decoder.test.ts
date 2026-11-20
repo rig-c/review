@@ -8,7 +8,6 @@ import {
   JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, jobCaptureBodyLimit,
   type JobContextComment, type JobMeshEdit, type JobMeshEditValue, type JobRigReviewAct,
 } from '../src/job-contract.ts';
-import {EMIT_UNPINNED_CREATE_FIELDS} from '../src/create-pin-gate.ts';
 import model from './fixtures/strip-probe/mesh-only/skeleton.model.json';
 import legacy from './fixtures/comments-contract-legacy.json';
 
@@ -155,16 +154,12 @@ test('#952 rejects malformed mesh envelopes and tampered digests', () => {
   }
 });
 
-test('#952 emission is gated and preserves mesh-free @6 bytes', () => {
+test('#977 mesh emission writes @8 and preserves mesh-free @6 bytes', () => {
   const meshFree = parseCommentsAct(rigAct(JOB_COMMENTS_ACT_SCHEMA, {}));
   if (meshFree.kind !== 'review-verdict') throw new Error('Expected a review verdict fixture');
   const withEdits = {...meshFree, value: {...meshFree.value, meshEdits: [entry]}};
-  expect(EMIT_UNPINNED_CREATE_FIELDS).toBe(false);
-  expect(() => meshEditsActForEmission(withEdits, EMIT_UNPINNED_CREATE_FIELDS)).toThrow('JOB_ACT_KIND_DISABLED');
-  expect(JSON.stringify(meshEditsActForEmission(withEdits, true))).toBe(JSON.stringify(rigAct(JOB_MESH_EDITS_ACT_SCHEMA)));
-  for (const gate of [false, true]) {
-    expect(JSON.stringify(meshEditsActForEmission(meshFree, gate))).toBe(JSON.stringify(meshFree));
-  }
+  expect(JSON.stringify(meshEditsActForEmission(withEdits))).toBe(JSON.stringify(rigAct(JOB_MESH_EDITS_ACT_SCHEMA)));
+  expect(JSON.stringify(meshEditsActForEmission(meshFree))).toBe(JSON.stringify(meshFree));
 });
 
 function bodyRequest(payload: unknown, byteLength: number): Request {

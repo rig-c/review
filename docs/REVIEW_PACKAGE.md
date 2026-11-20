@@ -37,9 +37,9 @@ The illustrative `look` animation in `axes` must also be declared in `animations
 
 ## Files and references
 
-Every path is a literal relative path, including `model`, optional `direction`, `scene` and `sets`, optional read-only `motion`, each reference `path`, authoring `path`, clip `path`, and every page name in the compiled model. Manifest paths accept no absolute paths, URL schemes, colon, percent encoding, traversal, backslash, query, fragment, empty segment, or symlink escape. Compiled-model page names are resolved relative to the model directory: a page such as `../parts/page.png` is accepted only when its normalized destination remains inside the review package. This permits portable local builds without letting a page escape the package. All declared files must exist as regular files. The asset endpoint serves only declared files, the manifest, and compiled-model page images. There is no arbitrary directory endpoint. Keep a package focused on the files intended for inspection.
+Every path is a literal relative path, including `model`, optional `frames`, `direction`, `scene` and `sets`, optional read-only `motion`, each reference `path`, authoring `path`, clip `path`, and every page name in the compiled model. Manifest paths accept no absolute paths, URL schemes, colon, percent encoding, traversal, backslash, query, fragment, empty segment, or symlink escape. Compiled-model page names are resolved relative to the model directory: a page such as `../parts/page.png` is accepted only when its normalized destination remains inside the review package. This permits portable local builds without letting a page escape the package. All declared files must exist as regular files. The asset endpoint serves only declared files, the manifest, and compiled-model page images. There is no arbitrary directory endpoint. Keep a package focused on the files intended for inspection.
 
-`model` is optional and must point to `rigc-compiled/3` under a filename ending `.model.json`, produced by an upstream gated rigc build. Review uses the public `@rig-c/play` loader and player; Spine JSON/skel is not its input. Its pages are resolved relative to the model document. Missing model means unavailable playback, never a mock playback success. The optional `sets` path declares an attachment-set sidecar for single-package playback. Without that declaration, attachment presets are unavailable. See [Direction inspection](#direction-inspection).
+`model` is optional and must point to `rigc-compiled/3` under a filename ending `.model.json`, produced by an upstream gated rigc build. Review uses the public `@rig-c/play` loader and player; Spine JSON/skel is not its input. Its pages are resolved relative to the model document. Missing model means unavailable playback, never a mock playback success. The optional `frames` path declares a producer `rigc-frames/1` record inside the package, read, validated and hashed only when present, added to `files`, and exposed on the loaded package as `frames: {path, sha256, sets: [{animation, fps, written, stride, duration}]} | null` (`null` when omitted, leaving older manifests unchanged); a missing declared file, unreadable JSON, non-`rigc-frames/1` `spec`, malformed set field (`sets[].animation`, `fps`, `written`, `stride`, `duration`) or duplicate animation set refuses by name (`FRAMES_MISSING`, `FRAMES_JSON`, `FRAMES_SPEC`, `FRAMES_FIELD`, `FRAMES_DUPLICATE_ANIMATION`), never falling back silently. The optional `sets` path declares an attachment-set sidecar for single-package playback. Without that declaration, attachment presets are unavailable. See [Direction inspection](#direction-inspection).
 
 Reference `type` is `image`, `video`, or `pose`. `width` and `height` optionally state image pixel dimensions. The primary animated pose input is the canonical `rig-pose-sequence/1` format documented by `@rig-c/pose`, consumed directly:
 
@@ -1122,7 +1122,7 @@ or establish official Create writer acceptance.
 
 ### Publication, producer-held freeze and generation CAS
 
-- **Mutating requests and CAS.** Agent mutations (`publish`, `ask`, `close` in `JobMutation`) require `expectedGeneration` (a nonnegative safe integer) and `idempotencyKey` alongside `schema` (`rig-review/job-api@2`), `jobId` and `requestId`. Stale generations refuse with `JOB_GENERATION_STALE` and conflicting idempotency payloads refuse with `JOB_IDEMPOTENCY_CONFLICT`. When `handleJobApi` (`POST /jobs/<jobId>/api`) catches a thrown refusal, the failure envelope `generation: number` reports `session.lastObservedGeneration`, which is the last durable generation this session observed successfully in storage and is carried in memory without rereading failing storage inside `catch`. That value reports the last observed session generation while preserving the original named refusal code and message (such as `JOB_STORAGE_FAILED` when SQLite files are removed or replaced) and keeping the numeric `generation: number` response type unchanged. A failed session constructor exposes no API ports when its initial storage read fails. Success responses continue to report current `session.status().generation`.
+- **Mutating requests and CAS.** Agent mutations (`publish`, `ask`, `close` in `JobMutation`) require `expectedGeneration` (a nonnegative safe integer) and `idempotencyKey` alongside `schema` (`rig-review/job-api@2`), `jobId` and `requestId`. Stale generations refuse with `JOB_GENERATION_STALE` and conflicting idempotency payloads refuse with `JOB_IDEMPOTENCY_CONFLICT`. A repeated `idempotencyKey` with the same payload returns the stored result only while that result is still true ([Review #1022](https://github.com/rig-c/review/issues/1022)): a replayed `publish` whose publication is no longer the head refuses `JOB_ACT_SOURCE_STALE`, and a replayed `ask` whose ask is no longer pending and has no finalized act refuses `JOB_ASK_SUPERSEDED` (`JOB_CLOSED` once the job is closed). Each refusal message names the replayed identity and the current head (`publication <id> is superseded; head <id>`, `ask <id> is superseded; head <id>`). A replay of a still-head publication, a still-pending ask or an ask whose act was finalized returns its stored result unchanged, and a `close` replay is unchanged. When `handleJobApi` (`POST /jobs/<jobId>/api`) catches a thrown refusal, the failure envelope `generation: number` reports `session.lastObservedGeneration`, which is the last durable generation this session observed successfully in storage and is carried in memory without rereading failing storage inside `catch`. That value reports the last observed session generation while preserving the original named refusal code and message (such as `JOB_STORAGE_FAILED` when SQLite files are removed or replaced) and keeping the numeric `generation: number` response type unchanged. A failed session constructor exposes no API ports when its initial storage read fails. Success responses continue to report current `session.status().generation`.
 - **Explicit producer-held freeze.** `JobPublishRequest` designates a root-relative `result` (`path` and nullable `selector`, never a command) and requires `freeze` with `kind` set to `'producer-held'`, `holdId` and `record` (`JobFileIdentity` for the exact record used for selection, or `null` for a declared non-Create root) held until acknowledgment. Review validates retained bytes, detects a moved or incomplete record (`JOB_FREEZE_REQUIRED`, `JOB_RECORD_INCOMPLETE`, `JOB_RECORD_MOVED`, `JOB_SOURCE_MISMATCH`, `JOB_SOURCE_UNRETAINABLE`, `JOB_ROOT_REPLACED`) and commits local CAS. The freeze assertion is a caller obligation on the publishing producer or agent, not a lock Review can impose on independent writers.
 - **Managed-state privacy boundary.** Managed state stays behind the host ports. The canonical work root and configured managed-state directory must be disjoint. A root equal to, inside or containing that state directory refuses `JOB_SOURCE_UNRETAINABLE` before job admission, including directory aliases resolved through symlink ancestors. Existing root identity failures, including a directly symlinked source root, retain `JOB_ROOT_REPLACED`. Trusted publication handles follow the origin job's lifetime, and publishing callers must maintain their producer-held freeze.
 - **Explicit close lifecycle.** Review offers no watched-root or automatic-close guarantee. Only an explicit `close` request (`JobCloseRequest` with `reason`) ends an active job (`status` transitions from `'active'` to `'closed'`, and subsequent mutations or fetches refuse with `JOB_CLOSED`).
@@ -1233,9 +1233,7 @@ except for the limit refusal.
 The publisher emits this field only when installed Review exports
 `JOB_PREVIOUS_DRAFT_SCHEMA` with value `rig-review-previous-draft/1` from
 `@rig-c/review/job-host`. This is the publisher-to-Review capability rule.
-Both new act keys require an admitted `previousDraft`. That admission is
-their emission gate. The existing pin gate in `src/create-pin-gate.ts`
-governs Review-to-publisher emission separately. An older Review ignores
+Both act keys require an admitted `previousDraft`. An older Review ignores
 the extra context key and treats the composite `files` rows as ordinary
 seals. On the pre-feature main
 `d82aff4`, the in-process `readPublished` seam is in
@@ -1298,7 +1296,7 @@ A post-interview option set with a `rig` context can also show the accepted rig 
 
 <a id="ask-batch"></a>
 
-`ask-batch` asks several subjects of the head record publication in one request ([Review #963](https://github.com/rig-c/review/issues/963)). Each subject is parsed exactly like the single `ask` subject, and a repeated subject refuses the batch. A package head refuses `JOB_REQUEST_INVALID`, a non-head publication refuses `JOB_ACT_SOURCE_STALE`, and zero or more than 64 subjects refuse `JOB_REQUEST_INVALID`. The existing 256 KiB body limit still applies. Review binds every subject, runs `verifyJobRecordSourceFresh` once for the batch (one `inventory` and one `retained` reader call) and validates each subject against that one fresh source. One immediate transaction then re-checks the head, the work root and the retained snapshot once and creates every ask. Each ask writes its own `pending` event and moves the generation by 1, so a batch of N moves it by N. The batch is all or none: any refusal creates no ask, no event and no generation change. A subject's refusal keeps its existing code and prefixes the message with `subjects[<i>]: `. A freshness refusal carries no index. One idempotency key replays the whole batch without reading the publisher again. Single `ask` and finalize are unchanged. A Create detects support through `capabilities.askBatch` in `next`, never by sending `ask-batch` and reading the refusal: an older Review answers the unknown verb with `JOB_REQUEST_INVALID`. In `JobCapabilitiesV3`, `recordPublication`, `recordActSchema` and `askBatch` describe the host rather than the current head: `ask-batch` applies only to a record-retained head publication and a package head refuses `JOB_REQUEST_INVALID`, so a consumer checks the publication's mode as well as the flag.
+`ask-batch` asks several subjects of the head record publication in one request ([Review #963](https://github.com/rig-c/review/issues/963)). Each subject is parsed exactly like the single `ask` subject, and a repeated subject refuses the batch. A package head refuses `JOB_REQUEST_INVALID`, a non-head publication refuses `JOB_ACT_SOURCE_STALE`, and zero or more than 64 subjects refuse `JOB_REQUEST_INVALID`. The existing 256 KiB body limit still applies. Review binds every subject, runs `verifyJobRecordSourceFresh` once for the batch (one `inventory` and one `retained` reader call) and validates each subject against that one fresh source. One immediate transaction then re-checks the head, the work root and the retained snapshot once and creates every ask. Each ask writes its own `pending` event and moves the generation by 1, so a batch of N moves it by N. The batch is all or none: any refusal creates no ask, no event and no generation change. A subject's refusal keeps its existing code and prefixes the message with `subjects[<i>]: `. A freshness refusal carries no index. One idempotency key replays the whole batch without reading the publisher again. The replay follows the same rule as a single `ask`: if any ask of the stored batch is no longer pending and has no finalized act, the replay refuses `JOB_ASK_SUPERSEDED` with the message prefixed by that ask's `subjects[<i>]: `. Single `ask` and finalize are unchanged. A Create detects support through `capabilities.askBatch` in `next`, never by sending `ask-batch` and reading the refusal: an older Review answers the unknown verb with `JOB_REQUEST_INVALID`. In `JobCapabilitiesV3`, `recordPublication`, `recordActSchema` and `askBatch` describe the host rather than the current head: `ask-batch` applies only to a record-retained head publication and a package head refuses `JOB_REQUEST_INVALID`, so a consumer checks the publication's mode as well as the flag.
 
 The read-only official reader returns the six-key `RecordPublishedContext` with producer-sealed `parts`. `prepareJobRecordSource` runs `phase: 'inventory'` on the immutable source root (re-verifying `project.json` identity before and after each reader phase and before mapping generic reader failures so mid-read record movement reports `JOB_RECORD_MOVED` / `JOB_SOURCE_MISMATCH` rather than `JOB_RECORD_INCOMPLETE`) and retains the sorted, duplicate-free `inventory.files` closure into an owned snapshot (`project.json` within 8 MiB, at most 4,096 regular non-symlink files, 64 MiB per file and 256 MiB total bytes). It then calls `phase: 'retained'` on the snapshot root with `parts: inventory.parts` forwarded unchanged and requires `assertEqualRecordContexts(inventory, retainedContext)`. Before ask or finalize, `verifyJobRecordSourceFresh` re-runs `phase: 'inventory'`, rejects any `inventory.parts` drift against the originally sealed `retained.context.parts` (`JOB_SOURCE_MISMATCH` on ask and `JOB_ACT_SOURCE_STALE` on finalize) before invoking `phase: 'retained'`, and forwards the sealed `retained.context.parts` unchanged when equal; synchronous `store.update` commit re-verifies source and retained snapshot integrity before persisting. Missing reader or contract tokens (`CREATE_PUBLICATION_CONTRACT_UNAVAILABLE`, `CREATE_PLAN_PUBLICATION_CONTRACT_UNAVAILABLE`) refuse with `JOB_SOURCE_UNRETAINABLE`, while named producer tokens (`JOB_RECORD_CLOSURE_INCOMPLETE`, `JOB_RECORD_PARTS_MISMATCH`, `JOB_RECORD_PARTS_LOCK_MISSING`) map to `JOB_RECORD_INCOMPLETE` on publish or ask and `JOB_ACT_SOURCE_STALE` on finalize.
 
@@ -1506,9 +1504,10 @@ strings and readers. There is no interview-picks arm or question/ask anchor in
 this extension. Technical configuration and search controls are outside it.
 
 The decoders and consumer projections are read-only. Since [Review #713](https://github.com/rig-c/review/issues/713)
-(HQ contract ruling), the UI finalizers write fresh checkpoint, parts-verdict,
-rig and direction review-verdict and signoff acts as act@6. The UI submission
-keeps its existing `words` and `issues` fields. [Review #746](https://github.com/rig-c/review/issues/746)
+(HQ contract ruling), the UI finalizers use act@6 as the base format for
+fresh checkpoint, parts-verdict, rig and direction review-verdict and signoff
+acts. The UI submission keeps its existing `words` and `issues` fields.
+[Review #746](https://github.com/rig-c/review/issues/746)
 adds optional `feedback: Feedback[]` beside required `words` only for the
 `rig-review` verdict submission. When present, including an empty list,
 `feedback` supplies the pinned comments and suppresses the `words` fallback.
@@ -1518,8 +1517,7 @@ malformed or blank rows. The act bar sends a detached feedback list when there
 are pinned comments and keeps `words` as their projection. It omits `feedback`
 when there are no pinned comments. With `feedback` absent, nonblank `words`
 still supplies one general comment. Direction and image verdict submissions
-keep their existing closed shapes. The comments mapping by itself keeps the
-act@6 format.
+keep their existing closed shapes.
 
 Only the `rig-review` verdict and `parts-verdict` accept optional
 `general: readonly string[]` in their UI submission values. Each string becomes
@@ -1528,12 +1526,13 @@ produced by the existing fields. For parts verdicts, nonblank `words` still
 produces a comment after the pinned `issues` and before `general`. Parts Request
 changes still requires a pinned issue, and approval still requires zero issues. The existing decoder
 validates the combined comment count, text, evidence and signed projection.
-Omitting `general` preserves the existing written bytes. By itself, `general`
-keeps the writer at act@6, and historical words-only acts retain their readers. [Review #831](https://github.com/rig-c/review/issues/831).
+Omitting `general` preserves the existing written bytes. Adding `general` by
+itself keeps the existing schema selection. Historical words-only acts retain
+their readers. [Review #831](https://github.com/rig-c/review/issues/831).
 
 Pointed marks, inline crops, bookmarks and valid time-only null frames remain
-inside the existing `anchor.context`. This is distinct from act@7's top-level
-`comment.context`, which remains disabled by `EMIT_UNPINNED_CREATE_FIELDS`.
+inside the existing `anchor.context`. [Comment context (act@7)](#comment-context-act7)
+defines the separate top-level `comment.context` field.
 
 For the words-only mapping, the daemon maps a nonblank note
 to one comment: anchored to the checkpoint for a checkpoint, general otherwise.
@@ -1609,9 +1608,8 @@ Anchors use existing source-bound fields without a new kind discriminator:
   `view.visibleLayers: {name, imageHash}[]` retains the complete visible set in
   source item order, bound to `sourceHash` and each loaded source image. Entries
   must be unique and source-bound before restoration replaces the hidden set.
-  Absent fields retain the historical restore branch and recorded bytes. Readers
-  accept both forms; fresh capture writes this field only when the shared
-  `EMIT_UNPINNED_CREATE_FIELDS` gate is enabled after Create confirms its parser pin.
+  Starting in 4.8.0, fresh assembled capture writes this field. Readers accept
+  both forms. Absence retains the historical restore branch and recorded bytes.
 - Named image: `name`, optionally the complete existing-field composition
   `imageRegion, crop, nativeCrop`. Names resolve in the sealed image set. Regions
   use nonnegative native-pixel integer origins, positive extents and at most
@@ -1690,10 +1688,11 @@ existing pin or restore path already carries:
 Each key reuses the decoder of the shape it copies. A `reopen` act has no ask
 subject, so its comments cannot carry `context.subject`.
 
-Create refuses unknown fields, so Review emits @7 only when
-`EMIT_UNPINNED_CREATE_FIELDS` (`src/create-pin-gate.ts`) is true. It is false
-until the create tower confirms Create has pinned the Review version that reads
-@7. While it is false, writers drop every `context` and emit @6.
+Starting in 4.8.0, the rig verdict writer takes top-level `context` from pinned
+stage-comment evidence and the bound ask and source. It uses @7 when at least
+one comment carries that context and @6 when none does. A rig verdict carrying
+mesh edits uses @8 as described below.
+See [Create compatibility](STABILITY.md#mesh-edit-act-compatibility).
 
 ### Mesh edits on Request changes (act@8)
 
@@ -1765,18 +1764,15 @@ escaping and serialize numbers as ECMAScript `Number.prototype.toString`
 shortest round-trip text. The value contains no integer-like keys, negative
 zero or non-finite numbers. For this value domain the rule is RFC 8785 (JCS).
 
-**Review refusals and rollout.** Before writing the act, Review refuses with
+**Review refusals.** Before writing the act, Review refuses with
 `JOB_ACT_INVALID` for invalid shape, digest mismatch, invalid ordering or
 duplicate identity, ineligible kind, stage or verdict, counts that differ from
 the stored entry, or an op that cannot replay over the stored topology. An
 attachment hash that differs from the retained displayed model refuses
 `JOB_ACT_SOURCE_STALE`. Existing browser `MESH_EDIT_*` refusals still apply.
-Review ships the decoder with act@8 emission off behind
-`EMIT_UNPINNED_CREATE_FIELDS` in `src/create-pin-gate.ts`.
-An edited submission while emission is off refuses `JOB_ACT_KIND_DISABLED`.
-Create must pin a Review release that reads @8 and build its relay before
-emission opens. The release that opens the gate will be recorded here when it
-is known. Older decoders refuse act@8 with `JOB_ACT_INVALID`.
+Starting in 4.8.0, eligible submissions carrying edits emit act@8. Review
+decoders older than 4.7.0 refuse act@8 with `JOB_ACT_INVALID`. See
+[Create compatibility](STABILITY.md#mesh-edit-act-compatibility).
 Review refuses `JOB_BODY_LIMIT` if the canonical UTF-8 JSON of
 `value.meshEdits` exceeds 256 KiB. Rig stills and inline comment images
 retain their existing request allowances. Finalized-act delivery retains its

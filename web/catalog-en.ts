@@ -3524,6 +3524,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.submit.JOB_STILL_UNAVAILABLE": "The retained rig image is unavailable — reopen the current rig review and try again.",
   "job.submit.JOB_STILL_OUTPUT_FAILED": "The rig image could not be saved — ask the host operator to check the output destination.",
   "Review was not submitted: {0}": "Review was NOT submitted: {0}",
+  "JOB_CAPABILITY_LINK_LOST": "This page lost its access link. Open the original link again to restore access.",
   "JOB_CAPABILITY_REQUIRED": "This page has lost its access. Ask the agent to open the job again.",
   "JOB_CLOSED": "JOB_CLOSED",
   "JOB_CURSOR_INVALID": "JOB_CURSOR_INVALID",
@@ -3630,5 +3631,6 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "This question refers to a scene that this publication does not include.": "This question refers to a scene that this publication does not include.",
   "This request has no picture.": "This request has no picture.",
   "The selected part has no chest regions. The chest editor keeps its current part.": "The selected part has no chest regions. The chest editor keeps its current part.",
+  "The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.": "The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.",
   'Resize comment area: {0}': 'Resize comment area: {0}',
 };

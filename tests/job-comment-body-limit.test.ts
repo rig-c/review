@@ -5,7 +5,7 @@ import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {jobFixture, syntheticJobParts, growJobRigFixture} from './helpers/job-api-fixture.ts';
 import {rigStillInput} from './helpers/job-rig-still.ts';
 import {syntheticPinnedFeedback} from './helpers/job-pinned-comments.ts';
-import {jobHash, parseCommentsAct, createJobHostPorts} from '../src/job-api.ts';
+import {jobHash, parseCommentsAct, parseContextCommentsAct, createJobHostPorts} from '../src/job-api.ts';
 import {jobRawActMediaType} from '../src/job-contract.ts';
 import {jobCropReferences, JobStore} from '../src/job-store.ts';
 import {feedbackItemComments} from '../src/stage-comment.ts';
@@ -76,8 +76,11 @@ for (const count of [1, 3, 6, 12]) test(`#790 finalized ${count}-pin rig verdict
     const payload = {...input, value: {stage: 'rig-review', verdict: 'changes-requested', words: '', feedback}};
     const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(payload));
     if (!saved.ok) throw new Error(saved.error.code + ': ' + saved.error.message);
-    const act = parseCommentsAct(saved.value), raw = JSON.stringify(saved.value), hash = jobHash(raw);
-    expect(act.value.comments).toEqual(feedbackItemComments(feedback));
+    const act = parseContextCommentsAct(saved.value), raw = JSON.stringify(saved.value), hash = jobHash(raw);
+    expect(act.value.comments.map(({context, ...comment}) => {
+      expect(context?.subject?.sourceHash).toBe(publication.source.sourceHash);
+      return comment;
+    })).toEqual(feedbackItemComments(feedback));
     const fetched = await (await f.call({...f.base(), verb: 'fetch-act', actId: act.actId},
       f.session.writerGrant().fetchCapability)).json();
     expect(jobHash(JSON.stringify(fetched.value))).toBe(hash);
@@ -353,7 +356,11 @@ for (const scenario of [
     expect(response.status).toBe(200);
     {
       expect(result.ok).toBe(true);
-      expect(result.value.value.comments).toEqual(feedbackItemComments([row]));
+      const act = parseContextCommentsAct(result.value);
+      const [{context, ...comment}] = act.value.comments;
+      expect([comment]).toEqual(feedbackItemComments([row]));
+      expect(context).toMatchObject({mode: 'animate', tab: 'playback', region: mark.world,
+        camera: mark.camera, frame: mark.frame});
       expect(JSON.parse(f.session.readActExport(result.value.actId, false).toString())).toEqual(result.value);
       expect(JSON.stringify(result.value)).not.toContain(payload.capture.png);
     }

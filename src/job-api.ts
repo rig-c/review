@@ -29,7 +29,6 @@ import { parseStageComment, hasStageComment, projectComments, commentModes } fro
 import { validatePngCrop, validatePngCropMetadata } from './comment-crops.ts';
 import {parseJobPartsIdentity} from './job-source.ts';
 import {parseControlPart, parseControlView} from './control.ts';
-import {EMIT_UNPINNED_CREATE_FIELDS} from './create-pin-gate.ts';
 import {canonicalJson} from './canonical-json.ts';
 import {MESH_EDIT_MAX_OPS, type Vec} from './mesh-edit.ts';
 
@@ -1528,25 +1527,22 @@ export function parseMeshEdits(raw: unknown): readonly JobMeshEdit[] {
   }, 'JOB_ACT_INVALID');
 }
 
-/** The comments act a writer sends. With EMIT_UNPINNED_CREATE_FIELDS off, contexts are dropped and @6 goes out. */
-export function commentsActForEmission(act: JobCommentsAct | JobContextCommentsAct,
-  emitUnpinned: boolean = EMIT_UNPINNED_CREATE_FIELDS): JobCommentsAct | JobContextCommentsAct {
+/** Write @7 when a comment carries context, otherwise keep the @6 envelope. */
+export function commentsActForEmission(act: JobCommentsAct | JobContextCommentsAct): JobCommentsAct | JobContextCommentsAct {
   const value = act.value as {comments: readonly JobContextComment[]};
-  const comments = value.comments.map(({context, ...comment}) => emitUnpinned && context ? {...comment, context} : comment);
-  const schema = emitUnpinned && comments.some(comment => 'context' in comment) ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA;
-  const next = {...structuredClone(act), schema, value: {...structuredClone(act.value), comments: structuredClone(comments)}};
+  const schema = value.comments.some(comment => Object.hasOwn(comment, 'context')) ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA;
+  const next = {...act, schema};
   return schema === JOB_COMMENTS_ACT_SCHEMA ? parseCommentsAct(next) : parseContextCommentsAct(next);
 }
 
-/** A writer must opt in to the Create pin gate before it can project mesh evidence. */
+/** Write @8 for a rig verdict carrying mesh evidence. */
 export function meshEditsActForEmission(act: JobCommentsAct | (Extract<JobCommentsAct, {kind: 'review-verdict'}> & {
   readonly value: {readonly meshEdits: readonly JobMeshEdit[]};
-}), emitMeshEdits: boolean): JobCommentsAct | Extract<JobAct, {schema: typeof JOB_MESH_EDITS_ACT_SCHEMA}> {
+})): JobCommentsAct | Extract<JobAct, {schema: typeof JOB_MESH_EDITS_ACT_SCHEMA}> {
   if (!Object.hasOwn(act.value, 'meshEdits')) {
     parseCommentsAct(act);
     return act;
   }
-  if (!emitMeshEdits) throw new JobError('JOB_ACT_KIND_DISABLED');
   return parseMeshEditsAct({...act, schema: JOB_MESH_EDITS_ACT_SCHEMA}) as Extract<JobAct, {schema: typeof JOB_MESH_EDITS_ACT_SCHEMA}>;
 }
 

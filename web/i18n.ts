@@ -972,10 +972,10 @@ export function assertCatalogParity(
 // Bar 2: Hardcoded visible string check across web/*.html and web/*.ts
 function decodeHtmlEntities(str: string): string {
   return str
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"');
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&');
 }
 
 function isSingleSymbolOrKeycap(text: string): boolean {

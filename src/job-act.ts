@@ -4,13 +4,15 @@ import {
   type ActV3, type JobAct, type JobComment, type JobCommentsAct, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
   type JobMeshEdit, type PendingAskV3, type RecordAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
+  type JobCommentContext, type JobContextComment,
 } from './job-contract.ts';
 import { parsePartsIssue, type PartsIssue } from './parts-comment.ts';
 import {
   isRecordSource, jobHash, jobId, jobInteger, jobObject,
-  meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
+  commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
 } from './job-api.ts';
 import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueComments } from './feedback-export.ts';
+import { hasStageComment, parseStageComment } from './stage-comment.ts';
 import type { Feedback } from './session.ts';
 import { validatePicks } from './interview-picks.ts';
 import {
@@ -22,7 +24,6 @@ import {
 import { JobError } from './job-store.ts';
 import { checkedPath, readRegular } from './interview-project.ts';
 import {validatePngBytes} from './comment-crops.ts';
-import {EMIT_UNPINNED_CREATE_FIELDS} from './create-pin-gate.ts';
 import {applyMeshOps, attachmentHashText, MESH_EDIT_CODES} from './mesh-edit.ts';
 import {readStoredSetupMesh} from './setup-mesh.ts';
 
@@ -35,6 +36,20 @@ function words(value: unknown): string {
 function commentsAct(act: JobCommentsAct): JobCommentsAct {
   parseCommentsAct(act);
   return act;
+}
+
+function rigVerdictFeedbackComments(feedback: readonly Feedback[], subject: NonNullable<JobCommentContext['subject']>): JobContextComment[] {
+  return feedbackItemComments(feedback).map(comment => {
+    const rawMark = (comment.anchor.context as {comment?: unknown} | undefined)?.comment;
+    if (!hasStageComment(rawMark)) return comment;
+    const mark = parseStageComment(rawMark);
+    const selection = (mark.bookmark as {
+      selection: {inspector: JobCommentContext['tab']; part?: JobCommentContext['part'] | null};
+    }).selection;
+    return {...comment, context: {subject, mode: mark.mode, tab: selection.inspector,
+      ...(selection.part ? {part: selection.part} : {}), region: mark.world, camera: mark.camera,
+      ...(mark.frame ? {frame: mark.frame} : {})}};
+  });
 }
 
 function hasMeshSubmission(kind: unknown, value: unknown): boolean {
@@ -209,9 +224,6 @@ export function parseUISubmission(
     (recordEnabled && (JOB_RECORD_ACT_KINDS as readonly string[]).includes(kind));
   if (!allowed) {
     throw new JobError('JOB_ACT_INVALID');
-  }
-  if (hasMeshSubmission(item.kind, item.value) && !EMIT_UNPINNED_CREATE_FIELDS) {
-    throw new JobError('JOB_ACT_KIND_DISABLED');
   }
   if (item.capture !== undefined && (item.kind !== 'review-verdict' ||
     (item.value as {stage?: unknown} | null)?.stage !== 'rig-review')) throw new JobError('JOB_REQUEST_INVALID');
@@ -513,7 +525,6 @@ export function finalizeJobAct(options: {
   readonly still?: JobRigStill;
   readonly actId?: string;
   readonly at?: string;
-  readonly emitUnpinned?: boolean;
 }): ActV3;
 export function finalizeJobAct(options: {
   readonly jobId: string;
@@ -524,15 +535,12 @@ export function finalizeJobAct(options: {
   readonly still?: JobRigStill;
   readonly actId?: string;
   readonly at?: string;
-  readonly emitUnpinned?: boolean;
 }): ActV3 {
   const meshSubmission = hasMeshSubmission(options.submission.kind, options.submission.value);
   if (meshSubmission && (isRetainedRecordSource(options.retained) ||
       options.ask.subject.kind !== 'review-verdict' || options.ask.subject.stage !== 'rig-review')) {
     throw new JobError('JOB_ACT_INVALID');
   }
-  const emitUnpinned = options.emitUnpinned ?? EMIT_UNPINNED_CREATE_FIELDS;
-  if (meshSubmission && !emitUnpinned) throw new JobError('JOB_ACT_KIND_DISABLED');
   if (isRetainedRecordSource(options.retained)) {
     return prepareJobRecordAct({
       jobId: options.jobId,
@@ -662,15 +670,18 @@ export function finalizeJobAct(options: {
         if (!options.still) throw new JobError('JOB_STILL_CAPTURE_FAILED');
         const note = words(value.words);
         if (value.feedback !== undefined && !Array.isArray(value.feedback)) throw new JobError('JOB_ACT_INVALID');
-        let verdictComments: ReturnType<typeof noteComments>;
+        const selector = source.selector as Extract<NonNullable<JobSourceBinding['selector']>, {kind: 'rig'}>;
+        let verdictComments: readonly JobContextComment[];
         try {
-          verdictComments = value.feedback === undefined ? noteComments(note) : feedbackItemComments(value.feedback as Feedback[]);
+          verdictComments = value.feedback === undefined ? noteComments(note) : rigVerdictFeedbackComments(value.feedback as Feedback[],
+            {ask: ask.subject, sourceHash: source.sourceHash, selector});
         } catch { throw new JobError('JOB_ACT_INVALID'); }
         const act = {...comments, kind: 'review-verdict' as const,
-          source: {...source, model: source.model!, selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, {kind: 'rig'}>},
+          source: {...source, model: source.model!, selector},
           value: {stage: 'rig-review' as const, verdict, comments: [...verdictComments, ...generalComments(value.general)]},
           still: options.still};
-        if (meshEdits) return meshEditsActForEmission({...act, value: {...act.value, meshEdits}}, emitUnpinned);
+        if (meshEdits) return meshEditsActForEmission({...act, value: {...act.value, meshEdits}});
+        if (verdictComments.some(comment => Object.hasOwn(comment, 'context'))) return commentsActForEmission(act);
         return commentsAct(act);
       }
       return commentsAct({ ...comments, kind: 'review-verdict', source: { ...source, model: source.model!,
