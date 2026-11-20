@@ -4,6 +4,7 @@ import {
   JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, jobActDeliveryLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
   type ActV3, type AgentRequestV3, type EventV3, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayPublicationV3, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest, type JobFetchActRequestV3,
+  type JobHostPorts, type JobProgressLineV3, type JobProgressRequestV3, type JobProgressV3, type JobProgressValueV3,
   type JobNextValue, type JobPendingAsk, type JobPublication, type JobPublicationMode, type JobReviewerBinding,
   type JobSubject, type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
 } from './job-contract.ts';
@@ -54,9 +55,13 @@ interface JobData {
   events: (JobEvent | EventV3)[];
   replays: Record<string, Replay>;
   pages: Record<string, JobDisplayReceipt>;
+  progress?: JobProgressV3;
+  progressReceipt?: Pick<JobProgressV3, 'seq' | 'at'> & { writes: number };
 }
 
 const maximumEventBytes = 512 * 1024;
+const progressIntervalMs = 1000;
+type JobSubscription = Parameters<JobHostPorts['subscribeJob']>[0];
 
 export interface JobSessionOptions {
   readonly root: string;
@@ -138,6 +143,7 @@ export class JobSession {
   readonly apiSchema: typeof JOB_API_SCHEMA | typeof JOB_API_V3_SCHEMA;
   private readonly store: JobStore<JobData>;
   private readonly listeners = new Set<() => void>();
+  private progressBroadcast?: { seq: number; when: number };
   private operations = 0;
   private disposed = false;
   private observedGeneration: number;
@@ -218,6 +224,8 @@ export class JobSession {
     if (!row.active) {
       row.data.fetchCapability = null;
       row.data.pages = {};
+      // The durable closure clears the slot without rewriting the historical row.
+      delete row.data.progress;
       for (const ask of Object.values(row.data.asks)) {
         if (ask.status === 'pending') row.data.asks[ask.askId] = {...ask, status: 'superseded'};
       }
@@ -416,12 +424,19 @@ export class JobSession {
     assertJobRoot(current.data.root);
   }
 
+  private sameSemanticRevision(observed: StoredJob<JobData>) {
+    // Progress writes wake cross-connection observers without invalidating semantic CAS.
+    const revision = observed.revision - (observed.data.progressReceipt?.writes ?? 0);
+    return (fresh: StoredJob<JobData>) => fresh.revision - (fresh.data.progressReceipt?.writes ?? 0) === revision;
+  }
+
   private event(data: JobData, value: JobEventPayload): EventV3 {
     const event: EventV3 = { ...value, cursor: randomUUID(), jobId: this.jobId, generation: data.generation };
     if (Buffer.byteLength(jobCropReferences(event)) > maximumEventBytes) {
       throw new JobError('JOB_BODY_LIMIT', 'Job event exceeds its delivery bound');
     }
     data.events.push(event);
+    if (value.type === 'published' || value.type === 'pending') delete data.progress;
     return event;
   }
 
@@ -448,9 +463,30 @@ export class JobSession {
 
   private notify(): void { for (const listener of this.listeners) listener(); }
 
+  private recordProgress(input: JobProgressRequestV3, signal: AbortSignal): JobProgressValueV3 {
+    if (signal.aborted || this.apiSchema !== JOB_API_V3_SCHEMA) throw new JobError('JOB_REQUEST_INVALID');
+    const { seq, phase, text, step } = input, at = new Date().toISOString();
+    let receipt: JobProgressValueV3 = { status: 'accepted', seq, at };
+    this.store.update(this.jobId, null, fresh => {
+      const { data } = fresh;
+      data.progress = { seq, phase, ...(text !== undefined ? { text } : {}), ...(step ? { step } : {}), at, generation: data.generation };
+      data.progressReceipt = { seq, at, writes: (data.progressReceipt?.writes ?? 0) + 1 };
+      return { data };
+    }, fresh => {
+      assertStoredSchemas(fresh.data);
+      if (!fresh.active) throw new JobError('JOB_CLOSED');
+      const previous = fresh.data.progressReceipt;
+      if (!previous || seq > previous.seq) return false;
+      receipt = { status: 'ignored', seq: previous.seq, at: previous.at };
+      return true;
+    });
+    return receipt;
+  }
+
   async execute(input: JobAgentRequest | AgentRequestV3 | JobFetchActRequest | JobFetchActRequestV3, signal: AbortSignal): Promise<unknown> {
     if (input.jobId !== this.jobId) throw new JobError('JOB_UNKNOWN');
     if (input.verb === 'next') return this.next(input.after, input.waitMs, signal);
+    if (input.verb === 'progress') return this.recordProgress(input, signal);
     if (input.verb === 'fetch-act') {
       const current = this.current();
       if (!current.active) throw new JobError('JOB_CLOSED');
@@ -497,7 +533,7 @@ export class JobSession {
           fresh.data.events.push(event);
           const value = {status: 'closed', cursor: event.cursor};
           return {generation: fresh.data.generation, event, replayKey: key, replay: {digest, value}};
-        });
+        }, this.sameSemanticRevision(current));
         this.notify();
         await this.reclaimClosedSnapshots();
         return closure.replay.value;
@@ -618,7 +654,7 @@ export class JobSession {
         if (!raced) return false;
         result = raced.value;
         return true;
-      });
+      }, this.sameSemanticRevision(current));
       this.notify();
       return result;
     } finally {
@@ -679,7 +715,7 @@ export class JobSession {
       receipt = { publicationId: input.publicationId, pageId: input.pageId, displayedNonce: randomBytes(32).toString('hex') };
       fresh.data.pages[input.pageId] = receipt;
       return { data: fresh.data };
-    });
+    }, undefined, this.sameSemanticRevision(current));
     return receipt!;
   }
 
@@ -796,8 +832,8 @@ export class JobSession {
     return act!;
   }
 
-  private events(after: string | null): JobNextValue | NextValueV3 {
-    const current = this.current(), events = current.data.events;
+  private events(after: string | null, current = this.current()): JobNextValue | NextValueV3 {
+    const events = current.data.events;
     const index = after === null ? -1 : events.findIndex(event => event.cursor === after);
     if (after !== null && index < 0) throw new JobError('JOB_CURSOR_INVALID');
     const batch: EventV3[] = [];
@@ -820,14 +856,17 @@ export class JobSession {
     };
   }
 
-  private async next(after: string | null, waitMs: number, signal: AbortSignal, observeWrites = false): Promise<JobNextValue | NextValueV3> {
+  private async next(after: string | null, waitMs: number, signal: AbortSignal): Promise<JobNextValue | NextValueV3> {
     if (waitMs < 0 || waitMs > jobWaitLimitMs || !Number.isSafeInteger(waitMs)) throw new JobError('JOB_REQUEST_INVALID');
     if (signal.aborted) throw new JobError('JOB_REQUEST_INVALID', 'Request cancelled');
-    // Capture before reading events so a commit between the read and listener registration still wakes us.
-    const revision = observeWrites ? this.store.revision(this.jobId) : null;
     const ready = this.events(after);
     if (ready.status !== 'timeout' || !waitMs) return ready;
-    await new Promise<void>((resolve, reject) => {
+    await this.waitForChange(after, waitMs, signal, null);
+    return this.events(after);
+  }
+
+  private waitForChange(after: string | null, waitMs: number, signal: AbortSignal, revision: number | null): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       let poll: ReturnType<typeof setInterval> | undefined;
       let settled = false;
       const cleanup = () => { clearTimeout(timer); clearInterval(poll); this.listeners.delete(finish); signal.removeEventListener('abort', abort); };
@@ -843,28 +882,59 @@ export class JobSession {
       signal.addEventListener('abort', abort, { once: true });
       try {
         if (signal.aborted) abort();
-        else if (observeWrites) {
+        else if (revision !== null) {
           // Other sessions commit to the same store but cannot notify this instance's listeners.
           poll = setInterval(changed, 250);
           changed();
         } else if (this.events(after).status !== 'timeout') finish();
       } catch (error) { fail(error); }
     });
-    return this.events(after);
   }
 
-  async *subscribe(input: { readonly jobId: string; readonly after: string | null; readonly signal: AbortSignal }): AsyncIterable<EventV3> {
+  subscribe(input: JobSubscription): AsyncIterable<EventV3>;
+  subscribe(input: JobSubscription, page: true): AsyncIterable<EventV3 | JobProgressLineV3>;
+  async *subscribe(input: JobSubscription, page = false): AsyncIterable<EventV3 | JobProgressLineV3> {
     if (input.jobId !== this.jobId) throw new JobError('JOB_UNKNOWN');
     let after = input.after;
+    let delivered: JobProgressV3 | null | undefined;
+    const line = (progress: JobProgressV3 | null): JobProgressLineV3 => ({
+      type: 'progress', jobId: this.jobId, progress, now: new Date().toISOString(),
+    });
     while (!input.signal.aborted) {
-      let value: JobNextValue | NextValueV3;
-      try { value = await this.next(after, jobWaitLimitMs, input.signal, true); }
+      // Read the scalar revision first so a commit between this snapshot and waiting is observed.
+      const revision = this.store.revision(this.jobId);
+      const current = this.current(), value = this.events(after, current);
+      const progress = current.data.progress ?? null;
+      const displayed = delivered;
+      if (page && displayed === undefined) {
+        delivered = progress;
+        yield line(delivered);
+      } else if (page && displayed && (!progress || value.events.some(event =>
+        event.type !== 'act' && event.generation > displayed.generation))) {
+        delivered = null;
+        yield line(null);
+      }
+      for (const event of value.events) { after = event.cursor; yield event; }
+      if (value.status === 'closed') return;
+      if (value.events.length) continue;
+      let waitMs = jobWaitLimitMs;
+      if (page && progress && delivered?.seq !== progress.seq) {
+        // Share the cadence across pages. Keep waiting for the trailing slot even when writes stop.
+        const when = performance.now();
+        const previous = this.progressBroadcast;
+        if (!previous || previous.seq === progress.seq || when - previous.when >= progressIntervalMs) {
+          if (previous?.seq !== progress.seq) this.progressBroadcast = { seq: progress.seq, when };
+          delivered = progress;
+          yield line(delivered);
+          continue;
+        }
+        waitMs = Math.ceil(progressIntervalMs - (when - previous.when));
+      }
+      try { await this.waitForChange(after, waitMs, input.signal, revision); }
       catch (error) {
         if (input.signal.aborted && error instanceof JobError && error.code === 'JOB_REQUEST_INVALID') return;
         throw error;
       }
-      for (const event of value.events) { after = event.cursor; yield event; }
-      if (value.status === 'closed') return;
     }
   }
 

@@ -8,7 +8,7 @@ import {
   JOB_MESH_EDITS_ACT_SCHEMA,
   type AgentRequestV3, type FetchActRequestV3, type JobAgentRequest, type JobApiSchema,
   type JobCheckpointEvidence, type JobDisplayAcknowledgment, type JobErrorCode, type JobFetchActRequest, type JobFileIdentity,
-  type JobHostPorts, type JobHumanAuthority, type JobInterviewDiagnostic, type JobInterviewDiagnostics,
+  type JobHostPorts, type JobHumanAuthority, type JobInterviewDiagnostic, type JobInterviewDiagnostics, type JobProgressRequestV3,
   type JobInterviewJson, type JobInterviewRecord, type JobPlanIdentity, type JobPublicationMode,
   type JobAct, type JobMeshEdit, type JobMeshEditsAct, type JobMeshEditValue,
   type JobPublishRequest, type JobResult, type JobSelector, type JobSha256, type JobSubject,
@@ -43,6 +43,7 @@ export const jobBodyLimit = 256 * 1024;
 export const jobWaitLimitMs = 30_000;
 /** Subjects one `ask-batch` request may list (#963). */
 export const jobAskBatchLimit = 64;
+const jobProgressBodyLimit = 1024;
 const requestDeadlineMs = 10_000;
 
 export function jobHash(value: string | Uint8Array): string {
@@ -283,7 +284,7 @@ export function parseJobRequest(
 ): JobAgentRequest | JobFetchActRequest | AgentRequestV3 | FetchActRequestV3 {
   const item = jobObject(value, [
     'schema', 'jobId', 'requestId', 'verb', 'expectedGeneration', 'idempotencyKey',
-    'result', 'freeze', 'publicationId', 'subject', 'subjects', 'after', 'waitMs', 'reason', 'actId',
+    'result', 'freeze', 'publicationId', 'subject', 'subjects', 'after', 'waitMs', 'reason', 'actId', 'seq', 'phase', 'text', 'step',
   ]);
   const targetSchema = mode === 'package-only' || mode === 'record-and-package'
     ? jobApiSchemaForMode(mode)
@@ -298,6 +299,9 @@ export function parseJobRequest(
     if (item.verb === 'fetch-act') {
       jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'actId']);
       return { ...base, verb: 'fetch-act', actId: jobId(item.actId) };
+    }
+    if (item.verb === 'progress') {
+      return { ...base, verb: 'progress', ...parseJobProgress(item) };
     }
     const mutation = { ...base, expectedGeneration: jobInteger(item.expectedGeneration), idempotencyKey: jobId(item.idempotencyKey) };
     switch (item.verb) {
@@ -390,6 +394,24 @@ export function parseJobRequest(
       return { ...mutation, verb: 'close', reason: jobText(item.reason, 1024) };
   }
   throw new JobError('JOB_REQUEST_INVALID');
+}
+
+function parseJobProgress(item: Record<string, unknown>): Omit<JobProgressRequestV3, 'schema' | 'jobId' | 'requestId' | 'verb'> {
+  jobObject(item, ['schema', 'jobId', 'requestId', 'verb', 'seq', 'phase', 'text', 'step']);
+  const seq = jobInteger(item.seq), phase = item.phase;
+  if (seq < 1 || (phase !== 'ingest' && phase !== 'build' && phase !== 'measure' && phase !== 'publish' && phase !== 'other')) {
+    throw new JobError('JOB_REQUEST_INVALID');
+  }
+  let text: string | undefined;
+  if (Object.hasOwn(item, 'text')) {
+    text = item.text === '' ? '' : jobText(item.text, 120);
+    if (/[\u0085\u2028\u2029]/u.test(text)) throw new JobError('JOB_REQUEST_INVALID');
+  }
+  if (!Object.hasOwn(item, 'step')) return { seq, phase, ...(text !== undefined ? { text } : {}) };
+  const step = jobObject(item.step, ['i', 'n']);
+  const n = jobInteger(step.n, 1000), i = jobInteger(step.i, n);
+  if (i < 1) throw new JobError('JOB_REQUEST_INVALID');
+  return { seq, phase, ...(text !== undefined ? { text } : {}), step: { i, n } };
 }
 
 /** The single V3 `ask` subject parser; `ask-batch` parses each listed subject through it. */
@@ -1609,7 +1631,7 @@ function decodeCommentsAct(raw: unknown, schema: JobCommentsAct['schema'] | JobC
   }, 'JOB_ACT_INVALID');
 }
 
-export async function jobBody(request: Request, maximum = jobBodyLimit): Promise<unknown> {
+export async function jobBody(request: Request, maximum = jobBodyLimit, validateSize?: (value: unknown, size: number) => void): Promise<unknown> {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '')) {
     throw new JobError('JOB_REQUEST_INVALID');
   }
@@ -1634,6 +1656,7 @@ export async function jobBody(request: Request, maximum = jobBodyLimit): Promise
       chunks.push(value);
     }
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+    validateSize?.(value, size);
     if (value?.value != null && Object.hasOwn(value.value, 'meshEdits') &&
         Buffer.byteLength(canonicalJson(value.value.meshEdits)) > jobBodyLimit) {
       throw new JobError('JOB_BODY_LIMIT');
@@ -1703,7 +1726,11 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
             {headers: {...responseHeaders, 'Content-Type': 'image/png'}});
         }
         gate(request, base + '/api', false);
-        const body = await jobBody(request);
+        const body = await jobBody(request, jobBodyLimit, (value, size) => {
+          if (size > jobProgressBodyLimit && (value as { verb?: unknown } | null)?.verb === 'progress') {
+            throw new JobError('JOB_REQUEST_INVALID');
+          }
+        });
         const mode: JobPublicationMode =
           session.publicationMode === 'record-and-package' &&
           body !== null &&
@@ -1738,6 +1765,9 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
       }
     },
     subscribeJob: input => session.subscribe(input),
+    ...(session.apiSchema === JOB_API_V3_SCHEMA ? {
+      subscribeJobPage: (input: Parameters<JobHostPorts['subscribeJob']>[0]) => session.subscribe(input, true),
+    } : {}),
     async readPublication(job, publication) {
       try {
         if (job !== session.jobId) throw new JobError('JOB_UNKNOWN');

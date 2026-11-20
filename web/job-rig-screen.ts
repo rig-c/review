@@ -4,7 +4,7 @@ import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
  * window. The job stays the transport: same asks, act kinds, still, displayed-ack and submission idempotency.
  * Rig verdicts use the act bar; supported approval and interview asks use the shared ask dialog. */
-import {JOB_MESH_EDITS_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobMeshEdit,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
+import {JOB_MESH_EDITS_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobMeshEdit,type JobProgressV3,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
 import {canonicalJson} from '../src/canonical-json.ts';
 import {draftKey} from '../src/mesh-edit.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
@@ -116,6 +116,12 @@ export function createJobRigScreen(options: {
   load(): Promise<unknown>;
 }) {
   let mounted: JobRigScreenPrepared | null = null, screen: JobRigMeshScreen | null = null, drawGeneration = 0;
+  let latestProgress: JobProgressV3 | null = null;
+  const showProgress=()=>{
+    if(!screen?.progress)return;
+    const awaitingAsk=screen.publish&&options.window.state().pending.some(ask=>ask.status==='pending');
+    screen.progress(awaitingAsk?null:latestProgress);
+  };
   let lastMessage: [text: string, error?: boolean, diagnostic?: string] = ['', false];
   let streamReport: {message: [text: string, error?: boolean, diagnostic?: string]; footer: {source: string; title: string; sourceTitle: string | null; error: boolean} | null; header: {source: string; error: boolean} | null; applied: string} | null = null;
   let transition:{rollback():Promise<void>;finalize():void}|null=null;
@@ -290,7 +296,7 @@ export function createJobRigScreen(options: {
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
-        attach:value=>{screen=value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
+        attach:value=>{screen=value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());screen.progress?.(latestProgress);refreshRecordForms();},
         displayed:()=>ready.resolve(),failed:error=>ready.reject(error)};
     }
     if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
@@ -326,7 +332,7 @@ export function createJobRigScreen(options: {
       },
       submit,
       canSubmitMeshEdits:()=>!!screen?.hasMeshEdits?.(),
-      attach: value => {screen = value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());refreshRecordForms();},
+      attach: value => {screen = value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());screen.progress?.(latestProgress);refreshRecordForms();},
       displayed: () => ready.resolve(),
       failed: error => ready.reject(error)};
   }
@@ -348,12 +354,16 @@ export function createJobRigScreen(options: {
         route:()=>{throw new Error('JOB_DISPLAY_MISMATCH');},headers:init=>options.access.headers(init)},
         read:()=>Promise.reject(new Error('JOB_DISPLAY_MISMATCH')),
         submit:async()=>{throw new Error('JOB_ACT_SOURCE_STALE');},
-        attach:value=>{screen=value;attached();},displayed:()=>{},failed});
+        attach:value=>{screen=value;showProgress();attached();},displayed:()=>{},failed});
       await options.load();await ready;
   }
   return {
     prepare,waiting,
     mounted: () => mounted,
+    progress(value: JobProgressV3 | null): void {
+      latestProgress = value;
+      showProgress();
+    },
     report(error:unknown,fallback?:string):void {
       const text=options.refusal(error,fallback),title=jobSubmissionRefusal(error).title;
       if(fallback!=='JOB_STREAM_FAILED'){say(text,true,title);return;}
@@ -395,7 +405,7 @@ export function createJobRigScreen(options: {
         // Filling consumes the waiting screen's one-shot continuation. Recreate that same shared
         // composition after disposing its mutated candidate, so the next transaction can fill it again.
         if(filling){screen=null;recovery=waiting();}
-        else recovery=Promise.resolve(previous?.resume?.());
+        else {previous?.progress?.(latestProgress);recovery=Promise.resolve(previous?.resume?.());}
         return recovery;
       };
       const filling=!!previousHost?.waiting&&!!previous?.publish;

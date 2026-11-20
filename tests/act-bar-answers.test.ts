@@ -5,13 +5,14 @@ import {readFileSync} from 'node:fs';
 const main=readFileSync(new URL('../web/main.ts',import.meta.url),'utf8');
 const start=main.indexOf('function renderAnswerControls():void {');
 const end=main.indexOf('\nlet verdictSubmit:',start);
-const renderer=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(start,end));
+const rowStart=main.indexOf('function syncJobActRow('),rowEnd=main.indexOf('function setJobProgress(',rowStart);
+const renderer=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(rowStart,rowEnd)+main.slice(start,end));
 function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  const control=()=>({hidden:false,disabled:false,title:'',textContent:'',onclick:null as null|((e:unknown)=>unknown),classList:{values:new Set<string>(),toggle(name:string,on:boolean){on?this.values.add(name):this.values.delete(name);}}});
  const save=control(),requestChanges=control(),rigAsk=control(),select=control(),label=control(),submit=control();
  let state:{kind:string;text:string}|null=null;const rigInspector={act:{hidden:true},actBar:{saveState:()=>state,setSaveState:(value:{kind:string;text:string})=>{state=value;}}};
  const calls:string[]=[],session={feedbackWarnings:[],status:'pending'};
- const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,firstPublicationPrompt:false,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
+ const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,firstPublicationPrompt:false,jobProgress:null as object|null,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
   questionForms:[],session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
   recordDialog:{querySelector:(selector:string)=>selector==='fieldset:not(:disabled)'?{disabled:false}:null,querySelectorAll:()=>[submit]},
   button:()=>save,select:()=>select,document:{querySelector:()=>label},
@@ -37,6 +38,12 @@ for(const kind of ['signoff','interview-picks','checkpoint'])test('#809 '+kind+'
 });
 test('#809 no pending ask has no emphasised action',()=>{
  const h=harness([]);expect(h.save.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);expect(h.save.classList.values.size+h.rigAsk.classList.values.size).toBe(0);expect(h.rigInspector.act.hidden).toBe(true);
+});
+test('#987 progress reveals the act row with the existing actions hidden',()=>{
+ const h=harness([]);h.env.jobProgress={};h.render();
+ expect(h.rigInspector.act.hidden).toBe(false);
+ expect([h.save,h.requestChanges,h.rigAsk].every(control=>control.hidden)).toBe(true);
+ h.env.jobProgress=null;h.render();expect(h.rigInspector.act.hidden).toBe(true);
 });
 for(const kind of ['review-verdict','parts-verdict','signoff','interview-picks','checkpoint'])test('#825 restore conflict blocks all '+kind+' submitting controls',()=>{
  const h=harness([{kind}],3,true);expect(h.rigAsk.disabled).toBe(true);expect(h.submit.disabled).toBe(true);
