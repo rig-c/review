@@ -1523,14 +1523,36 @@ export interface JobFormDependencies {
             submitting: false, ...(disposeInterview?{dispose:disposeInterview}:{}) };
         if(disposeInterview)form.addEventListener('job-form-dispose',disposeInterview);
         try {
-            const saved = JSON.parse(draftStorage().getItem(localDraftKey(prepared.display)) ?? 'null');
+            const primaryKey = localDraftKey(prepared.display);
+            const legacyPrefix = 'rig-review-job-draft/1:' + (/^\/jobs\/([^/]+)\//.exec(prepared.display.routes.entry)?.[1] ?? '') + ':';
+            const legacyCurrentKey = legacyPrefix + prepared.display.publication.publicationId + ':' + prepared.display.publication.source.sourceHash;
+            const legacyPreviousKey = prepared.display.publication.previousPublicationId
+                ? legacyPrefix + prepared.display.publication.previousPublicationId + ':' + prepared.display.publication.source.sourceHash : '';
+            const primaryRaw = draftStorage().getItem(primaryKey);
+            const raw = primaryRaw ?? draftStorage().getItem(legacyCurrentKey) ?? (legacyPreviousKey ? draftStorage().getItem(legacyPreviousKey) : null);
+            const saved = JSON.parse(raw ?? 'null');
+            const validPublication = primaryRaw !== null
+                ? typeof saved?.publicationId === 'string' && saved.publicationId.length > 0
+                : saved?.publicationId === prepared.display.publication.publicationId ||
+                    (Boolean(prepared.display.publication.previousPublicationId) && saved?.publicationId === prepared.display.publication.previousPublicationId);
             // A finalized answer is read back from its act; a local draft never overrides it.
-            if (ask.status !== 'answered' && saved?.publicationId === prepared.display.publication.publicationId &&
+            if (ask.status !== 'answered' && validPublication &&
                 saved?.sourceHash === prepared.display.publication.source.sourceHash) {
                 assertJobAskSource({...ask, source: saved.source}, prepared.display);
-                const original = saved.forms?.find((item: {
+                const exact = saved.forms?.find((item: {
                     askId: string;
                 }) => item.askId === ask.askId);
+                const original = exact ?? (saved.publicationId !== prepared.display.publication.publicationId
+                    ? [...(saved.forms ?? [])].reverse().find((item: {
+                        askId: string;
+                        value?: Record<string, unknown>;
+                    }) =>
+                        subject.kind === 'interview-picks' ? item.value?.questionId === subject.questionId :
+                        subject.kind === 'checkpoint' ? item.value?.checkpointId === subject.checkpointId :
+                        (subject.kind === 'signoff' || subject.kind === 'reopen') && item.value?.stage === subject.stage &&
+                            !('outcome' in (item.value ?? {})) && (subject.kind === 'signoff') === ('decision' in (item.value ?? {}))
+                    )
+                    : undefined);
                 if(commentOnly&&typeof original?.value?.words==='string'&&original.value.words.length<=10000)retainedCommentWords=original.value.words;
                 for (const input of form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')) {
                     const restored = original?.controls?.find((item: {
@@ -1646,9 +1668,21 @@ export async function joinedInterviewForms(access:InstanceAccess,present:(forms:
     return ()=>{disposed=true;off();for(const entry of forms.values())entry.dispose();forms.clear();};
 }
 
+export function jobSourceDraftId(source: SourceV3): string {
+    if ('record' in source)
+        return source.subject === 'option-set' ? source.selection.questionId + ':' + source.selection.setId : 'plan';
+    if (source.selector?.kind === 'draft')
+        return source.selector.id;
+    if (source.selector?.kind === 'rig')
+        return source.package.id + ':rig:' + source.selector.version;
+    if (source.selector?.kind === 'post')
+        return source.package.id + ':post:' + source.selector.version + ':' + source.selector.rigVersion;
+    return source.package.id;
+}
+
 export function createJobFormDrafts(options:{jobId:string;current():JobPreparedInspection|null;forms():ReadonlyMap<string,JobForm>;storage():Pick<Storage,'setItem'>}) {
     function localDraftKey(display: DisplayPublicationV3): string {
-        return 'rig-review-job-draft/1:' + options.jobId + ':' + display.publication.publicationId + ':' + display.publication.source.sourceHash;
+        return 'rig-review-job-draft/1:' + options.jobId + ':' + jobSourceDraftId(display.publication.source) + ':' + display.publication.source.sourceHash;
     }
     function saveDraft(): void {
         const current=options.current(),forms=options.forms();
@@ -1692,7 +1726,10 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
         window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),
         routes:display=>jobPublicationRoutes(display,location.origin),load:async()=>(await import('./main.ts')).mountRigScreen()});
     let bootstrapNotice:HTMLElement|null=null,bootstrapStream=false,bootstrapPrior:{text:string;title:string}|null=null;
-    const report=(error:unknown,fallback?:string)=>{const stream=fallback==='JOB_STREAM_FAILED';if(rigScreen.mounted()){rigScreen.report(error,fallback);return;}if(!bootstrapNotice){bootstrapNotice=node('p');bootstrapNotice.setAttribute('role','status');bootstrapNotice.setAttribute('translate','no');host.prepend(bootstrapNotice);}const text=jobWindowRefusal(error,fallback),code=error instanceof Error?error.message:error,title=typeof code==='string'&&/^[A-Z][A-Z0-9_]*$/.test(code)&&Object.hasOwn(enCatalog,code)&&Object.hasOwn(koCatalog,code)?code:fallback??'JOB_WINDOW_FAILED';if(stream)bootstrapStream=true;else{bootstrapStream=false;bootstrapPrior={text,title};}bootstrapNotice.textContent=text;bootstrapNotice.title=title;};
+    const report=(failure:unknown,fallback?:string)=>{
+        const reason=failure instanceof Error?failure.message:failure;
+        const error=!access.capability&&reason==='JOB_CAPABILITY_REQUIRED'?'JOB_CAPABILITY_LINK_LOST':failure;
+        const stream=fallback==='JOB_STREAM_FAILED';if(rigScreen.mounted()){rigScreen.report(error,fallback);return;}if(!bootstrapNotice){bootstrapNotice=node('p');bootstrapNotice.setAttribute('role','status');bootstrapNotice.setAttribute('translate','no');host.prepend(bootstrapNotice);}const text=jobWindowRefusal(error,fallback),code=error instanceof Error?error.message:error,title=typeof code==='string'&&/^[A-Z][A-Z0-9_]*$/.test(code)&&Object.hasOwn(enCatalog,code)&&Object.hasOwn(koCatalog,code)?code:fallback??'JOB_WINDOW_FAILED';if(stream)bootstrapStream=true;else{bootstrapStream=false;bootstrapPrior={text,title};}bootstrapNotice.textContent=text;bootstrapNotice.title=title;};
     const clear=()=>{rigScreen.clearReport?.();if(!bootstrapStream)return;bootstrapStream=false;if(bootstrapPrior&&bootstrapNotice){bootstrapNotice.textContent=bootstrapPrior.text;bootstrapNotice.title=bootstrapPrior.title;return;}if(bootstrapNotice){bootstrapNotice.textContent='';bootstrapNotice.title='';bootstrapNotice.remove?.();bootstrapNotice=null;}};
     const window=createJobWindow<JobRigScreenPrepared|null>({jobId:access.jobId,pageId,transport,adapter:{
         async prepare(display,signal){return rigScreen.prepare(display,signal);},

@@ -19,7 +19,7 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 export interface Reference { id: string; label: string; type: 'image' | 'video' | 'pose'; path: string; width?: number; height?: number }
 export interface Checkpoint { id: string; title: string; time?: number; animation?: string; reference?: string; note?: string; workspace?: 'modeling' | 'motion'; camera?: { zoom: number; x: number; y: number }; axis?: {id:string;value:number} }
 export interface ReviewManifest {
-  schema: 'rig-review/1'; id: string; title: string; revision: string; model?: string; motion?: string;
+  schema: 'rig-review/1'; id: string; title: string; revision: string; model?: string; frames?: string; motion?: string;
   direction?: string; scene?: string; sets?: string;
   references: Reference[]; animations: { id: string; label?: string; duration?: number }[];
   checkpoints: Checkpoint[]; authoring: { label: string; path: string }[];
@@ -29,8 +29,10 @@ export interface ReviewManifest {
   producer?: HandoffDeclaration;
   panels?: JobPanelComposition;
 }
+export interface ReviewFrameSet { animation: string; fps: number; written: number; stride: number; duration: number }
+export interface ReviewFrames { path: string; sha256: string; sets: ReviewFrameSet[] }
 export interface ReviewedSource { readonly packageRevision:string; readonly viewerVersion:string; readonly runtimeVersion:string; readonly rig:{readonly path:string;readonly sha256:string}|null; readonly motion:{readonly path:string;readonly sha256:string}|null; readonly handoff?:HandoffRecord }
-export interface ReviewPackage { scene?:SceneInspection; direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; feedbackCatalog:FeedbackCatalog;
+export interface ReviewPackage { scene?:SceneInspection; direction?:DirectionInspection; setsHash?:string; referenceHashes?:Record<string,string>; root: string; manifestPath: string; manifest: ReviewManifest; sourceHash: string; reviewedSource:ReviewedSource; files: Set<string>; report:ReportSeeds|null; frames:ReviewFrames|null; feedbackCatalog:FeedbackCatalog;
   /** The resolved producer handoff (#101) and, when there is none, the refusal line naming where it was looked for. */
   handoff: Handoff|null; handoffReason: string|null; handoffInputs?: HandoffFlags;
   /** #187: the rig-parts build root ({@link isBuildRoot}) whose `check/` this package is, however it was opened; review state stays outside it. */
@@ -80,6 +82,7 @@ export function parseManifest(input: unknown): ReviewManifest {
   const manifest: ReviewManifest = {
     schema: 'rig-review/1', id: id(m.id, 'id'), title: string(m.title, 'title'), revision: string(m.revision, 'revision'),
     model: m.model === undefined ? undefined : packagePath(m.model, 'model'),
+    ...(m.frames===undefined?{}:{frames:packagePath(m.frames,'frames')}),
     ...(m.direction===undefined?{}:{direction:packagePath(m.direction,'direction')}),
     ...(m.scene===undefined?{}:{scene:packagePath(m.scene,'scene')}),
     ...(m.sets===undefined?{}:{sets:packagePath(m.sets,'sets')}),
@@ -103,6 +106,29 @@ export function parseManifest(input: unknown): ReviewManifest {
   for(const c of manifest.checkpoints) if(c.axis){const a=manifest.axes.find(a=>a.id===c.axis!.id);if(!a)fail(`checkpoint ${c.id}.axis`,'declared axis id');if(c.axis.value<a.min||c.axis.value>a.max)fail(`checkpoint ${c.id}.axis.value`,`number in [${a.min}, ${a.max}]`);}
   return manifest;
 }
+function parseFrames(text: string, path: string, sha256: string): ReviewFrames {
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch (e) { throw new Error(`FRAMES_JSON: ${path}: ${e instanceof Error ? e.message : String(e)}`); }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`FRAMES_FIELD: ${path}: expected object`);
+  const doc = raw as Record<string, unknown>;
+  if (doc.spec !== 'rigc-frames/1') throw new Error(`FRAMES_SPEC: ${path}.spec: expected rigc-frames/1`);
+  if (!Array.isArray(doc.sets) || doc.sets.length > 10000) throw new Error(`FRAMES_FIELD: ${path}.sets: expected array of at most 10000 entries`);
+  const seen = new Set<string>();
+  const sets = doc.sets.map((entry, i): ReviewFrameSet => {
+    const f = `${path}.sets[${i}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`FRAMES_FIELD: ${f}: expected object`);
+    const s = entry as Record<string, unknown>;
+    if (typeof s.animation !== 'string' || !s.animation.trim() || s.animation.length > 10000) throw new Error(`FRAMES_FIELD: ${f}.animation: expected nonempty string`);
+    if (seen.has(s.animation)) throw new Error(`FRAMES_DUPLICATE_ANIMATION: ${f}.animation: duplicate animation ${JSON.stringify(s.animation)}`);
+    seen.add(s.animation);
+    if (typeof s.fps !== 'number' || !Number.isSafeInteger(s.fps) || s.fps <= 0) throw new Error(`FRAMES_FIELD: ${f}.fps: expected integer > 0`);
+    if (typeof s.written !== 'number' || !Number.isSafeInteger(s.written) || s.written < 0) throw new Error(`FRAMES_FIELD: ${f}.written: expected integer >= 0`);
+    if (typeof s.stride !== 'number' || !Number.isSafeInteger(s.stride) || s.stride <= 0) throw new Error(`FRAMES_FIELD: ${f}.stride: expected integer > 0`);
+    if (typeof s.duration !== 'number' || !Number.isFinite(s.duration) || s.duration < 0) throw new Error(`FRAMES_FIELD: ${f}.duration: expected finite number >= 0`);
+    return { animation: s.animation, fps: s.fps, written: s.written, stride: s.stride, duration: s.duration };
+  });
+  return { path, sha256, sets };
+}
 export const BUILD_MODEL_PATH = 'build/skeleton.model.json';
 interface ReviewLoadOptions {
   /** Explicit producer flags take precedence over discovery. False disables producer lookup. */
@@ -124,11 +150,14 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   const assetFile=async(path:string):Promise<string>=>{
     if(sealedPlayback&&!sealedPlayback.has(path))fail(path,'sealed playback file');
     const literal=sealedPlayback?checkedPath(root,path):undefined;
-    const full=await safeFile(root,path);
+    let full:string;
+    try{full=await safeFile(root,path);}
+    catch(e){if(path===manifest.frames&&['ENOENT','ENOTDIR'].includes((e as NodeJS.ErrnoException).code??''))throw new Error(`FRAMES_MISSING: ${path}: ${(e as Error).message}`);throw e;}
     if(literal!==undefined&&full!==literal)fail(path,'file without symlinks');
     return full;
   };
   const files = new Set([...(directory?[]:[relative(root,manifestPath)]),...manifest.references.map(v=>v.path),...manifest.authoring.map(v=>v.path),...manifest.audio.clips.map(v=>v.path)]);
+  if(manifest.frames)files.add(manifest.frames);
   if(manifest.direction)files.add(manifest.direction);
   if(manifest.sets)files.add(manifest.sets);
   const rootFile=async(name:string):Promise<string|undefined>=>{try{await safeFile(root,name);return name;}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw e;}};
@@ -158,7 +187,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     const joints=list(pose.joints,`pose ${r.id}.joints`,(v,f)=>({id:id(v.id,f+'.id'),x:number(v.x,f+'.x',-Number.MAX_VALUE),y:number(v.y,f+'.y',-Number.MAX_VALUE),parent:optionalString(v.parent,f+'.parent')}));
     for(const j of joints) if(j.parent&&!joints.some(v=>v.id===j.parent&&v.id!==j.id)) fail(`pose ${r.id} joint ${j.id}.parent`,'another declared joint id');
   }
-  const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let modelMetadata:Record<string,unknown>|null=null;let directionInput:unknown;
+  const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let frames:ReviewFrames|null=null;let modelMetadata:Record<string,unknown>|null=null;let directionInput:unknown;
   // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
   const {handoff,reason:handoffReason}=options.handoff===false?{handoff:null,reason:null}:
     await resolveHandoff(root,manifest.producer,options.handoff,{starts:options.handoffStarts??[options.cwd??process.cwd()]});
@@ -182,12 +211,13 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   }
   const hash = createHash('sha256');hash.update(JSON.stringify(manifest));hash.update('\0');const fileHashes=new Map<string,string>();
   for(const p of [...files].sort()) { const full=await assetFile(p); const before=await stat(full); hash.update(p);hash.update('\0');hash.update(String(before.size));hash.update('\0'); const fileHash=createHash('sha256');const metadataChunks:Buffer[]=[];const isDirection=p===manifest.direction;let bytesRead=0;
-    if(isDirection&&before.size>DIRECTION_MAX_BYTES)throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');for await(const chunk of createReadStream(full)){hash.update(chunk);fileHash.update(chunk);if(isDirection&&(bytesRead+=chunk.length)>DIRECTION_MAX_BYTES)throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');if(p===reportPath||p===manifest.model||isDirection)metadataChunks.push(chunk);}fileHashes.set(p,fileHash.digest('hex'));if(sceneBytes.has(p)&&createHash('sha256').update(sceneBytes.get(p)!).digest('hex')!==fileHashes.get(p))throw new Error('SCENE_SOURCE_MISMATCH: '+p); const after=await stat(full); if(before.size!==after.size||before.mtimeMs!==after.mtimeMs) throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`);
+    if(isDirection&&before.size>DIRECTION_MAX_BYTES)throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');for await(const chunk of createReadStream(full)){hash.update(chunk);fileHash.update(chunk);if(isDirection&&(bytesRead+=chunk.length)>DIRECTION_MAX_BYTES)throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');if(p===reportPath||p===manifest.model||isDirection||p===manifest.frames)metadataChunks.push(chunk);}fileHashes.set(p,fileHash.digest('hex'));if(sceneBytes.has(p)&&createHash('sha256').update(sceneBytes.get(p)!).digest('hex')!==fileHashes.get(p))throw new Error('SCENE_SOURCE_MISMATCH: '+p); const after=await stat(full); if(before.size!==after.size||before.mtimeMs!==after.mtimeMs) throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`);
     if(sealedPlayback&&fileHashes.get(p)!==sealedPlayback.get(p))fail(p,'sealed playback hash');
     // The parser and package hash consume the same bytes, never two file reads.
     if(p===manifest.model){if(fileHashes.get(p)!==modelBytesHash)throw new Error(`Model ${p} changed while hashing; retry with stable package inputs`);modelMetadata=object(JSON.parse(Buffer.concat(metadataChunks).toString('utf8')),'model');}
     if(isDirection)directionInput=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));
     if(p===reportPath){let value:unknown;try{value=JSON.parse(Buffer.concat(metadataChunks).toString('utf8'));}catch(e){throw new Error(`${p}: ${e instanceof Error?e.message:String(e)}`);}report=parseReport(value,p);}
+    if(p===manifest.frames)frames=parseFrames(Buffer.concat(metadataChunks).toString('utf8'),p,fileHashes.get(p)!);
   }
   if(painting){hash.update(SOURCE_PAINTING_ID);hash.update('\0');hash.update(painting.sha256);hash.update('\0');}
   // #192: the root is `check/` whether the folder or its review.json was opened, so the build root is kept either way.
@@ -195,7 +225,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
   const direction=manifest.direction?readDirectionInspection(directionInput,{path:manifest.direction,sha256:fileHashes.get(manifest.direction)!},reviewedSource.rig):undefined;
   const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations:modelAnimations(modelMetadata),clock:report?.clock??null,clockAnimation:report?.animation??null,...(discoverTurnDials(modelMetadata).length?{turnDials:discoverTurnDials(modelMetadata)}:{})};
-  return {...(scene?{scene}:{}),...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{}),...(options.cwd?{cwd:options.cwd}:{}),...(options.handoffStarts?{handoffStarts:options.handoffStarts}:{})};
+  return {...(scene?{scene}:{}),...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,frames,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{}),...(options.cwd?{cwd:options.cwd}:{}),...(options.handoffStarts?{handoffStarts:options.handoffStarts}:{})};
 }
 
 /** #329: the reference id and served path of the handoff's source painting; the path is a name, never a package file. */

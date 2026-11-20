@@ -43,9 +43,11 @@ test('#557/#588 control public job-host retains its runtime exports, record-mode
     'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct',
     // #914: the publisher's previous-draft support marker.
     'JOB_PREVIOUS_DRAFT_SCHEMA',
+    // #1005: the host-bound finalized-act waiter.
+    'waitForJobAct',
   ].sort();
   expect(legacyRuntimeExports).toHaveLength(16);
-  expect(expectedRuntimeExports).toHaveLength(31);
+  expect(expectedRuntimeExports).toHaveLength(32);
   expect(Object.keys(publicHost).sort()).toEqual(expectedRuntimeExports);
   for (const name of expectedRuntimeExports) {
     const missing = new Set(Object.keys(publicHost));

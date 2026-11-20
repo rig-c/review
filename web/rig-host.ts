@@ -43,12 +43,12 @@ export interface RigHost {
   readonly waiting?:boolean;
   readonly subject?:'parts';
   readonly unavailable?:string;
-  readonly direction?:{readonly publicationId:string;readonly sourceHash:string};
-  readonly verdictComments?:{readonly publicationId:string;readonly sourceHash:string;readonly rows:CommentRow[];readonly available:()=>boolean};
+  readonly direction?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId:string;readonly previousPublicationId?:string|null;readonly sourceHash:string};
+  readonly verdictComments?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId:string;readonly previousPublicationId?:string|null;readonly sourceHash:string;readonly rows:CommentRow[];readonly available:()=>boolean};
   readonly navigation?:RigHostNavigation;
   /** Derived from the displayed subject's finalized verdict; never a mode or another subject's act. */
   reviewState?(issues:number,sending:boolean):string;
-  readonly record?:{readonly publicationId?:string;readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean;readonly missingPicture?:'rig'|'scene';readonly questionPicture?:true};
+  readonly record?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId?:string;readonly previousPublicationId?:string|null;readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean;readonly missingPicture?:'rig'|'scene';readonly questionPicture?:true};
   submitParts?(issues:readonly PartsIssue[], general?:readonly string[]):Promise<string>;
   readonly access: InstanceAccess;
   /** UI act authority is separate from a retained backdrop's immutable source access. */
