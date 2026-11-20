@@ -1557,3 +1557,90 @@ test('#833 joined interview re-enables its opener before the saved event so ques
   expect(disabledAtSaved).toEqual([false,false]);expect(posted.map(value=>value.set.sha256)).toEqual(['a'.repeat(64),'b'.repeat(64)]);
  }finally{dispose?.();globalThis.fetch=previousFetch;if(previousDocument)Object.defineProperty(globalThis,'document',previousDocument);else delete (globalThis as any).document;}
 });
+
+test('#1009 provenance rig and motion SHA rows localize Not supplied in KO/EN while keeping supplied hex prefixes untranslated in code',async()=>{
+ const mainSource=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+ const compareSource=await readFile(new URL('../web/compare.ts',import.meta.url),'utf8');
+ const transpiler=new Bun.Transpiler({loader:'ts'});
+ const rpStart=mainSource.indexOf('function renderProvenance(): void {'),rpEnd=mainSource.indexOf('\nfunction checkpointEntry(',rpStart);
+ const partsStart=mainSource.indexOf(' const renderPartsProvenance='),partsEnd=mainSource.indexOf('\n text(\'provenance-full\'',partsStart);
+ const reportStart=mainSource.indexOf('function initReport(): void {'),reportEnd=mainSource.indexOf('\nfunction renderReportEvents(',reportStart);
+ const cmpStart=compareSource.indexOf('function provenance(): void {'),cmpEnd=compareSource.indexOf('\nfunction renderFeedbackSelection(',cmpStart);
+ expect(rpStart).toBeGreaterThan(0);expect(partsStart).toBeGreaterThan(0);expect(reportStart).toBeGreaterThan(0);expect(cmpStart).toBeGreaterThan(0);
+ const preference=getLanguagePreference();
+ try{
+  const makeProvenanceDom=()=>{
+   const {doc,root}=makeTestDoc();
+   const version=doc.createElement('strong');version.id='provenance-version';
+   const rig=doc.createElement('code');rig.id='provenance-rig';
+   const motion=doc.createElement('code');motion.id='provenance-motion';
+   const missing=doc.createElement('span');missing.id='provenance-motion-missing';missing.textContent='Not supplied';missing.hidden=true;
+   const full=doc.createElement('pre');full.id='provenance-full';
+   const summary=doc.createElement('span');summary.id='report-summary';
+   const browser=doc.createElement('div');browser.id='report-browser';
+   const unavail=doc.createElement('p');unavail.id='report-unavailable';
+   const brief=doc.createElement('div');brief.id='provenance-brief';
+   root.append(version,rig,motion,missing,full,summary,browser,unavail,brief);
+   return {doc,version,rig,motion,missing,summary,brief};
+  };
+  // 1. Parts-verdict job (no rig, no motion): KO shows 제공되지 않음 in both rows, EN shows Not supplied.
+  {
+   const {doc,version,rig,motion,missing}=makeProvenanceDom();
+   const viewDisposers:(()=>void)[]=[];
+   const el=(id:string)=>doc.getElementById(id)!;
+   const text=(id:string,v:string)=>setSourceText(el(id),v);
+   const runParts=new Function('text','el','t','viewDisposers','onLanguageChange','renderProvenance',transpiler.transformSync(mainSource.slice(partsStart,partsEnd)));
+   setLanguagePreference('ko');
+   runParts(text,el,t,viewDisposers,()=>{},()=>{});
+   applyDomI18n(doc as unknown as Document);
+   expect(version.textContent).toBe('파츠 패키지, 리깅 전');
+   expect(rig.textContent).toBe('제공되지 않음');
+   expect(motion.hidden).toBe(true);
+   expect(missing.hidden).toBe(false);
+   expect(missing.textContent).toBe('제공되지 않음');
+   setLanguagePreference('en');
+   runParts(text,el,t,viewDisposers,()=>{},()=>{});
+   applyDomI18n(doc as unknown as Document);
+   expect(version.textContent).toBe('Parts package, before rigging');
+   expect(rig.textContent).toBe('Not supplied');
+   expect(missing.textContent).toBe('Not supplied');
+  }
+  // 2. Single-package renderProvenance: missing vs supplied rig/motion SHA, report-summary, and compare provenance-brief.
+  {
+   const {doc,rig,motion,missing,summary,brief}=makeProvenanceDom();
+   const viewDisposers:(()=>void)[]=[];
+   const el=(id:string)=>doc.getElementById(id)!;
+   const text=(id:string,v:string)=>setSourceText(el(id),v);
+   const session:any={sourceHash:'s'.repeat(64),reviewedSource:{packageRevision:'v1',rig:null,motion:null}};
+   const data:any={report:null,a:{reviewedSource:{packageRevision:'v1',rig:{sha256:'abcdef0123456789'.padEnd(64,'0')},motion:null}},b:{reviewedSource:{packageRevision:'v2',rig:null,motion:null}},reference:{sha256:'fedcba9876543210'.padEnd(64,'0')}};
+   const renderProv=new Function('session','text','el','t','viewDisposers','onLanguageChange',transpiler.transformSync(mainSource.slice(rpStart,rpEnd))+';return renderProvenance;')(session,text,el,t,viewDisposers,()=>{});
+   const initRep=new Function('data','el','text',transpiler.transformSync(mainSource.slice(reportStart,reportEnd))+';return initReport;')(data,el,text);
+   const runCmp=new Function('el','data','session','document','text',transpiler.transformSync(compareSource.slice(cmpStart,cmpEnd))+';return provenance;')(el,data,{binding:{}},doc,(id:string,v:string)=>{el(id).textContent=v;});
+   setLanguagePreference('ko');
+   renderProv();initRep();runCmp();
+   applyDomI18n(doc as unknown as Document);
+   expect(rig.textContent).toBe('제공되지 않음');
+   expect(motion.hidden).toBe(true);expect(missing.hidden).toBe(false);expect(missing.textContent).toBe('제공되지 않음');
+   expect(summary.textContent).toBe('제공되지 않음');
+   expect(brief.children[0]!.textContent).toBe('A · v1 / 리그 abcdef012345 / 모션 제공되지 않음');
+   expect(brief.children[1]!.textContent).toBe('B · v2 / 리그 제공되지 않음 / 모션 제공되지 않음');
+
+   // Supplied SHA stays untranslated in <code>
+   session.reviewedSource={packageRevision:'v1',rig:{sha256:'abcdef0123456789'.padEnd(64,'0')},motion:{sha256:'1234567890abcdef'.padEnd(64,'0')}};
+   renderProv();applyDomI18n(doc as unknown as Document);
+   expect(rig.textContent).toBe('abcdef012345…');
+   expect(motion.hidden).toBe(false);expect(missing.hidden).toBe(true);expect(motion.textContent).toBe('1234567890ab…');
+  }
+  // 3. Control that fails on 93280e2: writing raw 'Not supplied' into <code id="provenance-rig"> and <code id="provenance-motion"> leaves English in KO because isExemptElement skips <code> outside p.hint.
+  {
+   const {doc,rig,motion}=makeProvenanceDom();
+   const el=(id:string)=>doc.getElementById(id)!;
+   const text=(id:string,v:string)=>setSourceText(el(id),v);
+   setLanguagePreference('ko');
+   text('provenance-rig','Not supplied');text('provenance-motion','Not supplied');
+   applyDomI18n(doc as unknown as Document);
+   expect(rig.textContent).toBe('Not supplied');
+   expect(motion.textContent).toBe('Not supplied');
+  }
+ }finally{setLanguagePreference(preference);}
+});
