@@ -1,0 +1,64 @@
+import {expect} from 'bun:test';
+import {join} from 'node:path';
+import {readFile} from 'node:fs/promises';
+import {JOB_API_SCHEMA, startJobHost, type JobHostOptions, type JobOwnerHost} from '../../src/job-host.ts';
+import {jobHash} from '../../src/job-api.ts';
+import {jobFixture} from './job-api-fixture.ts';
+
+// Every UI submission here is an explicitly synthetic test fixture. No real
+// owner's review or producer acceptance is represented by these acts.
+let sequence = 0;
+/** A live owner host, a strict attachment beside it and a pending checkpoint ask on its head. */
+export async function attachedPair(fixtures: Awaited<ReturnType<typeof jobFixture>>[], hosts: JobOwnerHost[]) {
+  const f = await jobFixture();
+  fixtures.push(f);
+  const options: JobHostOptions = {
+    root: f.root, stateDir: join(f.scratch, 'host-state'), fingerprint: 'f'.repeat(64),
+    reviewer: {id: 'declared-owner', role: 'owner'}, readPublished: async () => f.getContext(),
+    readerId: 'reader/1', installWriterBinding: () => {}, bindingId: 'writer/1',
+    partsEnumerator: f.partsEnumerator, partsEnumeratorId: 'parts/1',
+  };
+  const owner = await startJobHost(options);
+  hosts.push(owner);
+  const attached = await startJobHost({...options, reuseOnly: {expected: owner.attachment!}});
+  hosts.push(attached);
+  expect(attached.reused).toBe(true);
+  expect(attached.session).not.toBe(owner.session);
+  const jobId = owner.session.jobId, {agent, ui} = owner.session.hostCredentials();
+  async function agentCall(host: JobOwnerHost, body: Record<string, unknown>, signal?: AbortSignal) {
+    const response = await host.ports.handleJobApi(new Request(`${host.origin}/jobs/${jobId}/api`, {
+      method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + agent}, signal,
+      body: JSON.stringify({schema: JOB_API_SCHEMA, jobId, requestId: `request-${++sequence}`, ...body}),
+    }));
+    return response.json();
+  }
+  const uiRequest = (path: string, body: unknown) => new Request(`${owner.origin}/jobs/${jobId}/ui/${path}`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', Origin: owner.origin, 'X-Review-Capability': ui},
+    body: JSON.stringify(body),
+  });
+  const publish = async () => agentCall(owner, {verb: 'publish', expectedGeneration: owner.session.status().generation,
+    idempotencyKey: `publish-${++sequence}`, result: {path: 'out', selector: f.getContext().selector},
+    freeze: {kind: 'producer-held', holdId: 'synthetic-held-freeze',
+      record: {path: 'record.json', sha256: jobHash(await readFile(join(f.root, 'record.json')))}}});
+  const published = await publish();
+  expect(published.ok).toBe(true);
+  const publication = published.value;
+  const asked = await agentCall(owner, {verb: 'ask', expectedGeneration: owner.session.status().generation,
+    idempotencyKey: `ask-${++sequence}`, publicationId: publication.publicationId,
+    subject: {kind: 'checkpoint', checkpointId: 'step-one'}});
+  expect(asked.ok).toBe(true);
+  async function display(pageId = 'page-one') {
+    const shown = await owner.ports.ackDisplayed(jobId, uiRequest('displayed',
+      {publicationId: publication.publicationId, pageId, sourceHash: publication.source.sourceHash}));
+    if (!shown.ok) throw new Error(JSON.stringify(shown));
+    return shown.value;
+  }
+  const page = await display();
+  const act = {...page, askId: asked.value.askId, expectedGeneration: owner.session.status().generation,
+    submissionId: 'synthetic-cross-session-act', kind: 'checkpoint',
+    value: {checkpointId: 'step-one', outcome: 'pass', words: 'synthetic'}};
+  const head = await agentCall(attached, {verb: 'next', after: null, waitMs: 0});
+  expect(head.ok).toBe(true);
+  return {owner, attached, agentCall, display, publish, act, cursor: head.value.cursor as string,
+    commit: (value: unknown = act) => owner.ports.commitUIAct(jobId, uiRequest('acts', value))};
+}

@@ -454,7 +454,7 @@ export class JobSession {
   async execute(input: JobAgentRequest | AgentRequestV3 | JobFetchActRequest | JobFetchActRequestV3, signal: AbortSignal): Promise<unknown> {
     if (input.jobId !== this.jobId) throw new JobError('JOB_UNKNOWN');
     // An attached session never sees the live host's notify(), so it watches shared writes like subscribe.
-    if (input.verb === 'next') return this.next(input.after, input.waitMs, signal, this.attached);
+    if (input.verb === 'next') return this.next(input.after, input.waitMs, signal, this.attached ? 'events' : false);
     if (input.verb === 'fetch-act') {
       const current = this.current();
       if (!current.active) throw new JobError('JOB_CLOSED');
@@ -824,7 +824,12 @@ export class JobSession {
     };
   }
 
-  private async next(after: string | null, waitMs: number, signal: AbortSignal, observeWrites = false): Promise<JobNextValue | NextValueV3> {
+  /**
+   * `observeWrites` polls the shared store revision for commits from other sessions. `'revision'` (subscribe)
+   * wakes on any commit; `'events'` (an attached act wait) wakes only once a commit left an event to deliver.
+   */
+  private async next(after: string | null, waitMs: number, signal: AbortSignal,
+    observeWrites: false | 'revision' | 'events' = false): Promise<JobNextValue | NextValueV3> {
     if (waitMs < 0 || waitMs > jobWaitLimitMs || !Number.isSafeInteger(waitMs)) throw new JobError('JOB_REQUEST_INVALID');
     if (signal.aborted) throw new JobError('JOB_REQUEST_INVALID', 'Request cancelled');
     // Capture before reading events so a commit between the read and listener registration still wakes us.
@@ -842,7 +847,8 @@ export class JobSession {
         try {
           const observed = this.store.revision(this.jobId);
           if (observed === revision) return;
-          // A write without a deliverable event (display receipt, refused commit) keeps the wait open.
+          if (observeWrites === 'revision') return finish();
+          // An act wait stays open across a write without a deliverable event (display receipt).
           revision = observed;
           if (this.events(after).status !== 'timeout') finish();
         }
@@ -868,7 +874,7 @@ export class JobSession {
     let after = input.after;
     while (!input.signal.aborted) {
       let value: JobNextValue | NextValueV3;
-      try { value = await this.next(after, jobWaitLimitMs, input.signal, true); }
+      try { value = await this.next(after, jobWaitLimitMs, input.signal, 'revision'); }
       catch (error) {
         if (input.signal.aborted && error instanceof JobError && error.code === 'JOB_REQUEST_INVALID') return;
         throw error;
