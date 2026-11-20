@@ -26,11 +26,15 @@ const autoStill=Bun.argv.includes('--auto-still');
 // #1018: `--pin-comment` pins one rig comment in Playback before the verdict; `--frames` also declares the producer's
 // frame record (the real `rigc render --fps 12` record of the fixture's 1 s `still`, set renamed to the `idle` copy).
 const pinComment=Bun.argv.includes('--pin-comment'),declareFrames=Bun.argv.includes('--frames');
+// `--serve` starts the same fixture host for a person's look, prints the owner URL and stays up until Ctrl-C.
+const serve = Bun.argv.includes('--serve');
+assert.ok(!serve || !pinComment, '--serve leaves the comment to the person');
 const verdict=(argument('--verdict')??'approved') as 'approved'|'changes-requested';
 const language = argument('--lang') ?? 'both';
 assert.ok(language === 'both' || language === 'en' || language === 'ko');
 const output = resolve(argument('--out') ?? 'artifacts/job-rig-screen-709');
-await mkdir(output, {recursive: true});
+assert.ok(!serve || language !== 'both', '--serve requires one language');
+if (!serve) await mkdir(output, {recursive: true});
 
 // Read only the public numeric observation. No internal screen state, altered bundle or act injection.
 const cameraExpression = `JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig`;
@@ -43,7 +47,7 @@ const readyExpression = `!document.body.inert && !!document.querySelector('#stag
 
 async function run(lang: 'en' | 'ko') {
   const out = join(output, lang);
-  await mkdir(out, {recursive: true});
+  if (!serve) await mkdir(out, {recursive: true});
   const mark = walkCheckpoint(join(out, 'checkpoints.jsonl'));
   const observations: Record<string, unknown> = {language: lang, fixture: 'synthetic trusted-host job window, static idle'};
   const catalog = lang === 'ko' ? koCatalog : enCatalog;
@@ -166,6 +170,21 @@ async function run(lang: 'en' | 'ko') {
     const asked = await response.json();
     assert.equal(asked.ok, true);
     const ask = asked.value as JobPendingAsk;
+    if (serve) {
+      const owner = new URL(fixture.host.ownerUrl);
+      owner.searchParams.set('lang', lang);
+      console.log(owner.href);
+      await new Promise<void>(resolve => {
+        const stop = () => {
+          process.off('SIGINT', stop);
+          process.off('SIGTERM', stop);
+          resolve();
+        };
+        process.on('SIGINT', stop);
+        process.on('SIGTERM', stop);
+      });
+      return;
+    }
     const before = await jobInputHashes(fixture.input.root);
     const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
     const retainedBefore = await jobInputHashes(retained.snapshotRoot);

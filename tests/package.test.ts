@@ -237,6 +237,11 @@ test('#1018 frames clock: a set that is not the producer schedule for the model 
   [{...good,duration:0.8},'FRAMES_DURATION_MISMATCH'],[{...good,duration:good.duration+2*FRAMES_DURATION_TOLERANCE},'FRAMES_DURATION_MISMATCH'],
  ];
  for(const [set,code] of cases)await expect(loadReview(await clockPackage(record(set),'check/idle_frames/frames.json',false))).rejects.toThrow(code+':');
+ // HQ ruling: the refusal names the animation and both figures (the record's and the model's schedule).
+ const refusal=async(set:Record<string,unknown>)=>{try{await loadReview(await clockPackage(record(set),'check/idle_frames/frames.json',false));}catch(e){return (e as Error).message;}throw new Error('expected a refusal');};
+ expect(await refusal({...good,animation:'walk'})).toBe('FRAMES_ANIMATION_UNKNOWN: check/idle_frames/frames.json: set "walk" names no animation of the compiled model');
+ expect(await refusal({...good,written:10})).toBe('FRAMES_COUNT_MISMATCH: check/idle_frames/frames.json: set "short" writes 10 frame(s) at 12 fps stride 1; the model\'s 0.8 s animation samples to 11');
+ expect(await refusal({...good,duration:0.8})).toBe('FRAMES_DURATION_MISMATCH: check/idle_frames/frames.json: set "short" lasts 0.8 s; the model\'s 0.8 s animation at 12 fps ends its last sample at 0.8333333333333334 s');
  // Inside the tolerance (float rounding of i * (1 / fps) against i / fps) still loads.
  expect((await loadReview(await clockPackage(record({...good,duration:good.duration+FRAMES_DURATION_TOLERANCE/2}),'check/idle_frames/frames.json',false))).feedbackCatalog.frameClocks).toHaveLength(1);
  // One bad set refuses the record; it never indexes the others.
