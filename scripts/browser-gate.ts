@@ -15,6 +15,29 @@ export function partitionBrowserSuites(files:readonly string[], omitted:Exclusio
   const suites = discovered.filter(file=>!Object.hasOwn(omitted,file));
   return {discovered, exclusions:omitted, suites};
 }
+export function shardSuites(files:readonly string[], i:number, n:number) {
+  if (!Number.isSafeInteger(i) || !Number.isSafeInteger(n) || n < 1 || i < 1 || i > n)
+    throw Error(`BROWSER_SHARD_INVALID: ${i}/${n}`);
+  const sorted = [...files].sort();
+  return sorted.filter((_, idx) => idx % n === i - 1);
+}
+export function parseShardArg(argv:readonly string[]): {i:number;n:number}|undefined {
+  let shard:{i:number;n:number}|undefined;
+  for (let idx = 0; idx < argv.length; idx++) {
+    const arg = argv[idx]!;
+    if (arg === '--shard' || arg.startsWith('--shard=')) {
+      if (shard) throw Error(`BROWSER_SHARD_INVALID: ${arg}`);
+      const raw = arg === '--shard' ? argv[++idx] : arg.slice('--shard='.length);
+      const match = typeof raw === 'string' ? /^(\d+)\/(\d+)$/.exec(raw) : null;
+      if (!match) throw Error(`BROWSER_SHARD_INVALID: ${raw ?? ''}`);
+      const i = Number(match[1]), n = Number(match[2]);
+      if (!Number.isSafeInteger(i) || !Number.isSafeInteger(n) || n < 1 || i < 1 || i > n)
+        throw Error(`BROWSER_SHARD_INVALID: ${raw}`);
+      shard = {i, n};
+    }
+  }
+  return shard;
+}
 export async function browserPlan(root = process.cwd()) {
   const files = (await readdir(join(root,'tests'))).filter(file=>file.endsWith('-browser.ts')).map(file=>'tests/'+file);
   return partitionBrowserSuites(files);
@@ -39,13 +62,15 @@ export function browserInvocation(file:string, language:string, output:string, r
   return {argv,env};
 }
 const bilingual = new Set(['job-checkpoint-evidence','job-checkpoint-wire','job-record','open-workspace','stage3-framing'].map(name=>'tests/'+name+'-browser.ts'));
-export async function runBrowserSuites(output:string) {
+export async function runBrowserSuites(output:string, shard?:{i:number;n:number}) {
   const plan=await browserPlan();
+  const suites=shard?shardSuites(plan.suites,shard.i,shard.n):plan.suites;
+  const writtenPlan=shard?{...plan,shard,suites}:plan;
   await mkdir(output,{recursive:true});
-  await writeFile(join(output,'plan.json'),JSON.stringify(plan,null,2)+'\n');
+  await writeFile(join(output,'plan.json'),JSON.stringify(writtenPlan,null,2)+'\n');
   const results:{suite:string;language:string;exit:number;seconds:number;raw:string}[]=[];
   let failed=false;
-  for (const suite of plan.suites) for (const language of bilingual.has(suite)?['en','ko']:['default']) {
+  for (const suite of suites) for (const language of bilingual.has(suite)?['en','ko']:['default']) {
     const dir=join(output,suite.slice(6,-3),language);await mkdir(dir,{recursive:true});
     const {argv,env}=browserInvocation(suite,language,dir);
     const started=performance.now(),raw=join(dir,'raw.log');
@@ -66,7 +91,8 @@ export async function runBrowserSuites(output:string) {
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (Bun.argv.includes('--run')) {
+    const shard=parseShardArg(Bun.argv.slice(2));
     const output=resolve(process.env.BROWSER_ARTIFACTS??'artifacts/browser');
-    process.exitCode=await runBrowserSuites(output);
+    process.exitCode=await runBrowserSuites(output,shard);
   } else console.log(JSON.stringify(await browserPlan(),null,2));
 }
