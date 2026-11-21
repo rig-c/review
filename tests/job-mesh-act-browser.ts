@@ -458,6 +458,22 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
         assert.equal(await screen.evaluate<boolean>("document.querySelector('#mesh-undo').disabled"), true);
         await writeFile(join(directory, 'stale-status.json'), JSON.stringify({text}));
       } else {
+        if (mode === 'with-comment') {
+          await screen.evaluate<void>("document.documentElement.dataset.theme = 'light'");
+          await click(screen, '#mesh-edit');
+          await wait("document.querySelector('#mesh-editor-bar').hidden");
+          await click(screen, '#mesh-edit');
+          await wait("!document.querySelector('#mesh-editor-bar').hidden");
+          const veilPixel = await screen.evaluate<number[]>("Array.from(document.querySelector('#rig-overlay').getContext('2d').getImageData(20, 20, 1, 1).data)");
+          await writeFile(join(directory, 'mesh-editor-light.png'), await screen.screenshot());
+          await screen.evaluate<void>("delete document.documentElement.dataset.theme");
+          await click(screen, '#mesh-edit');
+          await wait("document.querySelector('#mesh-editor-bar').hidden");
+          await click(screen, '#mesh-edit');
+          await wait("!document.querySelector('#mesh-editor-bar').hidden");
+          assert.ok(veilPixel[0]! <= 16 && veilPixel[1]! <= 16 && veilPixel[2]! <= 24 && veilPixel[3]! >= 130,
+            `${language} F09 light-theme mesh veil must stay dark on #rig-overlay, got rgba(${veilPixel.join(',')})`);
+        }
         await click(screen, '#mesh-mode-create');
         await pointer('#rig-overlay');
         await wait("document.querySelector('#mesh-edit-draft').value.includes('\"op\":\"add\"')");
