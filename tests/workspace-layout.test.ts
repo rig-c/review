@@ -74,7 +74,7 @@ test('a resize that disables its own separator cancels safely before the move ca
 });
 
 test('coupled allocation uses reachable effective ranges and inverse desired values for keyboard and pointer',()=>{
- const element=new LayoutElement(),available={width:700,height:500};let desired:WorkspacePanels={leftWidth:420,rightWidth:550,inspectorHeight:280};const commits:number[]=[];
+ const element=new LayoutElement(),available={width:700,height:500};let desired:WorkspacePanels={leftWidth:420,rightWidth:550,inspectorHeight:280,communicationWidth:360};const commits:number[]=[];
  const effective=(leftWidth=desired.leftWidth)=>allocateWorkspaceLayout(available,{...desired,leftWidth}).leftWidth;
  const range=()=>({min:effective(panelBounds.leftWidth.min),max:effective(panelBounds.leftWidth.max),value:effective(),enabled:true});
  const binding=bindWorkspaceSeparator({element:element as unknown as HTMLElement,panel:'leftWidth',controls:'left',label:'Resize left',events:null,desired:()=>desired.leftWidth,range,resolveDesired:(target,context)=>{expect(context.range).toEqual(range());expect(context.desired).toBe(desired.leftWidth);let low:number=panelBounds.leftWidth.min,high:number=panelBounds.leftWidth.max;for(let i=0;i<60;i++){const mid=(low+high)/2;if(effective(mid)<target)low=mid;else high=mid;}return (low+high)/2;},resize:value=>{desired={...desired,leftWidth:value};},commit:value=>commits.push(value)});

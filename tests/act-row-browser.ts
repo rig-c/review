@@ -185,7 +185,8 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   await control('Fetch.enable',{patterns:[{urlPattern:'*assets/*',requestStage:'Response'},{urlPattern:'*review-painting*',requestStage:'Response'},{urlPattern:'*api/stage-parts/image/*',requestStage:'Response'}]});
   await page.goto(url,language);
   await wait(page,mode==='standalone'?`!!document.querySelector('#rig-root canvas')&&!document.body.inert`:`document.body.dataset.ready==='true'&&!document.body.inert&&!!document.querySelector('#workspace-ask-headline')?.textContent`);
-  const questionSelected=`!!document.querySelector('[data-block-target=question][aria-selected=true]')`;
+  // #1041: the question is shown in the right communication panel, not a bottom tab.
+  const questionSelected=`(()=>{const n=document.querySelector('#workspace-interview-answer');return !!n&&!n.hidden&&!!n.closest('#workspace-communication:not([hidden])')&&n.getClientRects().length>0;})()`;
   const recordDialogClosed=`!document.querySelector('#job-record-asks[open]')`;
   const interviewReady=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('#workspace-interview-answer form.interview-answer fieldset:not(:disabled)')`;
   if(mode==='interview')await wait(page,interviewReady);
@@ -245,12 +246,18 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    await writeFile(join(out,'headline-mutation-restored.json'),JSON.stringify(restored,null,2)+'\n');
    assert.equal(restoredHash,beforeHash,'long-question DOM restored byte-for-byte before further measurements');
   }
+  // #1041: a bottom panel with no view-controller block collapses to nothing; there is nothing to collapse.
+  let collapsed:any=null;
+  if(await page.evaluate<boolean>(`document.getElementById('workspace-inspector').hidden`)){
+   assert.match(await page.evaluate<string>(`document.querySelector('.layout main').style.gridTemplateRows`),/ 0px 0px$/,'the stage takes the bottom height');
+  }else{
   await click(page,'#workspace-bottom-collapse');
   await wait(page,`document.querySelector('.inspector-body').hidden`);
-  const collapsed:any=await capture(page,out,'collapsed');assertPending(collapsed,mode,width,expectedPendingFooter);
+  collapsed=await capture(page,out,'collapsed');assertPending(collapsed,mode,width,expectedPendingFooter);
   assert.ok(Math.abs(collapsed.panel.height-collapsed.heading.height)<=2,'collapsed panel is only its heading');
   assert.ok(collapsed.panel.height<initial.panel.height,'collapse actually shrinks the panel');
   await click(page,'#workspace-bottom-collapse');await wait(page,`!document.querySelector('.inspector-body').hidden`);
+  }
   if(['rig','direction','parts','embedded-rig'].includes(mode)){
    assert.equal(await page.evaluate(`document.getElementById('request-changes').disabled`),true,'changes needs a comment');
    if(mode==='rig'){

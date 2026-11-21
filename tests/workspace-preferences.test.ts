@@ -172,3 +172,22 @@ test('stored preferences from 0.24.1 without language load unchanged and languag
  expect(()=>parseWorkspacePreferences({...v0241Record,language:'ko'})).toThrow('PREFERENCES_STAMP: unstamped language differs from defaults');
  expect(()=>parseWorkspacePreferences({...defaultWorkspacePreferences(),language:'ja'})).toThrow('PREFERENCES_LANGUAGE: expected system, en or ko');
 });
+
+test('#1041 a 4.10.0 record without communicationWidth loads with the default and the new width persists',()=>{
+ // Exact 4.10.0 record shape: three panel widths and no communicationWidth stamp.
+ const v4100Record={schema:workspacePreferenceKey,revision:4,theme:'system',language:'ko',defaultCameraSync:true,defaultIdleRepeat:true,settingsCollapsed:true,
+  panels:{leftWidth:170,rightWidth:300,inspectorHeight:262},
+  stamps:{theme:{revision:0,writer:''},language:{revision:1,writer:'tab-4100'},defaultCameraSync:{revision:0,writer:''},defaultIdleRepeat:{revision:0,writer:''},settingsCollapsed:{revision:0,writer:''},
+   leftWidth:{revision:0,writer:''},rightWidth:{revision:4,writer:'tab-4100'},inspectorHeight:{revision:0,writer:''}}};
+ const parsed=parseWorkspacePreferences(v4100Record);
+ expect(parsed.panels).toEqual({leftWidth:170,rightWidth:300,inspectorHeight:262,communicationWidth:360});
+ expect(parsed.stamps.communicationWidth).toEqual({revision:0,writer:''});expect(parsed.revision).toBe(4);
+ const values=new Map([[workspacePreferenceKey,JSON.stringify(v4100Record)]]),storage={getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>{values.set(key,value);}};
+ const store=new WorkspacePreferenceStore({storage,events:null,writer:'tab-4110'});
+ expect(store.get().panels.communicationWidth).toBe(360);expect(store.get().panels.rightWidth).toBe(300);
+ store.update({panels:{communicationWidth:480}});
+ const reread=new WorkspacePreferenceStore({storage,events:null,writer:'tab-other'});
+ expect(reread.get().panels).toEqual({leftWidth:170,rightWidth:300,inspectorHeight:262,communicationWidth:480});
+ expect(()=>parseWorkspacePreferences({...v4100Record,panels:{...v4100Record.panels,communicationWidth:279}})).toThrow('PREFERENCES_PANEL: communicationWidth requires finite 280..640 CSS pixels');
+ expect(panelBounds.communicationWidth).toEqual({min:280,max:640});expect(defaultWorkspacePanels.communicationWidth).toBe(360);
+});

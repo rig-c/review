@@ -436,11 +436,11 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
     await click(page,'#job-record-asks .workspace-drawer-close');
    }
    if(kind.startsWith('interview')){
-    await wait(page,`!!document.querySelector('#workspace-interview-answer .interview-grid fieldset:not(:disabled)')&&!!document.querySelector('[data-block-target=question][aria-selected=true]')`,kind+' Question tab');
+    await wait(page,`!!document.querySelector('#workspace-interview-answer .interview-grid fieldset:not(:disabled)')&&!!document.querySelector('#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden])')`,kind+' Question section');
     assert.equal(await page.evaluate<number>(`document.querySelectorAll('#workspace-interview-answer form.interview-answer').length`),1);
     assert.equal(await page.evaluate<boolean>(`!!document.querySelector('#job-record-asks[open]')`),false);
     const catalog=lang==='en'?enCatalog:koCatalog;
-    assert.equal(await page.evaluate<string>(`document.querySelector('[data-block-target=question][aria-selected=true]').textContent`),catalog['Question']);
+    assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-interview-answer .review-dialog-header h2').textContent`),catalog['Question']);
     if(kind==='interview-standalone'){
      const panel:{left:number;top:number;right:number;bottom:number;width:number;height:number}=await page.evaluate(`document.querySelector('#workspace-interview-answer').getBoundingClientRect().toJSON()`);
      assert.ok(panel.width>0&&panel.height>0&&panel.left>=0&&panel.top>=0&&panel.right<=width&&panel.bottom<=height);
@@ -462,7 +462,7 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
     const row=strip.querySelector('.block-row:not([hidden])'),selected=row?.querySelector('[role=tab][aria-selected=true]:not([hidden])');
     return {language:document.documentElement.lang,entry:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,
      headingOrder:[...heading.children].map(n=>n===strip?'tabs':n===collapse?'collapse':n===act?'act':n.id),wrap:getComputedStyle(row??strip).flexWrap,
-     controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(n=>n.id),collapseDisabled:collapse.disabled,collapseText:collapse.textContent,
+     controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(n=>n.id),collapseDisabled:collapse.disabled,bottomHidden:document.getElementById('workspace-inspector').hidden,collapseText:collapse.textContent,
      availableTabs:row?[...row.querySelectorAll('[role=tab]')].filter(n=>!n.hidden).length:0,selected:selected?.dataset.blockTarget,selectedVisible:!!selected&&!selected.hasAttribute('data-tab-overflow')&&selected.getBoundingClientRect().width>0,
      ask:document.querySelector('#workspace-ask-headline').textContent,answer:document.querySelector('#workspace-pending-ask').textContent,
      actInHeading:act.parentElement===heading,actHome:act.parentElement.id,actRowDirect:document.getElementById('workspace-act-row')?.previousElementSibling===document.querySelector('.topbar'),actRect:act.getBoundingClientRect().toJSON()};
@@ -481,7 +481,9 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
    assert.equal(state.wrap,'nowrap');assert.equal(state.actInHeading,!live);assert.equal(state.collapseText,'⌄');
    if(state.availableTabs)assert.equal(state.selectedVisible,true);else assert.equal(state.selected,undefined,'subjects without rig capabilities expose no block tab');
    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-workspace.png`),await page.screenshot());
-   if(!state.collapseDisabled){
+   // #1041: a bottom panel with no view-controller block collapses to nothing; there is nothing to collapse.
+   if(state.bottomHidden)assert.equal(live&&!state.availableTabs,true,'only a live ask without view controllers hides the bottom panel');
+   else if(!state.collapseDisabled){
     await click(page,'#workspace-bottom-collapse');
     assert.equal(await page.evaluate(`document.querySelector('.inspector-body').hidden`),true);
     assert.equal(await page.evaluate(`document.querySelector('#workspace-bottom-collapse').textContent`),'⌃');

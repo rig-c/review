@@ -1548,7 +1548,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
 function showRecordComments(preserveInspector=false):void {
  for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
  if(preserveInspector)return;
- for(const child of rigInspector.comments.panel.children)(child as HTMLElement).hidden=child!==el('proposal-panel')&&!child.classList.contains('review-dialog-header');
+ for(const child of rigInspector.comments.panel.children)(child as HTMLElement).hidden=child!==el('proposal-panel')&&child!==el('comments-list-host')&&!child.classList.contains('review-dialog-header');
  rigInspector.comments.panel.style.display='block';
  rigInspector.collapse.disabled=false;setSourceAttribute(rigInspector.collapse,'title','');
 }

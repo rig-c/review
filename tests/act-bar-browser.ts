@@ -64,7 +64,8 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   await until(page,`(${mode==='standalone'}?!!document.querySelector('#rig-root canvas'):document.body.dataset.ready==='true')&&!document.body.inert&&(${mode==='joined-interview'||mode==='standalone'}||!!document.querySelector('#workspace-ask-headline')?.textContent)`);
   const interview=mode.startsWith('interview')||mode==='joined-interview';
   const answerRoot=interview?'#workspace-interview-answer':'#job-record-asks';
-  const questionSelected=`!!document.querySelector('[data-block-target=question][aria-selected=true]')`;
+  // #1041: the question is shown in the right communication panel, not a bottom tab.
+  const questionSelected=`(()=>{const n=document.querySelector('#workspace-interview-answer');return !!n&&!n.hidden&&!!n.closest('#workspace-communication:not([hidden])')&&n.getClientRects().length>0;})()`;
   const recordDialogClosed=`!document.querySelector('#job-record-asks[open]')`;
   const questionReady=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer fieldset:not(:disabled)')`;
   const questionSaved=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer[data-interview-answered=true]')`;

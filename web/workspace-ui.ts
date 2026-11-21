@@ -176,7 +176,10 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  const communicationShown=()=>!!communicationKey&&(communicationRevealed||!!regions?.rightPending?.());
  const hasInterviewForm=()=>!!explorer&&!!communicationKey&&!!explorer.querySelector('[data-interview-main]');
  // A bottom panel with no view-controller block collapses to nothing; the stage takes the height.
- const bottomEmpty=()=>!!bottom&&!bottom.strip.querySelector('button[data-block-target]:not([hidden]):not(:disabled)');
+ const controls=(node:HTMLElement):boolean=>[...node.children].some(child=>{const item=child as HTMLElement;if(item.hidden)return false;
+  return item.tagName==='BUTTON'&&(item.dataset.blockTarget!==undefined||item.dataset.inspector!==undefined)&&!(item as HTMLButtonElement).disabled||controls(item);});
+ // Temporary until #1044 moves every act into #workspace-act-row: a heading that still hosts the act keeps it.
+ const bottomEmpty=()=>!!bottom&&!controls(bottom.strip)&&bottom.actHome.id==='workspace-act-row';
  for(const panel of present){
   const handle=document.createElement('div');handle.className='workspace-separator workspace-'+panel+(sides[panel]?' workspace-side-'+sides[panel]:'');handles[panel]=handle;
   if(sides[panel]==='left')node(panel).after(handle);else if(sides[panel]==='right')node(panel).before(handle);else inspector.before(handle);
