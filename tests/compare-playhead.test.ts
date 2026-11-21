@@ -117,7 +117,7 @@ test('actual compare seek adapter refuses mismatched decoded frame without disab
   const source=await readFile(new URL('../web/compare.ts',import.meta.url),'utf8');
   const between=(from:string,to:string)=>{const start=source.indexOf(from),end=source.indexOf(to,start);if(start<0||end<start)throw new Error('compare adapter test boundary missing');return source.slice(start,end);};
   const stateFunctions=between('function updateFeedbackAvailability()', 'function renderPresentation(');
-  const seekFunctions=between('function seekReferenceFrame(', 'function unionBounds(');
+  const seekFunctions=between('function seekReferenceFrame(', 'function fit()');
   // seekTo now routes through the actual held-frame draw adapter. Keep that
   // source body in this extraction too; these bone-only players have no part
   // catalog, while the separate part suite measures its registered draw path.

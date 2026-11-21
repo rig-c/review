@@ -9,7 +9,7 @@ import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
 import {cameraSignature,type PaneCamera} from './camera-view.ts';
 import {createViewportController,createViewportState} from './viewport-controller.ts';
 import {createRigViewportProvider} from './rig-viewport-provider.ts';
-import { CanvasRenderer, loadModel, RigPlayer, type ModelAssets, type PoseBounds } from '@rig-c/play';
+import { CanvasRenderer, loadModel, RigPlayer, type ModelAssets } from '@rig-c/play';
 import type { CompareResponse, CompareSide } from '../src/compare.ts';
 import type { CompareFeedback, CompareSession } from '../src/compare-session.ts';
 import { clockForAnimation, lastFrame, timeAtFrame } from '../src/frame-clock.ts';
@@ -63,6 +63,7 @@ const describe = (value: unknown) => value instanceof Error ? value.message : St
 const video = el<HTMLVideoElement>('reference-video');
 let data: CompareResponse, session: CompareSession;
 const assets: Partial<Record<Side, ModelAssets>> = {}, players: Partial<Record<Side, RigPlayer>> = {};
+const framingDraws=new WeakMap<RigPlayer,number>();
 let domain: CompareDomain | null = null, trace: CompareTrace | null = null, lastPresented: ReferenceSample | null = null;
 let dirty = false, saving = false, ready = false, seeking = false, disposed = false;
 let seekAbort: AbortController | null = null, videoCallback: number | null = null, fallbackCallback: number | null = null;
@@ -255,7 +256,6 @@ async function seekTo(target: number,producer:{side:Side;frame:number;time:numbe
   finally { if (generation === latestSeek) { seeking = false; updateFeedbackAvailability();frameControls(); } }
 }
 
-function unionBounds(a: PoseBounds, b: PoseBounds): PoseBounds { const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y); return { x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y }; }
 function fit(): void {viewport.fitCamera();}
 
 function configureTurnPad():void {
@@ -274,7 +274,7 @@ async function loadSide(side: Side, value: CompareSide): Promise<number> {
   assets[side] = loaded; const clip = loaded.animations.find(item => item.name === data.animation); if (!clip) throw new Error(`${side.toUpperCase()}: animation "${data.animation}" Not supplied`);
   const player = new RigPlayer(el(`${side}-root`), loaded, { seekStep: compareSeekStep });
   // A side counts as loaded only after its first successful draw; a parts catalog refusal never fails the side.
-  try { players[side] = player;try{const catalog=await loadPartModel(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]);thumbnails[side]?.dispose();thumbnails[side]=new PartThumbnails(pageRegionTable(catalog.model),loaded.pageImages);parts?.register(side,catalog.entries,player,thumbnails[side]);pickedTools?.registerSideModel(side,modelUrl,access.route(`/compare-assets/${side}/`),value.reviewedSource.rig!.sha256,catalog.model);}catch(error){parts?.refuseCatalog(side,error);pickedTools?.registerSideModel(side,modelUrl,access.route(`/compare-assets/${side}/`),value.reviewedSource.rig!.sha256,null);} player.environment(null); player.play(data.animation, { loop: false }); player.pause(); player.draw(); }
+  try { players[side] = player;try{const catalog=await loadPartModel(modelUrl,value.reviewedSource.rig!.sha256,value.feedbackCatalog.slots??[]);thumbnails[side]?.dispose();thumbnails[side]=new PartThumbnails(pageRegionTable(catalog.model),loaded.pageImages);parts?.register(side,catalog.entries,player,thumbnails[side]);pickedTools?.registerSideModel(side,modelUrl,access.route(`/compare-assets/${side}/`),value.reviewedSource.rig!.sha256,catalog.model);}catch(error){parts?.refuseCatalog(side,error);pickedTools?.registerSideModel(side,modelUrl,access.route(`/compare-assets/${side}/`),value.reviewedSource.rig!.sha256,null);} player.environment(null); player.play(data.animation, { loop: false }); player.pause(); player.draw(); framingDraws.set(player,player.generation); }
   catch (error) { thumbnails[side]?.dispose(); delete thumbnails[side]; delete players[side]; player.dispose(); throw error; }
   el(`${side}-empty`).hidden = true; return clip.duration;
 }
@@ -288,7 +288,7 @@ async function swapSideRig(side:Side,modelUrl:string,prefix:string,sha256:string
  try{const catalog=await loadPartModel(modelUrl,sha256,data[side].feedbackCatalog.slots??[]);thumbnails[side]?.dispose();thumbnails[side]=new PartThumbnails(pageRegionTable(catalog.model),next.pageImages);parts?.register(side,catalog.entries,player,thumbnails[side]);pickedTools?.registerSideModel(side,modelUrl,prefix,sha256,catalog.model);}
  catch(error){parts?.refuseCatalog(side,error);pickedTools?.registerSideModel(side,modelUrl,prefix,sha256,null);}
  player.environment(null);if(chosenClip){player.play(chosenClip,{loop:false});player.pause();player.seek(Math.min(keepTime,next.animations.find(item=>item.name===chosenClip)?.duration??keepTime));}
- player.draw();parts?.present(side);fit();redrawOverlays(true);
+ player.draw();framingDraws.set(player,player.generation);parts?.present(side);fit();redrawOverlays(true);
  if(wasPlaying)void playComparison().catch(error=>message(describe(error),true));
 }
 
@@ -486,8 +486,10 @@ function createCompareViewport(){
  });
  const provider=createRigViewportProvider({fitLabel:'Fit',el,player:()=>null,assets:()=>null,
   panes:(['a','b'] as const).map(target=>({target,viewport:el(target+'-viewport'),pane:el(target+'-pane'),
-   root:el(target+'-root'),fallback:target==='a'?'b' as const:'a' as const,box:sharedBox,
-   player:()=>players[target]??null,scale:(value:number)=>{rigScales[target]=value;}})),
+   root:el(target+'-root'),fallback:target==='a'?'b' as const:'a' as const,
+   player:()=>players[target]??null,assets:()=>assets[target]??null,
+   drawnGeneration:()=>framingDraws.get(players[target]!)===players[target]?.generation
+    ? players[target]?.generation : parts?.frame(target)?.generation,scale:(value:number)=>{rigScales[target]=value;}})),
   rigMargins:{x:22,y:38},referenceTransform:{content:video,mode:'relative'},pinch:false,dimensionVisibility:true,
   referenceSize:()=>video.videoWidth>0&&video.videoHeight>0?{width:video.videoWidth,height:video.videoHeight}:null,
   view:()=>'',referenceGeneration:()=>0,parts:()=>null,text,message,redrawOverlay:redrawOverlays,
@@ -503,7 +505,6 @@ function createCompareViewport(){
  },state);
  return createViewportController(provider,state);
 }
-function sharedBox():PoseBounds|null {const a=assets.a?.stage??players.a?.bounds(),b=assets.b?.stage??players.b?.bounds();return a&&b?unionBounds(a,b):a??b??null;}
 /** The pair is offered only when both sides and the shared video actually loaded; a failed side leaves the survivor as a single pane, named. */
 function renderPairLayout():PairEligibilityState {
  const tools=typeof pickedTools!=='undefined'?pickedTools:null,state=pairEligibility(pairInputs),mode=tools?.mode()??'compare',picked=tools?.pickedSide()??'a',shown={reference:state.effective==='compare'||state.effective==='reference',a:(state.effective==='compare'&&(mode==='compare'||picked==='a'))||state.effective==='a',b:(state.effective==='compare'&&(mode==='compare'||picked==='b'))||state.effective==='b'};

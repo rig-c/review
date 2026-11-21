@@ -10,9 +10,9 @@ export interface RigViewportHost {
  referenceSize:()=>{width:number;height:number}|null;view:()=>string;referenceGeneration:()=>number;
  parts:()=>{value:()=>unknown;bounds:()=>PoseBounds|null;frame?:(side:'single')=>PosedFrame|undefined}|null;
  text:(id:string,value:string)=>void;message:ViewportProvider['message'];redrawOverlay:(fresh:boolean)=>void;
- /** Additional compiled panes share the renderer while retaining their declared framing basis. */
+ /** Additional compiled panes share the union of their per-player framing bases. */
  panes?:{target:CameraTarget;viewport:HTMLElement;pane:HTMLElement;root:HTMLElement;fallback?:CameraTarget;
-  box:()=>PoseBounds|null;player:()=>RigPlayer|null;scale:(value:number)=>void}[];
+  player:()=>RigPlayer|null;assets:()=>ModelAssets|null;drawnGeneration:()=>number|undefined;scale:(value:number)=>void}[];
  framingBox?:()=>PoseBounds|null;
  rigMargins?:{x:number;y:number};
  referenceTransform?:{content:HTMLElement;mode:'relative'};
@@ -26,6 +26,10 @@ export interface RigViewportHost {
  /** A native Setup comparison uses the existing parts raster policy on this same controller. */
  raster?:PartsViewportHost & {active:()=>boolean};
 }
+function unionBounds(a:PoseBounds,b:PoseBounds):PoseBounds {
+ const x=Math.min(a.x,b.x),y=Math.min(a.y,b.y);
+ return {x,y,width:Math.max(a.x+a.width,b.x+b.width)-x,height:Math.max(a.y+a.height,b.y+b.height)-y};
+}
 export function createRigViewportProvider(host:RigViewportHost,state:ViewportState):ViewportProvider {
  const raster=host.raster?createPartsViewportProvider(host.raster,state):null;
  const rasterActive=()=>!!host.raster?.active();
@@ -34,26 +38,32 @@ export function createRigViewportProvider(host:RigViewportHost,state:ViewportSta
  function positiveBounds(box:PoseBounds|null|undefined):box is PoseBounds {
   return !!box&&box.width>0&&box.height>0&&[box.x,box.y,box.width,box.height,box.x+box.width,box.y+box.height].every(Number.isFinite);
  }
- function rigFramingBox():PoseBounds|null {
-  const player=host.player(),assets=host.assets();if(!player)return null;
-  const authored=host.framingBox?.();if(authored)return authored;
+ function rigFramingBox(player:RigPlayer|null,assets:ModelAssets|null,drawnGeneration:()=>number|undefined):PoseBounds|null {
+  if(!player)return null;
   const declared=assets?.stage;
   // A model without a positive declared stage keeps its existing live pose/filter basis.
   if(!positiveBounds(declared))return player.bounds();
   const cached=framingBoxes.get(player);if(cached&&cached.assets===assets)return cached.box;
-  const stage={...declared},frame=host.parts()?.frame?.('single');
-  // present() records a successful draw. A prepared pose or later player slot filter
+  const stage={...declared},generation=drawnGeneration();
+  // The generation comes from a successful draw. A prepared pose or later player slot filter
   // must not become the whole-rig framing basis merely because bounds() is positive.
-  if(!frame||frame.generation===undefined||frame.generation!==player.generation||player.slots!==null)return stage;
+  if(generation===undefined||generation!==player.generation||player.slots!==null)return stage;
   const drawn=player.bounds();
   if(!positiveBounds(drawn))return stage;
-  const x=Math.min(stage.x,drawn.x),y=Math.min(stage.y,drawn.y);
-  const box={x,y,width:Math.max(stage.x+stage.width,drawn.x+drawn.width)-x,
-   height:Math.max(stage.y+stage.height,drawn.y+drawn.height)-y};
+  const box=unionBounds(stage,drawn);
   if(!positiveBounds(box))return null;
   // bounds() follows the live pose/filter. Keep one framing basis per loaded player/assets,
   // including when a semantic publication is temporarily replaced and then restored.
   framingBoxes.set(player,{assets,box});return box;
+ }
+ const singleFramingBox=()=>host.player()?(host.framingBox?.()??rigFramingBox(host.player(),host.assets(),()=>host.parts()?.frame?.('single')?.generation)):null;
+ function sharedFramingBox():PoseBounds|null {
+  let shared:PoseBounds|null=null;
+  for(const pane of host.panes??[]){
+   const box=rigFramingBox(pane.player(),pane.assets(),pane.drawnGeneration);
+   if(box)shared=shared?unionBounds(shared,box):box;
+  }
+  return shared;
  }
 function referenceFit(controller:ViewportController): void {
   const referenceSize=host.referenceSize();const {paneFrame}=controller;
@@ -74,10 +84,10 @@ function referenceFit(controller:ViewportController): void {
 function render(controller:ViewportController): void {
   const player=host.player(),assets=host.assets();const {paneFrame,renderNumericView,renderCameraControls}=controller;
   if(!host.panes){referenceFit(controller);renderNumericView();renderCameraControls();}
-  const panes=host.panes??(player&&assets?[{target:'rig' as const,viewport:el('rig-viewport'),root:el('rig-root'),box:rigFramingBox,player:()=>player,scale:(value:number)=>{state.rigScale=value;}}]:[]);
+  const panes=host.panes??(player&&assets?[{target:'rig' as const,viewport:el('rig-viewport'),root:el('rig-root'),player:()=>player,scale:(value:number)=>{state.rigScale=value;}}]:[]);
   let drawn=false;
   for(const pane of panes){
-   const box=pane.box();if(!box||box.width<=0||box.height<=0)continue;
+   const box=host.panes?sharedFramingBox():singleFramingBox();if(!box||box.width<=0||box.height<=0)continue;
    const frame=paneFrame(pane.target);if(!frame)continue;
    const camera=controller.paneCamera(pane.target),center=camera.center??frame.center;
    const scale=host.panes?frame.baseScale*camera.zoom:Math.max(.001,Math.min((pane.viewport.clientWidth-28)/box.width,(pane.viewport.clientHeight-58)/box.height)*camera.zoom);
@@ -110,11 +120,11 @@ function renderCaption():void {
  geometry:target=>{
   if(rasterActive())return raster!.geometry(target);
   const rig=target!=='reference',referenceSize=host.referenceSize(),pane=host.panes?.find(p=>p.target===target);
-  const box=rig?(host.panes?(pane?.player()?pane.box():null):rigFramingBox()):referenceSize?{x:0,y:0,...referenceSize}:null;
+  const box=rig?(host.panes?(pane?.player()?sharedFramingBox():null):singleFramingBox()):referenceSize?{x:0,y:0,...referenceSize}:null;
   if(!box)return null;const margin=rig?host.rigMargins??{x:28,y:58}:host.referenceTransform?{x:0,y:0}:{x:24,y:56};
   return {space:rig?'world':'image',box,marginX:margin.x,marginY:margin.y};
  },
- layoutKey:()=>rasterActive()?'raster:'+raster!.layoutKey():(host.layoutKey?.()??(()=>{const player=host.player(),referenceSize=host.referenceSize(),view=host.view(),referenceGeneration=host.referenceGeneration();const boxKey=rigFramingBox();return ['rig','reference'].map(target=>{const v=el(target+'-viewport');return `${v.clientWidth}:${v.clientHeight}`;}).join('|')+view+referenceGeneration+!!player+JSON.stringify(referenceSize)+JSON.stringify(boxKey);})()),
+ layoutKey:()=>rasterActive()?'raster:'+raster!.layoutKey():(host.layoutKey?host.layoutKey()+(host.panes?JSON.stringify(sharedFramingBox()):''):(()=>{const player=host.player(),referenceSize=host.referenceSize(),view=host.view(),referenceGeneration=host.referenceGeneration();const boxKey=singleFramingBox();return ['rig','reference'].map(target=>{const v=el(target+'-viewport');return `${v.clientWidth}:${v.clientHeight}`;}).join('|')+view+referenceGeneration+!!player+JSON.stringify(referenceSize)+JSON.stringify(boxKey);})()),
  selection:target=>rasterActive()?raster!.selection(target):(host.selection?.(target)??(()=>{const parts=host.parts(),part=parts?.value();return {selected:!!part,bounds:target==='rig'&&part?parts?.bounds()??null:null};})())
  };
 }
