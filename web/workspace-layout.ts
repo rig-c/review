@@ -1,6 +1,8 @@
 /** Effective workspace geometry and local DOM bindings. Never stores source or global preferences. */
 import {parseWorkspacePanels,panelBounds,type WorkspacePanels} from './workspace-preferences.ts';
 export type WorkspacePanel=keyof WorkspacePanels;
+/** Desired sizes; a page without the communication column may omit its width (the saved default applies). */
+export type DesiredWorkspacePanels=Omit<WorkspacePanels,'communicationWidth'>&{communicationWidth?:number};
 /** `separator` is the drawn thickness of every resize handle in CSS pixels; its hit area is wider (styles.css `::after`). */
 export const workspaceMinimums=Object.freeze({stageWidth:240,stageHeight:180,separator:4});
 export interface SeparatorRange {min:number;max:number;value:number;enabled:boolean}
@@ -12,17 +14,17 @@ export interface WorkspaceColumns {left:WorkspaceColumnKey|null;right:WorkspaceC
 export const defaultWorkspaceColumns:Readonly<WorkspaceColumns>=Object.freeze({left:'leftWidth',right:'rightWidth'});
 export type WorkspacePanelMode='panel'|'drawer'|'absent';
 /** Sizes and modes are keyed by saved panel, not by side; `absent` panels have width 0 and no separator. */
-export interface EffectiveWorkspaceLayout {leftWidth:number;rightWidth:number;inspectorHeight:number;stageWidth:number;stageHeight:number;leftMode:WorkspacePanelMode;rightMode:WorkspacePanelMode;inspectorMode:'panel'|'drawer';stageMinimumSatisfied:boolean;separators:Record<WorkspacePanel,SeparatorRange>}
+export interface EffectiveWorkspaceLayout {leftWidth:number;rightWidth:number;communicationWidth:number;inspectorHeight:number;stageWidth:number;stageHeight:number;leftMode:WorkspacePanelMode;rightMode:WorkspacePanelMode;communicationMode:WorkspacePanelMode;inspectorMode:'panel'|'drawer';stageMinimumSatisfied:boolean;separators:Record<WorkspacePanel,SeparatorRange>}
 const clamp=(value:number,min:number,max:number)=>Math.max(min,Math.min(max,value));
 export function parseWorkspaceColumns(value:WorkspaceColumns):WorkspaceColumns {
- const ok=(v:unknown)=>v===null||v==='leftWidth'||v==='rightWidth';
- if(!value||!ok(value.left)||!ok(value.right)||value.left!==null&&value.left===value.right)throw new Error(`WORKSPACE_COLUMNS: left ${String(value?.left)} / right ${String(value?.right)}; required distinct leftWidth, rightWidth or null`);
+ const ok=(v:unknown)=>v===null||v==='leftWidth'||v==='rightWidth'||v==='communicationWidth';
+ if(!value||!ok(value.left)||!ok(value.right)||value.left!==null&&value.left===value.right)throw new Error(`WORKSPACE_COLUMNS: left ${String(value?.left)} / right ${String(value?.right)}; required distinct leftWidth, rightWidth, communicationWidth or null`);
  return {left:value.left,right:value.right};
 }
 /** Input rectangle excludes app chrome. Drawer triggers must remain outside collapsed panel content.
  * Collapse the left column, then the right one when minima cannot coexist; Inspector becomes a drawer below its minimum.
  * Returned clamps never replace the user's desired desktop sizes. */
-export function allocateWorkspaceLayout(available:{width:number;height:number},desired:WorkspacePanels,columns:WorkspaceColumns=defaultWorkspaceColumns):EffectiveWorkspaceLayout {
+export function allocateWorkspaceLayout(available:{width:number;height:number},desired:DesiredWorkspacePanels,columns:WorkspaceColumns=defaultWorkspaceColumns):EffectiveWorkspaceLayout {
  const panels=parseWorkspacePanels(desired),{left:leftKey,right:rightKey}=parseWorkspaceColumns(columns),{width,height}=available,{stageWidth:minWidth,stageHeight:minHeight,separator}=workspaceMinimums;
  if(![width,height].every(n=>Number.isFinite(n)&&n>=0&&n<=65536))throw new Error('WORKSPACE_RECTANGLE: finite 0..65536 CSS pixels required');
  const boundLeft=leftKey?panelBounds[leftKey].min:0,boundRight=rightKey?panelBounds[rightKey].min:0;
@@ -35,10 +37,10 @@ export function allocateWorkspaceLayout(available:{width:number;height:number},d
  const inspector=height>=minHeight+panelBounds.inspectorHeight.min+separator,inspectorHeight=inspector?Math.min(panels.inspectorHeight,height-minHeight-separator):0;
  const stageWidth=Math.max(0,width-leftSize-rightSize-count*separator),stageHeight=Math.max(0,height-inspectorHeight-(inspector?separator:0));
  const range=(visible:boolean,key:WorkspacePanel,value:number,max:number):SeparatorRange=>visible?{min:panelBounds[key].min,max:Math.max(panelBounds[key].min,Math.min(panelBounds[key].max,max)),value,enabled:true}:{min:0,max:0,value:0,enabled:false};
- const size:Record<WorkspaceColumnKey,number>={leftWidth:0,rightWidth:0},mode:Record<WorkspaceColumnKey,WorkspacePanelMode>={leftWidth:'absent',rightWidth:'absent'},separators:Record<WorkspacePanel,SeparatorRange>={leftWidth:range(false,'leftWidth',0,0),rightWidth:range(false,'rightWidth',0,0),inspectorHeight:range(inspector,'inspectorHeight',inspectorHeight,height-minHeight-separator)};
+ const size:Record<WorkspaceColumnKey,number>={leftWidth:0,rightWidth:0,communicationWidth:0},mode:Record<WorkspaceColumnKey,WorkspacePanelMode>={leftWidth:'absent',rightWidth:'absent',communicationWidth:'absent'},separators:Record<WorkspacePanel,SeparatorRange>={leftWidth:range(false,'leftWidth',0,0),rightWidth:range(false,'rightWidth',0,0),communicationWidth:range(false,'communicationWidth',0,0),inspectorHeight:range(inspector,'inspectorHeight',inspectorHeight,height-minHeight-separator)};
  if(leftKey){size[leftKey]=leftSize;mode[leftKey]=left?'panel':'drawer';separators[leftKey]=range(left,leftKey,leftSize,width-rightSize-count*separator-minWidth);}
  if(rightKey){size[rightKey]=rightSize;mode[rightKey]=right?'panel':'drawer';separators[rightKey]=range(right,rightKey,rightSize,width-leftSize-count*separator-minWidth);}
- return {leftWidth:size.leftWidth,rightWidth:size.rightWidth,inspectorHeight,stageWidth,stageHeight,leftMode:mode.leftWidth,rightMode:mode.rightWidth,inspectorMode:inspector?'panel':'drawer',stageMinimumSatisfied:width>=minWidth&&height>=minHeight,separators};
+ return {leftWidth:size.leftWidth,rightWidth:size.rightWidth,communicationWidth:size.communicationWidth,inspectorHeight,stageWidth,stageHeight,leftMode:mode.leftWidth,rightMode:mode.rightWidth,communicationMode:mode.communicationWidth,inspectorMode:inspector?'panel':'drawer',stageMinimumSatisfied:width>=minWidth&&height>=minHeight,separators};
 }
 export interface WorkspaceSeparatorOptions {element:HTMLElement;panel:WorkspacePanel;controls:string;label:string;range:()=>SeparatorRange;resize:(desired:number)=>void;desired?:()=>number;resolveDesired?:(effective:number,context:{range:SeparatorRange;desired:number})=>number;commit?:(desired:number)=>void;side?:'left'|'right';events?:Pick<EventTarget,'addEventListener'|'removeEventListener'>|null;step?:number;coarseStep?:number}
 /** Arrow keys act only on the separator itself. Right/bottom boundaries grow inward.

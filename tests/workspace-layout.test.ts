@@ -102,7 +102,7 @@ test('a single left column uses its own saved width and bounds; the absent side 
  expect(allocateWorkspaceLayout({width:1280,height:900},defaultWorkspacePanels)).toMatchObject({leftWidth:170,rightWidth:260,leftMode:'panel',rightMode:'panel'});
 });
 test('column maps that repeat or invent a saved width are refused by name',()=>{
- expect(()=>allocateWorkspaceLayout({width:900,height:600},defaultWorkspacePanels,{left:'rightWidth',right:'rightWidth'})).toThrow('WORKSPACE_COLUMNS: left rightWidth / right rightWidth; required distinct leftWidth, rightWidth or null');
+ expect(()=>allocateWorkspaceLayout({width:900,height:600},defaultWorkspacePanels,{left:'rightWidth',right:'rightWidth'})).toThrow('WORKSPACE_COLUMNS: left rightWidth / right rightWidth; required distinct leftWidth, rightWidth, communicationWidth or null');
  expect(()=>allocateWorkspaceLayout({width:900,height:600},defaultWorkspacePanels,{left:'inspectorHeight',right:null} as never)).toThrow('WORKSPACE_COLUMNS: left inspectorHeight');
 });
 test('a separator follows its side, not its saved field name',()=>{

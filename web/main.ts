@@ -117,6 +117,10 @@ let host:JobRigMeshHost|null=rigHost(),access=host?.access??pageInstanceAccess()
 let partsOnly=host?.subject==='parts'||screenRoot.dataset.reviewScreen==='parts';
 let firstPublicationPrompt=!!host?.waiting;
 const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
+/** #1041: the right panel is communication with the AI: the pending question, Comments and (later) record forms.
+ * The bottom panel keeps the controllers tied to the view. */
+const communicationPanel=panelMake('aside',{id:'workspace-communication',className:'workspace-communication',hidden:true});
+setSourceAttribute(communicationPanel,'aria-label','Communication');
 const rigStatusBar=mountStatusBar({
  message:'Loading local review package…',
  readouts:[
@@ -1320,15 +1324,19 @@ function bind(): void {
 /** The one shell and block binding, for either subject. */
 function bindWorkspace(hasModel=false,empty=false):void {
   if(!workspace){
-  workspace=bindWorkspaceUI({root:screenRoot,regions:{layout:screenRoot.querySelector<HTMLElement>('.layout')!,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
+  const layout=screenRoot.querySelector<HTMLElement>('.layout')!;layout.append(communicationPanel);
+  workspace=bindWorkspaceUI({root:screenRoot,regions:{layout,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,right:communicationPanel,columns:{left:'rightWidth',right:'communicationWidth'},rightPending:communicationPending},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   }
   if(empty)return;
   bindReviewDialog();
-  // The waiting layout may have moved this body into the inspector drawer.
-  rigInspector.body.append(questionPanel);
-  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel&&!partsOnly)?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{syncQuestionImage();workspace?.refresh();persistence?.save();}});
+  // The question on top, Comments below; Comment rows sit above the provenance block and the review form.
+  const comments=rigInspector.comments.panel;comments.hidden=false;
+  comments.querySelector('.review-dialog-header')?.after(el('comments-list-host'));
+  communicationPanel.append(questionPanel,comments);
+  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel&&!partsOnly)?['feedback']:undefined,bottom:{strip:rigInspector.strip},changed:()=>{syncQuestionImage();workspace?.refresh();persistence?.save();}});
+  workspace?.refresh();
 }
 async function start(): Promise<void> {
   try {
@@ -1591,6 +1599,7 @@ let activeInterviewImages:readonly {name:string;src:string}[]|null=null;
 let activeInterviewImage:{name:string;src:string}|null=null;
 let releaseInterview:(()=>void)|null=null;
 const questionPanel=panelMake('section',{id:'workspace-interview-answer',className:'workspace-interview-panel',hidden:true});
+{const title=panelMake('h2',{});setSourceText(title,'Question');questionPanel.append(panelMake('div',{className:'review-dialog-header'},title));}
 let questionForms:readonly HTMLElement[]=[];
 /** #1004: several question forms share the Question tab; the list shows one at a time. */
 let selectedQuestionAsk:string|undefined;
@@ -1790,11 +1799,10 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
  questionForms=questionTabForms;
  if(questionForms.length){
   for(const form of questionForms)if(form.parentElement!==questionPanel)questionPanel.append(form);
-  const reveal=()=>{inspectorBlocks?.select(selectedInspector()??'rig','question');workspace?.revealInspector();};
+  const reveal=()=>{questionPanel.hidden=false;workspace?.revealCommunication();};
   rigAsk.onclick=()=>{if(!draftConflict)reveal();};
   if(!unregisterQuestion){
-   unregisterQuestion=inspectorBlocks!.register({id:'question',panel:questionPanel,label:'Question',position:'first'});
-   inspectorBlocks!.restore({rig:'question',playback:'question'});reveal();
+   unregisterQuestion=()=>{questionPanel.hidden=true;workspace?.refresh();};reveal();
   }
   if(questionForms.every(form=>form.dataset.interviewAnswered==='true')){answerSaved=true;firstPublicationPrompt=false;}
  }else{
@@ -2039,7 +2047,9 @@ function bindInspector(partsSubject=false):void {
  for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
-function openReview():void {pause();if(!partsOnly)syncCorrectionStage();inspectorBlocks?.select(selectedInspector()??'rig','feedback');workspace?.revealInspector();}
+function openReview():void {pause();if(!partsOnly)syncCorrectionStage();workspace?.revealCommunication();}
+/** Something to communicate: a pending question or record form, or at least one comment. */
+function communicationPending():boolean {return !!communicationPanel.querySelector('form[data-job-ask]')||!!communicationPanel.querySelector('.stage-comment-item');}
 function unitScaleMessage(target:CameraTarget):void {message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');}
 function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');}
 
