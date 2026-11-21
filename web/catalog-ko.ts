@@ -3235,6 +3235,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "COMMENT_CROP_UNAVAILABLE: mark is outside the viewport": "COMMENT_CROP_UNAVAILABLE: 표시 영역이 뷰포트 밖에 있어요",
   "mark is outside the viewport": "표시 영역이 뷰포트 밖에 있어요",
   "COMMENT_CROP_LIMIT: mark a smaller region (PNG limit 150 KiB)": "COMMENT_CROP_LIMIT: 더 작은 영역을 표시하세요 (PNG 제한 150 KiB)",
+  "COMMENT_PICTURE_LABEL_INVALID: the pin does not name the shown plan picture": "COMMENT_PICTURE_LABEL_INVALID: 이 핀은 지금 보이는 계획 그림을 가리키지 않아요",
   "mark a smaller region (PNG limit 150 KiB)": "더 작은 영역을 표시하세요 (PNG 제한 150 KiB)",
   "Stage comments": "스테이지 코멘트",
   "COMMENT_BUSY: wait for inspection": "COMMENT_BUSY: 점검이 완료될 때까지 기다리세요",

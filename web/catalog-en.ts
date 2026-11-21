@@ -3235,6 +3235,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "COMMENT_CROP_UNAVAILABLE: mark is outside the viewport": "COMMENT_CROP_UNAVAILABLE: mark is outside the viewport",
   "mark is outside the viewport": "mark is outside the viewport",
   "COMMENT_CROP_LIMIT: mark a smaller region (PNG limit 150 KiB)": "COMMENT_CROP_LIMIT: mark a smaller region (PNG limit 150 KiB)",
+  "COMMENT_PICTURE_LABEL_INVALID: the pin does not name the shown plan picture": "COMMENT_PICTURE_LABEL_INVALID: the pin does not name the shown plan picture",
   "mark a smaller region (PNG limit 150 KiB)": "mark a smaller region (PNG limit 150 KiB)",
   "Stage comments": "Stage comments",
   "COMMENT_BUSY: wait for inspection": "COMMENT_BUSY: wait for inspection",
