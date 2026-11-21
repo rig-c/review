@@ -1,6 +1,8 @@
 /** #1004 ordinary Nova browser check: one record publication with K = 4 option sets on the real job page.
  * The question list shows the four sets with one "Submit review (n/4)" at its top. Submit sends only the answered
- * sets, one interview-picks act each; the rest stay pending and editable, and are submitted later. EN and KO. */
+ * sets, one interview-picks act each; the rest stay pending and editable, and are submitted later. EN and KO.
+ * Retry case: of two sets sent by one click, one request is refused after the other lands; the shared submit
+ * re-enables, still counts both, and the refused set stays pending and submits on the next click. */
 import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -20,6 +22,9 @@ type ListState={forms:{ask:string;visible:boolean;answered:boolean;editable:bool
 const profile=await mkdtemp(join(tmpdir(),'review-1004-browser-'));
 const exceptions:unknown[]=[],consoleErrors:unknown[]=[],cases:unknown[]=[];
 let page:InputCdpSession|undefined;
+let control:((method:string,params?:Record<string,unknown>)=>Promise<any>)|undefined;
+/** The one ui/acts request held for the retry case, by its ask; every other request goes through. */
+let refuseAsk:string|undefined,heldRequest:string|undefined;
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('1004_BROWSER_TIMEOUT '+label);}
 async function waitFor(check:()=>boolean,label:string){const until=Date.now()+20000;while(Date.now()<until){if(check())return;await Bun.sleep(30);}throw new Error('1004_BROWSER_TIMEOUT '+label);}
 const state=()=>page!.evaluate<ListState>(`(()=>{const visible=n=>!!n&&!n.closest('[hidden]')&&n.getClientRects().length>0;
@@ -44,9 +49,14 @@ async function answerShown(){
 }
 
 try{
- page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:event=>{
+ page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:async(event,send)=>{
   if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);
-  if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);}});
+  if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);
+  if(event.sessionId)control=(method,params)=>(send as any)(method,params,event.sessionId);
+  if(event.method==='Fetch.requestPaused'){const paused=event.params as {requestId:string;request:{postData?:string}};
+   let ask:string|undefined;try{ask=JSON.parse(paused.request.postData??'{}').askId;}catch{}
+   if(refuseAsk&&ask===refuseAsk&&!heldRequest)heldRequest=paused.requestId;
+   else await (send as any)('Fetch.continueRequest',{requestId:paused.requestId},event.sessionId);}}});
  for(const language of ['en','ko'] as const){
   const catalog=language==='ko'?koCatalog:enCatalog,label=(n:number)=>catalog['interview.submitAnswered']!.replace('{0}',String(n)).replace('{1}','4');
   const fixture=await optionSetsJobFixture({count:4,answered:2}),out=join(output,language);await mkdir(out,{recursive:true});
@@ -92,6 +102,43 @@ try{
    console.log('1004_BROWSER_CASE '+JSON.stringify({language,before:before.action?.text,after:after.action,pending:sources.pending.length}));
    cases.push(observation);
   }finally{await page.goto('about:blank');await fixture.close();}
+ }
+ for(const language of ['en','ko'] as const){
+  const catalog=language==='ko'?koCatalog:enCatalog,label=(n:number)=>catalog['interview.submitAnswered']!.replace('{0}',String(n)).replace('{1}','4');
+  const fixture=await optionSetsJobFixture({count:4,answered:2}),out=join(output,language);await mkdir(out,{recursive:true});
+  try{
+   const asks=fixture.asks.map(ask=>ask.askId),pending=()=>fixture.session.status().pending.map(ask=>ask.askId);
+   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
+   await page.setViewport(1440,900);await page.goto('about:blank');await page.goto(url.href,language);
+   await wait(`document.body.dataset.ready==='true'&&document.querySelectorAll('${root} form[data-job-ask]').length===4&&!!document.querySelector('${visibleForm} [data-job-questions-submit]')`,'retry four forms');
+   assert.deepEqual((await state()).action,{text:label(2),disabled:false,first:true,visible:true});
+   // Hold the second set's request until the first set has landed, then refuse it: the refusal settles last.
+   assert.ok(control);refuseAsk=asks[1];heldRequest=undefined;
+   await control('Fetch.enable',{patterns:[{urlPattern:'*ui/acts*',requestStage:'Request'}]});
+   await clickVisible(`${visibleForm} [data-job-questions-submit]`);
+   await waitFor(()=>pending().length===3&&!!heldRequest,'one act landed, one request held');
+   assert.deepEqual(pending(),asks.slice(1));
+   await wait(`document.querySelectorAll('${root} form[data-job-ask]')[0].dataset.interviewAnswered==='true'`,'first set answered');
+   await control('Fetch.fulfillRequest',{requestId:heldRequest!,responseCode:409,responseHeaders:[{name:'Content-Type',value:'application/json'}],
+    body:Buffer.from(JSON.stringify({ok:false,error:{code:'JOB_ACT_INVALID',message:'JOB_ACT_INVALID'}})).toString('base64')});
+   refuseAsk=undefined;await control('Fetch.disable');
+   await wait(`!document.querySelectorAll('${root} form[data-job-ask]')[1].querySelector('fieldset').disabled`,'refused set editable again');
+   const refused=await state();
+   assert.deepEqual(refused.forms.map(f=>[f.answered,f.editable]),[[true,false],[false,true],[false,true],[false,true]]);
+   assert.deepEqual(pending(),asks.slice(1));
+   assert.deepEqual(refused.action,{text:label(2),disabled:false,first:true,visible:true},'shared submit re-enables after one set is refused');
+   await writeFile(join(out,'after-refused-set.png'),await page.screenshot());
+   await clickVisible(`${visibleForm} [data-job-questions-submit]`);
+   await waitFor(()=>pending().length===2,'retried act');
+   assert.deepEqual(pending(),asks.slice(2));
+   await wait(`document.querySelectorAll('${root} form[data-job-ask]')[1].dataset.interviewAnswered==='true'`,'retried set answered');
+   const retried=await state();
+   assert.deepEqual(retried.action,{text:label(2),disabled:true,first:true,visible:true});
+   const observation={language,case:'retry',asks,refused,retried,pendingAfter:pending().length};
+   await writeFile(join(out,'retry-observations.json'),JSON.stringify(observation,null,2)+'\n');
+   console.log('1004_BROWSER_RETRY_CASE '+JSON.stringify({language,refused:refused.action,retried:retried.action,pending:pending().length}));
+   cases.push(observation);
+  }finally{refuseAsk=undefined;if(heldRequest)await control?.('Fetch.disable').catch(()=>{});await page.goto('about:blank');await fixture.close();}
  }
  assert.equal(exceptions.length,0,JSON.stringify(exceptions));
  assert.equal(consoleErrors.length,0,JSON.stringify(consoleErrors));

@@ -1453,7 +1453,7 @@ function jobQuestionSet(ask: JobWindowAsk, prepared: JobPreparedInspection, t: t
             onSelect: (i: number) => rows.get(i)?.entry.form.dispatchEvent(new Event('job-question-select', {bubbles: true}))},
         join(entry: JobForm, redraw: () => void) {
             rows.set(index, {entry, action, redraw});
-            for (const type of ['input', 'change', 'job-answer-saved', 'job-form-language']) entry.form.addEventListener(type, refresh);
+            for (const type of ['input', 'change', 'job-answer-saved', 'job-answer-failed', 'job-form-language']) entry.form.addEventListener(type, refresh);
             entry.form.addEventListener('job-form-dispose', () => {if (rows.get(index)?.entry === entry) rows.delete(index); refresh();});
             refresh();
         },
@@ -1701,6 +1701,8 @@ export interface JobFormDependencies {
                     ? error.message : 'JOB_ACT_INVALID';
                 status.textContent = jobWindowRefusal(error, 'JOB_ACT_INVALID');
                 fields.disabled = false;
+                // A shared question-set submit waits on every member; a failed one must let it re-enable for the retry.
+                form.dispatchEvent(new Event('job-answer-failed'));
             }
         };
         return entry;
