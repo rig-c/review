@@ -106,7 +106,7 @@ function assertPending(state:any,mode:Mode,width:number,expectedFooter?:string){
   assert.ok([expectedFooter,catalog['Parts ready. Source files remain unchanged.']].includes(state.footerMessage),
    'pending Parts verdict keeps its publication label or ready message');
  }
- for(const part of state.footer){assert.ok(part.rect.left>=0&&part.rect.right<=width&&part.rect.top>=state.footer[0].rect.top&&part.rect.bottom<=state.footer[0].rect.bottom,'shown footer item inside viewport and footer: '+part.id);assert.ok(part.scrollWidth<=part.clientWidth+1&&part.scrollHeight<=part.clientHeight+1,'shown footer text fits: '+part.id);}
+ for(const part of state.footer){assert.ok(part.rect.left>=0&&part.rect.right<=width&&part.rect.top>=state.footer[0].rect.top&&part.rect.bottom<=state.footer[0].rect.bottom,'shown footer item inside viewport and footer: '+part.id);if(mode!=='standalone'||part.id!=='message')assert.ok(part.scrollWidth<=part.clientWidth+1&&part.scrollHeight<=part.clientHeight+1,'shown footer text fits: '+part.id);}
  assert.equal(state.bars,1);assert.equal(state.rows,1);assert.equal(state.rowVisible,true);assert.equal(state.direct,true);assert.equal(state.home,'workspace-act-row');
  assert.equal(state.headerVisible,mode!=='embedded-rig');
  assert.ok(Math.abs(state.row.top-(mode==='embedded-rig'?0:state.header.bottom))<=1,'row directly beneath topbar, or at embedded top');
@@ -199,8 +199,8 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   const initial:any=await capture(page,out,'pending');assert.equal(initial.language,language);
   const loading:any[]=await page.evaluate(`window.__actRowSamples`);
   const firstOffendingFrames:unknown[]=await page.evaluate(`window.__actRowFirstOffendingFrames`);
-  const violations=mode==='standalone'?[]:loading.filter(sample=>sample.controlsBeforeQuestion||sample.legacySave||sample.status||sample.label||sample.bar&&!sample.row);
-  const flash={mode,language,width,height,held,standaloneExempt:mode==='standalone',samples:loading.length,violations:violations.length,firstOffendingFrames};
+  const violations=loading.filter(sample=>sample.controlsBeforeQuestion||sample.legacySave||sample.status||sample.label||sample.bar&&!sample.row);
+  const flash={mode,language,width,height,held,samples:loading.length,violations:violations.length,firstOffendingFrames};
   if(violations.length)flashFailures.push(flash);
   await writeFile(join(out,'loading.json'),JSON.stringify({held,samples:loading,firstOffendingFrames},null,2)+'\n');
   await writeFile(join(out,'flash.json'),JSON.stringify({...flash,violations},null,2)+'\n');
@@ -210,17 +210,12 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   observations.push({mode,language,width,height,initial,flash});
   assert.ok(loading.length>0,'sampler observed this screen');
   if(flashOnly){
-   if(['rig','direction','parts','embedded-rig'].includes(mode))assert.ok(held>0,'asset response held while live workspace was loading');
+   if(['rig','direction','parts','embedded-rig','standalone'].includes(mode))assert.ok(held>0,'asset response held while live workspace was loading');
    continue;
-  }
-  if(mode==='standalone'){
-   assert.equal(initial.rows,0);assert.equal(initial.rowVisible,false);
-   assert.equal(await page.evaluate(`!!document.querySelector('.inspector-heading>#workspace-review-act')`),true,'standalone keeps existing home');
-   assert.equal(await page.evaluate(`document.getElementById('save').hidden`),false);continue;
   }
   assert.deepEqual(violations,[],'zero visible live answer controls before a visible nonempty question; no legacy/out-of-row flash');
   assertPending(initial,mode,width,expectedPendingFooter);
-  if(['rig','direction','parts','embedded-rig'].includes(mode))assert.ok(held>0,'asset response held while live workspace was loading');
+  if(['rig','direction','parts','embedded-rig','standalone'].includes(mode))assert.ok(held>0,'asset response held while live workspace was loading');
   assert.ok(!loading.some(sample=>sample.bar&&!sample.row),'a live act is only visible inside its row');
   // Test-only DOM mutation: announce and hash the exact node before changing it;
   // restore in finally and verify its hash before any subsequent measurement.
@@ -251,8 +246,23 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   assert.ok(Math.abs(collapsed.panel.height-collapsed.heading.height)<=2,'collapsed panel is only its heading');
   assert.ok(collapsed.panel.height<initial.panel.height,'collapse actually shrinks the panel');
   await click(page,'#workspace-bottom-collapse');await wait(page,`!document.querySelector('.inspector-body').hidden`);
-  if(['rig','direction','parts','embedded-rig'].includes(mode)){
+  if(['rig','direction','parts','embedded-rig','standalone'].includes(mode)){
    assert.equal(await page.evaluate(`document.getElementById('request-changes').disabled`),true,'changes needs a comment');
+   if(mode==='standalone'){
+    const standaloneStyles:{msg:{maxWidth:string;whiteSpace:string;textOverflow:string};state:{maxWidth:string;whiteSpace:string;textOverflow:string}}=await page.evaluate(`(()=>{
+     const msg=document.getElementById('review-message'),state=document.getElementById('review-draft-state');
+     msg.textContent='Refusal: very long refusal message that must wrap cleanly inside #workspace-act-row without 36ch truncation or ellipsis on standalone package screens';
+     msg.classList.add('error');
+     const pick=el=>{const cs=getComputedStyle(el);return {maxWidth:cs.maxWidth,whiteSpace:cs.whiteSpace,textOverflow:cs.textOverflow};};
+     const res={msg:pick(msg),state:pick(state)};
+     msg.textContent='';msg.classList.remove('error');
+     return res;
+    })()`);
+    assert.deepEqual(standaloneStyles.msg,{maxWidth:'none',whiteSpace:'normal',textOverflow:'clip'});
+    assert.deepEqual(standaloneStyles.state,{maxWidth:'none',whiteSpace:'normal',textOverflow:'clip'});
+    observations[observationIndex]={mode,language,width,height,initial,collapsed,held,flash};
+    continue;
+   }
    if(mode==='rig'){
     await click(page,'#zoom-in');await wait(page,`Object.keys(localStorage).some(key=>key.startsWith('rig-review-draft/1:'))`);
     const key:string=await page.evaluate(`Object.keys(localStorage).find(key=>key.startsWith('rig-review-draft/1:'))`);

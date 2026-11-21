@@ -54,9 +54,9 @@ function openHost(options:{ownedRoot?:boolean;nonRig?:boolean;explicitRegions?:b
  const tabs=options.tabs??['view','rig','playback','feedback'],panels={} as Record<string,Host>;for(const tab of tabs){const panel=new Host('section'),button=new Host('button');panel.id='inspector-'+tab;panel.dataset.inspectorPanel=tab;panel.hidden=tab!==tabs[0];panel.clientHeight=200;panel.clientWidth=500;button.dataset.inspector=tab;button.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(tab===tabs[0]));panels[tab]=panel;if(options.pressed){button.dataset.mode=tab;body.append(button);inspector.append(panel);}else inspector.append(button,panel);}
  let bottomPanel:{kind:string;strip:Host;act:Host;actHome:Host;collapse:Host}|undefined,bottomBody:Host|undefined;
  if(options.bottomPanel){
-  const strip=new Host('nav'),bottomHeading=new Host(),act=new Host(),collapse=new Host('button');bottomBody=new Host();bottomBody.className='inspector-body';bottomHeading.clientHeight=30;
+  const strip=new Host('nav'),bottomHeading=new Host(),act=new Host(),actHome=new Host(),collapse=new Host('button');bottomBody=new Host();bottomBody.className='inspector-body';bottomHeading.clientHeight=30;
   for(const child of [...inspector.children])if(child.dataset.inspector)strip.append(child);else bottomBody.append(child);
-  const actHome=panels.feedback??panels.parts!;act.id='workspace-review-act';actHome.append(act);bottomHeading.append(strip,collapse);inspector.append(bottomHeading,bottomBody);bottomPanel={kind:options.kind??'rig',strip,act,actHome,collapse};
+  actHome.id='workspace-act-row';act.id='workspace-review-act';actHome.append(act);bottomHeading.append(strip,collapse);inspector.append(bottomHeading,bottomBody);body.prepend(actHome);bottomPanel={kind:options.kind??'rig',strip,act,actHome,collapse};
  }
  main.append(heading,stage,inspector);
  if(options.direction){
@@ -363,20 +363,20 @@ test('#666 actual compare bookmark restoration delegates selection between the e
 test('#671 real bottom tabs reveal selected Setup and Animate bodies in a short embedded-layout drawer without restore side effects',()=>{
  const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});
  try{
-  const original=app.bottomBody!,strip=app.bottomPanel!.strip,act=app.bottomPanel!.act;
+  const original=app.bottomBody!,strip=app.bottomPanel!.strip,act=app.bottomPanel!.act,actHome=app.bottomPanel!.actHome;
   app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();
   const drawer=app.get('workspace-drawer-inspectorHeight');
   expect(original.parentElement).toBe(drawer);expect(drawer.open).toBe(false);
   app.tabBinding!.restore('playback');app.flush();expect(drawer.open).toBe(false);expect(app.panels.playback!.hidden).toBe(false);
   for(const name of ['playback','rig','rig','playback']){
    app.tabBinding!.select(name);app.flush();expect(drawer.open).toBe(true);expect(original.hidden).toBe(false);expect(app.panels[name]!.hidden).toBe(false);
-   expect(strip.parentElement!.parentElement).toBe(app.get('workspace-inspector'));expect(drawer.contains(act)).toBe(true);
-   drawer.close();app.flush();expect(drawer.open).toBe(false);expect(app.focus()?.dataset.inspector).toBe(name);expect(act.parentElement).toBe(strip.parentElement);
+   expect(strip.parentElement!.parentElement).toBe(app.get('workspace-inspector'));expect(drawer.contains(act)).toBe(false);expect(act.parentElement).toBe(actHome);
+   drawer.close();app.flush();expect(drawer.open).toBe(false);expect(app.focus()?.dataset.inspector).toBe(name);expect(act.parentElement).toBe(actHome);
   }
   const first=strip.children[0]!,key=Object.assign(new Event('keydown',{cancelable:true}),{key:'ArrowRight'});
   (first as unknown as {onkeydown:(event:KeyboardEvent)=>void}).onkeydown(key as KeyboardEvent);app.flush();expect(key.defaultPrevented).toBe(true);expect(drawer.open).toBe(true);expect(app.focus()).toBe(drawer);
   app.layout.clientWidth=1400;app.layout.clientHeight=900;app.ui.refresh();app.flush();
-  expect(drawer.open).toBe(false);expect(original.parentElement).toBe(app.get('workspace-inspector'));expect(drawer.contains(original)).toBe(false);expect(act.parentElement).toBe(app.bottomPanel!.strip.parentElement);
+  expect(drawer.open).toBe(false);expect(original.parentElement).toBe(app.get('workspace-inspector'));expect(drawer.contains(original)).toBe(false);expect(act.parentElement).toBe(actHome);
  }finally{app.close();}
 });
 
@@ -384,12 +384,12 @@ test('#671 collapse and expand keep single act identity and explicit selected-ta
  const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});
  try{
   const {collapse,act,strip,actHome}=app.bottomPanel!,body=app.bottomBody!;
-  collapse.click();app.flush();expect(body.hidden).toBe(true);expect(collapse.textContent).toBe('⌃');expect(collapse.getAttribute('aria-label')).toBe('Expand bottom panel');expect(collapse.getAttribute('title')).toBe('Expand bottom panel');expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('true');
+  collapse.click();app.flush();expect(body.hidden).toBe(true);expect(collapse.textContent).toBe('⌃');expect(collapse.getAttribute('aria-label')).toBe('Expand bottom panel');expect(collapse.getAttribute('title')).toBe('Expand bottom panel');expect(act.parentElement).toBe(actHome);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('true');
   app.tabBinding!.restore('rig');app.flush();expect(body.hidden).toBe(true);
-  app.tabBinding!.select('rig');app.flush();expect(body.hidden).toBe(false);expect(collapse.textContent).toBe('⌄');expect(collapse.getAttribute('aria-label')).toBe('Collapse bottom panel');expect(collapse.getAttribute('title')).toBe('Collapse bottom panel');expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('false');
+  app.tabBinding!.select('rig');app.flush();expect(body.hidden).toBe(false);expect(collapse.textContent).toBe('⌄');expect(collapse.getAttribute('aria-label')).toBe('Collapse bottom panel');expect(collapse.getAttribute('title')).toBe('Collapse bottom panel');expect(act.parentElement).toBe(actHome);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('false');
   app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();
   collapse.click();app.flush();expect(body.hidden).toBe(true);
-  collapse.click();app.flush();const drawer=app.get('workspace-drawer-inspectorHeight');expect(body.hidden).toBe(false);expect(drawer.open).toBe(true);expect(drawer.contains(act)).toBe(true);
+  collapse.click();app.flush();const drawer=app.get('workspace-drawer-inspectorHeight');expect(body.hidden).toBe(false);expect(drawer.open).toBe(true);expect(drawer.contains(act)).toBe(false);expect(act.parentElement).toBe(actHome);
   expect(app.bottomPanel!.act).toBe(act);expect(app.bottomPanel!.strip).toBe(strip);
  }finally{app.close();}
 });
@@ -606,16 +606,16 @@ test('#678 caller-owned parts regions without a parts explorer or right host sha
   expect(app.get('parts-explorer')).toBeNull();expect(app.get('stage-layout')).toBeNull();
   expect(app.layout.children.filter(node=>node.className.includes('workspace-separator')).map(node=>node.className)).toEqual(['workspace-separator workspace-leftWidth workspace-side-left']);
   expect(app.get('workspace-drawer-rightWidth')).toBeNull();
-  const bottom=app.get('workspace-inspector'),body=app.bottomBody!,act=app.bottomPanel!.act;
+  const bottom=app.get('workspace-inspector'),body=app.bottomBody!,act=app.bottomPanel!.act,actHome=app.bottomPanel!.actHome;
   expect(bottom.parentElement!.style.gridTemplateRows).toContain('4px');
   app.bottomPanel!.collapse.click();app.flush();expect(body.hidden).toBe(true);expect(app.values.get('rig-review-bottom-collapsed/parts')).toBe('true');
   app.bottomPanel!.collapse.click();app.flush();expect(body.hidden).toBe(false);
   app.layout.clientWidth=300;app.layout.clientHeight=300;app.ui.refresh();app.flush();
   expect(app.get('workspace-left').parentElement).toBe(app.get('workspace-drawer-leftWidth'));
   expect(body.parentElement).toBe(app.get('workspace-drawer-inspectorHeight'));
-  app.tabBinding!.select('parts');app.flush();expect(app.get('workspace-drawer-inspectorHeight').open).toBe(true);expect(app.get('workspace-drawer-inspectorHeight').contains(act)).toBe(true);
+  app.tabBinding!.select('parts');app.flush();expect(app.get('workspace-drawer-inspectorHeight').open).toBe(true);expect(app.get('workspace-drawer-inspectorHeight').contains(act)).toBe(false);expect(act.parentElement).toBe(actHome);
   app.layout.clientWidth=1400;app.layout.clientHeight=900;app.ui.refresh();app.flush();
-  expect(body.parentElement).toBe(bottom);expect(act.parentElement).toBe(app.bottomPanel!.strip.parentElement);expect(app.get('workspace-left').parentElement).toBe(app.layout);
+  expect(body.parentElement).toBe(bottom);expect(act.parentElement).toBe(actHome);expect(app.get('workspace-left').parentElement).toBe(app.layout);
  }finally{app.close();}
 });
 
