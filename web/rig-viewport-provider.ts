@@ -1,6 +1,6 @@
 /** Existing compiled rig/reference rendering for the shared inspection viewport. */
-import type {ModelAssets,RigPlayer,PoseBounds,PosedFrame} from '@rig-c/play';
-import type {CameraTarget,ViewportProvider,ViewportState,ViewportController} from './viewport-controller.ts';
+import type { ModelAssets, RigPlayer, PoseBounds, PosedFrame } from '@rig-c/play';
+import { formatZoomReadout, type CameraTarget, type ViewportProvider, type ViewportState, type ViewportController } from './viewport-controller.ts';
 import {cameraSignature} from './camera-view.ts';
 import {dragImpulse} from '../src/environment.ts';
 import {CLICK_SLOP_PX} from './stage-pick.ts';
@@ -90,10 +90,9 @@ function render(controller:ViewportController): void {
 }
 
 function renderControls(controller:ViewportController):void {
- const {availableCamera,paneCamera}=controller,controls=host.cameraControls;
- input('camera-sync').checked=state.cameraSync;const target=availableCamera();
- const label=controls?.targetLabel?.(target)??(target==='reference'?'Reference':'Rig');
- text(controls?.zoomId??'zoom-value',`${Math.round((target?paneCamera(target).zoom:1)*100)}% · ${label}`);
+ const controls=host.cameraControls;
+ input('camera-sync').checked=state.cameraSync;
+ text(controls?.zoomId??'zoom-value',formatZoomReadout(controller,controls?.targetLabel));
  button('fit').textContent=host.fitLabel??controls?.fitLabel?.(state.cameraSync)??(state.cameraSync?'Fit views':'Fit active');
  renderCaption();
 }

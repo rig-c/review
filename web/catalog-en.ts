@@ -3265,6 +3265,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "provide an explicit producer clock or a decoded reference frame index": "provide an explicit producer clock or a decoded reference frame index",
   "Comment {0}: {1}": "Comment {0}: {1}",
   "Comment {0}:": "Comment {0}:",
+  "Frame unavailable": "Frame unavailable",
+  "{0} s (seconds basis)": "{0} s (seconds basis)",
   "{0} s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)": "{0} s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)",
   "{0} split at": "{0} split at",
   "{0} split into": "{0} split into",

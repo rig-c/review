@@ -13,6 +13,10 @@ export interface ViewportState {
  rigScale:number;referenceScale:number;referenceZoom:number;displayedCenter:ViewPoint|null;
 }
 export function createViewportState():ViewportState {return {cameraSync:true,activeCamera:'rig',cameraRestoring:false,cameraLayout:'',cameraFrames:{},zoom:1,cameraCenter:null,referenceCenter:null,rigScale:1,referenceScale:1,referenceZoom:1,displayedCenter:null};}
+export function formatZoomReadout(controller:Pick<ViewportController,'availableCamera'|'paneCamera'>,targetLabel?:(target:CameraTarget|null)=>string):string {
+ const target=controller.availableCamera(),label=targetLabel?.(target)??(target==='reference'?'Reference':'Rig');
+ return `${Math.round((target?controller.paneCamera(target).zoom:1)*100)}% · ${label}`;
+}
 export interface ViewportGeometry {space:'world'|'image';box:{x:number;y:number;width:number;height:number};marginX:number;marginY:number}
 export interface ViewportProvider {
  /** Real mounted panes; the canonical rig host uses the default pair. */

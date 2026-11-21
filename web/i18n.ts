@@ -185,8 +185,8 @@ function ensureMaps(): { enToKo: Map<string, string>; koToEn: Map<string, string
     if (english === key) continue;
     const korean = koCatalog[key];
     if (korean === undefined) continue;
-    enToKoMap.set(english, korean);
-    koToEnMap.set(korean, english);
+    if (!enToKoMap.has(english)) enToKoMap.set(english, korean);
+    if (!koToEnMap.has(korean) || koToEnMap.get(korean) === key) koToEnMap.set(korean, english);
   }
   for (const [en, ko] of Object.entries(koCatalog)) {
     if (en.startsWith(' · ') && ko.startsWith(' · ')) {
