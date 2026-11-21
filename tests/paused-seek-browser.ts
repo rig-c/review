@@ -1,9 +1,9 @@
 /**
  * #935: a paused seek to the take's end lands on the same frame whatever came before it: fresh, after a seek
  * elsewhere, after playback across the loop. Compared at the instant the seek resolves and after 60 held steps,
- * against a fresh player seeking under the standing world. Ordinary Nova; synthetic public mesh and plates.
- * A time-varying wind (breeze, repeating gust) is not covered: its standing world at a seek depends on the wind
- * clock, which awaits a ruling on #935.
+ * against a fresh player seeking under the standing world, in the runtime world, under a constant applied wind and
+ * under a breeze: a paused seek to T sets the wind clock to T, so the standing world is the schedule's at T whatever
+ * ran before. Ordinary Nova; synthetic public mesh and plates.
  */
 import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,readFile,writeFile,copyFile,rm} from 'node:fs/promises';
@@ -34,7 +34,7 @@ const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format
 assert.ok(built.success,JSON.stringify(built.logs));
 async function wait(expression:string,ms=25000){const deadline=Date.now()+ms;while(Date.now()<deadline){const value=await page!.evaluate<any>(expression);if(value)return value;await Bun.sleep(30);}throw Error('WAIT '+expression);}
 const spread=(a:number[],b:number[])=>{let m=0;for(let i=0;i<a.length;i+=2)m=Math.max(m,Math.hypot(a[i]!-b[i]!,a[i+1]!-b[i+1]!));return m;};
-const results:Record<string,unknown>={};
+const results:Record<string,unknown>={},failures:string[]=[];
 try{
  const pkg=join(root,'package');await mkdir(pkg);
  await writeFile(join(pkg,'skeleton.model.json'),JSON.stringify(await directionPhysicsModel()));
@@ -43,7 +43,7 @@ try{
  const {direction}=await installSceneFixture(pkg);direction.timing.keys[0]!.easing='linear';
  await writeFile(join(pkg,'direction.json'),JSON.stringify(direction));
  page=await launchCdpSession(join(root,'profile'),{sendDeadlineMs:30000,browserArgs:['--renderer-process-limit=2'],onEvent(event){if(event.method==='Runtime.exceptionThrown')errors.push(event.params);}});await page.setViewport(1280,900);
- for(const world of ['default','base']){
+ for(const world of ['default','base','breeze']){
   const context=await createReviewRequestContext(await loadReview(pkg),{port:0,bundle:built.outputs[0]!,viewOnly:true,stateDir:join(root,'state-'+world)});
   const server=Bun.serve({hostname:'127.0.0.1',port:0,websocket:context.live.websocket,async fetch(req,srv){return (await context.handle(req,srv.port,srv))!;}});
   servers.push({stop(){context.stop();server.stop(true);}});
@@ -52,6 +52,7 @@ try{
   await page.evaluate(`document.querySelector('[data-mode="playback"]').click()`);
   await wait(`!document.querySelector('#play').disabled`);
   if(world==='base')await page.evaluate(`(()=>{const c=document.querySelector('#wind-base');c.value='3';c.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  if(world==='breeze')await page.evaluate(`(()=>{const c=document.querySelector('#wind-breeze');c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   const T=8,rows:any={};
   const instant=async(name:string)=>{const s:any=await page!.evaluate(`window.__p935.scrub(${T})`);await wait('window.__p935.held()',20000);const h:number[]=await page!.evaluate('window.__p935.held()');rows[name]={v:s.v,h,oracle:spread(s.v,s.o),env:s.env,wind:s.wind,applied:s.applied,source:s.source};};
   await instant('a');
@@ -67,9 +68,10 @@ try{
    oracleStanding:{a:rows.a.oracle,b:rows.b.oracle,c:rows.c.oracle},
    env:{a:rows.a.env,b:rows.b.env,c:rows.c.env},wind:{a:rows.a.wind,b:rows.b.wind,c:rows.c.wind,a2:rows.a2.wind}};
   results[world]=summary;console.log('PAUSED_SEEK_935',world,JSON.stringify(summary));
-  assert.equal(rows.a.applied,world!=='default');assert.ok(rows.b.wind>0,'playback crossed the loop');
-  for(const [name,value] of Object.entries({...summary.instant,...summary.held60,...summary.oracleStanding}))assert.equal(value,0,world+' '+name+' '+JSON.stringify(summary));
+  assert.equal(rows.a.applied,world!=='default');
+  for(const [name,value] of Object.entries({...summary.instant,...summary.held60,...summary.oracleStanding}))if(value!==0)failures.push(`${world} ${name} spread ${value}`);
+  for(const name of ['a','b','c','a2'])if(rows[name].wind!==T)failures.push(`${world} ${name} wind clock ${rows[name].wind}, not ${T}`);
  }
  await writeFile(join(out,'report.json'),JSON.stringify({results,errors},null,2));
- assert.deepEqual(errors,[]);
+ assert.deepEqual(failures,[]);assert.deepEqual(errors,[]);
 }finally{await page?.close();for(const server of servers)server.stop();assert.ok(root.startsWith(join(tmpdir(),'paused-seek-935-')));await rm(root,{recursive:true,force:true});}

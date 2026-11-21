@@ -13,7 +13,7 @@ import {freshSession} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
 import {environmentCheckArgs,type EnvironmentCheckJob} from '../src/environment-check.ts';
 import {parseAppliedContext} from '../src/applied-context.ts';
-import {environmentCheckRows,restartsWindClock,scheduleContext,worldExport,ENVIRONMENT_NOT_APPLIED} from '../web/environment-world.ts';
+import {environmentCheckRows,restartsWindClock,windClockOnMove,scheduleContext,worldExport,ENVIRONMENT_NOT_APPLIED} from '../web/environment-world.ts';
 
 /**
  * #112. Bar 1: the exported schedule, read the way rigc reads it (each step set before the physics step that ends on
@@ -270,4 +270,27 @@ test('#183: the wind clock restarts on every clip restart while the schedule is 
  expect(Math.abs(model.read().wind-scheduleWorldAt(e.schedule,0).wind[0])).toBeGreaterThan(1e-6);
  model.restore(model.snapshot());
  expect(Math.abs(model.read().wind-scheduleWorldAt(e.schedule,0).wind[0])).toBeLessThan(1e-9);
+});
+
+test('#935: a paused seek sets the wind clock to the seek time, watched or not; playback keeps #183\'s rule',()=>{
+ const rows:[Parameters<typeof windClockOnMove>[0],boolean,boolean,number|null][]=[
+  [{kind:'seek',to:1.25},true,false,1.25],   // paused mid-clip seek, schedule watched
+  [{kind:'seek',to:1.25},false,false,1.25],  // paused mid-clip seek, panel clock not watched
+  [{kind:'seek',to:8},false,false,8],        // paused seek to the take's end (#935's case)
+  [{kind:'seek',to:0},false,false,0],
+  [{kind:'seek',to:1.25},true,true,null],    // during playback a mid-clip seek leaves the running clock (#183)
+  [{kind:'seek',to:0},true,true,0],          // and a seek to 0 while watched is still a restart
+  [{kind:'replay'},true,true,0],[{kind:'choose'},true,false,0],
+  [{kind:'replay'},false,true,null],[{kind:'reload'},true,false,null],[{kind:'reload'},false,false,null],
+ ];
+ for(const [move,watched,playing,expected] of rows)expect(windClockOnMove(move,watched,playing)).toBe(expected);
+ // The clock a paused seek to T sets (a fresh clock advanced to T) reads the schedule's wind at T, whatever ran before.
+ const s=snap({base:2,breeze:true,repeat:true}),duration=8,e=windSchedule(s,1,duration);
+ for(const before of [0,3.3,9.5333]){
+  const model=createWindModel();model.restore(s);for(let i=0;i<Math.round(before*60);i++)model.advance(1/60);
+  model.restore(model.snapshot());model.advance(duration);
+  expect(model.read().time).toBe(duration);
+  expect(model.read().wind).toBeCloseTo(windAt(s,duration),12);
+  expect(model.read().wind).toBeCloseTo(scheduleWorldAt(e.schedule,duration).wind[0],12);
+ }
 });
