@@ -205,13 +205,14 @@ test('the chest landmark tooltip names the click order in owner words, in both c
  expect(koCat).toContain(`${JSON.stringify(en)}: ${JSON.stringify('오른쪽 끝, 왼쪽 끝, 가운데 골 순서로 찍으면 두 원을 만들어요')}`);
  for(const text of [html(),enCat,koCat])expect(text).not.toContain('the producer derives both circles');
 });
-test('#1030 F07: RigOverlays draws chest landmark tags through t() in EN and KO without altering marker positions',async()=>{
+test('#1030 F07: RigOverlays measures and draws chest landmark tags through t() in EN and KO',async()=>{
  const {createCanvas}=await import('@napi-rs/canvas'),{RigOverlays}=await import('../web/rig-overlays.ts'),{LANDMARKS}=await import('../web/chest-editor.ts'),{getLanguagePreference,setLanguagePreference}=await import('../web/i18n.ts');
  const prevLang=getLanguagePreference();
  try{
   const surface=createCanvas(500,300);Object.assign(surface,{style:{pointerEvents:'auto'},clientWidth:500,clientHeight:300});
-  const ctx=surface.getContext('2d'),calls:{text:string;x:number;y:number}[]=[],origFillText=ctx.fillText.bind(ctx);
+  const ctx=surface.getContext('2d'),calls:{text:string;x:number;y:number}[]=[],measured:string[]=[],origFillText=ctx.fillText.bind(ctx),origMeasureText=ctx.measureText.bind(ctx);
   ctx.fillText=((text:string,x:number,y:number)=>{calls.push({text,x,y});return origFillText(text,x,y);}) as typeof ctx.fillText;
+  ctx.measureText=((text:string)=>{measured.push(text);return origMeasureText(text);}) as typeof ctx.measureText;
   const overlays=new RigOverlays({canvas:surface as unknown as HTMLCanvasElement,rigRoot:{style:{visibility:'visible'}} as unknown as HTMLElement});
   const settings={images:true,mesh:false,bones:false,meshOpacity:.65},project=(x:number,y:number)=>({x,y});
   const colors={stroke:'#00ff00',fill:'#003300',ink:'#ffffff',labelBg:'#101010'};
@@ -221,13 +222,13 @@ test('#1030 F07: RigOverlays draws chest landmark tags through t() in EN and KO 
    {at:{x:240,y:90},tag:LANDMARKS[2].tag,active:false,colors},
   ];
   const player={posedFrame:()=>{throw new Error('unused');},bone:()=>{throw new Error('unused');}} as never;
-  setLanguagePreference('en');calls.length=0;
+  setLanguagePreference('en');calls.length=0;measured.length=0;
   overlays.refresh({player,bones:[],project,settings,dpr:1,markers});
-  const enCalls=[...calls];
-  expect(enCalls.map(c=>c.text)).toEqual(["Right apex (character's right, image left)","Left apex (character's left, image right)","Cleavage"]);
-  setLanguagePreference('ko');calls.length=0;
+  expect(measured).toEqual(["Right apex (character's right, image left)","Left apex (character's left, image right)","Cleavage"]);
+  expect(calls.map(c=>c.text)).toEqual(["Right apex (character's right, image left)","Left apex (character's left, image right)","Cleavage"]);
+  setLanguagePreference('ko');calls.length=0;measured.length=0;
   overlays.redraw({project,settings,dpr:1,markers});
+  expect(measured).toEqual(['오른쪽 끝(캐릭터 기준, 화면 왼쪽)','왼쪽 끝(캐릭터 기준, 화면 오른쪽)','가운데 골']);
   expect(calls.map(c=>c.text)).toEqual(['오른쪽 끝(캐릭터 기준, 화면 왼쪽)','왼쪽 끝(캐릭터 기준, 화면 오른쪽)','가운데 골']);
-  expect(calls.map(c=>[c.x,c.y])).toEqual(enCalls.map(c=>[c.x,c.y]));
  }finally{setLanguagePreference(prevLang);}
 });

@@ -271,7 +271,7 @@ export class RigOverlays {
    }
    // Labels avoid each other (#147): a moved label keeps a leader to its point; one with no free slot shows on hover only.
    ctx.font='600 11px ui-monospace, monospace';
-   const placed=placeLabels(drawn.map(({marker,at})=>({at,width:ctx.measureText(marker.tag).width+8,pinned:marker.active})),{gap:10,rise:3,bounds:{width,height},obstacles:drawn.map(({marker,at})=>{const r=marker.active?8:6.5;return {x:at.x-r,y:at.y-r,w:r*2,h:r*2};})});
+   const placed=placeLabels(drawn.map(({marker,at})=>({at,width:ctx.measureText(t(marker.tag)).width+8,pinned:marker.active})),{gap:10,rise:3,bounds:{width,height},obstacles:drawn.map(({marker,at})=>{const r=marker.active?8:6.5;return {x:at.x-r,y:at.y-r,w:r*2,h:r*2};})});
    // Leaders first, so no leader crosses another joint's label.
    drawn.forEach(({marker,at},i)=>{
     const {box,visible,moved}=placed[i]!;if(!visible||!moved)return;
