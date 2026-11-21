@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { clockForAnimation, frameAtTime, lastFrame, MAX_STAGE_FRAME_TIMES, rigPaneLabel, samplesClock, timeAtFrame, transportClock, type FrameClock, type StageClock } from '../src/frame-clock.ts';
+import { clockForAnimation, frameAtTime, framesSetClock, lastFrame, MAX_STAGE_FRAME_TIMES, rigPaneLabel, samplesClock, timeAtFrame, transportClock, type FrameClock, type StageClock } from '../src/frame-clock.ts';
 import { parseReport } from '../src/report.ts';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -56,6 +56,35 @@ test('transportClock prefers the report for its animation, else the stage build\
  expect(transportClock(none,'walk',true,null,'h1')).toBeNull();
  // The FEET line's frame: F14 at the run's frameTimes[14].
  const clock=transportClock(none,'walk',true,stage,'h1')!.clock;expect(timeAtFrame(clock,14)).toBe(0.583333);expect(frameAtTime(clock,0.583333)).toBe(14);expect(lastFrame(clock)).toBe(23);
+});
+test('#1018: a rigc-frames/1 set states written frames at i * stride / fps, and nothing outside them',()=>{
+ // The producer's own record for a 0.8 s clip at 12 fps (rigc render, measured): 11 frames, the last at 10/12 s.
+ const clock=framesSetClock({fps:12,written:11,stride:1});
+ expect(lastFrame(clock)).toBe(10);
+ for(let i=0;i<=10;i++){const t=timeAtFrame(clock,i)!;expect(Math.abs(t-i*1/12)).toBeLessThan(1e-12);expect(frameAtTime(clock,t)).toBe(i);}
+ expect(frameAtTime(clock,0.8)).toBe(9);expect(frameAtTime(clock,10/12)).toBe(10);
+ for(const outside of [-0.001,10/12+1e-6,Number.NaN])expect(frameAtTime(clock,outside)).toBeNull();
+ expect(timeAtFrame(clock,11)).toBeNull();expect(timeAtFrame(clock,-1)).toBeNull();expect(timeAtFrame(clock,1.5)).toBeNull();
+ // A stride writes every stride-th sample from frame 0: frame i is sample i * stride.
+ const strided=framesSetClock({fps:24,written:13,stride:2});
+ expect(lastFrame(strided)).toBe(12);for(let i=0;i<=12;i++){expect(Math.abs(timeAtFrame(strided,i)!-i*2/24)).toBeLessThan(1e-12);expect(frameAtTime(strided,i*2/24)).toBe(i);}
+ expect(frameAtTime(strided,3/24)).toBe(1);
+});
+test('#1018: transportClock takes the declared record after the report and before the stage, by animation only',()=>{
+ const report:FrameClock={kind:'uniform',fps:30,frame0:0,frameCount:10},idle=framesSetClock({fps:12,written:13,stride:1}),walk=framesSetClock({fps:12,written:5,stride:1});
+ const stageClock:FrameClock={kind:'uniform',fps:60,frame0:0,frameCount:61},stage:StageClock={animation:'idle',modelHash:'h1',clock:stageClock};
+ const frameClocks=[{animation:'idle',clock:idle},{animation:'walk',clock:walk}];
+ expect(transportClock({clock:report,animation:'idle',frameClocks},'idle',true,stage,'h1')).toEqual({clock:report,source:'report'});
+ expect(transportClock({clock:report,animation:'walk',frameClocks},'idle',true,stage,'h1')).toEqual({clock:idle,source:'frames'});
+ expect(transportClock({clock:null,animation:undefined,frameClocks},'walk',true,null,null)).toEqual({clock:walk,source:'frames'});
+ // No set for the animation: no clock from the record; the stage's own clock still applies to its build.
+ expect(transportClock({clock:null,animation:undefined,frameClocks},'jump',true,null,null)).toBeNull();
+ expect(transportClock({clock:null,animation:undefined,frameClocks:[frameClocks[1]!]},'idle',true,stage,'h1')).toEqual({clock:stageClock,source:'stage'});
+ // The record is the played model's: no player, or no animation playing, takes none of it.
+ expect(transportClock({clock:null,animation:undefined,frameClocks},'idle',false,null,null)).toBeNull();
+ expect(transportClock({clock:null,animation:undefined,frameClocks},'',true,null,null)).toBeNull();
+ // Absent (every package without a record) is today's behaviour exactly.
+ for(const absent of [undefined,null,[]])expect(transportClock({clock:null,animation:undefined,frameClocks:absent},'idle',true,stage,'h1')).toEqual(transportClock({clock:null,animation:undefined},'idle',true,stage,'h1'));
 });
 test('rigPaneLabel names the animation, frame and time of the drawn pose',()=>{
  expect(rigPaneLabel({hasPlayer:true,animation:'walk',time:0.583333,frame:14})).toBe('Generated rig · walk · F14 · 0.583 s');

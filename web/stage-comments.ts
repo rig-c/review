@@ -30,7 +30,7 @@ interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=Commen
  pose:(view:StageComment['viewport'])=>Pose|null;pause:()=>Promise<void>;
  bookmark:()=>unknown;restore:(bookmark:unknown,timeOnly?:boolean)=>Promise<void>;
  feedback:()=>Row[];locked:(id:string)=>boolean;
- add:(feedback:Row,side?:'a'|'b')=>void;changed:()=>void|Promise<void>;error:(message:string)=>void;
+ add:(feedback:Row,side?:'a'|'b')=>void;changed:()=>void|Promise<void>;draftChanged?:()=>void;error:(message:string)=>void;
  general?:{create:(summary:string)=>Row;matches:(row:Row)=>boolean;rows?:Row[];available?:()=>boolean;refusal?:()=>string|null};
  refusal?:()=>string|null;blocked:()=>boolean;busy?:()=>boolean;busyError?:(message:string)=>void;shortcutBlocked?:()=>boolean;shortcutActive?:()=>boolean;codec?:CommentCodec<Row,Pose>;
 }
@@ -67,7 +67,7 @@ async function crop(pose:CommentUiPose,r:MarkRegion):Promise<StageComment['crop'
  const bytes=Uint8Array.from(atob(png.split(',')[1]!),c=>c.charCodeAt(0)),sha256=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(n=>n.toString(16).padStart(2,'0')).join('');
  return {path:`comment-crops/${sha256}.png`,sha256,png,width:out.width,height:out.height};
 }
-export function bindStageComments<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose>(host:Host<Row,Pose>):{refresh:()=>void;dispose:()=>void;active:()=>boolean;draft:()=>boolean}{
+export function bindStageComments<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose>(host:Host<Row,Pose>):{refresh:()=>void;dispose:()=>void;active:()=>boolean;draft:()=>boolean;hasPendingComment:()=>boolean;commitDraft:()=>Promise<boolean>}{
  const readMark=(row:Row):CommentUiMark|null=>host.codec?host.codec.read(row):markOf(row as unknown as Feedback);
  const toggle=host.toggle??document.getElementById('stage-comment') as HTMLButtonElement;if(!toggle)throw new Error('PARTS_WORKSPACE_NODE_REQUIRED: stage-comment');Object.assign(toggle.style,{whiteSpace:'nowrap',flex:'none'});
  const inline=!!host.listHost;
@@ -80,13 +80,13 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const refusalNote=document.createElement('small');refusalNote.id='stage-comment-refusal';refusalNote.setAttribute('role','status');refusalNote.hidden=true;Object.assign(refusalNote.style,{position:'absolute',width:'1px',height:'1px',overflow:'hidden',clipPath:'inset(50%)',whiteSpace:'nowrap'});toggle.after(refusalNote);toggle.setAttribute('aria-describedby',refusalNote.id);toggle.setAttribute('aria-controls',list.id);toggle.setAttribute('aria-expanded',String(inline));const originalTitle=toEn(toggle.title);
  const updateRefusal=()=>{const raw=host.refusal?.()??null,reason=raw?t(raw):null,prev=refusalNote.textContent||'',nextTitle=reason??t(originalTitle);toggle.disabled=!!host.busy?.();toggle.setAttribute('aria-busy',String(toggle.disabled));if(toggle.title!==nextTitle)toggle.title=nextTitle;if(refusalNote.title!==(reason??''))refusalNote.title=reason??'';if(refusalNote.textContent!==(reason??''))refusalNote.textContent=reason??'';refusalNote.hidden=!reason;if(!list.hidden&&(reason??'')!==prev)renderList();return reason;};
  const layers=new Map<StageComment['viewport'],HTMLDivElement>();for(const [key,pane]of Object.entries(host.viewports)){const layer=document.createElement('div');layer.className='stage-comment-layer';pane!.append(layer);layers.set(key as StageComment['viewport'],layer);}
- let enabled=false,disposed=false,pending:{view:StageComment['viewport'];start:MarkPoint;end:MarkPoint;mode:string;id:number;interaction:number;settled:Promise<void>}|null=null,composer:HTMLFormElement|null=null,composerReadOnly=false,composerGeneral=false,syncComposerLang:(()=>void)|null=null,draftMark:{view:StageComment['viewport'];mode:string;screen:MarkRegion}|null=null,busy=false,last='',raf=0,interaction=0;
+ let enabled=false,disposed=false,pending:{view:StageComment['viewport'];start:MarkPoint;end:MarkPoint;mode:string;id:number;interaction:number;settled:Promise<void>}|null=null,composer:HTMLFormElement|null=null,composerField:HTMLInputElement|null=null,composerSubmit:(()=>Promise<boolean>)|null=null,composerReadOnly=false,composerGeneral=false,syncComposerLang:(()=>void)|null=null,draftMark:{view:StageComment['viewport'];mode:string;screen:MarkRegion}|null=null,busy=false,last='',raf=0,interaction=0;
  let geometryEdit:{view:StageComment['viewport'];screen:MarkRegion;id?:string;update:(screen:MarkRegion)=>void;changed:boolean;camera:string}|null=null;
  let geometryDrag:{id:number;start:MarkPoint;screen:MarkRegion;handle:string}|null=null;
  let suppressPinClick=false;
  let pinPress:{id:number;view:StageComment['viewport'];start:MarkPoint;pin:HTMLButtonElement}|null=null;
  const setCapture=(value:boolean)=>{value=value&&host.hasPicture?.()!==false;enabled=value;toggle.setAttribute('aria-pressed',String(value||!inline&&!list.hidden));for(const pane of Object.values(host.viewports))pane!.classList.toggle('stage-comment-mode',value);};
- const cancel=()=>{++interaction;const previous=pending??(geometryDrag&&geometryEdit?{view:geometryEdit.view,id:geometryDrag.id}:pinPress);geometryEdit=null;geometryDrag=null;pinPress=null;pending=null;if(previous){const pane=host.viewports[previous.view];if(pane?.hasPointerCapture(previous.id))pane.releasePointerCapture(previous.id);}composer?.remove();composer=null;composerReadOnly=false;composerGeneral=false;syncComposerLang=null;draftMark=null;last='';};
+ const cancel=()=>{++interaction;const hadComposer=!!composer,previous=pending??(geometryDrag&&geometryEdit?{view:geometryEdit.view,id:geometryDrag.id}:pinPress);geometryEdit=null;geometryDrag=null;pinPress=null;pending=null;if(previous){const pane=host.viewports[previous.view];if(pane?.hasPointerCapture(previous.id))pane.releasePointerCapture(previous.id);}composer?.remove();composer=null;composerField=null;composerSubmit=null;composerReadOnly=false;composerGeneral=false;syncComposerLang=null;draftMark=null;last='';if(hadComposer)host.draftChanged?.();};
  const assertCapture=()=>{const reason=updateRefusal();if(reason){cancel();setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
  const generalRefusal=()=>host.general?.refusal?.()??null;
  const assertWritable=(reason:string|null)=>{if(reason){setCapture(false);host.error(reason);throw new Error(reason);}if(host.blocked())throw new Error(t('COMMENT_BUSY: wait for inspection'));};
@@ -150,7 +150,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   const locked=!!existing&&host.locked(existing.id),initialRefusal=existing?(general?generalRefusal():updateRefusal()):null;
   if(existing&&!initialRefusal&&host.blocked()){host.error(t('COMMENT_BUSY: wait for inspection'));return;}
   geometryEdit=null;composer?.remove();composerReadOnly=locked||!!initialRefusal||!generalAvailable;composerGeneral=general;draftMark=view?{view,mode:placementMode!,screen}:null;const generation=interaction;const pane=view?host.viewports[view]!:list,form=composer=document.createElement('form');form.className='stage-comment-composer stage-comment-ui';form.setAttribute('aria-label',t('Comment composer'));if(general)form.style.position='relative';
-  const field=document.createElement('input');field.type='text';field.maxLength=1000;field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');field.value=existing?.summary??'';
+  const field=composerField=document.createElement('input');field.type='text';field.maxLength=1000;field.setAttribute('aria-label',t('Comment text'));field.placeholder=t('Describe this spot…');field.value=existing?.summary??'';field.oninput=()=>host.draftChanged?.();
   if(composerReadOnly){field.readOnly=true;field.setAttribute('aria-readonly','true');}
   const hint=document.createElement('small');hint.textContent=composerReadOnly?'Read only · Escape closes':'Enter saves · Escape cancels';hint.textContent=t(hint.textContent);const error=document.createElement('p');error.setAttribute('role','alert');form.append(field,hint,error);
   const place=()=>{if(general)return;
@@ -250,7 +250,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
      const chosen = new Set(selectedParts);
      if (chosen.has(name)) chosen.delete(name);else chosen.add(name);
      selectedParts = chipNames.filter(part => chosen.has(part));
-     syncChips();place();
+     syncChips();place();field.focus();
     };
     return chip;
    }));
@@ -274,20 +274,19 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     prepared=crop(pose,screen);prepared.catch(()=>{});last='';place();
    }};
   }
-  form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cancel();renderPins();pane.focus();}};
-  form.onsubmit=async e=>{e.preventDefault();if(busy)return;if(generation!==interaction||view&&host.pose(view)&&host.pose(view!)?.mode!==placementMode){cancel();return;}const summary=field.value.trim();if(!summary){field.focus();return;}try{
+  const submitComposer=composerSubmit=async():Promise<boolean>=>{if(busy)return false;if(generation!==interaction||view&&host.pose(view)&&host.pose(view!)?.mode!==placementMode){cancel();return false;}const summary=field.value.trim();if(!summary){field.focus();return false;}try{
    if(selectedParts && !selectedParts.length)throw new Error(t('Select at least one part.'));
    if(existing){
     assertEdit(general);if(host.locked(existing.id))throw new Error(t('COMMENT_SUBMITTED: submitted evidence is immutable'));
     busy=true;field.disabled=true;syncChips();
     if(!general&&host.codec?.update){
      const geometry=geometryEdit?.changed&&pose?{pose,screen:{...screen},crop:(await prepared)!}:undefined;
-     if(disposed||generation!==interaction)return;assertEdit(general);
+     if(disposed||generation!==interaction)return false;assertEdit(general);
      const replacement=await host.codec.update(copy(existing),summary,selectedParts?.slice(),geometry);
-     if(disposed||generation!==interaction)return;
+     if(disposed||generation!==interaction)return false;
      assertEdit(general);if(host.locked(existing.id))throw new Error(t('COMMENT_SUBMITTED: submitted evidence is immutable'));
      const all=host.feedback(),index=all.indexOf(existing);
-     if(index<0)return;
+     if(index<0)return false;
      all.splice(index,1,replacement);
     }else existing.summary=summary;
    }else if(general){
@@ -296,22 +295,24 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    }else{
     assertCapture();if(!pose||!host.codec&&!pose.frame&&!pose.timeBasis)throw new Error(t(pose?.frameReason??'COMMENT_FRAME_UNAVAILABLE: provide an explicit producer clock or a decoded reference frame index'));
     busy=true;field.disabled=true;syncChips();
-    if(host.codec){const pixels=await prepared;if(disposed||generation!==interaction)return;assertCapture();const row=await host.codec.create(pose,view!,screen,pixels!,bookmark,summary,selectedParts?.slice());if(disposed||generation!==interaction)return;assertCapture();if(host.pose(view!)?.mode!==placementMode)return;host.add(row);}
+    if(host.codec){const pixels=await prepared;if(disposed||generation!==interaction)return false;assertCapture();const row=await host.codec.create(pose,view!,screen,pixels!,bookmark,summary,selectedParts?.slice());if(disposed||generation!==interaction)return false;assertCapture();if(host.pose(view!)?.mode!==placementMode)return false;host.add(row);}
     else {const rigPose=pose as unknown as CommentPose;
     const world=region(unprojectMark(screen,rigPose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},rigPose.camera));
     const slots=rigPose.posed?drawnSlots(rigPose.posed,world):[];
     const comment:StageComment={schema:'rig-review-comment/1',mode:placementMode as StageComment['mode'],viewport:view!,frame:rigPose.frame,...(rigPose.timeBasis?{timeBasis:rigPose.timeBasis}:{}),time:rigPose.time,animation:rigPose.animation,sourceHash:rigPose.sourceHash,modelHash:rigPose.modelHash,referenceHash:rigPose.referenceHash,referenceId:rigPose.referenceId,camera:copy(rigPose.camera),screen,world,slots,crop:(await prepared)!,bookmark};
     assertCapture();
-    if(disposed||generation!==interaction||host.pose(view!)?.mode!==placementMode)return;
+    if(disposed||generation!==interaction||host.pose(view!)?.mode!==placementMode)return false;
     const n=rigPose.frame?.index??null;host.add({id:crypto.randomUUID(),frameStart:n,frameEnd:n,target:slots[0]?{kind:'slot',name:slots[0].slot}:{kind:'rig',name:rigPose.rig},category:'defect',summary,context:{animation:rigPose.animation,time:rigPose.time,frame:rigPose.frame?.basis==='producer'?n:null,...(turn?{turn:turn as any}:{}),interval:n===null?null:{frameStart:n,frameEnd:n,inclusive:true},comment:comment as any} } as unknown as Row,rigPose.side);
     }
    }
    busy=true;field.disabled=true;syncChips();
    await host.changed();
-   if(disposed||generation!==interaction)return;
-   cancel();refresh();revealLatest();
-  }catch(e){if(disposed||generation!==interaction)return;const msg=e instanceof Error?e.message:String(e);errorSource=toEn(msg);error.textContent=t(errorSource);place();if(locked)host.error(t(errorSource));field.disabled=false;field.focus();}finally{busy=false;if(composer===form)syncChips();}};
-  field.focus();last='';
+   if(disposed||generation!==interaction)return false;
+   cancel();refresh();revealLatest();return true;
+  }catch(e){if(disposed||generation!==interaction)return false;const rawMsg=e instanceof Error?e.message:String(e),msg=/^PARTS_COMMENT_OUT_OF_BOUNDS:/.test(rawMsg)?'PARTS_COMMENT_OUT_OF_BOUNDS: region exceeds original image':/^JOB_[A-Z_]+$/.test(rawMsg)&&t('job.submit.'+rawMsg)!=='job.submit.'+rawMsg?'job.submit.'+rawMsg:rawMsg;errorSource=toEn(msg);error.textContent=t(errorSource);place();host.error(t(errorSource));field.disabled=false;field.focus();return false;}finally{busy=false;if(composer===form)syncChips();}};
+  form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cancel();renderPins();pane.focus();}else if(e.key==='Enter'&&!e.isComposing&&!composerReadOnly){e.preventDefault();e.stopPropagation();void submitComposer();}};
+  form.onsubmit=e=>{e.preventDefault();return submitComposer();};
+  field.focus();last='';host.draftChanged?.();
  };
  const disposers:(()=>void)[]=[];
  for(const [key,pane]of Object.entries(host.viewports)){
@@ -349,7 +350,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    }
    if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();pending.end=local(e);draftMark={view,mode:pending.mode,screen:region(pending.start,pending.end)};last='';};
   const up=async(e:PointerEvent)=>{
-   if(geometryDrag?.id===e.pointerId){e.preventDefault();e.stopImmediatePropagation();geometryDrag=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);return;}
+   if(geometryDrag?.id===e.pointerId){e.preventDefault();e.stopImmediatePropagation();geometryDrag=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);if(composer&&!composerReadOnly)composerField?.focus();return;}
    if(pinPress?.id===e.pointerId){e.preventDefault();e.stopImmediatePropagation();const pin=pinPress.pin;pinPress=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);pin.click();return;}
    if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();const p=pending;pending=null;if(pane!.hasPointerCapture(e.pointerId))pane!.releasePointerCapture(e.pointerId);try{await p.settled;assertCapture();if(disposed||interaction!==p.interaction||!enabled)return;const r=Math.hypot(p.end.x-p.start.x,p.end.y-p.start.y)<4?region(p.start,p.start):region(p.start,p.end);openComposer(view,r,undefined,p.mode);}catch(error){host.error(String(error));cancel();}};
   const abort=(e:PointerEvent)=>{if(pending?.view===view&&pending.id===e.pointerId||geometryDrag?.id===e.pointerId||pinPress?.id===e.pointerId)cancel();};
@@ -358,7 +359,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   pane!.addEventListener('pointerdown',down,true);pane!.addEventListener('pointermove',move,true);pane!.addEventListener('pointerup',up,true);pane!.addEventListener('pointercancel',abort,true);pane!.addEventListener('lostpointercapture',abort,true);
   disposers.push(()=>{pane!.removeEventListener('pointerdown',down,true);pane!.removeEventListener('pointermove',move,true);pane!.removeEventListener('pointerup',up,true);pane!.removeEventListener('pointercancel',abort,true);pane!.removeEventListener('lostpointercapture',abort,true);});
  }
- const key=(e:KeyboardEvent)=>{if(host.shortcutActive&&!host.shortcutActive())return;if(e.key==='Escape'&&(pending||composer||pinPress)){e.preventDefault();cancel();renderPins();return;}if(e.defaultPrevented||e.repeat||e.ctrlKey||e.metaKey||e.altKey||textEntryFocused(e.target)||host.shortcutBlocked?.())return;if(e.key.toLowerCase()==='c'){e.preventDefault();setOpen(inline?!enabled:list.hidden);}};
+ const key=(e:KeyboardEvent)=>{if(host.shortcutActive&&!host.shortcutActive())return;if(e.key==='Escape'&&(pending||composer||pinPress)){e.preventDefault();cancel();renderPins();return;}if(e.key==='Enter'&&!e.isComposing&&composer&&!composerReadOnly&&!busy&&!textEntryFocused(e.target)){e.preventDefault();void composerSubmit?.();return;}if(e.defaultPrevented||e.repeat||e.ctrlKey||e.metaKey||e.altKey||textEntryFocused(e.target)||host.shortcutBlocked?.())return;if(e.key.toLowerCase()==='c'){e.preventDefault();setOpen(inline?!enabled:list.hidden);}};
  window.addEventListener('blur',cancel);window.addEventListener('resize',placeList);document.addEventListener('keydown',key);toggle.onclick=(e?:MouseEvent)=>{if(e?.detail)toggle.blur?.();setOpen(inline?!enabled:list.hidden);};
  const ro=typeof ResizeObserver==='function'?new ResizeObserver(()=>{if(!disposed&&!list.hidden)placeList();}):null;if(ro){try{ro.observe(host.toolbar);if(workspace)ro.observe(workspace);}catch{}}
  const renderPins=()=>{if(disposed)return;if(enabled&&host.hasPicture?.()===false){cancel();setCapture(false);}if(!list.hidden)placeList();const refusal=updateRefusal();if(refusal&&(enabled||pending||composer&&!composerReadOnly&&!composerGeneral)){cancel();setCapture(false);host.error(refusal);}const all=host.feedback().map(f=>({f,mark:readMark(f)})).filter(x=>x.mark);
@@ -395,5 +396,5 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  }}};
  const paint=()=>{if(disposed)return;renderPins();raf=requestAnimationFrame(paint);};
  const offLang=onLang(()=>{if(disposed)return;updateRefusal();renderList();syncComposerLang?.();last='';renderPins();});
- refresh();paint();return {active:()=>enabled,draft:()=>!!pending||!!composer&&!composerReadOnly,refresh,dispose:()=>{disposed=true;ro?.disconnect();offLang();cancelAnimationFrame(raf);cancel();window.removeEventListener('blur',cancel);window.removeEventListener('resize',placeList);document.removeEventListener('keydown',key);for(const dispose of disposers)dispose();for(const layer of layers.values())layer.remove();toggle.onclick=null;list.remove();refusalNote.remove();}};
+ refresh();paint();return {active:()=>enabled,draft:()=>!!pending||!!composer&&!composerReadOnly,hasPendingComment:()=>!!composer&&!composerReadOnly&&!composerGeneral&&!!composerField?.value.trim(),commitDraft:async()=>composer&&!composerReadOnly&&composerSubmit?await composerSubmit():true,refresh,dispose:()=>{disposed=true;ro?.disconnect();offLang();cancelAnimationFrame(raf);cancel();window.removeEventListener('blur',cancel);window.removeEventListener('resize',placeList);document.removeEventListener('keydown',key);for(const dispose of disposers)dispose();for(const layer of layers.values())layer.remove();toggle.onclick=null;list.remove();refusalNote.remove();}};
 }

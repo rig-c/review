@@ -95,11 +95,16 @@ function renderControls(controller:ViewportController):void {
  const label=controls?.targetLabel?.(target)??(target==='reference'?'Reference':'Rig');
  text(controls?.zoomId??'zoom-value',`${Math.round((target?paneCamera(target).zoom:1)*100)}% · ${label}`);
  button('fit').textContent=host.fitLabel??controls?.fitLabel?.(state.cameraSync)??(state.cameraSync?'Fit views':'Fit active');
+ renderCaption();
+}
+/** The footer names the camera mode the sync checkbox shows, on the rig and the raster paths alike. */
+function renderCaption():void {
+ const controls=host.cameraControls;
  if(controls?.coordinatesId!==null)text(controls?.coordinatesId??'coordinates',state.cameraSync?'Cameras synchronized · drag to pan · scroll to zoom':'Independent cameras · drag to pan · scroll to zoom');
 }
  return {el,message,get nativeScale(){return host.raster?rasterActive():undefined;},
  render:controller=>rasterActive()?raster!.render(controller):render(controller),
- renderControls:controller=>rasterActive()?raster!.renderControls(controller):renderControls(controller),
+ renderControls:controller=>{if(rasterActive()){raster!.renderControls(controller);renderCaption();}else renderControls(controller);},
  ...(host.panes?{panes:[...host.panes,{target:'reference' as const,viewport:el('reference-viewport'),pane:el('reference-pane')}]}:{}),
  dimensionVisibility:host.dimensionVisibility,
  fitMargins:host.rigMargins,fitMessage:host.fitMessage,pinch:host.pinch,

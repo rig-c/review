@@ -79,10 +79,42 @@ test('#750 no picture, receipt rearm, new ask, dirty form identity and closed su
   const saved=[...h.store.values()][0]!;expect(saved).toContain('retained reviewer words');
   h.state.preparing=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);
   h.state.preparing=false;h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'rearmed'};
-  h.state.pending.push({...h.f.ask,askId:'later-signoff',subject:{kind:'signoff',stage:'plan-approved'}});h.screen.changed(h.state);
-  expect(ready!.record!.forms.size).toBe(2);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(entry.read()).toMatchObject({words:'[general]\nretained reviewer words'});expect(entry.fieldset.disabled).toBe(false);
+  h.state.pending.push({...h.f.ask,askId:'later-signoff',subject:{kind:'signoff',stage:'plan-approved'}},{...h.f.ask,askId:'ignored-reopen',subject:{kind:'reopen',stage:'plan-approved'}});h.screen.changed(h.state);
+  expect(ready!.record!.forms.size).toBe(2);expect(ready!.record!.forms.has('ignored-reopen')).toBe(false);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(entry.read()).toMatchObject({words:'[general]\nretained reviewer words'});expect(entry.fieldset.disabled).toBe(false);
   const restored=formFor(h.f.ask,ready!.record!.inspection,h.deps);restored.form.commentWords=entry.form.commentWords;expect(restored.read()).toEqual(entry.read());
   h.state.closed=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);await entry.form.onsubmit!({preventDefault(){}} as never);expect(h.submitted).toHaveLength(0);
+ }finally{await h.close();}
+});
+
+test('#989 a publication resumed with a historical pending reopen ask plus a signoff ask loads, shows only the signoff form and submits it',async()=>{
+ const h=await harness();try{
+  const signoffAsk:PendingAskV3={...h.f.ask,askId:'ask-signoff',subject:{kind:'signoff',stage:'plan-approved'}};
+  const reopenAsk:PendingAskV3={...h.f.ask,askId:'ask-reopen',subject:{kind:'reopen',stage:'plan-approved'}};
+  h.state.pending=[reopenAsk,signoffAsk];
+  let mountedForms:readonly HTMLElement[]=[];
+  h.options.load=async()=>{rigHost()!.attach({stage:()=>null,redraw(){},message(){},recordForms(forms){mountedForms=forms;}});rigHost()!.displayed();};
+  const ready=await h.screen.prepare(h.f.display,new AbortController().signal);
+  expect([...ready!.record!.forms.keys()]).toEqual(['ask-signoff']);
+  h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
+  h.state.receipt={publicationId:signoffAsk.publicationId,pageId:h.deps.pageId,displayedNonce:'resumed-nonce'};
+  h.screen.changed(h.state);
+  expect(ready!.record!.forms.size).toBe(1);
+  expect(ready!.record!.forms.has('ask-reopen')).toBe(false);
+  expect(mountedForms).toHaveLength(1);
+  const entry=ready!.record!.forms.get('ask-signoff')!;
+  expect(entry.fieldset.disabled).toBe(false);
+  entry.form.commentWords=()=>'[general]\nsignoff on resumed job';
+  await entry.form.onsubmit!({preventDefault(){}} as never);
+  expect(h.submitted).toEqual([{
+   kind:'signoff',
+   publicationId:signoffAsk.publicationId,
+   askId:'ask-signoff',
+   pageId:h.deps.pageId,
+   displayedNonce:'resumed-nonce',
+   expectedGeneration:h.state.generation,
+   submissionId:entry.submissionId,
+   value:{stage:'plan-approved',decision:'approved',words:'[general]\nsignoff on resumed job'},
+  }]);
  }finally{await h.close();}
 });
 
@@ -239,6 +271,35 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   const finalizedWithNote=formFor(answeredWithNote,inspection,deps);
   expect(finalizedWithNote.form.querySelector('textarea[name="note"]')).toBeNull();
   expect(finalizedWithNote.form.querySelector('.interview-note')?.textContent).toBe(note10000);
+  // #992 Bar 2 & Bar 5: form drafts survive republish of the same job, draft and source hash, and restore from legacy per-publication keys.
+  const republishedDisplay:DisplayPublicationV3={...f.display,publication:{...f.display.publication,publicationId:'republished-publication-2',previousPublicationId:f.display.publication.publicationId,generation:f.display.publication.generation+1},routes:{entry:f.display.routes.entry.replace(f.display.publication.publicationId,'republished-publication-2'),apiBase:f.display.routes.apiBase.replace(f.display.publication.publicationId,'republished-publication-2'),assetsBase:f.display.routes.assetsBase.replace(f.display.publication.publicationId,'republished-publication-2')}};
+  const republishedAsk:PendingAskV3={...f.ask,askId:'republished-ask-2',publicationId:'republished-publication-2'};
+  const republishedRestored=formFor(republishedAsk,{...inspection,display:republishedDisplay},deps);
+  expect([...republishedRestored.form.querySelectorAll<HTMLInputElement>('input[type=radio]')].filter(input=>input.checked).map(input=>input.value)).toEqual(['topology_other','density_auto']);
+  expect(republishedRestored.read()).toEqual(entry.read());
+  expect(republishedRestored.dirty).toBe(true);
+  const legacySnapshot=store.get(drafts.localDraftKey(f.display))!;
+  store.clear();
+  store.set('rig-review-job-draft/1:'+f.session.jobId+':'+f.display.publication.publicationId+':'+f.display.publication.source.sourceHash,legacySnapshot);
+  const fallbackRestored=formFor(f.ask,inspection,deps);
+  expect(fallbackRestored.read()).toEqual(entry.read());
+  expect(fallbackRestored.dirty).toBe(true);
+  // Same-publication reconnect with an earlier pending ask for the same subject must match exact askId first.
+  forms.clear();store.clear();
+  const earlierAsk:PendingAskV3={...f.ask,askId:'earlier-unanswered-ask'};
+  const activeAsk:PendingAskV3={...f.ask,askId:'active-answered-ask'};
+  const earlierEntry=formFor(earlierAsk,inspection,deps);earlierEntry.dirty=true;forms.set(earlierAsk.askId,earlierEntry);
+  const activeEntry=formFor(activeAsk,inspection,deps);
+  for(const input of activeEntry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')){input.checked=['topology_other','density_auto'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
+  activeEntry.form.querySelector<HTMLTextAreaElement>('textarea[name="other.topology"]')!.value='Exact ask match';
+  activeEntry.dirty=true;forms.set(activeAsk.askId,activeEntry);
+  drafts.saveDraft();
+  const multiSaved=JSON.parse(store.get(drafts.localDraftKey(f.display))!);
+  // Control (c9e6a46): single .find(item => item.askId === ask.askId || item.value?.questionId === subject.questionId) matched earlierAsk at index 0
+  const buggyMatch=multiSaved.forms.find((item:{askId:string;value?:{questionId?:string}})=>item.askId===activeAsk.askId||item.value?.questionId==='rig_type');
+  expect(buggyMatch.askId).toBe(earlierAsk.askId);
+  const activeRestored=formFor(activeAsk,inspection,deps);
+  expect(activeRestored.read()).toEqual(activeEntry.read());
  }finally{inspection?.dispose();dom.restore();await f.close();}
 });
 
@@ -269,7 +330,10 @@ for (const language of ['en','ko'] as const) for (const rule of [1,2,3,4,5,6]) t
    expect(heading.textContent).toBe(descriptions[0]!);expect(heading.title).toBe((h.f.ask.subject as {checkpointId:string}).checkpointId);
    expect(form.textContent).not.toContain(plan.steps[0]!.id);expect(form.textContent).not.toContain(plan.steps[0]!.hash);
   }else if(rule===5){
-   for(const kind of ['signoff','reopen'] as const){const entry=formFor({...h.f.ask,subject:{kind,stage:'plan-approved'}},inspection,deps);expect(entry.form.textContent).not.toContain('plan-approved');expect(entry.fieldset.title).toBe('plan-approved');expect(entry.read()).toMatchObject({stage:'plan-approved',words:''});}
+   const entry=formFor({...h.f.ask,subject:{kind:'signoff',stage:'plan-approved'}},inspection,deps);expect(entry.form.textContent).not.toContain('plan-approved');expect(entry.fieldset.title).toBe('plan-approved');expect(entry.read()).toMatchObject({stage:'plan-approved',words:''});
+   expect(()=>formFor({...h.f.ask,subject:{kind:'reopen',stage:'plan-approved'}},inspection,deps)).toThrow('JOB_ACT_KIND_DISABLED');
+   expect('job.reopen' in enCatalog).toBe(false);expect('job.reopen' in koCatalog).toBe(false);
+   expect('Review the reopened stage.' in enCatalog).toBe(false);expect('Review the reopened stage.' in koCatalog).toBe(false);
   }else{
    const form=formFor(h.f.ask,inspection,deps).form,line=form.querySelector<HTMLElement>('.job-source')!;
    expect(line.textContent).toBe(h.f.display.publication.label);expect(line.title).toBe(source.sourceHash);
@@ -431,7 +495,7 @@ test('#809 checkpoint answers reuse the form contract without the evidence grid'
 });
 
 test('#839 disposed workspace cannot re-enter the transient image while tabs unregister',async()=>{
- const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('function syncQuestionImage():void {'),end=source.indexOf('/** Pictured backdrop forms',start);
+ const source=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),start=source.indexOf('function syncQuestionImage():void {'),end=source.indexOf('/** Survey forms use the shared bottom tab.',start);
  let released=0;const scope={disposed:true,releaseInterview:()=>{released++;}};
  const run=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return syncQuestionImage;}`)(scope);
  run();run();expect(released).toBe(1);expect(scope.releaseInterview).toBeNull();
@@ -452,10 +516,24 @@ test.each(['scene','unsealed-scene','rig','legacy'] as const)('#929 projects onl
    expect(image.status).toBe(200);
    expect(Buffer.from(await image.arrayBuffer())).toEqual(await readFile(fixture.root+'/evidence/plate.png'));
   }else{
-   expect(question!.images).toEqual([]);
+   expect(question!.images.map(image=>image.name)).toEqual(variant==='legacy'?[]:['reference.png']);
+   if(variant!=='legacy'){
+    const image=await fetch(base+'interview/image/'+question!.images[0]!.url.split('/').slice(-2).join('/'));
+    expect(image.status).toBe(200);
+    expect(Buffer.from(await image.arrayBuffer())).toEqual(await readFile(fixture.root+'/inputs/reference.png'));
+   }
    expect(question!.missingPicture).toBe(variant==='legacy'?undefined:variant==='rig'?'rig':'scene');
   }
  }finally{await fixture.close();}
+});
+
+test('#955 refuses a missing rig and an unsealed original painting', async () => {
+ const fixture = await recordScreenFixture('interview-picks',false,undefined,undefined,false,true,undefined,false,false,'rig-no-painting');
+ try {
+  const response = await fetch(fixture.origin + fixture.display.routes.apiBase + 'interview');
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ok:false,error:{code:'JOB_SOURCE_UNRETAINABLE'}});
+ } finally {await fixture.close();}
 });
 
 test.each(rigPictureCases)('#929 variant B resolves the rig picture for %s', async variant => {
@@ -484,7 +562,7 @@ test.each(rigPictureCases)('#929 variant B resolves the rig picture for %s', asy
   const interview = await fetch(base+'interview');
   expect(interview.status).toBe(200);
   const {questions:[question]} = await interview.json();
-  expect(question).toMatchObject({editable:true,images:[],set:{question:'post_timing',id:'post-picture'}});
+  expect(question).toMatchObject({editable:true,images:variant==='bound-rig'?[]:[{name:'reference.png'}],set:{question:'post_timing',id:'post-picture'}});
   const review = await fetch(base+'review');
   expect(review.status).toBe(200);
   const metadata = await review.json();

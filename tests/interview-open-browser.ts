@@ -1,5 +1,4 @@
-/** #725 synthetic browser proof; ordinary Nova only, 1600x1000 EN/KO.
- * Uses the shipped managed target and main/dialog/interview components. No submission or source write. */
+/** #725 / #986 synthetic managed-target browser proof, EN/KO on ordinary Nova. */
 import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,readdir,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -15,13 +14,26 @@ import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
-import {readProject} from '../src/interview-project.ts';
+import {digest, readProject} from '../src/interview-project.ts';
 import {savePicks} from '../src/interview-picks.ts';
 import {interviewPicksRecord} from '../web/interview-panel.ts';
 
 const index=Bun.argv.indexOf('--out'),out=resolve(index<0?'artifacts/interview-open-725':Bun.argv[index+1]!);
 await mkdir(out,{recursive:true});
 const f=await interviewOpenFixture(),profile=await mkdtemp(join(tmpdir(),'review-725-browser-'));
+const alternate='<svg xmlns="http://www.w3.org/2000/svg" width="48" height="24"><rect width="48" height="24" fill="#ab5830"/></svg>';
+const alternateRef={path:'alternate.svg',sha256:digest(alternate)};
+const originalQuestion=readProject(f.root).questions[0]!;
+const optionPath=join(f.root,originalQuestion.ref.path);
+const options=await Bun.file(optionPath).json() as {context:{files:{path:string;sha256:string}[]}};
+options.context.files.push(alternateRef);
+const optionBytes=JSON.stringify(options);
+await writeFile(join(f.root,alternateRef.path),alternate);
+await writeFile(optionPath,optionBytes);
+const project=f.project as {inputs:{path:string;sha256:string}[];interview:{framing:{pending_options:{sha256:string}}[]}};
+project.inputs.push(alternateRef);
+project.interview.framing[0]!.pending_options.sha256=digest(optionBytes);
+await writeFile(join(f.root,'project.json'),JSON.stringify(project));
 const retainedNote='  Retained note\r\n원문 👁 e\u0301\n  ';
 const question=readProject(f.root).questions[0]!;
 savePicks(join(f.root,'picks'),question,interviewPicksRecord(question.ref,question.set.asks.map(ask=>({ask:ask.id,option_id:ask.options.find(option=>option.kind==='value')!.id})),retainedNote,'2026-11-11T00:00:00.000Z'));
@@ -32,6 +44,29 @@ let page:InputCdpSession|undefined,command:((method:string,params?:Record<string
 const requests:string[]=[];
 const exceptions:unknown[]=[],mutations:unknown[]=[],cases:unknown[]=[];
 async function wait(expression:string){const deadline=Date.now()+20_000;while(Date.now()<deadline){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('725_BROWSER_TIMEOUT '+expression);}
+const sharedControls='#zoom-in,#zoom-out,#fit,#native-one,#view-menu';
+const questionPanel='#workspace-interview-answer';
+const selectedTab='.block-row:not([hidden]) [data-block-target="question"][aria-selected="true"]';
+const dialogViewer='dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,'+sharedControls+')';
+const visibleImage=`(()=>{const image=document.querySelector('#reference-content img'),box=image?.getBoundingClientRect();return image?.complete&&box.width>0&&box.height>0&&getComputedStyle(image).visibility==='visible'?image.naturalWidth:0;})()`;
+const imageWidth=`document.querySelector('#reference-content img').getBoundingClientRect().width`;
+type AskTrigger={count:number;text:string;visible:boolean;hidden:boolean;disabled:boolean;display:string;visibility:string;width:number;height:number};
+type JoinedScreen={
+ language:string;width:number;height:number;topbars:number;viewports:number;openDialogs:string[];modals:number;dialogViewers:number;
+ forms:number;noteInputs:number;columns:string[];modelCanvas:number;modelReason:string;questionLabel:string;
+ pendingAsk:AskTrigger|null;pendingRecordAsk:AskTrigger|null;
+ saveDisabled:boolean;commentHidden:boolean;controls:string[];imageModes:string[];
+ drawerOpen:boolean;formInDrawer:boolean;inspectorCollapsed:boolean;
+ rect:{left:number;top:number;right:number;bottom:number};
+};
+let currentCase:{language:'en'|'ko';width:number;height:number;state?:JoinedScreen}|undefined;
+
+async function switchImage(index:number,width:number):Promise<void>{
+ await click(page!,'#view-menu summary');
+ const mode=`#view-menu [data-view="interview-image-${index}"]`;
+ await click(page!,mode);
+ await wait(`${visibleImage}===${width}&&document.querySelector(${JSON.stringify(mode)})?.getAttribute('aria-pressed')==='true'`);
+}
 try{
  const before={files:await jobInputHashes(f.root),entries:(await readdir(f.root,{recursive:true})).sort()};
  const registration=await fetch(host.record.origin+'/workspace/api/register',{method:'POST',headers:{Authorization:'Bearer '+host.record.registrationCapability,'Content-Type':'application/json'},body:JSON.stringify({schema:WORKSPACE_SCHEMA,incarnation:host.record.incarnation,targets:[{key:prepared.key,contentHash:prepared.package.contentHash,cwd:prepared.cwd,viewOnly:false,inputs:prepared.package.inputs}]})});
@@ -40,36 +75,90 @@ try{
  assert.equal(list.targets.length,1);
  page=await launchCdpSession(profile,{onEvent:(event,send)=>{command=send;if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request)requests.push(new URL(request.url).pathname);if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Network.enable');
- await page.setViewport(1600,1000);
- for(const language of ['en','ko'] as const){
+ for(const height of [1000,360])for(const language of ['en','ko'] as const){
+  currentCase={language,width:1600,height};
+  await page.setViewport(1600,height);
   const catalog=language==='en'?enCatalog:koCatalog,url=new URL(host.record.origin+list.targets[0]!.entry);
   url.searchParams.set('lang',language);url.hash='cap='+targetCapability(host.record.ownerCapability,host.record.incarnation,prepared.key);
   await page.goto(url.href);
-  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#job-record-asks[open] .interview-grid')`);
-  await wait(`document.querySelector('#job-record-asks canvas')?.width===32`);
-  const state:any=await page.evaluate<any>(`(()=>{const dialog=document.querySelector('#job-record-asks'),r=dialog.getBoundingClientRect();return {language:document.documentElement.lang,width:innerWidth,height:innerHeight,topbars:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,dialogs:document.querySelectorAll('dialog[open]').length,formCount:dialog.querySelectorAll('form.interview-answer').length,noteInputs:dialog.querySelectorAll('textarea[name=note]').length,columns:[...dialog.querySelector('form.interview-answer').children].filter(node=>['NAV','ASIDE','FIELDSET'].includes(node.tagName)).map(node=>node.tagName),imageControls:[...dialog.querySelectorAll('.interview-view .view-zoom button')].map(node=>node.textContent),focusContained:dialog.contains(document.activeElement),modelCanvas:document.querySelectorAll('#rig-root canvas').length,modelReason:document.getElementById('rig-empty').textContent,interviewTitle:dialog.getAttribute('aria-label'),interviewButton:document.getElementById('workspace-pending-ask').textContent,controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(node=>node.id),rect:{x:r.x,y:r.y,width:r.width,height:r.height}};})()`);
-  assert.equal(state.language,language);assert.equal(state.width,1600);assert.equal(state.height,1000);
-  assert.equal(await page.evaluate(`document.querySelector('#stage-comment').hidden`),true,'standalone interview hides the unbound comment entry');assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.dialogs,1);assert.equal(state.formCount,1);assert.equal(state.focusContained,true);assert.equal(state.modelCanvas,0);
-  assert.equal(state.noteInputs,0);assert.deepEqual(state.columns,['NAV','ASIDE','FIELDSET']);
-  assert.equal(await page.evaluate(`document.querySelector('#job-record-asks pre.interview-note')?.textContent`),retainedNote);
-  assert.equal(state.interviewTitle,catalog['interview.title']);assert.equal(state.interviewButton,catalog['Answer…']);
+  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector(${JSON.stringify(selectedTab)})&&!!document.querySelector('${questionPanel}:not([hidden]) form.interview-answer')`);
+  await wait(`${visibleImage}===32`);
+  if(height===360)await wait(`!!document.querySelector('#workspace-drawer-inspectorHeight[open] ${questionPanel}')`);
+  const state:JoinedScreen=await page.evaluate(`(()=>{
+   const panel=document.querySelector('${questionPanel}'),form=panel.querySelector('form.interview-answer');
+   const drawer=document.querySelector('#workspace-drawer-inspectorHeight'),box=(drawer.open?drawer:panel).getBoundingClientRect();
+   const askTrigger=id=>{
+    const matches=document.querySelectorAll('#'+id),button=matches[0];
+    if(!button)return null;
+    const style=getComputedStyle(button),rect=button.getBoundingClientRect();
+    return {count:matches.length,text:button.textContent.trim(),hidden:button.hidden,disabled:button.disabled,
+     visible:rect.width>0&&rect.height>0&&style.visibility==='visible',display:style.display,visibility:style.visibility,
+     width:rect.width,height:rect.height};
+   };
+   return {language:document.documentElement.lang,width:innerWidth,height:innerHeight,
+    topbars:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,
+    openDialogs:[...document.querySelectorAll('dialog[open]')].map(node=>node.id),
+    modals:document.querySelectorAll('dialog:modal').length,dialogViewers:document.querySelectorAll(${JSON.stringify(dialogViewer)}).length,
+    forms:panel.querySelectorAll('form.interview-answer').length,noteInputs:form.querySelectorAll('textarea[name=note]').length,
+    columns:[...form.children].filter(node=>['NAV','ASIDE','FIELDSET'].includes(node.tagName)).map(node=>node.tagName),
+    modelCanvas:document.querySelectorAll('#rig-root canvas').length,modelReason:document.getElementById('rig-empty').textContent,
+    questionLabel:document.querySelector(${JSON.stringify(selectedTab)}).textContent.trim(),
+    pendingAsk:askTrigger('workspace-pending-ask'),pendingRecordAsk:askTrigger('workspace-pending-record-ask'),
+    saveDisabled:document.getElementById('save').disabled,commentHidden:document.getElementById('stage-comment').hidden,
+    controls:[...document.querySelectorAll('${sharedControls}')].map(node=>node.id),
+    imageModes:[...document.querySelectorAll('#view-menu [data-view]')].map(node=>node.dataset.view),
+    drawerOpen:drawer.open,formInDrawer:drawer.contains(form),inspectorCollapsed:document.getElementById('workspace-inspector').dataset.collapsed==='true',
+    rect:{left:box.left,top:box.top,right:box.right,bottom:box.bottom}};
+  })()`);
+  currentCase.state=state;
+  assert.equal(state.language,language);assert.equal(state.width,1600);assert.equal(state.height,height);
+  assert.equal(state.commentHidden,true,'standalone interview hides the unbound comment entry');
+  assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.modals,0);assert.equal(state.dialogViewers,0);
+  assert.equal(state.forms,1);assert.equal(state.modelCanvas,0);assert.equal(state.noteInputs,0);
+  assert.deepEqual(state.columns,['NAV','FIELDSET']);
+  assert.equal(await page.evaluate<string|null>(`document.querySelector('${questionPanel} pre.interview-note')?.textContent??null`),retainedNote);
+  assert.equal(state.questionLabel,catalog['Question']);
+  assert.ok(state.pendingAsk?.count===1&&state.pendingAsk.visible&&!state.pendingAsk.disabled&&!state.pendingAsk.hidden,
+   'expected a single visible and enabled #workspace-pending-ask '+JSON.stringify(currentCase));
+  assert.ok(!state.pendingRecordAsk?.visible,'unexpected visible #workspace-pending-record-ask '+JSON.stringify(currentCase));
+  assert.equal(state.saveDisabled,true);
   assert.equal(state.modelReason,catalog['MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.']);
   assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
-  assert.ok(state.rect.x>=0&&state.rect.y>=0&&state.rect.x+state.rect.width<=1600&&state.rect.y+state.rect.height<=1000);
-  await writeFile(join(out,language+'-interview.png'),await page.screenshot());
-  await click(page,'#job-record-asks .workspace-drawer-close');
-  assert.equal(await page.evaluate(`!document.querySelector('dialog[open]')&&document.activeElement.id==='workspace-pending-ask'`),true);
-  assert.equal(await page.evaluate(`document.querySelectorAll('.topbar').length===1&&document.querySelectorAll('#rig-viewport').length===1`),true);
-  const closed:{visibleInterviewTriggers:string[];saveDisabled:boolean;focused:string}=await page.evaluate<{visibleInterviewTriggers:string[];saveDisabled:boolean;focused:string}>(`(()=>{const label=${JSON.stringify(catalog['Answer…'])};return {visibleInterviewTriggers:[...document.querySelectorAll('button')].filter(button=>button.textContent.trim()===label&&button.getClientRects().length>0&&getComputedStyle(button).visibility!=='hidden').map(button=>button.id),saveDisabled:document.getElementById('save').disabled,focused:document.activeElement.id};})()`);
-  assert.deepEqual(closed.visibleInterviewTriggers,['workspace-pending-ask']);assert.equal(closed.saveDisabled,true);assert.equal(closed.focused,'workspace-pending-ask');
-  state.closedWorkspace=closed;
-  await writeFile(join(out,language+'-workspace.png'),await page.screenshot());
-  await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#job-record-asks[open] .interview-grid')`);
-  cases.push(state);await page.goto('about:blank');
+  assert.deepEqual(state.imageModes,['interview-image-0','interview-image-1']);
+  assert.deepEqual(state.openDialogs,height===360?['workspace-drawer-inspectorHeight']:[]);
+  assert.equal(state.drawerOpen,height===360);assert.equal(state.formInDrawer,height===360);
+  assert.equal(state.inspectorCollapsed,height===360);
+  assert.ok(state.rect.left>=0&&state.rect.top>=0&&state.rect.right<=1600&&state.rect.bottom<=height);
+  const prefix=language+(height===360?'-short':'');
+  await writeFile(join(out,prefix+'-interview.png'),await page.screenshot());
+  const firstImage:string=await page.evaluate(`document.querySelector('#reference-content img').currentSrc`);
+  await switchImage(1,48);
+  const secondImage:string=await page.evaluate(`document.querySelector('#reference-content img').currentSrc`);
+  assert.ok(new URL(firstImage).pathname.endsWith('/api/interview/image/'+question.ref.sha256+'/0'));
+  assert.ok(new URL(secondImage).pathname.endsWith('/api/interview/image/'+question.ref.sha256+'/1'));
+  if(height===360)assert.equal(await page.evaluate<boolean>(`!!document.querySelector('#workspace-drawer-inspectorHeight[open]:not(:modal)')`),true);
+  if(height===1000){
+   await click(page,'#native-one');await wait(`Math.abs(${imageWidth}-48)<1`);
+   const native=await page.evaluate<number>(imageWidth);
+   await click(page,'#zoom-in');await wait(`${imageWidth}>${native}+1`);
+   await click(page,'#zoom-out');await wait(`Math.abs(${imageWidth}-${native})<1`);
+   await click(page,'#fit');await wait(`${imageWidth}>${native}+1`);
+  }
+  await writeFile(join(out,prefix+'-workspace.png'),await page.screenshot());
+  await switchImage(0,32);
+  if(height===360){
+   await click(page,'#workspace-drawer-inspectorHeight .workspace-drawer-close');
+   await wait("!document.querySelector('#workspace-drawer-inspectorHeight[open]')");
+  }
+  await click(page,'#workspace-pending-ask');
+  await wait(`!!document.querySelector(${JSON.stringify(selectedTab)})&&${visibleImage}===32&&!document.querySelector('dialog:modal')`);
+  cases.push({...state,firstImage:new URL(firstImage).pathname,secondImage:new URL(secondImage).pathname});
+  await page.goto('about:blank');
+  currentCase=undefined;
  }
  const after={files:await jobInputHashes(f.root),entries:(await readdir(f.root,{recursive:true})).sort()};
  assert.deepEqual(after,before);assert.deepEqual(exceptions,[]);assert.deepEqual(mutations,[]);assert.ok(requests.some(path=>path.endsWith('/api/interview')));
  await writeFile(join(out,'result.json'),JSON.stringify({fixture:'synthetic interview-stage project; demo/build versions; no draft or review package',cases,sourceFilesBefore:before,sourceFilesAfter:after,sourceWrites:0,networkRequests:requests.length,exceptions,mutations},null,2)+'\n');
- console.log('725_BROWSER_PASS '+JSON.stringify({cases:cases.length,languages:['en','ko'],viewport:'1600x1000',sourceWrites:0,exceptions:exceptions.length}));
-}catch(error){await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error),exceptions,mutations,cases},null,2)+'\n');if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
+ console.log('725_BROWSER_PASS '+JSON.stringify({cases:cases.length,languages:['en','ko'],viewports:['1600x1000','1600x360'],sourceWrites:0,exceptions:exceptions.length}));
+}catch(error){await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error),currentCase,exceptions,mutations,cases},null,2)+'\n');if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await host.stop();await f.close();await rm(profile,{recursive:true,force:true});}

@@ -39,7 +39,7 @@ The illustrative `look` animation in `axes` must also be declared in `animations
 
 Every path is a literal relative path, including `model`, optional `frames`, `direction`, `scene` and `sets`, optional read-only `motion`, each reference `path`, authoring `path`, clip `path`, and every page name in the compiled model. Manifest paths accept no absolute paths, URL schemes, colon, percent encoding, traversal, backslash, query, fragment, empty segment, or symlink escape. Compiled-model page names are resolved relative to the model directory: a page such as `../parts/page.png` is accepted only when its normalized destination remains inside the review package. This permits portable local builds without letting a page escape the package. All declared files must exist as regular files. The asset endpoint serves only declared files, the manifest, and compiled-model page images. There is no arbitrary directory endpoint. Keep a package focused on the files intended for inspection.
 
-`model` is optional and must point to `rigc-compiled/3` under a filename ending `.model.json`, produced by an upstream gated rigc build. Review uses the public `@rig-c/play` loader and player; Spine JSON/skel is not its input. Its pages are resolved relative to the model document. Missing model means unavailable playback, never a mock playback success. The optional `frames` path declares a producer `rigc-frames/1` record inside the package, read, validated and hashed only when present, added to `files`, and exposed on the loaded package as `frames: {path, sha256, sets: [{animation, fps, written, stride, duration}]} | null` (`null` when omitted, leaving older manifests unchanged); a missing declared file, unreadable JSON, non-`rigc-frames/1` `spec`, malformed set field (`sets[].animation`, `fps`, `written`, `stride`, `duration`) or duplicate animation set refuses by name (`FRAMES_MISSING`, `FRAMES_JSON`, `FRAMES_SPEC`, `FRAMES_FIELD`, `FRAMES_DUPLICATE_ANIMATION`), never falling back silently. The optional `sets` path declares an attachment-set sidecar for single-package playback. Without that declaration, attachment presets are unavailable. See [Direction inspection](#direction-inspection).
+`model` is optional and must point to `rigc-compiled/3` under a filename ending `.model.json`, produced by an upstream gated rigc build. Review uses the public `@rig-c/play` loader and player; Spine JSON/skel is not its input. Its pages are resolved relative to the model document. Missing model means unavailable playback, never a mock playback success. The optional `frames` path declares a producer `rigc-frames/1` record inside the package, read, validated and hashed only when present, added to `files`, and exposed on the loaded package as `frames: {path, sha256, sets: [{animation, fps, written, stride, duration}]} | null` (`null` when omitted, leaving older manifests unchanged); a missing declared file, unreadable JSON, non-`rigc-frames/1` `spec`, malformed set field (`sets[].animation`, `fps`, `written`, `stride`, `duration`) or duplicate animation set refuses by name (`FRAMES_MISSING`, `FRAMES_JSON`, `FRAMES_SPEC`, `FRAMES_FIELD`, `FRAMES_DUPLICATE_ANIMATION`), never falling back silently. With a compiled model, each set must be the producer's schedule for the model animation it names, as measured from `@rig-c/core` 3.8.0 `rigc render`: an animation of duration `D` samples to `round(D * fps) + 1` frames, frame `i` at `i / fps`, and `duration` is the last sample's time, not the clip length (a 0.8 s clip at 12 fps gives 11 frames and `duration` 0.8333). So `written` must equal `floor(round(D * fps) / stride) + 1` and `duration` must lie within `1e-9` s of `round(D * fps) / fps`, or the package refuses by name, naming the animation and both figures (`FRAMES_ANIMATION_UNKNOWN`, `FRAMES_COUNT_MISMATCH`, `FRAMES_DURATION_MISMATCH`); an accepted set is that animation's comment frame clock, `written` frames with frame `i` at `i * stride / fps`, unless the report's clock names the animation ([Stability: frames declaration](STABILITY.md#package-manifest-frames-declaration)). The optional `sets` path declares an attachment-set sidecar for single-package playback. Without that declaration, attachment presets are unavailable. See [Direction inspection](#direction-inspection).
 
 Reference `type` is `image`, `video`, or `pose`. `width` and `height` optionally state image pixel dimensions. The primary animated pose input is the canonical `rig-pose-sequence/1` format documented by `@rig-c/pose`, consumed directly:
 
@@ -96,7 +96,7 @@ Audio clips contain `id`, local `path` and optional `label`. Cues require `id`, 
 
 New feedback requires safe integer frame indices and actual target membership. Unknown names are refused by name, such as `feedback.target.name: slot "no_such_slot" not in model`. Missing model metadata produces a named validation-unavailable refusal for bone/slot feedback. Rig feedback names the exact package id. Scan joints and point expressions are not guessed into model targets.
 
-For a matching report/actual model animation with an explicit bounded clock, `frameEnd` cannot exceed the last declared sample at or before that model clip's end. A clip with no declared sample inside its duration has no valid feedback frames. A different animation cannot borrow the report clock; its frame bound stays unknown. Source-only explicit report clocks remain usable without inventing model animation identity. No duration/frame-count ratio or video FPS supplies a limit; unknown clocks permit manual safe integer intervals.
+For a matching report/actual model animation with an explicit bounded clock, `frameEnd` cannot exceed the last declared sample at or before that model clip's end. A clip with no declared sample inside its duration has no valid feedback frames. A different animation cannot borrow the report clock; its frame bound stays unknown unless the declared `frames` record has a set for it, which bounds it the same way. Source-only explicit report clocks remain usable without inventing model animation identity. No duration/frame-count ratio or video FPS supplies a limit; unknown clocks permit manual safe integer intervals.
 
 The server derives `context.interval:{frameStart,frameEnd,inclusive:true}` from the chosen top-level annotation. Contradictory supplied interval data is refused; optional inspection `time` and `frame` remain separate and do not replace it. Compare uses the selected side's catalog and the CLI's exact animation; a row cannot borrow another side's names or bypass the animation binding.
 
@@ -286,7 +286,7 @@ Edit Mesh's **Download JSON** (#80, setup space since #100) saves two files; nei
 
 `mesh-edit.binding.json` (`rig-review-mesh-edit-binding/1`) binds the delta: `file {name, sha256}`, the package source hash, the model and motion SHA-256, `attachment {slot, skin, name, sha256}` (the same `hash`), `exportedAt`, the viewer and runtime versions, `mapping` (the crop mapping's basis) and an evidence note. Apply · Rebuild (#135) sends the same document as `{part, delta, configHash}` (bounded to 64 KiB, same-origin); the server writes it with the download's bytes and runs `rig-parts remesh --delta mesh-edit.json --part <part>` over the handoff rig (`@rig-c/parts` 1.43.0 or later, else `MODELING_PRODUCER_TOO_OLD <found> 1.43.0`). The producer computes `source.hash` from its own rigc build of the input and refuses a mismatch (`REMESH_DELTA_SOURCE`), a non-setup basis (`REMESH_DELTA_BASIS`) and an op that does not replay (`REMESH_DELTA_OP`); each line is shown verbatim. A built revision's `context.applied` is `rig-review-applied/3`: `{schema, buildId, part, delta, deltaSha256, configHash, producer, compiler, line, op: "remesh", files, mesh?, modelHash}`. `deltaSha256` is the SHA-256 of the bytes written, which equal the download's `mesh-edit.json`.
 
-The live-job handoff uses [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8). Standalone `--delta` and its download format remain available for legacy callers.
+The live-job handoff uses [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8) and [Chest landmarks on Request changes (act@9)](#chest-landmarks-on-request-changes-act9). Standalone `--delta` and its download format remain available for legacy callers.
 
 ## Historical feedback retrieval
 
@@ -1142,7 +1142,7 @@ or establish official Create writer acceptance.
 - **`interview-picks`.** `JobActValues['interview-picks']` carries `questionId`, ordered `selections` (`itemId`, `optionId`, nullable `otherText`) and `note`, with non-null `source.optionSet` (`id` and `sha256`).
 - **`checkpoint`.** `JobActValues['checkpoint']` carries `checkpointId`, `planStepId`, `outcome` restricted to `'pass'` or `'fail'` and required `words` as a `string`. `pending` stays in the UI draft only and never produces a finalized act. Only `'pass'` is eligible for Create's checkpoint sign-off writer, whereas `'fail'` is feedback or a named consumer refusal and never an approval write. `words` is preserved verbatim including empty or whitespace-only strings, matching Create's writer without adding a UI gate. In `JobSubject`, `checkpointId` defaults to the Create plan step ID and optional `planStepId` is required when the displayed Review checkpoint ID differs, matching [Create #184](https://github.com/rig-c/create/issues/184) without alias inference or browser trust. The browser supplies `checkpointId`, `outcome` and `words` only (`JobUIActValues['checkpoint']`), the daemon copies resolved `planStepId` from the validated ask and requires `source.plan`, and Create derives execution stage from its authoritative step phase and order without Review stamping a stage.
 - **`parts-verdict`.** `JobActValues['parts-verdict']` is `PartsVerdictValue` (`verdict` as `'approved'` or `'changes-requested'`, `issues` as `readonly PartsIssue[]` under `rig-review-parts-comment/2` — empty on `'approved'` and non-empty on `'changes-requested'`, bound to `source.sourceHash`, retained `partIds`, and `source.parts.images` hashes — and `words`), emitted in new finalized `rig-review/act@5` acts (`JobPartsVerdictAct`) and requiring non-null `source.projectHash`, a `draft` selector and `source.parts`. Historical `rig-review/act@2` `parts-verdict` acts remain in the `JobAct` union via `JobLegacyAct` with `value: JobLegacyPartsVerdictValue` (`verdict` as `'pending'`, `'approved'` or `'changes-requested'`, `parts` with `partId`, `part` outcome and note, `mesh` outcome and note with `JobPartOutcome` as `'pending'`, `'clean'` or `'flagged'`, and `words`).
-- **`review-verdict`.** The original model branch carries `stage` (`'rig-review'` or `'direction-review'`), `verdict` and `words`, requiring a `rig` or `post` selector and non-null `source.model` with runtime stage, selector and direction consistency checks.
+- **`review-verdict`.** The original model branch carries `stage` (`'rig-review'` or `'direction-review'`), `verdict` and `words`, requiring non-null `source.model` with runtime stage, selector and direction consistency checks. A declared `rig-review` ask can also bind a `draft` selector with `source.projectHash` and null `source.direction`. It uses the existing rig screen and still capture, and its finalized act preserves the retained draft publication's source hash, model and selector. A compiled rig's Request changes can carry [chest landmarks (act@9)](#chest-landmarks-on-request-changes-act9).
 - **`signoff`.** `JobActValues['signoff']` carries `stage` (validated by Create's writer), `decision` restricted to `'approved'` only (changes requested are a verdict, never a signoff) and required `words` preserved verbatim including empty or whitespace-only strings. A verdict, a signoff and a Create stage transition are three separate writes, and `JobAct` grants no transition authority. Every stage in `JOB_PLAN_BOUND_SIGNOFF_STAGES` (`'plan-approved'`, `'rigging-interview'`, `'post-interview'`) requires non-null `source.plan` with exact displayed step IDs and hashes before act creation, while other stages keep `source.plan` nullable where appropriate.
 - **Create-published step IDs and hashes.** `JobPlanIdentity` holds `steps` (`id` and `hash`) published by [Create #184](https://github.com/rig-c/create/issues/184) for the displayed plan. Review retains these values without importing or recomputing Create's internal `stepHash`. Create validates them through its existing `steps` and `step_hashes` writer logic, with no separate plan revision hash or additional revision gate in this contract.
 - **C4 manifest-referenced parts PNG identity.** C4 binds the exact public `partsFileReferences(dir)` array from `@rig-c/parts/src/parts.ts`, whose contract is frozen at Parts 2.25.0. The trusted host resolves an installed version in `JOB_PARTS_ENUMERATOR_RANGE` (`>=2.25.0 <3.0.0`), supplies its actual version and official callback through `partsEnumerator`, and declares `partsEnumeratorId`. `JobPartsIdentity.enumeratorVersion` carries that actual version. Manifest paths are work-root-relative and image paths are relative to the manifest directory. Each image carries `path`, bounded-string `role` and raw-byte `sha256`. Review compares the claimed array positionally with the official array, preserving its role/order/duplicate semantics. Upstream roles include `part`, `alternate`, `depth`, `painting` and `figure_mask`. Review bounds shape and paths, refuses traversal/symlinks, decodes PNGs and hashes retained bytes. Missing references refuse with row, role and path, including a missing sibling figure mask when a render copy exists. Unreferenced extras stay outside this parts identity. Composite source hashes use `rig-review-job-source/2`. Create #184 production reader/projection and official-hook wiring remain pending.
@@ -1173,8 +1173,8 @@ verdict. It verifies each retained Parts `assemble` recomposite against its
 bound hash and seals the original bytes. It omits the declaration when no
 qualifying draft, retained composite or bound hash is available. Review
 validates the declared ID with `jobId` and the revision as lowercase SHA-256.
-The labelled select in the secondary toolbar shows the previous ID and the
-first 12 revision characters. When that operand is selected, its title shows
+The labelled select in the secondary toolbar shows the previous ID.
+When that operand is selected, its title shows
 the ID and full revision. Resolution of the accepted draft stays with the
 publisher. [Publisher confirmation](https://github.com/rig-c/review/issues/914#issuecomment-7001422013)
 
@@ -1284,7 +1284,7 @@ A post-interview option set with a `rig` context can also show the accepted rig 
 | --- | --- |
 | `PublishResultV3` | `{kind, path, selector}` (`package`), `{kind, questionId, setId}` (`option-set`), `{kind}` (`plan`) |
 | `RecordFreeze` | `{kind: 'producer-held', holdId, record: {path: 'project.json', sha256}}` |
-| `RecordSubject` | `{kind: 'interview-picks', questionId, setId}`, `{kind: 'checkpoint', checkpointId}`, `{kind: 'signoff', stage}` (`plan-approved`, `rigging-interview`, `post-interview`, `direction-review`, `interview`), `{kind: 'reopen', stage}` |
+| `RecordSubject` | `{kind: 'interview-picks', questionId, setId}`, `{kind: 'checkpoint', checkpointId}`, `{kind: 'signoff', stage}` (`plan-approved`, `rigging-interview`, `post-interview`, `direction-review`, `interview`), `{kind: 'reopen', stage}` (read only: old records parse, Review neither asks nor renders it) |
 | `RecordPublishedContext` | Required `['label', 'parts', 'inputs', 'files', 'plan', 'subjects']`, optional `checkpointEvidence` on plans |
 | `RecordPartsIdentity` | `['name', 'version', 'integrity']` |
 | `RecordSource` | Required `['sourceHash', 'projectHash', 'record', 'inputs', 'files', 'subject', 'selection', 'optionSet', 'optionSetFile', 'plan', 'subjects']`, optional `checkpointEvidence` on plans |
@@ -1582,7 +1582,7 @@ option-set sources are excluded. Source capabilities remain consumer-owned.
 | `parts-verdict` | `verdict, comments` (`approved` or `changes-requested`) |
 | `review-verdict` | `stage, verdict, comments` (existing rig/direction/image stages and verdicts) |
 | `signoff` | `stage, decision, comments` (`approved`) |
-| `reopen` | `stage, comments` (existing declared record plan subject) |
+| `reopen` | `stage, comments` (read only: old records parse, Review neither asks nor renders it) |
 
 The declared plan/source/selector and ask eligibility checks remain applicable.
 The browser never supplies authoritative checkpoint-to-plan mapping. A Parts
@@ -1685,7 +1685,8 @@ existing pin or restore path already carries:
 | `camera` | numeric camera `{space, center, zoom, viewport, visible}` | StageComment `camera` |
 | `frame` | `{index, basis}` (`producer` or `reference`) | StageComment `frame` (absent when time-only) |
 
-Each key reuses the decoder of the shape it copies. A `reopen` act has no ask
+Each key reuses the decoder of the shape it copies. A `reopen` act is read only
+(old records parse, Review neither asks nor renders it) and has no ask
 subject, so its comments cannot carry `context.subject`.
 
 Starting in 4.8.0, the rig verdict writer takes top-level `context` from pinned
@@ -1787,3 +1788,60 @@ crop px and refuses the first op that does not replay by index. The API takes
 the edit and replay provenance without a Create-project argument or access
 to Review or Create storage. A mesh edit
 approves nothing. [HQ sign on Review #952](https://github.com/rig-c/review/issues/952#issuecomment-7001413869), [Parts #1159](https://github.com/rig-c/parts/issues/1159).
+
+### Chest landmarks on Request changes (act@9)
+
+The trusted package `readPublished` adapter can return
+`JobPublishedContext.chestLandmarks` for a `rig` selector. Review exposes those
+rows as `publication.chestLandmarks` in the publication receipt and pinned
+display response. Each `JobPublishedChestLandmark` row has the edit shape below
+with one additional required field, `source.configHash`, the lowercase SHA-256
+of the exact producer config bytes. If the package declares a producer handoff,
+Review uses that config identity. Otherwise the reader declares the config in
+its existing `files` array. Review hashes the retained file and checks that
+`meshes[slot].contour.bust` matches the published `bust` spec, including which
+optional keys are present. Review also checks the attachment hash and stage
+frame against the retained model. A bad declaration refuses
+`JOB_SOURCE_MISMATCH` before publication. The seed and config hash enter the
+publication's `source.sourceHash`; a config-only change gets a new binding.
+Omit the field when the draft has no published spec. Only a seeded attachment
+can be edited in a job.
+
+The UI sends `value.chestLandmarks`, an array of one to four exact
+`{edit, sha256}` rows. Both arrays sort by the UTF-16 string
+`skin/slot/attachment` and permit each identity tuple once. Each
+`JobChestLandmarkValue` edit carries:
+
+- `slot`, `skin` and `attachment` as nonempty strings of up to 128 characters
+  without control characters. These identify the supplying non-linked mesh in
+  the displayed setup model. The chest carrier's slot is the Parts part name.
+- `basis: "setup"` and `source: {hash, frame: {width, height}}` using the same
+  attachment hash and model stage binding as act@8.
+- `bust: {apex_r, apex_l, cleavage?, alpha?, clearance?, spacing?, bone_r?, bone_l?}`.
+  Coordinates are finite `[x, y]` in setup-pose rig pixels, in the whole figure's
+  frame with x right and y down. They lie on the 1/256-px grid inside the
+  inclusive stage bounds. Alpha and spacing are positive finite numbers,
+  clearance is finite, and bone names are 1–128 characters. An omitted
+  cleavage stays omitted.
+
+Each outer `sha256` hashes the complete canonical `edit` using the same
+canonical JSON rules as act@8. Review validates the act shape and digest,
+checks that the attachment was seeded, verifies the model and attachment
+hashes, and compares the frame with the retained stage. With all three points
+present, Review runs its clearance pre-check. Shape, frame, ineligible
+attachment and clearance refusals use `JOB_ACT_INVALID`. A stale model or
+attachment hash uses `JOB_ACT_SOURCE_STALE`. The request and delivery limits
+still apply. The producer validates the edit before rebuilding.
+
+`rig-review/act@9` is a `review-verdict` at `stage: "rig-review"` with
+`verdict: "changes-requested"` and at least one chest edit. It can also carry
+`meshEdits` and @7 comment context. Its comments array can be empty. Mesh-only
+edits use @8, and verdicts without edits keep their existing schemas.
+
+Consumers use the authorized finalized-act fetch and verify the act's
+`source.sourceHash`, `source.model.sha256`, the attachment SHA-256 and the
+frame before relaying landmarks to Parts. The publication carries the verified
+config hash, and the act binds to that publication through `source.sourceHash`.
+Parts checks the named slot is a contour part before writing the landmarks
+file. See [Review compatibility](STABILITY.md#chest-landmark-act-compatibility)
+and [Parts #1382](https://github.com/rig-c/parts/issues/1382).

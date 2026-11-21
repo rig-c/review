@@ -5,13 +5,14 @@ import {
   JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PARTS_ENUMERATOR_RANGE,
   JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RECORD_SIGNOFF_STAGES, JOB_RECORD_ACT_SCHEMA, JOB_RECORD_INSTANCE_SCHEMA, JOB_RECORD_SOURCE_SCHEMA,
   JOB_RESERVED_ACT_KINDS,
-  JOB_MESH_EDITS_ACT_SCHEMA,
+  JOB_MESH_EDITS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA,
   type AgentRequestV3, type FetchActRequestV3, type JobAgentRequest, type JobApiSchema,
   type JobCheckpointEvidence, type JobDisplayAcknowledgment, type JobErrorCode, type JobFetchActRequest, type JobFileIdentity,
   type JobHostPorts, type JobHumanAuthority, type JobInterviewDiagnostic, type JobInterviewDiagnostics,
   type JobInterviewJson, type JobInterviewRecord, type JobPlanIdentity, type JobPublicationMode,
   type JobAct, type JobMeshEdit, type JobMeshEditsAct, type JobMeshEditValue,
-  type JobPublishRequest, type JobResult, type JobSelector, type JobSha256, type JobSubject,
+  type JobChestLandmarkEdit, type JobChestLandmarksAct, type JobChestLandmarkValue, type JobPublishedChestLandmark,
+  type JobPublishRequest, type JobResult, type JobSelector, type JobSha256, type JobSourceBinding, type JobSubject,
   type OptionContext, type OptionSource, type PlanContext, type PlanSource, type ProjectRecord,
   type PublishRequestV3, type PublishResultV3, type RecordAct, type RecordFreeze,
   type RecordOptionResult, type RecordPartsIdentity, type RecordPicksSubject, type RecordPlanResult, type RecordPlanSubject,
@@ -31,6 +32,7 @@ import {parseJobPartsIdentity} from './job-source.ts';
 import {parseControlPart, parseControlView} from './control.ts';
 import {canonicalJson} from './canonical-json.ts';
 import {MESH_EDIT_MAX_OPS, type Vec} from './mesh-edit.ts';
+import {parseBustSpec} from './chest-landmarks.ts';
 
 export type {
   JobInterviewJson,
@@ -1425,6 +1427,10 @@ function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
   return structuredClone(item) as unknown as Exclude<SourceV3, OptionSource>;
 }
 
+export function isRigDraftVerdictSource(source: JobSourceBinding): boolean {
+  return source.selector?.kind === 'draft' && !!source.model && !!source.projectHash && source.direction === null;
+}
+
 /** Public @6 decoder. The UI finalizers write checkpoint, parts, rig/post verdict and signoff acts at @6 (#713). */
 export function parseCommentsAct(raw: unknown): JobCommentsAct {
   return decodeCommentsAct(raw, JOB_COMMENTS_ACT_SCHEMA) as JobCommentsAct;
@@ -1438,6 +1444,10 @@ export function parseContextCommentsAct(raw: unknown): JobContextCommentsAct {
 /** Public @8 decoder. Model freshness and topology are checked by the writer. */
 export function parseMeshEditsAct(raw: unknown): JobMeshEditsAct {
   return decodeCommentsAct(raw, JOB_MESH_EDITS_ACT_SCHEMA) as JobMeshEditsAct;
+}
+
+export function parseChestLandmarksAct(raw: unknown): JobChestLandmarksAct {
+  return decodeCommentsAct(raw, JOB_CHEST_LANDMARKS_ACT_SCHEMA) as JobChestLandmarksAct;
 }
 
 export function meshEditDigest(edit: JobMeshEditValue): JobSha256 {
@@ -1527,6 +1537,63 @@ export function parseMeshEdits(raw: unknown): readonly JobMeshEdit[] {
   }, 'JOB_ACT_INVALID');
 }
 
+function parseChestLandmarkValue(raw: unknown, code: JobErrorCode): JobChestLandmarkValue;
+function parseChestLandmarkValue(raw: unknown, code: JobErrorCode, published: true): JobPublishedChestLandmark;
+function parseChestLandmarkValue(raw: unknown, code: JobErrorCode, published = false): JobChestLandmarkValue | JobPublishedChestLandmark {
+  const value = exactObject(raw, ['slot', 'skin', 'attachment', 'basis', 'source', 'bust'], code);
+  if (value.basis !== 'setup') throw new JobError(code);
+  const source = exactObject(value.source, published ? ['hash', 'frame', 'configHash'] : ['hash', 'frame'], code);
+  const frame = exactObject(source.frame, ['width', 'height'], code);
+  const width = meshNumber(frame.width), height = meshNumber(frame.height);
+  if (width <= 0 || height <= 0) throw new JobError(code);
+  const bust = parseBustSpec(value.bust, 'bust', true);
+  for (const point of [bust.apex_r, bust.apex_l, bust.cleavage]) {
+    if (point && (point[0] < 0 || point[0] > width || point[1] < 0 || point[1] > height)) throw new JobError(code);
+  }
+  return {
+    slot: jobText(value.slot), skin: jobText(value.skin), attachment: jobText(value.attachment), basis: 'setup',
+    source: {hash: jobSha(source.hash), frame: {width, height}, ...(published ? {configHash: jobSha(source.configHash)} : {})}, bust,
+  };
+}
+
+export function chestLandmarkIdentity(edit: JobChestLandmarkValue): string {
+  return JSON.stringify([edit.skin, edit.slot, edit.attachment]);
+}
+
+/** The seed and act use the same bounds and identity order. The act wraps each row in a digest. */
+function readChestLandmarkRows<Row>(raw: unknown, code: JobErrorCode,
+  read: (item: unknown) => {edit: JobChestLandmarkValue; row: Row}): readonly Row[] {
+  return asCode(() => {
+    if (!Array.isArray(raw) || raw.length < 1 || raw.length > 4) throw new JobError(code);
+    const seen = new Set<string>();
+    let previousOrder: string | undefined;
+    return Array.from(raw, item => {
+      const {edit, row} = read(item);
+      const key = chestLandmarkIdentity(edit), order = [edit.skin, edit.slot, edit.attachment].join('/');
+      if (seen.has(key) || (previousOrder !== undefined && order < previousOrder)) throw new JobError(code);
+      seen.add(key);
+      previousOrder = order;
+      return row;
+    });
+  }, code);
+}
+
+export function parsePublishedChestLandmarks(raw: unknown): readonly JobPublishedChestLandmark[] {
+  return readChestLandmarkRows(raw, 'JOB_SOURCE_MISMATCH', item => {
+    const edit = parseChestLandmarkValue(item, 'JOB_SOURCE_MISMATCH', true);
+    return {edit, row: edit};
+  });
+}
+
+export function parseChestLandmarkEdits(raw: unknown): readonly JobChestLandmarkEdit[] {
+  return readChestLandmarkRows(raw, 'JOB_ACT_INVALID', item => {
+    const {edit: value, sha256} = commentsObject(item, ['edit', 'sha256']);
+    const edit = parseChestLandmarkValue(value, 'JOB_ACT_INVALID');
+    if (jobSha(sha256) !== requestDigest(value)) throw new JobError('JOB_ACT_INVALID');
+    return {edit, row: structuredClone(item) as unknown as JobChestLandmarkEdit};
+  });
+}
+
 /** Write @7 when a comment carries context, otherwise keep the @6 envelope. */
 export function commentsActForEmission(act: JobCommentsAct | JobContextCommentsAct): JobCommentsAct | JobContextCommentsAct {
   const value = act.value as {comments: readonly JobContextComment[]};
@@ -1546,8 +1613,9 @@ export function meshEditsActForEmission(act: JobCommentsAct | (Extract<JobCommen
   return parseMeshEditsAct({...act, schema: JOB_MESH_EDITS_ACT_SCHEMA}) as Extract<JobAct, {schema: typeof JOB_MESH_EDITS_ACT_SCHEMA}>;
 }
 
-function decodeCommentsAct(raw: unknown, schema: JobCommentsAct['schema'] | JobContextCommentsAct['schema'] | JobMeshEditsAct['schema']):
-  JobCommentsAct | JobContextCommentsAct | JobMeshEditsAct {
+type CommentsWireAct = JobCommentsAct | JobContextCommentsAct | JobMeshEditsAct | JobChestLandmarksAct;
+
+function decodeCommentsAct(raw: unknown, schema: CommentsWireAct['schema']): CommentsWireAct {
   return asCode(() => {
     const item = commentsObject(raw, ['schema', 'actId', 'jobId', 'askId', 'publicationId', 'kind', 'authority', 'at', 'source', 'value'], ['still']);
     if (item.schema !== schema) throw new JobError('JOB_ACT_INVALID');
@@ -1562,8 +1630,10 @@ function decodeCommentsAct(raw: unknown, schema: JobCommentsAct['schema'] | JobC
     };
     const keys = typeof item.kind === 'string' && Object.hasOwn(fields, item.kind) ? fields[item.kind] : undefined;
     if (!keys) throw new JobError('JOB_ACT_INVALID');
-    const at8 = schema === JOB_MESH_EDITS_ACT_SCHEMA;
-    const value = commentsObject(item.value, keys, at8 && item.kind === 'review-verdict' ? ['meshEdits'] : []);
+    const at9 = schema === JOB_CHEST_LANDMARKS_ACT_SCHEMA;
+    const supportsMesh = schema === JOB_MESH_EDITS_ACT_SCHEMA || at9;
+    const value = commentsObject(item.value, at9 ? [...keys, 'chestLandmarks'] : keys,
+      supportsMesh && item.kind === 'review-verdict' ? ['meshEdits'] : []);
     const comments = schema === JOB_COMMENTS_ACT_SCHEMA ? parseComments(value.comments, source) : decodeComments(value.comments, source, true);
     if (comments.some(comment => comment.anchor && 'side' in comment.anchor)) throw new JobError('JOB_ACT_INVALID');
     if ((comments as readonly JobContextComment[]).some(comment => comment.context?.subject &&
@@ -1579,7 +1649,7 @@ function decodeCommentsAct(raw: unknown, schema: JobCommentsAct['schema'] | JobC
       if ((value.verdict === 'approved') !== (issues === 0)) throw new JobError('JOB_ACT_INVALID');
     } else if (item.kind === 'review-verdict') {
       if ('record' in source || typeof value.verdict !== 'string' || !['pending', 'approved', 'changes-requested'].includes(value.verdict)) throw new JobError('JOB_ACT_INVALID');
-      if (!source.model || (value.stage === 'rig-review' ? source.selector?.kind !== 'rig' : value.stage !== 'direction-review' || source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ACT_INVALID');
+      if (!source.model || (value.stage === 'rig-review' ? source.selector?.kind !== 'rig' && !isRigDraftVerdictSource(source) : value.stage !== 'direction-review' || source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ACT_INVALID');
     } else {
       const stage = jobId(value.stage);
       if (item.kind === 'signoff' && value.decision !== 'approved') throw new JobError('JOB_ACT_INVALID');
@@ -1590,12 +1660,17 @@ function decodeCommentsAct(raw: unknown, schema: JobCommentsAct['schema'] | JobC
     if ('record' in source) validateRecordAskSubject(item.kind === 'checkpoint' ? {kind: item.kind, checkpointId: value.checkpointId} :
       {kind: item.kind, stage: value.stage}, source);
     const rig = item.kind === 'review-verdict' && value.stage === 'rig-review';
+    let chestLandmarks: readonly JobChestLandmarkEdit[] | undefined;
+    if (at9) {
+      if (!rig || value.verdict !== 'changes-requested') throw new JobError('JOB_ACT_INVALID');
+      chestLandmarks = parseChestLandmarkEdits(value.chestLandmarks);
+    }
     let meshEdits: readonly JobMeshEdit[] | undefined;
-    if (at8 && Object.hasOwn(value, 'meshEdits')) {
+    if (supportsMesh && Object.hasOwn(value, 'meshEdits')) {
       if (!rig || value.verdict !== 'changes-requested') throw new JobError('JOB_ACT_INVALID');
       meshEdits = parseMeshEdits(value.meshEdits);
     }
-    if (at8 && item.kind === 'review-verdict' && value.verdict === 'changes-requested' && !comments.length && !meshEdits) {
+    if (supportsMesh && item.kind === 'review-verdict' && value.verdict === 'changes-requested' && !comments.length && !meshEdits && !chestLandmarks) {
       throw new JobError('JOB_ACT_INVALID');
     }
     if (rig) {
@@ -1604,8 +1679,8 @@ function decodeCommentsAct(raw: unknown, schema: JobCommentsAct['schema'] | JobC
           (still.frame === 'setup' ? 'animation' in still : typeof still.frame !== 'number' || !Number.isFinite(still.frame) ||
             still.frame < 0 || typeof still.animation !== 'string' || !still.animation)) throw new JobError('JOB_ACT_INVALID');
     } else if ('still' in item) throw new JobError('JOB_ACT_INVALID');
-    return {...structuredClone(item), source, value: {...value, comments, ...(meshEdits ? {meshEdits} : {})}} as unknown as
-      JobCommentsAct | JobContextCommentsAct | JobMeshEditsAct;
+    return {...structuredClone(item), source, value: {...value, comments, ...(meshEdits ? {meshEdits} : {}),
+      ...(chestLandmarks ? {chestLandmarks} : {})}} as unknown as CommentsWireAct;
   }, 'JOB_ACT_INVALID');
 }
 

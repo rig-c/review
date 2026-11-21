@@ -1,10 +1,6 @@
 import type { HistoricalInterview, InterviewQuestion, InterviewDiagnostic } from '../src/interview-project.ts';
 import type { Picks } from '../src/interview-picks.ts';
-import { onLanguageChange, t } from './i18n.ts';
-import { bindWorkspaceSeparator } from './workspace-layout.ts';
-import { createViewControls } from './view-controls.ts';
-import {WorkspacePreferenceStore,panelBounds} from './workspace-preferences.ts';
-import { createPartsViewport } from './parts-viewport-provider.ts';
+import { t } from './i18n.ts';
 
 /** The active image-question form is mounted only while it owns the main reference pane. */
 export function hasTransientQuestionImage(root:{querySelector(selector:string):Element|null}=document):boolean {
@@ -128,70 +124,6 @@ export function interviewQuestionList(items: readonly {label: string; answered: 
   return nav;
 }
 
-/**
- * The question's bound images in the shared native-image viewport (#708 return): the parts page's camera through
- * createPartsViewport and the shared control set in its fixed order (Zoom in, Zoom out, Fit, 1:1, View switch), where the
- * view switch picks the bound image. Control ids are dropped so the modal never shadows the page's own main view.
- */
-export function interviewImageView(images: readonly {name: string; src: string}[], selected: number, onSelect: (index: number) => void, bottom?:HTMLElement) {
-  const image = images[selected]!;
-  const controls = createViewControls({layout:'rigStep1', viewSwitch:{currentMode:String(selected), groups:[{modes:images.map((asset, index) =>
-    ({id:String(index), labelKey:asset.name, pressed:index === selected}))}], onChange:id => onSelect(Number(id))}});
-  const sync = controls.syncLabel.querySelector('input')!;
-  const named = new Map<string, HTMLElement>([['zoom-in', controls.zoomButtons[0]!], ['zoom-out', controls.zoomButtons[1]!],
-    ['fit', controls.zoomButtons[2]!], ['native-one', controls.nativeOne!], ['zoom-value', controls.value], ['camera-sync', sync]]);
-  const toolbar = controls.zoomGroup!;
-  const viewport = element('div'); viewport.className = 'interview-viewport';
-  const root = element('div'); root.className = 'interview-view-root';
-  // A canvas starts at 300 x 150; the camera has no frame until the bound image has drawn.
-  const canvas = element('canvas'); root.append(canvas); viewport.append(root);
-  let loaded = false;
-  const reference = element('div'); reference.hidden = true;
-  for (const [id, node] of [['rig-viewport', viewport], ['rig-pane', viewport], ['stage-layout', viewport], ['rig-root', root],
-    ['reference-viewport', reference], ['reference-pane', reference], ['reference-content', reference]] as const) named.set(id, node);
-  for (const node of [toolbar, ...toolbar.querySelectorAll('[id]'), sync]) node.removeAttribute('id');
-  const unavailable = element('p'); unavailable.setAttribute('role', 'status'); unavailable.hidden = true;
-  const view = element('div'); view.className = 'interview-view'; view.append(toolbar, viewport, unavailable);
-  const camera = createPartsViewport({el:<T extends HTMLElement>(id: string) => named.get(id) as T, canvas, message:() => {},
-    reference:() => null, frameSize:target => target === 'rig' && loaded ? {w:canvas.width, h:canvas.height} : null});
-  const localize = () => {
-    for (const button of toolbar.querySelectorAll<HTMLButtonElement>('[data-view]')) button.textContent = images[Number(button.dataset.view)]!.name;
-    const summary = toolbar.querySelector('.view-menu summary');
-    if (summary?.firstChild) summary.firstChild.textContent = t('View switch') + ' ';
-    summary?.setAttribute('aria-label', t('View layout'));
-    if (summary?.lastElementChild) summary.lastElementChild.textContent = image.name;
-    for (const [button, key] of [[controls.zoomButtons[0]!, 'Zoom in'], [controls.zoomButtons[1]!, 'Zoom out']] as const) {
-      button.textContent = t(key); button.setAttribute('aria-label', t(key));
-    }
-    unavailable.textContent = t('interview.imageUnavailable');
-  };
-  // Agent-authored part names stay verbatim; the controls' own words follow the shared catalogs.
-  const unlocalize = onLanguageChange(() => {camera.renderCameraControls(); localize();}); localize();
-  const disposers = [camera.bindControls(), camera.bindNavigation(), unlocalize];
-  controls.nativeOne!.onclick = () => camera.cameraAction(() => camera.updateCamera('rig', {zoom:1, pan:{x:0, y:0}}));
-  let fitted = false;
-  const fit = () => {if (!fitted && loaded && camera.paneFrame('rig')) {fitted = true; camera.fitActiveCamera('rig');} else camera.fitCamera();};
-  const resize = new ResizeObserver(fit); resize.observe(viewport);
-  if(bottom){
-    const preferences=new WorkspacePreferenceStore();let height:number=panelBounds.inspectorHeight.min;
-    const separator=element('div');separator.className='workspace-separator interview-bottom-resize';
-    view.append(separator,bottom);
-    const range=()=>({min:panelBounds.inspectorHeight.min,max:Math.max(panelBounds.inspectorHeight.min,view.clientHeight-200),value:bottom.getBoundingClientRect().height,enabled:true});
-    const apply=(value:number)=>{height=value;view.style.setProperty('--interview-answer-height',Math.min(range().max,Math.max(range().min,value))+'px');};
-    const binding=bindWorkspaceSeparator({element:separator,panel:'inspectorHeight',controls:bottom.id,label:t('Resize Inspector'),range,desired:()=>height,resize:apply,commit:value=>preferences.update({panels:{inspectorHeight:value}})});
-    const observer=new ResizeObserver(()=>{apply(height);binding.refresh();});observer.observe(view);
-    disposers.push(()=>{observer.disconnect();binding.dispose();});apply(height);
-  }
-  const source = new Image();
-  source.onload = () => {
-    canvas.width = source.naturalWidth; canvas.height = source.naturalHeight; loaded = true;
-    canvas.getContext('2d')?.drawImage(source, 0, 0); fit();
-  };
-  source.onerror = () => {viewport.hidden = true; unavailable.hidden = false;};
-  source.alt = image.name; source.src = image.src;
-  return {element:view, dispose() {source.onload=source.onerror=null;source.src='';resize.disconnect(); for (const dispose of disposers) dispose();}};
-}
-
 /** Real interview API rows shared by job publications and joined project inspection. */
 export type InterviewDisplayQuestion = Omit<InterviewQuestion,'images'> & {images:{name:string;url:string}[];saved?:Picks|null};
 
@@ -213,7 +145,7 @@ export function interviewRecords(diagnostics:readonly InterviewDiagnostic[]=[],h
   return records;
 }
 
-/** B's list | image | survey builder. Hosts supply genuine source data and their own submit transport. */
+/** The question list and survey form. Hosts supply source data and submit transport. */
 export function createInterviewForm(options:{question:InterviewDisplayQuestion;id:string;node?:InterviewText;form?:HTMLFormElement;fieldset?:HTMLFieldSetElement;source?:HTMLElement;
     mainView?:boolean;images:readonly {name:string;src:string}[];questions?:readonly {label:string;answered:boolean}[]|(()=>readonly {label:string;answered:boolean}[]);selected?:number;onSelect?:(index:number)=>void;answered?:boolean;
     diagnostics?:readonly InterviewDiagnostic[];historical?:readonly HistoricalInterview[]}) {
@@ -223,6 +155,7 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   const form=options.form??make('form'),fields=options.fieldset??make('fieldset');
   if(!options.fieldset)form.append(fields);
   const joined=options.id.startsWith('joined-interview-');
+  form.setAttribute('translate','no');
   form.className='interview-answer interview-grid';form.dataset.interviewAnswered=String(options.answered??Boolean((joined&&question.saved)||question.answer));
   fields.className='interview-answer-fields';fields.id=options.id;fields.disabled=!question.editable;
   const heading=make('h3',question.set.question);fields.append(heading);
@@ -252,10 +185,8 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   if(question.partsUnavailable)context.append(node('p','interview.partsUnavailable'));
   const provenance=make('p'),binding=make('code',question.ref.path+' · '+question.ref.sha256);context.append(provenance,binding);
   if(question.answer)context.append(make('pre',[question.answer.by,question.answer.at,question.answer.source].filter(value=>typeof value==='string').join(' · ')),make('pre',typeof question.answer.verbatim==='string'?question.answer.verbatim:''));
-  if(options.mainView&&options.images.length){form.dataset.interviewMain='';Object.assign(form,{interviewImages:options.images});}
-  const art=make('aside');art.className='interview-art';form.prepend(art);
-  let view:ReturnType<typeof interviewImageView>|undefined,list:HTMLElement|undefined,records:HTMLElement|undefined;
-  const showImage=(index:number)=>{view?.dispose();view?.element.remove();view=interviewImageView(options.images,index,showImage,context);art.append(view.element);};
+  if(options.mainView){form.dataset.interviewMain='';Object.assign(form,{interviewImages:options.images});}
+  let list:HTMLElement|undefined,records:HTMLElement|undefined;
   const refresh=()=>preserveScrollAndFocus(fields,()=>{
     submit.hidden=!question.editable||form.dataset.interviewAnswered==='true';
     noteInput.placeholder=t('interview.notePlaceholder');noteInput.setAttribute('placeholder',noteInput.placeholder);
@@ -274,9 +205,9 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   const submit=node('button','interview.save');submit.type='submit';submit.hidden=!question.editable;
   const status=node('p',!question.editable?'interview.history':question.saved?'interview.saved':'interview.choose');status.setAttribute('role','status');form.append(status);
   const localize=()=>{for(const [item,key]of copy)item.textContent=t(item.dataset.jobText??key);refresh();};
-  const dispose=()=>{view?.dispose();form.removeEventListener('input',refresh);form.removeEventListener('change',refresh);form.removeEventListener('job-form-language',localize);};
+  const dispose=()=>{form.removeEventListener('input',refresh);form.removeEventListener('change',refresh);form.removeEventListener('job-form-language',localize);};
   form.addEventListener('input',refresh);form.addEventListener('change',refresh);form.addEventListener('job-form-language',localize);
-  try{if(!options.mainView&&options.images.length)showImage(0);else{art.hidden=true;fields.append(context);}fields.append(submit);refresh();}catch(error){dispose();throw error;}
+  try{fields.append(context,submit);refresh();}catch(error){dispose();throw error;}
   return {form,fieldset:fields,submit,status,retainedNote,
     read:()=>jobInterviewValue(question.set.question,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),editableOnInit?noteInput.value:(retainedNote??'')),
     localize,dispose};

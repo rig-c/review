@@ -4,6 +4,7 @@
  * the applied history for the page; the server owns every path and the producer's flags.
  */
 import {setSourceText} from './i18n.ts';
+import {bustLandmarkFields} from './chest-editor.ts';
 import {ellipsePolygon,fitChestEllipse,CHEST_ELLIPSE_MIN_POINTS} from '../src/chest-regions.ts';
 import {deriveBust,parseBustSpec,type BustSpec} from '../src/chest-landmarks.ts';
 import {CONFIG_PATCH_SCHEMA,type ConfigPatch,type PatchCmd,type PatchOp} from '../src/config-patch.ts';
@@ -200,10 +201,7 @@ export function seedLandmarks(status:Pick<RebuildStatusView,'parts'|'contour'>,r
  if(['apex_r','apex_l','cleavage'].some(k=>(read(`lm-${k}-x`)?.value??'').trim()||(read(`lm-${k}-y`)?.value??'').trim()))return null;
  for(const p of status.parts){
   const bust=(status.contour[p.name]?.contour as Record<string,unknown>|undefined)?.bust as Record<string,unknown>|undefined;if(!bust||typeof bust!=='object')continue;
-  const out:Record<string,string>={};
-  for(const k of ['apex_r','apex_l','cleavage'])if(Array.isArray(bust[k])&&(bust[k] as unknown[]).length===2){out[`lm-${k}-x`]=String((bust[k] as number[])[0]);out[`lm-${k}-y`]=String((bust[k] as number[])[1]);}
-  for(const k of ['alpha','clearance'])if(typeof bust[k]==='number')out[`lm-${k}`]=String(bust[k]);
-  for(const k of ['bone_r','bone_l'])if(typeof bust[k]==='string')out[`lm-${k}`]=bust[k] as string;
+  const out=bustLandmarkFields(bust);
   return Object.keys(out).length?out:null;
  }
  return null;

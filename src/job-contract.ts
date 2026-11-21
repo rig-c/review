@@ -19,6 +19,7 @@ import type { MarkRegion } from './stage-comment.ts';
 import type { PartsVerdict } from './parts-view.ts';
 import type { ControlNumericCamera, ControlPart } from './control.ts';
 import type { MeshOp, Vec } from './mesh-edit.ts';
+import type { BustLandmarks } from './chest-landmarks.ts';
 
 export const JOB_API_SCHEMA = 'rig-review/job-api@2' as const;
 export const JOB_API_V3_SCHEMA = 'rig-review/job-api@3' as const;
@@ -35,6 +36,8 @@ export const JOB_COMMENTS_ACT_SCHEMA = 'rig-review/act@6' as const;
 export const JOB_COMMENT_CONTEXT_ACT_SCHEMA = 'rig-review/act@7' as const;
 /** @7 plus a mesh payload on a compiled rig's Request changes (#952). */
 export const JOB_MESH_EDITS_ACT_SCHEMA = 'rig-review/act@8' as const;
+/** A compiled rig's Request changes carrying chest landmarks (#990). */
+export const JOB_CHEST_LANDMARKS_ACT_SCHEMA = 'rig-review/act@9' as const;
 export const REVIEW_COMMENTS_SESSION_SCHEMA = 'rig-review-session/2' as const;
 export const REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA = 'rig-review-compare-session/2' as const;
 export const PARTS_COMMENTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/5' as const;
@@ -142,6 +145,29 @@ export type JobMeshEditsAct = JobRigMeshEditsAct | {
     readonly value: Extract<JobContextCommentsAct, {kind: Kind}>['value'] & {readonly meshEdits?: never};
   }
 }[keyof JobCommentsActValues];
+
+/** Setup-pose rig px in the retained model's stage, shared by the seed and the edit. */
+export type JobChestLandmarkValue = Pick<JobMeshEditValue, 'slot' | 'skin' | 'attachment' | 'basis'> & {
+  readonly source: Pick<JobMeshEditValue['source'], 'hash' | 'frame'>;
+  readonly bust: Readonly<BustLandmarks>;
+};
+
+export type JobPublishedChestLandmark = JobChestLandmarkValue & {
+  readonly source: JobChestLandmarkValue['source'] & {readonly configHash: JobSha256};
+};
+
+export interface JobChestLandmarkEdit {
+  readonly edit: JobChestLandmarkValue;
+  readonly sha256: JobSha256;
+}
+
+export type JobChestLandmarksAct = Omit<JobRigMeshEditsAct, 'schema' | 'value'> & {
+  readonly schema: typeof JOB_CHEST_LANDMARKS_ACT_SCHEMA;
+  readonly value: Omit<JobRigMeshEditsAct['value'], 'meshEdits'> & {
+    readonly meshEdits?: readonly JobMeshEdit[];
+    readonly chestLandmarks: readonly JobChestLandmarkEdit[];
+  };
+};
 export type ReviewCommentsSession = Omit<ReviewSession, 'schema' | 'feedback' | 'checkpoints'> & {
   schema: typeof REVIEW_COMMENTS_SESSION_SCHEMA;
   checkpoints: Record<string, { outcome: 'pending' | 'pass' | 'fail' }>;
@@ -557,6 +583,7 @@ export type JobUIActValues = Omit<JobActValues, 'checkpoint' | 'parts-verdict' |
       readonly feedback?: readonly Feedback[];
       readonly general?: readonly string[];
       readonly meshEdits?: readonly JobMeshEdit[];
+      readonly chestLandmarks?: readonly JobChestLandmarkEdit[];
     });
 };
 
@@ -571,7 +598,7 @@ export interface JobActSources {
     readonly parts: JobPartsIdentity;
   };
   readonly 'review-verdict': (JobModelSourceBinding & {
-    readonly selector: Extract<JobSelector, { kind: 'rig' | 'post' }>;
+    readonly selector: Extract<JobSelector, { kind: 'rig' | 'post' | 'draft' }>;
     readonly model: JobFileIdentity;
   });
   readonly signoff: JobModelSourceBinding;
@@ -626,7 +653,7 @@ export type JobPartsVerdictAct = Omit<Extract<JobLegacyAct, {kind: 'parts-verdic
 
 /** Historical @2 acts remain readable without being backfilled or relabelled.
  * Fresh comments use @6, live rig comments carrying context use @7, and rig verdicts carrying mesh edits use @8. */
-export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct | JobCommentsAct | JobContextCommentsAct | JobRigMeshEditsAct;
+export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct | JobCommentsAct | JobContextCommentsAct | JobRigMeshEditsAct | JobChestLandmarksAct;
 
 /** Authenticated browser provenance. The daemon validates identity and hashes PNG bytes. */
 export interface JobRigCapture {
@@ -727,6 +754,8 @@ export interface JobPublication {
     readonly code: string;
   };
   readonly interview?: JobInterviewDiagnostics | null;
+  /** Producer-declared contour.bust for the displayed rig, sealed in source.sourceHash. */
+  readonly chestLandmarks?: readonly JobPublishedChestLandmark[];
 }
 
 export interface JobStatus {
@@ -913,6 +942,8 @@ export interface JobDisplayReceipt {
 
 export interface JobDisplayPublication {
   readonly publication: JobPublication;
+  /** A declared rig draft verdict selects the rig screen even when parts are retained. */
+  readonly rigDraftVerdict?: true;
   /** Same-origin routes pinned to this publication and instance. No current alias. */
   readonly routes: {
     readonly entry: string;
