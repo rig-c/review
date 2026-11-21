@@ -1647,8 +1647,9 @@ function restoreRecordComments(form?:HTMLFormElement):void {
    ids.add(row.id);
    if(host?.verdictComments&&('schema' in row||'target' in row))throw new Error('JOB_ACT_INVALID');
    if('schema' in row){const issue=parsePartsIssue(row,false,true,false),items=new Map((partsSubject?.items()??[]).map(item=>[item.name,{...item,imageHash:item.imageHash!}]));assertPartsIssueBinding(issue,items,partsSubject!.sourceHash());}
-   else if('target' in row){const mark=parseStageComment((row.context as {comment?:unknown})?.comment),pictures=!host?.direction&&!host!.record!.hasPicture?recordPictures():undefined;
-    if(pictures){
+   else if('target' in row){const mark=parseStageComment((row.context as {comment?:unknown})?.comment),pictures=!host?.direction?recordPictures():undefined;
+    // #1068: over a retained backdrop, only a reference pin naming a sealed picture's path is a picture pin; rig pins keep their check.
+    if(pictures&&(!host!.record!.hasPicture||mark.viewport==='reference'&&pictures.some(picture=>picture.path===mark.referenceId))){
      // #1048: a plan- or question-picture pin restores only through its A1 label, parsed back against a sealed entry.
      if(mark.viewport!=='reference'||mark.sourceHash!==sourceHash)throw new Error('JOB_DISPLAY_MISMATCH');
      const label=projectComments(feedbackItemComments([row as Feedback]),pictures).split('\n')[0]!.slice(1,-1),parsed=parsePictureCommentLabel(label);
@@ -1738,9 +1739,10 @@ function recordPictures():{path:string;sha256:string}[]|undefined {
 function recordCommentWords():string {
  return projectComments(recordComments.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}),recordPictures());
 }
-/** The sealed plan picture or question image while it is the reference view's shown image; null otherwise (#1048). */
+/** The sealed plan picture or question image while it is the reference view's shown image, with or without a retained
+ * backdrop (#1068); null otherwise (#1048). */
 function shownPlanPicture():{name:string;path:string;sha256:string}|null {
- const image=host?.record&&!host.record.hasPicture?activeInterviewImage:null,path=image?.path,sha256=image?.sha256;
+ const image=host?.record?activeInterviewImage:null,path=image?.path,sha256=image?.sha256;
  return image&&path&&sha256&&recordPictures()?.some(picture=>picture.path===path&&picture.sha256===sha256)?{name:image.name,path,sha256}:null;
 }
 function persistRecordComments():void {
@@ -3503,17 +3505,17 @@ function setupComments():void {
   ...(host.verdictComments?{rows:host.verdictComments.rows,available:host.verdictComments.available,refusal:()=>readOnly}:{}),
  }:undefined,listHost:el('comments-list-host'),openList:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot)||!!shownPlanPicture(),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?(recordPictures()?{reference:el('reference-viewport')}:{}):{rig:el('rig-viewport'),reference:el('reference-viewport')},
   pose:view=>{
-   if(host?.record&&!host.record.hasPicture)return planPicturePose(view);
+   if(host?.record&&(!host.record.hasPicture||shownPlanPicture()))return planPicturePose(view);
    if(hasTransientQuestionImage(screenRoot))return null;
    if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;
    const renderer=player?.renderer;const current=time,index=frameAtTime(activeFrameClock(),current),referenceId=view==='reference'?select('reference-select').value||null:null,referenceHash=referenceId?data.referenceHashes?.[referenceId]??(data.explicitReference?.id===referenceId?data.explicitReference.sha256:null):null;
    return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;
   },
-  pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:()=>shownPlanPicture()?planPictureBookmark():inspectionBookmark(),restore:(b,timed)=>host?.record&&!host.record.hasPicture?Promise.resolve():restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal,!!timed),feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
+  pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:()=>shownPlanPicture()?planPictureBookmark():inspectionBookmark(),restore:(b,timed)=>host?.record&&(!host.record.hasPicture||recordPictures()?.some(picture=>picture.path===(b as {selection?:{reference?:unknown}}|null)?.selection?.reference))?Promise.resolve():restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal,!!timed),feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
   locked:host?.record?()=>false:host?.direction?id=>submittedDirectionComments.has(id):isSubmittedFeedback,add:f=>{if(host?.record||host?.direction)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(/^The source changed, so /.test(draftStatus??''))draftStatus=null;if(host?.record||host?.direction){recordCommentsChanged();if(host?.direction){markDirty();comments?.refresh();}return;}if(host?.verdictComments)persistRecordComments();markDirty();renderProposals();return persistence?.save();},draftChanged:()=>{if(typeof renderAnswerControls==='function')renderAnswerControls();},error:value=>message(value,true),
-  picture:mark=>{const record=host?.record&&!host.record.hasPicture?host.record:undefined,pictures=record?[...record.planPicture?[record.planPicture]:[],...record.questionPictures??[]]:[];
+  picture:mark=>{const record=host?.record,pictures=record?[...record.planPicture?[record.planPicture]:[],...record.questionPictures??[]]:[];
    return mark.viewport==='reference'&&pictures.find(picture=>mark.referenceId===picture.path&&mark.referenceHash===picture.sha256)?.name||null;},
-  refusal:()=>host?.record&&!host.record.hasPicture?null:commentCaptureRefusal(),blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
+  refusal:()=>host?.record&&(!host.record.hasPicture||shownPlanPicture())?null:commentCaptureRefusal(),blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
  });
  if(host?.verdictComments)renderProposals();
 }

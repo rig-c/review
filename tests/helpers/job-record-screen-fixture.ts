@@ -44,7 +44,7 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
   backdrop=session.displayPublication(publication.publicationId);fake.publish(backdrop);
  }
  // The prior rig is retained before the synthetic producer advances into pending options.
- if(kind==='interview-picks'&&picture)workspace=createSyntheticOptionRecordWorkspace(root,{questionImages,longInterview});
+ if(kind==='interview-picks'&&picture)workspace=createSyntheticOptionRecordWorkspace(root,{questionImages,longInterview,...(questionImage?{inputImageBytes:questionImage}:{})});
  const publication=await call({verb:'publish',expectedGeneration:session.status().generation,idempotencyKey:'record',result:workspace.result,freeze:{kind:'producer-held',holdId:'synthetic-record',record:workspace.record}});
  const display=session.displayPublication(publication.publicationId);if(!deferDelivery)fake.publish(display);
  const subject=workspace.context.subjects.find(subject=>subject.kind===kind)!;

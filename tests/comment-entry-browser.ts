@@ -436,8 +436,9 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
    await wait(`document.querySelector('#reference-pane')?.checkVisibility()&&document.querySelector('#reference-content img')?.naturalWidth>0&&
     !!document.querySelector('#view-menu [data-view^="interview-image-"][aria-pressed="true"]')`);
   }
-  // #986 keeps the question painting visible in Comments, where it cannot carry stage pins.
-  assert.equal(state.pin,picture&&kind!=='interview-picks',kind+' stage pin mode');assert.equal(state.name,lang==='ko'?'코멘트':'Comments');assert.ok(state.listRect.y>=0&&state.listRect.y+state.listRect.height<=900,'whole comment list visible before composition');
+  // #986 keeps the question painting visible in Comments. #1068: over a retained backdrop the sealed question image
+  // takes pins like any other picture, so pin mode follows the backdrop for every kind.
+  assert.equal(state.pin,!!picture,kind+' stage pin mode');assert.equal(state.name,lang==='ko'?'코멘트':'Comments');assert.ok(state.listRect.y>=0&&state.listRect.y+state.listRect.height<=900,'whole comment list visible before composition');
   const generalExpected=kind!=='standalone'&&kind!=='standalone-parts';
   assert.equal(state.general,generalExpected,kind+' general comment entry visibility');
   assert.equal(state.generalCount,Number(generalExpected),kind+' general comment entry count');
