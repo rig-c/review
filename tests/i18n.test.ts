@@ -787,7 +787,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
     const koItem=list.children.find((n:TestElement)=>n.className==='stage-comment-item')!;
     const koRowBtn=koItem.children[0]!;
     expect(koRowBtn.className).toBe('stage-comment-summary');
-    expect(koRowBtn.textContent).toBe(`1 · ANIMATE · RIG · F0 (프로듀서) · ${catalogSummary}`);
+    expect(koRowBtn.textContent).toBe(`1 · 애니메이트 · 리그 · F0 (프로듀서) · ${catalogSummary}`);
 
     // Planted old-code control for Surface 3: unexempt row button gets its trailing summary translated by ' · ' splitting.
     const unexemptRowBtn=doc.createElement('button');
@@ -1005,7 +1005,7 @@ test('#294: dynamic compound strings, optional-suffix templates, and cloth/eye-r
   expect(inheritOptChain.textContent).toBe('hairback_r0_ (체인) · normal');
 
   // Verify #294 Row 2: cloth panel state line
-  expect(clothState.textContent).toBe('설치된 리더가 허용하는 태그 3개 · bottomwear: 설정에 파츠 0개 (없음), 체인 0개 · 빌드 방식: rig --config · 적용: CLOTH_KEYPOINTS_UNDECLARED: 천(Cloth) 레시피 적용은 인물의 키포인트로부터 신체 본을 배치하는 rig-parts propose를 실행해요. 키포인트가 없으면 초안이 설정의 신체 본을 이동시키므로 rig-review open <dir> --config <path> --keypoints <file> 또는 review.json "producer" 블록의 "keypoints"로 키포인트 파일을 선언하세요');
+  expect(clothState.textContent).toBe('설치된 리더가 허용하는 태그 3개 · bottomwear: 설정에 파츠 0개 (없음), 체인 0개 · 빌드 방식: rig --config · 적용: CLOTH_KEYPOINTS_UNDECLARED: 천 레시피 적용은 인물의 키포인트로부터 신체 본을 배치하는 rig-parts propose를 실행해요. 키포인트가 없으면 초안이 설정의 신체 본을 이동시키므로 rig-review open <dir> --config <path> --keypoints <file> 또는 review.json "producer" 블록의 "keypoints"로 키포인트 파일을 선언하세요');
   expect(clothStateDecl.textContent).toBe('설치된 리더가 허용하는 태그 3개 · back hair: 설정에 파츠 1개 (hair_back), 체인 2개 · 빌드 방식: rig --config');
   expect(clothTagOpt.textContent).toBe('bottomwear (레시피 없음)');
 
@@ -1685,8 +1685,8 @@ test('#1026 stage comment row localizes producer and multi-digit reference frame
   const rowTexts=()=>list.children.filter((n:TestElement)=>n.className==='stage-comment-item').map((item:TestElement)=>item.children[0]!.textContent);
   applyDomI18n(doc as unknown as Document);
   expect(rowTexts()).toEqual([
-   `1 · ANIMATE · RIG · F4 (프로듀서) · ${reviewerSummary}`,
-   '2 · COMPARE · REFERENCE · F120 (레퍼런스) · Reset',
+   `1 · 애니메이트 · 리그 · F4 (프로듀서) · ${reviewerSummary}`,
+   '2 · 비교 · 레퍼런스 · F120 (레퍼런스) · Reset',
   ]);
   expect(JSON.stringify(feedbackRows)).toBe(expectedSnapshot);
   expect(projectComments(feedbackItemComments(feedbackRows))).toBe(expectedProjection);
@@ -1696,8 +1696,8 @@ test('#1026 stage comment row localizes producer and multi-digit reference frame
   setLanguagePreference('en');
   applyDomI18n(doc as unknown as Document);
   expect(rowTexts()).toEqual([
-   `1 · ANIMATE · RIG · F4 (producer) · ${reviewerSummary}`,
-   '2 · COMPARE · REFERENCE · F120 (reference) · Reset',
+   `1 · Animate · Rig · F4 (producer) · ${reviewerSummary}`,
+   '2 · Compare · Reference · F120 (reference) · Reset',
   ]);
   expect(JSON.stringify(feedbackRows)).toBe(expectedSnapshot);
   expect(projectComments(feedbackItemComments(feedbackRows))).toBe(expectedProjection);
@@ -1708,4 +1708,252 @@ test('#1026 stage comment row localizes producer and multi-digit reference frame
   setLanguagePreference(preference);
   for(const [k,v]of savedGlobals)(globalThis as any)[k]=v;
  }
+});
+
+import {createViewportController,createViewportState} from '../web/viewport-controller.ts';
+import {createRigViewportProvider} from '../web/rig-viewport-provider.ts';
+import {createPartsViewportProvider} from '../web/parts-viewport-provider.ts';
+import {createViewControls,inspectionViewSwitch} from '../web/view-controls.ts';
+
+test('#1037 F03: stage comment rows localize mode and viewport in sentence case in KO and EN with no uppercase prefix',async()=>{
+ const stageCommentsSource=await readFile(new URL('../web/stage-comments.ts',import.meta.url),'utf8');
+ const preference=getLanguagePreference();
+ const {doc,root}=makeTestDoc();
+ const main=doc.createElement('main'),toolbar=doc.createElement('div'),toggle=doc.createElement('button'),pane=doc.createElement('div');
+ toggle.id='stage-comment';toggle.title='Comment · C';pane.clientWidth=100;pane.clientHeight=100;
+ toolbar.append(toggle);main.append(toolbar,pane);root.append(main);
+ const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABHNCSVQICAgIfAhkiAAAAAFzUkdCAK7OHOkAAAALSURBVAiZY2AAAgAABQABYlUyiAAAAABJRU5ErkJggg==';
+ const sha='d'.repeat(64);
+ const camera={space:'world' as const,center:{x:0,y:0},zoom:1,viewport:{width:100,height:100},visible:{x:-50,y:-50,width:100,height:100}};
+ const bookmarkFor=(mode:'setup'|'animate'|'compare',viewport:'rig'|'reference')=>({
+  schema:'rig-review-inspection/1',
+  binding:mode==='compare'?{mode:'compare',sourceHash:sha,rigs:[null,null]}:{mode:'single',sourceHash:sha,rigs:[null]},
+  time:0,animation:'idle',theme:'dark',layers:{images:true,meshes:false,bones:false},
+  view:{schema:'rig-review-view/1',cameras:{rig:viewport==='rig'?camera:null,a:mode==='compare'?camera:null,b:mode==='compare'?camera:null,reference:viewport==='reference'?camera:null}},
+  selection:{...(mode==='compare'?{mode:'compare'}:{}),inspector:mode==='setup'?'rig':'playback'},
+ });
+ const makeRow=(id:string,mode:'setup'|'animate'|'compare',viewport:'rig'|'reference',summary:string)=>({
+  id,frameStart:0,frameEnd:0,target:{kind:'rig',name:'probe'},category:'defect',summary,
+  context:{animation:'idle',time:0,frame:0,interval:{frameStart:0,frameEnd:0,inclusive:true},comment:{
+   schema:'rig-review-comment/1' as const,mode,viewport,frame:{index:0,basis:'producer' as const},time:0,animation:'idle',
+   sourceHash:sha,modelHash:null,referenceHash:null,referenceId:null,camera,screen:{x:40,y:40,width:0,height:0},world:{x:0,y:0,width:0,height:0},slots:[],
+   crop:{path:`comment-crops/${sha}.png`,sha256:sha,png:'data:image/png;base64,'+png,width:1,height:1},bookmark:bookmarkFor(mode,viewport),
+  }},
+ });
+ const rows:any[]=[
+  makeRow('r1','setup','rig','Setup rig check'),
+  makeRow('r2','setup','reference','Setup reference check'),
+  makeRow('r3','animate','rig','Animate rig check'),
+  makeRow('r4','compare','reference','Compare reference check'),
+ ];
+ const savedGlobals=new Map<string,any>();
+ for(const [k,v]of Object.entries({document:doc,window:root,requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{}})){
+  savedGlobals.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;
+ }
+ setLanguagePreference('ko');
+ const tool=bindStageComments({
+  toolbar:toolbar as any,viewports:{rig:pane as any},
+  pose:()=>({mode:'setup',camera,frame:{index:0,basis:'producer'},time:0,animation:'idle',turn:null,sourceHash:sha,modelHash:null,referenceHash:null,referenceId:null,rig:'probe'}),
+  pause:async()=>{},bookmark:()=>bookmarkFor('setup','rig'),restore:async()=>{},feedback:()=>rows,locked:()=>false,add:f=>rows.push(f),changed:()=>{},error:()=>{},refusal:()=>null,blocked:()=>false,
+ });
+ try{
+  const list=main.children.find((n:TestElement)=>n.id==='stage-comment-list')!;
+  const readTexts=()=>list.children.filter((n:TestElement)=>n.className==='stage-comment-item').map((item:TestElement)=>item.children[0]!.textContent);
+  expect(readTexts()).toEqual([
+   '1 · 셋업 · 리그 · F0 (프로듀서) · Setup rig check',
+   '2 · 셋업 · 레퍼런스 · F0 (프로듀서) · Setup reference check',
+   '3 · 애니메이트 · 리그 · F0 (프로듀서) · Animate rig check',
+   '4 · 비교 · 레퍼런스 · F0 (프로듀서) · Compare reference check',
+  ]);
+  setLanguagePreference('en');
+  expect(readTexts()).toEqual([
+   '1 · Setup · Rig · F0 (producer) · Setup rig check',
+   '2 · Setup · Reference · F0 (producer) · Setup reference check',
+   '3 · Animate · Rig · F0 (producer) · Animate rig check',
+   '4 · Compare · Reference · F0 (producer) · Compare reference check',
+  ]);
+  expect(stageCommentsSource).not.toContain('toUpperCase');
+ }finally{
+  tool.dispose();setLanguagePreference(preference);
+  for(const [k,v]of savedGlobals)(globalThis as any)[k]=v;
+ }
+});
+
+test('#1037 F05: time-only pinned comment row places reviewer text before short Frame unavailable reason and keeps COMMENT_FRAME_UNAVAILABLE in title only while payloads stay unchanged',()=>{
+ const preference=getLanguagePreference();
+ const {doc,root}=makeTestDoc();
+ const main=doc.createElement('main'),toolbar=doc.createElement('div'),toggle=doc.createElement('button'),pane=doc.createElement('div');
+ toggle.id='stage-comment';toggle.title='Comment · C';pane.clientWidth=100;pane.clientHeight=100;
+ toolbar.append(toggle);main.append(toolbar,pane);root.append(main);
+ const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABHNCSVQICAgIfAhkiAAAAAFzUkdCAK7OHOkAAAALSURBVAiZY2AAAgAABQABYlUyiAAAAABJRU5ErkJggg==';
+ const sha='e'.repeat(64);
+ const camera={space:'world' as const,center:{x:0,y:0},zoom:1,viewport:{width:100,height:100},visible:{x:-50,y:-50,width:100,height:100}};
+ const rawTime=0.8500000000000024;
+ const bookmark={schema:'rig-review-inspection/1',binding:{mode:'single',sourceHash:sha,rigs:[null]},time:rawTime,animation:'idle',theme:'dark',layers:{images:true,meshes:false,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:camera,a:null,b:null,reference:null}},selection:{inspector:'rig'}};
+ const timedMark={schema:'rig-review-comment/1' as const,mode:'setup' as const,viewport:'rig' as const,frame:null,timeBasis:timeOnlyBasis,time:rawTime,animation:'idle',sourceHash:sha,modelHash:null,referenceHash:null,referenceId:null,camera,screen:{x:40,y:40,width:0,height:0},world:{x:0,y:0,width:0,height:0},slots:[],crop:{path:`comment-crops/${sha}.png`,sha256:sha,png:'data:image/png;base64,'+png,width:1,height:1},bookmark};
+ const rows:any[]=[{id:'sc-timed',frameStart:null,frameEnd:null,target:{kind:'rig',name:'probe'},category:'defect',summary:'Pinned cuff note',context:{animation:'idle',time:rawTime,frame:null,interval:null,comment:timedMark}}];
+ const expectedPayload=JSON.stringify(rows);
+ const parsedSession:any={schema:'rig-review-session/1',id:'probe',revision:'v1',sourceHash:sha,reviewedSource:{packageRevision:'v1',rig:null,motion:null},referenceBinding:null,status:'changes-requested',updatedAt:'2026-11-20T00:00:00.000Z',checkpoints:{},feedback:rows,feedbackWarnings:[],historyWarnings:[]};
+ const expectedMd=formatFeedbackIssues(parsedSession);
+ expect(expectedMd).toContain('COMMENT&#95;FRAME&#95;UNAVAILABLE');
+ const savedGlobals=new Map<string,any>();
+ for(const [k,v]of Object.entries({document:doc,window:root,requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{}})){
+  savedGlobals.set(k,(globalThis as any)[k]);(globalThis as any)[k]=v;
+ }
+ setLanguagePreference('ko');
+ const tool=bindStageComments({
+  toolbar:toolbar as any,viewports:{rig:pane as any},
+  pose:()=>({mode:'setup',camera,frame:null,timeBasis:timeOnlyBasis,time:rawTime,animation:'idle',turn:null,sourceHash:sha,modelHash:null,referenceHash:null,referenceId:null,rig:'probe'}),
+  pause:async()=>{},bookmark:()=>bookmark,restore:async()=>{},feedback:()=>rows,locked:()=>false,add:f=>rows.push(f),changed:()=>{},error:()=>{},refusal:()=>null,blocked:()=>false,
+ });
+ try{
+  const list=main.children.find((n:TestElement)=>n.id==='stage-comment-list')!;
+  const rowBtn=()=>list.children.find((n:TestElement)=>n.className==='stage-comment-item')!.children[0]!;
+  expect(rowBtn().textContent).toBe('1 · 셋업 · 리그 · 0.850초 (초 기준) · Pinned cuff note · 프레임을 사용할 수 없음');
+  expect(rowBtn().textContent.indexOf('Pinned cuff note')).toBeLessThan(rowBtn().textContent.indexOf('프레임을 사용할 수 없음'));
+  expect(rowBtn().textContent).not.toContain('COMMENT_FRAME_UNAVAILABLE');
+  expect(rowBtn().title).toBe('프레임을 사용할 수 없음: 이 시간에 명시적 프로듀서 프레임 인덱스가 없어요 (COMMENT_FRAME_UNAVAILABLE)');
+  expect(rowBtn().title).toContain('COMMENT_FRAME_UNAVAILABLE');
+
+  setLanguagePreference('en');
+  expect(rowBtn().textContent).toBe('1 · Setup · Rig · 0.850 s (seconds basis) · Pinned cuff note · Frame unavailable');
+  expect(rowBtn().textContent.indexOf('Pinned cuff note')).toBeLessThan(rowBtn().textContent.indexOf('Frame unavailable'));
+  expect(rowBtn().textContent).not.toContain('COMMENT_FRAME_UNAVAILABLE');
+  expect(rowBtn().title).toBe('frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)');
+  expect(rowBtn().title).toContain('COMMENT_FRAME_UNAVAILABLE');
+
+  expect(JSON.stringify(rows)).toBe(expectedPayload);
+  expect(formatFeedbackIssues(parsedSession)).toBe(expectedMd);
+ }finally{
+  tool.dispose();setLanguagePreference(preference);
+  for(const [k,v]of savedGlobals)(globalThis as any)[k]=v;
+ }
+});
+
+test('#1037 F17: KO catalog drops bracketed English UI labels (grep count 0) while preserving real file, code, and unit brackets',async()=>{
+ const koSource=await readFile(new URL('../web/catalog-ko.ts',import.meta.url),'utf8');
+ const bracketedUiRe=/": ".*[가-힣][^"]*\((Apply|Reset|REGIONS|Solo|Turn|Idle|[A-Z][a-z]+)\)/;
+ const hits=koSource.split('\n').filter(line=>bracketedUiRe.test(line));
+ expect(hits).toEqual([]);
+ expect(koCatalog['REGIONS']).toBe('영역');
+ expect(koCatalog['Gust']).toBe('돌풍');
+ expect(koCatalog['Linear']).toBe('선형');
+ expect(koCatalog['SEAM PAIR']).toBe('심 쌍');
+ expect(koCatalog['Cloth links']).toBe('천 링크');
+ expect(koCatalog['Cloth {0}']).toBe('천 {0}');
+ // Kept real-name brackets: files, codes, and units stay intact.
+ expect(koCatalog['v / t (remesh.json)']).toContain('(remesh.json)');
+ expect(koCatalog['{0}: the package supplies no compiled model document (skeleton.model.json); {1} read from it']).toContain('(skeleton.model.json)');
+ expect(koCatalog['frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)']).toContain('(COMMENT_FRAME_UNAVAILABLE)');
+ expect(koCatalog['how far the silhouette grows before it is traced, px: 0, or 1 or more']).toContain('(px)');
+ expect(koCatalog['flip degrees']).toContain('(°)');
+});
+
+test('#1037 F13 + R3a: rig and parts viewport providers share one zoom readout shape and interview View switch uses shared view names with no file name',async()=>{
+ const preference=getLanguagePreference();
+ try{
+  const makeProviderDom=()=>{
+   const nodes=new Map<string,any>();
+   const el=(id:string)=>{
+    if(!nodes.has(id))nodes.set(id,{id,clientWidth:640,clientHeight:480,hidden:false,checked:true,textContent:'',style:{},setAttribute(){}});
+    return nodes.get(id);
+   };
+   return {nodes,el};
+  };
+  for(const lang of ['en','ko'] as const){
+   setLanguagePreference(lang);
+   for(const [active,zoom,targetLabel]of [['rig',1,'Rig'],['reference',16,'Reference']] as const){
+    const rigDom=makeProviderDom(),partsDom=makeProviderDom();
+    if(active==='reference'){rigDom.el('rig-pane').hidden=true;partsDom.el('rig-pane').hidden=true;}
+    const rigState=createViewportState(),partsState=createViewportState();
+    rigState.activeCamera=partsState.activeCamera=active;
+    rigState.zoom=partsState.zoom=rigState.referenceZoom=partsState.referenceZoom=zoom;
+    const rigCtrl=createViewportController(createRigViewportProvider({
+     el:rigDom.el,player:()=>({bounds:()=>({x:0,y:0,width:100,height:100}),renderer:{syncPixelRatio(){}}} as any),
+     assets:()=>({stage:{x:0,y:0,width:100,height:100}} as any),referenceSize:()=>({width:100,height:100}),
+     view:()=>active,referenceGeneration:()=>0,parts:()=>null,
+     text:(id,value)=>{rigDom.el(id).textContent=t(value,undefined,lang);},message:()=>{},redrawOverlay:()=>{},
+    },rigState),rigState);
+    const partsCtrl=createViewportController(createPartsViewportProvider({
+     el:partsDom.el,canvas:{width:100,height:100} as HTMLCanvasElement,
+     reference:()=>({width:100,height:100} as HTMLCanvasElement),
+     frameSize:()=>({w:100,h:100}),message:()=>{},
+    },partsState),partsState);
+    rigCtrl.renderCameraControls();
+    partsCtrl.renderCameraControls();
+    const expected=`${Math.round(zoom*100)}% · ${t(targetLabel)}`;
+    expect(rigDom.el('zoom-value').textContent).toBe(expected);
+    expect(partsDom.el('zoom-value').textContent).toBe(expected);
+   }
+  }
+
+  // Interview View switch uses shared view names (no file name) for 1 image and numbered Reference {0} for 2+ images, and preserves control order.
+  const mainSource=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+  const start=mainSource.indexOf('function syncQuestionImage():void {'),end=mainSource.indexOf('/** Survey forms use the shared bottom tab.',start);
+  expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
+  const {doc,root}=makeTestDoc();
+  const savedDoc=(globalThis as any).document;
+  Object.defineProperty(globalThis,'document',{value:doc,configurable:true});
+  try{
+   for(const lang of ['en','ko'] as const){
+    setLanguagePreference(lang);
+    const singleExpected=t('Reference');
+    const pairExpected=[t('Reference {0}',[1]),t('Reference {0}',[2])];
+    expect(pairExpected[0]).not.toBe(pairExpected[1]);
+    for(const [interviewImages,expectedLabels]of [
+     [[{name:'reference.png',src:'/img/0'}],[singleExpected]],
+     [[{name:'reference.png',src:'/img/0'},{name:'background',src:'/img/1'}],pairExpected],
+    ] as const){
+     const controls=createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(()=>{},true)});
+     const zoomGroup=controls.zoomGroup as unknown as TestElement;
+     root.replaceChildren(zoomGroup);
+     expect(zoomGroup.children.map((n:TestElement)=>n.id)).toEqual(['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']);
+     const nodes=new Map<string,any>();
+     const el=(id:string)=>{if(!nodes.has(id)){const n=doc.createElement('div');n.id=id;nodes.set(id,n);}return nodes.get(id);};
+     const scope:any={
+      disposed:false,releaseInterview:null,
+      questionForms:[{hidden:false,interviewImages}],
+      activeInterviewImages:null,activeInterviewImage:null,
+      view:'compare',viewport:{state:createViewportState(),cancelFit(){},bindControls:()=>()=>{},bindNavigation:()=>()=>{}},
+      el,button:(id:string)=>el(id),controls,chooseInspectionView(){},questionPanel:{dataset:{}},
+      referenceInput:{state:'absent'},referenceSize:null,referenceGeneration:0,
+      video:null,controlledVideoSample:null,sequence:null,sequenceSvg:null,selectedPerson:'',lastPoseFrame:-1,
+      unitScaleMessage(){},sourceTextContent:()=>'',message(){},showReference:async()=>{},
+      renderLayout(){},workspace:null,fitCamera(){},
+     };
+     const run=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(mainSource.slice(start,end))};return syncQuestionImage;}`)(scope);
+     run();
+     const viewSwitch=controls.viewSwitch as unknown as TestElement;
+     const viewLabel=viewSwitch.querySelectorAll('*').find((n:TestElement)=>n.id==='view-menu-label')!;
+     const itemButtons=viewSwitch.querySelectorAll('button');
+     expect(viewLabel.textContent).toBe(expectedLabels[0]);
+     expect(itemButtons.map((b:TestElement)=>b.textContent)).toEqual([...expectedLabels]);
+     if(itemButtons.length>1)expect(new Set(itemButtons.map((b:TestElement)=>b.textContent)).size).toBe(itemButtons.length);
+     expect(itemButtons.map((b:TestElement)=>b.dataset.view)).toEqual(interviewImages.map((_,i)=>`interview-image-${i}`));
+     expect(viewSwitch.textContent).not.toContain('reference.png');
+     expect(viewSwitch.textContent).not.toContain('background');
+    }
+   }
+  }finally{
+   if(savedDoc)Object.defineProperty(globalThis,'document',{value:savedDoc,configurable:true});
+   else delete (globalThis as any).document;
+  }
+ }finally{
+  setLanguagePreference(preference);
+ }
+});
+
+test('#1037 KO catalog uses 레퍼런스 for the noun reference and keeps 참조 only on explicit verb/see entries',()=>{
+ const allowedVerbKeys=new Set([
+  'Comparison and submission session refer to different source identities. Reopen the review.',
+  "Review's pre-check refuses the pending idle (lines above); the producer would refuse it by the same name",
+  '{0} physics constraints editable from the handoff config · {1} not editable (reasons below) · {2} chains from bone parentage',
+ ]);
+ const hits=Object.entries(koCatalog).filter(([,v])=>v.includes('참조')).map(([k])=>k);
+ const unexpected=hits.filter(k=>!allowedVerbKeys.has(k));
+ expect(unexpected).toEqual([]);
+ expect(hits.sort()).toEqual([...allowedVerbKeys].sort());
+ expect(t('job.imageRole.reference',undefined,'ko')).toBe(t('Reference',undefined,'ko'));
+ expect(tr('1600% · Reference','ko')).toBe(`1600% · ${t('Reference',undefined,'ko')}`);
+ expect(tr('reference.png · Reference','ko')).toBe(`reference.png · ${t('Reference',undefined,'ko')}`);
 });
