@@ -135,6 +135,8 @@ export interface WorkspaceRegions {
  /** With `columns.right` = `communicationWidth`, the right region is the communication panel (#1041): it is laid out
   * only while this returns true, or after `revealCommunication`, and otherwise the stage takes its width. */
  rightPending?:()=>boolean;
+ /** False while no subject has mounted its blocks (a job waiting for its first publication): the frame keeps its bottom heading so it does not jump (#904). */
+ bottomBound?:()=>boolean;
 }
 /** `currentTheme`, when given, is the appearance the Settings theme select shows; otherwise it shows the saved default. */
 export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceRegions;changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{kind:string;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
@@ -179,7 +181,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  const controls=(node:HTMLElement):boolean=>[...node.children].some(child=>{const item=child as HTMLElement;if(item.hidden)return false;
   return item.tagName==='BUTTON'&&(item.dataset.blockTarget!==undefined||item.dataset.inspector!==undefined)&&!(item as HTMLButtonElement).disabled||controls(item);});
  // Temporary until #1044 moves every act into #workspace-act-row: a heading that still hosts the act keeps it.
- const bottomEmpty=()=>!!bottom&&!controls(bottom.strip)&&bottom.actHome.id==='workspace-act-row';
+ const bottomEmpty=()=>!!bottom&&regions?.bottomBound?.()!==false&&!controls(bottom.strip)&&bottom.actHome.id==='workspace-act-row';
  for(const panel of present){
   const handle=document.createElement('div');handle.className='workspace-separator workspace-'+panel+(sides[panel]?' workspace-side-'+sides[panel]:'');handles[panel]=handle;
   if(sides[panel]==='left')node(panel).after(handle);else if(sides[panel]==='right')node(panel).before(handle);else inspector.before(handle);

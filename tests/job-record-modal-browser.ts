@@ -183,7 +183,8 @@ try{
    const [checkpoint,interview]=asks;
    const form=`#workspace-interview-answer form[data-job-ask="${interview!.askId}"]`;
    const checkpointForm=`form[data-job-ask="${checkpoint!.askId}"]`;
-   const selectedQuestion='.block-row:not([hidden]) [data-block-target="question"][aria-selected="true"]';
+   // #1041: the question section of the right communication panel, under its heading.
+   const selectedQuestion='#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden]) .review-dialog-header h2';
    const awayTab='.block-row:not([hidden]) [data-block-target="animation-dock"]';
    const questionTrigger='#workspace-pending-ask',recordTrigger='#workspace-pending-record-ask';
    const visiblePainting=`(()=>{const img=document.querySelector('#reference-content img');return img?.naturalWidth===32&&img.getBoundingClientRect().width>0?img.currentSrc:'';})()`;
@@ -196,7 +197,8 @@ try{
    const firstPainting:string=await page.evaluate(visiblePainting);
    await shot(out,'question');
    await click(page,awayTab);
-   await wait(`document.querySelector('${awayTab}')?.getAttribute('aria-selected')==='true'&&document.querySelector('#workspace-interview-answer').hidden`,'different bottom tab selected');
+   // #1041: the Question lives in the right communication panel, so a bottom tab no longer hides it.
+   await wait(`document.querySelector('${awayTab}')?.getAttribute('aria-selected')==='true'&&!!document.querySelector(${JSON.stringify(selectedQuestion)})`,'different bottom tab selected beside the Question');
    assert.equal(await page.evaluate<number>(`document.querySelectorAll('${form}').length`),1,'Question form remains mounted');
    assert.equal(await page.evaluate<string>(visiblePainting),firstPainting,'painting stays visible on a different bottom tab');
    await click(page,questionTrigger);

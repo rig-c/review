@@ -1325,7 +1325,7 @@ function bind(): void {
 function bindWorkspace(hasModel=false,empty=false):void {
   if(!workspace){
   const layout=screenRoot.querySelector<HTMLElement>('.layout')!;layout.append(communicationPanel);
-  workspace=bindWorkspaceUI({root:screenRoot,regions:{layout,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,right:communicationPanel,columns:{left:'rightWidth',right:'communicationWidth'},rightPending:communicationPending},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
+  workspace=bindWorkspaceUI({root:screenRoot,regions:{layout,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,right:communicationPanel,columns:{left:'rightWidth',right:'communicationWidth'},rightPending:communicationPending,bottomBound:()=>inspectorBlocks!==null},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   }

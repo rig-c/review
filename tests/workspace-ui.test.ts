@@ -49,7 +49,7 @@ class Host extends EventTarget {
  setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);}
 }
 let hostDocument:{activeElement:Host|null};
-function openHost(options:{ownedRoot?:boolean;nonRig?:boolean;explicitRegions?:boolean;explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean;bottomPanel?:boolean;kind?:string;stored?:Record<string,string>;communication?:{pending:()=>boolean}}={}){
+function openHost(options:{ownedRoot?:boolean;nonRig?:boolean;explicitRegions?:boolean;explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean;bottomPanel?:boolean;kind?:string;stored?:Record<string,string>;communication?:{pending:()=>boolean;bound?:()=>boolean}}={}){
  const body=new Host('body'),layout=new Host(),main=new Host('main'),left=new Host('aside'),right=new Host('aside'),stage=new Host(),inspector=new Host(),heading=new Host();layout.className='layout';left.className='left-panel';right.id='parts-explorer';stage.id='stage-layout';inspector.className='inspector';heading.clientHeight=30;if(options.communication)right.id='workspace-communication';
  const language=new Host('select');language.id='settings-language';const languageLabel=new Host('label');languageLabel.append(language);body.append(languageLabel);
  const tabs=options.tabs??['view','rig','playback','feedback'],panels={} as Record<string,Host>;for(const tab of tabs){const panel=new Host('section'),button=new Host('button');panel.id='inspector-'+tab;panel.dataset.inspectorPanel=tab;panel.hidden=tab!==tabs[0];panel.clientHeight=200;panel.clientWidth=500;button.dataset.inspector=tab;button.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(tab===tabs[0]));panels[tab]=panel;if(options.pressed){button.dataset.mode=tab;body.append(button);inspector.append(panel);}else inspector.append(button,panel);}
@@ -72,7 +72,7 @@ if(options.leftHeader){const header=new Host(),strip=new Host('details');header.
  const document=Object.assign(new EventTarget(),{body,hidden:false,activeElement:null as Host|null,getElementById:(id:string)=>body.all().find(n=>n.id===id)??null,querySelector:(selector:string)=>body.querySelector(selector),createElement:(tag:string)=>new Host(tag)});hostDocument=document;
  const globals={document,window:events,localStorage:{getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value)},requestAnimationFrame:(callback:()=>void)=>{frames.set(++handle,callback);return handle;},cancelAnimationFrame:(id:number)=>frames.delete(id),ResizeObserver:class{observe(){}disconnect(){}},MutationObserver:class{constructor(callback:()=>void){mutations.push(callback);}observe(){}disconnect(){}}};
  const old=new Map<string,PropertyDescriptor|undefined>();for(const [key,value]of Object.entries(globals)){old.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});}
- let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({...(options.ownedRoot?{root:ownedRoot as unknown as HTMLElement}:{}),...(options.nonRig||options.explicitRegions||options.communication?{regions:{layout,left,main,stage,bottom:inspector,...(options.explicitRegions?{columns:{left:'rightWidth',right:null}}:{}),...(options.communication?{right,columns:{left:'rightWidth',right:'communicationWidth'},rightPending:options.communication.pending}:{})} as unknown as NonNullable<Parameters<typeof bindWorkspaceUI>[0]['regions']>}:{}),changed:()=>changed++,defaultTheme:value=>{currentTheme=value;},...(options.currentTheme?{currentTheme:options.currentTheme}:{}),...(bottomPanel?{bottomPanel:bottomPanel as unknown as Parameters<typeof bindWorkspaceUI>[0]['bottomPanel']}:{})});
+ let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({...(options.ownedRoot?{root:ownedRoot as unknown as HTMLElement}:{}),...(options.nonRig||options.explicitRegions||options.communication?{regions:{layout,left,main,stage,bottom:inspector,...(options.explicitRegions?{columns:{left:'rightWidth',right:null}}:{}),...(options.communication?{right,columns:{left:'rightWidth',right:'communicationWidth'},rightPending:options.communication.pending,...(options.communication.bound?{bottomBound:options.communication.bound}:{})}:{})} as unknown as NonNullable<Parameters<typeof bindWorkspaceUI>[0]['regions']>}:{}),changed:()=>changed++,defaultTheme:value=>{currentTheme=value;},...(options.currentTheme?{currentTheme:options.currentTheme}:{}),...(bottomPanel?{bottomPanel:bottomPanel as unknown as Parameters<typeof bindWorkspaceUI>[0]['bottomPanel']}:{})});
  const flush=()=>{for(let i=0;i<5;i++){const pending=[...frames.values()];frames.clear();for(const run of pending)run();}};flush();
  const tabBinding=bottomPanel?bindInspectorTabs(()=>ui.afterTab(),()=>ui.beforeTab(),{
   tabs:bottomPanel.strip.children.map(button=>({id:button.dataset.inspector!,button:button as unknown as HTMLButtonElement,panels:[panels[button.dataset.inspector!] as unknown as HTMLElement],attribute:'aria-selected' as const})),
@@ -753,8 +753,15 @@ test('#1041 below the stage minimum the panel is a right drawer, non-modal for a
  }
 });
 test('#1041 a bottom panel with no controller block collapses to nothing and the stage takes the height',()=>{
- const app=openHost({bottomPanel:true,communication:{pending:()=>true}});
+ let bound=false;const app=openHost({bottomPanel:true,communication:{pending:()=>true,bound:()=>bound}});
  try{
+  // #904: a job waiting for its first publication keeps its frame, bottom heading included.
+  const home=app.bottomPanel!.actHome,waitRow=new Host();waitRow.id='workspace-act-row';
+  for(const button of app.bottomPanel!.strip.children)button.hidden=true;
+  app.layout.before(waitRow);waitRow.append(app.bottomPanel!.act);app.bottomPanel!.actHome=waitRow;
+  app.layout.clientWidth=1280;app.layout.clientHeight=600;app.ui.refresh();app.flush();
+  expect(app.inspector.hidden).toBe(false);
+  for(const button of app.bottomPanel!.strip.children)button.hidden=false;home.append(app.bottomPanel!.act);app.bottomPanel!.actHome=home;waitRow.remove();bound=true;
   app.layout.clientWidth=1280;app.layout.clientHeight=600;app.ui.refresh();app.flush();
   expect(app.inspector.hidden).toBe(false);expect(app.main.style.gridTemplateRows).not.toBe('minmax(0,1fr) 0px 0px');
   for(const button of app.bottomPanel!.strip.children)button.hidden=true;app.ui.refresh();app.flush();

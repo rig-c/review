@@ -443,7 +443,8 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
     assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-interview-answer .review-dialog-header h2').textContent`),catalog['Question']);
     if(kind==='interview-standalone'){
      const panel:{left:number;top:number;right:number;bottom:number;width:number;height:number}=await page.evaluate(`document.querySelector('#workspace-interview-answer').getBoundingClientRect().toJSON()`);
-     assert.ok(panel.width>0&&panel.height>0&&panel.left>=0&&panel.top>=0&&panel.right<=width&&panel.bottom<=height);
+     // #1041: the question is a section of the scrolling communication column; its top edge shows inside the viewport.
+     assert.ok(panel.width>0&&panel.height>0&&panel.left>=0&&panel.top>=0&&panel.right<=width&&panel.top<height);
      assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-pending-ask').textContent`),catalog['Answer…']);
     }
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-question.png`),await page.screenshot());

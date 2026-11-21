@@ -42,7 +42,8 @@ const postQuestionPictures=Bun.argv.includes('--post-question-pictures');
 const boundRigPictureOnly=Bun.argv.includes('--bound-rig-picture');
 const workspace986=Bun.argv.includes('--workspace-986');
 const questionRoot='#workspace-interview-answer';
-const questionTab='[data-block-target=question][aria-selected=true]';
+// #1041: the Question is a section of the right communication panel; this selector is its heading.
+const questionTab='#workspace-communication #workspace-interview-answer:not([hidden]) .review-dialog-header h2';
 const sharedControls=['zoom-in','zoom-out','fit','native-one','view-menu'];
 const controlSelector=sharedControls.map(id=>'#'+id).join(',');
 const dialogViewer='canvas,video,.viewport,.interview-view,.interview-viewport,.view-zoom,.zoom-controls,'+controlSelector;
@@ -50,10 +51,12 @@ const paintingSelector='#reference-content img';
 const otherText='  Custom topology · 직접 입력\n';
 type Rect={x:number;y:number;width:number;height:number;left:number;top:number;right:number;bottom:number};
 const baseline=await Bun.file(new URL('./fixtures/interview-722-empty-note.json',import.meta.url)).json();
+// #1041: the question scrolls inside the right communication column; measure its nearest scrolling ancestor.
+const scrollerSource=`const scroller=form=>{for(let n=form.parentElement;n;n=n.parentElement){if(n.scrollHeight>n.clientHeight+1&&/(auto|scroll)/.test(getComputedStyle(n).overflowY))return n;}return form.closest('#workspace-interview-answer');};`;
 async function assertLastAskPickKeepsScrollAndFocus(mode:string){
- const scrollBefore=await page!.evaluate<number>(`(()=>{
+ const scrollBefore=await page!.evaluate<number>(`(()=>{${scrollerSource}
   const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=form.closest('#workspace-interview-answer');
+  const panel=scroller(form);
   const firstOption=form.querySelector('fieldset.interview-ask:last-of-type label.interview-option');
   const pr=panel.getBoundingClientRect(),or=firstOption.getBoundingClientRect();
   panel.scrollTop=Math.max(0,Math.min(panel.scrollHeight-panel.clientHeight,panel.scrollTop+(or.top-pr.top)-4));
@@ -62,9 +65,9 @@ async function assertLastAskPickKeepsScrollAndFocus(mode:string){
  assert.ok(scrollBefore>0,`#875 ${mode} panel scrolls before changing pick`);
  await click(page!,'form[data-job-ask="ask-interview-picks"] label.interview-option:has(input[value="cloth_sim_other"])');
  await page!.evaluate<void>(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
- const afterOther=await page!.evaluate<{scrollTop:number;active:boolean}>(`(()=>{
+ const afterOther=await page!.evaluate<{scrollTop:number;active:boolean}>(`(()=>{${scrollerSource}
   const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=form.closest('#workspace-interview-answer');
+  const panel=scroller(form);
   const other=form.querySelector('input[type=radio][name="choice.cloth_sim"][value="cloth_sim_other"]');
   return {scrollTop:panel.scrollTop,active:document.activeElement===other};
  })()`);
@@ -72,9 +75,9 @@ async function assertLastAskPickKeepsScrollAndFocus(mode:string){
  assert.equal(afterOther.active,true,`#875 ${mode} document.activeElement unchanged after picking other in last ask`);
  await click(page!,'form[data-job-ask="ask-interview-picks"] label.interview-option:has(input[value="cloth_baked"])');
  await page!.evaluate<void>(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
- const afterBaked=await page!.evaluate<{scrollHeight:number;clientHeight:number;scrollTop:number;active:boolean}>(`(()=>{
+ const afterBaked=await page!.evaluate<{scrollHeight:number;clientHeight:number;scrollTop:number;active:boolean}>(`(()=>{${scrollerSource}
   const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=form.closest('#workspace-interview-answer');
+  const panel=scroller(form);
   const baked=form.querySelector('input[type=radio][name="choice.cloth_sim"][value="cloth_baked"]');
   return {scrollHeight:panel.scrollHeight,clientHeight:panel.clientHeight,scrollTop:panel.scrollTop,active:document.activeElement===baked};
  })()`);
@@ -272,7 +275,8 @@ const stripState=()=>page!.evaluate<StripState>(`(()=>{const row=document.queryS
 async function selectBlock(target:string){
  if(target==='feedback'){
   await click(page!,'#stage-comment');
-  await wait("!!document.querySelector('#inspector-feedback:not([hidden])')&&document.querySelector('#workspace-interview-answer').hidden",'986 Comments active');
+  // #1041: Comments and the Question are sections of one communication panel; Comment · C reveals Comments beside the Question.
+  await wait("!!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')",'986 Comments active');
   return;
  }
  const selector=`.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target="${target}"]`;
@@ -568,7 +572,8 @@ async function assertNoPictureQuestionTab(reason:string,catalog:Record<string,st
   tabHasReason:boolean;
   controls:{id:string;kind:string;ownLabel:string;accessibleName:string;ariaDescription:string|null;title:string|null}[];
  }>(`(()=>{
-  const tab=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target="question"][role="tab"][aria-selected="true"]');
+  // #1041: the Question is a section of the right communication panel; its heading stands for the old tab.
+  const tab=document.querySelector(${JSON.stringify(questionTab)});
   const tabRect=tab?.getBoundingClientRect();
   const panel=document.querySelector('#workspace-interview-answer:not([hidden])');
   const form=panel?.querySelector(${JSON.stringify(selector)});
@@ -782,7 +787,7 @@ async function boundRigPictureChecks(){
       document.querySelector('#animation-select')?.value==='idle'&&
       document.querySelector('#rig-empty')?.hidden===true&&
       !!document.querySelector('#workspace-interview-answer ${selector}')&&
-      !!document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target=question][aria-selected=true]')`,
+      !!document.querySelector('${questionTab}')`,
      '929 bound rig, idle and Question');
      const stage = await page!.evaluate<{left:number;top:number;right:number;bottom:number}>(`document.getElementById('rig-viewport').getBoundingClientRect().toJSON()`);
      const screen = await page!.screenshot();
@@ -934,20 +939,21 @@ async function surveyLayout(selector:string){
  })()`);
 }
 
+// #1041: the Question is in the right communication panel; its own separator resizes it.
 async function resizeQuestionPanel(){
- const selector='.workspace-inspectorHeight[role=separator]';
+ const selector='.workspace-communicationWidth[role=separator]';
  const range=()=>page!.evaluate<{value:number;min:number;max:number}>(`(()=>{
   const handle=document.querySelector('${selector}');
   return {value:Number(handle.getAttribute('aria-valuenow')),min:Number(handle.getAttribute('aria-valuemin')),max:Number(handle.getAttribute('aria-valuemax'))};
  })()`);
  await click(page!,selector);
  const before=await range();
- assert.ok(before.max>before.min,'shared bottom separator offers a resize range');
- const key=before.value<before.max?'ArrowUp':'ArrowDown',keyCode=key==='ArrowUp'?38:40;
- await command!('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:keyCode,modifiers:8});
- await command!('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:keyCode,modifiers:8});
+ assert.ok(before.max>before.min,'communication separator offers a resize range');
+ const key=before.value<before.max?'End':'Home',keyCode=key==='End'?35:36;
+ await command!('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:keyCode});
+ await command!('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:keyCode});
  const after=await range();
- assert.ok(key==='ArrowUp'?after.value>before.value:after.value<before.value,JSON.stringify({before,after}));
+ assert.ok(key==='End'?after.value>before.value:after.value<before.value,JSON.stringify({before,after}));
  return {before,after};
 }
 
@@ -1043,11 +1049,13 @@ async function liveQuestionDraftChecks(){
      assert.equal(layout.questions,1,'both asks belong to the same question set');
      assert.equal(layout.progress,catalog['interview.answered'].replace('{0}','0').replace('{1}','1'));
      assert.equal(layout.optionCount,8);assert.equal(layout.otherInputs,1);assert.equal(layout.noteInputs,1);assert.equal(layout.submitButtons,1);
-     assert.ok(layout.fields.left>=layout.list.right-1,'the Question panel places the list and fields side by side');
+     // #1041: the communication panel is narrow, so its container query stacks the question list above the fields.
+     assert.ok(layout.fields.top>=layout.list.bottom-1,'the Question panel stacks the list above the fields');
      assert.equal(layout.controlsReached,11,JSON.stringify(layout.targets.filter(item=>item.control)));
      assert.equal(layout.allHit,true,JSON.stringify(layout.targets));assert.equal(layout.allVisible,true,JSON.stringify(layout.targets));
      assert.ok(layout.documentScrollHeight<=layout.documentClientHeight+1);
-     assert.deepEqual(layout.scrollAncestors.filter(node=>node.scrollHeight>node.clientHeight+1).map(node=>node.id),['workspace-interview-answer']);
+     // #1041: the tall communication column may need no scrolling; if anything scrolls it is the question or its column.
+     assert.ok(layout.scrollAncestors.filter(node=>node.scrollHeight>node.clientHeight+1).every(node=>['workspace-interview-answer','workspace-communication'].includes(node.id)));
      observation.layout=layout;
      observation.resized=await resizeQuestionPanel();
      await writeFile(join(out,'radio-cards.png'),await page!.screenshot());
@@ -1362,7 +1370,8 @@ async function firstQuestionInDrawer(){
    assert.deepEqual(before,{inRoot:false,drawerBodies:1,height:320});
    await writeFile(join(out,'before-delivery.json'),JSON.stringify(before));
    fixture.deliver();
-   const options=panel+' form[data-job-ask] label.interview-option';
+   // #1041: the first question opens in the right communication panel (docked or its non-modal drawer), not the bottom drawer.
+   const options='#workspace-communication #workspace-interview-answer form[data-job-ask] label.interview-option';
    await withDeadline('941 first publication or refusal',20_000,async signal=>{
     while(!signal.aborted){
      if(consoleErrors.length>errorsBefore||await page!.evaluate<boolean>(`!!document.querySelector('${options}')`))return;
@@ -1373,7 +1382,7 @@ async function firstQuestionInDrawer(){
    const after:{language:string;options:string[];drawerOpen:boolean}=await page!.evaluate(`({
     language:document.documentElement.lang,
     options:[...document.querySelectorAll('${options}')].filter(node=>node.checkVisibility()).map(node=>node.textContent.trim()),
-    drawerOpen:document.querySelector('#workspace-drawer-inspectorHeight').open
+    drawerOpen:!!document.querySelector('#workspace-communication')?.checkVisibility()
    })`);
    const errors=consoleErrors.slice(errorsBefore);
    await writeFile(join(out,'after-delivery.json'),JSON.stringify({after,errors},null,2));
@@ -1381,7 +1390,7 @@ async function firstQuestionInDrawer(){
    console.log('941_FIRST_QUESTION '+JSON.stringify({language,before,after,errors}));
    assert.equal(errors.length,0,JSON.stringify(errors));
    assert.equal(after.language,language);assert.equal(after.drawerOpen,true);
-   assert.ok(after.options.length>0,'first publication shows visible option labels in the inspector drawer');
+   assert.ok(after.options.length>0,'first publication shows visible option labels in the communication panel');
   }finally{await fixture.close();}
  }
 }
