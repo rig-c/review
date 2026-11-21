@@ -563,6 +563,8 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-act-row .review-dialog-actions{min-width:0;gap:var(--space-2);justify-content:flex-end}
 .workspace-act-row .review-message:not(.error){display:none}
 .workspace-act-row .review-message.error{max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+/* A refusal shown in the row takes the room the ask leaves; the ask keeps its own line up to half the row, so the row does not grow and push the stage down (#1040). */
+.workspace-act-row .workspace-act-bar:has(.review-message.error) #workspace-ask-headline{flex:0 0 auto;max-width:50%}
 .workspace-act-row .review-draft-state{min-width:0;max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]){display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #workspace-ask-headline{grid-column:1;grid-row:1}
