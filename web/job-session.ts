@@ -1388,11 +1388,12 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
                     const issue = row.issues.find(issue => issue.field === field);
                     if (issue) value.append(node('span', 'job.plan.field.' + issue.reason));
                     else if (field === 'rests_on') {
-                        const rests = node('ul');
+                        const rests = node('ul'), questions = projection?.status === 'projected' ? projection.questions : undefined;
                         for (const text of row.rests_on!) {
                             const rest = node('li'), dependency = plan.steps.find(step => step.id === text);
+                            const question = !dependency && questions && Object.hasOwn(questions, text) ? questions[text] : undefined;
                             if (dependency) {planStepText(rest, dependency, projection); rest.title = text;}
-                            else {rest.textContent = text; rest.setAttribute('translate', 'no');}
+                            else {rest.textContent = question ?? text; if (question !== undefined) rest.title = text; rest.setAttribute('translate', 'no');}
                             rests.append(rest);
                         }
                         value.append(rests);

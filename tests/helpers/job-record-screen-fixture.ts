@@ -14,12 +14,12 @@ import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixt
 import {createSyntheticOptionRecordWorkspace, createSyntheticOptionSetsRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader,type PostPictureCase} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'interview-picks';
-export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false,deferDelivery=false,postPicture?:PostPictureCase){
+export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false,deferDelivery=false,postPicture?:PostPictureCase,planOptions?:Pick<NonNullable<Parameters<typeof createSyntheticPlanRecordWorkspace>[1]>,'text'|'interview'>){
  const scratch=await mkdtemp(join(tmpdir(),'review-750-')),root=join(scratch,'input');await mkdir(root);
  let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root,{boundParts,questionImages:postPicture==='legacy'?false:questionImages,longInterview,postPicture,
   ...(postPicture?{questionId:'post_timing',setId:'post-picture'}:{})}):createSyntheticPlanRecordWorkspace(root,{subjects:[
   {kind:'checkpoint',checkpointId:'step_layout'},{kind:'signoff',stage:signoffStage},{kind:'reopen',stage:'plan-approved'},
- ]});
+ ],...planOptions});
  const reader=createSyntheticRecordReader({onOption:()=>workspace.context as never,onPlan:()=>workspace.context as never});
  let packageContext={selector:{kind:'rig',version:1},plan:null,parts:null,subjects:[],partIds:[],files:[]} as import('../../src/job-source.ts').JobPublishedContext;
  const session=new JobSession({root,stateDir:join(scratch,'state'),fingerprint:'7'.repeat(64),reviewer:{id:'synthetic-owner',role:'owner'},

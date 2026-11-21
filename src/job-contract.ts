@@ -353,6 +353,7 @@ export type JobPlanTextProjection = {
   readonly record: {readonly path: 'project.json'; readonly sha256: string};
   readonly status: 'projected';
   readonly steps: readonly JobPlanTextStep[];
+  readonly questions?: Readonly<Record<string, string>>;
 } | {
   readonly schema: typeof JOB_PLAN_TEXT_SCHEMA;
   readonly record: {readonly path: 'project.json'; readonly sha256: string} | null;
@@ -368,7 +369,7 @@ export function parseJobPlanTextProjection(value: unknown): JobPlanTextProjectio
         Object.keys(input).some(key => !keys.includes(key))) return fail();
     return input as Record<string, unknown>;
   };
-  const envelope = object(value, ['schema', 'record', 'status', 'steps', 'reason']);
+  const envelope = object(value, ['schema', 'record', 'status', 'steps', 'questions', 'reason']);
   if (envelope.schema !== JOB_PLAN_TEXT_SCHEMA || !Object.hasOwn(envelope, 'record') ||
       new TextEncoder().encode(JSON.stringify(value)).length > 512 * 1024) return fail();
   if (envelope.record !== null) {
@@ -376,11 +377,17 @@ export function parseJobPlanTextProjection(value: unknown): JobPlanTextProjectio
     if (record.path !== 'project.json' || typeof record.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(record.sha256)) return fail();
   }
   if (envelope.status === 'unavailable') {
-    if (Object.hasOwn(envelope, 'steps') || !(JOB_PLAN_TEXT_UNAVAILABLE as readonly unknown[]).includes(envelope.reason)) return fail();
+    if (Object.hasOwn(envelope, 'steps') || Object.hasOwn(envelope, 'questions') ||
+        !(JOB_PLAN_TEXT_UNAVAILABLE as readonly unknown[]).includes(envelope.reason)) return fail();
     return value as JobPlanTextProjection;
   }
   if (envelope.status !== 'projected' || envelope.record === null || Object.hasOwn(envelope, 'reason') ||
       !Array.isArray(envelope.steps) || envelope.steps.length > 4096) return fail();
+  if (Object.hasOwn(envelope, 'questions')) {
+    const questions = envelope.questions;
+    if (!questions || typeof questions !== 'object' || Array.isArray(questions) ||
+        Object.entries(questions).some(([id, text]) => !id || id.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) || typeof text !== 'string')) return fail();
+  }
   const ids = new Set<string>();
   for (const raw of envelope.steps) {
     const row = object(raw, ['id', 'hash', ...JOB_PLAN_TEXT_FIELDS, 'issues']);

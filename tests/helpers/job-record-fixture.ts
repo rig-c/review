@@ -661,6 +661,11 @@ export function createSyntheticPlanRecordWorkspace(
     readonly steps?: readonly { readonly id: string; readonly hash: string }[];
     readonly subjects?: PlanContext['subjects'];
     readonly text?: {does:string; produces:string; bar:string; rests_on:readonly string[]};
+    readonly interview?: {
+      readonly framing?: readonly Record<string, unknown>[];
+      readonly waypoints?: readonly Record<string, unknown>[];
+      readonly post?: {readonly items?: readonly Record<string, unknown>[]};
+    };
   },
 ): SyntheticPlanWorkspace {
   const inputImage = writeWorkspaceFile(root, 'inputs/reference.png', makeSyntheticPngBytes(180, 90, 40));
@@ -685,9 +690,9 @@ export function createSyntheticPlanRecordWorkspace(
     name: 'Synthetic Plan Project',
     inputs: [inputImage, inputSpec],
     interview: {
-      framing: [],
-      waypoints: [],
-      post: { items: [] },
+      framing: options?.interview?.framing ?? [],
+      waypoints: options?.interview?.waypoints ?? [],
+      post: { items: options?.interview?.post?.items ?? [] },
     },
     plan: {
       steps: steps.map(step => ({

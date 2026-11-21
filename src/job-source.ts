@@ -965,6 +965,12 @@ export function retainedRecordPainting(retained: JobRetainedRecordSource): Pick<
   return {ref: seal, name: posix.basename(seal.path)};
 }
 
+const recordInterviewCollections = (interview: Record<string, unknown>) => [
+  [interview.framing, ['interview']],
+  [interview.waypoints, ['interview', 'rigging-interview']],
+  [asPlainObject(interview.post)?.items, ['post-interview']],
+] as const;
+
 /** Delivery-only projection through the existing retained record reader. */
 export function projectRetainedPlanText(retained: JobRetainedSourceV3): JobPlanTextProjection | undefined {
   const {source, record} = retained;
@@ -1024,7 +1030,20 @@ export function projectRetainedPlanText(retained: JobRetainedSourceV3): JobPlanT
     }
     return {id:step.id, hash:step.hash, ...fields, issues};
   });
-  const projection: JobPlanTextProjection = {schema:JOB_PLAN_TEXT_SCHEMA, record:identity, status:'projected', steps};
+  const questions: Record<string, string> = {};
+  const interview = asPlainObject(project.interview);
+  if (interview) {
+    for (const [items] of recordInterviewCollections(interview)) {
+      for (const rawItem of Array.isArray(items) ? items : []) {
+        const item = asPlainObject(rawItem);
+        if (typeof item?.id === 'string' && item.id.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(item.id) &&
+            typeof item.text === 'string' && !Object.hasOwn(questions, item.id))
+          questions[item.id] = item.text;
+      }
+    }
+  }
+  const projection: JobPlanTextProjection = {schema:JOB_PLAN_TEXT_SCHEMA, record:identity, status:'projected', steps,
+    ...(Object.keys(questions).length ? {questions} : {})};
   return Buffer.byteLength(JSON.stringify(projection)) > 512 * 1024 ? unavailable('PLAN_TEXT_LIMIT') : projection;
 }
 
@@ -1068,11 +1087,7 @@ function decodeRetainedRecordProject(
     if (!interview) throw new JobError('JOB_SOURCE_MISMATCH');
     // #1004: one question per published set, in set order; one set keeps the original single-question result.
     const decodedSets = optionSetRefs(result).map(({ questionId, setId }) => {
-    const collections = [
-      [interview.framing, ['interview']],
-      [interview.waypoints, ['interview', 'rigging-interview']],
-      [asPlainObject(interview.post)?.items, ['post-interview']],
-    ] as const;
+    const collections = recordInterviewCollections(interview);
     const matches: { readonly pending: unknown; readonly allowedStages: readonly string[] }[] = [];
     for (const [items, allowedStages] of collections) {
       if (items !== undefined && !Array.isArray(items)) throw new JobError('JOB_SOURCE_MISMATCH');
