@@ -10,7 +10,14 @@ const stateDir = join(root, 'state'), path = join(stateDir, 'owner-workspace/hos
 let shutdown: (() => Promise<void>) | undefined;
 let planted = false;
 let pinned: Awaited<ReturnType<typeof native.open>> | undefined;
-mock.module('node:fs/promises', () => ({...native, lstat: async (...args: Parameters<typeof fs.lstat>) => {
+// --detached-open: Linux path lookup can still find the dentry while unlink has already
+// dropped nlink to 0 (measured on Nova, #894). Hand smallJson's open a descriptor held on
+// that same real inode, so open succeeds after lstat reported the detached snapshot.
+let held: Awaited<ReturnType<typeof native.open>> | undefined;
+mock.module('node:fs/promises', () => ({...native, open: async (...args: Parameters<typeof fs.open>) => {
+  if (args[0] === path && planted && held) {const handle = held; held = undefined; return handle;}
+  return native.open(...args);
+}, lstat: async (...args: Parameters<typeof fs.lstat>) => {
   if (args[0] === path && shutdown) {
     const stop = shutdown; shutdown = undefined;
     // Model lstat's inode lookup before unlink and its metadata result after unlink.
@@ -32,6 +39,7 @@ let host: Awaited<ReturnType<typeof startOpenWorkspace>> | undefined;
 try {
   host = await startOpenWorkspace({stateDir, fingerprint: 'a'.repeat(64), port: 0});
   pinned = await native.open(path, 'r');
+  if (Bun.argv.includes('--detached-open')) held = await native.open(path, 'r');
   shutdown = host.stop;
   if (Bun.argv.includes('--replacement')) {
     try {await readPrivate(path); throw new Error('invalid snapshot was accepted');}
@@ -43,6 +51,7 @@ try {
   } else {
   const value = await readPrivate(path);
   if (!planted || value !== null) throw new Error('detached descriptor was not absent');
+  if (Bun.argv.includes('--detached-open') && held) throw new Error('detached open was not exercised');
   console.log('shutdown-read: null');
   }
 } finally {

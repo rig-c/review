@@ -32,7 +32,12 @@ export async function readPrivate(path: string): Promise<unknown | null> {
     const info = await lstat(path);
     // lstat can finish with nlink=0 during unlink. Establish that the path still
     // opens before validating that snapshot; a vanished path remains ENOENT.
-    return await smallJson(path, () => assertPrivateInfo(info, false));
+    // On Linux the open can still reach that same detached inode (fstat nlink=0, #894):
+    // no path names it any more, so it is absent too. A reappeared file still refuses.
+    return await smallJson(path, opened => {
+      if (info.nlink === 0 && opened.nlink === 0) throw Object.assign(new Error('detached'), {code: 'ENOENT'});
+      assertPrivateInfo(info, false);
+    });
   }
   catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw workspaceError('WORKSPACE_STATE_INVALID');}
 }
