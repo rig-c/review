@@ -53,8 +53,8 @@ jobs:
   browser:
     needs: tree-verdict
     runs-on: ubuntu-latest
-    # Main's serial gate already ran 14:49 of 15 (2026-11-15); #847 returns the two stage1 suites to it.
-    timeout-minutes: 25
+    # Stopgap until #1065 shards this job: the serial suite ran 24:29, 25:24 and 25:25 against 25 on 2026-11-21.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
