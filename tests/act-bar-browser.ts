@@ -64,7 +64,8 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   await until(page,`(${mode==='standalone'}?!!document.querySelector('#rig-root canvas'):document.body.dataset.ready==='true')&&!document.body.inert&&(${mode==='joined-interview'||mode==='standalone'}||!!document.querySelector('#workspace-ask-headline')?.textContent)`);
   const interview=mode.startsWith('interview')||mode==='joined-interview';
   const answerRoot=interview?'#workspace-interview-answer':'#job-record-asks';
-  const questionSelected=`!!document.querySelector('[data-block-target=question][aria-selected=true]')`;
+  // #1041: the question is shown in the right communication panel, not a bottom tab.
+  const questionSelected=`(()=>{const n=document.querySelector('#workspace-interview-answer');return !!n&&!n.hidden&&!!n.closest('#workspace-communication:not([hidden])')&&n.getClientRects().length>0;})()`;
   const recordDialogClosed=`!document.querySelector('#job-record-asks[open]')`;
   const questionReady=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer fieldset:not(:disabled)')`;
   const questionSaved=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer[data-interview-answered=true]')`;
@@ -73,15 +74,11 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   observations.push({mode,lang,boot});
   await writeFile(join(out,'loading-observations.json'),JSON.stringify(observations,null,2));
   await writeFile(join(out,`${mode}-${lang}-loaded.png`),await page.screenshot());
-  if(mode==='standalone'){
-   if(!boot.samples.some((row:any)=>row.legacySave))failures.push(mode+'/'+lang+' standalone Submit review not observed');
-   continue;
-  }
   const legacy=boot.samples.filter((row:any)=>row.legacySave||row.status||row.label);
-  if(mode!=='joined-interview'&&legacy.length)failures.push(mode+'/'+lang+' legacy controls in '+legacy.length+' frames');
+  if(legacy.length)failures.push(mode+'/'+lang+' legacy controls in '+legacy.length+' frames');
   if(boot.saveStates.length!==1)failures.push(mode+'/'+lang+' save-state count '+boot.saveStates.length);
-  if(mode!=='joined-interview'){assert.equal(boot.home,'workspace-act-row');assert.equal(boot.inHeading,false);assert.equal(boot.rowVisible,true);assert.deepEqual(boot.visibleStates,['review-draft-state']);}
-  if(flashOnly)continue;
+  assert.equal(boot.home,'workspace-act-row');assert.equal(boot.inHeading,false);assert.equal(boot.rowVisible,true);assert.deepEqual(boot.visibleStates,['review-draft-state']);
+  if(flashOnly||mode==='standalone')continue;
   const state=await page.evaluate<any>(`(()=>{const visible=n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])');const headline=document.querySelector('#workspace-ask-headline');return {language:document.documentElement.lang,primary:[...document.querySelectorAll('#workspace-review-act button.primary')].filter(visible).map(n=>n.id),question:headline.textContent,whiteSpace:getComputedStyle(headline).whiteSpace,overflow:getComputedStyle(headline).textOverflow,changesDisabled:document.querySelector('#request-changes').disabled,saveHidden:document.querySelector('#save').hidden};})()`);
   assert.equal(state.language,lang);assert.equal(state.primary.length,1,mode+' one emphasised act-bar answer');assert.notEqual(state.whiteSpace,'nowrap');assert.notEqual(state.overflow,'ellipsis');
   if(['rig','direction','parts'].includes(mode))assert.equal(state.changesDisabled,true);

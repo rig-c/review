@@ -40,8 +40,10 @@ The existing shell owns the header, language, workspace regions and status line.
 - **Shipped:** Setup · Animate · Compare in the header is the sole mode switch
   (#741). The bottom panel selects content, never a second mode.
 - The existing workspace places the parts list at left, the toolbars above the
-  main view, and the resizable Inspector directly below it. The right region is
-  reserved in this workspace; it is not a new context sidebar.
+  main view, the resizable Inspector directly below it, and the communication
+  panel at the right (#1041). The bottom panel holds the controllers tied to the
+  view; the right panel holds communication with the AI. Place any new element
+  by this rule.
 - Reuse `workspace-ui.ts`, `workspace-layout.ts` and `workspace-preferences.ts`
   for shell composition, resizing, drawers and browser preferences. Embedded
   inspection retains the existing header-hiding behavior.
@@ -117,21 +119,21 @@ act bar, not another mode switch.
 - **Shipped:** the main workspace has a resizable bottom panel directly beneath
   the view. Its heading keeps the current mode's content tabs (#741); the
   duplicate bottom **Comments (n)** tab was removed in favour of the top
-  **Comment · C** entry that reveals the bottom Comments panel and starts pin
-  mode (#835), and live-job act controls moved from the bottom row to
-  `#workspace-act-row` beneath the top bar (#845; standalone package inspection
-  retains the act bar in the bottom heading). The row remains reachable when
+  **Comment · C** entry (#835), which now opens the communication panel at
+  Comments and starts pin mode (C7, #1041), and act controls moved from the bottom row to
+  `#workspace-act-row` beneath the top bar as their single home (#845, #1040). The row remains reachable when
   the content is collapsed. Height is a saved workspace preference.
 - Setup blocks: **Part · Modeling · Chest · Mesh · Weights · Bones · Fields ·
   Cuts · Cloth**.
 - Animate blocks: **Transport · Sound · Environment · Physics · Idle tracks ·
   Readings · Requirements · Retarget · Report**. The timeline remains Animate
   content, not a second mode selector.
-- Parts use that same panel; Part and the Comments panel (via **Comment · C**)
-  are usable, while rig-only blocks are disabled with the missing-rig reason.
+- Parts use that same panel; Part is usable, while rig-only blocks are disabled
+  with the missing-rig reason. With no controller block left, the panel collapses
+  to nothing and the main view takes the height (#1041).
 - Reuse `mountRigInspector`, `bindInspectorBlocks` and `mountBottomPanel` in
-  `inspector-blocks.ts`. The programmatic Comments selection/panel retains
-  identity across modes.
+  `inspector-blocks.ts`. On the single review page the bottom rows carry no
+  Comments or Question selection; both live in the communication panel (C7).
 - **Historical:** old parts Issues/Producer flags tabs, bottom
   Setup/Animate/Write review mode tabs, the visible bottom **Comments (n)** tab
   (#741, removed by #835) and the proposed Compare tab replacement are
@@ -139,9 +141,15 @@ act bar, not another mode switch.
 
 ### C7 Side panel (right)
 
-This heading remains for inbound links. The rig/parts workspace has no right
-context panel. Use the existing left Checkpoints list and main-view Difference;
-record asks use the dialog in C10.
+- **Shipped (#1041):** the communication panel holds communication with the AI:
+  the pending question on top and Comments below, each under a one-line heading,
+  with the comment rows above the provenance block. It is single-column by
+  container query and has its own saved width (`communicationWidth`).
+- It is collapsed while nothing is pending; **Comment · C** and a pending ask open
+  it without changing the bottom panel. Below the stage minimum it is a
+  right-side drawer, non-modal for a question.
+- Record asks still use the dialog in C10 until the record forms move here.
+- Use the existing left Checkpoints list and main-view Difference for inspection.
 
 **Historical:** the old parts sidebar, producer flags and mesh-numbers panel
 were deleted (#745). Mesh edges is the visual mesh inspection surface. Geometry
@@ -177,11 +185,10 @@ inline Other text and per-question notes through the existing answer contract.
 
 ### C10 Act bar
 
-- **Shipped:** on live jobs, `mountActBar` places the pending ask headline,
+- **Shipped:** `mountActBar` places the pending ask headline,
   decision/submit controls and save state in the shared `#workspace-act-row`
-  directly beneath the top bar (#845, superseding the #741 bottom-row placement;
-  the row hides when no ask or early refusal is shown, and standalone package
-  inspection keeps the act bar at the right of the bottom heading). The act
+  directly beneath the top bar as their single home (#845, #1040, superseding the #741 bottom-row placement;
+  the row hides when no ask or early refusal is shown). The act
   follows the subject, not the chosen mode. A tab change never submits it.
 - Parts submit the comments-based verdict; rig review retains its decision and
   submit action. Failed saves and drafts remain explicit.

@@ -86,6 +86,9 @@ test('#1030 F08: chest landmark apex labels stay on their outward sides without 
  const cases=[
   {lang:'en',catalog:enCatalog,bounds:{width:574,height:263},points:[{x:207.56,y:126.37},{x:374.13,y:126.37},{x:292.13,y:113.56}]},
   {lang:'ko',catalog:koCatalog,bounds:{width:574,height:321},points:[{x:185.09,y:153.92},{x:398.78,y:153.92},{x:293.58,y:137.49}]},
+  // The same slot with the 240px default bottom panel (#1041): a taller canvas puts Cleavage just over one step above the apexes.
+  {lang:'en',catalog:enCatalog,bounds:{width:574,height:285},points:[{x:199.04,y:136.82},{x:383.48,y:136.82},{x:292.68,y:122.64}]},
+  {lang:'ko',catalog:koCatalog,bounds:{width:574,height:343},points:[{x:176.56,y:164.37},{x:408.13,y:164.37},{x:294.13,y:146.56}]},
  ] as const;
  const textWidth=(s:string)=>[...s].reduce((sum,ch)=>sum+(ch.charCodeAt(0)>127?11:6.61),0)+8;
  for(const {lang,catalog,bounds,points} of cases){

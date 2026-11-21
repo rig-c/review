@@ -72,12 +72,13 @@ test('Settings collapsed state round-trips through storage under its own key and
  expect(()=>parseWorkspacePreferences({...old,settingsCollapsed:false})).toThrow('PREFERENCES_STAMP');expect(()=>parseWorkspacePreferences({...defaultWorkspacePreferences(),settingsCollapsed:'no'})).toThrow('settingsCollapsed');
 });
 
-test('saved preferences from earlier versions with 280px, 350px, 120px or 240px inspectorHeight still load (unstamped default upgrades, stamped user resize stays)',()=>{
- // #709 ruling (c), as corrected by HQ: the shared bottom panel defaults to 262px (act bar in the heading plus three timeline rows in Animate at 1600x1000).
- expect(defaultWorkspacePanels.inspectorHeight).toBe(262);
+test('saved preferences from earlier versions with 280px, 350px, 120px, 240px or 262px inspectorHeight still load (unstamped default upgrades, stamped user resize stays)',()=>{
+ // #709 ruling (c), as corrected by HQ: the shared bottom panel defaulted to 262px (act bar in the heading plus three timeline rows in Animate at 1600x1000).
+ // #1041/#1040: the act bar left the heading for #workspace-act-row, so the +22 for it is gone: 240px; an unstamped 262 upgrades.
+ expect(defaultWorkspacePanels.inspectorHeight).toBe(240);
  expect(panelBounds.inspectorHeight.min).toBe(120);
  // 120 and 240 were defaults on the #709 branch only (0a54fec, 47b584b); a browser that ran them may hold an unstamped value.
- for(const legacy of [280,350,120,240]){
+ for(const legacy of [280,350,120,240,262]){
   // 1. An earlier version saved a record where the user changed theme, leaving inspectorHeight at that version's unstamped default.
   const legacyUnstamped=JSON.parse(JSON.stringify(defaultWorkspacePreferences()));
   legacyUnstamped.theme='dark';
@@ -86,13 +87,13 @@ test('saved preferences from earlier versions with 280px, 350px, 120px or 240px 
   legacyUnstamped.panels.inspectorHeight=legacy;
   legacyUnstamped.stamps.inspectorHeight={revision:0,writer:''};
   const parsedUnstamped=parseWorkspacePreferences(legacyUnstamped);
-  expect(parsedUnstamped.panels.inspectorHeight).toBe(262);
+  expect(parsedUnstamped.panels.inspectorHeight).toBe(240);
   expect(parsedUnstamped.theme).toBe('dark');
   const hubA=new PreferenceHub();
   hubA.values.set(workspacePreferenceKey,JSON.stringify(legacyUnstamped));
   const storeA=new WorkspacePreferenceStore({...hubA.endpoint(),writer:'tab-a'});
   expect(storeA.status().state).toBe('available');
-  expect(storeA.get().panels.inspectorHeight).toBe(262);
+  expect(storeA.get().panels.inspectorHeight).toBe(240);
   storeA.dispose();
 
   // 2. A user explicitly set (stamped) inspectorHeight to that same value: a saved height still wins.
@@ -171,4 +172,24 @@ test('stored preferences from 0.24.1 without language load unchanged and languag
  // Planted controls: unstamped non-default language or unsupported language code must fail.
  expect(()=>parseWorkspacePreferences({...v0241Record,language:'ko'})).toThrow('PREFERENCES_STAMP: unstamped language differs from defaults');
  expect(()=>parseWorkspacePreferences({...defaultWorkspacePreferences(),language:'ja'})).toThrow('PREFERENCES_LANGUAGE: expected system, en or ko');
+});
+
+test('#1041 a 4.10.0 record without communicationWidth loads with the default and the new width persists',()=>{
+ // Exact 4.10.0 record shape: three panel widths and no communicationWidth stamp.
+ const v4100Record={schema:workspacePreferenceKey,revision:4,theme:'system',language:'ko',defaultCameraSync:true,defaultIdleRepeat:true,settingsCollapsed:true,
+  panels:{leftWidth:170,rightWidth:300,inspectorHeight:262},
+  stamps:{theme:{revision:0,writer:''},language:{revision:1,writer:'tab-4100'},defaultCameraSync:{revision:0,writer:''},defaultIdleRepeat:{revision:0,writer:''},settingsCollapsed:{revision:0,writer:''},
+   leftWidth:{revision:0,writer:''},rightWidth:{revision:4,writer:'tab-4100'},inspectorHeight:{revision:0,writer:''}}};
+ const parsed=parseWorkspacePreferences(v4100Record);
+ // The 4.10.0 unstamped default 262 upgrades to 240 like earlier defaults.
+ expect(parsed.panels).toEqual({leftWidth:170,rightWidth:300,inspectorHeight:240,communicationWidth:360});
+ expect(parsed.stamps.communicationWidth).toEqual({revision:0,writer:''});expect(parsed.revision).toBe(4);
+ const values=new Map([[workspacePreferenceKey,JSON.stringify(v4100Record)]]),storage={getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>{values.set(key,value);}};
+ const store=new WorkspacePreferenceStore({storage,events:null,writer:'tab-4110'});
+ expect(store.get().panels.communicationWidth).toBe(360);expect(store.get().panels.rightWidth).toBe(300);
+ store.update({panels:{communicationWidth:480}});
+ const reread=new WorkspacePreferenceStore({storage,events:null,writer:'tab-other'});
+ expect(reread.get().panels).toEqual({leftWidth:170,rightWidth:300,inspectorHeight:240,communicationWidth:480});
+ expect(()=>parseWorkspacePreferences({...v4100Record,panels:{...v4100Record.panels,communicationWidth:279}})).toThrow('PREFERENCES_PANEL: communicationWidth requires finite 280..640 CSS pixels');
+ expect(panelBounds.communicationWidth).toEqual({min:280,max:640});expect(defaultWorkspacePanels.communicationWidth).toBe(360);
 });

@@ -32,8 +32,9 @@ export interface InspectorBlocksOptions {
  available?:readonly string[];
  /** Called when a click or a key changes a section's active tab. */
  changed?:()=>void;
- /** The rig reuses its block rows in the heading, with one programmatic Comments selection. */
- bottom?:{strip:HTMLElement;comment:HTMLButtonElement;panel:HTMLElement};
+ /** The rig reuses its block rows in the heading. A `comment` button and `panel` add one programmatic Comments
+  * selection; the single review page omits them because Comments live in its right communication panel (#1041). */
+ bottom?:{strip:HTMLElement;comment?:HTMLButtonElement;panel?:HTMLElement};
 }
 export interface InspectorBlocks {state():ActiveBlocks;restore(state:ActiveBlocks):void;select(section:string,id:string):void;activate(section:string):void;register(tab:{id:string;panel:HTMLElement;label:string;position?:'first'|'last'}):()=>void;dispose():void}
 
@@ -112,7 +113,7 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
      if(!more.menu.hidden)placeOverflow(more.menu);
     };
    }
-   definitions.set(name,{section,row,scrollRoot,tabs,syncOverflow});saved[name]=tabs.find(tab=>tab.button.getAttribute('aria-selected')==='true')?.id??tabs[0]?.id??'feedback';
+   definitions.set(name,{section,row,scrollRoot,tabs,syncOverflow});const first=tabs.find(tab=>tab.button.getAttribute('aria-selected')==='true')?.id??tabs[0]?.id??(options.bottom.comment?'feedback':undefined);if(first)saved[name]=first;
    row.hidden=true;options.bottom.strip.append(row);continue;
   }
   ids.set(name,new Set(tabs.map(tab=>tab.id)));
@@ -133,9 +134,10 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
   if(active===name&&!force)return;
   if(active){saved[active]=rows.get(active)?.state()??saved[active]!;rows.get(active)?.dispose();rows.delete(active);definitions.get(active)!.row.hidden=true;}
   active=name;const {section,row,scrollRoot,tabs,syncOverflow}=definitions.get(name)!,bottom=options.bottom;
-  bottom.comment.dataset.blockTarget='feedback';bottom.comment.hidden=true;bottom.comment.remove();row.hidden=false;
-  const all=[...tabs,{button:bottom.comment,id:'feedback',panel:bottom.panel,included:[]}];
-  ids.set(name,new Set(all.map(tab=>tab.id)));
+  const comments=bottom.comment&&bottom.panel?{button:bottom.comment,id:'feedback',panel:bottom.panel,included:[]}:null;
+  if(comments){comments.button.dataset.blockTarget='feedback';comments.button.hidden=true;comments.button.remove();}
+  const all=comments?[...tabs,comments]:tabs;row.hidden=!all.length;
+  ids.set(name,new Set(all.map(tab=>tab.id)));if(!all.length){syncOverflow();options.changed?.();return;}
   const sync=()=>{section.dataset.comments=String(rows.get(name)?.state()==='feedback'||external.has(rows.get(name)?.state()??''));syncOverflow();options.changed?.();};
   for(const tab of all)tab.button.setAttribute('aria-selected',String(tab.id===saved[name]));
   rows.set(name,bindInspectorTabs(sync,()=>{},{tabs:all.map(tab=>({id:tab.id,button:tab.button,panels:[tab.panel],included:tab.included,attribute:'aria-selected'})),panels:all.map(tab=>tab.panel),root:row,scrollRoot,initialize:true}));
@@ -167,7 +169,7 @@ export function bindInspectorBlocks(options:InspectorBlocksOptions):InspectorBlo
   },
   select:(name,id)=>{rows.get(name)?.select(resolve(name,id));definitions.get(name)?.syncOverflow();},
   /** Restore saved tabs without touching the workspace's section scroll offset. */
-  restore(value){for(const [name,id]of Object.entries(value)){if(options.bottom){const definition=definitions.get(name);if(id==='feedback'||definition?.tabs.some(tab=>tab.id===resolve(name,id)))saved[name]=resolve(name,id);}rows.get(name)?.restore(resolve(name,id));definitions.get(name)?.syncOverflow();}},
+  restore(value){for(const [name,id]of Object.entries(value)){if(options.bottom){const definition=definitions.get(name);if(id==='feedback'&&!!options.bottom.comment||definition?.tabs.some(tab=>tab.id===resolve(name,id)))saved[name]=resolve(name,id);}rows.get(name)?.restore(resolve(name,id));definitions.get(name)?.syncOverflow();}},
   dispose(){disposedState=state();for(const cleanup of cleanups)cleanup();for(const row of rows.values())row.dispose();rows.clear();ids.clear();},
  };
 }

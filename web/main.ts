@@ -106,7 +106,7 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
 const input = (id: string) => el<HTMLInputElement>(id);
 const select = (id: string) => el<HTMLSelectElement>(id);
 const button = (id: string) => el<HTMLButtonElement>(id);
-const titledIds = new Set(['message', 'player-state', 'layout-state', 'renderer-state', 'layer-state', 'idle-state', 'control-state', 'draft-state', 'rig-label', 'reference-label', 'coordinates']);
+const titledIds = new Set(['message', 'review-message', 'player-state', 'layout-state', 'renderer-state', 'layer-state', 'idle-state', 'control-state', 'draft-state', 'rig-label', 'reference-label', 'coordinates']);
 // #347: write only a changed source, so a played frame does not rewrite (and re-translate) unchanged text.
 const text = (id: string, value: string) => { const node = el(id); setSourceText(node, value); if (titledIds.has(id)) setSourceAttribute(node, 'title', value); };
 const option = (value: string, label: string) => { const item = document.createElement('option'); item.value = value; item.textContent = label; return item; };
@@ -117,6 +117,10 @@ let host:JobRigMeshHost|null=rigHost(),access=host?.access??pageInstanceAccess()
 let partsOnly=host?.subject==='parts'||screenRoot.dataset.reviewScreen==='parts';
 let firstPublicationPrompt=!!host?.waiting;
 const app=el('app');app.innerHTML=rigWorkspaceMarkup+rigFeedbackMarkup;
+/** #1041: the right panel is communication with the AI: the pending question, Comments and (later) record forms.
+ * The bottom panel keeps the controllers tied to the view. */
+const communicationPanel=panelMake('aside',{id:'workspace-communication',className:'workspace-communication',hidden:true});
+setSourceAttribute(communicationPanel,'aria-label','Communication');
 const rigStatusBar=mountStatusBar({
  message:'Loading local review package…',
  readouts:[
@@ -139,7 +143,7 @@ const rigStatusBar=mountStatusBar({
 app.querySelector<HTMLElement>('[data-workspace-status]')!.replaceWith(rigStatusBar.footer);
 for(const id of ['layout-state','idle-state','control-state','draft-state'])el(id).setAttribute('role','status');
 el('layout-state').setAttribute('aria-label','Effective layout');el('renderer-state').setAttribute('aria-label','Last draw backend');el('draft-state').setAttribute('aria-live','polite');el('view-coordinates').setAttribute('aria-label','Current numeric inspection region');
-const shell=mountWorkspaceShell({compatibility:'rigStep1',pendingActRow:!!host,embedded:new URLSearchParams(location.search).has('stageEmbed')&&!location.pathname.endsWith('/stage-interview.html')});app.prepend(shell.header,...shell.actRow?[shell.actRow]:[]);
+const shell=mountWorkspaceShell({compatibility:'rigStep1',embedded:new URLSearchParams(location.search).has('stageEmbed')&&!location.pathname.endsWith('/stage-interview.html')});app.prepend(shell.header,...shell.actRow?[shell.actRow]:[]);
 el('app').querySelector<HTMLElement>('[data-workspace-comment]')!.innerHTML=sharedCommentMarkup;
 el('app').querySelector<HTMLElement>('[data-workspace-layers]')!.append(createRigLayerControls());
 el('app').querySelector<HTMLElement>('[data-workspace-view-tools]')!.innerHTML=sharedViewToolsMarkup;
@@ -149,7 +153,7 @@ const primaryToolbar=app.querySelector<HTMLElement>('.viewbar')!;primaryToolbar.
 const secondaryToolbar=document.createElement('div');secondaryToolbar.className='workspace-secondary-toolbar';secondaryToolbar.append(app.querySelector<HTMLElement>('[data-workspace-layers]')!,app.querySelector<HTMLElement>('[data-workspace-view-tools]')!);primaryToolbar.after(secondaryToolbar);
 for(const event of ['click','change'])secondaryToolbar.addEventListener(event,()=>{if(rigDifference){leaveRigDifference();renderLayout();}},true);
 const rigInspector=mountRigInspector(document,shell.actRow??undefined);
-if(host)rigInspector.act.hidden=true;
+rigInspector.act.hidden=true;
 const rigAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigAsk.type='button';
 const recordAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-record-ask',hidden:true,type:'button'});
 const askHeadline=panelMake('span',{id:'workspace-ask-headline',className:'workspace-act-ask',hidden:true});
@@ -296,7 +300,7 @@ function message(value: string, error = false, footerOnly = false, diagnostic?: 
     delete reviewMessage.dataset.partsPinRefusal;
   }
   text('review-message', value); reviewMessage.classList.toggle('error', error);
-  if(host&&error&&rigInspector.act.hidden&&!rigInspector.answersRendered){
+  if(error&&rigInspector.act.hidden&&!rigInspector.answersRendered){
     for(const node of rigInspector.act.querySelectorAll<HTMLElement>('#save,#review-status,label[for="review-status"]'))node.hidden=true;
     rigInspector.act.hidden=false;
     rigInspector.syncActRow?.();
@@ -339,8 +343,8 @@ let liveIssueCount=()=>(session?.feedback.length??0)+(host?.verdictComments?.row
 function renderDraftState(): void {
   const live=host?.reviewState?.(liveIssueCount(),saving);
   renderAnswerControls();
-  if (draftStatus === null && !live && !answerSaved) return;
-  rigInspector.actBar.setSaveState({ kind: actReadOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftConflict ? 'Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.' : answerSaved ? 'Answer saved' : draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus)?draftStatus:actReadOnly??live??draftStatus! });
+  if (draftStatus === null && !live && !answerSaved && !dirty && !saving && !draftConflict && !actReadOnly && !session?.updatedAt) return;
+  rigInspector.actBar.setSaveState({ kind: actReadOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftConflict ? 'Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.' : saving ? 'Saving…' : answerSaved ? 'Answer saved' : draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus)?draftStatus:actReadOnly??live??draftStatus??(dirty ? 'Unsubmitted changes' : session?.updatedAt ? 'Submitted' : 'Not submitted') });
   if(answerSaved&&!saving&&!draftConflict&&!dirty&&!actReadOnly&&(host?.record||!host)&&
       (host?.pendingSubjects?.()??pendingAnswers).every(subject=>subject.kind==='interview-picks')&&!el('message').classList.contains('error'))message(sourceTextContent(el('dirty')),false,true);
 }
@@ -1328,15 +1332,19 @@ function bind(): void {
 /** The one shell and block binding, for either subject. */
 function bindWorkspace(hasModel=false,empty=false):void {
   if(!workspace){
-  workspace=bindWorkspaceUI({root:screenRoot,regions:{layout:screenRoot.querySelector<HTMLElement>('.layout')!,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,columns:{left:'rightWidth',right:null}},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
+  const layout=screenRoot.querySelector<HTMLElement>('.layout')!;layout.append(communicationPanel);
+  workspace=bindWorkspaceUI({root:screenRoot,regions:{layout,left:screenRoot.querySelector<HTMLElement>('.left-panel')!,main:el('stage-layout').parentElement!,stage:el('stage-layout'),bottom:screenRoot.querySelector<HTMLElement>('.inspector')!,right:communicationPanel,columns:{left:'rightWidth',right:'communicationWidth'},rightPending:communicationPending,bottomBound:()=>inspectorBlocks!==null},language:shell.language!,bottomPanel:rigInspector,changed:fitCamera,defaultTheme:theme=>appearance?.set(theme),currentTheme:()=>appearance?.get()});
   viewport.state.cameraSync=workspace.defaults().defaultCameraSync;input('camera-sync').checked=viewport.state.cameraSync;input('idle-repeat').checked=workspace.defaults().defaultIdleRepeat;
   appearance=bindAppearance(select('settings-theme'),workspace.defaults().theme);
   }
   if(empty)return;
   bindReviewDialog();
-  // The waiting layout may have moved this body into the inspector drawer.
-  rigInspector.body.append(questionPanel);
-  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel&&!partsOnly)?['feedback']:undefined,bottom:{strip:rigInspector.strip,comment:rigInspector.comments.button,panel:rigInspector.comments.panel},changed:()=>{syncQuestionImage();workspace?.refresh();persistence?.save();}});
+  // The question on top, Comments below; Comment rows sit above the provenance block and the review form.
+  const comments=rigInspector.comments.panel;comments.hidden=false;
+  comments.querySelector('.review-dialog-header')?.after(el('comments-list-host'));
+  communicationPanel.append(questionPanel,comments);
+  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel&&!partsOnly)?['feedback']:undefined,bottom:{strip:rigInspector.strip},changed:()=>{syncQuestionImage();workspace?.refresh();persistence?.save();}});
+  workspace?.refresh();
 }
 async function start(): Promise<void> {
   try {
@@ -1390,6 +1398,7 @@ async function start(): Promise<void> {
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';sourceFiles.parentElement!.hidden=!data.manifest.authoring.length;
     populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(rigDifference){leaveRigDifference();renderLayout();}const part=parts?.value();if(!stageCorrectionRebinding&&(previous?.side!==part?.side||previous?.slot!==part?.slot||previous?.mode!==part?.mode))stageDraftRequestToken++;if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);if(host)chestEditor?.sync();else if(part&&!stageCorrectionRebinding)void openStageCorrection({part:part.slot,instrument:'selection'});requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({hideGateBanner:!!host?.direction,readOnlyReason:sealedRecordRigReadOnly,host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){if(activeScene())seek(time);else{player.seek(time);drawRig(()=>player!.draw());}}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    if(!host&&!data.capabilities.preRig)renderPendingSubjects([{kind:'review-verdict',stage:'rig-review'}]);
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     // A job rig subject lands in Animate before the model finishes loading (#709).
@@ -1406,7 +1415,7 @@ async function start(): Promise<void> {
     else if (host?.ownerActAccess) message('Not submitted',false,true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     frameHandle=requestAnimationFrame(tick);
-    const restored=await setupPersistence();setupComments();renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'review-verdict',stage:'rig-review'}]);if(host?.direction)showRecordComments(true);else if(host?.record&&!data.manifest.model)showRecordComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
+    const restored=await setupPersistence();setupComments();renderPendingSubjects(host?.pendingSubjects?.()??(data.capabilities.preRig?[]:[{kind:'review-verdict',stage:'rig-review'}]));if(host?.direction)showRecordComments(true);else if(host?.record&&!data.manifest.model)showRecordComments();await loadRebuildStatus();void loadRequirements();renderChest();restoreEnvironment();physicsPanel?.restore();bonesPanel?.restore();cutsPanel?.restore();clothPanel?.restore();idlePanel?.restore();rigFieldsPanel?.restore();meshPanel?.restore();void refreshDensityStrip();renderIdle();if(idlePreviewOnOpen(restored,!!host)&&canRepeatIdle()&&automaticIdlePreview(assets?.animations.map(item=>item.name)??[],animation,first,!!requestedId))void playPreview();
     // Only an instance that serves agent control is asked for its config: a plain open has no control endpoint (#164).
     if(!readOnly&&writes.control!==false)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'single',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});
     bindWorkspaceVisibility({key:access.key,sourceHash:data.sourceHash,pause});
@@ -1521,6 +1530,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  };
  viewDisposers.push(viewport.bindControls(unitScaleMessage),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
+ if(!host)renderPendingSubjects([{kind:'parts-verdict'}]);
  viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message(actReadOnly??(host?.ownerActAccess?'Not submitted':'Parts ready. Source files remain unchanged.'),!!actReadOnly,!!host?.ownerActAccess&&!actReadOnly);referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
  setupPartsPersistence=async()=>{
   if(host?.record)return;
@@ -1548,7 +1558,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
 function showRecordComments(preserveInspector=false):void {
  for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
  if(preserveInspector)return;
- for(const child of rigInspector.comments.panel.children)(child as HTMLElement).hidden=child!==el('proposal-panel')&&!child.classList.contains('review-dialog-header');
+ for(const child of rigInspector.comments.panel.children)(child as HTMLElement).hidden=child!==el('proposal-panel')&&child!==el('comments-list-host')&&!child.classList.contains('review-dialog-header');
  rigInspector.comments.panel.style.display='block';
  rigInspector.collapse.disabled=false;setSourceAttribute(rigInspector.collapse,'title','');
 }
@@ -1599,6 +1609,7 @@ let activeInterviewImages:readonly {name:string;src:string}[]|null=null;
 let activeInterviewImage:{name:string;src:string}|null=null;
 let releaseInterview:(()=>void)|null=null;
 const questionPanel=panelMake('section',{id:'workspace-interview-answer',className:'workspace-interview-panel',hidden:true});
+{const title=panelMake('h2',{});setSourceText(title,'Question');questionPanel.append(panelMake('div',{className:'review-dialog-header'},title));}
 let questionForms:readonly HTMLElement[]=[];
 /** #1004: several question forms share the Question tab; the list shows one at a time. */
 let selectedQuestionAsk:string|undefined;
@@ -1787,7 +1798,7 @@ function syncQuestionImage():void {
 }
 /** Survey forms use the shared bottom tab. Pending text-only record forms use the drawer. */
 function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',standalone=false):void {
- if(standalone){pendingAnswers=[{kind:'interview-picks'}];}
+ if(standalone){renderPendingSubjects([{kind:'interview-picks'}]);}
  for(const form of forms){
   if(questionFormBindings.has(form))continue;questionFormBindings.add(form);
   form.addEventListener('submit',event=>{if(draftConflict||pendingAnswers.some(subject=>subject.kind.endsWith('verdict'))){event.preventDefault();event.stopImmediatePropagation();}},true);
@@ -1798,11 +1809,10 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
  questionForms=questionTabForms;
  if(questionForms.length){
   for(const form of questionForms)if(form.parentElement!==questionPanel)questionPanel.append(form);
-  const reveal=()=>{inspectorBlocks?.select(selectedInspector()??'rig','question');workspace?.revealInspector();};
+  const reveal=()=>{questionPanel.hidden=false;workspace?.revealCommunication();};
   rigAsk.onclick=()=>{if(!draftConflict)reveal();};
   if(!unregisterQuestion){
-   unregisterQuestion=inspectorBlocks!.register({id:'question',panel:questionPanel,label:'Question',position:'first'});
-   inspectorBlocks!.restore({rig:'question',playback:'question'});reveal();
+   unregisterQuestion=()=>{questionPanel.hidden=true;workspace?.refresh();};reveal();
   }
   if(questionForms.every(form=>form.dataset.interviewAnswered==='true')){answerSaved=true;firstPublicationPrompt=false;}
  }else{
@@ -1876,6 +1886,8 @@ function renderAskHeadline(sentence=askSentence):void {
   askHeadline.removeAttribute('translate');
   askHeadline.style?.removeProperty('white-space');
   setSourceText(askHeadline,sentence);
+  // In a refusal the headline ellipsizes to one line (#1041); its title keeps the whole sentence.
+  setSourceAttribute(askHeadline,'title',sentence);
   return;
  }
  const at=Date.parse(progress.at),age=()=>Math.max(0,Math.floor((Date.now()-at)/1000));
@@ -1887,18 +1899,15 @@ function renderAskHeadline(sentence=askSentence):void {
  // Catalog fragments are already localized. Keep the agent's text as a literal across locale changes.
  askHeadline.setAttribute('translate','no');
  askHeadline.style?.setProperty('white-space','pre-wrap');
- if(quiet){
-  const [before,after]=t('job.progress.quiet',['{0}',phaseAndStep]).split('{0}');
-  askHeadline.replaceChildren(before!,ageText,after!);
- }else{
-  const prefix=progress.text?phaseAndStep+' · '+progress.text:phaseAndStep;
-  askHeadline.replaceChildren(prefix+' · ',ageText);
- }
+ const [before,after]=quiet?t('job.progress.quiet',['{0}',phaseAndStep]).split('{0}'):[(progress.text?phaseAndStep+' · '+progress.text:phaseAndStep)+' · ',''];
+ askHeadline.replaceChildren(...[before!,ageText,after!].filter(part=>part!==''));
+ // In a refusal the headline ellipsizes to one line (#1041); its title keeps the whole sentence.
+ const titleNow=()=>setSourceAttribute(askHeadline,'title',before!+ageText.data+after!);titleNow();
  const tickAge=()=>{
   const seconds=age();
   if((seconds>=60)!==quiet){renderAskHeadline();return;}
   const value=ageValue(seconds);
-  if(ageText.data!==value)ageText.data=value;
+  if(ageText.data!==value){ageText.data=value;titleNow();}
  };
  if(!suspended&&!disposed)progressTimer=setInterval(tickAge,1000);
 }
@@ -1918,7 +1927,7 @@ function renderAnswerControls():void {
  const hasPinnedPart=parts&&(liveIssueCount()>0||pendingPartComment);
  const needsPinnedPart=parts&&!!host?.verdictComments?.rows.length&&!hasPinnedPart;
  const pinRefusal='Request changes needs at least one comment pinned to a part.';
- if((host||subjects.some(subject=>subject.kind==='interview-picks'))&&subjects.length&&!rigInspector.actBar.saveState())rigInspector.actBar.setSaveState({kind:'unsaved',text:'Not submitted'});
+ if(subjects.length&&!rigInspector.actBar.saveState())rigInspector.actBar.setSaveState({kind:'unsaved',text:'Not submitted'});
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
  save.classList.toggle('primary',verdict&&!hasPinnedPart);
  requestChanges.classList.toggle('primary',hasPinnedPart);
@@ -1957,16 +1966,17 @@ function renderAnswerControls():void {
   if(needsPinnedPart&&!save.hidden&&!save.disabled){
    if(!notice.classList.contains('error')){
     setSourceText(notice,pinRefusal);
+    setSourceAttribute(notice,'title',pinRefusal);
     notice.classList.add('error');
     notice.dataset.partsPinRefusal='true';
    }
   }else if(notice.dataset.partsPinRefusal){
    delete notice.dataset.partsPinRefusal;
-   setSourceText(notice,'');
+   setSourceText(notice,'');setSourceAttribute(notice,'title','');
    notice.classList.remove('error');
   }
  }
- if(host){rigInspector.answersRendered=true;syncJobActRow(subjects);}
+ rigInspector.answersRendered=true;syncJobActRow(subjects);
 }
 let verdictSubmit:((event:MouseEvent)=>unknown)|null=null;
 /** The rig pane for a live job's still (#709): the job binds and copies it, this screen keeps its view. */
@@ -2047,7 +2057,9 @@ function bindInspector(partsSubject=false):void {
  for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
-function openReview():void {pause();if(!partsOnly)syncCorrectionStage();inspectorBlocks?.select(selectedInspector()??'rig','feedback');workspace?.revealInspector();}
+function openReview():void {pause();if(!partsOnly)syncCorrectionStage();workspace?.revealCommunication();}
+/** Something to communicate: a pending question or record form, or at least one comment. */
+function communicationPending():boolean {return !!communicationPanel.querySelector('form[data-job-ask]')||!!communicationPanel.querySelector('.stage-comment-item');}
 function unitScaleMessage(target:CameraTarget):void {message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');}
 function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');}
 

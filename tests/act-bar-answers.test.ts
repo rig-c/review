@@ -79,7 +79,7 @@ for(const item of [
  {name:'early live refusal',host:{},error:true,footerOnly:false,hidden:true,reveal:true},
  {name:'footer-only refusal',host:{},error:true,footerOnly:true,hidden:true,reveal:false},
  {name:'ordinary loading message',host:{},error:false,footerOnly:false,hidden:true,reveal:false},
- {name:'standalone refusal',host:null,error:true,footerOnly:false,hidden:true,reveal:false},
+ {name:'standalone refusal',host:null,error:true,footerOnly:false,hidden:true,reveal:true},
  {name:'already rendered live refusal',host:{},error:true,footerOnly:false,hidden:false,reveal:false},
  {name:'completed live ask refusal',host:{},error:true,footerOnly:false,hidden:true,reveal:false,rendered:true},
 ])test('#833 '+item.name+' preserves refusal visibility without exposing legacy acts',()=>{

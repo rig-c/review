@@ -464,7 +464,8 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
           await wait("document.querySelector('#mesh-editor-bar').hidden");
           await click(screen, '#mesh-edit');
           await wait("!document.querySelector('#mesh-editor-bar').hidden");
-          const veilPixel = await screen.evaluate<number[]>("Array.from(document.querySelector('#rig-overlay').getContext('2d').getImageData(20, 20, 1, 1).data)");
+          // #1041: the comment opens the right communication panel, so the stage is narrower; sample inside the veil margin, clear of the mesh bounds stroke.
+          const veilPixel = await screen.evaluate<number[]>("Array.from(document.querySelector('#rig-overlay').getContext('2d').getImageData(4, 20, 1, 1).data)");
           await writeFile(join(directory, 'mesh-editor-light.png'), await screen.screenshot());
           await screen.evaluate<void>("delete document.documentElement.dataset.theme");
           await click(screen, '#mesh-edit');

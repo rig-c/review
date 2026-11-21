@@ -421,9 +421,9 @@ test('#839 record parts pictures keep ordinary inspector eligibility without com
   expect(opened.subject).toBe('parts');expect(f.workspace.result.kind).toBe('option-set');
   let available:unknown='not-bound',inspector=false;
   const element={querySelector:()=>({append(){}}),parentElement:{},checked:false},defaults={defaultCameraSync:false,defaultIdleRepeat:false,theme:'system'};
-  const environment={questionPanel:{},host:{record:{hasPicture:true},ownerActAccess:null},partsOnly:true,data:undefined,screenRoot:element,shell:{language:{}},rigInspector:{body:{append(){}},strip:{},comments:{button:{},panel:{}}},viewport:{state:{}},appearance:null,workspace:null,inspectorBlocks:null,liveIssueCount:null,readOnly:null,actReadOnly:null,
+  const environment={questionPanel:{},host:{record:{hasPicture:true},ownerActAccess:null},partsOnly:true,data:undefined,screenRoot:element,shell:{language:{}},rigInspector:{body:{append(){}},strip:{},comments:{button:{},panel:{querySelector:()=>null}}},communicationPanel:{append(){}},communicationPending:()=>false,viewport:{state:{}},appearance:null,workspace:null,inspectorBlocks:null,liveIssueCount:null,readOnly:null,actReadOnly:null,
    el:()=>element,input:()=>element,select:()=>element,text(){},document:{},tr:(key:string)=>key,readOnlyReason:()=>null,access:{},fitCamera(){},bindAppearance:()=>({}),bindReviewDialog(){},bindInspector(){inspector=true;},
-   bindWorkspaceUI:()=>({defaults:()=>defaults}),bindInspectorBlocks:(options:{available:unknown})=>{available=options.available;return {};}};
+   bindWorkspaceUI:()=>({defaults:()=>defaults,refresh(){}}),bindInspectorBlocks:(options:{available:unknown})=>{available=options.available;return {};}};
   const run=new Function('environment',`with(environment){${new Bun.Transpiler({loader:'ts'}).transformSync(gate+'\n'+parts)};return startParts;}`)(environment);
   await run(opened,{issues:[]},{capabilityRequired:true});expect(available).toBeUndefined();expect(inspector).toBe(true);
   // The same gate retains the existing rig and picture-free record decisions.

@@ -47,8 +47,9 @@ for(const lang of ['en','ko'] as const)for(const [width,height] of [[1024,768],[
   p=await launchCdpSession(profile,{sendDeadlineMs:20000,browserArgs:['--renderer-process-limit=2'],onEvent(event,send){if(event.sessionId)control=send;}});const page=p;await page.setViewport(width!,height!);const url=new URL(f.host.ownerUrl);url.searchParams.set('lang',lang);await page.goto(url.href,lang);
   await wait(page,`document.body.dataset.ready==='true'&&!document.body.inert&&document.getElementById('parts-canvas')?.width===2400`);
   await page.evaluate<void>(`(()=>{window.__895Records=[];const original=window.fetch;window.fetch=async(...args)=>{const response=await original(...args);if(String(args[0]).endsWith('/comment')&&response.ok)window.__895Records.push((await response.clone().json()).comment);return response;};})()`);
-  await click(page,'#fit');await click(page,'#stage-comment');
   const settle=()=>page.evaluate<void>(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+  // #1041: Comment · C opens the right communication panel; let the stage refit before reading canvas points.
+  await click(page,'#stage-comment');await settle();await click(page,'#fit');await settle();
   async function drag(a:Point,b:Point){await page.mouse('mouseMoved',a.x,a.y);await page.mouse('mousePressed',a.x,a.y);await page.mouse('mouseMoved',b.x,b.y);await page.mouse('mouseReleased',b.x,b.y);await settle();}
   for(const item of (cancelOnly?[{name:'large',a:{x:260,y:260},b:{x:2140,y:1940}}]:partCount===2?[{name:'interior',a:{x:60,y:60},b:{x:2340,y:2140}},{name:'above',a:{x:60,y:1400},b:{x:2340,y:1700}}]:[{name:'ordinary',a:{x:1000,y:600},b:{x:1300,y:900}},{name:'narrow',a:{x:650,y:600},b:{x:1750,y:1400}},{name:'large',a:{x:260,y:260},b:{x:2140,y:1940}}])){
    const points=await page.evaluate<{a:Point;b:Point}>(`(()=>{const c=document.getElementById('parts-canvas'),r=c.getBoundingClientRect(),z=r.width/c.width;return {a:{x:r.left+${item.a.x}*z,y:r.top+${item.a.y}*z},b:{x:r.left+${item.b.x}*z,y:r.top+${item.b.y}*z}};})()`);

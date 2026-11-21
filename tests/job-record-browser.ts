@@ -580,7 +580,8 @@ try {
 
   // #986: the owner URL opens Question automatically, with the shared main view reflecting the retained image inventory.
   const picksForm = `#workspace-interview-answer form[data-job-ask="${picksAsk.askId}"]`;
-  const selectedQuestion = '.block-row:not([hidden]) [data-block-target="question"][aria-selected="true"]';
+  // #1041: the question section of the right communication panel, under its heading.
+  const selectedQuestion='#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden]) .review-dialog-header h2';
   const visiblePainting = `(()=>{const image=document.querySelector('#reference-content img');return image?.complete&&image.naturalWidth>0&&image.getBoundingClientRect().width>0?image.currentSrc:'';})()`;
   const readOptionPicture = () => page!.evaluate<{painting:string;imageCount:number;imageModes:string[];emptyText:string;emptyVisible:boolean}>(`(()=>{
     const empty=document.getElementById('rig-empty'),rect=empty.getBoundingClientRect();
