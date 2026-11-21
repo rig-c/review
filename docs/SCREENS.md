@@ -115,21 +115,27 @@ act bar, not another mode switch.
 ### C6 Bottom panel
 
 - **Shipped:** the main workspace has a resizable bottom panel directly beneath
-  the view. Its heading keeps the current mode's content tabs, **Comments (n)**,
-  and the act bar at the right of that same row (#741). The row remains reachable
-  when the content is collapsed. Height is a saved workspace preference.
+  the view. Its heading keeps the current mode's content tabs (#741); the
+  duplicate bottom **Comments (n)** tab was removed in favour of the top
+  **Comment · C** entry that reveals the bottom Comments panel and starts pin
+  mode (#835), and live-job act controls moved from the bottom row to
+  `#workspace-act-row` beneath the top bar (#845; standalone package inspection
+  retains the act bar in the bottom heading). The row remains reachable when
+  the content is collapsed. Height is a saved workspace preference.
 - Setup blocks: **Part · Modeling · Chest · Mesh · Weights · Bones · Fields ·
-  Cuts · Cloth**, then **Comments (n)**.
+  Cuts · Cloth**.
 - Animate blocks: **Transport · Sound · Environment · Physics · Idle tracks ·
-  Readings · Requirements · Retarget · Report**, then **Comments (n)**. The
-  timeline remains Animate content, not a second mode selector.
-- Parts use that same panel; Part and Comments are usable, while rig-only
-  blocks are disabled with the missing-rig reason.
+  Readings · Requirements · Retarget · Report**. The timeline remains Animate
+  content, not a second mode selector.
+- Parts use that same panel; Part and the Comments panel (via **Comment · C**)
+  are usable, while rig-only blocks are disabled with the missing-rig reason.
 - Reuse `mountRigInspector`, `bindInspectorBlocks` and `mountBottomPanel` in
-  `inspector-blocks.ts`. The Comments button/panel retains identity across modes.
+  `inspector-blocks.ts`. The programmatic Comments selection/panel retains
+  identity across modes.
 - **Historical:** old parts Issues/Producer flags tabs, bottom
-  Setup/Animate/Write review mode tabs and the proposed Compare tab replacement
-  are superseded. Compare's existing View/Rig/Playback/Feedback sections are retained.
+  Setup/Animate/Write review mode tabs, the visible bottom **Comments (n)** tab
+  (#741, removed by #835) and the proposed Compare tab replacement are
+  superseded. Compare's existing View/Rig/Playback/Feedback sections are retained.
 
 ### C7 Side panel (right)
 
@@ -171,9 +177,12 @@ inline Other text and per-question notes through the existing answer contract.
 
 ### C10 Act bar
 
-- **Shipped:** `mountActBar` places the pending ask, decision/submit and save
-  state at the right of the bottom tab row. The act follows the subject, not
-  the chosen mode. A tab change never submits it.
+- **Shipped:** on live jobs, `mountActBar` places the pending ask headline,
+  decision/submit controls and save state in the shared `#workspace-act-row`
+  directly beneath the top bar (#845, superseding the #741 bottom-row placement;
+  the row hides when no ask or early refusal is shown, and standalone package
+  inspection keeps the act bar at the right of the bottom heading). The act
+  follows the subject, not the chosen mode. A tab change never submits it.
 - Parts submit the comments-based verdict; rig review retains its decision and
   submit action. Failed saves and drafts remain explicit.
 - **Shipped:** record checkpoint, signoff and interview asks open the

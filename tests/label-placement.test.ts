@@ -78,3 +78,25 @@ test('#186: a label whose anchor is off the canvas is not placed, pinned or not'
  // Without bounds nothing is off-canvas.
  expect(placeLabels(off).every(p=>p.visible)).toBe(true);
 });
+
+test('#1030 F08: chest landmark apex labels stay on their outward sides without colliding or crossing in EN and KO',async()=>{
+ const {enCatalog}=await import('../web/catalog-en.ts'),{koCatalog}=await import('../web/catalog-ko.ts');
+ const tags=["Right apex (character's right, image left)","Left apex (character's left, image right)","Cleavage"] as const;
+ // Browser-measured #rig-overlay geometry at Fit zoom on the mesh slot (apex_r=[50.25,39.5], apex_l=[66.5,39.5], cleavage=[58.5,38.25]).
+ const cases=[
+  {lang:'en',catalog:enCatalog,bounds:{width:574,height:263},points:[{x:207.56,y:126.37},{x:374.13,y:126.37},{x:292.13,y:113.56}]},
+  {lang:'ko',catalog:koCatalog,bounds:{width:574,height:321},points:[{x:185.09,y:153.92},{x:398.78,y:153.92},{x:293.58,y:137.49}]},
+ ] as const;
+ const textWidth=(s:string)=>[...s].reduce((sum,ch)=>sum+(ch.charCodeAt(0)>127?11:6.61),0)+8;
+ for(const {lang,catalog,bounds,points} of cases){
+  const obstacles=points.map(at=>({x:at.x-6.5,y:at.y-6.5,w:13,h:13}));
+  const inputs=points.map((at,i)=>({at,width:textWidth(catalog[tags[i]!])}));
+  const placed=placeLabels(inputs,{gap:10,rise:3,bounds,obstacles});
+  expect(placed.every(p=>p.visible),lang+' all visible').toBe(true);
+  expect(pairsIntersecting(placed),lang+' no 2D box intersection').toEqual([]);
+  for(const p of placed)for(const g of obstacles)expect(boxesIntersect(p.box,g),lang+' clears obstacle').toBe(false);
+  const [rightApex,leftApex]=placed;
+  // Right apex (image left) stays strictly left of Left apex (image right) with no horizontal overlap.
+  expect(rightApex!.box.x+rightApex!.box.w,`${lang} apex boxes do not overlap horizontally (${JSON.stringify(rightApex!.box)} vs ${JSON.stringify(leftApex!.box)})`).toBeLessThanOrEqual(leftApex!.box.x);
+ }
+});

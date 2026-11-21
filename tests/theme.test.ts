@@ -83,3 +83,43 @@ test('#774 retired job grid CSS is absent; shared bottom panel styles remain',as
  expect(source).toContain('.workspace-main-toolbar');
  expect(source).toContain('.workspace-secondary-toolbar');
 });
+
+test('#1030 F04: wrapping stage-comment row overrides the global 14px button line-height',async()=>{
+ const source=await readFile(new URL('../web/styles.css',import.meta.url),'utf8'),rules=cssRules(source);
+ const prop=(selector:string,name:string)=>rules.filter(r=>r.selector.trim()===selector&&!r.at.length).flatMap(r=>declarations(r.body)).findLast(d=>d.name===name)?.value;
+ expect(prop('button','line-height')).toBe('14px');
+ const rowLineHeight=prop('.stage-comment-item>button:first-child','line-height')??prop('button','line-height');
+ expect(rowLineHeight).toBe('20px');
+});
+
+function relativeLuminance(hex:string):number {
+ const clean=hex.trim().replace(/^#/,''),full=clean.length===3?clean.split('').map(c=>c+c).join(''):clean;
+ const n=Number.parseInt(full,16),channels=[(n>>16)&255,(n>>8)&255,n&255].map(v=>{const s=v/255;return s<=0.03928?s/12.92:((s+0.055)/1.055)**2.4;});
+ return 0.2126*channels[0]!+0.7152*channels[1]!+0.0722*channels[2]!;
+}
+function contrastRatio(a:string,b:string):number {
+ const la=relativeLuminance(a),lb=relativeLuminance(b);
+ return (Math.max(la,lb)+0.05)/(Math.min(la,lb)+0.05);
+}
+
+test('#1030 F06: stage-comment-pin keeps >=3:1 against the stage and >=4.5:1 for its number in dark and light themes, idle and hovered',async()=>{
+ const source=await readFile(new URL('../web/styles.css',import.meta.url),'utf8'),rules=cssRules(source).filter(r=>!r.at.length);
+ const cascade=(selectors:readonly {selector:string;weight:number}[],prop:string)=>{
+  const matched=rules.flatMap((r,order)=>{const s=selectors.find(m=>m.selector===r.selector.trim());if(!s)return [];const d=declarations(r.body).findLast(x=>x.name===prop);return d?[{value:d.value,weight:s.weight,order}]:[];});
+  matched.sort((a,b)=>a.weight-b.weight||a.order-b.order);
+  return matched.at(-1)?.value;
+ };
+ for(const scheme of ['dark','light'] as const){
+  const token=resolvedTokens(source,scheme),resolveValue=(raw:string)=>raw.startsWith('var(')?token(raw.match(/^var\(\s*(--[\w-]+)\s*\)$/)![1]!):raw;
+  const stage=token('--rv-pane-lo');
+  for(const [state,selectors] of [
+   ['idle',[{selector:'button',weight:1},{selector:'.stage-comment-pin',weight:10}]],
+   ['hover',[{selector:'button',weight:1},{selector:'.stage-comment-pin',weight:10},{selector:'button:hover',weight:11},{selector:'.stage-comment-pin:hover',weight:20}]],
+  ] as const){
+   const fill=resolveValue(cascade(selectors,'background')!),ink=resolveValue(cascade(selectors,'color')!);
+   const pinOnStage=contrastRatio(fill,stage),numberOnPin=contrastRatio(ink,fill);
+   expect(pinOnStage,`${scheme} ${state} pin/stage (${fill} on ${stage})`).toBeGreaterThanOrEqual(3);
+   expect(numberOnPin,`${scheme} ${state} number/pin (${ink} on ${fill})`).toBeGreaterThanOrEqual(4.5);
+  }
+ }
+});
