@@ -1860,9 +1860,9 @@ test('#1037 F13 + R3a: rig and parts viewport providers share one zoom readout s
    };
    return {nodes,el};
   };
-  for(const [lang,rigWord,refWord]of [['en','Rig','Reference'],['ko','리그','레퍼런스']] as const){
+  for(const lang of ['en','ko'] as const){
    setLanguagePreference(lang);
-   for(const [active,zoom,word]of [['rig',1,rigWord],['reference',16,refWord]] as const){
+   for(const [active,zoom,targetLabel]of [['rig',1,'Rig'],['reference',16,'Reference']] as const){
     const rigDom=makeProviderDom(),partsDom=makeProviderDom();
     if(active==='reference'){rigDom.el('rig-pane').hidden=true;partsDom.el('rig-pane').hidden=true;}
     const rigState=createViewportState(),partsState=createViewportState();
@@ -1881,13 +1881,13 @@ test('#1037 F13 + R3a: rig and parts viewport providers share one zoom readout s
     },partsState),partsState);
     rigCtrl.renderCameraControls();
     partsCtrl.renderCameraControls();
-    const expected=`${Math.round(zoom*100)}% · ${word}`;
+    const expected=t(`${Math.round(zoom*100)}% · ${targetLabel}`);
     expect(rigDom.el('zoom-value').textContent).toBe(expected);
     expect(partsDom.el('zoom-value').textContent).toBe(expected);
    }
   }
 
-  // Interview View switch uses shared view names (no file name) and preserves control order.
+  // Interview View switch uses shared view names (no file name) for 1 image and numbered Reference {0} for 2+ images, and preserves control order.
   const mainSource=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
   const start=mainSource.indexOf('function syncQuestionImage():void {'),end=mainSource.indexOf('/** Survey forms use the shared bottom tab.',start);
   expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
@@ -1895,36 +1895,44 @@ test('#1037 F13 + R3a: rig and parts viewport providers share one zoom readout s
   const savedDoc=(globalThis as any).document;
   Object.defineProperty(globalThis,'document',{value:doc,configurable:true});
   try{
-   for(const [lang,expectedViewName]of [['en','Reference'],['ko','레퍼런스']] as const){
+   for(const lang of ['en','ko'] as const){
     setLanguagePreference(lang);
-    const controls=createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(()=>{},true)});
-    const zoomGroup=controls.zoomGroup as unknown as TestElement;
-    root.replaceChildren(zoomGroup);
-    expect(zoomGroup.children.map((n:TestElement)=>n.id)).toEqual(['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']);
-    const nodes=new Map<string,any>();
-    const el=(id:string)=>{if(!nodes.has(id)){const n=doc.createElement('div');n.id=id;nodes.set(id,n);}return nodes.get(id);};
-    const scope:any={
-     disposed:false,releaseInterview:null,
-     questionForms:[{hidden:false,interviewImages:[{name:'reference.png',src:'/img/0'},{name:'background',src:'/img/1'}]}],
-     activeInterviewImages:null,activeInterviewImage:null,
-     view:'compare',viewport:{state:createViewportState(),cancelFit(){},bindControls:()=>()=>{},bindNavigation:()=>()=>{}},
-     el,button:(id:string)=>el(id),controls,chooseInspectionView(){},questionPanel:{dataset:{}},
-     referenceInput:{state:'absent'},referenceSize:null,referenceGeneration:0,
-     video:null,controlledVideoSample:null,sequence:null,sequenceSvg:null,selectedPerson:'',lastPoseFrame:-1,
-     unitScaleMessage(){},sourceTextContent:()=>'',message(){},showReference:async()=>{},
-     renderLayout(){},workspace:null,fitCamera(){},
-    };
-    const run=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(mainSource.slice(start,end))};return syncQuestionImage;}`)(scope);
-    run();
-    applyDomI18n(doc as unknown as Document);
-    const viewSwitch=controls.viewSwitch as unknown as TestElement;
-    const viewLabel=viewSwitch.querySelectorAll('*').find((n:TestElement)=>n.id==='view-menu-label')!;
-    const itemButtons=viewSwitch.querySelectorAll('button');
-    expect(viewLabel.textContent).toBe(expectedViewName);
-    expect(itemButtons.map((b:TestElement)=>b.textContent)).toEqual([expectedViewName,expectedViewName]);
-    expect(itemButtons.map((b:TestElement)=>b.dataset.view)).toEqual(['interview-image-0','interview-image-1']);
-    expect(viewSwitch.textContent).not.toContain('reference.png');
-    expect(viewSwitch.textContent).not.toContain('background');
+    const singleExpected=t('Reference');
+    const pairExpected=[t('Reference {0}',[1]),t('Reference {0}',[2])];
+    expect(pairExpected[0]).not.toBe(pairExpected[1]);
+    for(const [interviewImages,expectedLabels]of [
+     [[{name:'reference.png',src:'/img/0'}],[singleExpected]],
+     [[{name:'reference.png',src:'/img/0'},{name:'background',src:'/img/1'}],pairExpected],
+    ] as const){
+     const controls=createViewControls({layout:'rigStep1',viewSwitch:inspectionViewSwitch(()=>{},true)});
+     const zoomGroup=controls.zoomGroup as unknown as TestElement;
+     root.replaceChildren(zoomGroup);
+     expect(zoomGroup.children.map((n:TestElement)=>n.id)).toEqual(['zoom-in','zoom-out','fit','native-one','view-menu','zoom-value']);
+     const nodes=new Map<string,any>();
+     const el=(id:string)=>{if(!nodes.has(id)){const n=doc.createElement('div');n.id=id;nodes.set(id,n);}return nodes.get(id);};
+     const scope:any={
+      disposed:false,releaseInterview:null,
+      questionForms:[{hidden:false,interviewImages}],
+      activeInterviewImages:null,activeInterviewImage:null,
+      view:'compare',viewport:{state:createViewportState(),cancelFit(){},bindControls:()=>()=>{},bindNavigation:()=>()=>{}},
+      el,button:(id:string)=>el(id),controls,chooseInspectionView(){},questionPanel:{dataset:{}},
+      referenceInput:{state:'absent'},referenceSize:null,referenceGeneration:0,
+      video:null,controlledVideoSample:null,sequence:null,sequenceSvg:null,selectedPerson:'',lastPoseFrame:-1,
+      unitScaleMessage(){},sourceTextContent:()=>'',message(){},showReference:async()=>{},
+      renderLayout(){},workspace:null,fitCamera(){},
+     };
+     const run=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(mainSource.slice(start,end))};return syncQuestionImage;}`)(scope);
+     run();
+     const viewSwitch=controls.viewSwitch as unknown as TestElement;
+     const viewLabel=viewSwitch.querySelectorAll('*').find((n:TestElement)=>n.id==='view-menu-label')!;
+     const itemButtons=viewSwitch.querySelectorAll('button');
+     expect(viewLabel.textContent).toBe(expectedLabels[0]);
+     expect(itemButtons.map((b:TestElement)=>b.textContent)).toEqual([...expectedLabels]);
+     if(itemButtons.length>1)expect(new Set(itemButtons.map((b:TestElement)=>b.textContent)).size).toBe(itemButtons.length);
+     expect(itemButtons.map((b:TestElement)=>b.dataset.view)).toEqual(interviewImages.map((_,i)=>`interview-image-${i}`));
+     expect(viewSwitch.textContent).not.toContain('reference.png');
+     expect(viewSwitch.textContent).not.toContain('background');
+    }
    }
   }finally{
    if(savedDoc)Object.defineProperty(globalThis,'document',{value:savedDoc,configurable:true});

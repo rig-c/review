@@ -1,6 +1,6 @@
 /** Existing compiled rig/reference rendering for the shared inspection viewport. */
-import type { ModelAssets, RigPlayer, PoseBounds, PosedFrame } from '@rig-c/play';
-import { formatZoomReadout, type CameraTarget, type ViewportProvider, type ViewportState, type ViewportController } from './viewport-controller.ts';
+import type {ModelAssets,RigPlayer,PoseBounds,PosedFrame} from '@rig-c/play';
+import {formatZoomReadout,type CameraTarget,type ViewportProvider,type ViewportState,type ViewportController} from './viewport-controller.ts';
 import {cameraSignature} from './camera-view.ts';
 import {dragImpulse} from '../src/environment.ts';
 import {CLICK_SLOP_PX} from './stage-pick.ts';

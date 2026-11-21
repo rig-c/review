@@ -1761,7 +1761,7 @@ function syncQuestionImage():void {
  for(const button of disabled.keys())button.disabled=false;
  const cameraBindings=button('zoom-in').onclick?[]:[viewport.bindControls(unitScaleMessage),viewport.bindNavigation()];
  activeInterviewImages=images;activeInterviewImage=images[0]!;
- const restore=controls.replaceViewSwitch({currentMode:'interview-image-0',groups:[{modes:images.map((_image,index)=>({id:'interview-image-'+index,labelKey:'Reference',pressed:index===0}))}],onChange:chooseInspectionView});
+ const restore=controls.replaceViewSwitch({currentMode:'interview-image-0',groups:[{modes:images.map((_image,index)=>({id:'interview-image-'+index,labelKey:images.length>1?`Reference ${index+1}`:'Reference',pressed:index===0}))}],onChange:chooseInspectionView});
  viewport.state.cameraSync=false;viewport.state.activeCamera='reference';view='reference';questionPanel.dataset.questionImageActive='true';
  releaseInterview=()=>{
   ++referenceGeneration;activeInterviewImages=null;activeInterviewImage=null;delete questionPanel.dataset.questionImageActive;restore();
