@@ -10,7 +10,7 @@
  * placed at all, pinned or not (#186): a tag and leader for a joint that is not drawn would be a phantom annotation.
  */
 export interface LabelPoint {x:number;y:number}
-export interface LabelInput {at:LabelPoint;width:number;pinned?:boolean}
+export interface LabelInput {at:LabelPoint;width:number;pinned?:boolean;side?:'left'|'right'}
 export interface LabelBox {x:number;y:number;w:number;h:number}
 export interface PlacedLabel {box:LabelBox;/** False: drawn only when pinned (hover / selection). */visible:boolean;/** The box left its home slot; draw a leader to the point. */moved:boolean}
 export interface LabelPlacementOptions {
@@ -25,25 +25,42 @@ export interface LabelPlacementOptions {
 
 export function boxesIntersect(a:LabelBox,b:LabelBox):boolean{return a.x<b.x+b.w&&b.x<a.x+a.w&&a.y<b.y+b.h&&b.y<a.y+a.h;}
 
+function leaderBox(at:LabelPoint,box:LabelBox):LabelBox{
+ const ex=Math.min(Math.max(at.x,box.x),box.x+box.w),ey=Math.min(Math.max(at.y,box.y),box.y+box.h);
+ return {x:Math.min(at.x,ex),y:Math.min(at.y,ey),w:Math.max(1,Math.abs(ex-at.x)),h:Math.max(1,Math.abs(ey-at.y))};
+}
+
 /** Candidate boxes for one label, in the order they are tried. The first one is the home box. */
 export function labelCandidates(input:LabelInput,options:LabelPlacementOptions={}):LabelBox[]{
  const h=options.height??15,gap=options.gap??9,rise=options.rise??2,step=options.step??h+2,rows=options.rows??4,w=input.width;
- const right=input.at.x+gap,left=input.at.x-gap-w,home=input.at.y-rise-h,out:LabelBox[]=[{x:right,y:home,w,h},{x:left,y:home,w,h}];
- for(let k=1;k<=rows;k++){const d=k*step;out.push({x:right,y:home-d,w,h},{x:right,y:home+d,w,h},{x:left,y:home-d,w,h},{x:left,y:home+d,w,h});}
+ const right=input.at.x+gap,left=input.at.x-gap-w,home=input.at.y-rise-h;
+ const first=input.side==='left'?left:right,second=input.side==='left'?right:left;
+ const clamp=(x:number)=>options.bounds&&w<=options.bounds.width?Math.max(0,Math.min(x,options.bounds.width-w)):x;
+ const xs=[...new Set([first,clamp(first),second,clamp(second)])],out:LabelBox[]=[{x:first,y:home,w,h},{x:second,y:home,w,h}];
+ for(let k=1;k<=rows;k++){const d=k*step;for(const x of xs){const clamped=x!==first&&x!==second;out.push({x,y:home-d,w,h},{x,y:clamped?home+d+step:home+d,w,h});}}
  return out;
 }
 
 export function placeLabels(inputs:readonly LabelInput[],options:LabelPlacementOptions={}):PlacedLabel[]{
+ const h=options.height??15,gap=options.gap??9,step=options.step??h+2;
  const order=inputs.map((_,i)=>i).sort((a,b)=>Number(!!inputs[b]!.pinned)-Number(!!inputs[a]!.pinned)||a-b);
  const inside=(b:LabelBox)=>!options.bounds||(b.x>=0&&b.y>=0&&b.x+b.w<=options.bounds.width&&b.y+b.h<=options.bounds.height);
  const onCanvas=(p:LabelPoint)=>!options.bounds||(p.x>=0&&p.y>=0&&p.x<=options.bounds.width&&p.y<=options.bounds.height);
- const placed:LabelBox[]=[...(options.obstacles??[])],out:PlacedLabel[]=new Array(inputs.length);
+ const active=inputs.filter(x=>onCanvas(x.at));
+ const inferSide=(input:LabelInput):'left'|'right'=>{
+  if(input.side)return input.side;
+  const right=input.at.x+gap,left=input.at.x-gap-input.width,band=active.filter(o=>o!==input&&Math.abs(o.at.y-input.at.y)<=step);
+  return band.filter(o=>o.at.x>=right&&o.at.x<=right+input.width).length>band.filter(o=>o.at.x>=left&&o.at.x<=left+input.width).length?'left':'right';
+ };
+ const placed:LabelBox[]=[...(options.obstacles??[])],labels:LabelBox[]=[],out:PlacedLabel[]=new Array(inputs.length);
  for(const i of order){
-  const input=inputs[i]!,candidates=labelCandidates(input,options),home=candidates[0]!;
+  const raw=inputs[i]!,input:LabelInput={...raw,side:inferSide(raw)},candidates=labelCandidates(input,options),home=candidates[0]!;
   if(!onCanvas(input.at)){out[i]={box:home,visible:false,moved:false};continue;}
-  const index=candidates.findIndex(b=>inside(b)&&!placed.some(p=>boxesIntersect(b,p)));
-  if(index>=0){const box=candidates[index]!;placed.push(box);out[i]={box,visible:true,moved:index>0};}
-  else if(input.pinned){placed.push(home);out[i]={box:home,visible:true,moved:false};}
+  const free=(b:LabelBox)=>inside(b)&&!placed.some(p=>boxesIntersect(b,p));
+  let index=candidates.findIndex(b=>free(b)&&!labels.some(p=>boxesIntersect(leaderBox(input.at,b),p)));
+  if(index<0)index=candidates.findIndex(free);
+  if(index>=0){const box=candidates[index]!;placed.push(box);labels.push(box);out[i]={box,visible:true,moved:index>0};}
+  else if(input.pinned){placed.push(home);labels.push(home);out[i]={box:home,visible:true,moved:false};}
   else out[i]={box:home,visible:false,moved:false};
  }
  return out;
