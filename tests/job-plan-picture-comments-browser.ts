@@ -26,7 +26,7 @@ function pictureBytes(shift=0):Buffer{
   const c=[[230,20,160],[40,140,230],[250,200,40],[60,190,90]][q]!;png.data[i]=c[0]!;png.data[i+1]=(c[1]!+shift)%256;png.data[i+2]=c[2]!;png.data[i+3]=255;}
  return PNG.sync.write(png);
 }
-const fixtureFor=()=>recordScreenFixture('signoff',true,undefined,'plan-approved',false,true,undefined,false,false,undefined,pictureBytes());
+const fixtureFor=()=>recordScreenFixture('signoff',true,undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,pictureBytes());
 
 if(Bun.argv.includes('--serve')){
  const fixture=await fixtureFor(),url=new URL(fixture.ownerUrl);url.searchParams.set('lang',arg('--lang')??'en');
