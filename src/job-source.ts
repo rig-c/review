@@ -956,10 +956,18 @@ export async function loadRetainedRecordRig(retained: JobRetainedRecordSource) {
   }
 }
 
-/** Create declares the original painting as the first project input. */
+/** Create declares the original painting as `project.painting`, or as the first project input on older records. */
 export function retainedRecordPainting(retained: JobRetainedRecordSource): Pick<InterviewQuestion['images'][number], 'ref' | 'name'> | null {
   const {project} = readProjectRecordBytes(retained.snapshotRoot, retained.record);
-  const input = asPlainObject(Array.isArray(project.inputs) ? project.inputs[0] : null);
+  const inputs = Array.isArray(project.inputs) ? project.inputs : [];
+  let rawInput: unknown = null;
+  if (Object.hasOwn(project, 'painting')) {
+    if (typeof project.painting !== 'string') return null;
+    rawInput = inputs.find(item => asPlainObject(item)?.path === project.painting) ?? null;
+  } else {
+    rawInput = inputs[0] ?? null;
+  }
+  const input = asPlainObject(rawInput);
   const seal = retained.seals.find(file => file.path === input?.path && file.sha256 === input?.sha256);
   if (!seal || !/\.(png|jpe?g|webp|svg)$/i.test(seal.path)) return null;
   return {ref: seal, name: posix.basename(seal.path)};
