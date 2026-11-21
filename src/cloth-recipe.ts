@@ -31,15 +31,35 @@ export function clothPatchKind(ops: readonly Pick<PatchOp, 'path'>[]): 'cloth' |
   return n === 0 ? 'none' : n === ops.length ? 'cloth' : 'mixed';
 }
 
+/** The producer package's typed export key for its cloth target list (#954, paired with rig-c/parts#1433). */
+export const CLOTH_TARGETS_EXPORT = './cloth-targets.json';
+/** The first `@rig-c/parts` release exporting `./cloth-targets.json` (rig-c/parts#1433). */
+export const CLOTH_TARGETS_SINCE = '2.51.0';
+/** The schema of `@rig-c/parts`' `./cloth-targets.json` export. */
+export const CLOTH_TARGETS_SCHEMA = 'rig-parts/cloth-targets@1';
+export const CLOTH_TARGETS_INVALID = 'CLOTH_TARGETS_INVALID';
+export const CLOTH_TARGETS_UNAVAILABLE = 'CLOTH_TARGETS_UNAVAILABLE';
+export const clothTargetsUnavailable = (version: string) => `${CLOTH_TARGETS_UNAVAILABLE}: the installed rig-parts ${version || 'unknown'} has no cloth-targets export (needs ${CLOTH_TARGETS_SINCE})`;
+
+export class ClothTargetsError extends Error { constructor(detail: string) { super(`${CLOTH_TARGETS_INVALID}: ${detail}`); } }
+
+/** The tags the config's own `cloth` block already declares. */
+export function configClothTags(config: unknown): string[] {
+  const cloth = isObject(config) ? config.cloth : undefined;
+  return isObject(cloth) ? Object.keys(cloth).filter(k => k !== 'note' && !k.endsWith('_note') && !k.startsWith('x-')) : [];
+}
+
 /**
- * The tags the installed reader accepts, read from its own source text (`export const CLOTH_TARGETS = [...]`), or null
- * when the text does not state them in that form.
+ * The tags the installed reader accepts, validated from its `./cloth-targets.json` export (`rig-parts/cloth-targets@1`).
  */
-export function readClothTargets(sourceText: string): string[] | null {
-  const m = /export const CLOTH_TARGETS\s*=\s*\[([^\]]*)\]/.exec(sourceText);
-  if (!m) return null;
-  const tags = [...m[1]!.matchAll(/'([^']+)'|"([^"]+)"/g)].map(x => x[1] ?? x[2]!);
-  return tags.length ? tags : null;
+export function parseClothTargets(value: unknown): string[] {
+  if (!isObject(value) || value.schema !== CLOTH_TARGETS_SCHEMA || Object.keys(value).some(k => k !== 'schema' && k !== 'targets')) {
+    throw new ClothTargetsError(`expected {"schema":${JSON.stringify(CLOTH_TARGETS_SCHEMA)},"targets":[…]}`);
+  }
+  if (!Array.isArray(value.targets) || !value.targets.length) throw new ClothTargetsError('targets must be a non-empty array of strings');
+  const tags = value.targets.map(t => { if (typeof t !== 'string' || !t.trim()) throw new ClothTargetsError('targets must contain non-empty strings'); return t; });
+  if (new Set(tags).size !== tags.length) throw new ClothTargetsError('targets must be distinct');
+  return tags;
 }
 
 /** One recipe field the form edits: its pointer below `/cloth/<tag>` and how it is typed. The producer judges every value. */

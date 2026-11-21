@@ -1,8 +1,10 @@
 import {expect,test} from 'bun:test';
-import {readFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,realpath,rm,symlink,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {ClothFieldError,clothLinks,clothPatchKind,fieldText,fieldValue,readClothTargets,recipeFromFields,recipeOps,RECIPE_FIELDS,writtenDiff} from '../src/cloth-recipe.ts';
+import {CLOTH_TARGETS_SCHEMA,CLOTH_TARGETS_SINCE,ClothFieldError,ClothTargetsError,clothLinks,clothPatchKind,fieldText,fieldValue,parseClothTargets,recipeFromFields,recipeOps,RECIPE_FIELDS,writtenDiff} from '../src/cloth-recipe.ts';
 import {applyConfigPatch,type JsonValue} from '../src/config-patch.ts';
+import {clothTargets} from '../src/rebuild.ts';
 
 const recipe={chains:4,links:3,split:{at:1,into:2,hold_tip:true},damping:0.85,wind:[2,10],gravity:[5,30],strength:{trunk:50,branch:110,edge:45},swing:{scales:[1.3,1,1,1.3]},note:'kept'};
 const config={key:'k',cloth:{bottomwear:recipe,'front hair':{chains:1,links:3,wind:[1,6],gravity:[2,12]}}};
@@ -47,12 +49,80 @@ test('#111: field text is typed, never judged — the producer judges every valu
  expect(fieldValue(field('split.hold_tip'),'false')).toBe(false);expect(fieldValue(field('damping'),'  ')).toBeUndefined();
 });
 
-test('#111: the tags are the installed reader\'s own list',async()=>{
- expect(readClothTargets(`export const CLOTH_TARGETS = ['bottomwear', 'back hair', 'front hair'] as const;`)).toEqual(['bottomwear','back hair','front hair']);
- expect(readClothTargets('export const OTHER = 1;')).toBeNull();
+test('#111 / #954: cloth targets come from the producer\'s ./cloth-targets.json export, never from source text',async()=>{
+ const targets5=['bottomwear','back hair','front hair','handwear-r','handwear-l'];
+ expect(parseClothTargets({schema:CLOTH_TARGETS_SCHEMA,targets:targets5})).toEqual(targets5);
  expect(clothPatchKind([{path:'/cloth/bottomwear/links'}])).toBe('cloth');
  expect(clothPatchKind([{path:'/cloth/bottomwear/links'},{path:'/constraints/0/damping'}])).toBe('mixed');
  expect(clothPatchKind([{path:'/constraints/0/damping'}])).toBe('none');
+
+ const root=await realpath(await mkdtemp(join(tmpdir(),'review-cloth-targets-')));
+ const configText=JSON.stringify(config);
+ try{
+  // Control 1: export present (today's 5 tags, including spaces) → tags equal, read:true.
+  const p1=join(root,'p1');await mkdir(join(p1,'src'),{recursive:true});
+  await writeFile(join(p1,'package.json'),JSON.stringify({name:'@rig-c/parts',version:CLOTH_TARGETS_SINCE,exports:{'./cloth-targets.json':'./src/cloth-targets.json'}}));
+  await writeFile(join(p1,'src/cloth-targets.json'),JSON.stringify({schema:CLOTH_TARGETS_SCHEMA,targets:targets5})+'\n');
+  expect(await clothTargets(p1,configText)).toEqual({tags:targets5,read:true,reason:null});
+
+  // Control 2: export key missing → fallback to config's declared tags, read:false, reason names the version and 2.51.0.
+  const p2=join(root,'p2');await mkdir(p2,{recursive:true});
+  await writeFile(join(p2,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.50.0',exports:{'./assembly-reading':'./src/assembly-reading.ts'}}));
+  expect(await clothTargets(p2,configText)).toEqual({
+   tags:['bottomwear','front hair'],
+   read:false,
+   reason:'CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts 2.50.0 has no cloth-targets export (needs 2.51.0)',
+  });
+
+  // Control 3: wrong schema, a non-string tag, an empty-string tag, a duplicate, an empty list, extra keys → named refusal.
+  const p3=join(root,'p3');await mkdir(p3,{recursive:true});
+  await writeFile(join(p3,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.50.0',exports:{'./cloth-targets.json':'./cloth-targets.json'}}));
+  for(const bad of [
+   {schema:'rig-parts/cloth-targets@2',targets:['bottomwear']},
+   {schema:CLOTH_TARGETS_SCHEMA,targets:['bottomwear',123]},
+   {schema:CLOTH_TARGETS_SCHEMA,targets:['bottomwear','']},
+   {schema:CLOTH_TARGETS_SCHEMA,targets:['bottomwear','bottomwear']},
+   {schema:CLOTH_TARGETS_SCHEMA,targets:[]},
+   {schema:CLOTH_TARGETS_SCHEMA,targets:['bottomwear'],extra:true},
+  ]){
+   expect(()=>parseClothTargets(bad)).toThrow(ClothTargetsError);
+   await writeFile(join(p3,'cloth-targets.json'),JSON.stringify(bad)+'\n');
+   await expect(clothTargets(p3,configText)).rejects.toThrow(/^CLOTH_TARGETS_INVALID: /);
+  }
+
+  // Control 4: export pointing outside the package (../x.json, ./../x.json, or a symlink out) → refused.
+  await writeFile(join(root,'outside.json'),JSON.stringify({schema:CLOTH_TARGETS_SCHEMA,targets:targets5})+'\n');
+  const p4a=join(root,'p4a');await mkdir(p4a,{recursive:true});
+  await writeFile(join(p4a,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.50.0',exports:{'./cloth-targets.json':'../outside.json'}}));
+  await expect(clothTargets(p4a,configText)).rejects.toThrow(/^CLOTH_TARGETS_INVALID: /);
+
+  const p4b=join(root,'p4b');await mkdir(p4b,{recursive:true});
+  await writeFile(join(p4b,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.50.0',exports:{'./cloth-targets.json':'./../outside.json'}}));
+  await expect(clothTargets(p4b,configText)).rejects.toThrow(/^CLOTH_TARGETS_INVALID: /);
+
+  const p4c=join(root,'p4c');await mkdir(p4c,{recursive:true});
+  await symlink(join(root,'outside.json'),join(p4c,'cloth-targets.json'));
+  await writeFile(join(p4c,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.50.0',exports:{'./cloth-targets.json':'./cloth-targets.json'}}));
+  await expect(clothTargets(p4c,configText)).rejects.toThrow(/^CLOTH_TARGETS_INVALID: /);
+
+  const p4d=join(root,'p4d');await mkdir(p4d,{recursive:true});
+  const fifo=join(p4d,'cloth-targets.json');
+  expect(Bun.spawnSync(['mkfifo',fifo]).exitCode).toBe(0);
+  await writeFile(join(p4d,'package.json'),JSON.stringify({name:'@rig-c/parts',version:CLOTH_TARGETS_SINCE,exports:{'./cloth-targets.json':'./cloth-targets.json'}}));
+  await expect(clothTargets(p4d,configText)).rejects.toThrow(/^CLOTH_TARGETS_INVALID: /);
+
+  // Control 5: a spread or computed CLOTH_TARGETS in src/cloth.ts with no export → not read (proves no source parsing).
+  const p5=join(root,'p5');await mkdir(join(p5,'src'),{recursive:true});
+  await writeFile(join(p5,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.50.0'}));
+  await writeFile(join(p5,'src/cloth.ts'),`const HAIR = ['back hair', 'front hair'] as const;\nexport const CLOTH_TARGETS = ['bottomwear', ...HAIR] as const;\n`);
+  expect(await clothTargets(p5,configText)).toEqual({
+   tags:['bottomwear','front hair'],
+   read:false,
+   reason:'CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts 2.50.0 has no cloth-targets export (needs 2.51.0)',
+  });
+ }finally{
+  await rm(root,{recursive:true,force:true});
+ }
 });
 
 test('#111: the link preview reads each tag\'s parts (See-through tag or the recipe\'s part) and their chains\' points and tip',()=>{
