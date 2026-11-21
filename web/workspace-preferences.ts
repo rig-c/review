@@ -9,9 +9,9 @@ export type WorkspaceLanguage='system'|'en'|'ko';
  * communication panel (question, comments, record forms; #1041). */
 export interface WorkspacePanels {leftWidth:number;rightWidth:number;inspectorHeight:number;communicationWidth:number}
 export const panelBounds=Object.freeze({leftWidth:Object.freeze({min:120,max:720}),rightWidth:Object.freeze({min:180,max:900}),inspectorHeight:Object.freeze({min:120,max:900}),communicationWidth:Object.freeze({min:280,max:640})});
-export const defaultWorkspacePanels:Readonly<WorkspacePanels>=Object.freeze({leftWidth:170,rightWidth:260,inspectorHeight:262,communicationWidth:360});
+export const defaultWorkspacePanels:Readonly<WorkspacePanels>=Object.freeze({leftWidth:170,rightWidth:260,inspectorHeight:240,communicationWidth:360});
 /** Earlier defaults (280, then 350, then 120 and 240 on the #709 branch): an unstamped stored value equal to one loads as today's default. */
-const legacyDefaultInspectorHeights:ReadonlySet<number>=new Set([280,350,120,240]);
+const legacyDefaultInspectorHeights:ReadonlySet<number>=new Set([280,350,120,240,262]);
 type Flag='defaultCameraSync'|'defaultIdleRepeat'|'settingsCollapsed';
 type Field='theme'|'language'|Flag|keyof WorkspacePanels;
 const fields:readonly Field[]=['theme','language','defaultCameraSync','defaultIdleRepeat','settingsCollapsed','leftWidth','rightWidth','inspectorHeight','communicationWidth'];

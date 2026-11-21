@@ -136,7 +136,7 @@ async function run(lang: 'en' | 'ko') {
     assert.equal(state.actVisible, pendingAct, 'act bar visibility follows the pending act phase');
     assert.equal(state.actRowHidden, !pendingAct, 'only a pending act owns the act row');
     if (!pendingAct) assert.deepEqual(state.visibleSaveStates, ['dirty'], 'completed act has one visible topbar save state');
-    if (Bun.argv.includes('--assert-default262')) assert.ok(Math.abs(state.inspectorHeight - 262) <= 1, 'default bottom height 262');
+    if (Bun.argv.includes('--assert-default240')) assert.ok(Math.abs(state.inspectorHeight - 240) <= 1, 'default bottom height 240');
     await writeFile(join(out, name + '.png'), await page!.screenshot());
     return state;
   }
