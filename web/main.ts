@@ -867,19 +867,26 @@ function configureTurnPad(model:unknown):void {
  if(previous&&turnPad){try{turnPad.restore(previous);}catch{message('TURN_STATE_MODEL_MISMATCH: turn values reset for this build.',true);}}
  workspace?.refresh();
 }
-/** Verify the same response consumed by Play, rather than a second read of its source. */
+/** Verify the same response consumed by Play, rather than a second read of its source. One request per input per
+ * load (#1050): the verified response is kept for this load, and the part catalog and model document read it again
+ * through the same fetch. A new load (a rebuild, another build) calls this again and gets a fresh request. */
 function stageLoadInputs(modelUrl:string, modelHash:string) {
  const setsUrl=modelUrl===inspectedModel?.url&&data.manifest.sets&&data.setsHash
   ?new URL(assetUrl(data.manifest.sets),location.href).href:null;
+ const verified=new Map<string,Promise<Response>>();
  const checkedFetch=new Proxy(fetch,{apply:async(_target,_this,args:Parameters<typeof fetch>)=>{
-  const expected=String(args[0])===modelUrl?modelHash:String(args[0])===setsUrl?data.setsHash:null;
+  const url=String(args[0]),expected=url===modelUrl?modelHash:url===setsUrl?data.setsHash:null;
   if(!expected)throw new Error('DIRECTION_SOURCE_CHANGED: undeclared playback input');
-  const response=await fetch(...args);
-  if(!response.ok)return response;
-  const bytes=await response.clone().arrayBuffer();
-  const sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');
-  if(sha256!==expected)throw new Error('DIRECTION_SOURCE_CHANGED: playback bytes differ from the bound SHA-256');
-  return response;
+  let pending=verified.get(url);
+  if(!pending){pending=(async()=>{
+   const response=await fetch(...args);
+   if(!response.ok)return response;
+   const bytes=await response.arrayBuffer();
+   const sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');
+   if(sha256!==expected)throw new Error('DIRECTION_SOURCE_CHANGED: playback bytes differ from the bound SHA-256');
+   return new Response(bytes,{status:response.status,statusText:response.statusText,headers:response.headers});
+  })();verified.set(url,pending);}
+  return (await pending).clone();
  }});
  return {setsUrl,fetch:checkedFetch};
 }
@@ -914,14 +921,15 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
   try {
     const modelUrl = new URL(assetUrl(data.manifest.model), location.href).href;
     inspectedModel={url:modelUrl,prefix:access.route('/assets/'),sha256:data.reviewedSource.rig?.sha256??''};stageModelHash=inspectedModel.sha256||null;
-    assets = await loadModel({ modelUrl, ...stageLoadInputs(modelUrl,inspectedModel.sha256), resolvePage: (name, url) => {
+    const inputs=stageLoadInputs(modelUrl,inspectedModel.sha256);
+    assets = await loadModel({ modelUrl, ...inputs, resolvePage: (name, url) => {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith(access.route('/assets/'))) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
     if(data.scene){sceneComposite=bindScenePlates(data.scene,await loadScenePlates(data.scene,assetUrl));input('idle-repeat').checked=data.direction!.take.loop;input('idle-repeat').disabled=true;}
     player = createInspectionPlayer(el('rig-root'), assets,sceneComposite?'canvas':undefined);
     setupChestWorld = readSetupChest(player);
     // Parts inspection is an add-on: a catalog refusal is shown in the explorer and never aborts the rig.
-    try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
+    try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[],inputs.fetch);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
     animations.disabled = assets.animations.length === 0 || !!data.scene;
@@ -935,7 +943,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     select('axis-select').replaceChildren(); for (const axis of validAxes) select('axis-select').append(option(axis.id, axis.label));
     input('axis-value').disabled = !validAxes.length;
     for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;
-    enableEnvironment(modelUrl);
+    enableEnvironment(modelUrl,inputs.fetch);
     describeLayerToggles(document,el('layer-state').textContent??'');
     fitCamera();
   } catch (error) { turnPad?.dispose();turnPad=null;document.getElementById('turn-pad-host')?.remove();text('renderer-state',rendererStatus(null,'failed').label);player?.dispose(); player = null; assets?.dispose(); assets = null; text('player-state', 'Rig load failed'); text('rig-empty', `Could not open rig: ${errorText(error)}`); message(errorText(error), true); }
@@ -2418,13 +2426,13 @@ function restoreEnvironment():void {
  if(player){if(environmentApplied())applyEnvironment();else player.environment(null);}
 }
 function feedbackEnvironment(){return player?environmentJson(environmentContext(wind.read(),gravityValue(),environmentApplied(),player.environment())):null;}
-function enableEnvironment(modelUrl:string):void {
+function enableEnvironment(modelUrl:string,fetcher:typeof fetch):void {
  for(const id of environmentInputs)el<HTMLInputElement|HTMLButtonElement>(id).disabled=false;
  syncEnvironmentInputs();text('physics-panel-state','Reading the compiled model…');text('idle-tracks-state','Reading the compiled model…');
  readingsPanel?.catalog(data.feedbackCatalog.slots??[],data.feedbackCatalog.bones??[]);readingsPanel?.status('Pick readings, then Run: each runs on the inspected build and on the latest scratch build.',false);
  const rig=data.reviewedSource.rig;
  if(!rig){inspectedDocumentReason='PHYSICS_TUNING_UNAVAILABLE: no reviewed rig identity';refreshPhysics();return;}
- void loadModelDocument(modelUrl,rig.sha256).then(loaded=>{if(loaded.ok)inspectedDocument=loaded.document;else inspectedDocumentReason=`PHYSICS_TUNING_UNAVAILABLE: ${loaded.reason}`;refreshPhysics();},error=>{inspectedDocumentReason=`PHYSICS_TUNING_UNAVAILABLE: ${errorText(error)}`;refreshPhysics();});
+ void loadModelDocument(modelUrl,rig.sha256,fetcher).then(loaded=>{if(loaded.ok)inspectedDocument=loaded.document;else inspectedDocumentReason=`PHYSICS_TUNING_UNAVAILABLE: ${loaded.reason}`;refreshPhysics();},error=>{inspectedDocumentReason=`PHYSICS_TUNING_UNAVAILABLE: ${errorText(error)}`;refreshPhysics();});
 }
 /** The panel's rows: the inspected model's constraints against the handoff config's (both must be read). */
 function refreshPhysics():void {
@@ -3253,7 +3261,8 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  const keepRigCamera=structuredClone(viewport.paneCamera('rig')),keepReferenceCamera=structuredClone(viewport.paneCamera('reference'));
  const keepAnimation=animation,keepTime=time,wasPlaying=playing,keepSet=select('part-set').disabled?'':select('part-set').value;
  inspectionSourceState='pending';partModel=null;pause();refreshAnimationInspection();
- const next=await loadModel({modelUrl,...stageLoadInputs(modelUrl,sha256),resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}}).catch(error=>{inspectionSourceState='failed';refreshAnimationInspection();throw error;});
+ const inputs=stageLoadInputs(modelUrl,sha256);
+ const next=await loadModel({modelUrl,...inputs,resolvePage:(name,url)=>{const target=new URL(name,url);if(target.origin!==location.origin||!target.pathname.startsWith(prefix))throw new Error(`Model page escapes its build: ${name}`);return target.href;}}).catch(error=>{inspectionSourceState='failed';refreshAnimationInspection();throw error;});
  const keepFraming=!!keepStage&&!!next.stage&&(['x','y','width','height'] as const).every(key=>keepStage[key]===next.stage![key]);
  viewport.state.cameraRestoring=true;viewport.cancelFit();
  // The fit-relative zoom also depends on the first-draw framing basis, not just the declared stage.
@@ -3262,7 +3271,7 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  pause();player?.dispose();assets?.dispose();assets=next;player=createInspectionPlayer(el('rig-root'),assets);setupChestWorld=readSetupChest(player);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
  {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
- try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[]);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();meshEditor?.selectionChanged();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
+ try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[],inputs.fetch);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();meshEditor?.selectionChanged();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
  configurePartSets(keepSet);
  // The same world before the first pose: a physics Apply resumes the wind (clock and pulse), the pending jolts, gravity and
  // whether the controls are engaged as they stood when Apply was pressed; then the seek re-poses under that world.
@@ -3280,7 +3289,7 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  if(keepFraming){viewport.writeCamera('rig',keepRigCamera);viewport.writeCamera('reference',keepReferenceCamera);fitCamera();}
  else{viewport.state.cameraRestoring=cameraRestoring;viewport.requestFit();fitCamera();}
  // The preview (#104) drives the new player once its bone setups are read (an idle Apply cleared it first).
- stageDocumentSet=true;void loadModelDocument(modelUrl,sha256).then(loaded=>{if(loaded.ok&&stageModelHash===sha256)idlePanel?.model(boneSetup(loaded.document));});
+ stageDocumentSet=true;void loadModelDocument(modelUrl,sha256,inputs.fetch).then(loaded=>{if(loaded.ok&&stageModelHash===sha256)idlePanel?.model(boneSetup(loaded.document));});
  if(wasPlaying)void playPreview();
  }finally{viewport.state.cameraRestoring=cameraRestoring;stageCorrectionRebinding--;directionPanel?.refresh();}
 }
@@ -3535,8 +3544,9 @@ async function prepareStageDraftBuild(
   if(!nextModelHash)throw new Error(buildId==='inspected'?'STAGE_DRAFT_MISMATCH':'STAGE_DRAFT_STALE');
   target=options?.target??await resolveStageDraftTarget(buildId);
   if(target.buildId!==buildId||target.sha256!==nextModelHash||!target.url||!target.prefix)throw new Error('STAGE_DRAFT_MISMATCH');
-  nextAssets=await loadModel({modelUrl:target.url,...stageLoadInputs(target.url,target.sha256),resolvePage:(name,url)=>{const pageUrl=new URL(name,url);if(pageUrl.origin!==location.origin||!pageUrl.pathname.startsWith(target.prefix))throw new Error(`Model page escapes its build: ${name}`);return pageUrl.href;}});
-  const loadedDoc=await loadModelDocument(target.url,target.sha256);
+  const inputs=stageLoadInputs(target.url,target.sha256);
+  nextAssets=await loadModel({modelUrl:target.url,...inputs,resolvePage:(name,url)=>{const pageUrl=new URL(name,url);if(pageUrl.origin!==location.origin||!pageUrl.pathname.startsWith(target.prefix))throw new Error(`Model page escapes its build: ${name}`);return pageUrl.href;}});
+  const loadedDoc=await loadModelDocument(target.url,target.sha256,inputs.fetch);
   if(!loadedDoc.ok)throw new Error('PART_SOURCE_CHANGED: model bytes differ from reviewed SHA-256');
   verifiedDoc=loadedDoc.document;
   const rawSlots=verifiedDoc&&typeof verifiedDoc==='object'&&!Array.isArray(verifiedDoc)?(verifiedDoc as {slots?:unknown}).slots:null;

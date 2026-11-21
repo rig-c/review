@@ -1,4 +1,4 @@
-import {formFor, jobCheckpointContext, jobPublicationRoutes, jobSourceDraftId, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
+import {formFor, jobCheckpointContext, jobJson, jobPublicationRoutes, jobSourceDraftId, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
 import {commentPartsIssues,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
@@ -190,9 +190,10 @@ export function createJobRigScreen(options: {
       }catch(error){inspection.dispose();throw error;}
     }
     const routes = options.routes(display);
-    const response = await fetch(routes.api('review'), {signal});
-    if (!response.ok) throw new Error('JOB_VISUAL_UNAVAILABLE');
-    const review = await response.json() as ReviewJson;
+    // #1050: the modal inspection below reads the same metadata; jobJson hands it this request.
+    const review = await jobJson<ReviewJson>(routes.api('review'), signal).catch((error: unknown) => {
+      throw error instanceof Error && error.message === 'JOB_PRELOAD_FAILED' ? new Error('JOB_VISUAL_UNAVAILABLE') : error;
+    });
     if (!review.manifest || !review.reviewedSource || review.sourceHash !== source.sourceHash ||
         review.manifest.id !== source.package.id || review.manifest.revision !== source.package.revision ||
         (review.reviewedSource.rig?.sha256 ?? null) !== (source.model?.sha256 ?? null)) throw new Error('JOB_DISPLAY_MISMATCH');

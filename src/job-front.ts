@@ -28,6 +28,26 @@ const headers = {
     'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
 };
+/** #1050 cache policy. Every capability-bearing or computed response keeps `no-store` (`headers`).
+ * A sealed snapshot file is served only under its publication's instance route, whose publication id is new on every
+ * publish and whose instance key binds the source hash, and the seal refuses any other bytes: one URL, one content.
+ * `private` because the loopback server holds one user's work and no shared cache may keep it. */
+const sealedHeaders = (sha256: string) => ({...headers, 'Cache-Control': 'private, max-age=31536000, immutable', ETag: `"${sha256}"`});
+/** The shipped page files keep one URL across review upgrades: revalidate each load (the job liveness gate still runs). */
+const resourceHashes = new WeakMap<object, string>();
+async function shippedResource(request: Request, body: BodyInit, type: string): Promise<Response> {
+    // Bun's bundle is a BuildArtifact: Blob-like, not a Blob instance. Its hash is kept for the artifact's life.
+    const blob = typeof body === 'object' && 'arrayBuffer' in body && typeof body.arrayBuffer === 'function' ? body as {arrayBuffer(): Promise<ArrayBuffer>} : null;
+    let hash = blob ? resourceHashes.get(blob) : undefined;
+    if (!hash && (typeof body === 'string' || body instanceof Uint8Array || blob)) {
+        hash = jobHash(blob ? new Uint8Array(await blob.arrayBuffer()) : body as string | Uint8Array);
+        if (blob) resourceHashes.set(blob, hash);
+    }
+    const etag = hash ? `"${hash}"` : null;
+    const responseHeaders = {...headers, 'Content-Type': type, ...(etag ? {'Cache-Control': 'no-cache', ETag: etag} : {})};
+    if (etag && request.headers.get('if-none-match') === etag) return new Response(null, {status: 304, headers: responseHeaders});
+    return new Response(request.method === 'HEAD' ? null : body, {headers: responseHeaders});
+}
 interface CropFailureDiagnostic {
     field: string;
     expected: string | number[];
@@ -206,9 +226,7 @@ export function createJobFront(options: {
         if (!name)
             return failure('JOB_REQUEST_INVALID', 404);
         const type = name === 'index.html' ? 'text/html; charset=utf-8' : name === 'main.js' ? 'text/javascript' : 'text/css';
-        return new Response(request.method === 'HEAD' ? null : await options.resource(name), {
-            headers: { ...headers, 'Content-Type': type },
-        });
+        return shippedResource(request, await options.resource(name), type);
     }
     return {
         fetch: fetchJob,
@@ -269,7 +287,9 @@ export function retainedPublicationRoutes(session: JobSession) {
                     const file = await safeFile(retained.snapshotRoot, relativePath);
                     if (literal !== undefined && literal !== file)
                         return failure('JOB_SOURCE_UNRETAINABLE', 404);
-                    return serveReference(request, file, seal.sha256, headers);
+                    const cached = sealedHeaders(seal.sha256);
+                    if (request.headers.get('if-none-match') === cached.ETag) return new Response(null, {status: 304, headers: cached});
+                    return serveReference(request, file, seal.sha256, cached);
                 };
                 const reviewMetadata = (review: ReviewPackage | null) => json({
                     ...checkpointEvidenceMetadata(retained.snapshotRoot, retained.source.checkpointEvidence),
