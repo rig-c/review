@@ -58,8 +58,8 @@ jobs:
       matrix:
         shard: [1, 2, 3]
     name: browser (${{ matrix.shard }}/3)
-    # Main's serial gate already ran 14:49 of 15 (2026-11-15); #847 returns the two stage1 suites to it.
-    timeout-minutes: 25
+    # Three shards ran 5:55 / 7:59 / 7:17 on 2026-11-21 (#1065); 15 leaves 40%+ headroom.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
