@@ -198,7 +198,7 @@ test('#954: a producer without ./cloth-targets.json falls back to config tags an
  try{
   const {job,scratch}=await apply(f,[{op:'add',path:'/cloth/back hair',value:{links:3,wind:[1,4],gravity:[2,8]}}]);
   expect(job.status).toBe('refused');
-  expect((job as {error?:string}).error).toBe('CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts 1.49.1 has no cloth-targets export');
+  expect((job as {error?:string}).error).toBe('CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts 1.49.1 has no cloth-targets export (needs 2.51.0)');
   expect((await f.calls()).filter(l=>l.startsWith('propose'))).toEqual([]);
   expect(scratch).toEqual([]);
   const existing=await apply(f,[{op:'replace',path:'/cloth/bottomwear/links',value:3}]);

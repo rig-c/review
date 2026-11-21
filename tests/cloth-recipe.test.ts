@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {mkdir,mkdtemp,readFile,realpath,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {CLOTH_TARGETS_SCHEMA,ClothFieldError,ClothTargetsError,clothLinks,clothPatchKind,fieldText,fieldValue,parseClothTargets,recipeFromFields,recipeOps,RECIPE_FIELDS,writtenDiff} from '../src/cloth-recipe.ts';
+import {CLOTH_TARGETS_SCHEMA,CLOTH_TARGETS_SINCE,ClothFieldError,ClothTargetsError,clothLinks,clothPatchKind,fieldText,fieldValue,parseClothTargets,recipeFromFields,recipeOps,RECIPE_FIELDS,writtenDiff} from '../src/cloth-recipe.ts';
 import {applyConfigPatch,type JsonValue} from '../src/config-patch.ts';
 import {clothTargets} from '../src/rebuild.ts';
 
@@ -60,18 +60,18 @@ test('#111 / #954: cloth targets come from the producer\'s ./cloth-targets.json 
  const configText=JSON.stringify(config);
  try{
   // Control 1: export present (today's 5 tags, including spaces) → tags equal, read:true.
-  const p1=join(root,'p1');await mkdir(join(p1,'meta'),{recursive:true});
-  await writeFile(join(p1,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.50.0',exports:{'./cloth-targets.json':'./meta/cloth-targets.json'}}));
-  await writeFile(join(p1,'meta/cloth-targets.json'),JSON.stringify({schema:CLOTH_TARGETS_SCHEMA,targets:targets5})+'\n');
+  const p1=join(root,'p1');await mkdir(join(p1,'src'),{recursive:true});
+  await writeFile(join(p1,'package.json'),JSON.stringify({name:'@rig-c/parts',version:CLOTH_TARGETS_SINCE,exports:{'./cloth-targets.json':'./src/cloth-targets.json'}}));
+  await writeFile(join(p1,'src/cloth-targets.json'),JSON.stringify({schema:CLOTH_TARGETS_SCHEMA,targets:targets5})+'\n');
   expect(await clothTargets(p1,configText)).toEqual({tags:targets5,read:true,reason:null});
 
-  // Control 2: export key missing → fallback to config's declared tags, read:false, reason names the version.
+  // Control 2: export key missing → fallback to config's declared tags, read:false, reason names the version and 2.51.0.
   const p2=join(root,'p2');await mkdir(p2,{recursive:true});
-  await writeFile(join(p2,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.49.1',exports:{'./assembly-reading':'./src/assembly-reading.ts'}}));
+  await writeFile(join(p2,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.50.0',exports:{'./assembly-reading':'./src/assembly-reading.ts'}}));
   expect(await clothTargets(p2,configText)).toEqual({
    tags:['bottomwear','front hair'],
    read:false,
-   reason:'CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts 2.49.1 has no cloth-targets export',
+   reason:'CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts 2.50.0 has no cloth-targets export (needs 2.51.0)',
   });
 
   // Control 3: wrong schema, a non-string tag, an empty-string tag, a duplicate, an empty list, extra keys → named refusal.
@@ -107,12 +107,12 @@ test('#111 / #954: cloth targets come from the producer\'s ./cloth-targets.json 
 
   // Control 5: a spread or computed CLOTH_TARGETS in src/cloth.ts with no export → not read (proves no source parsing).
   const p5=join(root,'p5');await mkdir(join(p5,'src'),{recursive:true});
-  await writeFile(join(p5,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.49.1'}));
+  await writeFile(join(p5,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.50.0'}));
   await writeFile(join(p5,'src/cloth.ts'),`const HAIR = ['back hair', 'front hair'] as const;\nexport const CLOTH_TARGETS = ['bottomwear', ...HAIR] as const;\n`);
   expect(await clothTargets(p5,configText)).toEqual({
    tags:['bottomwear','front hair'],
    read:false,
-   reason:'CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts 2.49.1 has no cloth-targets export',
+   reason:'CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts 2.50.0 has no cloth-targets export (needs 2.51.0)',
   });
  }finally{
   await rm(root,{recursive:true,force:true});

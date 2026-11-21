@@ -33,11 +33,13 @@ export function clothPatchKind(ops: readonly Pick<PatchOp, 'path'>[]): 'cloth' |
 
 /** The producer package's typed export key for its cloth target list (#954, paired with rig-c/parts#1433). */
 export const CLOTH_TARGETS_EXPORT = './cloth-targets.json';
+/** The first `@rig-c/parts` release exporting `./cloth-targets.json` (rig-c/parts#1433). */
+export const CLOTH_TARGETS_SINCE = '2.51.0';
 /** The schema of `@rig-c/parts`' `./cloth-targets.json` export. */
 export const CLOTH_TARGETS_SCHEMA = 'rig-parts/cloth-targets@1';
 export const CLOTH_TARGETS_INVALID = 'CLOTH_TARGETS_INVALID';
 export const CLOTH_TARGETS_UNAVAILABLE = 'CLOTH_TARGETS_UNAVAILABLE';
-export const clothTargetsUnavailable = (version: string) => `${CLOTH_TARGETS_UNAVAILABLE}: the installed rig-parts ${version || 'unknown'} has no cloth-targets export`;
+export const clothTargetsUnavailable = (version: string) => `${CLOTH_TARGETS_UNAVAILABLE}: the installed rig-parts ${version || 'unknown'} has no cloth-targets export (needs ${CLOTH_TARGETS_SINCE})`;
 
 export class ClothTargetsError extends Error { constructor(detail: string) { super(`${CLOTH_TARGETS_INVALID}: ${detail}`); } }
 
