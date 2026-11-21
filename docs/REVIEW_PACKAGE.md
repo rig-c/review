@@ -1483,6 +1483,40 @@ publication nor draws bound parts. Without it the picture choice is unchanged: t
 record's own rig, then an earlier picture publication, then bound parts, then a
 scene-context option set.
 
+#### Pins on the plan picture
+
+While the plan picture is shown, stage comments pin a point or a region on it
+through the same pin layer as a rig view, with no new control
+([Review #1048](https://github.com/rig-c/review/issues/1048)). The row is an
+ordinary StageComment-backed Feedback with `viewport: 'reference'`,
+`camera.space: 'image'` and `world` in the picture's natural pixels, Y down. Its
+`referenceId` and `referenceHash` name the picture, and their meaning depends on
+the source that carries the pin:
+
+- **Record publication:** `referenceId` is the `path` of an entry in that
+  publication's `files`, the declared `planPicture`. `referenceHash` is that
+  entry's sealed `sha256`, copied from the source and never recomputed by the
+  page.
+- **Rig package:** `referenceId` is the selected bookmark reference, and
+  `referenceHash` is the loader's hash of it, as described under the comment
+  context above. Nothing changes for these marks.
+
+A record act carries comments only as the scalar `words` projection. A plan
+picture pin therefore projects its own label, so the picture and the pixels reach
+the act:
+
+`["rig-review-comment/1", mode, "reference", referenceId, referenceHash, x, y, w, h]`
+
+Here `x`, `y`, `w` and `h` are `world` rounded to integers in natural pixels, Y
+down, and a point has `w` and `h` of 0. Only a pin that names the record's sealed
+plan picture takes this label. Rig, package and every other label keep their
+existing tuple byte for byte. A pin that names the picture's path with a
+different `sha256`, or whose label does not parse back to that path and hash,
+refuses `COMMENT_PICTURE_LABEL_INVALID`, both when projected and when a local
+draft is restored. New picture bytes give the record a new `sourceHash`, so an
+unsent pin is not carried to the new publication; the existing "source changed …
+could not be carried over" notice reports it.
+
 ### Sealed plan step text
 
 Both publication-pinned `api/review` responses append delivery-only `planText`
@@ -1685,6 +1719,7 @@ labels are `JSON.stringify` of these logical target tuples:
 | Parts | `[schema, parts.map(part => part.name), view.mode]` |
 | Image | `[name]` |
 | StageComment-backed Feedback | `[mark.schema, mark.mode, mark.viewport, target.kind, target.name, frameStart, frameEnd]` |
+| StageComment-backed Feedback on a record's plan picture | `[mark.schema, mark.mode, "reference", referenceId, referenceHash, x, y, w, h]` ([pins on the plan picture](#pins-on-the-plan-picture)) |
 | Other Feedback | `[target.kind, target.name, frameStart, frameEnd, side ?? null]` |
 
 Capture IDs, hashes and crop bytes stay in the raw anchor and do not enter the

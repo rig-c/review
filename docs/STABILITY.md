@@ -882,6 +882,18 @@ sources keep their bytes and `sourceHash`. `PlanContext` and `PlanSource` gain t
 optional field; no runtime export or error code is added. See the
 [plan picture contract](REVIEW_PACKAGE.md#plan-picture).
 
+A pin on the shown plan picture reuses `referenceId` and `referenceHash`
+([Review #1048](https://github.com/rig-c/review/issues/1048)). In a record
+publication `referenceId` is the path of an entry of that publication's `files`
+and `referenceHash` is that entry's sealed sha256. In a rig package `referenceId`
+stays the selected bookmark reference. `projectComments` gains an optional second
+argument, the record's sealed pictures; with it, such a pin projects the label
+`["rig-review-comment/1", mode, "reference", referenceId, referenceHash, x, y, w, h]`
+with integer natural-pixel coordinates. Without the argument, and for every other
+mark, labels are byte-identical to before. A label that does not parse back refuses
+`COMMENT_PICTURE_LABEL_INVALID`. No act field or schema changes. See
+[pins on the plan picture](REVIEW_PACKAGE.md#pins-on-the-plan-picture).
+
 ## Package manifest `frames` declaration
 
 `rig-review/1` manifests accept an optional `frames` field beside `model`: a

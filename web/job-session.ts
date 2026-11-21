@@ -845,8 +845,9 @@ export interface JobPreparedInspection {
         images: readonly HTMLImageElement[];
     }[];
     references: JobReferenceView[];
-    /** #983: the record plan's declared picture, hash-checked and decoded; the record screen draws it first. */
-    planPicture?: {name: string; src: string};
+    /** #983: the record plan's declared picture, hash-checked and decoded; the record screen draws it first.
+     * #1048: `path` and `sha256` are the sealed `files` entry, never a browser digest; pins name the picture by them. */
+    planPicture?: {name: string; src: string; path: string; sha256: string};
     assets: ModelAssets | null;
     player: RigPlayer | null;
     rigRoot: HTMLElement;
@@ -1214,11 +1215,12 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
             preload.push(image(routes.api('stage-parts/page/' + page.index))
                 .then(element => { partPages.set(page.index, element); }));
         }
-        let planPicture: {name: string; src: string} | undefined;
+        let planPicture: {name: string; src: string; path: string; sha256: string} | undefined;
         const declaredPlanPicture = record && publishedSource.subject === 'plan' ? publishedSource.planPicture : undefined;
         if (preloadVisuals && declaredPlanPicture) {
             preload.push(image(routes.api('plan-picture'), declaredPlanPicture.sha256).then(element => {
-                planPicture = {name: declaredPlanPicture.path.split('/').at(-1)!, src: element.src};
+                planPicture = {name: declaredPlanPicture.path.split('/').at(-1)!, src: element.src,
+                    path: declaredPlanPicture.path, sha256: declaredPlanPicture.sha256};
             }));
         }
         const preloaded = await Promise.allSettled(preload);

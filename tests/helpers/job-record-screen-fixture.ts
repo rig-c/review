@@ -86,6 +86,17 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
  }});
  return {scratch,root,session,origin,display,ask,backdrop,workspace,reader,fake,files,submissions,ports,
   deliver(){fake.publish(display);fake.pending(ask,publication.generation);},
+  /** #1048: republish the same plan with new picture bytes; the old publication is the new one's previous. */
+  async republishPlanPicture(bytes:Buffer){
+   const context=workspace.context as {files:readonly {path:string;sha256:string}[];planPicture?:{path:string;sha256:string}};
+   if(!context.planPicture)throw new Error('SYNTHETIC_1048_PLAN_PICTURE_REQUIRED');
+   const picture=writeWorkspaceFile(root,context.planPicture.path,bytes);
+   (workspace as {context:unknown}).context={...context,files:context.files.map(file=>file.path===picture.path?picture:file),planPicture:picture};
+   const next=await call({verb:'publish',expectedGeneration:session.status().generation,idempotencyKey:'record-1048',result:workspace.result,freeze:{kind:'producer-held',holdId:'synthetic-record-1048',record:workspace.record}});
+   const nextDisplay=session.displayPublication(next.publicationId);fake.publish(nextDisplay);
+   fake.pending({...ask,askId:'ask-'+kind+'-1048',publicationId:next.publicationId,source:next.source},next.generation);
+   return nextDisplay;
+  },
   ownerUrl:origin+`/jobs/${session.jobId}/#cap=${credentials.ui}`,
   mode(value:string){mode=value;},output(path:string){writeRoot=path;},
   suppressRigPicture(){if(postPicture!=='bound-rig')throw new Error('SYNTHETIC_929_BOUND_RIG_REQUIRED');rigPictureSuppressed=true;},

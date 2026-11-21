@@ -8,14 +8,41 @@ import type {CompareFeedback} from './compare-session.ts';
 export interface MarkPoint {x:number;y:number}
 export interface MarkRegion {x:number;y:number;width:number;height:number}
 
+/** A sealed record file a pin can name: the path and sha256 of an entry of the publication's `files` (#1048). */
+export interface PictureIdentity {readonly path: string; readonly sha256: string}
+const pictureLabelInvalid = (why: string): never => { throw new Error('COMMENT_PICTURE_LABEL_INVALID: ' + why); };
+/** #1048 A1: `[schema, mode, 'reference', referenceId, referenceHash, x, y, w, h]`, integers in the picture's natural pixels, Y down. */
+function pictureCommentLabel(mark: StageComment, picture: PictureIdentity): string {
+ if (mark.referenceHash !== picture.sha256) pictureLabelInvalid(`referenceHash is not the sealed sha256 of ${picture.path}`);
+ const {x, y, width, height} = mark.world;
+ const label = JSON.stringify([mark.schema, mark.mode, 'reference', picture.path, picture.sha256,
+  Math.round(x), Math.round(y), Math.round(width), Math.round(height)]);
+ parsePictureCommentLabel(label);
+ return label;
+}
+/** The restore path's inverse of the A1 label; anything else refuses by name. */
+export function parsePictureCommentLabel(label: string): {mode: CommentMode; referenceId: string; referenceHash: string; region: MarkRegion} {
+ let value: unknown;
+ try { value = JSON.parse(label); } catch { return pictureLabelInvalid('not JSON'); }
+ if (!Array.isArray(value) || value.length !== 9) return pictureLabelInvalid('expected nine fields');
+ const [schema, mode, viewport, referenceId, referenceHash, x, y, width, height] = value as unknown[];
+ if (schema !== 'rig-review-comment/1' || !commentModes.includes(mode as CommentMode) || viewport !== 'reference') pictureLabelInvalid('schema, mode or viewport');
+ if (typeof referenceId !== 'string' || !referenceId || referenceId.length > 512 || typeof referenceHash !== 'string' || !/^[a-f0-9]{64}$/.test(referenceHash)) pictureLabelInvalid('picture identity');
+ if (![x, y, width, height].every(n => Number.isSafeInteger(n)) || (width as number) < 0 || (height as number) < 0) pictureLabelInvalid('region is not natural-pixel integers');
+ return {mode: mode as CommentMode, referenceId: referenceId as string, referenceHash: referenceHash as string,
+  region: {x: x as number, y: y as number, width: width as number, height: height as number}};
+}
+
 /** Stable logical labels survive a new Apply capture; raw anchors retain its full evidence. */
-function commentLabel(anchor: JobCommentAnchor): string {
+function commentLabel(anchor: JobCommentAnchor, pictures?: readonly PictureIdentity[]): string {
  if ('checkpointId' in anchor) return JSON.stringify(['checkpoint', anchor.checkpointId]);
  if ('schema' in anchor) return JSON.stringify([anchor.schema, anchor.parts.map(part => part.name), anchor.view.mode]);
  if ('name' in anchor) return JSON.stringify([anchor.name]);
  const context = anchor.context as Record<string, unknown> | undefined;
  if (hasStageComment(context?.comment)) {
   const mark = parseStageComment(context!.comment);
+  const picture = mark.viewport === 'reference' ? pictures?.find(item => item.path === mark.referenceId) : undefined;
+  if (picture) return pictureCommentLabel(mark, picture);
   return JSON.stringify([mark.schema, mark.mode, mark.viewport, anchor.target.kind, anchor.target.name,
    anchor.frameStart, anchor.frameEnd]);
  }
@@ -23,13 +50,14 @@ function commentLabel(anchor: JobCommentAnchor): string {
   'side' in anchor ? anchor.side : null]);
 }
 
-/** The signed scalar projection. Entry text and array order are never normalized. */
-export function projectComments(comments: readonly JobComment[]): string {
+/** The signed scalar projection. Entry text and array order are never normalized.
+ * `pictures` is a record host's sealed shown pictures (#1048); without it every label keeps its existing branch. */
+export function projectComments(comments: readonly JobComment[], pictures?: readonly PictureIdentity[]): string {
  if (!Array.isArray(comments) || comments.length > 1000) throw new Error('JOB_ACT_INVALID');
  const blocks = comments.map(comment => {
   if (!comment || typeof comment.text !== 'string' || !comment.text.trim() || comment.text.length > 10000 ||
    Object.keys(comment).some(key => key !== 'text' && key !== 'anchor')) throw new Error('JOB_ACT_INVALID');
-  return `[${comment.anchor === undefined ? 'general' : commentLabel(comment.anchor)}]\n${comment.text}`;
+  return `[${comment.anchor === undefined ? 'general' : commentLabel(comment.anchor, pictures)}]\n${comment.text}`;
  });
  const text = blocks.join('\n\n');
  if (text.length > 10000) throw new Error('JOB_ACT_INVALID');
