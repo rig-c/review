@@ -59,14 +59,16 @@ test('#1048 a picture pin whose sha256 is not the sealed entry, or a label that 
 
 /* The restore path is main.ts's own code (the #798 slice technique): a saved plan-picture pin restores only when its
  * A1 label parses back to the sealed entry; otherwise the draft is refused and the reason is named. */
-async function restore(rows: unknown[], planPicture = {...picture, name: 'plan.png', src: 'blob:x'}) {
+async function restore(rows: unknown[], planPicture: object | undefined = {...picture, name: 'plan.png', src: 'blob:x'},
+  questionPictures?: readonly {path: string; sha256: string}[]) {
   const {feedbackItemComments, parseStageComment} = await import('../src/stage-comment.ts');
   const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
   const start = main.indexOf('function restoreRecordComments('), end = main.indexOf('/** Comments remain native rows', start);
   const code = new Bun.Transpiler({loader: 'ts'}).transformSync(main.slice(start, end));
   const messages: [string, boolean][] = [];
   const saved = {publicationId: 'publication', sourceHash: sha('a'), comments: rows};
-  const scope = {host: {record: {publicationId: 'publication', sourceHash: sha('a'), hasPicture: false, planPicture}}, recordCommentKey: '',
+  const scope = {host: {record: {publicationId: 'publication', sourceHash: sha('a'), hasPicture: false, ...planPicture ? {planPicture} : {},
+    ...questionPictures ? {questionPictures} : {}}}, recordCommentKey: '',
     recordComments: [] as unknown[], localStorage: {getItem: () => JSON.stringify(saved)}, data: undefined,
     projectComments, feedbackItemComments, parseStageComment, parsePictureCommentLabel, message: (value: string, error: boolean) => messages.push([value, error])};
   new Function('scope', `with(scope){${code};restoreRecordComments();}`)(scope);
@@ -85,5 +87,36 @@ test('#1048 restore keeps a pin that names the sealed picture and refuses, by na
     expect(refused.messages.length).toBe(1);
     expect(refused.messages[0]![0]).toStartWith('COMMENT_PICTURE_LABEL_INVALID');
     expect(refused.messages[0]![1]).toBe(true);
+  }
+});
+
+/* #1048 PR2: an interview question image is a second sealed source; PR1's labels must not move. */
+const questionPicture = {path: 'inputs/reference.png', sha256: sha('9')};
+const questionMark = mark('reference', {referenceId: questionPicture.path, referenceHash: questionPicture.sha256});
+/* PR1's plan-picture label as 285a59f emits it for the A1 test's inputs. */
+const GOLDEN_PLAN_PICTURE = `[["rig-review-comment/1","setup","reference","plan/plan.png","${sha('d')}",10,21,8,3]]\nFix this`;
+
+test('#1048 PR2 rig, package and plan-picture labels stay byte-identical with question pictures in the sealed list', () => {
+  const both = [picture, questionPicture];
+  expect(projectComments([row(mark('rig'))], both)).toBe(GOLDEN_RIG);
+  expect(projectComments([row(mark('reference', {referenceId: 'ref-a', referenceHash: sha('e')}))], both)).toBe(GOLDEN_PACKAGE_REFERENCE);
+  expect(projectComments([row(pictureMark)], both)).toBe(GOLDEN_PLAN_PICTURE);
+  expect(projectComments([row(pictureMark)], [picture])).toBe(GOLDEN_PLAN_PICTURE);
+});
+
+test('#1048 PR2 a question-image pin projects the same A1 label from its sealed entry', () => {
+  expect(projectComments([row(questionMark)], [questionPicture]))
+    .toBe(`[["rig-review-comment/1","setup","reference","inputs/reference.png","${sha('9')}",10,21,8,3]]\nFix this`);
+  expect(() => projectComments([row({...questionMark, referenceHash: sha('f')})], [questionPicture])).toThrow('COMMENT_PICTURE_LABEL_INVALID');
+});
+
+test('#1048 PR2 restore keeps a question-image pin against its sealed entry and refuses one that names neither', async () => {
+  const kept = await restore([savedRow(questionMark)], undefined, [questionPicture]);
+  expect(kept.rows.length).toBe(1);
+  expect(kept.messages).toEqual([]);
+  for (const bad of [{...questionMark, referenceHash: sha('f')}, {...questionMark, referenceId: 'inputs/other.png'}]) {
+    const refused = await restore([savedRow(bad)], undefined, [questionPicture]);
+    expect(refused.rows).toEqual([]);
+    expect(refused.messages[0]![0]).toStartWith('COMMENT_PICTURE_LABEL_INVALID');
   }
 });

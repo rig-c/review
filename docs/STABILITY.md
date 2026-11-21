@@ -894,6 +894,22 @@ mark, labels are byte-identical to before. A label that does not parse back refu
 `COMMENT_PICTURE_LABEL_INVALID`. No act field or schema changes. See
 [pins on the plan picture](REVIEW_PACKAGE.md#pins-on-the-plan-picture).
 
+## Record interview comments
+
+A record `interview-picks` act (`rig-review/act@4`) may carry an optional, additive
+`value.words` ([Review #1048](https://github.com/rig-c/review/issues/1048)): the
+reviewer's general and pinned comments as the `projectComments` output, the same
+projection checkpoint and signoff carry. It is the last key and present only when
+comments exist, so an act without comments keeps its bytes. `parseRecordAct`
+accepts it with the checkpoint and signoff `words` check and still refuses any
+other extra key. A pin on a sealed question image takes the same label as a plan
+picture pin, and `api/interview` adds the image's sealed `path` and `sha256` on
+record publications. The schema stays `rig-review/act@4`: Create decodes record
+acts through this package's own `parseRecordAct`, so the producer and the parser
+move together, an older parser refuses a commented act by name and drops nothing,
+and acts without comments are unchanged. `JobActValues['interview-picks']` gains
+the optional `words`; no runtime export or error code is added.
+
 ## Package manifest `frames` declaration
 
 `rig-review/1` manifests accept an optional `frames` field beside `model`: a

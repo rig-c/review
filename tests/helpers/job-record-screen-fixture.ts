@@ -14,10 +14,10 @@ import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixt
 import {createSyntheticOptionRecordWorkspace, createSyntheticOptionSetsRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader,writeWorkspaceFile,type PostPictureCase} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'interview-picks';
-export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false,deferDelivery=false,postPicture?:PostPictureCase,planOptions?:Pick<NonNullable<Parameters<typeof createSyntheticPlanRecordWorkspace>[1]>,'text'|'interview'>,planPicture?:Buffer){
+export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false,deferDelivery=false,postPicture?:PostPictureCase,planOptions?:Pick<NonNullable<Parameters<typeof createSyntheticPlanRecordWorkspace>[1]>,'text'|'interview'>,planPicture?:Buffer,questionImage?:Buffer){
  const scratch=await mkdtemp(join(tmpdir(),'review-750-')),root=join(scratch,'input');await mkdir(root);
  let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root,{boundParts,questionImages:postPicture==='legacy'?false:questionImages,longInterview,postPicture,
-  ...(postPicture?{questionId:'post_timing',setId:'post-picture'}:{})}):createSyntheticPlanRecordWorkspace(root,{subjects:[
+  ...(postPicture?{questionId:'post_timing',setId:'post-picture'}:{}),...(questionImage?{inputImageBytes:questionImage}:{})}):createSyntheticPlanRecordWorkspace(root,{subjects:[
   {kind:'checkpoint',checkpointId:'step_layout'},{kind:'signoff',stage:signoffStage},{kind:'reopen',stage:'plan-approved'},
  ],...planOptions});
  // #983: a plan picture is one more sealed member of the closure, named by path and hash.
@@ -86,12 +86,18 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
  }});
  return {scratch,root,session,origin,display,ask,backdrop,workspace,reader,fake,files,submissions,ports,
   deliver(){fake.publish(display);fake.pending(ask,publication.generation);},
-  /** #1048: republish the same plan with new picture bytes; the old publication is the new one's previous. */
-  async republishPlanPicture(bytes:Buffer){
+  /** #1048: republish the same plan (or option set) with new picture (or question image) bytes; the old publication is
+   * the new one's previous. */
+  async republishPicture(bytes:Buffer){
+   if(kind==='interview-picks'){
+    if(picture||!questionImage)throw new Error('SYNTHETIC_1048_QUESTION_IMAGE_REQUIRED');
+    workspace=createSyntheticOptionRecordWorkspace(root,{boundParts,questionImages,longInterview,inputImageBytes:bytes});
+   }else{
    const context=workspace.context as {files:readonly {path:string;sha256:string}[];planPicture?:{path:string;sha256:string}};
    if(!context.planPicture)throw new Error('SYNTHETIC_1048_PLAN_PICTURE_REQUIRED');
    const picture=writeWorkspaceFile(root,context.planPicture.path,bytes);
    (workspace as {context:unknown}).context={...context,files:context.files.map(file=>file.path===picture.path?picture:file),planPicture:picture};
+   }
    const next=await call({verb:'publish',expectedGeneration:session.status().generation,idempotencyKey:'record-1048',result:workspace.result,freeze:{kind:'producer-held',holdId:'synthetic-record-1048',record:workspace.record}});
    const nextDisplay=session.displayPublication(next.publicationId);fake.publish(nextDisplay);
    fake.pending({...ask,askId:'ask-'+kind+'-1048',publicationId:next.publicationId,source:next.source},next.generation);

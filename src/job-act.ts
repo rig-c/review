@@ -372,7 +372,7 @@ export function prepareJobRecordAct(options: {
   switch (askSubject.kind) {
     case 'interview-picks': {
       if (boundSource.subject !== 'option-set') throw new JobError('JOB_ACT_SOURCE_STALE');
-      const value = actObject(submission.value, ['questionId', 'selections', 'note']);
+      const value = actObject(submission.value, ['questionId', 'selections', 'note', 'words']);
       if (
         !('questionId' in value) ||
         !('selections' in value) ||
@@ -401,6 +401,8 @@ export function prepareJobRecordAct(options: {
         };
       });
       const note = words(value.note);
+      // #1048: comments ride the optional `words`; with none the act keeps its pre-#1048 bytes (no key).
+      const comments = 'words' in value ? words(value.words) : '';
       try {
         validatePicks(
           {
@@ -425,7 +427,7 @@ export function prepareJobRecordAct(options: {
         kind: 'interview-picks',
         // #1004: the act's singular set fields name this ask's set.
         source: recordActSource(boundSource, askSubject),
-        value: { questionId: askSubject.questionId, selections, note },
+        value: { questionId: askSubject.questionId, selections, note, ...(comments ? { words: comments } : {}) },
       });
     }
     case 'checkpoint': {

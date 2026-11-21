@@ -1140,7 +1140,7 @@ or establish official Create writer acceptance.
 ### Act kinds, plan identity and parts identity
 
 - **Five enabled kinds and two reserved disabled kinds.** `JOB_ENABLED_ACT_KINDS` enables `'interview-picks'`, `'checkpoint'`, `'parts-verdict'`, `'review-verdict'` and `'signoff'`. `JOB_RESERVED_ACT_KINDS` reserves `'described-correction'` and `'mesh-edit'`. Asks and standalone acts of either kind refuse `JOB_ACT_KIND_DISABLED`. `described-correction` awaits the joint [Create #182](https://github.com/rig-c/create/issues/182) context allowlist. The jointly signed mesh value rides on the rig-review verdict under [Mesh edits on Request changes (act@8)](#mesh-edits-on-request-changes-act8).
-- **`interview-picks`.** `JobActValues['interview-picks']` carries `questionId`, ordered `selections` (`itemId`, `optionId`, nullable `otherText`) and `note`, with non-null `source.optionSet` (`id` and `sha256`).
+- **`interview-picks`.** `JobActValues['interview-picks']` carries `questionId`, ordered `selections` (`itemId`, `optionId`, nullable `otherText`) and `note`, with non-null `source.optionSet` (`id` and `sha256`). A record act (`rig-review/act@4`) may add an optional last key `words`, the reviewer's comments as the `projectComments` output, exactly as checkpoint and signoff carry them ([Review #1048](https://github.com/rig-c/review/issues/1048)). It is present only when comments exist, so an act without comments keeps its earlier bytes; it is checked like checkpoint and signoff `words` (a string of at most 10,000 characters) and any other extra key still refuses `JOB_ACT_INVALID`.
 - **`checkpoint`.** `JobActValues['checkpoint']` carries `checkpointId`, `planStepId`, `outcome` restricted to `'pass'` or `'fail'` and required `words` as a `string`. `pending` stays in the UI draft only and never produces a finalized act. Only `'pass'` is eligible for Create's checkpoint sign-off writer, whereas `'fail'` is feedback or a named consumer refusal and never an approval write. `words` is preserved verbatim including empty or whitespace-only strings, matching Create's writer without adding a UI gate. In `JobSubject`, `checkpointId` defaults to the Create plan step ID and optional `planStepId` is required when the displayed Review checkpoint ID differs, matching [Create #184](https://github.com/rig-c/create/issues/184) without alias inference or browser trust. The browser supplies `checkpointId`, `outcome` and `words` only (`JobUIActValues['checkpoint']`), the daemon copies resolved `planStepId` from the validated ask and requires `source.plan`, and Create derives execution stage from its authoritative step phase and order without Review stamping a stage.
 - **`parts-verdict`.** `JobActValues['parts-verdict']` is `PartsVerdictValue` (`verdict` as `'approved'` or `'changes-requested'`, `issues` as `readonly PartsIssue[]` under `rig-review-parts-comment/2` — empty on `'approved'` and non-empty on `'changes-requested'`, bound to `source.sourceHash`, retained `partIds`, and `source.parts.images` hashes — and `words`), emitted in new finalized `rig-review/act@5` acts (`JobPartsVerdictAct`) and requiring non-null `source.projectHash`, a `draft` selector and `source.parts`. Historical `rig-review/act@2` `parts-verdict` acts remain in the `JobAct` union via `JobLegacyAct` with `value: JobLegacyPartsVerdictValue` (`verdict` as `'pending'`, `'approved'` or `'changes-requested'`, `parts` with `partId`, `part` outcome and note, `mesh` outcome and note with `JobPartOutcome` as `'pending'`, `'clean'` or `'flagged'`, and `words`).
 - **`review-verdict`.** The original model branch carries `stage` (`'rig-review'` or `'direction-review'`), `verdict` and `words`, requiring non-null `source.model` with runtime stage, selector and direction consistency checks. A declared `rig-review` ask can also bind a `draft` selector with `source.projectHash` and null `source.direction`. It uses the existing rig screen and still capture, and its finalized act preserves the retained draft publication's source hash, model and selector. A compiled rig's Request changes can carry [chest landmarks (act@9)](#chest-landmarks-on-request-changes-act9).
@@ -1485,31 +1485,32 @@ scene-context option set.
 
 #### Pins on the plan picture
 
-While the plan picture is shown, stage comments pin a point or a region on it
-through the same pin layer as a rig view, with no new control
-([Review #1048](https://github.com/rig-c/review/issues/1048)). The row is an
+While the plan picture or a record interview's question image is shown, stage
+comments pin a point or a region on it through the same pin layer as a rig view,
+with no new control ([Review #1048](https://github.com/rig-c/review/issues/1048)). The row is an
 ordinary StageComment-backed Feedback with `viewport: 'reference'`,
 `camera.space: 'image'` and `world` in the picture's natural pixels, Y down. Its
 `referenceId` and `referenceHash` name the picture, and their meaning depends on
 the source that carries the pin:
 
 - **Record publication:** `referenceId` is the `path` of an entry in that
-  publication's `files`, the declared `planPicture`. `referenceHash` is that
-  entry's sealed `sha256`, copied from the source and never recomputed by the
-  page.
+  publication's `files`: the declared `planPicture`, or the sealed file of the
+  shown question image (`api/interview` lists it as the image's `path` and
+  `sha256`). `referenceHash` is that entry's sealed `sha256`, copied from the
+  source and never recomputed by the page.
 - **Rig package:** `referenceId` is the selected bookmark reference, and
   `referenceHash` is the loader's hash of it, as described under the comment
   context above. Nothing changes for these marks.
 
-A record act carries comments only as the scalar `words` projection. A plan
-picture pin therefore projects its own label, so the picture and the pixels reach
-the act:
+A record act carries comments only as the scalar `words` projection: checkpoint
+and signoff in their `words`, interview picks in their optional `words`. A picture
+pin therefore projects its own label, so the picture and the pixels reach the act:
 
 `["rig-review-comment/1", mode, "reference", referenceId, referenceHash, x, y, w, h]`
 
 Here `x`, `y`, `w` and `h` are `world` rounded to integers in natural pixels, Y
-down, and a point has `w` and `h` of 0. Only a pin that names the record's sealed
-plan picture takes this label. Rig, package and every other label keep their
+down, and a point has `w` and `h` of 0. Only a pin that names one of the record's sealed
+pictures (the plan picture or a question image) takes this label. Rig, package and every other label keep their
 existing tuple byte for byte. A pin that names the picture's path with a
 different `sha256`, or whose label does not parse back to that path and hash,
 refuses `COMMENT_PICTURE_LABEL_INVALID`, both when projected and when a local

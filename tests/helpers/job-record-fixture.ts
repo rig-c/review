@@ -174,6 +174,8 @@ export function createSyntheticOptionRecordWorkspace(
     readonly questionImages?: boolean;
     readonly postPicture?: PostPictureCase;
     readonly longInterview?: boolean;
+    /** #1048: the question image's bytes (default: a 2×2 swatch). */
+    readonly inputImageBytes?: Buffer;
   },
 ): SyntheticOptionWorkspace {
   const questionId = options?.questionId ?? 'rig_type';
@@ -181,7 +183,7 @@ export function createSyntheticOptionRecordWorkspace(
   const stage = options?.stage ?? (options?.postPicture ? 'post-interview' : 'interview');
   const post = postPictureFixture(root, options?.postPicture);
 
-  const inputImage = writeWorkspaceFile(root, 'inputs/reference.png', makeSyntheticPngBytes(40, 160, 220));
+  const inputImage = writeWorkspaceFile(root, 'inputs/reference.png', options?.inputImageBytes ?? makeSyntheticPngBytes(40, 160, 220));
   const inputSketch = options?.postPicture === 'rig-painting-second'
     ? writeWorkspaceFile(root, 'inputs/sketch.png', makeSyntheticPngBytes(200, 60, 60))
     : null;

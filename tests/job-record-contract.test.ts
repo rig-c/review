@@ -795,6 +795,15 @@ test('CP1 RecordAct (rig-review/act@4) validates interview-picks, checkpoint and
     },
   };
   expect(parseRecordAct(picksAct)).toEqual(picksAct);
+  // #1048 HQ ruling 3: optional additive `words`, checked as checkpoint and signoff words are; unknown keys still refuse.
+  const picksWithWords: RecordAct = {...picksAct, value: {...picksAct.value,
+    words: '[["rig-review-comment/1","setup","reference","inputs/reference.png","' + 'a'.repeat(64) + '",80,60,0,0]]\nFix this\n\n[general]\nAlso this'}};
+  expect(parseRecordAct(picksWithWords)).toEqual(picksWithWords);
+  expect('words' in parseRecordAct(picksAct).value).toBe(false);
+  for (const words of [42, null, ['x'], 'x'.repeat(10_001)]) {
+    expect(() => parseRecordAct({...picksAct, value: {...picksAct.value, words}})).toThrow('JOB_ACT_INVALID');
+  }
+  expect(() => parseRecordAct({...picksAct, value: {...picksAct.value, comments: 'x'}})).toThrow('JOB_ACT_INVALID');
 
   for (const outcome of ['pass', 'fail'] as const) {
     const checkpointAct: RecordAct = {
