@@ -636,7 +636,7 @@ test('#678 rig caller regions preserve the legacy shell DOM, labels, drawers and
 test('#809 pending ask heading uses full subject sentences in EN/KO and names the absence of an ask',async()=>{
  const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
  const raw={text:'',hidden:false,removeAttribute(){}};
- let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','renderDraftState','t','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null,askSentence="",jobProgress=null,progressTimer;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},()=>{statusRefreshes++;},t);
+ let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','renderDraftState','t','setSourceAttribute','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null,askSentence="",jobProgress=null,progressTimer;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},()=>{statusRefreshes++;},t,()=>{});
  render([]);expect(raw.hidden).toBe(false);expect(t(raw.text,undefined,'en')).toBe('Nothing is waiting for your answer.');expect(t(raw.text,undefined,'ko')).toBe('답변을 기다리는 요청이 없어요.');
  render([{kind:'review-verdict',stage:'rig-review'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
  expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Review this checkpoint.');
@@ -662,7 +662,7 @@ test('#904 waiting prompt never guesses a rig subject for model-free record and 
  const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
  for(const subject of [{kind:'interview-picks'},{kind:'checkpoint'},{kind:'signoff'}]){
   const raw={hidden:true,text:'',removeAttribute(){}};const scope={askHeadline:raw,firstPublicationPrompt:true,pendingAnswers:[],partsSubject:null,host:null,t,askSentence:'',jobProgress:null,progressTimer:undefined,
-   setSourceText:(_:unknown,value:string)=>{raw.text=value;},renderDraftState(){}};
+   setSourceText:(_:unknown,value:string)=>{raw.text=value;},setSourceAttribute(){},renderDraftState(){}};
   const render=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return renderPendingSubjects;}`)(scope);
   render([]);expect(t(raw.text,undefined,'en')).toBe(enCatalog['job.waiting']);expect(t(raw.text,undefined,'ko')).toBe(koCatalog['job.waiting']);
   render([subject]);expect(raw.text).not.toBe('Check the rig and motion.');expect(scope.firstPublicationPrompt).toBe(false);
@@ -688,7 +688,7 @@ for(const language of ['en','ko'] as const)test('#987 ticks the current age and 
   document:{createTextNode:(data:string)=>({data}),createElement:()=>({style:{},textContent:''})},
   setInterval(tick:()=>void){activeTick=tick;return 1;},clearInterval(){activeTick=undefined;},
   t:(key:string,values?:readonly (string|number)[],lang=language)=>t(key,values,lang),
-  setSourceText(_:unknown,value:string){parts=[t(value,undefined,language)];},renderDraftState(){}};
+  setSourceText(_:unknown,value:string){parts=[t(value,undefined,language)];},setSourceAttribute(_:unknown,key:string,value:string){attributes.set(key,value);},renderDraftState(){}};
  const render=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return {renderPendingSubjects,setJobProgress};}`)(scope);
  const read=()=>parts.map(part=>typeof part==='string'?part:part.data??part.textContent).join('');
  render.renderPendingSubjects([]);
@@ -696,6 +696,7 @@ for(const language of ['en','ko'] as const)test('#987 ticks the current age and 
  const phase=catalog['job.progress.phase.build']+' · '+t('job.progress.step',[2,3],language);
  expect(read()).toBe(phase+' · '+text+' · '+catalog['job.progress.now']);
  expect(attributes.get('translate')).toBe('no');
+ expect(attributes.get('title'),'#1041 the ellipsized headline keeps its full sentence in its title').toBe(read());
  const initialParts=parts;
  now+=1000;activeTick?.();
  expect(parts).toBe(initialParts);
