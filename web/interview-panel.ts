@@ -125,7 +125,7 @@ export function interviewQuestionList(items: readonly {label: string; answered: 
 }
 
 /** Real interview API rows shared by job publications and joined project inspection. */
-export type InterviewDisplayQuestion = Omit<InterviewQuestion,'images'> & {images:{name:string;url:string}[];saved?:Picks|null};
+export type InterviewDisplayQuestion = Omit<InterviewQuestion,'images'> & {images:{name:string;url:string;path?:string;sha256?:string}[];saved?:Picks|null};
 
 /** Read-only diagnostics and verbatim historical records, independent of submission transport. */
 export function interviewRecords(diagnostics:readonly InterviewDiagnostic[]=[],historical:readonly HistoricalInterview[]=[],factory?:InterviewText):HTMLElement {
@@ -147,7 +147,7 @@ export function interviewRecords(diagnostics:readonly InterviewDiagnostic[]=[],h
 
 /** The question list and survey form. Hosts supply source data and submit transport. */
 export function createInterviewForm(options:{question:InterviewDisplayQuestion;id:string;node?:InterviewText;form?:HTMLFormElement;fieldset?:HTMLFieldSetElement;source?:HTMLElement;
-    mainView?:boolean;images:readonly {name:string;src:string}[];questions?:readonly {label:string;answered:boolean}[]|(()=>readonly {label:string;answered:boolean}[]);selected?:number;onSelect?:(index:number)=>void;answered?:boolean;
+    mainView?:boolean;images:readonly {name:string;src:string;path?:string;sha256?:string}[];questions?:readonly {label:string;answered:boolean}[]|(()=>readonly {label:string;answered:boolean}[]);selected?:number;onSelect?:(index:number)=>void;answered?:boolean;
     diagnostics?:readonly InterviewDiagnostic[];historical?:readonly HistoricalInterview[];
     /** #1004: a control kept at the top of the question list (the job page's one submit for several sets). */
     listAction?:HTMLElement}) {

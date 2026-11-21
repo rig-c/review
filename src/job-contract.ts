@@ -545,6 +545,9 @@ export interface JobActValues {
       readonly otherText: string | null;
     }[];
     readonly note: string;
+    /** #1048: optional and additive. Present only when the reviewer left comments; exactly the `projectComments`
+     * output that checkpoint and signoff carry. An act without comments has no `words` key. */
+    readonly words?: string;
   };
   readonly checkpoint: {
     readonly checkpointId: string;

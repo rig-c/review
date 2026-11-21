@@ -1293,7 +1293,8 @@ export function parseRecordAct(value: unknown): RecordAct {
   switch (item.kind) {
     case 'interview-picks': {
       if (source.subject !== 'option-set') throw new JobError('JOB_ACT_INVALID');
-      const rawValue = exactObject(item.value, ['questionId', 'selections', 'note'], 'JOB_ACT_INVALID');
+      // #1048: `words` is optional and additive; it carries the comments with the same checker as checkpoint and signoff.
+      const rawValue = exactObject(item.value, ['questionId', 'selections', 'note'], 'JOB_ACT_INVALID', ['words']);
       const questionId = asCode(() => jobId(rawValue.questionId), 'JOB_ACT_INVALID');
       if (received.set && questionId !== received.set.questionId) {
         throw new JobError('JOB_ACT_INVALID', `value.questionId ${questionId} is not the act set ${received.set.questionId}/${received.set.setId}`);
@@ -1310,6 +1311,7 @@ export function parseRecordAct(value: unknown): RecordAct {
         return { itemId, optionId, otherText };
       });
       const note = parseActWords(rawValue.note, 'JOB_ACT_INVALID');
+      const words = Object.hasOwn(rawValue, 'words') ? parseActWords(rawValue.words, 'JOB_ACT_INVALID') : undefined;
       return {
         schema: JOB_RECORD_ACT_SCHEMA,
         actId,
@@ -1320,7 +1322,7 @@ export function parseRecordAct(value: unknown): RecordAct {
         authority,
         at,
         source,
-        value: { questionId, selections, note },
+        value: words === undefined ? { questionId, selections, note } : { questionId, selections, note, words },
       };
     }
     case 'checkpoint': {

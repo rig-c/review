@@ -315,11 +315,15 @@ export function retainedPublicationRoutes(session: JobSession) {
                 const interviewMetadata = (rigPicture = false, painting?: NonNullable<ReturnType<typeof retainedRecordPainting>>) => {
                     const interview = isRetainedRecordSource(retained) ? undefined :
                         retained.interview !== undefined ? retained.interview : display.publication.interview;
+                    // #1048: a record question image names its sealed `files` entry, so a pin binds to those bytes.
+                    const sealed = isRetainedRecordSource(retained) ? retained.source.files : [];
                     return json({
                         questions: questions.map(question => ({...question,
                             ...(rigPicture && question.missingPicture === 'rig' ? {missingPicture: undefined} : {}),
                             images: (painting && question.missingPicture ? [painting] : question.images).map((image, index) => ({name: image.name,
-                                url: `/api/interview/image/${question.ref.sha256}/${index}`})),
+                                url: `/api/interview/image/${question.ref.sha256}/${index}`,
+                                ...(sealed.some(file => file.path === image.ref.path && file.sha256 === image.ref.sha256)
+                                    ? {path: image.ref.path, sha256: image.ref.sha256} : {})})),
                         })),
                         ...(interview === undefined ? {} : {interview}),
                     });

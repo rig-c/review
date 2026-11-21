@@ -11,7 +11,10 @@ import {
   type RecordSubject,
   type RecordUISubmission,
 } from '../src/job-contract.ts';
-import { parseRecordAct, buildRecordSource } from '../src/job-api.ts';
+import { parseRecordAct, buildRecordSource, jobHash } from '../src/job-api.ts';
+
+/** #1048: JSON bytes of the synthetic interview-picks act below, as 285a59f's writer emitted them. */
+const PICKS_ACT_SHA256_285A59F = 'a7840d56090451e06143b4c5496e43338de57d387a255849ccb282f1776162e1';
 import {parseCommentsAct, projectComments} from '../src/job-host.ts';
 import commentsLegacy from './fixtures/comments-contract-legacy.json';
 import {
@@ -301,6 +304,20 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
     if (viaFinalize.kind === 'interview-picks') {
       expect(viaFinalize.value.note).toBe('');
     }
+
+    // #1048 HQ ruling 3 bar 1: an act with no comments keeps its pre-#1048 bytes, pinned from 285a59f.
+    const bytes = JSON.stringify(act);
+    expect(jobHash(bytes)).toBe(PICKS_ACT_SHA256_285A59F);
+    expect('words' in act.value).toBe(false);
+    const emptyWords = prepareJobRecordAct({jobId: 'job_1', submission: {...submission, value: {...submission.value, words: ''}},
+      ask, retained, reviewer, actId: 'act_picks_1', at: '2026-11-08T12:00:00.000Z'});
+    expect(JSON.stringify(emptyWords)).toBe(bytes);
+    // Comments ride `words`, appended last and exactly the projectComments output (bar 2).
+    const words = projectComments([{text: 'general'}]);
+    const commented = prepareJobRecordAct({jobId: 'job_1', submission: {...submission, value: {...submission.value, words}},
+      ask, retained, reviewer, actId: 'act_picks_1', at: '2026-11-08T12:00:00.000Z'});
+    expect(JSON.stringify(commented)).toBe(bytes.slice(0, -2) + ',"words":' + JSON.stringify(words) + '}}');
+    expect(parseRecordAct(commented)).toEqual(commented);
 
     // Inputs and filesystem are completely untouched
     expect(submission).toEqual(beforeSubmission);

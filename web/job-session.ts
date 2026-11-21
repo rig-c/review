@@ -741,6 +741,9 @@ type JobInterview = {
         images: {
             name: string;
             url: string;
+            /** #1048: the sealed `files` entry, present on a record publication only. */
+            path?: string;
+            sha256?: string;
         }[];
     })[];
     interview?: JobInterviewDiagnostics | null;
@@ -1549,7 +1552,7 @@ export interface JobFormDependencies {
             }
             questionSet=jobQuestionSet(ask,prepared,t);
             interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:true,
-                images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered',
+                images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url),...(image.path&&image.sha256?{path:image.path,sha256:image.sha256}:{})})),answered:ask.status==='answered',
                 ...questionSet?.list});
             if (prepared.metadata.recordSource && (question.missingPicture || !question.images.length) && !prepared.metadata.manifest?.model) {
                 fields.prepend(node('p', question.missingPicture === 'rig'
@@ -1560,7 +1563,9 @@ export interface JobFormDependencies {
             }
             const {localize,dispose,read:readInterview}=interviewForm;
             const offLanguage=onLanguageChange(localize);
-            disposeInterview=()=>{offLanguage();dispose();};read=readInterview;
+            disposeInterview=()=>{offLanguage();dispose();};
+            // #1048: a record interview carries its comments in the optional `words`; none keeps the old value bytes.
+            read=()=>{const value=readInterview(),words=prepared.metadata.recordSource?commentWords():'';return words?{...value,words}:value;};
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {

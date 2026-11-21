@@ -791,15 +791,15 @@ async function liveQuestionDraftChecks(){
     await wait(`document.querySelector(${JSON.stringify(status)})?.textContent===${JSON.stringify(catalog['job.saved'])}`,'986 live answer saved');
     if(painting)observation.savedPainting=await assertPaintingPersists(painting);
     assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(submit)}).hidden`),true);
-    // Carried from the retired #839 questionTabChecks: the completed answer leaves no act controls and one saved state,
-    // and the question painting cannot take a pointed comment.
+    // Carried from the retired #839 questionTabChecks: the completed answer leaves no act controls and one saved state.
+    // #1048 lifted the question-image pin refusal for a sealed question image: pin mode now opens on it.
     assert.equal(await page!.evaluate<boolean>(`['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)&&document.querySelector('#workspace-act-row').hidden`),true,'completed answer controls hidden');
     assert.deepEqual(await page!.evaluate<string[]>(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'single visible saved state');
     if(painting){
      await click(page!,'#stage-comment');
-     await wait(`!document.querySelector('#rig-viewport.stage-comment-mode,#reference-viewport.stage-comment-mode')`,'question image keeps pin mode unavailable');
-     await click(page!,'#reference-viewport');
-     assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('.stage-comment-composer')`),false,'no pointed comment composer on the question image');
+     await wait(`!!document.querySelector('#reference-viewport.stage-comment-mode')&&!document.querySelector('#rig-viewport.stage-comment-mode')`,'sealed question image takes pin mode (#1048)');
+     await click(page!,'#stage-comment');
+     await wait(`!document.querySelector('#reference-viewport.stage-comment-mode')`,'pin mode closes again');
     }
     const footer=await page!.evaluate<string>(`document.getElementById('message').textContent`);
     assert.equal(footer,await page!.evaluate<string>(`document.getElementById('dirty').textContent`));
