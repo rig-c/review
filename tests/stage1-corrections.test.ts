@@ -881,7 +881,9 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
 
   inspectorBinding=bindInspectorTabs(()=>{},()=>{}, {tabs:inspectorTabs.map(button=>({id:button.dataset.inspector!,button:button as unknown as HTMLButtonElement,panels:[],attribute:'aria-selected' as const})),panels:[],initialize:true,reveal:()=>mainScope.workspace.revealInspector()});
   const mainScope:any={
+   host:null,
    activeInterviewImages:null,
+   activeInterviewImage:null,
    partsOnly:false,
    controls:createRigViewControls(),
    refreshedBuilds,
@@ -972,7 +974,7 @@ test('#562(ii) handoffText renders joined draft provenance vs installed tools wi
    rigFieldsPanel:{load:()=>{}},
    meshPanel:{load:()=>{},select:()=>{},part:()=>'torso',status:()=>{},counts:()=>{},readout:()=>{}},
    meshEditor:{selectionChanged:()=>{},sync:()=>{},setStatusNote:()=>{},statusNote:()=>''},
-   chestEditor:{notify:(text:string|null,error=false)=>{chestNotices.push({text,error});},rebind:()=>{},unavailable:()=>{},rebuildState:()=>{},sync:()=>{},active:()=>false,mode:()=>'circles',flashing:()=>false},
+   chestEditor:{notify:(text:string|null,error=false)=>{chestNotices.push({text,error});},rebind:()=>{},unavailable:()=>{},rebuildState:()=>{},sync:()=>{},syncJobTarget:()=>{},active:()=>false,mode:()=>'circles',flashing:()=>false},
    weightsView:{refresh:()=>{},sync:()=>{}},
    bonesPanel:{load:()=>{},sync:()=>{}},
    cutsPanel:{load:()=>{},shown:()=>{},sync:()=>{}},

@@ -1,15 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import {
-  JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
+  JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
   type ActV3, type JobAct, type JobComment, type JobCommentsAct, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
   type JobMeshEdit, type PendingAskV3, type RecordAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
   type JobCommentContext, type JobContextComment,
+  type JobChestLandmarkEdit,
 } from './job-contract.ts';
 import { parsePartsIssue, type PartsIssue } from './parts-comment.ts';
 import {
   isRecordSource, isRigDraftVerdictSource, parseJobSelector, jobHash, jobId, jobInteger, jobObject,
   commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
+  chestLandmarkIdentity, parseChestLandmarkEdits, parseChestLandmarksAct,
 } from './job-api.ts';
 import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueComments } from './feedback-export.ts';
 import { hasStageComment, parseStageComment } from './stage-comment.ts';
@@ -17,6 +19,8 @@ import type { Feedback } from './session.ts';
 import { validatePicks } from './interview-picks.ts';
 import {
   isRetainedRecordSource,
+  readJobEditMesh,
+  readJobEditModel,
   type JobRetainedRecordSource,
   type JobRetainedSource,
   type JobRetainedSourceV3,
@@ -24,8 +28,8 @@ import {
 import { JobError } from './job-store.ts';
 import { checkedPath, readRegular } from './interview-project.ts';
 import {validatePngBytes} from './comment-crops.ts';
-import {applyMeshOps, attachmentHashText, MESH_EDIT_CODES} from './mesh-edit.ts';
-import {readStoredSetupMesh} from './setup-mesh.ts';
+import {applyMeshOps} from './mesh-edit.ts';
+import {deriveBust} from './chest-landmarks.ts';
 
 function words(value: unknown): string {
   if (typeof value !== 'string' || value.length > 10_000) throw new JobError('JOB_ACT_INVALID');
@@ -52,36 +56,14 @@ function rigVerdictFeedbackComments(feedback: readonly Feedback[], subject: NonN
   });
 }
 
-function hasMeshSubmission(kind: unknown, value: unknown): boolean {
-  if (value === null || typeof value !== 'object' || !Object.hasOwn(value, 'meshEdits')) return false;
-  const {stage, verdict} = value as {stage?: unknown; verdict?: unknown};
-  if (kind !== 'review-verdict' || stage !== 'rig-review' || verdict !== 'changes-requested') {
-    throw new JobError('JOB_ACT_INVALID');
-  }
-  return true;
-}
-
-function validateRetainedMeshEdits(retained: JobRetainedSource, edits: readonly JobMeshEdit[]): void {
-  const binding = retained.source.model;
-  if (!binding) throw new JobError('JOB_ACT_SOURCE_STALE');
-  let model: {stage?: {width?: number; height?: number}};
-  try {
-    const bytes = readRegular(checkedPath(retained.snapshotRoot, binding.path), 64 * 1024 * 1024);
-    if (jobHash(bytes) !== binding.sha256) throw new Error('model hash differs');
-    model = JSON.parse(bytes.toString('utf8'));
-  } catch {
-    throw new JobError('JOB_ACT_SOURCE_STALE');
-  }
+function validateRetainedMeshEdits(model: ReturnType<typeof readJobEditModel>, edits: readonly JobMeshEdit[]): void {
   for (const {edit} of edits) {
-    const read = readStoredSetupMesh(model, edit.slot, edit, MESH_EDIT_CODES);
-    if (!read.ok || jobHash(attachmentHashText(read.mesh.entry)) !== edit.source.hash) throw new JobError('JOB_ACT_SOURCE_STALE');
-    const {mesh} = read;
-    const {frame, positions, vertexCount, triangleCount, hullLength, hash} = edit.source;
+    const mesh = readJobEditMesh(model, edit, 'JOB_ACT_SOURCE_STALE', 'JOB_ACT_INVALID');
+    const {positions, vertexCount, triangleCount, hullLength, hash} = edit.source;
     const uvs = mesh.entry.uvs;
-    if (mesh.linked || !Array.isArray(uvs) || uvs.length !== vertexCount * 2 ||
+    if (!Array.isArray(uvs) || uvs.length !== vertexCount * 2 ||
         mesh.vertices.length !== vertexCount || positions.length !== vertexCount ||
-        mesh.triangles.length !== triangleCount * 3 || mesh.hull !== hullLength ||
-        model.stage?.width !== frame.width || model.stage?.height !== frame.height) {
+        mesh.triangles.length !== triangleCount * 3 || mesh.hull !== hullLength) {
       throw new JobError('JOB_ACT_INVALID');
     }
     try {
@@ -89,6 +71,20 @@ function validateRetainedMeshEdits(retained: JobRetainedSource, edits: readonly 
         vertices: positions, triangles: mesh.triangles, hull: hullLength, hash}, edit.ops);
     } catch {
       throw new JobError('JOB_ACT_INVALID');
+    }
+  }
+}
+
+function validateRetainedChestLandmarks(retained: JobRetainedSource, model: ReturnType<typeof readJobEditModel>,
+  edits: readonly JobChestLandmarkEdit[]): void {
+  const seeds = new Set(retained.chestLandmarks?.map(chestLandmarkIdentity));
+  for (const {edit} of edits) {
+    readJobEditMesh(model, edit, 'JOB_ACT_SOURCE_STALE', 'JOB_ACT_INVALID');
+    if (!seeds.has(chestLandmarkIdentity(edit))) throw new JobError('JOB_ACT_INVALID');
+    const {cleavage} = edit.bust;
+    if (cleavage) {
+      const {refusal} = deriveBust({...edit.bust, cleavage});
+      if (refusal) throw new JobError('JOB_ACT_INVALID', refusal);
     }
   }
 }
@@ -520,9 +516,12 @@ export function finalizeJobAct(options: {
   readonly actId?: string;
   readonly at?: string;
 }): ActV3 {
-  const meshSubmission = hasMeshSubmission(options.submission.kind, options.submission.value);
-  if (meshSubmission && (isRetainedRecordSource(options.retained) ||
-      options.ask.subject.kind !== 'review-verdict' || options.ask.subject.stage !== 'rig-review')) {
+  const {kind, value} = options.submission;
+  const meshSubmission = !!value && typeof value === 'object' && Object.hasOwn(value, 'meshEdits');
+  const chestSubmission = !!value && typeof value === 'object' && Object.hasOwn(value, 'chestLandmarks');
+  if ((meshSubmission || chestSubmission) && (kind !== 'review-verdict' ||
+      (value as {stage?: unknown}).stage !== 'rig-review' || (value as {verdict?: unknown}).verdict !== 'changes-requested' ||
+      isRetainedRecordSource(options.retained) || options.ask.subject.kind !== 'review-verdict' || options.ask.subject.stage !== 'rig-review')) {
     throw new JobError('JOB_ACT_INVALID');
   }
   if (isRetainedRecordSource(options.retained)) {
@@ -641,14 +640,16 @@ export function finalizeJobAct(options: {
     }
     case 'review-verdict': {
       const value = jobObject(submission.value, ['stage', 'verdict', 'words',
-        ...(ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ? ['feedback', 'general', 'meshEdits'] : [])]);
+        ...(ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ? ['feedback', 'general', 'meshEdits', 'chestLandmarks'] : [])]);
       if (ask.subject.kind !== 'review-verdict' || ask.subject.stage === 'image-review' || value.stage !== ask.subject.stage) throw new JobError('JOB_ACT_INVALID');
       if (ask.subject.stage === 'rig-review') {
         const verdict = choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const);
-        let meshEdits: readonly JobMeshEdit[] | undefined;
-        if (meshSubmission) {
-          meshEdits = parseMeshEdits(value.meshEdits);
-          validateRetainedMeshEdits(retained, meshEdits);
+        const meshEdits = meshSubmission ? parseMeshEdits(value.meshEdits) : undefined;
+        const chestLandmarks = chestSubmission ? parseChestLandmarkEdits(value.chestLandmarks) : undefined;
+        if (meshEdits || chestLandmarks) {
+          const model = readJobEditModel(retained.snapshotRoot, source.model, 'JOB_ACT_SOURCE_STALE');
+          if (meshEdits) validateRetainedMeshEdits(model, meshEdits);
+          if (chestLandmarks) validateRetainedChestLandmarks(retained, model, chestLandmarks);
         }
         if (!options.still) throw new JobError('JOB_STILL_CAPTURE_FAILED');
         const note = words(value.words);
@@ -663,6 +664,8 @@ export function finalizeJobAct(options: {
           source: {...source, model: source.model!, selector},
           value: {stage: 'rig-review' as const, verdict, comments: [...verdictComments, ...generalComments(value.general)]},
           still: options.still};
+        if (chestLandmarks) return parseChestLandmarksAct({...act, schema: JOB_CHEST_LANDMARKS_ACT_SCHEMA,
+          value: {...act.value, ...(meshEdits ? {meshEdits} : {}), chestLandmarks}});
         if (meshEdits) return meshEditsActForEmission({...act, value: {...act.value, meshEdits}});
         if (verdictComments.some(comment => Object.hasOwn(comment, 'context'))) return commentsActForEmission(act);
         return commentsAct(act);

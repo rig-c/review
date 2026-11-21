@@ -21,6 +21,9 @@ const profile = await mkdtemp(join(tmpdir(), 'review-901-browser-'));
 let page: InputCdpSession | undefined;
 let command: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
 const exceptions: unknown[] = [];
+const questionPanel = '#workspace-interview-answer';
+const selectedQuestion = '.block-row:not([hidden]) [data-block-target="question"][aria-selected="true"]';
+const dialogViewer = 'dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,#view-menu)';
 
 async function wait(expression: string, label: string): Promise<void> {
   const deadline = Date.now() + 20_000;
@@ -29,6 +32,13 @@ async function wait(expression: string, label: string): Promise<void> {
     await Bun.sleep(30);
   }
   throw new Error('901_BROWSER_TIMEOUT ' + label + ': ' + expression);
+}
+
+async function waitForQuestion(form: string, label: string, editable = true): Promise<void> {
+  const selector = `${questionPanel}:not([hidden]) ${form}${editable ? ' fieldset:not(:disabled)' : ''}`;
+  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector(${JSON.stringify(selectedQuestion)})&&document.querySelector(${JSON.stringify(selector)})?.getClientRects().length>0`, label);
+  assert.equal(await page!.evaluate<number>(`document.querySelectorAll('dialog[open]').length`), 0, label);
+  assert.equal(await page!.evaluate<number>(`document.querySelectorAll(${JSON.stringify(dialogViewer)}).length`), 0, label);
 }
 
 const results: Record<string, unknown>[] = [];
@@ -55,10 +65,11 @@ try {
       ? "Anything the choices don't cover"
       : '선택지로 다 말하지 못한 점을 적어 주세요';
     const noteText = 'First line opinion\n둘째 줄 의견 · 그대로 보존';
-    const selector = 'form[data-job-ask="ask-interview-picks"]';
+    const formSelector = 'form[data-job-ask="ask-interview-picks"]';
+    const selector = `${questionPanel} ${formSelector}`;
 
     // 1. Bars 1, 2, 5 on a job interview (empty note save + DOM placement + maxlength=10000 + >10000 typing refusal)
-    const emptyFixture = await recordScreenFixture('interview-picks', false);
+    const emptyFixture = await recordScreenFixture('interview-picks', false, undefined, undefined, false, false);
     const emptyOut = join(output, 'bar1-2-5', language);
     await mkdir(emptyOut, {recursive: true});
     emptyFixture.output(emptyOut);
@@ -70,11 +81,19 @@ try {
       url.searchParams.set('lang', language);
       await page.goto('about:blank');
       await page.goto(url.href);
-      await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('${selector} fieldset:not(:disabled)')`, 'bar1 ready ' + language);
-      if (!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`)) await click(page, '#workspace-pending-ask');
-      await wait(`!!document.querySelector('#job-record-asks[open] ${selector} fieldset:not(:disabled)')`, 'bar1 dialog ' + language);
+      await waitForQuestion(formSelector, 'bar1 pictureless Question ' + language);
+      const pictureless: {empty: string; images: number; imageModes: number} = await page.evaluate(`({
+        empty: document.querySelector('#rig-empty').textContent,
+        images: document.querySelectorAll('#reference-content img').length,
+        imageModes: document.querySelectorAll('#view-menu [data-view^="interview-image-"]').length,
+      })`);
+      assert.deepEqual(pictureless, {empty: catalog['This request has no picture.'], images: 0, imageModes: 0});
 
-      const dom = await page.evaluate<any>(`(()=>{
+      const dom = await page.evaluate<{
+        noteCount: number; preCount: number; noteId: string | null; noteDisabled: boolean | null;
+        labelFor: string | null; labelLinked: boolean; labelText: string | null; placeholder: string | null;
+        maxLengthProp: number | null; maxLengthAttr: string | null; orderOk: boolean; geometryOk: boolean;
+      }>(`(()=>{
         const form = document.querySelector('${selector}');
         const fields = form.querySelector('fieldset.interview-answer-fields');
         const asks = [...fields.querySelectorAll('fieldset.interview-ask')];
@@ -111,8 +130,9 @@ try {
       let overLimitLength: number | null = null;
       let overLimitTail: string | null = null;
       if (dom.noteCount === 1) {
-        await page.evaluate(`(()=>{
+        await page.evaluate<void>(`(()=>{
           const note = document.querySelector('${selector} textarea[name="note"]');
+          note.scrollIntoView({block: 'center'});
           note.value = 'a'.repeat(9998);
           note.focus();
           note.setSelectionRange(9998, 9998);
@@ -205,7 +225,7 @@ try {
       url.searchParams.set('lang', language);
       await page.goto('about:blank');
       await page.goto(url.href);
-      await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('${selector} fieldset:not(:disabled)')`, 'bar3 ready ' + language);
+      await waitForQuestion(formSelector, 'bar3 ready ' + language);
 
       const entered = await page.evaluate<boolean>(`(()=>{
         const form = document.querySelector('${selector}');
@@ -219,7 +239,7 @@ try {
 
       await page.goto('about:blank');
       await page.goto(url.href);
-      await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('${selector} fieldset:not(:disabled)')`, 'bar3 draft reopen ' + language);
+      await waitForQuestion(formSelector, 'bar3 draft reopen ' + language);
       const editableDraftReopen = await page.evaluate<{noteCount: number; preCount: number; value: string | null}>(`(()=>{
         const form = document.querySelector('${selector}');
         const note = form.querySelector('textarea[name="note"]');
@@ -236,9 +256,18 @@ try {
           for (const value of ['biped_std', 'density_high']) form.querySelector('input[type="radio"][value="' + value + '"]').click();
         })()`);
       }
-      await page.evaluate(`document.querySelector('${selector} button[type="submit"]').scrollIntoView({block: 'center'})`);
+      const visiblePainting = `(()=>{
+        const image = document.querySelector('#reference-content img');
+        return image?.complete && image.naturalWidth===2 && image.getBoundingClientRect().width>0 ? image.currentSrc : '';
+      })()`;
+      await wait(`Boolean(${visiblePainting})`, 'bar3 main painting before save ' + language);
+      const paintingBeforeSave: string = await page.evaluate(visiblePainting);
+      await page.evaluate<void>(`document.querySelector('${selector} button[type="submit"]').scrollIntoView({block: 'center'})`);
       await click(page, `${selector} button[type="submit"]`);
       await wait(`document.querySelector('${selector} > [role="status"]')?.textContent===${JSON.stringify(catalog['job.saved'])}`, 'bar3 saved ' + language);
+      await waitForQuestion(formSelector, 'bar3 Question stays selected after save ' + language, false);
+      const paintingAfterSave: string = await page.evaluate(visiblePainting);
+      assert.equal(paintingAfterSave, paintingBeforeSave, 'saving keeps the shared painting visible');
 
       const savedAct = parseRecordAct(JSON.parse(await readFile(join(noteOut, 'one-screen.json'), 'utf8')));
       assert.equal(savedAct.kind, 'interview-picks');
@@ -263,6 +292,7 @@ try {
       await page.goto('about:blank');
       await page.goto(url.href);
       await wait(`document.querySelector('${selector}')?.dataset.interviewAnswered==='true'`, 'bar3 reload read-only ' + language);
+      await waitForQuestion(formSelector, 'bar3 answered Question on reload ' + language, false);
       const reloadedReadOnly = await page.evaluate<{disabled: boolean; noteCount: number; preText: string | null}>(`(()=>{
         const form = document.querySelector('${selector}');
         return {
@@ -276,6 +306,8 @@ try {
         entered,
         postedNote: savedAct.value.note,
         editableDraftReopen,
+        paintingBeforeSave,
+        paintingAfterSave,
         immediateReadOnly,
         reloadedReadOnly,
         passed:
@@ -308,8 +340,7 @@ try {
         url.searchParams.set('lang', 'en');
         await page.goto('about:blank');
         await page.goto(url.href);
-        await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('${selector} fieldset:not(:disabled)')`, 'max10000 ready');
-        if (!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`)) await click(page, '#workspace-pending-ask');
+        await waitForQuestion(formSelector, 'max10000 ready');
         const maxNote = '가'.repeat(5000) + 'z'.repeat(5000);
         const canFill = await page.evaluate<boolean>(`(()=>{
           const form = document.querySelector('${selector}');
@@ -338,7 +369,7 @@ try {
 
     // 4. Bar 4: non-editable question shows disabled state with no textarea, and note as pre when present (and nothing when empty)
     const f4 = await interviewOpenFixture(2);
-    let server4: Awaited<ReturnType<typeof startServer>> | undefined;
+    let server4: {port?: number; stop(closeActiveConnections?: boolean): void} | undefined;
     let bar4: Record<string, unknown> = {};
     try {
       const project = f4.project as any;
@@ -372,18 +403,20 @@ try {
       const url = `http://127.0.0.1:${server4.port}/?lang=${language}#cap=${capability}`;
       await page.goto('about:blank');
       await page.goto(url);
-      await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#job-record-asks[open] .interview-grid')`, 'bar4 ready ' + language);
+      await waitForQuestion('form.interview-answer', 'bar4 joined Question ' + language, false);
       const q0 = await page.evaluate<{disabled: boolean; noteCount: number; preText: string | null}>(`(()=>{
-        const form = document.querySelector('#job-record-asks form.interview-answer');
+        const form = document.querySelector('${questionPanel} form.interview-answer');
         return {
           disabled: form.querySelector('fieldset.interview-answer-fields').disabled,
           noteCount: form.querySelectorAll('textarea[name="note"]').length,
           preText: form.querySelector('pre.interview-note')?.textContent ?? null,
         };
       })()`);
-      await click(page, '.interview-questions li:nth-child(2) button');
+      await click(page, `${questionPanel} .interview-questions li:nth-child(2) button`);
+      await wait(`document.querySelector('${questionPanel} form.interview-answer h3')?.textContent==='rig_type'`, 'bar4 switched question ' + language);
+      await waitForQuestion('form.interview-answer', 'bar4 joined second Question ' + language, false);
       const q1 = await page.evaluate<{disabled: boolean; noteCount: number; preCount: number}>(`(()=>{
-        const form = document.querySelector('#job-record-asks form.interview-answer');
+        const form = document.querySelector('${questionPanel} form.interview-answer');
         return {
           disabled: form.querySelector('fieldset.interview-answer-fields').disabled,
           noteCount: form.querySelectorAll('textarea[name="note"]').length,

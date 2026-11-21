@@ -1361,7 +1361,6 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
 
 /** The answer builder owns no page shell, transport or draft collection. */
 export interface JobFormDependencies {
-    interviewMainView?:boolean;
     node: JobFormNode;
     translate: typeof import('./i18n.ts').t;
     helpers: ReturnType<typeof createJobFormHelpers> & {
@@ -1439,19 +1438,18 @@ export interface JobFormDependencies {
                 legacyNotice.dataset.record = legacyDiagnostic.record;
                 fields.prepend(legacyNotice);
             }
-            interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:deps.interviewMainView,
+            interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:true,
                 images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered'});
-            if (deps.interviewMainView && prepared.metadata.recordSource) {
-                interviewForm.form.dataset.interviewMain = '';
-                if ((question.missingPicture || !question.images.length) && !prepared.metadata.manifest?.model) {
-                    fields.prepend(node('p', question.missingPicture === 'rig'
-                        ? 'This question refers to a rig version that this publication does not include.'
-                        : question.missingPicture === 'scene'
-                            ? 'This question refers to a scene that this publication does not include.'
-                            : 'This request has no picture.'));
-                }
+            if (prepared.metadata.recordSource && (question.missingPicture || !question.images.length) && !prepared.metadata.manifest?.model) {
+                fields.prepend(node('p', question.missingPicture === 'rig'
+                    ? 'This question refers to a rig version that this publication does not include.'
+                    : question.missingPicture === 'scene'
+                        ? 'This question refers to a scene that this publication does not include.'
+                        : 'This request has no picture.'));
             }
-            disposeInterview=interviewForm.dispose;read=interviewForm.read;
+            const {localize,dispose,read:readInterview}=interviewForm;
+            const offLanguage=onLanguageChange(localize);
+            disposeInterview=()=>{offLanguage();dispose();};read=readInterview;
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
@@ -1622,10 +1620,10 @@ export async function joinedInterviewForms(access:InstanceAccess,present:(forms:
     const show=(index:number)=>{
         if(disposed)return;selected=index;
         const question=data.questions[index];
-        if(!question){const empty=node('section');empty.append(node('p','interview.empty'),interviewRecords(data.diagnostics,data.historical));present([empty]);return;}
+        if(!question){const empty=node('section');empty.dataset.interviewMain='';empty.append(node('p','interview.empty'),interviewRecords(data.diagnostics,data.historical));present([empty]);return;}
         let entry=forms.get(index);
         if(!entry){
-            entry=createInterviewForm({question,id:'joined-interview-'+question.ref.sha256,node,
+            entry=createInterviewForm({question,id:'joined-interview-'+question.ref.sha256,node,mainView:true,
                 images:question.images.map(image=>({name:image.name,src:access.route(image.url)})),
                 questions:()=>data.questions.map((item,i)=>({label:item.set.question+' · '+item.set.id+(item.editable?'':' · '+t('interview.history')),answered:forms.get(i)?.form.dataset.interviewAnswered==='true'||Boolean(item.saved||item.answer)})),
                 selected:index,onSelect:show,diagnostics:data.diagnostics,historical:data.historical});

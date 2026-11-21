@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, writeFile, rm, symlink, mkdir, readdir, realpath } from 'node:fs/promises';
+import { cp, mkdtemp, writeFile, readFile, rm, symlink, mkdir, readdir, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadReview, packagePath, parseManifest } from '../src/manifest.ts';
+import { FRAMES_DURATION_TOLERANCE, loadReview, packagePath, parseManifest } from '../src/manifest.ts';
+import { feedbackLastFrame } from '../src/feedback-validation.ts';
 import { freshSession, readSession, saveSession, sessionFile } from '../src/session.ts';
 const dirs:string[]=[];
 afterEach(async()=>{for(const d of dirs.splice(0))await rm(d,{recursive:true,force:true});});
@@ -195,4 +196,73 @@ test('manifest frames field: path rules (.., absolute, not in files, symlink esc
  const sealedRoot=await realpath(await buildFolder());
  await writeFile(join(sealedRoot,'build/skeleton.model.json'),JSON.stringify({spec:'rigc-compiled/3',pages:[]}));
  await expect(loadReview(sealedRoot,{handoff:false,sealedPlayback:new Map()})).rejects.toThrow('build/skeleton.model.json: expected sealed playback file');
+});
+
+// #1018: the comment clock from the declared record. Records are `rigc render --candidate tests/fixtures/strip-probe/build
+// --animation <a> --fps <f>` output (@rig-c/core 3.8.0), whose model states inspect 1 s, still 1 s and short 0.8 s, the
+// same three animations and durations as the viewport-387 package used here.
+async function clockPackage(frames:unknown,path='check/idle_frames/frames.json',report=true){
+ const root=await mkdtemp(join(tmpdir(),'review-frames-clock-'));dirs.push(root);
+ await cp(new URL('./fixtures/viewport-387/package',import.meta.url),root,{recursive:true});
+ const manifest=JSON.parse(await readFile(join(root,'review.json'),'utf8'));if(!report)manifest.authoring=[];manifest.frames=path;
+ await mkdir(join(root,path,'..'),{recursive:true});await writeFile(join(root,path),typeof frames==='string'?frames:JSON.stringify(frames));
+ await writeFile(join(root,'review.json'),JSON.stringify(manifest));return join(root,'review.json');
+}
+const producerRecord=async(name:string)=>readFile(new URL(`./fixtures/frames-1018/${name}.frames.json`,import.meta.url),'utf8');
+const record=(...sets:Record<string,unknown>[])=>({spec:'rigc-frames/1',background:[232,232,232,255],viewport:null,sets:sets.map(set=>({dir:set.animation,sampled:set.written,...set}))});
+
+test('#1018 frames clock: the producer\'s own records give one clock per set, frame i at i * stride / fps',async()=>{
+ for(const [name,clip,written] of [['still-12fps','still',13],['short-12fps','short',11]] as const){
+  const pkg=await loadReview(await clockPackage(await producerRecord(name),'check/idle_frames/frames.json',false));
+  expect(pkg.feedbackCatalog.frameClocks).toEqual([{animation:clip,clock:{kind:'uniform',fps:12,frame0:0,frameCount:written}}]);
+  // The clip end bounds the samples: short's last sample (10/12 s) lies past its 0.8 s end, so F9 is the last reachable.
+  expect(feedbackLastFrame(pkg.feedbackCatalog,clip)).toBe(clip==='short'?9:12);
+  expect(feedbackLastFrame(pkg.feedbackCatalog,'inspect')).toBeNull();
+ }
+ // The same producer schedule at 7 fps (measured): still 8 frames ending at 1 s, short 7 frames ending at 6/7 s.
+ const seven=await loadReview(await clockPackage(record({animation:'still',fps:7,written:8,stride:1,duration:1},{animation:'short',fps:7,written:7,stride:1,duration:0.8571428571428571}),'check/idle_frames/frames.json',false));
+ expect(seven.feedbackCatalog.frameClocks?.map(value=>[value.animation,value.clock])).toEqual([['still',{kind:'uniform',fps:7,frame0:0,frameCount:8}],['short',{kind:'uniform',fps:7,frame0:0,frameCount:7}]]);
+ // A stride writes every stride-th sample from 0: still at 24 fps samples 25 frames, stride 2 writes 13.
+ const strided=await loadReview(await clockPackage(record({animation:'still',fps:24,written:13,stride:2,duration:1}),'check/idle_frames/frames.json',false));
+ expect(strided.feedbackCatalog.frameClocks).toEqual([{animation:'still',clock:{kind:'uniform',fps:12,frame0:0,frameCount:13}}]);
+});
+
+test('#1018 frames clock: a set that is not the producer schedule for the model animation refuses by name',async()=>{
+ const good={animation:'short',fps:12,written:11,stride:1,duration:0.8333333333333333};
+ const cases:[Record<string,unknown>,string][]=[
+  [{...good,animation:'walk'},'FRAMES_ANIMATION_UNKNOWN'],
+  [{...good,written:10},'FRAMES_COUNT_MISMATCH'],[{...good,written:12},'FRAMES_COUNT_MISMATCH'],[{...good,written:0},'FRAMES_COUNT_MISMATCH'],
+  [{...good,fps:24},'FRAMES_COUNT_MISMATCH'],[{...good,stride:2},'FRAMES_COUNT_MISMATCH'],
+  // The clip's own end is not the producer's last sample when the clip is not a whole number of frames.
+  [{...good,duration:0.8},'FRAMES_DURATION_MISMATCH'],[{...good,duration:good.duration+2*FRAMES_DURATION_TOLERANCE},'FRAMES_DURATION_MISMATCH'],
+ ];
+ for(const [set,code] of cases)await expect(loadReview(await clockPackage(record(set),'check/idle_frames/frames.json',false))).rejects.toThrow(code+':');
+ // HQ ruling: the refusal names the animation and both figures (the record's and the model's schedule).
+ const refusal=async(set:Record<string,unknown>)=>{try{await loadReview(await clockPackage(record(set),'check/idle_frames/frames.json',false));}catch(e){return (e as Error).message;}throw new Error('expected a refusal');};
+ expect(await refusal({...good,animation:'walk'})).toBe('FRAMES_ANIMATION_UNKNOWN: check/idle_frames/frames.json: set "walk" names no animation of the compiled model');
+ expect(await refusal({...good,written:10})).toBe('FRAMES_COUNT_MISMATCH: check/idle_frames/frames.json: set "short" writes 10 frame(s) at 12 fps stride 1; the model\'s 0.8 s animation samples to 11');
+ expect(await refusal({...good,duration:0.8})).toBe('FRAMES_DURATION_MISMATCH: check/idle_frames/frames.json: set "short" lasts 0.8 s; the model\'s 0.8 s animation at 12 fps ends its last sample at 0.8333333333333334 s');
+ // Inside the tolerance (float rounding of i * (1 / fps) against i / fps) still loads.
+ expect((await loadReview(await clockPackage(record({...good,duration:good.duration+FRAMES_DURATION_TOLERANCE/2}),'check/idle_frames/frames.json',false))).feedbackCatalog.frameClocks).toHaveLength(1);
+ // One bad set refuses the record; it never indexes the others.
+ await expect(loadReview(await clockPackage(record({animation:'still',fps:12,written:13,stride:1,duration:1},{...good,written:10}),'check/idle_frames/frames.json',false))).rejects.toThrow('FRAMES_COUNT_MISMATCH:');
+});
+
+test('#1018 frames clock: the report keeps its animation, other sets add clocks, and both publication paths read alike',async()=>{
+ const still={animation:'still',fps:12,written:13,stride:1,duration:1},inspect={animation:'inspect',fps:12,written:13,stride:1,duration:1};
+ const pkg=await loadReview(await clockPackage(record(inspect,still)));
+ expect(pkg.feedbackCatalog.clockAnimation).toBe('inspect');expect(pkg.feedbackCatalog.clock).toEqual({kind:'samples',frameTimes:expect.any(Array)});
+ expect(pkg.feedbackCatalog.frameClocks?.map(value=>value.animation)).toEqual(['still']);
+ expect(feedbackLastFrame(pkg.feedbackCatalog,'inspect')).toBe(24);expect(feedbackLastFrame(pkg.feedbackCatalog,'still')).toBe(12);expect(feedbackLastFrame(pkg.feedbackCatalog,'short')).toBeNull();
+ // Version-bound (the path the registration names) and draft-bound (check/idle_frames) publications: one rule, any declared path.
+ for(const path of ['versions/v1/registration/idle/frames.json','check/idle_frames/frames.json']){
+  const loaded=await loadReview(await clockPackage(await producerRecord('still-12fps'),path,false));
+  expect(loaded.frames?.path).toBe(path);expect(loaded.feedbackCatalog.frameClocks).toEqual([{animation:'still',clock:{kind:'uniform',fps:12,frame0:0,frameCount:13}}]);
+ }
+ // No compiled model: no player and nothing to index, so the record adds no clock (it is still hashed and checked as part A).
+ const f=await fixture();await mkdir(join(f.root,'check/idle_frames'),{recursive:true});await writeFile(join(f.root,'check/idle_frames/frames.json'),await producerRecord('still-12fps'));
+ await writeFile(f.path,JSON.stringify({...f.input,frames:'check/idle_frames/frames.json'}));
+ expect((await loadReview(f.path)).feedbackCatalog.frameClocks).toBeUndefined();
+ // Without a record the catalog carries no new key at all.
+ expect('frameClocks' in (await loadReview(new URL('./fixtures/viewport-387/package/review.json',import.meta.url).pathname)).feedbackCatalog).toBe(false);
 });

@@ -233,6 +233,7 @@ const argument = (key: string) => {
 const language = argument('--lang') ?? 'en';
 assert.ok(language === 'en' || language === 'ko');
 const catalog = language === 'ko' ? koCatalog : enCatalog;
+const answeredLabel = language === 'ko' ? koCatalog['Answer saved'] : 'Answer saved';
 const output = argument('--out') ?? `evidence/job-record-${language}`;
 await mkdir(output, { recursive: true });
 
@@ -354,18 +355,27 @@ async function edit(selector: string, value: string): Promise<void> {
   );
 }
 
-async function submitForm(askId: string, checkpoint = false): Promise<{ statusText: string; statusKey: string | null }> {
-  const selector = `form[data-job-ask=${JSON.stringify(askId)}]`;
-  const submitSelector=selector+(checkpoint?' button[data-job-text="Pass"]':' button[type="submit"]');
+async function submitForm(askId: string, kind: 'record' | 'checkpoint' | 'interview' = 'record'): Promise<{ statusText: string; statusKey: string | null }> {
+  const root = kind === 'interview' ? '#workspace-interview-answer' : '#job-record-asks';
+  const selector = `${root} form[data-job-ask=${JSON.stringify(askId)}]`;
+  const submitSelector=selector+(kind==='checkpoint'?' button[data-job-text="Pass"]':' button[type="submit"]');
   await wait(
     `!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled`,
     `enabled form ${askId}`,
   );
-  await openPendingAsk(page!);
-  await wait(`(()=>{const host=document.querySelector('#job-record-asks[open],#workspace-interview-answer:not([hidden])'),button=document.querySelector(${JSON.stringify(submitSelector)});return !!host&&!!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
+  if (kind !== 'interview') await openPendingAsk(page!);
+  await wait(`(()=>{const button=document.querySelector(${JSON.stringify(submitSelector)});return !!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
+  if (kind !== 'interview') assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('#job-record-asks:modal')`), true);
   await page!.evaluate(`document.querySelector(${JSON.stringify(submitSelector)}).scrollIntoView({block:'center',inline:'nearest'})`);
   await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   await click(page!,submitSelector);
+  if (kind !== 'interview') {
+    await wait(`(()=>{const state=document.getElementById('dirty');return state?.textContent===${JSON.stringify(answeredLabel)}&&state.dataset.saveState==='saved';})()&&
+      !document.querySelector(${JSON.stringify(selector)})`, `submitted form ${askId} was pruned and Answer saved is shown`);
+    return page!.evaluate<{statusText: string; statusKey: string | null}>(`(()=>{
+      const state=document.getElementById('dirty');return {statusText:state.textContent,statusKey:state.dataset.saveState??null};
+    })()`);
+  }
   await wait(
     `document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled && document.querySelector(${JSON.stringify(selector)}).querySelector(':scope > [role="status"]').dataset.jobText === 'job.saved'`,
     `submitted form ${askId}`,
@@ -544,7 +554,7 @@ try {
     reviewStatus: number;
     reviewBody: Record<string, unknown>;
     interviewStatus: number;
-    interviewBody: { questions?: Array<{ set?: { id?: string; question?: string } }> };
+    interviewBody: { questions?: Array<{ set?: { id?: string; question?: string }; images?: {name:string;url:string}[] }> };
   }>(`(async () => {
     const [reviewRes, interviewRes] = await Promise.all([
       fetch(${JSON.stringify(`${optionInstanceBase}/api/review`)}),
@@ -562,21 +572,44 @@ try {
   assert.equal(Object.hasOwn(optionRoutes.reviewBody, 'reviewedSource'), false);
   assert.deepEqual(optionRoutes.reviewBody.recordSource, optionPublication.source);
   assert.equal(optionRoutes.interviewStatus, 200, 'fetched api/interview payload for option-set publication');
-  assert.ok(
-    Array.isArray(optionRoutes.interviewBody.questions) &&
-      optionRoutes.interviewBody.questions.some(q => q.set?.id === 'chain-bones' && q.set?.question === 'bones'),
-    'captured api/interview questions for option-set publication',
-  );
+  assert.ok(Array.isArray(optionRoutes.interviewBody.questions),'captured api/interview questions for option-set publication');
+  const optionQuestion = optionRoutes.interviewBody.questions.find(q => q.set?.id === 'chain-bones' && q.set?.question === 'bones');
+  assert.ok(optionQuestion,'captured the matching chain-bones question');
+  assert.ok(Array.isArray(optionQuestion.images),'captured the matching question image inventory');
+  const optionImages = optionQuestion.images;
 
-  // #809:92 / #955: pictureless question page opens the Question tab directly.
-  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('form[data-job-ask="${picksAsk.askId}"] fieldset:not(:disabled)')`,'interview owner ready');
-  await openPendingAsk(page);
-  await wait(`!!document.querySelector('#workspace-interview-answer:not([hidden]) form[data-job-ask="${picksAsk.askId}"], #job-record-asks[open] form[data-job-ask="${picksAsk.askId}"]')`,'Answer form opened');
+  // #986: the owner URL opens Question automatically, with the shared main view reflecting the retained image inventory.
+  const picksForm = `#workspace-interview-answer form[data-job-ask="${picksAsk.askId}"]`;
+  const selectedQuestion = '.block-row:not([hidden]) [data-block-target="question"][aria-selected="true"]';
+  const visiblePainting = `(()=>{const image=document.querySelector('#reference-content img');return image?.complete&&image.naturalWidth>0&&image.getBoundingClientRect().width>0?image.currentSrc:'';})()`;
+  const readOptionPicture = () => page!.evaluate<{painting:string;imageCount:number;imageModes:string[];emptyText:string;emptyVisible:boolean}>(`(()=>{
+    const empty=document.getElementById('rig-empty'),rect=empty.getBoundingClientRect();
+    return {painting:${visiblePainting},imageCount:document.querySelectorAll('#reference-content img').length,
+      imageModes:[...document.querySelectorAll('#view-menu [data-view^="interview-image-"]')].map(button=>button.dataset.view),
+      emptyText:empty.textContent,emptyVisible:rect.width>0&&rect.height>0&&getComputedStyle(empty).visibility==='visible'};
+  })()`);
+  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('${selectedQuestion}')&&document.querySelector('${picksForm} fieldset:not(:disabled)')?.getClientRects().length>0`,'interview owner ready in Question');
+  const firstImage = optionImages[0];
+  const expectedPainting = firstImage ? new URL(optionInstanceBase+firstImage.url,recordHost.origin).href : '';
+  if (firstImage) await wait(`${visiblePainting}===${JSON.stringify(expectedPainting)}`,'first retained option-set image visible in main view');
+  const optionPictureBeforeSave = await readOptionPicture();
+  assert.deepEqual(optionPictureBeforeSave.imageModes,optionImages.map((_,index)=>`interview-image-${index}`));
+  assert.equal(optionPictureBeforeSave.painting,expectedPainting);
+  if (!firstImage) {
+    assert.equal(optionPictureBeforeSave.imageCount,0);
+    assert.equal(optionPictureBeforeSave.emptyText,catalog['This request has no picture.']);
+    assert.equal(optionPictureBeforeSave.emptyVisible,true);
+  }
+  const interviewShell = await page.evaluate<{dialogOpen:boolean;dialogViewers:number;questionLabel:string}>(`({
+    dialogOpen:!!document.querySelector('dialog[open]'),
+    dialogViewers:document.querySelectorAll('dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,#view-menu)').length,
+    questionLabel:document.querySelector('${selectedQuestion}').textContent.trim(),
+  })`);
+  assert.deepEqual(interviewShell,{dialogOpen:false,dialogViewers:0,questionLabel:catalog['Question']});
   for (const name of optionDom.selectNames) {
-    const radioSelector = `form[data-job-ask="${picksAsk.askId}"] input[type="radio"][name="${name}"][value="keep"]`;
-    await page.evaluate(`document.querySelector(${JSON.stringify(radioSelector)}).scrollIntoView({block:'center',inline:'nearest'})`);
-    await page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
-    await click(page, radioSelector);
+    const choice = `${picksForm} input[type="radio"][name="${name}"][value="keep"]`;
+    await page.evaluate<void>(`document.querySelector(${JSON.stringify(choice)}).scrollIntoView({block:'center',inline:'nearest'})`);
+    await click(page,choice);
   }
   // R2 / #901: one optional note textarea per editable question set; an existing note prefills it and shows as pre.interview-note when read-only.
   const sourceProject=JSON.parse(await readFile(join(recordRoot,'project.json'),'utf8'));
@@ -585,13 +618,16 @@ try {
   assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').length`),1);
   assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').value`),existingNote);
   assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] .interview-note').length`),0);
-  const picksSubmitStatus = await submitForm(picksAsk.askId);
+  const picksSubmitStatus = await submitForm(picksAsk.askId, 'interview');
   assert.equal(picksSubmitStatus.statusKey, 'job.saved');
   assert.equal(picksSubmitStatus.statusText, catalog['job.saved']);
   assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').length`),0);
   if(existingNote)assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${picksAsk.askId}"] .interview-note').textContent`),existingNote);
+  const optionPictureAfterSave = await readOptionPicture();
+  assert.deepEqual(optionPictureAfterSave,optionPictureBeforeSave,'the shared main view keeps the retained picture or blank fallback after save');
+  assert.equal(await page.evaluate<boolean>(`!!document.querySelector('${selectedQuestion}')&&!document.querySelector('dialog[open]')`),true);
   await writeFile(join(output, `record-option-set-${language}.png`), await page.screenshot());
-  await record('option-set-submitted', { optionDom, optionRoutes, picksSubmitStatus });
+  await record('option-set-submitted', { optionDom, optionRoutes, picksSubmitStatus, interviewShell, optionPictureBeforeSave, optionPictureAfterSave });
 
   // 2. Publish model-free plan via job-api@3 and ask checkpoint + signoff on the same standing owner window
   const pubPlan = await callRecordApi({
@@ -749,14 +785,16 @@ try {
   await edit(`form[data-job-ask="${cpAsk.askId}"] select[name="outcome"]`, 'pass');
   const checkpointWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
   assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"],input[name="note"]').length`),0);
-  const cpSubmitStatus = await submitForm(cpAsk.askId,true);
-  assert.equal(cpSubmitStatus.statusKey, 'job.saved');
-  assert.equal(cpSubmitStatus.statusText, catalog['job.saved']);
+  const cpSubmitStatus = await submitForm(cpAsk.askId,'checkpoint');
+  assert.equal(cpSubmitStatus.statusKey, 'saved');
+  assert.equal(cpSubmitStatus.statusText, answeredLabel);
 
   const signoffWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
   const signoffSubmitStatus = await submitForm(signoffAsk.askId);
-  assert.equal(signoffSubmitStatus.statusKey, 'job.saved');
-  assert.equal(signoffSubmitStatus.statusText, catalog['job.saved']);
+  assert.equal(signoffSubmitStatus.statusKey, 'saved');
+  assert.equal(signoffSubmitStatus.statusText, answeredLabel);
+
+  await wait(`!document.querySelector('#job-record-asks')`,'drawer removed after the final record act');
 
   await writeFile(join(output, `record-plan-${language}.png`), await page.screenshot());
 

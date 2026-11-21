@@ -62,7 +62,13 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   await control('Fetch.enable',{patterns:[{urlPattern:'*api/review*',requestStage:'Response'},{urlPattern:'*review-painting*',requestStage:'Response'},{urlPattern:'*api/stage-parts/image/*',requestStage:'Response'},{urlPattern:'*assets/*',requestStage:'Response'}]});
   await page.goto(url,lang);
   await until(page,`(${mode==='standalone'}?!!document.querySelector('#rig-root canvas'):document.body.dataset.ready==='true')&&!document.body.inert&&(${mode==='joined-interview'||mode==='standalone'}||!!document.querySelector('#workspace-ask-headline')?.textContent)`);
-  if(mode.startsWith('interview')||mode==='joined-interview')await page.evaluate(`document.querySelector('#job-record-asks')?.close()`);
+  const interview=mode.startsWith('interview')||mode==='joined-interview';
+  const answerRoot=interview?'#workspace-interview-answer':'#job-record-asks';
+  const questionSelected=`!!document.querySelector('[data-block-target=question][aria-selected=true]')`;
+  const recordDialogClosed=`!document.querySelector('#job-record-asks[open]')`;
+  const questionReady=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer fieldset:not(:disabled)')`;
+  const questionSaved=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer[data-interview-answered=true]')`;
+  if(interview)await until(page,questionReady);
   const boot=await page.evaluate<any>(`(()=>{const visible=n=>!!n&&!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden'&&!n.closest('dialog:not([open])');const bar=document.querySelector('#workspace-review-act');const nodes=['review-message','review-draft-state','draft-state','dirty'].map(id=>{const n=document.getElementById(id);return {id,text:n?.textContent.trim(),visible:visible(n),inBar:!!n&&bar.contains(n)};});const primary=nodes.find(n=>n.id==='review-draft-state')?.text;return {samples:window.__actFlashSamples,held:${held},nodes,saveStates:nodes.filter(n=>n.visible&&n.inBar&&n.text&&(n.text===primary||/^(Not submitted|제출되지 않음)$/.test(n.text))),home:bar.parentElement?.id,inHeading:!!bar.closest('.inspector-heading'),rowVisible:!!document.querySelector('#workspace-act-row')?.getClientRects().length,visibleStates:nodes.filter(n=>n.visible&&['review-draft-state','draft-state','dirty'].includes(n.id)&&n.text).map(n=>n.id),standaloneSave:document.querySelector('#save').textContent};})()`);
   observations.push({mode,lang,boot});
   await writeFile(join(out,'loading-observations.json'),JSON.stringify(observations,null,2));
@@ -94,23 +100,28 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await until(page,`!document.querySelector('#save').disabled`);
   }
   if(!['rig','direction','parts'].includes(mode)){
-   const questionTab=mode==='interview-rig'||mode==='interview-parts',answerRoot=questionTab?'#workspace-interview-answer':'#job-record-asks';
-   await click(page,'#workspace-pending-ask');await until(page,questionTab?`document.querySelector('[data-block-target=question][aria-selected=true]')!==null`:`!!document.querySelector('#job-record-asks[open]')`);
+   await click(page,'#workspace-pending-ask');await until(page,interview?questionReady:`!!document.querySelector('#job-record-asks[open]')`);
    assert.equal(await page.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`),false);
-   if(mode.startsWith('interview')||mode==='joined-interview')await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll(${JSON.stringify(answerRoot+' input[type=radio]')}))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
+   const chooseDefaults=`(()=>{const seen=new Set();for(const radio of document.querySelectorAll(${JSON.stringify(answerRoot+' input[type=radio]')}))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`;
+   if(interview)await page.evaluate<void>(chooseDefaults);
    const selector=mode==='checkpoint-fail'?'#job-record-asks button[data-job-text="job.fail"]':mode==='checkpoint-pass'?'#job-record-asks button[data-job-text="Pass"]':answerRoot+' button[type=submit]';
    await writeFile(join(out,`${mode}-${lang}-answer.png`),await page.screenshot());
-   if(questionTab)await page.evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`);
+   const scrollToSubmit=`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`;
+   if(interview)await page.evaluate<void>(scrollToSubmit);
    await click(page,selector);
-   await until(page,`!document.querySelector('#job-record-asks[open]')&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
+   await until(page,`${interview?questionSaved:recordDialogClosed}&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
    if(mode==='joined-interview'){
     assert.equal(await page.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false,'saved first answer leaves the opener enabled');
-    await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#job-record-asks[open]')`);
-    await click(page,'.interview-questions li:nth-child(2) button');
-    await page.evaluate(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#job-record-asks input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
-    await click(page,'#job-record-asks button[type=submit]');
-    await until(page,`!document.querySelector('#job-record-asks[open]')&&!document.querySelector('#workspace-pending-ask').disabled`);
+    await click(page,'#workspace-pending-ask');await until(page,questionSaved);
+    const secondQuestion=answerRoot+' .interview-questions li:nth-child(2) button';
+    await page.evaluate<void>(`document.querySelector(${JSON.stringify(secondQuestion)}).scrollIntoView({block:'nearest'})`);
+    await click(page,secondQuestion);
+    await until(page,`${questionReady}&&!document.querySelector('${answerRoot} form.interview-answer').matches('[data-interview-answered=true]')`);
+    await page.evaluate<void>(chooseDefaults);
+    await page.evaluate<void>(scrollToSubmit);
+    await click(page,selector);
+    await until(page,`${questionSaved}&&!document.querySelector('#workspace-pending-ask').disabled`);
     const saved=await page.evaluate<number>(`fetch('/api/interview').then(r=>r.json()).then(data=>data.questions.filter(question=>question.saved).length)`);
     assert.equal(saved,2,'both joined interview questions reached the real picks route');
     await writeFile(join(out,`${mode}-${lang}-second-saved.png`),await page.screenshot());

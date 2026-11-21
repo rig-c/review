@@ -8,17 +8,17 @@ const end=main.indexOf('\nlet verdictSubmit:',start);
 const renderer=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(start,end));
 function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  const control=()=>({hidden:false,disabled:false,title:'',textContent:'',onclick:null as null|((e:unknown)=>unknown),classList:{values:new Set<string>(),toggle(name:string,on:boolean){on?this.values.add(name):this.values.delete(name);}}});
- const save=control(),requestChanges=control(),rigAsk=control(),select=control(),label=control(),submit=control();
+ const save=control(),requestChanges=control(),rigAsk=control(),recordAsk=control(),select=control(),label=control(),submit=control();
  let state:{kind:string;text:string}|null=null;const rigInspector={act:{hidden:true},actBar:{saveState:()=>state,setSaveState:(value:{kind:string;text:string})=>{state=value;}}};
  const calls:string[]=[],session={feedbackWarnings:[],status:'pending'};
  const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,firstPublicationPrompt:false,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
-  questionForms:[],session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,
+  questionForms:subjects.some(subject=>subject.kind==='interview-picks')?[{dataset:{},querySelector:()=>({disabled:false}),querySelectorAll:()=>[]}]:[],session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,recordAsk,
   recordDialog:{querySelector:(selector:string)=>selector==='fieldset:not(:disabled)'?{disabled:false}:null,querySelectorAll:()=>[submit]},
   button:()=>save,select:()=>select,document:{querySelector:()=>label},
   setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
   verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};
  const render=new Function('env',`with(env){${renderer};return renderAnswerControls;}`)(env);
- render();return {save,requestChanges,rigAsk,submit,session,calls,env,render,rigInspector};
+ render();return {save,requestChanges,rigAsk,recordAsk,submit,session,calls,env,render,rigInspector};
 }
 for(const stage of ['rig-review','direction-review'])test('#809 '+stage+' directly submits the selected answer and requires a comment for changes',()=>{
  const h=harness([{kind:'review-verdict',stage}]);
@@ -34,6 +34,13 @@ test('#809 parts preserves the existing issue-derived verdict contract',()=>{
 for(const kind of ['signoff','interview-picks','checkpoint'])test('#809 '+kind+' has one answer opener and no redundant submit',()=>{
  const h=harness([{kind}]);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(false);expect(h.rigAsk.disabled).toBe(false);expect(h.rigAsk.classList.values.has('primary')).toBe(true);
  const mixed=harness([{kind:'review-verdict',stage:'rig-review'},{kind}]);expect(mixed.rigAsk.hidden).toBe(true);expect(mixed.submit.disabled).toBe(true);
+});
+test('#986 mixed pending uses distinct Question and checkpoint controls',()=>{
+ const h=harness([{kind:'interview-picks'},{kind:'checkpoint'}]);
+ expect(h.rigAsk).toMatchObject({hidden:false,disabled:false,textContent:'Answer…'});
+ expect(h.recordAsk).toMatchObject({hidden:false,disabled:false,textContent:'Review…'});
+ expect(h.rigAsk.classList.values.has('primary')).toBe(true);
+ expect(h.recordAsk.classList.values.has('primary')).toBe(false);
 });
 test('#809 no pending ask has no emphasised action',()=>{
  const h=harness([]);expect(h.save.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);expect(h.save.classList.values.size+h.rigAsk.classList.values.size).toBe(0);expect(h.rigInspector.act.hidden).toBe(true);

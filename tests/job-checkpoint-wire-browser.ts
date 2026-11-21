@@ -442,7 +442,8 @@ try {
     await click(page,'#workspace-pending-ask');
     await wait(`!!document.querySelector('#job-record-asks[open]')`,'checkpoint dialog');
     await click(page,`form[data-job-ask="${cpAsk.askId}"] button[data-job-text="Pass"]`);
-    await wait(`document.querySelector('form[data-job-ask="${cpAsk.askId}"] [role="status"]')?.dataset.jobText==='job.saved'`,'checkpoint saved');
+    await wait(`document.getElementById('dirty').textContent===${JSON.stringify(language==='en'?'Answer saved':koCatalog['Answer saved'])} &&
+      !document.querySelector('form[data-job-ask="${cpAsk.askId}"]') && !document.querySelector('#job-record-asks[open]')`,'checkpoint saved');
     const cpEvents=await nextEvents(),cpActEvent=cpEvents.events.find(e=>e.type==='act'&&e.act.askId===cpAsk.askId);
     assert.ok(cpActEvent?.type==='act'&&cpActEvent.act.kind==='checkpoint');
     assert.equal(cpActEvent.act.schema,JOB_COMMENTS_ACT_SCHEMA);
