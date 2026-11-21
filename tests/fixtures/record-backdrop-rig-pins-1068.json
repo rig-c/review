@@ -1,0 +1,301 @@
+{
+ "note": "#1068 golden captured on main 9228edd at 1440x900: two rig-backdrop pins (point, region) on the backdrop host without a question image, and the act words main writes when they are restored on the backdrop + sealed question image host with one general comment. Synthetic public fixture.",
+ "rows": [
+  {
+   "id": "308cb707-2332-4da5-84c4-aa7c89b61b52",
+   "frameStart": null,
+   "frameEnd": null,
+   "target": {
+    "kind": "rig",
+    "name": "viewport-387-public"
+   },
+   "category": "defect",
+   "summary": "Rig point · 리그 점",
+   "context": {
+    "animation": "inspect",
+    "time": 0,
+    "frame": null,
+    "interval": null,
+    "comment": {
+     "schema": "rig-review-comment/1",
+     "mode": "animate",
+     "viewport": "rig",
+     "frame": null,
+     "timeBasis": {
+      "schema": "rig-review-time-only/1",
+      "basis": "seconds",
+      "reason": "frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)"
+     },
+     "time": 0,
+     "animation": "inspect",
+     "sourceHash": "7e9483fa797a7f2c69ec61ab3392913522226df3bce5550a5ab7a3d29c031ef7",
+     "modelHash": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335",
+     "referenceHash": null,
+     "referenceId": null,
+     "camera": {
+      "space": "world",
+      "center": {
+       "x": 40,
+       "y": 27.000000000000004
+      },
+      "zoom": 1,
+      "viewport": {
+       "width": 392,
+       "height": 347
+      },
+      "visible": {
+       "x": -10.186851211072664,
+       "y": -17.42560553633218,
+       "width": 100.37370242214533,
+       "height": 88.85121107266437
+      }
+     },
+     "screen": {
+      "x": 176.4000244140625,
+      "y": 138.79998779296875,
+      "width": 0,
+      "height": 0
+     },
+     "world": {
+      "x": 34.981321130244375,
+      "y": 35.88512423294227,
+      "width": 0,
+      "height": 0
+     },
+     "slots": [],
+     "crop": {
+      "path": "comment-crops/438def7ca2b87de8e3932c36c8a878839a96f576eed462b14f0d48540a040ade.png",
+      "sha256": "438def7ca2b87de8e3932c36c8a878839a96f576eed462b14f0d48540a040ade",
+      "png": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAABUUlEQVR4AexYOwrCQBAdI2hUBEEEO9ETaKPX0PPYex69g52VlZWFnWCnRYL/TBFIRDKOu5MQMiGPJMzM233vbRWn2ui+8gwHcn6pgKwD1ARyl4BbqwHC9saRE8HlLd4R8j0PEFynqH7kRFB9n/XiJfDpQNbfmoAmYOiAHiFDA43HNQFjCw0JNAFDA43Hi5SAsVkiBJpAkq1OowPl9iCGkttMGmHXRBNwR1NozRYxVHpj9iaTBkQFhAvfLyd4eOfw0+ozFQHX/Rrux53VjYdkqQioD2dQ7U/CNa0+2QLwzwHil108g6NzO+0hiqf//SghJ+IX3mgPW0B0mHr3t0s4r+Yx3A4baoxVd1jdQTP+OUAEr1Zv5ERwSdkCuAtI96sAaYcpfk2Acki6rglIO0zxawKUQ9J1TUDaYYpfJgFqVYt1FWDRzL+oNIG/bLM4lPsE3gAAAP//ISyJIgAAAAZJREFUAwAc8oARS96cTgAAAABJRU5ErkJggg==",
+      "width": 48,
+      "height": 48
+     },
+     "bookmark": {
+      "schema": "rig-review-inspection/1",
+      "binding": {
+       "mode": "single",
+       "sourceHash": "7e9483fa797a7f2c69ec61ab3392913522226df3bce5550a5ab7a3d29c031ef7",
+       "rigs": [
+        "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+       ]
+      },
+      "animation": "inspect",
+      "time": 0,
+      "theme": "system",
+      "layers": {
+       "images": true,
+       "meshes": false,
+       "bones": false
+      },
+      "view": {
+       "schema": "rig-review-view/1",
+       "cameraSync": true,
+       "activeCamera": "rig",
+       "cameras": {
+        "rig": {
+         "space": "world",
+         "center": {
+          "x": 40,
+          "y": 27.000000000000004
+         },
+         "zoom": 1,
+         "viewport": {
+          "width": 392,
+          "height": 347
+         },
+         "visible": {
+          "x": -10.186851211072664,
+          "y": -17.42560553633218,
+          "width": 100.37370242214533,
+          "height": 88.85121107266437
+         }
+        },
+        "a": null,
+        "b": null,
+        "reference": {
+         "space": "image",
+         "center": {
+          "x": 10,
+          "y": 10
+         },
+         "zoom": 1,
+         "viewport": {
+          "width": 392,
+          "height": 347
+         },
+         "visible": {
+          "x": -3.470790378006873,
+          "y": -1.9243986254295535,
+          "width": 26.941580756013746,
+          "height": 23.848797250859107
+         }
+        }
+       }
+      },
+      "selection": {
+       "part": null,
+       "view": "compare",
+       "checkpoint": null,
+       "reference": "raster",
+       "person": null,
+       "inspector": "playback",
+       "partSet": null,
+       "axis": null
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "495f7d52-c77b-495a-ae7a-17042357e30b",
+   "frameStart": null,
+   "frameEnd": null,
+   "target": {
+    "kind": "rig",
+    "name": "viewport-387-public"
+   },
+   "category": "defect",
+   "summary": "Rig region · 리그 영역",
+   "context": {
+    "animation": "inspect",
+    "time": 0,
+    "frame": null,
+    "interval": null,
+    "comment": {
+     "schema": "rig-review-comment/1",
+     "mode": "animate",
+     "viewport": "rig",
+     "frame": null,
+     "timeBasis": {
+      "schema": "rig-review-time-only/1",
+      "basis": "seconds",
+      "reason": "frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)"
+     },
+     "time": 0,
+     "animation": "inspect",
+     "sourceHash": "7e9483fa797a7f2c69ec61ab3392913522226df3bce5550a5ab7a3d29c031ef7",
+     "modelHash": "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335",
+     "referenceHash": null,
+     "referenceId": null,
+     "camera": {
+      "space": "world",
+      "center": {
+       "x": 40,
+       "y": 27.000000000000004
+      },
+      "zoom": 1,
+      "viewport": {
+       "width": 392,
+       "height": 347
+      },
+      "visible": {
+       "x": -10.186851211072664,
+       "y": -17.42560553633218,
+       "width": 100.37370242214533,
+       "height": 88.85121107266437
+      }
+     },
+     "screen": {
+      "x": 117.5999755859375,
+      "y": 104.10000610351562,
+      "width": 98,
+      "height": 104.10000610351562
+     },
+     "world": {
+      "x": 19.92525326421929,
+      "y": 18.114875767057754,
+      "width": 25.09342560553633,
+      "height": 26.655364884637216
+     },
+     "slots": [],
+     "crop": {
+      "path": "comment-crops/befc0fad4100f72011eddf4797255e621638e848f5ce45745259c76dd0e6b32b.png",
+      "sha256": "befc0fad4100f72011eddf4797255e621638e848f5ce45745259c76dd0e6b32b",
+      "png": "data:image/png;base64,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",
+      "width": 146,
+      "height": 153
+     },
+     "bookmark": {
+      "schema": "rig-review-inspection/1",
+      "binding": {
+       "mode": "single",
+       "sourceHash": "7e9483fa797a7f2c69ec61ab3392913522226df3bce5550a5ab7a3d29c031ef7",
+       "rigs": [
+        "ae8a9ec6fa5f80272ca0b1c2f5e02f0c2929211f76cc1dfd4154d2ff2d226335"
+       ]
+      },
+      "animation": "inspect",
+      "time": 0,
+      "theme": "system",
+      "layers": {
+       "images": true,
+       "meshes": false,
+       "bones": false
+      },
+      "view": {
+       "schema": "rig-review-view/1",
+       "cameraSync": true,
+       "activeCamera": "rig",
+       "cameras": {
+        "rig": {
+         "space": "world",
+         "center": {
+          "x": 40,
+          "y": 27.000000000000004
+         },
+         "zoom": 1,
+         "viewport": {
+          "width": 392,
+          "height": 347
+         },
+         "visible": {
+          "x": -10.186851211072664,
+          "y": -17.42560553633218,
+          "width": 100.37370242214533,
+          "height": 88.85121107266437
+         }
+        },
+        "a": null,
+        "b": null,
+        "reference": {
+         "space": "image",
+         "center": {
+          "x": 10,
+          "y": 10
+         },
+         "zoom": 1,
+         "viewport": {
+          "width": 392,
+          "height": 347
+         },
+         "visible": {
+          "x": -3.470790378006873,
+          "y": -1.9243986254295535,
+          "width": 26.941580756013746,
+          "height": 23.848797250859107
+         }
+        }
+       }
+      },
+      "selection": {
+       "part": null,
+       "view": "compare",
+       "checkpoint": null,
+       "reference": "raster",
+       "person": null,
+       "inspector": "playback",
+       "partSet": null,
+       "axis": null
+      }
+     }
+    }
+   }
+  }
+ ],
+ "general": "General · 일반",
+ "words": "[[\"rig-review-comment/1\",\"animate\",\"rig\",\"rig\",\"viewport-387-public\",null,null]]\nRig point · 리그 점\n\n[[\"rig-review-comment/1\",\"animate\",\"rig\",\"rig\",\"viewport-387-public\",null,null]]\nRig region · 리그 영역\n\n[general]\nGeneral · 일반",
+ "rowTextEn": [
+  "1 · Animate · Rig · 0.000 s (seconds basis) · Rig point · 리그 점 · Frame unavailable",
+  "2 · Animate · Rig · 0.000 s (seconds basis) · Rig region · 리그 영역 · Frame unavailable"
+ ]
+}

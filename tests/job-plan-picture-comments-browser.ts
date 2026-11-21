@@ -3,9 +3,11 @@
  * on the same picture pixel after zoom and fit, and submit with the A1 label (sealed path and sha256, integer natural
  * pixels): the plan sign-off in its `words`, the interview picks in the new optional `value.words` together with a
  * general comment (HQ ruling 3, bar 3). Republishing new picture bytes drops the unsent pin with the existing
- * carry-over notice. Synthetic public fixtures only.
- * Usage: bun tests/job-plan-picture-comments-browser.ts --out <dir> [--subject plan|question] [--lang en|ko] [--size 1440x900|1280x720]
- *        bun tests/job-plan-picture-comments-browser.ts --serve [--subject plan|question] [--lang en|ko] [--republish] */
+ * carry-over notice. #1068 `backdrop`: the same question image over a retained rig backdrop takes the same pins at
+ * 1440×900, and rig-backdrop rows restored on that host keep main's stored bytes and act words (golden captured on main).
+ * Synthetic public fixtures only.
+ * Usage: bun tests/job-plan-picture-comments-browser.ts --out <dir> [--subject plan|question|backdrop] [--lang en|ko] [--size 1440x900|1280x720]
+ *        bun tests/job-plan-picture-comments-browser.ts --serve [--subject plan|question|backdrop] [--lang en|ko] [--republish] */
 import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
@@ -28,10 +30,10 @@ function pictureBytes(shift=0):Buffer{
   const c=[[230,20,160],[40,140,230],[250,200,40],[60,190,90]][q]!;png.data[i]=c[0]!;png.data[i+1]=(c[1]!+shift)%256;png.data[i+2]=c[2]!;png.data[i+3]=255;}
  return PNG.sync.write(png);
 }
-type Subject='plan'|'question';
+type Subject='plan'|'question'|'backdrop';
 const fixtureFor=(subject:Subject)=>subject==='plan'
  ?recordScreenFixture('signoff',true,undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,pictureBytes())
- :recordScreenFixture('interview-picks',false,undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,undefined,pictureBytes());
+ :recordScreenFixture('interview-picks',subject==='backdrop',undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,undefined,pictureBytes());
 /** The sealed `files` entry the pins must name: the plan's `planPicture`, or the question image's entry. */
 function sealedPicture(subject:Subject,source:unknown):{path:string;sha256:string}{
  const value=source as {planPicture?:{path:string;sha256:string};files:{path:string;sha256:string}[]};
@@ -50,7 +52,7 @@ if(Bun.argv.includes('--serve')){
 
 const output=resolve(arg('--out')??'artifacts/1048');await mkdir(output,{recursive:true});
 const languages=(arg('--lang')?[arg('--lang')]:['en','ko']) as ('en'|'ko')[];
-const subjects:Subject[]=subjectArg?[subjectArg]:['plan','question'];
+const subjects:Subject[]=subjectArg?[subjectArg]:['plan','question','backdrop'];
 const sizes=(arg('--size')?[arg('--size')!]:['1440x900','1280x720']).map(size=>size.split('x').map(Number) as [number,number]);
 const profile=await mkdtemp(join(tmpdir(),'review-1048-browser-'));let page:InputCdpSession|undefined;
 const errors:unknown[]=[],cases:unknown[]=[];
@@ -119,6 +121,7 @@ try{
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{if(event.sessionId)control=send;if(event.method==='Runtime.exceptionThrown')errors.push(event.params);}});
  for(const subject of subjects)for(const [width,height] of sizes)for(const language of languages){
   const catalog=language==='en'?enCatalog:koCatalog,name=`${width}x${height}`;
+  if(subject==='backdrop'&&name!=='1440x900')continue;
   await page.setViewport(width,height);
   // Case 1: point and region, reload, zoom, fit, submit.
   {const fixture=await fixtureFor(subject),out=join(output,subject,'pins',name,language);await mkdir(out,{recursive:true});fixture.output(out);
@@ -155,7 +158,7 @@ try{
     const fitted=await assertPinsOnPicture(rows,'after fit');await shot(out,'5-fit');
     const labels=rows.map(row=>{const w=row.context.comment.world;return JSON.stringify(['rig-review-comment/1','setup','reference',picture.path,picture.sha256,Math.round(w.x),Math.round(w.y),Math.round(w.width),Math.round(w.height)]);});
     let general:string|null=null;
-    if(subject==='question'){
+    if(subject!=='plan'){
      // Bar 3: a general comment on an interview host now reaches the act with the pins.
      general='General · 일반 '+language;await page.evaluate(`document.querySelector('[data-comment-general]').click()`);await save(general);
      await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===3`,'general comment listed');
@@ -186,6 +189,33 @@ try{
      scales:{fresh:fresh.scale,reloaded:reloaded.scale,zoomed:zoomed.scale,fitted:fitted.scale}};
     cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1048_PINS_PASS '+subject+' '+name+' '+language);
    }catch(error){await shot(out,'failure').catch(()=>{});throw error;}finally{await page.goto('about:blank');await fixture.close();}
+  }
+  // #1068: rig-backdrop rows restored on the backdrop + question image host keep main's stored bytes and act words.
+  if(subject==='backdrop'){const golden=JSON.parse(await readFile(new URL('./fixtures/record-backdrop-rig-pins-1068.json',import.meta.url),'utf8')) as {rows:Row[];general:string;words:string;rowTextEn:string[]};
+   const fixture=await fixtureFor(subject),out=join(output,subject,'rig-golden',name,language);await mkdir(out,{recursive:true});fixture.output(out);
+   const selector=`form[data-job-ask="${fixture.ask.askId}"]`,source=fixture.display.publication.source,ask=fixture.ask.subject as {questionId:string;setId:string};
+   try{
+    const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href,language);
+    await wait(pictureDrawn,'backdrop question image drawn');
+    const key=`rig-review-record-comments/1:${fixture.session.jobId}:${ask.questionId}:${ask.setId}:${source.sourceHash}`;
+    await page.evaluate(`localStorage.setItem(${JSON.stringify(key)},${JSON.stringify(JSON.stringify({status:'pending',publicationId:fixture.display.publication.publicationId,sourceHash:source.sourceHash,comments:golden.rows}))})`);
+    await page.goto('about:blank');await page.goto(url.href,language);
+    await wait(`${pictureDrawn}&&document.querySelectorAll('#stage-comment-list .stage-comment-item').length===${golden.rows.length}`,'rig rows restored');
+    if(language==='en')assert.deepEqual(await page.evaluate<string[]>(`[...document.querySelectorAll('#stage-comment-list .stage-comment-item')].map(row=>row.textContent)`),golden.rowTextEn,'rig rows read as on main');
+    await page.evaluate(`document.querySelector('[data-comment-general]').click()`);await save(golden.general);
+    const stored=(await draft())[0]!.value.comments;assert.equal(stored.length,golden.rows.length+1);
+    assert.equal(JSON.stringify(stored.slice(0,golden.rows.length)),JSON.stringify(golden.rows),'1068_RIG_ROWS: stored rig rows are byte-identical to main');
+    for(const value of ['biped_std','density_high']){const option=selector+` label.interview-option:has(input[value="${value}"])`;
+     await page.evaluate(`document.querySelector(${JSON.stringify(option)}).scrollIntoView({block:'center'})`);await click(page,option);}
+    await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).scrollIntoView({block:'center'})`);await click(page,selector+' button[type=submit]');
+    await wait(`!!document.querySelector(${JSON.stringify(selector+'[data-interview-answered=true]')})`,'interview saved');
+    const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));
+    assert.equal((act.value as {words?:string}).words,golden.words,'1068_RIG_LABELS: the projected rig labels are byte-identical to main');
+    await shot(out,'1-rig-rows-submitted');
+    const result={case:'rig-golden',subject,size:name,language,rows:golden.rows.length,words:golden.words};cases.push(result);
+    await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1068_RIG_GOLDEN_PASS '+name+' '+language);
+   }catch(error){await shot(out,'failure').catch(()=>{});throw error;}finally{await page.goto('about:blank');await fixture.close();}
+   continue;
   }
   // Case 2 (B2): republish with new picture bytes; the unsent pin is reported by the carry-over notice, not kept.
   {const fixture=await fixtureFor(subject),out=join(output,subject,'republish',name,language);await mkdir(out,{recursive:true});
