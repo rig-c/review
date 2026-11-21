@@ -1,5 +1,39 @@
 # Changelog
 
+## 4.12.0
+
+Record and interview screens put the conversation with the AI (questions, comments and confirmation forms) in a new right panel, and the bottom panel keeps only the view's controllers. A comment can be pinned on a record plan picture or on a sealed interview question image, and the pin reaches the AI as the picture's identity plus a rectangle in its pixels. General comments on an interview host now submit. Review pins `@rig-c/parts` 2.51.0, so the cloth editor reads the producer's typed target list.
+
+**Read before upgrading:**
+
+* **Interview-picks acts can carry `value.words`.**
+  * A consumer reading acts must be on Review ≥ 4.12.0 before a 4.12.0 host writes a commented picks act. An older `parseRecordAct` refuses the act as `REVIEW_ACT_INVALID`; it never drops the field.
+  * The field is optional and additive, and the act stays `rig-review/act@4`. It holds the same comment projection that checkpoint and signoff `words` use, validated by the same checker. Acts without comments keep their exact bytes.
+* **A pin on a record picture projects a new comment label.**
+  * In checkpoint, signoff and picks `words`, a pin on a record plan picture or a sealed question image reads `["rig-review-comment/1", mode, "reference", referenceId, referenceHash, x, y, w, h]`.
+  * `referenceId` is the path of an entry in the publication's `files`, and `referenceHash` is that entry's sealed sha256. `x`, `y`, `w` and `h` are integers in the picture's natural pixels, Y down, and a point has `w = h = 0`.
+  * A label that does not parse back is refused as `COMMENT_PICTURE_LABEL_INVALID`. Rig and package labels are unchanged.
+  * A republished picture changes the record source, so an unsent pin is reported by the existing carry-over notice rather than moved.
+* **The record and interview layout changes.**
+  * Questions, comments and the checkpoint, signoff and plan-approval forms move into a right panel. The bottom panel holds only view controllers.
+  * An empty bottom panel collapses, and the stage takes the height.
+
+### Added
+
+* Point and region comments on a record plan picture, through the existing pin layer and reference viewport. A picture pin's row reads `<picture> · Point|Region · <text>`, with no time or frame chip (#1062, part of #1048).
+* Point and region comments on a sealed interview question image. `api/interview` adds `path` and `sha256` to an image only when it matches the publication's sealed `files` (#1063, closes #1048).
+* The right communication panel, with the act row on every screen (#1049, #1041 and #1040).
+
+### Changed
+
+* Record forms move from the bottom panel into the right panel (#1055, closes #1041).
+* Review pins `@rig-c/parts` 2.51.0, with `@rig-c/core` 3.8.1. The cloth editor now reads the producer's `./cloth-targets.json` export instead of falling back to the config's tags (#1064, #954).
+
+### Fixed
+
+* General comments on an interview record host were saved locally but never submitted. They now travel in `value.words` (#1063).
+* `retainedRecordPainting` reads the declared `project.painting` instead of the first input (#1061, closes #1060).
+
 ## 4.11.0
 
 A record plan publication can carry an optional plan picture, and a plan step's `rests_on` entry that names an interview question shows the question's text. A paused seek now lands on the same physics frame whatever happened before it. The cloth editor reads the producer's target list from its typed `./cloth-targets.json` export. A job page fetches the model and `/api/review` once per load and lets the browser cache sealed files. The Korean interface uses 레퍼런스 for the reference noun, comment rows are reworded, and a stop-time race in the owner workspace no longer fails the read of its state file.
