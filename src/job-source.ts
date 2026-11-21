@@ -1725,9 +1725,11 @@ export function assertStoredCheckpointEvidence(retained: JobRetainedSourceV3): v
   if (isRetainedRecordSource(retained)) {
     if ('chestLandmarks' in retained) throw new JobError('JOB_SOURCE_MISMATCH');
     const parsed = parseRecordSource(retained.source);
-    if (!hasEvidence && !('checkpointEvidence' in retained.context) && !('previousDraft' in retained.context)) return;
+    if (!hasEvidence && !('planPicture' in retained.source) && !('checkpointEvidence' in retained.context) &&
+        !('planPicture' in retained.context) && !('previousDraft' in retained.context)) return;
     const context = parseRecordPublishedContext(retained.context, retained.result, retained.record);
     if (requestDigest(parsed.checkpointEvidence ?? null) !== requestDigest(context.checkpointEvidence ?? null) ||
+        requestDigest(parsed.planPicture ?? null) !== requestDigest(context.planPicture ?? null) ||
         requestDigest(parsed.subjects) !== requestDigest(retained.subjects) ||
         requestDigest(parsed.files) !== requestDigest(retained.seals)) throw new JobError('JOB_SOURCE_MISMATCH');
     return;

@@ -872,6 +872,16 @@ while `subjects`, `optionSets` and `sourceHash` stay the publication's; an act
 whose per-act fields disagree refuses `JOB_ACT_INVALID` by name. One set's act
 bytes are unchanged. No runtime or type export is added. See the [option-set contract](REVIEW_PACKAGE.md#option-sets).
 
+## Record plan picture
+
+A record-plan publication context and its retained source may carry an optional
+`planPicture: {path, sha256}` ([Review #983](https://github.com/rig-c/review/issues/983)):
+one raster member of `files` that the record screen draws first. It is refused
+on option sets and appended to the record digest only when present, so existing
+sources keep their bytes and `sourceHash`. `PlanContext` and `PlanSource` gain the
+optional field; no runtime export or error code is added. See the
+[plan picture contract](REVIEW_PACKAGE.md#plan-picture).
+
 ## Package manifest `frames` declaration
 
 `rig-review/1` manifests accept an optional `frames` field beside `model`: a
