@@ -865,3 +865,27 @@ declared file missing from the package, unreadable JSON, a `spec` other than
 `stride`, `duration`), or two sets naming the same animation refuses by name
 (`FRAMES_MISSING`, `FRAMES_JSON`, `FRAMES_SPEC`, `FRAMES_FIELD`,
 `FRAMES_DUPLICATE_ANIMATION`), never falling back silently.
+
+The record is the comment frame clock (#1018). On a package with a compiled
+model, each set is checked against the model animation it names when the
+package loads. The rule is measured from the producer, not from the clip length:
+`@rig-c/core` 3.8.0 `rigc render` samples an animation of duration `D` to
+`round(D * fps) + 1` frames, frame `i` at `i / fps`, writes every `stride`-th one
+from frame 0 and records the last sample's time as `duration`. For example, a
+0.8 s clip at 12 fps gives 11 frames and `duration` 0.8333, not 0.8, so a set's
+`duration` is not compared with the clip length. A set naming no model animation, a
+`written` other than `floor(round(D * fps) / stride) + 1`, or a `duration` more
+than `1e-9` s from `round(D * fps) / fps` refuses the package by name
+(`FRAMES_ANIMATION_UNKNOWN`, `FRAMES_COUNT_MISMATCH`, `FRAMES_DURATION_MISMATCH`)
+where the other `FRAMES_*` refusals surface, and indexes nothing. The refusal
+names the animation and both figures, the record's and the model's schedule. The tolerance
+covers float rounding only (`i * (1 / fps)` against `i / fps` differs by at most
+`7.3e-12` s over 100,000 frames at 1–240 fps). An accepted set becomes the clock
+for its animation: `written` frames, frame `i` at `i * stride / fps`. The report's
+clock keeps the animation it names; an animation with no set has no clock and its
+comments stay time-only. The page's transport and the server's comment validation
+read the same per-animation clocks from `feedbackCatalog.frameClocks`
+(`[{animation, clock}]`, present only when the package declares `frames` and has a
+compiled model), so a pinned comment on such an animation carries
+`frame: {index, basis: "producer"}`. Packages without `frames` are unchanged, and
+the comment act's shape is unchanged.

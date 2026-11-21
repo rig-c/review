@@ -9,7 +9,7 @@ import {loadReferencedReview,referenceBinding} from '../src/reference.ts';
 import {freshSession,parseFeedback,validatePackageFeedback,saveSession,readSession} from '../src/session.ts';
 import {parseStageComment} from '../src/stage-comment.ts';
 import {timeOnlyBasis} from '../src/stage-comment.ts';
-import {frameAtTime} from '../src/frame-clock.ts';
+import {frameAtTime,transportClock} from '../src/frame-clock.ts';
 import {recoverSession} from '../web/inspection-persistence.ts';
 const reason='frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)';
 const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABHNCSVQICAgIfAhkiAAAAAFzUkdCAK7OHOkAAAALSURBVAiZY2AAAgAABQABYlUyiAAAAABJRU5ErkJggg==';
@@ -65,6 +65,24 @@ test('time-only cannot falsely hide a real matching producer frame',()=>fixture(
  await writeFile(join(p.root,'report.json'),JSON.stringify({spec:'rig-pose-report/1',frames:25,fps:24,frame0:0,animation:'inspect'}));
  const manifest=JSON.parse(await readFile(join(p.root,'review.json'),'utf8'));manifest.authoring=[{label:'Clock',path:'report.json'}];await writeFile(join(p.root,'review.json'),JSON.stringify(manifest));
  const declared=await loadReferencedReview(p.root,join(p.root,'source.webm'));expect(declared.feedbackCatalog.clock).not.toBeNull();expect(()=>validatePackageFeedback(timed(declared),declared)).toThrow('COMMENT_TIME_ONLY_INVALID');
+}));
+test('#1018: the declared frame record frames a pinned comment the server accepts, and keeps refusing time-only where its frame exists',()=>fixture(async(p)=>{
+ // The producer's schedule for inspect (1 s) at 24 fps: 25 frames, frame i at i / 24 s, the last at 1 s.
+ await writeFile(join(p.root,'frames.json'),JSON.stringify({spec:'rigc-frames/1',background:null,viewport:null,sets:[{dir:'inspect@24fps',animation:'inspect',fps:24,sampled:25,written:25,stride:1,duration:1}]}));
+ const manifest=JSON.parse(await readFile(join(p.root,'review.json'),'utf8'));manifest.frames='frames.json';await writeFile(join(p.root,'review.json'),JSON.stringify(manifest));
+ const declared=await loadReferencedReview(p.root,join(p.root,'source.webm'));
+ expect(declared.feedbackCatalog.clock).toBeNull();expect(declared.feedbackCatalog.frameClocks).toEqual([{animation:'inspect',clock:{kind:'uniform',fps:24,frame0:0,frameCount:25}}]);
+ // The page's own transport clock for the playing animation is the one the server holds the comment to.
+ const index=frameAtTime(transportClock({clock:null,animation:undefined,frameClocks:declared.feedbackCatalog.frameClocks},'inspect',true,null,null)?.clock,.25);expect(index).toBe(6);
+ const framed=(reference:boolean,n:number)=>{const r=clone(timed(declared,reference));r.context.comment.frame={index:n,basis:'producer'};delete r.context.comment.timeBasis;r.frameStart=r.frameEnd=n;r.context.frame=n;r.context.interval={frameStart:n,frameEnd:n,inclusive:true};return parseFeedback(r);};
+ for(const reference of [false,true]){
+  expect(()=>validatePackageFeedback(timed(declared,reference),declared)).toThrow('COMMENT_TIME_ONLY_INVALID');
+  expect(validatePackageFeedback(framed(reference,6),declared).frameStart).toBe(6);
+ }
+ expect(()=>validatePackageFeedback(framed(true,7),declared)).toThrow('COMMENT_FRAME_UNAVAILABLE');
+ expect(()=>validatePackageFeedback(framed(false,25),declared)).toThrow('beyond clip last frame 24');
+ // Another animation has no set, so the page has no frame for it: time-only, as today.
+ expect(frameAtTime(transportClock({clock:null,animation:undefined,frameClocks:declared.feedbackCatalog.frameClocks},'turn',true,null,null)?.clock,.25)).toBeNull();
 }));
 test('actual time-only CLI JSON/issue names unavailable frame and seconds; strip refuses by name without coercion',()=>fixture(async(p,root)=>{
  const state=join(root,'state'),f=timed(p,true);await saveSession(p,{...freshSession(p),feedback:[f]},state);

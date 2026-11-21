@@ -48,13 +48,27 @@ export function samplesClock(times:unknown):FrameClock|null {
 /** The clock a scratch build states for one of its animations (a retarget's `motion.report.json`), bound to that build. */
 export interface StageClock {animation:string;modelHash:string;clock:FrameClock}
 
+/** One animation's clock from the package's declared `rigc-frames/1` record (#1018). */
+export interface DeclaredFrameClock {animation:string;clock:FrameClock}
+
+/**
+ * A `rigc-frames/1` set's clock (#1018): `written` frames, frame `i` at `i * stride / fps` seconds. The set is
+ * checked against the compiled model's animation when the package loads; this only states the schedule.
+ */
+export function framesSetClock(set:{fps:number;written:number;stride:number}):FrameClock {
+  return {kind:'uniform',fps:set.fps/set.stride,frame0:0,frameCount:set.written};
+}
+
 /**
  * The transport's clock. The package report's clock when it names the active animation; else, with a player, the
- * clock the build on the stage states for the active animation (#164: a retarget's own report frameTimes). The
- * stage clock binds by animation and by the drawn model's hash, so a reset or another rebuild drops it.
+ * clock the package's declared frame record states for the active animation (#1018); else the clock the build on
+ * the stage states for the active animation (#164: a retarget's own report frameTimes). The stage clock binds by
+ * animation and by the drawn model's hash, so a reset or another rebuild drops it. The report and the record are the
+ * package's own clocks, the ones the server validates a comment against, so they come before the page-only stage.
  */
-export function transportClock(report:{clock:FrameClock|null|undefined;animation:string|undefined},active:string,hasPlayer:boolean,stage:StageClock|null,stageModelHash:string|null):{clock:FrameClock;source:'report'|'stage'}|null {
+export function transportClock(report:{clock:FrameClock|null|undefined;animation:string|undefined;frameClocks?:readonly DeclaredFrameClock[]|null|undefined},active:string,hasPlayer:boolean,stage:StageClock|null,stageModelHash:string|null):{clock:FrameClock;source:'report'|'frames'|'stage'}|null {
   const own=clockForAnimation(report.clock,report.animation,active,hasPlayer);if(own)return {clock:own,source:'report'};
+  const declared=hasPlayer&&active?report.frameClocks?.find(value=>value.animation===active):undefined;if(declared)return {clock:declared.clock,source:'frames'};
   if(hasPlayer&&stage&&active&&stage.animation===active&&stage.modelHash===stageModelHash)return {clock:stage.clock,source:'stage'};
   return null;
 }

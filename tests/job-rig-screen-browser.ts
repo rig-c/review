@@ -26,16 +26,24 @@ import {fullyVisible, visibilityGeometry} from './helpers/walk-visibility.ts';
 const argument = (key: string) => {const at = Bun.argv.indexOf(key); return at < 0 ? undefined : Bun.argv[at + 1];};
 const draft = Bun.argv.includes('--draft');
 const hintOff = Bun.argv.includes('--hint-off');
+// `--serve` starts the fixture host for a person's look, prints the owner URL and stays up until Ctrl-C.
+// With `--draft` it serves the #1017 draft-verdict fixture; without it, the #1018 rig fixture (add `--frames` for the frame record).
 const serve = Bun.argv.includes('--serve');
-assert.ok(draft || (!hintOff && !serve), '--hint-off and --serve require --draft');
+assert.ok(draft || !hintOff, '--hint-off requires --draft');
 const draftComment = '초안의 이 부분을 수정해 주세요.';
 const draftSelector = {kind: 'draft', id: 'chain'} as const;
 const autoStill=Bun.argv.includes('--auto-still');
+// #1018: `--pin-comment` pins one rig comment in Playback before the verdict; `--frames` also declares the producer's
+// frame record (the real `rigc render --fps 12` record of the fixture's 1 s `still`, set renamed to the `idle` copy).
+const pinComment=Bun.argv.includes('--pin-comment'),declareFrames=Bun.argv.includes('--frames');
+assert.ok(!serve || !pinComment, '--serve leaves the comment to the person');
+assert.ok(!draft || !pinComment, '--draft places its own comment; --pin-comment runs without it');
 const verdict=(argument('--verdict')??'approved') as 'approved'|'changes-requested';
 const language = argument('--lang') ?? 'both';
 assert.ok(language === 'both' || language === 'en' || language === 'ko');
 const output = resolve(argument('--out') ?? 'artifacts/job-rig-screen-709');
 assert.ok(!serve || language !== 'both', '--serve requires one language');
+if (!serve) await mkdir(output, {recursive: true});
 
 // Read only the public numeric observation. No internal screen state, altered bundle or act injection.
 const cameraExpression = `JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig`;
@@ -166,6 +174,15 @@ async function run(lang: 'en' | 'ko') {
     model.animations.push({...still, name: 'idle'});
     if (model.editorOrder?.animations) model.editorOrder.animations.push('idle');
     manifest.animations.push({id: 'idle', label: 'Synthetic static idle'});
+    if (declareFrames) {
+      const frames = JSON.parse(await readFile(new URL('./fixtures/frames-1018/still-12fps.frames.json', import.meta.url), 'utf8'));
+      assert.equal(frames.sets.length, 1);
+      assert.equal(still.duration, 1, 'the record was rendered from a 1 s still');
+      frames.sets[0] = {...frames.sets[0], dir: 'idle', animation: 'idle'};
+      await mkdir(join(fixture.input.root, 'out/check/idle_frames'), {recursive: true});
+      await writeFile(join(fixture.input.root, 'out/check/idle_frames/frames.json'), JSON.stringify(frames, null, 2) + '\n');
+      manifest.frames = 'check/idle_frames/frames.json';
+    }
     await writeFile(modelPath, JSON.stringify(model));
     await writeFile(manifestPath, JSON.stringify(manifest));
     const publication = await fixture.publish();
@@ -300,6 +317,30 @@ async function run(lang: 'en' | 'ko') {
       assert.equal(Number((beforeSubmit as any).time),0.375);
       await record('788-before-submit',beforeSubmit);
     }
+    if(pinComment){
+      await page.evaluate(`(()=>{document.querySelector('[data-mode="playback"]').click();
+        const scrub=document.getElementById('scrub');scrub.value='0.375';scrub.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await wait(`document.getElementById('animation-select').value==='idle'&&Number(document.getElementById('scrub').value)===0.375`, 'comment-pose');
+      await click(page, '#stage-comment');
+      const at = await page.evaluate<{x: number; y: number}>(`(()=>{const r=document.getElementById('rig-viewport').getBoundingClientRect();
+        return {x:r.left+r.width*.54,y:r.top+r.height*.49};})()`);
+      await page.mouse('mouseMoved', at.x, at.y);await page.mouse('mousePressed', at.x, at.y);await page.mouse('mouseReleased', at.x, at.y);
+      await wait("!!document.querySelector('.stage-comment-composer input')", 'comment-composer');
+      await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');
+        form.querySelector('input').value='Pinned frame check';form.requestSubmit();})()`);
+      await wait("!document.querySelector('.stage-comment-composer') && !!document.querySelector('#stage-comment-list .stage-comment-summary')", 'comment-added');
+      if (await page.evaluate<boolean>("document.getElementById('stage-comment').getAttribute('aria-pressed')==='true'")) await click(page, '#stage-comment');
+      const row = await page.evaluate<{rows: string[]; frameLabel: string; frameControlsHidden: boolean}>(`({rows:[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].map(n=>n.textContent),
+        frameLabel:document.getElementById('frame-label').textContent,frameControlsHidden:document.getElementById('frame-controls').hidden})`);
+      await record('comment-row', row);
+      assert.equal(row.rows.length, 1, 'one pinned comment row');
+      const timeOnly = catalog['{0} s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)']!.replace('{0}', '0.375');
+      if (declareFrames) {
+        assert.equal(row.rows[0], '1 · ANIMATE · RIG · F4 (producer) · Pinned frame check', 'the normal row, unchanged wording');
+        assert.ok(!row.rows[0]!.includes('COMMENT_FRAME_UNAVAILABLE'));
+      } else assert.equal(row.rows[0], '1 · ANIMATE · RIG · ' + timeOnly + ' · Pinned frame check', "today's time-only row");
+      await writeFile(join(out, 'comment-row.png'), await page.screenshot());
+    }
     // Use the screen's direct verdict button and trusted pointer submit. No /ui/acts call here.
     assert.equal(await page.evaluate(`document.getElementById('review-status').hidden`),true);
     if (draft) {
@@ -346,17 +387,37 @@ async function run(lang: 'en' | 'ko') {
     const event = acts[0]!;
     assert.ok(event.type === 'act' && event.act.kind === 'review-verdict');
     await writeFile(join(out, 'recorded-act.json'), JSON.stringify(event.act, null, 2) + '\n');
-    const act = draft ? parseContextCommentsAct(event.act) : parseCommentsAct(event.act);
+    // A pinned comment (the draft run's or --pin-comment's) carries its view context, which the act records as act@7.
+    const contextAct = draft || pinComment;
+    const act = contextAct ? parseContextCommentsAct(event.act) : parseCommentsAct(event.act);
     assert.ok(act.kind === 'review-verdict');
     assert.ok(act.still);
-    assert.equal(act.schema, draft ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA);
+    assert.equal(act.schema, contextAct ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA);
     assert.equal(act.publicationId, publication.publicationId);
     assert.equal(act.source.sourceHash, publication.source.sourceHash);
     assert.equal(act.authority.actor, 'human');
     assert.equal(act.authority.channel, 'review-ui');
     assert.equal(act.value.stage, 'rig-review');
     assert.equal(act.value.verdict, verdict);
-    assert.equal(act.value.comments.length, draft ? 1 : 0);
+    if (pinComment) {
+      assert.equal(act.value.comments.length, 1, 'the pinned comment reaches the act');
+      // A JobComment carries the human text and, for a pin, its feedback anchor.
+      const pinned = act.value.comments[0]!.anchor as unknown as {frameStart: number | null; context?: {comment?: {frame: unknown; time: number; animation: string | null; timeBasis?: unknown}}};
+      assert.equal(act.value.comments[0]!.text, 'Pinned frame check');
+      await record('act-comment', {frameStart: pinned.frameStart, frame: pinned.context?.comment?.frame, time: pinned.context?.comment?.time,
+        animation: pinned.context?.comment?.animation, timeBasis: pinned.context?.comment?.timeBasis ?? null});
+      assert.equal(pinned.context?.comment?.animation, 'idle');
+      assert.equal(pinned.context?.comment?.time, 0.375);
+      if (declareFrames) {
+        assert.deepEqual(pinned.context?.comment?.frame, {index: 4, basis: 'producer'});
+        assert.equal(pinned.frameStart, 4);
+        assert.equal(pinned.context?.comment?.timeBasis, undefined);
+      } else {
+        assert.equal(pinned.context?.comment?.frame, null);
+        assert.equal(pinned.frameStart, null);
+      }
+    } else if (!draft) assert.deepEqual(act.value.comments, []);
+    assert.equal(act.value.comments.length, contextAct ? 1 : 0);
     if (draft) {
       assert.deepEqual(act.source.selector, draftSelector);
       const [comment] = act.value.comments;
