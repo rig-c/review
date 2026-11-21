@@ -72,7 +72,7 @@ import {createWindModel,environmentFor,windReadout,RUNTIME_START_READOUT,joltPac
 import {tuningRows,readoutRows,type InspectedCheckView} from '../src/physics-tuning.ts';
 import {bindReadingsPanel,type ReadingsJobView,type ReadingsPanel,type ReadingsRefusal} from './readings-panel.ts';
 import {READINGS_SCHEMA,readingSeekTime,type ReadingsContext} from '../src/readings.ts';
-import {restartsWindClock,type ClipMove,environmentCheckRows,scheduleContext,worldExport,type EnvironmentCheckView,type WorldExport} from './environment-world.ts';
+import {windClockOnMove,type ClipMove,environmentCheckRows,scheduleContext,worldExport,type EnvironmentCheckView,type WorldExport} from './environment-world.ts';
 import {barLine,beforeLine} from '../src/physics-tuning.ts';
 import {bindRequirementsPanel,type RequirementsCatalogView,type RequirementsJobView,type RequirementsPanel,type RequirementsRefusal} from './requirements-panel.ts';
 import {patchRoute} from '../src/retune-route.ts';
@@ -2312,7 +2312,8 @@ function stepEnvironment(dt:number):void {
  if(environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));
  renderEnvironment();
 }
-function applyEnvironment():void {if(player&&environmentApplied())player.environment(environmentFor(wind.read(),gravityValue()));renderEnvironment();}
+/** A standing world already in force is not set again: `environment` clears the player's seek replay cache (#935: a paused seek applies it). */
+function applyEnvironment():void {if(player&&environmentApplied()){const next=environmentFor(wind.read(),gravityValue()),now=player.environment();if(String(next.wind)!==String(now.wind)||String(next.gravity)!==String(now.gravity))player.environment(next);}renderEnvironment();}
 function renderEnvironment():void {
  if(!player)return;
  const reading=wind.read();
@@ -2336,10 +2337,10 @@ function worldFor(name:string):WorldExport|{error:string} {
  if(worldCache?.key!==key)worldCache={key,value:worldExport(wind.snapshot(),gravityValue(),environmentApplied(),name,clipDuration(name))};
  return worldCache.value;
 }
-/** A fresh wind clock at the same settings (a repeating gust restarts at 0); pending jolts keep their distance in time. */
-function restartWindClock():void {const now=wind.read().time;wind.restore(wind.snapshot());joltQueue=joltQueue.map(step=>({...step,at:Math.max(0,step.at-now)}));}
-/** #183: every clip restart (`restartsWindClock`) restarts the wind clock while the schedule is watched, not only the checkbox. */
-function clipMoved(move:ClipMove):void {if(player&&restartsWindClock(move,useWorld())){restartWindClock();applyEnvironment();}}
+/** A fresh wind clock at the same settings (a repeating gust restarts at 0), advanced to `at`; pending jolts keep their distance in time. */
+function restartWindClock(at=0):void {const now=wind.read().time;wind.restore(wind.snapshot());if(at>0)wind.advance(at);joltQueue=joltQueue.map(step=>({...step,at:Math.max(0,step.at-now)+at}));}
+/** #183: every clip restart restarts the wind clock while the schedule is watched. #935: a paused seek sets it to the seek's time. */
+function clipMoved(move:ClipMove):void {const at=player?windClockOnMove(move,useWorld(),playing):null;if(at!==null){restartWindClock(at);applyEnvironment();}}
 let scheduleShown='';
 function renderSchedule():void {
  const world=worldFor(animation),check=checkAnimation(),checked=check!==animation?worldFor(check):null;

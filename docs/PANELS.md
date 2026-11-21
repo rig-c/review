@@ -179,7 +179,9 @@ repeating gust (equal to the panel's wind at every frame time; between frames
 rigc holds the frame's value, and the panel states how far that can be from the
 live wind) — and sends it with readings and with Apply, whose check then runs
 `rig-parts check --environment`. The wind clock restarts with the clip, so what
-you watch is the world the readings and bars are taken in. **Export schedule**
+you watch is the world the readings and bars are taken in.
+A paused seek shows physics replayed from 0 to T under the wind at schedule(T), held constant over the replay, not the varying wind of a real run (#935).
+**Export schedule**
 downloads the same bytes; **Check under this world** runs `rig-parts check
 --environment` on the build on the stage (needs `@rig-c/parts` 1.48.0) and shows
 its `ANIMATIONS_DO_NOT_FOLD` and `TEXTURE_STRETCH` lines beside the same build's

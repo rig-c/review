@@ -55,3 +55,12 @@ export function restartsWindClock(move: ClipMove, watched: boolean): boolean {
   if (!watched) return false;
   return move.kind === 'choose' || move.kind === 'replay' || (move.kind === 'seek' && move.to <= 0);
 }
+/**
+ * #935: the wind clock time a clip move sets, or null to leave the running clock alone. A clip restart while the
+ * schedule is watched sets 0 (#183); a paused seek to T sets T whatever is watched, so a paused frame is a function of T
+ * and the world (a fresh clock advanced to T, the schedule's wind at T). During playback the clock runs on unchanged.
+ */
+export function windClockOnMove(move: ClipMove, watched: boolean, playing: boolean): number | null {
+  if (restartsWindClock(move, watched)) return 0;
+  return move.kind === 'seek' && !playing ? move.to : null;
+}
