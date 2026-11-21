@@ -106,7 +106,7 @@ const el = <T extends HTMLElement = HTMLElement>(id: string): T => {
 const input = (id: string) => el<HTMLInputElement>(id);
 const select = (id: string) => el<HTMLSelectElement>(id);
 const button = (id: string) => el<HTMLButtonElement>(id);
-const titledIds = new Set(['message', 'player-state', 'layout-state', 'renderer-state', 'layer-state', 'idle-state', 'control-state', 'draft-state', 'rig-label', 'reference-label', 'coordinates']);
+const titledIds = new Set(['message', 'review-message', 'player-state', 'layout-state', 'renderer-state', 'layer-state', 'idle-state', 'control-state', 'draft-state', 'rig-label', 'reference-label', 'coordinates']);
 // #347: write only a changed source, so a played frame does not rewrite (and re-translate) unchanged text.
 const text = (id: string, value: string) => { const node = el(id); setSourceText(node, value); if (titledIds.has(id)) setSourceAttribute(node, 'title', value); };
 const option = (value: string, label: string) => { const item = document.createElement('option'); item.value = value; item.textContent = label; return item; };
@@ -1878,6 +1878,8 @@ function renderAskHeadline(sentence=askSentence):void {
   askHeadline.removeAttribute('translate');
   askHeadline.style?.removeProperty('white-space');
   setSourceText(askHeadline,sentence);
+  // In a refusal the headline ellipsizes to one line (#1041); its title keeps the whole sentence.
+  setSourceAttribute(askHeadline,'title',sentence);
   return;
  }
  const at=Date.parse(progress.at),age=()=>Math.max(0,Math.floor((Date.now()-at)/1000));
@@ -1896,11 +1898,12 @@ function renderAskHeadline(sentence=askSentence):void {
   const prefix=progress.text?phaseAndStep+' · '+progress.text:phaseAndStep;
   askHeadline.replaceChildren(prefix+' · ',ageText);
  }
+ const titleNow=()=>setSourceAttribute(askHeadline,'title',askHeadline.textContent??'');titleNow();
  const tickAge=()=>{
   const seconds=age();
   if((seconds>=60)!==quiet){renderAskHeadline();return;}
   const value=ageValue(seconds);
-  if(ageText.data!==value)ageText.data=value;
+  if(ageText.data!==value){ageText.data=value;titleNow();}
  };
  if(!suspended&&!disposed)progressTimer=setInterval(tickAge,1000);
 }
@@ -1959,12 +1962,13 @@ function renderAnswerControls():void {
   if(needsPinnedPart&&!save.hidden&&!save.disabled){
    if(!notice.classList.contains('error')){
     setSourceText(notice,pinRefusal);
+    setSourceAttribute(notice,'title',pinRefusal);
     notice.classList.add('error');
     notice.dataset.partsPinRefusal='true';
    }
   }else if(notice.dataset.partsPinRefusal){
    delete notice.dataset.partsPinRefusal;
-   setSourceText(notice,'');
+   setSourceText(notice,'');setSourceAttribute(notice,'title','');
    notice.classList.remove('error');
   }
  }
