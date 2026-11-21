@@ -319,8 +319,8 @@ async function run(lang: 'en' | 'ko') {
     }
     if(pinComment){
       await page.evaluate(`(()=>{document.querySelector('[data-mode="playback"]').click();
-        const scrub=document.getElementById('scrub');scrub.value='0.375';scrub.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-      await wait(`document.getElementById('animation-select').value==='idle'&&Number(document.getElementById('scrub').value)===0.375`, 'comment-pose');
+        const scrub=document.getElementById('scrub');scrub.value='0.35';scrub.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await wait(`document.getElementById('animation-select').value==='idle'&&Number(document.getElementById('scrub').value)===0.35`, 'comment-pose');
       await click(page, '#stage-comment');
       const at = await page.evaluate<{x: number; y: number}>(`(()=>{const r=document.getElementById('rig-viewport').getBoundingClientRect();
         return {x:r.left+r.width*.54,y:r.top+r.height*.49};})()`);
@@ -334,7 +334,7 @@ async function run(lang: 'en' | 'ko') {
         frameLabel:document.getElementById('frame-label').textContent,frameControlsHidden:document.getElementById('frame-controls').hidden})`);
       await record('comment-row', row);
       assert.equal(row.rows.length, 1, 'one pinned comment row');
-      const timeOnly = catalog['{0} s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)']!.replace('{0}', '0.375');
+      const timeOnly = catalog['{0} s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)']!.replace('{0}', '0.350');
       if (declareFrames) {
         assert.equal(row.rows[0], '1 · ANIMATE · RIG · ' + catalog['F{0} (producer)']!.replace('{0}', '4') + ' · Pinned frame check', 'the normal row; #1026 localizes the frame basis label');
         assert.ok(!row.rows[0]!.includes('COMMENT_FRAME_UNAVAILABLE'));
@@ -407,7 +407,7 @@ async function run(lang: 'en' | 'ko') {
       await record('act-comment', {frameStart: pinned.frameStart, frame: pinned.context?.comment?.frame, time: pinned.context?.comment?.time,
         animation: pinned.context?.comment?.animation, timeBasis: pinned.context?.comment?.timeBasis ?? null});
       assert.equal(pinned.context?.comment?.animation, 'idle');
-      assert.equal(pinned.context?.comment?.time, 0.375);
+      assert.equal(pinned.context?.comment?.time, 0.35);
       if (declareFrames) {
         assert.deepEqual(pinned.context?.comment?.frame, {index: 4, basis: 'producer'});
         assert.equal(pinned.frameStart, 4);

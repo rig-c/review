@@ -13,6 +13,7 @@ import {JOB_API_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_
 import type {ReviewManifest} from '../src/manifest.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
+import {boxesIntersect, placeLabels} from '../web/label-placement.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
@@ -248,8 +249,13 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
     }
     if (chestCase) {
       await selectCarrier();
+      const expectedBounds = catalog['Selection bounds · world units / Y up: x {0}, y {1}, width {2}, height {3}. Conservative geometry/clip bounds; fit uses the existing 0.25–8× camera range.']!
+        .replace('{0}', '8.00').replace('{1}', '14.00').replace('{2}', '20.00').replace('{3}', '20.00');
+      const partText = await screen.evaluate<string>("document.querySelector('#selected-part')?.textContent ?? ''");
+      assert.ok(partText.includes(expectedBounds), `${language} ${mode}: expected formatted part bounds, read ${partText}`);
       const requestDisabled = "document.querySelector('#request-changes').disabled";
       if (chestSeed) {
+        if (mode === 'chest-only') await writeFile(join(directory, 'part-tab.png'), await screen.screenshot());
         await wait("!!document.querySelector('#chest-edit:not([hidden]):not(:disabled)')");
         await click(screen, '#chest-edit');
         await wait("!!document.querySelector('#chest-editor-bar:not([hidden]) [data-bust-mode=landmarks][aria-pressed=true]')");
@@ -274,6 +280,60 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
           cleavage: chestSeed.bust.cleavage ? ['58.5', '38.25'] : ['', ''], alpha: '0.46', clearance: '2.6'});
         assert.equal(await screen.evaluate<boolean>(requestDisabled), true, 'Published points alone are not a correction');
         await writeFile(join(directory, 'seeded.png'), await screen.screenshot());
+        if (chestSeed.bust.cleavage) {
+          const landmarkTags = [
+            catalog["Right apex (character's right, image left)"],
+            catalog["Left apex (character's left, image right)"],
+            catalog['Cleavage'],
+          ];
+          const overlayRead = await screen.evaluate<{
+            width: number; height: number;
+            points: {x: number; y: number}[];
+            widths: number[];
+          }>(`(() => {
+            const canvas = document.querySelector('#rig-overlay');
+            const ctx = canvas.getContext('2d');
+            ctx.font = '600 11px ui-monospace, monospace';
+            const camera = JSON.parse(document.querySelector('#view-coordinates').textContent).cameras.rig;
+            const stage = ${JSON.stringify(fixture.stage)};
+            const scale = camera.viewport.width / camera.visible.width;
+            const project = ([cx, cy]) => {
+              const wx = stage.x + cx, wy = stage.y + stage.height - cy;
+              return {
+                x: camera.viewport.width / 2 + (wx - camera.center.x) * scale,
+                y: camera.viewport.height / 2 - (wy - camera.center.y) * scale,
+              };
+            };
+            const pts = [[50.25, 39.5], [66.5, 39.5], [58.5, 38.25]].map(project);
+            const tags = ${JSON.stringify(landmarkTags)};
+            return {
+              width: canvas.clientWidth,
+              height: canvas.clientHeight,
+              points: pts,
+              widths: tags.map(tag => ctx.measureText(tag).width + 8),
+            };
+          })()`);
+          const obstacles = overlayRead.points.map(at => ({x: at.x - 6.5, y: at.y - 6.5, w: 13, h: 13}));
+          const placed = placeLabels(
+            overlayRead.points.map((at, i) => ({at, width: overlayRead.widths[i]!})),
+            {gap: 10, rise: 3, bounds: {width: overlayRead.width, height: overlayRead.height}, obstacles},
+          );
+          await writeFile(join(directory, 'overlay-labels.json'), JSON.stringify({overlayRead, placed}, null, 2) + '\n');
+          assert.equal(placed.every(p => p.visible), true, `${language} chest landmark labels all visible`);
+          for (let i = 0; i < placed.length; i++) {
+            for (let j = i + 1; j < placed.length; j++) {
+              assert.equal(boxesIntersect(placed[i]!.box, placed[j]!.box), false,
+                `${language} landmark labels ${i} and ${j} do not intersect`);
+            }
+            for (const obstacle of obstacles) {
+              assert.equal(boxesIntersect(placed[i]!.box, obstacle), false,
+                `${language} landmark label ${i} clears marker obstacles`);
+            }
+          }
+          const [rightApexBox, leftApexBox] = [placed[0]!.box, placed[1]!.box];
+          assert.ok(rightApexBox.x + rightApexBox.w <= leftApexBox.x,
+            `${language} F08 apex labels do not overlap horizontally: right=${JSON.stringify(rightApexBox)} left=${JSON.stringify(leftApexBox)}`);
+        }
         await placePosedApex(screen, fixture.stage);
         const edited = await readLandmarkFields(screen);
         assert.deepEqual(edited, {...seeded, apex_r: correctedApex.map(String)});
@@ -310,6 +370,64 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       await screen.evaluate<void>(`(()=>{const form=document.querySelector('.stage-comment-composer');
         form.querySelector('input').value='Adjust the mesh';form.requestSubmit();})()`);
       await wait("!document.querySelector('.stage-comment-composer') && !document.querySelector('#request-changes').disabled");
+      if (mode === 'with-comment') {
+        const commentVisuals = await screen.evaluate<{
+          lineHeight: string;
+          lineHeightPx: number;
+          themes: Record<'dark' | 'light', {bg: string; fg: string; stage: string; pinOnStage: number; numberOnPin: number}>;
+        }>(`(() => {
+          const parseRgb = (str) => {
+            const m = str.match(/\\d+(\\.\\d+)?/g);
+            return m ? [Number(m[0]), Number(m[1]), Number(m[2])] : [0, 0, 0];
+          };
+          const lum = (rgb) => {
+            const [r, g, b] = rgb.map(v => {
+              const s = v / 255;
+              return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+            });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          };
+          const ratio = (a, b) => {
+            const la = lum(parseRgb(a)), lb = lum(parseRgb(b));
+            return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+          };
+          const rowBtn = document.querySelector('.stage-comment-item > button:first-child');
+          const pin = document.querySelector('.stage-comment-pin');
+          const pane = document.querySelector('#rig-pane');
+          const lineHeight = getComputedStyle(rowBtn).lineHeight;
+          const prevTheme = document.documentElement.dataset.theme;
+          const themes = {};
+          for (const theme of ['dark', 'light']) {
+            document.documentElement.dataset.theme = theme;
+            const ps = getComputedStyle(pin), stage = getComputedStyle(pane).backgroundColor;
+            themes[theme] = {
+              bg: ps.backgroundColor,
+              fg: ps.color,
+              stage,
+              pinOnStage: Number(ratio(ps.backgroundColor, stage).toFixed(2)),
+              numberOnPin: Number(ratio(ps.color, ps.backgroundColor).toFixed(2)),
+            };
+          }
+          if (prevTheme) document.documentElement.dataset.theme = prevTheme;
+          else delete document.documentElement.dataset.theme;
+          return {lineHeight, lineHeightPx: Number.parseFloat(lineHeight), themes};
+        })()`);
+        await screen.evaluate<void>("document.documentElement.dataset.theme = 'dark'");
+        await writeFile(join(directory, 'comments-pins-dark.png'), await screen.screenshot());
+        await screen.evaluate<void>("document.documentElement.dataset.theme = 'light'");
+        await writeFile(join(directory, 'comments-pins-light.png'), await screen.screenshot());
+        await screen.evaluate<void>("delete document.documentElement.dataset.theme");
+        await writeFile(join(directory, 'comment-visuals.json'), JSON.stringify(commentVisuals, null, 2) + '\n');
+        assert.ok(commentVisuals.lineHeightPx >= 20,
+          `${language} F04 comment row line-height expected >=20px, got ${commentVisuals.lineHeight}`);
+        for (const theme of ['dark', 'light'] as const) {
+          const t = commentVisuals.themes[theme];
+          assert.ok(t.pinOnStage >= 3,
+            `${language} F06 ${theme} pin/stage contrast expected >=3, got ${t.pinOnStage} (${t.bg} on ${t.stage})`);
+          assert.ok(t.numberOnPin >= 4.5,
+            `${language} F06 ${theme} number/pin contrast expected >=4.5, got ${t.numberOnPin} (${t.fg} on ${t.bg})`);
+        }
+      }
       if (await screen.evaluate<boolean>("document.querySelector('#stage-comment').getAttribute('aria-pressed')==='true'")) {
         await click(screen, '#stage-comment');
       }
@@ -483,8 +601,11 @@ if (serving) {
     try { await fixture.close(); } finally { process.off('SIGINT', stop); }
   }
 } else {
+  const modesIndex = Bun.argv.indexOf('--modes');
+  const requestedModes = modesIndex >= 0 ? Bun.argv[modesIndex + 1]!.split(',') as BrowserMode[] :
+    ['mesh-only', 'with-comment', 'no-mesh', 'stale-draft', 'chest-only', 'chest-optional', 'chest-readonly'] as const;
   for (const language of ['en', 'ko'] as const) {
-    for (const mode of ['mesh-only', 'with-comment', 'no-mesh', 'stale-draft', 'chest-only', 'chest-optional', 'chest-readonly'] as const) {
+    for (const mode of requestedModes) {
       await runBrowser(language, mode);
     }
   }

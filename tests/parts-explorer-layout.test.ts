@@ -2,7 +2,8 @@ import {rigWorkspaceMarkup,rigReviewDialogMarkup,rigLayerControlsMarkup,sharedVi
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { setSourceAttribute, setSourceText, sourceAttribute } from '../web/i18n.ts';
+import { formatFixed } from '../src/frame-clock.ts';
+import { setSourceAttribute, setSourceText, sourceAttribute, t } from '../web/i18n.ts';
 import type { PosedFrame, SlotIdentitySnapshot } from '@rig-c/play';
 import {
   PartInspection,
@@ -230,8 +231,10 @@ test('Change 2: compare.ts reuses PartThumbnails, pageRegionTable, and loadPartM
     'setSourceText',
     'setSourceAttribute',
     'sourceAttribute',
+    't',
+    'formatFixed',
     script + ';return PartExplorer;',
-  )(PartInspection, orderedParts, partIdentity, doc, DetailNode, setSourceText, setSourceAttribute, sourceAttribute) as typeof PartExplorer;
+  )(PartInspection, orderedParts, partIdentity, doc, DetailNode, setSourceText, setSourceAttribute, sourceAttribute, t, formatFixed) as typeof PartExplorer;
 
   const oldDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
   const oldIO = Object.getOwnPropertyDescriptor(globalThis, 'IntersectionObserver');

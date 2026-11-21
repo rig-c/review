@@ -7,8 +7,9 @@ import {turnPackage} from './helpers/turn-pad.ts';
 import {loadReview} from '../src/manifest.ts';
 import {loadReferencedReview,referenceBinding} from '../src/reference.ts';
 import {freshSession,parseFeedback,validatePackageFeedback,saveSession,readSession} from '../src/session.ts';
-import {parseStageComment} from '../src/stage-comment.ts';
-import {timeOnlyBasis} from '../src/stage-comment.ts';
+import {parseStageComment,timeOnlyBasis,feedbackTimingLabel,feedbackItemComments,projectComments} from '../src/stage-comment.ts';
+import {formatFeedbackIssues} from '../src/feedback-export.ts';
+import {t} from '../web/i18n.ts';
 import {frameAtTime,transportClock} from '../src/frame-clock.ts';
 import {recoverSession} from '../web/inspection-persistence.ts';
 const reason='frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)';
@@ -89,4 +90,22 @@ test('actual time-only CLI JSON/issue names unavailable frame and seconds; strip
  const run=async(args:string[])=>{const proc=Bun.spawn([process.execPath,'src/cli.ts',...args],{env:{...process.env,RIG_REVIEW_STATE_DIR:state},stdout:'pipe',stderr:'pipe'});return {stdout:await new Response(proc.stdout).text(),stderr:await new Response(proc.stderr).text(),exit:await proc.exited};};
  for(const format of ['json','issue']){const r=await run(['feedback',p.root,'--reference',join(p.root,'source.webm'),'--format',format]);expect(r.exit,r.stderr).toBe(0);expect(r.stdout).toContain('frame is unavailable');expect(r.stdout).toContain('seconds');expect(r.stdout).not.toContain('null–null');expect(r.stdout).not.toContain('data:image/png');if(format==='json'){const row=JSON.parse(r.stdout).feedback[0];expect(row.frameStart).toBeNull();expect(row.frameEnd).toBeNull();expect(row.context.interval).toBeNull();expect(row.context.frame).toBeNull();expect(await readFile(row.context.comment.crop.path)).toEqual(Buffer.from(png,'base64'));}}
  const strip=await run(['strip',p.root,'--animation','inspect','--reference',p.manifest.references[0].id,'--reference-video',join(p.root,'source.webm'),'--all-feedback','--json']);expect(strip.exit).not.toBe(0);expect(strip.stderr).toContain('COMMENT_CLOCK_UNAVAILABLE');expect(strip.stderr).toContain('frame is unavailable');
+}));
+test('#1030 F01: feedbackTimingLabel formats seconds to 3 decimals matching rigPaneLabel while stored feedback, act projection and context JSON keep raw float bytes',()=>fixture(async(p)=>{
+ const rawTime=0.8500000000000024,f=timed(p);
+ f.context.time=rawTime;f.context.comment.time=rawTime;f.context.comment.bookmark.time=rawTime;
+ const beforeBytes=JSON.stringify(f);
+ expect(feedbackTimingLabel(f)).toBe(`0.850 s (seconds basis) · ${reason}`);
+ expect(t(feedbackTimingLabel(f),undefined,'ko')).toBe('0.850초 (초 기준) · 프레임을 사용할 수 없음: 현재 시간에 명시적 프로듀서 프레임 인덱스가 없어요 (COMMENT_FRAME_UNAVAILABLE)');
+ const validated=validatePackageFeedback(parseFeedback(f),p);
+ expect(JSON.stringify(validated)).toBe(beforeBytes);
+ expect((validated.context as any).time).toBe(rawTime);
+ expect((validated.context as any).comment.time).toBe(rawTime);
+ const actItems=feedbackItemComments([validated]);
+ expect((actItems[0]!.anchor.context as any).time).toBe(rawTime);
+ expect((actItems[0]!.anchor.context as any).comment.time).toBe(rawTime);
+ expect(projectComments(actItems)).toBe(`[["rig-review-comment/1","animate","rig","rig",${JSON.stringify(p.manifest.id)},null,null]]\nTimed opaque detail`);
+ const md=formatFeedbackIssues({...freshSession(p),feedback:[validated],feedbackWarnings:[],historyWarnings:[]});
+ expect(md).toContain('- Time-only comment: 0&#46;850 s &#40;seconds basis&#41; · frame is unavailable: no explicit producer frame index at this time &#40;COMMENT&#95;FRAME&#95;UNAVAILABLE&#41;');
+ expect(md).toContain(`"time": ${rawTime}`);
 }));
