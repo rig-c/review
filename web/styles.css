@@ -507,7 +507,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .parts-explorer li:has([data-pv-visible]) button{flex:1;min-width:0}
 
 .interview-answer.interview-grid{display:grid;flex:1;min-height:0;grid-template-columns:minmax(9rem,.5fr) minmax(0,1.5fr) minmax(24rem,1.25fr);grid-template-rows:minmax(0,1fr) auto;align-items:stretch;overflow:hidden}
-.interview-answer>.interview-questions{grid-column:1;grid-row:1;align-self:start;overflow:auto}
+.interview-answer>.interview-questions{grid-column:1;grid-row:1;align-self:start;max-height:100%;overflow:auto}
 .interview-image-context{grid-row:4;overflow:auto;min-height:0;padding:var(--space-2)}
 .interview-answer-fields{grid-column:3;grid-row:1;min-height:0;overflow:auto;border:0;padding:0 var(--space-1)!important}
 .interview-answer-fields>h3{margin:var(--space-1) 0}
