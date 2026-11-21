@@ -249,8 +249,13 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
     }
     if (chestCase) {
       await selectCarrier();
+      const expectedBounds = catalog['Selection bounds · world units / Y up: x {0}, y {1}, width {2}, height {3}. Conservative geometry/clip bounds; fit uses the existing 0.25–8× camera range.']!
+        .replace('{0}', '8.00').replace('{1}', '14.00').replace('{2}', '20.00').replace('{3}', '20.00');
+      const partText = await screen.evaluate<string>("document.querySelector('#selected-part')?.textContent ?? ''");
+      assert.ok(partText.includes(expectedBounds), `${language} ${mode}: expected formatted part bounds, read ${partText}`);
       const requestDisabled = "document.querySelector('#request-changes').disabled";
       if (chestSeed) {
+        if (mode === 'chest-only') await writeFile(join(directory, 'part-tab.png'), await screen.screenshot());
         await wait("!!document.querySelector('#chest-edit:not([hidden]):not(:disabled)')");
         await click(screen, '#chest-edit');
         await wait("!!document.querySelector('#chest-editor-bar:not([hidden]) [data-bust-mode=landmarks][aria-pressed=true]')");

@@ -1,5 +1,6 @@
 /** Inspection graphics from the last successfully drawn public player pose. */
 import {partBounds} from './part-selection.ts';
+import {t} from './i18n.ts';
 import {boxesIntersect,placeLabels,type LabelBox} from './label-placement.ts';
 import type {BoneWorld,PosedFrame,RigPlayer} from '@rig-c/play';
 
@@ -270,7 +271,7 @@ export class RigOverlays {
    }
    // Labels avoid each other (#147): a moved label keeps a leader to its point; one with no free slot shows on hover only.
    ctx.font='600 11px ui-monospace, monospace';
-   const placed=placeLabels(drawn.map(({marker,at})=>({at,width:ctx.measureText(marker.tag).width+8,pinned:marker.active})),{gap:10,rise:3,bounds:{width,height},obstacles:drawn.map(({marker,at})=>{const r=marker.active?8:6.5;return {x:at.x-r,y:at.y-r,w:r*2,h:r*2};})});
+   const placed=placeLabels(drawn.map(({marker,at})=>({at,width:ctx.measureText(t(marker.tag)).width+8,pinned:marker.active})),{gap:10,rise:3,bounds:{width,height},obstacles:drawn.map(({marker,at})=>{const r=marker.active?8:6.5;return {x:at.x-r,y:at.y-r,w:r*2,h:r*2};})});
    // Leaders first, so no leader crosses another joint's label.
    drawn.forEach(({marker,at},i)=>{
     const {box,visible,moved}=placed[i]!;if(!visible||!moved)return;
@@ -279,7 +280,7 @@ export class RigOverlays {
    });
    drawn.forEach(({marker},i)=>{
     const {box,visible}=placed[i]!,c=marker.colors;if(!visible)return;
-    ctx.fillStyle=c.labelBg;ctx.fillRect(box.x,box.y,box.w,box.h);ctx.fillStyle=c.stroke;ctx.fillText(marker.tag,box.x+4,box.y+11);
+    ctx.fillStyle=c.labelBg;ctx.fillRect(box.x,box.y,box.w,box.h);ctx.fillStyle=c.stroke;ctx.fillText(t(marker.tag),box.x+4,box.y+11);
    });
   }
   ctx.globalAlpha=1;

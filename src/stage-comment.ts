@@ -1,6 +1,7 @@
 /** Stage marks are optional inspection evidence on an ordinary feedback row. */
 import type {PosedFrame} from '@rig-c/play';
 import type {ControlNumericCamera} from './control.ts';
+import {formatFixed} from './frame-clock.ts';
 import type {JobActValues, JobComment, JobCommentAnchor, JobCommentFeedbackAnchor} from './job-contract.ts';
 import type {Feedback} from './session.ts';
 import type {CompareFeedback} from './compare-session.ts';
@@ -89,7 +90,7 @@ export function isTimeOnlyFeedback(value:unknown):boolean {
  try{const f=obj(value),context=obj(f.context),c=parseStageComment(context.comment);return f.frameStart===null&&f.frameEnd===null&&context.frame===null&&context.interval===null&&context.time===c.time&&c.frame===null&&c.timeBasis!==undefined;}catch{return false;}
 }
 export function feedbackTimingLabel(f:{frameStart:number|null;frameEnd:number|null;context?:unknown}):string {
- if(f.frameStart===null||f.frameEnd===null){const c=obj(obj(f.context).comment);if(c.frame!==null||c.timeBasis?.schema!==timeOnlyBasis.schema||c.timeBasis?.reason!==timeOnlyReason||!number(c.time)||c.time<0)fail('time-only display context');return `${c.time} s (seconds basis) · ${timeOnlyReason}`;}
+ if(f.frameStart===null||f.frameEnd===null){const c=obj(obj(f.context).comment);if(c.frame!==null||c.timeBasis?.schema!==timeOnlyBasis.schema||c.timeBasis?.reason!==timeOnlyReason||!number(c.time)||c.time<0)fail('time-only display context');return `${formatFixed(c.time)} s (seconds basis) · ${timeOnlyReason}`;}
  return `F${f.frameStart}–${f.frameEnd}`;
 }
 export function feedbackFrameInterval(f:{frameStart:number|null;frameEnd:number|null}):{frameStart:number;frameEnd:number}{

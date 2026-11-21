@@ -1,5 +1,6 @@
 import {readFile} from 'node:fs/promises';
-import {setSourceAttribute,setSourceText,sourceAttribute} from '../web/i18n.ts';
+import {formatFixed} from '../src/frame-clock.ts';
+import {getLanguagePreference,setLanguagePreference,setSourceAttribute,setSourceText,sourceAttribute,t} from '../web/i18n.ts';
 import {ComparePresentation} from '../src/compare-presentation.ts';
 import type {InspectionPlayer} from '../src/compare-playhead.ts';
 import {expect,test} from 'bun:test';
@@ -128,7 +129,7 @@ async function explorerHarness(){
  for(const [selector,tag]of [['[data-part-search]','INPUT'],['[data-part-list]','UL'],['[data-part-solo]','INPUT'],['[data-part-whole]','BUTTON'],['[data-part-status]','P']]){const node=new DetailNode(tag!);node.selector=selector!;host.append(node);}
  const source=await readFile(new URL('../web/part-selection.ts',import.meta.url),'utf8'),begin=source.indexOf('export class PartExplorer extends');if(begin<0)throw new Error('Actual explorer class boundary absent');
  const script=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync(source.slice(begin).replace('export class','class'));
- const Explorer=new Function('PartInspection','orderedParts','partIdentity','document','HTMLElement','setSourceText','setSourceAttribute','sourceAttribute',script+';return PartExplorer;')(PartInspection,orderedParts,partIdentity,document,DetailNode,setSourceText,setSourceAttribute,sourceAttribute) as typeof PartExplorer;
+ const Explorer=new Function('PartInspection','orderedParts','partIdentity','document','HTMLElement','setSourceText','setSourceAttribute','sourceAttribute','t','formatFixed',script+';return PartExplorer;')(PartInspection,orderedParts,partIdentity,document,DetailNode,setSourceText,setSourceAttribute,sourceAttribute,t,formatFixed) as typeof PartExplorer;
  return {document,host,detail,Explorer,DetailNode,counter};
 }
 test('animated Inspector details retain the focused feedback action and use the current selection',async()=>{
@@ -137,7 +138,7 @@ test('animated Inspector details retain the focused feedback action and use the 
  explorer.register('a',entries,a.player);explorer.register('b',entries,b.player);explorer.present('a');explorer.present('b');explorer.select({side:'a',slot:'s',mode:'solo'});
  const action=detail.querySelector('button')!;action.focus();const beforeBounds=detail.textContent;expect(document.activeElement).toBe(action);expect(action.isConnected).toBe(true);
  const moved=copyPartFrame(frame);const row=moved.order.find(value=>value.slot==='s')!;if(row.kind!=='mesh')throw new Error('Moving mesh required');row.vertices=row.vertices.map((value,i)=>value+(i%2===0?2:1));row.clip=undefined;a.source(moved);explorer.present('a');
- expect(detail.querySelector('button')).toBe(action);expect(action.isConnected).toBe(true);expect(document.activeElement).toBe(action);expect(detail.textContent).not.toBe(beforeBounds);expect(detail.textContent).toContain('x 2, y 1, width 10, height 10');
+ expect(detail.querySelector('button')).toBe(action);expect(action.isConnected).toBe(true);expect(document.activeElement).toBe(action);expect(detail.textContent).not.toBe(beforeBounds);expect(detail.textContent).toContain('x 2.00, y 1.00, width 10.00, height 10.00');
  explorer.select({side:'b',slot:'other',mode:'context'});expect(detail.querySelector('button')).toBe(action);expect(document.activeElement).toBe(action);action.onclick!();expect(targets).toHaveLength(1);expect(targets[0]).toMatchObject({side:'b',slot:'other',mode:'context',identity:{attachment:'sprite',skin:'default'}});
  explorer.select(null);expect(action.hidden).toBe(true);expect(action.disabled).toBe(true);expect(detail.textContent).toContain('Whole rig');action.onclick!();expect(targets).toHaveLength(1);
  explorer.select({side:'a',slot:'s',mode:'solo'});expect(detail.querySelector('button')).toBe(action);expect(action.hidden).toBe(false);expect(action.disabled).toBe(false);action.onclick!();expect(targets.at(-1)).toMatchObject({side:'a',slot:'s',mode:'solo',identity:{attachment:'first',skin:'default'}});
@@ -314,4 +315,25 @@ test('clear removes only the named side catalog, refusal, thumbnail source and s
  explorer.select({side:'a',slot:'s',mode:'context'});expect(explorer.value()).toMatchObject({side:'a',slot:'s'});
  explorer.clear('a');
  expect(explorer.value()).toBeNull();expect(explorer.refusal('a')).toBeNull();expect(explorer.refusal('b')).toMatchObject({code:'PART_CATALOG_UNAVAILABLE',catalog:true});
+});
+test('#1030 F02: PartExplorer formats selection bounds to 2 decimals and localizes bounds and unavailable text through t() while raw bounds stay exact',async()=>{
+ const prevLang=getLanguagePreference();
+ try{
+  const {host,detail,Explorer}=await explorerHarness(),a=fake();
+  const noisy=copyPartFrame(frame),mesh=noisy.order[0]!;
+  if(mesh.kind!=='mesh')throw new Error('mesh required');
+  mesh.clip=undefined;
+  mesh.vertices=[7.999998190001941,13.999999999999996,27.999999582308144,13.999999999999996,7.999998190001941,33.999999999999986];
+  a.source(noisy);
+  setLanguagePreference('en');
+  const explorer=new Explorer(host as unknown as HTMLElement,detail as unknown as HTMLElement,()=>{},()=>{});
+  explorer.register('single',entries,a.player);explorer.present('single');explorer.select({side:'single',slot:'s',mode:'context'});
+  expect(explorer.bounds()).toEqual({x:7.999998190001941,y:13.999999999999996,width:20.000001392306203,height:19.99999999999999});
+  expect(detail.children[3]?.textContent).toBe('Selection bounds · world units / Y up: x 8.00, y 14.00, width 20.00, height 20.00. Conservative geometry/clip bounds; fit uses the existing 0.25–8× camera range.');
+  setLanguagePreference('ko');
+  explorer.select({side:'single',slot:'s',mode:'solo'});
+  expect(detail.children[3]?.textContent).toBe('선택 경계 · 월드 단위 / 위쪽이 +Y: x 8.00, y 14.00, 너비 20.00, 높이 20.00. 보수적인 지오메트리/클립 경계이며 맞춤은 기존 0.25–8× 카메라 범위를 사용해요.');
+  explorer.select({side:'single',slot:'clip',mode:'context'});
+  expect(detail.children[3]?.textContent).toBe('PART_FIT_UNAVAILABLE: 유지된 포즈에 양수의 그려진 경계가 없어요.');
+ }finally{setLanguagePreference(prevLang);}
 });

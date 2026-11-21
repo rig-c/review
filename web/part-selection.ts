@@ -2,6 +2,7 @@
 import type {Json} from '../src/manifest.ts';
 import type {PosedFrame,RigPlayer,PoseBounds,SlotIdentitySnapshot} from '@rig-c/play';
 import {parseControlPart,parsePartIdentity,type ControlPart,type ControlPartIdentity,type PartIdentityReason} from '../src/control.ts';
+import {formatFixed} from '../src/frame-clock.ts';
 import {t,setSourceAttribute,setSourceText,sourceAttribute} from './i18n.ts';
 export interface PartDeclaration {skin:string;attachment:string;kind:string;path:string|null}
 export interface PartEntry {slot:string;bone:string;setup:string|null;declarations:PartDeclaration[]}
@@ -195,7 +196,7 @@ const key=this.viewKey();if(!force&&key===this.selectionKey)return;this.selectio
   nodes.info.textContent=observation?`${observation.mode==='solo'?'Solo':'In context'} · ${observation.drawn?observation.kind==='mesh'?`${observation.vertices} posed vertices · ${observation.triangles} triangles`:'Region · four posed corners':'Not drawn at current pose'} · Skin: ${observation.skin??'not set'} · Set: ${observation.set??'not set'}`:refusal?`Parts unavailable · ${refusal.message}. The whole rig stays drawn; no slot is selected, soloed or targeted from stale data.`:'Select an actual slot in the parts explorer. Selection preserves animation, time and physics history.';
   for(const node of [nodes.declarations,nodes.bounds,nodes.unavailable,nodes.feedback])node.hidden=!observation;nodes.feedback.disabled=!observation;
   nodes.declarations.textContent=observation?`${observation.activeAttachment?'Resolved public attachment: '+observation.activeAttachment.skin+' / '+observation.activeAttachment.attachment+'.':(observation.identityUnavailable??'No active drawable attachment: '+observation.reason)+'.'} Declared: ${observation.declarations.map(d=>`${d.skin} / ${d.attachment} (${d.kind})`).join('; ')||'none'}. ${observation.page?'Drawn page: '+observation.page:''}${observation.region?' · region '+observation.region:''}${observation.sequence!==null?' · sequence '+observation.sequence:''}`:'';
-  nodes.bounds.textContent=observation?observation.bounds?`Selection bounds · world units / Y up: x ${observation.bounds.x}, y ${observation.bounds.y}, width ${observation.bounds.width}, height ${observation.bounds.height}. Conservative geometry/clip bounds; fit uses the existing 0.25–8× camera range.`:'PART_FIT_UNAVAILABLE: no positive drawn bounds at the held pose.':'';
+  nodes.bounds.textContent=observation?observation.bounds?t('Selection bounds · world units / Y up: x {0}, y {1}, width {2}, height {3}. Conservative geometry/clip bounds; fit uses the existing 0.25–8× camera range.',[formatFixed(observation.bounds.x,2),formatFixed(observation.bounds.y,2),formatFixed(observation.bounds.width,2),formatFixed(observation.bounds.height,2)]):t('PART_FIT_UNAVAILABLE: no positive drawn bounds at the held pose.'):'';
  }
 
 }

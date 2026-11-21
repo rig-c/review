@@ -655,8 +655,8 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
   expect(actualSingle.deleteBtnText).toBe('삭제');
 
   const timingText = {
-   en: '0.25 s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)',
-   ko: '0.25초 (초 기준) · 프레임을 사용할 수 없음: 현재 시간에 명시적 프로듀서 프레임 인덱스가 없어요 (COMMENT_FRAME_UNAVAILABLE)',
+   en: '0.250 s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)',
+   ko: '0.250초 (초 기준) · 프레임을 사용할 수 없음: 현재 시간에 명시적 프로듀서 프레임 인덱스가 없어요 (COMMENT_FRAME_UNAVAILABLE)',
   };
   for(const lang of ['en','ko'] as const){
    const row=runProposalSurface(rpSource,true,lang);
