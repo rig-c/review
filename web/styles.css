@@ -570,7 +570,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-act-row .workspace-act-bar:has(.review-message.error) .review-dialog-actions{display:contents}
 .workspace-act-row .workspace-act-bar:has(.review-message.error) #workspace-ask-headline{grid-column:1;grid-row:1;min-width:0;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
 .workspace-act-row .workspace-act-bar:has(.review-message.error) .review-message.error{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;line-height:1.25;max-height:var(--control-height);overflow-wrap:normal}
-.workspace-act-row .workspace-act-bar:has(.review-message.error) :is(.review-draft-state,#save,#request-changes){white-space:nowrap}
+.workspace-act-row .workspace-act-bar:has(.review-message.error) :is(.review-draft-state,#save,#request-changes){min-width:max-content}
 .workspace-act-row .review-draft-state{min-width:0;max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]){display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #workspace-ask-headline{grid-column:1;grid-row:1}
