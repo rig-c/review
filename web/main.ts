@@ -1891,14 +1891,10 @@ function renderAskHeadline(sentence=askSentence):void {
  // Catalog fragments are already localized. Keep the agent's text as a literal across locale changes.
  askHeadline.setAttribute('translate','no');
  askHeadline.style?.setProperty('white-space','pre-wrap');
- if(quiet){
-  const [before,after]=t('job.progress.quiet',['{0}',phaseAndStep]).split('{0}');
-  askHeadline.replaceChildren(before!,ageText,after!);
- }else{
-  const prefix=progress.text?phaseAndStep+' · '+progress.text:phaseAndStep;
-  askHeadline.replaceChildren(prefix+' · ',ageText);
- }
- const titleNow=()=>setSourceAttribute(askHeadline,'title',askHeadline.textContent??'');titleNow();
+ const [before,after]=quiet?t('job.progress.quiet',['{0}',phaseAndStep]).split('{0}'):[(progress.text?phaseAndStep+' · '+progress.text:phaseAndStep)+' · ',''];
+ askHeadline.replaceChildren(...[before!,ageText,after!].filter(part=>part!==''));
+ // In a refusal the headline ellipsizes to one line (#1041); its title keeps the whole sentence.
+ const titleNow=()=>setSourceAttribute(askHeadline,'title',before!+ageText.data+after!);titleNow();
  const tickAge=()=>{
   const seconds=age();
   if((seconds>=60)!==quiet){renderAskHeadline();return;}
