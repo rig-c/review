@@ -400,7 +400,7 @@ async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'interview-picks',alr
   }throw signal.reason;});
   if(kind==='interview-picks'){
    await withDeadline('904.record.question-image',5000,async signal=>{while(!signal.aborted){
-    if(await page!.evaluate<boolean>(`!!document.querySelector('[data-block-target="question"][aria-selected="true"]')&&
+    if(await page!.evaluate<boolean>(`!!document.querySelector('#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden])')&&
       document.querySelector('#reference-content img')?.naturalWidth===2&&!document.querySelector('#reference-pane').hidden`))return;
     await Bun.sleep(25);
    }throw signal.reason;});
@@ -416,7 +416,14 @@ async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'interview-picks',alr
       originalRects:window.__review904RecordRects
     }))()`);
     await writeFile(join(out,'actual-pending-frame.json'),JSON.stringify(frame,null,2));
-    assert.equal(frame.sameNodes,true);assert.deepEqual(frame.rects,frame.originalRects,'record actual pending prompt keeps the original shared frame');
+    assert.equal(frame.sameNodes,true);
+    // #1041: the record's ask opens the right communication panel (interview) and its controller-less bottom panel
+    // collapses, so only the stage and bottom move. Topbar, layout and act row keep the original frame; the stage keeps
+    // its origin and does not lose height.
+    type Rect={x:number;y:number;width:number;height:number};const now=frame.rects as Rect[],was=frame.originalRects as Rect[];
+    assert.deepEqual([now[0],now[1],now[4]],[was[0],was[1],was[4]],'record actual pending prompt keeps the original shared chrome');
+    assert.deepEqual([now[2]!.x,now[2]!.y],[was[2]!.x,was[2]!.y],'stage keeps its origin');
+    assert.ok(now[2]!.height>=was[2]!.height,'the collapsed bottom panel gives the stage its height');
   }else await unchangedPublishedHeight(page,out);
   assert.equal(await page.evaluate(`['#save','#request-changes'].some(selector=>document.querySelector(selector)?.checkVisibility())`),false);
   await writeFile(join(out,'just-published.png'),await page.screenshot());

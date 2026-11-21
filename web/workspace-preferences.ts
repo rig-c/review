@@ -5,19 +5,20 @@ export type WorkspaceTheme='system'|'dark'|'light';
 export type WorkspaceLanguage='system'|'en'|'ko';
 /** Saved field names are part of the stored record and do not move with the panels.
  * `rightWidth` is the parts explorer's width wherever the page shows it (the single review page shows
- * it on the left); `leftWidth` is the compare page's sources column. */
-export interface WorkspacePanels {leftWidth:number;rightWidth:number;inspectorHeight:number}
-export const panelBounds=Object.freeze({leftWidth:Object.freeze({min:120,max:720}),rightWidth:Object.freeze({min:180,max:900}),inspectorHeight:Object.freeze({min:120,max:900})});
-export const defaultWorkspacePanels:Readonly<WorkspacePanels>=Object.freeze({leftWidth:170,rightWidth:260,inspectorHeight:262});
+ * it on the left); `leftWidth` is the compare page's sources column; `communicationWidth` is the single page's right
+ * communication panel (question, comments, record forms; #1041). */
+export interface WorkspacePanels {leftWidth:number;rightWidth:number;inspectorHeight:number;communicationWidth:number}
+export const panelBounds=Object.freeze({leftWidth:Object.freeze({min:120,max:720}),rightWidth:Object.freeze({min:180,max:900}),inspectorHeight:Object.freeze({min:120,max:900}),communicationWidth:Object.freeze({min:280,max:640})});
+export const defaultWorkspacePanels:Readonly<WorkspacePanels>=Object.freeze({leftWidth:170,rightWidth:260,inspectorHeight:240,communicationWidth:360});
 /** Earlier defaults (280, then 350, then 120 and 240 on the #709 branch): an unstamped stored value equal to one loads as today's default. */
-const legacyDefaultInspectorHeights:ReadonlySet<number>=new Set([280,350,120,240]);
+const legacyDefaultInspectorHeights:ReadonlySet<number>=new Set([280,350,120,240,262]);
 type Flag='defaultCameraSync'|'defaultIdleRepeat'|'settingsCollapsed';
 type Field='theme'|'language'|Flag|keyof WorkspacePanels;
-const fields:readonly Field[]=['theme','language','defaultCameraSync','defaultIdleRepeat','settingsCollapsed','leftWidth','rightWidth','inspectorHeight'];
+const fields:readonly Field[]=['theme','language','defaultCameraSync','defaultIdleRepeat','settingsCollapsed','leftWidth','rightWidth','inspectorHeight','communicationWidth'];
 const flags:readonly Flag[]=['defaultCameraSync','defaultIdleRepeat','settingsCollapsed'];
 /** Fields added after the record shipped. A stored record that predates one has neither the value nor its
  * stamp: it loads with the default value at revision 0, exactly as if that field had never been edited. */
-const addedFields:ReadonlySet<Field>=new Set(['settingsCollapsed','language']);
+const addedFields:ReadonlySet<Field>=new Set(['settingsCollapsed','language','communicationWidth']);
 interface FieldStamp {revision:number;writer:string}
 export interface WorkspacePreferences {schema:'rig-review-preferences/1';revision:number;theme:WorkspaceTheme;language:WorkspaceLanguage;defaultCameraSync:boolean;defaultIdleRepeat:boolean;settingsCollapsed:boolean;panels:WorkspacePanels;stamps:Record<Field,FieldStamp>}
 export interface WorkspacePreferencePatch {theme?:WorkspaceTheme;language?:WorkspaceLanguage;defaultCameraSync?:boolean;defaultIdleRepeat?:boolean;settingsCollapsed?:boolean;panels?:Partial<WorkspacePanels>}
@@ -31,7 +32,8 @@ const theme=(v:unknown):WorkspaceTheme=>{if(v!=='system'&&v!=='dark'&&v!=='light
 const language=(v:unknown):WorkspaceLanguage=>{if(v!=='system'&&v!=='en'&&v!=='ko')throw new Error('PREFERENCES_LANGUAGE: expected system, en or ko');return v;};
 const boolean=(v:unknown,label:string):boolean=>{if(typeof v!=='boolean')throw new Error(`${label}: expected boolean`);return v;};
 const panel=(v:unknown,key:keyof WorkspacePanels):number=>{const {min,max}=panelBounds[key];if(typeof v!=='number'||!Number.isFinite(v)||v<min||v>max)throw new Error(`PREFERENCES_PANEL: ${key} requires finite ${min}..${max} CSS pixels`);return v;};
-export function parseWorkspacePanels(value:unknown):WorkspacePanels {const o=object(value,'panels');closed(o,Object.keys(panelBounds),'panels');return {leftWidth:panel(o.leftWidth,'leftWidth'),rightWidth:panel(o.rightWidth,'rightWidth'),inspectorHeight:panel(o.inspectorHeight,'inspectorHeight')};}
+export function parseWorkspacePanels(value:unknown):WorkspacePanels {const o=object(value,'panels');closed(o,Object.keys(panelBounds),'panels');return {leftWidth:panel(o.leftWidth,'leftWidth'),rightWidth:panel(o.rightWidth,'rightWidth'),inspectorHeight:panel(o.inspectorHeight,'inspectorHeight'),
+ communicationWidth:'communicationWidth'in o?panel(o.communicationWidth,'communicationWidth'):defaultWorkspacePanels.communicationWidth};}
 export function defaultWorkspacePreferences():WorkspacePreferences {return {schema:workspacePreferenceKey,revision:0,theme:'system',language:'system',defaultCameraSync:true,defaultIdleRepeat:true,settingsCollapsed:true,panels:{...defaultWorkspacePanels},stamps:Object.fromEntries(fields.map(field=>[field,{revision:0,writer:''}])) as Record<Field,FieldStamp>};}
 const clone=(v:WorkspacePreferences):WorkspacePreferences=>({...v,panels:{...v.panels},stamps:Object.fromEntries(fields.map(field=>[field,{...v.stamps[field]}])) as Record<Field,FieldStamp>});
 function leaf(value:WorkspacePreferences,field:Field):WorkspaceTheme|WorkspaceLanguage|boolean|number {return field in panelBounds?value.panels[field as keyof WorkspacePanels]:value[field as 'theme'|'language'|Flag];}

@@ -49,7 +49,8 @@ export function placeLabels(inputs:readonly LabelInput[],options:LabelPlacementO
  const active=inputs.filter(x=>onCanvas(x.at));
  const inferSide=(input:LabelInput):'left'|'right'=>{
   if(input.side)return input.side;
-  const right=input.at.x+gap,left=input.at.x-gap-input.width,band=active.filter(o=>o!==input&&Math.abs(o.at.y-input.at.y)<=step);
+  // The band is the row the home box sits in (it rises above the point), so a neighbour just above the point counts at any zoom.
+  const right=input.at.x+gap,left=input.at.x-gap-input.width,row=input.at.y-(options.rise??2)-h/2,band=active.filter(o=>o!==input&&Math.abs(o.at.y-row)<=step);
   return band.filter(o=>o.at.x>=right&&o.at.x<=right+input.width).length>band.filter(o=>o.at.x>=left&&o.at.x<=left+input.width).length?'left':'right';
  };
  const placed:LabelBox[]=[...(options.obstacles??[])],labels:LabelBox[]=[],out:PlacedLabel[]=new Array(inputs.length);

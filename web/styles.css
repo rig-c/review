@@ -563,6 +563,14 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-act-row .review-dialog-actions{min-width:0;gap:var(--space-2);justify-content:flex-end}
 .workspace-act-row .review-message:not(.error){display:none}
 .workspace-act-row .review-message.error{max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+/* A refusal in the row never widens it nor changes its height (#1040, #1041): while one shows, the row is one grid line.
+ * The ask gives way first (one line, ellipsized, full text in its title, at least 12ch); the refusal, the save state and
+ * the answers keep their content width, so the refusal reads in full while it fits and only then clamps to two lines. */
+.workspace-act-row .workspace-act-bar:has(.review-message.error){display:grid;grid-template-columns:minmax(12ch,1fr);grid-auto-flow:column;grid-auto-columns:auto;align-items:center}
+.workspace-act-row .workspace-act-bar:has(.review-message.error) .review-dialog-actions{display:contents}
+.workspace-act-row .workspace-act-bar:has(.review-message.error) #workspace-ask-headline{grid-column:1;grid-row:1;min-width:0;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
+.workspace-act-row .workspace-act-bar:has(.review-message.error) .review-message.error{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;line-height:1.25;max-height:var(--control-height);overflow-wrap:normal}
+.workspace-act-row .workspace-act-bar:has(.review-message.error) :is(.review-draft-state,#save,#request-changes){min-width:max-content}
 .workspace-act-row .review-draft-state{min-width:0;max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]){display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center}
 .workspace-act-row .workspace-act-bar:has(.review-draft-state[data-save-state=failed]) #workspace-ask-headline{grid-column:1;grid-row:1}
@@ -595,3 +603,16 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .interview-question[data-answered]::before{margin-right:var(--space-1)}
 .animation-zoom-buttons button[aria-pressed=true],.animation-pose-buttons button[aria-pressed=true]{background:var(--rv-control)}
 .animation-zoom-buttons button[aria-pressed=true]:hover,.animation-pose-buttons button[aria-pressed=true]:hover{background:var(--rv-control-hover)}
+/* #1041: the right panel is communication with the AI (question on top, Comments below), one column by container query. */
+.workspace-layout>.workspace-communication{grid-column:5;grid-row:1;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:auto;border-left:1px solid var(--border);background:var(--rv-panel);container-type:inline-size}
+.workspace-communication[hidden]{display:none!important}
+.workspace-drawer>.workspace-communication{display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto;container-type:inline-size}
+.workspace-drawer[data-panel=communicationWidth][open]:not(:modal){inset:0 0 0 auto;width:min(94vw,420px);height:auto;max-height:none;margin:0}
+.workspace-communication>.workspace-interview-panel{flex:none;overflow:visible;border-bottom:1px solid var(--border)}
+.workspace-communication>.workspace-interview-panel[hidden]{display:none}
+.workspace-communication>#inspector-feedback.workspace-review-panel{flex:none;overflow:visible;display:grid;grid-template-columns:minmax(0,1fr)}
+@container (max-width:720px){
+ .workspace-communication .workspace-interview-panel>.interview-answer{grid-template-columns:minmax(0,1fr);grid-template-rows:auto}
+ .workspace-communication .workspace-interview-panel .interview-answer-fields{grid-column:1;grid-row:auto}
+ .workspace-communication .workspace-interview-panel .interview-answer>p[role=status]{grid-column:1;grid-row:auto}
+}

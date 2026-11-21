@@ -22,7 +22,8 @@ let page: InputCdpSession | undefined;
 let command: ((method: string, params?: Record<string, unknown>) => Promise<unknown>) | undefined;
 const exceptions: unknown[] = [];
 const questionPanel = '#workspace-interview-answer';
-const selectedQuestion = '.block-row:not([hidden]) [data-block-target="question"][aria-selected="true"]';
+// #1041: the question section of the right communication panel, under its heading.
+const selectedQuestion = '#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden]) .review-dialog-header h2';
 const dialogViewer = 'dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,#view-menu)';
 
 async function wait(expression: string, label: string): Promise<void> {

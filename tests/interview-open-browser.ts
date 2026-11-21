@@ -46,7 +46,9 @@ const exceptions:unknown[]=[],mutations:unknown[]=[],cases:unknown[]=[];
 async function wait(expression:string){const deadline=Date.now()+20_000;while(Date.now()<deadline){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('725_BROWSER_TIMEOUT '+expression);}
 const sharedControls='#zoom-in,#zoom-out,#fit,#native-one,#view-menu';
 const questionPanel='#workspace-interview-answer';
-const selectedTab='.block-row:not([hidden]) [data-block-target="question"][aria-selected="true"]';
+// #1041: the question lives in the right communication panel (docked, or a non-modal drawer when narrow).
+const selectedTab='#workspace-communication #workspace-interview-answer:not([hidden]) .review-dialog-header h2';
+const commDrawer='#workspace-drawer-communicationWidth';
 const dialogViewer='dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,'+sharedControls+')';
 const visibleImage=`(()=>{const image=document.querySelector('#reference-content img'),box=image?.getBoundingClientRect();return image?.complete&&box.width>0&&box.height>0&&getComputedStyle(image).visibility==='visible'?image.naturalWidth:0;})()`;
 const imageWidth=`document.querySelector('#reference-content img').getBoundingClientRect().width`;
@@ -56,7 +58,7 @@ type JoinedScreen={
  forms:number;noteInputs:number;columns:string[];modelCanvas:number;modelReason:string;questionLabel:string;
  pendingAsk:AskTrigger|null;pendingRecordAsk:AskTrigger|null;
  saveDisabled:boolean;commentHidden:boolean;controls:string[];imageModes:string[];
- drawerOpen:boolean;formInDrawer:boolean;inspectorCollapsed:boolean;
+ drawerOpen:boolean;formInDrawer:boolean;inspectorHidden:boolean;
  rect:{left:number;top:number;right:number;bottom:number};
  questionsHeight:number;questionsContentHeight:number;fieldsHeight:number;
 };
@@ -76,21 +78,21 @@ try{
  assert.equal(list.targets.length,1);
  page=await launchCdpSession(profile,{onEvent:(event,send)=>{command=send;if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request)requests.push(new URL(request.url).pathname);if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Network.enable');
- for(const height of [1000,360])for(const language of ['en','ko'] as const){
-  currentCase={language,width:1600,height};
-  await page.setViewport(1600,height);
+ for(const [width,height] of [[1600,1000],[1600,360],[520,720]] as const)for(const language of ['en','ko'] as const){
+  currentCase={language,width,height};
+  await page.setViewport(width,height);
   const catalog=language==='en'?enCatalog:koCatalog,url=new URL(host.record.origin+list.targets[0]!.entry);
   url.searchParams.set('lang',language);url.hash='cap='+targetCapability(host.record.ownerCapability,host.record.incarnation,prepared.key);
   await page.goto(url.href);
   await wait(`document.body.dataset.ready==='true'&&!!document.querySelector(${JSON.stringify(selectedTab)})&&!!document.querySelector('${questionPanel}:not([hidden]) form.interview-answer')`);
   await wait(`${visibleImage}===32`);
-  if(height===360)await wait(`!!document.querySelector('#workspace-drawer-inspectorHeight[open] ${questionPanel}')`);
+  if(width===520)await wait(`!!document.querySelector('${commDrawer}[open] ${questionPanel}')`);
   const state:JoinedScreen=await page.evaluate(`(()=>{
    const panel=document.querySelector('${questionPanel}'),form=panel.querySelector('form.interview-answer');
    const nav=form.querySelector('.interview-questions'),fields=form.querySelector('.interview-answer-fields');
    const navStyle=getComputedStyle(nav),navChildren=[...nav.children];
    const questionsContentHeight=navChildren.length?(navChildren.at(-1).getBoundingClientRect().bottom-navChildren[0].getBoundingClientRect().top)+parseFloat(navStyle.paddingTop)+parseFloat(navStyle.paddingBottom)+parseFloat(navStyle.borderTopWidth)+parseFloat(navStyle.borderBottomWidth):0;
-   const drawer=document.querySelector('#workspace-drawer-inspectorHeight'),box=(drawer.open?drawer:panel).getBoundingClientRect();
+   const drawer=document.querySelector('${commDrawer}'),box=(drawer?.open?drawer:panel).getBoundingClientRect();
    const askTrigger=id=>{
     const matches=document.querySelectorAll('#'+id),button=matches[0];
     if(!button)return null;
@@ -111,12 +113,12 @@ try{
     saveDisabled:document.getElementById('save').disabled,commentHidden:document.getElementById('stage-comment').hidden,
     controls:[...document.querySelectorAll('${sharedControls}')].map(node=>node.id),
     imageModes:[...document.querySelectorAll('#view-menu [data-view]')].map(node=>node.dataset.view),
-    drawerOpen:drawer.open,formInDrawer:drawer.contains(form),inspectorCollapsed:document.getElementById('workspace-inspector').dataset.collapsed==='true',
+    drawerOpen:!!drawer?.open,formInDrawer:!!drawer?.contains(form),inspectorHidden:document.getElementById('workspace-inspector').hidden,
     rect:{left:box.left,top:box.top,right:box.right,bottom:box.bottom},
     questionsHeight:nav.getBoundingClientRect().height,questionsContentHeight,fieldsHeight:fields.getBoundingClientRect().height};
   })()`);
   currentCase.state=state;
-  assert.equal(state.language,language);assert.equal(state.width,1600);assert.equal(state.height,height);
+  assert.equal(state.language,language);assert.equal(state.width,width);assert.equal(state.height,height);
   assert.ok(Math.abs(state.questionsHeight-state.questionsContentHeight)<=2,`#1038 F12 (${language}, ${height}): question card height (${state.questionsHeight}) must fit its content (${state.questionsContentHeight}), not stretch to fieldset (${state.fieldsHeight})`);
   assert.equal(state.commentHidden,true,'standalone interview hides the unbound comment entry');
   assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.modals,0);assert.equal(state.dialogViewers,0);
@@ -131,18 +133,23 @@ try{
   assert.equal(state.modelReason,catalog['MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.']);
   assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
   assert.deepEqual(state.imageModes,['interview-image-0','interview-image-1']);
-  assert.deepEqual(state.openDialogs,height===360?['workspace-drawer-inspectorHeight']:[]);
-  assert.equal(state.drawerOpen,height===360);assert.equal(state.formInDrawer,height===360);
-  assert.equal(state.inspectorCollapsed,height===360);
-  assert.ok(state.rect.left>=0&&state.rect.top>=0&&state.rect.right<=1600&&state.rect.bottom<=height);
-  const prefix=language+(height===360?'-short':'');
+  assert.deepEqual(state.openDialogs,width===520?['workspace-drawer-communicationWidth']:[]);
+  assert.equal(state.drawerOpen,width===520);assert.equal(state.formInDrawer,width===520);
+  assert.equal(state.inspectorHidden,true,'a standalone interview has no view-controller block, so the bottom panel collapses to nothing');
+  // #1041: the question is a section of the scrolling communication column; it starts inside the viewport.
+  assert.ok(state.rect.left>=0&&state.rect.top>=0&&state.rect.right<=width&&state.rect.top<height);
+  const prefix=language+(height===360?'-short':width===520?'-narrow':'');
   await writeFile(join(out,prefix+'-interview.png'),await page.screenshot());
+  if(width===520){
+   assert.equal(await page.evaluate<boolean>(`!!document.querySelector('${commDrawer}[open]:not(:modal)')`),true,'the question drawer is non-modal');
+   await click(page,commDrawer+' .workspace-drawer-close');
+   await wait(`!document.querySelector('${commDrawer}[open]')`);
+  }
   const firstImage:string=await page.evaluate(`document.querySelector('#reference-content img').currentSrc`);
   await switchImage(1,48);
   const secondImage:string=await page.evaluate(`document.querySelector('#reference-content img').currentSrc`);
   assert.ok(new URL(firstImage).pathname.endsWith('/api/interview/image/'+question.ref.sha256+'/0'));
   assert.ok(new URL(secondImage).pathname.endsWith('/api/interview/image/'+question.ref.sha256+'/1'));
-  if(height===360)assert.equal(await page.evaluate<boolean>(`!!document.querySelector('#workspace-drawer-inspectorHeight[open]:not(:modal)')`),true);
   if(height===1000){
    await click(page,'#native-one');await wait(`Math.abs(${imageWidth}-48)<1`);
    const native=await page.evaluate<number>(imageWidth);
@@ -152,15 +159,24 @@ try{
   }
   await writeFile(join(out,prefix+'-workspace.png'),await page.screenshot());
   await switchImage(0,32);
-  if(height===360){
-   await click(page,'#workspace-drawer-inspectorHeight .workspace-drawer-close');
-   await wait("!document.querySelector('#workspace-drawer-inspectorHeight[open]')");
-  }
   await click(page,'#workspace-pending-ask');
   await wait(`!!document.querySelector(${JSON.stringify(selectedTab)})&&${visibleImage}===32&&!document.querySelector('dialog:modal')`);
   type LongList={formBottom:number;navBottom:number;navHeight:number;scrollHeight:number;clientHeight:number;scrollTop:number;lastVisible:boolean};
   let longList:LongList|undefined;
-  if(height===1000){
+  // #1041: in the right communication panel the form is one column (container query) and the column scrolls,
+  // so the bounded two-column grid measure applies only when the list and fields sit side by side.
+  const stacked=await page.evaluate<boolean>(`(()=>{const f=document.querySelector('${questionPanel} form.interview-answer');return f.querySelector('.interview-answer-fields').getBoundingClientRect().top>=f.querySelector('nav.interview-questions').getBoundingClientRect().bottom-1;})()`);
+  if(height===1000&&stacked){
+   const reach:{lastVisible:boolean;items:number}=await page.evaluate(`(()=>{
+    const form=document.querySelector('${questionPanel} form.interview-answer'),ol=form.querySelector('nav.interview-questions ol'),first=ol.querySelector('li');
+    for(let i=2;i<=20;i++){const li=first.cloneNode(true);li.querySelector('button').textContent='question_'+i+' · synthetic-set-'+i;ol.append(li);}
+    const last=ol.lastElementChild;last.scrollIntoView({block:'nearest'});
+    const column=document.querySelector('#workspace-communication').getBoundingClientRect(),r=last.getBoundingClientRect();
+    return {items:ol.children.length,lastVisible:r.top>=column.top-1&&r.bottom<=column.bottom+1&&r.bottom<=innerHeight+1};
+   })()`);
+   await writeFile(join(out,language+'-long-interview.png'),await page.screenshot());
+   assert.ok(reach.items===20&&reach.lastVisible,`#1038 F12 long set (${language}): last question reachable in the communication column, got ${JSON.stringify(reach)}`);
+  }else if(height===1000){
    const measured:LongList=await page.evaluate(`(()=>{
     const form=document.querySelector('${questionPanel} form.interview-answer');
     const nav=form.querySelector('nav.interview-questions'),ol=nav.querySelector('ol'),first=ol.querySelector('li');
@@ -189,6 +205,6 @@ try{
  const after={files:await jobInputHashes(f.root),entries:(await readdir(f.root,{recursive:true})).sort()};
  assert.deepEqual(after,before);assert.deepEqual(exceptions,[]);assert.deepEqual(mutations,[]);assert.ok(requests.some(path=>path.endsWith('/api/interview')));
  await writeFile(join(out,'result.json'),JSON.stringify({fixture:'synthetic interview-stage project; demo/build versions; no draft or review package',cases,sourceFilesBefore:before,sourceFilesAfter:after,sourceWrites:0,networkRequests:requests.length,exceptions,mutations},null,2)+'\n');
- console.log('725_BROWSER_PASS '+JSON.stringify({cases:cases.length,languages:['en','ko'],viewports:['1600x1000','1600x360'],sourceWrites:0,exceptions:exceptions.length}));
+ console.log('725_BROWSER_PASS '+JSON.stringify({cases:cases.length,languages:['en','ko'],viewports:['1600x1000','1600x360','520x720'],sourceWrites:0,exceptions:exceptions.length}));
 }catch(error){await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error),currentCase,exceptions,mutations,cases},null,2)+'\n');if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await host.stop();await f.close();await rm(profile,{recursive:true,force:true});}

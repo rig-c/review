@@ -38,25 +38,26 @@ class Host extends EventTarget {
  after(node:Host){const parent=this.parentElement!;node.parentElement?.remove(node);node.parentElement=parent;parent.children.splice(parent.children.indexOf(this)+1,0,node);}
  contains(node:unknown):boolean{return node===this||this.children.some(n=>n.contains(node));}
  all():Host[]{return this.children.flatMap(n=>[n,...n.all()]);}
- querySelector(selector:string):Host|null {return this.all().find(n=>selector.startsWith('.')?n.classes.has(selector.slice(1)):selector.startsWith('#')?n.id===selector.slice(1):selector.startsWith('label[for=')?n.tagName==='LABEL'&&n.attrs.get('for')==='review-status':selector==='main'?n.tagName==='MAIN':selector.includes('aria-selected=true')&&n.attrs.get('aria-selected')==='true'||selector.includes('aria-pressed=true')&&n.attrs.get('aria-pressed')==='true')??null;}
+ querySelector(selector:string):Host|null {return this.all().find(n=>selector.startsWith('.')?n.classes.has(selector.slice(1)):selector.startsWith('#')?n.id===selector.slice(1):selector.startsWith('label[for=')?n.tagName==='LABEL'&&n.attrs.get('for')==='review-status':selector==='main'?n.tagName==='MAIN':selector==='[data-interview-main]'?n.dataset.interviewMain!==undefined:selector.includes('aria-selected=true')&&n.attrs.get('aria-selected')==='true'||selector.includes('aria-pressed=true')&&n.attrs.get('aria-pressed')==='true')??null;}
  set innerHTML(value:string){this.children=[];for(const match of value.matchAll(/<(select|input|button|p)[^>]*id="([^"]+)"[^>]*>/g)){const n=new Host(match[1]);n.id=match[2]!;if(match[0].includes('data-app-preference'))n.attrs.set('data-app-preference','');this.append(n);}}
  getAttribute(name:string){return this.attrs.get(name)??null;}setAttribute(name:string,value:string){this.attrs.set(name,value);}removeAttribute(name:string){this.attrs.delete(name);}
  getBoundingClientRect(){return {width:this.clientWidth,height:this.classes.has('workspace-drawer-triggers')?0:this.clientHeight};}
  focus(){hostDocument.activeElement=this;}
  click(){this.dispatchEvent(new Event('click'));const action=(this as unknown as {onclick?:()=>void}).onclick;action?.();}
- showModal(){this.open=true;this.focus();}close(){this.open=false;this.dispatchEvent(new Event('close'));}
+ modal=false;
+ showModal(){this.open=true;this.modal=true;this.focus();}show(){this.open=true;this.modal=false;}close(){this.open=false;this.dispatchEvent(new Event('close'));}
  setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);}
 }
 let hostDocument:{activeElement:Host|null};
-function openHost(options:{ownedRoot?:boolean;nonRig?:boolean;explicitRegions?:boolean;explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean;bottomPanel?:boolean;kind?:string;stored?:Record<string,string>}={}){
- const body=new Host('body'),layout=new Host(),main=new Host('main'),left=new Host('aside'),right=new Host('aside'),stage=new Host(),inspector=new Host(),heading=new Host();layout.className='layout';left.className='left-panel';right.id='parts-explorer';stage.id='stage-layout';inspector.className='inspector';heading.clientHeight=30;
+function openHost(options:{ownedRoot?:boolean;nonRig?:boolean;explicitRegions?:boolean;explorerLeft?:boolean;tabs?:string[];currentTheme?:()=>'system'|'dark'|'light';leftHeader?:boolean;pressed?:boolean;direction?:boolean;bottomPanel?:boolean;kind?:string;stored?:Record<string,string>;communication?:{pending:()=>boolean;bound?:()=>boolean}}={}){
+ const body=new Host('body'),layout=new Host(),main=new Host('main'),left=new Host('aside'),right=new Host('aside'),stage=new Host(),inspector=new Host(),heading=new Host();layout.className='layout';left.className='left-panel';right.id='parts-explorer';stage.id='stage-layout';inspector.className='inspector';heading.clientHeight=30;if(options.communication)right.id='workspace-communication';
  const language=new Host('select');language.id='settings-language';const languageLabel=new Host('label');languageLabel.append(language);body.append(languageLabel);
  const tabs=options.tabs??['view','rig','playback','feedback'],panels={} as Record<string,Host>;for(const tab of tabs){const panel=new Host('section'),button=new Host('button');panel.id='inspector-'+tab;panel.dataset.inspectorPanel=tab;panel.hidden=tab!==tabs[0];panel.clientHeight=200;panel.clientWidth=500;button.dataset.inspector=tab;button.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(tab===tabs[0]));panels[tab]=panel;if(options.pressed){button.dataset.mode=tab;body.append(button);inspector.append(panel);}else inspector.append(button,panel);}
  let bottomPanel:{kind:string;strip:Host;act:Host;actHome:Host;collapse:Host}|undefined,bottomBody:Host|undefined;
  if(options.bottomPanel){
-  const strip=new Host('nav'),bottomHeading=new Host(),act=new Host(),collapse=new Host('button');bottomBody=new Host();bottomBody.className='inspector-body';bottomHeading.clientHeight=30;
+  const strip=new Host('nav'),bottomHeading=new Host(),act=new Host(),actHome=new Host(),collapse=new Host('button');bottomBody=new Host();bottomBody.className='inspector-body';bottomHeading.clientHeight=30;
   for(const child of [...inspector.children])if(child.dataset.inspector)strip.append(child);else bottomBody.append(child);
-  const actHome=panels.feedback??panels.parts!;act.id='workspace-review-act';actHome.append(act);bottomHeading.append(strip,collapse);inspector.append(bottomHeading,bottomBody);bottomPanel={kind:options.kind??'rig',strip,act,actHome,collapse};
+  actHome.id='workspace-act-row';act.id='workspace-review-act';actHome.append(act);bottomHeading.append(strip,collapse);inspector.append(bottomHeading,bottomBody);body.prepend(actHome);bottomPanel={kind:options.kind??'rig',strip,act,actHome,collapse};
  }
  main.append(heading,stage,inspector);
  if(options.direction){
@@ -67,11 +68,11 @@ function openHost(options:{ownedRoot?:boolean;nonRig?:boolean;explicitRegions?:b
  }
 if(options.leftHeader){const header=new Host(),strip=new Host('details');header.className='left-header parts-header';strip.id='package-context';left.append(header,strip);}if(options.nonRig){stage.id='parts-stage';layout.append(left,main);}else if(options.explorerLeft){left.append(right);layout.append(left,main);}else layout.append(left,main,right);body.append(layout);
  const ownedRoot=new Host();ownedRoot.id='app';if(options.ownedRoot){ownedRoot.append(...body.children);body.append(ownedRoot);}
- const values=new Map<string,string>(Object.entries(options.stored??{})),events=new EventTarget(),frames=new Map<number,()=>void>();let handle=0;
+ const values=new Map<string,string>(Object.entries(options.stored??{})),events=new EventTarget(),frames=new Map<number,()=>void>(),mutations:(()=>void)[]=[];let handle=0;
  const document=Object.assign(new EventTarget(),{body,hidden:false,activeElement:null as Host|null,getElementById:(id:string)=>body.all().find(n=>n.id===id)??null,querySelector:(selector:string)=>body.querySelector(selector),createElement:(tag:string)=>new Host(tag)});hostDocument=document;
- const globals={document,window:events,localStorage:{getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value)},requestAnimationFrame:(callback:()=>void)=>{frames.set(++handle,callback);return handle;},cancelAnimationFrame:(id:number)=>frames.delete(id),ResizeObserver:class{observe(){}disconnect(){}},MutationObserver:class{constructor(_callback:()=>void){}observe(){}disconnect(){}}};
+ const globals={document,window:events,localStorage:{getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value)},requestAnimationFrame:(callback:()=>void)=>{frames.set(++handle,callback);return handle;},cancelAnimationFrame:(id:number)=>frames.delete(id),ResizeObserver:class{observe(){}disconnect(){}},MutationObserver:class{constructor(callback:()=>void){mutations.push(callback);}observe(){}disconnect(){}}};
  const old=new Map<string,PropertyDescriptor|undefined>();for(const [key,value]of Object.entries(globals)){old.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});}
- let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({...(options.ownedRoot?{root:ownedRoot as unknown as HTMLElement}:{}),...(options.nonRig||options.explicitRegions?{regions:{layout,left,main,stage,bottom:inspector,...(options.explicitRegions?{columns:{left:'rightWidth',right:null}}:{})} as unknown as NonNullable<Parameters<typeof bindWorkspaceUI>[0]['regions']>}:{}),changed:()=>changed++,defaultTheme:value=>{currentTheme=value;},...(options.currentTheme?{currentTheme:options.currentTheme}:{}),...(bottomPanel?{bottomPanel:bottomPanel as unknown as Parameters<typeof bindWorkspaceUI>[0]['bottomPanel']}:{})});
+ let changed=0,currentTheme='dark';const ui=bindWorkspaceUI({...(options.ownedRoot?{root:ownedRoot as unknown as HTMLElement}:{}),...(options.nonRig||options.explicitRegions||options.communication?{regions:{layout,left,main,stage,bottom:inspector,...(options.explicitRegions?{columns:{left:'rightWidth',right:null}}:{}),...(options.communication?{right,columns:{left:'rightWidth',right:'communicationWidth'},rightPending:options.communication.pending,...(options.communication.bound?{bottomBound:options.communication.bound}:{})}:{})} as unknown as NonNullable<Parameters<typeof bindWorkspaceUI>[0]['regions']>}:{}),changed:()=>changed++,defaultTheme:value=>{currentTheme=value;},...(options.currentTheme?{currentTheme:options.currentTheme}:{}),...(bottomPanel?{bottomPanel:bottomPanel as unknown as Parameters<typeof bindWorkspaceUI>[0]['bottomPanel']}:{})});
  const flush=()=>{for(let i=0;i<5;i++){const pending=[...frames.values()];frames.clear();for(const run of pending)run();}};flush();
  const tabBinding=bottomPanel?bindInspectorTabs(()=>ui.afterTab(),()=>ui.beforeTab(),{
   tabs:bottomPanel.strip.children.map(button=>({id:button.dataset.inspector!,button:button as unknown as HTMLButtonElement,panels:[panels[button.dataset.inspector!] as unknown as HTMLElement],attribute:'aria-selected' as const})),
@@ -79,7 +80,7 @@ if(options.leftHeader){const header=new Host(),strip=new Host('details');header.
  }):undefined;
  const get=(id:string)=>document.getElementById(id)!;
  const choose=(id:string,value:string|boolean)=>{const node=get(id);if(typeof value==='boolean')node.checked=value;else node.value=value;(node as unknown as {onchange:()=>void}).onchange();};
- return {ui,get,choose,values,layout,ownedRoot,panels,flush,tabBinding,bottomPanel,bottomBody,dom:()=>body.all().map(node=>({tag:node.tagName,id:node.id,className:node.className,parent:node.parentElement?.id,text:node.textContent,hidden:node.hidden,attrs:[...node.attrs]})),focus:()=>document.activeElement,changed:()=>changed,theme:()=>currentTheme,events,activate(tab:string){ui.beforeTab();for(const node of [...inspector.children,...body.children])if(node.dataset.inspector)node.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(node.dataset.inspector===tab));for(const [name,node]of Object.entries(panels))node.hidden=name!==tab;ui.afterTab();flush();},close(){tabBinding?.dispose();ui.dispose();for(const [key,value]of old)if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}};
+ return {ui,get,choose,values,layout,main,heading,inspector,right,mutate:()=>{for(const run of mutations as ((records:unknown[])=>void)[])run([]);},ownedRoot,panels,flush,tabBinding,bottomPanel,bottomBody,dom:()=>body.all().map(node=>({tag:node.tagName,id:node.id,className:node.className,parent:node.parentElement?.id,text:node.textContent,hidden:node.hidden,attrs:[...node.attrs]})),focus:()=>document.activeElement,changed:()=>changed,theme:()=>currentTheme,events,activate(tab:string){ui.beforeTab();for(const node of [...inspector.children,...body.children])if(node.dataset.inspector)node.attrs.set(options.pressed?'aria-pressed':'aria-selected',String(node.dataset.inspector===tab));for(const [name,node]of Object.entries(panels))node.hidden=name!==tab;ui.afterTab();flush();},close(){tabBinding?.dispose();ui.dispose();for(const [key,value]of old)if(value)Object.defineProperty(globalThis,key,value);else Reflect.deleteProperty(globalThis,key);}};
 }
 
 test('Settings changes future sync/idle defaults only; transient source state and Reset remain independent',()=>{
@@ -88,7 +89,7 @@ test('Settings changes future sync/idle defaults only; transient source state an
   app.choose('settings-theme','light');expect(app.theme()).toBe('light');
   app.choose('settings-language','ko');expect(app.ui.defaults().language).toBe('ko');expect(held).toEqual(before);
   const other=new WorkspacePreferenceStore({storage:{getItem:key=>app.values.get(key)??null,setItem:(key,value)=>app.values.set(key,value)},events:null,writer:'other'});other.update({panels:{leftWidth:400,rightWidth:500}});const event=new Event('storage');Object.assign(event,{key:workspacePreferenceKey,newValue:app.values.get(workspacePreferenceKey)});app.events.dispatchEvent(event);app.flush();expect(app.ui.defaults().panels.leftWidth).toBe(400);expect(held).toEqual(before);
-  app.get('settings-reset').click();expect(app.ui.defaults()).toMatchObject({theme:'light',language:'ko',defaultCameraSync:false,defaultIdleRepeat:false,panels:{leftWidth:170,rightWidth:260,inspectorHeight:262}});expect(held).toEqual(before);
+  app.get('settings-reset').click();expect(app.ui.defaults()).toMatchObject({theme:'light',language:'ko',defaultCameraSync:false,defaultIdleRepeat:false,panels:{leftWidth:170,rightWidth:260,inspectorHeight:240}});expect(held).toEqual(before);
   other.dispose();
  }finally{app.close();}
 });
@@ -123,7 +124,7 @@ test('actual tab hooks retain independent x/y through resize and responsive draw
  const app=openHost();try{
   app.panels.view!.scrollLeft=33;app.panels.view!.scrollTop=420;app.activate('rig');app.panels.rig!.scrollLeft=11;app.panels.rig!.scrollTop=80;app.activate('view');expect(app.panels.view!.scrollLeft).toBe(33);expect(app.panels.view!.scrollTop).toBe(420);app.activate('rig');expect(app.panels.rig!.scrollTop).toBe(80);expect(JSON.parse(app.ui.scroll())).toMatchObject({view:{x:33,y:420},rig:{x:11,y:80}});
   app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();const right=app.get('parts-explorer');expect(right.parentElement?.id).toBe('workspace-drawer-rightWidth');app.ui.revealInspector();expect(app.get('workspace-drawer-inspectorHeight').open).toBe(true);
-  app.layout.clientWidth=1400;app.layout.clientHeight=900;app.ui.refresh();app.flush();expect(app.get('parts-explorer')).toBe(right);expect(right.parentElement).toBe(app.layout);expect(app.get('workspace-drawer-inspectorHeight').open).toBe(false);expect(app.ui.defaults().panels).toEqual({leftWidth:170,rightWidth:260,inspectorHeight:262});
+  app.layout.clientWidth=1400;app.layout.clientHeight=900;app.ui.refresh();app.flush();expect(app.get('parts-explorer')).toBe(right);expect(right.parentElement).toBe(app.layout);expect(app.get('workspace-drawer-inspectorHeight').open).toBe(false);expect(app.ui.defaults().panels).toEqual({leftWidth:170,rightWidth:260,inspectorHeight:240,communicationWidth:360});
   expect(()=>app.ui.restoreScroll('{"unknown":{"x":1,"y":1}}')).toThrow('INSPECTOR_SCROLL');
  }finally{app.close();}
 });
@@ -363,20 +364,20 @@ test('#666 actual compare bookmark restoration delegates selection between the e
 test('#671 real bottom tabs reveal selected Setup and Animate bodies in a short embedded-layout drawer without restore side effects',()=>{
  const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});
  try{
-  const original=app.bottomBody!,strip=app.bottomPanel!.strip,act=app.bottomPanel!.act;
+  const original=app.bottomBody!,strip=app.bottomPanel!.strip,act=app.bottomPanel!.act,actHome=app.bottomPanel!.actHome;
   app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();
   const drawer=app.get('workspace-drawer-inspectorHeight');
   expect(original.parentElement).toBe(drawer);expect(drawer.open).toBe(false);
   app.tabBinding!.restore('playback');app.flush();expect(drawer.open).toBe(false);expect(app.panels.playback!.hidden).toBe(false);
   for(const name of ['playback','rig','rig','playback']){
    app.tabBinding!.select(name);app.flush();expect(drawer.open).toBe(true);expect(original.hidden).toBe(false);expect(app.panels[name]!.hidden).toBe(false);
-   expect(strip.parentElement!.parentElement).toBe(app.get('workspace-inspector'));expect(drawer.contains(act)).toBe(true);
-   drawer.close();app.flush();expect(drawer.open).toBe(false);expect(app.focus()?.dataset.inspector).toBe(name);expect(act.parentElement).toBe(strip.parentElement);
+   expect(strip.parentElement!.parentElement).toBe(app.get('workspace-inspector'));expect(drawer.contains(act)).toBe(false);expect(act.parentElement).toBe(actHome);
+   drawer.close();app.flush();expect(drawer.open).toBe(false);expect(app.focus()?.dataset.inspector).toBe(name);expect(act.parentElement).toBe(actHome);
   }
   const first=strip.children[0]!,key=Object.assign(new Event('keydown',{cancelable:true}),{key:'ArrowRight'});
   (first as unknown as {onkeydown:(event:KeyboardEvent)=>void}).onkeydown(key as KeyboardEvent);app.flush();expect(key.defaultPrevented).toBe(true);expect(drawer.open).toBe(true);expect(app.focus()).toBe(drawer);
   app.layout.clientWidth=1400;app.layout.clientHeight=900;app.ui.refresh();app.flush();
-  expect(drawer.open).toBe(false);expect(original.parentElement).toBe(app.get('workspace-inspector'));expect(drawer.contains(original)).toBe(false);expect(act.parentElement).toBe(app.bottomPanel!.strip.parentElement);
+  expect(drawer.open).toBe(false);expect(original.parentElement).toBe(app.get('workspace-inspector'));expect(drawer.contains(original)).toBe(false);expect(act.parentElement).toBe(actHome);
  }finally{app.close();}
 });
 
@@ -384,12 +385,12 @@ test('#671 collapse and expand keep single act identity and explicit selected-ta
  const app=openHost({explorerLeft:true,tabs:['rig','playback','feedback'],bottomPanel:true});
  try{
   const {collapse,act,strip,actHome}=app.bottomPanel!,body=app.bottomBody!;
-  collapse.click();app.flush();expect(body.hidden).toBe(true);expect(collapse.textContent).toBe('⌃');expect(collapse.getAttribute('aria-label')).toBe('Expand bottom panel');expect(collapse.getAttribute('title')).toBe('Expand bottom panel');expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('true');
+  collapse.click();app.flush();expect(body.hidden).toBe(true);expect(collapse.textContent).toBe('⌃');expect(collapse.getAttribute('aria-label')).toBe('Expand bottom panel');expect(collapse.getAttribute('title')).toBe('Expand bottom panel');expect(act.parentElement).toBe(actHome);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('true');
   app.tabBinding!.restore('rig');app.flush();expect(body.hidden).toBe(true);
-  app.tabBinding!.select('rig');app.flush();expect(body.hidden).toBe(false);expect(collapse.textContent).toBe('⌄');expect(collapse.getAttribute('aria-label')).toBe('Collapse bottom panel');expect(collapse.getAttribute('title')).toBe('Collapse bottom panel');expect(act.parentElement).toBe(strip.parentElement);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('false');
+  app.tabBinding!.select('rig');app.flush();expect(body.hidden).toBe(false);expect(collapse.textContent).toBe('⌄');expect(collapse.getAttribute('aria-label')).toBe('Collapse bottom panel');expect(collapse.getAttribute('title')).toBe('Collapse bottom panel');expect(act.parentElement).toBe(actHome);expect(app.values.get('rig-review-bottom-collapsed/rig')).toBe('false');
   app.layout.clientWidth=390;app.layout.clientHeight=300;app.ui.refresh();app.flush();
   collapse.click();app.flush();expect(body.hidden).toBe(true);
-  collapse.click();app.flush();const drawer=app.get('workspace-drawer-inspectorHeight');expect(body.hidden).toBe(false);expect(drawer.open).toBe(true);expect(drawer.contains(act)).toBe(true);
+  collapse.click();app.flush();const drawer=app.get('workspace-drawer-inspectorHeight');expect(body.hidden).toBe(false);expect(drawer.open).toBe(true);expect(drawer.contains(act)).toBe(false);expect(act.parentElement).toBe(actHome);
   expect(app.bottomPanel!.act).toBe(act);expect(app.bottomPanel!.strip).toBe(strip);
  }finally{app.close();}
 });
@@ -606,16 +607,16 @@ test('#678 caller-owned parts regions without a parts explorer or right host sha
   expect(app.get('parts-explorer')).toBeNull();expect(app.get('stage-layout')).toBeNull();
   expect(app.layout.children.filter(node=>node.className.includes('workspace-separator')).map(node=>node.className)).toEqual(['workspace-separator workspace-leftWidth workspace-side-left']);
   expect(app.get('workspace-drawer-rightWidth')).toBeNull();
-  const bottom=app.get('workspace-inspector'),body=app.bottomBody!,act=app.bottomPanel!.act;
+  const bottom=app.get('workspace-inspector'),body=app.bottomBody!,act=app.bottomPanel!.act,actHome=app.bottomPanel!.actHome;
   expect(bottom.parentElement!.style.gridTemplateRows).toContain('4px');
   app.bottomPanel!.collapse.click();app.flush();expect(body.hidden).toBe(true);expect(app.values.get('rig-review-bottom-collapsed/parts')).toBe('true');
   app.bottomPanel!.collapse.click();app.flush();expect(body.hidden).toBe(false);
   app.layout.clientWidth=300;app.layout.clientHeight=300;app.ui.refresh();app.flush();
   expect(app.get('workspace-left').parentElement).toBe(app.get('workspace-drawer-leftWidth'));
   expect(body.parentElement).toBe(app.get('workspace-drawer-inspectorHeight'));
-  app.tabBinding!.select('parts');app.flush();expect(app.get('workspace-drawer-inspectorHeight').open).toBe(true);expect(app.get('workspace-drawer-inspectorHeight').contains(act)).toBe(true);
+  app.tabBinding!.select('parts');app.flush();expect(app.get('workspace-drawer-inspectorHeight').open).toBe(true);expect(app.get('workspace-drawer-inspectorHeight').contains(act)).toBe(false);expect(act.parentElement).toBe(actHome);
   app.layout.clientWidth=1400;app.layout.clientHeight=900;app.ui.refresh();app.flush();
-  expect(body.parentElement).toBe(bottom);expect(act.parentElement).toBe(app.bottomPanel!.strip.parentElement);expect(app.get('workspace-left').parentElement).toBe(app.layout);
+  expect(body.parentElement).toBe(bottom);expect(act.parentElement).toBe(actHome);expect(app.get('workspace-left').parentElement).toBe(app.layout);
  }finally{app.close();}
 });
 
@@ -635,7 +636,7 @@ test('#678 rig caller regions preserve the legacy shell DOM, labels, drawers and
 test('#809 pending ask heading uses full subject sentences in EN/KO and names the absence of an ask',async()=>{
  const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
  const raw={text:'',hidden:false,removeAttribute(){}};
- let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','renderDraftState','t','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null,askSentence="",jobProgress=null,progressTimer;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},()=>{statusRefreshes++;},t);
+ let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','renderDraftState','t','setSourceAttribute','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null,askSentence="",jobProgress=null,progressTimer;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},()=>{statusRefreshes++;},t,()=>{});
  render([]);expect(raw.hidden).toBe(false);expect(t(raw.text,undefined,'en')).toBe('Nothing is waiting for your answer.');expect(t(raw.text,undefined,'ko')).toBe('답변을 기다리는 요청이 없어요.');
  render([{kind:'review-verdict',stage:'rig-review'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
  expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Review this checkpoint.');
@@ -661,7 +662,7 @@ test('#904 waiting prompt never guesses a rig subject for model-free record and 
  const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
  for(const subject of [{kind:'interview-picks'},{kind:'checkpoint'},{kind:'signoff'}]){
   const raw={hidden:true,text:'',removeAttribute(){}};const scope={askHeadline:raw,firstPublicationPrompt:true,pendingAnswers:[],partsSubject:null,host:null,t,askSentence:'',jobProgress:null,progressTimer:undefined,
-   setSourceText:(_:unknown,value:string)=>{raw.text=value;},renderDraftState(){}};
+   setSourceText:(_:unknown,value:string)=>{raw.text=value;},setSourceAttribute(){},renderDraftState(){}};
   const render=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return renderPendingSubjects;}`)(scope);
   render([]);expect(t(raw.text,undefined,'en')).toBe(enCatalog['job.waiting']);expect(t(raw.text,undefined,'ko')).toBe(koCatalog['job.waiting']);
   render([subject]);expect(raw.text).not.toBe('Check the rig and motion.');expect(scope.firstPublicationPrompt).toBe(false);
@@ -687,7 +688,7 @@ for(const language of ['en','ko'] as const)test('#987 ticks the current age and 
   document:{createTextNode:(data:string)=>({data}),createElement:()=>({style:{},textContent:''})},
   setInterval(tick:()=>void){activeTick=tick;return 1;},clearInterval(){activeTick=undefined;},
   t:(key:string,values?:readonly (string|number)[],lang=language)=>t(key,values,lang),
-  setSourceText(_:unknown,value:string){parts=[t(value,undefined,language)];},renderDraftState(){}};
+  setSourceText(_:unknown,value:string){parts=[t(value,undefined,language)];},setSourceAttribute(_:unknown,key:string,value:string){attributes.set(key,value);},renderDraftState(){}};
  const render=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return {renderPendingSubjects,setJobProgress};}`)(scope);
  const read=()=>parts.map(part=>typeof part==='string'?part:part.data??part.textContent).join('');
  render.renderPendingSubjects([]);
@@ -695,6 +696,7 @@ for(const language of ['en','ko'] as const)test('#987 ticks the current age and 
  const phase=catalog['job.progress.phase.build']+' · '+t('job.progress.step',[2,3],language);
  expect(read()).toBe(phase+' · '+text+' · '+catalog['job.progress.now']);
  expect(attributes.get('translate')).toBe('no');
+ expect(attributes.get('title'),'#1041 the ellipsized headline keeps its full sentence in its title').toBe(read());
  const initialParts=parts;
  now+=1000;activeTick?.();
  expect(parts).toBe(initialParts);
@@ -709,4 +711,79 @@ for(const language of ['en','ko'] as const)test('#987 ticks the current age and 
  expect(read()).toBe(catalog['Answer these questions.']);
  expect(attributes.has('translate')).toBe(false);
  expect(activeTick).toBeUndefined();
+});
+
+const columnsOf=(app:{layout:Host})=>app.layout.style.values.get('--workspace-columns');
+test('#1041 the communication panel has its own saved width and is laid out only while something is pending',()=>{
+ let pending=false;const store=new WorkspacePreferenceStore({storage:{getItem:()=>null,setItem:()=>{}},events:null,writer:'seed'});
+ const stored=new Map<string,string>();const seeded=new WorkspacePreferenceStore({storage:{getItem:key=>stored.get(key)??null,setItem:(key,value)=>{stored.set(key,value);}},events:null,writer:'seed'});seeded.update({panels:{communicationWidth:420}});store.dispose();seeded.dispose();
+ const app=openHost({bottomPanel:true,communication:{pending:()=>pending},stored:Object.fromEntries(stored)});
+ try{
+  app.layout.clientWidth=1440;app.layout.clientHeight=900;app.ui.refresh();app.flush();
+  expect(app.right.hidden).toBe(true);expect(columnsOf(app)).toEndWith(' 0px 0px');expect(app.get('workspace-drawer-communicationWidth').open).toBe(false);
+  pending=true;app.ui.refresh();app.flush();
+  expect(app.right.hidden).toBe(false);expect(app.right.parentElement).toBe(app.layout);expect(columnsOf(app)).toEndWith(' 4px 420px');
+  expect(app.layout.children.some(node=>node.className==='workspace-separator workspace-communicationWidth workspace-side-right'&&!node.hidden)).toBe(true);
+  expect(app.ui.defaults().panels.communicationWidth).toBe(420);
+  pending=false;app.ui.refresh();app.flush();expect(app.right.hidden).toBe(true);expect(columnsOf(app)).toEndWith(' 0px 0px');
+ }finally{app.close();}
+});
+test('#1041 a docked panel stays resizable while the communication panel is hidden (separator ranges use the shown columns)',()=>{
+ const app=openHost({bottomPanel:true,communication:{pending:()=>false}});
+ try{
+  app.layout.clientWidth=600;app.layout.clientHeight=900;app.ui.refresh();app.flush();
+  expect(app.right.hidden).toBe(true);expect(columnsOf(app)).toStartWith('260px 4px ');
+  const separator=app.layout.children.find(node=>node.className.startsWith('workspace-separator workspace-rightWidth'))!;
+  expect(separator.getAttribute('aria-disabled')).toBe('false');
+  expect(Number(separator.getAttribute('aria-valuemax'))).toBeGreaterThan(Number(separator.getAttribute('aria-valuemin')));
+ }finally{app.close();}
+});
+test('#1041 revealing the panel lays out at once and leaves the bottom panel as it was',()=>{
+ const app=openHost({bottomPanel:true,communication:{pending:()=>false}});
+ try{
+  app.layout.clientWidth=1440;app.layout.clientHeight=900;app.ui.refresh();app.flush();app.activate('rig');
+  const rows=app.main.style.gridTemplateRows,selected=app.dom().filter(node=>node.attrs.some(([key,value])=>key==='aria-selected'&&value==='true')).map(node=>node.id+node.text),collapsed=app.inspector.dataset.collapsed;
+  expect(columnsOf(app)).toEndWith(' 0px 0px');
+  app.ui.revealCommunication();
+  // No frame has run: the stage already has its final width when the caller arms pin mode.
+  expect(columnsOf(app)).toEndWith(' 4px 360px');expect(app.right.hidden).toBe(false);
+  expect(app.main.style.gridTemplateRows).toBe(rows);expect(app.inspector.dataset.collapsed).toBe(collapsed);expect(app.get('workspace-drawer-inspectorHeight').open).toBe(false);
+  expect(app.dom().filter(node=>node.attrs.some(([key,value])=>key==='aria-selected'&&value==='true')).map(node=>node.id+node.text)).toEqual(selected);
+ }finally{app.close();}
+});
+test('#1041 below the stage minimum the panel is a right drawer, non-modal for a question',()=>{
+ for(const question of [true,false]){
+  const app=openHost({bottomPanel:true,communication:{pending:()=>true}});
+  try{
+   if(question){const form=new Host('form');form.dataset.interviewMain='';app.right.append(form);}
+   app.layout.clientWidth=500;app.layout.clientHeight=900;app.ui.refresh();app.flush();
+   expect(app.right.parentElement?.id).toBe('workspace-drawer-communicationWidth');
+   app.ui.revealCommunication();const drawer=app.get('workspace-drawer-communicationWidth');
+   expect(drawer.open).toBe(true);expect(drawer.modal).toBe(!question);
+  }finally{app.close();}
+ }
+});
+test('#1041 a bottom panel with no controller block collapses to nothing and the stage takes the height',()=>{
+ let bound=false;const app=openHost({bottomPanel:true,communication:{pending:()=>true,bound:()=>bound}});
+ try{
+  // #904: a job waiting for its first publication keeps its frame, bottom heading included.
+  for(const button of app.bottomPanel!.strip.children)button.hidden=true;
+  app.layout.clientWidth=1280;app.layout.clientHeight=600;app.ui.refresh();app.flush();
+  expect(app.inspector.hidden).toBe(false);
+  for(const button of app.bottomPanel!.strip.children)button.hidden=false;bound=true;app.ui.refresh();app.flush();
+  expect(app.inspector.hidden).toBe(false);expect(app.main.style.gridTemplateRows).not.toBe('minmax(0,1fr) 0px 0px');
+  for(const button of app.bottomPanel!.strip.children)button.hidden=true;app.ui.refresh();app.flush();
+  expect(app.inspector.hidden).toBe(true);expect(app.main.style.gridTemplateRows).toBe('minmax(0,1fr) 0px 0px');
+  expect(app.layout.children.concat(app.main.children).filter(node=>node.className.includes('workspace-inspectorHeight')).every(node=>node.hidden)).toBe(true);
+ }finally{app.close();}
+});
+test('#1035 a region shown above the stage lays the workspace out before the next frame',()=>{
+ const app=openHost({bottomPanel:true});
+ try{
+  // 1280x720 window: 551 px between the act row and the footer; a 254 px toolbar and chest bar leave no room for a docked bottom panel.
+  app.layout.clientWidth=1016;app.layout.clientHeight=551;app.heading.clientHeight=92;app.ui.refresh();app.flush();
+  expect(app.inspector.dataset.collapsed).toBe('false');const docked=app.main.style.gridTemplateRows;
+  app.heading.clientHeight=254;app.mutate();
+  expect(app.main.style.gridTemplateRows).not.toBe(docked);expect(app.inspector.dataset.collapsed).toBe('true');
+ }finally{app.close();}
 });
