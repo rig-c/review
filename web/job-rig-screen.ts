@@ -143,11 +143,12 @@ export function createJobRigScreen(options: {
       try {
         const {entry} = options.routes(display);
         const {manifest, reviewedSource} = inspection.metadata;
-        let picture: JobRigScreenPrepared | null = manifest?.model && reviewedSource?.rig
+        // #983: a declared plan picture ranks first; the walk below runs only without it.
+        let picture: JobRigScreenPrepared | null = !inspection.planPicture && manifest?.model && reviewedSource?.rig
           ? {jobRigScreen:true, display, entry, checkpoints:new Set(), review:{...inspection.metadata, manifest, reviewedSource}}
           : null;
         const missingBoundPicture = inspection.interview?.questions.some(question => question.missingPicture);
-        let previous = missingBoundPicture ? null : display.publication.previousPublicationId;
+        let previous = missingBoundPicture || inspection.planPicture ? null : display.publication.previousPublicationId;
         const jobId=jobPublicationRoutes(display,location.origin).jobId;
         const seen = new Set([display.publication.publicationId]);
         let generation = display.publication.generation;
@@ -165,7 +166,7 @@ export function createJobRigScreen(options: {
           if (jobRigScreenSubject(candidate.publication.source, candidate.rigDraftVerdict)) {picture = await prepare(candidate, signal, true);break;}
           previous = candidate.publication.previousPublicationId;
         }
-        if (!picture && !missingBoundPicture && inspection.interview?.questions.some(question => question.hasParts)) {
+        if (!picture && !missingBoundPicture && !inspection.planPicture && inspection.interview?.questions.some(question => question.hasParts)) {
           const response = await fetch(options.routes(display).api('stage-parts'), {signal});
           if (!response.ok) throw new Error('JOB_VISUAL_UNAVAILABLE');
           const parts = await response.json() as PartsSubjectData;
@@ -307,7 +308,7 @@ export function createJobRigScreen(options: {
       return {...(backdrop?.subject?{subject:backdrop.subject}:{}),access:{...(backdrop?.access??access),capability:null,
         headers:init=>{const headers=options.access.headers(init);headers.delete('X-Review-Capability');return headers;}},
         ownerActAccess:{capability:options.access.capability},
-        record:{...(jobId?{jobId}:{}),draftId,publicationId:prepared.display.publication.publicationId,previousPublicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,missingPicture:question?.missingPicture,questionPicture:question?.scenePicture || (question?.missingPicture && question.images.length ? true : undefined)},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
+        record:{...(jobId?{jobId}:{}),draftId,publicationId:prepared.display.publication.publicationId,previousPublicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,...record.inspection.planPicture?{planPicture:record.inspection.planPicture}:{},missingPicture:question?.missingPicture,questionPicture:question?.scenePicture || (question?.missingPicture && question.images.length ? true : undefined)},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},

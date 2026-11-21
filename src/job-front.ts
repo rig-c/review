@@ -325,6 +325,11 @@ export function retainedPublicationRoutes(session: JobSession) {
                     return await sealedFile(member.path);
                 }
                 if (isRetainedRecordSource(retained)) {
+                    // #983: the declared plan picture is an exact sealed member; no other file is reachable here.
+                    if (path === 'api/plan-picture') {
+                        const picture = retained.source.subject === 'plan' ? retained.source.planPicture : undefined;
+                        return picture ? await sealedFile(picture.path) : failure('JOB_SOURCE_UNRETAINABLE', 404);
+                    }
                     // hasParts is projected only after validating the option's sealed draft closure.
                     const question = retained.questions.find(question => question.hasParts);
                     if (question && (path === 'api/stage-parts' || /^api\/stage-parts\/(image|page)\/(0|[1-9]\d*)$/.test(path))) {

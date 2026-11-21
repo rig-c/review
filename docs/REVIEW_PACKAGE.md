@@ -1285,10 +1285,10 @@ A post-interview option set with a `rig` context can also show the accepted rig 
 | `PublishResultV3` | `{kind, path, selector}` (`package`), `{kind, questionId, setId}` or `{kind, questionId, setId, sets}` (`option-set`, `sets` 2–64 `{questionId, setId}` with `sets[0]` equal to the first set), `{kind}` (`plan`) |
 | `RecordFreeze` | `{kind: 'producer-held', holdId, record: {path: 'project.json', sha256}}` |
 | `RecordSubject` | `{kind: 'interview-picks', questionId, setId}`, `{kind: 'checkpoint', checkpointId}`, `{kind: 'signoff', stage}` (`plan-approved`, `rigging-interview`, `post-interview`, `direction-review`, `interview`), `{kind: 'reopen', stage}` (read only: old records parse, Review neither asks nor renders it) |
-| `RecordPublishedContext` | Required `['label', 'parts', 'inputs', 'files', 'plan', 'subjects']`, optional `checkpointEvidence` on plans |
+| `RecordPublishedContext` | Required `['label', 'parts', 'inputs', 'files', 'plan', 'subjects']`, optional `checkpointEvidence` and `planPicture` on plans |
 | `RecordPartsIdentity` | `['name', 'version', 'integrity']` |
-| `RecordSource` | Required `['sourceHash', 'projectHash', 'record', 'inputs', 'files', 'subject', 'selection', 'optionSet', 'optionSetFile', 'plan', 'subjects']`, optional `checkpointEvidence` on plans, optional `optionSets` (`{questionId, setId, optionSet, optionSetFile}` per set) on several-set option-set sources |
-| `rig-review-job-record-source/1` | Required `['schema', 'record', 'selection', 'inputs', 'optionSet', 'optionSetFile', 'plan', 'subjects', 'files']`, optional `checkpointEvidence` on plans |
+| `RecordSource` | Required `['sourceHash', 'projectHash', 'record', 'inputs', 'files', 'subject', 'selection', 'optionSet', 'optionSetFile', 'plan', 'subjects']`, optional `checkpointEvidence` and `planPicture` on plans, optional `optionSets` (`{questionId, setId, optionSet, optionSetFile}` per set) on several-set option-set sources |
+| `rig-review-job-record-source/1` | Required `['schema', 'record', 'selection', 'inputs', 'optionSet', 'optionSetFile', 'plan', 'subjects', 'files']`, optional `checkpointEvidence` then `planPicture` on plans |
 | `rig-review-job-record-instance/1` | `['schema', 'fingerprint', 'sourceHash']` |
 | `JobCapabilitiesV3` | `{recordPublication: true, recordActSchema: 'rig-review/act@4', askBatch: true, progress: true}` |
 | `AskBatchRequestV3` | `{schema, jobId, requestId, verb: 'ask-batch', expectedGeneration, idempotencyKey, publicationId, subjects}`, `subjects` 1–64 |
@@ -1454,6 +1454,33 @@ with the earlier closed key set refuse evidence-bearing sources. New consumers
 require the signed extended contract. Owner-screen integration,
 EN/KO visual verification and later release serving have their own acceptance
 steps.
+
+<a id="plan-picture"></a>
+
+### Optional plan picture
+
+A record-plan `PlanContext` may declare `planPicture: {path, sha256}`
+([Review #983](https://github.com/rig-c/review/issues/983)): the picture the owner
+signs the plan against, such as the latest post render or take the record binds.
+It has exactly the keys `path` and `sha256`, and must equal an entry already in
+`files`. The path must name a raster image Review draws, by the package page-image
+rule: `.png`, `.jpg`, `.jpeg` or `.webp`. Option-set publications refuse it. Any
+violation refuses `JOB_SOURCE_MISMATCH` with detail `PLAN_PICTURE_INVALID`.
+
+The retained `RecordSource` carries the same `planPicture`. The
+`rig-review-job-record-source/1` digest preimage appends it after `files` and any
+`checkpointEvidence`, so the picture binds `sourceHash` and instance identity. An
+absent declaration emits and hashes nothing: existing records parse and hash
+exactly as before. The publication-pinned route `api/plan-picture` streams that
+one sealed member through the existing sealed reference route, and is 404 for
+records without it. The owner page checks the bytes against the declared SHA-256
+before drawing.
+
+On the record screen a declared `planPicture` ranks first: it is drawn in the main
+view's reference viewport, and Review neither walks to an earlier picture
+publication nor draws bound parts. Without it the picture choice is unchanged: the
+record's own rig, then an earlier picture publication, then bound parts, then a
+scene-context option set.
 
 ### Sealed plan step text
 
