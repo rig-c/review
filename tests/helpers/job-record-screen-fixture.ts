@@ -14,12 +14,12 @@ import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixt
 import {createSyntheticOptionRecordWorkspace, createSyntheticOptionSetsRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader,writeWorkspaceFile,type PostPictureCase} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'interview-picks';
-export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false,deferDelivery=false,postPicture?:PostPictureCase,planPicture?:Buffer){
+export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|'parts'=false,output?:string,signoffStage:RecordSignoffStage='plan-approved',boundParts=false,questionImages=true,resourcesOverride?:ReturnType<typeof jobWindowResources>,longInterview=false,deferDelivery=false,postPicture?:PostPictureCase,planOptions?:Pick<NonNullable<Parameters<typeof createSyntheticPlanRecordWorkspace>[1]>,'text'|'interview'>,planPicture?:Buffer){
  const scratch=await mkdtemp(join(tmpdir(),'review-750-')),root=join(scratch,'input');await mkdir(root);
  let workspace=kind==='interview-picks'&&!picture?createSyntheticOptionRecordWorkspace(root,{boundParts,questionImages:postPicture==='legacy'?false:questionImages,longInterview,postPicture,
   ...(postPicture?{questionId:'post_timing',setId:'post-picture'}:{})}):createSyntheticPlanRecordWorkspace(root,{subjects:[
   {kind:'checkpoint',checkpointId:'step_layout'},{kind:'signoff',stage:signoffStage},{kind:'reopen',stage:'plan-approved'},
- ]});
+ ],...planOptions});
  // #983: a plan picture is one more sealed member of the closure, named by path and hash.
  if(planPicture&&workspace.context.plan){
   const picture=writeWorkspaceFile(root,'post/v1/render.png',planPicture);

@@ -501,7 +501,7 @@ test('#839 disposed workspace cannot re-enter the transient image while tabs unr
  run();run();expect(released).toBe(1);expect(scope.releaseInterview).toBeNull();
 });
 
-test.each(['scene','unsealed-scene','rig','legacy'] as const)('#929 projects only a sealed question picture for %s', async variant => {
+test.each(['scene','unsealed-scene','rig','rig-painting-second','legacy'] as const)('#929 projects only a sealed question picture for %s', async variant => {
  const fixture=await recordScreenFixture('interview-picks',false,undefined,undefined,false,true,undefined,false,false,variant);
  try {
   const base=fixture.origin+fixture.display.routes.apiBase;
@@ -522,7 +522,7 @@ test.each(['scene','unsealed-scene','rig','legacy'] as const)('#929 projects onl
     expect(image.status).toBe(200);
     expect(Buffer.from(await image.arrayBuffer())).toEqual(await readFile(fixture.root+'/inputs/reference.png'));
    }
-   expect(question!.missingPicture).toBe(variant==='legacy'?undefined:variant==='rig'?'rig':'scene');
+   expect(question!.missingPicture).toBe(variant==='legacy'?undefined:(variant==='rig'||variant==='rig-painting-second')?'rig':'scene');
   }
  }finally{await fixture.close();}
 });
@@ -651,6 +651,53 @@ test.each(['none','record','model','version','partial'] as const)('#929 client v
    await expect(prepared).rejects.toThrow('JOB_DISPLAY_MISMATCH');
   }
   expect(assetRequests).toEqual([]);
+ } finally {
+  dom.restore();
+  await fixture.close();
+ }
+});
+
+test('#974 plan page resolves rests_on question ids from framing, waypoints and post.items while keeping step ids and unknown ids', async () => {
+ const fixture = await recordScreenFixture('signoff', false, undefined, 'plan-approved', false, true, undefined, false, false, undefined, {
+  text: {
+   does: 'Assemble post scene',
+   produces: 'Post composition pass',
+   bar: 'Matches declared timing and framing',
+   rests_on: ['post_timing', 'rig_type', 'bones_guide', 'step_weights', 'unknown_question_id'],
+  },
+  interview: {
+   framing: [{ id: 'rig_type', text: 'What is this: a character rig or a full-screen scene?' }],
+   waypoints: [{ id: 'bones_guide', text: 'How many segments should the limb bones use?' }],
+   post: { items: [{ id: 'post_timing', text: 'How long, does it loop, and where are the beats?' }] },
+  },
+ });
+ const dom = await recordScreenDom();
+ try {
+  dom.set('location', { origin: fixture.origin });
+  const inspection = await prepareJobInspection(fixture.display, new AbortController().signal);
+  try {
+   const node = ((tag: string, key?: string) => {
+    const element = dom.document.createElement(tag);
+    if (key) element.textContent = key;
+    return element;
+   }) as JobFormDependencies['node'];
+   const helpers = createJobFormHelpers(node, key => key);
+   expect(Object.keys(inspection.metadata.planText!)).toEqual(['schema', 'record', 'status', 'steps', 'questions']);
+   const list = helpers.planTextList(fixture.ask.source.plan!, inspection.metadata.planText, 'step_layout');
+   const entries = [...list.querySelector('[data-job-plan-field="rests_on"]')!.querySelectorAll('li')].map(item => ({
+    text: item.textContent,
+    title: item.title,
+   }));
+   expect(entries).toEqual([
+    { text: 'How long, does it loop, and where are the beats?', title: 'post_timing' },
+    { text: 'What is this: a character rig or a full-screen scene?', title: 'rig_type' },
+    { text: 'How many segments should the limb bones use?', title: 'bones_guide' },
+    { text: 'Assemble post scene', title: 'step_weights' },
+    { text: 'unknown_question_id', title: '' },
+   ]);
+  } finally {
+   inspection.dispose();
+  }
  } finally {
   dom.restore();
   await fixture.close();

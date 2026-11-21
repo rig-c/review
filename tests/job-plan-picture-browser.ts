@@ -33,7 +33,7 @@ try{
  await page.setViewport(1600,1000);
  for(const declared of [true,false])for(const language of ['en','ko'] as const){
   const catalog=language==='en'?enCatalog:koCatalog;
-  const fixture=await recordScreenFixture('signoff',true,undefined,'plan-approved',false,true,undefined,false,false,undefined,declared?pictureBytes():undefined);
+  const fixture=await recordScreenFixture('signoff',true,undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,declared?pictureBytes():undefined);
   const out=join(output,declared?'plan-picture':'no-plan-picture',language);await mkdir(out,{recursive:true});
   try{
    const source=fixture.display.publication.source as {planPicture?:{path:string;sha256:string}};

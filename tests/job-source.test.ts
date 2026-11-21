@@ -857,6 +857,8 @@ test('#606 closed metadata grammar rejects malformed value/issue entries while r
   const good:any={schema:'rig-review/job-plan-text@1',record:{path:'project.json',sha256:'a'.repeat(64)},status:'projected',
     steps:[{id:'step',hash:'b'.repeat(64),does:'',produces:' ',bar:'\r\n',rests_on:[],issues:[]}]};
   expect(parseJobPlanTextProjection(good)).toEqual(good);
+  const withQuestions:any={...structuredClone(good),questions:{post_timing:'How long, does it loop, and where are the beats?'}};
+  expect(parseJobPlanTextProjection(withQuestions)).toEqual(withQuestions);
   for (const mutate of [
     (p:any)=>{p.unknown=true;},
     (p:any)=>{p.record.path='other.json';},
@@ -868,6 +870,11 @@ test('#606 closed metadata grammar rejects malformed value/issue entries while r
     (p:any)=>{delete p.steps[0].bar;p.steps[0].issues=[{field:'bar',reason:['absent']}];},
     (p:any)=>{delete p.steps[0].bar;p.steps[0].issues=[{field:'bar',reason:'absent',extra:true}];},
     (p:any)=>{p.steps.push(structuredClone(p.steps[0]));},
+    (p:any)=>{p.questions=null;},
+    (p:any)=>{p.questions=[];},
+    (p:any)=>{p.questions={'bad id':'text'};},
+    (p:any)=>{p.questions={post_timing:123};},
+    (p:any)=>{p.status='unavailable';delete p.steps;p.reason='PLAN_TEXT_LIMIT';p.questions={post_timing:'text'};},
   ]) {const bad=structuredClone(good);mutate(bad);expect(()=>parseJobPlanTextProjection(bad)).toThrow('PLAN_TEXT_METADATA_INVALID');}
 });
 

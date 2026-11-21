@@ -34,7 +34,7 @@ const fakeRigc=`const fs=require('fs'),path=require('path');const a=process.argv
 const out=f('--out');fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'skeleton.model.json'),JSON.stringify({spec:'rigc-compiled/3',pages:[{name:'skeleton.png'}]}));fs.writeFileSync(path.join(out,'skeleton.png'),'png');console.log('rigc: wrote');`;
 const sha=(bytes:string|Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 
-async function fixture(options:{limbs?:boolean;stamped?:boolean;full?:boolean;namedCut?:boolean}={}){
+async function fixture(options:{limbs?:boolean;stamped?:boolean;full?:boolean;namedCut?:boolean;exportTargets?:boolean}={}){
  const root=await realpath(await mkdtemp(join(tmpdir(),'review-cloth-'))),pkg=join(root,'pkg'),out=join(pkg,'out'),rig=join(out,'rig');
  await mkdir(join(rig,'images'),{recursive:true});await mkdir(join(out,'parts'),{recursive:true});await mkdir(join(pkg,'layers/full'),{recursive:true});
  const config={key:'k',cloth:{bottomwear:{chains:1,links:2,wind:[1,2],gravity:[1,2]}},bones:[{name:'hip',parent:'root',at:[10,10]},{chain:'skirt0_',parent:'hip',points:[[10,20],[10,30]],tip:[10,40]}],meshes:{skirt:{grid:8,segments:['skirt0_']}},constraints:[{type:'physics',name:'c0',bone:'skirt0_0',wind:1}],...(options.limbs?{limbs:{}}:{}),...(options.namedCut?{assemble:{cuts:[{under:'under.png'}]}}:{})};
@@ -47,12 +47,13 @@ async function fixture(options:{limbs?:boolean;stamped?:boolean;full?:boolean;na
  await writeFile(join(pkg,'keypoints.json'),JSON.stringify({spec:'rig-parts-keypoints/1'}));
  const parts=join(root,'node_modules/@rig-c/parts');
  await mkdir(join(parts,'bin'),{recursive:true});await mkdir(join(parts,'src'),{recursive:true});await mkdir(join(root,'node_modules/rig-c/bin'),{recursive:true});
- await writeFile(join(parts,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'1.49.1',bin:{'rig-parts':'./bin/rig-parts.cjs'},exports:{'./assembly-reading':'./src/assembly-reading.ts'}}));
+ const exportTargets=options.exportTargets!==false;
+ await writeFile(join(parts,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'1.49.1',bin:{'rig-parts':'./bin/rig-parts.cjs'},exports:{'./assembly-reading':'./src/assembly-reading.ts',...(exportTargets?{'./cloth-targets.json':'./cloth-targets.json'}:{})}}));
+ if(exportTargets)await writeFile(join(parts,'cloth-targets.json'),JSON.stringify({schema:'rig-parts/cloth-targets@1',targets:['bottomwear','back hair','front hair']})+'\n');
  if(options.stamped){
   await writeFile(join(parts,'src/assembly-reading.ts'),"import {readFileSync} from 'node:fs'; export const assemblyConfigChanges = (path: string, manifest: {assembly_config?: unknown}) => manifest.assembly_config && JSON.parse(readFileSync(path, 'utf8')).constraints[0].wind === 3 ? ['constraints.physics'] : [];");
  }
  await writeFile(join(parts,'bin/rig-parts.cjs'),fakeParts);
- await writeFile(join(parts,'src/cloth.ts'),`export const CLOTH_TARGETS = ['bottomwear', 'back hair', 'front hair'] as const;\n`);
  await writeFile(join(root,'node_modules/rig-c/package.json'),JSON.stringify({name:'rig-c',version:'2.64.1',bin:{rigc:'./bin/rigc.cjs'}}));
  await writeFile(join(root,'node_modules/rig-c/bin/rigc.cjs'),fakeRigc);
  process.env.FAKE_PARTS=out;
@@ -189,6 +190,19 @@ test('#111: a written config that differs outside the drafted sections is not bu
   expect(job.status).toBe('refused');expect(job.producerLine).toStartWith('CLOTH_WRITTEN_OUTSIDE_DRAFTED: the config propose wrote differs from cloth.json outside the sections it splices, at /key');
   ({job}=await apply(f,[{op:'replace',path:'/cloth/bottomwear/links',value:3},{op:'replace',path:'/constraints/0/wind',value:2}]));
   expect((job as {error?:string}).error).toStartWith('CLOTH_PATCH_MIXED: ');
+ }finally{await f.done();}
+});
+
+test('#954: a producer without ./cloth-targets.json falls back to config tags and refuses adding a new tag as CLOTH_TARGETS_UNAVAILABLE',async()=>{
+ const f=await fixture({exportTargets:false});
+ try{
+  const {job,scratch}=await apply(f,[{op:'add',path:'/cloth/back hair',value:{links:3,wind:[1,4],gravity:[2,8]}}]);
+  expect(job.status).toBe('refused');
+  expect((job as {error?:string}).error).toBe('CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts 1.49.1 has no cloth-targets export (needs 2.51.0)');
+  expect((await f.calls()).filter(l=>l.startsWith('propose'))).toEqual([]);
+  expect(scratch).toEqual([]);
+  const existing=await apply(f,[{op:'replace',path:'/cloth/bottomwear/links',value:3}]);
+  expect(existing.job.status).toBe('built');
  }finally{await f.done();}
 });
 

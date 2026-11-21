@@ -69,7 +69,7 @@ export const rigPictureCases = [
   'rig-missing-version', 'rig-missing-version-field', 'rig-retained-model-hash',
 ] as const;
 type RigPictureCase = typeof rigPictureCases[number];
-export type PostPictureCase = 'scene' | 'unsealed-scene' | 'rig' | 'rig-no-painting' | 'legacy' | RigPictureCase;
+export type PostPictureCase = 'scene' | 'unsealed-scene' | 'rig' | 'rig-painting-second' | 'rig-no-painting' | 'legacy' | RigPictureCase;
 
 function rigPictureFixture(root: string, variant: RigPictureCase) {
   const signoffAt = '2026-10-31T00:00:00.000Z';
@@ -135,7 +135,7 @@ function rigPictureFixture(root: string, variant: RigPictureCase) {
 }
 
 function postPictureFixture(root: string, variant: PostPictureCase | undefined) {
-  if (variant === 'rig' || variant === 'rig-no-painting') {
+  if (variant === 'rig' || variant === 'rig-painting-second' || variant === 'rig-no-painting') {
     const config = writeWorkspaceFile(root,'rig/config.json','{}');
     return {context:{kind:'rig',rig_version:1,signoff_at:'2026-10-31T00:00:00Z',
       config,parts:{path:'derived/drafts/synthetic',files:[]}},files:[config]};
@@ -182,13 +182,20 @@ export function createSyntheticOptionRecordWorkspace(
   const post = postPictureFixture(root, options?.postPicture);
 
   const inputImage = writeWorkspaceFile(root, 'inputs/reference.png', makeSyntheticPngBytes(40, 160, 220));
+  const inputSketch = options?.postPicture === 'rig-painting-second'
+    ? writeWorkspaceFile(root, 'inputs/sketch.png', makeSyntheticPngBytes(200, 60, 60))
+    : null;
   const inputSpec = writeWorkspaceFile(
     root,
     'inputs/spec.json',
     JSON.stringify({ character: 'hero', version: 1 }, null, 2) + '\n',
   );
 
-  const inputs = options?.postPicture === 'rig-no-painting' ? [inputSpec] : [inputImage, inputSpec];
+  const inputs = options?.postPicture === 'rig-no-painting'
+    ? [inputSpec]
+    : inputSketch
+      ? [inputSketch, inputImage, inputSpec]
+      : [inputImage, inputSpec];
   const boundFiles = options?.boundParts ? [
     writeWorkspaceFile(root, 'derived/drafts/synthetic/parts/body.png', makeSyntheticPngBytes()),
     writeWorkspaceFile(root, 'derived/drafts/synthetic/parts.json', JSON.stringify({rig_size:[2,2],parts:[{name:'body',x:0,y:0,w:2,h:2}]})),
@@ -535,6 +542,7 @@ export function createSyntheticOptionRecordWorkspace(
     name: 'Synthetic Option Project',
     ...(post && 'scenes' in post ? {scenes:post.scenes} : {}),
     ...(post?.versions ? {versions:post.versions,signoffs:post.signoffs} : {}),
+    ...(inputSketch ? {painting:inputImage.path} : {}),
     inputs,
     interview: {
       framing: framingItems,
@@ -661,6 +669,11 @@ export function createSyntheticPlanRecordWorkspace(
     readonly steps?: readonly { readonly id: string; readonly hash: string }[];
     readonly subjects?: PlanContext['subjects'];
     readonly text?: {does:string; produces:string; bar:string; rests_on:readonly string[]};
+    readonly interview?: {
+      readonly framing?: readonly Record<string, unknown>[];
+      readonly waypoints?: readonly Record<string, unknown>[];
+      readonly post?: {readonly items?: readonly Record<string, unknown>[]};
+    };
   },
 ): SyntheticPlanWorkspace {
   const inputImage = writeWorkspaceFile(root, 'inputs/reference.png', makeSyntheticPngBytes(180, 90, 40));
@@ -685,9 +698,9 @@ export function createSyntheticPlanRecordWorkspace(
     name: 'Synthetic Plan Project',
     inputs: [inputImage, inputSpec],
     interview: {
-      framing: [],
-      waypoints: [],
-      post: { items: [] },
+      framing: options?.interview?.framing ?? [],
+      waypoints: options?.interview?.waypoints ?? [],
+      post: { items: options?.interview?.post?.items ?? [] },
     },
     plan: {
       steps: steps.map(step => ({
