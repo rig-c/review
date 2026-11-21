@@ -1,5 +1,5 @@
 import {parseCorrection} from './correction-handoff.ts';
-import {clockForAnimation,frameAtTime} from './frame-clock.ts';
+import {frameAtTime,transportClock} from './frame-clock.ts';
 import {parseBookmark} from '../web/inspection-persistence.ts';
 import {parseStageComment,projectMark,hasStageComment,isTimeOnlyFeedback,feedbackFrameInterval} from './stage-comment.ts';
 import {validateCommentCrop,saveCommentCrops,assertSubmittedComments} from './comment-crops.ts';
@@ -91,6 +91,11 @@ export function parseFeedback(item:unknown,strict=true):Feedback {
 export interface FeedbackWarning {id:string;error:string}
 
 /** Derive the annotated interval, retaining inspection context as separate data. */
+/** The page's transport clock for this package without a stage build: the report's, else the declared record's (#1018). */
+function packageClock(p:ReviewPackage,animation:string|null){
+  const catalog=p.feedbackCatalog;
+  return transportClock({clock:catalog.clock,animation:catalog.clockAnimation??undefined,frameClocks:catalog.frameClocks},animation??'',!!p.reviewedSource.rig,null,null)?.clock??null;
+}
 export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string,turnDials:readonly TurnDial[]=p.feedbackCatalog.turnDials??[]):Feedback {
   const context=feedback.context===undefined?{}:object(feedback.context,'feedback.context');
   const comment=hasStageComment(context.comment)?parseStageComment(context.comment):null,timed=comment?.frame===null;
@@ -119,13 +124,13 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
         const declared=p.manifest.references.find(r=>r.id===c.referenceId),explicit=referenceBinding(p)?.reference;
         const expectedHash=explicit?.id===c.referenceId?explicit.sha256:c.referenceId?p.referenceHashes?.[c.referenceId]:undefined;
         if(!declared||!expectedHash||c.referenceHash!==expectedHash||bookmark.selection.reference!==c.referenceId)throw new Error('COMMENT_REFERENCE_MISMATCH: selected reference ID/hash must match the source and bookmark');
-        const clock=clockForAnimation(p.feedbackCatalog.clock,p.feedbackCatalog.clockAnimation??undefined,c.animation??'',!!p.reviewedSource.rig);
+        const clock=packageClock(p,c.animation);
         if(c.frame&&(c.frame.basis!=='producer'||frameAtTime(clock,c.time)!==c.frame.index))throw new Error('COMMENT_FRAME_UNAVAILABLE: producer frame differs from the inspected reference time');
       }else if(c.referenceId!==null||c.referenceHash!==null)throw new Error('COMMENT_REFERENCE_MISMATCH: single rig marks have no reference viewport binding');
 }
     if(c.sourceHash!==p.sourceHash||c.modelHash!==(c.viewport==='reference'?null:p.reviewedSource.rig?.sha256??null))throw new Error('COMMENT_SOURCE_CHANGED: comment differs from inspected source');
     if(c.animation!==(animation??context.animation??null)||c.time!==context.time||(c.frame?.index??null)!==feedback.frameStart||feedback.frameStart!==feedback.frameEnd)throw new Error('COMMENT_CONTEXT_MISMATCH: frame, time or animation differs');
-    if(timed){const clock=clockForAnimation(p.feedbackCatalog.clock,p.feedbackCatalog.clockAnimation??undefined,c.animation??'',!!p.reviewedSource.rig);if(frameAtTime(clock,c.time)!==null)throw new Error('COMMENT_TIME_ONLY_INVALID: explicit producer frame exists at this time');}
+    if(timed){const clock=packageClock(p,c.animation);if(frameAtTime(clock,c.time)!==null)throw new Error('COMMENT_TIME_ONLY_INVALID: explicit producer frame exists at this time');}
     const a=projectMark(c.world,c.camera),b=projectMark({x:c.world.x+c.world.width,y:c.world.y+c.world.height},c.camera);
     if(Math.abs(Math.min(a.x,b.x)-c.screen.x)>1e-5||Math.abs(Math.min(a.y,b.y)-c.screen.y)>1e-5||Math.abs(Math.abs(a.x-b.x)-c.screen.width)>1e-5||Math.abs(Math.abs(a.y-b.y)-c.screen.height)>1e-5)throw new Error('COMMENT_CONTEXT_MISMATCH: screen/world region projection');
     if(c.camera.space!==(c.viewport==='reference'?'image':'world'))throw new Error('COMMENT_CONTEXT_MISMATCH: camera space');
@@ -135,7 +140,7 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
   }
   const selected=animation??(typeof context.animation==='string'?context.animation:null);
   if(timed)validateTimedFeedbackSelection(p.feedbackCatalog,{target:feedback.target,animation:selected,time:comment!.time});
-  else validateFeedbackSelection((context.comment as any)?.frame?.basis==='reference'?{...p.feedbackCatalog,clock:null,clockAnimation:null}:p.feedbackCatalog,{...feedbackFrameInterval(feedback),target:feedback.target,animation:selected});
+  else validateFeedbackSelection((context.comment as any)?.frame?.basis==='reference'?{...p.feedbackCatalog,clock:null,clockAnimation:null,frameClocks:undefined}:p.feedbackCatalog,{...feedbackFrameInterval(feedback),target:feedback.target,animation:selected});
   return {...feedback,context:{...context,...(animation===undefined?{}:{animation}),interval} as Json};
 }
 export function readPackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string,turnDials?:readonly TurnDial[]):{feedback:Feedback;warning?:FeedbackWarning} {

@@ -163,6 +163,8 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  const labels:Record<WorkspacePanel,string>=explorerLeft?{leftWidth:'Sources and settings',rightWidth:'Parts and settings',inspectorHeight:'Inspector'}:{leftWidth:'Sources and settings',rightWidth:'Parts explorer',inspectorHeight:'Inspector'};
  const handles={} as Record<WorkspacePanel,HTMLElement>,buttons={} as Record<WorkspacePanel,HTMLButtonElement>,disposers:(()=>void)[]=[];
  const present=Object.keys(panels) as WorkspacePanel[],node=(panel:WorkspacePanel)=>panels[panel]!;
+ const bottom=options.bottomPanel,bottomBody=bottom?inspector.querySelector<HTMLElement>('.inspector-body')!:null,bottomHeading=bottom?bottom.strip.parentElement!:null;
+ const hasInterviewForm=()=>!!bottomBody?.querySelector('[data-interview-main]');
  for(const panel of present){
   const handle=document.createElement('div');handle.className='workspace-separator workspace-'+panel+(sides[panel]?' workspace-side-'+sides[panel]:'');handles[panel]=handle;
   if(sides[panel]==='left')node(panel).after(handle);else if(sides[panel]==='right')node(panel).before(handle);else inspector.before(handle);
@@ -170,9 +172,8 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
   const dialog=document.createElement('dialog');dialog.className='workspace-drawer';dialog.id='workspace-drawer-'+panel;dialog.dataset.panel=panel;const close=document.createElement('button');close.type='button';close.textContent='Close '+labels[panel];close.className='workspace-drawer-close';
   // The drawer's header stays above its scrolling panel: title and the close action.
   const header=document.createElement('div');header.className='sticky-header workspace-drawer-header';const title=document.createElement('span');title.textContent=labels[panel];header.append(title,close);dialog.append(header);document.body.append(dialog);dialogs[panel]=dialog;
-  disposers.push(bindWorkspaceDrawer({trigger,drawer:dialog,label:labels[panel],close}));
+  disposers.push(bindWorkspaceDrawer({trigger,drawer:dialog,label:labels[panel],close,modal:()=>panel!=='inspectorHeight'||!hasInterviewForm()}));
  }
- const bottom=options.bottomPanel,bottomBody=bottom?inspector.querySelector<HTMLElement>('.inspector-body')!:null,bottomHeading=bottom?bottom.strip.parentElement!:null;
  const bottomCollapseKey=bottom?`rig-review-bottom-collapsed/${bottom.kind}`:'';
  let collapsed=false;
  if(bottom){try{collapsed=localStorage.getItem(bottomCollapseKey)==='true';}catch{}}
@@ -224,10 +225,11 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
   setLanguagePreference(shown);settingsToggle.setAttribute('aria-expanded',String(!value.settingsCollapsed));settingsBody.hidden=value.settingsCollapsed;settings.dataset.collapsed=String(value.settingsCollapsed);theme.value=options.currentTheme?.()??value.theme;language.value=getLinkLanguage()??shown;sync.checked=value.defaultCameraSync;idle.checked=value.defaultIdleRepeat;status.textContent=tr(store.status().detail);};
  const revealInspector=()=>{
   if(bottom&&collapsed){collapsed=false;try{localStorage.setItem(bottomCollapseKey,'false');}catch{}apply();}
+  if(hasInterviewForm()&&dialogs.inspectorHeight.open&&dialogs.inspectorHeight.matches(':modal'))dialogs.inspectorHeight.close();
   if(effective.inspectorMode==='drawer'&&!dialogs.inspectorHeight.open){for(const dialog of Object.values(dialogs))if(dialog.open)dialog.close();buttons.inspectorHeight.click();if(bottom)apply();}
  };
  if(bottom){
-  const closed=()=>{if(disposed)return;apply();bottom.strip.querySelector<HTMLButtonElement>('[aria-selected=true]')?.focus({preventScroll:true});};
+  const closed=()=>{if(disposed||dialogs.inspectorHeight.open)return;apply();bottom.strip.querySelector<HTMLButtonElement>('[aria-selected=true]')?.focus({preventScroll:true});};
   dialogs.inspectorHeight.addEventListener('close',closed);
   bottom.collapse.onclick=()=>{capture();collapsed=!collapsed;try{localStorage.setItem(bottomCollapseKey,String(collapsed));}catch{}if(dialogs.inspectorHeight.open)dialogs.inspectorHeight.close();apply();if(!collapsed)revealInspector();};
   disposers.push(()=>{bottom.collapse.onclick=null;dialogs.inspectorHeight.removeEventListener('close',closed);});

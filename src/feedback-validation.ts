@@ -1,11 +1,13 @@
 import type {TurnDial} from './turn-pad.ts';
-import { lastFrame, timeAtFrame, type FrameClock } from './frame-clock.ts';
+import { lastFrame, timeAtFrame, type DeclaredFrameClock, type FrameClock } from './frame-clock.ts';
 
 /** Null names mean unavailable metadata; an empty list means known empty. */
 export interface FeedbackCatalog {
   rig:string;bones:string[]|null;slots:string[]|null;
   animations:{name:string;duration:number}[]|null;
   clock:FrameClock|null;clockAnimation:string|null;
+  /** #1018: present only when the package declares a `rigc-frames/1` record; never an animation the report clock names. */
+  frameClocks?:DeclaredFrameClock[];
   turnDials?:TurnDial[];
 }
 export type FeedbackTargetKind='bone'|'slot'|'rig';
@@ -15,12 +17,15 @@ export function feedbackTargetNames(catalog:FeedbackCatalog,kind:FeedbackTargetK
 }
 /** Clip end restricts declared samples; it never creates a rate or a frame. */
 export function feedbackLastFrame(catalog:FeedbackCatalog,animation:string|null):number|null {
-  const last=lastFrame(catalog.clock);if(last===null)return null;
-  if(catalog.animations===null)return catalog.clockAnimation===null||animation===null||animation===catalog.clockAnimation?last:null;
-  if(!animation||catalog.clockAnimation!==animation)return null;
-  const clip=catalog.animations.find(value=>value.name===animation);if(!clip)return null;
+  const declared=animation?catalog.frameClocks?.find(value=>value.animation===animation)?.clock:undefined,clock=declared??catalog.clock;
+  const last=lastFrame(clock);if(last===null)return null;
+  if(!declared){
+    if(catalog.animations===null)return catalog.clockAnimation===null||animation===null||animation===catalog.clockAnimation?last:null;
+    if(!animation||catalog.clockAnimation!==animation)return null;
+  }
+  const clip=catalog.animations?.find(value=>value.name===animation);if(!clip)return null;
   let low=0,high=last;
-  while(low<=high){const middle=low+Math.floor((high-low)/2),time=timeAtFrame(catalog.clock,middle);if(time!==null&&time<=clip.duration)low=middle+1;else high=middle-1;}
+  while(low<=high){const middle=low+Math.floor((high-low)/2),time=timeAtFrame(clock,middle);if(time!==null&&time<=clip.duration)low=middle+1;else high=middle-1;}
   // -1 is a known empty clip/sample intersection, not an unknown clock.
   return high;
 }

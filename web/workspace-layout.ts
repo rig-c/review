@@ -64,14 +64,14 @@ export function bindWorkspaceSeparator(options:WorkspaceSeparatorOptions):{refre
  element.style.touchAction='none';element.addEventListener('pointerdown',down);element.addEventListener('pointermove',move);element.addEventListener('pointerup',up);element.addEventListener('pointercancel',cancel);element.addEventListener('lostpointercapture',cancel);element.addEventListener('keydown',key);events?.addEventListener('blur',blur);refresh();
  return {refresh,dispose(){if(disposed)return;release(true);disposed=true;element.removeEventListener('pointerdown',down);element.removeEventListener('pointermove',move);element.removeEventListener('pointerup',up);element.removeEventListener('pointercancel',cancel);element.removeEventListener('lostpointercapture',cancel);element.removeEventListener('keydown',key);events?.removeEventListener('blur',blur);element.style.touchAction=touchAction;element.tabIndex=tabIndex;for(const [key,value]of saved)if(value===null)element.removeAttribute(key);else element.setAttribute(key,value);}};
 }
-/** Use a native modal dialog for collapsed panels: focus containment/Escape belong to the browser.
+/** Use the native drawer, with modal focus containment unless the workspace stays interactive.
  * The trigger remains outside the collapsed panel; closing returns focus to that trigger. */
-export function bindWorkspaceDrawer(options:{trigger:HTMLButtonElement;drawer:HTMLDialogElement;label:string;close?:HTMLButtonElement}):()=>void {
+export function bindWorkspaceDrawer(options:{trigger:HTMLButtonElement;drawer:HTMLDialogElement;label:string;close?:HTMLButtonElement;modal?:()=>boolean}):()=>void {
  const {trigger,drawer}=options;if(!drawer.id||!options.label)throw new Error('WORKSPACE_DRAWER: named dialog and trigger required');let opened=false;
  trigger.setAttribute('aria-haspopup','dialog');trigger.setAttribute('aria-controls',drawer.id);trigger.setAttribute('aria-expanded',String(drawer.open));if(!drawer.getAttribute('aria-label')&&!drawer.getAttribute('aria-labelledby'))drawer.setAttribute('aria-label',options.label);
- const close=()=>{if(drawer.open)drawer.close();closed();};const toggle=()=>{if(drawer.open){close();return;}drawer.showModal();opened=true;trigger.setAttribute('aria-expanded','true');};const closed=()=>{trigger.setAttribute('aria-expanded','false');if(opened){opened=false;trigger.focus({preventScroll:true});}};
+ const close=()=>{if(drawer.open)drawer.close();closed();};const toggle=()=>{if(drawer.open){close();return;}if(options.modal?.()===false)drawer.show();else drawer.showModal();opened=true;trigger.setAttribute('aria-expanded','true');};const closed=()=>{if(drawer.open)return;trigger.setAttribute('aria-expanded','false');if(opened){opened=false;trigger.focus({preventScroll:true});}};
  trigger.addEventListener('click',toggle);drawer.addEventListener('close',closed);options.close?.addEventListener('click',close);
- return ()=>{if(opened)close();trigger.removeEventListener('click',toggle);drawer.removeEventListener('close',closed);options.close?.removeEventListener('click',close);};
+ return ()=>{if(opened)close();trigger.removeEventListener('click',toggle);for(const attr of ['aria-haspopup','aria-controls','aria-expanded'])trigger.removeAttribute(attr);drawer.removeEventListener('close',closed);options.close?.removeEventListener('click',close);};
 }
 export const inspectorTabs=['view','rig','playback','feedback'] as const;
 export type InspectorTab=typeof inspectorTabs[number];

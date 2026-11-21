@@ -315,7 +315,7 @@ beside the act bar. Selecting a mode never applies, approves or submits.
 
 The standing Review window hosts published subjects on the existing inspection
 screen. Rig and parts use its shared viewport and bottom panel. Record
-checkpoint, signoff, reopen and interview asks use existing forms in a dialog
+checkpoint, signoff and interview asks use existing forms in a dialog
 (#754). A record without a picture keeps that absence explicit; it does not
 manufacture a model or package. Remaining B (#722), C (#715), F (#734) and #756
 work is tracked in [the screen specification](https://github.com/rig-c/review/blob/main/docs/SCREENS.md#4-migration-order).
