@@ -23,7 +23,7 @@ import type {
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t,onLanguageChange} from './i18n.ts';
-import type {InstanceAccess} from './instance-access.ts';
+import {hashCapabilityAccess, type InstanceAccess} from './instance-access.ts';
 import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {createJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
 import type {JobRigPresentation} from './viewport-capture.ts';
@@ -413,27 +413,9 @@ export function jobWindowAccess(href: string, storage: Pick<Storage, 'getItem' |
     const jobId = match[1]!;
     const base = url.pathname;
     const slot = 'rig-review-job-capability/1:' + jobId;
-    let capability: string | null = null;
-    if (url.hash.startsWith('#cap=')) {
-        const value = url.hash.slice(5);
-        if (/^[a-f0-9]{64}$/.test(value))
-            capability = value;
-        url.hash = '';
-        replace(url.href);
-        try {
-            if (capability)
-                storage?.setItem(slot, capability);
-        }
-        catch { /* Memory-only capability when storage is denied. */ }
-    }
-    if (!capability) {
-        try {
-            const saved = storage?.getItem(slot);
-            if (saved && /^[a-f0-9]{64}$/.test(saved))
-                capability = saved;
-        }
-        catch { /* A copied link remains read-only. */ }
-    }
+    const capability = hashCapabilityAccess(url, slot, () => storage, replace, {
+        strip: 'cap-before-storage', storedValue: 'validate', fallback: null,
+    });
     return {
         jobId, base, capability,
         route(path) {
@@ -874,7 +856,19 @@ export interface JobPreparedInspection {
     setupPose(setup?: boolean): void;
     dispose(): void;
 }
+/** One request per resource per preparation (#1050). Every caller in one preparation passes the same signal; a
+ * later preparation (a republish, a reload) brings a new signal and so a new request. The URL carries the
+ * publication id and instance key, so a republished resource never shares an older promise. */
+const jobBytesBySignal = new WeakMap<AbortSignal, Map<string, Promise<Uint8Array<ArrayBuffer>>>>();
 async function jobBytes(url: string, signal: AbortSignal, maximum: number, refusal?: { status: number; code: string }): Promise<Uint8Array<ArrayBuffer>> {
+    let shared = jobBytesBySignal.get(signal);
+    if (!shared) jobBytesBySignal.set(signal, shared = new Map());
+    const key = `${url}\n${maximum}\n${refusal ? `${refusal.status}:${refusal.code}` : ''}`;
+    let pending = shared.get(key);
+    if (!pending) shared.set(key, pending = readJobBytes(url, signal, maximum, refusal));
+    return (await pending).slice();
+}
+async function readJobBytes(url: string, signal: AbortSignal, maximum: number, refusal?: { status: number; code: string }): Promise<Uint8Array<ArrayBuffer>> {
     const response = await fetch(url, { signal });
     if (!response.ok || !response.body) {
         void response.body?.cancel().catch(() => {});
@@ -910,7 +904,7 @@ async function jobDigest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
     return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
         .map(value => value.toString(16).padStart(2, '0')).join('');
 }
-async function jobJson<Value>(url: string, signal: AbortSignal, refusal?: { status: number; code: string }): Promise<Value> {
+export async function jobJson<Value>(url: string, signal: AbortSignal, refusal?: { status: number; code: string }): Promise<Value> {
     const bytes = await jobBytes(url, signal, 2 * 1024 * 1024, refusal);
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as Value;
 }
@@ -1400,11 +1394,12 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
                     const issue = row.issues.find(issue => issue.field === field);
                     if (issue) value.append(node('span', 'job.plan.field.' + issue.reason));
                     else if (field === 'rests_on') {
-                        const rests = node('ul');
+                        const rests = node('ul'), questions = projection?.status === 'projected' ? projection.questions : undefined;
                         for (const text of row.rests_on!) {
                             const rest = node('li'), dependency = plan.steps.find(step => step.id === text);
+                            const question = !dependency && questions && Object.hasOwn(questions, text) ? questions[text] : undefined;
                             if (dependency) {planStepText(rest, dependency, projection); rest.title = text;}
-                            else {rest.textContent = text; rest.setAttribute('translate', 'no');}
+                            else {rest.textContent = question ?? text; if (question !== undefined) rest.title = text; rest.setAttribute('translate', 'no');}
                             rests.append(rest);
                         }
                         value.append(rests);

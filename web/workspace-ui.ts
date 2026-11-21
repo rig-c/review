@@ -8,12 +8,12 @@ import {panelMake,actionButton,labelledControl} from './view-controls.ts';
 export function bindHeaderModeAvailability(options:{model:boolean;preRig?:boolean;parts?:boolean;root?:Pick<Document,'querySelectorAll'>}):()=>void {
  const root=options.root??document,reason=options.preRig?'RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.':!options.model?'MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.':null;
  if(!reason)return ()=>{};
- const modes=[...root.querySelectorAll<HTMLButtonElement>('[data-mode]')].map(button=>({button,disabled:button.disabled,title:button.getAttribute('title'),pressed:button.getAttribute('aria-pressed')}));
- const render=()=>{for(const {button}of modes){if(options.parts&&button.dataset.mode==='rig')continue;button.disabled=true;button.title=tr(reason);button.setAttribute('title',tr(reason));if(button.getAttribute('aria-pressed')!=='false')button.setAttribute('aria-pressed','false');}};
+ const modes=[...root.querySelectorAll<HTMLButtonElement>('[data-mode]')].map(button=>({button,disabled:button.disabled,title:button.getAttribute('title'),description:button.getAttribute('aria-description'),pressed:button.getAttribute('aria-pressed')}));
+ const render=()=>{const text=tr(reason);for(const {button}of modes){if(options.parts&&button.dataset.mode==='rig')continue;button.disabled=true;button.title=text;button.setAttribute('title',text);button.setAttribute('aria-description',text);if(button.getAttribute('aria-pressed')!=='false')button.setAttribute('aria-pressed','false');}};
  const refuse=(event:Event)=>{event.preventDefault();event.stopImmediatePropagation();render();};
  const observer=new MutationObserver(render);for(const {button}of modes){observer.observe(button,{attributes:true,attributeFilter:['aria-pressed']});button.addEventListener('click',refuse,true);}
  const off=onLanguageChange(render);render();
- return ()=>{off();observer.disconnect();for(const {button,disabled,title,pressed}of modes){button.removeEventListener('click',refuse,true);button.disabled=disabled;button.title=title??'';if(title===null)button.removeAttribute('title');else button.setAttribute('title',title);if(pressed===null)button.removeAttribute('aria-pressed');else button.setAttribute('aria-pressed',pressed);}};
+ return ()=>{off();observer.disconnect();for(const {button,disabled,title,description,pressed}of modes){button.removeEventListener('click',refuse,true);button.disabled=disabled;button.title=title??'';if(title===null)button.removeAttribute('title');else button.setAttribute('title',title);if(description===null)button.removeAttribute('aria-description');else button.setAttribute('aria-description',description);if(pressed===null)button.removeAttribute('aria-pressed');else button.setAttribute('aria-pressed',pressed);}};
 }
 
 export interface WorkspaceStatusBarOptions {

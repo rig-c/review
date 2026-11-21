@@ -16,6 +16,17 @@ test('readPrivate returns absent for the detached inode observed during host.jso
   expect(output).toContain('shutdown-read: null');
 });
 
+test('readPrivate returns absent when open still reaches the detached inode after lstat', async () => {
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, 'helpers/open-workspace-state-race.ts'), '--detached-open'],
+    {stdout: 'pipe', stderr: 'pipe'});
+  const [output, error, exit] = await Promise.all([new Response(child.stdout).text(),
+    new Response(child.stderr).text(), child.exited]);
+  expect(error).toBe('');
+  expect(exit).toBe(0);
+  expect(output).toContain('"nlink":0');
+  expect(output).toContain('shutdown-read: null');
+});
+
 test('readPrivate still rejects nlink=0 when host.json has reappeared', async () => {
   const child = Bun.spawn([process.execPath, join(import.meta.dir, 'helpers/open-workspace-state-race.ts'), '--replacement'],
     {stdout: 'pipe', stderr: 'pipe'});
