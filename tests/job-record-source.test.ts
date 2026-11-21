@@ -20,6 +20,7 @@ import {
   isRetainedRecordSource,
   prepareJobRecordSource,
   prepareJobSource,
+  retainedRecordPainting,
   verifyJobRecordSourceFresh,
 } from '../src/job-source.ts';
 import { JobError } from '../src/job-store.ts';
@@ -837,5 +838,122 @@ describe('Review #561 model-free record source preparation (SYNTHETIC reader fix
         phase: 'finalize',
       }),
     ).rejects.toMatchObject({ code: 'JOB_SOURCE_MISMATCH' });
+  });
+
+  describe('#1060 retainedRecordPainting controls', () => {
+    const stateRoot = makeTempDir('review-1060-state-');
+    const preparePaintingWorkspace = async (options: {
+      readonly inputs: readonly { readonly path: string; readonly bytes: Buffer | string }[];
+      readonly painting?: unknown;
+      readonly unsealedInputPath?: string;
+    }) => {
+      const workRoot = makeTempDir('review-1060-root-');
+      const base = createSyntheticOptionRecordWorkspace(workRoot, { postPicture: 'rig' });
+      const writtenInputs = options.inputs.map(item => writeWorkspaceFile(workRoot, item.path, item.bytes));
+      const projectDoc: Record<string, unknown> = {
+        ...JSON.parse(
+          await Bun.file(join(workRoot, 'project.json')).text(),
+        ),
+        inputs: writtenInputs,
+      };
+      if (options.painting !== undefined) {
+        projectDoc.painting = options.painting;
+      } else {
+        delete projectDoc.painting;
+      }
+      const recordIdentity = writeWorkspaceFile(workRoot, 'project.json', JSON.stringify(projectDoc, null, 2) + '\n');
+      const record = { path: 'project.json' as const, sha256: recordIdentity.sha256 };
+      const rigConfig = base.files.find(file => file.path === 'rig/config.json')!;
+      const files = [
+        ...writtenInputs.filter(file => file.path !== options.unsealedInputPath),
+        rigConfig,
+        base.optionSetFile,
+        record,
+      ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+      const context: OptionContext = {
+        ...base.context,
+        inputs: writtenInputs.filter(file => file.path !== options.unsealedInputPath),
+        files,
+      };
+      const { reader } = createSyntheticRecordReader({
+        onOption: () => structuredClone(context),
+      });
+      const retained = await prepareJobRecordSource({
+        root: captureJobRoot(workRoot),
+        stateRoot,
+        fingerprint: 'fp-1060',
+        request: {
+          freeze: { kind: 'producer-held', holdId: 'hold_1060', record },
+          result: base.result,
+        },
+        readRecordPublished: reader,
+      });
+      return { retained, writtenInputs };
+    };
+
+    test('[SYNTHETIC] #1060 painting-second returns declared project.painting instead of inputs[0]', async () => {
+      const second = await preparePaintingWorkspace({
+        inputs: [
+          { path: 'sketch.png', bytes: Buffer.from('sketch-png-bytes') },
+          { path: 'painting.png', bytes: Buffer.from('painting-png-bytes') },
+        ],
+        painting: 'painting.png',
+      });
+      expect(retainedRecordPainting(second.retained)).toEqual({
+        ref: second.writtenInputs[1]!,
+        name: 'painting.png',
+      });
+    });
+
+    test('[SYNTHETIC] #1060 unknown name, non-string, non-raster, or unsealed painting returns null without falling back to inputs[0]', async () => {
+      const unknown = await preparePaintingWorkspace({
+        inputs: [
+          { path: 'sketch.png', bytes: Buffer.from('sketch-png-bytes') },
+          { path: 'painting.png', bytes: Buffer.from('painting-png-bytes') },
+        ],
+        painting: 'missing.png',
+      });
+      expect(retainedRecordPainting(unknown.retained)).toBeNull();
+
+      for (const nonString of [null, 123, { path: 'sketch.png' }, ['sketch.png']]) {
+        const badType = await preparePaintingWorkspace({
+          inputs: [{ path: 'sketch.png', bytes: Buffer.from('sketch-png-bytes') }],
+          painting: nonString,
+        });
+        expect(retainedRecordPainting(badType.retained)).toBeNull();
+      }
+
+      const nonRaster = await preparePaintingWorkspace({
+        inputs: [
+          { path: 'sketch.png', bytes: Buffer.from('sketch-png-bytes') },
+          { path: 'inputs/spec.json', bytes: '{"spec":true}\n' },
+        ],
+        painting: 'inputs/spec.json',
+      });
+      expect(retainedRecordPainting(nonRaster.retained)).toBeNull();
+
+      const unsealed = await preparePaintingWorkspace({
+        inputs: [
+          { path: 'sketch.png', bytes: Buffer.from('sketch-png-bytes') },
+          { path: 'painting.png', bytes: Buffer.from('painting-png-bytes') },
+        ],
+        painting: 'painting.png',
+        unsealedInputPath: 'painting.png',
+      });
+      expect(retainedRecordPainting(unsealed.retained)).toBeNull();
+    });
+
+    test('[SYNTHETIC] #1060 byte identity when project.painting is absent keeps inputs[0]', async () => {
+      const absent = await preparePaintingWorkspace({
+        inputs: [
+          { path: 'inputs/reference.png', bytes: Buffer.from('ref-png-bytes') },
+          { path: 'inputs/spec.json', bytes: '{"spec":true}\n' },
+        ],
+      });
+      expect(retainedRecordPainting(absent.retained)).toEqual({
+        ref: absent.writtenInputs[0]!,
+        name: 'reference.png',
+      });
+    });
   });
 });

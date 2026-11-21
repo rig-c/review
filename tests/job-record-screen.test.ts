@@ -501,7 +501,7 @@ test('#839 disposed workspace cannot re-enter the transient image while tabs unr
  run();run();expect(released).toBe(1);expect(scope.releaseInterview).toBeNull();
 });
 
-test.each(['scene','unsealed-scene','rig','legacy'] as const)('#929 projects only a sealed question picture for %s', async variant => {
+test.each(['scene','unsealed-scene','rig','rig-painting-second','legacy'] as const)('#929 projects only a sealed question picture for %s', async variant => {
  const fixture=await recordScreenFixture('interview-picks',false,undefined,undefined,false,true,undefined,false,false,variant);
  try {
   const base=fixture.origin+fixture.display.routes.apiBase;
@@ -522,7 +522,7 @@ test.each(['scene','unsealed-scene','rig','legacy'] as const)('#929 projects onl
     expect(image.status).toBe(200);
     expect(Buffer.from(await image.arrayBuffer())).toEqual(await readFile(fixture.root+'/inputs/reference.png'));
    }
-   expect(question!.missingPicture).toBe(variant==='legacy'?undefined:variant==='rig'?'rig':'scene');
+   expect(question!.missingPicture).toBe(variant==='legacy'?undefined:(variant==='rig'||variant==='rig-painting-second')?'rig':'scene');
   }
  }finally{await fixture.close();}
 });
