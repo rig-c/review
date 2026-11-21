@@ -30,8 +30,8 @@ export function jobRigScreenAnswers(ask: Pick<PendingAskV3, 'subject'>, checkpoi
     subject.kind === 'checkpoint' && checkpoints.has(subject.checkpointId);
 }
 /** #1048: the sealed identities the server attached to the record's question images (none elsewhere). */
-function questionPictures(questions:readonly {readonly images:readonly {readonly path?:string;readonly sha256?:string}[]}[]|undefined):{questionPictures?:{path:string;sha256:string}[]} {
-  const rows=(questions??[]).flatMap(question=>question.images.flatMap(image=>image.path&&image.sha256?[{path:image.path,sha256:image.sha256}]:[]));
+function questionPictures(questions:readonly {readonly images:readonly {readonly name:string;readonly path?:string;readonly sha256?:string}[]}[]|undefined):{questionPictures?:{name:string;path:string;sha256:string}[]} {
+  const rows=(questions??[]).flatMap(question=>question.images.flatMap(image=>image.path&&image.sha256?[{name:image.name,path:image.path,sha256:image.sha256}]:[]));
   return rows.length?{questionPictures:rows}:{};
 }
 /** One ask-availability check for both the route and its retained modal forms. */
