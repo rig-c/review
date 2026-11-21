@@ -1,5 +1,6 @@
 /** Inspection graphics from the last successfully drawn public player pose. */
 import {partBounds} from './part-selection.ts';
+import {t} from './i18n.ts';
 import {boxesIntersect,placeLabels,type LabelBox} from './label-placement.ts';
 import type {BoneWorld,PosedFrame,RigPlayer} from '@rig-c/play';
 
@@ -279,7 +280,7 @@ export class RigOverlays {
    });
    drawn.forEach(({marker},i)=>{
     const {box,visible}=placed[i]!,c=marker.colors;if(!visible)return;
-    ctx.fillStyle=c.labelBg;ctx.fillRect(box.x,box.y,box.w,box.h);ctx.fillStyle=c.stroke;ctx.fillText(marker.tag,box.x+4,box.y+11);
+    ctx.fillStyle=c.labelBg;ctx.fillRect(box.x,box.y,box.w,box.h);ctx.fillStyle=c.stroke;ctx.fillText(t(marker.tag),box.x+4,box.y+11);
    });
   }
   ctx.globalAlpha=1;

@@ -73,8 +73,10 @@ export function transportClock(report:{clock:FrameClock|null|undefined;animation
   return null;
 }
 
+export const formatFixed=(value:number,digits=3):string=>(Object.is(value,-0)?0:value).toFixed(digits);
+
 /** The rig pane's header: the animation, frame and time the drawn pose is at — the transport's clock, the one a seek sets. */
 export function rigPaneLabel(state:{hasPlayer:boolean;animation:string;time:number;frame:number|null}):string {
   if(!state.hasPlayer)return 'Generated rig · read only';
-  return ['Generated rig',state.animation||'no animation',...(state.frame===null?[]:[`F${state.frame}`]),`${state.time.toFixed(3)} s`].join(' · ');
+  return ['Generated rig',state.animation||'no animation',...(state.frame===null?[]:[`F${state.frame}`]),`${formatFixed(state.time)} s`].join(' · ');
 }
