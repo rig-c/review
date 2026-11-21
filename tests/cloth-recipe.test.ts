@@ -105,6 +105,12 @@ test('#111 / #954: cloth targets come from the producer\'s ./cloth-targets.json 
   await writeFile(join(p4c,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.50.0',exports:{'./cloth-targets.json':'./cloth-targets.json'}}));
   await expect(clothTargets(p4c,configText)).rejects.toThrow(/^CLOTH_TARGETS_INVALID: /);
 
+  const p4d=join(root,'p4d');await mkdir(p4d,{recursive:true});
+  const fifo=join(p4d,'cloth-targets.json');
+  expect(Bun.spawnSync(['mkfifo',fifo]).exitCode).toBe(0);
+  await writeFile(join(p4d,'package.json'),JSON.stringify({name:'@rig-c/parts',version:CLOTH_TARGETS_SINCE,exports:{'./cloth-targets.json':'./cloth-targets.json'}}));
+  await expect(clothTargets(p4d,configText)).rejects.toThrow(/^CLOTH_TARGETS_INVALID: /);
+
   // Control 5: a spread or computed CLOTH_TARGETS in src/cloth.ts with no export → not read (proves no source parsing).
   const p5=join(root,'p5');await mkdir(join(p5,'src'),{recursive:true});
   await writeFile(join(p5,'package.json'),JSON.stringify({name:'@rig-c/parts',version:'2.50.0'}));

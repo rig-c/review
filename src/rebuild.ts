@@ -574,14 +574,9 @@ export async function clothTargets(producerRoot: string | null, configText: stri
   if (typeof entry !== 'string' || !entry.startsWith('./')) {
     throw new RebuildError(CLOTH_TARGETS_INVALID, `exports[${JSON.stringify(CLOTH_TARGETS_EXPORT)}] must be a string path starting with "./"`);
   }
-  const lexical = resolve(pkgReal, entry);
-  if (!lexical.startsWith(pkgReal + sep)) throw new RebuildError(CLOTH_TARGETS_INVALID, `exports[${JSON.stringify(CLOTH_TARGETS_EXPORT)}] points outside the package directory`);
-  let targetReal: string, text: string;
-  try { targetReal = await realpath(lexical); }
-  catch { throw new RebuildError(CLOTH_TARGETS_INVALID, `exports[${JSON.stringify(CLOTH_TARGETS_EXPORT)}] (${entry}) does not resolve inside the package`); }
-  if (!targetReal.startsWith(pkgReal + sep)) throw new RebuildError(CLOTH_TARGETS_INVALID, `exports[${JSON.stringify(CLOTH_TARGETS_EXPORT)}] escapes the package directory`);
-  try { text = await readFile(targetReal, 'utf8'); }
-  catch { throw new RebuildError(CLOTH_TARGETS_INVALID, `exports[${JSON.stringify(CLOTH_TARGETS_EXPORT)}] (${entry}) is not readable`); }
+  let text: string;
+  try { text = await readFile(await safeFile(pkgReal, entry.slice(2)), 'utf8'); }
+  catch (e) { throw new RebuildError(CLOTH_TARGETS_INVALID, e instanceof Error ? e.message : String(e)); }
   let parsed: unknown;
   try { parsed = JSON.parse(text); }
   catch { throw new RebuildError(CLOTH_TARGETS_INVALID, `exports[${JSON.stringify(CLOTH_TARGETS_EXPORT)}] is not valid JSON`); }
