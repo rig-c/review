@@ -23,7 +23,7 @@ import type {
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t,onLanguageChange} from './i18n.ts';
-import type {InstanceAccess} from './instance-access.ts';
+import {hashCapabilityAccess, type InstanceAccess} from './instance-access.ts';
 import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {createJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
 import type {JobRigPresentation} from './viewport-capture.ts';
@@ -413,27 +413,9 @@ export function jobWindowAccess(href: string, storage: Pick<Storage, 'getItem' |
     const jobId = match[1]!;
     const base = url.pathname;
     const slot = 'rig-review-job-capability/1:' + jobId;
-    let capability: string | null = null;
-    if (url.hash.startsWith('#cap=')) {
-        const value = url.hash.slice(5);
-        if (/^[a-f0-9]{64}$/.test(value))
-            capability = value;
-        url.hash = '';
-        replace(url.href);
-        try {
-            if (capability)
-                storage?.setItem(slot, capability);
-        }
-        catch { /* Memory-only capability when storage is denied. */ }
-    }
-    if (!capability) {
-        try {
-            const saved = storage?.getItem(slot);
-            if (saved && /^[a-f0-9]{64}$/.test(saved))
-                capability = saved;
-        }
-        catch { /* A copied link remains read-only. */ }
-    }
+    const capability = hashCapabilityAccess(url, slot, () => storage, replace, {
+        strip: 'cap-before-storage', storedValue: 'validate', fallback: null,
+    });
     return {
         jobId, base, capability,
         route(path) {
