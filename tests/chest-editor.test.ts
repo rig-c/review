@@ -212,7 +212,8 @@ test('#1030 F07: RigOverlays measures and draws chest landmark tags through t() 
   const surface=createCanvas(500,300);Object.assign(surface,{style:{pointerEvents:'auto'},clientWidth:500,clientHeight:300});
   const ctx=surface.getContext('2d'),calls:{text:string;x:number;y:number}[]=[],measured:string[]=[],origFillText=ctx.fillText.bind(ctx),origMeasureText=ctx.measureText.bind(ctx);
   ctx.fillText=((text:string,x:number,y:number)=>{calls.push({text,x,y});return origFillText(text,x,y);}) as typeof ctx.fillText;
-  ctx.measureText=((text:string)=>{measured.push(text);return origMeasureText(text);}) as typeof ctx.measureText;
+  // A fixed width keeps placement independent of the runner's fonts (#1032 CI: a wider fallback hid both apex tags); the control is which text is measured and drawn.
+  ctx.measureText=((text:string)=>{measured.push(text);return {...origMeasureText(text),width:40};}) as typeof ctx.measureText;
   const overlays=new RigOverlays({canvas:surface as unknown as HTMLCanvasElement,rigRoot:{style:{visibility:'visible'}} as unknown as HTMLElement});
   const settings={images:true,mesh:false,bones:false,meshOpacity:.65},project=(x:number,y:number)=>({x,y});
   const colors={stroke:'#00ff00',fill:'#003300',ink:'#ffffff',labelBg:'#101010'};
