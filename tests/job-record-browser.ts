@@ -336,7 +336,7 @@ async function openPendingAsk(page: InputCdpSession): Promise<void> {
   let state: 'open' | 'ready' | null = null;
   await until(async () => {
     state = await page.evaluate<'open' | 'ready' | null>(`(() => {
-      if (document.querySelector('#job-record-asks[open]') || document.querySelector('#workspace-interview-answer:not([hidden]) form.interview-answer')) return 'open';
+      if (document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])') || document.querySelector('#workspace-interview-answer:not([hidden]) form.interview-answer')) return 'open';
       const button = document.querySelector('#workspace-pending-ask');
       if (!button || button.hidden || button.disabled) return null;
       const rect = button.getBoundingClientRect();
@@ -365,7 +365,7 @@ async function submitForm(askId: string, kind: 'record' | 'checkpoint' | 'interv
   );
   if (kind !== 'interview') await openPendingAsk(page!);
   await wait(`(()=>{const button=document.querySelector(${JSON.stringify(submitSelector)});return !!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
-  if (kind !== 'interview') assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('#job-record-asks:modal')`), true);
+  if (kind !== 'interview') assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`), true);
   await page!.evaluate(`document.querySelector(${JSON.stringify(submitSelector)}).scrollIntoView({block:'center',inline:'nearest'})`);
   await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   await click(page!,submitSelector);
@@ -795,7 +795,7 @@ try {
   assert.equal(signoffSubmitStatus.statusKey, 'saved');
   assert.equal(signoffSubmitStatus.statusText, answeredLabel);
 
-  await wait(`!document.querySelector('#job-record-asks')`,'drawer removed after the final record act');
+  await wait(`!document.querySelector('#job-record-asks:not([hidden])')`,'record section hidden after the final record act');
 
   await writeFile(join(output, `record-plan-${language}.png`), await page.screenshot());
 

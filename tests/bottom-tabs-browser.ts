@@ -425,19 +425,21 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
    await page.setViewport(width,height);await page.goto(target.href,lang);
    await wait(page,kind.startsWith('standalone')?`!!document.querySelector('#rig-root canvas')`:`document.body.dataset.ready==='true'&&!document.body.inert`,kind+' ready');
    if(Bun.argv.includes('--finish-residues')&&(kind==='checkpoint'||kind==='plan')){
-    if(!await page.evaluate(`!!document.querySelector('#job-record-asks[open]')`))await click(page,'#workspace-pending-ask');
-    await wait(page,`!!document.querySelector('#job-record-asks[open]')`,'record dialog');
-    const cap:any=await page.evaluate(`document.querySelector('#job-record-asks').getBoundingClientRect().toJSON()`);
-    assert.ok(cap.width<=760&&cap.width>0,'record dialog respects readable760px cap');
-    assert.ok(Math.abs((cap.left+cap.right)/2-width/2)<=1&&Math.abs((cap.top+cap.bottom)/2-height/2)<=1,'record dialog is centered');
-    assert.ok(cap.left>=0&&cap.top>=0&&cap.right<=width&&cap.bottom<=height,'record dialog stays in viewport');
+    if(!await page.evaluate(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`))await click(page,'#workspace-pending-ask');
+    await wait(page,`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'record section');
+    // #1041 B: the record form is a section of the right communication panel, not a centred dialog.
+    const cap:any=await page.evaluate(`(()=>{const s=document.querySelector('#job-record-asks').getBoundingClientRect().toJSON(),p=document.querySelector('#workspace-communication').getBoundingClientRect().toJSON();return {...s,panel:p,dialogs:document.querySelectorAll('dialog[open]').length,heading:document.querySelector('#job-record-asks .review-dialog-header h2')?.textContent};})()`);
+    assert.ok(cap.width>0&&cap.left>=cap.panel.left-1&&cap.right<=cap.panel.right+1,'record section sits inside the communication panel');
+    assert.ok(Math.abs(cap.panel.right-width)<=1,'communication panel is the right column');
+    assert.ok(cap.left>=0&&cap.top>=0&&cap.right<=width,'record section stays in viewport');
+    assert.equal(cap.dialogs,0,'no dialog holds the record form');
+    assert.ok(cap.heading,'record section has a one-line heading');
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-cap.json`),JSON.stringify(cap,null,2)+'\n');
-    await click(page,'#job-record-asks .workspace-drawer-close');
    }
    if(kind.startsWith('interview')){
     await wait(page,`!!document.querySelector('#workspace-interview-answer .interview-grid fieldset:not(:disabled)')&&!!document.querySelector('#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden])')`,kind+' Question section');
     assert.equal(await page.evaluate<number>(`document.querySelectorAll('#workspace-interview-answer form.interview-answer').length`),1);
-    assert.equal(await page.evaluate<boolean>(`!!document.querySelector('#job-record-asks[open]')`),false);
+    assert.equal(await page.evaluate<boolean>(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`),false);
     const catalog=lang==='en'?enCatalog:koCatalog;
     assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-interview-answer .review-dialog-header h2').textContent`),catalog['Question']);
     if(kind==='interview-standalone'){

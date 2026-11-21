@@ -315,6 +315,7 @@ test('#992 record and verdict comment drafts survive reload, same-source republi
    comments:{refresh(){}},
    partsSubject:null,
    rigInspector:{comments:{button:{}}},
+   recordPanel:{querySelector:()=>null},
    setSourceText(){},
    renderAnswerControls(){},
    renderProposals(){},

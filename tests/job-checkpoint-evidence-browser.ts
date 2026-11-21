@@ -128,7 +128,7 @@ async function run() {
             assert.ok(pending,prefix+' pending source-bound checkpoint');
             const askId=pending.askId;
             await until(async () => (await checkpointForm(askId)).ready,prefix+' checkpoint form ready');
-            await page!.evaluate(`(()=>{const d=document.querySelector('#job-record-asks');if(!d.open)document.querySelector('#workspace-pending-ask').click();})()`);
+            await page!.evaluate(`(()=>{const d=document.querySelector('#job-record-asks');if(d.hidden)document.querySelector('#workspace-pending-ask').click();})()`);
             const layout=await page!.evaluate<any>(`(()=>{
               const dialog=document.querySelector('#job-record-asks'),forms=document.querySelector('form[data-job-ask="${askId}"]');
               const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
@@ -138,13 +138,14 @@ async function run() {
             layout.phase=phase;layout.sourceHash=publication.source.sourceHash;layout.recordSha256=publication.source.projectHash;
             layoutObservations.push(layout);assert.deepEqual(layout.viewport,viewport);assert.equal(layout.askId,askId);
             assert.equal(layout.legacy,0);assert.ok(layout.recordSha256,prefix+' authenticated text record');
-            assert.ok(layout.dialog.left>=0&&layout.dialog.top>=0&&layout.dialog.right<=viewport.width&&layout.dialog.bottom<=viewport.height,prefix+' native dialog is bounded');
-            assert.ok(layout.forms.width>0&&layout.formsClientHeight>0&&layout.forms.width<=layout.dialog.width,prefix+' scrollable form stays inside dialog');
+            // #1041 B: the record section of the right communication panel, bounded horizontally by the viewport.
+            assert.ok(layout.dialog.left>=0&&layout.dialog.top>=0&&layout.dialog.right<=viewport.width,prefix+' record section is bounded');
+            assert.ok(layout.forms.width>0&&layout.formsClientHeight>0&&layout.forms.width<=layout.dialog.width,prefix+' form stays inside the record section');
             // #809 question 4, phase1b/issue-809-numbered.txt:94: delete only tile labels/fourth-title grid reachability.
             for(const summary of layout.summaries){assert.ok(summary.title.includes(packet.planStepId));assert.equal(summary.text.includes(packet.planStepId),false);}
             let screenshot:Uint8Array|undefined;
             if (prefix.startsWith('package-')) {
-                await page!.evaluate(`document.querySelector('#job-record-asks').close()`);
+                // #1041 B: the record section is not modal, so nothing closes before the main view is read.
                 await until(async () => {
                     const paint = await page!.evaluate<any>(`(()=>{
                         const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,
@@ -257,7 +258,7 @@ async function run() {
                 sourceHash: publication.source.sourceHash, outcome, words, prefix};
             latestNext = undefined;
             await until(async () => (await checkpointForm(asked.askId)).ready, prefix + ' ' + outcome + ' decision ready');
-            await page!.evaluate(`(()=>{document.querySelector('#job-record-asks').close();document.querySelector('#stage-comment').click();})()`);
+            await page!.evaluate(`document.querySelector('#stage-comment').click()`);
             if(await page!.evaluate(`!!document.querySelector('[data-comment-general]')`))await page!.evaluate(`document.querySelector('[data-comment-general]').click()`);
             else {
                 await page!.evaluate(`(()=>{const button=document.querySelector('#stage-comment');if(button.getAttribute('aria-pressed')!=='true')button.click();})()`);

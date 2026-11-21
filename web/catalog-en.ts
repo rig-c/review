@@ -31,7 +31,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Comment · C": "Comment · C",
 
   "project.json": "project.json",
-  'job.commentsFromWorkspace': 'Comments from the workspace are included. Close this request to add or edit comments.',
+  'job.commentsFromWorkspace': 'Comments from the workspace are included. Add or edit them under Comments below.',
   'Add general comment': 'Add general comment',
   'General comment': 'General comment',
  "Difference: {0} of {1} pixels differ, compared where the rig draws \u00b7 rest still vs original painting.": "Difference: {0} of {1} pixels differ, compared where the rig draws · rest still vs original painting.",
@@ -3376,6 +3376,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "VERDICT": "VERDICT",
   "Note": "Note",
   "Sign-off": "Sign-off",
+  "Checkpoint · Sign-off": "Checkpoint · Sign-off",
   "Save sign-off": "Save sign-off",
   "{under} opens under {above} · {animation} f{frame} ({time} s) · {found} cells found / {allowed} allowed": "{under} opens under {above} · {animation} f{frame} ({time} s) · {found} cells found / {allowed} allowed",
   "Seam {a} | {b} · {px40} px over 40 · {px80} px over 80": "Seam {a} | {b} · {px40} px over 40 · {px80} px over 80",

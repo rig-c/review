@@ -131,7 +131,7 @@ try{
    const signoffPublication=await api('publish',{result:workspace.result,freeze:{kind:'producer-held',holdId:'signoff-held',record:workspace.record}});
    const signoff=await askSubject(signoffPublication,{kind:'signoff',stage:'direction-review'});
    await wait(`!!document.querySelector('form[data-job-ask="${signoff.askId}"] fieldset:not(:disabled)')`);
-   await click('#workspace-pending-ask');await wait(`document.querySelector('#job-record-asks[open] form[data-job-ask="${signoff.askId}"] fieldset:not(:disabled)')`);
+   await click('#workspace-pending-ask');await wait(`document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden]) form[data-job-ask="${signoff.askId}"] fieldset:not(:disabled)')`);
    await writeFile(join(output,language+'-signoff.png'),await page!.screenshot());
    await click(`form[data-job-ask="${signoff.askId}"] button[type=submit]`);
    let signed:any;const end=Date.now()+20000;while(Date.now()<end){const next=await api('next',{after:null,waitMs:0});signed=next.events.find((e:any)=>e.type==='act'&&e.act.askId===signoff.askId)?.act;if(signed)break;await Bun.sleep(25);}

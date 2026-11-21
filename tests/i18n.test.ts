@@ -1889,7 +1889,7 @@ test('#1037 F13 + R3a: rig and parts viewport providers share one zoom readout s
 
   // Interview View switch uses shared view names (no file name) for 1 image and numbered Reference {0} for 2+ images, and preserves control order.
   const mainSource=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
-  const start=mainSource.indexOf('function syncQuestionImage():void {'),end=mainSource.indexOf('/** Survey forms use the shared bottom tab.',start);
+  const start=mainSource.indexOf('function syncQuestionImage():void {'),end=mainSource.indexOf('/** Survey forms take the Question section',start);
   expect(start).toBeGreaterThan(0);expect(end).toBeGreaterThan(start);
   const {doc,root}=makeTestDoc();
   const savedDoc=(globalThis as any).document;

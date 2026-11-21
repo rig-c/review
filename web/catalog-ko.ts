@@ -31,7 +31,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Comment · C": "코멘트 · C",
 
   "project.json": "project.json",
-  'job.commentsFromWorkspace': '작업 공간의 코멘트를 함께 제출해요. 코멘트를 추가하거나 고치려면 이 요청을 닫으세요.',
+  'job.commentsFromWorkspace': '작업 공간의 코멘트를 함께 제출해요. 코멘트는 아래 코멘트에서 추가하거나 고칠 수 있어요.',
   'Add general comment': '일반 코멘트 추가',
   'General comment': '일반 코멘트',
  "Difference: {0} of {1} pixels differ, compared where the rig draws \u00b7 rest still vs original painting.": "차이: 리그가 그리는 {1}픽셀 중 {0}픽셀 다름 · 정지 셋업과 원본 그림.",
@@ -3376,6 +3376,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "VERDICT": "판정",
   "Note": "메모",
   "Sign-off": "승인",
+  "Checkpoint · Sign-off": "체크포인트 · 승인",
   "Save sign-off": "승인 저장",
   "{under} opens under {above} · {animation} f{frame} ({time} s) · {found} cells found / {allowed} allowed": "{under}이(가) {above} 아래에서 벌어짐 · {animation} f{frame} ({time}초) · 셀 {found}개 발견 / 허용 {allowed}개",
   "Seam {a} | {b} · {px40} px over 40 · {px80} px over 80": "이음매 {a} | {b} · 40 초과 {px40} px · 80 초과 {px80} px",

@@ -187,7 +187,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   await wait(page,mode==='standalone'?`!!document.querySelector('#rig-root canvas')&&!document.body.inert`:`document.body.dataset.ready==='true'&&!document.body.inert&&!!document.querySelector('#workspace-ask-headline')?.textContent`);
   // #1041: the question is shown in the right communication panel, not a bottom tab.
   const questionSelected=`(()=>{const n=document.querySelector('#workspace-interview-answer');return !!n&&!n.hidden&&!!n.closest('#workspace-communication:not([hidden])')&&n.getClientRects().length>0;})()`;
-  const recordDialogClosed=`!document.querySelector('#job-record-asks[open]')`;
+  const recordDialogClosed=`!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`;
   const interviewReady=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('#workspace-interview-answer form.interview-answer fieldset:not(:disabled)')`;
   if(mode==='interview')await wait(page,interviewReady);
   if(mode==='embedded-rig'){
@@ -297,7 +297,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(await page.evaluate(`document.getElementById('dirty').textContent`),catalog['job.review.approved']);
   }else{
    assert.deepEqual(initial.answers.map((answer:any)=>answer.id),['workspace-pending-ask']);
-   await click(page,'#workspace-pending-ask');await wait(page,mode==='interview'?interviewReady:`!!document.querySelector('#job-record-asks[open]')`);
+   await click(page,'#workspace-pending-ask');await wait(page,mode==='interview'?interviewReady:`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`);
    assert.equal(await page.evaluate(`document.getElementById('workspace-pending-ask').closest('#workspace-act-row')!==null`),true);
    if(mode==='interview')await page.evaluate<void>(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#workspace-interview-answer input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
    await capture(page,out,mode==='interview'?'answer-question':'answer-dialog');

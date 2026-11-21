@@ -1342,7 +1342,7 @@ function bindWorkspace(hasModel=false,empty=false):void {
   // The question on top, Comments below; Comment rows sit above the provenance block and the review form.
   const comments=rigInspector.comments.panel;comments.hidden=false;
   comments.querySelector('.review-dialog-header')?.after(el('comments-list-host'));
-  communicationPanel.append(questionPanel,comments);
+  communicationPanel.append(questionPanel,recordPanel,comments);
   inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel&&!partsOnly)?['feedback']:undefined,bottom:{strip:rigInspector.strip},changed:()=>{syncQuestionImage();workspace?.refresh();persistence?.save();}});
   workspace?.refresh();
 }
@@ -1591,7 +1591,7 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  if(interview){
   button('stage-comment').hidden=true;
   button('save').disabled=true;setSourceAttribute(button('save'),'aria-description',unavailable);
-  viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,'job.pending',true)));
+  viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,true)));
   text('provenance-rig',unavailable);text('provenance-motion',unavailable);text('source-files','project.json');
  }else{restoreRecordComments();setupComments();showRecordComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
@@ -1600,10 +1600,11 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  document.body.dataset.ready='true';
  if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
-let recordDialog:HTMLDialogElement|null=null;
-let releaseRecordDrawer:(()=>void)|null=null;
-viewDisposers.push(()=>{releaseRecordDrawer?.();releaseRecordDrawer=null;recordDialog?.remove();recordDialog=null;});
-let recordDrawerTrigger:HTMLButtonElement|null=null;
+/** #1041 B: checkpoint, signoff and plan-approval forms are a right-panel section, below the question and above Comments. */
+const recordPanel=panelMake('section',{id:'job-record-asks',className:'workspace-interview-panel',hidden:true});
+recordPanel.tabIndex=-1;const recordTitle=panelMake('h2',{});recordPanel.append(panelMake('div',{className:'review-dialog-header'},recordTitle));
+const recordForms=()=>[...recordPanel.querySelectorAll<HTMLFormElement>('form[data-job-ask]')];
+viewDisposers.push(()=>{for(const form of recordForms())form.remove();recordPanel.hidden=true;});
 let unregisterQuestion:(()=>void)|null=null;
 let activeInterviewImages:readonly {name:string;src:string}[]|null=null;
 let activeInterviewImage:{name:string;src:string}|null=null;
@@ -1742,7 +1743,7 @@ function persistRecordComments():void {
    comments.splice(0,comments.length,...kept,...addedFromOther,...localNew);
   }
   knownIds.clear();for(const row of comments)knownIds.add(row.id);
-  const dialogPublication=typeof recordDialog!=='undefined'?recordDialog?.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication:undefined;
+  const dialogPublication=recordPanel.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication;
   const activePub=binding.publicationId??dialogPublication;
   const prefix=host?.verdictComments?'rig-review-verdict-comments/1:':'rig-review-record-comments/1:';
   if(typeof localStorage.removeItem==='function'){
@@ -1759,7 +1760,7 @@ function recordCommentsChanged():void {
  persistRecordComments();
  setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);
  renderDraftState();
- for(const form of recordDialog?.querySelectorAll('form[data-job-ask]')??[])form.dispatchEvent(new Event('input',{bubbles:true}));
+ for(const form of recordForms())form.dispatchEvent(new Event('input',{bubbles:true}));
 }
 /** Keep the shared reference viewport bound while the interview form is mounted. */
 function syncQuestionImage():void {
@@ -1796,13 +1797,13 @@ function syncQuestionImage():void {
  if(sourceTextContent(el('message'))==='This request has no picture.')message(sourceTextContent(el('dirty')),false,true);
  void showReference('',activeInterviewImage);
 }
-/** Survey forms use the shared bottom tab. Pending text-only record forms use the drawer. */
-function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',standalone=false):void {
+/** Survey forms take the Question section and record forms the record section, both in the right panel (#1041). */
+function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
  if(standalone){renderPendingSubjects([{kind:'interview-picks'}]);}
  for(const form of forms){
   if(questionFormBindings.has(form))continue;questionFormBindings.add(form);
   form.addEventListener('submit',event=>{if(draftConflict||pendingAnswers.some(subject=>subject.kind.endsWith('verdict'))){event.preventDefault();event.stopImmediatePropagation();}},true);
-  form.addEventListener('job-answer-saved',()=>{answerSaved=true;if(recordDialog?.contains(form))recordDialog.close();renderDraftState();},{once:true});
+  form.addEventListener('job-answer-saved',()=>{answerSaved=true;renderDraftState();},{once:true});
  }
  const questionTabForms=forms.filter(form=>form.dataset.interviewMain!==undefined);
  for(const form of questionForms)if(!questionTabForms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
@@ -1821,25 +1822,24 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
  showQuestionForm();
  forms=forms.filter(form=>!questionTabForms.includes(form));
  if(!forms.length){
-  releaseRecordDrawer?.();releaseRecordDrawer=null;recordDrawerTrigger=null;
-  recordDialog?.remove();recordDialog=null;
+  for(const form of recordForms()){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
+  if(!recordPanel.hidden){recordPanel.hidden=true;workspace?.refresh();}
   renderDraftState();return;
  }
- if(!recordDialog){
-  recordDialog=panelMake('dialog',{id:'job-record-asks',className:'workspace-drawer'});recordDialog.setAttribute('aria-label',tr(label));
-  recordDialog.append(panelMake('button',{className:'workspace-drawer-close',type:'button'},tr('Close')));app.append(recordDialog);
- }
  const trigger=questionForms.length?recordAsk:rigAsk;
- if(recordDrawerTrigger!==trigger){
-  releaseRecordDrawer?.();recordDrawerTrigger=trigger;
-  releaseRecordDrawer=bindWorkspaceDrawer({trigger,drawer:recordDialog,label:tr(label),close:recordDialog.querySelector('button')!});
- }
- for(const form of recordDialog.querySelectorAll<HTMLFormElement>('form[data-job-ask]'))if(!forms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
+ // The ask line's Review…/Approve… brings the section into view; it opens with the panel like a pending question.
+ const revealRecord=()=>{recordPanel.hidden=false;workspace?.revealCommunication();recordPanel.scrollIntoView?.({block:'nearest'});};
+ trigger.onclick=()=>{if(draftConflict)return;revealRecord();recordPanel.focus({preventScroll:true});};
+ for(const form of recordForms())if(!forms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
  if(!standalone&&forms[0])restoreRecordComments(forms[0] as HTMLFormElement);
  for(const form of forms){
   if(!standalone)(form as JobForm['form']).commentWords=()=>host?.record||host?.direction?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):projectComments(feedbackItemComments(session.feedback));
-  if(!recordDialog.contains(form)){form.style.overflow='auto';form.style.minHeight='0';recordDialog.append(form);}
+  if(!recordPanel.contains(form))recordPanel.append(form);
  }
+ // One line, like Question and Comments: a checkpoint form carries the outcome select, a signoff (stage or plan approval) does not.
+ const checkpoints=forms.filter(form=>form.querySelector('select[name=outcome]')).length;
+ setSourceText(recordTitle,checkpoints===forms.length?'Checkpoint':checkpoints?'Checkpoint · Sign-off':'Sign-off');
+ if(recordPanel.hidden)revealRecord();
  if(host?.record){
   for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
   setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);comments?.refresh();partsSubject?.refreshComments();
@@ -1919,7 +1919,7 @@ function renderAnswerControls():void {
  const dialog=subjects.some(subject=>!subject.kind.endsWith('verdict'))&&!verdict;
  const readable=questionForms.some(form=>form.dataset.interviewAnswered==='true');
  const questionEnabled=questionForms.some(form=>form.querySelector('fieldset:not(:disabled)'));
- const recordEnabled=!!recordDialog?.querySelector('fieldset:not(:disabled)');
+ const recordEnabled=!!recordPanel.querySelector('form[data-job-ask] fieldset:not(:disabled)');
  const blocked=saving||draftConflict||!!actReadOnly||!!host?.unavailable;
  const save=button('save');
  const pendingPartComment=parts&&typeof partsSubject!=='undefined'&&!!partsSubject?.hasPendingComment?.();
@@ -1957,7 +1957,7 @@ function renderAnswerControls():void {
   }
   requestChanges.onclick=async()=>{if(requestChanges.disabled)return;if(parts){if(typeof partsSubject!=='undefined'&&partsSubject?.hasPendingComment?.()&&!await partsSubject.commitDraft())return;if(liveIssueCount()===0)return;void save.onclick?.call(save,new PointerEvent('click'));}else{if(typeof comments!=='undefined'&&comments?.hasPendingComment?.()&&!await comments.commitDraft())return;session.status='changes-requested';select('review-status').value=session.status;void verdictSubmit?.(new MouseEvent('click'));}};
  }
- for(const root of [recordDialog,...questionForms])for(const control of root?.querySelectorAll<HTMLButtonElement>('button[type="submit"]')??[])control.disabled=blocked||verdict;
+ for(const root of [recordPanel,...questionForms])for(const control of root.querySelectorAll<HTMLButtonElement>('button[type="submit"]'))control.disabled=blocked||verdict;
  // The waiting row is already visible: finish labels, state and handlers before revealing any answer.
  save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;rigAsk.hidden=!dialog||firstPublicationPrompt||!questionPending&&recordTrigger!==rigAsk;
  recordAsk.hidden=!dialog||firstPublicationPrompt||recordTrigger!==recordAsk||!recordKind;
