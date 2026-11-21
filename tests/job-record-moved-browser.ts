@@ -70,15 +70,16 @@ for (const language of ['en', 'ko'] as const) {
     await wait(`!document.querySelector('#workspace-pending-ask').hidden && !document.querySelector('#workspace-pending-ask').disabled`, 'stage approval offered');
     await click(page, '#workspace-pending-ask');
     const form = `form[data-job-ask="${signoff.askId}"]`;
-    await wait(`!!document.querySelector('#job-record-asks[open] ${form} fieldset:not(:disabled)')`, 'existing signoff dialog');
+    await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden]) ${form} fieldset:not(:disabled)')`, 'existing signoff in the record section');
     await click(page, form + ' button[type=submit]');
     const expected = catalog['JOB_RECORD_MOVED'];
     await wait(`document.querySelector(${JSON.stringify(form + ' [role=status]')})?.textContent === ${JSON.stringify(expected)}`, 'translated moved-record refusal');
-    const status = await page.evaluate<any>(`(()=>{const n=document.querySelector(${JSON.stringify(form + ' [role=status]')}),r=n.getBoundingClientRect(),s=getComputedStyle(n);return {text:n.textContent,key:n.dataset.jobText,x:r.x,y:r.y,width:r.width,height:r.height,display:s.display,visibility:s.visibility,language:document.documentElement.lang,dialogOpen:document.querySelector('#job-record-asks').open,enabled:!document.querySelector(${JSON.stringify(form + ' fieldset')}).disabled};})()`);
+    const status = await page.evaluate<any>(`(()=>{const n=document.querySelector(${JSON.stringify(form + ' [role=status]')}),r=n.getBoundingClientRect(),s=getComputedStyle(n);return {text:n.textContent,key:n.dataset.jobText,x:r.x,y:r.y,width:r.width,height:r.height,display:s.display,visibility:s.visibility,language:document.documentElement.lang,dialogOpen:!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])'),enabled:!document.querySelector(${JSON.stringify(form + ' fieldset')}).disabled};})()`);
     assert.equal(status.key, 'JOB_RECORD_MOVED');
     assert.equal(status.text, expected);
     assert.equal(status.language, language);
-    assert.equal(status.dialogOpen, true);
+    // #1041 B: the refusal stays readable in the record section of the right panel.
+    assert.equal(status.dialogOpen, true, 'record section stays shown');
     assert.equal(status.enabled, true);
     assert.equal(status.visibility, 'visible');
     assert.notEqual(status.display, 'none');

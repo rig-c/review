@@ -121,7 +121,7 @@ main{min-height:0;overflow:hidden;display:flex;flex-direction:column}
 .workspace-drawer:not([open]){display:none}.workspace-drawer[open]{display:flex;flex-direction:column;gap:var(--space-2)}
 .workspace-drawer[data-panel=inspectorHeight][open]:not(:modal){inset:auto 0 0;height:min(36dvh,360px);margin:0 auto}
 .workspace-drawer::backdrop{background:var(--rv-backdrop)}
-#job-record-asks{width:min(94vw,760px);height:fit-content;max-height:92dvh;gap:var(--space-1)}
+#job-record-asks form[data-job-ask]+form[data-job-ask]{margin-top:var(--space-3);padding-top:var(--space-3);border-top:1px solid var(--border)}
 #job-record-asks fieldset{min-width:0;margin:0;padding:0 var(--space-1) var(--space-1);border:0}
 #job-record-asks fieldset>:first-child{margin-top:0}
 #job-record-asks fieldset>button+button{margin-left:var(--space-2)}

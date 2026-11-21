@@ -943,7 +943,6 @@ async function draftSurvivalChecks(){
   const ask3={...fixture.ask,askId:'ask-checkpoint-3',publicationId:pub3.publicationId,source:pub3.source};
   fixture.fake.publish(display3);fixture.fake.pending(ask3,pub3.generation);
   await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 3 changed source');
-  await page!.evaluate<void>(`document.querySelector('#job-record-asks')?.close()`);
   await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
   const carryKey='The source changed, so {0} unsent comment(s) could not be carried over. Please add them again.';
   const expectedCarryEn=enCatalog[carryKey]!.replace('{0}','1');
@@ -962,7 +961,6 @@ async function draftSurvivalChecks(){
   const koUrl=new URL(fixture.ownerUrl);koUrl.searchParams.set('lang','ko');
   await page!.goto('about:blank');await page!.goto(koUrl.href);
   await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 3 changed source ko');
-  await page!.evaluate<void>(`document.querySelector('#job-record-asks')?.close()`);
   await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
   const bar3Ko=await page!.evaluate<{draftState:string;dirty:string}>(`({
    draftState:document.getElementById('review-draft-state')?.textContent??'',
