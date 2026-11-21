@@ -63,11 +63,10 @@ async function proveHeading(page:InputCdpSession,label:string){
 
 /** Returned #856 polish: inspect the painted footer and the retained action group at narrow widths. */
 async function proveRetainedReadouts(page:InputCdpSession,label:string){
- const g:any=await page.evaluate(`(()=>{const rect=n=>n.getBoundingClientRect().toJSON(),footer=document.querySelector('footer.status-bar'),message=document.querySelector('.inspector-heading .review-dialog-actions>.review-message'),approve=document.getElementById('save'),changes=document.getElementById('request-changes');return {width:innerWidth,footer:rect(footer),approve:rect(approve),changes:rect(changes),description:rect(message),items:[...footer.querySelectorAll('.status-message,.status-readouts>*,.status-source>summary,.status-source summary,.status-source>#source-hash')].filter(n=>n.getBoundingClientRect().width>0&&!n.closest('[hidden]')).map(n=>{const s=getComputedStyle(n),r=n.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(n);const t=range.getBoundingClientRect(),clip=['hidden','clip'].includes(s.overflowX);return {id:n.id||n.className,rect:r.toJSON(),text:{left:clip?Math.max(t.left,r.left):t.left,right:clip?Math.min(t.right,r.right):t.right,top:t.top,bottom:t.bottom},scroll:n.scrollWidth,client:n.clientWidth,overflow:s.overflowX,ellipsis:s.textOverflow};})};})()`);
+ const g:any=await page.evaluate(`(()=>{const rect=n=>n.getBoundingClientRect().toJSON(),footer=document.querySelector('footer.status-bar'),approve=document.getElementById('save'),changes=document.getElementById('request-changes');return {width:innerWidth,footer:rect(footer),approve:rect(approve),changes:rect(changes),items:[...footer.querySelectorAll('.status-message,.status-readouts>*,.status-source>summary,.status-source summary,.status-source>#source-hash')].filter(n=>n.getBoundingClientRect().width>0&&!n.closest('[hidden]')).map(n=>{const s=getComputedStyle(n),r=n.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(n);const t=range.getBoundingClientRect(),clip=['hidden','clip'].includes(s.overflowX);return {id:n.id||n.className,rect:r.toJSON(),text:{left:clip?Math.max(t.left,r.left):t.left,right:clip?Math.min(t.right,r.right):t.right,top:t.top,bottom:t.bottom},scroll:n.scrollWidth,client:n.clientWidth,overflow:s.overflowX,ellipsis:s.textOverflow};})};})()`);
  assert.ok(g.footer.left>=0&&g.footer.right<=g.width+1,label+' footer is contained by viewport');
  for(const n of g.items){assert.ok(n.rect.left>=g.footer.left&&n.rect.right<=g.footer.right&&n.text.left>=g.footer.left-1&&n.text.right<=g.footer.right+1,label+' shown footer text horizontally contained: '+n.id);assert.ok(n.text.top>=g.footer.top-1&&n.text.bottom<=g.footer.bottom+1,label+' shown footer text vertically contained: '+n.id);if(n.scroll>n.client+1)assert.ok(['hidden','clip'].includes(n.overflow)&&n.ellipsis==='ellipsis',label+' overflow uses explicit ellipsis: '+n.id);}
  assert.ok(Math.abs(g.approve.top-g.changes.top)<=1&&Math.abs(g.approve.bottom-g.changes.bottom)<=1,label+' Approve and Request changes share one row');
- assert.ok(g.description.bottom<=Math.min(g.approve.top,g.changes.top)+1,label+' description is above the action group');
  assert.ok(g.approve.right<=g.changes.left,label+' action buttons retain order');
  return g;
 }
@@ -475,15 +474,14 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
     for(const target of targets){await selectTab(page,target);await proveHeading(page,kind+' '+lang+' '+width+' '+target);}
    }
    assert.equal(state.language,lang);assert.equal(state.entry,1);assert.equal(state.viewports,1);
-   const live:boolean=!kind.startsWith('standalone')&&kind!=='interview-standalone';
-   assert.deepEqual(state.headingOrder,live?['tabs','collapse']:['tabs','collapse','act'],'only live asks leave the bottom heading');
-   if(live){assert.equal(state.actHome,'workspace-act-row');assert.equal(state.actRowDirect,true);}
+   assert.deepEqual(state.headingOrder,['tabs','collapse'],'act bar lives in #workspace-act-row outside the bottom heading');
+   assert.equal(state.actHome,'workspace-act-row');assert.equal(state.actRowDirect,true);
    assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
-   assert.equal(state.wrap,'nowrap');assert.equal(state.actInHeading,!live);assert.equal(state.collapseText,'⌄');
+   assert.equal(state.wrap,'nowrap');assert.equal(state.actInHeading,false);assert.equal(state.collapseText,'⌄');
    if(state.availableTabs)assert.equal(state.selectedVisible,true);else assert.equal(state.selected,undefined,'subjects without rig capabilities expose no block tab');
    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-workspace.png`),await page.screenshot());
    // #1041: a bottom panel with no view-controller block collapses to nothing; there is nothing to collapse.
-   if(state.bottomHidden)assert.equal(live&&!state.availableTabs,true,'only a live ask without view controllers hides the bottom panel');
+   if(state.bottomHidden)assert.equal(state.availableTabs,0,'only a subject without view controllers hides the bottom panel');
    else if(!state.collapseDisabled){
     await click(page,'#workspace-bottom-collapse');
     assert.equal(await page.evaluate(`document.querySelector('.inspector-body').hidden`),true);

@@ -120,9 +120,8 @@ act bar, not another mode switch.
   the view. Its heading keeps the current mode's content tabs (#741); the
   duplicate bottom **Comments (n)** tab was removed in favour of the top
   **Comment · C** entry (#835), which now opens the communication panel at
-  Comments and starts pin mode (C7, #1041), and live-job act controls moved from the bottom row to
-  `#workspace-act-row` beneath the top bar (#845; standalone package inspection
-  retains the act bar in the bottom heading). The row remains reachable when
+  Comments and starts pin mode (C7, #1041), and act controls moved from the bottom row to
+  `#workspace-act-row` beneath the top bar as their single home (#845, #1040). The row remains reachable when
   the content is collapsed. Height is a saved workspace preference.
 - Setup blocks: **Part · Modeling · Chest · Mesh · Weights · Bones · Fields ·
   Cuts · Cloth**.
@@ -186,11 +185,10 @@ inline Other text and per-question notes through the existing answer contract.
 
 ### C10 Act bar
 
-- **Shipped:** on live jobs, `mountActBar` places the pending ask headline,
+- **Shipped:** `mountActBar` places the pending ask headline,
   decision/submit controls and save state in the shared `#workspace-act-row`
-  directly beneath the top bar (#845, superseding the #741 bottom-row placement;
-  the row hides when no ask or early refusal is shown, and standalone package
-  inspection keeps the act bar at the right of the bottom heading). The act
+  directly beneath the top bar as their single home (#845, #1040, superseding the #741 bottom-row placement;
+  the row hides when no ask or early refusal is shown). The act
   follows the subject, not the chosen mode. A tab change never submits it.
 - Parts submit the comments-based verdict; rig review retains its decision and
   submit action. Failed saves and drafts remain explicit.

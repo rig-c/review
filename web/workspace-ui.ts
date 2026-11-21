@@ -35,7 +35,7 @@ export function mountStatusBar(options:WorkspaceStatusBarOptions|{placement:'inl
 
 export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyOwnerStep6';
 export interface WorkspaceHeaderOptions {
- compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;pendingActRow?:boolean;title?:string;revision?:string;
+ compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;
  /** Only the stopped compare host supplies its existing domain controls and actions. */
  compare?:{modeSwitch:HTMLElement;buildPicker:HTMLElement;actions:HTMLElement};
 }
@@ -98,7 +98,7 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
   else{if(interview)header.append('\n    ');header.append(language);if(interview)header.append('\n  ');}
  }
  if(options.embedded){if(rig||parts)header.hidden=true;else if(interview)language!.hidden=true;}
- const actRow=rig&&options.pendingActRow?panelMake('div',{id:'workspace-act-row',className:'workspace-act-row',hidden:true}):null;
+ const actRow=rig?panelMake('div',{id:'workspace-act-row',className:'workspace-act-row',hidden:true}):null;
  return {header,actRow,title,subtitle,modeSwitch,dirty,stages,status,language,languageLabel,dispose(){header.remove();actRow?.remove();languageLabel?.remove();}};
 }
 
@@ -180,8 +180,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  // A bottom panel with no view-controller block collapses to nothing; the stage takes the height.
  const controls=(node:HTMLElement):boolean=>[...node.children].some(child=>{const item=child as HTMLElement;if(item.hidden)return false;
   return item.tagName==='BUTTON'&&(item.dataset.blockTarget!==undefined||item.dataset.inspector!==undefined)&&!(item as HTMLButtonElement).disabled||controls(item);});
- // Temporary until #1044 moves every act into #workspace-act-row: a heading that still hosts the act keeps it.
- const bottomEmpty=()=>!!bottom&&regions?.bottomBound?.()!==false&&!controls(bottom.strip)&&bottom.actHome.id==='workspace-act-row';
+ const bottomEmpty=()=>!!bottom&&regions?.bottomBound?.()!==false&&!controls(bottom.strip);
  for(const panel of present){
   const handle=document.createElement('div');handle.className='workspace-separator workspace-'+panel+(sides[panel]?' workspace-side-'+sides[panel]:'');handles[panel]=handle;
   if(sides[panel]==='left')node(panel).after(handle);else if(sides[panel]==='right')node(panel).before(handle);else inspector.before(handle);
@@ -228,7 +227,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
    let bottomHeight=effective.inspectorHeight;
    if(bottom){
     const compact=collapsed||effective.inspectorMode==='drawer';bottomBody!.hidden=collapsed;
-    const actTarget=bottom.actHome.id==='workspace-act-row'||dialogs.inspectorHeight.open?bottom.actHome:bottomHeading!;if(bottom.act.parentElement!==actTarget)actTarget.append(bottom.act);
+    if(bottom.act.parentElement!==bottom.actHome)bottom.actHome.append(bottom.act);
     const collapseLabel=tr(collapsed?'Expand bottom panel':'Collapse bottom panel');
     inspector.dataset.collapsed=String(compact);bottom.collapse.setAttribute('aria-expanded',String(!collapsed));bottom.collapse.textContent=collapsed?'⌃':'⌄';bottom.collapse.setAttribute('aria-label',collapseLabel);bottom.collapse.setAttribute('title',collapseLabel);
     if(compact)bottomHeight=bottomHeading!.getBoundingClientRect().height;
