@@ -19,7 +19,8 @@ import {koCatalog} from '../web/catalog-ko.ts';
 const arg=(key:string)=>{const at=Bun.argv.indexOf(key);return at<0?undefined:Bun.argv[at+1];};
 const directionSignoff=Bun.argv.includes('--direction-signoff');
 const interviewSignoff=Bun.argv.includes('--interview-signoff');
-const stageSignoff=directionSignoff||interviewSignoff;
+const restsOnQuestions=Bun.argv.includes('--rests-on-questions');
+const stageSignoff=directionSignoff||interviewSignoff||restsOnQuestions;
 const modalPreload=Bun.argv.includes('--modal-preload');
 const signoffSubject=parseRecordSubject({kind:'signoff',stage:interviewSignoff?'interview':directionSignoff?'direction-review':'plan-approved'});
 if(signoffSubject.kind!=='signoff')throw new Error('SYNTHETIC_SIGNOFF_STAGE_INVALID');
@@ -64,13 +65,23 @@ type ModalScreen={
 };
 async function screen(out:string,fixture?:Awaited<ReturnType<typeof recordScreenFixture>>){const state=await page!.evaluate<ModalScreen>(`(()=>{const d=document.querySelector('#job-record-asks'),r=d.getBoundingClientRect();return {open:!d.hidden&&!!d.closest('#workspace-communication:not([hidden])'),workspaceReady:document.body.dataset.ready,activeElement:{tag:document.activeElement?.tagName,id:document.activeElement?.id,name:document.activeElement?.getAttribute('name')},dialogState:[...document.querySelectorAll('dialog')].map(n=>({id:n.id,open:n.open,containsFocus:n.contains(document.activeElement)})),language:document.documentElement.lang,capabilityState:globalThis.__access756??'not-requested',ownerFieldsEnabled:!!d.querySelector('form fieldset:not(:disabled)'),backdropMessage:document.getElementById('message')?.textContent??'',visibleText:document.body.innerText,width:innerWidth,height:innerHeight,topbars:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,dialogs:document.querySelectorAll('#job-record-asks').length,legacy:document.querySelectorAll('[data-job-forms],[data-job-plan-workspace]').length,notes:d.querySelectorAll('textarea[name=note]').length,editableInterviewSets:d.querySelectorAll('form.interview-answer:not([data-interview-answered=true]) fieldset.interview-answer-fields:not(:disabled)').length,readOnlyInterviewNotes:d.querySelectorAll('form.interview-answer[data-interview-answered=true] textarea[name=note],form.interview-answer fieldset.interview-answer-fields:disabled textarea[name=note]').length,focusContained:d.contains(document.activeElement),rect:{x:r.x,y:r.y,width:r.width,height:r.height},controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(n=>n.id)};})()`);
  await writeFile(join(out,'screen-state.json'),JSON.stringify(state,null,2)+'\n');await assertTextOnlyDialog();assert.equal(state.open,true,'record section shows in the right panel before focus and geometry checks');assert.equal(state.width,1600);assert.equal(state.height,1000);assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.dialogs,1);assert.equal(state.legacy,0);assert.equal(state.notes,0);assert.equal(state.editableInterviewSets,0);assert.equal(state.readOnlyInterviewNotes,0);assert.equal(state.focusContained,true);assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);assert.ok(state.rect.x>=0&&state.rect.y>=0&&state.rect.x+state.rect.width<=1600&&state.rect.y<1000,'record section starts inside the viewport');if(fixture){
-  const chrome=await page!.evaluate<any>(`(()=>{const form=document.querySelector('form[data-job-ask]');return {text:form.textContent,source:{text:form.querySelector('.job-source').textContent,title:form.querySelector('.job-source').title},summaries:[...form.querySelectorAll('.job-plan-steps summary')].map(n=>({text:n.textContent,title:n.title})),heading:{text:form.querySelector('h3')?.textContent,title:form.querySelector('h3')?.title},stageTitle:form.querySelector('fieldset').title,formCount:document.querySelectorAll('#job-record-asks form[data-job-ask]').length,reopenForms:document.querySelectorAll('#job-record-asks form[data-job-ask="ask-reopen"]').length,reopenButtons:[...document.querySelectorAll('#job-record-asks button')].filter(n=>n.dataset.jobText==='job.reopen'||n.textContent==='Reopen stage'||n.textContent==='단계 다시 열기').length};})()`);
+  const chrome=await page!.evaluate<any>(`(()=>{const form=document.querySelector('form[data-job-ask]');return {text:form.textContent,source:{text:form.querySelector('.job-source').textContent,title:form.querySelector('.job-source').title},summaries:[...form.querySelectorAll('.job-plan-steps summary')].map(n=>({text:n.textContent,title:n.title})),restsOn:[...form.querySelectorAll('[data-job-plan-field="rests_on"] li')].map(n=>({text:n.textContent,title:n.title})),heading:{text:form.querySelector('h3')?.textContent,title:form.querySelector('h3')?.title},stageTitle:form.querySelector('fieldset').title,formCount:document.querySelectorAll('#job-record-asks form[data-job-ask]').length,reopenForms:document.querySelectorAll('#job-record-asks form[data-job-ask="ask-reopen"]').length,reopenButtons:[...document.querySelectorAll('#job-record-asks button')].filter(n=>n.dataset.jobText==='job.reopen'||n.textContent==='Reopen stage'||n.textContent==='단계 다시 열기').length};})()`);
   const source=fixture.display.publication.source,catalog=state.language==='en'?enCatalog:koCatalog,metadata=await fixture.metadata();
   const label=(step:{id:string;hash:string})=>{const row=metadata.planText?.status==='projected'?metadata.planText.steps.find((row:{id:string;hash:string})=>row.id===step.id&&row.hash===step.hash):undefined;return row?.does??catalog['job.plan.field.'+(row?.issues.find((issue:{field:string})=>issue.field==='does')?.reason??'absent')];};
   if(fixture.backdrop){assert.equal(state.capabilityState,'resolved');assert.equal(state.ownerFieldsEnabled,true);assert.equal(state.backdropMessage,catalog['Not submitted']);for(const value of [enCatalog,koCatalog])assert.equal(state.visibleText.includes(value['Read-only view: reopen with rig-review open to edit.']),false);}
   assert.equal(chrome.source.text,fixture.display.publication.label);assert.equal(chrome.source.title,source.sourceHash);
   for(const raw of [source.sourceHash,source.projectHash,...(source.plan?.steps.flatMap(step=>[step.id,step.hash])??[])].filter(Boolean))assert.equal(chrome.text.includes(raw),false,'raw modal identity '+raw);
   for(const [index,summary]of chrome.summaries.entries()){const step=source.plan!.steps[index]!;assert.equal(summary.text,label(step));assert.ok(summary.title.includes(step.id)&&summary.title.includes(step.hash));}
+  if(restsOnQuestions){
+   for(const raw of ['post_timing','rig_type','bones_guide'])assert.equal(chrome.text.includes(raw),false,'raw question identity '+raw);
+   assert.deepEqual(chrome.restsOn.slice(0,5),[
+    {text:'How long, does it loop, and where are the beats?',title:'post_timing'},
+    {text:'What is this: a character rig or a full-screen scene?',title:'rig_type'},
+    {text:'How many segments should the limb bones use?',title:'bones_guide'},
+    {text:'Assemble post scene',title:'step_weights'},
+    {text:'unknown_question_id',title:''},
+   ]);
+  }
   if(fixture.ask.subject.kind==='checkpoint'){assert.equal(chrome.heading.text,label(source.plan!.steps[0]!));assert.equal(chrome.heading.title,fixture.ask.subject.checkpointId);}
   if(fixture.ask.subject.kind==='signoff'){assert.equal(chrome.text.includes(fixture.ask.subject.stage),false);assert.equal(chrome.stageTitle,fixture.ask.subject.stage);}
   if('record' in source&&source.subject==='plan'){assert.equal(source.subjects.some(subject=>subject.kind==='reopen'),true);assert.equal(chrome.formCount,1);assert.equal(chrome.reopenForms,0);assert.equal(chrome.reopenButtons,0);}
@@ -84,9 +95,17 @@ try{
  await command!('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{const all=Promise.all;Promise.all=function(values){return all.call(this,values).then(rows=>{if(rows.length===2&&rows.some(row=>row&&typeof row==='object'&&'capabilityRequired' in row)){globalThis.__access756='pending';return new Promise(resolve=>{globalThis.__releaseAccess756=()=>{globalThis.__access756='resolved';resolve(rows);};});}return rows;});};})();`});
  await page.setViewport(1600,1000);
  const boundary=Bun.argv.includes('--parts-only'),sample=Bun.argv.includes('--sample'),kinds:RecordScreenKind[]=modalPreload?[]:stageSignoff?['signoff']:sample?['checkpoint']:['checkpoint','signoff'];
- for(const kind of kinds)for(const picture of stageSignoff||sample?[false]:kind==='checkpoint'?[false,true,'parts'] as const:[false,true])for(const language of interviewSignoff?['en','ko'] as const:directionSignoff?['ko'] as const:sample?['en'] as const:['en','ko'] as const){
+ const planOptions=restsOnQuestions?{
+  text:{does:'Assemble post scene',produces:'Post composition pass',bar:'Matches declared timing and framing',rests_on:['post_timing','rig_type','bones_guide','step_weights','unknown_question_id']},
+  interview:{
+   framing:[{id:'rig_type',text:'What is this: a character rig or a full-screen scene?'}],
+   waypoints:[{id:'bones_guide',text:'How many segments should the limb bones use?'}],
+   post:{items:[{id:'post_timing',text:'How long, does it loop, and where are the beats?'}]},
+  },
+ }:undefined;
+ for(const kind of kinds)for(const picture of stageSignoff||sample?[false]:kind==='checkpoint'?[false,true,'parts'] as const:[false,true])for(const language of interviewSignoff||restsOnQuestions?['en','ko'] as const:directionSignoff?['ko'] as const:sample?['en'] as const:['en','ko'] as const){
   if(boundary&&picture!=='parts')continue;
-  const fixture=await recordScreenFixture(kind,picture,undefined,signoffSubject.stage),out=join(output,kind,picture==='parts'?'parts':picture?'picture':'empty',language);await mkdir(out,{recursive:true});fixture.output(out);
+  const fixture=await recordScreenFixture(kind,picture,undefined,signoffSubject.stage,false,true,undefined,false,false,undefined,planOptions),out=join(output,kind,picture==='parts'?'parts':picture?'picture':'empty',language);await mkdir(out,{recursive:true});fixture.output(out);
   if(kind==='signoff')fixture.fake.pending({askId:'ask-reopen',publicationId:fixture.display.publication.publicationId,source:fixture.display.publication.source,subject:{kind:'reopen',stage:'plan-approved'},status:'pending'},fixture.display.publication.generation);
   const before=await jobInputHashes(fixture.root),selector=`form[data-job-ask="${fixture.ask.askId}"]`,catalog=language==='en'?enCatalog:koCatalog;
   try{

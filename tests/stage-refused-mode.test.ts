@@ -281,19 +281,31 @@ function withDom<T>(dom:ReturnType<typeof buildHeaderDom>,href:string,run:()=>Pr
 
 test('#735 refused header controls retain exact EN/KO reasons, relock mutations and restore their original attributes',async()=>{
  const dom=buildHeaderDom();await withDom(dom,'http://127.0.0.1:4318/',async()=>{
+  dom.compareBtn.setAttribute('aria-description',dom.compareTitle);
   setLanguagePreference('en');const dispose=bindHeaderModeAvailability({model:false,preRig:true});
   try{
-   for(const lang of ['en','ko'] as const){setLanguagePreference(lang);const reason=(lang==='en'?enCatalog:koCatalog)['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.'];for(const button of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){expect(button.disabled).toBe(true);expect(button.getAttribute('title')).toBe(reason);expect(button.getAttribute('aria-pressed')).toBe('false');}}
+   for(const lang of ['en','ko'] as const){setLanguagePreference(lang);const reason=(lang==='en'?enCatalog:koCatalog)['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.'];for(const button of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){expect(button.disabled).toBe(true);expect(button.getAttribute('title')).toBe(reason);expect(button.getAttribute('aria-description')).toBe(reason);expect(button.getAttribute('aria-pressed')).toBe('false');}}
    dom.animateBtn.click();dom.animateBtn.setAttribute('aria-pressed','true');expect(dom.animateBtn.getAttribute('aria-pressed')).toBe('false');
    // Planted unguarded header is detected by the same enabled/pressed oracle.
    HarnessMutationObserver.active.clear();dom.setupBtn.disabled=false;dom.setupBtn.setAttribute('aria-pressed','true');expect([dom.setupBtn,dom.animateBtn].filter(button=>!button.disabled||button.getAttribute('aria-pressed')==='true')).toEqual([dom.setupBtn]);
   }finally{dispose();setLanguagePreference('en');}
-  expect(dom.setupBtn.disabled).toBe(false);expect(dom.setupBtn.getAttribute('aria-pressed')).toBe('true');expect(dom.setupBtn.getAttribute('title')).toBeNull();expect(dom.compareBtn.disabled).toBe(true);expect(dom.compareBtn.getAttribute('title')).toBe(dom.compareTitle);expect(dom.workspace.inert).toBe(false);
+  expect(dom.setupBtn.disabled).toBe(false);expect(dom.setupBtn.getAttribute('aria-pressed')).toBe('true');expect(dom.setupBtn.getAttribute('title')).toBeNull();expect(dom.setupBtn.getAttribute('aria-description')).toBeNull();expect(dom.animateBtn.getAttribute('aria-description')).toBeNull();expect(dom.compareBtn.disabled).toBe(true);expect(dom.compareBtn.getAttribute('title')).toBe(dom.compareTitle);expect(dom.compareBtn.getAttribute('aria-description')).toBe(dom.compareTitle);expect(dom.workspace.inert).toBe(false);
  });
 });
 test('#735 no-model header is refused by name and a supported header keeps real Setup/Animate navigation',async()=>{
  const dom=buildHeaderDom();await withDom(dom,'http://127.0.0.1:4318/',async()=>{
-  const dispose=bindHeaderModeAvailability({model:false});for(const button of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){expect(button.disabled).toBe(true);expect(button.title).toBe(t('MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.'));}dispose();
+  dom.compareBtn.setAttribute('aria-description',dom.compareTitle);
+  const partsDispose=bindHeaderModeAvailability({model:false,parts:true});
+  for(const lang of ['en','ko'] as const){
+   setLanguagePreference(lang);
+   const reason=(lang==='en'?enCatalog:koCatalog)['MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.'];
+   expect(dom.setupBtn.disabled).toBe(false);expect(dom.setupBtn.getAttribute('aria-description')).toBeNull();
+   for(const button of [dom.animateBtn,dom.compareBtn]){expect(button.disabled).toBe(true);expect(button.title).toBe(reason);expect(button.getAttribute('aria-description')).toBe(reason);}
+  }
+  partsDispose();setLanguagePreference('en');
+  expect(dom.animateBtn.getAttribute('aria-description')).toBeNull();expect(dom.compareBtn.getAttribute('aria-description')).toBe(dom.compareTitle);
+  const dispose=bindHeaderModeAvailability({model:false});for(const button of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){expect(button.disabled).toBe(true);const reason=t('MODEL_UNAVAILABLE: no compiled model is supplied in this inspection.');expect(button.title).toBe(reason);expect(button.getAttribute('aria-description')).toBe(reason);}dispose();
+  expect(dom.setupBtn.getAttribute('aria-description')).toBeNull();expect(dom.animateBtn.getAttribute('aria-description')).toBeNull();expect(dom.compareBtn.getAttribute('aria-description')).toBe(dom.compareTitle);
   const tabs=bindInspectorTabs(()=>{}),supported=bindHeaderModeAvailability({model:true});try{dom.animateBtn.click();expect(dom.animateBtn.getAttribute('aria-pressed')).toBe('true');expect(dom.setupBtn.getAttribute('aria-pressed')).toBe('false');expect(dom.panelPlayback.hidden).toBe(false);expect(dom.panelRig.hidden).toBe(true);dom.setupBtn.click();expect(dom.panelRig.hidden).toBe(false);expect(dom.compareBtn.disabled).toBe(true);expect(dom.compareBtn.title).toBe(dom.compareTitle);}finally{supported();tabs.dispose();}
  });
 });
@@ -314,7 +326,7 @@ test('pre-rig joined project preserves source-bound refusal and verdict output a
   // Header availability consumes the exact server capabilities for this pre-rig draft.
   const dom=buildHeaderDom();await withDom(dom,origin+'/',async()=>{
    const dispose=bindHeaderModeAvailability({model:Boolean(review.manifest.model),preRig:review.capabilities.preRig});
-   try{for(const button of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){expect(button.disabled).toBe(true);expect(button.getAttribute('aria-pressed')).toBe('false');expect(button.title).toBe(enCatalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.']);}}finally{dispose();}
+   try{for(const button of [dom.setupBtn,dom.animateBtn,dom.compareBtn]){expect(button.disabled).toBe(true);expect(button.getAttribute('aria-pressed')).toBe('false');const reason=enCatalog['RIG_VERSION_UNAVAILABLE: this draft has no recorded rig review package.'];expect(button.title).toBe(reason);expect(button.getAttribute('aria-description')).toBe(reason);}}finally{dispose();}
   });
 
   // Session submission remains refused with MODEL_UNAVAILABLE on pre-rig draft.

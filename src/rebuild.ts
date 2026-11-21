@@ -34,7 +34,7 @@ import { producerHint } from './baseline-reach.ts';
 import { carriedCheck, carriedCheckSummary, type CarryingOp, provenanceFile, REMESH_CHECK_SINCE, RETUNE_CHECK_SINCE, revisionBinding } from './retune-check.ts';
 import { absolutizeBuildFiles, buildLines, buildNamedFiles, buildReadout, MAX_BUILD_READOUT, needsBuild, newBuildFile, recompositeFigures, type RecompositeFigures } from './build-route.ts';
 import { jsonDiff } from './config-patch.ts';
-import { CLOTH_KEYPOINTS_UNDECLARED, CLOTH_PATCH_MIXED, CLOTH_SOURCE_UNAVAILABLE, CLOTH_WRITE_SINCE, clothLinks, clothPatchKind, readClothTargets, writtenDiff, type ClothTagView, type WrittenDiff } from './cloth-recipe.ts';
+import { CLOTH_KEYPOINTS_UNDECLARED, CLOTH_PATCH_MIXED, CLOTH_SOURCE_UNAVAILABLE, CLOTH_TARGETS_EXPORT, CLOTH_TARGETS_INVALID, CLOTH_TARGETS_UNAVAILABLE, CLOTH_WRITE_SINCE, clothLinks, clothPatchKind, clothTargetsUnavailable, ClothTargetsError, configClothTags, parseClothTargets, writtenDiff, type ClothTagView, type WrittenDiff } from './cloth-recipe.ts';
 import { CHECK_ENVIRONMENT_SINCE, parseSchedule, ScheduleError, scheduleText } from './environment-schedule.ts';
 import { availableParallelism } from 'node:os';
 import { candidateRow, DENSITY_STRIP_SCHEMA, DensityStripError, stripLabels, stripPatches, stripShape, type DensityField, type StripRow } from './density-strip.ts';
@@ -552,13 +552,36 @@ export interface ClothJob {
 /** #111: what a cloth Apply runs with — the handoff's painting and keypoints (absolute), parts.json and the reader's tags; never from the client. */
 export interface ClothPlan { source: string; keypoints: string; partsJson: unknown; targets: string[]; namedAssembly?: BuildPlan | RebuildError }
 /**
- * The tags the installed reader accepts, read off its own source (`src/cloth.ts`'s `CLOTH_TARGETS`); when that text
- * does not state them, the tags the config's `cloth` block already declares (and `read: false`).
+ * The tags the installed reader accepts, resolved from its `package.json` `exports["./cloth-targets.json"]`
+ * (`rig-parts/cloth-targets@1`) inside the package directory; when that export key is absent on an older producer,
+ * the tags the config's `cloth` block already declares (`read: false` and `CLOTH_TARGETS_UNAVAILABLE` naming the version).
  */
-export async function clothTargets(producerRoot: string | null, configText: string): Promise<{ tags: string[]; read: boolean }> {
-  if (producerRoot) { try { const tags = readClothTargets(await readFile(join(producerRoot, 'src', 'cloth.ts'), 'utf8')); if (tags) return { tags, read: true }; } catch { /* not readable: fall back */ } }
-  const cloth = object(JSON.parse(configText), 'config').cloth;
-  return { tags: cloth && typeof cloth === 'object' && !Array.isArray(cloth) ? Object.keys(cloth).filter(k => k !== 'note' && !k.endsWith('_note') && !k.startsWith('x-')) : [], read: false };
+export async function clothTargets(producerRoot: string | null, configText: string): Promise<{ tags: string[]; read: boolean; reason: string | null }> {
+  const fallback = () => configClothTags(object(JSON.parse(configText), 'config'));
+  if (!producerRoot) return { tags: fallback(), read: false, reason: null };
+  let pkgReal: string, pkgText: string;
+  try { pkgReal = await realpath(producerRoot); pkgText = await readFile(join(pkgReal, 'package.json'), 'utf8'); }
+  catch { return { tags: fallback(), read: false, reason: clothTargetsUnavailable('unknown') }; }
+  let pkg: Record<string, unknown>;
+  try { pkg = object(JSON.parse(pkgText), 'package.json'); }
+  catch { throw new RebuildError(CLOTH_TARGETS_INVALID, 'package.json is not a JSON object'); }
+  const version = typeof pkg.version === 'string' && pkg.version.trim() ? pkg.version.trim() : 'unknown';
+  const exportsMap = pkg.exports && typeof pkg.exports === 'object' && !Array.isArray(pkg.exports) ? pkg.exports as Record<string, unknown> : null;
+  if (!exportsMap || exportsMap[CLOTH_TARGETS_EXPORT] === undefined) {
+    return { tags: fallback(), read: false, reason: clothTargetsUnavailable(version) };
+  }
+  const entry = exportsMap[CLOTH_TARGETS_EXPORT];
+  if (typeof entry !== 'string' || !entry.startsWith('./')) {
+    throw new RebuildError(CLOTH_TARGETS_INVALID, `exports[${JSON.stringify(CLOTH_TARGETS_EXPORT)}] must be a string path starting with "./"`);
+  }
+  let text: string;
+  try { text = await readFile(await safeFile(pkgReal, entry.slice(2)), 'utf8'); }
+  catch (e) { throw new RebuildError(CLOTH_TARGETS_INVALID, e instanceof Error ? e.message : String(e)); }
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); }
+  catch { throw new RebuildError(CLOTH_TARGETS_INVALID, `exports[${JSON.stringify(CLOTH_TARGETS_EXPORT)}] is not valid JSON`); }
+  try { return { tags: parseClothTargets(parsed), read: true, reason: null }; }
+  catch (e) { if (e instanceof ClothTargetsError) throw new RebuildError(CLOTH_TARGETS_INVALID, e.message.slice(CLOTH_TARGETS_INVALID.length + 2)); throw e; }
 }
 /** A written config that differs from its input outside the drafted sections is not built (bar 1, #111). */
 export const CLOTH_WRITTEN_OUTSIDE_DRAFTED = 'CLOTH_WRITTEN_OUTSIDE_DRAFTED';
@@ -1260,13 +1283,17 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     const config = object(JSON.parse(inputs.configText), 'config');
     let partsJson: unknown = null;
     try { partsJson = JSON.parse(await readFile(join(inputs.parts, 'parts.json'), 'utf8')); } catch { /* none: no tag lists its parts */ }
-    const targets = await clothTargets(resolved.ok ? resolved.producer.root : null, inputs.configText);
+    let targets: { tags: string[]; read: boolean; reason: string | null };
+    let targetsInvalid: string | null = null;
+    try { targets = await clothTargets(resolved.ok ? resolved.producer.root : null, inputs.configText); }
+    catch (e) { if (!(e instanceof RebuildError)) throw e; targets = { tags: configClothTags(config), read: false, reason: e.message }; targetsInvalid = e.message; }
     const reason = !handoff.keypoints || !handoff.record.keypoints ? CLOTH_KEYPOINTS_UNDECLARED
       : !resolved.ok ? resolved.error
       : !versionAtLeast(resolved.producer.version, CLOTH_WRITE_SINCE) ? modelingProducerTooOld(resolved.producer.version || 'unknown', CLOTH_WRITE_SINCE, 'rig-parts propose --cloth --write-config (entry by entry)')
+      : targetsInvalid ? targetsInvalid
       : !handoff.source ? CLOTH_SOURCE_UNAVAILABLE
       : config.limbs !== undefined && !handoff.full ? BUILD_SOURCE_UNAVAILABLE : null;
-    return { targets: targets.tags, targetsRead: targets.read, recipes: config.cloth ?? null, tags: clothLinks(config, partsJson, targets.tags), keypoints: handoff.record.keypoints ?? null, route: config.limbs !== undefined ? 'build' : 'rig', reason };
+    return { targets: targets.tags, targetsRead: targets.read, targetsReason: targets.reason, recipes: config.cloth ?? null, tags: clothLinks(config, partsJson, targets.tags), keypoints: handoff.record.keypoints ?? null, route: config.limbs !== undefined ? 'build' : 'rig', reason };
   }
   /** The inspected build's check once it settles (tests); null when the baseline did not reproduce. */
   async function settledInspectedCheck(): Promise<InspectedCheck | null> { await settledBaseline(); return inspectedCheckRun ? await inspectedCheckRun : inspectedCheck; }
@@ -1864,9 +1891,14 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (clothing) {
       if (!versionAtLeast(resolved.producer.version, CLOTH_WRITE_SINCE)) { const error = modelingProducerTooOld(resolved.producer.version || 'unknown', CLOTH_WRITE_SINCE, 'rig-parts propose --cloth --write-config (entry by entry)'); return { status: 200, body: { status: 'refused', error, producerLine: error } }; }
       if (!p.handoff!.source) throw new RebuildError('MODELING_INPUT_UNAVAILABLE', CLOTH_SOURCE_UNAVAILABLE.slice('MODELING_INPUT_UNAVAILABLE: '.length));
+      const targets = await clothTargets(resolved.producer.root, inputs.configText);
+      if (!targets.read && configClothTags(patched).some(t => !targets.tags.includes(t))) {
+        const error = targets.reason ?? clothTargetsUnavailable(resolved.producer.version);
+        throw new RebuildError(CLOTH_TARGETS_UNAVAILABLE, error.slice(CLOTH_TARGETS_UNAVAILABLE.length + 2));
+      }
       let partsJson: unknown = null;
       try { partsJson = JSON.parse(await readFile(join(inputs.parts, 'parts.json'), 'utf8')); } catch { /* propose reads parts.json itself and refuses by name */ }
-      clothPlan = { source: p.handoff!.source, keypoints: p.handoff!.keypoints!, partsJson, targets: (await clothTargets(resolved.producer.root, inputs.configText)).tags };
+      clothPlan = { source: p.handoff!.source, keypoints: p.handoff!.keypoints!, partsJson, targets: targets.tags };
     }
     // Decision 2 (#111): the written config is built as #115 builds when it declares limbs, else by `rig --config`.
     const building = patch.op.cmd === 'rig' && (needsBuild(patch.ops, original) || (clothing && !!original && typeof original === 'object' && !Array.isArray(original) && (original as Record<string, unknown>).limbs !== undefined));

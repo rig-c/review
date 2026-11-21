@@ -1,5 +1,48 @@
 # Changelog
 
+## 4.11.0
+
+A record plan publication can carry an optional plan picture, and a plan step's `rests_on` entry that names an interview question shows the question's text. A paused seek now lands on the same physics frame whatever happened before it. The cloth editor reads the producer's target list from its typed `./cloth-targets.json` export. A job page fetches the model and `/api/review` once per load and lets the browser cache sealed files. The Korean interface uses 레퍼런스 for the reference noun, comment rows are reworded, and a stop-time race in the owner workspace no longer fails the read of its state file.
+
+**Read before upgrading:**
+
+* **Optional `planPicture: {path, sha256}` on plan-kind record publication contexts.**
+  * It sits next to `checkpointEvidence` and must equal an entry in `files`. It must be a png, jpg or webp, and it is refused on option-set publications. Violations are refused as `JOB_SOURCE_MISMATCH` / `PLAN_PICTURE_INVALID`.
+  * The field enters the record-source digest only when present, so existing records keep their bytes and hash. `api/plan-picture` serves the sealed bytes, and the record screen draws the picture first.
+  * `PlanContext` and `PlanSource` gain the optional field. There is no new runtime export and no new error code.
+  * Create must pin this release before it publishes the field (#1043, closes #983).
+* **A paused seek to T sets the wind clock to a fresh clock advanced to T.**
+  * A paused frame is now a function of T and the world, not of earlier seeks or playback.
+  * In a world with a varying wind, the frame you get by opening and then seeking changes: it now stands under the wind at schedule(T) instead of no wind (3.735 units on the breeze fixture).
+  * Default and constant-wind worlds are unchanged, and playback and the #183 restart rule are unchanged.
+  * A paused seek replays physics from 0 to T under the wind at schedule(T), held constant over the replay. The faithful replay is tracked in rig-c/play#265 (#1052, closes #935).
+* **The cloth editor reads the producer's targets from `@rig-c/parts` `exports["./cloth-targets.json"]` (`rig-parts/cloth-targets@1`, Parts 2.51.0).**
+  * The path must start with `./` and stay inside the package (through `safeFile`). Anything other than the exact schema and a non-empty list of distinct strings is refused as `CLOTH_TARGETS_INVALID`.
+  * An older Parts without the export falls back by name: the editor uses the tags the config already declares and reports `CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts <version> has no cloth-targets export (needs 2.51.0)`. Existing tags stay editable, and adding a new tag is refused.
+  * The regex over the producer's `src/cloth.ts` is gone (#1054, closes #954).
+
+### Added
+
+* A plan step whose `rests_on` names an interview question id shows that question's text, with the id in the hover title. Step ids resolve as before, and unknown ids stay raw. The projected `planText` envelope (`rig-review/job-plan-text@1`) gains an optional `questions` id-to-text map (#1045, closes #974).
+* When a record plan publication carries `planPicture`, the record screen draws it first in the shared reference viewport (#1043, closes #983).
+
+### Changed
+
+* The Korean interface uses 레퍼런스 for the reference noun everywhere. 참조 stays only on verb and "see" entries. The interview pane reads `<name> · 레퍼런스`, and every zoom readout reads `NN% · 레퍼런스` (#1042, closes #1037).
+* Comment-row prefixes go through the catalog in sentence case (`Setup · Rig` / `셋업 · 리그`). In a frame-unavailable pinned row, the reviewer's text comes first, followed by a short `Frame unavailable` / `프레임을 사용할 수 없음`, with the full reason on hover. 22 Korean strings drop their bracketed English. One formatter writes the zoom readout for the rig and parts views, and the View switch on an interview job names images `Reference` or `Reference 1…n`, never file names. Feedback payloads and exported Markdown are unchanged (#1042, closes #1037).
+* A job page fetches the model once per load instead of three times, and `/api/review` once instead of twice. A warm reload transfers 0.33 MB instead of 19.98 MB on the measured job.
+  * The page shell (`index.html`, `main.js`, `styles.css`) is served `no-cache` with a content `ETag`.
+  * Sealed instance files are served `private, max-age=31536000, immutable`, with the seal SHA-256 as `ETag`.
+  * The publication, `api/review`, `api/interview`, events and every refusal stay `no-store`, so every load still reruns the package recheck (#1056, closes #1050).
+* The job page's `#cap=` handoff uses the shared `hashCapabilityAccess` core. There is no visible change (#1046, closes #1003).
+
+### Fixed
+
+* The light-theme mesh veil stays dark, so the stage is dark in both themes. The interview question card takes its content's height, and a long list scrolls inside its row (#1039, closes #1038).
+* The header mode tabs carry their unavailable reason in `aria-description` as well as `title` (#1047, closes #982).
+* Reading the owner workspace's `host.json` while the host is shutting down on Linux no longer refuses with `WORKSPACE_STATE_INVALID` when the open reaches the just-unlinked file. That case is read as absent, and every other private-file check is unchanged (#1057, closes #894).
+* `scripts/paused-physics-browser.ts` (#346) runs again: it installs its hooks inside the mounted rig screen (#1058, closes #1053).
+
 ## 4.10.0
 
 A rig Request changes can now carry chest landmark edits (`rig-review/act@9`), a declared rig verdict can be answered on a draft, and an agent can report its progress to the open review page. A package may declare a producer frames record, which gives pinned rig comments a producer frame index. Every interview is answered in the Question tab beside the shared main view, the record `reopen` ask is removed, an option-set publication can carry several question sets, and a replay of a superseded publish or ask is refused. Comment seconds, part bounds, chest overlay tags, comment rows, pin hover contrast and apex label placement are corrected. The Parts devDependency moves to 2.49.1.

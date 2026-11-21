@@ -571,6 +571,29 @@ describe('job browser transport boundaries', () => {
         expect(jobWindowAccess('http://127.0.0.1:4318/jobs/job-two/', storage, () => { }).capability).toBe(null);
         expect(() => access.route('../api')).toThrow('JOB_REQUEST_INVALID');
     });
+    test('jobWindowAccess delegates #cap= handoff and slot recovery to the shared hashCapabilityAccess core', async () => {
+        const { spyOn } = await import('bun:test');
+        const instanceAccessModule = await import('../web/instance-access.ts');
+        const spy = spyOn(instanceAccessModule, 'hashCapabilityAccess');
+        try {
+            const values = new Map<string, string>();
+            const storage = { getItem: (key: string) => values.get(key) ?? null,
+                setItem: (key: string, value: string) => { values.set(key, value); } };
+            const replaced: string[] = [];
+            const replace = (href: string) => { replaced.push(href); };
+            const capability = 'c'.repeat(64);
+            const access = jobWindowAccess('http://127.0.0.1:4318/jobs/job-shared/#cap=' + capability, storage, replace);
+            expect(access.capability).toBe(capability);
+            expect(replaced).toEqual(['http://127.0.0.1:4318/jobs/job-shared/']);
+            expect(spy).toHaveBeenCalledTimes(1);
+            expect(spy.mock.calls[0]?.[1]).toBe('rig-review-job-capability/1:job-shared');
+            expect(spy.mock.calls[0]?.[2]?.()).toBe(storage);
+            expect(spy.mock.calls[0]?.[3]).toBe(replace);
+            expect(spy.mock.calls[0]?.[4]).toEqual({ strip: 'cap-before-storage', storedValue: 'validate', fallback: null });
+        } finally {
+            spy.mockRestore();
+        }
+    });
     test('publication assets, forms and metadata resolve under the exact instance', () => {
         const display = fixturePublication(1);
         const routes = jobPublicationRoutes(display, 'http://127.0.0.1:4318');
