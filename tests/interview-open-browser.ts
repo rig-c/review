@@ -58,6 +58,7 @@ type JoinedScreen={
  saveDisabled:boolean;commentHidden:boolean;controls:string[];imageModes:string[];
  drawerOpen:boolean;formInDrawer:boolean;inspectorCollapsed:boolean;
  rect:{left:number;top:number;right:number;bottom:number};
+ questionsHeight:number;questionsContentHeight:number;fieldsHeight:number;
 };
 let currentCase:{language:'en'|'ko';width:number;height:number;state?:JoinedScreen}|undefined;
 
@@ -86,6 +87,9 @@ try{
   if(height===360)await wait(`!!document.querySelector('#workspace-drawer-inspectorHeight[open] ${questionPanel}')`);
   const state:JoinedScreen=await page.evaluate(`(()=>{
    const panel=document.querySelector('${questionPanel}'),form=panel.querySelector('form.interview-answer');
+   const nav=form.querySelector('.interview-questions'),fields=form.querySelector('.interview-answer-fields');
+   const navStyle=getComputedStyle(nav),navChildren=[...nav.children];
+   const questionsContentHeight=navChildren.length?(navChildren.at(-1).getBoundingClientRect().bottom-navChildren[0].getBoundingClientRect().top)+parseFloat(navStyle.paddingTop)+parseFloat(navStyle.paddingBottom)+parseFloat(navStyle.borderTopWidth)+parseFloat(navStyle.borderBottomWidth):0;
    const drawer=document.querySelector('#workspace-drawer-inspectorHeight'),box=(drawer.open?drawer:panel).getBoundingClientRect();
    const askTrigger=id=>{
     const matches=document.querySelectorAll('#'+id),button=matches[0];
@@ -108,10 +112,12 @@ try{
     controls:[...document.querySelectorAll('${sharedControls}')].map(node=>node.id),
     imageModes:[...document.querySelectorAll('#view-menu [data-view]')].map(node=>node.dataset.view),
     drawerOpen:drawer.open,formInDrawer:drawer.contains(form),inspectorCollapsed:document.getElementById('workspace-inspector').dataset.collapsed==='true',
-    rect:{left:box.left,top:box.top,right:box.right,bottom:box.bottom}};
+    rect:{left:box.left,top:box.top,right:box.right,bottom:box.bottom},
+    questionsHeight:nav.getBoundingClientRect().height,questionsContentHeight,fieldsHeight:fields.getBoundingClientRect().height};
   })()`);
   currentCase.state=state;
   assert.equal(state.language,language);assert.equal(state.width,1600);assert.equal(state.height,height);
+  assert.ok(Math.abs(state.questionsHeight-state.questionsContentHeight)<=2,`#1038 F12 (${language}, ${height}): question card height (${state.questionsHeight}) must fit its content (${state.questionsContentHeight}), not stretch to fieldset (${state.fieldsHeight})`);
   assert.equal(state.commentHidden,true,'standalone interview hides the unbound comment entry');
   assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.modals,0);assert.equal(state.dialogViewers,0);
   assert.equal(state.forms,1);assert.equal(state.modelCanvas,0);assert.equal(state.noteInputs,0);

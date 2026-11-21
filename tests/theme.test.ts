@@ -75,6 +75,18 @@ test('styles.css: resize separators and scrollbars never share a colour, in eith
  expect(body('.workspace-separator')).toContain('background:var(--rv-separator)');expect(body('.workspace-separator:hover')).toContain('background:var(--rv-separator-hover)');
 });
 
+const stageTokens=[
+ '--rv-pane-lo','--rv-pane-label-bg','--rv-stage-fg','--rv-grid-dot','--rv-media-bg','--rv-mesh-veil',
+] as const;
+
+for(const file of ['styles.css','compare.css']){
+ test(`${file}: stage tokens stay equal in dark and light themes`,async()=>{
+  const source=await readFile(new URL('../web/'+file,import.meta.url),'utf8');
+  const dark=resolvedTokens(source,'dark'),light=resolvedTokens(source,'light');
+  for(const name of stageTokens)expect(light(name),`${file} ${name}`).toBe(dark(name));
+ });
+}
+
 
 test('#774 retired job grid CSS is absent; shared bottom panel styles remain',async()=>{
  const source=await readFile(new URL('../web/styles.css',import.meta.url),'utf8');
