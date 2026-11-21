@@ -194,7 +194,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  let collapsed=false;
  if(bottom){try{collapsed=localStorage.getItem(bottomCollapseKey)==='true';}catch{}}
  const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=selectedInspector(scope) as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
- let disposed=false,frame=0,applying=false,available={width:0,height:0},effective=allocateWorkspaceLayout(available,desired,columns);
+ let disposed=false,frame=0,applying=false,available={width:0,height:0},shownColumns:WorkspaceColumns=columns,effective=allocateWorkspaceLayout(available,desired,columns);
  const panelFor=(tab:InspectorTab)=>require('inspector-'+tab);
  const userByTab=new Map<InspectorTab,boolean>(),extentByTab=new Map<InspectorTab,string>(),extentOf=(panel:HTMLElement)=>`${panel.scrollWidth}:${panel.scrollHeight}:${panel.clientWidth}:${panel.clientHeight}`;
  const capture=()=>{if(!tabs.length)return;const tab=active(),section=require('inspector-'+tab),panel=panelFor(tab),saved=memory.snapshot()[tab];if(!section.hidden&&(!saved||saved.x<=Math.max(0,panel.scrollWidth-panel.clientWidth)&&saved.y<=Math.max(0,panel.scrollHeight-panel.clientHeight)))memory.capture(tab,panel,false);};
@@ -210,14 +210,14 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
   if(drawer&&element.parentElement!==dialog){const focus=element.contains(document.activeElement);dialog.append(element);if(focus)trigger.focus({preventScroll:true});}
   if(!drawer&&element.parentElement===dialog){const focused=element.contains(document.activeElement)||document.activeElement===trigger;if(dialog.open)dialog.close();trigger.setAttribute('aria-expanded','false');if(sides[panel]==='left')layout.prepend(element);else if(sides[panel]==='right')layout.append(element);else main.append(element);if(focused){element.tabIndex=-1;element.focus({preventScroll:true});}}
  };
- const bindings=present.map(panel=>bindWorkspaceSeparator({element:handles[panel],panel,...(sides[panel]?{side:sides[panel]}:{}),controls:node(panel).id,label:'Resize '+labels[panel],range:()=>workspaceResizeRange(available,desired,panel,columns),resolveDesired:value=>workspaceResizeTarget(available,desired,panel,value,columns),desired:()=>desired[panel],resize:value=>{desired={...desired,[panel]:value};apply();},commit:value=>store.update({panels:{[panel]:value}})}));
+ const bindings=present.map(panel=>bindWorkspaceSeparator({element:handles[panel],panel,...(sides[panel]?{side:sides[panel]}:{}),controls:node(panel).id,label:'Resize '+labels[panel],range:()=>workspaceResizeRange(available,desired,panel,shownColumns),resolveDesired:value=>workspaceResizeTarget(available,desired,panel,value,shownColumns),desired:()=>desired[panel],resize:value=>{desired={...desired,[panel]:value};apply();},commit:value=>store.update({panels:{[panel]:value}})}));
  function apply():void {
   if(disposed||applying)return;applying=true;
   try{
    // Chrome shares the center width. It is not charged against the actual stage minimum.
    // Authored JSON can fill the same slot as the rig while Direction metadata stays above it.
    const chrome=[...stack.children].filter(node=>node!==stage&&node.id!=='direction-authored-body'&&!((node as HTMLElement).hidden)).reduce((sum,node)=>sum+(node as HTMLElement).getBoundingClientRect().height,0);
-   const quiet=!!communicationKey&&!communicationShown(),shown:WorkspaceColumns=quiet?{...columns,right:null}:columns;
+   const quiet=!!communicationKey&&!communicationShown(),shown:WorkspaceColumns=quiet?{...columns,right:null}:columns;shownColumns=shown;
    if(communicationKey){explorer!.hidden=quiet;handles[communicationKey].hidden=quiet;if(quiet){buttons[communicationKey].hidden=true;if(dialogs[communicationKey].open)dialogs[communicationKey].close();}}
    available={width:Math.max(0,layout.clientWidth),height:Math.max(0,layout.clientHeight-chrome)};effective=allocateWorkspaceLayout(available,desired,shown);
    const mode=(panel:WorkspacePanel)=>effective[panel==='leftWidth'?'leftMode':panel==='rightWidth'?'rightMode':panel==='communicationWidth'?'communicationMode':'inspectorMode'];

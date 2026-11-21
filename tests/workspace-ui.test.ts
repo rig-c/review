@@ -727,6 +727,16 @@ test('#1041 the communication panel has its own saved width and is laid out only
   pending=false;app.ui.refresh();app.flush();expect(app.right.hidden).toBe(true);expect(columnsOf(app)).toEndWith(' 0px 0px');
  }finally{app.close();}
 });
+test('#1041 a docked panel stays resizable while the communication panel is hidden (separator ranges use the shown columns)',()=>{
+ const app=openHost({bottomPanel:true,communication:{pending:()=>false}});
+ try{
+  app.layout.clientWidth=600;app.layout.clientHeight=900;app.ui.refresh();app.flush();
+  expect(app.right.hidden).toBe(true);expect(columnsOf(app)).toStartWith('260px 4px ');
+  const separator=app.layout.children.find(node=>node.className.startsWith('workspace-separator workspace-rightWidth'))!;
+  expect(separator.getAttribute('aria-disabled')).toBe('false');
+  expect(Number(separator.getAttribute('aria-valuemax'))).toBeGreaterThan(Number(separator.getAttribute('aria-valuemin')));
+ }finally{app.close();}
+});
 test('#1041 revealing the panel lays out at once and leaves the bottom panel as it was',()=>{
  const app=openHost({bottomPanel:true,communication:{pending:()=>false}});
  try{
