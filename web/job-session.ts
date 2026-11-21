@@ -123,10 +123,17 @@ function assertJobAskSource(ask: PendingAskV3, display: DisplayPublicationV3): v
     if (sourceSnapshot(source) !== sourceSnapshot(display.publication.source)) {
         throw new Error('JOB_ACT_SOURCE_STALE');
     }
+    const optionSet = askOptionSet(ask);
     if (ask.subject.kind === 'interview-picks' &&
-        (ask.source.optionSet?.id !== ask.subject.setId || !/^[a-f0-9]{64}$/.test(ask.source.optionSet.sha256))) {
+        (optionSet?.id !== ask.subject.setId || !/^[a-f0-9]{64}$/.test(optionSet.sha256))) {
         throw new Error('JOB_ACT_SOURCE_STALE');
     }
+}
+/** #1004: the set an interview ask binds: its own `optionSets` row on a several-set publication, else the one set. */
+function askOptionSet(ask: PendingAskV3): {id: string; sha256: string} | null {
+    const subject = ask.subject, rows = 'optionSets' in ask.source ? ask.source.optionSets : undefined;
+    if (subject.kind !== 'interview-picks') return null;
+    return rows?.find(row => row.questionId === subject.questionId && row.setId === subject.setId)?.optionSet ?? ask.source.optionSet ?? null;
 }
 
 /** Build pending form dependencies off-stage. A failure rejects the candidate before it is displayed. */
@@ -1410,6 +1417,49 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
     return {inputLabel, selectValues, imageGallery, planTextList, planStepText};
 }
 
+/** #1004 (owner ruling 2026-11-21): the interview asks of one several-set publication share one question list and one
+ * submit at its top. Submit sends each answered set through its own form (one act per set); the rest stay pending. */
+const jobQuestionGroups = new WeakMap<JobPreparedInspection, Map<number, {entry: JobForm; action: HTMLButtonElement; redraw(): void}>>();
+function jobQuestionSet(ask: JobWindowAsk, prepared: JobPreparedInspection, t: typeof import('./i18n.ts').t) {
+    const subject = ask.subject, sets = 'optionSets' in ask.source ? ask.source.optionSets : undefined;
+    if (subject.kind !== 'interview-picks' || !sets || sets.length < 2) return undefined;
+    const index = sets.findIndex(row => row.questionId === subject.questionId && row.setId === subject.setId);
+    let group = jobQuestionGroups.get(prepared);
+    if (!group) jobQuestionGroups.set(prepared, group = new Map());
+    const rows = group, answered = (entry: JobForm) => entry.form.dataset.interviewAnswered === 'true';
+    // Every prompt has a pick and every required Other text is filled; a disabled fieldset does not count as filled.
+    const complete = (form: HTMLFormElement) => {
+        const groups = new Map<string, boolean>();
+        for (const radio of form.querySelectorAll<HTMLInputElement>('input[type=radio]')) groups.set(radio.name, (groups.get(radio.name) ?? false) || radio.checked);
+        return groups.size > 0 && [...groups.values()].every(Boolean) &&
+            [...form.querySelectorAll<HTMLTextAreaElement>('textarea')].every(area => !area.required || !!area.value.trim());
+    };
+    const ready = (entry: JobForm) => !answered(entry) && !entry.submitting && complete(entry.form);
+    const refresh = () => {
+        const members = [...rows.values()], count = members.filter(row => answered(row.entry) || ready(row.entry)).length;
+        for (const row of members) {
+            row.action.textContent = t('interview.submitAnswered', [count, sets.length]);
+            row.action.disabled = !members.some(item => ready(item.entry)) || members.some(item => item.entry.submitting);
+            row.redraw();
+        }
+    };
+    const action = document.createElement('button');
+    action.type = 'button'; action.className = 'primary'; action.dataset.jobQuestionsSubmit = '';
+    action.onclick = () => {for (const row of [...rows.values()]) if (ready(row.entry)) row.entry.form.requestSubmit();};
+    return {
+        list: {listAction: action, selected: index,
+            questions: () => sets.map((row, i) => {const member = rows.get(i)?.entry;
+                return {label: row.questionId + ' · ' + row.setId, answered: !!member && (answered(member) || ready(member))};}),
+            onSelect: (i: number) => rows.get(i)?.entry.form.dispatchEvent(new Event('job-question-select', {bubbles: true}))},
+        join(entry: JobForm, redraw: () => void) {
+            rows.set(index, {entry, action, redraw});
+            for (const type of ['input', 'change', 'job-answer-saved', 'job-answer-failed', 'job-form-language']) entry.form.addEventListener(type, refresh);
+            entry.form.addEventListener('job-form-dispose', () => {if (rows.get(index)?.entry === entry) rows.delete(index); refresh();});
+            refresh();
+        },
+    };
+}
+
 /** The answer builder owns no page shell, transport or draft collection. */
 export interface JobFormDependencies {
     node: JobFormNode;
@@ -1460,10 +1510,11 @@ export interface JobFormDependencies {
         let submitKey = 'Submit review';
         let disposeInterview:(()=>void)|undefined;
         let interviewForm:ReturnType<typeof createInterviewForm>|undefined;
+        let questionSet:ReturnType<typeof jobQuestionSet>;
         if (subject.kind === 'interview-picks') {
             let question:InterviewDisplayQuestion|undefined = prepared.interview?.questions.find(item => item.set.id === subject.setId && item.set.question === subject.questionId);
             if (!question || !question.editable) throw new Error('JOB_ASK_INVALID');
-            if (question.ref.sha256 !== ask.source.optionSet?.sha256) throw new Error('JOB_ACT_SOURCE_STALE');
+            if (question.ref.sha256 !== askOptionSet(ask)?.sha256) throw new Error('JOB_ACT_SOURCE_STALE');
             if(ask.status==='answered'&&ask.act?.kind==='interview-picks'){
                 const value=ask.act.value;
                 const picks=value.selections.map(selection=>({ask:selection.itemId,option_id:selection.optionId,...(selection.otherText!==null?{other_text:selection.otherText}:{})}));
@@ -1489,8 +1540,10 @@ export interface JobFormDependencies {
                 legacyNotice.dataset.record = legacyDiagnostic.record;
                 fields.prepend(legacyNotice);
             }
+            questionSet=jobQuestionSet(ask,prepared,t);
             interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:true,
-                images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered'});
+                images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered',
+                ...questionSet?.list});
             if (prepared.metadata.recordSource && (question.missingPicture || !question.images.length) && !prepared.metadata.manifest?.model) {
                 fields.prepend(node('p', question.missingPicture === 'rig'
                     ? 'This question refers to a rig version that this publication does not include.'
@@ -1557,6 +1610,7 @@ export interface JobFormDependencies {
         const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
             submitting: false, ...(disposeInterview?{dispose:disposeInterview}:{}) };
         if(disposeInterview)form.addEventListener('job-form-dispose',disposeInterview);
+        if(questionSet&&interviewForm)questionSet.join(entry,interviewForm.refresh);
         try {
             const primaryKey = localDraftKey(prepared.display);
             const legacyPrefix = 'rig-review-job-draft/1:' + (/^\/jobs\/([^/]+)\//.exec(prepared.display.routes.entry)?.[1] ?? '') + ':';
@@ -1647,6 +1701,8 @@ export interface JobFormDependencies {
                     ? error.message : 'JOB_ACT_INVALID';
                 status.textContent = jobWindowRefusal(error, 'JOB_ACT_INVALID');
                 fields.disabled = false;
+                // A shared question-set submit waits on every member; a failed one must let it re-enable for the retry.
+                form.dispatchEvent(new Event('job-answer-failed'));
             }
         };
         return entry;

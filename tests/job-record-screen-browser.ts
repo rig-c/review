@@ -6,13 +6,13 @@ import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
 import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join,resolve} from 'node:path';
+import {isAbsolute,join,resolve} from 'node:path';
 import {PNG} from 'pngjs';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
-import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
+import {optionSetsJobFixture,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_RGB} from './helpers/job-record-fixture.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
@@ -132,7 +132,7 @@ async function joinedFixture(){
  let host:Awaited<ReturnType<typeof startOpenWorkspace>>|undefined;
  try{
   // Extend the public fixture with a visibly different second painting for a real menu switch.
-  const optionPath=join(fixture.root,'evidence/options.json');
+  {const optionPath=join(fixture.root,'evidence/options.json');
   type ImageRef={path:string;sha256:string};
   const options=JSON.parse(await readFile(optionPath,'utf8')) as {context:{files:ImageRef[]}};
   const project=fixture.project as {inputs:ImageRef[];interview:{framing:{pending_options:ImageRef}[]}};
@@ -144,7 +144,7 @@ async function joinedFixture(){
   const bytes=JSON.stringify(options);
   await writeFile(optionPath,bytes);
   project.interview.framing[0]!.pending_options.sha256=sha(bytes);
-  await writeFile(join(fixture.root,'project.json'),JSON.stringify(project));
+  await writeFile(join(fixture.root,'project.json'),JSON.stringify(project));}
   const inputs=parseOpenInputs([fixture.root,'--project',fixture.root,'--picks-dir','picks']);
   const prepared=await prepareOpenTarget(inputs,{stateDir:fixture.stateDir});
   host=await startOpenWorkspace({stateDir:fixture.stateDir,fingerprint:prepared.fingerprint,port:0});
@@ -170,8 +170,12 @@ if(Bun.argv.includes('--serve')){
  const language=arg('--lang')??'en';
  assert.ok(language==='en'||language==='ko','--lang must be en or ko');
  const kind=arg('--fixture')??'live';
- assert.ok(kind==='live'||kind==='joined'||kind==='pictureless','--fixture must be live, joined or pictureless');
- const fixture=kind==='joined'?await joinedFixture():await recordScreenFixture('interview-picks',false,output,undefined,false,kind==='live');
+ assert.ok(kind==='live'||kind==='joined'||kind==='joined-plan-1004'||kind==='pictureless','--fixture must be live, joined, joined-plan-1004 or pictureless');
+ const answered=Number(arg('--answered')??'0'),painting=arg('--painting');
+ assert.ok(painting===undefined||kind==='joined-plan-1004'&&isAbsolute(painting),'--painting takes an absolute PNG path with --fixture joined-plan-1004');
+ assert.ok(kind!=='joined-plan-1004'||[0,2,4].includes(answered),'--answered must be 0, 2 or 4');
+ // #1004: the real job page, K = 4 sets on one publication, `answered` drafts seeded (recommended picks).
+ const fixture=kind==='joined-plan-1004'?await optionSetsJobFixture({count:4,answered,...painting!==undefined?{painting:await readFile(painting)}:{}}):kind==='joined'?await joinedFixture():await recordScreenFixture('interview-picks',false,output,undefined,false,kind==='live');
  try{
   console.log(fixtureUrl(fixture.ownerUrl,language));
   await new Promise<void>(resolve=>{process.once('SIGINT',resolve);process.once('SIGTERM',resolve);});

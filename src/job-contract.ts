@@ -859,6 +859,8 @@ export const JOB_ERROR_CODES = [
   'JOB_CURSOR_INVALID',
   'JOB_STORAGE_FAILED',
   'JOB_AGENT_ISOLATION_HOLE',
+  /** #1004: an option-set publication names one set twice (two subjects or two `sets` rows for one set). */
+  'JOB_OPTION_SET_DUPLICATE',
 ] as const;
 export type JobErrorCode = typeof JOB_ERROR_CODES[number];
 
@@ -1010,10 +1012,18 @@ export interface JobConsumerGrant {
   readonly lifetime: 'until-explicit-close';
 }
 
+/** One option set of a publication: the question it answers and the set's id. */
+export interface RecordOptionSetRef {
+  readonly questionId: string;
+  readonly setId: string;
+}
+
 export interface RecordOptionResult {
   readonly kind: 'option-set';
   readonly questionId: string;
   readonly setId: string;
+  /** #1004: 2–64 sets published together, one ask each; `sets[0]` repeats `questionId`/`setId`. Absent for one set. */
+  readonly sets?: readonly RecordOptionSetRef[];
 }
 
 export interface RecordPlanResult {
@@ -1155,7 +1165,8 @@ export interface RecordContextBase {
 export type OptionContext = RecordContextBase & {
   readonly checkpointEvidence?: never;
   readonly plan: null;
-  readonly subjects: readonly [RecordPicksSubject];
+  /** One `interview-picks` subject per published set, in set order. */
+  readonly subjects: readonly RecordPicksSubject[];
 };
 
 export type PlanContext = RecordContextBase & {
@@ -1209,8 +1220,19 @@ export type OptionSource = RecordSourceBase & {
   readonly optionSet: { readonly id: string; readonly sha256: JobSha256 };
   readonly optionSetFile: JobFileIdentity;
   readonly plan: null;
-  readonly subjects: readonly [RecordPicksSubject];
+  readonly subjects: readonly RecordPicksSubject[];
+  /** #1004: present only when the publication carries 2–64 sets; row i binds `selection.sets[i]`.
+   * On a publication the singular `selection`/`optionSet`/`optionSetFile` name the first set; on an act they name the act's set. */
+  readonly optionSets?: readonly RecordOptionSetBinding[];
 };
+
+/** One published set's identity and the sealed file it was read from. */
+export interface RecordOptionSetBinding {
+  readonly questionId: string;
+  readonly setId: string;
+  readonly optionSet: { readonly id: string; readonly sha256: JobSha256 };
+  readonly optionSetFile: JobFileIdentity;
+}
 
 export type PlanSource = RecordSourceBase & {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];

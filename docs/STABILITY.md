@@ -855,6 +855,23 @@ plan remain required. The record stage type has five members; the public package
 plan-bound list remains at three. Package interview signoffs and historical acts
 retain their existing nullable-plan behavior. No schema or runtime export changes.
 
+## Record option sets
+
+An `option-set` publication may carry 2 to 64 sets ([Review #1004](https://github.com/rig-c/review/issues/1004)).
+`JobPublishResultV3` gains an optional `sets` (`{questionId, setId}` in order, the
+first equal to the result's own `questionId`/`setId`), and the retained record
+source gains an optional `optionSets` (each set's `questionId`, `setId`,
+`optionSet` and `optionSetFile`). Both are absent for one set, whose source bytes
+and `sourceHash` are unchanged. `JOB_ERROR_CODES` gains
+`JOB_OPTION_SET_DUPLICATE`, refused on publish when the reader declares two
+subjects for one set or `sets` names a set twice. Each ask binds one set, the
+asks of one publication stay pending together, and each answer finalizes one
+`interview-picks` act (`rig-review/act@4`). At K ≥ 2 that act's `selection`
+(`questionId`, `setId`), `optionSet` and `optionSetFile` name the act's own set,
+while `subjects`, `optionSets` and `sourceHash` stay the publication's; an act
+whose per-act fields disagree refuses `JOB_ACT_INVALID` by name. One set's act
+bytes are unchanged. No runtime or type export is added. See the [option-set contract](REVIEW_PACKAGE.md#option-sets).
+
 ## Package manifest `frames` declaration
 
 `rig-review/1` manifests accept an optional `frames` field beside `model`: a

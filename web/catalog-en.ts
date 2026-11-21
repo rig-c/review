@@ -170,6 +170,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "interview.choose": "Choose one option per prompt, then save.",
   "interview.readOnly": "Read-only view. Open the launch URL to save picks.",
   "interview.answered": "Answered {0} / {1}",
+  "interview.submitAnswered": "Submit review ({0}/{1})",
   "interview.delegate": "Delegate",
   "interview.open": "Open interview",
   "interview.close": "Close interview",

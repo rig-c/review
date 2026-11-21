@@ -583,6 +583,66 @@ export function createSyntheticOptionRecordWorkspace(
   };
 }
 
+/** #1004: four rigging questions (bones, meshes, constraints, motion), in Korean 해요체, for the K = 4 job fixture.
+ * Fixture text, not catalog strings. Question and set ids are ASCII identifiers (src/interview-project.ts:40), so the
+ * id is the short title and the prompt carries the Korean question. */
+type PlanOption={id:string;label:string;effect:string;reason?:string};
+const RIGGING_PLAN:{question:string;prompt:string;values:[PlanOption,PlanOption]}[]=[
+ {question:'bones',prompt:'팔다리 뼈를 몇 마디로 나눌까요?',values:[
+  {id:'two_segments',label:'두 마디로 나눠요',effect:'위팔·아래팔, 허벅지·정강이로 나눠요',reason:'그림의 관절 위치와 맞아요'},
+  {id:'three_segments',label:'세 마디로 나눠요',effect:'비틀림 뼈를 하나 더 넣어 손목과 발목이 자연스럽게 돌아가요'}]},
+ {question:'meshes',prompt:'옷자락 메시를 어떻게 나눌까요?',values:[
+  {id:'single_sheet',label:'한 장으로 둬요',effect:'옷자락 전체가 함께 움직여요',reason:'그림에서 옷자락이 한 덩어리로 그려져 있어요'},
+  {id:'split_panels',label:'앞뒤 두 장으로 나눠요',effect:'걸을 때 앞자락과 뒷자락이 따로 흔들려요'}]},
+ {question:'constraints',prompt:'다리에 IK 제약을 걸까요?',values:[
+  {id:'leg_ik',label:'다리에 IK를 걸어요',effect:'발을 바닥에 고정한 채 몸을 움직일 수 있어요',reason:'서 있는 자세가 많은 캐릭터예요'},
+  {id:'fk_only',label:'FK로만 움직여요',effect:'관절을 하나씩 돌려서 자세를 잡아요'}]},
+ {question:'motion',prompt:'기본 대기 모션은 어떻게 할까요?',values:[
+  {id:'breathing',label:'숨쉬기만 넣어요',effect:'가슴과 어깨가 천천히 오르내려요',reason:'정면 일러스트에 가장 무난해요'},
+  {id:'sway',label:'몸을 살짝 흔들어요',effect:'숨쉬기에 좌우 흔들림을 더해요'}]},
+];
+
+/** One rigging question's ask: its two values, then Other and Auto. */
+function riggingPlanAsks(item:typeof RIGGING_PLAN[number]){
+ const options=[
+  ...item.values.map((value,n)=>({id:value.id,kind:'value',label:value.label,effect:value.effect,fragment:value.id,recommended:n===0,...(value.reason?{reason:value.reason}:{})})),
+  {id:'other',kind:'other',label:'직접 적을게요',effect:'원하는 방식을 직접 적어요',recommended:false},
+  {id:'auto',kind:'auto',label:'알아서 정해 주세요',effect:'AI가 그림을 보고 정해요',recommended:false},
+ ];
+ return [{id:item.question,prompt:item.prompt,options}];
+}
+
+/** #1004: one option-set publication carrying the plan's rigging questions, one framing question and one set each.
+ * Every set binds the same declared painting (`inputs/reference.png`, or the serve-only `painting` bytes). */
+export function createSyntheticOptionSetsRecordWorkspace(
+  root: string,
+  options: { readonly count: number; readonly painting?: Buffer },
+): SyntheticOptionWorkspace & { readonly optionSetFiles: readonly JobFileIdentity[] } {
+  const plan = RIGGING_PLAN.slice(0, options.count);
+  if (plan.length !== options.count || options.count < 1) throw new Error('SYNTHETIC_1004_SET_COUNT');
+  const inputImage = writeWorkspaceFile(root, 'inputs/reference.png', options.painting ?? makeSyntheticPngBytes(40, 160, 220));
+  const inputSpec = writeWorkspaceFile(root, 'inputs/spec.json', JSON.stringify({ character: 'hero', version: 1 }, null, 2) + '\n');
+  const optionSetFiles = plan.map((item, index) => writeWorkspaceFile(root, `interview/options/rigging-${index + 1}.json`,
+    JSON.stringify({ schema: 'rig-create/interview-options@1', id: `rig-${item.question}-01`, question: item.question,
+      stage: 'interview', drafted_by: 'ai', drafted_at: '2026-11-20T00:00:00.000Z',
+      context: { kind: 'inputs', files: [inputImage, inputSpec] }, assembly: { rule: 'single' }, asks: riggingPlanAsks(item) }, null, 2) + '\n'));
+  const projectDoc = {
+    schema: 'rig-create/project@0',
+    name: 'Synthetic Rigging Questions',
+    inputs: [inputImage, inputSpec],
+    interview: { framing: plan.map((item, index) => ({ id: item.question, pending_options: optionSetFiles[index] })), waypoints: [], post: { items: [] } },
+  };
+  const recordIdentity = writeWorkspaceFile(root, 'project.json', JSON.stringify(projectDoc, null, 2) + '\n');
+  const record: ProjectRecord = { path: 'project.json', sha256: recordIdentity.sha256 };
+  const files = [inputImage, inputSpec, ...optionSetFiles, record].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const sets = plan.map(item => ({ questionId: item.question, setId: `rig-${item.question}-01` }));
+  const result: RecordOptionResult = { kind: 'option-set', ...sets[0]!, ...(sets.length > 1 ? { sets } : {}) };
+  const context: OptionContext = { label: 'Synthetic rigging questions', parts: { ...DEFAULT_SYNTHETIC_PARTS }, inputs: [inputImage, inputSpec], files, plan: null,
+    subjects: sets.map(set => ({ kind: 'interview-picks', ...set })) };
+  return { marker: SYNTHETIC_RECORD_FIXTURE_MARKER, root, record, result, inputImage, inputSpec,
+    optionSetFile: optionSetFiles[0]!, optionSetFiles, files, context };
+}
+
 export interface SyntheticPlanWorkspace {
   readonly marker: typeof SYNTHETIC_RECORD_FIXTURE_MARKER;
   readonly root: string;

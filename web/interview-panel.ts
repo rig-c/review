@@ -148,7 +148,9 @@ export function interviewRecords(diagnostics:readonly InterviewDiagnostic[]=[],h
 /** The question list and survey form. Hosts supply source data and submit transport. */
 export function createInterviewForm(options:{question:InterviewDisplayQuestion;id:string;node?:InterviewText;form?:HTMLFormElement;fieldset?:HTMLFieldSetElement;source?:HTMLElement;
     mainView?:boolean;images:readonly {name:string;src:string}[];questions?:readonly {label:string;answered:boolean}[]|(()=>readonly {label:string;answered:boolean}[]);selected?:number;onSelect?:(index:number)=>void;answered?:boolean;
-    diagnostics?:readonly InterviewDiagnostic[];historical?:readonly HistoricalInterview[]}) {
+    diagnostics?:readonly InterviewDiagnostic[];historical?:readonly HistoricalInterview[];
+    /** #1004: a control kept at the top of the question list (the job page's one submit for several sets). */
+    listAction?:HTMLElement}) {
   const question=options.question,copy=new Map<HTMLElement,string>();
   const make=<K extends keyof HTMLElementTagNameMap>(tag:K,content?:string)=>element(tag,content,options.node);
   const node:InterviewText=(tag,key)=>{const result=options.node?options.node(tag,key):element(tag,key===undefined?undefined:t(key));if(key!==undefined)copy.set(result,key);return result;};
@@ -197,9 +199,9 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
     }
     provenance.textContent=t('interview.provenance',[question.set.drafted_by,question.set.drafted_at]);
     const questions=typeof options.questions==='function'?options.questions():options.questions;
-    const items=questions?.map((item,index)=>({...item,answered:index===(options.selected??0)?form.dataset.interviewAnswered==='true':item.answered}))??[{label:question.set.question+' · '+question.set.id,answered:form.dataset.interviewAnswered==='true'}];
+    const items=questions?.map((item,index)=>({...item,answered:index===(options.selected??0)&&!options.listAction?form.dataset.interviewAnswered==='true':item.answered}))??[{label:question.set.question+' · '+question.set.id,answered:form.dataset.interviewAnswered==='true'}];
     const listTop=list?.scrollTop??0,listLeft=list?.scrollLeft??0;
-    const next=interviewQuestionList(items,options.selected??0,options.onSelect??(()=>{}),false,options.node);list?.remove();form.prepend(next);next.scrollTop=listTop;next.scrollLeft=listLeft;list=next;
+    const next=interviewQuestionList(items,options.selected??0,options.onSelect??(()=>{}),false,options.node);if(options.listAction)next.prepend(options.listAction);list?.remove();form.prepend(next);next.scrollTop=listTop;next.scrollLeft=listLeft;list=next;
     records?.remove();records=interviewRecords(options.diagnostics,options.historical,options.node);context.append(records);
   });
   const submit=node('button','interview.save');submit.type='submit';submit.hidden=!question.editable;
@@ -210,5 +212,5 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   try{fields.append(context,submit);refresh();}catch(error){dispose();throw error;}
   return {form,fieldset:fields,submit,status,retainedNote,
     read:()=>jobInterviewValue(question.set.question,question.set.asks,item=>answers.find(answer=>answer.item===item)!.answer.value(),editableOnInit?noteInput.value:(retainedNote??'')),
-    localize,dispose};
+    localize,dispose,refresh};
 }
