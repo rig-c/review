@@ -20,6 +20,19 @@ for(const row of recorded.rows)test(`#687 three-pane legacy numeric parity: ${ro
  expect(state.positions).toEqual(row.positions);
 });
 
+test('#1051 Compare Fit and zoom use a shared A/B basis that includes off-stage drawing',async()=>{
+ const app=await openCompareCamera(true,{x:-500,y:-100,width:300,height:190});
+ app.fit('a');
+ const center={x:-200,y:290};
+ expect(app.frame('a')?.center).toEqual(center);
+ expect(app.frame('b')?.center).toEqual(center);
+ expect(app.frame('a')?.baseScale).toBeCloseTo((400-38)/780);
+ expect(app.frame('b')?.baseScale).toBeCloseTo(Math.min((400-22)/600,(600-38)/780));
+ expect(app.state().view.cameras.a?.center).toEqual({x:-200,y:290});
+ app.zoom(1.25,'a');
+ expect(app.signature('a')).toEqual(app.signature('b'));
+});
+
 test('#687 first hidden A/B replay uses sibling dimensions, caches frames, and keeps dimension-only visibility',async()=>{
  for(const target of ['a','b'] as const){
   const app=await openCompareCamera(false),other=target==='a'?'b':'a',pane=app.nodes.get(target+'-pane')!,node=app.nodes.get(target+'-viewport')!;
