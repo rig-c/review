@@ -1489,15 +1489,24 @@ when the accepted source has a plan. The daemon authenticates `project.json`
 from that publication's retained snapshot against its record seal and existing
 `projectHash`, then projects `does`, `produces`, `bar` and `rests_on`.
 
-The projected envelope has ordered keys `schema`, `record`, `status`, `steps`.
-`schema` is `rig-review/job-plan-text@1`, `record` is `{path:"project.json",sha256}`,
-and `status` is `projected`. Rows follow the accepted plan's exact id/hash order.
-Each row has `id`, `hash`, optional `does`, `produces`, `bar`, `rests_on`, then
-`issues`. Each field supplies exactly one value or an ordered
-`{field,reason:"absent"|"invalid"|"limit"}` issue. Scalar values are strings and
-`rests_on` is an ordered string array. Empty strings/arrays, whitespace, line
-endings, Unicode form, duplicate references and array order are preserved.
-Producer extras stay outside this display projection.
+The projected envelope has ordered keys `schema`, `record`, `status`, `steps`,
+and the additive optional key `questions` (present when at least one qualifying
+interview item exists). `schema` remains `rig-review/job-plan-text@1`, `record`
+is `{path:"project.json",sha256}`, and `status` is `projected`. Rows follow the
+accepted plan's exact id/hash order. Each row has `id`, `hash`, optional `does`,
+`produces`, `bar`, `rests_on`, then `issues`. Each field supplies exactly one
+value or an ordered `{field,reason:"absent"|"invalid"|"limit"}` issue. Scalar
+values are strings and `rests_on` is an ordered string array. Empty
+strings/arrays, whitespace, line endings, Unicode form, duplicate references and
+array order are preserved. When present, `questions` is an `id` → `text` string
+map collected from `interview.framing`, `interview.waypoints` and
+`interview.post.items` in that order (first entry wins per id), keeping only
+items whose `text` is a string and whose `id` is a non-empty string up to 128
+characters matching `/^[A-Za-z0-9][A-Za-z0-9._-]*$/` as the parser enforces. The
+UI uses `questions` only for `rests_on` entries that match no plan step,
+displaying the question's `text` with its `id` in `title` while step ids still
+resolve to their step and unmatched ids stay raw. Producer extras stay outside
+this display projection.
 
 D1 matches only accepted ids, preserving source order and existing checkpoint
 aliases (`planStepId ?? checkpointId`). D2 retains its existing whole-plan
@@ -1505,7 +1514,8 @@ count/ordered-id admission checks. Hashes are the producer's opaque accepted
 identities. The existing reader retains responsibility for their semantic value.
 
 The unavailable envelope has `schema`, `record` (or null),
-`status:"unavailable"`, `reason`. Named reasons are
+`status:"unavailable"`, `reason`; `questions` is never present on the
+unavailable envelope. Named reasons are
 `PLAN_TEXT_RECORD_UNAVAILABLE`, `PLAN_TEXT_RECORD_UNSUPPORTED`,
 `PLAN_TEXT_STEPS_ABSENT`, `PLAN_TEXT_STEPS_INVALID`,
 `PLAN_TEXT_MAPPING_UNAVAILABLE` and `PLAN_TEXT_LIMIT`. The UI shows the named
@@ -1514,7 +1524,8 @@ their missing/invalid field labels. Existing act authority and historical
 metadata omission retain their fallback behavior.
 
 The server retains its 8 MiB project read bound. Display limits are 4,096 plan
-steps, 4,096 `rests_on` entries and 512 KiB UTF-8 for `planText`. Whole owner
+steps, 4,096 `rests_on` entries and 512 KiB UTF-8 for the entire `planText`
+envelope (including `questions`). Whole owner
 metadata retains its 2 MiB bound. A small unavailable envelope replaces an
 oversized projection. If that envelope also exceeds the response budget, the
 server returns `JOB_BODY_LIMIT` with `PLAN_TEXT_LIMIT`. Values remain complete
