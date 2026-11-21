@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {partsIssueComments} from '../src/feedback-export.ts';
 import {prepareJobInspection, resolveJobPanels, jobPartsReviewState, jobPartsPainting, type JobInspectionMetadataV3, createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
-import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type UISubmissionV3, type ActV3, type JobPartsVerdictAct, type RecordAct } from '../src/job-contract.ts';
+import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobProgressLineV3, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type UISubmissionV3, type ActV3, type JobPartsVerdictAct, type RecordAct } from '../src/job-contract.ts';
 import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRecordSource, recordInstanceKey } from '../src/job-api.ts';
 import {createJobRigSubmission} from '../web/job-rig-capture.ts';
 import { createJobWindowFixture, fixturePublication, fixtureAct } from './helpers/job-window-fixture.ts';
@@ -1264,6 +1264,10 @@ test('the declared browser inputs publish parts, rig and direction through the r
 });
 
 describe('standalone event subscription lifetime', () => {
+    const at = '2026-11-20T00:00:00.000Z';
+    function progressLine(jobId: string, seq: number, generation: number): JobProgressLineV3 {
+        return {type: 'progress', jobId, now: at, progress: {seq, generation, at, phase: 'build', text: '빌드 😀', step: {i: 1, n: 2}}};
+    }
     async function settled(predicate: () => boolean) {
         for (let attempt = 0; attempt < 100; attempt++) {
             if (predicate()) return;
@@ -1280,7 +1284,8 @@ describe('standalone event subscription lifetime', () => {
         fixture.events.push({jobId: fixture.jobId, generation: 4, cursor: '4', type: 'act', act});
         fixture.close(5);
         const stop = new AbortController(), access = jobWindowAccess('http://127.0.0.1:4318/jobs/window-fixture/', null, () => {});
-        const requests: (string | null)[] = [], received: string[] = [], failures: unknown[] = [];
+        const requests: (string | null)[] = [], received: string[] = [], failures: unknown[] = [], progress: unknown[] = [];
+        const progressAfter: (string | undefined)[] = [];
         let active = 0, maximumActive = 0, disconnected = 0;
         const encoder = new TextEncoder();
         const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1292,10 +1297,17 @@ describe('standalone event subscription lifetime', () => {
             return new Response(new ReadableStream<Uint8Array>({
                 start(controller) {
                     if (first) {
-                        controller.enqueue(encoder.encode(JSON.stringify(fixture.events[0]) + '\n' + JSON.stringify(fixture.events[1]).slice(0, 20)));
+                        const build = progressLine(fixture.jobId, 1, 1);
+                        const rows = [{...build, progress: null}, fixture.events[0], build]
+                            .map(value => JSON.stringify(value) + '\n').join('');
+                        controller.enqueue(encoder.encode(rows + JSON.stringify(progressLine(fixture.jobId, 2, 1)).slice(0, 30)));
                         setTimeout(() => {disconnected++; controller.close(); finish();}, 0);
                     } else {
-                        controller.enqueue(encoder.encode(fixture.events.slice(1).map(event => JSON.stringify(event) + '\n').join('')));
+                        const [, published, pending, answered, closed] = fixture.events;
+                        const latest = progressLine(fixture.jobId, 3, 3), next = progressLine(fixture.jobId, 4, 4);
+                        const rows = [latest, published, pending, answered, progressLine(fixture.jobId, 2, 1),
+                            {...latest, progress: null}, next, closed];
+                        controller.enqueue(encoder.encode(rows.map(value => JSON.stringify(value) + '\n').join('')));
                         controller.close(); finish();
                     }
                 },
@@ -1303,17 +1315,43 @@ describe('standalone event subscription lifetime', () => {
             }));
         }) as typeof fetch;
         const subscription = startJobWindowEvents({access, signal: stop.signal, fetcher,
-            event: event => received.push(event.cursor), refused: error => failures.push(error)});
+            event: event => received.push(event.cursor), progress: value => {progress.push(value);progressAfter.push(received.at(-1));},
+            refused: error => failures.push(error)});
         try {
             await settled(() => received.length === 1);
             await subscription.done;
             expect(requests).toEqual([null, '1']);
             expect(received).toEqual(['1', '2', '3', '4', '5']);
+            // The first connection delivers its empty snapshot. Replay then clears the old build before publication 2.
+            expect(progress).toEqual([null, progressLine(fixture.jobId, 1, 1).progress,
+                null, progressLine(fixture.jobId, 3, 3).progress,
+                null, progressLine(fixture.jobId, 4, 4).progress, null]);
+            expect(progressAfter).toEqual([undefined, '1', '1', '3', '4', '4', '4']);
             expect(fixture.events.map(event => event.type)).toEqual(['published', 'published', 'pending', 'act', 'closed']);
             expect(maximumActive).toBe(1); expect(active).toBe(0);
             expect(disconnected).toBe(1);
             expect(failures.map(error => (error as Error).message)).toEqual(['JOB_STREAM_INCOMPLETE']);
         } finally {stop.abort(); await subscription.done;}
+    });
+    test('#987 accepts cursorless snapshots and refuses malformed snapshots through the existing stream error', async () => {
+        const access = jobWindowAccess('http://127.0.0.1:4318/jobs/window-fixture/', null, () => {});
+        const line = progressLine(access.jobId, 1, 0), events = createJobWindowFixture(access.jobId);
+        events.close(1);
+        const read = (rows: readonly unknown[], onProgress?: (line: JobProgressLineV3) => void) => {
+            const fetcher: typeof fetch = Object.assign(async () => new Response(rows.map(row => JSON.stringify(row) + '\n').join('')),
+                {preconnect() {}});
+            return jobWindowEvents(access, null, new AbortController().signal, fetcher, undefined, onProgress);
+        };
+        const observed: JobProgressLineV3[] = [], clear = {...line, progress: null};
+        const reader = read([line, clear, events.events[0]], value => observed.push(value));
+        expect((await reader.next()).value).toEqual(events.events[0]);
+        expect((await reader.next()).done).toBe(true);
+        expect(observed).toEqual([line, clear]);
+        for (const invalid of [
+            {...line, cursor: '1'}, {...line, jobId: 'wrong-job'}, {...line, progress: undefined}, {...line, now: 'invalid'},
+            {...line, progress: {...line.progress, at: 'invalid'}}, {...line, progress: {...line.progress, phase: 'invalid'}},
+            {...line, progress: {...line.progress, text: 'two\nlines'}}, {...line, progress: {...line.progress, step: {i: 3, n: 2}}},
+        ]) await expect(read([invalid]).next()).rejects.toThrow('JOB_STREAM_FAILED');
     });
     test('standalone keeps its persistent stream until the window stops', async () => {
         const h = frontHarness(), stop = new AbortController();
@@ -1339,6 +1377,8 @@ describe('standalone event subscription lifetime', () => {
         for (const surface of ['bootstrap', 'rig', 'record'] as const) {
             const originalFetch = globalThis.fetch, originalDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
             let attempts = 0, delivered = 0, down = true, notice: any = null;
+            const snapshot = progressLine('window-fixture', 1, 0);
+            const progress: JobProgressLineV3['progress'][] = [];
             const hostChildren: any[] = [];
             const makeNode = (initial = '') => {
                 const classes = new Set<string>();
@@ -1370,7 +1410,9 @@ describe('standalone event subscription lifetime', () => {
                     if (attempts === 2) throw new Error('network down');
                     return new Response('unavailable', {status: 503});
                 }
-                return new Response(new ReadableStream<Uint8Array>({start() {}}));
+                return new Response(new ReadableStream<Uint8Array>({
+                    start(controller) {controller.enqueue(new TextEncoder().encode(JSON.stringify(snapshot) + '\n'));},
+                }));
             }) as unknown as typeof fetch;
             let stop: (() => void) | undefined;
             try {
@@ -1408,7 +1450,8 @@ describe('standalone event subscription lifetime', () => {
                     i18nDouble: {onLanguageChange: () => () => {}, t: (key: string) => key},
                     t: (key: string) => key, createJobFormHelpers: () => ({}), createJobFormDrafts: () => ({saveDraft() {}}),
                     createJobWindowTransport: () => ({}),
-                    createJobRigScreen: () => ({...screen, waiting: async () => {}}),
+                    createJobRigScreen: () => ({...screen, waiting: async () => {},
+                        progress(value: JobProgressLineV3['progress']) {progress.push(value);screen.progress(value);}}),
                     createJobWindow: () => ({stop() {}, state: () => ({}), event() { delivered++; }}),
                     startJobWindowEvents, assertJobAskSource() {}, jobCheckpointContext, jobPublicationRoutes,
                     jobWindowRefusal, globalThis: {addEventListener() {}, removeEventListener() {}},
@@ -1432,9 +1475,9 @@ describe('standalone event subscription lifetime', () => {
                 }
                 down = false;
                 const beforeRestore = attempts;
-                await settled(() => attempts > beforeRestore);
-                await Bun.sleep(10);
+                await settled(() => attempts > beforeRestore && progress.length > 0);
                 expect(delivered).toBe(0);
+                expect(progress).toEqual([snapshot.progress]);
                 if (surface === 'bootstrap') {
                     expect(hostChildren).toHaveLength(0);
                     expect(notice.textContent).toBe('');

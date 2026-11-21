@@ -162,7 +162,8 @@ export function createJobFront(options: {
             request.signal.addEventListener('abort', stop, { once: true });
             if (request.signal.aborted)
                 stop();
-            const iterator = options.ports.subscribeJob({ jobId, after, signal: abort.signal })[Symbol.asyncIterator]();
+            const subscription = { jobId, after, signal: abort.signal };
+            const iterator = (options.ports.subscribeJobPage?.(subscription) ?? options.ports.subscribeJob(subscription))[Symbol.asyncIterator]();
             const encoder = new TextEncoder();
             const body = new ReadableStream<Uint8Array>({
                 async pull(controller) {

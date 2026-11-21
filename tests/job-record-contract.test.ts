@@ -141,6 +141,7 @@ test('CP1 schema constants and capabilities preserve API@2 defaults alongside op
     recordPublication: true,
     recordActSchema: 'rig-review/act@4',
     askBatch: true,
+    progress: true,
   });
   expect(jobApiSchemaForMode()).toBe(JOB_API_SCHEMA);
   expect(jobApiSchemaForMode('package-only')).toBe(JOB_API_SCHEMA);

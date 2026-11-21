@@ -965,6 +965,8 @@ export interface JobHostPorts {
     readonly after: JobCursor | null;
     readonly signal: AbortSignal;
   }): AsyncIterable<EventV3>;
+  /** Front-only opt-in. Semantic subscribers keep the durable event stream above. */
+  subscribeJobPage?(input: Parameters<JobHostPorts['subscribeJob']>[0]): AsyncIterable<EventV3 | JobProgressLineV3>;
   readPublication(jobId: JobId, publicationId: JobPublicationId): Promise<JobResult<DisplayPublicationV3>>;
   commitUIAct(jobId: JobId, request: Request): Promise<JobResult<ActV3>>;
   ackDisplayed(jobId: JobId, request: Request): Promise<JobResult<JobDisplayReceipt>>;
@@ -1063,6 +1065,34 @@ export interface AskBatchValueV3 {
   readonly asks: readonly PendingAskV3[];
 }
 
+export interface JobProgressV3 {
+  readonly seq: number;
+  readonly phase: 'ingest' | 'build' | 'measure' | 'publish' | 'other';
+  readonly text?: string;
+  readonly step?: { readonly i: number; readonly n: number };
+  readonly at: string;
+  readonly generation: number;
+}
+
+export type JobProgressRequestV3 = Omit<JobRequestBase, 'schema'> & Omit<JobProgressV3, 'at' | 'generation'> & {
+  readonly schema: typeof JOB_API_V3_SCHEMA;
+  readonly verb: 'progress';
+};
+
+export interface JobProgressValueV3 {
+  readonly status: 'accepted' | 'ignored';
+  readonly seq: number;
+  readonly at: string;
+}
+
+/** Current host progress delivered only on the page stream. */
+export interface JobProgressLineV3 {
+  readonly type: 'progress';
+  readonly jobId: JobId;
+  readonly progress: JobProgressV3 | null;
+  readonly now: string;
+}
+
 export type NextRequestV3 = Omit<JobNextRequest, 'schema'> & {
   readonly schema: typeof JOB_API_V3_SCHEMA;
 };
@@ -1075,6 +1105,7 @@ export type AgentRequestV3 =
   | PublishRequestV3
   | AskRequestV3
   | AskBatchRequestV3
+  | JobProgressRequestV3
   | NextRequestV3
   | CloseRequestV3;
 
@@ -1255,7 +1286,7 @@ export type SourceV3 = JobSourceBinding | RecordSource;
 export type ActV3 = JobAct | RecordAct;
 
 /**
- * `recordPublication`, `recordActSchema` and `askBatch` describe the host, not the current head.
+ * `recordPublication`, `recordActSchema`, `askBatch` and `progress` describe the host, not the current head.
  * `ask-batch` applies only to a record-retained head publication; a package head refuses `JOB_REQUEST_INVALID`,
  * so a consumer checks the publication's mode as well as the flag (#972).
  */
@@ -1263,12 +1294,14 @@ export interface JobCapabilitiesV3 extends JobCapabilities {
   readonly recordPublication: true;
   readonly recordActSchema: typeof JOB_RECORD_ACT_SCHEMA;
   readonly askBatch: true;
+  readonly progress: true;
 }
 
 export const JOB_CAPABILITIES_V3: JobCapabilitiesV3 = Object.freeze({
   recordPublication: true,
   recordActSchema: JOB_RECORD_ACT_SCHEMA,
   askBatch: true,
+  progress: true,
 });
 
 export interface PendingAskV3 extends Omit<JobPendingAsk, 'subject' | 'source'> {
@@ -1311,6 +1344,7 @@ export interface ResponseValuesV3 {
   readonly publish: PublicationV3;
   readonly ask: PendingAskV3;
   readonly 'ask-batch': AskBatchValueV3;
+  readonly progress: JobProgressValueV3;
   readonly next: NextValueV3;
   readonly close: { readonly status: 'closed'; readonly cursor: JobCursor | null };
   readonly 'fetch-act': ActV3;

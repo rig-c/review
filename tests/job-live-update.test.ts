@@ -152,7 +152,7 @@ test('#743 rollback resume waits for workspace redocking and persistence before 
  const {Transpiler}=await import('bun');const js=new Transpiler({loader:'ts'}).transformSync(body);
  for(const recordWithoutPicture of [false,true]){
  const queue:Function[]=[],events:string[]=[],screenRoot={inert:false},document={body:{dataset:{ready:'true'} as Record<string,string>,removeAttribute(name:string){if(name==='data-ready')delete this.dataset.ready;}}};let docked=false;
- const resume=new Function('window','document','screenRoot','workspace','setupPersistence','requestAnimationFrame','tick','host',`let disposed=false,suspended=true,partsOnly=false,frameHandle=0;const publicEditor={};${js};return resumeScreen;`)(
+ const resume=new Function('window','document','screenRoot','workspace','setupPersistence','requestAnimationFrame','tick','host',`let disposed=false,suspended=true,partsOnly=false,frameHandle=0,jobProgress=null;const publicEditor={};${js};return resumeScreen;`)(
   {},document,screenRoot,{settle(){return new Promise<void>(resolve=>queue.push(()=>{docked=true;events.push('docked');resolve();}));}},async()=>{if(!docked)throw Error('Missing UI element: feedback-target-name');events.push('persistence');},(fn:Function)=>{queue.push(fn);return queue.length;},()=>{},recordWithoutPicture?{record:{hasPicture:false}}:null);
  const done=resume();let complete=false;const completed=Promise.resolve(done).then(()=>{complete=true;});
  expect(document.body.dataset.ready).toBeUndefined();expect(screenRoot.inert).toBe(true);
@@ -199,7 +199,7 @@ test('#743 no-picture record attaches owned lifecycle only after asynchronous wo
   restoreRecordComments(){},showRecordComments(){},setupComments(){commentsSetup++;},rigInspector:{comments:{button:commentButton}},button:()=>stageCommentButton,
   PartExplorer:class{},workspace:{settle:()=>new Promise<void>(resolve=>{settle=resolve;})},
   viewport:{observeResize:()=>({disconnect:()=>events.push('disconnected')})},viewDisposers:disposers,
-  renderRecordForms(){},renderPendingSubjects(){},suspendScreen:suspend,resumeScreen:resume,disposeScreen:dispose};
+  renderRecordForms(){},renderPendingSubjects(){},setJobProgress(){},suspendScreen:suspend,resumeScreen:resume,disposeScreen:dispose};
  const run=new Function('scope',`with(scope){${js};return startRecord();}`);
  const pending=run(scope);expect(attached).toBeUndefined();expect(document.body.dataset.ready).toBeUndefined();
  settle();await pending;expect(events).toEqual(['attached','displayed']);

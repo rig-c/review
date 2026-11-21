@@ -370,11 +370,13 @@ export class JobStore<Data> {
     readonly active?: boolean;
     readonly snapshot?: JobSnapshotOwner;
     readonly still?: JobStoredStill;
-  }, replay?: (current: StoredJob<Data>) => boolean): StoredJob<Data> {
+  }, replay?: (current: StoredJob<Data>) => boolean, sameSemanticRevision?: (current: StoredJob<Data>) => boolean): StoredJob<Data> {
     return this.transaction(() => {
       const current = this.get(jobId);
       if (replay?.(current)) return current;
-      if (expectedRevision !== null && current.revision !== expectedRevision) throw new JobError('JOB_GENERATION_STALE');
+      if (expectedRevision !== null && current.revision !== expectedRevision && !sameSemanticRevision?.(current)) {
+        throw new JobError('JOB_GENERATION_STALE');
+      }
       const next = operation(current);
       const active = next.active ?? current.active;
       const document = encode(JSON.parse(this.saveCrops(next.data)));
@@ -451,12 +453,13 @@ export class JobStore<Data> {
   /** Close never grows or rewrites the bounded historical document. */
   sealClose(jobId: string, expectedRevision: number,
     replay: (current: StoredJob<Data>) => Pick<JobClosure, 'replay'> | null,
-    prepare: (current: StoredJob<Data>) => JobClosure): Pick<JobClosure, 'replay'> {
+    prepare: (current: StoredJob<Data>) => JobClosure,
+    sameSemanticRevision?: (current: StoredJob<Data>) => boolean): Pick<JobClosure, 'replay'> {
     return this.transaction(() => {
       const current = this.get(jobId);
       const previous = replay(current);
       if (previous) return previous;
-      if (current.revision !== expectedRevision) throw new JobError('JOB_GENERATION_STALE');
+      if (current.revision !== expectedRevision && !sameSemanticRevision?.(current)) throw new JobError('JOB_GENERATION_STALE');
       if (!current.active) throw new JobError('JOB_CLOSED');
       const closure = prepare(current), document = encode(closure);
       this.db.query('INSERT INTO job_closures(job_id,document) VALUES(?,?)').run(jobId, document);

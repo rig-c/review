@@ -198,6 +198,7 @@ test('#963 next reports askBatch among the V3 capabilities and ask-batch parses 
     const next = await fixture.call({ verb: 'next', after: null, waitMs: 0 });
     expect(next.value.capabilities).toEqual(JOB_CAPABILITIES_V3);
     expect(next.value.capabilities.askBatch).toBe(true);
+    expect(next.value.capabilities.progress).toBe(true);
   } finally { await fixture.dispose(); }
   const request = { schema: JOB_API_V3_SCHEMA, jobId: 'job-1', requestId: 'request-1', verb: 'ask-batch',
     expectedGeneration: 0, idempotencyKey: 'key', publicationId: 'publication-1', subjects: [{ kind: 'signoff', stage: 'plan-approved' }] };

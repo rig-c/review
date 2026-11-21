@@ -1,7 +1,7 @@
 import {hasTransientQuestionImage} from './interview-panel.ts';
 import {advanceTake,bindScenePlates,loadScenePlates,takeSample} from './scene-plates.ts';
 import type {SceneInspection} from '../src/scene-inspection.ts';
-import type {RecordSource} from '../src/job-contract.ts';
+import type {JobProgressV3,RecordSource} from '../src/job-contract.ts';
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
 import {mountJobScreen,joinedInterviewForms,mediaReady,jobSubmissionRefusal} from './job-session.ts';
 import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding} from '../src/parts-comment.ts';
@@ -156,6 +156,8 @@ const askHeadline=panelMake('span',{id:'workspace-ask-headline',className:'works
 const requestChanges=panelMake('button',{id:'request-changes',type:'button',hidden:true});
 rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requestChanges);
 let pendingAnswers:readonly {kind:string;stage?:string}[]=[],answerSaved=false;
+let jobProgress:JobProgressV3|null=null,progressTimer:ReturnType<typeof setInterval>|undefined;
+let askSentence='';
 let partsAnswerBlocked:()=>boolean=()=>false;
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
@@ -240,6 +242,7 @@ let idleHeld=false;
 let suspendedPreview=false;
 let controlDispose:(()=>void)|null=null;
 const viewDisposers:(()=>void)[]=[];
+if(host)viewDisposers.push(onLanguageChange(()=>{if(jobProgress&&!pendingAnswers.length)renderAskHeadline();}));
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let chestMapping:CropWorldMapping={available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn'};
 let setupChestWorld:{x:number;y:number}|null=null;
@@ -1340,12 +1343,12 @@ async function start(): Promise<void> {
         .filter(control=>control.id!=='settings-language').map(control=>({control,disabled:control.disabled}));
       for(const {control}of controls)control.disabled=true;
       for(const control of [button('save'),requestChanges,select('review-status'),screenRoot.querySelector<HTMLElement>('label[for="review-status"]')!])control.hidden=true;
-      askHeadline.hidden=false;setSourceText(askHeadline,t('job.waiting',undefined,'en'));rigInspector.act.hidden=false;rigInspector.syncActRow();
+      renderAskHeadline(t('job.waiting',undefined,'en'));syncJobActRow();
       await workspace?.settle();if(disposed)return;
       const next=await new Promise<RigHost>((resolve,reject)=>{
         lifecycle.signal.addEventListener('abort',()=>reject(new Error('JOB_PRELOAD_CANCELLED')),{once:true});
         host!.attach({publish:resolve,stage:()=>null,redraw:()=>{},
-          message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:()=>{},dispose:disposeScreen});
+          message:(value,error,diagnostic)=>message(value,error,false,diagnostic),progress:setJobProgress,suspend:()=>{},dispose:disposeScreen});
       });
       if(disposed)return;
       host=next;access=next.access;partsOnly=next.subject==='parts';
@@ -1408,7 +1411,7 @@ async function start(): Promise<void> {
       }
       if(!player&&(data.manifest.model||referenceInput.state!=='loaded'))throw new Error('JOB_VISUAL_UNAVAILABLE');
       await restorePublicationNavigation();document.body.dataset.ready='true';
-      const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
+      const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
         hasMeshEdits:()=>!!meshEditor?.hasJobEdits(),meshEdits:async()=>meshEditor?.jobEdits()??null,chestLandmarks:()=>chestEditor?.jobEdits()??null};
       host.attach(screen);showInspector(data.manifest.model?'playback':'rig');host.displayed();
     }
@@ -1529,7 +1532,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  await setupPartsPersistence();if(disposed)return;
  if(generalRows?.length)changed();
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
- if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),pendingSubjects:renderPendingSubjects,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
+ if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),pendingSubjects:renderPendingSubjects,progress:setJobProgress,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
 
  document.body.dataset.ready='true';
 }
@@ -1577,7 +1580,7 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  await workspace?.settle();if(disposed)return;
  if(host?.unavailable){message(t('job.refusal.'+host.unavailable),true);el('message').title=host.unavailable;button('save').disabled=true;button('save').title=host.unavailable;}
  document.body.dataset.ready='true';
- if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
+ if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
 let recordDialog:HTMLDialogElement|null=null;
 let releaseRecordDrawer:(()=>void)|null=null;
@@ -1827,9 +1830,60 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  const refreshVerdictComments=host?.verdictComments&&pendingAnswers.some(liveVerdict)!==subjects.some(liveVerdict);
  pendingAnswers=subjects;
  if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
- askHeadline.hidden=false;setSourceText(askHeadline,labels.join(' · ')||(firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
+ renderAskHeadline(labels.join(' · ')||(firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
  if(subjects.length)firstPublicationPrompt=false;
  renderDraftState();
+}
+function syncJobActRow(subjects=pendingAnswers):void {
+ rigInspector.act.hidden=!subjects.length&&!firstPublicationPrompt&&!jobProgress;
+ rigInspector.syncActRow?.();
+}
+function setJobProgress(value:JobProgressV3|null):void {
+ if(disposed||jobProgress===value)return;
+ jobProgress=value;
+ if(pendingAnswers.length)return;
+ renderAskHeadline();
+ syncJobActRow();
+}
+function stopProgressTimer():void {
+ clearInterval(progressTimer);
+ progressTimer=undefined;
+}
+/** Render the existing sentence. The timer writes only its age node until the quiet threshold. */
+function renderAskHeadline(sentence=askSentence):void {
+ askSentence=sentence;
+ stopProgressTimer();
+ askHeadline.hidden=false;
+ const progress=pendingAnswers.length ? null : jobProgress;
+ if(!progress){
+  askHeadline.removeAttribute('translate');
+  askHeadline.style?.removeProperty('white-space');
+  setSourceText(askHeadline,sentence);
+  return;
+ }
+ const at=Date.parse(progress.at),age=()=>Math.max(0,Math.floor((Date.now()-at)/1000));
+ const initialAge=age(),quiet=initialAge>=60;
+ const phase=t('job.progress.phase.'+progress.phase);
+ const phaseAndStep=progress.step ? phase+' · '+t('job.progress.step',[progress.step.i,progress.step.n]) : phase;
+ const ageValue=(seconds:number)=>quiet ? String(Math.floor(seconds/60)) : seconds ? t('job.progress.seconds',[seconds]) : t('job.progress.now');
+ const ageText=document.createTextNode(ageValue(initialAge));
+ // Catalog fragments are already localized. Keep the agent's text as a literal across locale changes.
+ askHeadline.setAttribute('translate','no');
+ askHeadline.style?.setProperty('white-space','pre-wrap');
+ if(quiet){
+  const [before,after]=t('job.progress.quiet',['{0}',phaseAndStep]).split('{0}');
+  askHeadline.replaceChildren(before!,ageText,after!);
+ }else{
+  const prefix=progress.text?phaseAndStep+' · '+progress.text:phaseAndStep;
+  askHeadline.replaceChildren(prefix+' · ',ageText);
+ }
+ const tickAge=()=>{
+  const seconds=age();
+  if((seconds>=60)!==quiet){renderAskHeadline();return;}
+  const value=ageValue(seconds);
+  if(ageText.data!==value)ageText.data=value;
+ };
+ if(!suspended&&!disposed)progressTimer=setInterval(tickAge,1000);
 }
 /** Answer controls compose the existing act bar and submit handlers. */
 function renderAnswerControls():void {
@@ -1895,7 +1949,7 @@ function renderAnswerControls():void {
    notice.classList.remove('error');
   }
  }
- if(host){rigInspector.answersRendered=true;rigInspector.act.hidden=subjects.length===0&&!firstPublicationPrompt;rigInspector.syncActRow?.();}
+ if(host){rigInspector.answersRendered=true;syncJobActRow(subjects);}
 }
 let verdictSubmit:((event:MouseEvent)=>unknown)|null=null;
 /** The rig pane for a live job's still (#709): the job binds and copies it, this screen keeps its view. */
@@ -1942,6 +1996,7 @@ async function restorePublicationNavigation():Promise<void> {
 }
 function suspendScreen():void {
  if(suspended||disposed)return;
+ stopProgressTimer();
  if(!partsOnly&&(!host?.record||host.record.hasPicture))pause();
  persistence?.dispose();persistence=null;suspended=true;cancelAnimationFrame(frameHandle);
 }
@@ -1954,7 +2009,8 @@ async function resumeScreen():Promise<void> {
   if(disposed)return;
   if(partsOnly){await setupPartsPersistence?.();if(disposed)return;}
   else if(!host?.record||host.record.hasPicture)await setupPersistence(true);
-  suspended=false;if(!partsOnly&&(!host?.record||host.record.hasPicture))frameHandle=requestAnimationFrame(tick);ready=true;
+  suspended=false;if(jobProgress)renderAskHeadline();
+  if(!partsOnly&&(!host?.record||host.record.hasPicture))frameHandle=requestAnimationFrame(tick);ready=true;
  }finally{screenRoot.inert=ready?wasInert:true;if(ready&&!disposed)document.body.dataset.ready='true';}
 }
 function disposeScreen():void {releaseInterview?.();releaseInterview=null;

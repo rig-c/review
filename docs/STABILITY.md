@@ -413,6 +413,7 @@ preserve capability, origin, size, cancellation and replay checks.
 ## Changelog
 
 - Breaking, 4.0.0 (#806): remove `startJobHub` and its `JobHubOptions`, `JobHubJobOptions`, `JobHubJob` and `JobOwnerHub` types; the uncalled semantic-job hub is deleted.
+- Additive (#987): V3 hosts advertise `progress: true` in the `next` capabilities. The HTTP `progress` verb and optional `subscribeJobPage` port implement [job progress](REVIEW_PACKAGE.md#job-progress). `subscribeJob`, the durable event union, cursors and CLI preserve their existing contracts. The owner front opts into the page stream for V3 hosts, with the published web bundle consuming the extra line. Reload an owner page left open across a host upgrade to load the matching bundle.
 
 ## Mesh-edit act compatibility
 
@@ -702,6 +703,10 @@ without aliases or copied wire shapes.
 - `JobAskRequestV3`
 - `JobAskBatchRequestV3`
 - `JobAskBatchValueV3`
+- `JobProgressRequestV3`
+- `JobProgressValueV3`
+- `JobProgressV3`
+- `JobProgressLineV3`
 - `JobNextRequest`
 - `JobNextRequestV3`
 - `JobCloseRequest`
@@ -797,7 +802,7 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer checks the thirty-four runtime exports and every listed type, including
+A consumer checks the thirty-four runtime exports and the existing managed-host types, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and
@@ -809,6 +814,8 @@ proves that `JobCapabilitiesV3` carries `askBatch: true`. In `JobCapabilitiesV3`
 than the current head: `ask-batch` applies only to a record-retained head
 publication and a package head refuses `JOB_REQUEST_INVALID`, so a consumer
 checks the publication's mode as well as the flag.
+The #987 contract tests cover the progress capability and the owner page stream
+against an attached publisher sharing the persisted job.
 TypeScript checks the installed consumer and the runtime checks the full owner
 resources, retained publication, semantic ports, declared hooks, enumerator
 version/row carriage, ordinary reuse, strict `reuseOnly: {expected}` attachment
