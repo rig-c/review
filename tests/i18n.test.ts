@@ -1881,7 +1881,7 @@ test('#1037 F13 + R3a: rig and parts viewport providers share one zoom readout s
     },partsState),partsState);
     rigCtrl.renderCameraControls();
     partsCtrl.renderCameraControls();
-    const expected=t(`${Math.round(zoom*100)}% · ${targetLabel}`);
+    const expected=`${Math.round(zoom*100)}% · ${t(targetLabel)}`;
     expect(rigDom.el('zoom-value').textContent).toBe(expected);
     expect(partsDom.el('zoom-value').textContent).toBe(expected);
    }
@@ -1941,4 +1941,19 @@ test('#1037 F13 + R3a: rig and parts viewport providers share one zoom readout s
  }finally{
   setLanguagePreference(preference);
  }
+});
+
+test('#1037 KO catalog uses 레퍼런스 for the noun reference and keeps 참조 only on explicit verb/see entries',()=>{
+ const allowedVerbKeys=new Set([
+  'Comparison and submission session refer to different source identities. Reopen the review.',
+  "Review's pre-check refuses the pending idle (lines above); the producer would refuse it by the same name",
+  '{0} physics constraints editable from the handoff config · {1} not editable (reasons below) · {2} chains from bone parentage',
+ ]);
+ const hits=Object.entries(koCatalog).filter(([,v])=>v.includes('참조')).map(([k])=>k);
+ const unexpected=hits.filter(k=>!allowedVerbKeys.has(k));
+ expect(unexpected).toEqual([]);
+ expect(hits.sort()).toEqual([...allowedVerbKeys].sort());
+ expect(t('job.imageRole.reference',undefined,'ko')).toBe(t('Reference',undefined,'ko'));
+ expect(tr('1600% · Reference','ko')).toBe(`1600% · ${t('Reference',undefined,'ko')}`);
+ expect(tr('reference.png · Reference','ko')).toBe(`reference.png · ${t('Reference',undefined,'ko')}`);
 });
