@@ -66,7 +66,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   const answerRoot=interview?'#workspace-interview-answer':'#job-record-asks';
   // #1041: the question is shown in the right communication panel, not a bottom tab.
   const questionSelected=`(()=>{const n=document.querySelector('#workspace-interview-answer');return !!n&&!n.hidden&&!!n.closest('#workspace-communication:not([hidden])')&&n.getClientRects().length>0;})()`;
-  const recordDialogClosed=`!document.querySelector('#job-record-asks[open]')`;
+  const recordDialogClosed=`!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`;
   const questionReady=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer fieldset:not(:disabled)')`;
   const questionSaved=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer[data-interview-answered=true]')`;
   if(interview)await until(page,questionReady);
@@ -97,7 +97,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await until(page,`!document.querySelector('#save').disabled`);
   }
   if(!['rig','direction','parts'].includes(mode)){
-   await click(page,'#workspace-pending-ask');await until(page,interview?questionReady:`!!document.querySelector('#job-record-asks[open]')`);
+   await click(page,'#workspace-pending-ask');await until(page,interview?questionReady:`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`);
    assert.equal(await page.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`),false);
    const chooseDefaults=`(()=>{const seen=new Set();for(const radio of document.querySelectorAll(${JSON.stringify(answerRoot+' input[type=radio]')}))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`;
    if(interview)await page.evaluate<void>(chooseDefaults);

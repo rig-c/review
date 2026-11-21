@@ -22,7 +22,8 @@ merge (R0). This documentation update adds no UI or public contract.
   owner, language and capability URLs. Routing does not widen grants or
   change API contracts. See [public stability](STABILITY.md).
 - **E3** Record publications are hosted over the existing inspection screen
-  (#754). Their checkpoint, signoff and interview forms open in a dialog.
+  (#754). Their checkpoint, signoff and interview forms sit in the right communication
+  panel (#1041).
   A record without a picture does not manufacture a model or package.
 - **Shipped:** #756 and hub/owner single-entry adoption F (#734) shipped in
   [2.13.0](../CHANGELOG.md#2130). The remaining job window and hub were removed in
@@ -148,7 +149,9 @@ act bar, not another mode switch.
 - It is collapsed while nothing is pending; **Comment · C** and a pending ask open
   it without changing the bottom panel. Below the stage minimum it is a
   right-side drawer, non-modal for a question.
-- Record asks still use the dialog in C10 until the record forms move here.
+- Record asks (checkpoint, signoff, plan approval) sit in their own section
+  between the question and Comments (#1041). The act row's **Review…** or
+  **Approve…** brings it into view; the act fields are unchanged.
 - Use the existing left Checkpoints list and main-view Difference for inspection.
 
 **Historical:** the old parts sidebar, producer flags and mesh-numbers panel
@@ -176,8 +179,8 @@ instrument is not the removed parts numbers panel.
 Survey answers are distinct from feedback comments. Preserve interview choices,
 inline Other text and per-question notes through the existing answer contract.
 
-- **Shipped:** #754 hosts the existing record interview answer forms in a dialog
-  on the inspection screen. It reuses the current forms rather than replacing
+- **Shipped:** #754 hosts the existing record interview answer forms on the
+  inspection screen, in the right communication panel since #1041. It reuses the current forms rather than replacing
   their answer contract.
 - **Planned:** B (#722) is the remaining interview-modal work. Existing
   `interview-panel.ts` is the component to extend; no new interview page, image
@@ -216,7 +219,7 @@ build path. Compare retains its existing playback controls.
 ### C13 Read-only context blocks
 
 Keep source binding, provenance, warnings and plan text in their existing blocks
-or record dialogs. Do not duplicate visual checkpoint evidence in a sidebar;
+or the record section of the communication panel. Do not duplicate visual checkpoint evidence in a sidebar;
 inspect supported pixels through the main view. Historical records remain readable.
 
 ## 3. Screens
@@ -228,7 +231,7 @@ These are subjects and hosts of the existing tool, not designs for new screens.
 | Rig package, including hosted rig | Shipped | Header Setup/Animate; shared rig/reference view; mode blocks + Comments; act bar |
 | Parts package, including hosted parts | Shipped (#745, #749, #751) | Same Setup workspace and parts list; original follows selection; comments verdict |
 | Two builds and a reference | Shipped, unchanged | Header Compare; existing A/B host and controls; card D PARKED |
-| Record checkpoint, signoff, interview | Shipped hosting (#754) | Existing screen with a dialog; no model fabricated for a record without a picture |
+| Record checkpoint, signoff, interview | Shipped hosting (#754) | Existing screen with the forms in the right panel; no model fabricated for a record without a picture |
 | Remaining interview-modal work | Planned B (#722) | Extend existing interview component |
 | Remaining record-modal feedback cleanup | Planned C (#715) | Move existing memo feedback to Comments without changing contracts |
 | Legacy job-window owner surfaces | #756 shipped in [2.13.0](../CHANGELOG.md#2130); remainder removed in [4.0.0](../CHANGELOG.md#400) | Existing shared inspection and record-dialog homes |

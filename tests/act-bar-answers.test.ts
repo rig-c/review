@@ -14,7 +14,7 @@ function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  const calls:string[]=[],session={feedbackWarnings:[],status:'pending'};
  const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,firstPublicationPrompt:false,jobProgress:null as object|null,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
   questionForms:subjects.some(subject=>subject.kind==='interview-picks')?[{dataset:{},querySelector:()=>({disabled:false}),querySelectorAll:()=>[]}]:[],session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,recordAsk,
-  recordDialog:{querySelector:(selector:string)=>selector==='fieldset:not(:disabled)'?{disabled:false}:null,querySelectorAll:()=>[submit]},
+  recordPanel:{querySelector:(selector:string)=>selector==='form[data-job-ask] fieldset:not(:disabled)'?{disabled:false}:null,querySelectorAll:()=>[submit]},
   button:()=>save,select:()=>select,document:{querySelector:()=>label},
   setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
   verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};
