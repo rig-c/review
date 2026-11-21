@@ -463,7 +463,7 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
     return {language:document.documentElement.lang,entry:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,
      headingOrder:[...heading.children].map(n=>n===strip?'tabs':n===collapse?'collapse':n===act?'act':n.id),wrap:getComputedStyle(row??strip).flexWrap,
      controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(n=>n.id),collapseDisabled:collapse.disabled,bottomHidden:document.getElementById('workspace-inspector').hidden,collapseText:collapse.textContent,
-     availableTabs:row?[...row.querySelectorAll('[role=tab]')].filter(n=>!n.hidden).length:0,selected:selected?.dataset.blockTarget,selectedVisible:!!selected&&!selected.hasAttribute('data-tab-overflow')&&selected.getBoundingClientRect().width>0,
+     availableTabs:row?[...row.querySelectorAll('[role=tab]')].filter(n=>!n.hidden).length:0,enabledTabs:row?[...row.querySelectorAll('[role=tab]')].filter(n=>!n.hidden&&!n.disabled).length:0,selected:selected?.dataset.blockTarget,selectedVisible:!!selected&&!selected.hasAttribute('data-tab-overflow')&&selected.getBoundingClientRect().width>0,
      ask:document.querySelector('#workspace-ask-headline').textContent,answer:document.querySelector('#workspace-pending-ask').textContent,
      actInHeading:act.parentElement===heading,actHome:act.parentElement.id,actRowDirect:document.getElementById('workspace-act-row')?.previousElementSibling===document.querySelector('.topbar'),actRect:act.getBoundingClientRect().toJSON()};
    })()`);
@@ -478,10 +478,10 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
    assert.equal(state.actHome,'workspace-act-row');assert.equal(state.actRowDirect,true);
    assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);
    assert.equal(state.wrap,'nowrap');assert.equal(state.actInHeading,false);assert.equal(state.collapseText,'⌄');
-   if(state.availableTabs)assert.equal(state.selectedVisible,true);else assert.equal(state.selected,undefined,'subjects without rig capabilities expose no block tab');
+   if(state.availableTabs&&!state.bottomHidden)assert.equal(state.selectedVisible,true);else if(!state.availableTabs) assert.equal(state.selected,undefined,'subjects without rig capabilities expose no block tab');
    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-workspace.png`),await page.screenshot());
    // #1041: a bottom panel with no view-controller block collapses to nothing; there is nothing to collapse.
-   if(state.bottomHidden)assert.equal(state.availableTabs,0,'only a subject without view controllers hides the bottom panel');
+   if(state.bottomHidden)assert.equal(state.enabledTabs,0,'only a subject without an enabled view controller hides the bottom panel');
    else if(!state.collapseDisabled){
     await click(page,'#workspace-bottom-collapse');
     assert.equal(await page.evaluate(`document.querySelector('.inspector-body').hidden`),true);

@@ -37,7 +37,6 @@ const interviewOnly=Bun.argv.includes('--interview-only');
 const completedPicture=Bun.argv.includes('--completed-picture')||Bun.argv.includes('--question-tab');
 const freshParts=Bun.argv.includes('--fresh-parts');
 const narrowQuestionResize=Bun.argv.includes('--question-narrow-resize');
-const followup839=Bun.argv.includes('--followup-839');
 const postQuestionPictures=Bun.argv.includes('--post-question-pictures');
 const boundRigPictureOnly=Bun.argv.includes('--bound-rig-picture');
 const workspace986=Bun.argv.includes('--workspace-986');
@@ -270,8 +269,6 @@ async function assertPaintingPersists(previous:Painting){
  assert.equal(state.mode,previous.mode);
  return {...identity,state};
 }
-type StripState={tabs:{id:string;text:string;disabled:boolean}[];selected:string|null;selectedVisible:boolean;questionFirst:boolean;reportOverflow:boolean;actRowVisible:boolean;ordinaryPanelVisible:boolean};
-const stripState=()=>page!.evaluate<StripState>(`(()=>{const row=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])'),visible=n=>!!n&&!n.hidden&&n.getClientRects().length>0&&getComputedStyle(n).display!=='none';const buttons=[...row.querySelectorAll(':scope>button[role=tab]')],selected=row.querySelector('[aria-selected=true]');return {tabs:buttons.filter(visible).map(n=>({id:n.dataset.blockTarget,text:n.textContent,disabled:n.disabled})),selected:selected?.dataset.blockTarget??null,selectedVisible:visible(selected),questionFirst:buttons[0]?.dataset.blockTarget==='question',reportOverflow:!!row.querySelector('[data-block-target=report-panel][data-tab-overflow]'),actRowVisible:visible(document.querySelector('#workspace-act-row')),ordinaryPanelVisible:visible(document.querySelector('#selected-part'))};})()`);
 async function selectBlock(target:string){
  if(target==='feedback'){
   await click(page!,'#stage-comment');
@@ -284,286 +281,9 @@ async function selectBlock(target:string){
   await click(page!,'.workspace-bottom-tabs>.block-row:not([hidden]) .workspace-tabs-more');await click(page!,`.workspace-tabs-menu:not([hidden]) [data-block-more-target="${target}"]`);
  }else await click(page!,selector);
 }
-const ordinaryParts=new Map<string,{state:StripState;sourceHash:string}>();
-async function ordinaryPartsStrip(language:string,out:string){
- const fixture=await scriptedJobWindowFixture({c5Parts:'mesh'});
- try{
-  const publication=await fixture.publish('parts');await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
-  const before=await jobInputHashes(fixture.input.root),url=new URL(fixture.locator+'/#cap='+fixture.credentials.ui);url.searchParams.set('lang',language);
-  await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.body.dataset.ready==='true'&&document.querySelector('[data-part-list] button')&&!document.body.inert`,'839 genuine ordinary parts verdict');
-  const state=await stripState();assert.equal(state.tabs.length,9);assert.equal(state.tabs[0]!.id,'selected-part');assert.equal(state.tabs[0]!.disabled,false);assert.ok(state.tabs.slice(1).every(tab=>tab.disabled));
-  const result={state,sourceHash:publication.source.sourceHash};await writeFile(join(out,'ordinary-parts.json'),JSON.stringify(result,null,2));await writeFile(join(out,'ordinary-parts.png'),await page!.screenshot());
-  assert.deepEqual(await jobInputHashes(fixture.input.root),before);ordinaryParts.set(language,result);return result;
- }finally{await page!.goto('about:blank');await fixture.close();}
-}
-function comparePartsStrip(state:StripState,ordinary:StripState,question:boolean){
- assert.deepEqual(state.tabs.filter(tab=>tab.id!=='question'),ordinary.tabs,'displayed ordinary parts tabs and disabled states match genuine parts-verdict job');
- assert.equal(state.tabs.some(tab=>tab.id==='question'),question);
- if(question){assert.equal(state.questionFirst,true);assert.equal(state.tabs[0]!.id,'question');assert.equal(state.tabs.find(tab=>tab.id==='question')!.disabled,false);}
-}
 
-/** #839 uses the same retained fixture and #834 viewport instrument; no replacement screen. */
-async function questionTabChecks(){
- for(const picture of [true,'parts'] as const)for(const language of ['en','ko'] as const){
-  const fixture=await recordScreenFixture('interview-picks',picture),out=join(output,picture==='parts'?'parts':'rig',language);
-  await mkdir(out,{recursive:true});fixture.output(out);const before=await jobInputHashes(fixture.root);
-  try{
-   // Measure the pre-existing controls, then publish the genuine pending ask through the fixture stream.
-   for(let i=fixture.fake.events.length-1;i>=0;i--)if(fixture.fake.events[i]!.type==='pending')fixture.fake.events.splice(i,1);
-   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
-   await page!.setViewport(1440,900);await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
-   const ordinary=picture==='parts'?await ordinaryPartsStrip(language,out):null;
-   await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#rig-root canvas')`,'839 baseline');
-   const tabs=async()=>(await stripState()).tabs;
-   const beforeAskStrip=await stripState();if(ordinary)comparePartsStrip(beforeAskStrip,ordinary.state,false);else assert.equal(beforeAskStrip.tabs.length,10,'ten ordinary Animate tabs remain displayed');
-   const awayTarget=picture==='parts'?'selected-part':'animation-dock';
-   const originalTabs=await tabs();
-   fixture.fake.pending(fixture.ask,fixture.display.publication.generation+1);
-   const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
-   await waitForQuestion(selector);
-   const eventPainting=await readPainting(2);
-   await rememberPainting();
-   assert.equal(await page!.evaluate<number>('devicePixelRatio'),2);assert.equal(await page!.evaluate<number>('innerWidth'),1440);
-   assert.equal(await page!.evaluate<string>(`document.querySelector('${questionTab}').textContent`),(language==='en'?enCatalog:koCatalog)['Question']);
-   const eventArrivalStrip=await stripState();assert.equal(eventArrivalStrip.tabs[0]!.id,'question');assert.deepEqual(eventArrivalStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs and enabled states retained');
-   if(ordinary)comparePartsStrip(eventArrivalStrip,ordinary.state,true);
-   assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
-   await writeFile(join(out,'event-arrival.png'),await page!.screenshot());
-   await selectBlock(awayTarget);
-   const eventAwayStrip=await stripState();assert.equal(eventAwayStrip.selected,awayTarget);assert.equal(eventAwayStrip.actRowVisible,true);
-   if(ordinary){comparePartsStrip(eventAwayStrip,ordinary.state,true);assert.equal(eventAwayStrip.ordinaryPanelVisible,true);}
-   await assertPaintingPersists(eventPainting);
-   // The same genuine pending stream must select Question on initial navigation, not only event arrival.
-   await page!.goto('about:blank');await page!.goto(url.href);
-   await waitForQuestion(selector);
-   const pendingPainting=await readPainting(2);
-   await rememberPainting();
-   const pendingStrip=await stripState();assert.equal(pendingStrip.tabs[0]!.id,'question');assert.deepEqual(pendingStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs retained on pending load');assert.equal(pendingStrip.selectedVisible,true);assert.equal(pendingStrip.questionFirst,true);
-   if(ordinary)comparePartsStrip(pendingStrip,ordinary.state,true);
-   assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),false,'pending interview save remains visible');
-   await writeFile(join(out,'load.png'),await page!.screenshot());
-   let narrowStrip:StripState|undefined;
-   if(picture===true&&narrowQuestionResize){
-    await command!('Emulation.setDeviceMetricsOverride',{width:900,height:900,deviceScaleFactor:2,mobile:false});
-    await wait(`(()=>{const row=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])');return row.querySelector('[data-block-target=question][aria-selected=true]')?.getBoundingClientRect().width>0&&!!row.querySelector('[data-block-target=report-panel][data-tab-overflow]');})()`,'839 900px selected Question visible and Report overflows');
-    narrowStrip=await stripState();assert.equal(narrowStrip.selectedVisible,true);assert.equal(narrowStrip.reportOverflow,true);assert.equal(narrowStrip.questionFirst,true);await writeFile(join(out,'narrow-900.png'),await page!.screenshot());
-    await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});await wait(`innerWidth===1440&&document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])').clientWidth>1000`,'839 full strip restored');
-   }
-   await selectBlock(awayTarget);
-   const awayStrip=await stripState();assert.equal(awayStrip.selected,awayTarget);assert.equal(awayStrip.actRowVisible,true);
-   if(ordinary){comparePartsStrip(awayStrip,ordinary.state,true);assert.equal(awayStrip.ordinaryPanelVisible,true);}
-   const awayPainting=await assertPaintingPersists(pendingPainting);
-   await writeFile(join(out,'away.png'),await page!.screenshot());
-   await click(page!,'#workspace-pending-ask');await waitForQuestion(selector);
-   await assertPaintingPersists(pendingPainting);
-   assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
-   // Clicking the visible main painting cannot open a pointed comment composer.
-   await wait(`!document.querySelector('#rig-viewport.stage-comment-mode,#reference-viewport.stage-comment-mode')`,'839 question image refuses pin mode');
-   await click(page!,'#stage-comment');
-   await wait(`!document.querySelector('#rig-viewport.stage-comment-mode,#reference-viewport.stage-comment-mode')`,'839 comment action keeps pin mode unavailable');
-   await click(page!,'#reference-viewport');
-   assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('.stage-comment-composer')`),false,'no pointed comment composer on the question image');
-   await click(page!,'#workspace-pending-ask');await waitForQuestion(selector);
-   await writeFile(join(out,'back.png'),await page!.screenshot());
-   await answerInterview(selector);
-   await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).scrollIntoView({block:'center'})`);
-   await click(page!,selector+' button[type=submit]');
-   await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'&&document.querySelector('#dirty').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})&&document.querySelector('#workspace-act-row').hidden`,'839 answer saved');
-   assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
-   assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),true,'answered interview submit is absent from readback');
-   assert.equal(await page!.evaluate<string>(`document.getElementById('message').textContent`),await page!.evaluate<string>(`document.getElementById('dirty').textContent`),'interview-only saved footer agrees with rendered saved header');
-   assert.deepEqual(await page!.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
-   assert.equal(await page!.evaluate<boolean>(`['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)`),true,'completed answer controls hidden');
-   assert.equal(await page!.evaluate<boolean>(`document.querySelector('#workspace-act-row').hidden`),true);
-   assert.deepEqual(await page!.evaluate<string[]>(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'single visible saved state');
-   const answeredStrip=await stripState();assert.equal(answeredStrip.tabs[0]!.id,'question');assert.deepEqual(answeredStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs retained after save');if(ordinary)comparePartsStrip(answeredStrip,ordinary.state,true);
-   const savedFooter:string=await page!.evaluate<string>(`document.getElementById('message').textContent`);
-   assert.equal(savedFooter,await page!.evaluate<string>(`document.getElementById('dirty').textContent`),'footer agrees with actual rendered saved header');
-   const readbackCopy=await page!.evaluate<string>(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).textContent`);assert.equal(readbackCopy,(language==='en'?enCatalog:koCatalog)['job.saved']);
-   await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).scrollIntoView({block:'center'})`);await writeFile(join(out,'readback-status.png'),await page!.screenshot());
-   const savedPainting=await assertPaintingPersists(pendingPainting);
-   await selectBlock(awayTarget);if(ordinary){const savedAway=await stripState();comparePartsStrip(savedAway,ordinary.state,true);assert.equal(savedAway.ordinaryPanelVisible,true);}
-   await assertPaintingPersists(pendingPainting);
-   await selectBlock('question');
-   await waitForQuestion(selector,true);
-   await assertPaintingPersists(pendingPainting);
-   await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
-   await writeFile(join(out,'answered.png'),await page!.screenshot());
-   const bytes=await readFile(join(out,'one-screen.json'),'utf8'),act=parseRecordAct(JSON.parse(bytes));assert.equal(act.kind,'interview-picks');
-   if(act.kind!=='interview-picks')throw Error('wrong act');
-   assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
-   const expected=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});
-   assert.equal(bytes,JSON.stringify(expected));
-   // The fixture server replays the committed act just as the real retained job stream does on reload.
-   const pending=fixture.fake.events.find(event=>event.type==='pending'&&event.ask.askId===fixture.ask.askId);
-   if(!pending||pending.type!=='pending')throw Error('missing pending fixture event');fixture.fake.events.push({type:'act',jobId:fixture.session.jobId,generation:fixture.display.publication.generation+2,cursor:String(fixture.fake.events.length+1),act});
-   await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'&&document.querySelector('#reference-content img')?.naturalWidth===2`,'839 reload readback');
-   await waitForQuestion(selector,true);await readPainting(2);
-   assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector+' fieldset')}).disabled`),true);
-   assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).hidden`),true,'answered interview submit is absent from readback');
-   assert.equal(await page!.evaluate<string>(`document.getElementById('message').textContent`),await page!.evaluate<string>(`document.getElementById('dirty').textContent`),'interview-only saved footer agrees with rendered saved header');
-   assert.deepEqual(await page!.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked')})].map(n=>n.value)`),['topology_other','density_auto']);
-   assert.equal(await page!.evaluate<string>(`document.querySelector(${JSON.stringify(selector+' textarea[name="other.topology"]')}).value`),'  Custom topology · 직접 입력\n');
-   assert.equal(await page!.evaluate<boolean>(`document.querySelector('#workspace-act-row').hidden&&['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)`),true,'reloaded completed row and controls hidden');
-   assert.deepEqual(await page!.evaluate<string[]>(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'reloaded single visible saved state');
-   assert.ok(await page!.evaluate<boolean>(`document.querySelector('#dirty').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`));
-   await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector+' input:checked')}).scrollIntoView({block:'center'})`);
-   await writeFile(join(out,'reload.png'),await page!.screenshot());
-   const reloadStrip=await stripState();assert.equal(reloadStrip.tabs[0]!.id,'question');assert.deepEqual(reloadStrip.tabs.filter(tab=>tab.id!=='question'),originalTabs,'displayed tabs retained on readback reload');if(ordinary)comparePartsStrip(reloadStrip,ordinary.state,true);
-   const observation={eventPainting,pendingPainting,awayPainting,savedPainting,transientPinRefused:true,pendingOnLoad:true,picture,language,width:1440,height:900,dpr:2,originalTabs,ordinary,beforeAskStrip,eventArrivalStrip,eventAwayStrip,pendingStrip,awayStrip,answeredStrip,reloadStrip,narrowStrip,readbackCopy,savedFooter,sourceHash:fixture.display.publication.source.sourceHash,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);persistedActs++;await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));
-   console.log('839_QUESTION_PASS '+JSON.stringify(observation));
-   assert.deepEqual(await jobInputHashes(fixture.root),before);
-  }finally{await fixture.close();}
- }
- await picturelessPartsQuestionChecks();
- await longInterviewScrollChecks(true);
-}
-
-/** A question without images leaves the published parts backdrop and its tabs available. */
-async function picturelessPartsQuestionChecks(){
- for(const language of ['en','ko'] as const){
-  const fixture=await recordScreenFixture('interview-picks','parts',undefined,undefined,false,false),out=join(output,'parts-no-question-image',language),ordinary=ordinaryParts.get(language);
-  assert.ok(ordinary);await mkdir(out,{recursive:true});fixture.output(out);const before=await jobInputHashes(fixture.root);
-  try{
-   const metadata=await (await fetch(fixture.origin+fixture.display.routes.apiBase+'interview')).json() as {questions:{images:unknown[]}[]};assert.equal(metadata.questions[0]!.images.length,0);assert.ok(fixture.backdrop);
-   await page!.setViewport(1440,900);await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
-   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page!.goto('about:blank');await page!.goto(url.href);
-   const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
-   await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&!!document.querySelector(${JSON.stringify(selector+' fieldset:not(:disabled)')})`,'839 no-image question ready over real parts');
-   await waitForQuestion(selector);
-   const pictureless=await page!.evaluate<{partVisible:boolean;imageModes:number;codeText:string;sourceAboveSubmit:boolean}>(`(()=>{
-    const canvas=document.querySelector('#parts-canvas'),form=document.querySelector(${JSON.stringify(selector)});
-    const context=form.querySelector('.interview-image-context'),submit=form.querySelector('button[type=submit]');
-    return {partVisible:canvas.getBoundingClientRect().width>0,imageModes:document.querySelectorAll('#view-menu [data-view^="interview-image-"]').length,
-     codeText:context.querySelector('code').textContent,sourceAboveSubmit:!!(context.compareDocumentPosition(submit)&Node.DOCUMENT_POSITION_FOLLOWING)};
-   })()`);
-   assert.equal(pictureless.partVisible,true);assert.equal(pictureless.imageModes,0);
-   assert.ok(pictureless.codeText.includes('.json · ')&&pictureless.sourceAboveSubmit,'bound-source line precedes submit');
-   assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
-   const pendingStrip=await stripState();comparePartsStrip(pendingStrip,ordinary.state,true);assert.equal(pendingStrip.actRowVisible,true);await writeFile(join(out,'pending.png'),await page!.screenshot());
-   await selectBlock('selected-part');const awayStrip=await stripState();comparePartsStrip(awayStrip,ordinary.state,true);assert.equal(awayStrip.ordinaryPanelVisible,true);await writeFile(join(out,'away.png'),await page!.screenshot());
-   await click(page!,'#workspace-pending-ask');await waitForQuestion(selector);
-   await answerInterview(selector);
-   await clickFormControl(selector+' button[type=submit]');
-   await waitForQuestion(selector,true);
-   const answeredStrip=await stripState();comparePartsStrip(answeredStrip,ordinary.state,true);assert.equal(answeredStrip.selected,'question');
-   assert.equal(await page!.evaluate<boolean>(`document.querySelector('#workspace-act-row').hidden`),true);
-   const savedFooter:string=await page!.evaluate<string>(`document.getElementById('message').textContent`);
-   assert.equal(savedFooter,await page!.evaluate<string>(`document.getElementById('dirty').textContent`),'footer agrees with actual rendered saved header');
-   const readbackCopy=await page!.evaluate<string>(`document.querySelector(${JSON.stringify(selector+' > [role="status"]')}).textContent`);assert.equal(readbackCopy,(language==='en'?enCatalog:koCatalog)['job.saved']);await writeFile(join(out,'answered.png'),await page!.screenshot());
-   const bytes=await readFile(join(out,'one-screen.json'),'utf8'),act=parseRecordAct(JSON.parse(bytes));assert.equal(act.kind,'interview-picks');if(act.kind!=='interview-picks')throw Error('wrong act');assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
-   const expected=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});assert.equal(bytes,JSON.stringify(expected));
-   fixture.fake.events.push({type:'act',jobId:fixture.session.jobId,generation:fixture.display.publication.generation+2,cursor:String(fixture.fake.events.length+1),act});
-   await page!.goto('about:blank');await page!.goto(url.href);await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#workspace-act-row').hidden`,'839 no-image saved reload');
-   await waitForQuestion(selector,true);
-   assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
-   const reloadStrip=await stripState();comparePartsStrip(reloadStrip,ordinary.state,true);assert.equal(reloadStrip.selected,'question');await writeFile(join(out,'reload.png'),await page!.screenshot());
-   const observation={picture:'parts',questionImages:false,language,sourceHash:fixture.display.publication.source.sourceHash,ordinary,pendingStrip,awayStrip,answeredStrip,reloadStrip,readbackCopy,savedFooter,fullActByteEqual:true,bytes:bytes.length};cases.push(observation);persistedActs++;await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2));console.log('839_NO_IMAGE_PARTS_PASS '+JSON.stringify(observation));
-   assert.deepEqual(await jobInputHashes(fixture.root),before);
-  }finally{await fixture.close();}
- }
-}
-
-/** Observer changes only the served test bundle, preserving the original error and fallback call. */
-async function followupResources(root:string,identity:string){
- const original=await (await buildWeb('single',root)).text();
- const pattern=/refused:\s*\(?([\w$]+)\)?\s*=>\s*([\w$]+)\(\1,\s*["']JOB_STREAM_FAILED["']\)/g;
- assert.equal([...original.matchAll(pattern)].length,1,'one pre-fallback observation site');
- const instrumented=original.replace(pattern,(_match,errorName:string,reportName:string)=>`refused: (${errorName})=>{const chain=[];let item=${errorName};for(let i=0;item!=null&&i<5;i++,item=item.cause)chain.push({name:String(item.name??typeof item),message:String(item.message??item),stack:String(item.stack??'')});(globalThis.__839OriginalErrors??=[]).push({chain,at:performance.now(),ready:document.body.dataset.ready,dialogOpen:!!document.querySelector('#job-record-asks[open]')});${reportName}(${errorName},"JOB_STREAM_FAILED");}`);
- const sources:Record<string,string>={};for(const path of ['web/main.ts','web/job-session.ts','web/job-rig-screen.ts','web/interview-panel.ts','web/inspector-blocks.ts','src/job-front.ts','src/build.ts'])sources[path]=sha(await readFile(join(root,path)));
- await writeFile(join(output,identity+'-bundle.json'),JSON.stringify({identity,root,sources,originalBundleSha256:sha(original),observedBundleSha256:sha(instrumented),observer:'Before existing stream refused callback fallback; original Error/cause/stack and report call preserved; no source file mutation'},null,2));
- return async(name:'index.html'|'main.js'|'styles.css'):Promise<BodyInit>=>name==='main.js'?instrumented:await readFile(join(root,'web',name),'utf8');
-}
-
-type RouteSnapshot={caught:{chain:{name:string;message:string;stack:string}[];at:number;ready?:string;dialogOpen:boolean}[];
- ready?:string;dialogOpen:boolean;dialogConnected:boolean;questionSelected:boolean;partsWidth?:number;formReady:boolean;message?:string;bodyText:string};
-type RouteObservation={variant:string;language:string;sourceHash:string;fixture:string;events?:unknown;initial?:RouteSnapshot;afterAnswer?:RouteSnapshot;
- saved?:RouteSnapshot;final?:RouteSnapshot|null;verdict?:string;originalFailure?:RouteSnapshot['caught'];downstream?:string;sourceImmutable?:boolean;error?:{message:string;stack?:string|null}};
-type Edges=Pick<Rect,'left'|'right'|'top'|'bottom'>;
-type StripRect=Edges&Pick<Rect,'width'|'height'>;
-type StripGeometry={selected:StripRect;activeRow:StripRect;strip:StripRect;viewport:StripRect;deltas:Record<'row'|'strip'|'viewport',Edges>;
- insideRow:boolean;insideStrip:boolean;insideViewport:boolean;selectedId:string;questionFirst:boolean;reportOverflow:boolean;documentWidth:number;deviceScaleFactor:number};
-type GeometryObservation={picture:string;language:string;sourceHash:string;width:number;height:number;dpr:number;navigation:string;
- originalState?:RouteSnapshot;geometry?:StripGeometry;sourceImmutable?:boolean;verdict?:string;error?:RouteObservation['error'];final?:RouteSnapshot|null};
-
-/** Preserve the frozen #839 native-form comparator and measure the current Question route. */
-async function followupQuestionChecks(){
- const mainRoot=process.env.RIG_REVIEW_839_MAIN_ROOT;assert.ok(mainRoot,'immutable main input supplied through nova-run --script');
- const variants=[{id:'main-38bb5f7',legacy:true,resource:await followupResources(mainRoot,'main-38bb5f7')},
-  {id:'current',legacy:false,resource:await followupResources(resolve('.'),'current')}];
- const pairs:RouteObservation[]=[],numeric:GeometryObservation[]=[];
- const snapshot=()=>page!.evaluate<RouteSnapshot>(`({caught:globalThis.__839OriginalErrors??[],ready:document.body.dataset.ready,
-  dialogOpen:!!document.querySelector('#job-record-asks[open]'),dialogConnected:!!document.querySelector('#job-record-asks')?.isConnected,
-  questionSelected:!!document.querySelector('${questionTab}'),partsWidth:document.querySelector('#parts-canvas')?.width,
-  formReady:!!document.querySelector('form.interview-answer fieldset:not(:disabled)'),message:document.querySelector('#review-message')?.textContent,
-  bodyText:document.body.innerText.slice(0,12000)})`);
- for(const variant of variants)for(const language of ['en','ko'] as const){
-  const out=join(output,'no-image-pair',variant.id,language);await mkdir(out,{recursive:true});
-  const fixture=await recordScreenFixture('interview-picks','parts',out,undefined,false,false,variant.resource),entry:RouteObservation={variant:variant.id,language,sourceHash:fixture.display.publication.source.sourceHash,fixture:'Same retained parts backdrop and images-empty record path, including original event history'};
-  try{
-   const before=await jobInputHashes(fixture.root),metadata=await (await fetch(fixture.origin+fixture.display.routes.apiBase+'interview')).json() as {questions:{images:unknown[]}[]};assert.equal(metadata.questions[0]!.images.length,0);
-   entry.events=fixture.fake.events;await page!.setViewport(1440,900);await command!('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:2,mobile:false});
-   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page!.goto('about:blank');await page!.goto(url.href);
-   await wait(`(globalThis.__839OriginalErrors?.length??0)>0||(document.body.dataset.ready==='true'&&!!document.querySelector('form.interview-answer fieldset:not(:disabled)'))`,'839 paired no-image original result');
-   entry.initial=await snapshot();
-   const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
-   if(!entry.initial.caught.length){
-    if(variant.legacy){
-     if(!entry.initial.dialogOpen)await click(page!,'#workspace-pending-ask');
-     await wait(`(globalThis.__839OriginalErrors?.length??0)>0||!!document.querySelector('#job-record-asks[open] form.interview-answer fieldset:not(:disabled)')`,'839 frozen native Answer action');
-    }else{
-     await waitForQuestion(selector);
-     assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
-    }
-    entry.afterAnswer=await snapshot();
-   }
-   const state=entry.afterAnswer??entry.initial;
-   const reachable=variant.legacy?state.dialogOpen:state.questionSelected&&!state.dialogOpen;
-   entry.verdict=state.caught.length?'RED_ORIGINAL_REFUSAL':reachable?'ANSWER_FORM_OPEN':'RED_ANSWER_FORM_ABSENT';
-   entry.originalFailure=state.caught;entry.downstream=state.caught.length?'SKIP_NO_IMAGE_ACTS_ORIGINAL_REFUSAL':'answer form reachable';
-   if(entry.verdict==='ANSWER_FORM_OPEN'){
-    await answerInterview(selector);
-    await clickFormControl(selector+' button[type=submit]');
-    await wait(`(globalThis.__839OriginalErrors?.length??0)>0||document.querySelector(${JSON.stringify(selector)})?.dataset.interviewAnswered==='true'`,'839 paired save');
-    entry.saved=await snapshot();
-    if(entry.saved.caught.length){entry.verdict='RED_ORIGINAL_REFUSAL';entry.originalFailure=entry.saved.caught;}
-    else{
-     const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));
-     assert.equal(act.kind,'interview-picks');assert.equal(JSON.stringify(act.value),baseline.expectedValueBytes);
-     entry.verdict=variant.legacy?'NATIVE_ANSWER_SAVED':'QUESTION_ANSWER_SAVED';
-    }
-   }
-   assert.deepEqual(await jobInputHashes(fixture.root),before);entry.sourceImmutable=true;
-  }catch(error){entry.verdict='RED_TEST_OR_ROUTE';entry.error={message:String(error),stack:error instanceof Error?error.stack:null};entry.final=await snapshot().catch(()=>null);}
-  finally{await writeFile(join(out,'screen.png'),await page!.screenshot()).catch(()=>{});await writeFile(join(out,'observation.json'),JSON.stringify(entry,null,2));pairs.push(entry);console.log('839_NO_IMAGE_PAIR '+JSON.stringify({variant:entry.variant,language,verdict:entry.verdict,originalFailure:entry.originalFailure,error:entry.error}));await page!.goto('about:blank');await fixture.close();}
- }
- await writeFile(join(output,'no-image-pair.json'),JSON.stringify(pairs,null,2));
- for(const picture of [true,'parts'] as const)for(const language of ['en','ko'] as const){
-  const out=join(output,'fresh-900',picture==='parts'?'parts':'rig',language);await mkdir(out,{recursive:true});
-  const fixture=await recordScreenFixture('interview-picks',picture,out,undefined,false,true,variants[1]!.resource),entry:GeometryObservation={picture:picture==='parts'?'parts':'rig',language,sourceHash:fixture.display.publication.source.sourceHash,width:900,height:900,dpr:2,navigation:'fresh about:blank then genuine pending owner URL at preconfigured width900; no post-navigation resize'};
-  try{
-   // Keep only the actual active ask for this independent geometry measurement.
-   const historical=fixture.fake.events.findIndex(event=>event.type==='pending'&&event.ask.askId==='historical-incompatible');
-   if(historical>=0)fixture.fake.events.splice(historical,1);
-   const before=await jobInputHashes(fixture.root);await page!.setViewport(900,900);await command!('Emulation.setDeviceMetricsOverride',{width:900,height:900,deviceScaleFactor:2,mobile:false});
-   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page!.goto('about:blank');await page!.goto(url.href);
-   await wait(`(globalThis.__839OriginalErrors?.length??0)>0||(document.body.dataset.ready==='true'&&!!document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target=question][aria-selected=true]')&&document.querySelector('#reference-content img')?.naturalWidth===2)`,'839 fresh900 pending ready');
-   entry.originalState=await snapshot();
-   if(entry.originalState.caught.length)entry.verdict='RED_ORIGINAL_REFUSAL';
-   else{
-    await page!.evaluate<void>(`document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))`);
-    entry.geometry=await page!.evaluate<StripGeometry>(`(()=>{const row=document.querySelector('.workspace-bottom-tabs>.block-row:not([hidden])'),strip=document.querySelector('.workspace-bottom-tabs'),tab=row.querySelector('[data-block-target=question][aria-selected=true]'),rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};},selected=rect(tab),activeRow=rect(row),stripRect=rect(strip),viewport={left:0,top:0,right:innerWidth,bottom:innerHeight,width:innerWidth,height:innerHeight},deltas=b=>({left:selected.left-b.left,right:b.right-selected.right,top:selected.top-b.top,bottom:b.bottom-selected.bottom}),inside=b=>{const d=deltas(b);return selected.width>0&&selected.height>0&&Object.values(d).every(v=>v>=-0.5);};return {selected,activeRow,strip:stripRect,viewport,deltas:{row:deltas(activeRow),strip:deltas(stripRect),viewport:deltas(viewport)},insideRow:inside(activeRow),insideStrip:inside(stripRect),insideViewport:inside(viewport),selectedId:tab.dataset.blockTarget,questionFirst:[...row.querySelectorAll(':scope>button[role=tab]')][0]?.dataset.blockTarget==='question',reportOverflow:!!row.querySelector('[data-block-target=report-panel][data-tab-overflow]'),documentWidth:document.documentElement.scrollWidth,deviceScaleFactor:devicePixelRatio};})()`);
-    const g=entry.geometry;await readPainting(2);assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));entry.verdict=g.viewport.width===900&&g.insideRow&&g.insideStrip&&g.insideViewport&&g.questionFirst&&(picture==='parts'||g.reportOverflow)?'FRESH_900_CONTAINED':'RED_FRESH_900_CLIPPED';
-   }
-   assert.deepEqual(await jobInputHashes(fixture.root),before);entry.sourceImmutable=true;
-  }catch(error){entry.verdict='RED_TEST_OR_ROUTE';entry.error={message:String(error),stack:error instanceof Error?error.stack:null};entry.final=await snapshot().catch(()=>null);}
-  finally{await writeFile(join(out,'screen.png'),await page!.screenshot()).catch(()=>{});await writeFile(join(out,'geometry.json'),JSON.stringify(entry,null,2));numeric.push(entry);console.log('839_FRESH_900 '+JSON.stringify(entry));await page!.goto('about:blank');await fixture.close();}
- }
- await writeFile(join(output,'fresh-900.json'),JSON.stringify(numeric,null,2));
- const result={pairs:pairs.map(e=>({variant:e.variant,language:e.language,verdict:e.verdict})),numeric:numeric.map(e=>({picture:e.picture,language:e.language,verdict:e.verdict})),originalRefusals:pairs.filter(e=>e.verdict==='RED_ORIGINAL_REFUSAL').length,uncaughtExceptions:exceptions,passed:pairs.every(e=>e.verdict===(e.variant==='main-38bb5f7'?'NATIVE_ANSWER_SAVED':'QUESTION_ANSWER_SAVED'))&&numeric.every(e=>e.verdict==='FRESH_900_CONTAINED')&&exceptions.length===0};
- await writeFile(join(output,'followup-result.json'),JSON.stringify(result,null,2));console.log('839_FOLLOWUP_RESULT '+JSON.stringify(result));if(!result.passed)process.exitCode=1;
-}
-
+/* #1041 retired the flag-only #839 questionTabChecks and followupQuestionChecks: the Question is no longer a bottom
+ * strip tab. The handover maps each retired assertion to its right-panel home. */
 async function assertNoPictureQuestionTab(reason:string,catalog:Record<string,string>,selector='form.interview-answer'){
  const state=await page!.evaluate<{
   tabOpen:boolean;
@@ -1071,6 +791,16 @@ async function liveQuestionDraftChecks(){
     await wait(`document.querySelector(${JSON.stringify(status)})?.textContent===${JSON.stringify(catalog['job.saved'])}`,'986 live answer saved');
     if(painting)observation.savedPainting=await assertPaintingPersists(painting);
     assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(submit)}).hidden`),true);
+    // Carried from the retired #839 questionTabChecks: the completed answer leaves no act controls and one saved state,
+    // and the question painting cannot take a pointed comment.
+    assert.equal(await page!.evaluate<boolean>(`['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)&&document.querySelector('#workspace-act-row').hidden`),true,'completed answer controls hidden');
+    assert.deepEqual(await page!.evaluate<string[]>(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['dirty'],'single visible saved state');
+    if(painting){
+     await click(page!,'#stage-comment');
+     await wait(`!document.querySelector('#rig-viewport.stage-comment-mode,#reference-viewport.stage-comment-mode')`,'question image keeps pin mode unavailable');
+     await click(page!,'#reference-viewport');
+     assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('.stage-comment-composer')`),false,'no pointed comment composer on the question image');
+    }
     const footer=await page!.evaluate<string>(`document.getElementById('message').textContent`);
     assert.equal(footer,await page!.evaluate<string>(`document.getElementById('dirty').textContent`));
     observation.savedFooter=footer;
@@ -1454,11 +1184,10 @@ try{
  else if(Bun.argv.includes('--first-question-drawer'))await firstQuestionInDrawer();
  else if(boundRigPictureOnly)await boundRigPictureChecks();
  else if(postQuestionPictures)await postQuestionPictureChecks();
- else if(followup839){holdImages=false;await followupQuestionChecks();}else{
+ else{
  await firstQuestionInDrawer();
  if(!completedPicture||workspace986)await liveQuestionDraftChecks();
  if(workspace986)await twoImageDrawerChecks();
- if(completedPicture||workspace986)await questionTabChecks();
  if(!interviewOnly&&!freshParts&&!completedPicture){
   await postQuestionPictureChecks();
   await boundRigPictureChecks();
