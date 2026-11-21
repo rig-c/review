@@ -4,7 +4,7 @@ import {expect,test} from 'bun:test';
 import {readdir,readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {feedbackTimingLabel,timeOnlyBasis} from '../src/stage-comment.ts';
+import {feedbackItemComments,feedbackTimingLabel,projectComments,timeOnlyBasis} from '../src/stage-comment.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {createInterviewForm,interviewErrors,interviewPicksRecord} from '../web/interview-panel.ts';
@@ -783,18 +783,18 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
     await rowBtn.onclick!();
     applyDomI18n(doc as unknown as Document);
 
-    // Surface 3: Stage comment drawer row button preserves catalogue-matching summary in ko.
+    // Surface 3: Stage comment drawer row button preserves catalogue-matching summary in ko while localizing the frame basis label (#1026).
     const koItem=list.children.find((n:TestElement)=>n.className==='stage-comment-item')!;
     const koRowBtn=koItem.children[0]!;
     expect(koRowBtn.className).toBe('stage-comment-summary');
-    expect(koRowBtn.textContent).toBe(`1 · ANIMATE · RIG · F0 (producer) · ${catalogSummary}`);
+    expect(koRowBtn.textContent).toBe(`1 · ANIMATE · RIG · F0 (프로듀서) · ${catalogSummary}`);
 
     // Planted old-code control for Surface 3: unexempt row button gets its trailing summary translated by ' · ' splitting.
     const unexemptRowBtn=doc.createElement('button');
     unexemptRowBtn.textContent=`1 · ANIMATE · RIG · F0 (producer) · ${catalogSummary}`;
     root.append(unexemptRowBtn);
     applyDomI18n(doc as unknown as Document);
-    expect(unexemptRowBtn.textContent).toBe('1 · ANIMATE · RIG · F0 (producer) · 현재 포즈에서 그려지지 않음');
+    expect(unexemptRowBtn.textContent).toBe('1 · ANIMATE · RIG · F0 (프로듀서) · 현재 포즈에서 그려지지 않음');
 
     // Surface 4: Stage comment pin title and aria-label preserve catalogue-matching summary in ko.
     const layer=pane.children.find((n:TestElement)=>n.className==='stage-comment-layer')!;
@@ -1627,4 +1627,85 @@ test('#1009 provenance rig and motion SHA rows localize Not supplied in KO/EN wh
    expect(motion.textContent).toBe('Not supplied');
   }
  }finally{setLanguagePreference(preference);}
+});
+
+test('#1026 stage comment row localizes producer and multi-digit reference frame basis labels in KO while keeping EN, reviewer summary, and act projection byte-identical',()=>{
+ const preference=getLanguagePreference();
+ const {doc,root}=makeTestDoc();
+ const main=doc.createElement('main');
+ const toolbar=doc.createElement('div');
+ const toggle=doc.createElement('button');toggle.id='stage-comment';toggle.title='Comment · C (active mesh editor keeps C)';
+ toolbar.append(toggle);
+ const pane=doc.createElement('div');pane.clientWidth=100;pane.clientHeight=100;
+ main.append(toolbar,pane);
+ root.append(main);
+ const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABHNCSVQICAgIfAhkiAAAAAFzUkdCAK7OHOkAAAALSURBVAiZY2AAAgAABQABYlUyiAAAAABJRU5ErkJggg==';
+ const sha='c'.repeat(64);
+ const camera={space:'world' as const,center:{x:0,y:0},zoom:1,viewport:{width:100,height:100},visible:{x:-50,y:-50,width:100,height:100}};
+ const singleBookmark={schema:'rig-review-inspection/1',binding:{mode:'single',sourceHash:sha,rigs:[null]},time:0.166667,animation:'idle',theme:'dark',layers:{images:true,meshes:false,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:camera,a:null,b:null,reference:null}},selection:{inspector:'playback'}};
+ const compareBookmark={schema:'rig-review-inspection/1',binding:{mode:'compare',sourceHash:sha,rigs:[null,null]},time:5,animation:'idle',theme:'dark',layers:{images:true,meshes:false,bones:false},view:{schema:'rig-review-view/1',cameras:{rig:null,a:camera,b:camera,reference:camera}},selection:{mode:'compare',inspector:'playback'}};
+ const producerMark={schema:'rig-review-comment/1' as const,mode:'animate' as const,viewport:'rig' as const,frame:{index:4,basis:'producer' as const},time:0.166667,animation:'idle',sourceHash:sha,modelHash:null,referenceHash:null,referenceId:null,camera,screen:{x:40,y:40,width:0,height:0},world:{x:0,y:0,width:0,height:0},slots:[],crop:{path:`comment-crops/${sha}.png`,sha256:sha,png:'data:image/png;base64,'+png,width:1,height:1},bookmark:singleBookmark};
+ const referenceMark={...producerMark,mode:'compare' as const,viewport:'reference' as const,frame:{index:120,basis:'reference' as const},time:5,bookmark:compareBookmark};
+ const reviewerSummary='Not drawn at current pose';
+ expect(koCatalog[reviewerSummary]).toBe('현재 포즈에서 그려지지 않음');
+ const feedbackRows:any[]=[
+  {id:'sc-producer',frameStart:4,frameEnd:4,target:{kind:'rig',name:'probe'},category:'defect',summary:reviewerSummary,context:{animation:'idle',time:0.166667,frame:4,interval:{frameStart:4,frameEnd:4,inclusive:true},comment:producerMark}},
+  {id:'sc-reference',frameStart:120,frameEnd:120,target:{kind:'rig',name:'probe'},category:'defect',summary:'Reset',context:{animation:'idle',time:5,frame:null,interval:{frameStart:120,frameEnd:120,inclusive:true},comment:referenceMark}},
+ ];
+ const expectedSnapshot=JSON.stringify(feedbackRows);
+ const expectedProjection=projectComments(feedbackItemComments(feedbackRows));
+ const parsedSession:any={schema:'rig-review-session/1',id:'probe',revision:'v1',sourceHash:sha,reviewedSource:{packageRevision:'v1',rig:null,motion:null},referenceBinding:null,status:'changes-requested',updatedAt:'2026-11-20T00:00:00.000Z',checkpoints:{},feedback:feedbackRows,feedbackWarnings:[],historyWarnings:[]};
+ const expectedExportJson=JSON.stringify(feedbackWithCommentGroups(parsedSession));
+ const expectedExportMd=formatFeedbackIssues(parsedSession);
+ expect(expectedExportMd).toContain('- Viewport: rig · frame basis: producer');
+ expect(expectedExportMd).toContain('- Viewport: reference · frame basis: reference');
+ const savedGlobals=new Map<string,any>();
+ for(const [k,v]of Object.entries({document:doc,window:root,requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{}})){
+  savedGlobals.set(k,(globalThis as any)[k]);
+  (globalThis as any)[k]=v;
+ }
+ setLanguagePreference('ko');
+ const tool=bindStageComments({
+  toolbar:toolbar as any,
+  viewports:{rig:pane as any},
+  pose:()=>({mode:'animate',camera,frame:{index:4,basis:'producer'},time:0.166667,animation:'idle',turn:null,sourceHash:sha,modelHash:null,referenceHash:null,referenceId:null,rig:'probe'}),
+  pause:async()=>{},
+  bookmark:()=>singleBookmark,
+  restore:async()=>{},
+  feedback:()=>feedbackRows,
+  locked:()=>false,
+  add:f=>feedbackRows.push(f),
+  changed:()=>{},
+  error:()=>{},
+  refusal:()=>null,
+  blocked:()=>false,
+ });
+ try{
+  const list=main.children.find((n:TestElement)=>n.id==='stage-comment-list')!;
+  const rowTexts=()=>list.children.filter((n:TestElement)=>n.className==='stage-comment-item').map((item:TestElement)=>item.children[0]!.textContent);
+  applyDomI18n(doc as unknown as Document);
+  expect(rowTexts()).toEqual([
+   `1 · ANIMATE · RIG · F4 (프로듀서) · ${reviewerSummary}`,
+   '2 · COMPARE · REFERENCE · F120 (레퍼런스) · Reset',
+  ]);
+  expect(JSON.stringify(feedbackRows)).toBe(expectedSnapshot);
+  expect(projectComments(feedbackItemComments(feedbackRows))).toBe(expectedProjection);
+  expect(JSON.stringify(feedbackWithCommentGroups(parsedSession))).toBe(expectedExportJson);
+  expect(formatFeedbackIssues(parsedSession)).toBe(expectedExportMd);
+
+  setLanguagePreference('en');
+  applyDomI18n(doc as unknown as Document);
+  expect(rowTexts()).toEqual([
+   `1 · ANIMATE · RIG · F4 (producer) · ${reviewerSummary}`,
+   '2 · COMPARE · REFERENCE · F120 (reference) · Reset',
+  ]);
+  expect(JSON.stringify(feedbackRows)).toBe(expectedSnapshot);
+  expect(projectComments(feedbackItemComments(feedbackRows))).toBe(expectedProjection);
+  expect(JSON.stringify(feedbackWithCommentGroups(parsedSession))).toBe(expectedExportJson);
+  expect(formatFeedbackIssues(parsedSession)).toBe(expectedExportMd);
+ }finally{
+  tool.dispose();
+  setLanguagePreference(preference);
+  for(const [k,v]of savedGlobals)(globalThis as any)[k]=v;
+ }
 });

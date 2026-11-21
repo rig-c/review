@@ -336,7 +336,7 @@ async function run(lang: 'en' | 'ko') {
       assert.equal(row.rows.length, 1, 'one pinned comment row');
       const timeOnly = catalog['{0} s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)']!.replace('{0}', '0.375');
       if (declareFrames) {
-        assert.equal(row.rows[0], '1 · ANIMATE · RIG · F4 (producer) · Pinned frame check', 'the normal row, unchanged wording');
+        assert.equal(row.rows[0], '1 · ANIMATE · RIG · ' + catalog['F{0} (producer)']!.replace('{0}', '4') + ' · Pinned frame check', 'the normal row; #1026 localizes the frame basis label');
         assert.ok(!row.rows[0]!.includes('COMMENT_FRAME_UNAVAILABLE'));
       } else assert.equal(row.rows[0], '1 · ANIMATE · RIG · ' + timeOnly + ' · Pinned frame check', "today's time-only row");
       await writeFile(join(out, 'comment-row.png'), await page.screenshot());
