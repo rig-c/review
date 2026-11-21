@@ -73,6 +73,7 @@ for(const language of ['en','ko'] as const)for(const [width,height] of [[1280,72
   check(refused.answersFit&&refused.stateFits,label+' the save state and the answers keep their content width');
   check(refused.message&&refused.message.right<=width&&refused.message.bottom<=refused.row!.bottom,label+' the refusal stays inside the row');
   check(refused.message?.full,label+' the refusal renders its whole text, not clamped');
+  check(refused.message&&refused.headline&&refused.headline.right<=refused.message.x+0.5,`${label} the ask ends before the refusal begins (${refused.headline?.right}/${refused.message?.x})`);
   check(refused.message?.titled,label+' the refusal carries its full text in its title');
   check(refused.headlineOneLine&&refused.headlineFull,label+' the ask stays on one line with its full sentence in its title');
  }finally{
