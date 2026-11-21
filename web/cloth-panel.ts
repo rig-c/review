@@ -125,7 +125,7 @@ export function bindClothPanel(deps:ClothPanelDeps):ClothPanel {
   select(tag){selected=tag;render();deps.changed();},
   values:(tag=selected)=>({...current(tag).values}),
   set(key,text,tag=selected){const f=RECIPE_FIELDS.find(x=>x.key===key);if(!f)throw new Error(`CLOTH_FIELD_UNKNOWN: ${key}`);const e=current(tag);edits.set(tag,{declared:e.declared,values:{...e.values,[key]:text}});change();},
-  declare(on,tag=selected){const e=current(tag);edits.set(tag,{declared:on,values:{...e.values}});change();},
+  declare(on,tag=selected){if(on&&status&&!status.targetsRead&&recipe(tag)===undefined&&status.targetsReason){panelStatus(status.targetsReason,true);throw new Error(status.targetsReason);}const e=current(tag);edits.set(tag,{declared:on,values:{...e.values}});change();},
   ops:allOps,
   active:()=>active,setActive,
   links(){return {tag:selected,inspected:status?.tags.find(t=>t.tag===selected)??null,drafted:drafted.find(t=>t.tag===selected)??null};},

@@ -659,6 +659,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "CLOTH_NOTHING_PENDING: no pending ops": "CLOTH_NOTHING_PENDING: no pending ops",
   "CLOTH_PATCH_MIXED: ": "CLOTH_PATCH_MIXED: ",
   "CLOTH_PATCH_MIXED: a cloth recipe patch holds /cloth ops only; apply the other edits separately": "CLOTH_PATCH_MIXED: a cloth recipe patch holds /cloth ops only; apply the other edits separately",
+  "CLOTH_TARGETS_INVALID: {0}": "CLOTH_TARGETS_INVALID: {0}",
+  "CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts {0} has no cloth-targets export": "CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts {0} has no cloth-targets export",
   "CLOTH_UNAVAILABLE: no producer handoff": "CLOTH_UNAVAILABLE: no producer handoff",
   "COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build": "COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build",
   "COMMENT_BACKGROUND_UNAVAILABLE: unknown stage ellipse": "COMMENT_BACKGROUND_UNAVAILABLE: unknown stage ellipse",

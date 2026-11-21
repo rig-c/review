@@ -659,6 +659,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "CLOTH_NOTHING_PENDING: no pending ops": "CLOTH_NOTHING_PENDING: 보류 중인 작업이 없어요",
   "CLOTH_PATCH_MIXED: ": "CLOTH_PATCH_MIXED: ",
   "CLOTH_PATCH_MIXED: a cloth recipe patch holds /cloth ops only; apply the other edits separately": "CLOTH_PATCH_MIXED: 천 레시피 패치는 /cloth 작업만 포함할 수 있어요. 다른 편집은 별도로 적용하세요",
+  "CLOTH_TARGETS_INVALID: {0}": "CLOTH_TARGETS_INVALID: {0}",
+  "CLOTH_TARGETS_UNAVAILABLE: the installed rig-parts {0} has no cloth-targets export": "CLOTH_TARGETS_UNAVAILABLE: 설치된 rig-parts {0}에 cloth-targets 내보내기가 없어요",
   "CLOTH_UNAVAILABLE: no producer handoff": "CLOTH_UNAVAILABLE: 프로듀서 핸드오프가 없어요",
   "COMMENT_APPLIED_BUILD_UNSUPPORTED: return to the inspected source before commenting on this applied scratch build": "COMMENT_APPLIED_BUILD_UNSUPPORTED: 적용된 임시 빌드에 코멘트를 남기려면 먼저 점검 중인 소스로 돌아가세요",
   "COMMENT_BACKGROUND_UNAVAILABLE: unknown stage ellipse": "COMMENT_BACKGROUND_UNAVAILABLE: 알 수 없는 스테이지 타원",
