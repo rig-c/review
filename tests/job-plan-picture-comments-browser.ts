@@ -41,6 +41,7 @@ const languages=(arg('--lang')?[arg('--lang')]:['en','ko']) as ('en'|'ko')[];
 const sizes=(arg('--size')?[arg('--size')!]:['1440x900','1280x720']).map(size=>size.split('x').map(Number) as [number,number]);
 const profile=await mkdtemp(join(tmpdir(),'review-1048-browser-'));let page:InputCdpSession|undefined;
 const errors:unknown[]=[],cases:unknown[]=[];
+let control:((method:string,params?:Record<string,unknown>)=>Promise<unknown>)|undefined;
 async function wait(expression:string,label:string){const until=Date.now()+30000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(25);}throw new Error('1048_WAIT '+label);}
 async function shot(out:string,name:string){await writeFile(join(out,name+'.png'),await page!.screenshot());}
 type Geometry={scale:number;left:number;top:number};
@@ -57,6 +58,27 @@ async function captureOn(){await wait(`!!document.querySelector('#stage-comment-
 async function pointAt(x:number,y:number){const g=await geometry(),p=at(g,x,y);await page!.mouse('mouseMoved',p.x,p.y);await page!.mouse('mousePressed',p.x,p.y);await page!.mouse('mouseReleased',p.x,p.y);}
 async function dragFrom(a:[number,number],b:[number,number]){const g=await geometry(),p=at(g,...a),q=at(g,...b);
  await page!.mouse('mouseMoved',p.x,p.y);await page!.mouse('mousePressed',p.x,p.y);await page!.mouse('mouseMoved',(p.x+q.x)/2,(p.y+q.y)/2);await page!.mouse('mouseMoved',q.x,q.y);await page!.mouse('mouseReleased',q.x,q.y);}
+/** #1062: the composer a pin click opens takes keyboard text at once. Typing goes through CDP input, never a focus() call. */
+async function typedWithoutFocus(text:string){await wait(`!!document.querySelector('.stage-comment-composer input')`,'composer');
+ const focused=await page!.evaluate<boolean>(`document.activeElement===document.querySelector('.stage-comment-composer input')`);
+ assert.equal(focused,true,'1062_COMPOSER_FOCUS: the pin composer focuses its text field when it opens');
+ assert.ok(control,'CDP input');await control!('Input.insertText',{text});
+ assert.equal(await page!.evaluate<string>(`document.querySelector('.stage-comment-composer input').value`),text,'typing without clicking the field fills it');}
+/** #1062: a still picture has no clock. Its row names the picture and the place, never a time or frame warning. */
+async function assertPictureRows(catalog:Readonly<Record<string,string>>,picture:{path:string},places:string[],label:string){
+ const name=picture.path.split('/').at(-1)!,seconds=catalog['{0} s (seconds basis)']!.replace('{0}',''),unavailable=catalog['Frame unavailable']!;
+ const rows=await page!.evaluate<string[]>(`[...document.querySelectorAll('#stage-comment-list .stage-comment-item')].map(row=>[row,...row.querySelectorAll('*')].flatMap(n=>[n.textContent,n.getAttribute('title'),n.getAttribute('aria-label'),n.getAttribute('aria-description')]).filter(Boolean).join(' | '))`);
+ assert.equal(rows.length,places.length,label+' rows');
+ rows.forEach((text,index)=>{
+  for(const bad of ['COMMENT_FRAME_UNAVAILABLE',unavailable,seconds])assert.ok(!text.includes(bad),`1062_ROW ${label}: row ${index+1} carries ${JSON.stringify(bad)}: ${text}`);
+  assert.ok(text.includes(name),`1062_ROW ${label}: row ${index+1} names the picture: ${text}`);
+  assert.ok(text.includes(' · '+catalog[places[index]!]+' · '),`1062_ROW ${label}: row ${index+1} names the place ${places[index]}: ${text}`);
+ });
+ const tree=await control!('Accessibility.getFullAXTree',{}) as {nodes:{name?:{value?:unknown};description?:{value?:unknown}}[]};
+ const named=tree.nodes.flatMap(n=>[n.name?.value,n.description?.value]).filter((v):v is string=>typeof v==='string'&&(v.includes('COMMENT_FRAME_UNAVAILABLE')||v.includes(unavailable)));
+ assert.deepEqual(named,[],`1062_ROW ${label}: no accessible name or description carries the frame warning`);
+ return rows;
+}
 type Row={id:string;summary:string;target:unknown;context:{comment:{viewport:string;referenceId:string;referenceHash:string;world:{x:number;y:number;width:number;height:number};camera:{space:string}}}};
 const draft=()=>page!.evaluate<{key:string;value:{sourceHash:string;comments:Row[]}}[]>(`Object.entries(localStorage).filter(([key])=>key.startsWith('rig-review-record-comments/1:')).map(([key,raw])=>({key,value:JSON.parse(raw)}))`);
 /** Each drawn region's top-left, back in picture pixels, must be the saved `world` corner. Zoom and fit animate, so the
@@ -79,7 +101,7 @@ async function assertPinsOnPicture(rows:Row[],label:string){
  }
 }
 try{
- page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:event=>{if(event.method==='Runtime.exceptionThrown')errors.push(event.params);}});
+ page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{if(event.sessionId)control=send;if(event.method==='Runtime.exceptionThrown')errors.push(event.params);}});
  for(const [width,height] of sizes)for(const language of languages){
   const catalog=language==='en'?enCatalog:koCatalog,name=`${width}x${height}`;
   await page.setViewport(width,height);
@@ -92,9 +114,12 @@ try{
     const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href,language);
     await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#reference-content img')?.naturalWidth`,'plan picture drawn');
     await captureOn();await shot(out,'1-pin-mode');
-    await pointAt(80,60);await save('Point · 점 '+language);
+    await pointAt(80,60);await typedWithoutFocus('Point · 점 '+language);await save('Point · 점 '+language);
     await captureOn();await dragFrom([200,150],[280,210]);await save('Region · 영역 '+language);
     await shot(out,'2-saved');
+    const rowText=await assertPictureRows(catalog,picture,['Point','Region'],'after save');
+    const list=await page.evaluate<{x:number;y:number;width:number;height:number}>(`(()=>{const r=document.querySelector('#stage-comment-list').getBoundingClientRect();return {x:r.left,y:r.top,width:r.width,height:Math.max(1,r.height)};})()`);
+    await writeFile(join(out,'2-saved-rows.png'),await page.screenshot(list));
     const saved=await draft();assert.equal(saved.length,1,'one record draft');
     const rows=saved[0]!.value.comments;assert.equal(rows.length,2);
     for(const row of rows){const c=row.context.comment;
@@ -108,6 +133,7 @@ try{
     await page.goto('about:blank');await page.goto(url.href,language);
     await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('#reference-content img')?.naturalWidth&&document.querySelectorAll('#stage-comment-list .stage-comment-item').length===2`,'reload restores both pins');
     const reloaded=await assertPinsOnPicture(rows,'after reload');await shot(out,'3-reloaded');
+    await assertPictureRows(catalog,picture,['Point','Region'],'after reload');
     await click(page,'#zoom-in');await click(page,'#zoom-in');
     await wait(`(()=>{const img=document.querySelector('#reference-content img');return img.getBoundingClientRect().width/img.naturalWidth>${reloaded.scale*1.05};})()`,'zoomed');
     const zoomed=await assertPinsOnPicture(rows,'after zoom');await shot(out,'4-zoomed');
@@ -125,7 +151,7 @@ try{
     assert.equal(act.kind,'signoff');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
     assert.equal((act.value as {words:string}).words,expected,'the act words carry the picture labels');
     await shot(out,'7-submitted');
-    const result={case:'pins',size:name,language,picture,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,words:expected,
+    const result={case:'pins',size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,words:expected,
      scales:{fresh:fresh.scale,reloaded:reloaded.scale,zoomed:zoomed.scale,fitted:fitted.scale}};
     cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1048_PINS_PASS '+name+' '+language);
    }catch(error){await shot(out,'failure').catch(()=>{});throw error;}finally{await page.goto('about:blank');await fixture.close();}
