@@ -13,7 +13,7 @@ import {parseCommentsSession} from './session.ts';
 import {projectComments} from './stage-comment.ts';
 import type {ReviewCommentsSession, JobCommentFeedbackAnchor, JobCommentPartsAnchor} from './job-contract.ts';
 import type {PartsIssue} from './parts-comment.ts';
-import type {JobComment, JobActValues, ActV3, JobCommentsAct, JobContextCommentsAct, JobMeshEditsAct} from './job-contract.ts';
+import type {JobComment, JobActValues, ActV3, JobCommentsAct, JobContextCommentsAct, JobMeshEditsAct, JobChestLandmarksAct} from './job-contract.ts';
 import type {CompareFeedback} from './compare-session.ts';
 import {parseRecordAct} from './job-api.ts';
 
@@ -51,7 +51,7 @@ export function legacyRecordActComments(raw: unknown): {text: string}[] {
 }
 
 /** Display projection of already-decoded @2–@5 acts, without upgrading their envelopes. */
-export function legacyActComments(act: Exclude<ActV3, JobCommentsAct | JobContextCommentsAct | JobMeshEditsAct>): {text: string}[] {
+export function legacyActComments(act: Exclude<ActV3, JobCommentsAct | JobContextCommentsAct | JobMeshEditsAct | JobChestLandmarksAct>): {text: string}[] {
   if (act.kind === 'interview-picks') return [];
   const value = act.value;
   const fields = [value.words];

@@ -633,13 +633,14 @@ test('#678 rig caller regions preserve the legacy shell DOM, labels, drawers and
 });
 
 test('#809 pending ask heading uses full subject sentences in EN/KO and names the absence of an ask',async()=>{
- const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start),raw:{text:string;title:string;hidden:boolean}={text:'',title:'',hidden:false};
- let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','setSourceAttribute','renderDraftState','t','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},(_:unknown,_key:string,value:string)=>{raw.title=value;},()=>{statusRefreshes++;},t);
+ const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
+ const raw={text:'',hidden:false,removeAttribute(){}};
+ let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','renderDraftState','t','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null,askSentence="",jobProgress=null,progressTimer;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},()=>{statusRefreshes++;},t);
  render([]);expect(raw.hidden).toBe(false);expect(t(raw.text,undefined,'en')).toBe('Nothing is waiting for your answer.');expect(t(raw.text,undefined,'ko')).toBe('답변을 기다리는 요청이 없어요.');
  render([{kind:'review-verdict',stage:'rig-review'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
  expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Review this checkpoint.');
  expect(t(raw.text,undefined,'ko')).toBe('리그와 모션을 확인해 주세요. · 이 체크포인트를 검토해 주세요.');
- render([]);expect(raw.hidden).toBe(false);expect(raw.text).toBe('Nothing is waiting for your answer.');expect(raw.title).toBe('');expect(statusRefreshes).toBe(3);
+ render([]);expect(raw.hidden).toBe(false);expect(raw.text).toBe('Nothing is waiting for your answer.');expect(statusRefreshes).toBe(3);
 });
 
 test('#743 workspace owns detached portal lookup, settles redocking, and disposes only its drawers',async()=>{
@@ -659,11 +660,53 @@ test('#743 workspace owns detached portal lookup, settles redocking, and dispose
 test('#904 waiting prompt never guesses a rig subject for model-free record and interview publications',async()=>{
  const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
  for(const subject of [{kind:'interview-picks'},{kind:'checkpoint'},{kind:'signoff'}]){
-  const raw={hidden:true,text:''};const scope={askHeadline:raw,firstPublicationPrompt:true,pendingAnswers:[],partsSubject:null,host:null,t,
+  const raw={hidden:true,text:'',removeAttribute(){}};const scope={askHeadline:raw,firstPublicationPrompt:true,pendingAnswers:[],partsSubject:null,host:null,t,askSentence:'',jobProgress:null,progressTimer:undefined,
    setSourceText:(_:unknown,value:string)=>{raw.text=value;},renderDraftState(){}};
   const render=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return renderPendingSubjects;}`)(scope);
   render([]);expect(t(raw.text,undefined,'en')).toBe(enCatalog['job.waiting']);expect(t(raw.text,undefined,'ko')).toBe(koCatalog['job.waiting']);
   render([subject]);expect(raw.text).not.toBe('Check the rig and motion.');expect(scope.firstPublicationPrompt).toBe(false);
   render([]);expect(raw.text).toBe('Nothing is waiting for your answer.');
  }
+});
+
+for(const language of ['en','ko'] as const)test('#987 ticks the current age and stops when a pending ask takes the headline ('+language+')',async()=>{
+ const source=await mainSource(),start=source.indexOf('function renderPendingSubjects('),end=source.indexOf('/** Answer controls',start);
+ const catalog=language==='ko'?koCatalog:enCatalog;
+ const at='2026-11-20T00:00:00.000Z',text='Check the parts.';
+ let now=Date.parse(at),activeTick:(()=>void)|undefined;
+ const attributes=new Map<string,string>();
+ type TextPart=string|{data?:string;textContent?:string};
+ let parts:TextPart[]=[];
+ const headline={hidden:true,
+  setAttribute(key:string,value:string){attributes.set(key,value);},removeAttribute(key:string){attributes.delete(key);},
+  replaceChildren(...value:TextPart[]){parts=value;}};
+ const scope={askHeadline:headline,askSentence:'',partsSubject:null,host:null,firstPublicationPrompt:false,pendingAnswers:[],jobProgress:null,
+  progressTimer:undefined,suspended:false,disposed:false,
+  rigInspector:{act:{hidden:true},syncActRow(){}},
+  Date:{parse:Date.parse,now:()=>now},
+  document:{createTextNode:(data:string)=>({data}),createElement:()=>({style:{},textContent:''})},
+  setInterval(tick:()=>void){activeTick=tick;return 1;},clearInterval(){activeTick=undefined;},
+  t:(key:string,values?:readonly (string|number)[],lang=language)=>t(key,values,lang),
+  setSourceText(_:unknown,value:string){parts=[t(value,undefined,language)];},renderDraftState(){}};
+ const render=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return {renderPendingSubjects,setJobProgress};}`)(scope);
+ const read=()=>parts.map(part=>typeof part==='string'?part:part.data??part.textContent).join('');
+ render.renderPendingSubjects([]);
+ render.setJobProgress({seq:1,phase:'build',at,text,generation:0,step:{i:2,n:3}});
+ const phase=catalog['job.progress.phase.build']+' · '+t('job.progress.step',[2,3],language);
+ expect(read()).toBe(phase+' · '+text+' · '+catalog['job.progress.now']);
+ expect(attributes.get('translate')).toBe('no');
+ const initialParts=parts;
+ now+=1000;activeTick?.();
+ expect(parts).toBe(initialParts);
+ expect(read()).toBe(phase+' · '+text+' · '+t('job.progress.seconds',[1],language));
+ now+=59000;activeTick?.();
+ const quietParts=parts;
+ expect(read()).toBe(t('job.progress.quiet',[1,phase],language));
+ now+=60000;activeTick?.();
+ expect(parts).toBe(quietParts);
+ expect(read()).toBe(t('job.progress.quiet',[2,phase],language));
+ render.renderPendingSubjects([{kind:'interview-picks'}]);
+ expect(read()).toBe(catalog['Answer these questions.']);
+ expect(attributes.has('translate')).toBe(false);
+ expect(activeTick).toBeUndefined();
 });

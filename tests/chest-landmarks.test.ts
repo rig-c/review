@@ -153,3 +153,17 @@ test('landmarks and circles name whose side is R vs L (#306/#307), and contour.b
  expect(seeded?.['chest-1-cx']).toBe('514');
  expect(seeded?.['chest-1-cy']).toBe('345');
 });
+
+test('every next-landmark prompt is one whole KO sentence with no English landmark names',async()=>{
+ const {koCatalog:ko}=await import('../web/catalog-ko.ts');
+ const keys=['apex_r','apex_l','cleavage'] as const;
+ for(let mask=1;mask<8;mask++){
+  const missing=keys.filter((_,i)=>mask&(1<<i));
+  const {text}=landmarkReadout({missing:[...missing]});
+  expect(text).not.toContain('(then');
+  const value=ko[text];
+  expect(value,`KO entry for ${missing.join(',')}`).toBeString();
+  expect(value!).not.toMatch(/apex|cleavage|정점|클리비지/i);
+  for(const name of missing)expect(value!).toContain({apex_r:'오른쪽 끝',apex_l:'왼쪽 끝',cleavage:'가운데 골'}[name]);
+ }
+});

@@ -19,6 +19,7 @@ import type { MarkRegion } from './stage-comment.ts';
 import type { PartsVerdict } from './parts-view.ts';
 import type { ControlNumericCamera, ControlPart } from './control.ts';
 import type { MeshOp, Vec } from './mesh-edit.ts';
+import type { BustLandmarks } from './chest-landmarks.ts';
 
 export const JOB_API_SCHEMA = 'rig-review/job-api@2' as const;
 export const JOB_API_V3_SCHEMA = 'rig-review/job-api@3' as const;
@@ -35,6 +36,8 @@ export const JOB_COMMENTS_ACT_SCHEMA = 'rig-review/act@6' as const;
 export const JOB_COMMENT_CONTEXT_ACT_SCHEMA = 'rig-review/act@7' as const;
 /** @7 plus a mesh payload on a compiled rig's Request changes (#952). */
 export const JOB_MESH_EDITS_ACT_SCHEMA = 'rig-review/act@8' as const;
+/** A compiled rig's Request changes carrying chest landmarks (#990). */
+export const JOB_CHEST_LANDMARKS_ACT_SCHEMA = 'rig-review/act@9' as const;
 export const REVIEW_COMMENTS_SESSION_SCHEMA = 'rig-review-session/2' as const;
 export const REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA = 'rig-review-compare-session/2' as const;
 export const PARTS_COMMENTS_VERDICT_SCHEMA = 'rig-review-parts-verdict/5' as const;
@@ -142,6 +145,29 @@ export type JobMeshEditsAct = JobRigMeshEditsAct | {
     readonly value: Extract<JobContextCommentsAct, {kind: Kind}>['value'] & {readonly meshEdits?: never};
   }
 }[keyof JobCommentsActValues];
+
+/** Setup-pose rig px in the retained model's stage, shared by the seed and the edit. */
+export type JobChestLandmarkValue = Pick<JobMeshEditValue, 'slot' | 'skin' | 'attachment' | 'basis'> & {
+  readonly source: Pick<JobMeshEditValue['source'], 'hash' | 'frame'>;
+  readonly bust: Readonly<BustLandmarks>;
+};
+
+export type JobPublishedChestLandmark = JobChestLandmarkValue & {
+  readonly source: JobChestLandmarkValue['source'] & {readonly configHash: JobSha256};
+};
+
+export interface JobChestLandmarkEdit {
+  readonly edit: JobChestLandmarkValue;
+  readonly sha256: JobSha256;
+}
+
+export type JobChestLandmarksAct = Omit<JobRigMeshEditsAct, 'schema' | 'value'> & {
+  readonly schema: typeof JOB_CHEST_LANDMARKS_ACT_SCHEMA;
+  readonly value: Omit<JobRigMeshEditsAct['value'], 'meshEdits'> & {
+    readonly meshEdits?: readonly JobMeshEdit[];
+    readonly chestLandmarks: readonly JobChestLandmarkEdit[];
+  };
+};
 export type ReviewCommentsSession = Omit<ReviewSession, 'schema' | 'feedback' | 'checkpoints'> & {
   schema: typeof REVIEW_COMMENTS_SESSION_SCHEMA;
   checkpoints: Record<string, { outcome: 'pending' | 'pass' | 'fail' }>;
@@ -557,6 +583,7 @@ export type JobUIActValues = Omit<JobActValues, 'checkpoint' | 'parts-verdict' |
       readonly feedback?: readonly Feedback[];
       readonly general?: readonly string[];
       readonly meshEdits?: readonly JobMeshEdit[];
+      readonly chestLandmarks?: readonly JobChestLandmarkEdit[];
     });
 };
 
@@ -571,7 +598,7 @@ export interface JobActSources {
     readonly parts: JobPartsIdentity;
   };
   readonly 'review-verdict': (JobModelSourceBinding & {
-    readonly selector: Extract<JobSelector, { kind: 'rig' | 'post' }>;
+    readonly selector: Extract<JobSelector, { kind: 'rig' | 'post' | 'draft' }>;
     readonly model: JobFileIdentity;
   });
   readonly signoff: JobModelSourceBinding;
@@ -626,7 +653,7 @@ export type JobPartsVerdictAct = Omit<Extract<JobLegacyAct, {kind: 'parts-verdic
 
 /** Historical @2 acts remain readable without being backfilled or relabelled.
  * Fresh comments use @6, live rig comments carrying context use @7, and rig verdicts carrying mesh edits use @8. */
-export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct | JobCommentsAct | JobContextCommentsAct | JobRigMeshEditsAct;
+export type JobAct = JobLegacyAct | JobRigReviewAct | JobPartsVerdictAct | JobCommentsAct | JobContextCommentsAct | JobRigMeshEditsAct | JobChestLandmarksAct;
 
 /** Authenticated browser provenance. The daemon validates identity and hashes PNG bytes. */
 export interface JobRigCapture {
@@ -727,6 +754,8 @@ export interface JobPublication {
     readonly code: string;
   };
   readonly interview?: JobInterviewDiagnostics | null;
+  /** Producer-declared contour.bust for the displayed rig, sealed in source.sourceHash. */
+  readonly chestLandmarks?: readonly JobPublishedChestLandmark[];
 }
 
 export interface JobStatus {
@@ -915,6 +944,8 @@ export interface JobDisplayReceipt {
 
 export interface JobDisplayPublication {
   readonly publication: JobPublication;
+  /** A declared rig draft verdict selects the rig screen even when parts are retained. */
+  readonly rigDraftVerdict?: true;
   /** Same-origin routes pinned to this publication and instance. No current alias. */
   readonly routes: {
     readonly entry: string;
@@ -936,6 +967,8 @@ export interface JobHostPorts {
     readonly after: JobCursor | null;
     readonly signal: AbortSignal;
   }): AsyncIterable<EventV3>;
+  /** Front-only opt-in. Semantic subscribers keep the durable event stream above. */
+  subscribeJobPage?(input: Parameters<JobHostPorts['subscribeJob']>[0]): AsyncIterable<EventV3 | JobProgressLineV3>;
   readPublication(jobId: JobId, publicationId: JobPublicationId): Promise<JobResult<DisplayPublicationV3>>;
   commitUIAct(jobId: JobId, request: Request): Promise<JobResult<ActV3>>;
   ackDisplayed(jobId: JobId, request: Request): Promise<JobResult<JobDisplayReceipt>>;
@@ -1042,6 +1075,34 @@ export interface AskBatchValueV3 {
   readonly asks: readonly PendingAskV3[];
 }
 
+export interface JobProgressV3 {
+  readonly seq: number;
+  readonly phase: 'ingest' | 'build' | 'measure' | 'publish' | 'other';
+  readonly text?: string;
+  readonly step?: { readonly i: number; readonly n: number };
+  readonly at: string;
+  readonly generation: number;
+}
+
+export type JobProgressRequestV3 = Omit<JobRequestBase, 'schema'> & Omit<JobProgressV3, 'at' | 'generation'> & {
+  readonly schema: typeof JOB_API_V3_SCHEMA;
+  readonly verb: 'progress';
+};
+
+export interface JobProgressValueV3 {
+  readonly status: 'accepted' | 'ignored';
+  readonly seq: number;
+  readonly at: string;
+}
+
+/** Current host progress delivered only on the page stream. */
+export interface JobProgressLineV3 {
+  readonly type: 'progress';
+  readonly jobId: JobId;
+  readonly progress: JobProgressV3 | null;
+  readonly now: string;
+}
+
 export type NextRequestV3 = Omit<JobNextRequest, 'schema'> & {
   readonly schema: typeof JOB_API_V3_SCHEMA;
 };
@@ -1054,6 +1115,7 @@ export type AgentRequestV3 =
   | PublishRequestV3
   | AskRequestV3
   | AskBatchRequestV3
+  | JobProgressRequestV3
   | NextRequestV3
   | CloseRequestV3;
 
@@ -1246,7 +1308,7 @@ export type SourceV3 = JobSourceBinding | RecordSource;
 export type ActV3 = JobAct | RecordAct;
 
 /**
- * `recordPublication`, `recordActSchema` and `askBatch` describe the host, not the current head.
+ * `recordPublication`, `recordActSchema`, `askBatch` and `progress` describe the host, not the current head.
  * `ask-batch` applies only to a record-retained head publication; a package head refuses `JOB_REQUEST_INVALID`,
  * so a consumer checks the publication's mode as well as the flag (#972).
  */
@@ -1254,12 +1316,14 @@ export interface JobCapabilitiesV3 extends JobCapabilities {
   readonly recordPublication: true;
   readonly recordActSchema: typeof JOB_RECORD_ACT_SCHEMA;
   readonly askBatch: true;
+  readonly progress: true;
 }
 
 export const JOB_CAPABILITIES_V3: JobCapabilitiesV3 = Object.freeze({
   recordPublication: true,
   recordActSchema: JOB_RECORD_ACT_SCHEMA,
   askBatch: true,
+  progress: true,
 });
 
 export interface PendingAskV3 extends Omit<JobPendingAsk, 'subject' | 'source'> {
@@ -1302,6 +1366,7 @@ export interface ResponseValuesV3 {
   readonly publish: PublicationV3;
   readonly ask: PendingAskV3;
   readonly 'ask-batch': AskBatchValueV3;
+  readonly progress: JobProgressValueV3;
   readonly next: NextValueV3;
   readonly close: { readonly status: 'closed'; readonly cursor: JobCursor | null };
   readonly 'fetch-act': ActV3;

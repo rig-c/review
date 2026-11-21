@@ -39,8 +39,9 @@ test('subscribe wakes on a republish of the same job', async () => {
  * existing commit with exactly that shape (revision advances, no event). */
 test('subscribe wakes on a progress update with no act', async () => {
   const {attached, display, cursor} = await pair(fixtures, hosts);
-  const session = attached.session as unknown as {next: (...args: unknown[]) => Promise<unknown>};
-  const reads = spyOn(session, 'next');
+  // subscribe reads events, then waits in waitForChange (#987); each wait follows one read.
+  const session = attached.session as unknown as {waitForChange: (...args: unknown[]) => Promise<void>};
+  const reads = spyOn(session, 'waitForChange');
   const controller = new AbortController();
   const iterator = attached.ports.subscribeJob({jobId: attached.session.jobId, after: cursor, signal: controller.signal})[Symbol.asyncIterator]();
   const pending = iterator.next();

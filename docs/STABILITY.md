@@ -413,6 +413,7 @@ preserve capability, origin, size, cancellation and replay checks.
 ## Changelog
 
 - Breaking, 4.0.0 (#806): remove `startJobHub` and its `JobHubOptions`, `JobHubJobOptions`, `JobHubJob` and `JobOwnerHub` types; the uncalled semantic-job hub is deleted.
+- Additive (#987): V3 hosts advertise `progress: true` in the `next` capabilities. The HTTP `progress` verb and optional `subscribeJobPage` port implement [job progress](REVIEW_PACKAGE.md#job-progress). `subscribeJob`, the durable event union, cursors and CLI preserve their existing contracts. The owner front opts into the page stream for V3 hosts, with the published web bundle consuming the extra line. Reload an owner page left open across a host upgrade to load the matching bundle.
 
 ## Mesh-edit act compatibility
 
@@ -434,6 +435,25 @@ refuse @8 with `JOB_ACT_INVALID`. The consumer's required hash, frame and positi
 checks are part of the [act@8 wire contract](REVIEW_PACKAGE.md#mesh-edits-on-request-changes-act8).
 The host facade adds `parseMeshEditsAct`, `JOB_MESH_EDITS_ACT_SCHEMA` and
 the three mesh edit types listed below.
+
+## Chest landmark act compatibility
+
+`rig-review/act@9` carries one or more `value.chestLandmarks` rows on a
+compiled rig's Request changes verdict. It accepts optional `meshEdits` and
+@7 comment context. Older decoders refuse @9 with `JOB_ACT_INVALID`.
+Existing decoders and historical @2–@8 bytes retain their contracts. Mesh-only
+submissions still emit @8. See the [act@9 wire contract](REVIEW_PACKAGE.md#chest-landmarks-on-request-changes-act9).
+
+The trusted adapter can detect support through
+`JOB_CHEST_LANDMARKS_ACT_SCHEMA`. It supplies the draft's
+`contour.bust` spec and required `source.configHash` for a rig publication.
+Review verifies both against the retained config and binds them into the source
+hash. With the declaration absent, the publication and all historical source
+bindings keep their existing shape.
+
+Create must pin a Review release that exports `parseChestLandmarksAct` and
+support @9 before publishing the new declaration. Parts consumes the
+finalized act through the existing writer grant and source checks.
 
 ## Named export inventory
 
@@ -556,6 +576,12 @@ finalized act the live host commits wakes it. A write that adds no deliverable
 event, such as a display receipt, keeps the wait open, and a refused save
 commits nothing. No API verb, act field or capability changes.
 
+[Review #990](https://github.com/rig-c/review/issues/990) then adds
+`parseChestLandmarksAct` and `JOB_CHEST_LANDMARKS_ACT_SCHEMA`
+(`rig-review/act@9`), for thirty-four runtime exports total, plus the type-only
+`JobChestLandmarkValue`, `JobPublishedChestLandmark`, `JobChestLandmarkEdit`
+and `JobChestLandmarksAct`.
+
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
@@ -566,6 +592,7 @@ values from the frozen semantic contract.
 - `parseCommentsAct`
 - `parseContextCommentsAct`
 - `parseMeshEditsAct`
+- `parseChestLandmarksAct`
 - `projectComments`
 - `parseCommentsSession`
 - `parseCommentsCompareSession`
@@ -574,6 +601,7 @@ values from the frozen semantic contract.
 - `JOB_COMMENTS_ACT_SCHEMA`
 - `JOB_COMMENT_CONTEXT_ACT_SCHEMA`
 - `JOB_MESH_EDITS_ACT_SCHEMA`
+- `JOB_CHEST_LANDMARKS_ACT_SCHEMA`
 - `REVIEW_COMMENTS_SESSION_SCHEMA`
 - `REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA`
 - `PARTS_COMMENTS_VERDICT_SCHEMA`
@@ -675,6 +703,10 @@ without aliases or copied wire shapes.
 - `JobAskRequestV3`
 - `JobAskBatchRequestV3`
 - `JobAskBatchValueV3`
+- `JobProgressRequestV3`
+- `JobProgressValueV3`
+- `JobProgressV3`
+- `JobProgressLineV3`
 - `JobNextRequest`
 - `JobNextRequestV3`
 - `JobCloseRequest`
@@ -716,7 +748,7 @@ without aliases or copied wire shapes.
 - `JobRecordPicksSubject`
 - `JobRecordCheckpointSubject`
 - `JobRecordSignoffSubject`
-- `JobRecordReopenSubject`
+- `JobRecordReopenSubject` (read-only compatibility: old records and acts parse; new `reopen` asks refuse with `JOB_ASK_INVALID` and Review neither renders nor builds `reopen`, #989)
 - `JobRecordPlanSubject`
 - `JobRecordSubject`
 - `JobRecordContextBase`
@@ -731,7 +763,7 @@ without aliases or copied wire shapes.
 - `JobRecordSource`
 - `JobSourceV3`
 - `JobRecordSignoffValue`
-- `JobRecordReopenValue`
+- `JobRecordReopenValue` (read-only compatibility: exported for historical record and act decoders, #989)
 - `JobRecordUIActValues`
 - `JobRecordUISubmission`
 - `JobRetainedRecordSource`
@@ -751,6 +783,10 @@ without aliases or copied wire shapes.
 - `JobMeshEditValue`
 - `JobMeshEdit`
 - `JobMeshEditsAct`
+- `JobChestLandmarkValue`
+- `JobPublishedChestLandmark`
+- `JobChestLandmarkEdit`
+- `JobChestLandmarksAct`
 - `ReviewCommentsSession`
 - `CompareCommentsSession`
 - `PartsCommentsVerdict`
@@ -766,7 +802,7 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer checks the thirty-two runtime exports and every listed type, including
+A consumer checks the thirty-four runtime exports and the existing managed-host types, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and
@@ -778,6 +814,8 @@ proves that `JobCapabilitiesV3` carries `askBatch: true`. In `JobCapabilitiesV3`
 than the current head: `ask-batch` applies only to a record-retained head
 publication and a package head refuses `JOB_REQUEST_INVALID`, so a consumer
 checks the publication's mode as well as the flag.
+The #987 contract tests cover the progress capability and the owner page stream
+against an attached publisher sharing the persisted job.
 TypeScript checks the installed consumer and the runtime checks the full owner
 resources, retained publication, semantic ports, declared hooks, enumerator
 version/row carriage, ordinary reuse, strict `reuseOnly: {expected}` attachment
@@ -851,3 +889,27 @@ declared file missing from the package, unreadable JSON, a `spec` other than
 `stride`, `duration`), or two sets naming the same animation refuses by name
 (`FRAMES_MISSING`, `FRAMES_JSON`, `FRAMES_SPEC`, `FRAMES_FIELD`,
 `FRAMES_DUPLICATE_ANIMATION`), never falling back silently.
+
+The record is the comment frame clock (#1018). On a package with a compiled
+model, each set is checked against the model animation it names when the
+package loads. The rule is measured from the producer, not from the clip length:
+`@rig-c/core` 3.8.0 `rigc render` samples an animation of duration `D` to
+`round(D * fps) + 1` frames, frame `i` at `i / fps`, writes every `stride`-th one
+from frame 0 and records the last sample's time as `duration`. For example, a
+0.8 s clip at 12 fps gives 11 frames and `duration` 0.8333, not 0.8, so a set's
+`duration` is not compared with the clip length. A set naming no model animation, a
+`written` other than `floor(round(D * fps) / stride) + 1`, or a `duration` more
+than `1e-9` s from `round(D * fps) / fps` refuses the package by name
+(`FRAMES_ANIMATION_UNKNOWN`, `FRAMES_COUNT_MISMATCH`, `FRAMES_DURATION_MISMATCH`)
+where the other `FRAMES_*` refusals surface, and indexes nothing. The refusal
+names the animation and both figures, the record's and the model's schedule. The tolerance
+covers float rounding only (`i * (1 / fps)` against `i / fps` differs by at most
+`7.3e-12` s over 100,000 frames at 1–240 fps). An accepted set becomes the clock
+for its animation: `written` frames, frame `i` at `i * stride / fps`. The report's
+clock keeps the animation it names; an animation with no set has no clock and its
+comments stay time-only. The page's transport and the server's comment validation
+read the same per-animation clocks from `feedbackCatalog.frameClocks`
+(`[{animation, clock}]`, present only when the package declares `frames` and has a
+compiled model), so a pinned comment on such an animation carries
+`frame: {index, basis: "producer"}`. Packages without `frames` are unchanged, and
+the comment act's shape is unchanged.

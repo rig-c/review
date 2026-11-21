@@ -7,6 +7,8 @@ import type {
     JobCheckpointEvidence,
     JobCheckpointTable,
     JobInterviewDiagnostics,
+    JobProgressLineV3,
+    JobProgressV3,
     JobResult,
     PendingAskV3,
     JobPanelComposition,
@@ -525,8 +527,26 @@ export function createJobWindowTransport(access: JobWindowAccess, fetcher: typeo
         submit: body => post('ui/acts', body),
     };
 }
+/** A cursorless snapshot belongs to the page stream, alongside the replayable job events. */
+function validateJobProgressLine(line: JobProgressLineV3, jobId: string): void {
+    if (line.jobId !== jobId || 'cursor' in line || typeof line.now !== 'string' || !Number.isFinite(Date.parse(line.now)))
+        throw new Error('JOB_STREAM_FAILED');
+    const value = line.progress;
+    if (value === null) return;
+    if (!value || !Number.isSafeInteger(value.seq) || value.seq < 1 ||
+        !Number.isSafeInteger(value.generation) || value.generation < 0 ||
+        !['ingest', 'build', 'measure', 'publish', 'other'].includes(value.phase) ||
+        typeof value.at !== 'string' || !Number.isFinite(Date.parse(value.at)))
+        throw new Error('JOB_STREAM_FAILED');
+    const {text, step} = value;
+    if (text !== undefined && (typeof text !== 'string' || text.length > 120 || /[\x00-\x1f\x7f\u0085\u2028\u2029]/u.test(text)))
+        throw new Error('JOB_STREAM_FAILED');
+    if (step !== undefined && (!step || !Number.isSafeInteger(step.i) || !Number.isSafeInteger(step.n) ||
+        step.i < 1 || step.i > step.n || step.n > 1000))
+        throw new Error('JOB_STREAM_FAILED');
+}
 /** Bounded newline events. Reconnects resume after the last fully parsed event. */
-export async function* jobWindowEvents(access: JobWindowAccess, after: string | null, signal: AbortSignal, fetcher: typeof fetch = fetch, connected?: () => void): AsyncGenerator<EventV3> {
+export async function* jobWindowEvents(access: JobWindowAccess, after: string | null, signal: AbortSignal, fetcher: typeof fetch = fetch, connected?: () => void, progress?: (line: JobProgressLineV3) => void): AsyncGenerator<EventV3> {
     const path = 'events' + (after === null ? '' : '?after=' + encodeURIComponent(after));
     const response = await fetcher(access.route(path), { signal, headers: access.headers() });
     if (!response.ok || !response.body)
@@ -550,12 +570,18 @@ export async function* jobWindowEvents(access: JobWindowAccess, after: string | 
             while (newline >= 0) {
                 if (newline > limit)
                     throw new Error('JOB_BODY_LIMIT', {cause: 'client: event stream'});
-                const event = JSON.parse(buffered.slice(0, newline)) as EventV3;
+                const event = JSON.parse(buffered.slice(0, newline)) as EventV3 | JobProgressLineV3;
+                buffered = buffered.slice(newline + 1);
+                if (event?.type === 'progress') {
+                    validateJobProgressLine(event, access.jobId);
+                    if (!signal.aborted) progress?.(event);
+                    newline = buffered.indexOf('\n');
+                    continue;
+                }
                 if (!event || event.jobId !== access.jobId || typeof event.cursor !== 'string' ||
                     !Number.isSafeInteger(event.generation) || event.generation < 0 ||
                     !['published', 'pending', 'act', 'closed'].includes(event.type))
                     throw new Error('JOB_STREAM_FAILED');
-                buffered = buffered.slice(newline + 1);
                 const crops = new Map<string, {owner: Record<string, unknown>; key: string}[]>();
                 const packed = event as EventV3 & {_jobCommentCrops?: [string[], string][]};
                 for (const [path, sha256] of packed._jobCommentCrops ?? []) {
@@ -610,11 +636,20 @@ export function startJobWindowEvents(options: {
     access: JobWindowAccess;
     signal: AbortSignal;
     event(value: EventV3): void;
+    progress?(value: JobProgressV3 | null): void;
     refused(error: unknown): void;
     connected?(): void;
     fetcher?: typeof fetch;
 }) {
     let cursor: string | null = null;
+    const progressState: {latest: JobProgressV3 | null} = {latest: null};
+    let replayGeneration = 0;
+    let progressGenerationFloor = 0;
+    function deliverProgress(value: JobProgressV3 | null): void {
+        if (value && value.generation < progressGenerationFloor) return;
+        progressState.latest = value;
+        options.progress?.(value);
+    }
     let reader: AbortController | null = null;
     let wake: (() => void) | null = null;
     let failed = false;
@@ -632,6 +667,7 @@ export function startJobWindowEvents(options: {
         try {
             while (!options.signal.aborted) {
                 const current = new AbortController();
+                const replay: {progress: JobProgressV3 | null} = {progress: null};
                 reader = current;
                 try {
                     for await (const event of jobWindowEvents(options.access, cursor, current.signal, options.fetcher, () => {
@@ -639,11 +675,26 @@ export function startJobWindowEvents(options: {
                             failed = false;
                             options.connected?.();
                         }
+                    }, ({progress}) => {
+                        // Restore durable asks before rendering a connect snapshot taken after those asks.
+                        replay.progress = progress && progress.generation > replayGeneration ? progress : null;
+                        if (!replay.progress) deliverProgress(progress);
                     })) {
+                        if (event.type !== 'act') {
+                            progressGenerationFloor = Math.max(progressGenerationFloor, event.generation);
+                            const latestProgress = progressState.latest;
+                            if (latestProgress && (event.type === 'closed' || latestProgress.generation < progressGenerationFloor))
+                                deliverProgress(null);
+                        }
                         // Only complete, delivered events advance replay, including a final event racing hide.
                         options.event(event);
                         cursor = event.cursor;
                         if (event.type === 'closed') return;
+                        replayGeneration = Math.max(replayGeneration, event.generation);
+                        if (replay.progress && replay.progress.generation <= replayGeneration) {
+                            deliverProgress(replay.progress);
+                            replay.progress = null;
+                        }
                     }
                 } catch (error) {
                     if (!current.signal.aborted && !options.signal.aborted) {
@@ -820,10 +871,12 @@ export interface JobPreparedInspection {
     setupPose(setup?: boolean): void;
     dispose(): void;
 }
-async function jobBytes(url: string, signal: AbortSignal, maximum: number): Promise<Uint8Array<ArrayBuffer>> {
+async function jobBytes(url: string, signal: AbortSignal, maximum: number, refusal?: { status: number; code: string }): Promise<Uint8Array<ArrayBuffer>> {
     const response = await fetch(url, { signal });
-    if (!response.ok || !response.body)
-        throw new Error('JOB_PRELOAD_FAILED');
+    if (!response.ok || !response.body) {
+        void response.body?.cancel().catch(() => {});
+        throw new Error(response.status === refusal?.status ? refusal.code : 'JOB_PRELOAD_FAILED');
+    }
     const reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -854,8 +907,8 @@ async function jobDigest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
     return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
         .map(value => value.toString(16).padStart(2, '0')).join('');
 }
-async function jobJson<Value>(url: string, signal: AbortSignal): Promise<Value> {
-    const bytes = await jobBytes(url, signal, 2 * 1024 * 1024);
+async function jobJson<Value>(url: string, signal: AbortSignal, refusal?: { status: number; code: string }): Promise<Value> {
+    const bytes = await jobBytes(url, signal, 2 * 1024 * 1024, refusal);
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as Value;
 }
 export function mediaReady(media: HTMLVideoElement, name: 'loadeddata' | 'seeked', signal: AbortSignal): Promise<void> {
@@ -967,7 +1020,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         }
     }
     try {
-        const interview = metadata.capabilities.interview ? await jobJson<JobInterview>(routes.api('interview'), signal) : null;
+        const interview = metadata.capabilities.interview ? await jobJson<JobInterview>(routes.api('interview'), signal, {status: 409, code: 'JOB_SOURCE_UNRETAINABLE'}) : null;
         if (recordRig) {
             const {manifest, reviewedSource} = metadata;
             const model = reviewedSource?.rig;
@@ -1449,7 +1502,7 @@ export interface JobFormDependencies {
         fields.append(source);
         const subject = ask.subject;
         if(subject.kind==='review-verdict')throw new Error('JOB_ACT_KIND_DISABLED');
-        const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff' || subject.kind === 'reopen';
+        const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff';
         if(commentOnly)fields.append(node('p','job.commentsFromWorkspace'));
         let retainedCommentWords='';
         const commentWords=()=>form.commentWords?.()??retainedCommentWords;
@@ -1491,6 +1544,13 @@ export interface JobFormDependencies {
             interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:true,
                 images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url)})),answered:ask.status==='answered',
                 ...questionSet?.list});
+            if (prepared.metadata.recordSource && (question.missingPicture || !question.images.length) && !prepared.metadata.manifest?.model) {
+                fields.prepend(node('p', question.missingPicture === 'rig'
+                    ? 'This question refers to a rig version that this publication does not include.'
+                    : question.missingPicture === 'scene'
+                        ? 'This question refers to a scene that this publication does not include.'
+                        : 'This request has no picture.'));
+            }
             const {localize,dispose,read:readInterview}=interviewForm;
             const offLanguage=onLanguageChange(localize);
             disposeInterview=()=>{offLanguage();dispose();};read=readInterview;
@@ -1529,20 +1589,6 @@ export interface JobFormDependencies {
             if (ask.source.plan) fields.append(planTextList(ask.source.plan, prepared.metadata.planText));
             read = () => ({ stage: subject.stage, decision: 'approved', words: commentWords() });
             submitKey = 'job.signoff';
-        }
-        else if (subject.kind === 'reopen') {
-            if (
-                !('record' in ask.source) ||
-                ask.source.subject !== 'plan' ||
-                typeof subject.stage !== 'string' ||
-                !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(subject.stage) ||
-                !ask.source.subjects.some(candidate => candidate.kind === 'reopen' && candidate.stage === subject.stage)
-            ) {
-                throw new Error('JOB_ASK_INVALID');
-            }
-            fields.title = subject.stage;
-            read = () => ({ stage: subject.stage, words: commentWords() });
-            submitKey = 'job.reopen';
         }
         else {
             throw new Error('JOB_ACT_KIND_DISABLED');
@@ -1592,8 +1638,8 @@ export interface JobFormDependencies {
                     }) =>
                         subject.kind === 'interview-picks' ? item.value?.questionId === subject.questionId :
                         subject.kind === 'checkpoint' ? item.value?.checkpointId === subject.checkpointId :
-                        (subject.kind === 'signoff' || subject.kind === 'reopen') && item.value?.stage === subject.stage &&
-                            !('outcome' in (item.value ?? {})) && (subject.kind === 'signoff') === ('decision' in (item.value ?? {}))
+                        subject.kind === 'signoff' && item.value?.stage === subject.stage &&
+                            !('outcome' in (item.value ?? {})) && 'decision' in (item.value ?? {})
                     )
                     : undefined);
                 if(commentOnly&&typeof original?.value?.words==='string'&&original.value.words.length<=10000)retainedCommentWords=original.value.words;
@@ -1765,7 +1811,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     let stopped=false;
     const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource,jobCheckpointContext},draftStorage:()=>localStorage,...drafts,access,pageId,
         window:{state:()=>window.state(),submit:input=>window.submit(input)}};
-    const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),refusal:jobWindowRefusal,formDependencies:dependencies,
+    const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),confirm:text=>globalThis.confirm(i18n.tr(text)),refusal:jobWindowRefusal,formDependencies:dependencies,
         window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),
         routes:display=>jobPublicationRoutes(display,location.origin),load:async()=>(await import('./main.ts')).mountRigScreen()});
     let bootstrapNotice:HTMLElement|null=null,bootstrapStream=false,bootstrapPrior:{text:string;title:string}|null=null;
@@ -1784,7 +1830,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     }});
     const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);for(const form of host.querySelectorAll('form.interview-answer'))form.dispatchEvent(new Event('job-form-language'));});
     await rigScreen.waiting();
-    startJobWindowEvents({access,signal:abort.signal,event:event=>window.event(event),refused:error=>report(error,'JOB_STREAM_FAILED'),connected:clear});
+    startJobWindowEvents({access,signal:abort.signal,event:event=>window.event(event),progress:value=>rigScreen.progress(value),refused:error=>report(error,'JOB_STREAM_FAILED'),connected:clear});
     const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();const modal=modalState();for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();localize();globalThis.removeEventListener('pagehide',stop);};
     globalThis.addEventListener('pagehide',stop,{once:true});return stop;
 }

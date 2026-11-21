@@ -7,6 +7,7 @@ import { toolVersions } from './versions.ts';
 import type { FeedbackCatalog } from './feedback-validation.ts';
 import { validatePoseSequence } from './pose.ts';
 import { parseReport, type ReportSeeds } from './report.ts';
+import { framesSetClock, type DeclaredFrameClock } from './frame-clock.ts';
 import { readFile, realpath, stat, lstat, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, posix } from 'node:path';
@@ -129,6 +130,26 @@ function parseFrames(text: string, path: string, sha256: string): ReviewFrames {
   });
   return { path, sha256, sets };
 }
+/** Seconds a set's `duration` may differ from the producer's last sample time: float rounding only (#1018). */
+export const FRAMES_DURATION_TOLERANCE = 1e-9;
+/**
+ * #1018: one clock per set of the declared record, each checked against the compiled model's animation before it
+ * indexes anything. The producer samples an animation of duration D at fps to round(D * fps) + 1 frames, frame i at
+ * i / fps, writes every stride-th one from frame 0, and records the last sample's time as `duration`; a set that is
+ * not that schedule for the model's animation is refused by name. An animation the report's clock names keeps the
+ * report's clock, so its set adds none. A package without a compiled model plays nothing, so its record adds no clock.
+ */
+function declaredFrameClocks(frames: ReviewFrames, animations: {name: string; duration: number}[], report: ReportSeeds | null): DeclaredFrameClock[] {
+  return frames.sets.flatMap(set => {
+    const where = `${frames.path}: set ${JSON.stringify(set.animation)}`;
+    const clip = animations.find(value => value.name === set.animation);
+    if (!clip) throw new Error(`FRAMES_ANIMATION_UNKNOWN: ${where} names no animation of the compiled model`);
+    const last = Math.round(clip.duration * set.fps), written = Math.floor(last / set.stride) + 1;
+    if (set.written !== written) throw new Error(`FRAMES_COUNT_MISMATCH: ${where} writes ${set.written} frame(s) at ${set.fps} fps stride ${set.stride}; the model's ${clip.duration} s animation samples to ${written}`);
+    if (Math.abs(set.duration - last / set.fps) > FRAMES_DURATION_TOLERANCE) throw new Error(`FRAMES_DURATION_MISMATCH: ${where} lasts ${set.duration} s; the model's ${clip.duration} s animation at ${set.fps} fps ends its last sample at ${last / set.fps} s`);
+    return report?.clock && report.animation === set.animation ? [] : [{animation: set.animation, clock: framesSetClock(set)}];
+  });
+}
 export const BUILD_MODEL_PATH = 'build/skeleton.model.json';
 interface ReviewLoadOptions {
   /** Explicit producer flags take precedence over discovery. False disables producer lookup. */
@@ -224,7 +245,8 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   const buildRoot=!sealedPlayback&&basename(root)==='check'&&await isBuildRoot(dirname(root))?dirname(root):undefined;
   const reviewedSource:ReviewedSource={packageRevision:manifest.revision,...await toolVersions(),rig:rigPath?{path:rigPath,sha256:fileHashes.get(rigPath)!}:null,motion:motionPath?{path:motionPath,sha256:fileHashes.get(motionPath)!}:null,...(handoff?{handoff:handoff.record}:{})};
   const direction=manifest.direction?readDirectionInspection(directionInput,{path:manifest.direction,sha256:fileHashes.get(manifest.direction)!},reviewedSource.rig):undefined;
-  const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations:modelAnimations(modelMetadata),clock:report?.clock??null,clockAnimation:report?.animation??null,...(discoverTurnDials(modelMetadata).length?{turnDials:discoverTurnDials(modelMetadata)}:{})};
+  const animations=modelAnimations(modelMetadata);
+  const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations,clock:report?.clock??null,clockAnimation:report?.animation??null,...(frames&&animations?{frameClocks:declaredFrameClocks(frames,animations,report)}:{}),...(discoverTurnDials(modelMetadata).length?{turnDials:discoverTurnDials(modelMetadata)}:{})};
   return {...(scene?{scene}:{}),...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,frames,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{}),...(options.cwd?{cwd:options.cwd}:{}),...(options.handoffStarts?{handoffStarts:options.handoffStarts}:{})};
 }
 

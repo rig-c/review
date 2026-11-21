@@ -1,7 +1,7 @@
 import {hasTransientQuestionImage} from './interview-panel.ts';
 import {advanceTake,bindScenePlates,loadScenePlates,takeSample} from './scene-plates.ts';
 import type {SceneInspection} from '../src/scene-inspection.ts';
-import type {RecordSource} from '../src/job-contract.ts';
+import type {JobProgressV3,RecordSource} from '../src/job-contract.ts';
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
 import {mountJobScreen,joinedInterviewForms,mediaReady,jobSubmissionRefusal} from './job-session.ts';
 import {partsIssueComments,parsePartsIssue,assertPartsIssueBinding} from '../src/parts-comment.ts';
@@ -156,6 +156,8 @@ const askHeadline=panelMake('span',{id:'workspace-ask-headline',className:'works
 const requestChanges=panelMake('button',{id:'request-changes',type:'button',hidden:true});
 rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requestChanges);
 let pendingAnswers:readonly {kind:string;stage?:string}[]=[],answerSaved=false;
+let jobProgress:JobProgressV3|null=null,progressTimer:ReturnType<typeof setInterval>|undefined;
+let askSentence='';
 let partsAnswerBlocked:()=>boolean=()=>false;
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
@@ -240,6 +242,7 @@ let idleHeld=false;
 let suspendedPreview=false;
 let controlDispose:(()=>void)|null=null;
 const viewDisposers:(()=>void)[]=[];
+if(host)viewDisposers.push(onLanguageChange(()=>{if(jobProgress&&!pendingAnswers.length)renderAskHeadline();}));
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let chestMapping:CropWorldMapping={available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn'};
 let setupChestWorld:{x:number;y:number}|null=null;
@@ -649,7 +652,7 @@ function renderFrameTransport(): void {
 function activeTransportClock() {
   if(activeScene())return null;
   const active = player && player.current !== animation ? '' : animation;
-  return transportClock({ clock: data.report?.clock, animation: data.report?.animation }, active, !!player, stageClock, stageModelHash);
+  return transportClock({ clock: data.report?.clock, animation: data.report?.animation, frameClocks: data.feedbackCatalog?.frameClocks }, active, !!player, stageClock, stageModelHash);
 }
 function activeFrameClock() { return activeScene()?null:activeTransportClock()?.clock ?? null; }
 
@@ -665,7 +668,7 @@ function seekFrame(frame: number): void {
 function drawRig(action:()=>void):void {
  if(rigDifference&&rigDifference.assets!==assets){leaveRigDifference();renderLayout();}
  inDrawRig=true;
- try{const box=sceneBox();if(box&&player?.renderer instanceof CanvasRenderer)player.renderer.viewport=box;action();if(box&&player){sceneComposite?.draw(player,box);}parts?.present('single');if(box)viewport.fitCamera();if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);}
+ try{const box=sceneBox();if(box&&player?.renderer instanceof CanvasRenderer)player.renderer.viewport=box;action();if(box&&player){sceneComposite?.draw(player,box);}parts?.present('single');chestEditor?.syncJobTarget();if(box)viewport.fitCamera();if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);}
  catch(error){animationPanel?.capture(null,undefined);overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);throw error;}
  finally{inDrawRig=false;}
 }
@@ -922,6 +925,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
     const animations = select('animation-select'); animations.replaceChildren();
     for (const item of assets.animations) animations.append(option(item.name, data.manifest.animations.find(a => a.id === item.name)?.label ?? item.name));
     animations.disabled = assets.animations.length === 0 || !!data.scene;
+    if(host?.chestLandmarks?.length)updateChestMapping();
     const names=assets.animations.map(clip=>clip.name),initial=data.scene?.animation??initialIdleAnimation(names,initialPlayerAnimation(names,data.initialAnimation??undefined,initialCheckpoint),!!data.initialAnimation||!!initialCheckpoint?.animation||!!initialCheckpoint?.axis);
     if(initial)chooseAnimation(initial);else drawRig(()=>player!.draw());
     el('rig-empty').hidden = true; text('player-state', '@rig-c/play · Actual rig');
@@ -1214,7 +1218,7 @@ function bind(): void {
           await persistence?.submitted(submittedBaseline);
           comments?.refresh(); renderProposals();
         },host.direction?recordCommentWords():undefined,general);
-        message(sent);
+        if (sent) message(sent);
       } catch (error) {
         submissionFailure = jobSubmissionRefusal(error);
         message(submissionFailure.text, true);
@@ -1248,7 +1252,13 @@ function bind(): void {
   bindWorkspace(!!data.manifest.model);
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   verdictSubmit=button('save').onclick as ((event:MouseEvent)=>unknown)|null;
-  chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),changed:renderChest,download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
+  chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),
+   job:host?(readOnly||host.direction?'read-only':{
+    seeds:()=>inspectionSourceState==='ready'&&stageModelHash===data.reviewedSource.rig?.sha256&&chestMapping.available?host?.chestLandmarks??[]:[],
+    selection:()=>{const part=parts?.value();return part?{slot:part.slot,skin:part.identity?.skin??null,attachment:part.identity?.attachment??null}:null;},
+    download:edit=>download('chest-landmarks.json',JSON.stringify(edit,null,2)+'\n','application/json'),
+   }):undefined,
+   changed:()=>{renderChest();if(host)renderAnswerControls();},download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   const editRefusal=sealedRecordRigReadOnly();
   if(editRefusal)chestEditor.unavailable(editRefusal);
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),readOnly:!!editRefusal,source:meshSource,pause,
@@ -1333,12 +1343,12 @@ async function start(): Promise<void> {
         .filter(control=>control.id!=='settings-language').map(control=>({control,disabled:control.disabled}));
       for(const {control}of controls)control.disabled=true;
       for(const control of [button('save'),requestChanges,select('review-status'),screenRoot.querySelector<HTMLElement>('label[for="review-status"]')!])control.hidden=true;
-      askHeadline.hidden=false;setSourceText(askHeadline,t('job.waiting',undefined,'en'));rigInspector.act.hidden=false;rigInspector.syncActRow();
+      renderAskHeadline(t('job.waiting',undefined,'en'));syncJobActRow();
       await workspace?.settle();if(disposed)return;
       const next=await new Promise<RigHost>((resolve,reject)=>{
         lifecycle.signal.addEventListener('abort',()=>reject(new Error('JOB_PRELOAD_CANCELLED')),{once:true});
         host!.attach({publish:resolve,stage:()=>null,redraw:()=>{},
-          message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:()=>{},dispose:disposeScreen});
+          message:(value,error,diagnostic)=>message(value,error,false,diagnostic),progress:setJobProgress,suspend:()=>{},dispose:disposeScreen});
       });
       if(disposed)return;
       host=next;access=next.access;partsOnly=next.subject==='parts';
@@ -1371,7 +1381,7 @@ async function start(): Promise<void> {
     // Checkpoints and reference fold away when the package supplies neither.
     (el('package-context') as HTMLDetailsElement).open = data.manifest.checkpoints.length > 0 || data.manifest.references.length > 0;
     const sourceFiles = el('source-files'); for (const file of data.manifest.authoring) { const a = document.createElement('a'); a.href = assetUrl(file.path); a.textContent = file.label; a.className = 'source-link'; a.target = '_blank'; a.rel = 'noopener'; sourceFiles.append(a); } if (!data.manifest.authoring.length) sourceFiles.textContent = 'No source files supplied';sourceFiles.parentElement!.hidden=!data.manifest.authoring.length;
-    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(rigDifference){leaveRigDifference();renderLayout();}const part=parts?.value();if(!stageCorrectionRebinding&&(previous?.side!==part?.side||previous?.slot!==part?.slot||previous?.mode!==part?.mode))stageDraftRequestToken++;if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);if(part&&!stageCorrectionRebinding)void openStageCorrection({part:part.slot,instrument:'selection'});requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({hideGateBanner:!!host?.direction,readOnlyReason:sealedRecordRigReadOnly,host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){if(activeScene())seek(time);else{player.seek(time);drawRig(()=>player!.draw());}}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
+    populateChestBones(); bind(); parts=new PartExplorer(el('workspace-left'),el('selected-part'),previous=>{if(rigDifference){leaveRigDifference();renderLayout();}const part=parts?.value();if(!stageCorrectionRebinding&&(previous?.side!==part?.side||previous?.slot!==part?.slot||previous?.mode!==part?.mode))stageDraftRequestToken++;if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);weightsView?.refresh();redrawOverlay(true);meshEditor?.selectionChanged();if(stageCorrectionPart&&!stageCorrectionRebinding&&(part?.slot??null)!==stageCorrectionPart){stageCorrectionPart=null;document.getElementById('stage-draft-label')?.remove();}animationPanel?.fromParts(part?.slot??null);meshPanel?.select(part?.slot??null);if(host)chestEditor?.sync();else if(part&&!stageCorrectionRebinding)void openStageCorrection({part:part.slot,instrument:'selection'});requirementsPanel?.selectionChanged();renderDropNotices();if(part){viewport.state.activeCamera='rig';if(view==='reference')setView('rig');if(selectedInspector(document)!=='playback')showInspector('rig');renderCameraControls();}if(!viewport.state.cameraRestoring&&(previous?.side!==part?.side||previous?.slot!==part?.slot))cameraAction(()=>fitActiveCamera(part?'rig':availableCamera()));persistence?.save();},part=>{select('feedback-target-kind').value='slot';renderFeedbackTargets(true);input('feedback-target-name').value=part.slot;showInspector('feedback');}); animationPanel=new AnimationInspectionPanel({hideGateBanner:!!host?.direction,readOnlyReason:sealedRecordRigReadOnly,host:el('animation-inspection'),stage:el('rig-viewport'),project:(x,y)=>rigProject()(x,y),enabled:()=>inspectionSourceState==='ready'&&selectedInspector(document)==='playback',pause,preview:fn=>{animAdjust=fn;if(!player)return;player.adjust=composeAdjust(composeAdjust(composeAdjust(idleAdjust,dialAdjust),turnAdjust),animAdjust);if(!inDrawRig&&player.current&&!playing){if(activeScene())seek(time);else{player.seek(time);drawRig(()=>player!.draw());}}},apply:ops=>applyAnimation(ops),reset:()=>resetAnimationBuild(),seek:exact=>{if(!Number.isFinite(exact)||exact<0||exact>duration){message('KEY_TIME_OUT_OF_DOMAIN: no substitute time was used.',true);return;}seekMarker(animation,exact,'Stored key');},select:value=>{const slot=value?.kind==='slot'?value.name:null;if((parts?.value()?.slot??null)!==slot)parts?.select(slot?{side:'single',slot,mode:parts?.value()?.mode??'context'}:null);parts?.highlightBone(value?.kind==='bone'?value.name:null);redrawOverlay(false);}});viewDisposers.push(()=>animationPanel?.dispose()); updateStripControls(); stripStatus('Choose the entered start–end frames or all feedback ranges to download. Unsubmitted feedback is included; exporting does not submit the review.'); renderFeedbackTargets(true); renderFeedbackRange(); renderCheckpoints(); renderProposals(); renderProvenance(); updateSavedState(); renderCues(); initReport();
     const requestedId = new URLSearchParams(location.search).get('checkpoint'),initial=initialReviewSelection(data.manifest,requestedId,data.explicitReference?.id,data.initialAnimation??undefined),first=initial.checkpoint;
     rigInput=data.manifest.model?{state:'pending'}:{state:'absent'};renderLayout();
     // A job rig subject lands in Animate before the model finishes loading (#709).
@@ -1379,7 +1389,7 @@ async function start(): Promise<void> {
     if(initial.referenceId){select('reference-select').value=initial.referenceId;await showReference(initial.referenceId);}
     await initPlayer(first);
     // initPlayer keeps `player` only after its first draw succeeded; a declared model path alone never counts.
-    updateChestMapping();
+    if(!host?.chestLandmarks?.length)updateChestMapping();
     rigInput=player?{state:'loaded'}:data.manifest.model?{state:'failed',reason:el('rig-empty').textContent||'compiled player unavailable'}:{state:'absent'};renderLayout();
     if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
     viewport.state.activeCamera=player?'rig':'reference';if(viewport.state.cameraSync)alignCameras();renderTransport();fitCamera();
@@ -1401,8 +1411,8 @@ async function start(): Promise<void> {
       }
       if(!player&&(data.manifest.model||referenceInput.state!=='loaded'))throw new Error('JOB_VISUAL_UNAVAILABLE');
       await restorePublicationNavigation();document.body.dataset.ready='true';
-      const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
-        hasMeshEdits:()=>!!meshEditor?.hasJobEdits(),meshEdits:async()=>meshEditor?.jobEdits()??null};
+      const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
+        hasMeshEdits:()=>!!meshEditor?.hasJobEdits(),meshEdits:async()=>meshEditor?.jobEdits()??null,chestLandmarks:()=>chestEditor?.jobEdits()??null};
       host.attach(screen);showInspector(data.manifest.model?'playback':'rig');host.displayed();
     }
   } catch (error) { if(disposed)return;message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
@@ -1464,7 +1474,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   const label=panelMake('label',{id:'parts-difference-operand-label',hidden:true},tr('Compare with'),operand);
   const localizeOptions=()=>{
    paintingOption.textContent=t('Original painting');
-   previousOption.textContent=t('Previous accepted draft · {0} · {1}',[previousDraft.id,previousDraft.revision.slice(0,12)]);
+   previousOption.textContent=t('Previous accepted draft · {0}',[previousDraft.id]);
   };
   localizeOptions();viewDisposers.push(onLanguageChange(localizeOptions));
   operand.onchange=()=>{
@@ -1522,7 +1532,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  await setupPartsPersistence();if(disposed)return;
  if(generalRows?.length)changed();
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
- if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),pendingSubjects:renderPendingSubjects,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
+ if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),pendingSubjects:renderPendingSubjects,progress:setJobProgress,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
 
  document.body.dataset.ready='true';
 }
@@ -1545,13 +1555,24 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  readOnly=tr(interview?'MODEL_UNAVAILABLE':'JOB_REVIEW_READ_ONLY');
  if(!interview)actReadOnly=readOnlyReason(access,true,host?.ownerActAccess);
  bindWorkspace();bindInspector(true);rigInput={state:'absent'};referenceInput={state:'absent'};renderLayout();
- parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??(host?.record?.scenePicture?'':unavailable),!!actReadOnly);
+ parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??(host?.record?.questionPicture?'':unavailable),!!actReadOnly);
  text('package-title',interview?.label??host!.record!.label);text('revision','');text('source-hash',`source ${(interview?.sourceHash??host!.record!.sourceHash).slice(0,12)}`);
  el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty',unavailable);
- for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,textarea,button')){control.disabled=true;setSourceAttribute(control,'title',unavailable);}
+ for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button')){
+  if(control===rigInspector.collapse||(!interview&&control===rigInspector.comments.button))continue;
+  control.disabled=true;control.removeAttribute('title');
+  const toggleLabel=control.closest('label.layer-toggle');if(toggleLabel)toggleLabel.removeAttribute('title');
+  if(!control.hasAttribute('aria-label')&&!control.hasAttribute('aria-labelledby')&&control.getAttribute('aria-hidden')!=='true'){
+   const wrappingLabel=control.closest('label'),explicitLabel=control.id?document.querySelector<HTMLLabelElement>(`label[for="${control.id}"]`):null;
+   const labelNode=control instanceof HTMLButtonElement?(control.childElementCount?control.childNodes[0]??null:control):wrappingLabel?(wrappingLabel.querySelector('span')??[...wrappingLabel.childNodes].find(node=>node.nodeType===3&&node.nodeValue?.trim())??null):explicitLabel;
+   const labelText=sourceTextContent(labelNode).trim();
+   if(labelText)setSourceAttribute(control,'aria-label',labelText);
+  }
+  setSourceAttribute(control,'aria-description',unavailable);
+ }
  if(interview){
   button('stage-comment').hidden=true;
-  button('save').disabled=true;setSourceAttribute(button('save'),'title',unavailable);
+  button('save').disabled=true;setSourceAttribute(button('save'),'aria-description',unavailable);
   viewDisposers.push(await joinedInterviewForms(access,forms=>renderRecordForms(forms,'job.pending',true)));
   text('provenance-rig',unavailable);text('provenance-motion',unavailable);text('source-files','project.json');
  }else{restoreRecordComments();setupComments();showRecordComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}
@@ -1559,7 +1580,7 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  await workspace?.settle();if(disposed)return;
  if(host?.unavailable){message(t('job.refusal.'+host.unavailable),true);el('message').title=host.unavailable;button('save').disabled=true;button('save').title=host.unavailable;}
  document.body.dataset.ready='true';
- if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
+ if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
 let recordDialog:HTMLDialogElement|null=null;
 let releaseRecordDrawer:(()=>void)|null=null;
@@ -1810,7 +1831,7 @@ function renderRecordForms(forms:readonly HTMLElement[],label='job.pending',stan
 }
 /** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {
- const requests:Record<string,string>={'parts-verdict':partsSubject?.items().some(item=>item.mesh)?'Check the parts and meshes.':'Check the parts.','interview-picks':'Answer these questions.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.','review-verdict:image-review':'Check these images.','checkpoint':'Review this checkpoint.','signoff':'Approve this stage.','reopen':'Review the reopened stage.'};
+ const requests:Record<string,string>={'parts-verdict':partsSubject?.items().some(item=>item.mesh)?'Check the parts and meshes.':'Check the parts.','interview-picks':'Answer these questions.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.','review-verdict:image-review':'Check these images.','checkpoint':'Review this checkpoint.','signoff':'Approve this stage.'};
  // #1004: several pending asks of one kind say their sentence once.
  const labels=[...new Set(subjects.map(subject=>requests[subject.kind+':'+subject.stage]??requests[subject.kind]).filter((label):label is string=>!!label))];
  const liveVerdict=(subject:{kind:string;stage?:string})=>
@@ -1818,9 +1839,60 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  const refreshVerdictComments=host?.verdictComments&&pendingAnswers.some(liveVerdict)!==subjects.some(liveVerdict);
  pendingAnswers=subjects;
  if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
- askHeadline.hidden=false;setSourceText(askHeadline,labels.join(' · ')||(firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
+ renderAskHeadline(labels.join(' · ')||(firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
  if(subjects.length)firstPublicationPrompt=false;
  renderDraftState();
+}
+function syncJobActRow(subjects=pendingAnswers):void {
+ rigInspector.act.hidden=!subjects.length&&!firstPublicationPrompt&&!jobProgress;
+ rigInspector.syncActRow?.();
+}
+function setJobProgress(value:JobProgressV3|null):void {
+ if(disposed||jobProgress===value)return;
+ jobProgress=value;
+ if(pendingAnswers.length)return;
+ renderAskHeadline();
+ syncJobActRow();
+}
+function stopProgressTimer():void {
+ clearInterval(progressTimer);
+ progressTimer=undefined;
+}
+/** Render the existing sentence. The timer writes only its age node until the quiet threshold. */
+function renderAskHeadline(sentence=askSentence):void {
+ askSentence=sentence;
+ stopProgressTimer();
+ askHeadline.hidden=false;
+ const progress=pendingAnswers.length ? null : jobProgress;
+ if(!progress){
+  askHeadline.removeAttribute('translate');
+  askHeadline.style?.removeProperty('white-space');
+  setSourceText(askHeadline,sentence);
+  return;
+ }
+ const at=Date.parse(progress.at),age=()=>Math.max(0,Math.floor((Date.now()-at)/1000));
+ const initialAge=age(),quiet=initialAge>=60;
+ const phase=t('job.progress.phase.'+progress.phase);
+ const phaseAndStep=progress.step ? phase+' · '+t('job.progress.step',[progress.step.i,progress.step.n]) : phase;
+ const ageValue=(seconds:number)=>quiet ? String(Math.floor(seconds/60)) : seconds ? t('job.progress.seconds',[seconds]) : t('job.progress.now');
+ const ageText=document.createTextNode(ageValue(initialAge));
+ // Catalog fragments are already localized. Keep the agent's text as a literal across locale changes.
+ askHeadline.setAttribute('translate','no');
+ askHeadline.style?.setProperty('white-space','pre-wrap');
+ if(quiet){
+  const [before,after]=t('job.progress.quiet',['{0}',phaseAndStep]).split('{0}');
+  askHeadline.replaceChildren(before!,ageText,after!);
+ }else{
+  const prefix=progress.text?phaseAndStep+' · '+progress.text:phaseAndStep;
+  askHeadline.replaceChildren(prefix+' · ',ageText);
+ }
+ const tickAge=()=>{
+  const seconds=age();
+  if((seconds>=60)!==quiet){renderAskHeadline();return;}
+  const value=ageValue(seconds);
+  if(ageText.data!==value)ageText.data=value;
+ };
+ if(!suspended&&!disposed)progressTimer=setInterval(tickAge,1000);
 }
 /** Answer controls compose the existing act bar and submit handlers. */
 function renderAnswerControls():void {
@@ -1862,7 +1934,7 @@ function renderAnswerControls():void {
   save.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||(parts&&(partsAnswerBlocked()||count>0));
   requestChanges.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||!hasChanges||(parts&&partsAnswerBlocked());
   setSourceAttribute(save,'title',parts&&count>0?'Remove the flagged parts comments before approving.':'');
-  setSourceAttribute(requestChanges,'title',needsPinnedPart?pinRefusal:hasChanges?'':'Add a comment where changes are needed.');
+  setSourceAttribute(requestChanges,'title',needsPinnedPart?pinRefusal:hasChanges?'':host?.verdictComments&&!parts?'Add a comment or an edit where changes are needed.':'Add a comment where changes are needed.');
   if(!parts){
    save.onclick=event=>{session.status='approved';select('review-status').value=session.status;return verdictSubmit?.(event);};
   }
@@ -1886,7 +1958,7 @@ function renderAnswerControls():void {
    notice.classList.remove('error');
   }
  }
- if(host){rigInspector.answersRendered=true;rigInspector.act.hidden=subjects.length===0&&!firstPublicationPrompt;rigInspector.syncActRow?.();}
+ if(host){rigInspector.answersRendered=true;syncJobActRow(subjects);}
 }
 let verdictSubmit:((event:MouseEvent)=>unknown)|null=null;
 /** The rig pane for a live job's still (#709): the job binds and copies it, this screen keeps its view. */
@@ -1933,6 +2005,7 @@ async function restorePublicationNavigation():Promise<void> {
 }
 function suspendScreen():void {
  if(suspended||disposed)return;
+ stopProgressTimer();
  if(!partsOnly&&(!host?.record||host.record.hasPicture))pause();
  persistence?.dispose();persistence=null;suspended=true;cancelAnimationFrame(frameHandle);
 }
@@ -1945,7 +2018,8 @@ async function resumeScreen():Promise<void> {
   if(disposed)return;
   if(partsOnly){await setupPartsPersistence?.();if(disposed)return;}
   else if(!host?.record||host.record.hasPicture)await setupPersistence(true);
-  suspended=false;if(!partsOnly&&(!host?.record||host.record.hasPicture))frameHandle=requestAnimationFrame(tick);ready=true;
+  suspended=false;if(jobProgress)renderAskHeadline();
+  if(!partsOnly&&(!host?.record||host.record.hasPicture))frameHandle=requestAnimationFrame(tick);ready=true;
  }finally{screenRoot.inert=ready?wasInert:true;if(ready&&!disposed)document.body.dataset.ready='true';}
 }
 function disposeScreen():void {releaseInterview?.();releaseInterview=null;
@@ -2147,7 +2221,12 @@ async function setupPersistence(keepCameraOnResume=false):Promise<boolean> {
  let restoredChestFormPart:string|null=null;
  inspectionOpening=true;try{
  persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();renderProvenance();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b)),keepCameraOnResume||bookmarkCameraKept(inspectionOpening,!!host)),
- ui:()=>({chestFormPart,inspectorScroll:workspace?.scroll()??'{}',...(inspectorBlocks?activeBlocksUI(inspectorBlocks.state()):{}),reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{restoredChestFormPart=typeof value.chestFormPart==='string'?value.chestFormPart:null;if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();inspectorBlocks?.restore(restoreActiveBlocksUI(value));workspace?.restoreScroll(value.inspectorScroll);},afterInputs:()=>{chestFormPart=restoredChestFormPart??parts?.value()?.slot??null;const selected=parts?.value()?.slot;if(rebuildStatus&&selected)void openStageCorrection({part:selected,instrument:'selection'});const target=input('feedback-target-name').value;renderFeedbackTargets(true);if(select('feedback-target-kind').value!=='rig')input('feedback-target-name').value=target;renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{draftStatus=value;renderDraftState();}});
+ ui:()=>({chestFormPart,...(host?{chestLandmarkDraft:chestEditor?.jobDraftText()??null}:{}),inspectorScroll:workspace?.scroll()??'{}',...(inspectorBlocks?activeBlocksUI(inspectorBlocks.state()):{}),reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{restoredChestFormPart=typeof value.chestFormPart==='string'?value.chestFormPart:null;if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();inspectorBlocks?.restore(restoreActiveBlocksUI(value));workspace?.restoreScroll(value.inspectorScroll);},afterInputs:draft=>{
+  if(host){
+   const saved=draft?.ui.chestLandmarkDraft;
+   chestEditor?.restoreJobDraft(typeof saved==='string'?saved:null);
+  }
+  chestFormPart=restoredChestFormPart??parts?.value()?.slot??null;const selected=parts?.value()?.slot;if(rebuildStatus&&selected)void openStageCorrection({part:selected,instrument:'selection'});const target=input('feedback-target-name').value;renderFeedbackTargets(true);if(select('feedback-target-kind').value!=='rig')input('feedback-target-name').value=target;renderFeedbackRange();text('audio-volume-label',`${Math.round(Number(input('audio-volume').value)*100)}%`);},onConflict:value=>{draftConflict=value;updateSavedState();},onStatus:value=>{draftStatus=value;renderDraftState();}});
  }finally{inspectionOpening=false;}
  return persistence.restored;
 }
@@ -2156,7 +2235,8 @@ function chestField(id:string){const node=document.getElementById(id) as HTMLInp
 function chestEvaluation(){return evaluateChestForm(chestField,chestMapping,activeSetupBones());}
 function chestRegions():OverlayRegion[]{
  // #345: the chest overlay is drawn only while the Chest regions toggle is on.
- if(!chestEditor?.active())return [];
+ // Jobs draw the landmark derivation through chestCircles, separately from manual region rows.
+ if(host||!chestEditor?.active())return [];
  const style=getComputedStyle(document.documentElement),token=(name:string)=>style.getPropertyValue(name).trim();
  return chestOverlayPolygons(chestEvaluation(),activeChestMapping()).map((region,i)=>({...region,stroke:token(i?'--rv-region-b':'--rv-region-a'),fill:token(i?'--rv-region-b-fill':'--rv-region-a-fill')}));
 }
@@ -2467,7 +2547,7 @@ function rebindChestPart(status:RebuildStatusView,part:string):void {
 }
 /** `GET /api/rebuild`: whether Apply can run, and the producer config's regions to start an untouched editor from. */
 async function loadRebuildStatus():Promise<RebuildStatusView|null> {
- try{rebuildStatus=await api<RebuildStatusView>('/api/rebuild');}catch(error){rebuildStatus=null;const reason=`REBUILD_STATUS_UNAVAILABLE: ${errorText(error)}`;chestEditor?.notify(reason,true);animationPanel?.loadSource(null,reason);return null;}
+ try{rebuildStatus=await api<RebuildStatusView>('/api/rebuild');}catch(error){rebuildStatus=null;const reason=`REBUILD_STATUS_UNAVAILABLE: ${errorText(error)}`;if(!host)chestEditor?.notify(reason,true);animationPanel?.loadSource(null,reason);return null;}
  // Restore the form owner before seeding either mode or caching a selection switch.
  chestFormPart??=chestSeed(rebuildStatus).part;
  const scoped=chestStatusForPart(rebuildStatus,chestFormPart);

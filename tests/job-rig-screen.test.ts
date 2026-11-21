@@ -49,6 +49,13 @@ test('#715 mixed rig verdict and supported modal asks stay on the shared screen'
     {kind: 'checkpoint', checkpointId: 'undeclared'}]) {
     expect(jobRigScreenRoute(display, [...asks, {...signoff, subject} as PendingAskV3], ids)).toBe(false);
   }
+  const recordSource = {record: {path: 'project.json', sha256: 'a'.repeat(64)}, subject: 'plan', plan: {steps: [{id: 'step-one', hash: '1'.repeat(64)}]},
+    subjects: [{kind: 'checkpoint', checkpointId: 'step-one'}, {kind: 'signoff', stage: 'plan-approved'}, {kind: 'reopen', stage: 'plan-approved'}]};
+  const recordDisplay = {publication: {...publication, source: recordSource}} as unknown as DisplayPublicationV3;
+  expect(jobRigScreenAsk(recordDisplay, {...checkpoint, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(true);
+  expect(jobRigScreenAsk(recordDisplay, {...signoff, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(true);
+  expect(jobRigScreenAsk(recordDisplay, {...interview, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(true);
+  expect(jobRigScreenAsk(recordDisplay, {...signoff, source: recordSource as never, subject: {kind: 'reopen', stage: 'plan-approved'}} as unknown as PendingAskV3, ids)).toBe(false);
   const draft = {...publication, source: {...publication.source, selector: {kind: 'draft', id: 'd'}}};
   expect(jobRigScreenRoute({publication: draft} as unknown as DisplayPublicationV3, [], ids)).toBe(false);
 });
@@ -170,6 +177,14 @@ test('#709 job-window rig verdict mount and capture path are deleted, not hidden
   expect(source).not.toContain('copyJobRigViewport');
   const controls = await Bun.file(new URL('./job-window.test.ts', import.meta.url)).text();
   expect(controls).not.toContain('legacy' + 'RigForm');
+  expect(form).not.toContain("subject.kind === 'reopen'");
+  expect(source).not.toContain('job.reopen');
+  const rigScreenSource = await Bun.file(new URL('../web/job-rig-screen.ts', import.meta.url)).text();
+  expect(rigScreenSource).not.toContain('reopen');
+  const mainSource = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
+  expect(mainSource).not.toContain('Review the reopened stage.');
+  const actSource = await Bun.file(new URL('../src/job-act.ts', import.meta.url)).text();
+  expect(actSource.match(/reopen/g)).toEqual(['reopen']);
 });
 
 test('#756 package checkpoint modal requires the same-source plan mapping before leaving the legacy route',async()=>{

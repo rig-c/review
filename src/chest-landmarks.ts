@@ -26,8 +26,10 @@ export const PART_PAD = 4;
 const GRID = 256;
 
 export type RigPoint = [number, number];
-/** The `contour.bust` entry as the config holds it; absent optional fields are the producer's defaults. */
-export interface BustSpec { apex_r: RigPoint; apex_l: RigPoint; cleavage: RigPoint; alpha?: number; clearance?: number; bone_r?: string; bone_l?: string; spacing?: number }
+/** The published job spec and the landmark reader allow cleavage to be omitted. */
+export interface BustLandmarks { apex_r: RigPoint; apex_l: RigPoint; cleavage?: RigPoint; alpha?: number; clearance?: number; bone_r?: string; bone_l?: string; spacing?: number }
+/** Circle derivation and standalone Apply require all three points. */
+export interface BustSpec extends BustLandmarks { cleavage: RigPoint }
 /** A derived region in the config's circle shape (key order as parts writes it). */
 export interface DerivedBustRegion { name: 'bust_r' | 'bust_l'; shape: 'circle'; cx: number; cy: number; r: number; spacing: number; band: number; bone: string }
 export interface BustDerivation {
@@ -81,10 +83,13 @@ function point(v: unknown, field: string): RigPoint {
  * positive numbers, `clearance` a number, bone names non-empty strings); the geometry (`CONFIG_BUST_CLEARANCE`) and
  * whether the bones resolve (`CONFIG_NAME_RESOLVES`) are the producer's to judge. Key order is the producer's.
  */
-export function parseBustSpec(value: unknown, field = 'bust'): BustSpec {
+export function parseBustSpec(value: unknown, field?: string): BustSpec;
+export function parseBustSpec(value: unknown, field: string, allowMissingCleavage: true): BustLandmarks;
+export function parseBustSpec(value: unknown, field = 'bust', allowMissingCleavage = false): BustLandmarks {
   if (!isObject(value)) return bad(`${field} must be an object`);
   for (const key of Object.keys(value)) if (!(BUST_SPEC_FIELDS as readonly string[]).includes(key)) bad(`${field}.${key} is not a contour.bust field`);
-  const out: BustSpec = { apex_r: point(value.apex_r, `${field}.apex_r`), apex_l: point(value.apex_l, `${field}.apex_l`), cleavage: point(value.cleavage, `${field}.cleavage`) };
+  const out: BustLandmarks = {apex_r: point(value.apex_r, `${field}.apex_r`), apex_l: point(value.apex_l, `${field}.apex_l`)};
+  if (!allowMissingCleavage || Object.hasOwn(value, 'cleavage')) out.cleavage = point(value.cleavage, `${field}.cleavage`);
   for (const key of ['alpha', 'clearance', 'spacing'] as const) {
     if (!(key in value)) continue;
     const n = value[key];

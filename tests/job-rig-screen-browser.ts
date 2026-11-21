@@ -1,4 +1,4 @@
-/** Direct Bun script (not bun-test discovery). Run on ordinary Nova only, after implementation freeze.
+/** Direct Bun script (not bun-test discovery). Browser mode runs on ordinary Nova only. Serve mode opens the fixture locally.
  * Synthetic producer input; real owner UI, displayed acknowledgment, SQLite act and semantic next.
  * EN/KO run sequentially in fresh profiles. No producer/compiler acceptance claim.
  */
@@ -7,14 +7,16 @@ import {randomUUID} from 'node:crypto';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, type JobNextValue, type JobPendingAsk} from '../src/job-contract.ts';
-import {parseCommentsAct} from '../src/job-api.ts';
+import {JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, type JobNextValue, type JobPendingAsk} from '../src/job-contract.ts';
+import {jobHash, parseCommentsAct, parseContextCommentsAct} from '../src/job-api.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
 import type {LocalInspectionDraft} from '../web/inspection-persistence.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
+import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
+import {writeComparisonPackage} from './helpers/parts-comparison-package.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {withDeadline, walkCheckpoint} from './helpers/walk-deadline.ts';
@@ -22,12 +24,26 @@ import {freshWalkReopen} from './helpers/walk-reopen.ts';
 import {fullyVisible, visibilityGeometry} from './helpers/walk-visibility.ts';
 
 const argument = (key: string) => {const at = Bun.argv.indexOf(key); return at < 0 ? undefined : Bun.argv[at + 1];};
+const draft = Bun.argv.includes('--draft');
+const hintOff = Bun.argv.includes('--hint-off');
+// `--serve` starts the fixture host for a person's look, prints the owner URL and stays up until Ctrl-C.
+// With `--draft` it serves the #1017 draft-verdict fixture; without it, the #1018 rig fixture (add `--frames` for the frame record).
+const serve = Bun.argv.includes('--serve');
+assert.ok(draft || !hintOff, '--hint-off requires --draft');
+const draftComment = '초안의 이 부분을 수정해 주세요.';
+const draftSelector = {kind: 'draft', id: 'chain'} as const;
 const autoStill=Bun.argv.includes('--auto-still');
+// #1018: `--pin-comment` pins one rig comment in Playback before the verdict; `--frames` also declares the producer's
+// frame record (the real `rigc render --fps 12` record of the fixture's 1 s `still`, set renamed to the `idle` copy).
+const pinComment=Bun.argv.includes('--pin-comment'),declareFrames=Bun.argv.includes('--frames');
+assert.ok(!serve || !pinComment, '--serve leaves the comment to the person');
+assert.ok(!draft || !pinComment, '--draft places its own comment; --pin-comment runs without it');
 const verdict=(argument('--verdict')??'approved') as 'approved'|'changes-requested';
 const language = argument('--lang') ?? 'both';
 assert.ok(language === 'both' || language === 'en' || language === 'ko');
 const output = resolve(argument('--out') ?? 'artifacts/job-rig-screen-709');
-await mkdir(output, {recursive: true});
+assert.ok(!serve || language !== 'both', '--serve requires one language');
+if (!serve) await mkdir(output, {recursive: true});
 
 // Read only the public numeric observation. No internal screen state, altered bundle or act injection.
 const cameraExpression = `JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig`;
@@ -40,7 +56,7 @@ const readyExpression = `!document.body.inert && !!document.querySelector('#stag
 
 async function run(lang: 'en' | 'ko') {
   const out = join(output, lang);
-  await mkdir(out, {recursive: true});
+  if (!serve) await mkdir(out, {recursive: true});
   const mark = walkCheckpoint(join(out, 'checkpoints.jsonl'));
   const observations: Record<string, unknown> = {language: lang, fixture: 'synthetic trusted-host job window, static idle'};
   const catalog = lang === 'ko' ? koCatalog : enCatalog;
@@ -134,6 +150,21 @@ async function run(lang: 'en' | 'ko') {
   }
   try {
     // Modify only disposable synthetic input, before publication/freeze. The source fixture stays unchanged.
+    if (draft) {
+      await joinedVerdictFixture(fixture.input.root, '2-rigging-answers');
+      fixture.input.setRecordPath('project.json');
+      const packageRoot = join(fixture.input.root, 'out');
+      await writeComparisonPackage(packageRoot);
+      const references = ['parts/body.png', 'parts/front.png'].map(path => ({path, role: 'part'}));
+      fixture.input.setPartsReferences(references);
+      const images = await Promise.all(references.map(async image => ({
+        ...image, sha256: jobHash(await readFile(join(packageRoot, image.path))),
+      })));
+      const parts = {enumeratorVersion: fixture.input.partsEnumerator.version, images,
+        manifest: {path: 'out/parts.json', sha256: jobHash(await readFile(join(packageRoot, 'parts.json')))}};
+      fixture.input.setContext({...fixture.input.getContext(), selector: draftSelector, parts, partIds: ['body', 'front'],
+        subjects: hintOff ? [] : [{kind: 'review-verdict', stage: 'rig-review'}]});
+    }
     const modelPath = join(fixture.input.root, 'out/skeleton.model.json');
     const manifestPath = join(fixture.input.root, 'out/review.json');
     const model = JSON.parse(await readFile(modelPath, 'utf8'));
@@ -143,17 +174,46 @@ async function run(lang: 'en' | 'ko') {
     model.animations.push({...still, name: 'idle'});
     if (model.editorOrder?.animations) model.editorOrder.animations.push('idle');
     manifest.animations.push({id: 'idle', label: 'Synthetic static idle'});
+    if (declareFrames) {
+      const frames = JSON.parse(await readFile(new URL('./fixtures/frames-1018/still-12fps.frames.json', import.meta.url), 'utf8'));
+      assert.equal(frames.sets.length, 1);
+      assert.equal(still.duration, 1, 'the record was rendered from a 1 s still');
+      frames.sets[0] = {...frames.sets[0], dir: 'idle', animation: 'idle'};
+      await mkdir(join(fixture.input.root, 'out/check/idle_frames'), {recursive: true});
+      await writeFile(join(fixture.input.root, 'out/check/idle_frames/frames.json'), JSON.stringify(frames, null, 2) + '\n');
+      manifest.frames = 'check/idle_frames/frames.json';
+    }
     await writeFile(modelPath, JSON.stringify(model));
     await writeFile(manifestPath, JSON.stringify(manifest));
     const publication = await fixture.publish();
-    const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
-      requestId: randomUUID(), verb: 'ask', expectedGeneration: fixture.host.session.status().generation,
-      idempotencyKey: '709-rig-' + lang, publicationId: publication.publicationId,
-      subject: {kind: 'review-verdict', stage: 'rig-review'}});
-    assert.equal(response.status, 200);
-    const asked = await response.json();
-    assert.equal(asked.ok, true);
-    const ask = asked.value as JobPendingAsk;
+    const display = fixture.host.session.displayPublication(publication.publicationId);
+    assert.equal(display.rigDraftVerdict === true, draft && !hintOff);
+    let ask: JobPendingAsk | undefined;
+    if (!hintOff) {
+      const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
+        requestId: randomUUID(), verb: 'ask', expectedGeneration: fixture.host.session.status().generation,
+        idempotencyKey: '709-rig-' + lang, publicationId: publication.publicationId,
+        subject: {kind: 'review-verdict', stage: 'rig-review'}});
+      assert.equal(response.status, 200);
+      const asked = await response.json();
+      assert.equal(asked.ok, true);
+      ask = asked.value as JobPendingAsk;
+    }
+    const owner = new URL(fixture.host.ownerUrl);
+    owner.searchParams.set('lang', lang);
+    if (serve) {
+      console.log(owner.href);
+      await new Promise<void>(resolve => {
+        const stop = () => {
+          process.off('SIGINT', stop);
+          process.off('SIGTERM', stop);
+          resolve();
+        };
+        process.on('SIGINT', stop);
+        process.on('SIGTERM', stop);
+      });
+      return;
+    }
     const before = await jobInputHashes(fixture.input.root);
     const retained = fixture.host.session.retainedSourceV3(publication.publicationId);
     const retainedBefore = await jobInputHashes(retained.snapshotRoot);
@@ -172,9 +232,21 @@ async function run(lang: 'en' | 'ko') {
     }});
     await page.setViewport(1440, 1000);
     if(autoStill&&pageCommand)await pageCommand('Emulation.setDeviceMetricsOverride',{width:1920,height:1080,deviceScaleFactor:2,mobile:false});
-    const owner = new URL(fixture.host.ownerUrl);
-    owner.searchParams.set('lang', lang);
     await page.goto(owner.href, lang);
+    if (hintOff) {
+      await wait(`document.body.dataset.ready === 'true' && document.querySelector('#parts-canvas')?.width > 0`,
+        'hint-off-parts-ready');
+      const state = await page.evaluate<{language: string; verdictVisible: boolean}>(`({
+        language: document.documentElement.lang,
+        verdictVisible: ['#save','#request-changes'].some(selector => document.querySelector(selector)?.checkVisibility()),
+      })`);
+      assert.deepEqual(state, {language: lang, verdictVisible: false});
+      assert.equal((await next()).events.some(event => event.type === 'pending' || event.type === 'act'), false);
+      await writeFile(join(out, 'hint-off-parts.png'), await page.screenshot());
+      await record('result', {status: 'PASS', hintOff, ...state});
+      return;
+    }
+    assert.ok(ask);
     const fresh = await settled('fresh-fit');
     const initial = await screen('fresh-screen');
     assert.equal(initial.status, 'pending');
@@ -183,50 +255,52 @@ async function run(lang: 'en' | 'ko') {
     assert.equal(initial.fullRigHash, publication.source.model!.sha256);
     assert.equal(initial.sourceHash, publication.source.sourceHash);
     assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'opening never answers the pending ask');
-    await click(page, '#fit');
-    const explicitFit = await settled('explicit-fit');
-    sameCamera(fresh, explicitFit, 'fresh open equals actual Fit');
-    await click(page, '#zoom-in');
-    await wait(`Math.abs((${cameraExpression}).zoom-${JSON.stringify(explicitFit.zoom)})>1e-5`, 'zoom-changed');
-    const zoomed = await camera();
-    await wait(`(${draftExpression}).some(({draft})=>draft.sourceHash===${JSON.stringify(publication.source.sourceHash)}&&
-      Math.abs(draft.bookmark.view.cameras.rig.zoom-${JSON.stringify(zoomed.zoom)})<1e-7)`, 'zoom-bookmark-saved');
-    const drafts = await page.evaluate<{key: string; draft: LocalInspectionDraft}[]>(draftExpression);
-    const saved = drafts.find(item => item.draft.sourceHash === publication.source.sourceHash)!;
-    assert.equal(saved.draft.reviewDirty, false, 'camera-only work is not an unsaved review');
-    await record('saved-zoom-bookmark', {zoomed, saved});
-    const savedUrl = await page.evaluate<string>('location.href');
-    assert.ok(new URL(savedUrl).hash.startsWith('#review='), 'the real persistence path generated the bookmark URL');
-    // Literal browser Reload while the current URL and local draft still contain the actual saved zoom.
-    assert.ok(pageCommand, 'the existing CDP event hook exposes the page-scoped sender');
-    const beforeReload = {loadEvents, document: documentLoads.at(-1)};
-    assert.ok(beforeReload.document, 'initial top-level loader observed');
-    await page.evaluate(`window.__jobRig709BeforeReload=true`);
-    await pageCommand('Page.reload', {ignoreCache: false});
-    await withDeadline('709.' + lang + '.reload-load-event', 20_000, async signal => {
-      while (!signal.aborted) {
-        assert.equal(unexpectedDialog, undefined, 'view-only Reload must not open an unsaved-review dialog');
-        if (loadEvents > beforeReload.loadEvents) return;
-        await Bun.sleep(25);
-      }
-      throw signal.reason;
-    });
-    await wait(`!Object.hasOwn(window,'__jobRig709BeforeReload') && (${readyExpression})`, 'reload-new-document');
-    const reloaded = await settled('actual-reload-fit');
-    sameCamera(reloaded, explicitFit, 'actual Reload of saved zoom settles at Fit');
-    assert.ok(Math.abs(reloaded.zoom - zoomed.zoom) > 1e-5, 'Reload did not retain the saved zoom');
-    assert.notEqual(documentLoads.at(-1)?.loaderId, beforeReload.document.loaderId, 'Reload replaced the document loader');
-    await record('actual-reload', {command: 'Page.reload', before: beforeReload, after: {loadEvents, document: documentLoads.at(-1)}});
-    assert.equal((await screen('reloaded-screen')).status, 'pending');
-    assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'Reload does not submit');
-    // Fresh document at the actual saved link; no fabricated bookmark or localStorage writes.
-    await freshWalkReopen(page, savedUrl, lang, '709.' + lang + '.bookmark-reopen', 1, mark, mark);
-    const reopened = await settled('bookmark-reopened-fit');
-    sameCamera(reopened, explicitFit, 'saved zoom must settle at Fit on hosted opening');
-    assert.ok(Math.abs(reopened.zoom - zoomed.zoom) > 1e-5, 'reopen did not retain the old zoom');
-    const afterReopen = await screen('reopened-screen');
-    assert.equal(afterReopen.status, 'pending');
-    assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'reopen does not submit');
+    if (!draft) {
+      await click(page, '#fit');
+      const explicitFit = await settled('explicit-fit');
+      sameCamera(fresh, explicitFit, 'fresh open equals actual Fit');
+      await click(page, '#zoom-in');
+      await wait(`Math.abs((${cameraExpression}).zoom-${JSON.stringify(explicitFit.zoom)})>1e-5`, 'zoom-changed');
+      const zoomed = await camera();
+      await wait(`(${draftExpression}).some(({draft})=>draft.sourceHash===${JSON.stringify(publication.source.sourceHash)}&&
+        Math.abs(draft.bookmark.view.cameras.rig.zoom-${JSON.stringify(zoomed.zoom)})<1e-7)`, 'zoom-bookmark-saved');
+      const drafts = await page.evaluate<{key: string; draft: LocalInspectionDraft}[]>(draftExpression);
+      const saved = drafts.find(item => item.draft.sourceHash === publication.source.sourceHash)!;
+      assert.equal(saved.draft.reviewDirty, false, 'camera-only work is not an unsaved review');
+      await record('saved-zoom-bookmark', {zoomed, saved});
+      const savedUrl = await page.evaluate<string>('location.href');
+      assert.ok(new URL(savedUrl).hash.startsWith('#review='), 'the real persistence path generated the bookmark URL');
+      // Literal browser Reload while the current URL and local draft still contain the actual saved zoom.
+      assert.ok(pageCommand, 'the existing CDP event hook exposes the page-scoped sender');
+      const beforeReload = {loadEvents, document: documentLoads.at(-1)};
+      assert.ok(beforeReload.document, 'initial top-level loader observed');
+      await page.evaluate(`window.__jobRig709BeforeReload=true`);
+      await pageCommand('Page.reload', {ignoreCache: false});
+      await withDeadline('709.' + lang + '.reload-load-event', 20_000, async signal => {
+        while (!signal.aborted) {
+          assert.equal(unexpectedDialog, undefined, 'view-only Reload must not open an unsaved-review dialog');
+          if (loadEvents > beforeReload.loadEvents) return;
+          await Bun.sleep(25);
+        }
+        throw signal.reason;
+      });
+      await wait(`!Object.hasOwn(window,'__jobRig709BeforeReload') && (${readyExpression})`, 'reload-new-document');
+      const reloaded = await settled('actual-reload-fit');
+      sameCamera(reloaded, explicitFit, 'actual Reload of saved zoom settles at Fit');
+      assert.ok(Math.abs(reloaded.zoom - zoomed.zoom) > 1e-5, 'Reload did not retain the saved zoom');
+      assert.notEqual(documentLoads.at(-1)?.loaderId, beforeReload.document.loaderId, 'Reload replaced the document loader');
+      await record('actual-reload', {command: 'Page.reload', before: beforeReload, after: {loadEvents, document: documentLoads.at(-1)}});
+      assert.equal((await screen('reloaded-screen')).status, 'pending');
+      assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'Reload does not submit');
+      // Fresh document at the actual saved link; no fabricated bookmark or localStorage writes.
+      await freshWalkReopen(page, savedUrl, lang, '709.' + lang + '.bookmark-reopen', 1, mark, mark);
+      const reopened = await settled('bookmark-reopened-fit');
+      sameCamera(reopened, explicitFit, 'saved zoom must settle at Fit on hosted opening');
+      assert.ok(Math.abs(reopened.zoom - zoomed.zoom) > 1e-5, 'reopen did not retain the old zoom');
+      const afterReopen = await screen('reopened-screen');
+      assert.equal(afterReopen.status, 'pending');
+      assert.equal((await next()).events.filter(event => event.type === 'act').length, 0, 'reopen does not submit');
+    }
     let beforeSubmit:unknown;
     const inspectionExpression=`({camera:JSON.parse(document.getElementById('view-coordinates').textContent).cameras.rig,
       selected:[...document.querySelectorAll('[data-part-list] button[aria-pressed="true"]')].map(n=>({slot:n.dataset.slot,side:n.dataset.side})),
@@ -243,8 +317,58 @@ async function run(lang: 'en' | 'ko') {
       assert.equal(Number((beforeSubmit as any).time),0.375);
       await record('788-before-submit',beforeSubmit);
     }
+    if(pinComment){
+      await page.evaluate(`(()=>{document.querySelector('[data-mode="playback"]').click();
+        const scrub=document.getElementById('scrub');scrub.value='0.375';scrub.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await wait(`document.getElementById('animation-select').value==='idle'&&Number(document.getElementById('scrub').value)===0.375`, 'comment-pose');
+      await click(page, '#stage-comment');
+      const at = await page.evaluate<{x: number; y: number}>(`(()=>{const r=document.getElementById('rig-viewport').getBoundingClientRect();
+        return {x:r.left+r.width*.54,y:r.top+r.height*.49};})()`);
+      await page.mouse('mouseMoved', at.x, at.y);await page.mouse('mousePressed', at.x, at.y);await page.mouse('mouseReleased', at.x, at.y);
+      await wait("!!document.querySelector('.stage-comment-composer input')", 'comment-composer');
+      await page.evaluate(`(()=>{const form=document.querySelector('.stage-comment-composer');
+        form.querySelector('input').value='Pinned frame check';form.requestSubmit();})()`);
+      await wait("!document.querySelector('.stage-comment-composer') && !!document.querySelector('#stage-comment-list .stage-comment-summary')", 'comment-added');
+      if (await page.evaluate<boolean>("document.getElementById('stage-comment').getAttribute('aria-pressed')==='true'")) await click(page, '#stage-comment');
+      const row = await page.evaluate<{rows: string[]; frameLabel: string; frameControlsHidden: boolean}>(`({rows:[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].map(n=>n.textContent),
+        frameLabel:document.getElementById('frame-label').textContent,frameControlsHidden:document.getElementById('frame-controls').hidden})`);
+      await record('comment-row', row);
+      assert.equal(row.rows.length, 1, 'one pinned comment row');
+      const timeOnly = catalog['{0} s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)']!.replace('{0}', '0.375');
+      if (declareFrames) {
+        assert.equal(row.rows[0], '1 · ANIMATE · RIG · ' + catalog['F{0} (producer)']!.replace('{0}', '4') + ' · Pinned frame check', 'the normal row; #1026 localizes the frame basis label');
+        assert.ok(!row.rows[0]!.includes('COMMENT_FRAME_UNAVAILABLE'));
+      } else assert.equal(row.rows[0], '1 · ANIMATE · RIG · ' + timeOnly + ' · Pinned frame check', "today's time-only row");
+      await writeFile(join(out, 'comment-row.png'), await page.screenshot());
+    }
     // Use the screen's direct verdict button and trusted pointer submit. No /ui/acts call here.
     assert.equal(await page.evaluate(`document.getElementById('review-status').hidden`),true);
+    if (draft) {
+      await wait(`['#save','#request-changes'].every(selector => {
+        const button = document.querySelector(selector);
+        return button && button.getClientRects().length > 0;
+      })`, 'both-verdict-buttons');
+      if (!await page.evaluate<boolean>(`document.querySelector('#stage-comment').getAttribute('aria-pressed') === 'true'`)) {
+        await click(page, '#stage-comment');
+      }
+      await wait(`document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`, 'draft-comment-placement');
+      const point = await page.evaluate<{x: number; y: number; target: string}>(`(() => {
+        const rect = document.querySelector('#rig-viewport').getBoundingClientRect();
+        const x = rect.left + rect.width * .54, y = rect.top + rect.height * .49;
+        return {x, y, target: document.elementFromPoint(x, y)?.id ?? ''};
+      })()`);
+      await record('draft-comment-placement', point);
+      await page.mouse('mouseMoved', point.x, point.y);
+      await page.mouse('mousePressed', point.x, point.y);
+      await page.mouse('mouseReleased', point.x, point.y);
+      await wait(`!!document.querySelector('.stage-comment-composer input')`, 'draft-comment-composer');
+      await page.evaluate<void>(`(() => {
+        const form = document.querySelector('.stage-comment-composer');
+        form.querySelector('input').value = ${JSON.stringify(draftComment)};
+        form.requestSubmit();
+      })()`);
+      await wait(`!document.querySelector('.stage-comment-composer')`, 'draft-comment-saved');
+    }
     const answerSelector=verdict==='approved'?'#save':'#request-changes';
     await wait(`!document.querySelector(${JSON.stringify(answerSelector)}).disabled`, 'decision-ready');
     await screen('decision-screen');
@@ -263,17 +387,47 @@ async function run(lang: 'en' | 'ko') {
     const event = acts[0]!;
     assert.ok(event.type === 'act' && event.act.kind === 'review-verdict');
     await writeFile(join(out, 'recorded-act.json'), JSON.stringify(event.act, null, 2) + '\n');
-    const act = parseCommentsAct(event.act);
+    // A pinned comment (the draft run's or --pin-comment's) carries its view context, which the act records as act@7.
+    const contextAct = draft || pinComment;
+    const act = contextAct ? parseContextCommentsAct(event.act) : parseCommentsAct(event.act);
     assert.ok(act.kind === 'review-verdict');
     assert.ok(act.still);
-    assert.equal(act.schema, JOB_COMMENTS_ACT_SCHEMA);
+    assert.equal(act.schema, contextAct ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA);
     assert.equal(act.publicationId, publication.publicationId);
     assert.equal(act.source.sourceHash, publication.source.sourceHash);
     assert.equal(act.authority.actor, 'human');
     assert.equal(act.authority.channel, 'review-ui');
     assert.equal(act.value.stage, 'rig-review');
     assert.equal(act.value.verdict, verdict);
-    assert.deepEqual(act.value.comments, []);
+    if (pinComment) {
+      assert.equal(act.value.comments.length, 1, 'the pinned comment reaches the act');
+      // A JobComment carries the human text and, for a pin, its feedback anchor.
+      const pinned = act.value.comments[0]!.anchor as unknown as {frameStart: number | null; context?: {comment?: {frame: unknown; time: number; animation: string | null; timeBasis?: unknown}}};
+      assert.equal(act.value.comments[0]!.text, 'Pinned frame check');
+      await record('act-comment', {frameStart: pinned.frameStart, frame: pinned.context?.comment?.frame, time: pinned.context?.comment?.time,
+        animation: pinned.context?.comment?.animation, timeBasis: pinned.context?.comment?.timeBasis ?? null});
+      assert.equal(pinned.context?.comment?.animation, 'idle');
+      assert.equal(pinned.context?.comment?.time, 0.375);
+      if (declareFrames) {
+        assert.deepEqual(pinned.context?.comment?.frame, {index: 4, basis: 'producer'});
+        assert.equal(pinned.frameStart, 4);
+        assert.equal(pinned.context?.comment?.timeBasis, undefined);
+      } else {
+        assert.equal(pinned.context?.comment?.frame, null);
+        assert.equal(pinned.frameStart, null);
+      }
+    } else if (!draft) assert.deepEqual(act.value.comments, []);
+    assert.equal(act.value.comments.length, contextAct ? 1 : 0);
+    if (draft) {
+      assert.deepEqual(act.source.selector, draftSelector);
+      const [comment] = act.value.comments;
+      assert.equal(comment?.text, draftComment);
+      assert.ok(comment?.anchor);
+      assert.ok('context' in comment);
+      assert.deepEqual((comment.context as import('../src/job-contract.ts').JobCommentContext).subject, {
+        ask: ask.subject, sourceHash: publication.source.sourceHash, selector: draftSelector,
+      });
+    }
     assert.equal(act.still.camera, 'fixed');
     assert.match(act.still.sha256, /^[a-f0-9]{64}$/);
     assert.equal(act.still.path, act.still.sha256 + '.png');
@@ -293,6 +447,7 @@ async function run(lang: 'en' | 'ko') {
       scope: 'synthetic retained rig; actual human UI submission; no upstream producer or owner R0 ruling claim'});
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (serve) throw error;
     await record('failure', {status: 'FAIL', message: message.replace(/#cap=[a-f0-9]+/gi, '#cap=REDACTED'), unexpectedDialog});
     if (page) await writeFile(join(out, 'failure.png'), await page.screenshot()).catch(() => {});
     throw error;

@@ -69,7 +69,7 @@ export const rigPictureCases = [
   'rig-missing-version', 'rig-missing-version-field', 'rig-retained-model-hash',
 ] as const;
 type RigPictureCase = typeof rigPictureCases[number];
-export type PostPictureCase = 'scene' | 'unsealed-scene' | 'rig' | 'legacy' | RigPictureCase;
+export type PostPictureCase = 'scene' | 'unsealed-scene' | 'rig' | 'rig-no-painting' | 'legacy' | RigPictureCase;
 
 function rigPictureFixture(root: string, variant: RigPictureCase) {
   const signoffAt = '2026-10-31T00:00:00.000Z';
@@ -135,7 +135,7 @@ function rigPictureFixture(root: string, variant: RigPictureCase) {
 }
 
 function postPictureFixture(root: string, variant: PostPictureCase | undefined) {
-  if (variant === 'rig') {
+  if (variant === 'rig' || variant === 'rig-no-painting') {
     const config = writeWorkspaceFile(root,'rig/config.json','{}');
     return {context:{kind:'rig',rig_version:1,signoff_at:'2026-10-31T00:00:00Z',
       config,parts:{path:'derived/drafts/synthetic',files:[]}},files:[config]};
@@ -188,6 +188,7 @@ export function createSyntheticOptionRecordWorkspace(
     JSON.stringify({ character: 'hero', version: 1 }, null, 2) + '\n',
   );
 
+  const inputs = options?.postPicture === 'rig-no-painting' ? [inputSpec] : [inputImage, inputSpec];
   const boundFiles = options?.boundParts ? [
     writeWorkspaceFile(root, 'derived/drafts/synthetic/parts/body.png', makeSyntheticPngBytes()),
     writeWorkspaceFile(root, 'derived/drafts/synthetic/parts.json', JSON.stringify({rig_size:[2,2],parts:[{name:'body',x:0,y:0,w:2,h:2}]})),
@@ -534,7 +535,7 @@ export function createSyntheticOptionRecordWorkspace(
     name: 'Synthetic Option Project',
     ...(post && 'scenes' in post ? {scenes:post.scenes} : {}),
     ...(post?.versions ? {versions:post.versions,signoffs:post.signoffs} : {}),
-    inputs: [inputImage, inputSpec],
+    inputs,
     interview: {
       framing: framingItems,
       waypoints: waypointItems,
@@ -556,14 +557,14 @@ export function createSyntheticOptionRecordWorkspace(
 
   const recordIdentity = writeWorkspaceFile(root, 'project.json', JSON.stringify(projectDoc, null, 2) + '\n');
   const record: ProjectRecord = { path: 'project.json', sha256: recordIdentity.sha256 };
-  const files = [inputImage, inputSpec, optionSetFile, record, ...boundFiles, ...(post?.files ?? [])].sort((a, b) =>
+  const files = [...inputs, optionSetFile, record, ...boundFiles, ...(post?.files ?? [])].sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
   const result: RecordOptionResult = { kind: 'option-set', questionId, setId };
   const context: OptionContext = {
     label: 'Synthetic Option Project',
     parts: { ...DEFAULT_SYNTHETIC_PARTS },
-    inputs: [inputImage, inputSpec],
+    inputs,
     files,
     plan: null,
     subjects: [{ kind: 'interview-picks', questionId, setId }],

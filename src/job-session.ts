@@ -1,16 +1,17 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
-  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, jobActDeliveryLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
+  JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RIG_REVIEW_ACT_SCHEMA, JOB_RECORD_READER_ID, jobStillByteLimit, jobActDeliveryLimit, JOB_CAPABILITIES, JOB_CAPABILITIES_V3, JOB_ENABLED_ACT_KINDS,
   type ActV3, type AgentRequestV3, type EventV3, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayPublicationV3, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest, type JobFetchActRequestV3,
+  type JobHostPorts, type JobProgressLineV3, type JobProgressRequestV3, type JobProgressV3, type JobProgressValueV3,
   type JobNextValue, type JobPendingAsk, type JobPublication, type JobPublicationMode, type JobReviewerBinding,
   type JobSubject, type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
 } from './job-contract.ts';
 import { bindJobAsk, bindJobRecordAsk, finalizeJobAct, parseUISubmission, prepareJobRecordAct, prepareJobStill } from './job-act.ts';
-import { atSubject, isRecordSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
+import { atSubject, isRecordSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, parseChestLandmarksAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
-  assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, prepareJobSource, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
+  assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, prepareJobSource, retainedRigDraftVerdict, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
   type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
 } from './job-source.ts';
 import { JobError, JobStore, jobCropReferences, type JobSnapshotOwner, type StoredJob } from './job-store.ts';
@@ -54,9 +55,13 @@ interface JobData {
   events: (JobEvent | EventV3)[];
   replays: Record<string, Replay>;
   pages: Record<string, JobDisplayReceipt>;
+  progress?: JobProgressV3;
+  progressReceipt?: Pick<JobProgressV3, 'seq' | 'at'> & { writes: number };
 }
 
 const maximumEventBytes = 512 * 1024;
+const progressIntervalMs = 1000;
+type JobSubscription = Parameters<JobHostPorts['subscribeJob']>[0];
 
 export interface JobSessionOptions {
   readonly root: string;
@@ -84,12 +89,12 @@ function assertStoredSchemas(data: JobData): void {
 function assertStoredEvidence(data: JobData): void {
   for (const stored of Object.values(data.publications)) {
     assertStoredCheckpointEvidence(stored.retained);
-    assertStoredEvidenceCopy(stored.publication, data);
+    assertStoredEvidenceCopy(stored.publication, data, true);
   }
   for (const ask of Object.values(data.asks)) assertStoredEvidenceCopy(ask, data);
   for (const act of Object.values(data.acts)) assertStoredEvidenceCopy(act, data);
   for (const event of data.events) {
-    if (event.type === 'published') assertStoredEvidenceCopy(event.publication, data);
+    if (event.type === 'published') assertStoredEvidenceCopy(event.publication, data, true);
     if (event.type === 'pending') assertStoredEvidenceCopy(event.ask, data);
     if (event.type === 'act') assertStoredEvidenceCopy(event.act, data);
   }
@@ -97,7 +102,7 @@ function assertStoredEvidence(data: JobData): void {
     // An ask-batch receipt wraps its asks; each one is a durable copy like a single ask's receipt.
     const asks = (replay.value as {asks?: unknown} | null)?.asks;
     if (Array.isArray(asks)) for (const ask of asks) assertStoredEvidenceCopy(ask, data);
-    else assertStoredEvidenceCopy(replay.value, data);
+    else assertStoredEvidenceCopy(replay.value, data, !!replay.value && typeof replay.value === 'object' && 'instanceKey' in replay.value);
   }
 }
 
@@ -105,11 +110,23 @@ function hasStoredEvidence(source: object | undefined): boolean {
   return !!source && ('checkpointEvidence' in source || 'previousDraft' in source);
 }
 
-function assertStoredEvidenceCopy(value: unknown, data: JobData): void {
+function needsSnapshotRecheck(retained: JobRetainedSourceV3): boolean {
+  return isRetainedRecordSource(retained) || hasStoredEvidence(retained.source) || retained.chestLandmarks !== undefined;
+}
+
+function assertStoredEvidenceCopy(value: unknown, data: JobData, publication = false): void {
   if (!value || typeof value !== 'object') return;
   const copy = value as {publicationId: string; source: JobPublication['source'] | PublicationV3['source']};
   const stored = data.publications[copy.publicationId];
   const bound = stored?.retained.source;
+  const seeds = stored && !isRetainedRecordSource(stored.retained) ? stored.retained.chestLandmarks : undefined;
+  if (publication || 'chestLandmarks' in copy) {
+    if (('chestLandmarks' in copy) !== (seeds !== undefined) ||
+        ('chestLandmarks' in copy && (!publication || requestDigest(copy.chestLandmarks ?? null) !== requestDigest(seeds)))) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+  }
+  if (seeds && requestDigest(copy.source ?? null) !== requestDigest(bound)) throw new JobError('JOB_SOURCE_MISMATCH');
   if (!('source' in value) && !hasStoredEvidence(bound)) return;
   if (!copy.source || typeof copy.source !== 'object' || Array.isArray(copy.source)) throw new JobError('JOB_SOURCE_MISMATCH');
   if (!hasStoredEvidence(copy.source) && !hasStoredEvidence(bound)) return;
@@ -138,6 +155,7 @@ export class JobSession {
   readonly apiSchema: typeof JOB_API_SCHEMA | typeof JOB_API_V3_SCHEMA;
   private readonly store: JobStore<JobData>;
   private readonly listeners = new Set<() => void>();
+  private progressBroadcast?: { seq: number; when: number };
   private operations = 0;
   private disposed = false;
   private observedGeneration: number;
@@ -221,6 +239,8 @@ export class JobSession {
     if (!row.active) {
       row.data.fetchCapability = null;
       row.data.pages = {};
+      // The durable closure clears the slot without rewriting the historical row.
+      delete row.data.progress;
       for (const ask of Object.values(row.data.asks)) {
         if (ask.status === 'pending') row.data.asks[ask.askId] = {...ask, status: 'superseded'};
       }
@@ -323,7 +343,8 @@ export class JobSession {
     const stored = current.data.publications[publicationId];
     if (!stored) throw new JobError('JOB_PUBLICATION_UNKNOWN');
     const base = `/jobs/${this.jobId}/publications/${publicationId}/instances/${stored.publication.instanceKey}/`;
-    return { publication: stored.publication, routes: { entry: base, apiBase: base + 'api/', assetsBase: base + 'assets/' } };
+    const rigDraftVerdict = retainedRigDraftVerdict(stored.retained);
+    return { publication: stored.publication, ...(rigDraftVerdict ? {rigDraftVerdict: true as const} : {}), routes: { entry: base, apiBase: base + 'api/', assetsBase: base + 'assets/' } };
   }
 
   /** Internal front seam. A count covers preparation and the entire file stream. */
@@ -438,12 +459,19 @@ export class JobSession {
     assertJobRoot(current.data.root);
   }
 
+  private sameSemanticRevision(observed: StoredJob<JobData>) {
+    // Progress writes wake cross-connection observers without invalidating semantic CAS.
+    const revision = observed.revision - (observed.data.progressReceipt?.writes ?? 0);
+    return (fresh: StoredJob<JobData>) => fresh.revision - (fresh.data.progressReceipt?.writes ?? 0) === revision;
+  }
+
   private event(data: JobData, value: JobEventPayload): EventV3 {
     const event: EventV3 = { ...value, cursor: randomUUID(), jobId: this.jobId, generation: data.generation };
     if (Buffer.byteLength(jobCropReferences(event)) > maximumEventBytes) {
       throw new JobError('JOB_BODY_LIMIT', 'Job event exceeds its delivery bound');
     }
     data.events.push(event);
+    if (value.type === 'published' || value.type === 'pending') delete data.progress;
     return event;
   }
 
@@ -452,7 +480,7 @@ export class JobSession {
     if (data.head !== publicationId) throw new JobError('JOB_ACT_SOURCE_STALE');
     const retained = data.publications[publicationId].retained;
     assertJobSourceCurrent(retained);
-    if (isRetainedRecordSource(retained) || hasStoredEvidence(retained.source)) {
+    if (needsSnapshotRecheck(retained)) {
       assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals, retained.snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE');
     }
     return retained;
@@ -470,10 +498,31 @@ export class JobSession {
 
   private notify(): void { for (const listener of this.listeners) listener(); }
 
+  private recordProgress(input: JobProgressRequestV3, signal: AbortSignal): JobProgressValueV3 {
+    if (signal.aborted || this.apiSchema !== JOB_API_V3_SCHEMA) throw new JobError('JOB_REQUEST_INVALID');
+    const { seq, phase, text, step } = input, at = new Date().toISOString();
+    let receipt: JobProgressValueV3 = { status: 'accepted', seq, at };
+    this.store.update(this.jobId, null, fresh => {
+      const { data } = fresh;
+      data.progress = { seq, phase, ...(text !== undefined ? { text } : {}), ...(step ? { step } : {}), at, generation: data.generation };
+      data.progressReceipt = { seq, at, writes: (data.progressReceipt?.writes ?? 0) + 1 };
+      return { data };
+    }, fresh => {
+      assertStoredSchemas(fresh.data);
+      if (!fresh.active) throw new JobError('JOB_CLOSED');
+      const previous = fresh.data.progressReceipt;
+      if (!previous || seq > previous.seq) return false;
+      receipt = { status: 'ignored', seq: previous.seq, at: previous.at };
+      return true;
+    });
+    return receipt;
+  }
+
   async execute(input: JobAgentRequest | AgentRequestV3 | JobFetchActRequest | JobFetchActRequestV3, signal: AbortSignal): Promise<unknown> {
     if (input.jobId !== this.jobId) throw new JobError('JOB_UNKNOWN');
     // An attached session never sees the live host's notify(), so it watches shared writes like subscribe.
     if (input.verb === 'next') return this.next(input.after, input.waitMs, signal, this.attached ? 'events' : false);
+    if (input.verb === 'progress') return this.recordProgress(input, signal);
     if (input.verb === 'fetch-act') {
       const current = this.current();
       if (!current.active) throw new JobError('JOB_CLOSED');
@@ -521,7 +570,7 @@ export class JobSession {
           fresh.data.events.push(event);
           const value = {status: 'closed', cursor: event.cursor};
           return {generation: fresh.data.generation, event, replayKey: key, replay: {digest, value}};
-        });
+        }, this.sameSemanticRevision(current));
         this.notify();
         await this.reclaimClosedSnapshots();
         return closure.replay.value;
@@ -596,7 +645,7 @@ export class JobSession {
         switch (input.verb) {
           case 'publish': {
             assertJobSourceCurrent(candidate!);
-            if (isRetainedRecordSource(candidate!) || hasStoredEvidence(candidate!.source)) {
+            if (needsSnapshotRecheck(candidate!)) {
               assertRetainedSnapshotIntact(
                 candidate!.snapshotRoot,
                 candidate!.seals,
@@ -608,6 +657,7 @@ export class JobSession {
               publicationId: randomUUID(), instanceKey: candidate!.instanceKey, generation: data.generation,
               source: candidate!.source, label: candidate!.label, previousPublicationId: data.head, visual: candidate!.visual,
               ...(!isRetainedRecordSource(candidate!) && candidate!.interview !== undefined ? { interview: candidate!.interview } : {}),
+              ...(!isRetainedRecordSource(candidate!) && candidate!.chestLandmarks ? {chestLandmarks: candidate!.chestLandmarks} : {}),
             };
             for (const ask of Object.values(data.asks)) {
               if (ask.status === 'pending') data.asks[ask.askId] = { ...ask, status: 'superseded' };
@@ -643,7 +693,7 @@ export class JobSession {
         this.assertReplayCurrent(fresh, input.verb, raced.value);
         result = raced.value;
         return true;
-      });
+      }, this.sameSemanticRevision(current));
       this.notify();
       return result;
     } finally {
@@ -665,6 +715,7 @@ export class JobSession {
     if (storedAct.schema === JOB_COMMENTS_ACT_SCHEMA) parseCommentsAct(storedAct);
     if (storedAct.schema === JOB_COMMENT_CONTEXT_ACT_SCHEMA) parseContextCommentsAct(storedAct);
     if (storedAct.schema === JOB_MESH_EDITS_ACT_SCHEMA) parseMeshEditsAct(storedAct);
+    if (storedAct.schema === JOB_CHEST_LANDMARKS_ACT_SCHEMA) parseChestLandmarksAct(storedAct);
     const still = 'still' in storedAct ? storedAct.still : undefined;
     const actBytes = Buffer.from(JSON.stringify(storedAct));
     if (storedAct.schema !== JOB_RIG_REVIEW_ACT_SCHEMA && !still) {
@@ -704,7 +755,7 @@ export class JobSession {
       receipt = { publicationId: input.publicationId, pageId: input.pageId, displayedNonce: randomBytes(32).toString('hex') };
       fresh.data.pages[input.pageId] = receipt;
       return { data: fresh.data };
-    });
+    }, undefined, this.sameSemanticRevision(current));
     return receipt!;
   }
 
@@ -789,7 +840,7 @@ export class JobSession {
       if (!ask) throw new JobError('JOB_ASK_INVALID');
       const retained = fresh.data.publications[input.publicationId].retained;
       assertJobSourceCurrent(retained);
-      if (isRetainedRecordSource(retained) || hasStoredEvidence(retained.source) || input.kind === 'parts-verdict') {
+      if (needsSnapshotRecheck(retained) || input.kind === 'parts-verdict') {
         assertRetainedSnapshotIntact(
           retained.snapshotRoot,
           retained.seals,
@@ -821,8 +872,8 @@ export class JobSession {
     return act!;
   }
 
-  private events(after: string | null): JobNextValue | NextValueV3 {
-    const current = this.current(), events = current.data.events;
+  private events(after: string | null, current = this.current()): JobNextValue | NextValueV3 {
+    const events = current.data.events;
     const index = after === null ? -1 : events.findIndex(event => event.cursor === after);
     if (after !== null && index < 0) throw new JobError('JOB_CURSOR_INVALID');
     const batch: EventV3[] = [];
@@ -854,10 +905,17 @@ export class JobSession {
     if (waitMs < 0 || waitMs > jobWaitLimitMs || !Number.isSafeInteger(waitMs)) throw new JobError('JOB_REQUEST_INVALID');
     if (signal.aborted) throw new JobError('JOB_REQUEST_INVALID', 'Request cancelled');
     // Capture before reading events so a commit between the read and listener registration still wakes us.
-    let revision = observeWrites ? this.store.revision(this.jobId) : null;
+    const observe = observeWrites ? { revision: this.store.revision(this.jobId), mode: observeWrites } : null;
     const ready = this.events(after);
     if (ready.status !== 'timeout' || !waitMs) return ready;
-    await new Promise<void>((resolve, reject) => {
+    await this.waitForChange(after, waitMs, signal, observe);
+    return this.events(after);
+  }
+
+  private waitForChange(after: string | null, waitMs: number, signal: AbortSignal,
+    observe: { readonly revision: number; readonly mode: 'revision' | 'events' } | null): Promise<void> {
+    let revision = observe?.revision ?? null;
+    return new Promise<void>((resolve, reject) => {
       let poll: ReturnType<typeof setInterval> | undefined;
       let settled = false;
       const cleanup = () => { clearTimeout(timer); clearInterval(poll); this.listeners.delete(finish); signal.removeEventListener('abort', abort); };
@@ -868,7 +926,7 @@ export class JobSession {
         try {
           const observed = this.store.revision(this.jobId);
           if (observed === revision) return;
-          if (observeWrites === 'revision') return finish();
+          if (observe?.mode === 'revision') return finish();
           // An act wait stays open across a write without a deliverable event (display receipt).
           revision = observed;
           if (this.events(after).status !== 'timeout') finish();
@@ -880,28 +938,59 @@ export class JobSession {
       signal.addEventListener('abort', abort, { once: true });
       try {
         if (signal.aborted) abort();
-        else if (observeWrites) {
+        else if (revision !== null) {
           // Other sessions commit to the same store but cannot notify this instance's listeners.
           poll = setInterval(changed, 250);
           changed();
         } else if (this.events(after).status !== 'timeout') finish();
       } catch (error) { fail(error); }
     });
-    return this.events(after);
   }
 
-  async *subscribe(input: { readonly jobId: string; readonly after: string | null; readonly signal: AbortSignal }): AsyncIterable<EventV3> {
+  subscribe(input: JobSubscription): AsyncIterable<EventV3>;
+  subscribe(input: JobSubscription, page: true): AsyncIterable<EventV3 | JobProgressLineV3>;
+  async *subscribe(input: JobSubscription, page = false): AsyncIterable<EventV3 | JobProgressLineV3> {
     if (input.jobId !== this.jobId) throw new JobError('JOB_UNKNOWN');
     let after = input.after;
+    let delivered: JobProgressV3 | null | undefined;
+    const line = (progress: JobProgressV3 | null): JobProgressLineV3 => ({
+      type: 'progress', jobId: this.jobId, progress, now: new Date().toISOString(),
+    });
     while (!input.signal.aborted) {
-      let value: JobNextValue | NextValueV3;
-      try { value = await this.next(after, jobWaitLimitMs, input.signal, 'revision'); }
+      // Read the scalar revision first so a commit between this snapshot and waiting is observed.
+      const revision = this.store.revision(this.jobId);
+      const current = this.current(), value = this.events(after, current);
+      const progress = current.data.progress ?? null;
+      const displayed = delivered;
+      if (page && displayed === undefined) {
+        delivered = progress;
+        yield line(delivered);
+      } else if (page && displayed && (!progress || value.events.some(event =>
+        event.type !== 'act' && event.generation > displayed.generation))) {
+        delivered = null;
+        yield line(null);
+      }
+      for (const event of value.events) { after = event.cursor; yield event; }
+      if (value.status === 'closed') return;
+      if (value.events.length) continue;
+      let waitMs = jobWaitLimitMs;
+      if (page && progress && delivered?.seq !== progress.seq) {
+        // Share the cadence across pages. Keep waiting for the trailing slot even when writes stop.
+        const when = performance.now();
+        const previous = this.progressBroadcast;
+        if (!previous || previous.seq === progress.seq || when - previous.when >= progressIntervalMs) {
+          if (previous?.seq !== progress.seq) this.progressBroadcast = { seq: progress.seq, when };
+          delivered = progress;
+          yield line(delivered);
+          continue;
+        }
+        waitMs = Math.ceil(progressIntervalMs - (when - previous.when));
+      }
+      try { await this.waitForChange(after, waitMs, input.signal, { revision, mode: 'revision' }); }
       catch (error) {
         if (input.signal.aborted && error instanceof JobError && error.code === 'JOB_REQUEST_INVALID') return;
         throw error;
       }
-      for (const event of value.events) { after = event.cursor; yield event; }
-      if (value.status === 'closed') return;
     }
   }
 
