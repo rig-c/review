@@ -1,4 +1,4 @@
-import {checkpointEvidenceFields} from './job-checkpoint-evidence.ts';
+import {checkpointEvidenceFields, planPictureFields} from './job-checkpoint-evidence.ts';
 import {previousDraftFields} from './job-previous-draft.ts';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
@@ -744,6 +744,7 @@ type ParsedRecordPayload =
   | {
       readonly kind: 'plan';
       readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
+      readonly planPicture?: JobFileIdentity;
       readonly inputs: readonly JobFileIdentity[];
       readonly files: readonly JobFileIdentity[];
       readonly plan: JobPlanIdentity;
@@ -761,14 +762,15 @@ function parseRecordClosureAndSubjects(
 ): ParsedRecordPayload {
   const { inputs, files } = parseFileClosure(rawInputs, rawFiles, checkedRecord, 'JOB_SOURCE_MISMATCH');
   if (selection.kind === 'option-set') {
-    if (rawPlan !== null || 'checkpointEvidence' in evidenceHolder) throw new JobError('JOB_SOURCE_MISMATCH');
+    if (rawPlan !== null || 'checkpointEvidence' in evidenceHolder || 'planPicture' in evidenceHolder) throw new JobError('JOB_SOURCE_MISMATCH');
     const subjects = parseOptionSubjects(rawSubjects, selection, 'JOB_SOURCE_MISMATCH');
     return { kind: 'option-set', inputs, files, plan: null, subjects };
   }
   if (rawPlan === null) throw new JobError('JOB_SOURCE_MISMATCH');
   const { plan, stepIds } = parsePlanIdentity(rawPlan, 'JOB_SOURCE_MISMATCH');
   const subjects = parsePlanSubjects(rawSubjects, stepIds, 'JOB_SOURCE_MISMATCH');
-  return { kind: 'plan', inputs, files, plan, subjects, ...checkpointEvidenceFields(evidenceHolder, plan, subjects, files) };
+  return { kind: 'plan', inputs, files, plan, subjects, ...checkpointEvidenceFields(evidenceHolder, plan, subjects, files),
+    ...planPictureFields(evidenceHolder, plan, files) };
 }
 
 export function parseRecordPublishedContext(
@@ -794,7 +796,7 @@ export function parseRecordPublishedContext(
   const selection = parseRecordResult(result);
   const checkedRecord = record === undefined ? undefined : parseProjectRecord(record, 'JOB_SOURCE_MISMATCH');
   if (value && typeof value === 'object') previousDraftFields(value, null);
-  const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH', ['checkpointEvidence']);
+  const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH', ['checkpointEvidence', 'planPicture']);
   const label = asCode(() => jobText(item.label), 'JOB_SOURCE_MISMATCH');
   const parts = parseRecordPartsIdentity(item.parts, 'JOB_SOURCE_MISMATCH');
   const body = parseRecordClosureAndSubjects(
@@ -810,7 +812,8 @@ export function parseRecordPublishedContext(
     return { label, parts, inputs: body.inputs, files: body.files, plan: null, subjects: body.subjects };
   }
   return { label, parts, inputs: body.inputs, files: body.files, plan: body.plan, subjects: body.subjects,
-    ...(body.checkpointEvidence ? {checkpointEvidence: body.checkpointEvidence} : {}) };
+    ...(body.checkpointEvidence ? {checkpointEvidence: body.checkpointEvidence} : {}),
+    ...(body.planPicture ? {planPicture: body.planPicture} : {}) };
 }
 
 export function assertEqualRecordContexts(
@@ -838,6 +841,7 @@ export function assertEqualRecordContexts(
 
 export interface RecordSourceDigestInput {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
+  readonly planPicture?: JobFileIdentity;
   readonly schema?: typeof JOB_RECORD_SOURCE_SCHEMA;
   readonly sourceHash?: JobSha256;
   readonly projectHash?: JobSha256;
@@ -871,6 +875,7 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
         'files',
         'checkpointEvidence',
         'optionSets',
+        'planPicture',
       ]),
     'JOB_SOURCE_MISMATCH',
   );
@@ -894,7 +899,7 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
   const { inputs, files, byPath } = parseFileClosure(item.inputs, item.files, record, 'JOB_SOURCE_MISMATCH');
 
   if (selection.kind === 'option-set') {
-    if ('checkpointEvidence' in item || item.plan !== null || item.optionSet === null || item.optionSetFile === null) {
+    if ('checkpointEvidence' in item || 'planPicture' in item || item.plan !== null || item.optionSet === null || item.optionSetFile === null) {
       throw new JobError('JOB_SOURCE_MISMATCH');
     }
     const rawOptionSet = exactObject(item.optionSet, ['id', 'sha256'], 'JOB_SOURCE_MISMATCH');
@@ -944,6 +949,8 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
     subjects,
     files,
     ...checkpointEvidenceFields(item, plan, subjects, files),
+    // #983: last, and only when present, so a record without it keeps its source hash.
+    ...planPictureFields(item, plan, files),
   });
 }
 
@@ -1047,6 +1054,7 @@ function assembleRecordSource(
     subjects: body.subjects,
     files: body.files,
     ...(body.checkpointEvidence ? {checkpointEvidence: body.checkpointEvidence} : {}),
+    ...(body.planPicture ? {planPicture: body.planPicture} : {}),
   });
   return {
     sourceHash,
@@ -1055,6 +1063,7 @@ function assembleRecordSource(
     inputs: body.inputs,
     files: body.files,
     ...(body.checkpointEvidence ? {checkpointEvidence: body.checkpointEvidence} : {}),
+    ...(body.planPicture ? {planPicture: body.planPicture} : {}),
     subject: 'plan',
     selection: { kind: 'plan' },
     optionSet: null,
@@ -1104,6 +1113,7 @@ export function buildRecordSource(input: {
           plan: context.plan,
           subjects: context.subjects,
           ...(context.checkpointEvidence ? {checkpointEvidence: context.checkpointEvidence} : {}),
+          ...(context.planPicture ? {planPicture: context.planPicture} : {}),
         };
   const sets = selection.kind === 'option-set' ? selection.sets : undefined;
   if ((sets === undefined) !== (input.optionSetFiles === undefined)) throw new JobError('JOB_SOURCE_MISMATCH');
@@ -1131,7 +1141,7 @@ export function parseRecordSource(value: unknown): RecordSource {
       'subjects',
     ],
     'JOB_SOURCE_MISMATCH',
-    ['checkpointEvidence', 'optionSets'],
+    ['checkpointEvidence', 'optionSets', 'planPicture'],
   );
   const record = parseProjectRecord(item.record, 'JOB_SOURCE_MISMATCH');
   const projectHash = asCode(() => jobSha(item.projectHash), 'JOB_SOURCE_MISMATCH');

@@ -55,6 +55,23 @@ export function checkpointEvidenceFields(holder: object, plan: JobPlanIdentity |
   }
 }
 
+/** #983: the plan-level picture the owner signs against. Plan records only; one sealed raster, by the
+ * package page-image rule (png, jpg, webp). Absence must not materialize the field. */
+export function planPictureFields(holder: object, plan: JobPlanIdentity | null,
+  files: readonly JobFileIdentity[]): {planPicture?: JobFileIdentity} {
+  if (!('planPicture' in holder)) return {};
+  try {
+    if (!plan) throw new Error('plan only');
+    const raw = exactObject(holder.planPicture, ['path', 'sha256'], 'JOB_SOURCE_MISMATCH');
+    const planPicture = {path: jobPath(raw.path), sha256: jobSha(raw.sha256)};
+    if (!/\.(png|jpe?g|webp)$/i.test(planPicture.path) ||
+        !files.some(seal => seal.path === planPicture.path && seal.sha256 === planPicture.sha256)) throw new Error('closure');
+    return {planPicture};
+  } catch {
+    throw new JobError('JOB_SOURCE_MISMATCH', 'PLAN_PICTURE_INVALID');
+  }
+}
+
 /** The sealed document is the sole table body. Preserve columns, rows and scalars. */
 export function parseCheckpointTable(bytes: Buffer): JobCheckpointTable {
   try {

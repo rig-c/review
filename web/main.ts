@@ -1555,7 +1555,7 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  readOnly=tr(interview?'MODEL_UNAVAILABLE':'JOB_REVIEW_READ_ONLY');
  if(!interview)actReadOnly=readOnlyReason(access,true,host?.ownerActAccess);
  bindWorkspace();bindInspector(true);rigInput={state:'absent'};referenceInput={state:'absent'};renderLayout();
- parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??(host?.record?.questionPicture?'':unavailable),!!actReadOnly);
+ parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??(host?.record?.questionPicture||host?.record?.planPicture?'':unavailable),!!actReadOnly);
  text('package-title',interview?.label??host!.record!.label);text('revision','');text('source-hash',`source ${(interview?.sourceHash??host!.record!.sourceHash).slice(0,12)}`);
  el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty',unavailable);
  for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button')){
@@ -1746,7 +1746,7 @@ function recordCommentsChanged():void {
 function syncQuestionImage():void {
  if(disposed){releaseInterview?.();releaseInterview=null;return;}
  const form=(questionForms.find(item=>!item.hidden)??questionForms[0]) as (HTMLElement&{interviewImages?:readonly {name:string;src:string}[]})|undefined;
- const images=form?.interviewImages;
+ const images=form?.interviewImages??(host?.record?.planPicture?[host.record.planPicture]:undefined);
  if(activeInterviewImages&&images?.length===activeInterviewImages.length&&images.every((image,index)=>{
   const previous=activeInterviewImages![index]!;
   return previous.name===image.name&&previous.src===image.src;
