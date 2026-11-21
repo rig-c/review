@@ -19,8 +19,8 @@ import {candidateRow,DENSITY_STRIP_LIMIT,DensityStripError,refineValues,stripFig
  * revision misses TIP_OVER_ROOT and remesh refuses `REMESH_CHECK_HELD`. A built revision carries its check in
  * remesh.json (`check.revision.line` / `status`, parts 1.49.1, #174) bound by its hash rows. Each run sleeps 300 ms and
  * logs S/E beside the stand-in, so the overlap of runs is readable. With a `barrier` file holding N beside it, a run
- * that does not record the input check waits (up to 2 s) until N runs have been open at once, so the overlap a test
- * reads is the pool's bound, not how fast the machine reaches the next slot (#1070).
+ * that does not record the input check waits until N runs have been open at once, so the overlap a test reads is the
+ * pool's bound, not how fast the machine reaches the next slot (#1070). The 10 s cap only ends a pool that never opens N.
  */
 const FLOOR=1.4725,CEIL=1.926544;
 const entry={grid:31,r:15,segments:['skirt0a'],stray:40};
@@ -29,7 +29,7 @@ const fakeParts=`const fs=require('fs'),path=require('path'),crypto=require('cry
 const sha=b=>crypto.createHash('sha256').update(b).digest('hex');const runs=path.join(__dirname,'runs');
 const tree=root=>{const out=[];const walk=d=>{for(const n of fs.readdirSync(d).sort()){const p=path.join(d,n);if(fs.statSync(p).isDirectory())walk(p);else out.push(path.relative(root,p).split(path.sep).join('/'));}};walk(root);return out.sort();};
 const copy=(src,out)=>{for(const r of tree(src)){fs.mkdirSync(path.dirname(path.join(out,r)),{recursive:true});fs.copyFileSync(path.join(src,r),path.join(out,r));}};
-if(a[0]==='remesh'){fs.appendFileSync(path.join(__dirname,'args'),JSON.stringify(a)+'\\n');fs.appendFileSync(runs,'S\\n');const bar=path.join(__dirname,'barrier');if(fs.existsSync(bar)&&!a.includes('--record-input-check')){const want=+fs.readFileSync(bar,'utf8'),until=Date.now()+2000;const peak=()=>{let o=0,m=0;for(const c of fs.readFileSync(runs,'utf8').trim().split('\\n')){o+=c==='S'?1:-1;m=Math.max(m,o);}return m;};while(peak()<want&&Date.now()<until)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,300);
+if(a[0]==='remesh'){fs.appendFileSync(path.join(__dirname,'args'),JSON.stringify(a)+'\\n');fs.appendFileSync(runs,'S\\n');const bar=path.join(__dirname,'barrier');if(fs.existsSync(bar)&&!a.includes('--record-input-check')){const want=+fs.readFileSync(bar,'utf8'),until=Date.now()+10000;const peak=()=>{let o=0,m=0;for(const c of fs.readFileSync(runs,'utf8').trim().split('\\n')){o+=c==='S'?1:-1;m=Math.max(m,o);}return m;};while(peak()<want&&Date.now()<until)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,300);
  const out=f('--out'),input=f('--rig'),part=f('--part'),e=JSON.parse(fs.readFileSync(f('--mesh'),'utf8')),g=e.grid;
  const parts=f('--parts'),binding={versions:{parts:JSON.parse(fs.readFileSync(path.join(__dirname,'../package.json'))).version,rigc:'2.64.1'},options:{page_edges:a.includes('--page-edges')?f('--page-edges'):'free',pack_shape:a.includes('--pack-shape')?f('--pack-shape'):'polygon',requirements:null},rig:{dir:path.resolve(input),files:tree(input).map(p=>[p,sha(fs.readFileSync(path.join(input,p)))])},parts:{dir:path.resolve(parts),files:[['parts.json',sha(fs.readFileSync(path.join(parts,'parts.json')))]]}};
  if(a.includes('--input-check')){let record;try{record=JSON.parse(fs.readFileSync(f('--input-check'),'utf8'));if(record.spec!=='rig-parts-input-check/1'||!record.rig||!record.parts||!record.check)throw Error();}catch{console.log('  FAIL  REMESH_INPUT_CHECK_FILE: invalid input-check.json');fs.appendFileSync(runs,'E\\n');process.exit(1);}
@@ -93,12 +93,14 @@ const inputChecks=async(root:string) => (await readFile(join(root,'node_modules/
 test('#179: one input check, same inspected directories, at most four candidates, and the shared record never enters a revision or public route',async()=>{
  await session(async({base,hash,state,sourceHash,root,runs,checkRuns})=>{
   const patch=(g:number)=>patchFor(hash,g,{},'1.55.0');
-  await writeFile(join(root,'node_modules/@rig-c/parts/bin/barrier'),'4');
-  const view=await settle(base,await post(base,'/api/density-strip',{patches:[40,50,60,70,80].map(patch)}));
+  const barrier=join(root,'node_modules/@rig-c/parts/bin/barrier');
+  await writeFile(barrier,'4');
+  let view:View;
+  try{view=await settle(base,await post(base,'/api/density-strip',{patches:[40,50,60,70,80].map(patch)}));}
+  finally{await rm(barrier,{force:true});}
   expect(view.rows.every(r=>r.status==='built')).toBe(true);
   const log=await readFile(runs,'utf8');
   expect(view.concurrency).toBe(4);expect(overlap(log)).toBe(4);expect(log.trim().split('\n')).toHaveLength(10);
-  await rm(join(root,'node_modules/@rig-c/parts/bin/barrier'));
   const argv=await calls(root);
   expect(argv.filter(a=>a.includes('--record-input-check'))).toHaveLength(1);
   expect(argv.filter(a=>a.includes('--input-check'))).toHaveLength(4);
@@ -126,7 +128,7 @@ test('#179: one input check, same inspected directories, at most four candidates
   expect(await ls(join(state,'density-strip'))).toEqual([]);
   expect((await loadReview(join(root,'pkg'))).sourceHash).toBe(sourceHash);
  },{version:'1.55.0',stripConcurrency:99});
-},15000); // #1070: the barrier holds three runs open until the fourth slot opens; a loaded Mac reaches it late.
+},60000); // #1070: the barrier holds three runs open until the fourth slot opens; a loaded Mac reaches it late.
 
 test('#179: a refused first candidate keeps its line; the next candidate seeds the remaining pool; all-refused and single-slot strips settle',async()=>{
  await session(async({base,hash,root})=>{
