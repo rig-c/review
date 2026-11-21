@@ -3372,6 +3372,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Checker": "Checker",
   "Alpha only": "Alpha only",
   "Footprints of parts in front": "Footprints of parts in front",
+  "Point": "Point",
   "Region": "Region",
   "Pages": "Pages",
   "VERDICT": "VERDICT",

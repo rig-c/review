@@ -3372,6 +3372,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "Checker": "체커",
   "Alpha only": "알파만",
   "Footprints of parts in front": "앞 파츠의 풋프린트",
+  "Point": "지점",
   "Region": "영역",
   "Pages": "페이지",
   "VERDICT": "판정",

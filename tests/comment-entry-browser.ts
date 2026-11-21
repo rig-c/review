@@ -243,6 +243,9 @@ async function exerciseLiveVerdict(page:InputCdpSession,wait:Wait,reload:Reload,
   }else if(pinned){
     await wait(`!!document.querySelector('#rig-root canvas')&&document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`);
     await click(page,'#rig-viewport');
+    await wait(`!!document.querySelector('${composer} input')`);
+    assert.equal(await page.evaluate<boolean>(`document.activeElement===document.querySelector('${composer} input')`),true,
+      '1062_COMPOSER_FOCUS: a rig-view pin composer focuses its text field when it opens');
     await saveComment(page,wait,pinText);
   }
   if(pinned)await wait(`document.querySelectorAll('#rig-viewport .stage-comment-pin').length===1`);
