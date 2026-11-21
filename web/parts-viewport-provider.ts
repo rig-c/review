@@ -1,5 +1,5 @@
 /** Native image policy for the canonical pair. Camera gestures and writes belong to viewport-controller. */
-import {createViewportController,createViewportState,type ViewportState,type ViewportController,type CameraTarget,type ViewportProvider} from './viewport-controller.ts';
+import {createViewportController,createViewportState,formatZoomReadout,type ViewportState,type ViewportController,type CameraTarget,type ViewportProvider} from './viewport-controller.ts';
 import {t} from './i18n.ts';
 
 interface PartsFrame {w:number;h:number;world?:{box:{x:number;y:number;width:number;height:number};origin:{x:number;y:number};scale:{x:number;y:number}}}
@@ -45,7 +45,7 @@ export function createPartsViewportProvider(host:PartsViewportHost,state:Viewpor
    if(target==='rig'){state.rigScale=c.zoom;state.displayedCenter={...center};}
   }
  },
- renderControls:controller=>{const zoom=controller.paneCamera(controller.availableCamera()??'rig').zoom;host.el('zoom-value').textContent=zoom===1?t('1:1'):`${(zoom*100).toFixed(1)}%`;host.el('native-one').setAttribute('aria-pressed',String(zoom===1));(host.el('camera-sync') as HTMLInputElement).checked=state.cameraSync;host.el('fit').textContent=t('Fit');}
+ renderControls:controller=>{const zoom=controller.paneCamera(controller.availableCamera()??'rig').zoom;host.el('zoom-value').textContent=t(formatZoomReadout(controller));host.el('native-one').setAttribute('aria-pressed',String(zoom===1));(host.el('camera-sync') as HTMLInputElement).checked=state.cameraSync;host.el('fit').textContent=t('Fit');}
  };
  return provider;
 }

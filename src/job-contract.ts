@@ -1171,6 +1171,7 @@ export interface RecordContextBase {
 
 export type OptionContext = RecordContextBase & {
   readonly checkpointEvidence?: never;
+  readonly planPicture?: never;
   readonly plan: null;
   /** One `interview-picks` subject per published set, in set order. */
   readonly subjects: readonly RecordPicksSubject[];
@@ -1178,6 +1179,8 @@ export type OptionContext = RecordContextBase & {
 
 export type PlanContext = RecordContextBase & {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
+  /** #983: the sealed raster (an entry of `files`) the owner signs the plan against; drawn first. */
+  readonly planPicture?: JobFileIdentity;
   readonly plan: JobPlanIdentity;
   readonly subjects: readonly RecordPlanSubject[];
 };
@@ -1222,6 +1225,7 @@ export interface RecordSourceBase {
 
 export type OptionSource = RecordSourceBase & {
   readonly checkpointEvidence?: never;
+  readonly planPicture?: never;
   readonly subject: 'option-set';
   readonly selection: RecordOptionResult;
   readonly optionSet: { readonly id: string; readonly sha256: JobSha256 };
@@ -1243,6 +1247,8 @@ export interface RecordOptionSetBinding {
 
 export type PlanSource = RecordSourceBase & {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
+  /** #983: equal to an entry of `files`; bound into `sourceHash` only when present. */
+  readonly planPicture?: JobFileIdentity;
   readonly subject: 'plan';
   readonly selection: RecordPlanResult;
   readonly optionSet: null;

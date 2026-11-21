@@ -330,15 +330,21 @@ async function run(lang: 'en' | 'ko') {
         form.querySelector('input').value='Pinned frame check';form.requestSubmit();})()`);
       await wait("!document.querySelector('.stage-comment-composer') && !!document.querySelector('#stage-comment-list .stage-comment-summary')", 'comment-added');
       if (await page.evaluate<boolean>("document.getElementById('stage-comment').getAttribute('aria-pressed')==='true'")) await click(page, '#stage-comment');
-      const row = await page.evaluate<{rows: string[]; frameLabel: string; frameControlsHidden: boolean}>(`({rows:[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].map(n=>n.textContent),
+      const row = await page.evaluate<{rows: string[]; titles: string[]; frameLabel: string; frameControlsHidden: boolean}>(`({rows:[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].map(n=>n.textContent),
+        titles:[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].map(n=>n.title),
         frameLabel:document.getElementById('frame-label').textContent,frameControlsHidden:document.getElementById('frame-controls').hidden})`);
       await record('comment-row', row);
       assert.equal(row.rows.length, 1, 'one pinned comment row');
-      const timeOnly = catalog['{0} s (seconds basis) · frame is unavailable: no explicit producer frame index at this time (COMMENT_FRAME_UNAVAILABLE)']!.replace('{0}', '0.350');
+      const prefix = `1 · ${catalog['Animate']} · ${catalog['Rig']} · `;
       if (declareFrames) {
-        assert.equal(row.rows[0], '1 · ANIMATE · RIG · ' + catalog['F{0} (producer)']!.replace('{0}', '4') + ' · Pinned frame check', 'the normal row; #1026 localizes the frame basis label');
+        assert.equal(row.rows[0], prefix + catalog['F{0} (producer)']!.replace('{0}', '4') + ' · Pinned frame check', 'the normal row; #1026/#1037 localize prefix and frame basis label');
         assert.ok(!row.rows[0]!.includes('COMMENT_FRAME_UNAVAILABLE'));
-      } else assert.equal(row.rows[0], '1 · ANIMATE · RIG · ' + timeOnly + ' · Pinned frame check', "today's time-only row");
+        assert.equal(row.titles[0], '');
+      } else {
+        assert.equal(row.rows[0], prefix + catalog['{0} s (seconds basis)']!.replace('{0}', '0.350') + ' · Pinned frame check · ' + catalog['Frame unavailable'], "today's time-only row");
+        assert.ok(!row.rows[0]!.includes('COMMENT_FRAME_UNAVAILABLE'));
+        assert.ok(row.titles[0]!.includes('COMMENT_FRAME_UNAVAILABLE'));
+      }
       await writeFile(join(out, 'comment-row.png'), await page.screenshot());
     }
     // Use the screen's direct verdict button and trusted pointer submit. No /ui/acts call here.

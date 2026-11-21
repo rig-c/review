@@ -863,6 +863,8 @@ export interface JobPreparedInspection {
         images: readonly HTMLImageElement[];
     }[];
     references: JobReferenceView[];
+    /** #983: the record plan's declared picture, hash-checked and decoded; the record screen draws it first. */
+    planPicture?: {name: string; src: string};
     assets: ModelAssets | null;
     player: RigPlayer | null;
     rigRoot: HTMLElement;
@@ -1218,6 +1220,13 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
             preload.push(image(routes.api('stage-parts/page/' + page.index))
                 .then(element => { partPages.set(page.index, element); }));
         }
+        let planPicture: {name: string; src: string} | undefined;
+        const declaredPlanPicture = record && publishedSource.subject === 'plan' ? publishedSource.planPicture : undefined;
+        if (preloadVisuals && declaredPlanPicture) {
+            preload.push(image(routes.api('plan-picture'), declaredPlanPicture.sha256).then(element => {
+                planPicture = {name: declaredPlanPicture.path.split('/').at(-1)!, src: element.src};
+            }));
+        }
         const preloaded = await Promise.allSettled(preload);
         const failed = preloaded.find(result => result.status === 'rejected');
         if (failed?.status === 'rejected')
@@ -1264,6 +1273,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
         references.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
         return {
             display, metadata, interview, parts, partImages, partPages, checkpointEvidence, references, assets, rigRoot,
+            ...(planPicture ? {planPicture} : {}),
             get rigPresentation() { return rigPresentation; },
             set rigPresentation(value) {
                 clearRigPresentation();
