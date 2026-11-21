@@ -855,7 +855,19 @@ export interface JobPreparedInspection {
     setupPose(setup?: boolean): void;
     dispose(): void;
 }
+/** One request per resource per preparation (#1050). Every caller in one preparation passes the same signal; a
+ * later preparation (a republish, a reload) brings a new signal and so a new request. The URL carries the
+ * publication id and instance key, so a republished resource never shares an older promise. */
+const jobBytesBySignal = new WeakMap<AbortSignal, Map<string, Promise<Uint8Array<ArrayBuffer>>>>();
 async function jobBytes(url: string, signal: AbortSignal, maximum: number, refusal?: { status: number; code: string }): Promise<Uint8Array<ArrayBuffer>> {
+    let shared = jobBytesBySignal.get(signal);
+    if (!shared) jobBytesBySignal.set(signal, shared = new Map());
+    const key = `${url}\n${maximum}\n${refusal ? `${refusal.status}:${refusal.code}` : ''}`;
+    let pending = shared.get(key);
+    if (!pending) shared.set(key, pending = readJobBytes(url, signal, maximum, refusal));
+    return (await pending).slice();
+}
+async function readJobBytes(url: string, signal: AbortSignal, maximum: number, refusal?: { status: number; code: string }): Promise<Uint8Array<ArrayBuffer>> {
     const response = await fetch(url, { signal });
     if (!response.ok || !response.body) {
         void response.body?.cancel().catch(() => {});
@@ -891,7 +903,7 @@ async function jobDigest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
     return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
         .map(value => value.toString(16).padStart(2, '0')).join('');
 }
-async function jobJson<Value>(url: string, signal: AbortSignal, refusal?: { status: number; code: string }): Promise<Value> {
+export async function jobJson<Value>(url: string, signal: AbortSignal, refusal?: { status: number; code: string }): Promise<Value> {
     const bytes = await jobBytes(url, signal, 2 * 1024 * 1024, refusal);
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as Value;
 }
