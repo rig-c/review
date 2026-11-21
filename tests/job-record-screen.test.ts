@@ -682,6 +682,7 @@ test('#974 plan page resolves rests_on question ids from framing, waypoints and 
     return element;
    }) as JobFormDependencies['node'];
    const helpers = createJobFormHelpers(node, key => key);
+   expect(Object.keys(inspection.metadata.planText!)).toEqual(['schema', 'record', 'status', 'steps', 'questions']);
    const list = helpers.planTextList(fixture.ask.source.plan!, inspection.metadata.planText, 'step_layout');
    const entries = [...list.querySelector('[data-job-plan-field="rests_on"]')!.querySelectorAll('li')].map(item => ({
     text: item.textContent,
