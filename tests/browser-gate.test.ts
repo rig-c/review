@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {partitionBrowserSuites,browserInvocation,browserPlan} from '../scripts/browser-gate.ts';
+import {partitionBrowserSuites,browserInvocation,browserPlan,shardSuites} from '../scripts/browser-gate.ts';
 import exclusions from '../scripts/browser-exclusions.json';
 
 test('every discovered nonexcluded browser is in the serial plan, including an unknown new filename',()=>{
@@ -49,4 +49,27 @@ test('gate CLI uses an explicit argv entry and importing it does not execute the
  const direct=Bun.spawn([process.execPath,'scripts/browser-gate.ts'],{stdout:'pipe',stderr:'pipe'});
  const [planOut,planErr,planExit]=await Promise.all([new Response(direct.stdout).text(),new Response(direct.stderr).text(),direct.exited]);
  expect(planExit).toBe(0);expect(planErr).toBe('');expect(JSON.parse(planOut)).toEqual(await browserPlan());
+});
+
+test('shardSuites partitions sorted discovered suites across n=1..5 without drop or duplication and refuses invalid shard specs',async()=>{
+ const plan=await browserPlan();
+ for(let n=1;n<=5;n++){
+  const shards=Array.from({length:n},(_,idx)=>shardSuites(plan.suites,idx+1,n));
+  const flattened=shards.flat();
+  expect(flattened.length).toBe(plan.suites.length);
+  expect(new Set(flattened).size).toBe(plan.suites.length);
+  expect([...flattened].sort()).toEqual(plan.suites);
+  for(let i=1;i<=n;i++){
+   expect(shards[i-1]).toEqual(plan.suites.filter((_,idx)=>idx%n===i-1));
+  }
+ }
+ for(const [i,n] of [[0,3],[4,3],[-1,3],[1,0],[1,-2],[1.5,3],[1,2.5],[NaN,3],[1,NaN]] as const){
+  expect(()=>shardSuites(plan.suites,i,n)).toThrow('BROWSER_SHARD_INVALID');
+ }
+ for(const badArgs of [['--run','--shard'],['--run','--shard','0/3'],['--run','--shard','4/3'],['--run','--shard','1/0'],['--run','--shard','abc']]){
+  const proc=Bun.spawn([process.execPath,'scripts/browser-gate.ts',...badArgs],{stdout:'pipe',stderr:'pipe'});
+  const [err,exit]=await Promise.all([new Response(proc.stderr).text(),proc.exited]);
+  expect(exit).not.toBe(0);
+  expect(err).toContain('BROWSER_SHARD_INVALID');
+ }
 });
