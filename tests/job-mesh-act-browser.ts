@@ -167,6 +167,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
   const fixture = await createFixture(mode);
   const {chestSeed} = fixture;
   const chestCase = !!chestSeed || mode === 'chest-readonly';
+  const checkOpeningChestGate = mode === 'chest-only' || mode === 'chest-readonly';
   const profile = await mkdtemp(join(tmpdir(), 'review-952-chrome-'));
   const directory = join(output, language, mode);
   await mkdir(directory, {recursive: true});
@@ -186,11 +187,23 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       }
     }});
     const screen = page;
-    await screen.setViewport(largeCapture ? 2200 : 1440, largeCapture ? 1750 : 1000);
-    if (mode === 'with-comment') {
+    await screen.setViewport(checkOpeningChestGate ? 1280 : largeCapture ? 2200 : 1440,
+      checkOpeningChestGate ? 720 : largeCapture ? 1750 : 1000);
+    if (mode === 'with-comment' || checkOpeningChestGate) {
       await screen.goto('about:blank');
       assert.ok(send);
-      await send('Page.addScriptToEvaluateOnNewDocument', {source: `(() => {
+      await send('Page.addScriptToEvaluateOnNewDocument', {source: checkOpeningChestGate ? `(() => {
+        const original = window.fetch;
+        const held = new Promise(resolve => {window.__releaseChestModel = resolve;});
+        window.fetch = async (input, init) => {
+          const path = new URL(input instanceof Request ? input.url : input, location.href).pathname;
+          if (path.endsWith('/skeleton.model.json')) {
+            window.__chestModelHeld = true;
+            await held;
+          }
+          return original(input, init);
+        };
+      })()` : `(() => {
         const original=window.fetch;
         window.fetch=(input,init)=>{
           if(window.__refuseMeshOnce &&
@@ -225,7 +238,18 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       await screen.mouse('mousePressed', x, y);
       await screen.mouse('mouseReleased', x, y);
     }
+    if (checkOpeningChestGate) {
+      await wait("window.__chestModelHeld && !!document.querySelector('#chest-edit:not([hidden]):disabled')");
+      assert.equal(await screen.evaluate("document.querySelector('[data-mode=playback]').getAttribute('aria-pressed')"), 'true');
+      const reason = await screen.evaluate<string>("document.querySelector('#chest-edit').title");
+      await writeFile(join(directory, 'opening-gate.png'), await screen.screenshot());
+      await writeFile(join(directory, 'opening-gate.json'), JSON.stringify({reason}));
+      assert.equal(reason, catalog[chestSeed ? 'Find slot' : 'job.chest.unpublished'],
+        `${language} ${mode}: chest edit tooltip while the initial model is loading`);
+      await screen.evaluate('window.__releaseChestModel()');
+    }
     await wait("!!document.querySelector('#rig-root canvas') && !!document.querySelector('#save:not([hidden]):not(:disabled)')");
+    if (checkOpeningChestGate) await screen.setViewport(1440, 1000);
     assert.equal(await screen.evaluate<string>('document.documentElement.lang'), language);
     assert.equal(await screen.evaluate<boolean>("document.querySelector('#request-changes').disabled"), true);
     const inputHashes = chestCase ? await jobInputHashes(fixture.input.root) : null;
