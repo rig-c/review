@@ -17,7 +17,8 @@ import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
-import {parseCommentsAct,parseRecordAct} from '../src/job-api.ts';
+import {createJobHostPorts,jobHash,parseCommentsAct,parseRecordAct} from '../src/job-api.ts';
+import {JOB_API_V3_SCHEMA,jobRawActMediaType,type PendingAskV3} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
@@ -39,6 +40,30 @@ function sealedPicture(subject:Subject,source:unknown):{path:string;sha256:strin
  const value=source as {planPicture?:{path:string;sha256:string};files:{path:string;sha256:string}[]};
  const picture=subject==='plan'?value.planPicture:value.files.find(file=>file.path==='inputs/reference.png');
  assert.ok(picture,'the publication seals its '+subject+' picture');return picture;
+}
+/** Commit the captured browser submission through the real retained session and consumer transport. */
+async function verifyPicksReplay(fixture: Awaited<ReturnType<typeof fixtureFor>>, out: string, act: ReturnType<typeof parseCommentsAct>) {
+ const {session,origin,submissions}=fixture,submitted=submissions.at(-1);
+ assert.ok(submitted?.kind==='interview-picks');
+ const {publicationId}=submitted,expectedGeneration=session.status().generation,signal=new AbortController().signal;
+ const base={schema:JOB_API_V3_SCHEMA,jobId:session.jobId} as const;
+ const ask=await session.execute({...base,verb:'ask',requestId:'picks-replay-ask',idempotencyKey:'picks-replay-ask',
+  expectedGeneration,publicationId,subject:fixture.ask.subject},signal) as PendingAskV3;
+ const display=session.ackDisplayed({publicationId,pageId:submitted.pageId,sourceHash:ask.source.sourceHash});
+ const input={...submitted,...display,askId:ask.askId,expectedGeneration:session.status().generation};
+ const saved=await session.commitUIAct(input),bytes=JSON.stringify(saved);
+ assert.equal(JSON.stringify(parseCommentsAct(saved)),bytes);
+ assert.equal(JSON.stringify(saved.value),JSON.stringify(act.value));
+ assert.equal(JSON.stringify(await session.commitUIAct(input)),bytes);
+ const consumer=await createJobHostPorts(session,origin).handleJobApi(new Request(origin+'/jobs/'+session.jobId+'/api',{
+  method:'POST',headers:{'Content-Type':'application/json',Accept:jobRawActMediaType,Authorization:'Bearer '+session.writerGrant().fetchCapability},
+  body:JSON.stringify({...base,verb:'fetch-act',requestId:'picks-replay-fetch',actId:saved.actId}),
+ }));
+ assert.equal(consumer.status,200);
+ const fetched=await consumer.text();
+ assert.equal(fetched,bytes);
+ await writeFile(join(out,'replayed-consumer-act.json'),fetched);
+ return jobHash(fetched);
 }
 const subjectArg=arg('--subject') as Subject|undefined;
 
@@ -188,8 +213,9 @@ try{
      assert.equal(JSON.stringify(act.value.comments),JSON.stringify(all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary})));
      assert.equal(JSON.stringify(act),bytes,'picks round-trip byte-for-byte');
     }else assert.equal((act.value as {words?:string}).words,expected,'plan signoff keeps the A1 labels');
+    const replayActSha256=act.schema==='rig-review/act@6'?await verifyPicksReplay(fixture,out,act):null;
     await shot(out,'7-submitted');
-    const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,...(act.schema==='rig-review/act@6'?{structuredComments:act.value.comments}:{words:expected}),
+    const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,...(act.schema==='rig-review/act@6'?{structuredComments:act.value.comments,replayActSha256}:{words:expected}),
      scales:{fresh:fresh.scale,reloaded:reloaded.scale,zoomed:zoomed.scale,fitted:fitted.scale}};
     cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1048_PINS_PASS '+subject+' '+name+' '+language);
    }catch(error){await shot(out,'failure').catch(()=>{});throw error;}finally{await page.goto('about:blank');await fixture.close();}
@@ -217,8 +243,9 @@ try{
     assert.equal(JSON.stringify(act.value.comments),JSON.stringify([...feedbackItemComments(golden.rows as never),{text:golden.general}]));
     assert.equal(projectComments(act.value.comments),golden.words,'1068_RIG_LABELS: the projected rig labels are byte-identical to main');
     assert.equal(JSON.stringify(act),bytes);
+    const replayActSha256=await verifyPicksReplay(fixture,out,act);
     await shot(out,'1-rig-rows-submitted');
-    const result={case:'rig-golden',subject,size:name,language,rows:golden.rows.length,words:golden.words};cases.push(result);
+    const result={case:'rig-golden',subject,size:name,language,rows:golden.rows.length,words:golden.words,replayActSha256};cases.push(result);
     await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1068_RIG_GOLDEN_PASS '+name+' '+language);
    }catch(error){await shot(out,'failure').catch(()=>{});throw error;}finally{await page.goto('about:blank');await fixture.close();}
    continue;
