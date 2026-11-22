@@ -128,7 +128,8 @@ async function pilotCase(lang:'en'|'ko'){
   }
   const saved=await page.evaluate<any[]>(`window.__891Large.slice(0,2)`);const count=Bun.argv.includes('--pilot-main')?1:2;
   for(let i=0;i<count;i++)await check(lang+' pilot open resize save pin '+(i+1),async()=>{
-   await escape();await click(page,'.stage-comment-pin:nth-of-type('+(i+1)+')');await wait(page,`!!document.querySelector('.stage-comment-composer')||document.getElementById('message')?.textContent.includes('PARTS_CAMERA_RANGE')`);await settle();
+   await escape();await click(page,'.stage-comment-pin:nth-of-type('+(i+1)+')');await wait(page,`!!document.querySelector('.stage-comment-composer')||document.querySelector('#workspace-act-row #review-message.error')?.textContent.includes('PARTS_CAMERA_RANGE')`);await settle();
+   const refusal=await page.evaluate<string>(`document.querySelector('#workspace-act-row #review-message.error')?.textContent||''`);assert.ok(!refusal.includes('PARTS_CAMERA_RANGE'),refusal);
    const footer=await page.evaluate<string>(`document.getElementById('message')?.textContent||''`);assert.ok(!footer.includes('PARTS_CAMERA_RANGE'),footer);assert.deepEqual(await camera(),initial,'opening retains both zoom and pan');assert.ok((await pins()).every(pin=>pin.hittable),'pins stay hittable while the composer is open');
    if(Bun.argv.includes('--pilot-main'))return;
    await check(lang+' pilot composer blocks pan '+i,async()=>{const r=await page.evaluate<any>(`document.querySelector('.stage-comment-composer').getBoundingClientRect().toJSON()`);await drag({x:r.left+3,y:r.top+3},{x:r.left+10,y:r.top+9});assert.deepEqual(await camera(),initial,'composer background must not pan the canvas');assert.ok(await page.evaluate(`!!document.querySelector('.stage-comment-composer')`));});

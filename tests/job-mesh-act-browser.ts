@@ -530,7 +530,8 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       assert.ok(before);
       await screen.evaluate<void>("void(window.__refuseMeshOnce=true)");
       await click(screen, '#request-changes');
-      await wait("document.querySelector('#message').title.includes('JOB_ACT_INVALID') && !document.querySelector('#request-changes').disabled");
+      await wait("document.querySelector('#workspace-act-row #review-draft-state').title.includes('JOB_ACT_INVALID') && !document.querySelector('#request-changes').disabled");
+      assert.equal(await screen.evaluate<boolean>("document.querySelector('#message').title.includes('JOB_ACT_INVALID')"), false);
       assert.equal(await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value"), before);
     }
     await click(screen, '#request-changes');

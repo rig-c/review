@@ -86,16 +86,26 @@ const geometry=`(()=>{
    labels:[...document.querySelectorAll('.label,.eyebrow,.inspector-body label')].filter(n=>visible(n)&&n.textContent.trim()).map(style)},
   band:row?{background:getComputedStyle(row).backgroundColor,clientWidth:row.clientWidth,scrollWidth:row.scrollWidth}:null,
   draftStates:['review-draft-state','draft-state'].map(id=>document.getElementById(id)).filter(n=>visible(n)&&n.textContent.trim()).map(style),
-  footer:[...document.querySelectorAll('footer,footer .status-message,footer .status-readouts,footer .status-source,footer span,footer summary')].filter(n=>visible(n)&&!n.closest('.view-region-body')).map(n=>({id:n.id,rect:rect(n),clientWidth:n.clientWidth,scrollWidth:n.scrollWidth,clientHeight:n.clientHeight,scrollHeight:n.scrollHeight})),
+  footer:[...document.querySelectorAll('footer,footer .status-message,footer .status-readouts,footer .status-source,footer span,footer summary')].filter(n=>visible(n)&&!n.closest('.view-region-body')).map(n=>({id:n.id,rect:rect(n),title:n.title,text:n.textContent,divider:getComputedStyle(n).borderInlineStartWidth,ellipsis:getComputedStyle(n).textOverflow,whiteSpace:getComputedStyle(n).whiteSpace,overflowX:getComputedStyle(n).overflowX,clientWidth:n.clientWidth,scrollWidth:n.scrollWidth,clientHeight:n.clientHeight,scrollHeight:n.scrollHeight})),
+  readoutIds:[...document.querySelectorAll('.status-readouts>*')].filter(visible).map(n=>n.id).filter(Boolean),
   commentButtons:document.querySelectorAll('#stage-comment').length,
   gateHidden:document.querySelector('[data-animation-gate]')?.hidden,title:document.getElementById('rig-label')?.textContent};
 })()`;
 async function settleLayout(page:InputCdpSession){
  await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
 }
-async function capture(page:InputCdpSession,out:string,name:string){
+async function capture(page:InputCdpSession,out:string,name:string,expectedFooter?:string){
  await settleLayout(page);
- const state:any=await page.evaluate<any>(geometry);
+ const state:any=await page.evaluate<any>(expectedFooter===undefined?geometry:`new Promise((resolve,reject)=>{
+  const deadline=performance.now()+10000,expected=${JSON.stringify(expectedFooter)};
+  function sample(){
+   const state=${geometry};
+   if(state.footerMessage===expected) resolve(state);
+   else if(performance.now()>=deadline) reject(new Error('Parts footer expected '+expected+'; read '+state.footerMessage));
+   else requestAnimationFrame(sample);
+  }
+  sample();
+ })`);
  await writeFile(join(out,name+'.json'),JSON.stringify(state,null,2)+'\n');
  await writeFile(join(out,name+'.png'),await page.screenshot());return state;
 }
@@ -103,10 +113,22 @@ function assertPending(state:any,mode:Mode,width:number,expectedFooter?:string){
  if(mode==='rig')assert.equal(state.footerMessage,expectedFooter,'pending Rig verdict preserves its publication label');
  if(mode==='parts'){
   const catalog=state.language==='ko'?koCatalog:enCatalog;
-  assert.ok([expectedFooter,catalog['Parts ready. Source files remain unchanged.']].includes(state.footerMessage),
-   'pending Parts verdict keeps its publication label or ready message');
+  assert.ok([expectedFooter,catalog['Parts ready. Source files remain unchanged.']].includes(state.footerMessage),'pending Parts verdict shows a valid status');
  }
- for(const part of state.footer){assert.ok(part.rect.left>=0&&part.rect.right<=width&&part.rect.top>=state.footer[0].rect.top&&part.rect.bottom<=state.footer[0].rect.bottom,'shown footer item inside viewport and footer: '+part.id);if(mode!=='standalone'||part.id!=='message')assert.ok(part.scrollWidth<=part.clientWidth+1&&part.scrollHeight<=part.clientHeight+1,'shown footer text fits: '+part.id);}
+ for(const part of state.footer){
+  assert.ok(part.rect.left>=0&&part.rect.right<=width&&part.rect.top>=state.footer[0].rect.top&&part.rect.bottom<=state.footer[0].rect.bottom,'shown footer item inside viewport and footer: '+part.id);
+  assert.ok(part.scrollHeight<=part.clientHeight+1,'shown footer item stays on one line: '+part.id);
+  if(part.id!=='message')assert.ok(part.scrollWidth<=part.clientWidth+1,'shown footer text fits: '+part.id);
+  else if(part.scrollWidth>part.clientWidth+1){
+   assert.equal(part.ellipsis,'ellipsis');assert.equal(part.whiteSpace,'nowrap');assert.equal(part.overflowX,'hidden');
+   assert.equal(part.title,part.text,'truncated status retains the full localized tooltip');
+  }
+ }
+ if(mode==='parts'){
+  const readouts=state.readoutIds.map((id:string)=>state.footer.find((part:any)=>part.id===id));
+  assert.ok(readouts.length>=2,'Parts footer has multiple readouts');
+  assert.ok(readouts.slice(1).every((part:any)=>parseFloat(part.divider)>0),'Parts footer separates successive readouts');
+ }
  assert.equal(state.bars,1);assert.equal(state.rows,1);assert.equal(state.rowVisible,true);assert.equal(state.direct,true);assert.equal(state.home,'workspace-act-row');
  assert.equal(state.headerVisible,mode!=='embedded-rig');
  assert.ok(Math.abs(state.row.top-(mode==='embedded-rig'?0:state.header.bottom))<=1,'row directly beneath topbar, or at embedded top');
@@ -130,8 +152,10 @@ function assertPending(state:any,mode:Mode,width:number,expectedFooter?:string){
  assert.ok(state.answers.every((answer:any)=>answer.rect.left>=state.bar.left&&answer.rect.right<=state.bar.right+1),'all answers stay inside row');
  if(mode==='direction'){assert.equal(state.gateHidden,true);assert.equal(state.title,state.language==='en'?'Take · 1 s':'테이크 · 1초');}
 }
-for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900],[1100,800]] as const)for(const mode of modes){
- const out=join(output,mode,language,`${width}x${height}`);await mkdir(out,{recursive:true});
+for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900],[1100,800],[1280,720]] as const)for(const variant of [...modes,'parts-ready'] as const){
+ if(width===1280&&variant!=='parts'&&variant!=='parts-ready'||flashOnly&&(width===1280||variant==='parts-ready'))continue;
+ const mode:Mode=variant==='parts-ready'?'parts':variant;
+ const out=join(output,variant,language,`${width}x${height}`);await mkdir(out,{recursive:true});
  const observationIndex=observations.length;
  const profile=await mkdtemp(join(tmpdir(),'review840-'));
  let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
@@ -146,9 +170,11 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    close=()=>fixture.close();url=fixture.ownerUrl;
   }else{
    const fixture=await scriptedJobWindowFixture({c5Parts:'mesh'});close=()=>fixture.close();
-   const stage=mode==='embedded-rig'?'rig':mode,publication=await fixture.publish(stage);
+   const stage=mode==='embedded-rig'?'rig':mode;
+   const readyTitle='Parts ready. Source files remain unchanged.';
+   const publication=await fixture.publish(stage,stage,variant==='parts-ready'?{title:readyTitle}:undefined);
    // origin/main changed(): a fresh compatible publication has no previousLabel, so its label is the footer.
-   if(mode==='rig'||mode==='parts')expectedPendingFooter=publication.label;
+   if(mode==='rig'||mode==='parts')expectedPendingFooter=variant==='parts-ready'?(language==='ko'?koCatalog[readyTitle]:enCatalog[readyTitle]):publication.label;
    await fixture.ask(publication,stage==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:stage==='direction'?'direction-review':'rig-review'});
    url=fixture.host.ownerUrl;
   }
@@ -197,7 +223,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(embedding.publicEmbeddedRoute,false);
    await writeFile(join(out,'embedded-presentation-fixture.json'),JSON.stringify(embedding,null,2)+'\n');
   }
-  const initial:any=await capture(page,out,'pending');assert.equal(initial.language,language);
+  const initial:any=await capture(page,out,'pending',mode==='parts'&&!flashOnly?expectedPendingFooter:undefined);assert.equal(initial.language,language);
   const loading:any[]=await page.evaluate(`window.__actRowSamples`);
   const firstOffendingFrames:unknown[]=await page.evaluate(`window.__actRowFirstOffendingFrames`);
   const violations=loading.filter(sample=>sample.controlsBeforeQuestion||sample.legacySave||sample.status||sample.label||sample.bar&&!sample.row);
@@ -333,7 +359,8 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
      const row=document.getElementById('workspace-act-row'),message=document.getElementById('review-message');
      if(!row||row.hidden||!message?.classList.contains('error'))return;
      const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden]');
-     window.__earlyActRowRefusal={rowVisible:visible(row),text:message.textContent,messageVisible:visible(message),
+    const footer=document.getElementById('message');
+    window.__earlyActRowRefusal={rowVisible:visible(row),text:message.textContent,messageVisible:visible(message),footerText:footer.textContent,footerTitle:footer.title,
       controls:[...row.querySelectorAll('#save,#request-changes,#workspace-pending-ask,#review-status,label[for="review-status"]')].filter(visible).map(n=>n.id||n.tagName),
       rowRect:row.getBoundingClientRect().toJSON(),messageRect:message.getBoundingClientRect().toJSON()};
     }).observe(document,{childList:true,subtree:true,attributes:true});
@@ -369,6 +396,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    const refusal:any=await page.evaluate(`window.__earlyActRowRefusal`);
    assert.equal(refusal.rowVisible,true);assert.equal(refusal.messageVisible,true);assert.deepEqual(refusal.controls,[]);
    assert.ok(refusal.text.includes('JOB_VISUAL_UNAVAILABLE'));
+   assert.ok(!refusal.footerText.includes('JOB_VISUAL_UNAVAILABLE')&&!refusal.footerTitle.includes('JOB_VISUAL_UNAVAILABLE'),'refusal stays out of the footer and its tooltip');
    await writeFile(join(out,'early-refusal-before-rollback.json'),JSON.stringify(refusal,null,2)+'\n');
    await writeFile(join(out,'early-refusal-after-rollback.png'),await page.screenshot());
   }
@@ -386,4 +414,4 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
 await writeFile(join(output,'flash-summary.json'),JSON.stringify({flashOnly,cases:observations.length,flashFailures,caseFailures},null,2)+'\n');
 assert.deepEqual(caseFailures,[],'all matrix cases sampled successfully');
 assert.deepEqual(flashFailures,[],'zero live answer controls before the question across every sampled screen');
-console.log('ACT_ROW_840_OK cases='+observations.length+' EN=16 KO=16');
+console.log('ACT_ROW_840_OK cases='+observations.length+' EN='+observations.length/2+' KO='+observations.length/2);

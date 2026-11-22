@@ -26,6 +26,7 @@ type DifferenceCall = {
 };
 type ViewState = {
   selected: string[]; header: string; footer: string; timeOrigin: number;
+  footerTitle: string; footerLine: {height: number; whiteSpace: string; clientHeight: number; scrollHeight: number};
   panes: {id: string; hidden: boolean; display: string; visibility: string; visible: boolean}[];
   canvases: {id: string; width: number; height: number; data: string; opaque: number; red: number}[];
 };
@@ -50,8 +51,15 @@ async function shot(name: string) {await writeFile(join(output, name + '.png'), 
 async function state() {
   return page!.evaluate<ViewState>(`(() => ({
     selected: [...document.querySelectorAll('#view-menu [data-view][aria-pressed="true"]')].map(n=>n.dataset.view),
-    header: document.querySelector('#review-message').textContent,
+    header: document.querySelector('#workspace-act-row #review-message').textContent,
     footer: document.querySelector('#message').textContent,
+    footerTitle: document.querySelector('#message').title,
+    footerLine: {
+      height: document.querySelector('footer.status-bar').getBoundingClientRect().height,
+      whiteSpace: getComputedStyle(document.querySelector('#message')).whiteSpace,
+      clientHeight: document.querySelector('#message').clientHeight,
+      scrollHeight: document.querySelector('#message').scrollHeight
+    },
     timeOrigin: performance.timeOrigin,
     panes: ['reference-pane','rig-pane'].map(id=>{const n=document.getElementById(id),s=getComputedStyle(n),r=n.getBoundingClientRect();return {id,hidden:n.hidden,display:s.display,visibility:s.visibility,visible:!n.hidden&&s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0};}),
     canvases: [...document.querySelectorAll('#parts-canvas,#reference-content canvas')].map(c=>{
@@ -143,11 +151,17 @@ async function declaredCase(lang: 'en' | 'ko') {
       assert.equal(call.code, code);
       assert.deepEqual(JSON.parse(call.body!), {ok: false, error: {code, message: code}});
       if (mode === 'unavailable') assert.match(new URL(call.effectiveUrl).pathname, /\/difference\/99$/);
-      await wait(`document.querySelector('#stage-layout').getAttribute('aria-busy')==='false'&&document.querySelector('#review-message').textContent===${JSON.stringify(code)}&&document.querySelector('#message').textContent===${JSON.stringify(code)}`, 'exact header/footer refusal');
+      await wait(`document.querySelector('#stage-layout').getAttribute('aria-busy')==='false' &&
+        document.querySelector('#workspace-act-row:not([hidden]) #review-message.error')?.textContent===${JSON.stringify(code)}`, 'exact act-row refusal');
       const after = await state();
       report[key + '-after'] = receipt(after);
       await shot(key + '-after');
-      assert.equal(after.header, code); assert.equal(after.footer, code);
+      assert.equal(after.header, code);
+      assert.equal(after.footer, before.footer, 'failure must preserve footer status');
+      assert.equal(after.footerTitle, before.footerTitle, 'failure must preserve footer tooltip');
+      assert.equal(after.footerLine.height, before.footerLine.height);
+      assert.equal(after.footerLine.whiteSpace, 'nowrap');
+      assert.ok(after.footerLine.clientHeight > 0 && after.footerLine.scrollHeight <= after.footerLine.clientHeight + 1, 'footer status stays on one line');
       assert.deepEqual(after.selected, ['compare']);
       assert.deepEqual(after.canvases, before.canvases, 'failure must preserve exact toDataURL bytes and canvas pixels');
       assert.deepEqual(after.panes, before.panes, 'failure must preserve pane visibility');
