@@ -323,7 +323,7 @@ export function createJobRigScreen(options: {
       pairs.set(packet.checkpointId,{checkpointId:packet.checkpointId,before:imageFor(pair.before),after:imageFor(pair.after),
         differenceUrl:options.routes(prepared.display).api(`checkpoint-evidence/${packet.checkpointId}/difference`)});
     }
-    const evidencePair=pairs.size?{checkpointPair:()=>{
+    const evidencePair=pairs.size?{checkpointPairs:pairs,checkpointPair:()=>{
       const ask=pendingSubjects().find(subject=>subject.kind==='checkpoint');
       return ask?.kind==='checkpoint'?pairs.get(ask.checkpointId):undefined;
     }}:{};

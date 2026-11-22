@@ -380,17 +380,22 @@ async function inspectionErrors(page: InputCdpSession) {
     return page.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(errors)})].map(node => node.textContent).filter(Boolean)`);
 }
 
+async function clickScrolled(page: InputCdpSession, selector: string) {
+    await page.evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center',inline:'nearest'})`);
+    await settle(page);
+    await click(page, selector);
+}
+
 async function submitCheckpoint(page: InputCdpSession, fixture: Fixture, route: Route, words: string) {
     const {host, publication} = fixture;
     const ask = host.session.status().pending.find(item => item.publicationId === publication.publicationId &&
         item.subject.kind === 'checkpoint' && item.status === 'pending');
     assert.ok(ask);
-    await page.evaluate(`(() => {
-        const form = document.querySelector('form[data-job-ask="${ask.askId}"]');
-        form.querySelector('select[name=outcome]').value = 'pass';
-        form.dispatchEvent(new Event('input',{bubbles:true}));
-        form.requestSubmit();
-    })()`);
+    const form = `form[data-job-ask="${ask.askId}"]`;
+    const pass = form + ' button[data-job-text="Pass"]';
+    if (!await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(pass)})?.checkVisibility()`))
+        await click(page, '#workspace-pending-ask');
+    await clickScrolled(page, pass);
     const schema = route === 'plan' ? JOB_API_V3_SCHEMA : JOB_API_SCHEMA;
     const act = await waitFor('finalized checkpoint', async () => {
         const next = await call<NextValueV3>(host, schema, {verb: 'next', after: null, waitMs: 0});
@@ -400,20 +405,54 @@ async function submitCheckpoint(page: InputCdpSession, fixture: Fixture, route: 
     assert.equal(act.act.kind, 'checkpoint');
     assert.equal(act.act.value.outcome, 'pass');
     assert.equal('comments' in act.act.value ? act.act.value.comments[0]?.text : act.act.value.words, words);
-    return act.act.actId;
+    return {actId: act.act.actId, form};
 }
 
-async function runPair(page: InputCdpSession, fixture: Fixture, language: Language, captures: string, prefix: string) {
+async function waitForPairRelease(page: InputCdpSession, fixture: Fixture, language: Language, form: string) {
+    await waitFor('submitted checkpoint form and pair view released', async () => {
+        const released = await page.evaluate<boolean>(`!document.querySelector(${JSON.stringify(form)}) &&
+            !document.querySelector('#view-menu [data-view="before"], #view-menu [data-view="after"]')`);
+        return released && (await observe(page, fixture.evidence, language)).tiles.length === 0;
+    });
+}
+
+type TileSeal = Pick<JobCheckpointEvidence['tiles'][number], 'id' | 'path' | 'sha256'>;
+type ReplayPin = {id: string; text: string; tile: TileSeal};
+
+async function replaySubmittedPin(page: InputCdpSession, fixture: Fixture, language: Language, pin: ReplayPin) {
+    const selector = `[data-comment-id="${pin.id}"] .stage-comment-summary`;
+    await waitFor(pin.text + ' saved row', () => page.evaluate<boolean>(`!!document.querySelector(${JSON.stringify(selector)})`));
+    await clickScrolled(page, selector);
+    const state = await waitFor(pin.text + ' replay after submission', async () => {
+        const refusals = await inspectionErrors(page);
+        const view = await observe(page, fixture.evidence, language);
+        const tiles = view.tiles.filter(tile => tile.pane === 'reference-viewport');
+        return refusals.length || tiles.some(tile => tile.id === pin.tile.id) ? {tiles, refusals} : false;
+    });
+    assert.deepEqual(state.refusals, [], pin.text + ' replays without refusal after submission');
+    // The fixture verifies encoded bytes from the sealed routes. Match the visible pixels
+    // to the same fixture tiles without fetching a blob URL under the page's CSP.
+    const tiles = state.tiles.map(({id}) => {
+        const tile = fixture.evidence.packet.tiles.find(candidate => candidate.id === id);
+        assert.ok(tile);
+        return {id, path: tile.path, sha256: tile.sha256};
+    });
+    assert.deepEqual(tiles, [pin.tile], pin.text + ' restores the exact sealed tile after submission');
+    assert.deepEqual(await inspectionErrors(page), [], pin.text + ' remains free of refusal after paint');
+    return tiles[0];
+}
+
+async function runPair(page: InputCdpSession, fixture: Fixture, language: Language, captures: string, route: Route) {
     const observations = {} as Record<PairView, ViewObservation>;
     const pins: {mode: PairView; id: string; text: string; tile: Fixture['evidence']['after']}[] = [];
     await pairView(page, fixture, language, 'after');
-    await capture(page, captures, prefix + '-opening-' + language);
+    await capture(page, captures, route + '-opening-' + language);
     await chooseView(page, 'compare');
     await pairView(page, fixture, language, 'compare');
-    await capture(page, captures, prefix + '-side-by-side-' + language);
+    await capture(page, captures, route + '-side-by-side-' + language);
     await chooseView(page, 'difference');
     await pairView(page, fixture, language, 'difference');
-    await capture(page, captures, prefix + '-difference-' + language);
+    await capture(page, captures, route + '-difference-' + language);
     const rgba = await differenceBytes(page, fixture.evidence);
     await chooseView(page, 'after');
     for (const [index, mode] of (['after', 'compare', 'before', 'difference'] as const).entries()) {
@@ -437,7 +476,7 @@ async function runPair(page: InputCdpSession, fixture: Fixture, language: Langua
     }
     const ids = pins.map(pin => pin.id);
     const entry = await waitFor('four pins persisted', () => savedDraft(page, ids));
-    assert.ok(entry.key.startsWith(prefix === 'plan' ? 'rig-review-record-comments/1:' : 'rig-review-draft/1:'),
+    assert.ok(entry.key.startsWith(route === 'plan' ? 'rig-review-record-comments/1:' : 'rig-review-draft/1:'),
         'pins persist through the route’s own draft store');
     const rows = feedbackRows(entry);
     const anchors = pins.map(({id, mode, text, tile}) => {
@@ -467,14 +506,33 @@ async function runPair(page: InputCdpSession, fixture: Fixture, language: Langua
     await pairView(page, fixture, language, 'before');
     await verifyReplay(page, pins[3]!.id, 'Checkpoint pin difference');
     await pairView(page, fixture, language, 'after');
-    const unknownPath = prefix === 'package' && language === 'en'
-        ? await refuseOutsidePair(page, fixture, entry, pins[3]!.id) : undefined;
     await page.evaluate(`document.querySelector('.stage-comment-composer input')?.dispatchEvent(
         new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
-    const submittedAct = await submitCheckpoint(page, fixture, prefix as Route, words);
+    const {actId: submittedAct, form} = await submitCheckpoint(page, fixture, route, words);
+    const postSubmitReplay = {released: false, pins: [] as {
+        mode: 'after' | 'before'; id: string; expected: TileSeal; observed?: Awaited<ReturnType<typeof replaySubmittedPin>>;
+        error?: string; refusals: string[];
+    }[], releaseError: ''};
+    try {
+        await waitForPairRelease(page, fixture, language, form);
+        postSubmitReplay.released = true;
+        for (const mode of ['after', 'before'] as const) {
+            const {id} = pins.find(pin => pin.mode === mode)!;
+            const {id: tileId, path, sha256} = fixture.evidence[mode];
+            const expected = {id: tileId, path, sha256};
+            try {
+                const observed = await replaySubmittedPin(page, fixture, language, {id, text: 'Checkpoint pin ' + mode, tile: expected});
+                postSubmitReplay.pins.push({mode, id, expected, observed, refusals: []});
+            } catch (error) {
+                postSubmitReplay.pins.push({mode, id, expected, error: String(error), refusals: await inspectionErrors(page)});
+            }
+        }
+    } catch (error) {
+        postSubmitReplay.releaseError = String(error);
+    }
     const counts = {tiles: observations.compare.tiles.length, canvases: observations.difference.differenceCanvases,
         differenceEnabled: observations.after.differenceEnabled};
-    return {counts, views: observations, rgba, anchors, labels, rightPaneRefused: true, replayedAfterNative: true, unknownPath, submittedAct};
+    return {counts, views: observations, rgba, anchors, labels, rightPaneRefused: true, replayedAfterNative: true, submittedAct, postSubmitReplay};
 }
 
 /** A correctly sealed third tile is still neither a manifest reference nor a member of the pair. */
@@ -497,8 +555,24 @@ async function refuseOutsidePair(page: InputCdpSession, fixture: Fixture, entry:
     assert.equal(await page.evaluate<boolean>('!!document.querySelector(' + JSON.stringify(composer) + ')'), false);
     await pairView(page, fixture, 'en', 'after');
     const refusal = await inspectionErrors(page);
-    await showSeededDraft(page, fixture, entry.key, entry.draft);
     return {path: spare.path, sha256: spare.sha256, refusal};
+}
+
+async function runOutsidePairControl(page: InputCdpSession, scratch: string) {
+    const fixture = await openFixture(scratch, 'package', 'pair', 'en');
+    try {
+        await showFixture(page, fixture, 'en');
+        await chooseView(page, 'difference');
+        await pairView(page, fixture, 'en', 'difference');
+        await startCapture(page);
+        const {id} = await placePin(page, 'Checkpoint pin difference', 'difference', 0.73);
+        const draft = await waitFor('outside-pair control draft', () => savedDraft(page, [id]));
+        const result = await refuseOutsidePair(page, fixture, draft, id);
+        await page.goto('about:blank');
+        return result;
+    } finally {
+        await fixture.close();
+    }
 }
 
 /** The pre-step-3 viewport-387 public package declares the raster by manifest ID. Replay a
@@ -573,6 +647,7 @@ async function run() {
     } : null;
     const scratch = await mkdtemp(join(tmpdir(), 'review-716-browser-'));
     const results = {baseline, noPair: {} as Record<string, ViewObservation>, cases: {} as Record<string, unknown>};
+    const replayFailures: string[] = [];
     let page: InputCdpSession | undefined;
     let active = '';
     try {
@@ -591,6 +666,7 @@ async function run() {
                     const fixture = await openFixture(scratch, route, variant, language);
                     try {
                         const key = route + '-' + language;
+                        let casePassed = true;
                         await showFixture(page, fixture, language);
                         if (baseline || variant === 'no-pair') {
                             const view = await observe(page, fixture.evidence, language);
@@ -612,6 +688,12 @@ async function run() {
                             const result = await runPair(page, fixture, language, captures, route);
                             results.cases[active] = result;
                             console.log('CHECKPOINT_PAIR_COUNTS ' + JSON.stringify({case: active, ...result.counts}));
+                            const replay = result.postSubmitReplay;
+                            console.log('CHECKPOINT_PAIR_POST_SUBMIT ' + JSON.stringify({case: active, submittedAct: result.submittedAct, ...replay}));
+                            const failedPins = replay.pins.filter(pin => pin.error).map(pin => active + '/' + pin.mode);
+                            if (replay.releaseError) replayFailures.push(active + '/release');
+                            replayFailures.push(...failedPins);
+                            casePassed = replay.released && failedPins.length === 0;
                         } else {
                             const view = await pairView(page, fixture, language, 'after', false);
                             const difference = view.menu.find(option => option.id === 'difference');
@@ -620,7 +702,7 @@ async function run() {
                             await capture(page, captures, route + '-size-mismatch-' + language);
                             results.cases[active] = view;
                         }
-                        console.log('CHECKPOINT_PAIR_PASS ' + active);
+                        if (casePassed) console.log('CHECKPOINT_PAIR_PASS ' + active);
                         await page.goto('about:blank');
                     } finally {
                         await fixture.close();
@@ -628,11 +710,18 @@ async function run() {
                 }
             }
         }
+        active = 'post-submit-replay';
+        if (replayFailures.length) throw new Error('CHECKPOINT_PAIR_POST_SUBMIT_REPLAY ' + replayFailures.join(', '));
+        if (!baseline) {
+            active = 'outside-pair-control';
+            results.cases.outsidePair = await runOutsidePairControl(page, scratch);
+        }
         await writeFile(join(output, 'observations.json'), JSON.stringify(results, null, 2) + '\n');
     } catch (error) {
         const detail = String(error).replace(/#cap=[^\s"']+/g, '#cap=<redacted>');
         await writeFile(join(output, 'failure.json'), JSON.stringify({active, detail, ...results}, null, 2) + '\n');
-        if (page) await page.screenshot().then(png => writeFile(join(output, 'failure.png'), png)).catch(() => {});
+        if (page && active !== 'post-submit-replay')
+            await page.screenshot().then(png => writeFile(join(output, 'failure.png'), png)).catch(() => {});
         throw new Error(detail);
     } finally {
         try {await page?.close();}

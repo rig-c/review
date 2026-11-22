@@ -54,6 +54,8 @@ export interface CheckpointPairView {
   readonly differenceUrl:string;
 }
 export interface RigHost {
+  /** All declared pairs belong to the displayed publication. The active pair below follows the pending ask. */
+  readonly checkpointPairs?:ReadonlyMap<string,CheckpointPairView>;
   checkpointPair?():CheckpointPairView|undefined;
   readonly waiting?:boolean;
   readonly subject?:'parts';
