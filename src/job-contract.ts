@@ -80,6 +80,9 @@ export interface JobCommentContext {
 }
 export interface JobContextComment extends JobComment { readonly context?: JobCommentContext }
 export interface JobCommentsActValues {
+  readonly 'interview-picks': Omit<JobActValues['interview-picks'], 'words'> & {
+    readonly comments: readonly (JobComment & {readonly anchor?: JobCommentImageAnchor})[];
+  };
   readonly checkpoint: { readonly checkpointId: string; readonly planStepId: string;
     readonly outcome: 'pass' | 'fail'; readonly comments: readonly JobComment[] };
   readonly 'parts-verdict': { readonly verdict: 'approved' | 'changes-requested'; readonly comments: readonly JobComment[] };
@@ -92,16 +95,18 @@ export type JobCommentsAct = {
     readonly schema: typeof JOB_COMMENTS_ACT_SCHEMA;
     readonly actId: string; readonly jobId: string; readonly askId: string; readonly publicationId: string;
     readonly kind: Kind; readonly authority: JobHumanAuthority; readonly at: string;
-    readonly source: Exclude<SourceV3, OptionSource>; readonly value: JobCommentsActValues[Kind]; readonly still?: JobRigStill;
+    readonly source: Kind extends 'interview-picks' ? JobActSources['interview-picks'] | OptionSource : Exclude<SourceV3, OptionSource>;
+    readonly value: JobCommentsActValues[Kind]; readonly still?: Kind extends 'interview-picks' ? never : JobRigStill;
   }
 }[keyof JobCommentsActValues];
-/** act@7: the @6 envelope whose comments may carry `context`. */
+type ContextCommentsActKind = Exclude<keyof JobCommentsActValues, 'interview-picks'>;
+/** act@7: verdict, checkpoint, signoff and reopen comment envelopes may carry `context`. */
 export type JobContextCommentsAct = {
-  [Kind in keyof JobCommentsActValues]: Omit<Extract<JobCommentsAct, { readonly kind: Kind }>, 'schema' | 'value'> & {
+  [Kind in ContextCommentsActKind]: Omit<Extract<JobCommentsAct, { readonly kind: Kind }>, 'schema' | 'value'> & {
     readonly schema: typeof JOB_COMMENT_CONTEXT_ACT_SCHEMA;
     readonly value: Omit<JobCommentsActValues[Kind], 'comments'> & { readonly comments: readonly JobContextComment[] };
   }
-}[keyof JobCommentsActValues];
+}[ContextCommentsActKind];
 
 export interface JobMeshEditValue {
   readonly slot: string;
@@ -140,11 +145,11 @@ type JobRigMeshEditsAct = Omit<Extract<JobContextCommentsAct, {kind: 'review-ver
 
 /** Decoder grammar for @8, whose writer emits it only when mesh edits are present. */
 export type JobMeshEditsAct = JobRigMeshEditsAct | {
-  [Kind in keyof JobCommentsActValues]: Omit<Extract<JobContextCommentsAct, {kind: Kind}>, 'schema' | 'value'> & {
+  [Kind in ContextCommentsActKind]: Omit<Extract<JobContextCommentsAct, {kind: Kind}>, 'schema' | 'value'> & {
     readonly schema: typeof JOB_MESH_EDITS_ACT_SCHEMA;
     readonly value: Extract<JobContextCommentsAct, {kind: Kind}>['value'] & {readonly meshEdits?: never};
   }
-}[keyof JobCommentsActValues];
+}[ContextCommentsActKind];
 
 /** Setup-pose rig px in the retained model's stage, shared by the seed and the edit. */
 export type JobChestLandmarkValue = Pick<JobMeshEditValue, 'slot' | 'skin' | 'attachment' | 'basis'> & {

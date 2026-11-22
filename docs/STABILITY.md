@@ -483,6 +483,14 @@ record acts stay at act@4. Consumers narrow on `schema`. A consumer's
 kind. This changes the type on the consumer's next pin and does not break any
 runtime reader. Historical act@2–@5 bytes keep their readers.
 
+[Review #646](https://github.com/rig-c/review/issues/646) adds an `interview-picks`
+arm to `JobCommentsAct` and `JobCommentsActValues`. `parseCommentsAct` accepts
+act@6 picks with the existing package or record option-set binding and ordered
+`comments` in the value. Each anchor uses `JobCommentImageAnchor`.
+`words` remains a historical field. The @2 and @4 writers keep their encoding,
+and picks at @7 and later versions still refuse. Create must pin a compatible
+Review reader and release its own reader before Review switches the writer.
+
 [Review #746](https://github.com/rig-c/review/issues/746) adds optional
 `feedback: readonly Feedback[]` to `JobUIActValues['review-verdict']` only when
 `stage` is `rig-review`; `stage`, `verdict` and required `words` remain.
