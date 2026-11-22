@@ -176,6 +176,11 @@ footer.status-bar{display:grid;max-width:100vw;grid-template-columns:minmax(0,1f
 .status-readouts .draft-notice #draft-recovery{margin-left:var(--space-2)}
 .status-source{display:flex;align-items:center;gap:var(--space-3);min-width:0;white-space:nowrap}
 
+/* Reserve the rig readouts' natural width before giving the remaining space to the help text. */
+:where(#app:not(:has(#parts-canvas)))>footer.status-bar{grid-template-columns:minmax(0,1fr) minmax(0,max-content) max-content}
+:where(#app:not(:has(#parts-canvas))) .status-readouts{justify-content:safe flex-end}
+:where(#app:not(:has(#parts-canvas))) .status-readouts>span{flex-shrink:1;overflow:hidden}
+
 @media(max-width:1599px){.status-readouts :is(#layer-state,#idle-state,#control-state){display:none}}
 @media(max-width:1279px){.status-readouts #renderer-state{display:none}}
 @media(max-width:1000px){.status-readouts #layout-state,.status-source #source-hash{display:none}}
