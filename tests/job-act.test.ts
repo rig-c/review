@@ -280,11 +280,11 @@ test('synthetic private adapters validate ordered interview picks without exposi
   const act = finalizeJobAct({ jobId: f.session.jobId, submission, ask, retained: withQuestion,
     reviewer: { id: 'owner', role: 'owner' } });
   expect(act.kind).toBe('interview-picks');
-  expect(act.schema).toBe('rig-review/act@2');
+  expect(act.schema).toBe('rig-review/act@6');
   expect(JSON.stringify(act)).toBe(JSON.stringify({
-    schema: 'rig-review/act@2', actId: act.actId, jobId: f.session.jobId, askId: ask.askId, publicationId: publication.publicationId,
+    schema: 'rig-review/act@6', actId: act.actId, jobId: f.session.jobId, askId: ask.askId, publicationId: publication.publicationId,
     authority: {actor: 'human', channel: 'review-ui', reviewer: {id: 'owner', role: 'owner'}}, at: act.at,
-    kind: 'interview-picks', source: ask.source, value: submission.value,
+    kind: 'interview-picks', source: ask.source, value: {...submission.value, comments: []},
   }));
   expect(() => finalizeJobAct({ jobId: f.session.jobId, submission: { ...submission, value: {
     ...submission.value, selections: [{ itemId: 'different', optionId: 'value-one', otherText: null }] } },
@@ -311,17 +311,18 @@ function packagePicksCommentsAct() {
 test('#646 act@6 decodes package picks with exact comment text, order and image anchors', () => {
   const input = packagePicksCommentsAct();
   const decoded = parseCommentsAct(input);
-  expect(decoded).toEqual(input);
+  const {questionId, selections, note, comments} = input.value;
+  expect(JSON.stringify(decoded)).toBe(JSON.stringify({...input, value: {questionId, selections, note, comments}}));
   expect(projectComments(decoded.value.comments)).toBe('[general]\n  첫 번째\r\n\n\n[["reference.png"]]\nSecond\t \n\n[["reference.png"]]\ne\u0301\nThird');
 });
 
-test('#646 act@6 picks refuses words, unknown members and non-image anchors by name', () => {
+test('#646 act@6 picks refuses words, unknown members and checkpoint anchors by name', () => {
   const act = packagePicksCommentsAct();
   for (const extra of [
     {words: ''},
     {selections: [{...act.value.selections[0], extra: true}]},
     {comments: [{text: 'x', anchor: {name: 'reference.png', extra: true}}]},
-    {comments: [{text: 'x', anchor: feedbackAnchor()}]},
+    {comments: [{text: 'x', anchor: {checkpointId: 'step-one', planStepId: 'step-one'}}]},
     {comments: [{text: 'x', anchor: {questionId: 'question-one', itemId: 'palette'}}]},
   ]) expect(() => parseCommentsAct({...act, value: {...act.value, ...extra}})).toThrow('JOB_ACT_INVALID');
 });
@@ -509,6 +510,9 @@ test('parts-verdict UI save finalizes rig-review/act@6 with pointed Parts commen
   const mixedBytes = f.session.readActExport(mixed.value.actId, false).toString();
   const mixedAct = parseCommentsAct(JSON.parse(mixedBytes));
   const pinned = partsIssueComments(input.value.issues);
+  const picks = packagePicksCommentsAct();
+  expect(JSON.stringify(parseCommentsAct({...picks, value: {...picks.value, comments: pinned}}).value.comments))
+    .toBe(JSON.stringify(pinned));
   expect(mixedAct.kind).toBe('parts-verdict');
   expect(mixedAct.value).toEqual({verdict: 'changes-requested', comments: [...pinned, {text: general[0]}, {text: general[1]}]});
   expect(projectComments(mixedAct.value.comments)).toBe(projectComments(pinned) + '\n\n[general]\n' + general.join('\n\n[general]\n'));

@@ -264,7 +264,7 @@ try{
    const [picks,rawCheckpoint]=acts;
    assert.ok(picks?.kind==='interview-picks');
    assert.deepEqual(picks.source.optionSet,{id:question.set.id,sha256:question.ref.sha256});
-   assert.deepEqual(picks.value,{questionId:question.set.question,selections:[{itemId:'reference',optionId:'keep',otherText:null}],note:''});
+   assert.deepEqual(parseCommentsAct(picks).value,{questionId:question.set.question,selections:[{itemId:'reference',optionId:'keep',otherText:null}],note:'',comments:[]});
    const checkpointAct=parseCommentsAct(rawCheckpoint);
    assert.equal(checkpointAct.kind,'checkpoint');
    assert.equal(checkpointAct.source.sourceHash,publication.source.sourceHash);

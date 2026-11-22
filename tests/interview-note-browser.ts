@@ -9,7 +9,7 @@ import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
 import {joinProject} from '../src/joined-project.ts';
 import {startServer} from '../src/server.ts';
-import {parseRecordAct} from '../src/job-api.ts';
+import {parseCommentsAct} from '../src/job-api.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
@@ -190,8 +190,10 @@ try {
       })()`);
       await click(page, `${selector} button[type="submit"]`);
       await wait(`document.querySelector('${selector} > [role="status"]')?.textContent===${JSON.stringify(catalog['job.saved'])}`, 'bar2 saved ' + language);
-      const emptyAct = parseRecordAct(JSON.parse(await readFile(join(emptyOut, 'one-screen.json'), 'utf8')));
+      const emptyAct = parseCommentsAct(JSON.parse(await readFile(join(emptyOut, 'one-screen.json'), 'utf8')));
       assert.equal(emptyAct.kind, 'interview-picks');
+      const {comments, ...emptySurvey} = emptyAct.value;
+      assert.deepEqual(comments, []);
       const afterEmptySave = await page.evaluate<{noteCount: number; preCount: number}>(`(()=>{
         const form = document.querySelector('${selector}');
         return {
@@ -201,11 +203,11 @@ try {
       })()`);
       bar2 = {
         postedNote: emptyAct.value.note,
-        matches1793715Bytes: JSON.stringify(emptyAct.value) === baseline.expectedValueBytes,
+        matches1793715Bytes: JSON.stringify(emptySurvey) === baseline.expectedValueBytes,
         afterEmptySave,
         passed:
           emptyAct.value.note === '' &&
-          JSON.stringify(emptyAct.value) === baseline.expectedValueBytes &&
+          JSON.stringify(emptySurvey) === baseline.expectedValueBytes &&
           afterEmptySave.noteCount === 0 &&
           afterEmptySave.preCount === 0,
       };
@@ -270,7 +272,7 @@ try {
       const paintingAfterSave: string = await page.evaluate(visiblePainting);
       assert.equal(paintingAfterSave, paintingBeforeSave, 'saving keeps the shared painting visible');
 
-      const savedAct = parseRecordAct(JSON.parse(await readFile(join(noteOut, 'one-screen.json'), 'utf8')));
+      const savedAct = parseCommentsAct(JSON.parse(await readFile(join(noteOut, 'one-screen.json'), 'utf8')));
       assert.equal(savedAct.kind, 'interview-picks');
 
       const immediateReadOnly = await page.evaluate<{disabled: boolean; noteCount: number; preText: string | null}>(`(()=>{
@@ -356,7 +358,7 @@ try {
         if (canFill) {
           await click(page, `${selector} button[type="submit"]`);
           await wait(`document.querySelector('${selector} > [role="status"]')?.textContent===${JSON.stringify(enCatalog['job.saved'])}`, 'max10000 saved');
-          const maxAct = parseRecordAct(JSON.parse(await readFile(join(maxOut, 'one-screen.json'), 'utf8')));
+          const maxAct = parseCommentsAct(JSON.parse(await readFile(join(maxOut, 'one-screen.json'), 'utf8')));
           assert.equal(maxAct.kind, 'interview-picks');
           check(maxAct.value.note === maxNote && maxAct.value.note.length === 10000, 'End-to-end 10000-char note accepted');
         } else {

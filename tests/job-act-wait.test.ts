@@ -4,7 +4,7 @@ import {jobFixture} from './helpers/job-api-fixture.ts';
 import {attachedPair as pair, recordAttachedPair} from './helpers/job-attach-fixture.ts';
 import {rm} from 'node:fs/promises';
 import {jobCommand} from '../src/job-cli.ts';
-import {JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA} from '../src/job-contract.ts';
+import {JOB_COMMENTS_ACT_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA} from '../src/job-contract.ts';
 
 // Every UI submission here is an explicitly synthetic test fixture. No real
 // owner's review or producer acceptance is represented by these acts.
@@ -178,7 +178,7 @@ test('#1005 the waiter refuses unbounded deadlines before any request and surfac
 // Driven from the contract constant: a record kind added there without a fixture case fails here.
 // A new reopen ask is refused (#989); old reopen acts still parse but no live one can be committed.
 for (const kind of JOB_RECORD_ACT_KINDS.filter(kind => kind !== 'reopen')) {
-  test(`#1005 a record-and-package attachment resolves a live-committed ${kind} act@4`, async () => {
+  test(`#1005 a record-and-package attachment resolves a live-committed ${kind} act`, async () => {
     const {attached, commit, cursor} = await recordAttachedPair(scratches, hosts, kind);
     const {host, requests} = counted(attached);
     const sent: string[] = [];
@@ -197,7 +197,7 @@ for (const kind of JOB_RECORD_ACT_KINDS.filter(kind => kind !== 'reopen')) {
     if (outcome.kind !== 'act') throw new Error('unreachable');
     const row = outcome.next.events[0] as {type: string; act: {schema: string; kind: string; actId: string}};
     expect(row.type).toBe('act');
-    expect(row.act).toMatchObject({schema: JOB_RECORD_ACT_SCHEMA, kind, actId: saved.value.actId});
+    expect(row.act).toMatchObject({schema: kind === 'interview-picks' ? JOB_COMMENTS_ACT_SCHEMA : JOB_RECORD_ACT_SCHEMA, kind, actId: saved.value.actId});
     expect(sent).toEqual(['rig-review/job-api@3']);
     expect(requests).toHaveLength(1);
   });
@@ -218,7 +218,7 @@ test('#1005 a malformed record act and an unknown act schema keep their JOB_ACT_
   const {attached, commit, cursor, agentCall} = await recordAttachedPair(scratches, hosts, 'interview-picks');
   expect((await commit()).ok).toBe(true);
   const real = await agentCall(attached, {verb: 'next', after: cursor, waitMs: 0});
-  expect(real.value.events[0].act.schema).toBe(JOB_RECORD_ACT_SCHEMA);
+  expect(real.value.events[0].act.schema).toBe(JOB_COMMENTS_ACT_SCHEMA);
   const variants = {
     'broken record value': (act: Record<string, unknown>) => ({...act, value: {...(act.value as object), selections: 'not-a-list'}}),
     'unknown schema': (act: Record<string, unknown>) => ({...act, schema: 'rig-review/act@99'}),
@@ -251,6 +251,6 @@ test('#1005 job next --until act returns a finalized record act from a record-an
     expect(out).toHaveLength(1);
     const envelope = JSON.parse(out[0]!);
     expect(envelope.schema).toBe('rig-review/job-api@2');
-    expect(envelope.value.events.map((event: {act?: {schema: string}}) => event.act?.schema)).toEqual([JOB_RECORD_ACT_SCHEMA]);
+    expect(envelope.value.events.map((event: {act?: {schema: string}}) => event.act?.schema)).toEqual([JOB_COMMENTS_ACT_SCHEMA]);
   } finally {process.exitCode = previous ?? 0;}
 });

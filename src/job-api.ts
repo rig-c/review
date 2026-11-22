@@ -1800,7 +1800,7 @@ function decodePicksCommentsAct(item: Record<string, unknown>): Extract<JobComme
   const selections = parsePicksSelections(value.selections, commentsObject);
   // Image anchors have no source-hash member. The act binds the option set independently.
   const comments = parseComments(rawComments);
-  if (comments.some(comment => comment.anchor && !('name' in comment.anchor))) throw new JobError('JOB_ACT_INVALID');
+  if (comments.some(comment => comment.anchor && 'checkpointId' in comment.anchor)) throw new JobError('JOB_ACT_INVALID');
   if (isRecordSource(item.source)) {
     const picks = parseRecordAct({...item, schema: JOB_RECORD_ACT_SCHEMA, value: {...value, selections}});
     return {...picks, schema: JOB_COMMENTS_ACT_SCHEMA, value: {...picks.value, comments}} as Extract<JobCommentsAct, {kind: 'interview-picks'}>;

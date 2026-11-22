@@ -96,8 +96,8 @@ function assertNextVerbatimOracle(
     const act: JobAct = event.act;
     const rig = expected.kind === 'review-verdict' &&
       (expected.value as {stage?: string}).stage === 'rig-review';
-    // #713: fresh checkpoint, parts, rig/post verdict and signoff acts are act@6; surveys and image review stay @2.
-    const comments = expected.kind !== 'interview-picks' &&
+    // Image-review keeps its legacy schema.
+    const comments =
       (expected.value as {stage?: string}).stage !== 'image-review';
     expect(act.schema).toBe(comments ? JOB_COMMENTS_ACT_SCHEMA : JOB_ACT_SCHEMA);
     if (rig) {
@@ -120,7 +120,7 @@ function assertNextVerbatimOracle(
 /** The submitted words and issues, spelled as the act@6 value the writer must emit. */
 function writtenComments(expected: ExpectedActOracleInput): unknown {
   const {words, ...value} = expected.value as {words: string; issues?: readonly PartsIssue[]};
-  const note = words.trim() ? [{text: words}] : [];
+  const note = words?.trim() ? [{text: words}] : [];
   if (expected.kind === 'checkpoint') {
     const {checkpointId, planStepId} = value as unknown as {checkpointId: string; planStepId: string};
     return {...value, comments: words.trim() ? [{text: words, anchor: {checkpointId, planStepId}}] : []};

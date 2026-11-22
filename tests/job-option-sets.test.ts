@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'bun:test';
 import { JobSession } from '../src/job-session.ts';
-import { createJobHostPorts, parseRecordAct } from '../src/job-api.ts';
+import { createJobHostPorts, parseCommentsAct } from '../src/job-api.ts';
 import { JOB_API_V3_SCHEMA, type OptionContext, type PendingAskV3, type PublicationV3, type RecordSubject } from '../src/job-contract.ts';
 import {
   createSyntheticOptionRecordWorkspace, createSyntheticOptionSetsRecordWorkspace, createSyntheticRecordReader, type SyntheticOptionWorkspace,
@@ -82,7 +82,7 @@ test('#1004 K = 4 publishes four questions; two acts leave two asks pending, two
     const first = [await fixture.answer(publication, asks[0]!), await fixture.answer(publication, asks[2]!)];
     for (const act of first) {
       expect(act.ok).toBe(true);
-      if (act.ok) expect(parseRecordAct(act.value)).toEqual(act.value as never);
+      if (act.ok) expect(parseCommentsAct(act.value)).toEqual(act.value as never);
     }
     const firstActs = first.map(act => act.ok ? act.value as unknown as { kind: string; askId: string; value: { questionId: string } } : null);
     expect(firstActs.map(act => [act!.kind, act!.askId, act!.value.questionId]))
@@ -111,7 +111,7 @@ test('#1004 K = 4 publishes four questions; two acts leave two asks pending, two
       expect(act!.source.sourceHash).toBe(source.sourceHash);
       // Re-derivation: put set 0 back into the singular fields and the publication source returns.
       expect({ ...act!.source, selection: source.selection, optionSet: source.optionSet, optionSetFile: source.optionSetFile }).toEqual(source);
-      expect(parseRecordAct(act)).toEqual(act as never);
+      expect(parseCommentsAct(act)).toEqual(act as never);
     }
     expect(new Set(acts.map(act => act!.source.optionSet.id)).size).toBe(4);
     // The consumer's read (fetch-act) returns the same per-set act.
@@ -186,7 +186,7 @@ test('#1004 an act whose set fields disagree is refused by name (JOB_ACT_INVALID
     const other = act.source.optionSets![1]!;
     const refused = (mutate: (copy: typeof act) => void) => {
       const copy = structuredClone(act); mutate(copy);
-      try { parseRecordAct(copy); return null; } catch (error) { return { code: (error as { code?: string }).code, message: (error as Error).message }; }
+      try { parseCommentsAct(copy); return null; } catch (error) { return { code: (error as { code?: string }).code, message: (error as Error).message }; }
     };
     expect(refused(copy => { (copy.source as { optionSet: object }).optionSet = other.optionSet; }))
       .toEqual({ code: 'JOB_ACT_INVALID', message: 'act optionSet does not name set constraints/rig-constraints-01' });

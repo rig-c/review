@@ -497,13 +497,15 @@ record acts stay at act@4. Consumers narrow on `schema`. A consumer's
 kind. This changes the type on the consumer's next pin and does not break any
 runtime reader. Historical act@2–@5 bytes keep their readers.
 
-[Review #646](https://github.com/rig-c/review/issues/646) adds an `interview-picks`
-arm to `JobCommentsAct` and `JobCommentsActValues`. `parseCommentsAct` accepts
-act@6 picks with the existing package or record option-set binding and ordered
-`comments` in the value. Each anchor uses `JobCommentImageAnchor`.
-`words` remains a historical field. The @2 and @4 writers keep their encoding,
-and picks at @7 and later versions still refuse. Create must pin a compatible
-Review reader and release its own reader before Review switches the writer.
+[Review #646](https://github.com/rig-c/review/issues/646) writes fresh package
+and record `interview-picks` acts at act@6. `parseCommentsAct` accepts the existing
+option-set binding and ordered `comments` with general, Feedback, PartsIssue
+and `JobCommentImageAnchor` entries. Checkpoint anchors and picks at @7 and
+later versions refuse. `prepareJobRecordAct` returns act@6 for picks and act@4
+for the other record subjects. The @2 and @4 readers retain their encoding,
+including historical `words`. Create 1.21.0 pins Review 4.14.0 and refuses
+Feedback and PartsIssue anchors on picks. Consumers of those anchors need the
+widened reader.
 
 [Review #746](https://github.com/rig-c/review/issues/746) adds optional
 `feedback: readonly Feedback[]` to `JobUIActValues['review-verdict']` only when
@@ -894,7 +896,7 @@ and `sourceHash` are unchanged. `JOB_ERROR_CODES` gains
 `JOB_OPTION_SET_DUPLICATE`, refused on publish when the reader declares two
 subjects for one set or `sets` names a set twice. Each ask binds one set, the
 asks of one publication stay pending together, and each answer finalizes one
-`interview-picks` act (`rig-review/act@4`). At K ≥ 2 that act's `selection`
+`interview-picks` act (`rig-review/act@6`). At K ≥ 2 that act's `selection`
 (`questionId`, `setId`), `optionSet` and `optionSetFile` name the act's own set,
 while `subjects`, `optionSets` and `sourceHash` stay the publication's; an act
 whose per-act fields disagree refuses `JOB_ACT_INVALID` by name. One set's act
@@ -924,7 +926,7 @@ mark, labels are byte-identical to before. A label that does not parse back refu
 
 ## Record interview comments
 
-A record `interview-picks` act (`rig-review/act@4`) may carry an optional, additive
+A historical record `interview-picks` act (`rig-review/act@4`) may carry an optional, additive
 `value.words` ([Review #1048](https://github.com/rig-c/review/issues/1048)): the
 reviewer's general and pinned comments as the `projectComments` output, the same
 projection checkpoint and signoff carry. It is the last key and present only when
@@ -932,11 +934,9 @@ comments exist, so an act without comments keeps its bytes. `parseRecordAct`
 accepts it with the checkpoint and signoff `words` check and still refuses any
 other extra key. A pin on a sealed question image takes the same label as a plan
 picture pin, and `api/interview` adds the image's sealed `path` and `sha256` on
-record publications. The schema stays `rig-review/act@4`: Create decodes record
-acts through this package's own `parseRecordAct`, so the producer and the parser
-move together, an older parser refuses a commented act by name and drops nothing,
-and acts without comments are unchanged. `JobActValues['interview-picks']` gains
-the optional `words`; no runtime export or error code is added.
+record publications. Consumers of historical act@4 use `parseRecordAct`.
+Fresh picks carry structured comments through `parseCommentsAct` as described
+in the [comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
 
 ## Package manifest `frames` declaration
 
