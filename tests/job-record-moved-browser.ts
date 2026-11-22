@@ -24,22 +24,23 @@ for (const language of ['en', 'ko'] as const) {
     const publication = await fixture.publish('parts');
     const verdict = await fixture.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
     const signoff = await fixture.ask(publication, {kind: 'signoff', stage: 'plan-approved'});
+    const url = new URL(fixture.host.ownerUrl);
+    const actsUrl = new URL('ui/acts', url);
     let send: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
     page = await launchCdpSession(profile, {onEvent(event, command) {
       send = command;
       if (event.method !== 'Network.responseReceived') return;
       const response = event.params?.response as {url?: string; status: number} | undefined;
-      if (response?.url?.endsWith('/ui/acts')) responses.push({path: new URL(response.url).pathname, status: response.status});
+      if (response?.url === actsUrl.href) responses.push({path: actsUrl.pathname, status: response.status});
     }});
     await send!('Network.enable');
     await page.setViewport(1600, 1000);
-    const url = new URL(fixture.host.ownerUrl);
     url.searchParams.set('lang', language);
     await page.goto(url.href);
-    async function wait(expression: string, label: string) {
+    async function wait(expression: string, label: string, ready = () => true) {
       const until = Date.now() + 20000;
       while (Date.now() < until) {
-        if (await page!.evaluate<boolean>(expression)) return;
+        if (ready() && await page!.evaluate<boolean>(expression)) return;
         await Bun.sleep(25);
       }
       throw new Error('908_WAIT ' + label);
@@ -48,7 +49,11 @@ for (const language of ['en', 'ko'] as const) {
     await wait(`document.body.dataset.ready === 'true' && !document.querySelector('#save').disabled`, 'parts ready');
     const before = await jobInputHashes(fixture.input.root);
     await click(page, '#save');
-    await wait(`document.getElementById('review-draft-state')?.dataset.saveState === 'saved'`, 'verdict approved');
+    // A clean, pending review also uses the saved draft state.
+    await wait(`(() => {
+      const state = document.getElementById('review-draft-state');
+      return state?.dataset.saveState === 'saved' && state.textContent === ${JSON.stringify(catalog['job.review.approved'])};
+    })()`, 'verdict approved after act POST', () => responses[0]?.status === 200);
     const next = await fixture.next();
     const approved = next.events.find(event => event.type === 'act' && event.act.askId === verdict.askId);
     assert.ok(approved && approved.type === 'act' && approved.act.kind === 'parts-verdict');
