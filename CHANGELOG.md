@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.17.0
+
+A checkpoint whose evidence declares a before/after pair now opens that pair in the main view, with Difference between the two. A rig-backed question page now shows every question a stage publishes together, where it used to refuse.
+
+**Read before upgrading:**
+
+* **No act, parser or export change.** `parseCheckpointEvidencePacket` moved to its own module and is still exported from `@rig-c/review/job-host` with the same result.
+* **A record publication with a rig and several question sets now opens.** In 4.16.0 and earlier it refused `JOB_DISPLAY_MISMATCH`, so a publisher had to ask one question per page. Each answered question still produces its own interview-picks act.
+
+### Added
+
+* A checkpoint evidence packet with a declared `pair` shows in the main view through the View switch: Side by side, Before, After and Difference ("나란히 · 이전 · 이후 · 차이"). It opens on After. A pin binds to the sealed After tile, and saved pins replay after submission. Images of different sizes disable Difference and name the reason. A packet without `pair` is unchanged on both the plan route and the package route (#1099, #716).
+
+### Fixed
+
+* A rig-backed record page lists every published question with "Submit review (n/K)" and partial submit, as the page without a rig already does. Every question is checked against its own sealed set, and all must bind the same rig version (#1102, closes #1101).
+
 ## 4.16.0
 
 Animate's Repeat now repeats whichever animation is selected, not only idle. A non-idle clip such as `wind` used to play once and stop. The rig footer's help text no longer runs into the status readouts at 1600 px, and the Parts footer keeps its status on one line.
