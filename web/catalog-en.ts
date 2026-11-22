@@ -1619,7 +1619,6 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "Rendering failed · pair unavailable": "Rendering failed · pair unavailable",
   "Repeat": "Repeat",
   "Repeat idle": "Repeat idle",
-  "Repeat idle by default": "Repeat idle by default",
   "Report": "Report",
   "Report defining the range frames": "Report defining the range frames",
   "Report event category": "Report event category",

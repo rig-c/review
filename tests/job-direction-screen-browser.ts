@@ -74,9 +74,31 @@ try{
    await page.evaluate(`(()=>{const select=document.querySelector('#animation-select');select.value='short';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
    assert.equal(await page.evaluate(scrubAt(0)),true);await Bun.sleep(100);
    assert.equal(await page.evaluate(scrubAt(0)),true);
+   assert.equal(await page.evaluate(`document.querySelector('#idle-repeat').checked`),true);
+   await click('#idle-repeat');
+   assert.equal(await page.evaluate(`document.querySelector('#idle-repeat').checked`),false);
    await click('#play');await wait(scrubAt('max'));
    const ended:string=await page.evaluate<string>(`document.querySelector('#scrub').value`);await Bun.sleep(100);
    assert.equal(await page.evaluate(`document.querySelector('#scrub').value`),ended);
+   await click('#idle-repeat');
+   assert.equal(await page.evaluate(`document.querySelector('#idle-repeat').checked`),true);
+   assert.equal(await page.evaluate(scrubAt('max')),true,'enabling Repeat leaves short paused');
+   const wrap:{before:number;after:number;max:number}|null=await page.evaluate(`(async()=>{
+    const scrub=document.querySelector('#scrub'),play=document.querySelector('#play'),max=Number(scrub.max);
+    play.click();
+    let before=0;
+    const deadline=performance.now()+5000;
+    while(performance.now()<deadline){
+     await new Promise(requestAnimationFrame);
+     const after=Number(scrub.value);
+     if(before-after>max/2){play.click();return {before,after,max};}
+     before=after;
+    }
+    return null;
+   })()`);
+   assert.ok(wrap,'short wraps with Repeat enabled');
+   observations.push({kind:'short-repeat',language,ended,wrap});
+   console.log('DIRECTION_SHORT_REPEAT',JSON.stringify({language,ended,wrap}));
    await page.evaluate(`(()=>{const s=document.querySelector('#review-status');s.value='approved';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
    await click('[data-comment-general]');await composer('Direction comment · 연출');
    await wait(`document.querySelectorAll('.stage-comment-item').length===1`);

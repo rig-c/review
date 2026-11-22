@@ -657,9 +657,11 @@ queries only an already running matching opt-in worker. It reports mode,
 instanceKey, sourceHash and each live page's pageId/revision/actual inspection.
 No page is chosen by latest activity; commands need an explicit page when more
 than one is connected. Reads include current theme, automatic/effective layout,
-synchronized or independent per-pane cameras, animation/time, playback/idle-loop,
+synchronized or independent per-pane cameras, animation/time, playback and repeat,
 layers, readiness/feedback eligibility and supported capabilities. Unavailable
 capabilities stay false; absence does not manufacture a model or frame clock.
+`control.loop` uses `'idle' | 'off'`. In Animate, `'idle'` means the selected
+clip repeats. Comparison retains its idle-loop behavior.
 
 `inspection.view`, when supplied, is a closed `rig-review-view/1` observation:
 
