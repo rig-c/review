@@ -1342,7 +1342,11 @@ The collection contains ordered packets with exactly these fields.
   tiles: [{id: string, label: string, path: string, sha256: string}],
   table: {path: string, sha256: string, label?: string},
   routesText: string,
-  recommendationText: string
+  recommendationText: string,
+  pair?: {
+    before: {id: string, sha256: string},
+    after: {id: string, sha256: string}
+  }
 }
 ```
 
@@ -1394,8 +1398,11 @@ refusals still apply to movement during retention or subsequent operations.
 
 Source binding contains the canonical `checkpointEvidence` collection. Packet
 key order is `schema`, `checkpointId`, `planStepId`, `tiles`, `table`, `routesText`,
-`recommendationText`. Tile key order is `id`, `label`, `path`, `sha256`. Table
-key order is `path`, `sha256`, followed by `label` only when supplied. JSON uses
+`recommendationText`, followed by `pair` only when supplied. Tile key order is `id`, `label`, `path`, `sha256`. Table
+key order is `path`, `sha256`, followed by `label` only when supplied. Pair key
+order is `before`, `after`, each with exact keys `id`, `sha256` naming distinct
+tiles in the same packet whose declared `sha256` matches (`parseCheckpointEvidencePacket`
+from `@rig-c/review/job-host`). JSON uses
 these fixed keys and preserves collection order and exact strings. The package
 `rig-review-job-source/2` composite preimage appends `checkpointEvidence` after
 `files`. The record `rig-review-job-record-source/1` digest preimage does the same.

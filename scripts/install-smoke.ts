@@ -59,7 +59,8 @@ import {createHash} from 'node:crypto';
 import {
  startJobHost, JOB_CAPABILITIES, JOB_API_SCHEMA, JOB_ACT_SCHEMA, JOB_PARTS_ENUMERATOR_RANGE, JOB_PREVIOUS_DRAFT_SCHEMA, JOB_ENABLED_ACT_KINDS,
  JOB_RESERVED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_CONSUMER_AUTH_MODE, JOB_ERROR_CODES,
- JOB_CHEST_LANDMARKS_ACT_SCHEMA, parseChestLandmarksAct, parseMeshEditsAct,
+ JOB_CHEST_LANDMARKS_ACT_SCHEMA, parseChestLandmarksAct, parseMeshEditsAct, parseCheckpointEvidencePacket,
+ type CheckpointEvidencePacketResult,
  type JobHostOptions, type JobOwnerHost, type JobSessionOptions, type JobSession, type JobWorkerOptions,
  type JobActWaitOptions, type JobActWaitOutcome,
  type JobHostListenerIncarnation, type JobHostReuseBinding, type JobHostReuseExpectation, type JobHostAttachField, type JobHostAttachFailure,
@@ -117,6 +118,7 @@ export type PublicTypes = [
  JobCommentContext, JobContextComment, JobContextCommentsAct,
  JobMeshEditValue, JobMeshEdit, JobMeshEditsAct,
  JobChestLandmarkValue, JobPublishedChestLandmark, JobChestLandmarkEdit, JobChestLandmarksAct,
+ CheckpointEvidencePacketResult,
 ];
 // Review #713: JobAct admits fresh act@6 comments acts from the UI writers.
 export type JobActAdmitsComments = JobCommentsAct extends JobAct ? true : never;
@@ -136,7 +138,8 @@ const expectedExports = ['JOB_CAPABILITIES', 'startJobHost', 'JOB_API_SCHEMA', '
  'PARTS_COMMENTS_VERDICT_SCHEMA', 'parseCommentsAct', 'projectComments', 'parseCommentsSession',
  'parseCommentsCompareSession', 'parseCommentsPartsVerdict', 'projectSelectedCommentsFeedback',
  'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
- 'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct', 'waitForJobAct', 'JOB_CHEST_LANDMARKS_ACT_SCHEMA', 'parseChestLandmarksAct'];
+ 'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct', 'waitForJobAct', 'JOB_CHEST_LANDMARKS_ACT_SCHEMA', 'parseChestLandmarksAct',
+ 'parseCheckpointEvidencePacket'];
 assert(JSON.stringify(Object.keys(publicHost).sort()) === JSON.stringify(expectedExports.sort()), 'EXPORTS');
 assert(JOB_API_SCHEMA === 'rig-review/job-api@2' && JOB_ACT_SCHEMA === 'rig-review/act@2' &&
  JOB_PARTS_ENUMERATOR_RANGE === '>=2.25.0 <3.0.0' && JOB_PREVIOUS_DRAFT_SCHEMA === 'rig-review-previous-draft/1', 'SCHEMAS');

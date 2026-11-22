@@ -1590,7 +1590,7 @@ function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
     // Validate the declared packet with the existing codec. Actual closure seals remain
     // with the retained-source owner; a decoder has neither files nor source authority.
     const declarations = item.checkpointEvidence.map(raw => commentsObject(raw,
-      ['schema', 'checkpointId', 'planStepId', 'tiles', 'table', 'routesText', 'recommendationText']));
+      ['schema', 'checkpointId', 'planStepId', 'tiles', 'table', 'routesText', 'recommendationText'], ['pair']));
     const subjects = declarations.map(row => ({kind: 'checkpoint' as const, checkpointId: jobId(row.checkpointId), planStepId: jobId(row.planStepId)}));
     const files = declarations.flatMap(row => {
       if (!Array.isArray(row.tiles)) throw new JobError('JOB_ACT_INVALID');

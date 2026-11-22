@@ -46,9 +46,11 @@ test('#557/#588 control public job-host retains its runtime exports, record-mode
     'JOB_PREVIOUS_DRAFT_SCHEMA',
     // #1005: the host-bound finalized-act waiter.
     'waitForJobAct',
+    // #716: the shared checkpoint evidence packet validator.
+    'parseCheckpointEvidencePacket',
   ].sort();
   expect(legacyRuntimeExports).toHaveLength(16);
-  expect(expectedRuntimeExports).toHaveLength(34);
+  expect(expectedRuntimeExports).toHaveLength(35);
   expect(Object.keys(publicHost).sort()).toEqual(expectedRuntimeExports);
   for (const name of expectedRuntimeExports) {
     const missing = new Set(Object.keys(publicHost));

@@ -309,7 +309,24 @@ export interface JobCheckpointEvidence {
   readonly table: JobFileIdentity & {readonly label?: string};
   readonly routesText: string;
   readonly recommendationText: string;
+  readonly pair?: {
+    readonly before: {readonly id: string; readonly sha256: JobSha256};
+    readonly after: {readonly id: string; readonly sha256: JobSha256};
+  };
 }
+
+export type CheckpointEvidencePacketResult =
+  | {
+      readonly ok: true;
+      readonly packet: JobCheckpointEvidence;
+    }
+  | {
+      readonly ok: false;
+      readonly member: 'keys' | 'tiles' | 'table' | 'text' | 'pair';
+      readonly side?: 'before' | 'after';
+      readonly index?: number;
+      readonly reason: string;
+    };
 
 export interface JobCheckpointTable {
   readonly schema: 'rig-review-checkpoint-table/1';
