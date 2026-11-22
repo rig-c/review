@@ -1270,6 +1270,7 @@ function bind(): void {
   verdictSubmit=button('save').onclick as ((event:MouseEvent)=>unknown)|null;
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),
    job:host?(readOnly||host.direction?'read-only':{
+    hasPublishedSpec:()=>!!host.chestLandmarks?.length,
     seeds:()=>inspectionSourceState==='ready'&&stageModelHash===data.reviewedSource.rig?.sha256&&chestMapping.available?host?.chestLandmarks??[]:[],
     selection:()=>{const part=parts?.value();return part?{slot:part.slot,skin:part.identity?.skin??null,attachment:part.identity?.attachment??null}:null;},
     download:edit=>download('chest-landmarks.json',JSON.stringify(edit,null,2)+'\n','application/json'),

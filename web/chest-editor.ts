@@ -270,6 +270,7 @@ export interface ChestEditorHost {
  message:(text:string,error?:boolean)=>void;
  inspector:()=>string|undefined;
  job?:'read-only'|{
+  hasPublishedSpec:()=>boolean;
   seeds:()=>readonly JobPublishedChestLandmark[];
   selection:()=>{slot:string;skin:string|null;attachment:string|null}|null;
   download:(edit:JobChestLandmarkValue)=>void;
@@ -394,7 +395,7 @@ export function bindChestEditor(host:ChestEditorHost):ChestEditor {
  /** #342: a disabled control names its reason in its tooltip, the way an unavailable layout does. */
  const gate=()=>{
   const jobReason=host.job==='read-only'?'JOB_REVIEW_READ_ONLY':job&&!jobDraft?.target()?
-    t(!job.seeds().length||job.selection()?'job.chest.unpublished':'Find slot',undefined,'en'):null;
+    t(job.hasPublishedSpec()?'Find slot':'job.chest.unpublished',undefined,'en'):null;
   const refusal=blocked??jobReason;
   const hint=job?t('job.chest.sendHint',undefined,'en'):null;
   for(const [button,title] of [[toggle,hint??CHEST_EDIT_TITLE],[apply,hint??BUST_APPLY_TITLE],...(markers?[[markers,hint??CHEST_MARKERS_TITLE] as const]:[])] as const){
