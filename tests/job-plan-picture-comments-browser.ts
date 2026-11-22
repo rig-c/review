@@ -1,10 +1,10 @@
 /** #1048 ordinary Nova: a record plan's declared `planPicture` (PR1) and a record interview's sealed question image
  * (PR2) take pointed and region comments through the existing stage-comments pin layer. They save, survive reload, stay
  * on the same picture pixel after zoom and fit, and submit with the A1 label (sealed path and sha256, integer natural
- * pixels): the plan sign-off in its `words`, the interview picks in the new optional `value.words` together with a
+ * pixels): the plan sign-off in its `words`, the interview picks in structured `value.comments` with a
  * general comment (HQ ruling 3, bar 3). Republishing new picture bytes drops the unsent pin with the existing
  * carry-over notice. #1068 `backdrop`: the same question image over a retained rig backdrop takes the same pins at
- * 1440×900, and rig-backdrop rows restored on that host keep main's stored bytes and act words (golden captured on main).
+ * 1440×900, and rig-backdrop rows restored on that host keep main's stored bytes (golden captured on main) and emit structured comments.
  * Synthetic public fixtures only.
  * Usage: bun tests/job-plan-picture-comments-browser.ts --out <dir> [--subject plan|question|backdrop] [--lang en|ko] [--size 1440x900|1280x720]
  *        bun tests/job-plan-picture-comments-browser.ts --serve [--subject plan|question|backdrop] [--lang en|ko] [--republish] */
@@ -17,7 +17,7 @@ import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
-import {parseRecordAct} from '../src/job-api.ts';
+import {parseCommentsAct,parseRecordAct} from '../src/job-api.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
@@ -173,24 +173,28 @@ try{
      await wait(`(()=>{const s=document.getElementById('dirty');return s?.textContent===${JSON.stringify(language==='en'?'Answer saved':catalog['Answer saved'])}&&s.dataset.saveState==='saved';})()&&
       !document.querySelector('#job-record-asks:not([hidden])')`,'signoff saved');
     }else{
-     // Submit the interview picks: the act's optional `words` carries the pins and the general comment.
+     // Submit the interview picks with the original pointed and general comments.
      for(const value of ['biped_std','density_high']){const option=selector+` label.interview-option:has(input[value="${value}"])`;
       await page.evaluate(`document.querySelector(${JSON.stringify(option)}).scrollIntoView({block:'center'})`);await click(page,option);}
      await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).scrollIntoView({block:'center'})`);
      await shot(out,'6-before-submit');await click(page,selector+' button[type=submit]');
      await wait(`!!document.querySelector(${JSON.stringify(selector+'[data-interview-answered=true]')})`,'interview saved');
     }
-    const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));
+    const bytes=await readFile(join(out,'one-screen.json'),'utf8');
+    const act=subject==='plan'?parseRecordAct(JSON.parse(bytes)):parseCommentsAct(JSON.parse(bytes));
     assert.equal(act.kind,subject==='plan'?'signoff':'interview-picks');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
-    assert.ok(act.source.files.some(file=>file.path===picture.path&&file.sha256===picture.sha256),'the label names a sealed files entry of the act source');
-    assert.equal((act.value as {words?:string}).words,expected,'the act words carry the picture labels'+(general?' and the general comment':''));
+    assert.ok('record' in act.source&&act.source.files.some(file=>file.path===picture.path&&file.sha256===picture.sha256),'the label names a sealed files entry of the act source');
+    if(act.schema==='rig-review/act@6'){
+     assert.equal(JSON.stringify(act.value.comments),JSON.stringify(all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary})));
+     assert.equal(JSON.stringify(act),bytes,'picks round-trip byte-for-byte');
+    }else assert.equal((act.value as {words?:string}).words,expected,'plan signoff keeps the A1 labels');
     await shot(out,'7-submitted');
-    const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,words:expected,
+    const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,...(act.schema==='rig-review/act@6'?{structuredComments:act.value.comments}:{words:expected}),
      scales:{fresh:fresh.scale,reloaded:reloaded.scale,zoomed:zoomed.scale,fitted:fitted.scale}};
     cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1048_PINS_PASS '+subject+' '+name+' '+language);
    }catch(error){await shot(out,'failure').catch(()=>{});throw error;}finally{await page.goto('about:blank');await fixture.close();}
   }
-  // #1068: rig-backdrop rows restored on the backdrop + question image host keep main's stored bytes and act words.
+  // #1068: restored rig-backdrop rows keep main's stored bytes and travel as structured pins.
   if(subject==='backdrop'){const golden=JSON.parse(await readFile(new URL('./fixtures/record-backdrop-rig-pins-1068.json',import.meta.url),'utf8')) as {rows:Row[];general:string;words:string;rowTextEn:string[]};
    const fixture=await fixtureFor(subject),out=join(output,subject,'rig-golden',name,language);await mkdir(out,{recursive:true});fixture.output(out);
    const selector=`form[data-job-ask="${fixture.ask.askId}"]`,source=fixture.display.publication.source,ask=fixture.ask.subject as {questionId:string;setId:string};
@@ -209,8 +213,10 @@ try{
      await page.evaluate(`document.querySelector(${JSON.stringify(option)}).scrollIntoView({block:'center'})`);await click(page,option);}
     await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).scrollIntoView({block:'center'})`);await click(page,selector+' button[type=submit]');
     await wait(`!!document.querySelector(${JSON.stringify(selector+'[data-interview-answered=true]')})`,'interview saved');
-    const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));
-    assert.equal((act.value as {words?:string}).words,golden.words,'1068_RIG_LABELS: the projected rig labels are byte-identical to main');
+    const bytes=await readFile(join(out,'one-screen.json'),'utf8'),act=parseCommentsAct(JSON.parse(bytes));
+    assert.equal(JSON.stringify(act.value.comments),JSON.stringify([...feedbackItemComments(golden.rows as never),{text:golden.general}]));
+    assert.equal(projectComments(act.value.comments),golden.words,'1068_RIG_LABELS: the projected rig labels are byte-identical to main');
+    assert.equal(JSON.stringify(act),bytes);
     await shot(out,'1-rig-rows-submitted');
     const result={case:'rig-golden',subject,size:name,language,rows:golden.rows.length,words:golden.words};cases.push(result);
     await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1068_RIG_GOLDEN_PASS '+name+' '+language);

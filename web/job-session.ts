@@ -6,6 +6,7 @@ import type {
     JobDisplayReceipt,
     JobCheckpointEvidence,
     JobCheckpointTable,
+    JobCommentsActValues,
     JobInterviewDiagnostics,
     JobProgressLineV3,
     JobProgressV3,
@@ -1290,7 +1291,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
     }
 }
 export type JobForm = {
-    form: HTMLFormElement & {commentWords?:()=>string};
+    form: HTMLFormElement & {commentWords?:()=>string; interviewComments?:()=>JobCommentsActValues['interview-picks']['comments']};
     fieldset: HTMLFieldSetElement;
     read: () => UISubmissionV3['value'];
     submissionId: string;
@@ -1564,8 +1565,7 @@ export interface JobFormDependencies {
             const {localize,dispose,read:readInterview}=interviewForm;
             const offLanguage=onLanguageChange(localize);
             disposeInterview=()=>{offLanguage();dispose();};
-            // #1048: a record interview carries its comments in the optional `words`; none keeps the old value bytes.
-            read=()=>{const value=readInterview(),words=prepared.metadata.recordSource?commentWords():'';return words?{...value,words}:value;};
+            read=readInterview;
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
@@ -1684,8 +1684,10 @@ export interface JobFormDependencies {
             if (!receipt || state.preparing || state.closed || !access.capability || !form.reportValidity())
                 return;
             try {
-                const value=read(),key=JSON.stringify(value);
-                if(commentOnly&&attemptedValue!==undefined&&attemptedValue!==key)entry.submissionId=crypto.randomUUID();
+                const draft=read();
+                const value=form.interviewComments?{...draft,comments:form.interviewComments()}:draft;
+                const key=JSON.stringify(value);
+                if((commentOnly||form.interviewComments)&&attemptedValue!==undefined&&attemptedValue!==key)entry.submissionId=crypto.randomUUID();
                 attemptedValue=key;
                 const input = { kind: subject.kind, publicationId: ask.publicationId,
                     askId: ask.askId, pageId, displayedNonce: receipt.displayedNonce,
