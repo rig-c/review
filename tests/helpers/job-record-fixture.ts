@@ -622,29 +622,31 @@ function riggingPlanAsks(item:typeof RIGGING_PLAN[number]){
  return [{id:item.question,prompt:item.prompt,options}];
 }
 
-/** #1004: one option-set publication carrying the plan's rigging questions, one framing question and one set each.
- * Every set binds the same declared painting (`inputs/reference.png`, or the serve-only `painting` bytes). */
+/** One option-set publication with a set per question and a shared input or accepted rig. */
 export function createSyntheticOptionSetsRecordWorkspace(
   root: string,
-  options: { readonly count: number; readonly painting?: Buffer },
+  options: { readonly count: number; readonly painting?: Buffer; readonly boundRig?: boolean },
 ): SyntheticOptionWorkspace & { readonly optionSetFiles: readonly JobFileIdentity[] } {
   const plan = RIGGING_PLAN.slice(0, options.count);
   if (plan.length !== options.count || options.count < 1) throw new Error('SYNTHETIC_1004_SET_COUNT');
+  const rig = options.boundRig ? rigPictureFixture(root, 'bound-rig') : null;
   const inputImage = writeWorkspaceFile(root, 'inputs/reference.png', options.painting ?? makeSyntheticPngBytes(40, 160, 220));
   const inputSpec = writeWorkspaceFile(root, 'inputs/spec.json', JSON.stringify({ character: 'hero', version: 1 }, null, 2) + '\n');
   const optionSetFiles = plan.map((item, index) => writeWorkspaceFile(root, `interview/options/rigging-${index + 1}.json`,
     JSON.stringify({ schema: 'rig-create/interview-options@1', id: `rig-${item.question}-01`, question: item.question,
-      stage: 'interview', drafted_by: 'ai', drafted_at: '2026-11-20T00:00:00.000Z',
-      context: { kind: 'inputs', files: [inputImage, inputSpec] }, assembly: { rule: 'single' }, asks: riggingPlanAsks(item) }, null, 2) + '\n'));
+      stage: rig ? 'post-interview' : 'interview', drafted_by: 'ai', drafted_at: '2026-11-20T00:00:00.000Z',
+      context: rig?.context ?? { kind: 'inputs', files: [inputImage, inputSpec] }, assembly: { rule: 'single' }, asks: riggingPlanAsks(item) }, null, 2) + '\n'));
+  const questions = plan.map((item, index) => ({ id: item.question, pending_options: optionSetFiles[index] }));
   const projectDoc = {
     schema: 'rig-create/project@0',
     name: 'Synthetic Rigging Questions',
     inputs: [inputImage, inputSpec],
-    interview: { framing: plan.map((item, index) => ({ id: item.question, pending_options: optionSetFiles[index] })), waypoints: [], post: { items: [] } },
+    ...(rig ? { versions: rig.versions, signoffs: rig.signoffs } : {}),
+    interview: { framing: rig ? [] : questions, waypoints: [], post: { items: rig ? questions : [] } },
   };
   const recordIdentity = writeWorkspaceFile(root, 'project.json', JSON.stringify(projectDoc, null, 2) + '\n');
   const record: ProjectRecord = { path: 'project.json', sha256: recordIdentity.sha256 };
-  const files = [inputImage, inputSpec, ...optionSetFiles, record].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const files = [inputImage, inputSpec, ...optionSetFiles, record, ...rig?.files ?? []].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
   const sets = plan.map(item => ({ questionId: item.question, setId: `rig-${item.question}-01` }));
   const result: RecordOptionResult = { kind: 'option-set', ...sets[0]!, ...(sets.length > 1 ? { sets } : {}) };
   const context: OptionContext = { label: 'Synthetic rigging questions', parts: { ...DEFAULT_SYNTHETIC_PARTS }, inputs: [inputImage, inputSpec], files, plan: null,
