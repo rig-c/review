@@ -1524,7 +1524,9 @@ export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHos
     const control = join(canonicalStatePath(startup.stateDir), 'job-ui');
     await mkdir(control, {recursive: true, mode: 0o700}).catch(error => {session.dispose(); throw error;});
     const recordPath = join(control, session.jobId + '.json');
+    const deadline = performance.now() + 20_000;
     let previousPort = 0;
+    let recordedPid = 0;
     const reuse = async (): Promise<JobHostRecord | null> => {
         try {
             const info = await lstat(recordPath);
@@ -1535,16 +1537,39 @@ export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHos
                 origin.origin !== row.origin || origin.protocol !== 'http:' || origin.hostname !== '127.0.0.1' ||
                 !Number.isSafeInteger(row.pid) || row.pid <= 0) throw new JobError('JOB_STORAGE_FAILED');
             previousPort = Number(origin.port);
-            if (!running(row.pid)) return null;
-            const response = await fetch(row.origin + `/jobs/${session.jobId}/host`, {
-                headers: {'X-Review-Capability': credentials.ui}, redirect: 'error', signal: AbortSignal.timeout(1500),
-            }).catch(() => null);
-            if (!response?.ok) {void response?.body?.cancel(); return null;}
-            const value = await response.json() as JobHostRecord;
-            if (value.schema !== row.schema || value.jobId !== row.jobId || value.fingerprint !== row.fingerprint) return null;
-            assertJobHostCompatible(row, identity);
-            assertJobHostCompatible(value, identity);
-            return row;
+            recordedPid = row.pid;
+            for (;;) {
+                if (!running(row.pid)) return null;
+                const remaining = deadline - performance.now();
+                let probeError: unknown = null;
+                let value: JobHostRecord | null = null;
+                if (remaining > 0) {
+                    const response = await fetch(row.origin + `/jobs/${session.jobId}/host`, {
+                        headers: {'X-Review-Capability': credentials.ui}, redirect: 'error',
+                        signal: AbortSignal.timeout(Math.min(1500, Math.max(1, Math.ceil(remaining)))),
+                    }).catch((error: unknown) => {probeError = error; return null;});
+                    if (!response) {
+                        if ((probeError as NodeJS.ErrnoException | null)?.code === 'ECONNREFUSED') return null;
+                    } else if (!response.ok) {
+                        void response.body?.cancel();
+                        return null;
+                    } else {
+                        value = await response.json().catch((error: unknown) => {probeError = error; return null;}) as JobHostRecord | null;
+                        if (!value && probeError instanceof SyntaxError) return null;
+                    }
+                }
+                if (value) {
+                    if (value.schema !== row.schema || value.jobId !== row.jobId || value.fingerprint !== row.fingerprint) return null;
+                    assertJobHostCompatible(row, identity);
+                    assertJobHostCompatible(value, identity);
+                    return row;
+                }
+                if (!running(row.pid)) return null;
+                if (performance.now() >= deadline) {
+                    throw new JobError('JOB_STORAGE_FAILED', `JOB_HOST_UNRESPONSIVE: pid=${row.pid} port=${previousPort}`);
+                }
+                await Bun.sleep(Math.min(30, Math.max(1, Math.ceil(deadline - performance.now()))));
+            }
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
             throw error;
@@ -1555,8 +1580,17 @@ export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHos
     let stop: (() => void) | null = null;
     try {
         const ready = await reuse();
-        const acquired = ready ? {row: ready} : await acquireClaim(control, 'job-' + session.jobId, nonce, reuse,
-            performance.now() + 20_000, 'JOB_STORAGE_FAILED');
+        let acquired: {row: JobHostRecord} | {claim: string};
+        try {
+            acquired = ready ? {row: ready} : await acquireClaim(control, 'job-' + session.jobId, nonce, reuse,
+                deadline, 'JOB_STORAGE_FAILED');
+        } catch (error) {
+            if (!(error instanceof JobError) && (error as Error)?.message === 'JOB_STORAGE_FAILED') {
+                throw new JobError('JOB_STORAGE_FAILED',
+                    recordedPid > 0 && running(recordedPid) ? `JOB_HOST_UNRESPONSIVE: pid=${recordedPid} port=${previousPort}` : undefined);
+            }
+            throw error;
+        }
         if ('row' in acquired) {
             const origin = acquired.row.origin;
             const ports = createJobHostPorts(session, new URL(origin).origin);
@@ -1576,9 +1610,17 @@ export async function startJobHost(options: JobHostOptions): Promise<JobOwnerHos
         claim = acquired.claim;
         let context: ReturnType<typeof createJobRequestContext>;
         const preferredPort = startup.port ?? previousPort;
-        const server = Bun.serve({hostname: '127.0.0.1', port: preferredPort, idleTimeout: 0,
-            fetch(request) {return context.fetch(request);},
-        });
+        let server: ReturnType<typeof Bun.serve>;
+        try {
+            server = Bun.serve({hostname: '127.0.0.1', port: preferredPort, idleTimeout: 0,
+                fetch(request) {return context.fetch(request);},
+            });
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException)?.code === 'EADDRINUSE' && preferredPort > 0 && recordedPid > 0 && running(recordedPid)) {
+                throw new JobError('JOB_STORAGE_FAILED', `JOB_HOST_PORT_IN_USE: pid=${recordedPid} port=${preferredPort}`);
+            }
+            throw error;
+        }
         const origin = `http://127.0.0.1:${server.port}`;
         context = createJobRequestContext(session, startup, origin, identity);
         const {ports} = context;
