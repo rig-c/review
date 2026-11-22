@@ -1324,7 +1324,7 @@ function bind(): void {
   viewDisposers.push(viewport.bindNavigation(rigPanCarry({player:()=>player},viewport.state),panOnly=>!comments?.active()||!!panOnly));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
   viewDisposers.push(bindLayerShortcuts(document));describeLayerToggles(document,el('layer-state').textContent??'');
-  input('idle-repeat').onchange=()=>{syncPlayerLoop();renderIdle();if(canRepeatIdle())void playPreview();};
+  input('idle-repeat').onchange=()=>{syncPlayerLoop();renderIdle();if(animation==='idle'&&canRepeatIdle())void playPreview();};
   bindEnvironment();
   for(const id of ['proposal-panel','checkpoint-detail'])el(id).addEventListener('focusin',pause);
   bindInspector();
@@ -2114,8 +2114,8 @@ function syncPlayerLoop():void {
  try{drawRig(()=>{player!.play(animation,{loop:want});if(!playing)player!.pause();player!.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time);player!.draw();});}
  catch(error){message(errorText(error),true);}
 }
-function canRepeatIdle():boolean{const direction=activeScene();if(direction)return direction.take.loop;return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
-function renderIdle():void {text('idle-state',canRepeatIdle()?activeScene()&&animation&&animation!=='idle'?`${data.manifest?.animations?.find(a=>a.id===animation)?.label??animation} · repeating`:'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
+function canRepeatIdle():boolean{const direction=activeScene();if(direction)return direction.take.loop;return !!player&&!!assets?.animations.some(clip=>clip.name===animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
+function renderIdle():void {text('idle-state',canRepeatIdle()?animation&&animation!=='idle'?`${data.manifest?.animations?.find(a=>a.id===animation)?.label??animation} · repeating`:'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
 async function playPreview():Promise<void> {
  if((!player&&!video&&!sequence)||duration<=0)return;
  const intent=++playbackIntent;desiredPlay=true;idleHeld=false;syncPlayerLoop();if(time>=duration)seek(0,{kind:'replay'});
