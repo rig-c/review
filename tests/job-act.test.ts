@@ -15,7 +15,7 @@ import {preparePartsComment,validateStoredPartsComment} from '../src/parts-comme
 import {commentPartsIssues, parsePartsIssue} from '../src/parts-comment.ts';
 import {jobHash} from '../src/job-api.ts';
 import {PNG} from 'pngjs';
-import {parseCommentsAct, projectComments, parseRecordAct, type JobComment} from '../src/job-host.ts';
+import {parseCommentsAct, parseContextCommentsAct, projectComments, parseRecordAct, type JobComment} from '../src/job-host.ts';
 import {legacyFeedbackComments, partsIssueComments} from '../src/feedback-export.ts';
 import legacyComments from './fixtures/comments-contract-legacy.json';
 
@@ -116,7 +116,7 @@ test('#646 later-Apply-stable-wording: changing capture identity preserves logic
   expect(projectComments([after])).toBe(projectComments([before]));
 });
 
-test('#646 interview-excluded-from-act6: survey bytes and existing answer inputs remain unchanged', () => {
+test('#646 survey bytes stay readable and incomplete act@6 picks refuse', () => {
   const act = commentsAct();
   expect(() => parseCommentsAct({...act, kind: 'interview-picks', value: {comments: []}})).toThrow('JOB_ACT_INVALID');
   expect(jobHash(legacyComments.records.survey.raw)).toBe(legacyComments.records.survey.sha256);
@@ -280,10 +280,56 @@ test('synthetic private adapters validate ordered interview picks without exposi
   const act = finalizeJobAct({ jobId: f.session.jobId, submission, ask, retained: withQuestion,
     reviewer: { id: 'owner', role: 'owner' } });
   expect(act.kind).toBe('interview-picks');
-  expect(act.value).toEqual(submission.value);
+  expect(act.schema).toBe('rig-review/act@2');
+  expect(JSON.stringify(act)).toBe(JSON.stringify({
+    schema: 'rig-review/act@2', actId: act.actId, jobId: f.session.jobId, askId: ask.askId, publicationId: publication.publicationId,
+    authority: {actor: 'human', channel: 'review-ui', reviewer: {id: 'owner', role: 'owner'}}, at: act.at,
+    kind: 'interview-picks', source: ask.source, value: submission.value,
+  }));
   expect(() => finalizeJobAct({ jobId: f.session.jobId, submission: { ...submission, value: {
     ...submission.value, selections: [{ itemId: 'different', optionId: 'value-one', otherText: null }] } },
   ask, retained: withQuestion, reviewer: { id: 'owner', role: 'owner' } })).toThrow('JOB_ACT_INVALID');
+});
+
+function packagePicksCommentsAct() {
+  const {source, ...envelope} = commentsAct();
+  const sha256 = 'a'.repeat(64);
+  const crop = {path: `comment-crops/${sha256}.png`, sha256, width: 2, height: 3};
+  return {...envelope, source: {...source, optionSet: {id: 'set-one', sha256}}, kind: 'interview-picks', value: {
+    questionId: 'question-one', note: '  Survey note\r\n', selections: [
+      {itemId: 'palette', optionId: 'other', otherText: '한글\r\n  '},
+      {itemId: 'framing', optionId: 'wide', otherText: null},
+    ],
+    comments: [
+      {text: '  첫 번째\r\n'},
+      {text: 'Second\t ', anchor: {name: 'reference.png'}},
+      {text: 'e\u0301\nThird', anchor: {name: 'reference.png', imageRegion: {x: 1, y: 2, width: 2, height: 3}, crop, nativeCrop: crop}},
+    ],
+  }};
+}
+
+test('#646 act@6 decodes package picks with exact comment text, order and image anchors', () => {
+  const input = packagePicksCommentsAct();
+  const decoded = parseCommentsAct(input);
+  expect(decoded).toEqual(input);
+  expect(projectComments(decoded.value.comments)).toBe('[general]\n  첫 번째\r\n\n\n[["reference.png"]]\nSecond\t \n\n[["reference.png"]]\ne\u0301\nThird');
+});
+
+test('#646 act@6 picks refuses words, unknown members and non-image anchors by name', () => {
+  const act = packagePicksCommentsAct();
+  for (const extra of [
+    {words: ''},
+    {selections: [{...act.value.selections[0], extra: true}]},
+    {comments: [{text: 'x', anchor: {name: 'reference.png', extra: true}}]},
+    {comments: [{text: 'x', anchor: feedbackAnchor()}]},
+    {comments: [{text: 'x', anchor: {questionId: 'question-one', itemId: 'palette'}}]},
+  ]) expect(() => parseCommentsAct({...act, value: {...act.value, ...extra}})).toThrow('JOB_ACT_INVALID');
+});
+
+test('#646 picks requires an option-set identity and keeps act@7 closed', () => {
+  const act = packagePicksCommentsAct();
+  expect(() => parseCommentsAct({...act, source: {...act.source, optionSet: null}})).toThrow('JOB_ACT_INVALID');
+  expect(() => parseContextCommentsAct({...act, schema: 'rig-review/act@7'})).toThrow('JOB_ACT_INVALID');
 });
 
 test('parts-verdict UI save finalizes rig-review/act@6 with pointed Parts comments plus the note, rejects invalid issue bindings and binds all referenced bytes', async () => {

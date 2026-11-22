@@ -1597,8 +1597,9 @@ separate Create follow-up. (Naru, 2026-11-11)
 The comments feature accepts multiple ordered entries, each general or pinned to
 an existing inspection target. Surveys remain separate answer inputs: interview
 selections, inline Other text and per-question notes keep their existing formats,
-strings and readers. There is no interview-picks arm or question/ask anchor in
-this extension. Technical configuration and search controls are outside it.
+strings and readers. In an `interview-picks` act, structured comments sit
+alongside those survey answers. Technical configuration and search controls are
+outside this extension.
 
 The decoders and consumer projections are read-only. Since [Review #713](https://github.com/rig-c/review/issues/713)
 (HQ contract ruling), the UI finalizers use act@6 as the base format for
@@ -1640,9 +1641,20 @@ A note whose projection exceeds the 10,000-unit scalar bound refuses
 prefix is part of them, so a general note longer than 9,990 units refuses even
 though act@5 accepted it. Feedback is many comments, not one long note.
 Each written act@6 must decode through `parseCommentsAct`.
-Image-review verdicts and interview picks stay at act@2, because Create refuses
-both under act@6. Record acts stay at act@4, because Create maps only a record
-checkpoint under act@6. Standalone save paths keep their existing versions.
+Review writes package interview picks and image-review verdicts at act@2 and
+record interview picks at act@4. The interview writer switch follows the Create
+reader pin and release. Standalone save paths keep their existing versions.
+
+[Review #646](https://github.com/rig-c/review/issues/646) adds reader support for
+`interview-picks` at act@6. The value has `questionId`, ordered `selections`,
+`note` and ordered `comments`, with the existing non-null `source.optionSet`
+binding. A record source follows the per-act set binding described in
+[Model-free record mode and source seam](#model-free-record-mode-and-source-seam).
+A comment may be general or carry the existing `JobCommentImageAnchor`. Image
+anchors carry `name` and may include `imageRegion`, `crop` and `nativeCrop`
+together. The decoder preserves comment text and order and refuses `words` and
+unknown members with `JOB_ACT_INVALID`. Image-review and question/ask anchors
+remain outside this reader change.
 
 The existing `@rig-c/review/job-host` facade exports:
 
@@ -1761,8 +1773,9 @@ working-screen review.
 ### Comment context (act@7)
 
 `JOB_COMMENT_CONTEXT_ACT_SCHEMA` is `rig-review/act@7` ([#714](https://github.com/rig-c/review/issues/714)).
-It is the @6 envelope, kinds, value keys and checks with one addition: each
-comment entry may carry an optional `context` object after `text` and `anchor`.
+It applies the @6 checks to its existing verdict, checkpoint, signoff and reopen
+envelopes. Each comment entry may carry an optional `context` object after
+`text` and `anchor`.
 `context` records where the comment was made so opening it can restore that
 view. It is not part of the signed projection: `projectComments` covers `text`
 and `anchor` only. `parseContextCommentsAct` decodes @7 only; `parseCommentsAct`

@@ -70,6 +70,17 @@ test('#646 record-plan @6 reuses declared checkpoint/signoff/reopen subjects and
     kind: 'signoff', value: {stage: 'plan-approved', decision: 'approved', comments: []}})).toThrow('JOB_ACT_INVALID');
 });
 
+test('#646 act@6 decodes record picks using the existing option-set binding', () => {
+  const options = createSyntheticOptionRecordWorkspace(makeTempDir('646-record-picks-'));
+  const source = buildRecordSource({record: options.record, selection: options.result, context: options.context, optionSetFile: options.optionSetFile});
+  const old = JSON.parse(commentsLegacy.records['@4'].raw);
+  const input = {...old, schema: 'rig-review/act@6', kind: 'interview-picks', source, value: {
+    questionId: options.result.questionId, selections: [], note: '원문', comments: [{text: '  Keep this\n', anchor: {name: 'reference.png'}}],
+  }};
+  expect(parseCommentsAct(input)).toEqual(input);
+  expect(() => parseCommentsAct({...input, value: {...input.value, questionId: 'wrong-question'}})).toThrow('JOB_ACT_INVALID');
+});
+
 function buildPendingRecordAsk(
   publicationId: string,
   askId: string,
