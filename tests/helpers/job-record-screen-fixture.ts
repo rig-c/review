@@ -9,7 +9,7 @@ import {createJobHostPorts} from '../../src/job-api.ts';
 import {prepareJobRecordAct} from '../../src/job-act.ts';
 import type {JobRetainedRecordSource} from '../../src/job-source.ts';
 import {createJobFront, jobWindowResources, retainedPublicationRoutes} from '../../src/job-front.ts';
-import {JOB_API_V3_SCHEMA, type DisplayPublicationV3, type PendingAskV3, type UISubmissionV3, type RecordSignoffStage} from '../../src/job-contract.ts';
+import {JOB_API_V3_SCHEMA, type DisplayPublicationV3, type NextValueV3, type PendingAskV3, type PublicationV3, type UISubmissionV3, type RecordSignoffStage} from '../../src/job-contract.ts';
 import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixture.ts';
 import {createSyntheticOptionRecordWorkspace, createSyntheticOptionSetsRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader,writeWorkspaceFile,type PostPictureCase} from './job-record-fixture.ts';
 
@@ -112,12 +112,12 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
  }catch(error){front?.stop();await server.stop(true);session.dispose();await rm(scratch,{recursive:true,force:true});throw error;}
 }
 
-/** #1004: the real job page over a real session. One publication carries `count` rigging question sets and each set
+/** The real job page over a real session. One publication carries `count` question sets and each set
  * has its own pending ask. `answered` seeds that many unsent local drafts (the recommended pick of every prompt), so
  * the page opens with the same partly answered list the owner ruled on. */
-export async function optionSetsJobFixture(options:{count:number;answered?:number;painting?:Buffer}){
+export async function optionSetsJobFixture(options:{count:number;answered?:number;painting?:Buffer;boundRig?:boolean}){
  const scratch=await mkdtemp(join(tmpdir(),'review-1004-')),root=join(scratch,'input');await mkdir(root);
- const workspace=createSyntheticOptionSetsRecordWorkspace(root,{count:options.count,...options.painting?{painting:options.painting}:{}});
+ const workspace=createSyntheticOptionSetsRecordWorkspace(root,options);
  const reader=createSyntheticRecordReader({onOption:()=>structuredClone(workspace.context)});
  const session=new JobSession({root,stateDir:join(scratch,'state'),fingerprint:'4'.repeat(64),reviewer:{id:'synthetic-owner',role:'owner'},
   publicationMode:'record-and-package',readRecordPublished:reader.reader});
@@ -125,11 +125,12 @@ export async function optionSetsJobFixture(options:{count:number;answered?:numbe
  const server=Bun.serve({hostname:'127.0.0.1',port:0,idleTimeout:0,fetch:async request=>(await front?.fetch(request))??new Response(null,{status:404})});
  const origin=`http://127.0.0.1:${server.port}`,ports=createJobHostPorts(session,origin),credentials=session.hostCredentials();
  let sequence=0;
- const call=async(body:object)=>{const response=await ports.handleJobApi(new Request(origin+`/jobs/${session.jobId}/api`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+credentials.agent},body:JSON.stringify({schema:JOB_API_V3_SCHEMA,jobId:session.jobId,requestId:'fixture-'+(++sequence),...body})}));const result=await response.json();if(!result.ok)throw new Error(JSON.stringify(result));return result.value;};
+ const call=async<T>(body:object):Promise<T>=>{const response=await ports.handleJobApi(new Request(origin+`/jobs/${session.jobId}/api`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+credentials.agent},body:JSON.stringify({schema:JOB_API_V3_SCHEMA,jobId:session.jobId,requestId:'fixture-'+(++sequence),...body})}));const result=await response.json();if(!result.ok)throw new Error(JSON.stringify(result));return result.value;};
  const close=async()=>{front?.stop();await server.stop(true);session.dispose();await rm(scratch,{recursive:true,force:true});};
  try{
-  const publication=await call({verb:'publish',expectedGeneration:0,idempotencyKey:'publish',result:workspace.result,freeze:{kind:'producer-held',holdId:'synthetic-1004',record:workspace.record}});
-  const {asks}=await call({verb:'ask-batch',expectedGeneration:session.status().generation,idempotencyKey:'asks',publicationId:publication.publicationId,subjects:workspace.context.subjects}) as {asks:PendingAskV3[]};
+  const publication=await call<PublicationV3>({verb:'publish',expectedGeneration:0,idempotencyKey:'publish',result:workspace.result,freeze:{kind:'producer-held',holdId:'synthetic-1004',record:workspace.record}});
+  const display=session.displayPublication(publication.publicationId);
+  const {asks}=await call<{asks:PendingAskV3[]}>({verb:'ask-batch',expectedGeneration:session.status().generation,idempotencyKey:'asks',publicationId:publication.publicationId,subjects:workspace.context.subjects});
   const retained=session.retainedSourceV3(publication.publicationId) as JobRetainedRecordSource;
   const forms=asks.slice(0,options.answered??0).map((ask,index)=>{const question=retained.questions[index]!;
    const selections=question.set.asks.map(item=>({itemId:item.id,optionId:item.options.find(option=>option.recommended)!.id,otherText:null}));
@@ -141,7 +142,8 @@ export async function optionSetsJobFixture(options:{count:number;answered?:numbe
   }
   const resources=jobWindowResources();
   front=createJobFront({origin,ports,publication:retainedPublicationRoutes(session),resource:async name=>name==='main.js'&&seed?seed+'\n'+await new Response(await resources(name)).text():resources(name)});
-  return {scratch,root,session,origin,workspace,publication,asks,call,ownerUrl:origin+`/jobs/${session.jobId}/#cap=${credentials.ui}`,close};
+  const readEvents=()=>call<NextValueV3>({verb:'next',after:null,waitMs:0});
+  return {scratch,root,session,origin,workspace,publication,display,asks,call,readEvents,ownerUrl:origin+`/jobs/${session.jobId}/#cap=${credentials.ui}`,close};
  }catch(error){await close();throw error;}
 }
 

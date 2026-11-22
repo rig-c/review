@@ -1035,20 +1035,32 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
                 manifest.motion || manifest.sets || manifest.direction || manifest.scene || manifest.producer ||
                 [manifest.references, manifest.checkpoints, manifest.authoring, manifest.axes, manifest.audio?.clips, manifest.audio?.cues]
                     .some(rows => !Array.isArray(rows) || rows.length !== 0) ||
-                !Array.isArray(interview?.questions) || interview.questions.length !== 1) {
+                !Array.isArray(interview?.questions) || interview.questions.length === 0) {
                 throw new Error('JOB_DISPLAY_MISMATCH');
             }
-            const [question] = interview.questions;
-            const context = question?.set?.context;
-            if (!question?.set || question.set.stage !== 'post-interview' || question.editable !== true ||
-                question.set.id !== publishedSource.selection.setId || question.set.question !== publishedSource.selection.questionId ||
-                sourceSnapshot(question.ref) !== sourceSnapshot(publishedSource.optionSetFile) || question.missingPicture !== undefined ||
-                question.hasParts || question.scenePicture || !Array.isArray(question.images) || question.images.length ||
-                !context || context.kind !== 'rig' || typeof context.rig_version !== 'number' ||
-                !Number.isSafeInteger(context.rig_version) || context.rig_version < 1 ||
-                !publishedSource.files.some(file =>
-                    file.path === `derived/review/v${context.rig_version}/out/check/${model.path}` && file.sha256 === model.sha256)) {
+            const {selection, optionSets, optionSetFile} = publishedSource;
+            const bindings = selection.sets ? optionSets
+                : [{questionId: selection.questionId, setId: selection.setId, optionSetFile}];
+            if (!bindings || bindings.length !== (selection.sets?.length ?? 1) || interview.questions.length !== bindings.length) {
                 throw new Error('JOB_DISPLAY_MISMATCH');
+            }
+            // The retained viewer uses the first published set's rig. Every question must bind to that same version.
+            let rigVersion: number | undefined;
+            for (const binding of bindings) {
+                const question = interview.questions.find(row =>
+                    row?.set?.question === binding.questionId && row.set?.id === binding.setId);
+                const context = question?.set?.context;
+                if (!question?.set || question.set.stage !== 'post-interview' || question.editable !== true ||
+                    sourceSnapshot(question.ref) !== sourceSnapshot(binding.optionSetFile) || question.missingPicture !== undefined ||
+                    question.hasParts || question.scenePicture || !Array.isArray(question.images) || question.images.length ||
+                    !context || context.kind !== 'rig' || typeof context.rig_version !== 'number' ||
+                    !Number.isSafeInteger(context.rig_version) || context.rig_version < 1 ||
+                    (rigVersion !== undefined && context.rig_version !== rigVersion) ||
+                    !publishedSource.files.some(file =>
+                        file.path === `derived/review/v${context.rig_version}/out/check/${model.path}` && file.sha256 === model.sha256)) {
+                    throw new Error('JOB_DISPLAY_MISMATCH');
+                }
+                rigVersion = context.rig_version;
             }
         }
         if (interview?.interview !== undefined && display.publication.interview !== undefined &&

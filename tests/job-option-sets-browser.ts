@@ -2,7 +2,8 @@
  * The question list shows the four sets with one "Submit review (n/4)" at its top. Submit sends only the answered
  * sets, one interview-picks act each; the rest stay pending and editable, and are submitted later. EN and KO.
  * Retry case: of two sets sent by one click, one request is refused after the other lands; the shared submit
- * re-enables, still counts both, and the refused set stays pending and submits on the next click. */
+ * re-enables, still counts both, and the refused set stays pending and submits on the next click.
+ * #1101 reuses the list on an accepted rig, leaving its third set pending after partial submit. */
 import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -10,11 +11,13 @@ import {join,resolve} from 'node:path';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {optionSetsJobFixture} from './helpers/job-record-screen-fixture.ts';
+import {JOB_COMMENTS_ACT_SCHEMA} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
 const arg=(name:string)=>{const i=Bun.argv.indexOf(name);return i<0?undefined:Bun.argv[i+1];};
 const output=resolve(arg('--out')??'artifacts/job-option-sets-1004');await mkdir(output,{recursive:true});
+const rigOnly=Bun.argv.includes('--rig-only');
 const root='#workspace-interview-answer';
 const headline=()=>page!.evaluate<string>(`document.querySelector('#workspace-ask-headline').textContent`);
 type ListState={forms:{ask:string;visible:boolean;answered:boolean;editable:boolean}[];rows:{answered:boolean;current:boolean}[];
@@ -48,6 +51,129 @@ async function answerShown(){
  await clickVisible(`${visibleForm} fieldset.interview-ask label.interview-option:first-of-type`);
 }
 
+type RigReadback = {
+ language: string;
+ viewport: {width: number; height: number};
+ communication: boolean;
+ visibleCanvasCount: number;
+ sameCanvas: boolean;
+ visibleAsk: string | null;
+ checked: string | null;
+ rows: {text: string; checkmark: boolean; current: boolean; visible: boolean}[];
+ submit: {text: string; disabled: boolean; first: boolean} | null;
+ visibleSubmitCount: number;
+};
+const rigCanvas='#rig-root canvas';
+const rigReadback=()=>page!.evaluate<RigReadback>(`(()=>{
+ const visible=node=>!!node&&node.checkVisibility()&&node.getClientRects().length>0;
+ const form=document.querySelector(${JSON.stringify(visibleForm)});
+ const nav=form?.querySelector('nav.interview-questions');
+ const submit=nav?.querySelector('[data-job-questions-submit]');
+ const canvases=[...document.querySelectorAll('${rigCanvas}')].filter(visible);
+ const controls=[...document.querySelectorAll('${root} [data-job-questions-submit]')];
+ return {language:document.documentElement.lang,viewport:{width:innerWidth,height:innerHeight},
+  communication:!!form?.closest('#workspace-communication'),visibleCanvasCount:canvases.length,
+  sameCanvas:canvases[0]===window.optionSetsRigCanvas,visibleAsk:form?.dataset.jobAsk??null,
+  checked:form?.querySelector('input[type=radio]:checked')?.value??null,
+  rows:[...(nav?.querySelectorAll('button.interview-question')??[])].map(row=>({text:row.textContent,
+   checkmark:row.hasAttribute('data-answered')&&getComputedStyle(row,'::before').content.includes('✓'),
+   current:row.getAttribute('aria-current')==='true',visible:visible(row)})),
+  submit:submit?{text:submit.textContent,disabled:submit.disabled,first:nav.firstElementChild===submit}:null,
+  visibleSubmitCount:controls.filter(visible).length};
+})()`);
+
+async function groupedRigCase(language:'en'|'ko'){
+ const catalog=language==='ko'?koCatalog:enCatalog;
+ const label=(n:number)=>catalog['interview.submitAnswered']!.replace('{0}',String(n)).replace('{1}','3');
+ const out=join(output,'owner-look',language);
+ await mkdir(out,{recursive:true});
+ const fixture=await optionSetsJobFixture({count:3,boundRig:true});
+ const asks=fixture.asks.map(ask=>ask.askId);
+ const sets=fixture.workspace.result.sets!;
+ const pending=()=>fixture.session.status().pending.map(ask=>ask.askId);
+ async function capture(name:string,selected:number,answered:boolean[],submitDisabled:boolean){
+  await page!.evaluate<void>(`document.querySelector('#workspace-communication').scrollTop=0;`);
+  const readback=await rigReadback();
+  await writeFile(join(out,name+'.png'),await page!.screenshot());
+  await writeFile(join(out,name+'.json'),JSON.stringify(readback,null,2)+'\n');
+  assert.deepEqual(readback.viewport,{width:1440,height:900});
+  assert.equal(readback.language,language);
+  assert.equal(readback.communication,true);
+  assert.equal(readback.visibleCanvasCount,1);
+  assert.equal(readback.sameCanvas,true);
+  assert.equal(readback.visibleAsk,asks[selected]);
+  assert.deepEqual(readback.rows,sets.map((set,index)=>({text:`${set.questionId} · ${set.setId}`,
+   checkmark:answered[index],current:index===selected,visible:true})));
+  assert.equal(readback.visibleSubmitCount,1);
+  assert.deepEqual(readback.submit,{text:label(answered.filter(Boolean).length),disabled:submitDisabled,first:true});
+  return readback;
+ }
+ try{
+  const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
+  await page!.setViewport(1440,900);
+  await page!.goto('about:blank');await page!.goto(url.href,language);
+  const refusal='[role="status"][title="JOB_DISPLAY_MISMATCH"], #review-message[title="JOB_DISPLAY_MISMATCH"]';
+  await wait(`!!document.querySelector(${JSON.stringify(refusal)}) || (document.body.dataset.ready==='true' &&
+   document.querySelector('#player-state')?.textContent===${JSON.stringify(catalog['@rig-c/play · Actual rig'])} &&
+   document.querySelector('#animation-select')?.value==='idle' && document.querySelector('#rig-empty')?.hidden===true &&
+   document.querySelectorAll('${root} form[data-job-ask]').length===3 &&
+   !!document.querySelector('${visibleForm} [data-job-questions-submit]') &&
+   document.querySelector('${visibleForm} .interview-answer-fields')?.disabled===false)`,'grouped rig '+language);
+  const refusalCode=await page!.evaluate<string|null>(`document.querySelector(${JSON.stringify(refusal)})?.title??null`);
+  assert.equal(refusalCode,null,`${language} grouped rig preparation refused: ${refusalCode}`);
+  await page!.evaluate<void>(`window.optionSetsRigCanvas=[...document.querySelectorAll('${rigCanvas}')].find(node=>node.checkVisibility());`);
+  assert.deepEqual(pending(),asks);
+  const opened=await capture('01-open-0-of-3',0,[false,false,false],true);
+  const selectedRows: {index:number;ask:string|null;sameCanvas:boolean}[]=[];
+  const picks: (string|null)[]=[];
+  for(const index of [0,1,2]){
+   await selectRow(index);
+   const readback=await rigReadback();
+   assert.equal(readback.visibleAsk,asks[index]);
+   assert.equal(readback.sameCanvas,true);
+   selectedRows.push({index,ask:readback.visibleAsk,sameCanvas:readback.sameCanvas});
+   if(index<2){await answerShown();picks.push((await rigReadback()).checked);}
+  }
+  const ready=await capture('02-ready-2-of-3',2,[true,true,false],false);
+  assert.equal(ready.checked,null);
+  await clickVisible(`${visibleForm} [data-job-questions-submit]`);
+  await waitFor(()=>pending().length===1,'grouped rig partial submit '+language);
+  await wait(`[...document.querySelectorAll('${root} form[data-job-ask]')].filter(form=>form.dataset.interviewAnswered==='true').length===2`,'grouped rig saved forms '+language);
+  const pendingAfterSubmit=pending();
+  assert.deepEqual(pendingAfterSubmit,asks.slice(2));
+  const formsAfterSubmit=(await state()).forms;
+  assert.deepEqual(formsAfterSubmit.map(form=>[form.answered,form.editable]),[[true,false],[true,false],[false,true]]);
+  await selectRow(2);
+  const partial=await capture('03-partial-third-pending',2,[true,true,false],true);
+  assert.equal(partial.checked,null);
+  await answerShown();
+  const edited=await rigReadback();
+  assert.ok(edited.checked,'the third set still accepts a pick');
+  assert.equal(edited.sameCanvas,true);
+  assert.deepEqual(edited.submit,{text:label(3),disabled:false,first:true});
+  assert.deepEqual(pending(),pendingAfterSubmit);
+  const {events}=await fixture.readEvents();
+  const acts=events.flatMap(event=>event.type==='act'?[event.act]:[]).map(act=>{
+   assert.equal(act.schema,JOB_COMMENTS_ACT_SCHEMA);
+   assert.equal(act.kind,'interview-picks');
+   return {ask:act.askId,publication:act.publicationId,sourceHash:act.source.sourceHash,
+    question:act.value.questionId,selections:act.value.selections};
+  });
+  assert.deepEqual(acts.sort((a,b)=>asks.indexOf(a.ask)-asks.indexOf(b.ask)),sets.slice(0,2).map((set,index)=>({
+   ask:asks[index],publication:fixture.publication.publicationId,sourceHash:fixture.publication.source.sourceHash,
+   question:set.questionId,selections:[{itemId:set.questionId,optionId:picks[index],otherText:null}],
+  })));
+  const observation={language,opened,selectedRows,ready,partial,edited,formsAfterSubmit,pendingAfterSubmit,acts};
+  await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');
+  console.log('1101_GROUPED_RIG_CASE '+JSON.stringify({language,rows:partial.rows.length,acts:acts.length,pending:pendingAfterSubmit.length}));
+  return observation;
+ }catch(error){
+  await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error),dom:await rigReadback().catch(()=>null)},null,2)+'\n');
+  await writeFile(join(out,'failure.png'),await page!.screenshot()).catch(()=>{});
+  throw error;
+ }finally{await page!.goto('about:blank');await fixture.close();}
+}
+
 try{
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:async(event,send)=>{
   if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);
@@ -57,7 +183,7 @@ try{
    let ask:string|undefined;try{ask=JSON.parse(paused.request.postData??'{}').askId;}catch{}
    if(refuseAsk&&ask===refuseAsk&&!heldRequest)heldRequest=paused.requestId;
    else await (send as any)('Fetch.continueRequest',{requestId:paused.requestId},event.sessionId);}}});
- for(const language of ['en','ko'] as const){
+ if(!rigOnly)for(const language of ['en','ko'] as const){
   const catalog=language==='ko'?koCatalog:enCatalog,label=(n:number)=>catalog['interview.submitAnswered']!.replace('{0}',String(n)).replace('{1}','4');
   const fixture=await optionSetsJobFixture({count:4,answered:2}),out=join(output,language);await mkdir(out,{recursive:true});
   try{
@@ -103,7 +229,7 @@ try{
    cases.push(observation);
   }finally{await page.goto('about:blank');await fixture.close();}
  }
- for(const language of ['en','ko'] as const){
+ if(!rigOnly)for(const language of ['en','ko'] as const){
   const catalog=language==='ko'?koCatalog:enCatalog,label=(n:number)=>catalog['interview.submitAnswered']!.replace('{0}',String(n)).replace('{1}','4');
   const fixture=await optionSetsJobFixture({count:4,answered:2}),out=join(output,language);await mkdir(out,{recursive:true});
   try{
@@ -140,6 +266,12 @@ try{
    cases.push(observation);
   }finally{refuseAsk=undefined;if(heldRequest)await control?.('Fetch.disable').catch(()=>{});await page.goto('about:blank');await fixture.close();}
  }
+ const rigFailures: string[]=[];
+ for(const language of ['en','ko'] as const){
+  try{cases.push(await groupedRigCase(language));}
+  catch(error){rigFailures.push(String(error));console.error('1101_GROUPED_RIG_RED '+language+' '+String(error));}
+ }
+ assert.deepEqual(rigFailures,[],'grouped rig browser scenario failed');
  assert.equal(exceptions.length,0,JSON.stringify(exceptions));
  assert.equal(consoleErrors.length,0,JSON.stringify(consoleErrors));
  const result={cases:cases.length,languages:['en','ko'],exceptions:exceptions.length,consoleErrors:consoleErrors.length};

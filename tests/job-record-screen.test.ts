@@ -6,10 +6,11 @@ import {jobHash} from '../src/job-api.ts';
 import {expect,test} from 'bun:test';
 import {readFile,writeFile} from 'node:fs/promises';
 import {createJobRigScreen} from '../web/job-rig-screen.ts';
+import type {InterviewDisplayQuestion} from '../web/interview-panel.ts';
 import {rigHost,setRigHost} from '../web/rig-host.ts';
 import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jobPublicationRoutes,prepareJobForms,prepareJobInspection,type JobFormDependencies} from '../web/job-session.ts';
 import type {DisplayPublicationV3,PendingAskV3,UISubmissionV3} from '../src/job-contract.ts';
-import {recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
+import {optionSetsJobFixture,recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {rigPictureCases,SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_ROOT} from './helpers/job-record-fixture.ts';
 
 async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'='checkpoint',boundParts=false){
@@ -649,6 +650,49 @@ test.each(['none','record','model','version','partial'] as const)('#929 client v
    } finally { ready.dispose(); }
   } else {
    await expect(prepared).rejects.toThrow('JOB_DISPLAY_MISMATCH');
+  }
+  expect(assetRequests).toEqual([]);
+ } finally {
+  dom.restore();
+  await fixture.close();
+ }
+});
+
+test.each(['same rig','third question names another rig'] as const)('#1101 verifies all three question bindings (%s)', async variant => {
+ type RigQuestion = InterviewDisplayQuestion & {set:{context:{kind:'rig';rig_version:number}}};
+ const fixture = await optionSetsJobFixture({count:3,boundRig:true});
+ const dom = await recordScreenDom();
+ const originalFetch = globalThis.fetch;
+ const assetRequests: string[] = [];
+ const questionVersions: number[] = [];
+ try {
+  dom.set('location',{origin:fixture.origin});
+  dom.set('fetch',async (...args: Parameters<typeof fetch>) => {
+   const path = new URL(String(args[0])).pathname;
+   if (path.startsWith(fixture.display.routes.assetsBase)) assetRequests.push(path);
+   const response = await originalFetch(...args);
+   if (path !== fixture.display.routes.apiBase+'interview') return response;
+   expect(response.status).toBe(200);
+   const body: {questions: RigQuestion[]} = await response.json();
+   expect(body.questions.map(question => question.set.question)).toEqual(['bones','meshes','constraints']);
+   if (variant === 'third question names another rig') {
+    const question = body.questions[2]!;
+    body.questions[2] = {...question,set:{...question.set,context:{...question.set.context,rig_version:4}}};
+   }
+   questionVersions.push(...body.questions.map(question => question.set.context.rig_version));
+   return Response.json(body);
+  });
+  const prepared = prepareJobInspection(fixture.display,new AbortController().signal,true,false);
+  if (variant === 'same rig') {
+   const ready = await prepared;
+   try {
+    expect(ready.metadata.manifest?.model).toBe(SYNTHETIC_RIG_MODEL);
+    expect(ready.interview?.questions).toHaveLength(3);
+    expect(questionVersions).toEqual([3,3,3]);
+   } finally { ready.dispose(); }
+  } else {
+   await expect(prepared).rejects.toThrow('JOB_DISPLAY_MISMATCH');
+   expect(questionVersions).toEqual([3,3,4]);
   }
   expect(assetRequests).toEqual([]);
  } finally {
