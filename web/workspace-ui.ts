@@ -173,6 +173,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  const handles={} as Record<WorkspacePanel,HTMLElement>,buttons={} as Record<WorkspacePanel,HTMLButtonElement>,disposers:(()=>void)[]=[];
  const present=Object.keys(panels) as WorkspacePanel[],node=(panel:WorkspacePanel)=>panels[panel]!;
  const bottom=options.bottomPanel,bottomBody=bottom?inspector.querySelector<HTMLElement>('.inspector-body')!:null,bottomHeading=bottom?bottom.strip.parentElement!:null;
+ const chestBar=stack.querySelector<HTMLElement>('#chest-editor-bar');
  // The communication panel: present while something is pending or after an explicit reveal (C, a pending ask).
  const communicationKey=columns.right==='communicationWidth'&&explorer?'communicationWidth' as const:null;let communicationRevealed=false;
  const communicationShown=()=>!!communicationKey&&(communicationRevealed||!!regions?.rightPending?.());
@@ -216,13 +217,39 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
   try{
    // Chrome shares the center width. It is not charged against the actual stage minimum.
    // Authored JSON can fill the same slot as the rig while Direction metadata stays above it.
-   const chrome=[...stack.children].filter(node=>node!==stage&&node.id!=='direction-authored-body'&&!((node as HTMLElement).hidden)).reduce((sum,node)=>sum+(node as HTMLElement).getBoundingClientRect().height,0);
+   const chrome=[...stack.children].filter(node=>node!==stage&&node!==chestBar&&node.id!=='direction-authored-body'&&!((node as HTMLElement).hidden)).reduce((sum,node)=>sum+(node as HTMLElement).getBoundingClientRect().height,0);
    const quiet=!!communicationKey&&!communicationShown(),shown:WorkspaceColumns=quiet?{...columns,right:null}:columns;shownColumns=shown;
    if(communicationKey){explorer!.hidden=quiet;handles[communicationKey].hidden=quiet;if(quiet){buttons[communicationKey].hidden=true;if(dialogs[communicationKey].open)dialogs[communicationKey].close();}}
-   available={width:Math.max(0,layout.clientWidth),height:Math.max(0,layout.clientHeight-chrome)};effective=allocateWorkspaceLayout(available,desired,shown);
+   const width=layout.clientWidth,gap=workspaceMinimums.separator;
+   const empty=bottomEmpty();
+   const rigMinimum=chestBar&&window.innerWidth>=1280&&window.innerHeight>=720?240:workspaceMinimums.stageHeight;
+   const height=layout.clientHeight-chrome-(rigMinimum-workspaceMinimums.stageHeight);
+   let chestHeight=0;
+   if(chestBar){
+    const scroll=chestBar.scrollTop;
+    chestBar.style.removeProperty('max-height');
+    chestBar.style.removeProperty('overflow-y');
+    if(!chestBar.hidden){
+     const natural=chestBar.getBoundingClientRect().height;
+     const panelMinimum=panelBounds.inspectorHeight.min+gap;
+     const canDock=height>=workspaceMinimums.stageHeight+panelMinimum;
+     const bottomReserve=empty?0:!collapsed&&canDock?panelMinimum:bottomHeading?.getBoundingClientRect().height??0;
+     // The allocator spends the bottom panel's excess first. Limit the chest bar only
+     // once the remaining height would consume the stage or the bottom panel's minimum.
+     const chestBudget=Math.max(0,Math.floor(height-workspaceMinimums.stageHeight-bottomReserve));
+     chestHeight=rigMinimum===workspaceMinimums.stageHeight?natural:Math.min(natural,chestBudget);
+     if(chestHeight<natural){
+      chestBar.style.maxHeight=`${chestHeight}px`;
+      chestBar.style.overflowY='auto';
+      chestHeight=chestBar.getBoundingClientRect().height;
+      chestBar.scrollTop=scroll;
+     }
+    }
+   }
+   available={width:Math.max(0,width),height:Math.max(0,height-chestHeight)};effective=allocateWorkspaceLayout(available,desired,shown);
    const mode=(panel:WorkspacePanel)=>effective[panel==='leftWidth'?'leftMode':panel==='rightWidth'?'rightMode':panel==='communicationWidth'?'communicationMode':'inspectorMode'];
    for(const panel of present)if(!(quiet&&panel===communicationKey))dock(panel,mode(panel)==='drawer');
-   const gap=workspaceMinimums.separator,side=(key:WorkspaceColumns['left'])=>key&&mode(key)==='panel'?{width:effective[key],separator:gap}:{width:0,separator:0},l=side(shown.left),r=side(shown.right);
+   const side=(key:WorkspaceColumns['left'])=>key&&mode(key)==='panel'?{width:effective[key],separator:gap}:{width:0,separator:0},l=side(shown.left),r=side(shown.right);
    layout.style.setProperty('--workspace-columns',`${l.width}px ${l.separator}px minmax(0,1fr) ${r.separator}px ${r.width}px`);
    let bottomHeight=effective.inspectorHeight;
    if(bottom){
@@ -232,7 +259,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
     inspector.dataset.collapsed=String(compact);bottom.collapse.setAttribute('aria-expanded',String(!collapsed));bottom.collapse.textContent=collapsed?'⌃':'⌄';bottom.collapse.setAttribute('aria-label',collapseLabel);bottom.collapse.setAttribute('title',collapseLabel);
     if(compact)bottomHeight=bottomHeading!.getBoundingClientRect().height;
    }
-   const empty=bottomEmpty();inspector.hidden=empty;if(empty){handles.inspectorHeight.hidden=true;bottomHeight=0;}
+   inspector.hidden=empty;if(empty){handles.inspectorHeight.hidden=true;bottomHeight=0;}
    main.style.gridTemplateRows=`minmax(0,1fr) ${effective.inspectorMode==='panel'&&!collapsed&&!empty?gap:0}px ${bottomHeight}px`;
    layout.dataset.stageMinimum=String(effective.stageMinimumSatisfied);for(const binding of bindings)binding.refresh();options.changed();restore();
   }finally{applying=false;}

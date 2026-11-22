@@ -1262,13 +1262,18 @@ function bind(): void {
   bindWorkspace(!!data.manifest.model);
   overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
   verdictSubmit=button('save').onclick as ((event:MouseEvent)=>unknown)|null;
+  let chestWasOpen=false;
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),
    job:host?(readOnly||host.direction?'read-only':{
     seeds:()=>inspectionSourceState==='ready'&&stageModelHash===data.reviewedSource.rig?.sha256&&chestMapping.available?host?.chestLandmarks??[]:[],
     selection:()=>{const part=parts?.value();return part?{slot:part.slot,skin:part.identity?.skin??null,attachment:part.identity?.attachment??null}:null;},
     download:edit=>download('chest-landmarks.json',JSON.stringify(edit,null,2)+'\n','application/json'),
    }):undefined,
-   changed:()=>{renderChest();if(host)renderAnswerControls();},download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
+   changed:()=>{
+    const open=!el('chest-editor-bar').hidden;
+    if(open!==chestWasOpen){chestWasOpen=open;workspace?.layoutNow();}
+    renderChest();if(host)renderAnswerControls();
+   },download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   const editRefusal=sealedRecordRigReadOnly();
   if(editRefusal)chestEditor.unavailable(editRefusal);
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),readOnly:!!editRefusal,source:meshSource,pause,

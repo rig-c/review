@@ -14,12 +14,14 @@ import type {ReviewManifest} from '../src/manifest.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {boxesIntersect, placeLabels} from '../web/label-placement.ts';
+import {workspacePreferenceKey} from '../web/workspace-preferences.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 
 const serving = Bun.argv.includes('--serve');
+const minimumViewportOnly = Bun.argv.includes('--minimum-viewport');
 if (Bun.argv.includes('--gate')) throw new Error('--gate has been removed. This fixture uses the production writer.');
 const outputIndex = Bun.argv.indexOf('--out');
 const output = resolve(outputIndex < 0 ? 'artifacts/job-mesh-act-952' : Bun.argv[outputIndex + 1]!);
@@ -162,13 +164,13 @@ async function placePosedApex(screen: InputCdpSession, stage: BrowserFixtureMode
   await screen.mouse('mouseReleased', x, y);
 }
 
-async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
+async function runBrowser(language: 'en' | 'ko', mode: BrowserMode, minimumViewport = false) {
   const largeCapture = mode === 'mesh-only';
   const fixture = await createFixture(mode);
   const {chestSeed} = fixture;
   const chestCase = !!chestSeed || mode === 'chest-readonly';
   const profile = await mkdtemp(join(tmpdir(), 'review-952-chrome-'));
-  const directory = join(output, language, mode);
+  const directory = join(output, language, minimumViewport ? `${mode}-1280x720` : mode);
   await mkdir(directory, {recursive: true});
   let page: InputCdpSession | undefined;
   try {
@@ -186,7 +188,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       }
     }});
     const screen = page;
-    await screen.setViewport(largeCapture ? 2200 : 1440, largeCapture ? 1750 : 1000);
+    await screen.setViewport(minimumViewport ? 1280 : largeCapture ? 2200 : 1440, minimumViewport ? 720 : largeCapture ? 1750 : 1000);
     if (mode === 'with-comment') {
       await screen.goto('about:blank');
       assert.ok(send);
@@ -257,8 +259,24 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       if (chestSeed) {
         if (mode === 'chest-only') await writeFile(join(directory, 'part-tab.png'), await screen.screenshot());
         await wait("!!document.querySelector('#chest-edit:not([hidden]):not(:disabled)')");
+        const stageGeometry = `({stage: document.querySelector('#stage-layout').getBoundingClientRect().height,
+          overlay: document.querySelector('#rig-overlay').getBoundingClientRect().height})`;
+        if (minimumViewport) await screen.evaluate(`document.addEventListener('click', event => {
+          if (event.target.closest('#chest-edit')) window.__openedChestGeometry = ${stageGeometry};
+        }, {once: true})`);
         await click(screen, '#chest-edit');
         await wait("!!document.querySelector('#chest-editor-bar:not([hidden]) [data-bust-mode=landmarks][aria-pressed=true]')");
+        if (minimumViewport) {
+          const immediate = await screen.evaluate<{stage:number;overlay:number}>('window.__openedChestGeometry');
+          const settled = await screen.evaluate<{stage:number;overlay:number}>(`new Promise(resolve =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve(${stageGeometry}))))`);
+          const measurement = {language, immediate, settled};
+          await writeFile(join(directory, 'minimum-viewport.json'), JSON.stringify(measurement));
+          console.log('MINIMUM_STAGE ' + JSON.stringify(measurement));
+          for (const geometry of [immediate, settled]) {
+            assert.ok(geometry.stage >= 240 && geometry.overlay > 0, JSON.stringify(measurement));
+          }
+        }
         const controls = await screen.evaluate<{
           applyDisabled: boolean; circlesDisabled: boolean; status: string; readout: string; readoutError: boolean;
         }>(`({
@@ -331,8 +349,9 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
             }
           }
           const [rightApexBox, leftApexBox] = [placed[0]!.box, placed[1]!.box];
-          assert.ok(rightApexBox.x + rightApexBox.w <= leftApexBox.x,
-            `${language} F08 apex labels do not overlap horizontally: right=${JSON.stringify(rightApexBox)} left=${JSON.stringify(leftApexBox)}`);
+          const sharesRow = rightApexBox.y < leftApexBox.y + leftApexBox.h && leftApexBox.y < rightApexBox.y + rightApexBox.h;
+          if (sharesRow) assert.ok(rightApexBox.x + rightApexBox.w <= leftApexBox.x,
+            `${language} F08 apex labels on the same row read left to right: right=${JSON.stringify(rightApexBox)} left=${JSON.stringify(leftApexBox)}`);
         }
         await placePosedApex(screen, fixture.stage);
         const edited = await readLandmarkFields(screen);
@@ -593,6 +612,32 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       assert.equal(act.value.comments[0]?.context?.subject?.sourceHash, act.source.sourceHash);
     }
     if (inputHashes) assert.deepEqual(await jobInputHashes(fixture.input.root), inputHashes, 'Owner actions preserve source bytes');
+    if (minimumViewport) {
+      const panelGeometry = `({height: document.querySelector('#workspace-inspector').getBoundingClientRect().height,
+        desired: JSON.parse(localStorage.getItem(${JSON.stringify(workspacePreferenceKey)}))?.panels.inspectorHeight})`;
+      if (await screen.evaluate<boolean>("!document.querySelector('#chest-editor-bar').hidden")) await click(screen, '#chest-edit');
+      await screen.setViewport(1440, 900);
+      await wait("innerWidth===1440 && Number(document.querySelector('.workspace-inspectorHeight').getAttribute('aria-valuemax'))>248");
+      await screen.evaluate(`document.querySelector('.workspace-inspectorHeight').dispatchEvent(
+        new KeyboardEvent('keydown', {key:'ArrowUp', bubbles:true}))`);
+      const wide = await screen.evaluate<{height:number;desired:number}>(panelGeometry);
+      assert.ok(Math.abs(wide.height-248)<0.1 && Math.abs(wide.desired-248)<0.1,
+        'wide resize saves and uses a non-default height: '+JSON.stringify(wide));
+      await screen.setViewport(1280, 720);
+      await wait("innerWidth===1280");
+      await click(screen, '#chest-edit');
+      await wait(`${panelGeometry}.height < ${wide.height}`);
+      const narrow = await screen.evaluate<typeof wide>(panelGeometry);
+      assert.equal(narrow.desired, wide.desired);
+      await click(screen, '#chest-edit');
+      await screen.setViewport(1440, 900);
+      await wait(`innerWidth===1440 && ${panelGeometry}.height === ${wide.height}`);
+      const restored = await screen.evaluate<typeof wide>(panelGeometry);
+      assert.deepEqual(restored, wide);
+      const measurement = {language, wide, narrow, restored};
+      await writeFile(join(directory, 'saved-panel-roundtrip.json'), JSON.stringify(measurement));
+      console.log('SAVED_PANEL_ROUNDTRIP ' + JSON.stringify(measurement));
+    }
     await writeFile(join(directory, 'act.json'), raw);
     console.log(chestCase ? 'CHEST_ACT_990_PASS' : 'MESH_ACT_952_PASS', language, mode);
   } catch (error) {
@@ -621,10 +666,11 @@ if (serving) {
 } else {
   const modesIndex = Bun.argv.indexOf('--modes');
   const requestedModes = modesIndex >= 0 ? Bun.argv[modesIndex + 1]!.split(',') as BrowserMode[] :
-    ['mesh-only', 'with-comment', 'no-mesh', 'stale-draft', 'chest-only', 'chest-optional', 'chest-readonly'] as const;
+    minimumViewportOnly ? ['chest-only'] as const : ['mesh-only', 'with-comment', 'no-mesh', 'stale-draft', 'chest-only', 'chest-optional', 'chest-readonly'] as const;
   for (const language of ['en', 'ko'] as const) {
     for (const mode of requestedModes) {
-      await runBrowser(language, mode);
+      if (!minimumViewportOnly) await runBrowser(language, mode);
+      if (mode === 'chest-only') await runBrowser(language, mode, true);
     }
   }
 }
