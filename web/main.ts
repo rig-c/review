@@ -1166,7 +1166,11 @@ function bind(): void {
   for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
   select('reference-select').onchange = () => { void showReference(select('reference-select').value); };
   select('person-select').onchange = () => { selectedPerson = select('person-select').value; lastPoseFrame = -1; renderSequenceFrame(); };
-  select('animation-select').onchange = () => {chooseAnimation(select('animation-select').value);if(canRepeatIdle())void playPreview();};
+  select('animation-select').onchange = () => {
+    const wasPlaying = playing;
+    chooseAnimation(select('animation-select').value);
+    if (wasPlaying) void playPreview();
+  };
   select('part-set').onchange = () => { try { if(!player)return;player.setSet(select('part-set').value || null);drawRig(()=>player!.draw());fitCamera(); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } };
   select('axis-select').onchange = chooseAxis; input('axis-value').oninput = applyAxis;
   viewport.bindControls(unitScaleMessage);
