@@ -1740,6 +1740,7 @@ function recordPictures():{path:string;sha256:string}[]|undefined {
  const picture=host?.record?.planPicture,rows=[...picture?[{path:picture.path,sha256:picture.sha256}]:[],...host?.record?.questionPictures??[]];
  return rows.length?rows:undefined;
 }
+/** Comments remain native rows in the draft and feed both act encodings. */
 function recordJobComments() {
  return recordComments.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary});
 }
