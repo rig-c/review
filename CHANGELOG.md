@@ -2,7 +2,7 @@
 
 ## 4.16.0
 
-Animate's Repeat now repeats whichever animation is selected, not only idle. A non-idle clip such as `wind` used to play once and stop. The rig footer's help text no longer runs into the status readouts at 1600 px.
+Animate's Repeat now repeats whichever animation is selected, not only idle. A non-idle clip such as `wind` used to play once and stop. The rig footer's help text no longer runs into the status readouts at 1600 px, and the Parts footer keeps its status on one line.
 
 **Read before upgrading:**
 
@@ -11,6 +11,7 @@ Animate's Repeat now repeats whichever animation is selected, not only idle. A n
 ### Fixed
 
 * Repeat plays the selected animation in a loop, not only idle (#1091, closes #1090).
+* The Parts footer status stays on one line, ending in an ellipsis with the full text in its title. Refusals show in the act row only, and Parts comment errors take the same route (#1085, closes #1034).
 * The rig footer reserves the readouts' width. The help text gets the remaining space and ends in an ellipsis, with the full text in its title (#1095, closes #1092).
 
 ## 4.15.0
