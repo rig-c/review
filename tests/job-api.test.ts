@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { createJobHostPorts, jobBodyLimit, parseJobRequest } from '../src/job-api.ts';
-import { JOB_API_SCHEMA, jobActDeliveryLimit, jobResponseBodyLimit } from '../src/job-contract.ts';
+import { JOB_ACT_SCHEMA, JOB_API_SCHEMA, jobActDeliveryLimit, jobRawActMediaType, jobResponseBodyLimit, type JobLegacyAct } from '../src/job-contract.ts';
 import { parseJobCLI, jobCommand } from '../src/job-cli.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
 import { Database } from 'bun:sqlite';
@@ -15,6 +15,57 @@ import {parseCommentsAct, projectComments, type JobComment} from '../src/job-hos
 import commentsLegacy from './fixtures/comments-contract-legacy.json';
 import {JobSession} from '../src/job-session.ts';
 import {JobError, JobStore} from '../src/job-store.ts';
+import {legacyActComments} from '../src/feedback-export.ts';
+
+test('#1096 stored act@2 image-review exports its exact bytes and projects historical image notes', async () => {
+  const f = await fixture();
+  const act = {
+    schema: JOB_ACT_SCHEMA, actId: 'historical-image-verdict', jobId: f.session.jobId,
+    askId: 'historical-image-ask', publicationId: 'historical-image-publication',
+    authority: {actor: 'human', channel: 'review-ui', reviewer: {id: 'declared-owner', role: 'owner'}},
+    at: '2026-11-01T00:00:00.000Z', kind: 'review-verdict',
+    source: {
+      subject: 'image-set', sourceHash: '1'.repeat(64), projectHash: null,
+      package: {id: 'historical-plates', revision: '1'},
+      direction: null, optionSet: null, appliedResult: null, plan: null, parts: null,
+      imageSet: {purpose: 'plate-adoption', images: [
+        {role: 'source', name: 'before', path: 'before.png', sha256: '2'.repeat(64)},
+        {role: 'candidate', name: 'after', path: 'after.png', sha256: '3'.repeat(64)},
+      ]},
+      imageSetDigest: '4'.repeat(64), duplicateHashes: [],
+    },
+    value: {stage: 'image-review', verdict: 'changes-requested', words: '  전체 의견\n',
+      imageNotes: [{name: 'before', words: ''}, {name: 'after', words: '  이미지 메모\n'}]},
+  };
+  const expected = Buffer.from(JSON.stringify(act));
+  const store = new JobStore<{acts: Record<string, unknown>}>(f.state);
+  try {
+    store.update(f.session.jobId, null, ({data}) => ({data: {
+      ...data, acts: {...data.acts, [act.actId]: act},
+    }}));
+  } finally {
+    store.close();
+  }
+
+  const front = createJobFront({origin: f.origin, ports: f.ports, resource: async () => ''});
+  try {
+    const response = await front.fetch(new Request(f.origin + `/jobs/${f.session.jobId}/api`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', Accept: jobRawActMediaType,
+        Authorization: 'Bearer ' + f.session.writerGrant().fetchCapability},
+      body: JSON.stringify({...f.base(), verb: 'fetch-act', actId: act.actId}),
+    }));
+    expect(response?.status).toBe(200);
+    expect(response!.headers.get('content-type')).toBe(jobRawActMediaType);
+    const fetched = Buffer.from(await response!.arrayBuffer());
+    expect(fetched.equals(expected)).toBe(true);
+    expect(legacyActComments(JSON.parse(fetched.toString('utf8')) as JobLegacyAct))
+      .toEqual([{text: '  전체 의견\n'}, {text: ''}, {text: '  이미지 메모\n'}]);
+    console.log(`#1096 stored/exported SHA-256 ${jobHash(expected)} ${jobHash(fetched)}`);
+  } finally {
+    front.stop();
+  }
+});
 
 const permutedFeedbackComment = (): JobComment => ({
   anchor: {category: 'defect', target: {name: 'sleeve', kind: 'slot'}, frameEnd: 3, frameStart: 3, id: 'permuted-feedback'},

@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import {checkpointNoteComments, feedbackItemComments, feedbackWordsComments, imageNoteComments,
+import {checkpointNoteComments, feedbackItemComments, feedbackWordsComments,
   legacyActComments, legacyRecordActComments, legacySessionComments} from '../src/feedback-export.ts';
 import {parseComments, parseRecordAct} from '../src/job-api.ts';
 import type {Feedback} from '../src/session.ts';
@@ -17,11 +17,9 @@ test('Feedback mapper preserves order, duplicate text, side and detached evidenc
   (mapped[0]!.anchor.context as any).comment.evidence = 'changed';
   expect(rows).toEqual(before);
 });
-test('checkpoint mapping keeps explicit plan mapping and image notes keep names', () => {
+test('checkpoint mapping keeps explicit plan mapping', () => {
   expect(checkpointNoteComments({checkpointId: 'checkpoint', planStepId: 'different-step', note: ' exact '}))
     .toEqual([{text: ' exact ', anchor: {checkpointId: 'checkpoint', planStepId: 'different-step'}}]);
-  expect(imageNoteComments([{name: 'plate', words: ' first '}, {name: 'plate', words: ' first '}]))
-    .toEqual([{text: ' first ', anchor: {name: 'plate'}}, {text: ' first ', anchor: {name: 'plate'}}]);
   expect(feedbackWordsComments(' words ')).toEqual([{text: ' words '}]);
 });
 test('mapped feedback uses existing decoder; empty preparation is not fresh text admission', () => {
@@ -30,7 +28,6 @@ test('mapped feedback uses existing decoder; empty preparation is not fresh text
   expect(feedbackWordsComments('')).toEqual([{text: ''}]);
   expect(() => parseComments(feedbackWordsComments(''), 'f'.repeat(64))).toThrow('JOB_ACT_INVALID');
   expect(feedbackItemComments([])).toEqual([]);
-  expect(imageNoteComments([])).toEqual([]);
 });
 test('historical sessions display every note and summary as general, including empty text', () => {
   const input = {checkpoints: {one: {outcome: 'pass' as const, note: ''}}, feedback: [feedback, feedback]};

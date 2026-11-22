@@ -83,12 +83,16 @@ export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'c
     decisions.push({ask, kind: 'checkpoint', value: {checkpointId, outcome: entry.outcome,
       words: entry.note.trim() ? projectComments(checkpointNoteComments({checkpointId, planStepId, note: entry.note})) : ''}});
   }
-  const verdict = open.find(ask => ask.subject.kind === 'review-verdict' && (ask.subject.stage === 'rig-review' || ask.subject.stage === 'direction-review'));
-  if (verdict?.subject.kind === 'review-verdict' && verdict.subject.stage !== 'image-review' && session.status !== 'pending') {
-    decisions.push({ask: verdict, kind: 'review-verdict', value: {stage: verdict.subject.stage, verdict: session.status,
+  if (session.status === 'pending') return decisions;
+  for (const verdict of open) {
+    if (verdict.subject.kind !== 'review-verdict') continue;
+    const {stage} = verdict.subject;
+    if (stage !== 'rig-review' && stage !== 'direction-review') continue;
+    decisions.push({ask: verdict, kind: 'review-verdict', value: {stage, verdict: session.status,
       words: session.feedback.length ? projectComments(feedbackItemComments(session.feedback)) : '',
-      ...(verdict.subject.stage === 'rig-review' && session.feedback.length ? {feedback: structuredClone(session.feedback)} : {}),
-      ...(verdict.subject.stage === 'rig-review' && general?.length ? {general: [...general]} : {})}});
+      ...(stage === 'rig-review' && session.feedback.length ? {feedback: structuredClone(session.feedback)} : {}),
+      ...(stage === 'rig-review' && general?.length ? {general: [...general]} : {})}});
+    break;
   }
   return decisions;
 }

@@ -32,11 +32,6 @@ export function noteComments(words: string): JobComment[] {
   return words.trim() ? feedbackWordsComments(words) : [];
 }
 
-/** Named-image notes retain sealed image names; no region evidence is manufactured. */
-export function imageNoteComments(notes: readonly {readonly name: string; readonly words: string}[]): JobComment[] {
-  return notes.map(({name, words}) => ({text: words, anchor: {name}}));
-}
-
 /** Display only over decoded legacy sessions: historical fields are general comments. */
 export function legacySessionComments(session: Pick<ReviewSession, 'feedback'> & Partial<Pick<ReviewSession, 'checkpoints'>>): {text: string}[] {
   return legacyFeedbackComments([
