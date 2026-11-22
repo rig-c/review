@@ -267,7 +267,7 @@ if(a[0]==='rig'){`));
   await writeFile(join(pkg,'rig/clips.json'),'{}');
   const p=await loadReview(pkg),before=await treeHash(pkg);
   const inputs=await producerInputs(p.handoff,p.handoffReason);
-  expect(inputs.requirements).toEqual({source:requirementsPath,sha256:digest(requirementBytes)});
+  expect(inputs.requirements).toEqual({source:await realpath(requirementsPath),sha256:digest(requirementBytes)});
   const unbound={...p.handoff!,record:{...p.handoff!.record,files:p.handoff!.record.files.filter(file=>file.path!=='rig/requirements.json')}};
   await expect(producerInputs(unbound,null)).rejects.toThrow('config.requirements has no bound handoff hash');
 
