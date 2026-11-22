@@ -298,7 +298,7 @@ export async function scriptedJobWindowFixture(options: {c5Parts?: 'mesh' | 'no-
     return {...f, question, packageRoot,
         publishResponseAt: () => publishResponseAt,
         async close() {try {attached?.stop();} finally {await f.close();}},
-        async publish(stage: 'parts' | 'rig' | 'direction', revision: string = stage, options?: {stripShortAnimation?: boolean}) {
+        async publish(stage: 'parts' | 'rig' | 'direction', revision: string = stage, options?: {stripShortAnimation?: boolean; title?: string}) {
             await agent('next', {after: null, waitMs: 0});
             const model = structuredClone(originalModel);
             if (stage !== 'parts') model.bones.find((bone: {name: string}) => bone.name === 'mesh').x = options?.stripShortAnimation ? 20 : 19;
@@ -309,7 +309,7 @@ export async function scriptedJobWindowFixture(options: {c5Parts?: 'mesh' | 'no-
                 }
             }
             await writeFile(join(packageRoot, 'skeleton.model.json'), JSON.stringify(model));
-            const manifest = {...originalManifest, title: 'Synthetic ' + revision, revision};
+            const manifest = {...originalManifest, title: options?.title ?? 'Synthetic ' + revision, revision};
             const selector = stage === 'parts' ? {kind: 'draft' as const, id: 'synthetic-parts'} :
                 stage === 'rig' ? {kind: 'rig' as const, version: 2} : {kind: 'post' as const, version: 3, rigVersion: 2};
             if (stage === 'direction') {
