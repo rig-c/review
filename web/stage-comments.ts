@@ -105,6 +105,8 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
 
   hiddenPanes ??= Object.values(host.viewports).map(pane => ({pane: pane!, visibility: pane!.style.visibility}));
   try {
+   // The destination controls whether capture can resume after the saved mark is restored.
+   setCapture(false);
    for (const {pane} of hiddenPanes) pane.style.visibility = 'hidden';
    await host.restore(mark.bookmark, mark.frame === null, row);
    if (disposed || request !== jumpGeneration || generation !== interaction) return false;

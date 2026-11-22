@@ -430,6 +430,8 @@ async function replaySubmittedPin(page: InputCdpSession, fixture: Fixture, langu
         return refusals.length || tiles.some(tile => tile.id === pin.tile.id) ? {tiles, refusals} : false;
     });
     assert.deepEqual(state.refusals, [], pin.text + ' replays without refusal after submission');
+    await waitFor(pin.text + ' reopened comment', () => page.evaluate<boolean>(
+        `document.querySelector(${JSON.stringify('#reference-viewport ' + composer + ' input')})?.value === ${JSON.stringify(pin.text)}`));
     // The fixture verifies encoded bytes from the sealed routes. Match the visible pixels
     // to the same fixture tiles without fetching a blob URL under the page's CSP.
     const tiles = state.tiles.map(({id}) => {
