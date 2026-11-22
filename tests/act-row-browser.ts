@@ -101,7 +101,7 @@ async function capture(page:InputCdpSession,out:string,name:string,expectedFoote
   function sample(){
    const state=${geometry};
    if(state.footerMessage===expected) resolve(state);
-   else if(performance.now()>=deadline) reject(new Error('Parts footer expected '+expected+'; read '+state.footerMessage));
+   else if(performance.now()>=deadline) reject(new Error('Footer expected '+expected+'; read '+state.footerMessage));
    else requestAnimationFrame(sample);
   }
   sample();
@@ -223,7 +223,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(embedding.publicEmbeddedRoute,false);
    await writeFile(join(out,'embedded-presentation-fixture.json'),JSON.stringify(embedding,null,2)+'\n');
   }
-  const initial:any=await capture(page,out,'pending',mode==='parts'&&!flashOnly?expectedPendingFooter:undefined);assert.equal(initial.language,language);
+  const initial:any=await capture(page,out,'pending',(mode==='parts'||mode==='rig')&&!flashOnly?expectedPendingFooter:undefined);assert.equal(initial.language,language);
   const loading:any[]=await page.evaluate(`window.__actRowSamples`);
   const firstOffendingFrames:unknown[]=await page.evaluate(`window.__actRowFirstOffendingFrames`);
   const violations=loading.filter(sample=>sample.controlsBeforeQuestion||sample.legacySave||sample.status||sample.label||sample.bar&&!sample.row);
@@ -253,7 +253,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   await writeFile(join(out,'headline-mutation-begin.json'),JSON.stringify(mutation,null,2)+'\n');
   try{
    await page.evaluate(`document.getElementById('workspace-ask-headline').textContent=${JSON.stringify((headlineBefore.text+' ').repeat(16))}`);
-   const wrapped:any=await capture(page,out,'long-question');assertPending(wrapped,mode,width,expectedPendingFooter);assert.ok(wrapped.headline.rect.height>initial.headline.rect.height);
+   const wrapped:any=await capture(page,out,'long-question',mode==='rig'?expectedPendingFooter:undefined);assertPending(wrapped,mode,width,expectedPendingFooter);assert.ok(wrapped.headline.rect.height>initial.headline.rect.height);
    assert.equal(await page.evaluate(`document.getElementById('workspace-ask-headline').scrollWidth<=document.getElementById('workspace-ask-headline').clientWidth+1`),true);
   }finally{
    await page.evaluate(`document.getElementById('workspace-ask-headline').textContent=${JSON.stringify(headlineBefore.text)}`);
@@ -274,7 +274,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   }else{
   await click(page,'#workspace-bottom-collapse');
   await wait(page,`document.querySelector('.inspector-body').hidden`);
-  collapsed=await capture(page,out,'collapsed');assertPending(collapsed,mode,width,expectedPendingFooter);
+  collapsed=await capture(page,out,'collapsed',mode==='rig'?expectedPendingFooter:undefined);assertPending(collapsed,mode,width,expectedPendingFooter);
   assert.ok(Math.abs(collapsed.panel.height-collapsed.heading.height)<=2,'collapsed panel is only its heading');
   assert.ok(collapsed.panel.height<initial.panel.height,'collapse actually shrinks the panel');
   await click(page,'#workspace-bottom-collapse');await wait(page,`!document.querySelector('.inspector-body').hidden`);
@@ -306,7 +306,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
      await wait(page,`document.body.dataset.ready==='true'&&!document.body.inert&&document.querySelector('#review-draft-recovery button')`);
      const blocked:{submit:boolean;changes:boolean;noticeInRow:boolean;noticeVisible:boolean;kind:string}=await page.evaluate<any>(`({submit:document.getElementById('save').disabled,changes:document.getElementById('request-changes').disabled,noticeInRow:!!document.querySelector('#workspace-act-row #review-draft-recovery'),noticeVisible:!!document.getElementById('review-draft-recovery').getClientRects().length,kind:document.getElementById('review-draft-state').dataset.saveState})`);
      assert.deepEqual(blocked,{submit:true,changes:true,noticeInRow:true,noticeVisible:true,kind:'failed'});
-     const recovery:any=await capture(page,out,'restore-'+action+'-blocked');assertPending(recovery,mode,width,expectedPendingFooter);
+     const recovery:any=await capture(page,out,'restore-'+action+'-blocked',mode==='rig'?expectedPendingFooter:undefined);assertPending(recovery,mode,width,expectedPendingFooter);
      const bands:any=await page.evaluate(`(()=>{const r=id=>document.getElementById(id).getBoundingClientRect().toJSON();return {headline:r('workspace-ask-headline'),notice:r('review-draft-state'),recovery:r('review-draft-recovery')};})()`);
      assert.ok(bands.headline.top<bands.notice.top,'restore notice follows the first-line question');
      assert.ok(Math.abs((bands.headline.top+bands.headline.bottom)/2-(bands.recovery.top+bands.recovery.bottom)/2)<=1,'restore actions stay beside the first-line question');
