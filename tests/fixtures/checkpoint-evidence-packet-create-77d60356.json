@@ -1,0 +1,2343 @@
+{
+  "provenance": "Measured from rig-c/create main commit 77d603563443bc16b35338f310d7ef5c51322863 (src/checkpoint-evidence.ts parseCheckpointEvidence) in a read-only scratch archive copy for review#716. Do not regenerate from the working tree.",
+  "golden": {
+    "canonicalWithTableLabel": {
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "canonicalBytes": "{\"schema\":\"rig-review-checkpoint-evidence/1\",\"checkpointId\":\"step-one\",\"planStepId\":\"step-one\",\"tiles\":[{\"id\":\"pair-0\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"pair-1\",\"label\":\"Pair 1 — 한글\\n<b>raw</b>\\tframe\",\"path\":\"evidence/checkpoint/pair-1.png\",\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"},{\"id\":\"pair-2\",\"label\":\"Pair 2 — candidate A\",\"path\":\"evidence/checkpoint/pair-2.png\",\"sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\"},{\"id\":\"pair-3\",\"label\":\"Pair 3 — candidate B\",\"path\":\"evidence/checkpoint/pair-3.png\",\"sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\"}],\"table\":{\"path\":\"evidence/checkpoint/table.json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"label\":\"Complete 103 rows\"},\"routesText\":\"(i) accept openings\\n(ii) repair\\twith tab\\n(iii) change source\",\"recommendationText\":\"HQ recommendation — (i), preserve raw FAIL & 한글\"}"
+    },
+    "reorderedWithTableLabel": {
+      "input": {
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글",
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "table": {
+          "label": "Complete 103 rows",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "path": "evidence/checkpoint/table.json"
+        },
+        "tiles": [
+          {
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "path": "evidence/checkpoint/pair-0.png",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "id": "pair-0"
+          },
+          {
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "path": "evidence/checkpoint/pair-1.png",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "id": "pair-1"
+          },
+          {
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "path": "evidence/checkpoint/pair-2.png",
+            "label": "Pair 2 — candidate A",
+            "id": "pair-2"
+          },
+          {
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "path": "evidence/checkpoint/pair-3.png",
+            "label": "Pair 3 — candidate B",
+            "id": "pair-3"
+          }
+        ],
+        "planStepId": "step-one",
+        "checkpointId": "step-one",
+        "schema": "rig-review-checkpoint-evidence/1"
+      },
+      "canonicalBytes": "{\"schema\":\"rig-review-checkpoint-evidence/1\",\"checkpointId\":\"step-one\",\"planStepId\":\"step-one\",\"tiles\":[{\"id\":\"pair-0\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"pair-1\",\"label\":\"Pair 1 — 한글\\n<b>raw</b>\\tframe\",\"path\":\"evidence/checkpoint/pair-1.png\",\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"},{\"id\":\"pair-2\",\"label\":\"Pair 2 — candidate A\",\"path\":\"evidence/checkpoint/pair-2.png\",\"sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\"},{\"id\":\"pair-3\",\"label\":\"Pair 3 — candidate B\",\"path\":\"evidence/checkpoint/pair-3.png\",\"sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\"}],\"table\":{\"path\":\"evidence/checkpoint/table.json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"label\":\"Complete 103 rows\"},\"routesText\":\"(i) accept openings\\n(ii) repair\\twith tab\\n(iii) change source\",\"recommendationText\":\"HQ recommendation — (i), preserve raw FAIL & 한글\"}"
+    },
+    "withoutTableLabel": {
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "path": "evidence/checkpoint/table.json"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "canonicalBytes": "{\"schema\":\"rig-review-checkpoint-evidence/1\",\"checkpointId\":\"step-one\",\"planStepId\":\"step-one\",\"tiles\":[{\"id\":\"pair-0\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"pair-1\",\"label\":\"Pair 1 — 한글\\n<b>raw</b>\\tframe\",\"path\":\"evidence/checkpoint/pair-1.png\",\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"},{\"id\":\"pair-2\",\"label\":\"Pair 2 — candidate A\",\"path\":\"evidence/checkpoint/pair-2.png\",\"sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\"},{\"id\":\"pair-3\",\"label\":\"Pair 3 — candidate B\",\"path\":\"evidence/checkpoint/pair-3.png\",\"sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\"}],\"table\":{\"path\":\"evidence/checkpoint/table.json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"routesText\":\"(i) accept openings\\n(ii) repair\\twith tab\\n(iii) change source\",\"recommendationText\":\"HQ recommendation — (i), preserve raw FAIL & 한글\"}"
+    }
+  },
+  "rules": [
+    {
+      "id": "valid-base",
+      "rule": "accepts canonical legacy packet",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": true,
+        "canonicalBytes": "{\"schema\":\"rig-review-checkpoint-evidence/1\",\"checkpointId\":\"step-one\",\"planStepId\":\"step-one\",\"tiles\":[{\"id\":\"pair-0\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"pair-1\",\"label\":\"Pair 1 — 한글\\n<b>raw</b>\\tframe\",\"path\":\"evidence/checkpoint/pair-1.png\",\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"},{\"id\":\"pair-2\",\"label\":\"Pair 2 — candidate A\",\"path\":\"evidence/checkpoint/pair-2.png\",\"sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\"},{\"id\":\"pair-3\",\"label\":\"Pair 3 — candidate B\",\"path\":\"evidence/checkpoint/pair-3.png\",\"sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\"}],\"table\":{\"path\":\"evidence/checkpoint/table.json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"label\":\"Complete 103 rows\"},\"routesText\":\"(i) accept openings\\n(ii) repair\\twith tab\\n(iii) change source\",\"recommendationText\":\"HQ recommendation — (i), preserve raw FAIL & 한글\"}"
+      },
+      "expectedMember": null,
+      "expectedIndex": null
+    },
+    {
+      "id": "valid-8-tiles",
+      "rule": "accepts maximum 8 tiles",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "tile-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-1",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-2",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-3",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-4",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-5",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-6",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-7",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": true,
+        "canonicalBytes": "{\"schema\":\"rig-review-checkpoint-evidence/1\",\"checkpointId\":\"step-one\",\"planStepId\":\"step-one\",\"tiles\":[{\"id\":\"tile-0\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"tile-1\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"tile-2\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"tile-3\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"tile-4\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"tile-5\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"tile-6\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"id\":\"tile-7\",\"label\":\"Pair 0 — setup beside worst, marked cells\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"}],\"table\":{\"path\":\"evidence/checkpoint/table.json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"label\":\"Complete 103 rows\"},\"routesText\":\"(i) accept openings\\n(ii) repair\\twith tab\\n(iii) change source\",\"recommendationText\":\"HQ recommendation — (i), preserve raw FAIL & 한글\"}"
+      },
+      "expectedMember": null,
+      "expectedIndex": null
+    },
+    {
+      "id": "valid-text-bounds",
+      "rule": "accepts 512-char label and 4096-char routes/recommendation with LF and tab",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "L\n\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "T\n\tbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "routesText": "R\n\tccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "recommendationText": "M\n\tddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "create": {
+        "ok": true,
+        "canonicalBytes": "{\"schema\":\"rig-review-checkpoint-evidence/1\",\"checkpointId\":\"step-one\",\"planStepId\":\"step-one\",\"tiles\":[{\"id\":\"pair-0\",\"label\":\"L\\n\\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"path\":\"evidence/checkpoint/pair-0.png\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"}],\"table\":{\"path\":\"evidence/checkpoint/table.json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"label\":\"T\\n\\tbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"routesText\":\"R\\n\\tccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"recommendationText\":\"M\\n\\tddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"}"
+      },
+      "expectedMember": null,
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-null",
+      "rule": "packet must be an object (not null)",
+      "input": null,
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-array",
+      "rule": "packet must be an object (not array)",
+      "input": [],
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-missing-schema",
+      "rule": "packet requires schema key",
+      "input": {
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-missing-checkpointId",
+      "rule": "packet requires checkpointId key",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-missing-planStepId",
+      "rule": "packet requires planStepId key",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-missing-tiles",
+      "rule": "packet requires tiles key",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-missing-table",
+      "rule": "packet requires table key",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-missing-routesText",
+      "rule": "packet requires routesText key",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-missing-recommendationText",
+      "rule": "packet requires recommendationText key",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-unknown-key",
+      "rule": "packet refuses unknown keys",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글",
+        "extra": true
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-wrong-schema",
+      "rule": "packet schema must be rig-review-checkpoint-evidence/1",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/2",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-checkpointId-empty",
+      "rule": "checkpointId must be nonempty id",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-checkpointId-leading-punct",
+      "rule": "checkpointId must start with alphanumeric",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "_step",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-checkpointId-over-128",
+      "rule": "checkpointId must be at most 128 chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "packet-planStepId-invalid",
+      "rule": "planStepId must match identifier grammar",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step/one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "keys",
+      "expectedIndex": null
+    },
+    {
+      "id": "tiles-not-array",
+      "rule": "tiles must be an array",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": {},
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": null
+    },
+    {
+      "id": "tiles-empty",
+      "rule": "tiles must have at least 1 entry",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": null
+    },
+    {
+      "id": "tiles-over-8",
+      "rule": "tiles must have at most 8 entries",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "tile-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-1",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-2",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-3",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-4",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-5",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-6",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-7",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "tile-8",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": null
+    },
+    {
+      "id": "tile-not-object",
+      "rule": "tile entry must be an object",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          null
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-missing-id",
+      "rule": "tile entry requires id",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-missing-label",
+      "rule": "tile entry requires label",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-missing-path",
+      "rule": "tile entry requires path",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-missing-sha256",
+      "rule": "tile entry requires sha256",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-unknown-key",
+      "rule": "tile entry refuses unknown keys",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "extra": 1
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-id-invalid",
+      "rule": "tile id must match identifier grammar",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "-bad",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-id-duplicate",
+      "rule": "tile ids must be unique within packet",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-0",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 1
+    },
+    {
+      "id": "tile-label-empty",
+      "rule": "tile label must be nonempty",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-label-over-512",
+      "rule": "tile label must be at most 512 chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-label-cr",
+      "rule": "tile label refuses carriage return and control chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "bad\rlabel",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-path-empty",
+      "rule": "tile path must be nonempty",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-path-over-4096",
+      "rule": "tile path must be at most 4096 chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-path-traversal",
+      "rule": "tile path refuses .. traversal",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "../escape.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-path-dot",
+      "rule": "tile path refuses . segment",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "a/./b.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-path-empty-segment",
+      "rule": "tile path refuses leading or double slash",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "a//b.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-path-forbidden-char",
+      "rule": "tile path refuses backslash, colon, percent, query and hash",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "a\\b.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-sha256-uppercase",
+      "rule": "tile sha256 must be 64 lowercase hex chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "tile-sha256-short",
+      "rule": "tile sha256 must be 64 chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "tiles",
+      "expectedIndex": 0
+    },
+    {
+      "id": "table-not-object",
+      "rule": "table must be an object",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": null,
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "table",
+      "expectedIndex": null
+    },
+    {
+      "id": "table-missing-path",
+      "rule": "table requires path",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "table",
+      "expectedIndex": null
+    },
+    {
+      "id": "table-missing-sha256",
+      "rule": "table requires sha256",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "table",
+      "expectedIndex": null
+    },
+    {
+      "id": "table-unknown-key",
+      "rule": "table refuses unknown keys",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows",
+          "rows": []
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "table",
+      "expectedIndex": null
+    },
+    {
+      "id": "table-label-null",
+      "rule": "table optional label when present must be a string",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": null
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "table",
+      "expectedIndex": null
+    },
+    {
+      "id": "table-label-empty",
+      "rule": "table optional label when present must be nonempty",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": ""
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "table",
+      "expectedIndex": null
+    },
+    {
+      "id": "table-label-over-512",
+      "rule": "table optional label must be at most 512 chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "table",
+      "expectedIndex": null
+    },
+    {
+      "id": "table-label-control",
+      "rule": "table optional label refuses control chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "bad\u0000label"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "table",
+      "expectedIndex": null
+    },
+    {
+      "id": "table-path-invalid",
+      "rule": "table path must be literal portable relative path",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "/absolute.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "table",
+      "expectedIndex": null
+    },
+    {
+      "id": "table-sha256-invalid",
+      "rule": "table sha256 must be 64 lowercase hex chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "table",
+      "expectedIndex": null
+    },
+    {
+      "id": "routesText-empty",
+      "rule": "routesText must be nonempty",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "text",
+      "expectedIndex": null
+    },
+    {
+      "id": "routesText-over-4096",
+      "rule": "routesText must be at most 4096 chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "text",
+      "expectedIndex": null
+    },
+    {
+      "id": "routesText-control",
+      "rule": "routesText refuses non-LF/tab ASCII control chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "line1\r\nline2",
+        "recommendationText": "HQ recommendation — (i), preserve raw FAIL & 한글"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "text",
+      "expectedIndex": null
+    },
+    {
+      "id": "recommendationText-empty",
+      "rule": "recommendationText must be nonempty",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": ""
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "text",
+      "expectedIndex": null
+    },
+    {
+      "id": "recommendationText-over-4096",
+      "rule": "recommendationText must be at most 4096 chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "text",
+      "expectedIndex": null
+    },
+    {
+      "id": "recommendationText-control",
+      "rule": "recommendationText refuses DEL (0x7f) and control chars",
+      "input": {
+        "schema": "rig-review-checkpoint-evidence/1",
+        "checkpointId": "step-one",
+        "planStepId": "step-one",
+        "tiles": [
+          {
+            "id": "pair-0",
+            "label": "Pair 0 — setup beside worst, marked cells",
+            "path": "evidence/checkpoint/pair-0.png",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          {
+            "id": "pair-1",
+            "label": "Pair 1 — 한글\n<b>raw</b>\tframe",
+            "path": "evidence/checkpoint/pair-1.png",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "id": "pair-2",
+            "label": "Pair 2 — candidate A",
+            "path": "evidence/checkpoint/pair-2.png",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "id": "pair-3",
+            "label": "Pair 3 — candidate B",
+            "path": "evidence/checkpoint/pair-3.png",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "table": {
+          "path": "evidence/checkpoint/table.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Complete 103 rows"
+        },
+        "routesText": "(i) accept openings\n(ii) repair\twith tab\n(iii) change source",
+        "recommendationText": "badtext"
+      },
+      "create": {
+        "ok": false,
+        "code": "CHECKPOINT_EVIDENCE_INVALID"
+      },
+      "expectedMember": "text",
+      "expectedIndex": null
+    }
+  ]
+}

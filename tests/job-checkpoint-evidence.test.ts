@@ -6,8 +6,10 @@ import {tmpdir} from 'node:os';
 import type {JobCheckpointEvidence, PlanContext, JobPublication, PublicationV3} from '../src/job-contract.ts';
 import {JOB_RECORD_READER_ID} from '../src/job-contract.ts';
 import {checkpointEvidenceFields, checkpointEvidenceMetadata, parseCheckpointTable} from '../src/job-checkpoint-evidence.ts';
-import {assertEqualRecordContexts, buildRecordSource, createJobHostPorts, jobHash, parseRecordPublishedContext,
+import {parseCheckpointEvidencePacket, type CheckpointEvidencePacketResult} from '../src/job-host.ts';
+import {assertEqualRecordContexts, buildRecordSource, createJobHostPorts, jobHash, parseCommentsAct, parseRecordPublishedContext,
   parseRecordSource, serializeRecordSourceDigestPayload, parseRecordAct} from '../src/job-api.ts';
+import createGoldenFixture from './fixtures/checkpoint-evidence-packet-create-77d60356.json';
 import {assertStoredCheckpointEvidence, captureJobRoot, prepareJobRecordSource, verifyJobRecordSourceFresh} from '../src/job-source.ts';
 import {retainedPublicationRoutes} from '../src/job-front.ts';
 import {JobSession} from '../src/job-session.ts';
@@ -782,4 +784,194 @@ for (const mutation of bindingMutations) test(`pinned package recheck: ${mutatio
     expect(next.status).toBe(409);
     expect(await next.json()).toMatchObject({error: {code: 'JOB_SOURCE_MISMATCH'}});
   }
+});
+
+test('#716 golden bytes: legacy packets without pair match Create main parseCheckpointEvidence output byte-for-byte', () => {
+  for (const [name, entry] of Object.entries(createGoldenFixture.golden)) {
+    const result: CheckpointEvidencePacketResult = parseCheckpointEvidencePacket(entry.input);
+    expect(result.ok, name).toBe(true);
+    if (!result.ok) throw new Error(result.reason);
+    expect(Object.hasOwn(result.packet, 'pair')).toBe(false);
+    expect(JSON.stringify(result.packet)).toBe(entry.canonicalBytes);
+  }
+});
+
+test.each(createGoldenFixture.rules)('#716 rule parity with Create main: $id ($rule)', row => {
+  const result = parseCheckpointEvidencePacket(row.input);
+  expect(result.ok).toBe(row.create.ok);
+  if (result.ok) {
+    if (!('canonicalBytes' in row.create)) throw new Error('expected refusal');
+    expect(JSON.stringify(result.packet)).toBe(row.create.canonicalBytes!);
+  } else {
+    expect(result.member).toBe(row.expectedMember as typeof result.member);
+    expect(result.index ?? null).toBe(row.expectedIndex);
+    expect(result.side).toBeUndefined();
+    expect(typeof result.reason).toBe('string');
+    expect(result.reason.length).toBeGreaterThan(0);
+  }
+});
+
+test('#716 pair validator: valid pair canonicalizes as last key and round-trips through Review callers; invalid pairs report member, side and reason', async () => {
+  const base = createGoldenFixture.golden.canonicalWithTableLabel.input;
+  const tile0 = base.tiles[0]!;
+  const tile1 = base.tiles[1]!;
+  const validPair = {
+    before: {id: tile0.id, sha256: tile0.sha256},
+    after: {id: tile1.id, sha256: tile1.sha256},
+  };
+  const reorderedInput = {
+    pair: {
+      after: {sha256: tile1.sha256, id: tile1.id},
+      before: {sha256: tile0.sha256, id: tile0.id},
+    },
+    recommendationText: base.recommendationText,
+    routesText: base.routesText,
+    table: base.table,
+    tiles: base.tiles,
+    planStepId: base.planStepId,
+    checkpointId: base.checkpointId,
+    schema: base.schema,
+  };
+  const parsed = parseCheckpointEvidencePacket(reorderedInput);
+  expect(parsed).toEqual({
+    ok: true,
+    packet: {...base, schema: 'rig-review-checkpoint-evidence/1', pair: validPair},
+  });
+  if (!parsed.ok) throw new Error(parsed.reason);
+  expect(Object.keys(parsed.packet)).toEqual([
+    'schema', 'checkpointId', 'planStepId', 'tiles', 'table', 'routesText', 'recommendationText', 'pair',
+  ]);
+  expect(Object.keys(parsed.packet.pair!)).toEqual(['before', 'after']);
+  expect(Object.keys(parsed.packet.pair!.before)).toEqual(['id', 'sha256']);
+  expect(Object.keys(parsed.packet.pair!.after)).toEqual(['id', 'sha256']);
+  expect(JSON.stringify(parsed.packet)).toBe(
+    `${createGoldenFixture.golden.canonicalWithTableLabel.canonicalBytes.slice(0, -1)},"pair":${JSON.stringify(validPair)}}`,
+  );
+
+  const pairFailures: {
+    label: string;
+    packet: unknown;
+    side?: 'before' | 'after';
+    reason: RegExp;
+  }[] = [
+    {
+      label: 'missing id on before (property omitted)',
+      packet: {...base, pair: {before: {sha256: tile0.sha256}, after: validPair.after}},
+      side: 'before',
+      reason: /valid tile id/,
+    },
+    {
+      label: 'missing id on after (empty string)',
+      packet: {...base, pair: {before: validPair.before, after: {id: '', sha256: tile1.sha256}}},
+      side: 'after',
+      reason: /valid tile id/,
+    },
+    {
+      label: 'sha mismatch on before',
+      packet: {...base, pair: {before: {id: tile0.id, sha256: tile1.sha256}, after: validPair.after}},
+      side: 'before',
+      reason: /sha256 must match/,
+    },
+    {
+      label: 'sha mismatch on after',
+      packet: {...base, pair: {before: validPair.before, after: {id: tile1.id, sha256: tile0.sha256}}},
+      side: 'after',
+      reason: /sha256 must match/,
+    },
+    {
+      label: 'malformed sha256 on before',
+      packet: {...base, pair: {before: {id: tile0.id, sha256: 'UPPERCASE'}, after: validPair.after}},
+      side: 'before',
+      reason: /lowercase SHA-256/,
+    },
+    {
+      label: 'same id twice',
+      packet: {...base, pair: {before: validPair.before, after: {...validPair.before}}},
+      side: 'after',
+      reason: /distinct tiles/,
+    },
+    {
+      label: 'unknown member on pair object',
+      packet: {...base, pair: {...validPair, direction: 'left-to-right'}},
+      side: undefined,
+      reason: /unexpected or missing pair fields/,
+    },
+    {
+      label: 'unknown member on pair.before',
+      packet: {...base, pair: {before: {...validPair.before, label: 'Before'}, after: validPair.after}},
+      side: 'before',
+      reason: /unexpected or missing pair side fields/,
+    },
+    {
+      label: 'unknown member on pair.after',
+      packet: {...base, pair: {before: validPair.before, after: {...validPair.after, label: 'After'}}},
+      side: 'after',
+      reason: /unexpected or missing pair side fields/,
+    },
+    {
+      label: 'missing after side on pair',
+      packet: {...base, pair: {before: validPair.before}},
+      side: 'after',
+      reason: /unexpected or missing pair fields/,
+    },
+    {
+      label: 'pair on a packet whose referenced before tile is absent',
+      packet: {...base, pair: {before: {id: 'absent-tile', sha256: tile0.sha256}, after: validPair.after}},
+      side: 'before',
+      reason: /tile in this packet/,
+    },
+    {
+      label: 'pair on a single-tile packet whose second tile is absent',
+      packet: {...base, tiles: [tile0], pair: validPair},
+      side: 'after',
+      reason: /tile in this packet/,
+    },
+  ];
+
+  const plan = {steps: [{id: 'step-one', hash: '1'.repeat(64)}]};
+  const subjects = [{kind: 'checkpoint' as const, checkpointId: 'step-one'}];
+  const files = [...base.tiles.map(({path, sha256}) => ({path, sha256})), {path: base.table.path, sha256: base.table.sha256}];
+
+  expect(checkpointEvidenceFields({checkpointEvidence: [reorderedInput]}, plan, subjects, files)).toEqual({
+    checkpointEvidence: [parsed.packet],
+  });
+
+  for (const failure of pairFailures) {
+    const result = parseCheckpointEvidencePacket(failure.packet);
+    expect(result.ok, failure.label).toBe(false);
+    if (result.ok) throw new Error(failure.label);
+    expect(result.member, failure.label).toBe('pair');
+    expect(result.side, failure.label).toBe(failure.side);
+    expect(result.reason, failure.label).toMatch(failure.reason);
+    expect(() => checkpointEvidenceFields({checkpointEvidence: [failure.packet]}, plan, subjects, files)).toThrow(
+      'CHECKPOINT_EVIDENCE_INVALID',
+    );
+  }
+
+  // Verify package publication and act@6 commentsSource accept declared pair on source.checkpointEvidence.
+  const f = await packageFixture();
+  const pkgEvidence = evidence(f.root);
+  const pairedPacket: JobCheckpointEvidence = {
+    ...pkgEvidence.packet,
+    pair: {
+      before: {id: pkgEvidence.packet.tiles[0]!.id, sha256: pkgEvidence.packet.tiles[0]!.sha256},
+      after: {id: pkgEvidence.packet.tiles[1]!.id, sha256: pkgEvidence.packet.tiles[1]!.sha256},
+    },
+  };
+  contextWithEvidence(f, {...pkgEvidence, packet: pairedPacket});
+  const publication = await f.publish();
+  expect(publication.source.checkpointEvidence).toEqual([pairedPacket]);
+  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+  const page = await f.display(publication);
+  const committed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({
+    ...page,
+    askId: ask.askId,
+    expectedGeneration: f.session.status().generation,
+    submissionId: 'paired-checkpoint',
+    kind: 'checkpoint',
+    value: {checkpointId: 'step-one', outcome: 'pass', words: 'paired ok'},
+  }));
+  expect(committed.ok).toBe(true);
+  if (!committed.ok) throw new Error(JSON.stringify(committed));
+  expect(parseCommentsAct(committed.value).source.checkpointEvidence).toEqual([pairedPacket]);
 });

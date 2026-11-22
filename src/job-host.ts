@@ -236,4 +236,5 @@ export type {
 
 export type {JobCapabilities, JobModelSourceBinding, JobModelReviewValue} from './job-contract.ts';
 
-export type {JobCheckpointEvidence, JobCheckpointTable} from './job-contract.ts';
+export {parseCheckpointEvidencePacket} from './job-checkpoint-evidence.ts';
+export type {CheckpointEvidencePacketResult, JobCheckpointEvidence, JobCheckpointTable} from './job-contract.ts';

@@ -582,6 +582,10 @@ commits nothing. No API verb, act field or capability changes.
 `JobChestLandmarkValue`, `JobPublishedChestLandmark`, `JobChestLandmarkEdit`
 and `JobChestLandmarksAct`.
 
+[Review #716](https://github.com/rig-c/review/issues/716) adds the checkpoint
+evidence packet validator `parseCheckpointEvidencePacket`, for thirty-five
+runtime exports total, plus the type-only `CheckpointEvidencePacketResult`.
+
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
@@ -593,6 +597,7 @@ values from the frozen semantic contract.
 - `parseContextCommentsAct`
 - `parseMeshEditsAct`
 - `parseChestLandmarksAct`
+- `parseCheckpointEvidencePacket`
 - `projectComments`
 - `parseCommentsSession`
 - `parseCommentsCompareSession`
@@ -790,6 +795,7 @@ without aliases or copied wire shapes.
 - `ReviewCommentsSession`
 - `CompareCommentsSession`
 - `PartsCommentsVerdict`
+- `CheckpointEvidencePacketResult`
 
 ## Parts enumeration boundary
 
@@ -802,7 +808,7 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ## Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer checks the thirty-four runtime exports and the existing managed-host types, including
+A consumer checks the thirty-five runtime exports and the existing managed-host types, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and
