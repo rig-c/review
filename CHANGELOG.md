@@ -10,7 +10,7 @@ Animate's Repeat now repeats whichever animation is selected, not only idle. A n
 
 ### Fixed
 
-* Repeat plays the selected animation in a loop, not only idle. (#1091, closes #1090).
+* Repeat plays the selected animation in a loop, not only idle (#1091, closes #1090).
 * The rig footer reserves the readouts' width. The help text gets the remaining space and ends in an ellipsis, with the full text in its title (#1095, closes #1092).
 
 ## 4.15.0
