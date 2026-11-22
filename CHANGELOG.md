@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.16.0
+
+Animate's Repeat now repeats whichever animation is selected, not only idle. A non-idle clip such as `wind` used to play once and stop. The rig footer's help text no longer runs into the status readouts at 1600 px.
+
+**Read before upgrading:**
+
+* **`control.loop` keeps its values `'idle' | 'off'`, but `'idle'` now means the selected clip repeats in Animate.** Comparison keeps its idle-loop behavior. The control is labelled "Repeat" / "반복 재생".
+
+### Fixed
+
+* Repeat plays the selected animation in a loop, not only idle. (#1091, closes #1090).
+* The rig footer reserves the readouts' width. The help text gets the remaining space and ends in an ellipsis, with the full text in its title (#1095, closes #1092).
+
 ## 4.15.0
 
 Review now writes interview answers at the comments act version. Every comment the owner made (a point, an area, a general comment, or a pin on a rig backdrop) reaches Create with its anchor instead of as flattened text. A job host also reports each refused owner submission once, on stdout by default or through an optional hook.
