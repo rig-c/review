@@ -1,5 +1,28 @@
 # Changelog
 
+## 4.15.0
+
+Review now writes interview answers at the comments act version. Every comment the owner made (a point, an area, a general comment, or a pin on a rig backdrop) reaches Create with its anchor instead of as flattened text. A job host also reports each refused owner submission once, on stdout by default or through an optional hook.
+
+**Read before upgrading:**
+
+* **Fresh interview-picks acts are `rig-review/act@6`.** Both package picks (formerly @2) and record picks (formerly @4) change.
+  * `questionId`, `selections` (with Other text) and the survey `note` keep their wire values. Comments travel as ordered `comments[]`, and @6 has no `words`.
+  * Each comment keeps the anchor it already had: Feedback (points, browser areas and rig-backdrop pins), PartsIssue, or the image anchor. Checkpoint anchors and unknown members refuse.
+  * `parseCommentsAct` widens additively for picks: every act 4.14.0 accepted parses to identical output.
+  * `prepareJobRecordAct` returns `RecordUIAct`, and a picks submission yields the @6 act.
+  * Image-review stays on act@2. Historical @2 and @4 picks acts remain readable byte for byte.
+  * A consumer whose Review is 4.14.0 refuses @6 picks carrying a Feedback or PartsIssue anchor. Pin 4.15.0 before reading answers written by this version.
+* **`JobHostOptions` adds an optional `onRefusal(event)`.**
+  * The event is `{code, route, bytes, limit?}`, called once per refused owner submit to `/jobs/:jobId/ui/acts`. It never carries the body or a capability.
+  * Without a hook, the host writes that event as one JSON line on stdout. A hook replaces the line, and an error thrown by the hook leaves the HTTP response unchanged.
+  * `JobError` gains an optional `byteLimit`.
+
+### Added
+
+* Interview picks are written as act@6 with structured, anchored comments, and the picks reader accepts the verdict anchor union (#1093, part of #646).
+* `JobHostOptions.onRefusal`, with a default stdout line for refused owner submissions (#1089, closes #817).
+
 ## 4.14.0
 
 Review's shared act parser now reads interview-picks answers at the comments act version, with structured comments pinned to reference images, so Create can accept them without parsing text. The chest editor's disabled button names the real reason while a published spec waits for setup. A rule from the owner is now recorded: chest landmarks are a mesh-density hint, and a circle may sit outside the mesh.
