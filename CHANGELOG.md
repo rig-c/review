@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.17.1
+
+A second `job open` no longer fails with a raw `EADDRINUSE` when the job's host is alive but answers slowly. Create used to report this as `JOB_PUBLISH_PENDING`. Unreachable image-review internals are removed.
+
+**Read before upgrading:**
+
+* **No act, parser, export or type change.** The new refusals use the existing `JOB_STORAGE_FAILED` code.
+
+### Fixed
+
+* A live host whose `/jobs/:id/host` reply is slower than 1.5 s is now reused. The probe retries within the existing 20 s host-claim deadline instead of re-binding the host's port. A dead process or a closed listener still gets a fresh host at once. A host that stays alive and silent past the deadline refuses with `JOB_STORAGE_FAILED` (`JOB_HOST_UNRESPONSIVE: pid=… port=…`). Binding a port that the recorded live host still holds refuses with `JOB_STORAGE_FAILED` (`JOB_HOST_PORT_IN_USE: pid=… port=…`) (#1107, closes #1105, from rig-c/create#877).
+
+### Removed
+
+* Internal code for the unreachable image-review path. Both refusals stay byte-identical, and stored @2 image-review acts still read and export unchanged. The exported types still list `image-review`; narrowing them waits for the next major (#1104) (#1106, closes #1096).
+
 ## 4.17.0
 
 A checkpoint whose evidence declares a before/after pair now opens that pair in the main view, with Difference between the two. A rig-backed question page now shows every question a stage publishes together, where it used to refuse.
