@@ -53,7 +53,7 @@ try {
   }]}]},
  };
  model.animations = [idle, wind];
- model.editorOrder.animations = model.animations.map(({name}) => name);
+ model.editorOrder.animations = [idle.name, wind.name];
  await writeFile(join(pkg, 'skeleton.model.json'), JSON.stringify(model));
  await copyFile('tests/fixtures/strip-probe/build/mesh.png', join(pkg, 'mesh.png'));
  await writeFile(join(pkg, 'review.json'), JSON.stringify({
