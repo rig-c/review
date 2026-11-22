@@ -4,14 +4,10 @@ import { chmodSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import {createHash} from 'node:crypto';
 import {validatePngCrop} from './comment-crops.ts';
-import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobEvent } from './job-contract.ts';
+import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobEvent } from './job-contract.ts';
 
-export class JobError extends Error {
-  constructor(readonly code: JobErrorCode, message: string = code, readonly byteLimit?: number) {
-    super(message);
-    this.name = 'JobError';
-  }
-}
+import {JobError} from './job-validation.ts';
+export {JobError} from './job-validation.ts';
 
 export interface StoredJob<Data> {
   readonly jobId: string;

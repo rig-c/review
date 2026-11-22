@@ -1,3 +1,4 @@
+import {checkpointEvidencePair} from '../src/checkpoint-evidence-packet.ts';
 /** Live job window transactions. Every form remains bound to its displayed publication. */
 import type {
     ActV3,
@@ -1069,6 +1070,7 @@ export async function prepareJobInspection(display: DisplayPublicationV3, signal
             throw new Error('CHECKPOINT_EVIDENCE_INVALID');
         }
         for (const [index, packet] of (source.checkpointEvidence ?? []).entries()) {
+            checkpointEvidencePair(packet);
             const projection = metadata.checkpointEvidence?.[index];
             const tableUrl = `/api/checkpoint-evidence/${packet.checkpointId}/table`;
             if (!projection?.table || !source.plan?.steps.some(step => step.id === packet.planStepId) ||
@@ -1569,6 +1571,7 @@ export interface JobFormDependencies {
             submitKey = 'interview.save';
         }
         else if (subject.kind === 'checkpoint') {
+            form.dataset.checkpointId = subject.checkpointId;
             const checkpoint = jobCheckpointContext(ask, prepared.metadata.manifest?.checkpoints ?? []);
             const heading = node('h3');
             heading.textContent = checkpoint.title;

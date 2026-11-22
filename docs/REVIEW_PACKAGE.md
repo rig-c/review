@@ -1522,12 +1522,17 @@ the source that carries the pin:
 
 - **Record publication:** `referenceId` is the `path` of an entry in that
   publication's `files`: the declared `planPicture`, or the sealed file of the
-  shown question image (`api/interview` lists it as the image's `path` and
-  `sha256`). `referenceHash` is that entry's sealed `sha256`, copied from the
-  source and never recomputed by the page.
+  shown question image (`api/interview` lists its `path` and `sha256`), or a tile
+  of the active plan checkpoint's declared pair. `referenceHash` is that entry's sealed
+  `sha256`, copied from the source and never recomputed by the page.
 - **Rig package:** `referenceId` is the selected bookmark reference, and
   `referenceHash` is the loader's hash of it, as described under the comment
   context above. Nothing changes for these marks.
+- **Rig package checkpoint evidence pair:** A pin on a tile of the active checkpoint's
+  declared pair uses that tile's literal sealed file path as `referenceId` and its
+  sealed SHA-256 as `referenceHash`. Checkpoint words use the same picture label
+  as record pins. Side by side pins bind to Before on the left, and Difference
+  pins bind to After. Replay resolves the same path and hash from the declared pair.
 
 A record act carries comments only as the scalar `words` projection: checkpoint
 and signoff in their `words`, interview picks in their optional `words`. A picture
@@ -1536,12 +1541,13 @@ pin therefore projects its own label, so the picture and the pixels reach the ac
 `["rig-review-comment/1", mode, "reference", referenceId, referenceHash, x, y, w, h]`
 
 Here `x`, `y`, `w` and `h` are `world` rounded to integers in natural pixels, Y
-down, and a point has `w` and `h` of 0. Only a pin that names one of the record's sealed
-pictures (the plan picture or a question image) takes this label. Rig, package and every other label keep their
-existing tuple byte for byte. A pin that names the picture's path with a
+down, and a point has `w` and `h` of 0. Pins on a sealed plan picture, question
+image, or declared pair tile take this label. Historical manifest-reference
+pins keep their existing tuple byte for byte. A record pin that names the picture's path with a
 different `sha256`, or whose label does not parse back to that path and hash,
 refuses `COMMENT_PICTURE_LABEL_INVALID`, both when projected and when a local
-draft is restored. New picture bytes give the record a new `sourceHash`, so an
+draft is restored. Package pair pins with a mismatched path or hash refuse
+`COMMENT_REFERENCE_MISMATCH`. New picture bytes give the record a new `sourceHash`, so an
 unsent pin is not carried to the new publication; the existing "source changed …
 could not be carried over" notice reports it.
 

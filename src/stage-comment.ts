@@ -12,7 +12,7 @@ export interface MarkRegion {x:number;y:number;width:number;height:number}
 export interface PictureIdentity {readonly path: string; readonly sha256: string}
 const pictureLabelInvalid = (why: string): never => { throw new Error('COMMENT_PICTURE_LABEL_INVALID: ' + why); };
 /** #1048 A1: `[schema, mode, 'reference', referenceId, referenceHash, x, y, w, h]`, integers in the picture's natural pixels, Y down. */
-function pictureCommentLabel(mark: StageComment, picture: PictureIdentity): string {
+export function pictureCommentLabel(mark: StageComment, picture: PictureIdentity): string {
  if (mark.referenceHash !== picture.sha256) pictureLabelInvalid(`referenceHash is not the sealed sha256 of ${picture.path}`);
  const {x, y, width, height} = mark.world;
  const label = JSON.stringify([mark.schema, mark.mode, 'reference', picture.path, picture.sha256,
@@ -34,14 +34,14 @@ export function parsePictureCommentLabel(label: string): {mode: CommentMode; ref
 }
 
 /** Stable logical labels survive a new Apply capture; raw anchors retain its full evidence. */
-function commentLabel(anchor: JobCommentAnchor, pictures?: readonly PictureIdentity[]): string {
+function commentLabel(anchor: JobCommentAnchor, pictureForMark: (mark: StageComment) => PictureIdentity | undefined): string {
  if ('checkpointId' in anchor) return JSON.stringify(['checkpoint', anchor.checkpointId]);
  if ('schema' in anchor) return JSON.stringify([anchor.schema, anchor.parts.map(part => part.name), anchor.view.mode]);
  if ('name' in anchor) return JSON.stringify([anchor.name]);
  const context = anchor.context as Record<string, unknown> | undefined;
  if (hasStageComment(context?.comment)) {
   const mark = parseStageComment(context!.comment);
-  const picture = mark.viewport === 'reference' ? pictures?.find(item => item.path === mark.referenceId) : undefined;
+  const picture = mark.viewport === 'reference' ? pictureForMark(mark) : undefined;
   if (picture) return pictureCommentLabel(mark, picture);
   return JSON.stringify([mark.schema, mark.mode, mark.viewport, anchor.target.kind, anchor.target.name,
    anchor.frameStart, anchor.frameEnd]);
@@ -51,13 +51,17 @@ function commentLabel(anchor: JobCommentAnchor, pictures?: readonly PictureIdent
 }
 
 /** The signed scalar projection. Entry text and array order are never normalized.
- * `pictures` is a record host's sealed shown pictures (#1048); without it every label keeps its existing branch. */
+ * `pictures` comes from the host's sealed pictures (#1048, #716); without it every label keeps its existing branch. */
 export function projectComments(comments: readonly JobComment[], pictures?: readonly PictureIdentity[]): string {
+ return projectCommentLabels(comments, mark => pictures?.find(item => item.path === mark.referenceId));
+}
+/** Package checkpoints can have both historical manifest references and sealed picture paths. */
+export function projectCommentLabels(comments: readonly JobComment[], pictureForMark: (mark: StageComment) => PictureIdentity | undefined): string {
  if (!Array.isArray(comments) || comments.length > 1000) throw new Error('JOB_ACT_INVALID');
  const blocks = comments.map(comment => {
   if (!comment || typeof comment.text !== 'string' || !comment.text.trim() || comment.text.length > 10000 ||
    Object.keys(comment).some(key => key !== 'text' && key !== 'anchor')) throw new Error('JOB_ACT_INVALID');
-  return `[${comment.anchor === undefined ? 'general' : commentLabel(comment.anchor, pictures)}]\n${comment.text}`;
+  return `[${comment.anchor === undefined ? 'general' : commentLabel(comment.anchor, pictureForMark)}]\n${comment.text}`;
  });
  const text = blocks.join('\n\n');
  if (text.length > 10000) throw new Error('JOB_ACT_INVALID');

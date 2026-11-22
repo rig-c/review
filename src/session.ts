@@ -1,7 +1,7 @@
 import {parseCorrection} from './correction-handoff.ts';
 import {frameAtTime,transportClock} from './frame-clock.ts';
 import {parseBookmark} from '../web/inspection-persistence.ts';
-import {parseStageComment,projectMark,hasStageComment,isTimeOnlyFeedback,feedbackFrameInterval} from './stage-comment.ts';
+import {parseStageComment,pictureCommentLabel,projectMark,hasStageComment,isTimeOnlyFeedback,feedbackFrameInterval} from './stage-comment.ts';
 import {validateCommentCrop,saveCommentCrops,assertSubmittedComments} from './comment-crops.ts';
 import {TurnState,type TurnDial} from './turn-pad.ts';
 import { createHash } from 'node:crypto';
@@ -18,7 +18,8 @@ import { parseRequirementsContext } from './requirements.ts';
 import { parseScheduleContext } from './environment-schedule.ts';
 import { choice, object, string, type Json, type ReviewPackage, type ReviewedSource } from './manifest.ts';
 import { commentsObject, jobSha, parseComments } from './job-api.ts';
-import { REVIEW_COMMENTS_SESSION_SCHEMA, type ReviewCommentsSession } from './job-contract.ts';
+import {checkpointEvidencePair} from './checkpoint-evidence-packet.ts';
+import { REVIEW_COMMENTS_SESSION_SCHEMA, type JobCheckpointEvidence, type ReviewCommentsSession } from './job-contract.ts';
 
 /** Shared declared provenance decoder. Native source freshness belongs to the package owner. */
 export function parseCommentsReviewedSource(value: unknown): ReviewedSource {
@@ -96,9 +97,11 @@ function packageClock(p:ReviewPackage,animation:string|null){
   const catalog=p.feedbackCatalog;
   return transportClock({clock:catalog.clock,animation:catalog.clockAnimation??undefined,frameClocks:catalog.frameClocks},animation??'',!!p.reviewedSource.rig,null,null)?.clock??null;
 }
-export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string,turnDials:readonly TurnDial[]=p.feedbackCatalog.turnDials??[]):Feedback {
+/** Only a server-owned publication may supply the checkpoint evidence for this validation. */
+export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animation?:string,turnDials:readonly TurnDial[]=p.feedbackCatalog.turnDials??[],trustedCheckpointEvidence?:JobCheckpointEvidence):Feedback {
   const context=feedback.context===undefined?{}:object(feedback.context,'feedback.context');
   const comment=hasStageComment(context.comment)?parseStageComment(context.comment):null,timed=comment?.frame===null;
+  let sealedPicture=false;
   if(timed&&(!isTimeOnlyFeedback(feedback)||animation!==undefined))throw new Error('COMMENT_TIME_ONLY_INVALID: seconds-only single comment requires null frame and interval');
   const interval=timed?null:{frameStart:feedback.frameStart,frameEnd:feedback.frameEnd,inclusive:true};
   if(context.interval!==undefined&&!isDeepStrictEqual(context.interval,interval))throw new Error('feedback.context.interval: must match chosen inclusive frameStart/frameEnd');
@@ -123,14 +126,20 @@ export function validatePackageFeedback(feedback:Feedback,p:ReviewPackage,animat
       if(c.viewport==='reference'){
         const declared=p.manifest.references.find(r=>r.id===c.referenceId),explicit=referenceBinding(p)?.reference;
         const expectedHash=explicit?.id===c.referenceId?explicit.sha256:c.referenceId?p.referenceHashes?.[c.referenceId]:undefined;
-        if(!declared||!expectedHash||c.referenceHash!==expectedHash||bookmark.selection.reference!==c.referenceId)throw new Error('COMMENT_REFERENCE_MISMATCH: selected reference ID/hash must match the source and bookmark');
+        if(!declared||!expectedHash||c.referenceHash!==expectedHash||bookmark.selection.reference!==c.referenceId){
+          const pair=trustedCheckpointEvidence&&checkpointEvidencePair(trustedCheckpointEvidence);
+          const picture=pair&&[pair.before,pair.after].find(tile=>tile.path===c.referenceId&&tile.sha256===c.referenceHash);
+          if(!picture||bookmark.selection.reference!==c.referenceId)throw new Error('COMMENT_REFERENCE_MISMATCH: selected reference ID/hash must match the source and bookmark');
+          pictureCommentLabel(c,picture);
+          sealedPicture=true;
+        }
         const clock=packageClock(p,c.animation);
         if(c.frame&&(c.frame.basis!=='producer'||frameAtTime(clock,c.time)!==c.frame.index))throw new Error('COMMENT_FRAME_UNAVAILABLE: producer frame differs from the inspected reference time');
       }else if(c.referenceId!==null||c.referenceHash!==null)throw new Error('COMMENT_REFERENCE_MISMATCH: single rig marks have no reference viewport binding');
 }
     if(c.sourceHash!==p.sourceHash||c.modelHash!==(c.viewport==='reference'?null:p.reviewedSource.rig?.sha256??null))throw new Error('COMMENT_SOURCE_CHANGED: comment differs from inspected source');
     if(c.animation!==(animation??context.animation??null)||c.time!==context.time||(c.frame?.index??null)!==feedback.frameStart||feedback.frameStart!==feedback.frameEnd)throw new Error('COMMENT_CONTEXT_MISMATCH: frame, time or animation differs');
-    if(timed){const clock=packageClock(p,c.animation);if(frameAtTime(clock,c.time)!==null)throw new Error('COMMENT_TIME_ONLY_INVALID: explicit producer frame exists at this time');}
+    if(timed&&!sealedPicture){const clock=packageClock(p,c.animation);if(frameAtTime(clock,c.time)!==null)throw new Error('COMMENT_TIME_ONLY_INVALID: explicit producer frame exists at this time');}
     const a=projectMark(c.world,c.camera),b=projectMark({x:c.world.x+c.world.width,y:c.world.y+c.world.height},c.camera);
     if(Math.abs(Math.min(a.x,b.x)-c.screen.x)>1e-5||Math.abs(Math.min(a.y,b.y)-c.screen.y)>1e-5||Math.abs(Math.abs(a.x-b.x)-c.screen.width)>1e-5||Math.abs(Math.abs(a.y-b.y)-c.screen.height)>1e-5)throw new Error('COMMENT_CONTEXT_MISMATCH: screen/world region projection');
     if(c.camera.space!==(c.viewport==='reference'?'image':'world'))throw new Error('COMMENT_CONTEXT_MISMATCH: camera space');
