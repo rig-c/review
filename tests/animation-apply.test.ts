@@ -381,6 +381,7 @@ function installStandinProducer(root: string): void {
   writeFileSync(join(root, 'node_modules', 'rig-c', 'bin', 'rigc.cjs'), STANDIN_RIGC);
 }
 
+// #1081: this case took 10.05 s on macOS across 46 fixture subprocesses and two server bundles.
 test('Slice 2 Apply: retime, delete, insert, value, curve match H5; cumulative second Apply vs control [op2]; kept and evicted Undo restore scratch text and build byte-for-byte; pack flags, no-op, stale hash and t > duration; compare mode isolates sides', async () => {
   const root = mkdtempSync(join(tmpdir(), 'review-anim-apply-'));
   try {
@@ -907,7 +908,7 @@ test('Slice 2 Apply: retime, delete, insert, value, curve match H5; cumulative s
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
+}, 20_000);
 
 test('an animations_from alias inside the package applies to its canonical handoff file', async () => {
   const root = mkdtempSync(join(tmpdir(), 'review-anim-alias-'));

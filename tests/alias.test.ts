@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { ALIAS_COMMAND_TIMEOUT_MS, PACK_TIMEOUT_MS, AliasTarballError, packInto } from '../scripts/alias_tarball.ts';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -78,7 +78,7 @@ test('pack keeps manifest bytes and caller config while suppressing every lifecy
     npm_config_ignore_scripts: 'false', npm_config_script_shell: '/does/not/exist',
   });
   expect(made.status, made.out).toBe(0);
-  expect(made.stdout.trim()).toBe(join(destination, 'rig-c-review-1.2.3.tgz'));
+  expect(made.stdout.trim()).toBe(join(realpathSync(destination), 'rig-c-review-1.2.3.tgz'));
   expect(readFileSync(join(fixture, 'package.json')).equals(before)).toBe(true);
   expect(readFileSync(config, 'utf8')).toBe(configText);
   const unpacked = join(dir, 'unpacked');

@@ -153,6 +153,7 @@ test('#166 bar 2: an evicted predecessor re-runs its recorded step and must come
  }finally{delete process.env.FAKE_LOG;delete process.env.FAKE_PERTURB;await server.stop(true);await rm(root,{recursive:true,force:true});}
 });
 
+// #1081: this case runs ten sequential Applies. It hit 5 s on macOS and finished in 2.66 s on the timing run.
 test(`#166: at most ${MAX_KEPT_BUILDS} builds stay on disk; the oldest record's build is evicted and its record kept`,async()=>{
  const {root,pkg,state}=await fixture();
  const p=await loadReview(pkg),server=await startServer(p,{port:0,stateDir:state,cwd:root}),s=await session(`http://127.0.0.1:${server.port}`);
@@ -165,4 +166,4 @@ test(`#166: at most ${MAX_KEPT_BUILDS} builds stay on disk; the oldest record's 
   const again=await s.apply(dampings[MAX_KEPT_BUILDS]!);expect(again.id).toBe(jobs[MAX_KEPT_BUILDS]!.id);expect((again as unknown as {reused:boolean}).reused).toBe(true);
   expect((await s.history()).depth).toBe(MAX_KEPT_BUILDS+3);
  }finally{await server.stop(true);await rm(root,{recursive:true,force:true});}
-});
+}, 10_000);
