@@ -1,5 +1,28 @@
 # Changelog
 
+## 4.13.0
+
+Review exports the checkpoint evidence packet grammar as a pure validator, so Create can check a packet with the same rules Review uses, and a packet can now name its before and after tiles for the Difference view. An animation picked while playing keeps playing, so physics-keyed clips like wind show their response. Compare's Fit frames panes with the same box the rig viewport uses, and a pin on a sealed question image works over a retained backdrop.
+
+**Read before upgrading:**
+
+* **`@rig-c/review/job-host` adds `parseCheckpointEvidencePacket` and `CheckpointEvidencePacketResult`.**
+  * The function is pure and never throws. It returns `{ok: true, packet}` with canonical key order, or `{ok: false, member, side?, index?, reason}` where `member` is `keys`, `tiles`, `table`, `text` or `pair`.
+  * Legacy packets keep their exact bytes, and the accept and refuse rules are the same as Create's `parseCheckpointEvidence`.
+* **A checkpoint evidence packet can carry an optional `pair`.**
+  * The shape is `{"before": {"id", "sha256"}, "after": {"id", "sha256"}}`, placed last. Both ids name tiles in the same packet, each `sha256` equals that tile's, and before and after differ.
+  * A reader on Review < 4.13.0 refuses a packet carrying `pair` as an unknown key. Consumers upgrade before a producer writes one.
+
+### Added
+
+* `parseCheckpointEvidencePacket` export and the optional evidence `pair`. Finalized acts whose `source.checkpointEvidence` carries `pair` decode (#1077, part of #716).
+
+### Fixed
+
+* Picking an animation while playback runs no longer pauses at 0 s, so a physics-keyed clip such as wind shows its response (#1075, closes #1074).
+* Compare's Fit uses the shared rig viewport framing box (#1072, part of #1051).
+* A comment pin on a sealed question image shown over a retained backdrop (#1071, closes #1068).
+
 ## 4.12.0
 
 Record and interview screens put the conversation with the AI (questions, comments and confirmation forms) in a new right panel, and the bottom panel keeps only the view's controllers. A comment can be pinned on a record plan picture or on a sealed interview question image, and the pin reaches the AI as the picture's identity plus a rectangle in its pixels. General comments on an interview host now submit. Review pins `@rig-c/parts` 2.51.0, so the cloth editor reads the producer's typed target list.
