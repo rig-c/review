@@ -15,7 +15,7 @@ function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,firstPublicationPrompt:false,jobProgress:null as object|null,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
   questionForms:subjects.some(subject=>subject.kind==='interview-picks')?[{dataset:{},querySelector:()=>({disabled:false}),querySelectorAll:()=>[]}]:[],session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,recordAsk,
   recordPanel:{querySelector:(selector:string)=>selector==='form[data-job-ask] fieldset:not(:disabled)'?{disabled:false}:null,querySelectorAll:()=>[submit]},
-  button:()=>save,select:()=>select,document:{querySelector:()=>label},
+  button:()=>save,select:()=>select,document:{querySelector:()=>label},el:()=>({classList:{contains:()=>false}}),
   setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
   verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};
  const render=new Function('env',`with(env){${renderer};return renderAnswerControls;}`)(env);
@@ -77,25 +77,25 @@ test('#833 live act reveals only after controls render and initialises the share
 
 for(const item of [
  {name:'early live refusal',host:{},error:true,footerOnly:false,hidden:true,reveal:true},
- {name:'footer-only refusal',host:{},error:true,footerOnly:true,hidden:true,reveal:false},
+ {name:'footer-only flag on a refusal',host:{},error:true,footerOnly:true,hidden:true,reveal:true},
  {name:'ordinary loading message',host:{},error:false,footerOnly:false,hidden:true,reveal:false},
  {name:'standalone refusal',host:null,error:true,footerOnly:false,hidden:true,reveal:true},
  {name:'already rendered live refusal',host:{},error:true,footerOnly:false,hidden:false,reveal:false},
- {name:'completed live ask refusal',host:{},error:true,footerOnly:false,hidden:true,reveal:false,rendered:true},
+ {name:'completed live ask refusal',host:{},error:true,footerOnly:false,hidden:true,reveal:true,rendered:true},
 ])test('#833 '+item.name+' preserves refusal visibility without exposing legacy acts',()=>{
  const begin=main.indexOf('function message(value:'),end=main.indexOf('\nasync function api',begin);
  const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end));
- const node=()=>({hidden:false,title:'',textContent:'',classList:{toggle(){}}});
+ const node=()=>({hidden:false,title:'',textContent:'',classList:{contains:()=>false,toggle(){}}});
  const nodes={'message':node(),'review-message':node()},legacy=[node(),node(),node()];
  const act={hidden:item.hidden,querySelectorAll:()=>legacy};
  let rowReveals=0;
  const env={host:item.host,rigInspector:{act,answersRendered:item.rendered??false,syncActRow:()=>rowReveals++},el:(id:keyof typeof nodes)=>nodes[id],text:(id:keyof typeof nodes,value:string)=>{nodes[id].textContent=value;}};
  const message=new Function('env',`with(env){${script};return message;}`)(env);
  message('JOB_VISUAL_UNAVAILABLE',item.error,item.footerOnly,'source refusal');
- expect(nodes.message.textContent).toBe('JOB_VISUAL_UNAVAILABLE');
- expect(nodes['review-message'].textContent).toBe(item.footerOnly?'':'JOB_VISUAL_UNAVAILABLE');
+ expect(nodes.message.textContent).toBe(item.error?'':'JOB_VISUAL_UNAVAILABLE');
+ expect(nodes['review-message'].textContent).toBe('JOB_VISUAL_UNAVAILABLE');
  expect(act.hidden).toBe(item.reveal?false:item.hidden);expect(rowReveals).toBe(item.reveal?1:0);
- expect(legacy.map(control=>control.hidden)).toEqual(item.reveal?[true,true,true]:[false,false,false]);
+ expect(legacy.map(control=>control.hidden)).toEqual(item.reveal&&!item.rendered?[true,true,true]:[false,false,false]);
 });
 
 test('#839 answered Question readback does not reveal completed answer controls or the act row',()=>{
@@ -111,13 +111,13 @@ for(const sample of [
  {name:'parts verdict after an interview answer',record:false,subjects:[{kind:'parts-verdict'}],saved:true,expected:'Not submitted'},
  {name:'record host with a pending verdict',record:true,subjects:[{kind:'review-verdict',stage:'rig-review'}],saved:true,expected:'Not submitted'},
  {name:'saved interview with a pending checkpoint',record:true,subjects:[{kind:'checkpoint'}],saved:true,expected:'Not submitted'},
- {name:'saved interview with a footer refusal',record:true,subjects:[],saved:true,error:true,expected:'JOB_VISUAL_UNAVAILABLE'},
+ {name:'saved interview with an act-row refusal',record:true,subjects:[],saved:true,error:true,expected:'Not submitted'},
 ])test('#851 footer '+sample.name+' reads the production footer node',()=>{
  const begin=main.indexOf('function renderDraftState(): void {'),end=main.indexOf('\nfunction renderProvenance',begin);
  const messageBegin=main.indexOf('function message(value:'),messageEnd=main.indexOf('\nasync function api',messageBegin);
  const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(messageBegin,messageEnd)+'\n'+main.slice(begin,end));
- const footer={textContent:sample.error?'JOB_VISUAL_UNAVAILABLE':'Not submitted',title:'',classList:{error:!!sample.error,contains(name:string){return name==='error'&&this.error;},toggle(name:string,on:boolean){if(name==='error')this.error=on;}}};
- const nodes={message:footer,'review-message':{...footer,textContent:''},dirty:{...footer,textContent:'Not submitted'}};
+ const node=(textContent:string,error=false)=>({textContent,title:'',classList:{error,contains(name:string){return name==='error'&&this.error;},toggle(name:string,on:boolean){if(name==='error')this.error=on;}}});
+ const nodes={message:node('Not submitted'),'review-message':node(sample.error?'JOB_VISUAL_UNAVAILABLE':'',sample.error),dirty:node('Not submitted')};
  const env={host:{...(sample.record?{record:{hasPicture:true}}:{}),pendingSubjects:()=>sample.subjects,reviewState:()=> 'Reviewing'},pendingAnswers:sample.subjects,liveIssueCount:()=>0,saving:false,draftConflict:false,draftStatus:null,answerSaved:sample.saved,actReadOnly:null,dirty:false,renderAnswerControls(){},rigInspector:{actBar:{setSaveState(state:{text:string}){nodes.dirty.textContent=state.text;}},act:{hidden:false}},sourceTextContent:(node:{textContent:string})=>node.textContent,el:(id:keyof typeof nodes)=>nodes[id],text:(id:keyof typeof nodes,value:string)=>{nodes[id].textContent=value;}};
  const render=new Function('env',`with(env){${script};return renderDraftState;}`)(env);render();
  const footerText=()=>nodes.message.textContent;expect(footerText()).toBe(sample.expected);

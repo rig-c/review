@@ -1505,7 +1505,7 @@ async function main() {
       throw new Error(`Bar 8 / Slice 3c Bar 4 verification failed: ${JSON.stringify(bar8Result, null, 2)}`);
     }
 
-    // #856: the real compiler refusal stays in one footer cell at every layout width.
+    // #1034: the compiler refusal stays in the act row while the footer keeps its status at every width.
     const refusalFooterGeometry = [];
     for (const width of [1600, 1440, 1280, 900]) {
       await session.setViewport(width, 1000);
@@ -1517,18 +1517,20 @@ async function main() {
         const rect = node => node.getBoundingClientRect().toJSON();
         const range = document.createRange();range.selectNodeContents(message);
         return {width:innerWidth, footer:rect(footer), message:rect(message), readouts:rect(readouts),
-          text:range.getBoundingClientRect().toJSON(), refusal:message.textContent,
+          text:range.getBoundingClientRect().toJSON(), status:message.textContent, title:message.title,
+          refusal:document.querySelector('#workspace-act-row #review-message')?.textContent,
           whiteSpace:style.whiteSpace, overflow:style.overflowX, ellipsis:style.textOverflow};
       })()`);
       refusalFooterGeometry.push(geometry);
       const {footer, message, readouts, text} = geometry;
-      if (!geometry.refusal.includes('CE_COMPILE_KEY_AFTER_DURATION') ||
+      if (!geometry.refusal?.includes('CE_COMPILE_KEY_AFTER_DURATION') ||
+          geometry.status.includes('CE_COMPILE_KEY_AFTER_DURATION') || geometry.title.includes('CE_COMPILE_KEY_AFTER_DURATION') ||
           geometry.whiteSpace !== 'nowrap' || geometry.overflow !== 'hidden' || geometry.ellipsis !== 'ellipsis' ||
           message.left < footer.left || message.right > footer.right ||
           message.top < footer.top || message.bottom > footer.bottom ||
           text.top < footer.top || text.bottom > footer.bottom ||
           message.right > readouts.left) {
-        throw new Error('Refusal footer overlaps or escapes: ' + JSON.stringify(geometry));
+        throw new Error('Footer status overlaps, escapes, or repeats the refusal: ' + JSON.stringify(geometry));
       }
     }
     await session.setViewport(1600, 1000);
