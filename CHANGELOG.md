@@ -1,5 +1,33 @@
 # Changelog
 
+## 4.14.0
+
+Review's shared act parser now reads interview-picks answers at the comments act version, with structured comments pinned to reference images, so Create can accept them without parsing text. The chest editor's disabled button names the real reason while a published spec waits for setup. A rule from the owner is now recorded: chest landmarks are a mesh-density hint, and a circle may sit outside the mesh.
+
+**Read before upgrading:**
+
+* **`parseCommentsAct` accepts `interview-picks` at `rig-review/act@6`.**
+  * The value carries the existing survey fields (`questionId`, `selections`, `note`) plus ordered `comments[]`. Each comment's optional anchor is `JobCommentImageAnchor`. The source is the package or record option-set binding.
+  * `words` at @6 refuses, and so do unknown members, non-image anchors and picks at @7 or later.
+  * `JobCommentsAct` and `JobCommentsActValues` gain an `interview-picks` arm, and `JobContextCommentsAct` excludes it. Runtime readers don't break, but a consumer with an exhaustive `kind` switch sees the new arm on its next pin.
+  * Review's writers are unchanged: package picks still emit @2, and record picks @4. The writer switches only after Create's reader ships.
+
+### Added
+
+* `parseCommentsAct` reads interview-picks at act@6 with structured comments (#1083, part of #646).
+
+### Fixed
+
+* The disabled chest-edit button said the spec was unpublished while a published spec was still waiting for setup or a part. It now gives the existing "find the slot" reason (#1080, closes #1078).
+
+### Documentation
+
+* DESIGN.md records the owner's rule: chest landmarks raise mesh density and need not sit inside the mesh. Nothing in Review or the producer refuses a circle outside it (#1084).
+
+### Tests
+
+* Path and timing controls are portable on macOS (#1082, closes #1081).
+
 ## 4.13.0
 
 Review exports the checkpoint evidence packet grammar as a pure validator, so Create can check a packet with the same rules Review uses, and a packet can now name its before and after tiles for the Difference view. An animation picked while playing keeps playing, so physics-keyed clips like wind show their response. Compare's Fit frames panes with the same box the rig viewport uses, and a pin on a sealed question image works over a retained backdrop.
