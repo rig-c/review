@@ -262,10 +262,14 @@ export function prepareJobStill(input: UISubmissionV3, ask: JobPendingAsk, retai
     if (!clip || !Number.isFinite(clip.duration) || frame > clip.duration) throw new JobError('JOB_STILL_CAPTURE_FAILED');
   }
   const prefix = 'data:image/png;base64,';
-  if (typeof capture.png !== 'string' || capture.png.length > prefix.length + Math.ceil(jobStillByteLimit / 3) * 4 ||
-      !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(capture.png)) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  if (typeof capture.png !== 'string') throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  if (capture.png.length > prefix.length + Math.ceil(jobStillByteLimit / 3) * 4) {
+    throw new JobError('JOB_STILL_CAPTURE_FAILED', undefined, jobStillByteLimit);
+  }
+  if (!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(capture.png)) throw new JobError('JOB_STILL_CAPTURE_FAILED');
   const bytes = Buffer.from(capture.png.slice(prefix.length), 'base64');
-  if (bytes.length > jobStillByteLimit || prefix + bytes.toString('base64') !== capture.png) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  if (bytes.length > jobStillByteLimit) throw new JobError('JOB_STILL_CAPTURE_FAILED', undefined, jobStillByteLimit);
+  if (prefix + bytes.toString('base64') !== capture.png) throw new JobError('JOB_STILL_CAPTURE_FAILED');
   try { validatePngBytes(bytes, capture.width as number, capture.height as number); }
   catch { throw new JobError('JOB_STILL_CAPTURE_FAILED'); }
   const sha256 = jobHash(bytes);

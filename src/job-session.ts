@@ -468,7 +468,7 @@ export class JobSession {
   private event(data: JobData, value: JobEventPayload): EventV3 {
     const event: EventV3 = { ...value, cursor: randomUUID(), jobId: this.jobId, generation: data.generation };
     if (Buffer.byteLength(jobCropReferences(event)) > maximumEventBytes) {
-      throw new JobError('JOB_BODY_LIMIT', 'Job event exceeds its delivery bound');
+      throw new JobError('JOB_BODY_LIMIT', 'Job event exceeds its delivery bound', maximumEventBytes);
     }
     data.events.push(event);
     if (value.type === 'published' || value.type === 'pending') delete data.progress;

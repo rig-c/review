@@ -1881,6 +1881,20 @@ function decodeCommentsAct(raw: unknown, schema: CommentsWireAct['schema']): Com
   }, 'JOB_ACT_INVALID');
 }
 
+interface JobBodyObservation {
+  bytes: number;
+  limit?: number;
+}
+
+const jobBodyObservations = new WeakMap<Request, JobBodyObservation>();
+
+/** Observe the existing reader's counts without cloning, draining or retaining a body. */
+export function observeJobBody(request: Request): JobBodyObservation {
+  const observation = {bytes: 0};
+  jobBodyObservations.set(request, observation);
+  return observation;
+}
+
 export async function jobBody(request: Request, maximum = jobBodyLimit, validateSize?: (value: unknown, size: number) => void): Promise<unknown> {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '')) {
     throw new JobError('JOB_REQUEST_INVALID');
@@ -1896,26 +1910,30 @@ export async function jobBody(request: Request, maximum = jobBodyLimit, validate
     if (request.signal.aborted) abort();
   });
   try {
+    const observation = jobBodyObservations.get(request);
     const chunks: Uint8Array[] = [];
     let size = 0;
     for (;;) {
       const { done, value } = await Promise.race([reader.read(), interrupted]);
       if (done) break;
       size += value.length;
-      if (size > maximum) throw new JobError('JOB_BODY_LIMIT');
+      if (observation) observation.bytes = size;
+      if (size > maximum) throw new JobError('JOB_BODY_LIMIT', undefined, maximum);
       chunks.push(value);
     }
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
     validateSize?.(value, size);
     if (value?.value != null && Object.hasOwn(value.value, 'meshEdits') &&
         Buffer.byteLength(canonicalJson(value.value.meshEdits)) > jobBodyLimit) {
-      throw new JobError('JOB_BODY_LIMIT');
+      throw new JobError('JOB_BODY_LIMIT', undefined, jobBodyLimit);
     }
     if (size > jobBodyLimit) {
       const hasCommentImages = ['parts-verdict', 'review-verdict', 'checkpoint', 'signoff', 'reopen'].includes(value?.kind) &&
         /"png":"data:image\/png;base64,/.test(JSON.stringify(value?.value));
       const rigCapture = value?.kind === 'review-verdict' && value?.value?.stage === 'rig-review' && value.capture;
-      if (!(maximum > jobBodyLimit && (rigCapture || hasCommentImages))) throw new JobError('JOB_BODY_LIMIT');
+      if (!(maximum > jobBodyLimit && (rigCapture || hasCommentImages))) {
+        throw new JobError('JOB_BODY_LIMIT', undefined, jobBodyLimit);
+      }
     }
     return value;
   } catch (error) {
@@ -1957,7 +1975,11 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
       gate(request, path, true);
       session.authorize('ui', request.headers.get('X-Review-Capability'));
       return { ok: true, value: await action(await jobBody(request, maximum)) };
-    } catch (error) { return jobFailure(error); }
+    } catch (error) {
+      const observation = jobBodyObservations.get(request);
+      if (observation && error instanceof JobError) observation.limit = error.byteLimit;
+      return jobFailure(error);
+    }
   }
   return {
     async handleJobApi(request) {

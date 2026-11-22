@@ -7,7 +7,7 @@ import {validatePngCrop} from './comment-crops.ts';
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobEvent } from './job-contract.ts';
 
 export class JobError extends Error {
-  constructor(readonly code: JobErrorCode, message: string = code) {
+  constructor(readonly code: JobErrorCode, message: string = code, readonly byteLimit?: number) {
     super(message);
     this.name = 'JobError';
   }
