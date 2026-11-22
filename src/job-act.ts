@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
-  JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
+  JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
   type ActV3, type JobAct, type JobComment, type JobCommentsAct, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
   type JobMeshEdit, type PendingAskV3, type RecordUIAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
@@ -567,14 +567,12 @@ export function finalizeJobAct(options: {
   if (requestDigest(source) !== requestDigest(ask.source)) throw new JobError('JOB_ACT_SOURCE_STALE');
   if (!reviewer.id || !['owner', 'delegate'].includes(reviewer.role)) throw new JobError('JOB_AUTHORITY_REFUSED');
   const at = new Date().toISOString();
-  const envelope = {
-    schema: JOB_ACT_SCHEMA, actId: randomUUID(), jobId: options.jobId, askId: ask.askId,
+  const comments = {
+    schema: JOB_COMMENTS_ACT_SCHEMA, actId: randomUUID(), jobId: options.jobId, askId: ask.askId,
     publicationId: ask.publicationId,
     authority: { actor: 'human' as const, channel: 'review-ui' as const, reviewer: structuredClone(reviewer) },
     at,
   };
-  // Image-review keeps act@2.
-  const comments = {...envelope, schema: JOB_COMMENTS_ACT_SCHEMA};
   switch (submission.kind) {
     case 'interview-picks': {
       const value = commentsObject(submission.value, ['questionId', 'selections', 'note'], ['comments']);
