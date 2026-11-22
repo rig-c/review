@@ -131,6 +131,12 @@ interface JobHostOptions extends JobWorkerOptions {
   readonly readerId?: string;
   readonly bindingId?: string;
   readonly partsEnumeratorId?: string;
+  readonly onRefusal?: (event: {
+    readonly code: string;
+    readonly route: string;
+    readonly bytes: number;
+    readonly limit?: number;
+  }) => void;
   readonly reuseOnly?: {
     readonly expected: JobHostReuseExpectation;
   };
@@ -252,6 +258,14 @@ grant after reuse validation on each successful new or ordinary reused startup. 
 writer adapter owns its private binding and storage. A callback failure rejects
 startup with `JOB_AUTHORITY_REFUSED`. `afterSnapshot` and `afterDirectorySync` are
 optional disposable-test boundary hooks inherited from the existing seam.
+
+`onRefusal` observes a newly started listener's refused owner act submissions.
+It receives the same event that the listener would otherwise write as a single
+JSON line to stdout. A supplied callback replaces that line. Callback failures
+leave the HTTP refusal intact. The callback has no compatibility ID and is
+owned by the running listener. Ordinary reuse and `reuseOnly` keep the running
+listener's observer. See [Owner submit refusals](REVIEW_PACKAGE.md#owner-submit-refusals)
+for the event fields and byte accounting.
 
 Each standalone `startJobHost` and internal `startJobWorker` listener start mints a
 fresh canonical lowercase UUIDv4 `listenerIncarnation` via `randomUUID()`. The format
