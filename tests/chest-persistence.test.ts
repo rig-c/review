@@ -8,6 +8,7 @@ async function chestPersistenceFixture(){
  const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
  const slice=(start:string,end:string)=>{const a=main.indexOf(start),b=main.indexOf(end,a);if(a<0||b<0)throw Error('CHEST_PERSISTENCE_SOURCE_MISSING');return main.slice(a,b);};
  const code=new Bun.Transpiler({loader:'ts',target:'bun'}).transformSync([
+  slice('const navigationBookmark=', '/** Read the SELECTED reference'),
   slice('async function setupPersistence(', '/** Setup\'s Chest regions tool:'),
   slice('function chestField(', 'function chestEvaluation('),
   slice('let chestFormPart:', '/** The handoff line (#101):'),
@@ -26,7 +27,7 @@ async function chestPersistenceFixture(){
   let persistence=null,inspectionOpening=false,captured,selected=null,rebuildStatus=null;
   const parts={value:()=>selected?{slot:selected}:null},connectInspectionPersistence=async adapter=>{captured=adapter;return {restored:true};};
   const data={manifest:{id:'chests'},sourceHash:'source'},submittedBaseline={},session={feedback:[]},dirty=false;
-  const inspectionBinding=()=>({}),inspectionBookmark=()=>({}),host=null,bookmarkCameraKept=()=>true;
+  const inspectionBinding=()=>({}),inspectionBookmark=()=>({}),checkpointPair=null,host=null,bookmarkCameraKept=()=>true;
   let reportPage=0,selectedReportEvent,selectedReportTime,selectedReportTarget;
   const workspace=null,inspectorBlocks=null,activeBlocksUI=()=>({}),restoreActiveBlocksUI=()=>({});
   const renderReportEvents=()=>{},renderReportSelection=()=>{},renderFeedbackTargets=()=>{},renderFeedbackRange=()=>{},text=()=>{};

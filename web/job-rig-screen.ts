@@ -1,3 +1,4 @@
+import {checkpointEvidencePair} from '../src/checkpoint-evidence-packet.ts';
 import {formFor, jobCheckpointContext, jobJson, jobPublicationRoutes, jobSourceDraftId, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
 import {commentPartsIssues,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
@@ -13,7 +14,7 @@ import {checkpointNoteComments, feedbackItemComments, projectComments} from '../
 import {createJobRigSubmission, freezeJobRigStage} from './job-rig-capture.ts';
 import {sha256Hex,type JobMeshDraftSubmission} from './mesh-editor.ts';
 import type {JobChestDraftSubmission} from './chest-editor.ts';
-import {setRigHost, rigHost, type RigHost, type RigHostScreen, type RigHostCommit, type RigHostNavigation} from './rig-host.ts';
+import {setRigHost, rigHost, type RigHost, type RigHostScreen, type RigHostCommit, type RigHostNavigation, type CheckpointPairView} from './rig-host.ts';
 import {setSourceAttribute, setSourceText, sourceAttribute, sourceTextContent} from './i18n.ts';
 import type {InstanceAccess} from './instance-access.ts';
 
@@ -103,7 +104,7 @@ export interface JobRigMeshHost extends RigHost {
   readonly chestLandmarks?: readonly JobPublishedChestLandmark[];
 }
 export interface JobRigScreenPrepared {readonly jobRigScreen: true; readonly display: DisplayPublicationV3; readonly entry: string;
-  readonly refusal?:string; readonly modals?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>}; readonly review?: ReviewJson; readonly record?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>;picture:JobRigScreenPrepared|null}; readonly parts?:PartsSubjectData; readonly checkpoints: ReadonlySet<string>}
+  readonly refusal?:string; readonly modals?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>}; readonly review?: ReviewJson; readonly evidence?:JobPreparedInspection; readonly record?: {inspection:JobPreparedInspection;forms:Map<string,JobForm>;picture:JobRigScreenPrepared|null}; readonly parts?:PartsSubjectData; readonly checkpoints: ReadonlySet<string>}
 export function isJobRigScreen(value: unknown): value is JobRigScreenPrepared {
   return !!value && typeof value === 'object' && (value as {jobRigScreen?: unknown}).jobRigScreen === true;
 }
@@ -147,11 +148,13 @@ export function createJobRigScreen(options: {
         const {entry} = options.routes(display);
         const {manifest, reviewedSource} = inspection.metadata;
         // #983: a declared plan picture ranks first; the walk below runs only without it.
-        let picture: JobRigScreenPrepared | null = !inspection.planPicture && manifest?.model && reviewedSource?.rig
+        const checkpoint = options.window.state().pending.find(ask=>ask.publicationId===display.publication.publicationId&&ask.status==='pending'&&ask.subject.kind==='checkpoint')?.subject;
+        const paired = checkpoint?.kind==='checkpoint'&&inspection.checkpointEvidence?.some(({packet})=>packet.checkpointId===checkpoint.checkpointId&&!!packet.pair);
+        let picture: JobRigScreenPrepared | null = !paired && !inspection.planPicture && manifest?.model && reviewedSource?.rig
           ? {jobRigScreen:true, display, entry, checkpoints:new Set(), review:{...inspection.metadata, manifest, reviewedSource}}
           : null;
         const missingBoundPicture = inspection.interview?.questions.some(question => question.missingPicture);
-        let previous = missingBoundPicture || inspection.planPicture ? null : display.publication.previousPublicationId;
+        let previous = paired || missingBoundPicture || inspection.planPicture ? null : display.publication.previousPublicationId;
         const jobId=jobPublicationRoutes(display,location.origin).jobId;
         const seen = new Set([display.publication.publicationId]);
         let generation = display.publication.generation;
@@ -208,7 +211,7 @@ export function createJobRigScreen(options: {
       parts=await response.json() as PartsSubjectData;
       if(parts.sourceHash!==source.sourceHash||parts.mode!=='parts')throw new Error('JOB_DISPLAY_MISMATCH');
     }
-    let modals:JobRigScreenPrepared['modals'];
+    let modals:JobRigScreenPrepared['modals'], evidence:JobPreparedInspection|undefined;
     const asks=options.window.state().pending.filter(ask=>ask.publicationId===display.publication.publicationId&&ask.subject.kind!=='review-verdict'&&ask.subject.kind!=='parts-verdict'&&jobRigScreenAsk(display,ask,checkpoints));
     if(!backdropOnly&&options.formDependencies){
       // The shared main workspace loads visuals; modal forms keep data and checkpoint evidence.
@@ -216,7 +219,8 @@ export function createJobRigScreen(options: {
       try{modals={inspection,forms:prepareJobForms(display,asks,ask=>formFor(ask,inspection,options.formDependencies!))};}
       catch(error){inspection.dispose();throw error;}
     }
-    return {jobRigScreen: true, display, entry: routes.entry, review, checkpoints,...refusal?{refusal}:{},...parts?{parts}:{},...modals?{modals}:{}};
+    if(!backdropOnly&&!modals&&source.checkpointEvidence?.some(packet=>Object.hasOwn(packet,'pair')))evidence=await prepareJobInspection(display,signal,true,false);
+    return {jobRigScreen: true, display, entry: routes.entry, review, checkpoints,...evidence?{evidence}:{},...refusal?{refusal}:{},...parts?{parts}:{},...modals?{modals}:{}};
   }
   function still(ask: PendingAskV3, prepared: JobRigScreenPrepared) {
     const stage = screen?.stage();
@@ -306,10 +310,27 @@ export function createJobRigScreen(options: {
       route: path => {if (!path.startsWith('/') || path.startsWith('//')) throw new Error('Instance route must be app-absolute'); return base + path.slice(1);},
       headers: init => options.access.headers(init)};
     const review = prepared.review;
+    const inspection=prepared.record?.inspection??prepared.modals?.inspection??prepared.evidence;
+    const pairs=new Map<string,CheckpointPairView>();
+    for(const {packet,images} of prepared.parts?[]:inspection?.checkpointEvidence??[]){
+      const pair=checkpointEvidencePair(packet);
+      if(!pair)continue;
+      const imageFor=(tile:typeof pair.before)=>{
+        const image=images[packet.tiles.findIndex(item=>item.id===tile.id&&item.sha256===tile.sha256)];
+        if(!image)throw new Error('CHECKPOINT_EVIDENCE_PAIR_INVALID');
+        return {id:tile.id,path:tile.path,sha256:tile.sha256,image};
+      };
+      pairs.set(packet.checkpointId,{checkpointId:packet.checkpointId,before:imageFor(pair.before),after:imageFor(pair.after),
+        differenceUrl:options.routes(prepared.display).api(`checkpoint-evidence/${packet.checkpointId}/difference`)});
+    }
+    const evidencePair=pairs.size?{checkpointPairs:pairs,checkpointPair:()=>{
+      const ask=pendingSubjects().find(subject=>subject.kind==='checkpoint');
+      return ask?.kind==='checkpoint'?pairs.get(ask.checkpointId):undefined;
+    }}:{};
     if(prepared.record){
       const record=prepared.record,backdrop=record.picture?host(record.picture,ready):null;
       const question=record.inspection.interview?.questions[0];
-      return {...(backdrop?.subject?{subject:backdrop.subject}:{}),access:{...(backdrop?.access??access),capability:null,
+      return {...evidencePair,...(backdrop?.subject?{subject:backdrop.subject}:{}),access:{...(backdrop?.access??access),capability:null,
         headers:init=>{const headers=options.access.headers(init);headers.delete('X-Review-Capability');return headers;}},
         ownerActAccess:{capability:options.access.capability},
         record:{...(jobId?{jobId}:{}),draftId,publicationId:prepared.display.publication.publicationId,previousPublicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,...record.inspection.planPicture?{planPicture:record.inspection.planPicture}:{},...questionPictures(record.inspection.interview?.questions),missingPicture:question?.missingPicture,questionPicture:question?.scenePicture || (question?.missingPicture && question.images.length ? true : undefined)},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
@@ -322,7 +343,7 @@ export function createJobRigScreen(options: {
     if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
     const {publicationId,source}=prepared.display.publication;
     const binding={...(jobId?{jobId}:{}),draftId,publicationId,previousPublicationId,sourceHash:source.sourceHash};
-    return {access,pendingSubjects,navigation,...prepared.refusal?{unavailable:prepared.refusal}:{},
+    return {...evidencePair,access,pendingSubjects,navigation,...prepared.refusal?{unavailable:prepared.refusal}:{},
       chestLandmarks:prepared.display.publication.chestLandmarks,
       ...(source.direction?{direction:binding}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
         prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review')}}:{}),
@@ -409,7 +430,7 @@ export function createJobRigScreen(options: {
     },
     commit(prepared: JobRigScreenPrepared) {
       const previous=mounted;mounted=prepared;
-      return {async rollback(){try{await transition?.rollback();}finally{transition=null;mounted=previous;}},finalize(){try{transition?.finalize();}finally{transition=null;if(previous!==prepared){const modal=previous?.record??previous?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();}}}};
+      return {async rollback(){try{await transition?.rollback();}finally{transition=null;mounted=previous;}},finalize(){try{transition?.finalize();}finally{transition=null;if(previous!==prepared){const modal=previous?.record??previous?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();previous?.evidence?.dispose();}}}};
     },
     /** The rig composition draws first; the job acknowledges the display after. */
     async painted(prepared: JobRigScreenPrepared, signal: AbortSignal): Promise<void> {

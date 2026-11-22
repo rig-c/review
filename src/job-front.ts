@@ -1,5 +1,6 @@
 import {buildWeb} from './build.ts';
 import {PNG} from 'pngjs';
+import {checkpointEvidencePair} from './checkpoint-evidence-packet.ts';
 import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-checkpoint-evidence.ts';
 /** Disjoint live-job routes. The backend receives the original authenticated Request. */
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
@@ -12,8 +13,8 @@ import { JobError, JobStore, jobCropReferences } from './job-store.ts';
 import { safeFile, packagePath, type ReviewPackage } from './manifest.ts';
 import { serveReference, assertReviewUnchanged } from './reference.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
-import type { DifferenceRaster } from './parts-comparison.ts';
-import { loadPartsView, partsViewJson, partsDifference, previousDraftDifference, servedImage, type PartsViewPackage } from './parts-view.ts';
+import {differencePixels, nativeDifferenceAlignment, type DifferenceRaster} from './parts-comparison.ts';
+import { loadPartsView, partsViewJson, partsDifference, previousDraftDifference, decodeDifferencePng, servedImage, type PartsViewPackage } from './parts-view.ts';
 import { destinationDirectory, DestinationDirectoryError } from './destination-directory.ts';
 import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
 import { constants, openSync, closeSync, readSync, fstatSync, lstatSync, statSync, type Stats } from 'node:fs';
@@ -358,9 +359,23 @@ export function retainedPublicationRoutes(session: JobSession) {
                     if (!review.files.has(asset)) return failure('JOB_SOURCE_UNRETAINABLE', 404);
                     return sealedFile(relative(retained.snapshotRoot, join(review.root, asset)).split('\\').join('/'));
                 };
-                const evidenceRoute = /^api\/checkpoint-evidence\/([A-Za-z0-9][A-Za-z0-9._-]*)\/(table|tiles\/(0|[1-9]\d*))$/.exec(path);
+                const evidenceRoute = /^api\/checkpoint-evidence\/([A-Za-z0-9][A-Za-z0-9._-]*)\/(table|difference|tiles\/(0|[1-9]\d*))$/.exec(path);
                 if (evidenceRoute) {
                     const packet = retained.source.checkpointEvidence?.find(item => item.checkpointId === evidenceRoute[1]);
+                    if (evidenceRoute[2] === 'difference') {
+                        const pair = packet && checkpointEvidencePair(packet);
+                        if (!pair) return failure('CHECKPOINT_EVIDENCE_PAIR_INVALID', 404);
+                        const decode = (tile: typeof pair.before) =>
+                            decodeDifferencePng(readCheckpointEvidenceBytes(retained.snapshotRoot, tile, 8 * 1024 * 1024));
+                        const before = decode(pair.before), after = decode(pair.after);
+                        if (before.width !== after.width || before.height !== after.height)
+                            return failure('PARTS_DIFFERENCE_ALIGNMENT', 409, undefined, nativeDifferenceAlignment);
+                        const result = differencePixels(after, {x:0,y:0,w:after.width,h:after.height}, before, [], 0, false, 'previous-draft');
+                        const png = new PNG({width: result.width, height: result.height});
+                        png.data = Buffer.from(result.data);
+                        return new Response(request.method === 'HEAD' ? null : new Uint8Array(PNG.sync.write(png)),
+                            {headers: {...headers, 'Content-Type': 'image/png'}});
+                    }
                     const isTable = evidenceRoute[2] === 'table';
                     const member = isTable ? packet?.table : packet?.tiles[Number(evidenceRoute[3])];
                     if (!member) return failure('JOB_SOURCE_UNRETAINABLE', 404);

@@ -19,7 +19,8 @@ import {
   type RecordResult, type RecordSignoffStage, type RecordSource, type RecordSubject,
   jobCaptureBodyLimit, jobRawActMediaType,
 } from './job-contract.ts';
-import { JobError } from './job-store.ts';
+import { JobError, jobId, jobPath, jobSha, jobText } from './job-validation.ts';
+export { jobId, jobPath, jobSha, jobText } from './job-validation.ts';
 import type { JobSession } from './job-session.ts';
 import { JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, type JobCommentContext, type JobContextComment,
   type JobContextCommentsAct, type JobComment, type JobCommentAnchor, type JobCommentsAct,
@@ -69,37 +70,11 @@ export function jobObject(value: unknown, allowed: readonly string[]): Record<st
   return value as Record<string, unknown>;
 }
 
-export function jobText(value: unknown, max = 128): string {
-  if (typeof value !== 'string' || !value || value.length > max || /[\x00-\x1f\x7f]/.test(value)) {
-    throw new JobError('JOB_REQUEST_INVALID');
-  }
-  return value;
-}
-
-export function jobId(value: unknown): string {
-  const id = jobText(value);
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) throw new JobError('JOB_REQUEST_INVALID');
-  return id;
-}
-
 export function jobInteger(value: unknown, max = Number.MAX_SAFE_INTEGER): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > max) {
     throw new JobError('JOB_REQUEST_INVALID');
   }
   return value;
-}
-
-export function jobSha(value: unknown): string {
-  if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) throw new JobError('JOB_REQUEST_INVALID');
-  return value;
-}
-
-export function jobPath(value: unknown): string {
-  const path = jobText(value, 4096);
-  if (path.split('/').some(part => !part || part === '.' || part === '..') || /[\\:%?#]/.test(path)) {
-    throw new JobError('JOB_REQUEST_INVALID');
-  }
-  return path;
 }
 
 export function parseJobSelector(value: unknown): JobSelector | null {

@@ -22,6 +22,8 @@ export function paintingRectangle(item:{x:number;y:number;w:number;h:number},rig
  return {x:item.x*x,y:item.y*y,width:item.w*x,height:item.h*y};
 }
 
+export const nativeDifferenceAlignment = 'PARTS_DIFFERENCE_ALIGNMENT: integer native placement and exact PNG dimensions required';
+
 export interface DifferenceRaster {width:number;height:number;data:Uint8Array}
 export interface DifferenceBox {x:number;y:number;w:number;h:number}
 type DifferenceFronts = readonly {box:DifferenceBox;raster:DifferenceRaster}[];
@@ -32,10 +34,10 @@ export function differencePixels(current:DifferenceRaster,box:DifferenceBox,prev
 export function differencePixels(part:DifferenceRaster,box:DifferenceBox,reference:DifferenceRaster,fronts:DifferenceFronts,threshold:number,excludeCovered:boolean,operand?:'previous-draft'):DifferenceRaster|PaintingDifferenceRaster {
  if(!Number.isInteger(threshold)||threshold<0||threshold>255)throw new Error('PARTS_COMPARISON_INVALID: integer threshold 0..255 required');
  const valid=(b:DifferenceBox,r:DifferenceRaster)=>[b.x,b.y,b.w,b.h].every(Number.isSafeInteger)&&b.w===r.width&&b.h===r.height&&r.data.length===r.width*r.height*4;
- if(!valid(box,part)||(excludeCovered&&fronts.some(f=>!valid(f.box,f.raster))))throw new Error('PARTS_DIFFERENCE_ALIGNMENT: integer native placement and exact PNG dimensions required');
+ if(!valid(box,part)||(excludeCovered&&fronts.some(f=>!valid(f.box,f.raster))))throw new Error(nativeDifferenceAlignment);
  const previousDraft=operand==='previous-draft';
  if(previousDraft&&(box.x!==0||box.y!==0||!valid(box,reference)||excludeCovered||fronts.length))
-  throw new Error('PARTS_DIFFERENCE_ALIGNMENT: integer native placement and exact PNG dimensions required');
+  throw new Error(nativeDifferenceAlignment);
  const rgba=new Uint8Array(part.width*part.height*4);let count=0,covered=0,compared=0;
  for(let y=0;y<part.height;y++)for(let x=0;x<part.width;x++){
   const i=(y*part.width+x)*4;

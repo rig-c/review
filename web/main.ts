@@ -1,3 +1,6 @@
+import {nativeDifferenceAlignment} from '../src/parts-comparison.ts';
+import type {CheckpointPairView} from './rig-host.ts';
+import {clampZoom} from './camera-view.ts';
 import {hasTransientQuestionImage} from './interview-panel.ts';
 import {advanceTake,bindScenePlates,loadScenePlates,takeSample} from './scene-plates.ts';
 import type {SceneInspection} from '../src/scene-inspection.ts';
@@ -9,12 +12,12 @@ import type {JobForm} from './job-session.ts';
 import type {JobRigMeshHost,JobRigMeshScreen} from './job-rig-screen.ts';
 import {bindWorkspaceDrawer,settleAnimationFrames} from './workspace-layout.ts';
 import {captureRigRestStill,rigRestCanvas} from './job-rig-capture.ts';
-import {createPartsViewportProvider,bindPartsSubject,paintRigDifference,type PartsSubjectEntry,type PartsSubjectSession} from './parts-viewport-provider.ts';
+import {createPartsViewportProvider,bindPartsSubject,paintRigDifference,loadViewportImage,type PartsSubjectEntry,type PartsSubjectSession} from './parts-viewport-provider.ts';
 import {rigWorkspaceMarkup,rigFeedbackMarkup,sharedViewToolsMarkup,sharedCommentMarkup} from '../src/compare-html.ts';
 import {bindDirectionPanel} from './direction-panel.ts';
 import {bindWorkspaceVisibility} from './workspace-visibility.ts';
 import type {DirectionInspection} from '../src/direction-inspection.ts';
-import {parseStageComment,parsePictureCommentLabel,feedbackItemComments,projectComments,timeOnlyBasis,unprojectMark,feedbackTimingLabel,requireFeedbackFrames,isTimeOnlyFeedback,type StageComment} from '../src/stage-comment.ts';
+import {parseStageComment,parsePictureCommentLabel,feedbackItemComments,projectComments,projectCommentLabels,timeOnlyBasis,unprojectMark,feedbackTimingLabel,requireFeedbackFrames,isTimeOnlyFeedback,type StageComment} from '../src/stage-comment.ts';
 import {bindStageComments,type CommentRow,type CommentPose} from './stage-comments.ts';
 import {discoverTurnDials,TurnState} from '../src/turn-pad.ts';
 import {bindTurnPad,type TurnPad} from './turn-pad.ts';
@@ -48,7 +51,7 @@ import {appliedCheckState,renderAppliedHistory,isPatchJob,recordFor,refusedText,
 import {meshEditBinding,meshEditText,type MeshEditDocument} from '../src/mesh-edit.ts';
 import {chestRegionsBinding,cropWorldMapping,type CropWorldMapping} from '../src/chest-regions.ts';
 import {mountWorkspaceShell,mountStatusBar,bindWorkspaceUI,bindHeaderModeAvailability,selectedInspector,type WorkspaceUI} from './workspace-ui.ts';
-import {setSourceAttribute,setSourceText,sourceTextContent,onLanguageChange,t,tr} from './i18n.ts';
+import {setSourceAttribute,setSourceText,sourceAttribute,sourceTextContent,onLanguageChange,t,tr} from './i18n.ts';
 import {holdScrubBox,releaseScrubBox,scrubBox} from './scrub-box.ts';
 import {mountRigInspector,bindInspectorBlocks,activeBlocksUI,restoreActiveBlocksUI,type InspectorBlocks} from './inspector-blocks.ts';
 import {connectControl} from './control.ts';
@@ -170,11 +173,24 @@ let partsSubject:ReturnType<typeof bindPartsSubject>|null=null;
 let setupPartsPersistence:(()=>Promise<void>)|null=null;
 let rigDifference:{assets:ModelAssets;painting:HTMLImageElement;camera:ReturnType<typeof createViewportState>;hidden:Map<HTMLElement,boolean>;label:string;bookmark:InspectionBookmark}|null=null;
 let rigDifferenceFailure:string|null=null;
+const checkpointPairLabels={compare:'Side by side',before:'Before',after:'After',difference:'Difference'} as const;
+type CheckpointPairMode=keyof typeof checkpointPairLabels;
+type CheckpointPairTile={pair:CheckpointPairView;side:'before'|'after'};
+let checkpointPair:{pair:CheckpointPairView;mode:CheckpointPairMode;bookmark:InspectionBookmark;
+ /** An explicit replay lasts while this pending pair (or its absence) holds. */
+ replayFor?:CheckpointPairView|null;
+ difference:Promise<HTMLCanvasElement>|null;generation:number;release:()=>void}|null=null;
+const pairFrame=(target:CameraTarget)=>{
+ const pair=checkpointPair?.pair;if(!pair||target==='rig'&&checkpointPair?.mode!=='compare')return null;
+ const {image}=target==='rig'||checkpointPair?.mode==='after'||checkpointPair?.mode==='difference'?pair.after:pair.before;
+ return {w:image.naturalWidth,h:image.naturalHeight};
+};
+
 const rigRaster={el,canvas:partsCanvas,message,reference:()=>null,
- frameSize:(target:CameraTarget)=>activeInterviewImage
+ frameSize:(target:CameraTarget)=>checkpointPair?pairFrame(target):activeInterviewImage
   ?target==='reference'&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:null
   :{w:partsCanvas.width,h:partsCanvas.height},
- active:()=>!!rigDifference||!!activeInterviewImage};
+ active:()=>!!checkpointPair||!!rigDifference||!!activeInterviewImage};
 if(partsOnly){partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);el('reference-content').append(partsReference);}
 let sceneComposite:ReturnType<typeof bindScenePlates>|undefined;
 const activeScene=()=>sceneComposite&&data.direction&&(!stageSource||stageSource.url===inspectedModel?.url)?data.direction:undefined;
@@ -246,7 +262,7 @@ let idleHeld=false;
 let suspendedPreview=false;
 let controlDispose:(()=>void)|null=null;
 const viewDisposers:(()=>void)[]=[];
-if(host)viewDisposers.push(onLanguageChange(()=>{if(jobProgress&&!pendingAnswers.length)renderAskHeadline();}));
+if(host)viewDisposers.push(onLanguageChange(()=>{if(host?.checkpointPair&&checkpointPair)renderLayout();if(jobProgress&&!pendingAnswers.length)renderAskHeadline();}));
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let chestMapping:CropWorldMapping={available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn'};
 let setupChestWorld:{x:number;y:number}|null=null;
@@ -410,6 +426,7 @@ function renderCheckpoint(): void {
 
 function setView(value: typeof view): void {view=value;renderLayout();}
 async function chooseInspectionView(id:string):Promise<void> {
+ if(checkpointPair){await showCheckpointPair(id as CheckpointPairMode);return;}
  if(activeInterviewImages){const image=activeInterviewImages[Number(id.replace('interview-image-',''))];if(id.startsWith('interview-image-')&&image){activeInterviewImage=image;void showReference('',image);}return;}
  if(!partsSubject){
   if(id==='difference'){
@@ -455,6 +472,14 @@ function layoutEligibility(){return singleEligibility({rig:rigInput,reference:re
 /** Unavailable layouts stay visible but disabled with their named reason; no placeholder pane stands in for a missing input. */
 function renderLayout():void {
  el('play').hidden=selectedInspector()!=='playback';
+ if(checkpointPair){
+  const {mode,pair}=checkpointPair;
+  effectiveView=mode==='compare'?'compare':'reference';
+  el('reference-pane').hidden=false;el('rig-pane').hidden=mode!=='compare';
+  controls.setMode(mode);controls.setDisabled('difference',checkpointDifferenceReason(pair));
+  text('layout-state',checkpointPairLabels[mode]);
+  fitCamera();return;
+ }
  if(rigDifference&&(rigDifferenceReason()||rigDifference.assets!==assets||rigDifference.painting!==el('reference-content').querySelector('img')))leaveRigDifference();
  const state=layoutEligibility();effectiveView=state.effective;
  for(const id of controls.viewModeIds)if(id!=='difference')controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
@@ -546,6 +571,7 @@ function renderSequenceFrame(): void {
 }
 
 async function showReference(id: string, bound?:{name:string;src:string}): Promise<void> {
+  if(checkpointPair)return;
   rigDifferenceFailure=null;leaveRigDifference();
   const generation = ++referenceGeneration;
   video?.pause(); video = null;controlledVideoSample=null;delete viewport.state.cameraFrames.reference; viewport.state.referenceCenter=null; referenceSize = null; sequence = null; sequenceSvg = null; selectedPerson=''; lastPoseFrame = -1; el('person-control').hidden = true;
@@ -1346,7 +1372,7 @@ function bindWorkspace(hasModel=false,empty=false):void {
   const comments=rigInspector.comments.panel;comments.hidden=false;
   comments.querySelector('.review-dialog-header')?.after(el('comments-list-host'));
   communicationPanel.append(questionPanel,recordPanel,comments);
-  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel&&!partsOnly)?['feedback']:undefined,bottom:{strip:rigInspector.strip},changed:()=>{syncQuestionImage();workspace?.refresh();persistence?.save();}});
+  inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel&&!partsOnly)?['feedback']:undefined,bottom:{strip:rigInspector.strip},changed:()=>{if(!checkpointPair)syncQuestionImage();workspace?.refresh();persistence?.save();}});
   workspace?.refresh();
 }
 async function start(): Promise<void> {
@@ -1431,7 +1457,7 @@ async function start(): Promise<void> {
       }
       if(!player&&(data.manifest.model||referenceInput.state!=='loaded'))throw new Error('JOB_VISUAL_UNAVAILABLE');
       await restorePublicationNavigation();document.body.dataset.ready='true';
-      const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:inspectionBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
+      const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:navigationBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
         hasMeshEdits:()=>!!meshEditor?.hasJobEdits(),meshEdits:async()=>meshEditor?.jobEdits()??null,chestLandmarks:()=>chestEditor?.jobEdits()??null};
       host.attach(screen);showInspector(data.manifest.model?'playback':'rig');host.displayed();
     }
@@ -1621,7 +1647,7 @@ questionPanel.addEventListener('job-question-select',event=>{selectedQuestionAsk
 function showQuestionForm():void {
  const shown=questionForms.find(form=>form.dataset.jobAsk!==undefined&&form.dataset.jobAsk===selectedQuestionAsk)??questionForms.find(form=>form.dataset.interviewAnswered!=='true')??questionForms[0];
  for(const form of questionForms)form.hidden=form!==shown;
- syncQuestionImage();
+ if(!checkpointPair)syncQuestionImage();
 }
 let questionFormBindings=new WeakSet<HTMLElement>();
 
@@ -1651,16 +1677,18 @@ function restoreRecordComments(form?:HTMLFormElement):void {
    if(host?.verdictComments&&('schema' in row||'target' in row))throw new Error('JOB_ACT_INVALID');
    if('schema' in row){const issue=parsePartsIssue(row,false,true,false),items=new Map((partsSubject?.items()??[]).map(item=>[item.name,{...item,imageHash:item.imageHash!}]));assertPartsIssueBinding(issue,items,partsSubject!.sourceHash());}
    else if('target' in row){const mark=parseStageComment((row.context as {comment?:unknown})?.comment),pictures=!host?.direction?recordPictures():undefined;
-    // #1068: over a retained backdrop, only a reference pin naming a sealed picture's path is a picture pin; rig pins keep their check.
-    if(pictures&&(!host!.record!.hasPicture||mark.viewport==='reference'&&pictures.some(picture=>picture.path===mark.referenceId))){
+    const pairs=host?.checkpointPairs,reference=(mark.bookmark as InspectionBookmark).selection.reference;
+    // A record-source reference pin stays on the sealed-picture path over a retained backdrop.
+    if(pictures&&(!host!.record!.hasPicture||mark.viewport==='reference'&&
+     !manifestReferenceMatches(mark,reference)&&
+     (pairs&&mark.sourceHash===sourceHash||pictures.some(picture=>picture.path===mark.referenceId)))){
      // #1048: a plan- or question-picture pin restores only through its A1 label, parsed back against a sealed entry.
      if(mark.viewport!=='reference'||mark.sourceHash!==sourceHash)throw new Error('JOB_DISPLAY_MISMATCH');
-     const label=projectComments(feedbackItemComments([row as Feedback]),pictures).split('\n')[0]!.slice(1,-1),parsed=parsePictureCommentLabel(label);
-     if(!pictures.some(picture=>parsed.referenceId===picture.path&&parsed.referenceHash===picture.sha256))throw new Error('COMMENT_PICTURE_LABEL_INVALID: the pin does not name a sealed picture of this record');
+     validateSealedPictureMark(row as Feedback,mark,pictures,pairs?'COMMENT_REFERENCE_MISMATCH':undefined);
     }else if((!host?.direction&&!host!.record!.hasPicture)||mark.sourceHash!==data.sourceHash)throw new Error('JOB_DISPLAY_MISMATCH');}
    else if(Object.keys(row).some(key=>key!=='id'&&key!=='summary'))throw new Error('JOB_ACT_INVALID');
   }
-  if(!host?.verdictComments)projectComments(rows.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}),recordPictures());
+  if(!host?.verdictComments)projectRecordComments(rows);
   return rows;
  };
  if(!target.storageBound&&typeof window!=='undefined'&&typeof window.addEventListener==='function'){
@@ -1730,24 +1758,71 @@ function restoreRecordComments(form?:HTMLFormElement):void {
  }catch(error){
   /* A mismatched or invalid local draft has no authority. A plan-picture pin that cannot be parsed back says so by name (#1048). */
   const reason=error instanceof Error?error.message:'';
-  if(reason.startsWith('COMMENT_PICTURE_LABEL_INVALID')&&typeof message==='function')message(reason,true);
+  if(/^(COMMENT_PICTURE_LABEL_INVALID|COMMENT_REFERENCE_MISMATCH)/.test(reason)&&typeof message==='function')message(reason,true);
  }
 }
-/** #1048: the record's sealed plan picture and question images, the only `files` entries a record-host pin can name. */
+function validateSealedPictureMark(row:Feedback,mark:StageComment,pictures:readonly {path:string;sha256:string}[],mismatch?:string):void {
+ const exact=pictures.find(picture=>picture.path===mark.referenceId&&picture.sha256===mark.referenceHash);
+ if(mismatch&&(!exact||mark.viewport!=='reference'||(mark.bookmark as InspectionBookmark).selection.reference!==mark.referenceId))
+  throw new Error(mismatch);
+ const label=projectComments(feedbackItemComments([row]),exact?[exact]:pictures).split('\n')[0]!.slice(1,-1),parsed=parsePictureCommentLabel(label);
+ if(!pictures.some(picture=>parsed.referenceId===picture.path&&parsed.referenceHash===picture.sha256))
+  throw new Error(mismatch??'COMMENT_PICTURE_LABEL_INVALID: the pin does not name a sealed picture of this record');
+}
+function manifestReferenceMatches(mark:StageComment,reference:string|null|undefined):boolean {
+ const id=mark.referenceId;
+ if(!id||reference!==id||!data?.manifest.references.some(item=>item.id===id))return false;
+ const hash=data.explicitReference?.id===id?data.explicitReference.sha256:data.referenceHashes?.[id];
+ return !!hash&&hash===mark.referenceHash;
+}
+/** The record draft keeps the sealed picture identities for the life of the publication. */
 function recordPictures():{path:string;sha256:string}[]|undefined {
  const picture=host?.record?.planPicture,rows=[...picture?[{path:picture.path,sha256:picture.sha256}]:[],...host?.record?.questionPictures??[]];
+ for(const pair of host?.checkpointPairs?.values()??[])for(const {path,sha256}of [pair.before,pair.after])rows.push({path,sha256});
  return rows.length?rows:undefined;
 }
-/** Comments remain native rows in the draft and feed both act encodings. */
-function recordJobComments() {
- return recordComments.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary});
+function recordJobComments(rows:readonly CommentRow[]=recordComments) {
+ return rows.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary});
 }
+function projectRecordComments(rows:readonly CommentRow[]):string {
+ const entries=recordJobComments(rows);
+ const pictures=recordPictures();
+ if(!pictures||(!host?.record?.hasPicture&&!host?.checkpointPairs))return projectComments(entries,pictures);
+ return projectCommentLabels(entries,mark=>{
+  if(manifestReferenceMatches(mark,(mark.bookmark as InspectionBookmark).selection.reference))return undefined;
+  return pictures.find(picture=>picture.path===mark.referenceId&&picture.sha256===mark.referenceHash)??
+   pictures.find(picture=>picture.path===mark.referenceId);
+ });
+}
+/** Comments remain native rows in the draft and feed both act encodings. */
 function recordCommentWords():string {
- return projectComments(recordJobComments(),recordPictures());
+ return projectRecordComments(recordComments);
+}
+function checkpointPairTile(path:string|null,sha256:string|null):CheckpointPairTile|undefined {
+ for(const pair of host?.checkpointPairs?.values()??[]){
+  const side=(['after','before'] as const).find(side=>pair[side].path===path&&pair[side].sha256===sha256);
+  if(side)return {pair,side};
+ }
+}
+function packageCheckpointWords(checkpointId:string|undefined):string {
+ const rows=feedbackItemComments(session.feedback),pair=host?.checkpointPair?.();
+ if(!pair||pair.checkpointId!==checkpointId)return projectComments(rows);
+ const pictures=[pair.before,pair.after];
+ return projectCommentLabels(rows,mark=>{
+  const {selection}=parseBookmark(mark.bookmark,inspectionBinding());
+  if(manifestReferenceMatches(mark,selection.reference))return undefined;
+  const picture=pictures.find(item=>item.path===mark.referenceId&&item.sha256===mark.referenceHash);
+  if(!picture||mark.sourceHash!==data.sourceHash||selection.reference!==mark.referenceId)throw new Error('COMMENT_REFERENCE_MISMATCH');
+  return picture;
+ });
 }
 /** The sealed plan picture or question image while it is the reference view's shown image, with or without a retained
  * backdrop (#1068); null otherwise (#1048). */
 function shownPlanPicture():{name:string;path:string;sha256:string}|null {
+ if(host?.checkpointPair&&checkpointPair){
+  const before=checkpointPair.mode==='before'||checkpointPair.mode==='compare';
+  return {...(before?checkpointPair.pair.before:checkpointPair.pair.after),name:before?'Before':'After'};
+ }
  const image=host?.record?activeInterviewImage:null,path=image?.path,sha256=image?.sha256;
  return image&&path&&sha256&&recordPictures()?.some(picture=>picture.path===path&&picture.sha256===sha256)?{name:image.name,path,sha256}:null;
 }
@@ -1790,6 +1865,84 @@ function recordCommentsChanged():void {
  renderDraftState();
  for(const form of recordForms())form.dispatchEvent(new Event('input',{bubbles:true}));
 }
+function checkpointDifferenceReason({before,after}:CheckpointPairView):string|null {
+ return before.image.naturalWidth!==after.image.naturalWidth||before.image.naturalHeight!==after.image.naturalHeight
+  ?tr(nativeDifferenceAlignment):null;
+}
+
+async function showCheckpointPair(mode:CheckpointPairMode):Promise<void> {
+ const state=checkpointPair;if(!state)return;
+ const {pair}=state,generation=++state.generation;
+ let pixels:HTMLCanvasElement|undefined;
+ if(mode==='difference'){
+  if(checkpointDifferenceReason(pair)){renderLayout();return;}
+  try{
+   pixels=await (state.difference??=fetch(pair.differenceUrl,{signal:lifecycle.signal}).then(async response=>{
+    if(!response.ok)throw new Error((await response.json()).error.message);
+    const image=await loadViewportImage(response),canvas=document.createElement('canvas');
+    canvas.id='checkpoint-difference-canvas';canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
+    canvas.getContext('2d')!.drawImage(image,0,0);return canvas;
+   }));
+  }catch(error){
+   state.difference=null;
+   if(checkpointPair===state&&generation===state.generation){message(errorText(error),true);renderLayout();}
+   return;
+  }
+ }
+ if(checkpointPair!==state||generation!==state.generation)return;
+ state.mode=mode;
+ const image=mode==='before'||mode==='compare'?pair.before.image:pair.after.image;
+ el('reference-content').replaceChildren(pixels??image);
+ if(mode==='compare'&&pair.after.image.parentElement!==el('rig-root'))el('rig-root').append(pair.after.image);
+ else if(mode!=='compare'&&pair.after.image.parentElement===el('rig-root'))pair.after.image.remove();
+ const label=checkpointPairLabels[mode==='compare'?'before':mode];
+ text('reference-label',label);setSourceAttribute(el('reference-pane'),'aria-label',label);
+ viewport.state.activeCamera='reference';viewport.state.cameraFrames={};viewport.state.cameraLayout='';
+ viewport.requestFit();renderLayout();comments?.refresh();
+}
+
+function syncCheckpointPair(keepReplay=true):void {
+ const pair=host?.checkpointPair?.();
+ if(keepReplay&&checkpointPair?.replayFor===(pair??null))return;
+ if(pair===checkpointPair?.pair){
+  if(checkpointPair)checkpointPair.replayFor=undefined;
+  return;
+ }
+ if(mountCheckpointPair(pair))void showCheckpointPair('after');
+}
+
+function mountCheckpointPair(pair:CheckpointPairView|undefined):boolean {
+ const hadPair=!!checkpointPair;checkpointPair?.release();
+ if(!pair){if(hadPair)syncQuestionImage();return false;}
+ releaseInterview?.();releaseInterview=null;
+ leaveRigDifference();pause();++referenceGeneration;
+ const bookmark=inspectionBookmark(),camera=structuredClone(viewport.state),content=el('reference-content'),nodes=[...content.childNodes];
+ const hidden=[...el('rig-root').children,...el('rig-viewport').children,el('reference-empty')]
+  .filter((node):node is HTMLElement=>node instanceof HTMLElement&&node!==el('rig-root')&&!node.classList.contains('stage-comment-layer'))
+  .map(node=>({node,value:node.hidden}));
+ const labels=['reference-label','rig-label'].map(id=>({id,value:sourceTextContent(el(id))}));
+ const paneLabels=['reference-pane','rig-pane'].map(id=>({id,value:sourceAttribute(el(id),'aria-label')??''}));
+ for(const {node}of hidden)node.hidden=true;
+ for(const {image}of [pair.before,pair.after]){image.draggable=false;image.width=image.naturalWidth;image.height=image.naturalHeight;}
+ const disabled=new Map(controls.zoomButtons.concat(controls.nativeOne!).map(button=>[button,button.disabled]));
+ for(const button of disabled.keys())button.disabled=false;
+ const bindings=button('zoom-in').onclick?[]:[viewport.bindControls(unitScaleMessage),viewport.bindNavigation()];
+ const modes=Object.entries(checkpointPairLabels).map(([id,labelKey])=>({id,labelKey,pressed:id==='after'}));
+ const restoreSwitch=controls.replaceViewSwitch({currentMode:'after',groups:[{modes}],onChange:chooseInspectionView});
+ checkpointPair={pair,mode:'after',bookmark,difference:null,generation:0,release:()=>{
+  checkpointPair=null;pair.after.image.remove();content.replaceChildren(...nodes);restoreSwitch();
+  for(const {node,value}of hidden)node.hidden=value;
+  for(const {id,value}of labels)text(id,value);
+  for(const {id,value}of paneLabels)setSourceAttribute(el(id),'aria-label',value);
+  select('reference-select').value=bookmark.selection.reference??'';
+  for(const dispose of bindings)dispose();for(const [button,value]of disabled)button.disabled=value;
+  viewport.cancelFit();Object.assign(viewport.state,camera);if(!disposed){renderLayout();comments?.refresh();}
+ }};
+ viewport.state.cameraSync=false;text('rig-label','After');setSourceAttribute(el('rig-pane'),'aria-label','After');
+ if(sourceTextContent(el('message'))==='This request has no picture.')message(sourceTextContent(el('dirty')),false,true);
+ return true;
+}
+
 /** Keep the shared reference viewport bound while the interview form is mounted. */
 function syncQuestionImage():void {
  if(disposed){releaseInterview?.();releaseInterview=null;return;}
@@ -1858,11 +2011,11 @@ function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
  const trigger=questionForms.length?recordAsk:rigAsk;
  // The ask line's Review…/Approve… brings the section into view; it opens with the panel like a pending question.
  const revealRecord=()=>{recordPanel.hidden=false;workspace?.revealCommunication();recordPanel.scrollIntoView?.({block:'nearest'});};
- trigger.onclick=()=>{if(draftConflict)return;revealRecord();recordPanel.focus({preventScroll:true});};
+ trigger.onclick=()=>{if(draftConflict)return;if(checkpointPair?.replayFor!==undefined)syncCheckpointPair(false);revealRecord();recordPanel.focus({preventScroll:true});};
  for(const form of recordForms())if(!forms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
  if(!standalone&&forms[0])restoreRecordComments(forms[0] as HTMLFormElement);
  for(const form of forms){
-  if(!standalone)(form as JobForm['form']).commentWords=()=>host?.record||host?.direction?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):projectComments(feedbackItemComments(session.feedback));
+  if(!standalone)(form as JobForm['form']).commentWords=()=>host?.record||host?.direction?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):packageCheckpointWords(form.dataset.checkpointId);
   if(!recordPanel.contains(form))recordPanel.append(form);
  }
  // One line, like Question and Comments: a checkpoint form carries the outcome select, a signoff (stage or plan approval) does not.
@@ -1885,6 +2038,7 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
   partsOnly?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review';
  const refreshVerdictComments=host?.verdictComments&&pendingAnswers.some(liveVerdict)!==subjects.some(liveVerdict);
  pendingAnswers=subjects;
+ if(host?.checkpointPair)syncCheckpointPair();
  if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
  renderAskHeadline(labels.join(' · ')||(firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
  if(subjects.length)firstPublicationPrompt=false;
@@ -2071,7 +2225,7 @@ async function resumeScreen():Promise<void> {
   if(!partsOnly&&(!host?.record||host.record.hasPicture))frameHandle=requestAnimationFrame(tick);ready=true;
  }finally{screenRoot.inert=ready?wasInert:true;if(ready&&!disposed)document.body.dataset.ready='true';}
 }
-function disposeScreen():void {releaseInterview?.();releaseInterview=null;
+function disposeScreen():void {checkpointPair?.release();releaseInterview?.();releaseInterview=null;
  if(disposed)return;suspendScreen();disposed=true;lifecycle.abort();
  comments?.dispose();partsSubject?.dispose();turnPad?.dispose();inspectorBlocks?.dispose();inspectorTabs?.dispose();
  workspace?.dispose();controlDispose?.();appearance?.dispose();rigInspector.actBar.dispose();shell.dispose();
@@ -2083,9 +2237,12 @@ function showInspector(name:string,reveal=true):void {if(name==='feedback'){if(r
 function bindInspector(partsSubject=false):void {
  inspectorTabs?.dispose();
  rigInspector.row.reveal=()=>workspace?.revealInspector();
- inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode)inspectorBlocks?.activate(mode);syncQuestionImage();workspace?.afterTab();renderLayout();},()=>workspace?.beforeTab(),rigInspector.row);
+ inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode)inspectorBlocks?.activate(mode);if(!checkpointPair)syncQuestionImage();workspace?.afterTab();renderLayout();},()=>workspace?.beforeTab(),rigInspector.row);
  viewDisposers.push(bindHeaderModeAvailability(partsSubject?{model:false,parts:true}:{model:!!data.manifest.model,preRig:data.capabilities.preRig,parts:!!host?.record&&!data.manifest.model}));
- for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>showInspector(mode.dataset.mode!);
+ for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>{
+  if(checkpointPair?.replayFor!==undefined)syncCheckpointPair(false);
+  showInspector(mode.dataset.mode!);
+ };
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
 function openReview():void {pause();if(!partsOnly)syncCorrectionStage();workspace?.revealCommunication();}
@@ -2191,9 +2348,18 @@ function numericView():ControlView {return viewport.numericView();}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data?.sourceHash??host!.record!.sourceHash,rigs:[data?.reviewedSource.rig?.sha256??null]};}
 // Persist the displayed inspection clock; the runtime clock accumulates across idle loops for physics.
 function inspectionBookmark():InspectionBookmark {if(rigDifference)return structuredClone(rigDifference.bookmark);return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode??selectedInspector()??'rig',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
-async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false,keepCamera=true):Promise<void> {
- await restoreTransaction(()=>prepareInspection(bookmark,signal),()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal,preserveSeconds,keepCamera),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
+async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false,keepCamera=true,feedback?:Feedback):Promise<void> {
+ const pictureHost=feedback&&(host?.checkpointPairs||host?.record);
+ if(pictureHost){
+  const picture=await prepareInspection(bookmark,signal,feedback);
+  if(picture){await restoreSealedPicture(bookmark,picture,signal);return;}
+ }
+ await restoreTransaction(async()=>{
+  if(!pictureHost)await prepareInspection(bookmark,signal);
+  if(pictureHost||checkpointPair?.replayFor!==undefined)checkpointPair?.release();
+ },()=>({bookmark:inspectionBookmark(),inputs:captureInputs()}),()=>applyInspection(bookmark,signal,preserveSeconds,keepCamera),async previous=>{await applyInspection(previous.bookmark,new AbortController().signal);restoreInputs(previous.inputs);renderFeedbackRange();});
 }
+const navigationBookmark=()=>checkpointPair?structuredClone(checkpointPair.bookmark):inspectionBookmark();
 /** Read the SELECTED reference without replacing the currently inspected DOM/player. */
 async function inspectionReferenceInfo(id:string|null,signal:AbortSignal):Promise<{width:number;height:number;duration:number|null;people:string[]}> {
  if(!id)return {width:0,height:0,duration:null,people:[]};
@@ -2211,8 +2377,20 @@ function inspectionTimeLimit(bookmark:InspectionBookmark,info:{duration:number|n
  const clipDuration=bookmark.animation?assets?.animations.find(a=>a.name===bookmark.animation)?.duration:undefined,referenceId=selection.reference===undefined?select('reference-select').value:selection.reference,isVideo=data.manifest.references.find(r=>r.id===referenceId)?.type==='video';
  return clipDuration===undefined?info.duration??0:isVideo&&info.duration!==null?Math.min(clipDuration,info.duration):clipDuration;
 }
-async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal):Promise<void> {
+async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal,feedback?:Feedback):Promise<{path:string;sha256:string}|void> {
  const selection=bookmark.selection;
+ if(feedback){
+  const mark=parseStageComment((feedback.context as {comment?:unknown}|undefined)?.comment),pairs=host?.checkpointPairs;
+  const pictures=recordPictures(),picture=pictures?.find(item=>item.path===mark.referenceId&&item.sha256===mark.referenceHash);
+  if(mark.viewport==='reference'&&(pairs||host?.record&&(!host.record.hasPicture||picture))&&!manifestReferenceMatches(mark,selection.reference)){
+   if(signal.aborted)throw new Error('Inspection restore superseded');
+   if(pairs&&mark.sourceHash!==(host?.record?.sourceHash??data.sourceHash))
+    throw new Error('COMMENT_REFERENCE_MISMATCH');
+   validateSealedPictureMark(feedback,mark,pictures??[],pairs?'COMMENT_REFERENCE_MISMATCH':undefined);
+   return picture;
+  }
+ }
+
  if(selection.turn){if(!turnPad)throw new Error('TURN_UNAVAILABLE');turnPad.state.validate(selection.turn);}
  parts?.validate(selection.part);
  if(bookmark.animation&&!assets?.animations.some(a=>a.name===bookmark.animation))throw new Error('Saved animation is absent from this rig');
@@ -2232,6 +2410,32 @@ async function prepareInspection(bookmark:InspectionBookmark,signal:AbortSignal)
  // Viewport aspect, Inspector and pose bounds may differ from the current view.
  // Range fitting belongs to the transactional apply after that layout is measured.
  if(signal.aborted)throw new Error('Inspection restore superseded');
+}
+async function restoreSealedPicture(bookmark:InspectionBookmark,picture:{path:string;sha256:string},signal:AbortSignal):Promise<void> {
+ if(signal.aborted)throw new Error('Inspection restore superseded');
+ const tile=checkpointPairTile(picture.path,picture.sha256);
+ let shown:typeof checkpointPair=null,generation:number|undefined;
+ if(tile){
+  if(checkpointPair?.pair!==tile.pair)mountCheckpointPair(tile.pair);
+  shown=checkpointPair!;
+  const pending=host?.checkpointPair?.();
+  shown.replayFor=tile.pair===pending?undefined:pending??null;
+  const showing=showCheckpointPair(tile.side);
+  generation=shown.generation;
+  await showing;
+ }else{
+  if(checkpointPair){checkpointPair.release();syncQuestionImage();}
+  const image=activeInterviewImages?.find(image=>image.path===picture.path&&image.sha256===picture.sha256);
+  if(!image)return;
+  if(image!==activeInterviewImage){activeInterviewImage=image;await showReference('',image);}
+ }
+ await settleAnimationFrames();
+ if(signal.aborted||checkpointPair!==shown||shown&&generation!==shown.generation)throw new Error('Inspection restore superseded');
+ const camera=bookmark.view.cameras.reference;
+ if(camera){
+  const zoom=tile?camera.viewport.width/camera.visible.width:camera.zoom;
+  viewport.writeCamera('reference',{center:camera.center,zoom});viewport.activateCamera('reference');fitCamera();
+ }
 }
 async function applyInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false,keepCamera=true):Promise<void> {
  viewport.state.cameraRestoring=true;try{
@@ -2271,7 +2475,7 @@ let inspectionOpening=false;
 async function setupPersistence(keepCameraOnResume=false):Promise<boolean> {
  let restoredChestFormPart:string|null=null;
  inspectionOpening=true;try{
- persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();renderProvenance();updateSavedState();},bookmark:inspectionBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b)),keepCameraOnResume||bookmarkCameraKept(inspectionOpening,!!host)),
+ persistence=await connectInspectionPersistence({scope:'single:'+data.manifest.id+':'+data.sourceHash,binding:inspectionBinding(),baseline:submittedBaseline!,session:()=>session,reviewDirty:()=>dirty,restoreSession:(value,isDirty)=>{session=value;dirty=isDirty;select('review-status').value=session.status;renderProposals();renderCheckpoint();renderCheckpoints();renderProvenance();updateSavedState();},bookmark:navigationBookmark,restoreBookmark:(b,s)=>restoreInspection(b,s,session.feedback.some(f=>isTimeOnlyFeedback(f)&&JSON.stringify((f.context as any).comment.bookmark)===JSON.stringify(b)),keepCameraOnResume||bookmarkCameraKept(inspectionOpening,!!host)),
  ui:()=>({chestFormPart,...(host?{chestLandmarkDraft:chestEditor?.jobDraftText()??null}:{}),inspectorScroll:workspace?.scroll()??'{}',...(inspectorBlocks?activeBlocksUI(inspectorBlocks.state()):{}),reportCategory:select('report-category').value,reportPage,reportEvent:selectedReportEvent?.id??null,reportTime:selectedReportTime??null,reportTarget:selectedReportTarget??null}),restoreUI:value=>{restoredChestFormPart=typeof value.chestFormPart==='string'?value.chestFormPart:null;if(typeof value.reportCategory==='string'&&[...select('report-category').options].some(o=>o.value===value.reportCategory))select('report-category').value=value.reportCategory;if(typeof value.reportPage==='number'&&Number.isSafeInteger(value.reportPage)&&value.reportPage>=0)reportPage=value.reportPage;selectedReportEvent=typeof value.reportEvent==='string'?data.report?.categories.flatMap(c=>c.events).find(e=>e.id===value.reportEvent)??null:null;selectedReportTime=typeof value.reportTime==='number'?value.reportTime:undefined;selectedReportTarget=typeof value.reportTarget==='number'?value.reportTarget:undefined;renderReportEvents();renderReportSelection();inspectorBlocks?.restore(restoreActiveBlocksUI(value));workspace?.restoreScroll(value.inspectorScroll);},afterInputs:draft=>{
   if(host){
    const saved=draft?.ui.chestLandmarkDraft;
@@ -3494,15 +3698,40 @@ function commentCaptureRefusal():string|null {
 }
 /** #1048: the shown plan picture or sealed question image takes reference-view pins. The camera is the shared reference viewport's image space,
  * so `world` is the picture's natural pixels; the identity is the sealed `files` entry. */
+function sealedReferenceCamera(){
+ const camera=numericView().cameras.reference;
+ return host?.checkpointPair&&checkpointPair&&camera?{...camera,zoom:clampZoom(camera.zoom)}:camera;
+}
 function planPicturePose(view:StageComment['viewport']):CommentPose|null {
- const picture=shownPlanPicture(),pane=el('reference-viewport'),camera=numericView().cameras.reference,media=el('reference-content').querySelector('img');
- if(!picture||view!=='reference'||!camera||!media||pane.clientWidth<=0||pane.clientHeight<=0)return null;
- return {mode:'setup',capture:{pane,images:true,backend:'canvas2d'},camera,frame:null,timeBasis:timeOnlyBasis,time:0,animation:null,turn:null,
-  sourceHash:host!.record!.sourceHash,modelHash:null,referenceHash:picture.sha256,referenceId:picture.path,rig:picture.name,media};
+ const picture=shownPlanPicture(),pane=el('reference-viewport'),camera=sealedReferenceCamera();
+ const content=el('reference-content'),media=content.querySelector('img');
+ const canvas=checkpointPair?.mode==='difference'?content.querySelector('canvas')??undefined:undefined;
+ if(!picture||view!=='reference'||!camera||(!media&&!canvas)||pane.clientWidth<=0||pane.clientHeight<=0)return null;
+ return {mode:'setup',capture:{pane,root:content,images:true,backend:'canvas2d',canvas},camera,frame:null,timeBasis:timeOnlyBasis,time:0,animation:null,turn:null,
+  sourceHash:host?.record?.sourceHash??data.sourceHash,modelHash:null,referenceHash:picture.sha256,referenceId:picture.path,
+  rig:checkpointPair&&data?data.feedbackCatalog.rig:picture.name,media:media??undefined};
 }
 function planPictureBookmark():InspectionBookmark {
- const bookmark=inspectionBookmark();
+ const bookmark=navigationBookmark();
+ if(checkpointPair){
+  const reference=sealedReferenceCamera();
+  return {...bookmark,animation:null,time:0,view:{schema:'rig-review-view/1',cameras:{rig:null,reference,a:null,b:null},cameraSync:false,activeCamera:'reference'},selection:{
+  view:'reference',part:null,checkpoint:data?.manifest.checkpoints.some(item=>item.id===checkpointPair!.pair.checkpointId)?checkpointPair.pair.checkpointId:null,
+  reference:shownPlanPicture()!.path,inspector:'rig'}};
+ }
  return {...bookmark,time:0,selection:{...bookmark.selection,view:'reference',reference:shownPlanPicture()!.path,inspector:'rig'}};
+}
+function restoreCommentInspection(value:unknown,timeOnly?:boolean,row?:CommentRow):Promise<void> {
+ const feedback=row as Feedback|undefined;
+ const mark=host?.record&&host.checkpointPairs&&feedback?
+  parseStageComment((feedback.context as {comment?:unknown}|undefined)?.comment):null;
+ // The record can reopen with a different backdrop. The tile path, hash and record source bind this replay.
+ if(mark?.viewport==='reference'&&mark.sourceHash===host?.record?.sourceHash&&checkpointPairTile(mark.referenceId,mark.referenceHash)){
+  const bookmark=parseBookmark(value);
+  if(!manifestReferenceMatches(mark,bookmark.selection.reference))
+   return restoreInspection(bookmark,lifecycle.signal,!!timeOnly,true,feedback);
+ }
+ return restoreInspection(parseBookmark(value,inspectionBinding()),lifecycle.signal,!!timeOnly,true,feedback);
 }
 function setupComments():void {
  if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.length;if(host?.direction)dirty=dirty||recordComments.length>0;}
@@ -3510,19 +3739,26 @@ function setupComments():void {
  comments=bindStageComments<CommentRow,CommentPose>({general:host?.record||host?.direction||host?.verdictComments?{
   create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row),
   ...(host.verdictComments?{rows:host.verdictComments.rows,available:host.verdictComments.available,refusal:()=>readOnly}:{}),
- }:undefined,listHost:el('comments-list-host'),openList:openReview,hasPicture:()=>!hasTransientQuestionImage(screenRoot)||!!shownPlanPicture(),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?(recordPictures()?{reference:el('reference-viewport')}:{}):{rig:el('rig-viewport'),reference:el('reference-viewport')},
+ }:undefined,listHost:el('comments-list-host'),openList:openReview,hasPicture:()=>checkpointPair?.replayFor===undefined&&(!hasTransientQuestionImage(screenRoot)||!!shownPlanPicture()),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?(recordPictures()?{reference:el('reference-viewport')}:{}):{rig:el('rig-viewport'),reference:el('reference-viewport')},
   pose:view=>{
-   if(host?.record&&(!host.record.hasPicture||shownPlanPicture()))return planPicturePose(view);
+   if(host?.checkpointPair&&checkpointPair||host?.record&&(!host.record.hasPicture||shownPlanPicture()))return planPicturePose(view);
    if(hasTransientQuestionImage(screenRoot))return null;
    if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;
    const renderer=player?.renderer;const current=time,index=frameAtTime(activeFrameClock(),current),referenceId=view==='reference'?select('reference-select').value||null:null,referenceHash=referenceId?data.referenceHashes?.[referenceId]??(data.explicitReference?.id===referenceId?data.explicitReference.sha256:null):null;
    return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;
   },
-  pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:()=>shownPlanPicture()?planPictureBookmark():inspectionBookmark(),restore:(b,timed)=>host?.record&&(!host.record.hasPicture||recordPictures()?.some(picture=>picture.path===(b as {selection?:{reference?:unknown}}|null)?.selection?.reference))?Promise.resolve():restoreInspection(parseBookmark(b,inspectionBinding()),new AbortController().signal,!!timed),feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
+  pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:()=>shownPlanPicture()?planPictureBookmark():inspectionBookmark(),restore:restoreCommentInspection,feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
   locked:host?.record?()=>false:host?.direction?id=>submittedDirectionComments.has(id):isSubmittedFeedback,add:f=>{if(host?.record||host?.direction)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(/^The source changed, so /.test(draftStatus??''))draftStatus=null;if(host?.record||host?.direction){recordCommentsChanged();if(host?.direction){markDirty();comments?.refresh();}return;}if(host?.verdictComments)persistRecordComments();markDirty();renderProposals();return persistence?.save();},draftChanged:()=>{if(typeof renderAnswerControls==='function')renderAnswerControls();},error:value=>message(value,true),
-  picture:mark=>{const record=host?.record,pictures=record?[...record.planPicture?[record.planPicture]:[],...record.questionPictures??[]]:[];
-   return mark.viewport==='reference'&&pictures.find(picture=>mark.referenceId===picture.path&&mark.referenceHash===picture.sha256)?.name||null;},
-  refusal:()=>host?.record&&(!host.record.hasPicture||shownPlanPicture())?null:commentCaptureRefusal(),blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
+  picture:mark=>{
+   if(mark.viewport!=='reference'||manifestReferenceMatches(mark,(mark.bookmark as InspectionBookmark).selection.reference))return null;
+   const tile=checkpointPairTile(mark.referenceId,mark.referenceHash);
+   if(tile)return {name:t(checkpointPairLabels[tile.side])};
+   const record=host?.record,pictures=record?[...record.planPicture?[record.planPicture]:[],...record.questionPictures??[]]:[];
+   return pictures.find(picture=>mark.referenceId===picture.path&&mark.referenceHash===picture.sha256)?.name??null;},
+  refusal:()=>{
+   if(host?.checkpointPair&&checkpointPair)return shownPlanPicture()!.path.length>512?'COMMENT_PICTURE_LABEL_INVALID: picture identity':null;
+   return host?.record&&(!host.record.hasPicture||shownPlanPicture())?null:commentCaptureRefusal();
+  },blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
  });
  if(host?.verdictComments)renderProposals();
 }

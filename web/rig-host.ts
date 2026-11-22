@@ -2,7 +2,7 @@
  * (`main.ts`): the job keeps the transport, the screen keeps its own view. Unset, the screen is the package page. */
 import type {ModelAssets, PosedFrame} from '@rig-c/play';
 import type {PartsIssue} from '../src/parts-comment.ts';
-import type {JobProgressV3, PendingAskV3} from '../src/job-contract.ts';
+import type {JobCheckpointEvidence,JobProgressV3, PendingAskV3} from '../src/job-contract.ts';
 import type {ReviewSession} from '../src/session.ts';
 import type {InspectionBookmark} from './inspection-persistence.ts';
 import type {ControlView} from '../src/control.ts';
@@ -41,7 +41,22 @@ export interface RigHostCommit {
   readonly checkpoints?: ReviewSession['checkpoints'];
   readonly review?: Pick<ReviewSession, 'status' | 'feedback'>;
 }
+export interface CheckpointPairPicture {
+  readonly id:string;
+  readonly path:string;
+  readonly sha256:string;
+  readonly image:HTMLImageElement;
+}
+export interface CheckpointPairView {
+  readonly checkpointId:JobCheckpointEvidence['checkpointId'];
+  readonly before:CheckpointPairPicture;
+  readonly after:CheckpointPairPicture;
+  readonly differenceUrl:string;
+}
 export interface RigHost {
+  /** All declared pairs belong to the displayed publication. The active pair below follows the pending ask. */
+  readonly checkpointPairs?:ReadonlyMap<string,CheckpointPairView>;
+  checkpointPair?():CheckpointPairView|undefined;
   readonly waiting?:boolean;
   readonly subject?:'parts';
   readonly unavailable?:string;

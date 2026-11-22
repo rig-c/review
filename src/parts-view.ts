@@ -1124,7 +1124,7 @@ export function exportPartsVerdict(
 }
 
 /** Numeric comparison is decoded from bound original PNG bytes on the server, never browser pixels. */
-function decodeDifferencePng(bytes: Buffer): PNG {
+export function decodeDifferencePng(bytes: Buffer): PNG {
   // pngjs normalizes valid PNG colour types and bit depths from the bound bytes.
   try { return PNG.sync.read(bytes); }
   catch { return refuse('PARTS_DIFFERENCE_PNG', 'decodable PNG operands required'); }
