@@ -83,10 +83,10 @@ try{
    await click('#idle-repeat');
    assert.equal(await page.evaluate(`document.querySelector('#idle-repeat').checked`),true);
    assert.equal(await page.evaluate(scrubAt('max')),true,'enabling Repeat leaves short paused');
-   const wrap=await page.evaluate<{before:number;after:number;max:number}|null>(`(async()=>{
+   const wrap:{before:number;after:number;max:number}|null=await page.evaluate(`(async()=>{
     const scrub=document.querySelector('#scrub'),play=document.querySelector('#play'),max=Number(scrub.max);
     play.click();
-    let before=Number(scrub.value);
+    let before=0;
     const deadline=performance.now()+5000;
     while(performance.now()<deadline){
      await new Promise(requestAnimationFrame);
