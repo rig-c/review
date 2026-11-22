@@ -1407,7 +1407,7 @@ describe('standalone event subscription lifetime', () => {
                 const classes = new Set<string>();
                 const el: any = {
                     textContent: initial, title: initial, dataset: {},
-                    setAttribute() {}, getAttribute: () => null,
+                    setAttribute(name: string, value: string) { if (name === "title") this.title = value; }, getAttribute(name: string) { return name === "title" ? this.title : null; },
                     classList: {
                         contains: (name: string) => classes.has(name),
                         toggle: (name: string, force?: boolean) => {
@@ -1450,8 +1450,8 @@ describe('standalone event subscription lifetime', () => {
                         host.attach({
                             stage: () => null, redraw() {},
                             message(value, error = false, diagnostic) {
-                                footer.textContent = value; footer.title = diagnostic ?? value; footer.classList.toggle('error', error);
-                                header.textContent = value; header.classList.toggle('error', error);
+                                if (!error) {footer.textContent = value; footer.title = value;}
+                                header.textContent = value; header.title = diagnostic ?? value; header.classList.toggle('error', error);
                             },
                         });
                         host.displayed();
@@ -1490,8 +1490,9 @@ describe('standalone event subscription lifetime', () => {
                         expect(notice.textContent).toBe('JOB_STREAM_FAILED');
                         expect(notice.title).toBe('JOB_STREAM_FAILED');
                     } else {
-                        expect(footer.textContent).toBe('JOB_STREAM_FAILED');
-                        expect(footer.classList.contains('error')).toBe(true);
+                        expect(footer.textContent).toBe(surface === 'record' ? 'Not submitted' : 'Rig 1');
+                        expect(footer.title).toBe(footer.textContent);
+                        expect(footer.classList.contains('error')).toBe(false);
                         expect(header.textContent).toBe('JOB_STREAM_FAILED');
                         expect(header.classList.contains('error')).toBe(true);
                     }
@@ -1538,7 +1539,7 @@ describe('standalone event subscription lifetime', () => {
                 const classes = new Set<string>();
                 const el: any = {
                     textContent: initial, title: initial, dataset: {},
-                    setAttribute() {}, getAttribute: () => null,
+                    setAttribute(name: string, value: string) { if (name === "title") this.title = value; }, getAttribute(name: string) { return name === "title" ? this.title : null; },
                     classList: {
                         contains: (name: string) => classes.has(name),
                         toggle: (name: string, force?: boolean) => {
@@ -1579,8 +1580,8 @@ describe('standalone event subscription lifetime', () => {
                         host.attach({
                             stage: () => null, redraw() {},
                             message(value, error = false, diagnostic) {
-                                footer.textContent = value; footer.title = diagnostic ?? value; footer.classList.toggle('error', error);
-                                header.textContent = value; header.classList.toggle('error', error);
+                                if (!error) {footer.textContent = value; footer.title = value;}
+                                header.textContent = value; header.title = diagnostic ?? value; header.classList.toggle('error', error);
                             },
                         });
                         host.displayed();
@@ -1616,13 +1617,11 @@ describe('standalone event subscription lifetime', () => {
                     gate();
                     await settled(() => attempts >= 1 && notice.title === 'JOB_STREAM_FAILED');
                 } else if (kind === 'submit-before') {
-                    footer.textContent = 'Review was not submitted: stale';
-                    footer.title = 'JOB_ACT_SOURCE_STALE · client: submission';
-                    footer.classList.toggle('error', true);
                     header.textContent = 'Review was not submitted: stale';
+                    header.title = 'JOB_ACT_SOURCE_STALE · client: submission';
                     header.classList.toggle('error', true);
                     gate();
-                    await settled(() => attempts >= 1 && footer.textContent === 'JOB_STREAM_FAILED');
+                    await settled(() => attempts >= 1 && header.textContent === 'JOB_STREAM_FAILED');
                 } else {
                     await settled(() => attempts >= 1);
                     if (kind === 'bootstrap-tx-during') {
@@ -1632,10 +1631,8 @@ describe('standalone event subscription lifetime', () => {
                     } else if (kind === 'record-tx') {
                         adapter.changed({pending: [], closed: false, error: 'JOB_CAPABILITY_REQUIRED'});
                     } else if (kind === 'submit-during') {
-                        footer.textContent = 'Review was not submitted: stale';
-                        footer.title = 'JOB_ACT_SOURCE_STALE · client: submission';
-                        footer.classList.toggle('error', true);
                         header.textContent = 'Review was not submitted: stale';
+                        header.title = 'JOB_ACT_SOURCE_STALE · client: submission';
                         header.classList.toggle('error', true);
                     }
                 }
@@ -1648,17 +1645,17 @@ describe('standalone event subscription lifetime', () => {
                     expect(notice.title).toBe('JOB_CAPABILITY_REQUIRED');
                     expect(notice.textContent).toBe(jobWindowRefusal(new Error('JOB_CAPABILITY_REQUIRED')));
                 } else if (kind === 'rig-tx') {
-                    expect(footer.textContent).toContain('job.failed');
-                    expect(footer.classList.contains('error')).toBe(true);
+                    expect(header.textContent).toContain('job.failed');
+                    expect(footer.classList.contains('error')).toBe(false);
                     expect(header.classList.contains('error')).toBe(true);
                 } else if (kind === 'record-tx') {
-                    expect(footer.textContent).toBe(jobWindowRefusal('JOB_CAPABILITY_REQUIRED'));
-                    expect(footer.classList.contains('error')).toBe(true);
+                    expect(header.textContent).toBe(jobWindowRefusal('JOB_CAPABILITY_REQUIRED'));
+                    expect(footer.classList.contains('error')).toBe(false);
                     expect(header.classList.contains('error')).toBe(true);
                 } else {
-                    expect(footer.textContent).toBe('Review was not submitted: stale');
-                    expect(footer.title).toBe('JOB_ACT_SOURCE_STALE · client: submission');
-                    expect(footer.classList.contains('error')).toBe(true);
+                    expect(footer.title).toBe(footer.textContent);
+                    expect(footer.classList.contains('error')).toBe(false);
+                    expect(header.title).toBe('JOB_ACT_SOURCE_STALE · client: submission');
                     expect(header.textContent).toBe('Review was not submitted: stale');
                     expect(header.classList.contains('error')).toBe(true);
                 }
@@ -1688,7 +1685,7 @@ describe('standalone event subscription lifetime', () => {
                     const classes = new Set<string>();
                     const el: any = {
                         textContent: initial, title: initial, dataset: {},
-                        setAttribute() {}, getAttribute: () => null,
+                        setAttribute(name: string, value: string) { if (name === "title") this.title = value; }, getAttribute(name: string) { return name === "title" ? this.title : null; },
                         classList: {
                             contains: (name: string) => classes.has(name),
                             toggle: (name: string, force?: boolean) => {
@@ -1722,8 +1719,8 @@ describe('standalone event subscription lifetime', () => {
                             host.attach({
                                 stage: () => null, redraw() {},
                                 message(value, error = false, diagnostic) {
-                                    footer.textContent = value; footer.title = diagnostic ?? value; footer.classList.toggle('error', error);
-                                    header.textContent = value; header.classList.toggle('error', error);
+                                    if (!error) {footer.textContent = value; footer.title = value;}
+                                    header.textContent = value; header.title = diagnostic ?? value; header.classList.toggle('error', error);
                                 },
                             });
                             host.displayed();
@@ -1786,9 +1783,9 @@ describe('standalone event subscription lifetime', () => {
                         expect(notice.textContent).toBe(t('JOB_WINDOW_FAILED'));
                         expect(notice.title).toBe('JOB_WINDOW_FAILED');
                     } else if (surface === 'rig') {
-                        expect(footer.textContent).toBe('job.failed · ' + t('JOB_WINDOW_FAILED'));
+                        expect(header.textContent).toBe('job.failed · ' + t('JOB_WINDOW_FAILED'));
                     } else {
-                        expect(footer.textContent).toBe(t('JOB_WINDOW_FAILED'));
+                        expect(header.textContent).toBe(t('JOB_WINDOW_FAILED'));
                     }
 
                     calls.length = 0;
@@ -1802,9 +1799,9 @@ describe('standalone event subscription lifetime', () => {
                         expect(notice.textContent).toBe(t('JOB_CAPABILITY_REQUIRED'));
                         expect(notice.title).toBe('JOB_CAPABILITY_REQUIRED');
                     } else if (surface === 'rig') {
-                        expect(footer.textContent).toBe('job.failed · ' + t('JOB_CAPABILITY_REQUIRED'));
+                        expect(header.textContent).toBe('job.failed · ' + t('JOB_CAPABILITY_REQUIRED'));
                     } else {
-                        expect(footer.textContent).toBe(t('JOB_CAPABILITY_REQUIRED'));
+                        expect(header.textContent).toBe(t('JOB_CAPABILITY_REQUIRED'));
                     }
                 } finally {
                     stop?.();

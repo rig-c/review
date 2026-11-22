@@ -132,12 +132,10 @@ export function createJobRigScreen(options: {
     screen.progress(awaitingAsk?null:latestProgress);
   };
   let lastMessage: [text: string, error?: boolean, diagnostic?: string] = ['', false];
-  let streamReport: {message: [text: string, error?: boolean, diagnostic?: string]; footer: {source: string; title: string; sourceTitle: string | null; error: boolean} | null; header: {source: string; error: boolean} | null; applied: string} | null = null;
+  let streamReport: {message: typeof lastMessage; notice: HTMLElement | null; applied: string; title: string} | null = null;
   let transition:{rollback():Promise<void>;finalize():void}|null=null;
   const say=(text:string,error?:boolean,diagnostic?:string,title?:string)=>{
-    streamReport=null;lastMessage=[text,error,diagnostic];screen?.message(text,error,diagnostic);
-    const notice=title!==undefined&&typeof document!=='undefined'?document.getElementById?.('message'):null;
-    if(notice)notice.title=title!;
+    streamReport=null;lastMessage=[text,error,title??diagnostic];screen?.message(...lastMessage);
   };
   const attempts = new Map<string, {key: string; submissionId: string; rig: ReturnType<typeof createJobRigSubmission>; commit: Omit<RigHostCommit, 'at'>}>();
   async function prepare(display: DisplayPublicationV3, signal: AbortSignal, backdropOnly=false): Promise<JobRigScreenPrepared | null> {
@@ -411,21 +409,24 @@ export function createJobRigScreen(options: {
     report(error:unknown,fallback?:string):void {
       const text=options.refusal(error,fallback),title=jobSubmissionRefusal(error).title;
       if(fallback!=='JOB_STREAM_FAILED'){say(text,true,title);return;}
-      const footer=typeof document!=='undefined'?document.getElementById?.('message'):null,header=typeof document!=='undefined'?document.getElementById?.('review-message'):null;
-      if(!streamReport||(footer&&(footer.textContent??'')!==streamReport.applied)){
-        streamReport={message:footer?[sourceTextContent(footer),footer.classList?.contains('error')??false,footer.title||undefined]:lastMessage,
-          footer:footer?{source:sourceTextContent(footer),title:footer.title,sourceTitle:sourceAttribute(footer,'title'),error:footer.classList?.contains('error')??false}:null,
-          header:header?{source:sourceTextContent(header),error:header.classList?.contains('error')??false}:null,applied:''};
+      const notice=typeof document!=='undefined'?document.getElementById?.('review-message'):null;
+      if(!streamReport||streamReport.notice!==notice||
+        (notice&&(notice.textContent!==streamReport.applied||notice.title!==streamReport.title))){
+        const previous=notice?[sourceTextContent(notice),notice.classList.contains('error'),sourceAttribute(notice,'title')??notice.title] as const:lastMessage;
+        streamReport={message:[...previous],notice,applied:'',title:''};
       }
-      screen?.message(text,true,title);streamReport.applied=footer?footer.textContent??text:text;
+      screen?.message(text,true,title);
+      streamReport.applied=notice?.textContent??text;
+      streamReport.title=notice?.title??title;
     },
     clearReport():void {
       if(!streamReport)return;
-      const current=streamReport,footer=typeof document!=='undefined'?document.getElementById?.('message'):null,header=typeof document!=='undefined'?document.getElementById?.('review-message'):null;
-      streamReport=null;if(footer&&(footer.textContent??'')!==current.applied)return;
-      screen?.message(...current.message);
-      if(current.footer&&footer){setSourceText(footer,current.footer.source);if(current.footer.sourceTitle!==null)setSourceAttribute(footer,'title',current.footer.sourceTitle);footer.title=current.footer.title;footer.classList?.toggle('error',current.footer.error);}
-      if(current.header&&header){setSourceText(header,current.header.source);header.classList?.toggle('error',current.header.error);}
+      const {message,notice,applied,title}=streamReport;
+      streamReport=null;
+      if(!notice){screen?.message(...message);return;}
+      if(notice!==document.getElementById?.('review-message')||notice.textContent!==applied||notice.title!==title)return;
+      setSourceText(notice,message[0]);setSourceAttribute(notice,'title',message[2]??'');notice.classList.toggle('error',!!message[1]);
+      screen?.syncActRow?.();
     },
     commit(prepared: JobRigScreenPrepared) {
       const previous=mounted;mounted=prepared;

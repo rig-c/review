@@ -90,12 +90,14 @@ for (const language of ['en', 'ko'] as const) test(`#785 ${code} says NOT submit
     expect(sentence).toContain(language === 'en' ? 'NOT submitted' : '제출되지 않았어요');
     expect(sentence).toContain('—');
     expect(sentence).not.toContain('JOB_');
-    expect(app.state().title).toStartWith(code);
+    const actStatus = app.state().saveStates.at(-1);
+    expect(actStatus?.title).toStartWith(code);
+    expect(app.state().title).toBe('');
     if (code === 'JOB_BODY_LIMIT') {
-      expect(app.state().title).toContain('POST /jobs/' + f.session.jobId + '/ui/acts');
-      expect(app.state().title).toMatch(/ · \d+ bytes · HTTP 413$/);
+      expect(actStatus?.title).toContain('POST /jobs/' + f.session.jobId + '/ui/acts');
+      expect(actStatus?.title).toMatch(/ · \d+ bytes · HTTP 413$/);
     }
-    expect(app.state().saveStates.at(-1)).toEqual({kind: 'failed', text: sentence, title: app.state().title});
+    expect(actStatus).toMatchObject({kind: 'failed', text: sentence});
     expect(app.state().messages.at(-1)).toBe(sentence);
     expect(app.state().readouts.dirty).toBe('Unsubmitted changes');
     expect(app.state().submittedBaseline.updatedAt).toBeNull();
@@ -117,11 +119,13 @@ for (const language of ['en', 'ko'] as const) test(`#785 stream refusal retains 
     const current = baseline(); current.status = 'approved';
     const app = await mainSave(current, baseline(), {async submit() {throw refusal;}});
     await app.save();
-    expect(app.state().title).toBe('JOB_BODY_LIMIT · client: event stream');
+    const actTitle = app.state().saveStates.at(-1)?.title;
+    expect(actTitle).toBe('JOB_BODY_LIMIT · client: event stream');
+    expect(app.state().title).toBe('');
     expect(app.state().saveStates.at(-1)?.text).toContain(language === 'en' ? 'NOT submitted' : '제출되지 않았어요');
     expect(app.state().saveStates.at(-1)?.text).not.toContain('JOB_');
     expect(app.state().readouts.dirty).toBe('Unsubmitted changes');
-    expect(warning).toHaveBeenCalledWith(app.state().title);
+    expect(warning).toHaveBeenCalledWith(actTitle);
   } finally {warning.mockRestore();setLanguagePreference('en');}
 });
 

@@ -1000,7 +1000,8 @@ try {
   });
   assert.equal(emptyPkgRes.status, 200);
   await wait(
-    `document.querySelector('#message')?.title==='JOB_MODEL_MISSING'||document.querySelector('#message')?.textContent?.includes('JOB_MODEL_MISSING')`,
+    `document.querySelector('#workspace-act-row #review-message')?.title.includes('JOB_MODEL_MISSING') ||
+      document.querySelector('#workspace-act-row #review-message')?.textContent?.includes('JOB_MODEL_MISSING')`,
     'model-less package publication names JOB_MODEL_MISSING',
   );
 

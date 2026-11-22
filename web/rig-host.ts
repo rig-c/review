@@ -18,6 +18,7 @@ export type RigHostStage = Omit<JobRigStage, 'source' | 'presentation'> & {
 export type RigHostNavigation = {subject:'rig';bookmark:InspectionBookmark} |
   {subject:'parts';part:string|null;solo:boolean;view:string;camera:ControlView};
 export interface RigHostScreen {
+    syncActRow?(): void;
   /** Fill the pre-publication frame once, keeping its shell and viewport nodes. */
   publish?(host:RigHost):void;
   navigation?():RigHostNavigation;

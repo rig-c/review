@@ -301,25 +301,24 @@ let readingsPanel:ReadingsPanel|null=null,readingsJob:ReadingsJobView|null=null,
 interface StageWorld {wind:WindState;jolts:JoltStep[];applied:boolean;gravity:number}
 
 function message(value: string, error = false, footerOnly = false, diagnostic?: string): void {
-  text('message', value);
-  el('message').title = value; // the footer truncates long messages
-  el('message').classList.toggle('error', error);
+  if (!error) text('message', value);
   // A view readout (a Difference count) is not the act's state, so it stays in the footer only.
-  if (footerOnly) return;
-  // The modal makes the footer inert; the review dialog repeats the latest message for its reader.
+  if (footerOnly && !error) return;
+  // A refusal belongs to the act row. Keep the previous status and its tooltip in the footer.
   const reviewMessage=el('review-message');
   if(reviewMessage.dataset?.partsPinRefusal){
     if(!error)return;
     delete reviewMessage.dataset.partsPinRefusal;
   }
+  const cleared = !error && reviewMessage.classList.contains('error');
   text('review-message', value); reviewMessage.classList.toggle('error', error);
-  if(error&&rigInspector.act.hidden&&!rigInspector.answersRendered){
-    for(const node of rigInspector.act.querySelectorAll<HTMLElement>('#save,#review-status,label[for="review-status"]'))node.hidden=true;
+  if (diagnostic) reviewMessage.title = diagnostic;
+  if(error&&rigInspector.act.hidden){
+    if(!rigInspector.answersRendered)for(const node of rigInspector.act.querySelectorAll<HTMLElement>('#save,#review-status,label[for="review-status"]'))node.hidden=true;
     rigInspector.act.hidden=false;
     rigInspector.syncActRow?.();
   }
-  // A background refusal names its code and origin on hover; only Submit's own catch changes the act bar.
-  if (diagnostic) el('message').title = diagnostic;
+  if(cleared&&host?.ownerActAccess)syncJobActRow();
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -359,7 +358,7 @@ function renderDraftState(): void {
   if (draftStatus === null && !live && !answerSaved && !dirty && !saving && !draftConflict && !actReadOnly && !session?.updatedAt) return;
   rigInspector.actBar.setSaveState({ kind: actReadOnly ? 'read-only' : saving ? 'saving' : draftConflict ? 'failed' : dirty ? 'unsaved' : 'saved', text: draftConflict ? 'Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.' : saving ? 'Saving…' : answerSaved ? 'Answer saved' : draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus)?draftStatus:actReadOnly??live??draftStatus??(dirty ? 'Unsubmitted changes' : session?.updatedAt ? 'Submitted' : 'Not submitted') });
   if(answerSaved&&!saving&&!draftConflict&&!dirty&&!actReadOnly&&(host?.record||!host)&&
-      (host?.pendingSubjects?.()??pendingAnswers).every(subject=>subject.kind==='interview-picks')&&!el('message').classList.contains('error'))message(sourceTextContent(el('dirty')),false,true);
+      (host?.pendingSubjects?.()??pendingAnswers).every(subject=>subject.kind==='interview-picks')&&!el('review-message').classList.contains('error'))message(sourceTextContent(el('dirty')),false,true);
 }
 
 function renderProvenance(): void {
@@ -1266,7 +1265,6 @@ function bind(): void {
         saving = false; updateSavedState();
         if (submissionFailure) {
           rigInspector.actBar.setSaveState({kind: 'failed', text: submissionFailure.text, title: submissionFailure.title});
-          el('message').title = submissionFailure.title;
         }
       }
       return;
@@ -1392,7 +1390,7 @@ async function start(): Promise<void> {
       const next=await new Promise<RigHost>((resolve,reject)=>{
         lifecycle.signal.addEventListener('abort',()=>reject(new Error('JOB_PRELOAD_CANCELLED')),{once:true});
         host!.attach({publish:resolve,stage:()=>null,redraw:()=>{},
-          message:(value,error,diagnostic)=>message(value,error,false,diagnostic),progress:setJobProgress,suspend:()=>{},dispose:disposeScreen});
+          message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,progress:setJobProgress,suspend:()=>{},dispose:disposeScreen});
       });
       if(disposed)return;
       host=next;access=next.access;partsOnly=next.subject==='parts';
@@ -1439,7 +1437,7 @@ async function start(): Promise<void> {
     if (first) await chooseCheckpoint(first,initial); else renderCheckpoint();
     viewport.state.activeCamera=player?'rig':'reference';if(viewport.state.cameraSync)alignCameras();renderTransport();fitCamera();
     if (requestedId && !first) message(`Checkpoint "${requestedId}" is not in this package. Select one from the list.`, true);
-    else if (actReadOnly) message(actReadOnly, true);
+    else if (actReadOnly) message(actReadOnly);
     else if (host?.ownerActAccess) message('Not submitted',false,true);
     else message(data.manifest.model ? 'Record review status and structured feedback while preserving sources. Motion is read only.' : 'No rig supplied. Review the available references and checkpoints.');
     frameHandle=requestAnimationFrame(tick);
@@ -1456,7 +1454,7 @@ async function start(): Promise<void> {
       }
       if(!player&&(data.manifest.model||referenceInput.state!=='loaded'))throw new Error('JOB_VISUAL_UNAVAILABLE');
       await restorePublicationNavigation();document.body.dataset.ready='true';
-      const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:navigationBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
+      const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:navigationBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
         hasMeshEdits:()=>!!meshEditor?.hasJobEdits(),meshEdits:async()=>meshEditor?.jobEdits()??null,chestLandmarks:()=>chestEditor?.jobEdits()??null};
       host.attach(screen);showInspector(data.manifest.model?'playback':'rig');host.displayed();
     }
@@ -1554,12 +1552,12 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
    if(general?.length){partsSubject?.refreshComments();showCommentCount();}
    dirty=JSON.stringify(issues)!==JSON.stringify(frozen);partsBaseline={subject:'parts',issues:frozen};await persistence?.submitted(partsBaseline);if(disposed)return;state.setSaveState({kind:dirty?'unsaved':'saved',text:dirty?'Unsubmitted changes':'Submitted'});text('dirty',dirty?'Unsubmitted changes':'Submitted');el('dirty').classList.toggle('dirty',dirty);
   }catch(error){saveFailed=true;if(host){submissionFailure=jobSubmissionRefusal(error);message(submissionFailure.text,true);}else{message(errorText(error),true);state.setSaveState({kind:'failed',text:'Save failed.'});}}
-  finally{saving=false;button('save').disabled=saveBlocked();renderDraftState();if(submissionFailure){state.setSaveState({kind:'failed',text:submissionFailure.text,title:submissionFailure.title});el('message').title=submissionFailure.title;}else if(saveFailed)state.setSaveState({kind:'failed',text:'Save failed.'});}
+  finally{saving=false;button('save').disabled=saveBlocked();renderDraftState();if(submissionFailure){state.setSaveState({kind:'failed',text:submissionFailure.text,title:submissionFailure.title});}else if(saveFailed)state.setSaveState({kind:'failed',text:'Save failed.'});}
  };
  viewDisposers.push(viewport.bindControls(unitScaleMessage),viewport.bindNavigation(undefined,()=>!el('stage-layout').getAttribute('aria-busy')?.includes('true')),bindLayerShortcuts(document));
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  if(!host)renderPendingSubjects([{kind:'parts-verdict'}]);
- viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message(actReadOnly??(host?.ownerActAccess?'Not submitted':'Parts ready. Source files remain unchanged.'),!!actReadOnly,!!host?.ownerActAccess&&!actReadOnly);referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
+ viewport.requestFit();await partsSubject.ready();text('dirty','Not submitted');message(actReadOnly??(host?.ownerActAccess?'Not submitted':'Parts ready. Source files remain unchanged.'),false,!!host?.ownerActAccess&&!actReadOnly);referenceInput=subject.painting?{state:'loaded'}:{state:'absent'};renderLayout();
  setupPartsPersistence=async()=>{
   if(host?.record)return;
   const binding:InspectionBinding={mode:'single',sourceHash:subject.sourceHash,rigs:[null]};
@@ -1578,7 +1576,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  await setupPartsPersistence();if(disposed)return;
  if(generalRows?.length)changed();
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
- if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),pendingSubjects:renderPendingSubjects,progress:setJobProgress,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
+ if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,pendingSubjects:renderPendingSubjects,progress:setJobProgress,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
 
  document.body.dataset.ready='true';
 }
@@ -1601,7 +1599,7 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  readOnly=tr(interview?'MODEL_UNAVAILABLE':'JOB_REVIEW_READ_ONLY');
  if(!interview)actReadOnly=readOnlyReason(access,true,host?.ownerActAccess);
  bindWorkspace();bindInspector(true);rigInput={state:'absent'};referenceInput={state:'absent'};renderLayout();
- parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??(host?.record?.questionPicture||host?.record?.planPicture?'':unavailable),!!actReadOnly);
+ parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??(host?.record?.questionPicture||host?.record?.planPicture?'':unavailable));
  text('package-title',interview?.label??host!.record!.label);text('revision','');text('source-hash',`source ${(interview?.sourceHash??host!.record!.sourceHash).slice(0,12)}`);
  el('rig-pane').hidden=false;el('rig-empty').hidden=false;text('rig-empty',unavailable);
  for(const region of document.querySelectorAll('.inspector,.workspace-secondary-toolbar'))for(const control of region.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button')){
@@ -1624,9 +1622,9 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  }else{restoreRecordComments();setupComments();showRecordComments();rigInspector.comments.button.disabled=false;button('stage-comment').disabled=false;}
  const resize=viewport.observeResize();viewDisposers.push(()=>resize.disconnect());
  await workspace?.settle();if(disposed)return;
- if(host?.unavailable){message(t('job.refusal.'+host.unavailable),true);el('message').title=host.unavailable;button('save').disabled=true;button('save').title=host.unavailable;}
+ if(host?.unavailable){message(t('job.refusal.'+host.unavailable),true,false,host.unavailable);button('save').disabled=true;button('save').title=host.unavailable;}
  document.body.dataset.ready='true';
- if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
+ if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
 /** #1041 B: checkpoint, signoff and plan-approval forms are a right-panel section, below the question and above Comments. */
 const recordPanel=panelMake('section',{id:'job-record-asks',className:'workspace-interview-panel',hidden:true});
@@ -2019,7 +2017,9 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  renderDraftState();
 }
 function syncJobActRow(subjects=pendingAnswers):void {
- rigInspector.act.hidden=!subjects.length&&!firstPublicationPrompt&&!jobProgress;
+ const notice=el('review-message');
+ const refusal=notice.classList.contains('error')&&!!notice.textContent?.trim();
+ rigInspector.act.hidden=!subjects.length&&!firstPublicationPrompt&&!jobProgress&&!refusal;
  rigInspector.syncActRow?.();
 }
 function setJobProgress(value:JobProgressV3|null):void {
