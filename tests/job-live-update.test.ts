@@ -199,12 +199,13 @@ test('#743 no-picture record attaches owned lifecycle only after asynchronous wo
   restoreRecordComments(){},showRecordComments(){},setupComments(){commentsSetup++;},rigInspector:{comments:{button:commentButton}},button:()=>stageCommentButton,
   PartExplorer:class{},workspace:{settle:()=>new Promise<void>(resolve=>{settle=resolve;})},
   viewport:{observeResize:()=>({disconnect:()=>events.push('disconnected')})},viewDisposers:disposers,
-  renderRecordForms(){},renderPendingSubjects(){},setJobProgress(){},suspendScreen:suspend,resumeScreen:resume,disposeScreen:dispose};
+  renderRecordForms(){},renderPendingSubjects(){},setJobProgress(){},syncJobActRow(){},suspendScreen:suspend,resumeScreen:resume,disposeScreen:dispose};
  const run=new Function('scope',`with(scope){${js};return startRecord();}`);
  const pending=run(scope);expect(attached).toBeUndefined();expect(document.body.dataset.ready).toBeUndefined();
  settle();await pending;expect(events).toEqual(['attached','displayed']);
  expect(commentsSetup).toBe(1);expect(commentButton.disabled).toBe(false);expect(stageCommentButton.disabled).toBe(false);
  expect(attached.suspend).toBe(suspend);expect(attached.resume).toBe(resume);expect(attached.dispose).toBe(dispose);
+ expect(attached.syncActRow).toBe(scope.syncJobActRow);
  expect(attached.navigation).toBeUndefined();expect(attached.incompatible).toBeUndefined();expect(attached.recordForms).toBe(scope.renderRecordForms);
  for(const close of disposers)close();expect(events.at(-1)).toBe('disconnected');
 });

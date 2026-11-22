@@ -684,6 +684,7 @@ for(const language of ['en','ko'] as const)test('#987 ticks the current age and 
  const scope={askHeadline:headline,askSentence:'',partsSubject:null,host:null,firstPublicationPrompt:false,pendingAnswers:[],jobProgress:null,
   progressTimer:undefined,suspended:false,disposed:false,
   rigInspector:{act:{hidden:true},syncActRow(){}},
+  el:()=>({classList:{contains:()=>false}}),
   Date:{parse:Date.parse,now:()=>now},
   document:{createTextNode:(data:string)=>({data}),createElement:()=>({style:{},textContent:''})},
   setInterval(tick:()=>void){activeTick=tick;return 1;},clearInterval(){activeTick=undefined;},
