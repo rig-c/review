@@ -4,8 +4,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'bun:test';
+import {feedbackItemComments} from '../src/stage-comment.ts';
+import backdropPins from './fixtures/record-backdrop-rig-pins-1068.json';
+import type {Feedback} from '../src/session.ts';
 import {JobSession} from '../src/job-session.ts';
-import {createJobHostPorts} from '../src/job-api.ts';
+import {createJobHostPorts, parseCommentsAct} from '../src/job-api.ts';
 import {createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './helpers/job-record-fixture.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
 import { runRecordBrowserPreflightSetupCheck } from './job-record-browser.ts';
@@ -1727,7 +1730,36 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
     expect(askOptionRes.status).toBe(200);
     const optionAsk = (await askOptionRes.json()).value as publicJobHost.JobPendingAskV3;
 
-    const commitOptionRes = await host.ports.commitUIAct(
+    const [rigPoint] = feedbackItemComments(backdropPins.rows as unknown as Feedback[]);
+    const referencePoint = structuredClone(rigPoint!);
+    const mark = (referencePoint.anchor.context as {comment: Record<string, unknown>}).comment;
+    Object.assign(mark, {viewport: 'reference', referenceId: 'inputs/reference.png', referenceHash: 'f'.repeat(64)});
+    referencePoint.text = 'Point · 점';
+    referencePoint.anchor = {...referencePoint.anchor, id: 'reference-point'};
+    const sha256 = 'a'.repeat(64);
+    const crop = {path: `comment-crops/${sha256}.png`, sha256, width: 2, height: 3};
+    const region = {text: 'Region · 영역', anchor: {name: 'reference.png',
+      imageRegion: {x: 1, y: 2, width: 2, height: 3}, crop, nativeCrop: crop}};
+    const comments = [referencePoint, region, {text: '  First line\n둘째 줄  '}, rigPoint!];
+    const submission = JSON.stringify({
+      publicationId: optionPublication.publicationId,
+      askId: optionAsk.askId,
+      pageId: 'page-create-option',
+      displayedNonce: ackOptionRes.value.displayedNonce,
+      expectedGeneration: host.session.status().generation,
+      submissionId: 'sub-option-bones',
+      kind: 'interview-picks',
+      value: {
+        questionId: 'bones',
+        selections: [
+          { itemId: 'chains', optionId: 'keep', otherText: null },
+          { itemId: 'placement', optionId: 'keep', otherText: null },
+          { itemId: 'length', optionId: 'keep', otherText: null },
+        ],
+        note: 'Keep synthetic bones options.', comments,
+      },
+    });
+    const commit = () => host.ports.commitUIAct(
       host.session.jobId,
       new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
         method: 'POST',
@@ -1736,29 +1768,20 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
           Origin: host.origin,
           'X-Review-Capability': credentials.ui,
         },
-        body: JSON.stringify({
-          publicationId: optionPublication.publicationId,
-          askId: optionAsk.askId,
-          pageId: 'page-create-option',
-          displayedNonce: ackOptionRes.value.displayedNonce,
-          expectedGeneration: host.session.status().generation,
-          submissionId: 'sub-option-bones',
-          kind: 'interview-picks',
-          value: {
-            questionId: 'bones',
-            selections: [
-              { itemId: 'chains', optionId: 'keep', otherText: null },
-              { itemId: 'placement', optionId: 'keep', otherText: null },
-              { itemId: 'length', optionId: 'keep', otherText: null },
-            ],
-            note: 'Keep synthetic bones options.',
-          },
-        }),
+        body: submission,
       }),
     );
-    expect(commitOptionRes.ok).toBe(true);
-    if (!commitOptionRes.ok) throw new Error(commitOptionRes.error.code);
-    const finalizedOptionAct = commitOptionRes.value as unknown as JobRecordAct;
+    const committed = await commit();
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) throw new Error(committed.error.code);
+    const finalizedOptionAct = committed.value as JobActV3;
+    const parsed = parseCommentsAct(finalizedOptionAct);
+    expect(parsed.kind).toBe('interview-picks');
+    expect(JSON.stringify(parsed.value.comments)).toBe(JSON.stringify(comments));
+    expect(JSON.stringify(parsed)).toBe(JSON.stringify(finalizedOptionAct));
+    const replay = await commit();
+    if (!replay.ok) throw new Error(replay.error.code);
+    expect(JSON.stringify(replay.value)).toBe(JSON.stringify(finalizedOptionAct));
     const fetchOptionRes = await callApi(
       {
         schema: HOST_JOB_API_V3_SCHEMA,
@@ -1768,11 +1791,10 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
         actId: finalizedOptionAct.actId,
       },
       consumerGrant!.fetchCapability,
+      'application/vnd.rig-review.act+json',
     );
     expect(fetchOptionRes.status).toBe(200);
-    const parsedOptionAct = parseRecordActFromHost((await fetchOptionRes.json()).value);
-    expect(parsedOptionAct).toEqual(finalizedOptionAct);
-    expect(parsedOptionAct.kind).toBe('interview-picks');
+    expect(await fetchOptionRes.text()).toBe(JSON.stringify(finalizedOptionAct));
 
     // 7. Close over job-api@3 succeeds and revokes consumer fetch
     const closeRes = await callApi({

@@ -1322,7 +1322,7 @@ function bind(): void {
   viewDisposers.push(viewport.bindNavigation(rigPanCarry({player:()=>player},viewport.state),panOnly=>!comments?.active()||!!panOnly));
   for(const [id,key] of [['layer-images','images'],['layer-mesh','mesh'],['layer-bones','bones']] as const)input(id).onchange=()=>{layers[key]=input(id).checked;redrawOverlay(false);};
   viewDisposers.push(bindLayerShortcuts(document));describeLayerToggles(document,el('layer-state').textContent??'');
-  input('idle-repeat').onchange=()=>{syncPlayerLoop();renderIdle();if(canRepeatIdle())void playPreview();};
+  input('idle-repeat').onchange=()=>{syncPlayerLoop();renderIdle();if(animation==='idle'&&canRepeatIdle())void playPreview();};
   bindEnvironment();
   for(const id of ['proposal-panel','checkpoint-detail'])el(id).addEventListener('focusin',pause);
   bindInspector();
@@ -1738,9 +1738,12 @@ function recordPictures():{path:string;sha256:string}[]|undefined {
  const picture=host?.record?.planPicture,rows=[...picture?[{path:picture.path,sha256:picture.sha256}]:[],...host?.record?.questionPictures??[]];
  return rows.length?rows:undefined;
 }
-/** Comments remain native rows locally; the old act field carries their scalar projection only. */
+/** Comments remain native rows in the draft and feed both act encodings. */
+function recordJobComments() {
+ return recordComments.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary});
+}
 function recordCommentWords():string {
- return projectComments(recordComments.map(row=>'schema' in row?partsIssueComments([row as import('../src/parts-comment.ts').PartsIssue])[0]!:'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}),recordPictures());
+ return projectComments(recordJobComments(),recordPictures());
 }
 /** The sealed plan picture or question image while it is the reference view's shown image, with or without a retained
  * backdrop (#1068); null otherwise (#1048). */
@@ -1845,8 +1848,7 @@ function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
   unregisterQuestion?.();unregisterQuestion=null;rigAsk.onclick=null;
  }
  showQuestionForm();
- // #1048: a record question form carries the comments too, in its interview-picks act's optional `words`.
- if(!standalone&&host?.record)for(const form of questionTabForms)(form as JobForm['form']).commentWords=recordCommentWords;
+ if(!standalone&&host?.record)for(const form of questionTabForms)(form as JobForm['form']).interviewComments=recordJobComments;
  forms=forms.filter(form=>!questionTabForms.includes(form));
  if(!forms.length){
   for(const form of recordForms()){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
@@ -2114,8 +2116,8 @@ function syncPlayerLoop():void {
  try{drawRig(()=>{player!.play(animation,{loop:want});if(!playing)player!.pause();player!.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time);player!.draw();});}
  catch(error){message(errorText(error),true);}
 }
-function canRepeatIdle():boolean{const direction=activeScene();if(direction)return direction.take.loop;return !!player&&idleAvailable(assets?.animations.map(a=>a.name)??[],animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
-function renderIdle():void {text('idle-state',canRepeatIdle()?activeScene()&&animation&&animation!=='idle'?`${data.manifest?.animations?.find(a=>a.id===animation)?.label??animation} · repeating`:'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
+function canRepeatIdle():boolean{const direction=activeScene();if(direction)return direction.take.loop;return !!player&&!!assets?.animations.some(clip=>clip.name===animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
+function renderIdle():void {text('idle-state',canRepeatIdle()?animation&&animation!=='idle'?`${data.manifest?.animations?.find(a=>a.id===animation)?.label??animation} · repeating`:'Actual idle · repeat enabled':animation==='idle'?'Idle repeat paused':'Non-idle inspection · no automatic playback');}
 async function playPreview():Promise<void> {
  if((!player&&!video&&!sequence)||duration<=0)return;
  const intent=++playbackIntent;desiredPlay=true;idleHeld=false;syncPlayerLoop();if(time>=duration)seek(0,{kind:'replay'});

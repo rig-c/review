@@ -30,7 +30,7 @@ export const JOB_RIG_REVIEW_ACT_SCHEMA = 'rig-review/act@3' as const;
 export const JOB_RECORD_ACT_SCHEMA = 'rig-review/act@4' as const;
 /** New parts verdicts only. Historical @2 parts-verdict acts remain readable. */
 export const JOB_PARTS_VERDICT_ACT_SCHEMA = 'rig-review/act@5' as const;
-/** Fresh checkpoint, parts-verdict, rig/post review-verdict and signoff writers. Image-review and interview-picks stay @2; record acts stay @4. */
+/** Fresh interview-picks, checkpoint, parts-verdict, rig/post review-verdict and signoff writers. Image-review stays @2. */
 export const JOB_COMMENTS_ACT_SCHEMA = 'rig-review/act@6' as const;
 /** @6 plus an optional per-comment `context` (#714). */
 export const JOB_COMMENT_CONTEXT_ACT_SCHEMA = 'rig-review/act@7' as const;
@@ -80,6 +80,9 @@ export interface JobCommentContext {
 }
 export interface JobContextComment extends JobComment { readonly context?: JobCommentContext }
 export interface JobCommentsActValues {
+  readonly 'interview-picks': Omit<JobActValues['interview-picks'], 'words'> & {
+    readonly comments: readonly (JobComment & {readonly anchor?: Exclude<JobCommentAnchor, {readonly checkpointId: string}>})[];
+  };
   readonly checkpoint: { readonly checkpointId: string; readonly planStepId: string;
     readonly outcome: 'pass' | 'fail'; readonly comments: readonly JobComment[] };
   readonly 'parts-verdict': { readonly verdict: 'approved' | 'changes-requested'; readonly comments: readonly JobComment[] };
@@ -92,16 +95,18 @@ export type JobCommentsAct = {
     readonly schema: typeof JOB_COMMENTS_ACT_SCHEMA;
     readonly actId: string; readonly jobId: string; readonly askId: string; readonly publicationId: string;
     readonly kind: Kind; readonly authority: JobHumanAuthority; readonly at: string;
-    readonly source: Exclude<SourceV3, OptionSource>; readonly value: JobCommentsActValues[Kind]; readonly still?: JobRigStill;
+    readonly source: Kind extends 'interview-picks' ? JobActSources['interview-picks'] | OptionSource : Exclude<SourceV3, OptionSource>;
+    readonly value: JobCommentsActValues[Kind]; readonly still?: Kind extends 'interview-picks' ? never : JobRigStill;
   }
 }[keyof JobCommentsActValues];
-/** act@7: the @6 envelope whose comments may carry `context`. */
+type ContextCommentsActKind = Exclude<keyof JobCommentsActValues, 'interview-picks'>;
+/** act@7: verdict, checkpoint, signoff and reopen comment envelopes may carry `context`. */
 export type JobContextCommentsAct = {
-  [Kind in keyof JobCommentsActValues]: Omit<Extract<JobCommentsAct, { readonly kind: Kind }>, 'schema' | 'value'> & {
+  [Kind in ContextCommentsActKind]: Omit<Extract<JobCommentsAct, { readonly kind: Kind }>, 'schema' | 'value'> & {
     readonly schema: typeof JOB_COMMENT_CONTEXT_ACT_SCHEMA;
     readonly value: Omit<JobCommentsActValues[Kind], 'comments'> & { readonly comments: readonly JobContextComment[] };
   }
-}[keyof JobCommentsActValues];
+}[ContextCommentsActKind];
 
 export interface JobMeshEditValue {
   readonly slot: string;
@@ -140,11 +145,11 @@ type JobRigMeshEditsAct = Omit<Extract<JobContextCommentsAct, {kind: 'review-ver
 
 /** Decoder grammar for @8, whose writer emits it only when mesh edits are present. */
 export type JobMeshEditsAct = JobRigMeshEditsAct | {
-  [Kind in keyof JobCommentsActValues]: Omit<Extract<JobContextCommentsAct, {kind: Kind}>, 'schema' | 'value'> & {
+  [Kind in ContextCommentsActKind]: Omit<Extract<JobContextCommentsAct, {kind: Kind}>, 'schema' | 'value'> & {
     readonly schema: typeof JOB_MESH_EDITS_ACT_SCHEMA;
     readonly value: Extract<JobContextCommentsAct, {kind: Kind}>['value'] & {readonly meshEdits?: never};
   }
-}[keyof JobCommentsActValues];
+}[ContextCommentsActKind];
 
 /** Setup-pose rig px in the retained model's stage, shared by the seed and the edit. */
 export type JobChestLandmarkValue = Pick<JobMeshEditValue, 'slot' | 'skin' | 'attachment' | 'basis'> & {
@@ -600,7 +605,8 @@ export interface JobActValues {
  * supplies checkpoint ID, outcome and words only. Create derives execution
  * stage from its authoritative step phase/order. Review never stamps a stage.
  */
-export type JobUIActValues = Omit<JobActValues, 'checkpoint' | 'parts-verdict' | 'review-verdict'> & {
+export type JobUIActValues = Omit<JobActValues, 'interview-picks' | 'checkpoint' | 'parts-verdict' | 'review-verdict'> & {
+  readonly 'interview-picks': JobActValues['interview-picks'] & {readonly comments?: JobCommentsActValues['interview-picks']['comments']};
   readonly checkpoint: Omit<JobActValues['checkpoint'], 'planStepId'>;
   readonly 'parts-verdict': PartsVerdictValue & {readonly general?: readonly string[]};
   readonly 'review-verdict': JobImageReviewValue
@@ -1336,6 +1342,10 @@ export type RecordAct = Pick<JobLegacyAct,
     readonly value: RecordReopenValue;
   }
 );
+
+type RecordPicksCommentsAct = Extract<JobCommentsAct, {kind: 'interview-picks'}> & {readonly source: OptionSource};
+
+export type RecordUIAct = RecordAct | RecordPicksCommentsAct;
 
 export type SourceV3 = JobSourceBinding | RecordSource;
 export type ActV3 = JobAct | RecordAct;

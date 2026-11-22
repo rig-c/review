@@ -1,6 +1,5 @@
 import {takeSample} from '../web/scene-plates.ts';
 import type {DirectionInspection} from '../src/direction-inspection.ts';
-import {idleAvailable} from '../web/view-controls.ts';
 import {expect,test} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import {RigPlayer} from '@rig-c/play';
@@ -119,7 +118,7 @@ test('#799 the first scene draw and immediate frozen pose use a nonzero mapped s
  }finally{h.close();}
 });
 
-test('#841 a looping direction scene with a non-idle clip labels #idle-state by the clip in EN and KO while idle and non-scene cases keep the idle label',()=>{
+test('#841 and #1090 label repeating direction and standalone clips by name in EN and KO',()=>{
  const direction:DirectionInspection={file:{path:'direction.json',sha256:'a'.repeat(64)},model:{path:'skeleton.model.json',sha256:'b'.repeat(64)},rigVersion:1,
   camera:{space:'rig-world-y-up',keys:[{time:0,easing:'hold',box:{x:0,y:0,width:80,height:64}}]},
   take:{duration:4,loop:true},timing:[{time:0,source_time:0,easing:'linear'},{time:4,source_time:2,easing:'hold'}]};
@@ -135,7 +134,6 @@ test('#841 a looping direction scene with a non-idle clip labels #idle-state by 
   animation:'look_around',
   duration:2,
   axisInspection:false,
-  idleAvailable,
   activeScene:()=>scene,
   input:()=>({checked:true}),
   text:(id:string,value:string)=>{if(id==='idle-state')setSourceText(idleStateEl,value);},
@@ -162,6 +160,12 @@ test('#841 a looping direction scene with a non-idle clip labels #idle-state by 
   expect(rendered('ko')).toBe('실제 아이들 · 반복 활성화됨');
 
   scope.animation='look_around';
+  run.renderIdle();
+  expect(rendered('en')).toBe('look_around · repeating');
+  expect(rendered('ko')).toBe('look_around · 반복 재생 중');
+
+  scope.animation='missing';
+  expect(run.canRepeatIdle()).toBe(false);
   run.renderIdle();
   expect(rendered('en')).toBe('Non-idle inspection · no automatic playback');
   expect(rendered('ko')).toBe('비아이들 점검 · 자동 재생 안 함');

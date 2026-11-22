@@ -3,13 +3,13 @@ import {
   JOB_ACT_SCHEMA, JOB_API_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_API_V3_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA, jobStillByteLimit, JOB_ENABLED_ACT_KINDS, JOB_PLAN_BOUND_SIGNOFF_STAGES, JOB_RESERVED_ACT_KINDS,
   type ActV3, type JobAct, type JobComment, type JobCommentsAct, type JobApiSchema, type JobPendingAsk, type JobPublicationMode, type JobReviewerBinding,
   type JobSourceBinding, type JobSubject, type JobUISubmission, type JobRigCapture, type JobRigStill,
-  type JobMeshEdit, type PendingAskV3, type RecordAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
+  type JobMeshEdit, type PendingAskV3, type RecordUIAct, type RecordSource, type RecordSubject, type SourceV3, type UISubmissionV3,
   type JobCommentContext, type JobContextComment,
   type JobChestLandmarkEdit,
 } from './job-contract.ts';
 import { parsePartsIssue, type PartsIssue } from './parts-comment.ts';
 import {
-  isRecordSource, isRigDraftVerdictSource, parseJobSelector, jobHash, jobId, jobInteger, jobObject,
+  isRecordSource, isRigDraftVerdictSource, parseJobSelector, commentsObject, jobHash, jobId, jobInteger, jobObject,
   commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, recordActSource, requestDigest, validateRecordAskSubject,
   chestLandmarkIdentity, parseChestLandmarkEdits, parseChestLandmarksAct,
 } from './job-api.ts';
@@ -37,9 +37,19 @@ function words(value: unknown): string {
 }
 
 /** The writer's output must decode through the public @6 decoder; its refusal is JOB_ACT_INVALID. */
-function commentsAct(act: JobCommentsAct): JobCommentsAct {
+function commentsAct<Act extends JobCommentsAct>(act: Act): Act {
   parseCommentsAct(act);
   return act;
+}
+
+function picksComments(value: Record<string, unknown>): Extract<JobCommentsAct, {kind: 'interview-picks'}>['value']['comments'] {
+  if (Object.hasOwn(value, 'comments')) {
+    if ('words' in value) throw new JobError('JOB_ACT_INVALID');
+    // commentsAct checks the complete wire value before emission.
+    return value.comments as ReturnType<typeof picksComments>;
+  }
+  const legacy = 'words' in value ? words(value.words) : '';
+  return legacy.trim() ? [{text: legacy}] : [];
 }
 
 function rigVerdictFeedbackComments(feedback: readonly Feedback[], subject: NonNullable<JobCommentContext['subject']>): JobContextComment[] {
@@ -262,10 +272,14 @@ export function prepareJobStill(input: UISubmissionV3, ask: JobPendingAsk, retai
     if (!clip || !Number.isFinite(clip.duration) || frame > clip.duration) throw new JobError('JOB_STILL_CAPTURE_FAILED');
   }
   const prefix = 'data:image/png;base64,';
-  if (typeof capture.png !== 'string' || capture.png.length > prefix.length + Math.ceil(jobStillByteLimit / 3) * 4 ||
-      !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(capture.png)) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  if (typeof capture.png !== 'string') throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  if (capture.png.length > prefix.length + Math.ceil(jobStillByteLimit / 3) * 4) {
+    throw new JobError('JOB_STILL_CAPTURE_FAILED', undefined, jobStillByteLimit);
+  }
+  if (!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(capture.png)) throw new JobError('JOB_STILL_CAPTURE_FAILED');
   const bytes = Buffer.from(capture.png.slice(prefix.length), 'base64');
-  if (bytes.length > jobStillByteLimit || prefix + bytes.toString('base64') !== capture.png) throw new JobError('JOB_STILL_CAPTURE_FAILED');
+  if (bytes.length > jobStillByteLimit) throw new JobError('JOB_STILL_CAPTURE_FAILED', undefined, jobStillByteLimit);
+  if (prefix + bytes.toString('base64') !== capture.png) throw new JobError('JOB_STILL_CAPTURE_FAILED');
   try { validatePngBytes(bytes, capture.width as number, capture.height as number); }
   catch { throw new JobError('JOB_STILL_CAPTURE_FAILED'); }
   const sha256 = jobHash(bytes);
@@ -302,7 +316,7 @@ export function prepareJobRecordAct(options: {
   readonly still?: unknown;
   readonly actId?: string;
   readonly at?: string;
-}): RecordAct {
+}): RecordUIAct {
   const { submission, ask, retained, reviewer } = options;
   if (!submission || typeof submission !== 'object' || Array.isArray(submission)) {
     throw new JobError('JOB_REQUEST_INVALID');
@@ -361,6 +375,7 @@ export function prepareJobRecordAct(options: {
     jobId: actIdField(options.jobId),
     askId: actIdField(ask.askId),
     publicationId: actIdField(ask.publicationId),
+    kind: askSubject.kind,
     authority: {
       actor: 'human' as const,
       channel: 'review-ui' as const,
@@ -372,7 +387,7 @@ export function prepareJobRecordAct(options: {
   switch (askSubject.kind) {
     case 'interview-picks': {
       if (boundSource.subject !== 'option-set') throw new JobError('JOB_ACT_SOURCE_STALE');
-      const value = actObject(submission.value, ['questionId', 'selections', 'note', 'words']);
+      const value = actObject(submission.value, ['questionId', 'selections', 'note', 'words', 'comments']);
       if (
         !('questionId' in value) ||
         !('selections' in value) ||
@@ -401,8 +416,6 @@ export function prepareJobRecordAct(options: {
         };
       });
       const note = words(value.note);
-      // #1048: comments ride the optional `words`; with none the act keeps its pre-#1048 bytes (no key).
-      const comments = 'words' in value ? words(value.words) : '';
       try {
         validatePicks(
           {
@@ -422,12 +435,11 @@ export function prepareJobRecordAct(options: {
       } catch {
         throw new JobError('JOB_ACT_INVALID');
       }
-      return parseRecordAct({
-        ...envelope,
-        kind: 'interview-picks',
-        // #1004: the act's singular set fields name this ask's set.
-        source: recordActSource(boundSource, askSubject),
-        value: { questionId: askSubject.questionId, selections, note, ...(comments ? { words: comments } : {}) },
+      const source = recordActSource(boundSource, askSubject);
+      if (source.subject !== 'option-set') throw new JobError('JOB_ACT_SOURCE_STALE');
+      return commentsAct({
+        ...envelope, schema: JOB_COMMENTS_ACT_SCHEMA, kind: 'interview-picks', source,
+        value: { questionId: askSubject.questionId, selections, note, comments: picksComments(value) },
       });
     }
     case 'checkpoint': {
@@ -500,7 +512,7 @@ export function finalizeJobAct(options: {
   readonly still?: undefined;
   readonly actId?: string;
   readonly at?: string;
-}): RecordAct;
+}): RecordUIAct;
 export function finalizeJobAct(options: {
   readonly jobId: string;
   readonly submission: UISubmissionV3;
@@ -561,11 +573,11 @@ export function finalizeJobAct(options: {
     authority: { actor: 'human' as const, channel: 'review-ui' as const, reviewer: structuredClone(reviewer) },
     at,
   };
-  // Image-review and interview-picks keep act@2: Create refuses both under act@6.
+  // Image-review keeps act@2.
   const comments = {...envelope, schema: JOB_COMMENTS_ACT_SCHEMA};
   switch (submission.kind) {
     case 'interview-picks': {
-      const value = jobObject(submission.value, ['questionId', 'selections', 'note']);
+      const value = commentsObject(submission.value, ['questionId', 'selections', 'note'], ['comments']);
       const subject = ask.subject;
       if (subject.kind !== 'interview-picks' || value.questionId !== subject.questionId || !Array.isArray(value.selections)) {
         throw new JobError('JOB_ACT_INVALID');
@@ -582,8 +594,8 @@ export function finalizeJobAct(options: {
           picks: selections.map(item => ({ ask: item.itemId, option_id: item.optionId,
             ...(item.otherText === null ? {} : { other_text: item.otherText }) })), note }, question);
       } catch { throw new JobError('JOB_ACT_INVALID'); }
-      return { ...envelope, kind: 'interview-picks', source: { ...source, optionSet: source.optionSet! },
-        value: { questionId: subject.questionId, selections, note } };
+      return commentsAct({ ...comments, kind: 'interview-picks', source: { ...source, optionSet: source.optionSet! },
+        value: { questionId: subject.questionId, selections, note, comments: picksComments(value) } });
     }
     case 'checkpoint': {
       const value = jobObject(submission.value, ['checkpointId', 'outcome', 'words']);

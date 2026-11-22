@@ -16,7 +16,7 @@ import vendored from './fixtures/act6-projection-create-c8382ba5.json';
 useTemporaryReviewState();
 
 // #713: fresh checkpoint, signoff, parts-verdict and rig/post review-verdict acts are act@6.
-// Image-review and interview-picks stay act@2 (Create refuses them under @6); record acts stay act@4.
+// Interview-picks joins act@6 under #646. Image-review stays act@2.
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => {for (const f of fixtures.splice(0)) await f.close();});
@@ -95,7 +95,7 @@ test('post direction verdict is written as act@6 and read back through the publi
 
 });
 
-test('interview-picks stays pinned at act@2 with its note', async () => {
+test('interview-picks writes act@6 with its note and comments', async () => {
   const f = await fixture(), publication = await f.publish();
   const retained = f.session.retainedSource(publication.publicationId);
   const question = {ref: {path: 'synthetic/options.json', sha256: '2'.repeat(64)}, editable: true,
@@ -110,8 +110,8 @@ test('interview-picks stays pinned at act@2 with its note', async () => {
     displayedNonce: 'nonce', expectedGeneration: 1, submissionId: 'submission', kind: 'interview-picks', value: {
       questionId: 'question-one', selections: [{itemId: 'item-one', optionId: 'value-one', otherText: null}], note: '  원문 '}};
   const act = finalizeJobAct({jobId: f.session.jobId, submission, ask, retained: withQuestion, reviewer});
-  expect(act.schema).toBe('rig-review/act@2');
-  expect(act.value).toEqual(submission.value);
+  expect(act.schema).toBe('rig-review/act@6');
+  expect(act.value).toEqual({...submission.value, comments: []});
 });
 
 test('an empty or whitespace-only note has no comment form: zero comments, nothing padded', () => {

@@ -1,4 +1,4 @@
-/** Ordinary Nova browser verification for model-free record mode (job-api@3 / act@4) and package normal-entry regression. Run with --lang en or --lang ko. */
+/** Ordinary Nova browser verification for model-free record mode (job-api@3 / act@4 and act@6) and package normal-entry regression. Run with --lang en or --lang ko. */
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
@@ -10,8 +10,10 @@ import {
   JOB_API_SCHEMA,
   JOB_API_V3_SCHEMA,
   JOB_RECORD_ACT_SCHEMA,
+  JOB_COMMENTS_ACT_SCHEMA,
   JOB_RECORD_READER_ID,
   parseRecordAct,
+  parseCommentsAct,
   startJobHost,
   type JobApiResponseV3,
   type JobEventV3,
@@ -20,6 +22,7 @@ import {
   type JobPlanContext,
   type JobPublicationV3,
   type JobRecordAct,
+  type JobCommentsAct,
   type JobRecordPartsIdentity,
   type JobRecordPublicationReader,
   type JobRecordReaderInput,
@@ -813,7 +816,7 @@ try {
   );
   assert.equal(actEvents.length, 3);
 
-  const fetchedActs: Record<string, JobRecordAct> = {};
+  const fetchedActs: Record<string, JobRecordAct | JobCommentsAct> = {};
   for (const event of actEvents) {
     const jsonFetchRes: Response = await fetch(`${recordHost.origin}/jobs/${recordHost.session.jobId}/api`, {
       method: 'POST',
@@ -851,10 +854,14 @@ try {
       }),
     });
     assert.equal(rawFetchRes.status, 200);
-    const rawParsed = parseRecordAct(JSON.parse(await rawFetchRes.text()));
-    const envelopeParsed = parseRecordAct(jsonFetched.value);
+    const picks = event.act.kind === 'interview-picks';
+    const parse = picks ? parseCommentsAct : parseRecordAct;
+    const rawBytes = await rawFetchRes.text();
+    const rawParsed = parse(JSON.parse(rawBytes));
+    const envelopeParsed = parse(jsonFetched.value);
     assert.deepEqual(rawParsed, envelopeParsed);
-    assert.equal(envelopeParsed.schema, JOB_RECORD_ACT_SCHEMA);
+    assert.equal(envelopeParsed.schema, picks ? JOB_COMMENTS_ACT_SCHEMA : JOB_RECORD_ACT_SCHEMA);
+    assert.equal(rawBytes, JSON.stringify(jsonFetched.value));
     assert.deepEqual(envelopeParsed.authority, {
       actor: 'human',
       channel: 'review-ui',
@@ -863,7 +870,7 @@ try {
     fetchedActs[envelopeParsed.kind] = envelopeParsed;
   }
 
-  assert.equal(fetchedActs['interview-picks']?.source.subject, 'option-set');
+  assert.equal((fetchedActs['interview-picks']?.source as JobRecordAct['source'] | undefined)?.subject, 'option-set');
   assert.deepEqual(fetchedActs['interview-picks']?.value, {
     questionId: 'bones',
     selections: [
@@ -872,9 +879,10 @@ try {
       { itemId: 'length', optionId: 'keep', otherText: null },
     ],
     note: existingNote,
+    comments: [],
   });
 
-  assert.equal(fetchedActs.checkpoint?.source.subject, 'plan');
+  assert.equal((fetchedActs.checkpoint?.source as JobRecordAct['source'] | undefined)?.subject, 'plan');
   assert.deepEqual(fetchedActs.checkpoint?.value, {
     checkpointId: 'seethrough',
     planStepId: 'seethrough',
@@ -882,7 +890,7 @@ try {
     words: checkpointWords,
   });
 
-  assert.equal(fetchedActs.signoff?.source.subject, 'plan');
+  assert.equal((fetchedActs.signoff?.source as JobRecordAct['source'] | undefined)?.subject, 'plan');
   assert.deepEqual(fetchedActs.signoff?.value, {
     stage: 'rigging-interview',
     decision: 'approved',

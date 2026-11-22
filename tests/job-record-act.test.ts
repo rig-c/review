@@ -70,6 +70,22 @@ test('#646 record-plan @6 reuses declared checkpoint/signoff/reopen subjects and
     kind: 'signoff', value: {stage: 'plan-approved', decision: 'approved', comments: []}})).toThrow('JOB_ACT_INVALID');
 });
 
+test('#646 act@6 decodes record picks using the existing option-set binding', () => {
+  const options = createSyntheticOptionRecordWorkspace(makeTempDir('646-record-picks-'));
+  const source = buildRecordSource({record: options.record, selection: options.result, context: options.context, optionSetFile: options.optionSetFile});
+  const old = JSON.parse(commentsLegacy.records['@4'].raw);
+  const input = {...old, schema: 'rig-review/act@6', kind: 'interview-picks', source, value: {
+    questionId: options.result.questionId, selections: [], note: '원문', comments: [{text: '  Keep this\n', anchor: {name: 'reference.png'}}],
+  }};
+  const historical = parseRecordAct({...input, schema: JOB_RECORD_ACT_SCHEMA, value: {
+    questionId: input.value.questionId, selections: input.value.selections, note: input.value.note,
+  }});
+  expect(JSON.stringify(parseCommentsAct(input))).toBe(JSON.stringify({
+    ...historical, schema: 'rig-review/act@6', value: input.value,
+  }));
+  expect(() => parseCommentsAct({...input, value: {...input.value, questionId: 'wrong-question'}})).toThrow('JOB_ACT_INVALID');
+});
+
 function buildPendingRecordAsk(
   publicationId: string,
   askId: string,
@@ -202,7 +218,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
     ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
   });
 
-  test('[SYNTHETIC] prepares rig-review/act@4 interview-picks with in-memory validatePicks, verbatim text preservation, and zero disk writes', async () => {
+  test('[SYNTHETIC] prepares rig-review/act@6 interview-picks with in-memory validatePicks, verbatim text preservation, and zero disk writes', async () => {
     const workRoot = makeTempDir('review-561-picks-root-');
     const stateRoot = makeTempDir('review-561-picks-state-');
     const fixture = createSyntheticOptionRecordWorkspace(workRoot);
@@ -269,7 +285,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       at: '2026-11-08T12:00:00.000Z',
     });
 
-    expect(act.schema).toBe(JOB_RECORD_ACT_SCHEMA);
+    expect(act.schema).toBe('rig-review/act@6');
     expect(act.kind).toBe('interview-picks');
     expect(act.authority).toEqual({
       actor: 'human',
@@ -282,7 +298,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       expect(act.value.selections[0]!.otherText).toBe(verbatimOther);
       expect(act.value.selections[1]!.otherText).toBeNull();
     }
-    expect(parseRecordAct(act)).toEqual(act);
+    expect(JSON.stringify(parseCommentsAct(act))).toBe(JSON.stringify(act));
 
     // Also works through the finalizeJobAct overload
     const viaFinalize = finalizeJobAct({
@@ -300,24 +316,24 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       actId: 'act_picks_2',
       at: '2026-11-08T12:05:00.000Z',
     });
-    expect(viaFinalize.schema).toBe(JOB_RECORD_ACT_SCHEMA);
+    expect(viaFinalize.schema).toBe('rig-review/act@6');
     if (viaFinalize.kind === 'interview-picks') {
       expect(viaFinalize.value.note).toBe('');
     }
 
-    // #1048 HQ ruling 3 bar 1: an act with no comments keeps its pre-#1048 bytes, pinned from 285a59f.
-    const bytes = JSON.stringify(act);
+    if (act.schema !== 'rig-review/act@6') throw new Error('Expected structured picks');
+    const {comments, ...survey} = act.value;
+    expect(comments).toEqual([]);
+    const historical = {...act, schema: JOB_RECORD_ACT_SCHEMA, value: survey};
+    const bytes = JSON.stringify(historical);
     expect(jobHash(bytes)).toBe(PICKS_ACT_SHA256_285A59F);
-    expect('words' in act.value).toBe(false);
-    const emptyWords = prepareJobRecordAct({jobId: 'job_1', submission: {...submission, value: {...submission.value, words: ''}},
-      ask, retained, reviewer, actId: 'act_picks_1', at: '2026-11-08T12:00:00.000Z'});
-    expect(JSON.stringify(emptyWords)).toBe(bytes);
-    // Comments ride `words`, appended last and exactly the projectComments output (bar 2).
+    expect(JSON.stringify(parseRecordAct(JSON.parse(bytes)))).toBe(bytes);
     const words = projectComments([{text: 'general'}]);
-    const commented = prepareJobRecordAct({jobId: 'job_1', submission: {...submission, value: {...submission.value, words}},
+    const historicalWords = {...historical, value: {...survey, words}};
+    expect(JSON.stringify(parseRecordAct(historicalWords))).toBe(JSON.stringify(historicalWords));
+    const oldSubmission = prepareJobRecordAct({jobId: 'job_1', submission: {...submission, value: {...submission.value, words}},
       ask, retained, reviewer, actId: 'act_picks_1', at: '2026-11-08T12:00:00.000Z'});
-    expect(JSON.stringify(commented)).toBe(bytes.slice(0, -2) + ',"words":' + JSON.stringify(words) + '}}');
-    expect(parseRecordAct(commented)).toEqual(commented);
+    expect(oldSubmission.value).toEqual({...survey, comments: [{text: words}]});
 
     // Inputs and filesystem are completely untouched
     expect(submission).toEqual(beforeSubmission);
@@ -433,7 +449,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
           words: outcome === 'fail' ? '   Needs joint placement adjustment   ' : '',
         });
       }
-      expect(parseRecordAct(cpAct)).toEqual(cpAct);
+      expect(JSON.stringify(parseRecordAct(cpAct))).toBe(JSON.stringify(cpAct));
     }
 
     // Pending outcome on checkpoint refuses
@@ -499,7 +515,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
           words: `Approved ${stage}`,
         });
       }
-      expect(parseRecordAct(signoffAct)).toEqual(signoffAct);
+      expect(JSON.stringify(parseRecordAct(signoffAct))).toBe(JSON.stringify(signoffAct));
     }
   });
 

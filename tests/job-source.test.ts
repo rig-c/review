@@ -391,7 +391,7 @@ test('actual readProject pending questions publish, ask and save an act while op
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
   expect(saved.value.kind).toBe('interview-picks');
-  expect(saved.value.value).toEqual({ questionId: pending.set.question, selections, note });
+  expect(saved.value.value).toEqual({ questionId: pending.set.question, selections, note, comments: [] });
   expect(saved.value.source.optionSet).toEqual({ id: pending.set.id, sha256: pending.ref.sha256 });
   expect(saved.value.source.projectHash).toBe(opened.hash);
   expect(await jobInputHashes(f.root)).toEqual(before);

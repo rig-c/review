@@ -11,11 +11,19 @@ import {instrumentRigMount} from './helpers/mount-probe.ts';
 import {launchCdpSession} from './parts-explorer-browser.ts';
 
 const probe = `
+const windFrames = [];
+const drawForSelectionProbe = drawRig;
+drawRig = (action) => {
+ drawForSelectionProbe(action);
+ if (!playing || player?.current !== 'wind' || windFrames.at(-1)?.time === time) return;
+ const {x, y} = player.bone('probe');
+ windFrames.push({time, x, y});
+};
 Object.assign(window, {readAnimationSelection: () => player?.current && ({
  name: player.current, time, playerTime: player.time, playing,
  loop: player.entry(0)?.loop,
  wind: player.readPhysicsParameters('probe_physics').effective?.wind ?? null
-})});
+}), windFrames});
 `;
 const bundle = await Bun.build({
  entrypoints: ['web/main.ts'], target: 'browser', format: 'esm', conditions: playBuildConditions(),
@@ -31,7 +39,8 @@ const root = await mkdtemp(join(tmpdir(), 'animation-selection-'));
 const pkg = join(root, 'package');
 const outFlag = Bun.argv.indexOf('--out');
 const output = resolve(outFlag < 0 ? 'artifacts/animation-selection' : Bun.argv[outFlag + 1]!);
-let closeServer: (() => void) | undefined;
+const lang = Bun.argv.includes('--ko') ? 'ko' : 'en';
+const closeServers: (() => void)[] = [];
 let page: Awaited<ReturnType<typeof launchCdpSession>> | undefined;
 interface Sample {
  name: string;
@@ -41,6 +50,7 @@ interface Sample {
  loop: boolean;
  wind: number | null;
 }
+interface WindFrame {time: number; x: number; y: number}
 
 try {
  await mkdir(pkg);
@@ -60,18 +70,23 @@ try {
   schema: 'rig-review/1', id: 'animation-selection', title: 'Animation selection', revision: '1',
   model: 'skeleton.model.json', animations: [{id: 'idle', label: 'Idle'}, {id: 'wind', label: 'Wind'}],
  }));
- const context = await createReviewRequestContext(await loadReview(pkg), {
-  bundle: bundle.outputs[0]!, viewOnly: true, stateDir: join(root, 'state'),
- });
- const server = Bun.serve({
-  hostname: '127.0.0.1', port: 0, websocket: context.live.websocket,
-  async fetch(request, server) {
-   return (await context.handle(request, server.port, server))!;
-  },
- });
- closeServer = () => {context.stop(); server.stop(true);};
+ const loaded = await loadReview(pkg);
+ const serve = async (initialAnimation?: string) => {
+  const context = await createReviewRequestContext(loaded, {
+   bundle: bundle.outputs[0]!, viewOnly: true, stateDir: join(root, initialAnimation ?? 'default'), initialAnimation,
+  });
+  const server = Bun.serve({
+   hostname: '127.0.0.1', port: 0, websocket: context.live.websocket,
+   async fetch(request, server) {
+    return (await context.handle(request, server.port, server))!;
+   },
+  });
+  closeServers.push(() => {context.stop(); server.stop(true);});
+  return `http://127.0.0.1:${server.port}/?lang=${lang}`;
+ };
  page = await launchCdpSession(join(root, 'browser'), {browserArgs: ['--renderer-process-limit=2']});
- await page.goto(`http://127.0.0.1:${server.port}/`);
+ await page.setViewport(1440, 900);
+ await page.goto(await serve(), lang);
  const browser = page;
  const read = () => browser.evaluate<Sample | null>('window.readAnimationSelection?.() ?? null');
  const waitFor = async (label: string, predicate: (state: Sample) => boolean) => {
@@ -93,6 +108,7 @@ try {
 
  const opening = await waitFor('auto-playing idle', s => s.name === 'idle' && s.playing && s.time > 0);
  await browser.evaluate(`document.querySelector('[data-mode="playback"]').click()`);
+ await browser.evaluate("document.querySelector('#idle-repeat').click()");
  const selected = await select('wind');
  // Collect the one-shot endpoint even against a baseline that requires an extra Play click.
  if (!selected.playing) await play();
@@ -123,9 +139,41 @@ try {
   pausedWind: atRest(pausedWind) && atRest(afterPause),
   pausedIdle: atRest(idleAfterEnd) && atRest(pausedIdle),
  }, {resumesFromZero: true, signedPhysics: true, oneShot: true, pausedWind: true, pausedIdle: true});
+
+ // A fresh origin keeps the saved inspection from the selection controls out of this opening.
+ await browser.goto(await serve('wind'), lang);
+ const openedWind = await waitFor('opening wind', s => s.name === 'wind');
+ await Bun.sleep(250);
+ const beforePlay = await read();
+ console.log('ANIMATION_SELECTION_1090_OPEN', JSON.stringify({openedWind, beforePlay}));
+ assert.ok(atRest(openedWind) && atRest(beforePlay), 'opening wind must leave playback paused at zero');
+ await browser.evaluate(`document.querySelector('[data-mode="playback"]').click()`);
+ await play();
+ await waitFor('playing wind', s => s.name === 'wind' && s.playing && s.time > .5);
+ await writeFile(join(output, `wind-${lang}.png`), await browser.screenshot());
+ await waitFor('two wind wraps or one-shot endpoint', s => s.playerTime > 12.25 || (!s.playing && s.time === 6));
+ const frames = await browser.evaluate<WindFrame[]>('window.windFrames');
+ const wrapSteps: number[] = [];
+ let largestInClipStep = 0;
+ for (let i = 1; i < frames.length; i++) {
+  const before = frames[i - 1]!, after = frames[i]!;
+  const step = Math.hypot(after.x - before.x, after.y - before.y);
+  if (after.time < before.time) wrapSteps.push(step);
+  else largestInClipStep = Math.max(largestInClipStep, step);
+ }
+ const wrap = {frameCount: frames.length, wrapSteps, largestInClipStep, final: await read()};
+ await writeFile(join(output, 'wind-wrap.json'), JSON.stringify({...wrap, frames}, null, 2));
+ console.log('ANIMATION_SELECTION_1090_WRAP', JSON.stringify(wrap));
+ assert.ok(wrapSteps.length >= 2, 'wind must wrap at least twice');
+ assert.ok(largestInClipStep > 0 && wrapSteps.every(step => step <= largestInClipStep), 'wind wrap must carry physics within the in-clip step bound');
+
+ await browser.evaluate("if (document.querySelector('#settings-body').hidden) document.querySelector('#settings-toggle').click()");
+ await writeFile(join(output, `settings-${lang}.png`), await browser.screenshot());
+ const labels = await browser.evaluate<string[]>(`['#idle-repeat', '#settings-idle'].map(id => document.querySelector(id).closest('label').textContent.trim())`);
+ assert.deepEqual(labels, lang === 'ko' ? ['반복 재생', '반복 재생'] : ['Repeat', 'Repeat']);
 } finally {
  await page?.close();
- closeServer?.();
+ for (const close of closeServers) close();
  assert.ok(root.startsWith(join(tmpdir(), 'animation-selection-')));
  await rm(root, {recursive: true, force: true});
 }

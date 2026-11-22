@@ -3,7 +3,7 @@ import {PNG} from 'pngjs';
 import {checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-checkpoint-evidence.ts';
 /** Disjoint live-job routes. The backend receives the original authenticated Request. */
 import { JOB_API_SCHEMA, JOB_ACT_SCHEMA, type JobErrorCode, type JobHostPorts, type JobId, type JobPublicationMode, type JobResult, type JobReviewerBinding } from './job-contract.ts';
-import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion } from './job-api.ts';
+import { createJobHostPorts, jobBody, jobHash, jobId, jobObject, jobPartsEnumeratorVersion, observeJobBody } from './job-api.ts';
 import { JobSession } from './job-session.ts';
 import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMetadata, isRetainedRecordSource, loadRetainedJobReview, loadRetainedRecordRig, retainedRecordPainting, readPreviousDraftBytes, retainedRigDraftVerdict, type JobRootIdentity } from './job-source.ts';
 import { checkedPath } from './interview-project.ts';
@@ -118,12 +118,23 @@ function result<Value>(value: JobResult<Value>): Response {
     const status = value.ok ? 200 : errorStatus[value.error.code] ?? 409;
     return Response.json(value, { status, headers });
 }
+const ownerSubmitRoute = 'ui/acts';
+
+function reportOwnerRefusal(onRefusal: NonNullable<JobHostOptions['onRefusal']>, code: JobErrorCode,
+    {bytes, limit}: {bytes: number; limit?: number}): void {
+    try {
+        void Promise.resolve(onRefusal({code, route: '/jobs/:jobId/ui/acts', bytes,
+            ...(limit === undefined ? {} : {limit})})).catch(() => {});
+    } catch { /* The observer cannot alter the refusal or cause a second report. */ }
+}
+
 /** A host supplies only shipped web resources. No request becomes a filesystem path. */
 export function createJobFront(options: {
     origin: string;
     ports: JobHostPorts;
     resource: (name: 'index.html' | 'main.js' | 'styles.css') => Promise<BodyInit>;
     publication?: (jobId: string, publicationId: string, instanceKey: string, path: string, request: Request) => Promise<Response>;
+    onRefusal?: JobHostOptions['onRefusal'];
 }) {
     const origin = new URL(options.origin);
     if (origin.protocol !== 'http:' || origin.hostname !== '127.0.0.1' ||
@@ -135,30 +146,38 @@ export function createJobFront(options: {
         const url = new URL(request.url);
         if (!url.pathname.startsWith('/jobs/'))
             return null;
-        if (url.origin !== origin.origin)
-            return failure('JOB_LOOPBACK_REQUIRED', 403);
         const match = /^\/jobs\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/(.*)$/.exec(url.pathname);
+        const onRefusal = request.method === 'POST' && match?.[2] === ownerSubmitRoute ? options.onRefusal : undefined;
+        function reject(code: JobErrorCode, status: number): Response {
+            if (onRefusal) reportOwnerRefusal(onRefusal, code, {bytes: 0});
+            return failure(code, status);
+        }
+        if (url.origin !== origin.origin)
+            return reject('JOB_LOOPBACK_REQUIRED', 403);
         if (!match)
             return failure('JOB_REQUEST_INVALID', 404);
         const jobId = match[1]!;
         const route = match[2]!;
         const sentOrigin = request.headers.get('origin');
         if (request.headers.get('sec-fetch-site') === 'cross-site' || sentOrigin !== null && sentOrigin !== origin.origin) {
-            return failure('JOB_SAME_ORIGIN_REQUIRED', 403);
+            return reject('JOB_SAME_ORIGIN_REQUIRED', 403);
         }
         const read = request.method === 'GET' || request.method === 'HEAD';
-        if (['api', 'ui/displayed', 'ui/acts'].includes(route)) {
+        if (['api', 'ui/displayed', ownerSubmitRoute].includes(route)) {
             if (request.method !== 'POST' || url.search)
-                return failure('JOB_REQUEST_INVALID', 405);
+                return reject('JOB_REQUEST_INVALID', 405);
             if (route !== 'api' && sentOrigin !== origin.origin)
-                return failure('JOB_SAME_ORIGIN_REQUIRED', 403);
+                return reject('JOB_SAME_ORIGIN_REQUIRED', 403);
             // Each method owns streaming size bounds and actual capability authentication.
             // A bearer agent request never gets reclassified as an authenticated UI act.
             if (route === 'api')
                 return options.ports.handleJobApi(request);
             if (route === 'ui/displayed')
                 return result(await options.ports.ackDisplayed(jobId, request));
-            return result(await options.ports.commitUIAct(jobId, request));
+            const observation = onRefusal && observeJobBody(request);
+            const act = await options.ports.commitUIAct(jobId, request);
+            if (!act.ok && onRefusal && observation) reportOwnerRefusal(onRefusal, act.error.code, observation);
+            return result(act);
         }
         const partsCrop = request.method === 'POST' &&
             /^publications\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/instances\/[a-f0-9]{64}\/api\/stage-parts\/comment$/.test(route);
@@ -608,11 +627,17 @@ export type JobHostAttachFailure =
         readonly actual: string | null;
     };
 
-/** Callers declare stable hook semantics. Equal IDs permit reuse across processes. */
+/** Callers declare stable producer hook semantics. Equal IDs permit reuse across processes. */
 export interface JobHostOptions extends JobWorkerOptions {
     readonly readerId?: string;
     readonly bindingId?: string;
     readonly partsEnumeratorId?: string;
+    readonly onRefusal?: (event: {
+        readonly code: string;
+        readonly route: string;
+        readonly bytes: number;
+        readonly limit?: number;
+    }) => void;
     readonly reuseOnly?: {
         readonly expected: JobHostReuseExpectation;
     };
@@ -908,7 +933,8 @@ export function createJobRequestContext(session: JobSession, startup: JobHostOpt
         fingerprint: startup.fingerprint,
         pid: process.pid,
     };
-    const front = createJobFront({origin, ports, resource, publication: retainedPublicationRoutes(session)});
+    const front = createJobFront({origin, ports, resource, publication: retainedPublicationRoutes(session),
+        onRefusal: startup.onRefusal ?? (event => console.log(JSON.stringify(event)))});
     let requests = 0, stopped = false, published = false;
     let captured: ObservedFiles;
     let descriptorBytes: string;
@@ -1450,7 +1476,7 @@ function snapshotHostOptions(options: JobHostOptions): JobHostOptions {
     if (copy.reuseOnly !== undefined && Object.keys(copy).some(key => ![
         'root', 'stateDir', 'fingerprint', 'reviewer', 'publicationMode', 'readPublished', 'readerId',
         'readRecordPublished', 'recordReaderId', 'installWriterBinding',
-        'bindingId', 'partsEnumerator', 'partsEnumeratorId', 'port', 'reuseOnly', 'afterSnapshot', 'afterDirectorySync',
+        'bindingId', 'partsEnumerator', 'partsEnumeratorId', 'port', 'reuseOnly', 'afterSnapshot', 'afterDirectorySync', 'onRefusal',
     ].includes(key))) throw new JobError('JOB_REQUEST_INVALID');
     if (copy.partsEnumerator !== undefined) copy.partsEnumerator = {...exactKeys(copy.partsEnumerator, ['version', 'enumerate'])};
     if (copy.reviewer !== undefined) copyReviewer();

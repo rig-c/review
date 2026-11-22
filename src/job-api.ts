@@ -1226,6 +1226,17 @@ function parseActWords(value: unknown, code: JobErrorCode): string {
   return value;
 }
 
+function parsePicksSelections(raw: unknown, read = (value: unknown, keys: readonly string[]) => exactObject(value, keys, 'JOB_ACT_INVALID')) {
+  if (!Array.isArray(raw) || raw.length > maxRecordFiles) throw new JobError('JOB_ACT_INVALID');
+  return raw.map(rawSelection => {
+    const entry = read(rawSelection, ['itemId', 'optionId', 'otherText']);
+    const itemId = asCode(() => jobId(entry.itemId), 'JOB_ACT_INVALID');
+    const optionId = asCode(() => jobId(entry.optionId), 'JOB_ACT_INVALID');
+    const otherText = entry.otherText === null ? null : parseActWords(entry.otherText, 'JOB_ACT_INVALID');
+    return { itemId, optionId, otherText };
+  });
+}
+
 /** #1004: an act's source names that act's own set. At K >= 2 the singular `selection` (`questionId`/`setId`, with
  * `sets` kept), `optionSet` and `optionSetFile` are re-pointed to the act's `optionSets` row; `subjects`, `optionSets`
  * and `sourceHash` stay the publication's. One set is returned unchanged. */
@@ -1299,17 +1310,10 @@ export function parseRecordAct(value: unknown): RecordAct {
       if (received.set && questionId !== received.set.questionId) {
         throw new JobError('JOB_ACT_INVALID', `value.questionId ${questionId} is not the act set ${received.set.questionId}/${received.set.setId}`);
       }
-      if (!optionSetRefs(source.selection).some(set => set.questionId === questionId) || !Array.isArray(rawValue.selections) ||
-          rawValue.selections.length > maxRecordFiles) {
+      if (!optionSetRefs(source.selection).some(set => set.questionId === questionId)) {
         throw new JobError('JOB_ACT_INVALID');
       }
-      const selections = rawValue.selections.map(rawSelection => {
-        const entry = exactObject(rawSelection, ['itemId', 'optionId', 'otherText'], 'JOB_ACT_INVALID');
-        const itemId = asCode(() => jobId(entry.itemId), 'JOB_ACT_INVALID');
-        const optionId = asCode(() => jobId(entry.optionId), 'JOB_ACT_INVALID');
-        const otherText = entry.otherText === null ? null : parseActWords(entry.otherText, 'JOB_ACT_INVALID');
-        return { itemId, optionId, otherText };
-      });
+      const selections = parsePicksSelections(rawValue.selections);
       const note = parseActWords(rawValue.note, 'JOB_ACT_INVALID');
       const words = Object.hasOwn(rawValue, 'words') ? parseActWords(rawValue.words, 'JOB_ACT_INVALID') : undefined;
       return {
@@ -1611,7 +1615,7 @@ export function parseCommentsAct(raw: unknown): JobCommentsAct {
   return decodeCommentsAct(raw, JOB_COMMENTS_ACT_SCHEMA) as JobCommentsAct;
 }
 
-/** Public @7 decoder: the @6 rules plus an optional `context` on each comment. @6 input refuses. */
+/** Public @7 decoder for the context-aware act kinds. @6 input refuses. */
 export function parseContextCommentsAct(raw: unknown): JobContextCommentsAct {
   return decodeCommentsAct(raw, JOB_COMMENT_CONTEXT_ACT_SCHEMA) as JobContextCommentsAct;
 }
@@ -1790,6 +1794,23 @@ export function meshEditsActForEmission(act: JobCommentsAct | (Extract<JobCommen
 
 type CommentsWireAct = JobCommentsAct | JobContextCommentsAct | JobMeshEditsAct | JobChestLandmarksAct;
 
+function decodePicksCommentsAct(item: Record<string, unknown>): Extract<JobCommentsAct, {kind: 'interview-picks'}> {
+  if (Object.hasOwn(item, 'still')) throw new JobError('JOB_ACT_INVALID');
+  const {comments: rawComments, ...value} = commentsObject(item.value, ['questionId', 'selections', 'note', 'comments']);
+  const selections = parsePicksSelections(value.selections, commentsObject);
+  // Image anchors have no source-hash member. The act binds the option set independently.
+  const comments = parseComments(rawComments);
+  if (comments.some(comment => comment.anchor && 'checkpointId' in comment.anchor)) throw new JobError('JOB_ACT_INVALID');
+  if (isRecordSource(item.source)) {
+    const picks = parseRecordAct({...item, schema: JOB_RECORD_ACT_SCHEMA, value: {...value, selections}});
+    return {...picks, schema: JOB_COMMENTS_ACT_SCHEMA, value: {...picks.value, comments}} as Extract<JobCommentsAct, {kind: 'interview-picks'}>;
+  }
+  const source = commentsSource(item.source);
+  if ('record' in source || !source.optionSet) throw new JobError('JOB_ACT_INVALID');
+  const questionId = jobId(value.questionId), note = parseActWords(value.note, 'JOB_ACT_INVALID');
+  return {...structuredClone(item), source, value: {questionId, selections, note, comments}} as unknown as Extract<JobCommentsAct, {kind: 'interview-picks'}>;
+}
+
 function decodeCommentsAct(raw: unknown, schema: CommentsWireAct['schema']): CommentsWireAct {
   return asCode(() => {
     const item = commentsObject(raw, ['schema', 'actId', 'jobId', 'askId', 'publicationId', 'kind', 'authority', 'at', 'source', 'value'], ['still']);
@@ -1797,6 +1818,7 @@ function decodeCommentsAct(raw: unknown, schema: CommentsWireAct['schema']): Com
     for (const key of ['actId', 'jobId', 'askId', 'publicationId']) jobId(item[key]);
     parseHumanAuthority(item.authority, 'JOB_ACT_INVALID');
     if (typeof item.at !== 'string' || !Number.isFinite(Date.parse(item.at))) throw new JobError('JOB_ACT_INVALID');
+    if (schema === JOB_COMMENTS_ACT_SCHEMA && item.kind === 'interview-picks') return decodePicksCommentsAct(item);
     const source = commentsSource(item.source);
     const fields: Record<string, readonly string[]> = {
       checkpoint: ['checkpointId', 'planStepId', 'outcome', 'comments'],
@@ -1859,6 +1881,20 @@ function decodeCommentsAct(raw: unknown, schema: CommentsWireAct['schema']): Com
   }, 'JOB_ACT_INVALID');
 }
 
+interface JobBodyObservation {
+  bytes: number;
+  limit?: number;
+}
+
+const jobBodyObservations = new WeakMap<Request, JobBodyObservation>();
+
+/** Observe the existing reader's counts without cloning, draining or retaining a body. */
+export function observeJobBody(request: Request): JobBodyObservation {
+  const observation = {bytes: 0};
+  jobBodyObservations.set(request, observation);
+  return observation;
+}
+
 export async function jobBody(request: Request, maximum = jobBodyLimit, validateSize?: (value: unknown, size: number) => void): Promise<unknown> {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '')) {
     throw new JobError('JOB_REQUEST_INVALID');
@@ -1874,26 +1910,30 @@ export async function jobBody(request: Request, maximum = jobBodyLimit, validate
     if (request.signal.aborted) abort();
   });
   try {
+    const observation = jobBodyObservations.get(request);
     const chunks: Uint8Array[] = [];
     let size = 0;
     for (;;) {
       const { done, value } = await Promise.race([reader.read(), interrupted]);
       if (done) break;
       size += value.length;
-      if (size > maximum) throw new JobError('JOB_BODY_LIMIT');
+      if (observation) observation.bytes = size;
+      if (size > maximum) throw new JobError('JOB_BODY_LIMIT', undefined, maximum);
       chunks.push(value);
     }
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
     validateSize?.(value, size);
     if (value?.value != null && Object.hasOwn(value.value, 'meshEdits') &&
         Buffer.byteLength(canonicalJson(value.value.meshEdits)) > jobBodyLimit) {
-      throw new JobError('JOB_BODY_LIMIT');
+      throw new JobError('JOB_BODY_LIMIT', undefined, jobBodyLimit);
     }
     if (size > jobBodyLimit) {
       const hasCommentImages = ['parts-verdict', 'review-verdict', 'checkpoint', 'signoff', 'reopen'].includes(value?.kind) &&
         /"png":"data:image\/png;base64,/.test(JSON.stringify(value?.value));
       const rigCapture = value?.kind === 'review-verdict' && value?.value?.stage === 'rig-review' && value.capture;
-      if (!(maximum > jobBodyLimit && (rigCapture || hasCommentImages))) throw new JobError('JOB_BODY_LIMIT');
+      if (!(maximum > jobBodyLimit && (rigCapture || hasCommentImages))) {
+        throw new JobError('JOB_BODY_LIMIT', undefined, jobBodyLimit);
+      }
     }
     return value;
   } catch (error) {
@@ -1935,7 +1975,11 @@ export function createJobHostPorts(session: JobSession, origin: string): JobHost
       gate(request, path, true);
       session.authorize('ui', request.headers.get('X-Review-Capability'));
       return { ok: true, value: await action(await jobBody(request, maximum)) };
-    } catch (error) { return jobFailure(error); }
+    } catch (error) {
+      const observation = jobBodyObservations.get(request);
+      if (observation && error instanceof JobError) observation.limit = error.byteLimit;
+      return jobFailure(error);
+    }
   }
   return {
     async handleJobApi(request) {

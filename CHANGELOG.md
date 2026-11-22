@@ -1,5 +1,56 @@
 # Changelog
 
+## 4.15.0
+
+Review now writes interview answers at the comments act version. Every comment the owner made (a point, an area, a general comment, or a pin on a rig backdrop) reaches Create with its anchor instead of as flattened text. A job host also reports each refused owner submission once, on stdout by default or through an optional hook.
+
+**Read before upgrading:**
+
+* **Fresh interview-picks acts are `rig-review/act@6`.** Both package picks (formerly @2) and record picks (formerly @4) change.
+  * `questionId`, `selections` (with Other text) and the survey `note` keep their wire values. Comments travel as ordered `comments[]`, and @6 has no `words`.
+  * Each comment keeps the anchor it already had: Feedback (points, browser areas and rig-backdrop pins), PartsIssue, or the image anchor. Checkpoint anchors and unknown members refuse.
+  * `parseCommentsAct` widens additively for picks: every act 4.14.0 accepted parses to identical output.
+  * `prepareJobRecordAct` returns `RecordUIAct`, and a picks submission yields the @6 act.
+  * Image-review stays on act@2. Historical @2 and @4 picks acts remain readable byte for byte.
+  * A consumer whose Review is 4.14.0 refuses @6 picks carrying a Feedback or PartsIssue anchor. Pin 4.15.0 before reading answers written by this version.
+* **`JobHostOptions` adds an optional `onRefusal(event)`.**
+  * The event is `{code, route, bytes, limit?}`, called once per refused owner submit to `/jobs/:jobId/ui/acts`. It never carries the body or a capability.
+  * Without a hook, the host writes that event as one JSON line on stdout. A hook replaces the line, and an error thrown by the hook leaves the HTTP response unchanged.
+  * `JobError` gains an optional `byteLimit`.
+
+### Added
+
+* Interview picks are written as act@6 with structured, anchored comments, and the picks reader accepts the verdict anchor union (#1093, part of #646).
+* `JobHostOptions.onRefusal`, with a default stdout line for refused owner submissions (#1089, closes #817).
+
+## 4.14.0
+
+Review's shared act parser now reads interview-picks answers at the comments act version, with structured comments pinned to reference images, so Create can accept them without parsing text. The chest editor's disabled button names the real reason while a published spec waits for setup. A rule from the owner is now recorded: chest landmarks are a mesh-density hint, and a circle may sit outside the mesh.
+
+**Read before upgrading:**
+
+* **`parseCommentsAct` accepts `interview-picks` at `rig-review/act@6`.**
+  * The value carries the existing survey fields (`questionId`, `selections`, `note`) plus ordered `comments[]`. Each comment's optional anchor is `JobCommentImageAnchor`. The source is the package or record option-set binding.
+  * `words` at @6 refuses, and so do unknown members, non-image anchors and picks at @7 or later.
+  * `JobCommentsAct` and `JobCommentsActValues` gain an `interview-picks` arm, and `JobContextCommentsAct` excludes it. Runtime readers don't break, but a consumer with an exhaustive `kind` switch sees the new arm on its next pin.
+  * Review's writers are unchanged: package picks still emit @2, and record picks @4. The writer switches only after Create's reader ships.
+
+### Added
+
+* `parseCommentsAct` reads interview-picks at act@6 with structured comments (#1083, part of #646).
+
+### Fixed
+
+* The disabled chest-edit button said the spec was unpublished while a published spec was still waiting for setup or a part. It now gives the existing "find the slot" reason (#1080, closes #1078).
+
+### Documentation
+
+* DESIGN.md records the owner's rule: chest landmarks raise mesh density and need not sit inside the mesh. Nothing in Review or the producer refuses a circle outside it (#1084).
+
+### Tests
+
+* Path and timing controls are portable on macOS (#1082, closes #1081).
+
 ## 4.13.0
 
 Review exports the checkpoint evidence packet grammar as a pure validator, so Create can check a packet with the same rules Review uses, and a packet can now name its before and after tiles for the Difference view. An animation picked while playing keeps playing, so physics-keyed clips like wind show their response. Compare's Fit frames panes with the same box the rig viewport uses, and a pin on a sealed question image works over a retained backdrop.
