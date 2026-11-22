@@ -1026,7 +1026,12 @@ async function draftSurvivalChecks(){
     await click(page!,'.stage-comment-parts [data-comment-part="body"]');
     await page!.evaluate<void>(`document.querySelector('.stage-comment-composer').requestSubmit()`);
     const expectedRefusal=(lang==='ko'?koCatalog:enCatalog)['Select at least one part.']!;
-    await wait(`document.getElementById('message')?.textContent===${JSON.stringify(expectedRefusal)}&&document.getElementById('review-message')?.textContent===${JSON.stringify(expectedRefusal)}`,'999 refusal status line '+lang);
+    await wait(`document.querySelector('#workspace-act-row:not([hidden]) #review-message.error')?.textContent===${JSON.stringify(expectedRefusal)}`,'999 refusal in act row '+lang);
+    const footer = await page!.evaluate<{text:string;title:string}>(`(() => {
+      const status = document.getElementById('message');
+      return {text:status.textContent,title:status.title};
+    })()`);
+    assert.ok(![footer.text,footer.title].some(value=>value.includes(expectedRefusal)), 'refusal stays out of the footer');
     // Re-select the part chip (which replaces chip children) and press Enter / submit to save the box-pin comment
     await click(page!,'.stage-comment-parts [data-comment-part="body"]');
     assert.equal(await page!.evaluate<boolean>(`document.activeElement===document.querySelector('.stage-comment-composer input')`),true,'chip click restores focus to composer input');
