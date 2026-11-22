@@ -1575,3 +1575,130 @@ test('CP1 standalone attachment checks serialized strict request budget while pr
   ordinaryExact.stop();
   exact.stop();
 });
+
+test('#1105 slow live host delayed past 1.5s reuses the existing host instead of re-binding its port', async () => {
+  const f = await createFixture(), options = baseOptions(f);
+  const owner = await startJobHost(options); hosts.push(owner);
+  const hostPath = `/jobs/${owner.session.jobId}/host`;
+  const startedAt = performance.now();
+  let getProbes = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if ((init?.method ?? 'GET') === 'GET' && url.endsWith(hostPath)) {
+      getProbes++;
+      const waitMs = 1750 - (performance.now() - startedAt);
+      if (waitMs > 0) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, waitMs);
+          init?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(init.signal!.reason ?? Object.assign(new Error('The operation timed out.'), {name: 'TimeoutError'}));
+          }, {once: true});
+        });
+      }
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  const reused = await startJobHost(options); hosts.push(reused);
+  expect(reused.reused).toBe(true);
+  expect(reused.origin).toBe(owner.origin);
+  expect(reused.ownerUrl).toBe(owner.ownerUrl);
+  expect(reused.session.jobId).toBe(owner.session.jobId);
+  expect(reused.attachment).toEqual(owner.attachment);
+  expect(getProbes).toBeGreaterThanOrEqual(2);
+});
+
+test('#1105 live host that never answers within the bounded deadline or holds preferredPort refuses with named JobError naming pid and port', async () => {
+  const f = await createFixture(), options = baseOptions(f);
+  const owner = await startJobHost(options); hosts.push(owner);
+  const port = Number(new URL(owner.origin).port);
+  const hostPath = `/jobs/${owner.session.jobId}/host`;
+  const origNow = performance.now.bind(performance);
+  let clockOffset = 0;
+  performance.now = () => origNow() + clockOffset;
+  try {
+    let hungProbes = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if ((init?.method ?? 'GET') === 'GET' && url.endsWith(hostPath)) {
+        hungProbes++;
+        clockOffset += 20_000;
+        return await new Promise<Response>((_resolve, reject) => {
+          const timer = setTimeout(() => {
+            const err = new Error('The operation timed out.');
+            err.name = 'TimeoutError';
+            reject(err);
+          }, 50);
+          init?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(init.signal!.reason ?? Object.assign(new Error('The operation timed out.'), {name: 'TimeoutError'}));
+          }, {once: true});
+        });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    let unresponsiveErr: unknown;
+    try {
+      await startJobHost(options);
+    } catch (error) {
+      unresponsiveErr = error;
+    }
+    expect(hungProbes).toBeGreaterThanOrEqual(1);
+    expect(unresponsiveErr).toBeInstanceOf(JobError);
+    expect(unresponsiveErr).toMatchObject({code: 'JOB_STORAGE_FAILED'});
+    expect((unresponsiveErr as Error).message).toContain(`pid=${process.pid}`);
+    expect((unresponsiveErr as Error).message).toContain(`port=${port}`);
+  } finally {
+    performance.now = origNow;
+    globalThis.fetch = originalFetch;
+  }
+
+  // EADDRINUSE on preferredPort while recorded pid is alive (e.g. non-OK probe response on a live listener) is a named refusal naming pid and port.
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if ((init?.method ?? 'GET') === 'GET' && url.endsWith(hostPath)) {
+      return new Response(null, {status: 503});
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  let inUseErr: unknown;
+  try {
+    await startJobHost(options);
+  } catch (error) {
+    inUseErr = error;
+  }
+  expect(inUseErr).toBeInstanceOf(JobError);
+  expect(inUseErr).toMatchObject({code: 'JOB_STORAGE_FAILED'});
+  expect((inUseErr as Error).message).toContain(`pid=${process.pid}`);
+  expect((inUseErr as Error).message).toContain(`port=${port}`);
+  globalThis.fetch = originalFetch;
+
+  // Controls: closed listener (ECONNREFUSED with live pid), dead pid, missing record, and mismatched fingerprint.
+  const recordPath = join(options.stateDir, 'job-ui', `${owner.session.jobId}.json`);
+  const recordBytes = await readFile(recordPath, 'utf8');
+  owner.stop();
+
+  // Closed listener (live pid, ECONNREFUSED) re-binds a fresh host on the preferred port immediately.
+  const afterClosedListener = await startJobHost(options); hosts.push(afterClosedListener);
+  expect(afterClosedListener.reused).toBe(false);
+  expect(afterClosedListener.origin).toBe(owner.origin);
+  afterClosedListener.stop();
+
+  // Dead pid → fresh host.
+  await writeFile(recordPath, JSON.stringify({...JSON.parse(recordBytes), pid: 999_999}), {mode: 0o600});
+  const afterDeadPid = await startJobHost(options); hosts.push(afterDeadPid);
+  expect(afterDeadPid.reused).toBe(false);
+  expect(afterDeadPid.origin).toBe(owner.origin);
+  afterDeadPid.stop();
+
+  // Missing record → fresh host.
+  await unlink(recordPath);
+  const afterMissingRecord = await startJobHost(options); hosts.push(afterMissingRecord);
+  expect(afterMissingRecord.reused).toBe(false);
+
+  // Mismatched fingerprint → not reused.
+  const otherFingerprint = await startJobHost({...options, fingerprint: 'e'.repeat(64)}); hosts.push(otherFingerprint);
+  expect(otherFingerprint.reused).toBe(false);
+  expect(otherFingerprint.session.jobId).not.toBe(afterMissingRecord.session.jobId);
+});
