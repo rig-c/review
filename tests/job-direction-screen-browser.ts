@@ -10,7 +10,9 @@ import {createSyntheticPlanRecordWorkspace,createSyntheticRecordReader} from './
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
-import {projectComments,feedbackItemComments} from '../src/stage-comment.ts';
+import {feedbackItemComments,parseStageComment,timeOnlyBasis,unprojectMark} from '../src/stage-comment.ts';
+import {parseCommentsAct} from '../src/job-host.ts';
+import {validateCommentCrop} from '../src/comment-crops.ts';
 import type {Feedback} from '../src/session.ts';
 import {jobSourceDraftId} from '../web/job-session.ts';
 const at=Bun.argv.indexOf('--out'),output=resolve(at<0?'artifacts/direction-screen-796':Bun.argv[at+1]!);await mkdir(output,{recursive:true});
@@ -110,7 +112,7 @@ try{
    const draft:any=await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)}))`);
    assert.deepEqual(draft.comments.map((row:any)=>row.summary),['Direction comment · 연출','Direction spot · 연출 위치']);
    assert.equal('target' in draft.comments[0],false);assert.ok(draft.comments[1].context.comment.crop.png);
-   const projected=projectComments(draft.comments.map((row:any)=>'target' in row?feedbackItemComments([row as Feedback])[0]!:{text:row.summary}));
+   const expected=draft.comments.map((row:Feedback|{summary:string})=>'target' in row?feedbackItemComments([row])[0]!:{text:row.summary});
    assert.equal(draft.status,'approved','legacy comment draft records the earlier verdict');
    await page.evaluate(`(()=>{const s=document.querySelector('#review-status');s.value='changes-requested';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
    await click('#direction-panel > summary');assert.equal((await panelState()).open,true);
@@ -126,14 +128,26 @@ try{
    assert.deepEqual(await page.evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)})).comments.map(row=>row.summary)`),draft.comments.map((row:any)=>row.summary));
    const screenshot=language+'-direction.png';await writeFile(join(output,screenshot),await page.screenshot());
    await click('#request-changes');
-   let act:any;const deadline=Date.now()+20000;
-   while(Date.now()<deadline){const next=await api('next',{after:null,waitMs:0});act=next.events.flatMap((e:any)=>e.type==='act'&&e.act.askId===ask.askId?[e.act]:[])[0];if(act)break;await Bun.sleep(25);}
-   assert.ok(act,'direction UI committed act');assert.equal(act.schema,'rig-review/act@6');assert.equal(act.authority.channel,'review-ui');
+   let rawAct:unknown;const deadline=Date.now()+20000;
+   while(Date.now()<deadline){const next=await api('next',{after:null,waitMs:0});rawAct=next.events.find((e:any)=>e.type==='act'&&e.act.askId===ask.askId)?.act;if(rawAct)break;await Bun.sleep(25);}
+   assert.ok(rawAct,'direction UI committed act');
+   const act=parseCommentsAct(rawAct);
+   assert.equal(act.schema,'rig-review/act@6');assert.equal(act.kind,'review-verdict');assert.equal(act.authority.channel,'review-ui');
    assert.equal(act.value.stage,'direction-review');assert.equal(act.value.verdict,'changes-requested');
-   assert.equal(act.value.comments.length,1);assert.equal(act.value.comments[0].text,projected);
+   assert.deepEqual(act.value.comments,expected,'verdict retains the general row and the complete pin in draft order');
+   const pin=act.value.comments[1]?.anchor;assert.ok(pin&&'frameStart' in pin);
+   assert.equal(pin.frameStart,null);assert.equal(pin.frameEnd,null);
+   const context=pin.context as {comment:unknown;time:number;frame:null;interval:null};
+   const mark=parseStageComment(context.comment);
+   assert.equal(mark.time,context.time);assert.equal(mark.frame,null);assert.deepEqual(mark.timeBasis,timeOnlyBasis);
+   assert.equal(context.frame,null);assert.equal(context.interval,null);
+   const {x,y,width,height}=mark.screen;
+   assert.equal(width,0);assert.equal(height,0);
+   assert.deepEqual(mark.world,{...unprojectMark({x,y},mark.camera),width:0,height:0});
+   assert.equal(hash(validateCommentCrop(mark)),mark.crop.sha256);
    assert.equal('still' in act,false);assert.deepEqual(act.source.direction,publication.source.direction);
    const playback=await page.evaluate(`(()=>{const s=document.querySelector('#scrub');return {value:s.value,max:s.max,step:s.step};})()`);
-   observations.push({kind:'direction',language,layout,playback,projected,restoredRows:2,act,screenshot,pinTransport:'text projection only; positions/crops/bookmarks follow-up #776'});
+   observations.push({kind:'direction',language,layout,playback,restoredRows:2,act,screenshot});
    assert.deepEqual(await jobInputHashes(builder.input.root),frozen);
 
    const views:string[]=await page.evaluate(`[...document.querySelectorAll('#view-menu button[data-view]:not(:disabled)')].map(n=>n.dataset.view)`);

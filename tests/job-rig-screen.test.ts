@@ -12,7 +12,7 @@ import {tr} from '../web/i18n.ts';
 // The projector Create applies to act@6 comments: the public job-host export (Create c8382ba5 pins @rig-c/review 2.12.0).
 import {parseCommentsAct, projectComments} from '../src/job-host.ts';
 import legacy from './fixtures/comments-contract-legacy.json';
-import type {DisplayPublicationV3, PendingAskV3} from '../src/job-contract.ts';
+import type {DisplayPublicationV3, JobUISubmission, PendingAskV3} from '../src/job-contract.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
@@ -234,6 +234,56 @@ test('#784 model-less checkpoint routing uses its declared plan mapping independ
  expect(jobRigScreenAsk(display,invalid,new Set(['photo-check']))).toBe(false);
  expect(jobRigScreenRoute(display,[invalid],new Set(['photo-check']))).toBe(false);
  expect(jobRigScreenRoute(display,[{...ask,subject:{kind:'review-verdict',stage:'rig-review'}} as PendingAskV3],new Set())).toBe(false);
+});
+
+test('#1136 direction save hands the host ordered native comments from the shared draft', async () => {
+  const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
+  const rows = [feedback, {id: 'general', summary: '  전체 timing '}, {...feedback, id: 'two', summary: 'Later pose'}];
+  const start = main.indexOf("  button('save').onclick = async () => {");
+  const end = main.indexOf('    try { const saved = await api<ReviewSession>', start);
+  const mapStart = main.indexOf('function recordJobComments('), mapEnd = main.indexOf('function projectRecordComments(', mapStart);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  expect(mapStart).toBeGreaterThanOrEqual(0);
+  expect(mapEnd).toBeGreaterThan(mapStart);
+  const source = main.slice(mapStart, mapEnd) + main.slice(start, end) + '};';
+  const code = new Bun.Transpiler({loader: 'ts'}).transformSync(source);
+  const args: unknown[][] = [], save = {onclick: async () => {}};
+  const scope = {button: () => save, readOnly: false, draftConflict: false, saving: false,
+    session: {...session({status: 'changes-requested'}), feedbackWarnings: []},
+    updateSavedState() {}, recordComments: rows, feedbackItemComments,
+    recordCommentWords: () => 'legacy scalar', host: {direction: {}, submit: async (...input: unknown[]) => {args.push(input); return '';}}};
+  new Function('scope', `with(scope){${code}}`)(scope);
+  await save.onclick();
+  expect(args).toHaveLength(1);
+  expect(args[0]![2]).toEqual([...feedbackItemComments([feedback]), {text: '  전체 timing '},
+    ...feedbackItemComments([rows[2] as Feedback])]);
+});
+
+test('#1136 transport sends direction comments in order and retains the omitted-argument words path', async () => {
+  const source = await Bun.file(new URL('../web/job-rig-screen.ts', import.meta.url)).text();
+  const start = source.indexOf('  async function submit(session:'), end = source.indexOf('  const partsAttempts=', start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  const code = new Bun.Transpiler({loader: 'ts'}).transformSync(source.slice(start, end));
+  const ask = {askId: 'direction-ask', publicationId: 'publication', status: 'pending',
+    subject: {kind: 'review-verdict', stage: 'direction-review'}};
+  const sent: JobUISubmission[] = [];
+  const scope = {mounted: {display: {publication: {publicationId: ask.publicationId}}}, attempts: new Map(),
+    jobRigScreenRefusal: () => null, jobRigScreenDecisions, createJobRigSubmission: () => ({}),
+    options: {access: {capability: 'owner'}, pageId: 'page', translate: (key: string) => key,
+      window: {state: () => ({receipt: {displayedNonce: 'nonce'}, pending: [ask], generation: 2}),
+        submit: async (input: JobUISubmission) => {sent.push(input); return {ok: true, value: {kind: input.kind, at: 'time'}};}}}};
+  const submit = new Function('scope', `with(scope){${code};return submit;}`)(scope);
+  const review = session({status: 'changes-requested', feedback: [feedback]});
+  const comments = [{text: 'First general'}, ...feedbackItemComments([feedback]), {text: 'Final general'}];
+  await submit(review, () => {}, comments);
+  await submit(review, () => {}, []);
+  await submit(review, () => {});
+  const decision = {stage: 'direction-review', verdict: 'changes-requested'} as const;
+  expect(sent.map(input => input.value)).toEqual([
+    {...decision, comments}, {...decision, comments: []}, {...decision, words: projectComments(feedbackItemComments([feedback]))},
+  ]);
 });
 
 test('#798 direction comments restore cannot override the inspection draft verdict', async()=>{
