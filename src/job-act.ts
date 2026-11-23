@@ -14,7 +14,7 @@ import {
   chestLandmarkIdentity, parseChestLandmarkEdits, parseChestLandmarksAct,
 } from './job-api.ts';
 import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueComments } from './feedback-export.ts';
-import { hasStageComment, isTimeOnlyFeedback, parseStageComment } from './stage-comment.ts';
+import { hasStageComment, parseStageComment } from './stage-comment.ts';
 import type { Feedback } from './session.ts';
 import { validatePicks } from './interview-picks.ts';
 import {
@@ -689,13 +689,9 @@ export function finalizeJobAct(options: {
         if (verdictComments.some(comment => Object.hasOwn(comment, 'context'))) return commentsActForEmission(rigAct);
         return commentsAct(rigAct);
       }
-      const directionComments = submittedComments(value, true);
-      if (!Array.isArray(directionComments) || directionComments.some(row => row?.anchor !== undefined && !isTimeOnlyFeedback(row.anchor))) {
-        throw new JobError('JOB_ACT_INVALID');
-      }
       return commentsAct({ ...act, source: { ...source, model: source.model!,
         selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, { kind: 'rig' | 'post' }> }, value: {
-        stage: ask.subject.stage, verdict, comments: directionComments,
+        stage: ask.subject.stage, verdict, comments: submittedComments(value, true),
       } });
     }
     case 'signoff': {

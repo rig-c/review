@@ -229,6 +229,30 @@ test('#1136 direction@3 writes three exact time-only pins and an interleaved gen
   expect(await jobInputHashes(f.root)).toEqual(originalInputs);
 });
 
+test('#1136 direction verdict preserves producer and reference frame pins', async () => {
+  const {f, publication, modelHash} = await postFixture();
+  const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'direction-review'}), page = await f.display(publication);
+  const comments = (['producer', 'reference'] as const).map((basis, offset) => {
+    const index = 4 + offset;
+    const {text, anchor, mark: {timeBasis: _timeBasis, ...mark}} =
+      timedPin(publication.source.sourceHash, modelHash, 0.25 + offset * 0.25, index, basis + ' pin');
+    const comment = {...mark, frame: {index, basis}, ...(basis === 'reference' ? {
+      viewport: 'reference' as const, modelHash: null, referenceId: 'reference', referenceHash: 'a'.repeat(64),
+    } : {})} satisfies StageComment;
+    return {text, anchor: {...anchor, frameStart: index, frameEnd: index, context: {
+      ...anchor.context as object, frame: basis === 'producer' ? index : null,
+      interval: {frameStart: index, frameEnd: index, inclusive: true}, comment,
+    } as Json}};
+  });
+  const value = {stage: 'direction-review', verdict: 'approved', comments};
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
+    expectedGeneration: f.session.status().generation, submissionId: 'direction-framed', kind: 'review-verdict', value}));
+  if (!saved.ok) throw new Error(saved.error.code);
+  const parsed = parseCommentsAct(saved.value);
+  expect(parsed).toMatchObject({schema: 'rig-review/act@6', kind: 'review-verdict'});
+  expect(parsed.value).toEqual(value);
+});
+
 test('#1136 words-only direction retains its anchorless export and replay bytes', async () => {
   const {f, publication} = await postFixture();
   const stage = 'direction-review', verdict = 'changes-requested', words = '  Legacy 연출\r\nKeep edges  \n';

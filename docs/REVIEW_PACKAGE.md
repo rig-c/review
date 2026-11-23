@@ -1668,10 +1668,11 @@ defines the separate top-level `comment.context` field.
 [Review #1136](https://github.com/rig-c/review/issues/1136) lets a
 `direction-review` UI submission carry an ordered `comments` list in place of
 `words`. The finalized `rig-review/act@6` uses the existing Feedback anchor.
-Each pin carries the exact held seconds, the seconds time basis, null
-`frame`, `frameStart` and `frameEnd`, the stage-local and rig-world rectangles,
-crop, numeric camera including zoom, and recorded turn when present. Point
-pins use zero width and height. The writer checks pins against the retained
+Each pin carries the exact held seconds, stage-local and world rectangles,
+crop, numeric camera including zoom, and recorded turn when present. Pins with
+an explicit producer or reference frame preserve that frame and its basis.
+Time-only pins carry the seconds time basis and null `frame`, `frameStart` and
+`frameEnd`. Point pins use zero width and height. The writer checks pins against the retained
 publication. General comments carry `text` alone. Legacy words-only submissions
 still emit a single anchorless comment for nonblank words and an empty list for
 blank words. Historical act bytes and the `projectComments` projection are unchanged.
