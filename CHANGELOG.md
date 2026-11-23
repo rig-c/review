@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.18.4
+
+Direction review shows only what a reviewer can use, and a composed direction take is drawn inside its authored stage. There is no export, act or contract change.
+
+### Fixed
+
+* On every direction-review screen, the six frame-feedback shortcuts that pointed at the hidden frame-range fields are hidden: Inspect pose, Inspect interval, Audio links, Mesh density, Contour curvature and Chest position. Angle inspection stays; with no inspection axes supplied it is disabled and shows the existing reason. Hidden or disabled entries ignore clicks (#1146, closes #1143).
+* A composed direction take (direction@3 with `canvas_clip`) is now drawn by Play's CanvasRenderer with its viewport set to the authored stage, plus an exact clip for Play's outward raster rounding. Actor art and turned parts past the stage edge no longer show. Non-composed rigs keep the DOM renderer and their pixels are unchanged; camera, zoom, 1:1, Turn and pinned comments still use the shared viewport (#1147, closes #1145).
+
 ## 4.18.3
 
 A direction verdict's pinned comments keep where and when they were pinned. The act stays act@6 with no new keys. Create's reader receives the anchor it already accepts for picks.
