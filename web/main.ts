@@ -1601,6 +1601,9 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
   'This request has no picture.';
  readOnly=tr(interview?'MODEL_UNAVAILABLE':'JOB_REVIEW_READ_ONLY');
  if(!interview)actReadOnly=readOnlyReason(access,true,host?.ownerActAccess);
+ // Image and pair mounts temporarily replace this baseline and release it before viewDisposers run.
+ for(const control of controls.zoomButtons.concat(controls.nativeOne!))control.disabled=true;
+ viewDisposers.push(controls.replaceViewSwitch({...inspectionViewSwitch(chooseInspectionView,true),disabled:true}));
  bindWorkspace();bindInspector(true);rigInput={state:'absent'};referenceInput={state:'absent'};renderLayout();
  parts=new PartExplorer(el('workspace-left'),el('selected-part'),()=>{},()=>{});text('checkpoints','No checkpoints supplied.');text('dirty','Not submitted');if(interview)message(unavailable);else message(actReadOnly??(host?.record?.questionPicture||host?.record?.planPicture?'':unavailable));
  text('package-title',interview?.label??host!.record!.label);text('revision','');text('source-hash',`source ${(interview?.sourceHash??host!.record!.sourceHash).slice(0,12)}`);

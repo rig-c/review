@@ -10,6 +10,7 @@ import {isAbsolute,join,resolve} from 'node:path';
 import {PNG} from 'pngjs';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {recordViewportControls} from './helpers/record-viewport-controls.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {optionSetsJobFixture,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
@@ -216,6 +217,43 @@ async function sharedCameraChecks(){
  await click(page!,'#fit');
  const fit=await paintingState();assert.ok(Math.abs(fit.scale-initialFit.scale)<0.001,JSON.stringify({initialFit,fit}));
  return {native,enlarged,reduced,fit};
+}
+async function questionViewportControls(){
+ await page!.setViewport(1440,900);
+ const width=480,swatch=new PNG({width,height:240});
+ swatch.data.fill(0x90);
+ const bytes=PNG.sync.write(swatch);
+ for(const language of ['en','ko'] as const){
+  const fixture=await recordScreenFixture('interview-picks',false,undefined,undefined,false,true,undefined,false,true,undefined,undefined,undefined,bytes);
+  const open=async()=>page!.goto(fixtureUrl(fixture.ownerUrl,language));
+  try{
+   await open();
+   fixture.fake.publish(fixture.display);
+   await wait(`document.body.dataset.ready==='true'&&document.querySelector('#rig-empty')?.checkVisibility()&&
+    document.querySelector('#view-menu [data-view="compare"]')`,'1128 empty record mounted');
+   await recordViewportControls(page!,command!,language,true);
+   fixture.fake.pending(fixture.ask,fixture.display.publication.generation);
+   await readPainting(width);
+   await wait(`document.querySelector('#reference-empty').hidden`,'1128 image loaded');
+   await recordViewportControls(page!,command!,language,false);
+   await sharedCameraChecks();
+   await page!.evaluate(`globalThis.questionImage=document.querySelector('${paintingSelector}');true`);
+   await selectInterviewImage(0);
+   await readPainting(width);
+   assert.ok(await page!.evaluate(`document.querySelector('${paintingSelector}')!==globalThis.questionImage`),'View switch invokes the image handler');
+   fixture.fake.pending({...fixture.ask,status:'superseded'},fixture.display.publication.generation);
+   await wait(`!document.querySelector('${paintingSelector}')&&!document.querySelector('#view-menu [data-view="interview-image-0"]')`,'1128 question image released');
+   await recordViewportControls(page!,command!,language,true);
+   // Replay a pending pictured ask when opening the same publication.
+   await page!.goto('about:blank');
+   fixture.fake.pending(fixture.ask,fixture.display.publication.generation);
+   await open();
+   await readPainting(width);
+   await wait(`document.querySelector('#reference-empty').hidden`,'1128 image loaded at open');
+   await recordViewportControls(page!,command!,language,false);
+   console.log('1128_QUESTION_PASS '+language);
+  }finally{await page!.goto('about:blank');await fixture.close();}
+ }
 }
 async function clickFormControl(selector:string){
  await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`);
@@ -1164,11 +1202,13 @@ try{
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Runtime.enable');await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
- if(Bun.argv.includes('--draft-survival'))await draftSurvivalChecks();
+ if(Bun.argv.includes('--viewport-controls'))await questionViewportControls();
+ else if(Bun.argv.includes('--draft-survival'))await draftSurvivalChecks();
  else if(Bun.argv.includes('--first-question-drawer'))await firstQuestionInDrawer();
  else if(boundRigPictureOnly)await boundRigPictureChecks();
  else if(postQuestionPictures)await postQuestionPictureChecks();
  else{
+ await questionViewportControls();
  await firstQuestionInDrawer();
  if(!completedPicture||workspace986)await liveQuestionDraftChecks();
  if(workspace986)await twoImageDrawerChecks();
