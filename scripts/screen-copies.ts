@@ -67,9 +67,9 @@ const layoutRow = (layout: string, step: string, ceiling: number): CopyRow => ({
   ],
 });
 
-const identifierRow = (name: string, step: string, ceiling: number, plantIn: string): CopyRow => ({
+const identifierRow = (name: string, step: string, ceiling: number, plantIn: string, files?: readonly string[]): CopyRow => ({
   name, step, ceiling,
-  matchers: [{pattern: new RegExp(`(?<![\\w-])${name}(?![\\w-])`, 'gu'), plant: `\n/* ${name} */\n`, plantIn}],
+  matchers: [{pattern: new RegExp(`(?<![\\w-])${name}(?![\\w-])`, 'gu'), files, plant: `\n/* ${name} */\n`, plantIn}],
 });
 
 export const ROWS: readonly CopyRow[] = [
@@ -102,6 +102,14 @@ export const ROWS: readonly CopyRow[] = [
     {pattern: /<!doctype html/giu, files: ['src/job-front.ts'], plant: "\nconst planted = '<!doctype html>';\n", plantIn: 'src/job-front.ts'},
   ]},
   layoutRow('legacyPartsStep2', '2', 0),
+  identifierRow('legacyPartsStep2', '5', 0, 'web/workspace-ui.ts', ['web/workspace-ui.ts']),
+  identifierRow('legacyInterviewStep4', '5', 0, 'web/workspace-ui.ts', ['web/workspace-ui.ts']),
+  {name: 'legacy interview pathname in web/main.ts', step: '5', ceiling: 0, matchers: [
+    {pattern: /\/stage-interview\.html/gu, files: ['web/main.ts'], plant: "\nlocation.pathname.endsWith('/stage-interview.html');\n", plantIn: 'web/main.ts'},
+  ]},
+  {name: 'legacy parts build modes in src/build.ts', step: '5', ceiling: 0, matchers: [
+    {pattern: /['"]stage-parts['"]|(?:mode:[^\n]+?\||buildWeb\(\s*)['"]parts['"]/gu, files: ['src/build.ts'], plant: "\nbuildWeb('parts');\n", plantIn: 'src/build.ts'},
+  ]},
   layoutRow('legacyCompareStep3', '3', 3),
   layoutRow('legacyCompiled' + 'JobStep5', '5', 0),
   {name: 'compare camera stack definitions in web/compare.ts', step: '3', ceiling: 2, matchers: [

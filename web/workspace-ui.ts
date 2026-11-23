@@ -33,7 +33,7 @@ export function mountStatusBar(options:WorkspaceStatusBarOptions|{placement:'inl
  return {footer,message};
 }
 
-export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyPartsStep2'|'legacyInterviewStep4'|'legacyOwnerStep6';
+export type WorkspaceHeaderCompatibility = 'rigStep1'|'legacyCompareStep3'|'legacyOwnerStep6';
 export interface WorkspaceHeaderOptions {
  compatibility:WorkspaceHeaderCompatibility;embedded?:boolean;title?:string;revision?:string;
  /** Only the stopped compare host supplies its existing domain controls and actions. */
@@ -46,26 +46,26 @@ export interface WorkspaceHeader {
 }
 /** One C1 construction path; the finite legacy choices expire at their named screen migrations. */
 export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHeader {
- const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',parts=kind==='legacyPartsStep2',interview=kind==='legacyInterviewStep4',owner=kind==='legacyOwnerStep6';
- const branded=rig||compare||parts,settingsLanguage=rig||compare;
+ const kind=options.compatibility,rig=kind==='rigStep1',compare=kind==='legacyCompareStep3',owner=kind==='legacyOwnerStep6';
+ const branded=rig||compare;
  const header=panelMake('header');
- const headerClass=rig?'topbar':parts?'pv-top':owner?'owner-header':null;
+ const headerClass=rig?'topbar':owner?'owner-header':null;
  if(headerClass)header.className=headerClass;
  if(branded){
-  const brand=panelMake('div',{className:parts?'pv-brand':'brand'});
-  const mark=panelMake('span',compare?{}:{className:parts?'pv-mark':'brand-mark'},compare?'COMPARE':'r');
+  const brand=panelMake('div',{className:'brand'});
+  const mark=panelMake('span',compare?{}:{className:'brand-mark'},compare?'COMPARE':'r');
   if(compare)brand.append('rig review ',mark);else brand.append(mark,'rig review');
   header.append(brand);
  }
- const title=panelMake(rig||parts?'strong':'h1');
- const titleId=rig?'package-title':compare?'title':parts?'pv-title':null;
+ const title=panelMake(rig?'strong':'h1');
+ const titleId=rig?'package-title':compare?'title':null;
  if(titleId)title.id=titleId;
- title.textContent=options.title??(rig?'Review package':compare?'A / B comparison':parts?'Parts review':'');
+ title.textContent=options.title??(rig?'Review package':compare?'A / B comparison':'');
  let subtitle:HTMLElement|null=null;
  if(branded){
-  subtitle=panelMake('span',{id:rig?'revision':compare?'animation':'pv-mode',className:rig?'subtle':compare?'hint':'pv-subtle',textContent:options.revision??''});
-  const identity=panelMake('div',{},title,...(parts?[' ']:[]),subtitle);header.append(identity);
- }else{if(interview)header.append('\n    ');header.append(title);}
+  subtitle=panelMake('span',{id:rig?'revision':'animation',className:rig?'subtle':'hint',textContent:options.revision??''});
+  const identity=panelMake('div',{},title,subtitle);header.append(identity);
+ }else header.append(title);
  let modeSwitch:HTMLElement|null=null,dirty:HTMLElement|null=null;
  if(rig||compare){
   modeSwitch=compare?options.compare!.modeSwitch:panelMake('div',{className:'mode-switch'});
@@ -85,19 +85,18 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
  let stages:HTMLElement|null=null,status:HTMLParagraphElement|null=null;
 
  if(owner){status=panelMake('p',{className:'owner-status'});status.setAttribute('role','status');header.append(status);}
- let language:HTMLSelectElement|null=null,languageLabel:HTMLLabelElement|null=null;
- if(!parts){
-  language=panelMake('select');
-  if(settingsLanguage){language.id='settings-language';language.dataset.appPreference='';}
-  for(const value of ['en','ko']){
-   // Owner ruling #873: the top-bar choice is En or Kr, with no System option.
-   const text=settingsLanguage?(value==='en'?'En':'Kr'):interview?(value==='en'?'English':'한국어'):'';
-   language.append(panelMake('option',{value,textContent:text}));
-  }
-  if(settingsLanguage){if(rig){language.setAttribute('aria-label','Language');header.append(language);}else languageLabel=labelledControl('Language ',language);}
-  else{if(interview)header.append('\n    ');header.append(language);if(interview)header.append('\n  ');}
+ const language=panelMake('select');
+ let languageLabel:HTMLLabelElement|null=null;
+ if(branded){language.id='settings-language';language.dataset.appPreference='';}
+ for(const value of ['en','ko']){
+  // Owner ruling #873: the top-bar choice is En or Kr, with no System option.
+  const text=branded?(value==='en'?'En':'Kr'):'';
+  language.append(panelMake('option',{value,textContent:text}));
  }
- if(options.embedded){if(rig||parts)header.hidden=true;else if(interview)language!.hidden=true;}
+ if(rig){language.setAttribute('aria-label','Language');header.append(language);}
+ else if(compare)languageLabel=labelledControl('Language ',language);
+ else header.append(language);
+ if(options.embedded&&rig)header.hidden=true;
  const actRow=rig?panelMake('div',{id:'workspace-act-row',className:'workspace-act-row',hidden:true}):null;
  return {header,actRow,title,subtitle,modeSwitch,dirty,stages,status,language,languageLabel,dispose(){header.remove();actRow?.remove();languageLabel?.remove();}};
 }
