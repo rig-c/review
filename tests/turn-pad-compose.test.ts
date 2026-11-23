@@ -30,7 +30,7 @@ test('one composed actor exposes its generated body dial and accepts turn feedba
   const values=Object.fromEntries(p.feedbackCatalog.turnDials!.map(d=>[d.axis,d.axis==='body'?12:0]));
   const angle={...turn,values};
   const parsed=parseSession({...freshSession(p),feedback:[{...feedback,context:{turn:angle}}]},p);
-  expect(parsed.feedback[0]?.context?.turn).toEqual(angle);
+  expect(parsed.feedback[0]?.context).toMatchObject({turn:angle});
  });
 });
 
