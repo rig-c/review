@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {prepareJobRecordAct} from '../src/job-act.ts';
 import {buildRecordSource, createJobHostPorts, parseCommentsAct, parseRecordAct, parseRecordPublishedContext,
   parseRecordSource, serializeRecordSourceDigestPayload} from '../src/job-api.ts';
-import {JOB_API_V3_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, jobRawActMediaType, type PendingAskV3, type PlanContext,
+import {JOB_API_V3_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, jobRawActMediaType, type JobCommentsAct, type PendingAskV3, type PlanContext,
   type PublicationV3, type UISubmissionV3} from '../src/job-contract.ts';
 import {retainedPublicationRoutes} from '../src/job-front.ts';
 import {JobSession, type JobSessionOptions} from '../src/job-session.ts';
@@ -165,8 +165,12 @@ test('#1088 publish, ask, display, finalize, fetch and replay preserve act bytes
         const act = parseRecordAct(committed.value);
         expect(Object.hasOwn(act.source, 'directionReview')).toBe(false);
         expect(() => parseRecordAct({...act, source: {...act.source, directionReview}})).toThrow('JOB_ACT_INVALID');
-        const {words: text, ...value} = act.value as typeof submission.value;
-        const commentsAct = {...act, schema: JOB_COMMENTS_ACT_SCHEMA, value: {...value, comments: [{text}]}};
+        if (act.kind !== 'signoff' && act.kind !== 'checkpoint') throw new Error('Expected signoff or checkpoint act');
+        const comments = [{text: act.value.words}];
+        const commentsAct: JobCommentsAct = act.kind === 'signoff'
+          ? {...act, schema: JOB_COMMENTS_ACT_SCHEMA, value: {stage: act.value.stage, decision: act.value.decision, comments}}
+          : {...act, schema: JOB_COMMENTS_ACT_SCHEMA, value: {checkpointId: act.value.checkpointId,
+            planStepId: act.value.planStepId, outcome: act.value.outcome, comments}};
         expect(parseCommentsAct(commentsAct)).toEqual(commentsAct);
         expect(() => parseCommentsAct({...commentsAct, source: {...act.source, directionReview}})).toThrow('JOB_ACT_INVALID');
         const response = await api.fetch(act.actId);
