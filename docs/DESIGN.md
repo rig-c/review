@@ -44,7 +44,10 @@ change adds no screen, behavior or public contract.
   supported checkpoint act flow through its existing contract.
 - **R3a** Any main view in rig, comparison, parts, job, interview or package review
   has a resizable bottom panel directly beneath it for the controllers tied to
-  that view. Use one control set in this
+  that view. A view with no controller (an image-only interview picture, plan
+  picture or record checkpoint pair) has no bottom panel: the panel exists only
+  when the view has a controller to hold (owner ruling on #1122, 2026-11-23).
+  Use one control set in this
   order: **Zoom in → Zoom out → Fit → 1:1 → View switch**, with the same names and
   behavior across views. Use the shared viewport implementation and extend it
   for missing behavior. Keep main-view code shared across screens.
