@@ -71,7 +71,7 @@ export const rigPictureCases = [
 type RigPictureCase = typeof rigPictureCases[number];
 export type PostPictureCase = 'scene' | 'unsealed-scene' | 'rig' | 'rig-painting-second' | 'rig-no-painting' | 'legacy' | RigPictureCase;
 
-function rigPictureFixture(root: string, variant: RigPictureCase) {
+function rigPictureFixture(root: string, variant: RigPictureCase, sealAcceptedParts = false) {
   const signoffAt = '2026-10-31T00:00:00.000Z';
   const config = writeWorkspaceFile(root, 'rig/config.json', '{}');
   const packageConfig = writeWorkspaceFile(root, SYNTHETIC_RIG_ROOT + '/config.json', '{}');
@@ -124,10 +124,14 @@ function rigPictureFixture(root: string, variant: RigPictureCase) {
       ...(variant === 'rig-outputs' ? {outputs} : {review_package: reviewPackage}),
       verdicts: [{review: 'rig-review', by: 'synthetic-owner', at: signoffAt, verdict: 'accepted'}]},
   ];
-  const parts = {path: 'derived/drafts/synthetic', files: []};
+  const partsPath = 'derived/drafts/synthetic';
+  const parts = {path: partsPath, files: sealAcceptedParts ? [
+    writeWorkspaceFile(root, partsPath + '/parts.json', JSON.stringify({rig_size:[2,2],parts:[{name:'body',x:0,y:0,w:2,h:2}]})),
+    writeWorkspaceFile(root, partsPath + '/parts/body.png', makeSyntheticPngBytes()),
+  ] : []};
   return {
     context: {kind: 'rig', ...(variant === 'rig-missing-version-field' ? {} : {rig_version: 3}), signoff_at: signoffAt, config, parts},
-    files: [config, ...hazard, ...buildFiles.filter(row => variant !== 'rig-outputs' && variant !== 'rig-pre-closure' &&
+    files: [config, ...parts.files, ...hazard, ...buildFiles.filter(row => variant !== 'rig-outputs' && variant !== 'rig-pre-closure' &&
       (variant !== 'rig-unsealed-build-row' || !row.path.endsWith('/run.json')))],
     versions: variant === 'rig-missing-version' ? versions.slice(0,1) : versions,
     signoffs: [{stage: 'rig-review', checkpoint: null, at: signoffAt, by: 'synthetic-owner', target}],
@@ -625,11 +629,11 @@ function riggingPlanAsks(item:typeof RIGGING_PLAN[number]){
 /** One option-set publication with a set per question and a shared input or accepted rig. */
 export function createSyntheticOptionSetsRecordWorkspace(
   root: string,
-  options: { readonly count: number; readonly painting?: Buffer; readonly boundRig?: boolean },
+  options: { readonly count: number; readonly painting?: Buffer; readonly boundRig?: boolean; readonly sealAcceptedParts?: boolean },
 ): SyntheticOptionWorkspace & { readonly optionSetFiles: readonly JobFileIdentity[] } {
   const plan = RIGGING_PLAN.slice(0, options.count);
   if (plan.length !== options.count || options.count < 1) throw new Error('SYNTHETIC_1004_SET_COUNT');
-  const rig = options.boundRig ? rigPictureFixture(root, 'bound-rig') : null;
+  const rig = options.boundRig ? rigPictureFixture(root, 'bound-rig', options.sealAcceptedParts) : null;
   const inputImage = writeWorkspaceFile(root, 'inputs/reference.png', options.painting ?? makeSyntheticPngBytes(40, 160, 220));
   const inputSpec = writeWorkspaceFile(root, 'inputs/spec.json', JSON.stringify({ character: 'hero', version: 1 }, null, 2) + '\n');
   const optionSetFiles = plan.map((item, index) => writeWorkspaceFile(root, `interview/options/rigging-${index + 1}.json`,

@@ -147,6 +147,7 @@ export function interviewRecords(diagnostics:readonly InterviewDiagnostic[]=[],h
 
 /** The question list and survey form. Hosts supply source data and submit transport. */
 export function createInterviewForm(options:{question:InterviewDisplayQuestion;id:string;node?:InterviewText;form?:HTMLFormElement;fieldset?:HTMLFieldSetElement;source?:HTMLElement;
+    presentation?:'inspection'|'record';
     mainView?:boolean;images:readonly {name:string;src:string;path?:string;sha256?:string}[];questions?:readonly {label:string;answered:boolean}[]|(()=>readonly {label:string;answered:boolean}[]);selected?:number;onSelect?:(index:number)=>void;answered?:boolean;
     diagnostics?:readonly InterviewDiagnostic[];historical?:readonly HistoricalInterview[];
     /** #1004: a control kept at the top of the question list (the job page's one submit for several sets). */
@@ -157,6 +158,7 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   const form=options.form??make('form'),fields=options.fieldset??make('fieldset');
   if(!options.fieldset)form.append(fields);
   const joined=options.id.startsWith('joined-interview-');
+  const record=options.presentation==='record';
   form.setAttribute('translate','no');
   form.className='interview-answer interview-grid';form.dataset.interviewAnswered=String(options.answered??Boolean((joined&&question.saved)||question.answer));
   fields.className='interview-answer-fields';fields.id=options.id;fields.disabled=!question.editable;
@@ -183,9 +185,10 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
   const context=make('div');context.id=options.id+'-source';context.className='interview-image-context';
   if(options.source)context.append(options.source);
   context.append(node('h2',question.hasParts?'interview.parts':'interview.source'));
-  if(!question.hasParts)context.append(node('p','interview.noParts'));
+  if(!record&&!question.hasParts)context.append(node('p','interview.noParts'));
   if(question.partsUnavailable)context.append(node('p','interview.partsUnavailable'));
-  const provenance=make('p'),binding=make('code',question.ref.path+' · '+question.ref.sha256);context.append(provenance,binding);
+  const provenance=make('p');context.append(provenance);
+  if(!record)context.append(make('code',question.ref.path+' · '+question.ref.sha256));
   if(question.answer)context.append(make('pre',[question.answer.by,question.answer.at,question.answer.source].filter(value=>typeof value==='string').join(' · ')),make('pre',typeof question.answer.verbatim==='string'?question.answer.verbatim:''));
   if(options.mainView){form.dataset.interviewMain='';Object.assign(form,{interviewImages:options.images});}
   let list:HTMLElement|undefined,records:HTMLElement|undefined;
@@ -199,7 +202,7 @@ export function createInterviewForm(options:{question:InterviewDisplayQuestion;i
     }
     provenance.textContent=t('interview.provenance',[question.set.drafted_by,question.set.drafted_at]);
     const questions=typeof options.questions==='function'?options.questions():options.questions;
-    const items=questions?.map((item,index)=>({...item,answered:index===(options.selected??0)&&!options.listAction?form.dataset.interviewAnswered==='true':item.answered}))??[{label:question.set.question+' · '+question.set.id,answered:form.dataset.interviewAnswered==='true'}];
+    const items=questions?.map((item,index)=>({...item,answered:index===(options.selected??0)&&!options.listAction?form.dataset.interviewAnswered==='true':item.answered}))??[{label:record?t('interview.question'):question.set.question+' · '+question.set.id,answered:form.dataset.interviewAnswered==='true'}];
     const listTop=list?.scrollTop??0,listLeft=list?.scrollLeft??0;
     const next=interviewQuestionList(items,options.selected??0,options.onSelect??(()=>{}),false,options.node);if(options.listAction)next.prepend(options.listAction);list?.remove();form.prepend(next);next.scrollTop=listTop;next.scrollLeft=listLeft;list=next;
     records?.remove();records=interviewRecords(options.diagnostics,options.historical,options.node);context.append(records);

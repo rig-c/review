@@ -9,12 +9,12 @@ import {createJobRigScreen} from '../web/job-rig-screen.ts';
 import type {InterviewDisplayQuestion} from '../web/interview-panel.ts';
 import {rigHost,setRigHost} from '../web/rig-host.ts';
 import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jobPublicationRoutes,prepareJobForms,prepareJobInspection,type JobFormDependencies} from '../web/job-session.ts';
-import type {DisplayPublicationV3,PendingAskV3,PlanSource,RecordSignoffStage,UISubmissionV3} from '../src/job-contract.ts';
+import {JOB_API_V3_SCHEMA,jobRawActMediaType,type ActV3,type DisplayPublicationV3,type JobFileIdentity,type PendingAskV3,type PlanSource,type RecordSignoffStage,type UISubmissionV3} from '../src/job-contract.ts';
 import {optionSetsJobFixture,recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
-import {rigPictureCases,SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_ROOT} from './helpers/job-record-fixture.ts';
+import {rigPictureCases,SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_ROOT,type PostPictureCase} from './helpers/job-record-fixture.ts';
 
-async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'|'signoff'='checkpoint',boundParts=false,signoffStage?:RecordSignoffStage){
- const f=await recordScreenFixture(kind,picture,undefined,signoffStage,boundParts),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
+async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'|'signoff'='checkpoint',boundParts=false,signoffStage?:RecordSignoffStage,postPicture?:PostPictureCase){
+ const f=await recordScreenFixture(kind,picture,undefined,signoffStage,boundParts,true,undefined,false,false,postPicture),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
  const state={pending:[f.ask] as PendingAskV3[],receipt:null as {publicationId:string;pageId:string;displayedNonce:string}|null,generation:f.display.publication.generation,preparing:false,closed:false};
  const submitted:UISubmissionV3[]=[],store=new Map<string,string>();
  const node=((tag:string,key?:string)=>{const value=dom.document.createElement(tag);if(key)value.textContent=key;return value;}) as JobFormDependencies['node'];
@@ -589,6 +589,147 @@ test('#839 disposed workspace cannot re-enter the transient image while tabs unr
  let released=0;const scope={disposed:true,releaseInterview:()=>{released++;}};
  const run=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))};return syncQuestionImage;}`)(scope);
  run();run();expect(released).toBe(1);expect(scope.releaseInterview).toBeNull();
+});
+
+test('#1112 a sealed rig question hides the option file row and exports the original binding', async () => {
+ type RigQuestion = InterviewDisplayQuestion & {set:{context:{kind:'rig';rig_version:number;parts:{files:JobFileIdentity[]}}}};
+ const f = await optionSetsJobFixture({count:1,boundRig:true,sealAcceptedParts:true});
+ const dom = await recordScreenDom();
+ const i18n = await import('../web/i18n.ts');
+ const preference = i18n.getLanguagePreference(), link = i18n.getLinkLanguage();
+ let inspection: Awaited<ReturnType<typeof prepareJobInspection>> | undefined;
+ let entry: ReturnType<typeof formFor> | undefined;
+ try {
+  dom.set('location',{origin:f.origin});
+  i18n.setLinkLanguage(null);
+  i18n.setLanguagePreference('en');
+  const ask = f.asks[0]!, source = f.publication.source;
+  if (source.subject !== 'option-set' || ask.subject.kind !== 'interview-picks') throw new Error('Expected a record question');
+  const ref = f.workspace.optionSetFile;
+  const response = await fetch(f.origin+f.display.routes.apiBase+'interview');
+  expect(response.status).toBe(200);
+  const {questions} = await response.json() as {questions:RigQuestion[]};
+  expect(questions).toHaveLength(1);
+  const question = questions[0]!;
+  expect(question.ref).toEqual(ref);
+  expect(question).toMatchObject({hasParts:false,images:[],set:{context:{kind:'rig',rig_version:3}}});
+  const context = question.set.context;
+  expect(context.parts.files.map(file => file.path)).toEqual([
+   'derived/drafts/synthetic/parts.json','derived/drafts/synthetic/parts/body.png',
+  ]);
+  const retained = f.session.retainedSourceV3(f.publication.publicationId);
+  for (const file of context.parts.files) {
+   expect(retained.seals).toContainEqual(file);
+   expect(jobHash(await readFile(retained.snapshotRoot+'/'+file.path))).toBe(file.sha256);
+  }
+  inspection = await prepareJobInspection(f.display,new AbortController().signal,true,false);
+  expect(inspection.metadata.manifest?.model).toBe(SYNTHETIC_RIG_MODEL);
+  const pageId = 'page-review-1112';
+  const receipt = f.session.ackDisplayed({publicationId:ask.publicationId,pageId,sourceHash:source.sourceHash});
+  const node: JobFormDependencies['node'] = (tag,key) => {
+   const element = dom.document.createElement(tag);
+   if (key) {element.dataset.jobText=key;element.textContent=i18n.t(key);}
+   return element;
+  };
+  let act: ActV3 | undefined;
+  entry = formFor(ask,inspection,{node,translate:i18n.t,
+   helpers:{...createJobFormHelpers(node,i18n.t),jobCheckpointContext,assertJobAskSource:(bound,display)=>{prepareJobForms(display,[bound],()=>null);}},
+   draftStorage:()=>({getItem:()=>null}),localDraftKey:()=> 'review-1112',saveDraft(){},
+   pageId,access:{capability:f.session.hostCredentials().ui},
+   window:{state:()=>({...f.session.status(),receipt,preparing:false,closed:false}),
+    async submit(input){act=await f.session.commitUIAct(input);return {ok:true,value:act};}},
+  });
+  const {form} = entry;
+  const badge = form.querySelector('.job-source');
+  expect(badge?.textContent).toBe(f.publication.label);
+  expect(badge?.getAttribute('title')).toBe(source.sourceHash);
+  expect(form.querySelector('h3')?.textContent).toBe(question.set.question);
+  const assertQuestionList = (label:string,count:string,answered:boolean) => {
+   const list = form.querySelector('.interview-questions')!;
+   expect(list.getAttribute('aria-label')).toBe(label);
+   expect(list.querySelector('p')?.textContent).toBe(count);
+   const buttons = list.querySelectorAll<HTMLButtonElement>('.interview-question');
+   expect(buttons).toHaveLength(1);
+   expect(buttons[0]?.textContent).toBe(label);
+   expect(buttons[0]?.getAttribute('aria-current')).toBe('true');
+   expect(Object.hasOwn(buttons[0]!.dataset,'answered')).toBe(answered);
+  };
+  for (const [language,label,count,catalog] of [
+   ['en','Interview question','Answered 0 / 1',enCatalog],
+   ['ko','인터뷰 질문','답변 0 / 1',koCatalog],
+  ] as const) {
+   i18n.setLanguagePreference(language);
+   assertQuestionList(label,count,false);
+   expect(form.querySelector('.interview-image-context h2')?.textContent).toBe(catalog['interview.source']);
+   expect(form.textContent).toContain(i18n.t('interview.provenance',[question.set.drafted_by,question.set.drafted_at]));
+   expect(form.textContent).not.toContain(catalog['interview.noParts']);
+   expect(form.textContent).not.toContain(catalog['This request has no picture.']);
+   expect(form.textContent).not.toContain(ref.path);
+   expect(form.textContent).not.toContain(ref.sha256);
+   expect(form.querySelector('.interview-image-context code')).toBeNull();
+  }
+  const item = question.set.asks[0]!, option = item.options.find(item => item.recommended)!;
+  const radio = [...form.querySelectorAll<HTMLInputElement>('input[type=radio]')].find(input => input.value === option.id)!;
+  radio.click();
+  expect(entry.read()).toEqual({questionId:question.set.question,selections:[{itemId:item.id,optionId:option.id,otherText:null}],note:''});
+  assertQuestionList('인터뷰 질문','답변 0 / 1',false);
+  const submitter = form.querySelector<HTMLButtonElement>('button[type=submit]');
+  await form.onsubmit!(Object.assign(new Event('submit',{cancelable:true}),{submitter}));
+  expect(act).toMatchObject({kind:'interview-picks',source:{optionSetFile:ref,optionSet:{id:question.set.id,sha256:ref.sha256}}});
+  if (!act) throw new Error('Expected a committed interview act');
+  assertQuestionList('인터뷰 질문','답변 1 / 1',true);
+  i18n.setLanguagePreference('en');
+  assertQuestionList('Interview question','Answered 1 / 1',true);
+  const exported = await fetch(`${f.origin}/jobs/${f.session.jobId}/api`,{method:'POST',headers:{
+   'Content-Type':'application/json',Accept:jobRawActMediaType,Authorization:'Bearer '+f.session.writerGrant().fetchCapability,
+  },body:JSON.stringify({schema:JOB_API_V3_SCHEMA,jobId:f.session.jobId,requestId:'review-1112-export',verb:'fetch-act',actId:act.actId})});
+  expect(exported.status).toBe(200);
+  expect(exported.headers.get('Content-Type')).toBe(jobRawActMediaType);
+  expect(await exported.text()).toBe(JSON.stringify(act));
+ } finally {
+  entry?.form.dispatchEvent(new Event('job-form-dispose'));
+  inspection?.dispose();
+  i18n.setLinkLanguage(link);
+  i18n.setLanguagePreference(preference);
+  dom.restore();
+  await f.close();
+ }
+});
+
+test.each([
+ ['bound parts',true,undefined,undefined],
+ ['missing rig',false,'rig','This question refers to a rig version that this publication does not include.'],
+ ['missing scene',false,'unsealed-scene','This question refers to a scene that this publication does not include.'],
+ ['no picture',false,'legacy','This request has no picture.'],
+] as const)('#1112 record question keeps the source heading and genuine warnings (%s)', async (_name,boundParts,postPicture,warning) => {
+ const h = await harness(false,'fixture','interview-picks',boundParts,undefined,postPicture);
+ const forms: ReturnType<typeof formFor>[] = [];
+ let inspection: Awaited<ReturnType<typeof prepareJobInspection>> | undefined;
+ try {
+  inspection = await prepareJobInspection(h.f.display,new AbortController().signal);
+  const question = inspection.interview!.questions[0]!;
+  expect(question.hasParts).toBe(boundParts);
+  const entry = formFor(h.f.ask,inspection,h.deps);
+  forms.push(entry);
+  expect(entry.form.querySelector('.interview-image-context h2')?.textContent).toBe(boundParts?'interview.parts':'interview.source');
+  expect(entry.form.textContent).not.toContain('interview.noParts');
+  expect(entry.form.textContent).not.toContain(question.ref.path);
+  expect(entry.form.textContent).not.toContain(question.ref.sha256);
+  if (warning) expect(entry.form.textContent).toContain(warning);
+  if (boundParts) {
+   // Exercise the shared warning with an explicit unavailable signal on the decoded parts row.
+   expect(question.set.context?.kind).toBe('parts');
+   expect(entry.form.textContent).not.toContain('interview.partsUnavailable');
+   const unavailable = formFor(h.f.ask,{...inspection,interview:{...inspection.interview!,questions:[{...question,hasParts:false,partsUnavailable:true}]}},h.deps);
+   forms.push(unavailable);
+   expect(unavailable.form.textContent).toContain('interview.partsUnavailable');
+   expect(unavailable.form.textContent).not.toContain('interview.noParts');
+  }
+ } finally {
+  for (const entry of forms) entry.form.dispatchEvent(new Event('job-form-dispose'));
+  inspection?.dispose();
+  await h.close();
+ }
 });
 
 test.each(['scene','unsealed-scene','rig','rig-painting-second','legacy'] as const)('#929 projects only a sealed question picture for %s', async variant => {
