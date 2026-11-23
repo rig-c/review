@@ -1669,8 +1669,11 @@ A note whose projection exceeds the 10,000-unit scalar bound refuses
 prefix is part of them, so a general note longer than 9,990 units refuses even
 though act@5 accepted it. Feedback is many comments, not one long note.
 Each written act@6 must decode through `parseCommentsAct`.
-Review writes image-review verdicts at act@2. Standalone save paths keep their
-existing versions.
+Review no longer writes image-review verdicts. Image-review publications and
+acts were removed ([Review #796](https://github.com/rig-c/review/issues/796),
+[Review #1106](https://github.com/rig-c/review/issues/1106)), and an ask on
+an `image-review` subject refuses. Historical act@2 image-review bytes keep
+their readers. Standalone save paths keep their existing versions.
 
 [Review #646](https://github.com/rig-c/review/issues/646) writes package and record
 `interview-picks` at act@6. The value carries `questionId`, ordered `selections`,

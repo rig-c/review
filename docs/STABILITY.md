@@ -496,6 +496,14 @@ record acts stay at act@4. Consumers narrow on `schema`. A consumer's
 `Extract<JobAct, {kind: ...}>` alias now also contains the act@6 arm of that
 kind. This changes the type on the consumer's next pin and does not break any
 runtime reader. Historical act@2–@5 bytes keep their readers.
+Later changes superseded two of those writers.
+[Review #646](https://github.com/rig-c/review/issues/646) moved interview picks to act@6.
+Image-review publications and acts are removed: image sets were removed in
+[Review #796](https://github.com/rig-c/review/issues/796) and
+[Review #798](https://github.com/rig-c/review/issues/798), and
+[Review #1106](https://github.com/rig-c/review/issues/1106) deleted the act@2 image
+writer. A fresh `image-review` subject refuses. Historical act@2 image-review
+bytes keep their readers.
 
 [Review #646](https://github.com/rig-c/review/issues/646) writes fresh package
 and record `interview-picks` acts at act@6. `parseCommentsAct` accepts the existing
