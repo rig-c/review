@@ -700,7 +700,14 @@ async function run() {
             await send('Page.handleJavaScriptDialog', {accept: true});
         }});
         await page.setViewport(1440, 900);
-        if (!baseline) await checkpointViewportControls(page, scratch);
+        if (!baseline) {
+            const viewportScratch = await mkdtemp(join(scratch, 'viewport-controls-'));
+            try {
+                await checkpointViewportControls(page, viewportScratch);
+            } finally {
+                await rm(viewportScratch, {recursive: true, force: true});
+            }
+        }
         if (Bun.argv.includes('--viewport-controls')) return;
         for (const route of routes) {
             const variants: Variant[] = baseline ? ['no-pair', 'pair'] : ['no-pair', 'pair', 'size-mismatch'];
