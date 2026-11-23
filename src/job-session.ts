@@ -127,6 +127,15 @@ function assertStoredEvidenceCopy(value: unknown, data: JobData, publication = f
     }
   }
   if (seeds && requestDigest(copy.source ?? null) !== requestDigest(bound)) throw new JobError('JOB_SOURCE_MISMATCH');
+  const carriesDirection = copy.source && Object.hasOwn(copy.source, 'directionReview');
+  const boundDirection = bound && isRecordSource(bound) ? bound.directionReview : undefined;
+  if (carriesDirection || (boundDirection && (publication || ('askId' in copy && !('actId' in copy))))) {
+    if (!isRecordSource(copy.source) || !boundDirection || 'actId' in copy ||
+        copy.source.sourceHash !== bound?.sourceHash ||
+        requestDigest(copy.source.directionReview ?? null) !== requestDigest(boundDirection)) {
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
+  }
   if (!('source' in value) && !hasStoredEvidence(bound)) return;
   if (!copy.source || typeof copy.source !== 'object' || Array.isArray(copy.source)) throw new JobError('JOB_SOURCE_MISMATCH');
   if (!hasStoredEvidence(copy.source) && !hasStoredEvidence(bound)) return;

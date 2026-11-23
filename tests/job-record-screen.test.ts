@@ -9,12 +9,12 @@ import {createJobRigScreen} from '../web/job-rig-screen.ts';
 import type {InterviewDisplayQuestion} from '../web/interview-panel.ts';
 import {rigHost,setRigHost} from '../web/rig-host.ts';
 import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jobPublicationRoutes,prepareJobForms,prepareJobInspection,type JobFormDependencies} from '../web/job-session.ts';
-import type {DisplayPublicationV3,PendingAskV3,UISubmissionV3} from '../src/job-contract.ts';
+import type {DisplayPublicationV3,PendingAskV3,PlanSource,RecordSignoffStage,UISubmissionV3} from '../src/job-contract.ts';
 import {optionSetsJobFixture,recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {rigPictureCases,SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_ROOT} from './helpers/job-record-fixture.ts';
 
-async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'='checkpoint',boundParts=false){
- const f=await recordScreenFixture(kind,picture,undefined,undefined,boundParts),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
+async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'|'signoff'='checkpoint',boundParts=false,signoffStage?:RecordSignoffStage){
+ const f=await recordScreenFixture(kind,picture,undefined,signoffStage,boundParts),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
  const state={pending:[f.ask] as PendingAskV3[],receipt:null as {publicationId:string;pageId:string;displayedNonce:string}|null,generation:f.display.publication.generation,preparing:false,closed:false};
  const submitted:UISubmissionV3[]=[],store=new Map<string,string>();
  const node=((tag:string,key?:string)=>{const value=dom.document.createElement(tag);if(key)value.textContent=key;return value;}) as JobFormDependencies['node'];
@@ -118,6 +118,95 @@ test('#989 a publication resumed with a historical pending reopen ask plus a sig
   }]);
  }finally{await h.close();}
 });
+
+test('#1088 direction sign-off shows three localized rows for projected and historical sources', async () => {
+ const i18n = await import('../web/i18n.ts');
+ const preference = i18n.getLanguagePreference(), link = i18n.getLinkLanguage();
+ const h = await harness(false, 'fixture', 'signoff', false, 'direction-review');
+ let inspection: Awaited<ReturnType<typeof prepareJobInspection>> | undefined;
+ let unbind: (() => void) | undefined;
+ try {
+  i18n.setLinkLanguage(null);
+  const source = h.f.ask.source;
+  if (source.subject !== 'plan') throw new Error('Expected plan source');
+  inspection = await prepareJobInspection(h.f.display, new AbortController().signal);
+  const node = ((tag: string, key?: string) => {
+   const element = h.dom.document.createElement(tag);
+   if (key) {element.dataset.jobText = key; element.textContent = i18n.t(key);}
+   return element;
+  }) as JobFormDependencies['node'];
+  const deps = {...h.deps, node, translate: i18n.t, helpers: {...h.deps.helpers, ...createJobFormHelpers(node, i18n.t)}};
+  const host = h.dom.document.createElement('div');
+  const cases: {projection?: PlanSource['directionReview']; en: string[]; ko: string[]}[] = [
+   {
+    projection: {postVersion: 3, verdictActId: 'act-direction-accepted', take: {duration: 4.5, loop: true}, camera: 'composed'},
+    en: ['Signed post v3', 'Accepted direction verdict · act-direction-accepted', 'Direction · 4.5 s · loop'],
+    ko: ['서명 대상 포스트 v3', '채택된 연출 판정 · act-direction-accepted', '연출 · 4.5초 · 반복'],
+   },
+   {
+    projection: {postVersion: 4, verdictActId: null, take: {duration: 8, loop: true}, camera: 'fixed'},
+    en: ['Signed post v4', 'Direction verdict not supplied', 'Direction · 8 s · loop · fixed camera'],
+    ko: ['서명 대상 포스트 v4', '연출 판정이 제공되지 않았어요.', '연출 · 8초 · 반복 · 카메라 고정'],
+   },
+   {
+    projection: {postVersion: 1, verdictActId: 'act-moving', take: {duration: 2, loop: false}, camera: 'moving'},
+    en: ['Signed post v1', 'Accepted direction verdict · act-moving', 'Direction · 2 s · once · moving camera'],
+    ko: ['서명 대상 포스트 v1', '채택된 연출 판정 · act-moving', '연출 · 2초 · 한 번 · 카메라 이동'],
+   },
+   {
+    en: ['Post version not supplied', 'Direction verdict not supplied', 'Direction summary not supplied'],
+    ko: ['포스트 버전이 제공되지 않았어요.', '연출 판정이 제공되지 않았어요.', '연출 요약이 제공되지 않았어요.'],
+   },
+  ];
+  const script = await readFile(new URL('../web/job-session.ts', import.meta.url), 'utf8');
+  const subscription = script.split('\n').find(line => line.includes('const localize=i18n.onLanguageChange('))!;
+  unbind = new Function('i18n', 't', 'host', new Bun.Transpiler({loader: 'ts'}).transformSync(subscription + ';return localize;'))(i18n, i18n.t, host);
+  for (const {projection, en, ko} of cases) {
+   // Inject the already-decoded source on both sides of the existing display/ask binding.
+   const boundSource = projection ? {...source, directionReview: projection} : source;
+   const display = {...h.f.display, publication: {...h.f.display.publication, source: boundSource}};
+   i18n.setLanguagePreference('en');
+   const entry = formFor({...h.f.ask, source: boundSource}, {...inspection, display}, deps);
+   const {form, fieldset} = entry;
+   host.replaceChildren(form);
+   expect(form.querySelectorAll('[data-job-plan-step]')).toHaveLength(0);
+   expect(host.querySelector('form[data-direction-signoff]')).toBe(form);
+   const rows = [...form.querySelectorAll<HTMLElement>('li[data-direction-signoff-row]')];
+   expect(rows.map(row => row.dataset.directionSignoffRow)).toEqual(['post-version', 'verdict-act-id', 'summary']);
+   for (const [language, expected] of [['en', en], ['ko', ko], ['en', en]] as const) {
+    i18n.setLanguagePreference(language);
+    expect(rows.map(row => row.textContent)).toEqual(expected);
+    expect(form.querySelector('[data-job-text="job.commentsFromWorkspace"]')?.textContent).toBe(i18n.t('job.commentsFromWorkspace'));
+    expect(form.querySelector('button[type="submit"]')?.textContent).toBe(i18n.t('job.signoff'));
+   }
+   expect(fieldset.title).toBe('direction-review');
+   form.commentWords = () => '[general]\nKeep this take';
+   expect(entry.read()).toEqual({stage: 'direction-review', decision: 'approved', words: '[general]\nKeep this take'});
+  }
+ } finally {
+  unbind?.();
+  inspection?.dispose();
+  await h.close();
+  i18n.setLinkLanguage(link);
+  i18n.setLanguagePreference(preference);
+ }
+});
+
+for (const stage of ['plan-approved', 'rigging-interview', 'post-interview', 'interview'] as const) {
+ test(`#1088 ${stage} sign-off still shows the published plan steps`, async () => {
+  const h = await harness(false, 'fixture', 'signoff', false, stage);
+  try {
+   const prepared = await h.screen.prepare(h.f.display, new AbortController().signal);
+   const record = prepared!.record!;
+   try {
+    const entry = record.forms.get(h.f.ask.askId)!;
+    expect(entry.form.querySelector('[data-direction-signoff-row]')).toBeNull();
+    const steps = [...entry.form.querySelectorAll<HTMLElement>('[data-job-plan-step]')];
+    expect(steps.map(step => step.dataset.jobPlanStep)).toEqual(h.f.ask.source.plan!.steps.map(step => step.id));
+   } finally {record.inspection.dispose();}
+  } finally {await h.close();}
+ });
+}
 
 test('#750 record metadata mismatch refuses',async()=>{
  const h=await harness(),original=globalThis.fetch;try{

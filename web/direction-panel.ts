@@ -1,5 +1,6 @@
 import type {SceneInspection} from '../src/scene-inspection.ts';
 import type { DirectionInspection } from '../src/direction-inspection.ts';
+import type { PlanSource } from '../src/job-contract.ts';
 import type { TurnDial } from '../src/turn-pad.ts';
 import { onLanguageChange, t } from './i18n.ts';
 
@@ -39,19 +40,27 @@ export function directionRows(view: DirectionView): { key: string; values?: stri
   ];
 }
 
-/** Summarize only authored fields bound to the model currently on stage. */
-export function directionSummary(view: DirectionView, language?: 'en' | 'ko'): string {
+type DirectionSummarySource = Pick<NonNullable<PlanSource['directionReview']>, 'take' | 'camera'>;
+
+function formatDirectionSummary({ take, camera }: DirectionSummarySource, version: string, language?: 'en' | 'ko'): string {
+  const repeat = t(take.loop ? 'direction.loop' : 'direction.once', undefined, language);
+  if (camera === 'composed') return t('direction.composed', [version, String(take.duration), repeat], language);
+  return t('direction.summary', [version, String(take.duration), repeat,
+    t(camera === 'fixed' ? 'direction.fixedCamera' : 'direction.movingCamera', undefined, language)], language);
+}
+
+/** Summarize the inspected model's authored fields or the frozen sign-off projection. */
+export function directionSummary(view: DirectionView | DirectionSummarySource, language?: 'en' | 'ko'): string {
+  if ('take' in view) return formatDirectionSummary(view, '', language);
   const authored = view.model?.inspected ? view.authored : undefined;
   if (!authored) return t('direction.title', undefined, language);
   const post=authored.joined?.postVersion??authored.postVersion;
   const version = post ? ` v${post}` : '';
-  const repeat = t(authored.take.loop ? 'direction.loop' : 'direction.once', undefined, language);
-  if (authored.composed) return t('direction.composed', [version, String(authored.take.duration), repeat], language);
+  if (authored.composed) return formatDirectionSummary({take: authored.take, camera: 'composed'}, version, language);
   const first = authored.camera.keys[0]!.box;
   const fixed = authored.camera.keys.every(({ box }) =>
     box.x === first.x && box.y === first.y && box.width === first.width && box.height === first.height);
-  return t('direction.summary', [version, String(authored.take.duration), repeat,
-    t(fixed ? 'direction.fixedCamera' : 'direction.movingCamera', undefined, language)], language);
+  return formatDirectionSummary({take: authored.take, camera: fixed ? 'fixed' : 'moving'}, version, language);
 }
 
 /** The adjacent viewport, reference picker and Turn Pad keep their normal input and rendering paths. */

@@ -356,6 +356,7 @@ export function prepareJobRecordAct(options: {
   ) {
     throw new JobError('JOB_ACT_SOURCE_STALE');
   }
+  const {directionReview: _directionReview, ...actSource} = boundSource;
   if (
     !reviewer ||
     typeof reviewer !== 'object' ||
@@ -456,7 +457,7 @@ export function prepareJobRecordAct(options: {
       return parseRecordAct({
         ...envelope,
         kind: 'checkpoint',
-        source: boundSource,
+        source: actSource,
         value: {
           checkpointId: askSubject.checkpointId,
           planStepId: askSubject.checkpointId,
@@ -480,7 +481,7 @@ export function prepareJobRecordAct(options: {
       return parseRecordAct({
         ...envelope,
         kind: 'signoff',
-        source: boundSource,
+        source: actSource,
         value: {
           stage: askSubject.stage,
           decision: 'approved',

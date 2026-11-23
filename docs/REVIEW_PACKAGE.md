@@ -1341,6 +1341,8 @@ The read-only official reader returns the six-key `RecordPublishedContext` with 
 
 Record `interview` and `direction-review` signoffs use the existing signoff modal and are plan-bound like `post-interview`: the published record must declare the subject and contain non-empty `plan.steps`. Each approves the frozen record revision through its project/source hashes; no separate post-version selector or new ask/act field is carried. Existing stage values and act schemas are unchanged. The public package plan-bound stage list remains the original three stages; package `direction-review` signoffs and historical package acts continue to accept `plan: null`.
 
+For a declared `{kind: 'signoff', stage: 'direction-review'}` subject, the trusted record reader may return `directionReview` on `PlanContext` from the same frozen record revision named by the publication hashes. `PlanSource` mirrors the exact display shape `{postVersion, verdictActId, take: {duration, loop}, camera}` in the publication source and its pending ask copies. The post version is an integer of at least 1, the accepted verdict act ID is a string or `null`, the take duration is positive finite seconds, looping is a boolean, and the camera is `composed`, `fixed` or `moving`. An omitted field leaves the display details unavailable. A malformed field or a field without the declared signoff subject refuses `JOB_SOURCE_INVALID`. The projection is excluded from `files`, `inputs`, the source hash and every act.
+
 ### Optional sealed checkpoint evidence
 
 The trusted `JobPublicationReader` package context and the record reader's
