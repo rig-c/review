@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.18.2
+
+The Turn Pad works on a composed model. There is no export, act or contract change.
+
+### Fixed
+
+* Turn dial discovery reads the character prefix that `rig-parts compose` adds (`<id>:body_yaw_dial`, `<id>:body_turn`, `<id>:yaw_dial`, `<id>:pitch_dial`), as stated in Parts' stability contract. A composed scene with one dial character now shows its Turn Pad instead of refusing with `TURN_UNAVAILABLE`. A scene with two dial characters still has no dial, so Review never guesses. Un-composed models are unchanged (#1135, closes #1134).
+
 ## 4.18.1
 
 Three record-screen fixes that the owner passed on their working screens. There is no export, act or contract change.
