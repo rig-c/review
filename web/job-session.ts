@@ -1417,14 +1417,17 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
                         for (const text of row.rests_on!) {
                             const question = questions && Object.hasOwn(questions, text) ? questions[text] : undefined;
                             const dependency = question === undefined ? plan.steps.find(step => step.id === text) : undefined;
-                            const rest = node('li', question === '' ? 'job.plan.field.absent' : undefined);
-                            if (dependency) planStepText(rest, dependency, projection);
-                            else {
-                                if (question !== '') rest.textContent = question ?? text;
-                                rest.setAttribute('translate', 'no');
+                            const labels = typeof question === 'string' || question === undefined ? [question] : question;
+                            for (const label of labels) {
+                                const rest = node('li', label === '' ? 'job.plan.field.absent' : undefined);
+                                if (dependency) planStepText(rest, dependency, projection);
+                                else {
+                                    if (label !== '') rest.textContent = label ?? text;
+                                    rest.setAttribute('translate', 'no');
+                                }
+                                if (label !== undefined || dependency) rest.title = text;
+                                rests.append(rest);
                             }
-                            if (question !== undefined || dependency) rest.title = text;
-                            rests.append(rest);
                         }
                         value.append(rests);
                     } else {value.textContent = row[field]!; value.setAttribute('translate', 'no');}

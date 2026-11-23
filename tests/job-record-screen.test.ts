@@ -934,6 +934,7 @@ test.each(['same rig','third question names another rig'] as const)('#1101 verif
 
 test('#1123 and #974 plan grounds resolve interview IDs before overlapping steps and keep plain step and unknown IDs', async () => {
  const prompt = '  Keep the hat with the head?  ';
+ const multiple = ['First question?\r\nContinue here.', '  Second question?  '];
  const absence = enCatalog['job.plan.field.absent'];
  const fixture = await recordScreenFixture('signoff', false, undefined, 'plan-approved', false, true, undefined, false, false, undefined, {
   text: {
@@ -947,8 +948,10 @@ test('#1123 and #974 plan grounds resolve interview IDs before overlapping steps
    waypoints: [
     { id: 'bones_guide', text: 'How many segments should the limb bones use?' },
     { id: 'step_layout', prompts: [{ text: prompt }] },
-    { id: 'missing', prompts: [{ id: 'no-text' }] },
-    { id: 'multiple', prompts: [{ text: 'First question?' }, { text: 'Second question?' }] },
+    { id: 'missing', prompts: [] },
+    { id: 'multiple', text: 'Legacy label', prompts: [
+     { text: multiple[0] }, { text: '  ' }, { id: 'no-text' }, { text: multiple[1] },
+    ] },
    ],
    post: { items: [
     { id: 'post_timing', text: 'How long, does it loop, and where are the beats?' },
@@ -987,9 +990,10 @@ test('#1123 and #974 plan grounds resolve interview IDs before overlapping steps
     { text: 'Assemble post scene', title: 'step_weights' },
     { text: 'unknown_question_id', title: '' },
     { text: absence, title: 'missing' },
-    { text: absence, title: 'multiple' },
+    ...multiple.map(text => ({text, title: 'multiple'})),
    ]);
    expect(rows[3]?.getAttribute('translate')).toBe('no');
+   expect(rows.slice(-2).map(row => row.getAttribute('translate'))).toEqual(['no', 'no']);
    expect(fixture.ask.source).toEqual(source);
    expect(jobHash(await readFile(path))).toBe(recordHash);
   } finally {

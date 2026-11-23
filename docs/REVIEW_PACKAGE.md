@@ -1569,15 +1569,17 @@ accepted plan's exact id/hash order. Each row has `id`, `hash`, optional `does`,
 value or an ordered `{field,reason:"absent"|"invalid"|"limit"}` issue. Scalar
 values are strings and `rests_on` is an ordered string array. Empty
 strings/arrays, whitespace, line endings, Unicode form, duplicate references and
-array order are preserved. When present, `questions` is an `id` → `text` string
-map collected from `interview.framing`, `interview.waypoints` and
+array order are preserved. When present, `questions` maps IDs to labels
+collected from `interview.framing`, `interview.waypoints` and
 `interview.post.items` in that order (first qualifying entry wins per id).
 Qualifying ids are at most 128 characters and match
-`/^[A-Za-z0-9][A-Za-z0-9._-]*$/`. A string `text` is used verbatim. A waypoint
-without direct text uses the verbatim text of a single nonblank prompt, or an
-empty label when its prompt is missing or ambiguous. In `rests_on`, the UI
-resolves a known interview id first, displays its label with the id in
-`title`, and uses the localized absence text for an empty label. An id found
+`/^[A-Za-z0-9][A-Za-z0-9._-]*$/`. A waypoint uses its nonblank `prompts[].text`
+in source order, encoded as a string for one prompt or a string array for
+multiple prompts. When no usable prompt exists, it uses legacy nonblank
+`text` or an empty label. Other interview items keep their string `text`.
+In `rests_on`, the UI resolves a known interview id first, displays each
+label verbatim in its own row with the id in `title`, and uses the localized
+absence text for an empty label. An id found
 only in the plan resolves to its step, and unmatched ids stay raw. Producer
 extras stay outside this display projection.
 
@@ -1597,7 +1599,7 @@ their missing/invalid field labels. Existing act authority and historical
 metadata omission retain their fallback behavior.
 
 The server retains its 8 MiB project read bound. Display limits are 4,096 plan
-steps, 4,096 `rests_on` entries and 512 KiB UTF-8 for the entire `planText`
+steps, 4,096 `rests_on` rows per step after expanding prompts, and 512 KiB UTF-8 for the entire `planText`
 envelope (including `questions`). Whole owner
 metadata retains its 2 MiB bound. A small unavailable envelope replaces an
 oversized projection. If that envelope also exceeds the response budget, the
