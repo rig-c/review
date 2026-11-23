@@ -11,6 +11,7 @@ import {installSceneFixture} from './helpers/scene-inspection-fixture.ts';
 import {directionPhysicsModel} from './helpers/direction-playback.ts';
 type PoseSample={actual:number[];expected:number[];source:number;expectedSource:number;take:number};
 type LoopReport={inside:number;wraps:number[][];sourceError:number;frames:number};
+type TurnReading={displayed:number;angle:number};
 const arg=Bun.argv.indexOf('--out'),out=resolve(arg<0?'artifacts/direction-playback-930':Bun.argv[arg+1]!);
 await mkdir(out,{recursive:true});const root=await mkdtemp(join(tmpdir(),'direction-playback-930-'));
 let page:InputCdpSession|undefined;const servers:{stop():void}[]=[],errors:unknown[]=[],observations:unknown[]=[];
@@ -26,6 +27,11 @@ tickPlaying=now=>{const before=time,previous=player?.current?vertices930():null;
  record930.sourceError=Math.max(record930.sourceError,Math.min(error,Math.abs(error-player.entry(0).duration)));record930.frames++;
 };
 Object.assign(window,{__direction930:{ready:()=>!!activeScene()&&!!player?.current,state:()=>({playing,time,source:player?.time,vertices:player?.current?vertices930():null}),record:()=>{record930={inside:0,wraps:[],sourceError:0,frames:0};},report:()=>record930,
+ turn:()=>{const output=document.querySelector('[data-turn-axis="yaw"]');
+  const rectangle=player?.current&&player.posedFrame().order.find(row=>row.kind==='region'&&row.slot==='rectangle');
+  if(!output?.getClientRects().length||!output.textContent?.trim()||!rectangle)return null;
+  const [x0,y0,,,x1,y1]=rectangle.corners;
+  return {displayed:Number(output.textContent),angle:Math.atan2(y1-y0,x1-x0)*180/Math.PI};},
  scrub:target=>{const control=input('scrub');control.value=String(target);control.dispatchEvent(new Event('input',{bubbles:true}));const actual=vertices930(),source=player.time;
  const oracle=new RigPlayer(document.createElement('div'),assets,{mode:'canvas'});try{oracle.play(animation,{loop:true});oracle.seek(takeSample(activeScene(),target).sourceTime);const mesh=oracle.posedFrame().order.find(p=>p.kind==='mesh');return {actual,expected:[...mesh.vertices],source,expectedSource:oracle.time,take:time};}finally{oracle.dispose();}}
 }});
@@ -33,6 +39,12 @@ Object.assign(window,{__direction930:{ready:()=>!!activeScene()&&!!player?.curre
 const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'direction-observer',setup(build){build.onLoad({filter:/web\/main\.ts$/},async({path})=>({loader:'ts',contents:instrumentRigMount(await readFile(path,'utf8'),probe)}));}}]});
 assert.ok(built.success,JSON.stringify(built.logs));
 async function wait(expression:string,ms=25000){const deadline=Date.now()+ms;while(Date.now()<deadline){const value=await page!.evaluate<any>(expression);if(value)return value;await Bun.sleep(50);}throw Error('DIRECTION_WAIT '+expression+' '+await page!.evaluate('document.body.innerText'));}
+async function servePackage(pkg:string,state:string,initialAnimation?:string){
+ const context=await createReviewRequestContext(await loadReview(pkg),{port:0,bundle:built.outputs[0]!,viewOnly:true,stateDir:join(root,state),initialAnimation});
+ const server=Bun.serve({hostname:'127.0.0.1',port:0,websocket:context.live.websocket,async fetch(req,srv){return (await context.handle(req,srv.port,srv))!;}});
+ servers.push({stop(){context.stop();server.stop(true);}});
+ return server.port;
+}
 try{
  const pkg=join(root,'package');await mkdir(pkg);
  await writeFile(join(pkg,'skeleton.model.json'),JSON.stringify(await directionPhysicsModel()));
@@ -42,10 +54,8 @@ try{
  await writeFile(join(pkg,'direction.json'),JSON.stringify(direction));
  page=await launchCdpSession(join(root,'profile'),{sendDeadlineMs:30000,browserArgs:['--renderer-process-limit=2','--js-flags=--max-old-space-size=1536'],onEvent(event){if(event.method==='Runtime.exceptionThrown')errors.push(event.params);}});await page.setViewport(1280,900);
  for(const language of ['en','ko']){
-  const context=await createReviewRequestContext(await loadReview(pkg),{port:0,bundle:built.outputs[0]!,viewOnly:true,stateDir:join(root,'state-'+language)});
-  const server=Bun.serve({hostname:'127.0.0.1',port:0,websocket:context.live.websocket,async fetch(req,srv){return (await context.handle(req,srv.port,srv))!;}});
-  servers.push({stop(){context.stop();server.stop(true);}});
-  await page.goto(`http://127.0.0.1:${server.port}/?lang=${language}`);
+  const port=await servePackage(pkg,'state-'+language);
+  await page.goto(`http://127.0.0.1:${port}/?lang=${language}`);
   await wait('window.__direction930?.ready()');
   await page.evaluate(`document.querySelector('[data-mode="playback"]').click()`);
   await wait(`!document.querySelector('#play').disabled`);
@@ -64,6 +74,23 @@ try{
   await writeFile(join(out,language+'.png'),await page.screenshot());observations.push({language,initial,report,scrubs});
   await writeFile(join(out,'report.json'),JSON.stringify({observations,errors},null,2));console.log('DIRECTION_BROWSER_PASS',JSON.stringify({language,...report}));
  }
+ const turnPort=await servePackage('tests/fixtures/direction-inspection','state-turn','turn');
+ await page.goto(`http://127.0.0.1:${turnPort}/?lang=en`);
+ const readTurn='window.__direction930?.turn()';
+ await wait(readTurn);
+ await page.evaluate(`document.querySelector('#turn-pad input[type="checkbox"]').click()`);
+ const before=await page.evaluate<TurnReading>(readTurn);
+ const pointer=await page.evaluate<{x:number;y:number}>(`(()=>{const box=document.querySelector('#rig-viewport').getBoundingClientRect();return {x:box.left+(box.width-1)*.75,y:box.top+box.height/2};})()`);
+ await page.mouse('mouseMoved',pointer.x,pointer.y);
+ const after=await page.evaluate<TurnReading>(readTurn);
+ // The slider maps about 60 degrees of yaw to 20 degrees of rectangle rotation.
+ // The visible readout rounds yaw to two decimal places.
+ const yawDelta=after.displayed-before.displayed,angleDelta=after.angle-before.angle;
+ assert.ok(yawDelta>10&&angleDelta>3&&Math.abs(angleDelta-yawDelta/3)<.004,
+  'TURN_PAD_POINTER_POSE '+JSON.stringify({before,after,yawDelta,angleDelta}));
+ observations.push({turn:{before,after,yawDelta,angleDelta}});
+ await writeFile(join(out,'report.json'),JSON.stringify({observations,errors},null,2));
+ console.log('TURN_PAD_POINTER_PASS',JSON.stringify({before,after,yawDelta,angleDelta}));
  assert.deepEqual(errors,[]);
 }catch(error){await writeFile(join(out,'failure.json'),JSON.stringify({error:String(error),errors,observations,body:await page?.evaluate('document.body.innerText')},null,2));if(page)await writeFile(join(out,'failure.png'),await page.screenshot());throw error;
 }finally{await page?.close();for(const server of servers)server.stop();assert.ok(root.startsWith(join(tmpdir(),'direction-playback-930-')));await rm(root,{recursive:true,force:true});}
