@@ -187,7 +187,27 @@ export async function navigateCdpPage(
   throw new Error('CDP_NAVIGATION_NOT_READY');
 }
 
-function findBrowserBinary(): string {
+export function findBrowserBinary(): string {
+  const macCandidates: string[] = [];
+  if (process.platform === 'darwin') {
+    const cache = join(homedir(), 'Library', 'Caches', 'ms-playwright');
+    if (existsSync(cache)) {
+      try {
+        const entries = readdirSync(cache).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+        for (const entry of entries.filter(name => /^chromium_headless_shell-\d+$/.test(name))) {
+          macCandidates.push(join(cache, entry, `chrome-headless-shell-mac-${process.arch}`, 'chrome-headless-shell'));
+        }
+        for (const entry of entries.filter(name => /^chromium-\d+$/.test(name))) {
+          for (const layout of [`chrome-mac-${process.arch}`, 'chrome-mac']) {
+            macCandidates.push(
+              join(cache, entry, layout, 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
+              join(cache, entry, layout, 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
+            );
+          }
+        }
+      } catch {}
+    }
+  }
   const pwRoot = join(homedir(), '.cache', 'ms-playwright');
   const pwCandidates: string[] = [];
   if (existsSync(pwRoot)) {
@@ -208,6 +228,7 @@ function findBrowserBinary(): string {
   }
   const candidates = [
     process.env.CHROME_BIN,
+    ...macCandidates,
     ...pwCandidates,
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
