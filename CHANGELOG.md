@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.18.3
+
+A direction verdict's pinned comments keep where and when they were pinned. The act stays act@6 with no new keys. Create's reader receives the anchor it already accepts for picks.
+
+### Fixed
+
+* A finalized direction-review verdict now carries each pinned comment as `{text, anchor}` on the existing act@6 Feedback anchor. The anchor holds the exact seconds and the seconds time basis, the stage and world rectangles, the crop, the camera with its zoom, and the Turn Pad value when one was set. A pin made on a producer or reference frame keeps that frame. Frames stay null on a take with no frame clock. General comments stay `{text}`. The words-only submission is still accepted, and historical acts keep their bytes. Before this change, the verdict carried only a projected text label, and the seconds and pin position were lost (#1138, closes #1136).
+
 ## 4.18.2
 
 The Turn Pad works on a composed model. There is no export, act or contract change.
