@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.18.0
+
+A direction-review sign-off now shows what the owner signs: the post version, the accepted direction verdict and the direction summary. It no longer lists the whole plan.
+
+**Read before upgrading:**
+
+* **New optional field, no act change.** `PlanContext` and `PlanSource` gain an optional display-only `directionReview` (`postVersion`, `verdictActId`, `take {duration, loop}`, `camera`). It is accepted only with a declared `direction-review` sign-off subject. It stays outside `sourceHash`, `files`, `inputs` and every act, and act bytes are identical with and without it.
+* **New error code `JOB_SOURCE_INVALID`.** It refuses a malformed `directionReview`, or one on any other stage.
+
+### Changed
+
+* On the `direction-review` sign-off, the nine plan rows give way to three rows: signed post vN, the accepted direction verdict act id and the direction summary. The summary uses the existing direction strings. A publication without `directionReview` (Create before rig-c/create#881) shows the three rows as named absences. Other sign-off stages are unchanged (#1111, closes #1088).
+
+### Removed
+
+* The separate `parts` build mode and the dead parts and interview header compatibility paths. The parts server serves the same single `main.js` bundle as before, and every screen is pixel-identical. The packed file list is unchanged: 200 entries before and after (#1116, closes #1114).
+
 ## 4.17.1
 
 A second `job open` no longer fails with a raw `EADDRINUSE` when the job's host is alive but answers slowly. Create used to report this as `JOB_PUBLISH_PENDING`. Unreachable image-review internals are removed.
