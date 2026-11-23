@@ -12,6 +12,7 @@ import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {recordViewportControls} from './helpers/record-viewport-controls.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
+import {ownedMacHeadlessShell} from './helpers/owned-chromium.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {optionSetsJobFixture,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_RGB} from './helpers/job-record-fixture.ts';
@@ -100,7 +101,10 @@ async function longInterviewScrollChecks(picturedBackdrop:boolean){
   }
  }
 }
-const output=resolve(arg('--out')??'artifacts/record-screen-750');await mkdir(output,{recursive:true});
+const outputArg=arg('--out');
+const output=outputArg===undefined?await mkdtemp(join(tmpdir(),'review-750-evidence-')):resolve(outputArg);
+if(outputArg!==undefined)await mkdir(output,{recursive:true});
+if(!Bun.argv.includes('--serve'))console.log('750_BROWSER_ARTIFACTS '+output);
 const sha=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('hex');
 function fixtureUrl(ownerUrl:string,language:string){
  const url=new URL(ownerUrl);
@@ -174,7 +178,7 @@ async function wait(expression:string,label:string){const until=Date.now()+20000
 
 async function waitForQuestion(form:string,answered=false){
  const selector=questionRoot+' '+form+(answered?'[data-interview-answered=true] fieldset:disabled':' fieldset:not(:disabled)');
- await wait(`document.body.dataset.ready==='true'&&!!document.querySelector(${JSON.stringify(selector)})&&document.querySelector(${JSON.stringify(questionTab)})?.getClientRects().length>0`,
+ await wait(`document.body?.dataset.ready==='true'&&!!document.querySelector(${JSON.stringify(selector)})&&document.querySelector(${JSON.stringify(questionTab)})?.getClientRects().length>0`,
   '986 Question selected with '+(answered?'saved':'editable')+' form');
 }
 async function assertNoDialogViewer(){
@@ -229,7 +233,7 @@ async function questionViewportControls(){
   try{
    await open();
    fixture.fake.publish(fixture.display);
-   await wait(`document.body.dataset.ready==='true'&&document.querySelector('#rig-empty')?.checkVisibility()&&
+   await wait(`document.body?.dataset.ready==='true'&&document.querySelector('#rig-empty')?.checkVisibility()&&
     document.querySelector('#view-menu [data-view="compare"]')`,'1128 empty record mounted');
    await recordViewportControls(page!,command!,language,true);
    fixture.fake.pending(fixture.ask,fixture.display.publication.generation);
@@ -1018,7 +1022,7 @@ async function draftSurvivalChecks(){
     const pUrl=partsDifferenceOwnerUrl(pf,lang);
     await page!.setViewport(1440,900);
     await page!.goto('about:blank');await page!.goto(pUrl);
-    await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'`,'999 parts ready '+lang);
+    await wait(`document.body?.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'`,'999 parts ready '+lang);
     const drawEdgeBox=async(text:string)=>{
      if(await page!.evaluate<boolean>(`!document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`))await click(page!,'#stage-comment');
      await wait(`document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`,'999 comment mode '+lang);
@@ -1058,7 +1062,7 @@ async function draftSurvivalChecks(){
     await wait(`!document.querySelector('.stage-comment-composer')&&document.querySelectorAll('.stage-comment-pin').length===1`,'999 box-pin saved '+lang);
     // Reload survival on parts-verdict page
     await page!.goto('about:blank');await page!.goto(pUrl);
-    await wait(`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'&&document.querySelectorAll('.stage-comment-pin').length===1`,'999 box-pin survives reload '+lang);
+    await wait(`document.body?.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'&&document.querySelectorAll('.stage-comment-pin').length===1`,'999 box-pin survives reload '+lang);
     assert.equal(await page!.evaluate<boolean>(`[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].some(n=>n.textContent.includes(${JSON.stringify(words)}))`),true);
     if(await page!.evaluate<boolean>(`document.querySelector('#stage-comment')?.getAttribute('aria-pressed')!=='true'`))await click(page!,'#stage-comment');
     await wait(`document.querySelector('#stage-comment-list .stage-comment-summary')?.checkVisibility()===true`,'999 comments panel visible '+lang);
@@ -1198,10 +1202,12 @@ if(Bun.argv.includes('--serve')){
 }
 
 try{
+ const shell=process.env.CHROME_BIN?undefined:ownedMacHeadlessShell();
+ if(shell)process.env.CHROME_BIN=shell;
  // Reuse the shared launcher's browser discovery and process policy without a suite-local wrapper.
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
- await command!('Runtime.enable');await command!('Network.enable');await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
+ await command!('Runtime.enable');await command!('Network.enable');await command!('Network.setCacheDisabled',{cacheDisabled:true});await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
  if(Bun.argv.includes('--viewport-controls'))await questionViewportControls();
  else if(Bun.argv.includes('--draft-survival'))await draftSurvivalChecks();
  else if(Bun.argv.includes('--first-question-drawer'))await firstQuestionInDrawer();
