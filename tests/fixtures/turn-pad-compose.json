@@ -1,5 +1,5 @@
 {
-  "provenance": "rig-c/examples@13cfd38617db06ebe6ff9bd6cc4fdf11b60f50d3 look, @rig-c/parts@2.53.0: remove config.turn.body.slider and set config.turn.band.yaw=12 in a scratch config; rig-parts compose --scene scene-single.json --out composed-single and rig-parts compose --scene scene-pair.json --out composed-pair. Single: actor at [0,0] on 832x1216; pair: actor at [0,0], other at [832,0] on 1664x1216, in that order, both reading the same look-review-build.",
+  "provenance": "rig-c/examples@13cfd38617db06ebe6ff9bd6cc4fdf11b60f50d3 look, @rig-c/parts@2.53.0: remove config.turn.body.slider and set config.turn.band.yaw=12 in a scratch config; rig-parts compose --scene scene-single.json --out composed-single and rig-parts compose --scene scene-pair.json --out composed-pair. Single: actor at [0,0] on 832x1216; pair: actor at [0,0], other at [832,0] on 1664x1216, in that order, both reading the same look-review-build. For the original custom slider: rig-parts compose --scene scene-custom.json --out composed-custom, using the single scene with the unmodified look build.",
   "uncomposed": {
     "bones": [
       {"name": "yaw_dial"},
@@ -58,6 +58,17 @@
       {"name": "other:turn", "duration": 1.5},
       {"name": "other:tilt", "duration": 1.5},
       {"name": "other:body_turn", "duration": 1.5}
+    ]
+  },
+  "custom": {
+    "bones": [
+      {"name": "actor:body_dial"}
+    ],
+    "constraints": [
+      {"kind": "slider", "name": "actor:body_dial", "bone": "actor:body_dial", "animation": "actor:body_turn", "property": "rotate", "local": true, "from": -15, "to": 0, "scale": 0.0625}
+    ],
+    "animations": [
+      {"name": "actor:body_turn", "duration": 1.875}
     ]
   }
 }
