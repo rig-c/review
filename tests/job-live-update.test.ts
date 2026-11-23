@@ -192,9 +192,16 @@ test('#743 no-picture record attaches owned lifecycle only after asynchronous wo
  let settle!:()=>void,attached:any;
  const commentButton={disabled:true},stageCommentButton={disabled:true};let commentsSetup=0;
  const document={body:{dataset:{} as Record<string,string>},querySelectorAll:()=>[]};
+ const cameraButtons=Array.from({length:4},()=>({disabled:false}));
+ const chooseInspectionView=()=>{};
  const suspend=()=>{},resume=async()=>{},dispose=()=>{};
  const scope={document,host:{record:{label:'Plan',sourceHash:'a'.repeat(64),hasPicture:false},attach(screen:unknown){attached=screen;events.push('attached');},displayed(){expect(document.body.dataset.ready).toBe('true');events.push('displayed');}},
   readOnly:null,actReadOnly:null,access:{capability:"owner"},readOnlyReason,rigInput:null,referenceInput:null,parts:null,disposed:false,tr:String,
+  controls:{zoomButtons:cameraButtons.slice(0,3),nativeOne:cameraButtons[3],replaceViewSwitch(config:{disabled:boolean}){
+   expect(config.disabled).toBe(true);return ()=>{};
+  }},chooseInspectionView,inspectionViewSwitch(callback:()=>void,partsSetup:boolean){
+   expect(callback).toBe(chooseInspectionView);expect(partsSetup).toBe(true);return {};
+  },
   bindWorkspace(){},bindInspector(){},renderLayout(){},text(){},message(){},el:()=>({hidden:false,children:[]}),
   restoreRecordComments(){},showRecordComments(){},setupComments(){commentsSetup++;},rigInspector:{comments:{button:commentButton}},button:()=>stageCommentButton,
   PartExplorer:class{},workspace:{settle:()=>new Promise<void>(resolve=>{settle=resolve;})},
@@ -203,6 +210,7 @@ test('#743 no-picture record attaches owned lifecycle only after asynchronous wo
  const run=new Function('scope',`with(scope){${js};return startRecord();}`);
  const pending=run(scope);expect(attached).toBeUndefined();expect(document.body.dataset.ready).toBeUndefined();
  settle();await pending;expect(events).toEqual(['attached','displayed']);
+ expect(cameraButtons.every(button=>button.disabled)).toBe(true);
  expect(commentsSetup).toBe(1);expect(commentButton.disabled).toBe(false);expect(stageCommentButton.disabled).toBe(false);
  expect(attached.suspend).toBe(suspend);expect(attached.resume).toBe(resume);expect(attached.dispose).toBe(dispose);
  expect(attached.syncActRow).toBe(scope.syncJobActRow);

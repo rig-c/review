@@ -115,6 +115,7 @@ export interface ViewSwitchGroup {modes:readonly ViewSwitchMode[];hidden?:boolea
 export interface ViewSwitchConfig {
  groups:readonly ViewSwitchGroup[];
  currentMode:string;
+ disabled?:boolean;
  onChange?:(id:string)=>void;
 }
 /** One group from layout eligibility: the effective mode is pressed and named (else the requested one); each refused mode carries its existing reason. */
@@ -177,12 +178,22 @@ export function createViewControls(options:ViewControlsOptions) {
   const current=groups.flat().find(mode=>mode.id===next.currentMode);
   const label=viewLabel=panelMake('span',{id:'view-menu-label',textContent:current?t(current.labelKey):''});
   const summary=panelMake('summary',{},t('View switch')+' ',label);summary.setAttribute('aria-label',t('View layout'));
+  if(next.disabled){
+   summary.tabIndex=-1;
+   viewSwitch!.setAttribute('aria-disabled','true');summary.setAttribute('aria-disabled','true');
+   summary.onclick=event=>event.preventDefault();
+   summary.onkeydown=event=>{if(event.key==='Enter'||event.key===' ')event.preventDefault();};
+   viewSwitch!.ontoggle=()=>{if(viewSwitch!.open)viewSwitch!.open=false;};
+  }else{
+   viewSwitch!.removeAttribute('aria-disabled');
+   viewSwitch!.ontoggle=null;
+  }
   const list=panelMake('div',{className:'view-menu-list'});list.setAttribute('role','group');list.setAttribute('aria-label',t('View'));
   for(const [index,group] of groups.entries()){
    if(index)list.append(panelMake('hr',{role:'separator'}));
    for(const mode of group){
     const button=actionButton(t(mode.labelKey),()=>{
-     if(button.disabled)return;
+     if(next.disabled||button.disabled)return;
      setMode(mode.id);viewSwitch!.open=false;next.onChange?.(mode.id);
     });
     button.dataset.view=mode.id;button.setAttribute('aria-pressed',String(mode.pressed));

@@ -22,6 +22,7 @@ import {createSyntheticPlanRecordWorkspace, createSyntheticRecordReader, writeWo
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {recordViewportControls} from './helpers/record-viewport-controls.ts';
 import legacy from './fixtures/comments-contract-legacy.json';
 
 type Route = 'plan' | 'package';
@@ -80,7 +81,7 @@ async function call<T>(host: Host, schema: typeof JOB_API_SCHEMA | typeof JOB_AP
     return result.value as T;
 }
 
-async function openFixture(scratch: string, route: Route, variant: Variant, language?: Language) {
+async function openFixture(scratch: string, route: Route, variant: Variant, language?: Language, deferAsk = false) {
     const pkg = route === 'package' ? await realJobWindowFixture({scratchParent: scratch}) : null;
     const name = variant + (language ? '-' + language : '');
     const root = pkg?.input.root ?? join(scratch, 'plan-' + name);
@@ -112,8 +113,10 @@ async function openFixture(scratch: string, route: Route, variant: Variant, lang
                 idempotencyKey: randomUUID(), freeze: {kind: 'producer-held', holdId: 'synthetic', record: plan.record}, result: plan.result});
         }
         assert.ok(host);
-        await call(host, schema, {verb: 'ask', expectedGeneration: host.session.status().generation,
+        const mountedHost = host;
+        const ask = () => call(mountedHost, schema, {verb: 'ask', expectedGeneration: mountedHost.session.status().generation,
             idempotencyKey: randomUUID(), publicationId: publication.publicationId, subject});
+        if (!deferAsk) await ask();
         assert.deepEqual(publication.source.checkpointEvidence, [evidence.packet], 'retained checkpoint evidence identity');
         const display = host.session.displayPublication(publication.publicationId);
         const base = host.origin + '/jobs/' + host.session.jobId + '/publications/' + publication.publicationId +
@@ -132,7 +135,7 @@ async function openFixture(scratch: string, route: Route, variant: Variant, lang
             assert.equal(res.status, 200);
             assert.equal(sha256(Buffer.from(await res.arrayBuffer())), tile.sha256, tile.path);
         }
-        return {host, publication, evidence, close, sourceHash: metadata.sourceHash as string};
+        return {host, publication, evidence, close, ask, sourceHash: metadata.sourceHash as string};
     } catch (error) {
         await close();
         throw error;
@@ -186,7 +189,7 @@ async function observe(page: InputCdpSession, evidence: ReturnType<typeof create
         const isDifference = ${differenceCanvas};
         return {language: document.documentElement.lang,
             controls: q('#zoom-in, #zoom-out, #fit, #native-one, #view-menu').map(node =>
-                ({id: node.id, disabled: node.disabled ?? false, text: node.id === 'view-menu'
+                ({id: node.id, disabled: node.disabled ?? node.getAttribute('aria-disabled') === 'true', text: node.id === 'view-menu'
                     ? node.querySelector('summary').getAttribute('aria-label') : node.textContent.trim()})),
             menu,
             panes: q('#stage-layout .stage-pane').map(node => ({id: node.id, shown: !node.hidden,
@@ -638,6 +641,43 @@ function arg(name: string) {
     return value;
 }
 
+async function checkpointViewportControls(page: InputCdpSession, scratch: string) {
+    for (const language of languages) {
+        const fixture = await openFixture(scratch, 'plan', 'pair', language, true);
+        try {
+            const url = new URL(fixture.host.ownerUrl);
+            url.searchParams.set('lang', language);
+            await page.goto(url.href, language);
+            await waitFor('1128 empty checkpoint', () => page.evaluate<boolean>(`document.body.dataset.ready === 'true' &&
+                document.querySelector('#rig-empty')?.checkVisibility() && !!document.querySelector('#view-menu [data-view="compare"]')`));
+            await recordViewportControls(page, command!, language, true);
+            await fixture.ask();
+            await pairView(page, fixture, language, 'after');
+            await recordViewportControls(page, command!, language, false);
+            const scale = () => page.evaluate<number>("new DOMMatrix(getComputedStyle(document.querySelector('#reference-content')).transform).a");
+            await click(page, '#fit');
+            const fit = await scale();
+            await click(page, '#native-one');
+            assert.equal(await scale(), 1);
+            await click(page, '#zoom-in');
+            assert.ok(await scale() > 1);
+            await click(page, '#zoom-out');
+            assert.equal(await scale(), 1);
+            await click(page, '#fit');
+            assert.equal(await scale(), fit);
+            await chooseView(page, 'before');
+            await pairView(page, fixture, language, 'before');
+            const {form} = await submitCheckpoint(page, fixture, 'plan', '');
+            await waitForPairRelease(page, fixture, language, form);
+            await recordViewportControls(page, command!, language, true);
+            console.log('1128_CHECKPOINT_PASS ' + language);
+        } finally {
+            await page.goto('about:blank');
+            await fixture.close();
+        }
+    }
+}
+
 async function run() {
     const baseline = Bun.argv.includes('--baseline');
     const comparisonPath = arg('--compare');
@@ -660,6 +700,8 @@ async function run() {
             await send('Page.handleJavaScriptDialog', {accept: true});
         }});
         await page.setViewport(1440, 900);
+        if (!baseline) await checkpointViewportControls(page, scratch);
+        if (Bun.argv.includes('--viewport-controls')) return;
         for (const route of routes) {
             const variants: Variant[] = baseline ? ['no-pair', 'pair'] : ['no-pair', 'pair', 'size-mismatch'];
             for (const variant of variants) {
@@ -675,7 +717,11 @@ async function run() {
                             assert.equal(view.language, language);
                             if (variant === 'no-pair') {
                                 results.noPair[key] = view;
-                                if (comparison) assert.deepEqual(view, comparison.noPair[key], active + ' matches main');
+                                if (comparison) {
+                                    const prior = comparison.noPair[key]!;
+                                    const expected = route === 'plan' ? {...prior, controls: prior.controls.map(control => ({...control, disabled: true}))} : prior;
+                                    assert.deepEqual(view, expected, active + ' matches baseline with the record viewport availability change');
+                                }
                             }
                             assert.equal(view.tiles.length, 0, active + ' evidence tiles drawn');
                             assert.equal(view.differenceCanvases, 0, active + ' Difference canvases');
