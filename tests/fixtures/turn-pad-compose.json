@@ -1,0 +1,74 @@
+{
+  "provenance": "rig-c/examples@13cfd38617db06ebe6ff9bd6cc4fdf11b60f50d3 look, @rig-c/parts@2.53.0: remove config.turn.body.slider and set config.turn.band.yaw=12 in a scratch config; rig-parts compose --scene scene-single.json --out composed-single and rig-parts compose --scene scene-pair.json --out composed-pair. Single: actor at [0,0] on 832x1216; pair: actor at [0,0], other at [832,0] on 1664x1216, in that order, both reading the same look-review-build. For the original custom slider: rig-parts compose --scene scene-custom.json --out composed-custom, using the single scene with the unmodified look build.",
+  "uncomposed": {
+    "bones": [
+      {"name": "yaw_dial"},
+      {"name": "pitch_dial"},
+      {"name": "body_yaw_dial"}
+    ],
+    "constraints": [
+      {"kind": "slider", "name": "yaw", "bone": "yaw_dial", "animation": "turn", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625},
+      {"kind": "slider", "name": "pitch", "bone": "pitch_dial", "animation": "tilt", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625},
+      {"kind": "slider", "name": "body_yaw_dial", "bone": "body_yaw_dial", "animation": "body_turn", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625}
+    ],
+    "animations": [
+      {"name": "turn", "duration": 1.5},
+      {"name": "tilt", "duration": 1.5},
+      {"name": "body_turn", "duration": 1.5}
+    ]
+  },
+  "single": {
+    "bones": [
+      {"name": "actor:yaw_dial"},
+      {"name": "actor:pitch_dial"},
+      {"name": "actor:body_yaw_dial"}
+    ],
+    "constraints": [
+      {"kind": "slider", "name": "actor:yaw", "bone": "actor:yaw_dial", "animation": "actor:turn", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625},
+      {"kind": "slider", "name": "actor:pitch", "bone": "actor:pitch_dial", "animation": "actor:tilt", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625},
+      {"kind": "slider", "name": "actor:body_yaw_dial", "bone": "actor:body_yaw_dial", "animation": "actor:body_turn", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625}
+    ],
+    "animations": [
+      {"name": "actor:turn", "duration": 1.5},
+      {"name": "actor:tilt", "duration": 1.5},
+      {"name": "actor:body_turn", "duration": 1.5}
+    ]
+  },
+  "pair": {
+    "bones": [
+      {"name": "actor:yaw_dial"},
+      {"name": "actor:pitch_dial"},
+      {"name": "actor:body_yaw_dial"},
+      {"name": "other:yaw_dial"},
+      {"name": "other:pitch_dial"},
+      {"name": "other:body_yaw_dial"}
+    ],
+    "constraints": [
+      {"kind": "slider", "name": "actor:yaw", "bone": "actor:yaw_dial", "animation": "actor:turn", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625},
+      {"kind": "slider", "name": "actor:pitch", "bone": "actor:pitch_dial", "animation": "actor:tilt", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625},
+      {"kind": "slider", "name": "actor:body_yaw_dial", "bone": "actor:body_yaw_dial", "animation": "actor:body_turn", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625},
+      {"kind": "slider", "name": "other:yaw", "bone": "other:yaw_dial", "animation": "other:turn", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625},
+      {"kind": "slider", "name": "other:pitch", "bone": "other:pitch_dial", "animation": "other:tilt", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625},
+      {"kind": "slider", "name": "other:body_yaw_dial", "bone": "other:body_yaw_dial", "animation": "other:body_turn", "property": "rotate", "local": true, "from": -12, "to": 0, "scale": 0.0625}
+    ],
+    "animations": [
+      {"name": "actor:turn", "duration": 1.5},
+      {"name": "actor:tilt", "duration": 1.5},
+      {"name": "actor:body_turn", "duration": 1.5},
+      {"name": "other:turn", "duration": 1.5},
+      {"name": "other:tilt", "duration": 1.5},
+      {"name": "other:body_turn", "duration": 1.5}
+    ]
+  },
+  "custom": {
+    "bones": [
+      {"name": "actor:body_dial"}
+    ],
+    "constraints": [
+      {"kind": "slider", "name": "actor:body_dial", "bone": "actor:body_dial", "animation": "actor:body_turn", "property": "rotate", "local": true, "from": -15, "to": 0, "scale": 0.0625}
+    ],
+    "animations": [
+      {"name": "actor:body_turn", "duration": 1.875}
+    ]
+  }
+}
