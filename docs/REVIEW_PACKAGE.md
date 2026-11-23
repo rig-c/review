@@ -1163,7 +1163,7 @@ retain their formats. See [Managed owner host](STABILITY.md#managed-owner-host).
 - **`interview-picks`.** Fresh package and record answers use `rig-review/act@6`. They carry `questionId`, ordered `selections` (`itemId`, `optionId`, nullable `otherText`), `note` and ordered `comments`, with non-null `source.optionSet` (`id` and `sha256`). The note and Other text remain survey answers. Historical act@2 and act@4 picks keep their readers, including the optional act@4 `words` added by [Review #1048](https://github.com/rig-c/review/issues/1048).
 - **`checkpoint`.** `JobActValues['checkpoint']` carries `checkpointId`, `planStepId`, `outcome` restricted to `'pass'` or `'fail'` and required `words` as a `string`. `pending` stays in the UI draft only and never produces a finalized act. Only `'pass'` is eligible for Create's checkpoint sign-off writer, whereas `'fail'` is feedback or a named consumer refusal and never an approval write. `words` is preserved verbatim including empty or whitespace-only strings, matching Create's writer without adding a UI gate. In `JobSubject`, `checkpointId` defaults to the Create plan step ID and optional `planStepId` is required when the displayed Review checkpoint ID differs, matching [Create #184](https://github.com/rig-c/create/issues/184) without alias inference or browser trust. The browser supplies `checkpointId`, `outcome` and `words` only (`JobUIActValues['checkpoint']`), the daemon copies resolved `planStepId` from the validated ask and requires `source.plan`, and Create derives execution stage from its authoritative step phase and order without Review stamping a stage.
 - **`parts-verdict`.** `JobActValues['parts-verdict']` is `PartsVerdictValue` (`verdict` as `'approved'` or `'changes-requested'`, `issues` as `readonly PartsIssue[]` under `rig-review-parts-comment/2` — empty on `'approved'` and non-empty on `'changes-requested'`, bound to `source.sourceHash`, retained `partIds`, and `source.parts.images` hashes — and `words`), emitted in new finalized `rig-review/act@5` acts (`JobPartsVerdictAct`) and requiring non-null `source.projectHash`, a `draft` selector and `source.parts`. Historical `rig-review/act@2` `parts-verdict` acts remain in the `JobAct` union via `JobLegacyAct` with `value: JobLegacyPartsVerdictValue` (`verdict` as `'pending'`, `'approved'` or `'changes-requested'`, `parts` with `partId`, `part` outcome and note, `mesh` outcome and note with `JobPartOutcome` as `'pending'`, `'clean'` or `'flagged'`, and `words`).
-- **`review-verdict`.** The original model branch carries `stage` (`'rig-review'` or `'direction-review'`), `verdict` and `words`, requiring non-null `source.model` with runtime stage, selector and direction consistency checks. A declared `rig-review` ask can also bind a `draft` selector with `source.projectHash` and null `source.direction`. It uses the existing rig screen and still capture, and its finalized act preserves the retained draft publication's source hash, model and selector. A compiled rig's Request changes can carry [chest landmarks (act@9)](#chest-landmarks-on-request-changes-act9).
+- **`review-verdict`.** The model branch carries `stage` (`'rig-review'` or `'direction-review'`) and `verdict`, requiring non-null `source.model` with runtime stage, selector and direction consistency checks. Direction submits ordered [comments](#direction-verdict-comments) or legacy `words`. A declared `rig-review` ask can also bind a `draft` selector with `source.projectHash` and null `source.direction`. It uses the existing rig screen and still capture, and its finalized act preserves the retained draft publication's source hash, model and selector. A compiled rig's Request changes can carry [chest landmarks (act@9)](#chest-landmarks-on-request-changes-act9).
 - **`signoff`.** `JobActValues['signoff']` carries `stage` (validated by Create's writer), `decision` restricted to `'approved'` only (changes requested are a verdict, never a signoff) and required `words` preserved verbatim including empty or whitespace-only strings. A verdict, a signoff and a Create stage transition are three separate writes, and `JobAct` grants no transition authority. Every stage in `JOB_PLAN_BOUND_SIGNOFF_STAGES` (`'plan-approved'`, `'rigging-interview'`, `'post-interview'`) requires non-null `source.plan` with exact displayed step IDs and hashes before act creation, while other stages keep `source.plan` nullable where appropriate.
 - **Create-published step IDs and hashes.** `JobPlanIdentity` holds `steps` (`id` and `hash`) published by [Create #184](https://github.com/rig-c/create/issues/184) for the displayed plan. Review retains these values without importing or recomputing Create's internal `stepHash`. Create validates them through its existing `steps` and `step_hashes` writer logic, with no separate plan revision hash or additional revision gate in this contract.
 - **C4 manifest-referenced parts PNG identity.** C4 binds the exact public `partsFileReferences(dir)` array from `@rig-c/parts/src/parts.ts`, whose contract is frozen at Parts 2.25.0. The trusted host resolves an installed version in `JOB_PARTS_ENUMERATOR_RANGE` (`>=2.25.0 <3.0.0`), supplies its actual version and official callback through `partsEnumerator`, and declares `partsEnumeratorId`. `JobPartsIdentity.enumeratorVersion` carries that actual version. Manifest paths are work-root-relative and image paths are relative to the manifest directory. Each image carries `path`, bounded-string `role` and raw-byte `sha256`. Review compares the claimed array positionally with the official array, preserving its role/order/duplicate semantics. Upstream roles include `part`, `alternate`, `depth`, `painting` and `figure_mask`. Review bounds shape and paths, refuses traversal/symlinks, decodes PNGs and hashes retained bytes. Missing references refuse with row, role and path, including a missing sibling figure mask when a render copy exists. Unreferenced extras stay outside this parts identity. Composite source hashes use `rig-review-job-source/2`. Create #184 production reader/projection and official-hook wiring remain pending.
@@ -1636,7 +1636,7 @@ outside this extension.
 The decoders and consumer projections are read-only. Since [Review #713](https://github.com/rig-c/review/issues/713)
 (HQ contract ruling), the UI finalizers use act@6 as the base format for
 fresh checkpoint, parts-verdict, rig and direction review-verdict and signoff
-acts. The UI submission for those kinds keeps its existing `words` and `issues` fields.
+acts. The UI submission for those kinds continues to accept its existing `words` and `issues` fields.
 [Review #746](https://github.com/rig-c/review/issues/746)
 adds optional `feedback: Feedback[]` beside required `words` only for the
 `rig-review` verdict submission. When present, including an empty list,
@@ -1646,8 +1646,7 @@ adds optional `feedback: Feedback[]` beside required `words` only for the
 malformed or blank rows. The act bar sends a detached feedback list when there
 are pinned comments and keeps `words` as their projection. It omits `feedback`
 when there are no pinned comments. With `feedback` absent, nonblank `words`
-still supplies one general comment. Direction and image verdict submissions
-keep their existing closed shapes.
+still supplies one general comment.
 
 Only the `rig-review` verdict and `parts-verdict` accept optional
 `general: readonly string[]` in their UI submission values. Each string becomes
@@ -1663,6 +1662,19 @@ their readers. [Review #831](https://github.com/rig-c/review/issues/831).
 Pointed marks, inline crops, bookmarks and valid time-only null frames remain
 inside the existing `anchor.context`. [Comment context (act@7)](#comment-context-act7)
 defines the separate top-level `comment.context` field.
+
+### Direction verdict comments
+
+[Review #1136](https://github.com/rig-c/review/issues/1136) lets a
+`direction-review` UI submission carry an ordered `comments` list in place of
+`words`. The finalized `rig-review/act@6` uses the existing Feedback anchor.
+Each pin carries the exact held seconds, the seconds time basis, null
+`frame`, `frameStart` and `frameEnd`, the stage-local and rig-world rectangles,
+crop, numeric camera including zoom, and recorded turn when present. Point
+pins use zero width and height. The writer checks pins against the retained
+publication. General comments carry `text` alone. Legacy words-only submissions
+still emit a single anchorless comment for nonblank words and an empty list for
+blank words. Historical act bytes and the `projectComments` projection are unchanged.
 
 For the words-only mapping, the daemon maps a nonblank note
 to one comment: anchored to the checkpoint for a checkpoint, general otherwise.

@@ -1258,7 +1258,7 @@ function bind(): void {
           if(host?.direction){for(const row of recordComments)submittedDirectionComments.add(row.id);try{localStorage.removeItem(recordCommentKey);}catch{}}
           await persistence?.submitted(submittedBaseline);
           comments?.refresh(); renderProposals();
-        },host.direction?recordCommentWords():undefined,general);
+        },host.direction?recordJobComments():undefined,general);
         if (sent) message(sent);
       } catch (error) {
         submissionFailure = jobSubmissionRefusal(error);

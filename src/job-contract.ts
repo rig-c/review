@@ -626,7 +626,10 @@ export type JobUIActValues = Omit<JobActValues, 'interview-picks' | 'checkpoint'
   readonly checkpoint: Omit<JobActValues['checkpoint'], 'planStepId'>;
   readonly 'parts-verdict': PartsVerdictValue & {readonly general?: readonly string[]};
   readonly 'review-verdict': JobImageReviewValue
-    | (JobModelReviewValue & {readonly stage: 'direction-review'})
+    | (Omit<JobModelReviewValue, 'stage' | 'words'> & {readonly stage: 'direction-review'} & (
+      | {readonly words: string; readonly comments?: never}
+      | {readonly comments: readonly JobComment[]; readonly words?: never}
+    ))
     | (JobModelReviewValue & {
       readonly stage: 'rig-review';
       readonly feedback?: readonly Feedback[];

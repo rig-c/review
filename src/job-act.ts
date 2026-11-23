@@ -14,7 +14,7 @@ import {
   chestLandmarkIdentity, parseChestLandmarkEdits, parseChestLandmarksAct,
 } from './job-api.ts';
 import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueComments } from './feedback-export.ts';
-import { hasStageComment, parseStageComment } from './stage-comment.ts';
+import { hasStageComment, isTimeOnlyFeedback, parseStageComment } from './stage-comment.ts';
 import type { Feedback } from './session.ts';
 import { validatePicks } from './interview-picks.ts';
 import {
@@ -42,13 +42,13 @@ function commentsAct<Act extends JobCommentsAct>(act: Act): Act {
   return act;
 }
 
-function picksComments(value: Record<string, unknown>): Extract<JobCommentsAct, {kind: 'interview-picks'}>['value']['comments'] {
+function submittedComments(value: Record<string, unknown>, legacyWordsRequired = false): Extract<JobCommentsAct, {kind: 'interview-picks'}>['value']['comments'] {
   if (Object.hasOwn(value, 'comments')) {
     if ('words' in value) throw new JobError('JOB_ACT_INVALID');
     // commentsAct checks the complete wire value before emission.
-    return value.comments as ReturnType<typeof picksComments>;
+    return value.comments as ReturnType<typeof submittedComments>;
   }
-  const legacy = 'words' in value ? words(value.words) : '';
+  const legacy = legacyWordsRequired || 'words' in value ? words(value.words) : '';
   return legacy.trim() ? [{text: legacy}] : [];
 }
 
@@ -440,7 +440,7 @@ export function prepareJobRecordAct(options: {
       if (source.subject !== 'option-set') throw new JobError('JOB_ACT_SOURCE_STALE');
       return commentsAct({
         ...envelope, schema: JOB_COMMENTS_ACT_SCHEMA, kind: 'interview-picks', source,
-        value: { questionId: askSubject.questionId, selections, note, comments: picksComments(value) },
+        value: { questionId: askSubject.questionId, selections, note, comments: submittedComments(value) },
       });
     }
     case 'checkpoint': {
@@ -594,7 +594,7 @@ export function finalizeJobAct(options: {
             ...(item.otherText === null ? {} : { other_text: item.otherText }) })), note }, question);
       } catch { throw new JobError('JOB_ACT_INVALID'); }
       return commentsAct({ ...comments, kind: 'interview-picks', source: { ...source, optionSet: source.optionSet! },
-        value: { questionId: subject.questionId, selections, note, comments: picksComments(value) } });
+        value: { questionId: subject.questionId, selections, note, comments: submittedComments(value) } });
     }
     case 'checkpoint': {
       const value = jobObject(submission.value, ['checkpointId', 'outcome', 'words']);
@@ -655,11 +655,14 @@ export function finalizeJobAct(options: {
       });
     }
     case 'review-verdict': {
+      const stage = ask.subject.kind === 'review-verdict' ? ask.subject.stage : undefined;
       const value = jobObject(submission.value, ['stage', 'verdict', 'words',
-        ...(ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review' ? ['feedback', 'general', 'meshEdits', 'chestLandmarks'] : [])]);
+        ...(stage === 'rig-review' ? ['feedback', 'general', 'meshEdits', 'chestLandmarks'] : []),
+        ...(stage === 'direction-review' ? ['comments'] : [])]);
       if (ask.subject.kind !== 'review-verdict' || ask.subject.stage === 'image-review' || value.stage !== ask.subject.stage) throw new JobError('JOB_ACT_INVALID');
+      const verdict = choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const);
+      const act = {...comments, kind: 'review-verdict' as const};
       if (ask.subject.stage === 'rig-review') {
-        const verdict = choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const);
         const meshEdits = meshSubmission ? parseMeshEdits(value.meshEdits) : undefined;
         const chestLandmarks = chestSubmission ? parseChestLandmarkEdits(value.chestLandmarks) : undefined;
         if (meshEdits || chestLandmarks) {
@@ -676,19 +679,23 @@ export function finalizeJobAct(options: {
           verdictComments = value.feedback === undefined ? noteComments(note) : rigVerdictFeedbackComments(value.feedback as Feedback[],
             {ask: ask.subject, sourceHash: source.sourceHash, selector});
         } catch { throw new JobError('JOB_ACT_INVALID'); }
-        const act = {...comments, kind: 'review-verdict' as const,
+        const rigAct = {...act,
           source: {...source, model: source.model!, selector},
           value: {stage: 'rig-review' as const, verdict, comments: [...verdictComments, ...generalComments(value.general)]},
           still: options.still};
-        if (chestLandmarks) return parseChestLandmarksAct({...act, schema: JOB_CHEST_LANDMARKS_ACT_SCHEMA,
-          value: {...act.value, ...(meshEdits ? {meshEdits} : {}), chestLandmarks}});
-        if (meshEdits) return meshEditsActForEmission({...act, value: {...act.value, meshEdits}});
-        if (verdictComments.some(comment => Object.hasOwn(comment, 'context'))) return commentsActForEmission(act);
-        return commentsAct(act);
+        if (chestLandmarks) return parseChestLandmarksAct({...rigAct, schema: JOB_CHEST_LANDMARKS_ACT_SCHEMA,
+          value: {...rigAct.value, ...(meshEdits ? {meshEdits} : {}), chestLandmarks}});
+        if (meshEdits) return meshEditsActForEmission({...rigAct, value: {...rigAct.value, meshEdits}});
+        if (verdictComments.some(comment => Object.hasOwn(comment, 'context'))) return commentsActForEmission(rigAct);
+        return commentsAct(rigAct);
       }
-      return commentsAct({ ...comments, kind: 'review-verdict', source: { ...source, model: source.model!,
+      const directionComments = submittedComments(value, true);
+      if (!Array.isArray(directionComments) || directionComments.some(row => row?.anchor !== undefined && !isTimeOnlyFeedback(row.anchor))) {
+        throw new JobError('JOB_ACT_INVALID');
+      }
+      return commentsAct({ ...act, source: { ...source, model: source.model!,
         selector: source.selector as Extract<NonNullable<JobSourceBinding['selector']>, { kind: 'rig' | 'post' }> }, value: {
-        stage: ask.subject.stage, verdict: choice(value.verdict, ['pending', 'approved', 'changes-requested'] as const), comments: noteComments(words(value.words)),
+        stage: ask.subject.stage, verdict, comments: directionComments,
       } });
     }
     case 'signoff': {

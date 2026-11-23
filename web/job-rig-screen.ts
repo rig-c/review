@@ -5,7 +5,7 @@ import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
  * window. The job stays the transport: same asks, act kinds, still, displayed-ack and submission idempotency.
  * Rig verdicts use the act bar, interviews use the Question tab, and text approvals use the shared ask dialog. */
-import {JOB_CHEST_LANDMARKS_ACT_SCHEMA,JOB_MESH_EDITS_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobChestLandmarkEdit,type JobMeshEdit,type JobProgressV3,type JobPublishedChestLandmark,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
+import {JOB_CHEST_LANDMARKS_ACT_SCHEMA,JOB_MESH_EDITS_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobChestLandmarkEdit,type JobComment,type JobMeshEdit,type JobProgressV3,type JobPublishedChestLandmark,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
 import {canonicalJson} from '../src/canonical-json.ts';
 import {draftKey} from '../src/mesh-edit.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
@@ -235,14 +235,13 @@ export function createJobRigScreen(options: {
     return freezeJobRigStage({...stage,source},ask.askId,++drawGeneration);
   }
 
-  async function submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionWords?:string, general?:readonly string[]): Promise<string> {
+  async function submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionComments?: readonly JobComment[], general?:readonly string[]): Promise<string> {
     const prepared = mounted, state = options.window.state();
     if (!prepared || !state.receipt || state.preparing) throw new Error('JOB_ACT_SOURCE_STALE');
     if (state.closed) throw new Error('JOB_CLOSED');
     const refusal=jobRigScreenRefusal(prepared.display,state.pending,prepared.checkpoints);if(refusal)throw new Error(options.translate('job.refusal.'+refusal));
     if (!options.access.capability) throw new Error('JOB_CAPABILITY_REQUIRED');
     const decisions=jobRigScreenDecisions(session, state.pending.filter(ask=>!prepared.modals?.forms.has(ask.askId)), prepared.display.publication.publicationId, general);
-    if(directionWords!==undefined)for(const decision of decisions)if(decision.kind==='review-verdict'&&decision.value.stage==='direction-review')decision.value.words=directionWords;
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     const rigChanges=decisions.find(decision=>decision.kind==='review-verdict'&&decision.value.stage==='rig-review'&&decision.value.verdict==='changes-requested');
     const chestDraft=rigChanges?.kind==='review-verdict'?screen?.chestLandmarks?.():null;
@@ -259,7 +258,10 @@ export function createJobRigScreen(options: {
       if(rigChanges.value.meshEdits?.length&&options.confirm&&!options.confirm(options.translate('Send this Request changes with {0} mesh edit(s) to the producer?',[rigChanges.value.meshEdits.length])))return '';
     }
     for (const decision of decisions) {
-      const key = JSON.stringify(decision.value);
+      const value = directionComments !== undefined && decision.kind === 'review-verdict' && decision.value.stage === 'direction-review'
+        ? {stage: decision.value.stage, verdict: decision.value.verdict, comments: directionComments}
+        : decision.value;
+      const key = JSON.stringify(value);
       let attempt = attempts.get(decision.ask.askId);
       if (!attempt || attempt.key !== key) attempts.set(decision.ask.askId, attempt = {key, submissionId: crypto.randomUUID(), rig: createJobRigSubmission(),
         commit: decision.kind === 'checkpoint' ? {checkpoints: {[decision.value.checkpointId]: structuredClone(session.checkpoints[decision.value.checkpointId]!)}} :
@@ -268,7 +270,7 @@ export function createJobRigScreen(options: {
       if (!latest.receipt) throw new Error('JOB_ACT_SOURCE_STALE');
       const input = {kind: decision.kind, publicationId: decision.ask.publicationId, askId: decision.ask.askId, pageId: options.pageId,
         displayedNonce: latest.receipt.displayedNonce, expectedGeneration: latest.generation, submissionId: attempt.submissionId,
-        value: decision.value} as JobUISubmission;
+        value} as JobUISubmission;
       const ask = decision.ask, current = attempt;
       const frozen = decision.kind === 'review-verdict' && decision.value.stage === 'rig-review' ? await current.rig.prepare(input, () => still(ask, prepared)) : input;
       const result = await options.window.submit(frozen);
