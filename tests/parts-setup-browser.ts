@@ -53,7 +53,7 @@ async function inspect(name:string,pkg:PartsViewPackage,expectedDifference:boole
   await page!.goto(`http://127.0.0.1:${server.port}/?lang=${lang}`);await settled();const state=await controls();assert.deepEqual(state.ids,['zoom-in','zoom-out','fit','native-one','view-menu']);assert.deepEqual(state.menu,['compare','reference','rig','difference']);assert.deepEqual(state.counts,[1,1,1,1,1]);assert.equal(state.caption,lang==='ko'?koCatalog['Assembled parts']:enCatalog['Assembled parts']);
   await wait(`document.querySelectorAll('[data-part-list] .part-thumb[data-thumbnail="image"] canvas').length>0`,'original thumbnails');
   assert.ok(await page!.evaluate(`(()=>{const list=document.querySelector('#comments-list-host #stage-comment-list');return !!list&&document.querySelector('#workspace-communication').contains(list)&&!document.querySelector('#stage-layout').contains(list)&&getComputedStyle(list).position==='static'})()`));
-  assert.ok(await page!.evaluate(`Array.from(document.querySelectorAll('#checkpoint-detail input')).every(n=>n.disabled&&!n.checked&&n.title.includes('PARTS_RIG_UNAVAILABLE'))`));
+  assert.equal(await page!.evaluate<boolean>(`document.querySelector('#checkpoint-detail')?.hidden`),true);
 
   // Fit uses the existing cameraFrame's single 24px margin and full-precision camera.
   // Compare its projection through the browser CSS serializer, as the camera-race oracle does.

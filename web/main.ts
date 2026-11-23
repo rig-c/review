@@ -1495,9 +1495,9 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  parts.registerImages({thumbnail:(icon,item,glyph)=>thumbnails.showOriginal(icon,item,()=>partsSubject!.image(item.index),glyph),items:subject.items,selected:partsSubject.selected,solo:partsSubject.solo,visible:partsSubject.visible,select:partsSubject.select,isolate:partsSubject.isolate,show:partsSubject.show});
  const unavailable='PARTS_RIG_UNAVAILABLE: this parts subject has no compiled rig.';
  for(const node of el('proposal-panel').children)if(node.id!=='comments-list-host')(node as HTMLElement).hidden=true;
- for(const control of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('#checkpoint-detail input,#proposal-panel input,#proposal-panel select,#proposal-panel button,#strip-panel input,#strip-panel select,#strip-panel button'))if(!control.closest('#comments-list-host')){control.disabled=true;setSourceAttribute(control,'title',unavailable);if(control instanceof HTMLInputElement&&control.name==='outcome')control.checked=false;}
+ for(const control of document.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('#proposal-panel input,#proposal-panel select,#proposal-panel button,#strip-panel input,#strip-panel select,#strip-panel button'))if(!control.closest('#comments-list-host')){control.disabled=true;setSourceAttribute(control,'title',unavailable);}
  el('checkpoint-detail').hidden=true;
- text('detail-note',unavailable);text('checkpoint-note','');el('strip-panel').hidden=true;
+ el('strip-panel').hidden=true;
  const renderPartsProvenance=()=>{text('provenance-version','Parts package, before rigging');el('provenance-rig').textContent=t('Not supplied');el('provenance-motion').hidden=true;el('provenance-motion-missing').hidden=false;text('provenance-motion','');};
  renderPartsProvenance();viewDisposers.push(onLanguageChange(renderPartsProvenance));
  text('provenance-full',JSON.stringify({subject:'parts',sourceHash:subject.sourceHash,painting:subject.painting,images:subject.items.map(({name,imageHash})=>({name,imageHash}))},null,2));
