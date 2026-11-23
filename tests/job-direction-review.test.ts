@@ -50,6 +50,13 @@ test('#1088 validates exact display shape and admits it only on declared record 
         .toEqual(projected);
       expect(parseRecordSource({...source, directionReview: projected}).directionReview).toEqual(projected);
     }
+    const createProjection = {postVersion: 4, verdictActId: null,
+      take: {duration: 8, loop: true}, camera: 'fixed'} as const satisfies PlanContext['directionReview'];
+    const createContext = parseRecordPublishedContext({...fixture.context, directionReview: createProjection}, fixture.result);
+    const createSource = buildRecordSource({record: fixture.record, selection: fixture.result, context: createContext});
+    expect(parseRecordSource(createSource).directionReview).toEqual(createProjection);
+    expect(createSource.sourceHash).toBe(source.sourceHash);
+    refuse({directionReview: createProjection, subjects: [{...signoff, stage: 'post-interview'}]});
     const option = createSyntheticOptionRecordWorkspace(join(scratch, 'option'));
     expect(() => parseRecordPublishedContext({...option.context, directionReview}, option.result)).toThrow(invalid.code);
     const optionSource = buildRecordSource({record: option.record, selection: option.result, context: option.context,

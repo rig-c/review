@@ -144,9 +144,9 @@ test('#1088 direction sign-off shows three localized rows for projected and hist
     ko: ['서명 대상 포스트 v3', '채택된 연출 판정 · act-direction-accepted', '연출 · 4.5초 · 반복'],
    },
    {
-    projection: {postVersion: 12, verdictActId: null, take: {duration: 6, loop: false}, camera: 'fixed'},
-    en: ['Signed post v12', 'Direction verdict not supplied', 'Direction · 6 s · once · fixed camera'],
-    ko: ['서명 대상 포스트 v12', '연출 판정이 제공되지 않았어요.', '연출 · 6초 · 한 번 · 카메라 고정'],
+    projection: {postVersion: 4, verdictActId: null, take: {duration: 8, loop: true}, camera: 'fixed'},
+    en: ['Signed post v4', 'Direction verdict not supplied', 'Direction · 8 s · loop · fixed camera'],
+    ko: ['서명 대상 포스트 v4', '연출 판정이 제공되지 않았어요.', '연출 · 8초 · 반복 · 카메라 고정'],
    },
    {
     projection: {postVersion: 1, verdictActId: 'act-moving', take: {duration: 2, loop: false}, camera: 'moving'},
