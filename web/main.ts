@@ -928,8 +928,20 @@ function configurePartSets(keep=''):void {
 }
 
 /** One creation path for initial load, rebuilds and a post-Setup single-track restart. */
-function createInspectionPlayer(root:HTMLElement,loaded:ModelAssets,mode?:RigPlayer['mode']):RigPlayer {
- const next=new RigPlayer(root,loaded,{mode});
+function createInspectionPlayer(root:HTMLElement,loaded:ModelAssets,mode?:RigPlayer['mode'],source?:{url:string;sha256:string}):RigPlayer {
+ const direction=source&&data.direction;
+ const declared=source&&direction?.composed&&source.url===inspectedModel?.url&&source.sha256===direction.model.sha256?loaded.stage:null;
+ const stage=declared&&declared.width>0&&declared.height>0?declared:null;
+ const next=new RigPlayer(root,loaded,{mode:stage?'canvas':mode});
+ if(stage&&next.renderer instanceof CanvasRenderer){
+  next.renderer.viewport=stage;
+  // Play rounds its canvas origin outward in Y-down space. Clip the rounded raster in canvas-local CSS units.
+  const top=-(stage.y+stage.height);
+  const x=stage.x-Math.floor(stage.x),y=top-Math.floor(top);
+  const right=x+stage.width,bottom=y+stage.height;
+  const corners=[[x,y],[right,y],[right,bottom],[x,bottom]].map(point=>point.map(value=>`${value}px`).join(' '));
+  next.renderer.canvas.style.clipPath='polygon('+corners.join(', ')+')';
+ }
  next.on('event',event=>{text('event-log',`Runtime event: ${event.name} · ${event.time.toFixed(2)} s`);});
  return next;
 }
@@ -938,7 +950,8 @@ function restartSetupPlayer(force=false):void {
  const previous=player,loaded=assets;if(!previous||!loaded||!force&&(previous.current!==null||!previous.composed))return;
  const skin=previous.skin,sets=[...previous.activeSets],slots=previous.slots,adjust=previous.adjust,world=previous.environment(),mode=previous.mode;
  const entries=partModel&&inspectionSourceState==='ready'?partCatalog(partModel,data.feedbackCatalog.slots??[]):null;
- previous.dispose();player=createInspectionPlayer(el('rig-root'),loaded,mode);
+ const source=data.direction?.composed?(stageSource?{url:stageSource.url,sha256:stageSource.hash}:inspectedModel??undefined):undefined;
+ previous.dispose();player=createInspectionPlayer(el('rig-root'),loaded,mode,source);
  player.skin=skin;if(sets.length)player.setSets(sets);player.slots=slots;player.adjust=adjust;player.environment(world);
  setupChestWorld=readSetupChest(player);
  if(entries)parts?.register('single',entries,player,new PartThumbnails(pageRegionTable(partModel),loaded.pageImages));
@@ -955,7 +968,7 @@ async function initPlayer(initialCheckpoint?:Checkpoint): Promise<void> {
       const target = new URL(name, url); if (target.origin !== location.origin || !target.pathname.startsWith(access.route('/assets/'))) throw new Error(`Model page escapes local package: ${name}`); return target.href;
     } });
     if(data.scene){sceneComposite=bindScenePlates(data.scene,await loadScenePlates(data.scene,assetUrl));input('idle-repeat').checked=data.direction!.take.loop;input('idle-repeat').disabled=true;}
-    player = createInspectionPlayer(el('rig-root'), assets,sceneComposite?'canvas':undefined);
+    player = createInspectionPlayer(el('rig-root'), assets,sceneComposite?'canvas':undefined,inspectedModel);
     setupChestWorld = readSetupChest(player);
     // Parts inspection is an add-on: a catalog refusal is shown in the explorer and never aborts the rig.
     try{const catalog=await loadPartModel(modelUrl,data.reviewedSource.rig!.sha256,data.feedbackCatalog.slots??[],inputs.fetch);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
@@ -3533,7 +3546,7 @@ async function swapRig(modelUrl:string,prefix:string,sha256:string,world:StageWo
  // The fit-relative zoom also depends on the first-draw framing basis, not just the declared stage.
  if(keepFraming&&keepFramingBox)rebuildFramingBoxes.set(next,{...keepFramingBox});
  physicsPanel?.clearPreview();
- pause();player?.dispose();assets?.dispose();assets=next;player=createInspectionPlayer(el('rig-root'),assets);setupChestWorld=readSetupChest(player);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
+ pause();player?.dispose();assets?.dispose();assets=next;player=createInspectionPlayer(el('rig-root'),assets,undefined,{url:modelUrl,sha256});setupChestWorld=readSetupChest(player);stageModelHash=sha256;stageSource={url:modelUrl,prefix,hash:sha256};
  // A scratch build may hold another set of animations (a retarget adds one, #114): the picker lists what this build has.
  {const animations=select('animation-select');animations.replaceChildren(...assets.animations.map(item=>option(item.name,data.manifest.animations.find(a=>a.id===item.name)?.label??item.name)));animations.disabled=assets.animations.length===0;}
  try{const catalog=await loadPartModel(modelUrl,sha256,data.feedbackCatalog.slots??[],inputs.fetch);inspectionSourceState='ready';partModel=catalog.model;configureTurnPad(catalog.model);refreshAnimationInspection();weightsView?.refresh();meshEditor?.selectionChanged();parts?.register('single',catalog.entries,player,new PartThumbnails(pageRegionTable(catalog.model),assets.pageImages));}catch(error){inspectionSourceState='failed';partModel=null;refreshAnimationInspection();parts?.refuseCatalog('single',error);}
@@ -3920,7 +3933,7 @@ async function prepareStageDraftBuild(
   // Release the previous renderer's root clip while retaining its pose and views for rollback.
   prevPlayer?.renderer.render({order:[]});
   rigRoot.replaceChildren();
-  nextPlayer=createInspectionPlayer(rigRoot,nextAssets);
+  nextPlayer=createInspectionPlayer(rigRoot,nextAssets,undefined,target);
   // A fresh player's draw has no held pose. Clearing track 0 publicly poses Setup.
   nextPlayer.clear();
   const nextSetupChest=readSetupChest(nextPlayer);
