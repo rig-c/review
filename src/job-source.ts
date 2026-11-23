@@ -1044,9 +1044,14 @@ export function projectRetainedPlanText(retained: JobRetainedSourceV3): JobPlanT
     for (const [items] of recordInterviewCollections(interview)) {
       for (const rawItem of Array.isArray(items) ? items : []) {
         const item = asPlainObject(rawItem);
-        if (typeof item?.id === 'string' && item.id.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(item.id) &&
-            typeof item.text === 'string' && !Object.hasOwn(questions, item.id))
-          questions[item.id] = item.text;
+        if (typeof item?.id !== 'string' || item.id.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(item.id) ||
+            Object.hasOwn(questions, item.id)) continue;
+        if (typeof item.text === 'string') questions[item.id] = item.text;
+        else if (items === interview.waypoints) {
+          const prompt = Array.isArray(item.prompts) && item.prompts.length === 1 ? asPlainObject(item.prompts[0])?.text : undefined;
+          // An empty label preserves the known waypoint ID so the renderer can localize its absence.
+          questions[item.id] = typeof prompt === 'string' && prompt.trim() ? prompt : '';
+        }
       }
     }
   }

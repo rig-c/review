@@ -5,6 +5,7 @@ import {parseManifest} from '../src/manifest.ts';
 import {jobHash} from '../src/job-api.ts';
 import {expect,test} from 'bun:test';
 import {readFile,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
 import {createJobRigScreen} from '../web/job-rig-screen.ts';
 import type {InterviewDisplayQuestion} from '../web/interview-panel.ts';
 import {rigHost,setRigHost} from '../web/rig-host.ts';
@@ -931,34 +932,50 @@ test.each(['same rig','third question names another rig'] as const)('#1101 verif
  }
 });
 
-test('#974 plan page resolves rests_on question ids from framing, waypoints and post.items while keeping step ids and unknown ids', async () => {
+test('#1123 and #974 plan grounds resolve interview IDs before overlapping steps and keep plain step and unknown IDs', async () => {
+ const prompt = '  Keep the hat with the head?  ';
+ const absence = enCatalog['job.plan.field.absent'];
  const fixture = await recordScreenFixture('signoff', false, undefined, 'plan-approved', false, true, undefined, false, false, undefined, {
   text: {
    does: 'Assemble post scene',
    produces: 'Post composition pass',
    bar: 'Matches declared timing and framing',
-   rests_on: ['post_timing', 'rig_type', 'bones_guide', 'step_weights', 'unknown_question_id'],
+   rests_on: ['post_timing', 'rig_type', 'bones_guide', 'step_layout', 'step_weights', 'unknown_question_id', 'missing', 'multiple'],
   },
   interview: {
    framing: [{ id: 'rig_type', text: 'What is this: a character rig or a full-screen scene?' }],
-   waypoints: [{ id: 'bones_guide', text: 'How many segments should the limb bones use?' }],
-   post: { items: [{ id: 'post_timing', text: 'How long, does it loop, and where are the beats?' }] },
+   waypoints: [
+    { id: 'bones_guide', text: 'How many segments should the limb bones use?' },
+    { id: 'step_layout', prompts: [{ text: prompt }] },
+    { id: 'missing', prompts: [{ id: 'no-text' }] },
+    { id: 'multiple', prompts: [{ text: 'First question?' }, { text: 'Second question?' }] },
+   ],
+   post: { items: [
+    { id: 'post_timing', text: 'How long, does it loop, and where are the beats?' },
+    { id: 'step_layout', text: 'Later duplicate question' },
+   ] },
   },
  });
  const dom = await recordScreenDom();
  try {
   dom.set('location', { origin: fixture.origin });
+  const path = join(fixture.root, 'project.json');
+  const source = structuredClone(fixture.ask.source);
+  const recordHash = jobHash(await readFile(path));
   const inspection = await prepareJobInspection(fixture.display, new AbortController().signal);
   try {
+   const translate = (key: string) => key === 'job.plan.field.absent' ? absence : key;
    const node = ((tag: string, key?: string) => {
     const element = dom.document.createElement(tag);
-    if (key) element.textContent = key;
+    if (key) element.textContent = translate(key);
     return element;
    }) as JobFormDependencies['node'];
-   const helpers = createJobFormHelpers(node, key => key);
+   const helpers = createJobFormHelpers(node, translate);
    expect(Object.keys(inspection.metadata.planText!)).toEqual(['schema', 'record', 'status', 'steps', 'questions']);
+   expect(inspection.metadata.planText).toMatchObject({record: {sha256: recordHash}, questions: {step_layout: prompt}});
    const list = helpers.planTextList(fixture.ask.source.plan!, inspection.metadata.planText, 'step_layout');
-   const entries = [...list.querySelector('[data-job-plan-field="rests_on"]')!.querySelectorAll('li')].map(item => ({
+   const rows = [...list.querySelector('[data-job-plan-field="rests_on"]')!.querySelectorAll('li')];
+   const entries = rows.map(item => ({
     text: item.textContent,
     title: item.title,
    }));
@@ -966,9 +983,15 @@ test('#974 plan page resolves rests_on question ids from framing, waypoints and 
     { text: 'How long, does it loop, and where are the beats?', title: 'post_timing' },
     { text: 'What is this: a character rig or a full-screen scene?', title: 'rig_type' },
     { text: 'How many segments should the limb bones use?', title: 'bones_guide' },
+    { text: prompt, title: 'step_layout' },
     { text: 'Assemble post scene', title: 'step_weights' },
     { text: 'unknown_question_id', title: '' },
+    { text: absence, title: 'missing' },
+    { text: absence, title: 'multiple' },
    ]);
+   expect(rows[3]?.getAttribute('translate')).toBe('no');
+   expect(fixture.ask.source).toEqual(source);
+   expect(jobHash(await readFile(path))).toBe(recordHash);
   } finally {
    inspection.dispose();
   }

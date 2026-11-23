@@ -1571,13 +1571,15 @@ values are strings and `rests_on` is an ordered string array. Empty
 strings/arrays, whitespace, line endings, Unicode form, duplicate references and
 array order are preserved. When present, `questions` is an `id` → `text` string
 map collected from `interview.framing`, `interview.waypoints` and
-`interview.post.items` in that order (first entry wins per id), keeping only
-items whose `text` is a string and whose `id` is a non-empty string up to 128
-characters matching `/^[A-Za-z0-9][A-Za-z0-9._-]*$/` as the parser enforces. The
-UI uses `questions` only for `rests_on` entries that match no plan step,
-displaying the question's `text` with its `id` in `title` while step ids still
-resolve to their step and unmatched ids stay raw. Producer extras stay outside
-this display projection.
+`interview.post.items` in that order (first qualifying entry wins per id).
+Qualifying ids are at most 128 characters and match
+`/^[A-Za-z0-9][A-Za-z0-9._-]*$/`. A string `text` is used verbatim. A waypoint
+without direct text uses the verbatim text of a single nonblank prompt, or an
+empty label when its prompt is missing or ambiguous. In `rests_on`, the UI
+resolves a known interview id first, displays its label with the id in
+`title`, and uses the localized absence text for an empty label. An id found
+only in the plan resolves to its step, and unmatched ids stay raw. Producer
+extras stay outside this display projection.
 
 D1 matches only accepted ids, preserving source order and existing checkpoint
 aliases (`planStepId ?? checkpointId`). D2 retains its existing whole-plan

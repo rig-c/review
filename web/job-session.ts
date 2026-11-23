@@ -1415,10 +1415,15 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
                     else if (field === 'rests_on') {
                         const rests = node('ul'), questions = projection?.status === 'projected' ? projection.questions : undefined;
                         for (const text of row.rests_on!) {
-                            const rest = node('li'), dependency = plan.steps.find(step => step.id === text);
-                            const question = !dependency && questions && Object.hasOwn(questions, text) ? questions[text] : undefined;
-                            if (dependency) {planStepText(rest, dependency, projection); rest.title = text;}
-                            else {rest.textContent = question ?? text; if (question !== undefined) rest.title = text; rest.setAttribute('translate', 'no');}
+                            const question = questions && Object.hasOwn(questions, text) ? questions[text] : undefined;
+                            const dependency = question === undefined ? plan.steps.find(step => step.id === text) : undefined;
+                            const rest = node('li', question === '' ? 'job.plan.field.absent' : undefined);
+                            if (dependency) planStepText(rest, dependency, projection);
+                            else {
+                                if (question !== '') rest.textContent = question ?? text;
+                                rest.setAttribute('translate', 'no');
+                            }
+                            if (question !== undefined || dependency) rest.title = text;
                             rests.append(rest);
                         }
                         value.append(rests);
