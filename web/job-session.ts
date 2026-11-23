@@ -1415,11 +1415,19 @@ export function createJobFormHelpers(node: JobFormNode, t: typeof import('./i18n
                     else if (field === 'rests_on') {
                         const rests = node('ul'), questions = projection?.status === 'projected' ? projection.questions : undefined;
                         for (const text of row.rests_on!) {
-                            const rest = node('li'), dependency = plan.steps.find(step => step.id === text);
-                            const question = !dependency && questions && Object.hasOwn(questions, text) ? questions[text] : undefined;
-                            if (dependency) {planStepText(rest, dependency, projection); rest.title = text;}
-                            else {rest.textContent = question ?? text; if (question !== undefined) rest.title = text; rest.setAttribute('translate', 'no');}
-                            rests.append(rest);
+                            const question = questions && Object.hasOwn(questions, text) ? questions[text] : undefined;
+                            const dependency = question === undefined ? plan.steps.find(step => step.id === text) : undefined;
+                            const labels = typeof question === 'string' || question === undefined ? [question] : question;
+                            for (const label of labels) {
+                                const rest = node('li', label === '' ? 'job.plan.field.absent' : undefined);
+                                if (dependency) planStepText(rest, dependency, projection);
+                                else {
+                                    if (label !== '') rest.textContent = label ?? text;
+                                    rest.setAttribute('translate', 'no');
+                                }
+                                if (label !== undefined || dependency) rest.title = text;
+                                rests.append(rest);
+                            }
                         }
                         value.append(rests);
                     } else {value.textContent = row[field]!; value.setAttribute('translate', 'no');}

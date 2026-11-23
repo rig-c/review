@@ -370,12 +370,25 @@ export const JOB_PLAN_TEXT_UNAVAILABLE = [
   'PLAN_TEXT_RECORD_UNAVAILABLE', 'PLAN_TEXT_RECORD_UNSUPPORTED', 'PLAN_TEXT_STEPS_ABSENT',
   'PLAN_TEXT_STEPS_INVALID', 'PLAN_TEXT_MAPPING_UNAVAILABLE', 'PLAN_TEXT_LIMIT',
 ] as const;
+type JobPlanGrounds = Readonly<Record<string, string | readonly string[]>>;
+
+/** Count rendered rows so repeated references to multi-prompt waypoints share the existing field limit. */
+export function planGroundsExceedLimit(ids: readonly string[], questions?: JobPlanGrounds): boolean {
+  let rows = ids.length;
+  for (const id of ids) {
+    const question = questions && Object.hasOwn(questions, id) ? questions[id] : undefined;
+    if (Array.isArray(question)) rows += question.length - 1;
+    if (rows > 4096) return true;
+  }
+  return false;
+}
+
 export type JobPlanTextProjection = {
   readonly schema: typeof JOB_PLAN_TEXT_SCHEMA;
   readonly record: {readonly path: 'project.json'; readonly sha256: string};
   readonly status: 'projected';
   readonly steps: readonly JobPlanTextStep[];
-  readonly questions?: Readonly<Record<string, string>>;
+  readonly questions?: JobPlanGrounds;
 } | {
   readonly schema: typeof JOB_PLAN_TEXT_SCHEMA;
   readonly record: {readonly path: 'project.json'; readonly sha256: string} | null;
@@ -405,10 +418,12 @@ export function parseJobPlanTextProjection(value: unknown): JobPlanTextProjectio
   }
   if (envelope.status !== 'projected' || envelope.record === null || Object.hasOwn(envelope, 'reason') ||
       !Array.isArray(envelope.steps) || envelope.steps.length > 4096) return fail();
+  const questions = Object.hasOwn(envelope, 'questions') ? envelope.questions : undefined;
   if (Object.hasOwn(envelope, 'questions')) {
-    const questions = envelope.questions;
     if (!questions || typeof questions !== 'object' || Array.isArray(questions) ||
-        Object.entries(questions).some(([id, text]) => !id || id.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) || typeof text !== 'string')) return fail();
+        Object.entries(questions).some(([id, text]) => id.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) ||
+          !(typeof text === 'string' || Array.isArray(text) && text.length > 1 &&
+            text.every(prompt => typeof prompt === 'string' && prompt.trim())))) return fail();
   }
   const ids = new Set<string>();
   for (const raw of envelope.steps) {
@@ -426,7 +441,8 @@ export function parseJobPlanTextProjection(value: unknown): JobPlanTextProjectio
       if (!Object.hasOwn(row, field)) continue;
       const content = row[field];
       if (field === 'rests_on') {
-        if (!Array.isArray(content) || content.length > 4096 || content.some(item => typeof item !== 'string')) return fail();
+        if (!Array.isArray(content) || content.some(item => typeof item !== 'string') ||
+            planGroundsExceedLimit(content, questions as JobPlanGrounds | undefined)) return fail();
       } else if (typeof content !== 'string') return fail();
     }
   }

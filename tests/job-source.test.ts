@@ -798,6 +798,10 @@ test('#606 missing versus malformed fields and legacy mapping/limits stay explic
   for (const [change,reason] of [
     [(p:any)=>{p.plan.steps[0].bar='x'.repeat(512*1024);},'PLAN_TEXT_LIMIT'],
     [(p:any)=>{p.plan.steps[0].rests_on=Array(4097).fill('a');},'field-limit'],
+    [(p:any)=>{
+      p.interview.waypoints = [{id:'a',prompts:[{text:'First?'},{text:'Second?'}]}];
+      p.plan.steps[0].rests_on = Array(2049).fill('a');
+    },'field-limit'],
   ] as const) {
     const f = await textFixture606('package',change);
     try {
@@ -860,6 +864,12 @@ test('#606 closed metadata grammar rejects malformed value/issue entries while r
   expect(parseJobPlanTextProjection(good)).toEqual(good);
   const withQuestions:any={...structuredClone(good),questions:{post_timing:'How long, does it loop, and where are the beats?'}};
   expect(parseJobPlanTextProjection(withQuestions)).toEqual(withQuestions);
+  const multiple = structuredClone(withQuestions);
+  multiple.questions.assemble = ['First?', 'Second?'];
+  multiple.steps[0].rests_on = Array(2048).fill('assemble');
+  expect(parseJobPlanTextProjection(multiple)).toEqual(multiple);
+  multiple.steps[0].rests_on.push('assemble');
+  expect(()=>parseJobPlanTextProjection(multiple)).toThrow('PLAN_TEXT_METADATA_INVALID');
   for (const mutate of [
     (p:any)=>{p.unknown=true;},
     (p:any)=>{p.record.path='other.json';},
@@ -875,6 +885,8 @@ test('#606 closed metadata grammar rejects malformed value/issue entries while r
     (p:any)=>{p.questions=[];},
     (p:any)=>{p.questions={'bad id':'text'};},
     (p:any)=>{p.questions={post_timing:123};},
+    (p:any)=>{p.questions={assemble:['First?', ' ']};},
+    (p:any)=>{p.questions={assemble:['First?', null]};},
     (p:any)=>{p.status='unavailable';delete p.steps;p.reason='PLAN_TEXT_LIMIT';p.questions={post_timing:'text'};},
   ]) {const bad=structuredClone(good);mutate(bad);expect(()=>parseJobPlanTextProjection(bad)).toThrow('PLAN_TEXT_METADATA_INVALID');}
 });

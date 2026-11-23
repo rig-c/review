@@ -9,6 +9,7 @@ import { PNG } from 'pngjs';
 import {
   JOB_API_V3_SCHEMA, JOB_PLAN_TEXT_FIELDS, JOB_PLAN_TEXT_SCHEMA,
   JOB_PARTS_ENUMERATOR_RANGE,
+  planGroundsExceedLimit,
 } from './job-contract.ts';
 import type {
   JobChestLandmarkValue, JobErrorCode, JobPublication, JobPublishedChestLandmark,
@@ -1022,6 +1023,26 @@ export function projectRetainedPlanText(retained: JobRetainedSourceV3): JobPlanT
       matched.set(step.id, matched.has(step.id) ? null : step);
   }
   if (plan.steps.some(step => !matched.get(step.id))) return unavailable('PLAN_TEXT_MAPPING_UNAVAILABLE');
+  const questions: Record<string, string | string[]> = {};
+  const interview = asPlainObject(project.interview);
+  if (interview) {
+    for (const [items] of recordInterviewCollections(interview)) {
+      for (const rawItem of Array.isArray(items) ? items : []) {
+        const item = asPlainObject(rawItem);
+        if (typeof item?.id !== 'string' || item.id.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(item.id) ||
+            Object.hasOwn(questions, item.id)) continue;
+        if (items === interview.waypoints) {
+          const prompts: string[] = [];
+          for (const rawPrompt of Array.isArray(item.prompts) ? item.prompts : []) {
+            const text = asPlainObject(rawPrompt)?.text;
+            if (typeof text === 'string' && text.trim()) prompts.push(text);
+          }
+          const legacy = typeof item.text === 'string' && item.text.trim() ? item.text : '';
+          questions[item.id] = prompts.length > 1 ? prompts : prompts[0] ?? legacy;
+        } else if (typeof item.text === 'string') questions[item.id] = item.text;
+      }
+    }
+  }
   const steps = plan.steps.map<JobPlanTextStep>(step => {
     const raw = matched.get(step.id)!;
     const fields: Omit<JobPlanTextStep, 'id' | 'hash' | 'issues'> = {};
@@ -1031,25 +1052,13 @@ export function projectRetainedPlanText(retained: JobRetainedSourceV3): JobPlanT
       if (!Object.hasOwn(raw, field)) issues.push({field, reason:'absent'});
       else if (field === 'rests_on') {
         if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) issues.push({field, reason:'invalid'});
-        else if (value.length > 4096) issues.push({field, reason:'limit'});
+        else if (planGroundsExceedLimit(value, questions)) issues.push({field, reason:'limit'});
         else fields.rests_on = value;
       } else if (typeof value === 'string') fields[field] = value;
       else issues.push({field, reason:'invalid'});
     }
     return {id:step.id, hash:step.hash, ...fields, issues};
   });
-  const questions: Record<string, string> = {};
-  const interview = asPlainObject(project.interview);
-  if (interview) {
-    for (const [items] of recordInterviewCollections(interview)) {
-      for (const rawItem of Array.isArray(items) ? items : []) {
-        const item = asPlainObject(rawItem);
-        if (typeof item?.id === 'string' && item.id.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(item.id) &&
-            typeof item.text === 'string' && !Object.hasOwn(questions, item.id))
-          questions[item.id] = item.text;
-      }
-    }
-  }
   const projection: JobPlanTextProjection = {schema:JOB_PLAN_TEXT_SCHEMA, record:identity, status:'projected', steps,
     ...(Object.keys(questions).length ? {questions} : {})};
   return Buffer.byteLength(JSON.stringify(projection)) > 512 * 1024 ? unavailable('PLAN_TEXT_LIMIT') : projection;
