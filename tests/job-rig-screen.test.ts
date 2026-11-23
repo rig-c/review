@@ -301,19 +301,66 @@ test('#798 direction comments restore cannot override the inspection draft verdi
  expect(applyScope.session.status).toBe('changes-requested');expect(selector.value).toBe(applyScope.session.status);
 });
 
-test('#798 direction reuses the Comments input gate without changing the rig inspector presentation',async()=>{
+test('#798 and #1143 direction share the frame range gate with feedback shortcuts while preserving the rig inspector',async()=>{
  const main=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
- const start=main.indexOf('function showRecordComments('),end=main.indexOf('/** Publications without a picture',start);
+ const helpers=main.indexOf('function proposalButtons(');
+ const start=helpers<0?main.indexOf('function showRecordComments('):helpers,end=main.indexOf('/** Publications without a picture',start);
  const code=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(start,end));
- for(const preserveInspector of [true,false]){
+ for(const [preserveInspector,axisDisabled] of [[true,true],[true,false],[false,true]]){
+  const frameRange={id:'',hidden:false};
   const correction={id:'correction-controls',hidden:false},fileButton={id:'add-proposal',hidden:false},comments={id:'comments-list-host',hidden:false};
   const panel={children:[] as {hidden:boolean;classList:{contains(value:string):boolean}}[],style:{display:'none'}},collapse={disabled:true};
-  const scope={el:()=>({children:[correction,fileButton,comments]}),rigInspector:{comments:{panel},collapse},setSourceAttribute(){}};
+  const shortcuts=['pose','timing','audio','mesh','contour','chest'].map(proposal=>({dataset:{proposal},hidden:false,disabled:false}));
+  const angle={dataset:{proposal:'angle'},hidden:false,disabled:false,title:'','aria-description':''};
+  const previousShortcut={dataset:{proposal:'pose'},hidden:false};
+  const axisState={textContent:axisDisabled?'No inspection axes supplied':'1 axes'};
+  const elements={
+   'axis-state':axisState,'proposal-panel':{children:[frameRange,correction,fileButton,comments]},
+   'motion-tools':{querySelectorAll:()=>[...shortcuts.slice(0,3),angle]},
+   'modeling-tools':{querySelectorAll:()=>shortcuts.slice(3)},
+  };
+  const scope={el:(id:keyof typeof elements)=>elements[id],
+   rigInspector:{comments:{panel},collapse},document:{querySelectorAll:()=>[...shortcuts,angle,previousShortcut]},input:()=>({disabled:axisDisabled}),
+   sourceTextContent:(node:typeof axisState)=>node.textContent,
+   setSourceAttribute(node:typeof angle,attribute:'title'|'aria-description',value:string){node[attribute]=value;}};
   new Function('scope','preserveInspector',`with(scope){${code};showRecordComments(preserveInspector);}`)(scope,preserveInspector);
-  expect(correction.hidden).toBe(true);expect(fileButton.hidden).toBe(true);expect(comments.hidden).toBe(false);
+  expect(frameRange.hidden).toBe(true);expect(correction.hidden).toBe(true);expect(fileButton.hidden).toBe(true);expect(comments.hidden).toBe(false);
+  expect(shortcuts.map(item=>item.hidden)).toEqual(shortcuts.map(()=>preserveInspector));
+  expect(previousShortcut.hidden).toBe(false);
+  expect(angle.hidden).toBe(false);expect(angle.disabled).toBe(preserveInspector&&axisDisabled);
+  const reason=preserveInspector&&axisDisabled?axisState.textContent:'';
+  expect(angle.title).toBe(reason);expect(angle['aria-description']).toBe(reason);
   expect(panel.style.display).toBe(preserveInspector?'none':'block');expect(collapse.disabled).toBe(preserveInspector);
  }
  expect(main).toContain('if(host?.direction)showRecordComments(true);else if(host?.record&&!data.manifest.model)showRecordComments();');
+});
+
+test('#1143 proposal clicks follow current button availability and preserve angle and frame feedback actions',async()=>{
+ const main=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
+ const start=main.indexOf('function propose('),end=main.indexOf('function download(',start);
+ const bindStart=main.indexOf('  for (const item of ',main.indexOf('function bind()'));
+ const bindEnd=main.indexOf("  select('reference-select').onchange",bindStart);
+ const code=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(start,end)+main.slice(bindStart,bindEnd));
+ const bindProposals=new Function('scope',`with(scope){${code}}`);
+ for(const direction of [false,true]){
+  const calls:string[]=[],target={value:''},frame={focus:()=>calls.push('frame range')},axis={disabled:true};
+  const shortcut=(proposal:string,hidden=false,disabled=false)=>({dataset:{proposal},hidden,disabled,onclick:()=>{throw Error('missing proposal binding');}});
+  const angle=shortcut('angle',false,direction),pose=shortcut('pose',direction);
+  const buttons=()=>[angle,pose];
+  const scope={host:direction?{direction:{}}:null,proposalButtons:buttons,document:{querySelectorAll:buttons},data:{manifest:{id:'rig'}},
+   input:(id:string)=>id==='axis-value'?axis:id==='feedback-start'?frame:target,select:()=>target,
+   showInspector:(mode:string)=>calls.push(mode),chooseAxis:()=>calls.push('axis'),
+   renderFeedbackTargets:()=>calls.push('targets'),message:()=>calls.push('message')};
+  bindProposals(scope);
+  const feedback=['targets','feedback','frame range','message'];
+  angle.onclick();expect(calls.splice(0)).toEqual(direction?[]:feedback);
+  pose.onclick();expect(calls.splice(0)).toEqual(direction?[]:feedback);
+  axis.disabled=false;angle.disabled=false;
+  angle.onclick();expect(calls.splice(0)).toEqual(['playback','axis']);
+  axis.disabled=true;pose.hidden=false;
+  angle.onclick();expect(calls.splice(0)).toEqual(feedback);
+  pose.onclick();expect(calls).toEqual(feedback);
+ }
 });
 
 test('#992 record and verdict comment drafts survive reload, same-source republish, two-tab merge/delete, legacy fallback, and report changed-source drops',async()=>{
