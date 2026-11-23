@@ -1188,7 +1188,9 @@ function bind(): void {
   // A discarded local draft restores the form after its button's own handler; re-read the tool then.
   for (const id of ['draft-recovery', 'review-draft-recovery']) el(id).addEventListener('click', () => { renderChest(); restoreEnvironment(); physicsPanel?.restore(); bonesPanel?.restore(); cutsPanel?.restore(); clothPanel?.restore(); idlePanel?.restore(); rigFieldsPanel?.restore(); syncCorrectionStage(); });
   for (const id of ['strip-scope', 'strip-reference', 'strip-format']) select(id).onchange = () => stripStatus('Selection changed. Check the ranges, animation and reference video before downloading.');
-  for (const item of document.querySelectorAll<HTMLButtonElement>('[data-proposal]')) item.onclick = () => propose(item.dataset.proposal ?? '');
+  for (const item of proposalButtons()) item.onclick = () => {
+    if (!item.hidden && !item.disabled) propose(item.dataset.proposal ?? '');
+  };
   select('reference-select').onchange = () => { void showReference(select('reference-select').value); };
   select('person-select').onchange = () => { selectedPerson = select('person-select').value; lastPoseFrame = -1; renderSequenceFrame(); };
   select('animation-select').onchange = () => {
@@ -1583,10 +1585,23 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
 
  document.body.dataset.ready='true';
 }
+function proposalButtons():HTMLButtonElement[] {
+ return ['motion-tools','modeling-tools'].flatMap(id=>[...el(id).querySelectorAll<HTMLButtonElement>('[data-proposal]')]);
+}
 /** Use the existing Comments-only presentation for subjects without rig capabilities. */
 function showRecordComments(preserveInspector=false):void {
  for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
- if(preserveInspector)return;
+ if(preserveInspector){
+  for(const item of proposalButtons()){
+   if(item.dataset.proposal!=='angle'){item.hidden=true;continue;}
+   item.disabled=input('axis-value').disabled;
+   if(item.disabled){
+    const reason=sourceTextContent(el('axis-state'));
+    setSourceAttribute(item,'title',reason);setSourceAttribute(item,'aria-description',reason);
+   }
+  }
+  return;
+ }
  for(const child of rigInspector.comments.panel.children)(child as HTMLElement).hidden=child!==el('proposal-panel')&&child!==el('comments-list-host')&&!child.classList.contains('review-dialog-header');
  rigInspector.comments.panel.style.display='block';
  rigInspector.collapse.disabled=false;setSourceAttribute(rigInspector.collapse,'title','');
