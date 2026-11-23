@@ -1576,6 +1576,7 @@ export async function prepareJobSource(options: {
   const context: JobPublishedContext = options.readPublished && record ? await options.readPublished({
     root: root.path, record, result: request.result,
   }) : { selector: request.result.selector, plan: null, parts: null, subjects: [], partIds: [], files: [] };
+  if (Object.hasOwn(context, 'directionReview')) throw new JobError('JOB_SOURCE_INVALID');
   if (project && !options.readPublished) {
     throw new JobError('JOB_SOURCE_UNRETAINABLE', 'CREATE_PUBLICATION_CONTRACT_UNAVAILABLE');
   }
@@ -1749,15 +1750,18 @@ export function assertStoredCheckpointEvidence(retained: JobRetainedSourceV3): v
     if ('chestLandmarks' in retained) throw new JobError('JOB_SOURCE_MISMATCH');
     const parsed = parseRecordSource(retained.source);
     if (!hasEvidence && !('planPicture' in retained.source) && !('checkpointEvidence' in retained.context) &&
-        !('planPicture' in retained.context) && !('previousDraft' in retained.context)) return;
+        !('planPicture' in retained.context) && !('previousDraft' in retained.context) &&
+        !('directionReview' in retained.source) && !('directionReview' in retained.context)) return;
     const context = parseRecordPublishedContext(retained.context, retained.result, retained.record);
     if (requestDigest(parsed.checkpointEvidence ?? null) !== requestDigest(context.checkpointEvidence ?? null) ||
         requestDigest(parsed.planPicture ?? null) !== requestDigest(context.planPicture ?? null) ||
+        requestDigest(parsed.directionReview ?? null) !== requestDigest(context.directionReview ?? null) ||
         requestDigest(parsed.subjects) !== requestDigest(retained.subjects) ||
         requestDigest(parsed.files) !== requestDigest(retained.seals)) throw new JobError('JOB_SOURCE_MISMATCH');
     return;
   }
   const source = retained.source;
+  if (Object.hasOwn(source, 'directionReview')) throw new JobError('JOB_SOURCE_INVALID');
   const hasPreviousDraft = 'previousDraft' in source;
   const hasChest = 'chestLandmarks' in retained;
   if (!hasEvidence && !hasPreviousDraft && !hasChest && !('checkpointEvidencePackageHash' in retained)) return;

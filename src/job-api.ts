@@ -719,12 +719,28 @@ type ParsedRecordPayload =
   | {
       readonly kind: 'plan';
       readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
+      readonly directionReview?: PlanContext['directionReview'];
       readonly planPicture?: JobFileIdentity;
       readonly inputs: readonly JobFileIdentity[];
       readonly files: readonly JobFileIdentity[];
       readonly plan: JobPlanIdentity;
       readonly subjects: readonly RecordPlanSubject[];
     };
+
+function directionReviewFields(holder: object, subjects: readonly RecordPlanSubject[]): Pick<PlanContext, 'directionReview'> {
+  if (!Object.hasOwn(holder, 'directionReview')) return {};
+  const code = 'JOB_SOURCE_INVALID';
+  if (!subjects.some(subject => subject.kind === 'signoff' && subject.stage === 'direction-review')) throw new JobError(code);
+  const {postVersion, verdictActId, take, camera} = exactObject(
+    (holder as Record<string, unknown>).directionReview, ['postVersion', 'verdictActId', 'take', 'camera'], code,
+  );
+  const {duration, loop} = exactObject(take, ['duration', 'loop'], code);
+  if (typeof postVersion !== 'number' || !Number.isInteger(postVersion) || postVersion < 1 ||
+      (verdictActId !== null && typeof verdictActId !== 'string') ||
+      typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0 || typeof loop !== 'boolean' ||
+      (camera !== 'composed' && camera !== 'fixed' && camera !== 'moving')) throw new JobError(code);
+  return {directionReview: {postVersion, verdictActId, take: {duration, loop}, camera}};
+}
 
 function parseRecordClosureAndSubjects(
   rawInputs: unknown,
@@ -735,6 +751,8 @@ function parseRecordClosureAndSubjects(
   checkedRecord?: ProjectRecord,
   evidenceHolder: object = {},
 ): ParsedRecordPayload {
+  const hasDirectionReview = Object.hasOwn(evidenceHolder, 'directionReview');
+  if (hasDirectionReview && (selection.kind !== 'plan' || rawPlan === null)) throw new JobError('JOB_SOURCE_INVALID');
   const { inputs, files } = parseFileClosure(rawInputs, rawFiles, checkedRecord, 'JOB_SOURCE_MISMATCH');
   if (selection.kind === 'option-set') {
     if (rawPlan !== null || 'checkpointEvidence' in evidenceHolder || 'planPicture' in evidenceHolder) throw new JobError('JOB_SOURCE_MISMATCH');
@@ -743,9 +761,9 @@ function parseRecordClosureAndSubjects(
   }
   if (rawPlan === null) throw new JobError('JOB_SOURCE_MISMATCH');
   const { plan, stepIds } = parsePlanIdentity(rawPlan, 'JOB_SOURCE_MISMATCH');
-  const subjects = parsePlanSubjects(rawSubjects, stepIds, 'JOB_SOURCE_MISMATCH');
+  const subjects = parsePlanSubjects(rawSubjects, stepIds, hasDirectionReview ? 'JOB_SOURCE_INVALID' : 'JOB_SOURCE_MISMATCH');
   return { kind: 'plan', inputs, files, plan, subjects, ...checkpointEvidenceFields(evidenceHolder, plan, subjects, files),
-    ...planPictureFields(evidenceHolder, plan, files) };
+    ...planPictureFields(evidenceHolder, plan, files), ...directionReviewFields(evidenceHolder, subjects) };
 }
 
 export function parseRecordPublishedContext(
@@ -771,7 +789,7 @@ export function parseRecordPublishedContext(
   const selection = parseRecordResult(result);
   const checkedRecord = record === undefined ? undefined : parseProjectRecord(record, 'JOB_SOURCE_MISMATCH');
   if (value && typeof value === 'object') previousDraftFields(value, null);
-  const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH', ['checkpointEvidence', 'planPicture']);
+  const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH', ['checkpointEvidence', 'planPicture', 'directionReview']);
   const label = asCode(() => jobText(item.label), 'JOB_SOURCE_MISMATCH');
   const parts = parseRecordPartsIdentity(item.parts, 'JOB_SOURCE_MISMATCH');
   const body = parseRecordClosureAndSubjects(
@@ -788,7 +806,8 @@ export function parseRecordPublishedContext(
   }
   return { label, parts, inputs: body.inputs, files: body.files, plan: body.plan, subjects: body.subjects,
     ...(body.checkpointEvidence ? {checkpointEvidence: body.checkpointEvidence} : {}),
-    ...(body.planPicture ? {planPicture: body.planPicture} : {}) };
+    ...(body.planPicture ? {planPicture: body.planPicture} : {}),
+    ...(body.directionReview ? {directionReview: body.directionReview} : {}) };
 }
 
 export function assertEqualRecordContexts(
@@ -851,6 +870,7 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
         'checkpointEvidence',
         'optionSets',
         'planPicture',
+        'directionReview',
       ]),
     'JOB_SOURCE_MISMATCH',
   );
@@ -868,6 +888,8 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
     throw new JobError('JOB_SOURCE_MISMATCH');
   }
   const selection = asCode(() => parseRecordResult(item.selection), 'JOB_SOURCE_MISMATCH');
+  const hasDirectionReview = Object.hasOwn(item, 'directionReview');
+  if (hasDirectionReview && selection.kind !== 'plan') throw new JobError('JOB_SOURCE_INVALID');
   if (item.subject !== undefined && item.subject !== selection.kind) {
     throw new JobError('JOB_SOURCE_MISMATCH');
   }
@@ -912,7 +934,8 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
     throw new JobError('JOB_SOURCE_MISMATCH');
   }
   const { plan, stepIds } = parsePlanIdentity(item.plan, 'JOB_SOURCE_MISMATCH');
-  const subjects = parsePlanSubjects(item.subjects, stepIds, 'JOB_SOURCE_MISMATCH');
+  const subjects = parsePlanSubjects(item.subjects, stepIds, hasDirectionReview ? 'JOB_SOURCE_INVALID' : 'JOB_SOURCE_MISMATCH');
+  directionReviewFields(item, subjects);
   return JSON.stringify({
     schema: JOB_RECORD_SOURCE_SCHEMA,
     record: { path: 'project.json', sha256: record.sha256 },
@@ -1045,6 +1068,7 @@ function assembleRecordSource(
     optionSetFile: null,
     plan: body.plan,
     subjects: body.subjects,
+    ...(body.directionReview ? {directionReview: body.directionReview} : {}),
   };
 }
 
@@ -1089,6 +1113,7 @@ export function buildRecordSource(input: {
           subjects: context.subjects,
           ...(context.checkpointEvidence ? {checkpointEvidence: context.checkpointEvidence} : {}),
           ...(context.planPicture ? {planPicture: context.planPicture} : {}),
+          ...(context.directionReview ? {directionReview: context.directionReview} : {}),
         };
   const sets = selection.kind === 'option-set' ? selection.sets : undefined;
   if ((sets === undefined) !== (input.optionSetFiles === undefined)) throw new JobError('JOB_SOURCE_MISMATCH');
@@ -1116,7 +1141,7 @@ export function parseRecordSource(value: unknown): RecordSource {
       'subjects',
     ],
     'JOB_SOURCE_MISMATCH',
-    ['checkpointEvidence', 'optionSets', 'planPicture'],
+    ['checkpointEvidence', 'optionSets', 'planPicture', 'directionReview'],
   );
   const record = parseProjectRecord(item.record, 'JOB_SOURCE_MISMATCH');
   const projectHash = asCode(() => jobSha(item.projectHash), 'JOB_SOURCE_MISMATCH');
@@ -1273,6 +1298,7 @@ export function parseRecordAct(value: unknown): RecordAct {
   const at = asCode(() => jobText(item.at, 128), 'JOB_ACT_INVALID');
   if (Number.isNaN(Date.parse(at))) throw new JobError('JOB_ACT_INVALID');
   const received = publicationFormOfActSource(item.source);
+  if (isRecordSource(received.raw) && Object.hasOwn(received.raw, 'directionReview')) throw new JobError('JOB_ACT_INVALID');
   const published = asCode(() => parseRecordSource(received.raw), 'JOB_ACT_INVALID');
   const source = received.set ? recordActSource(published, received.set) : published;
 
@@ -1544,6 +1570,7 @@ function parseCommentContext(raw: unknown, source?: SourceV3 | string): JobComme
 
 function commentsSource(raw: unknown): Exclude<SourceV3, OptionSource> {
   if (isRecordSource(raw)) {
+    if (Object.hasOwn(raw, 'directionReview')) throw new JobError('JOB_ACT_INVALID');
     const record = parseRecordSource(raw);
     if (record.subject !== 'plan') throw new JobError('JOB_ACT_INVALID');
     return record;

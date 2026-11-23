@@ -871,6 +871,7 @@ export const JOB_ERROR_CODES = [
   'JOB_FREEZE_REQUIRED',
   'JOB_RECORD_INCOMPLETE',
   'JOB_RECORD_MOVED',
+  'JOB_SOURCE_INVALID',
   'JOB_SOURCE_MISMATCH',
   'JOB_SOURCE_UNRETAINABLE',
   'JOB_ROOT_REPLACED',
@@ -1197,6 +1198,7 @@ export interface RecordContextBase {
 
 export type OptionContext = RecordContextBase & {
   readonly checkpointEvidence?: never;
+  readonly directionReview?: never;
   readonly planPicture?: never;
   readonly plan: null;
   /** One `interview-picks` subject per published set, in set order. */
@@ -1205,6 +1207,13 @@ export type OptionContext = RecordContextBase & {
 
 export type PlanContext = RecordContextBase & {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
+  /** #1088: display only for a declared direction-review signoff. */
+  readonly directionReview?: {
+    readonly postVersion: number;
+    readonly verdictActId: string | null;
+    readonly take: { readonly duration: number; readonly loop: boolean };
+    readonly camera: 'composed' | 'fixed' | 'moving';
+  };
   /** #983: the sealed raster (an entry of `files`) the owner signs the plan against; drawn first. */
   readonly planPicture?: JobFileIdentity;
   readonly plan: JobPlanIdentity;
@@ -1251,6 +1260,7 @@ export interface RecordSourceBase {
 
 export type OptionSource = RecordSourceBase & {
   readonly checkpointEvidence?: never;
+  readonly directionReview?: never;
   readonly planPicture?: never;
   readonly subject: 'option-set';
   readonly selection: RecordOptionResult;
@@ -1273,6 +1283,8 @@ export interface RecordOptionSetBinding {
 
 export type PlanSource = RecordSourceBase & {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
+  /** #1088: excluded from the source digest and all acts. */
+  readonly directionReview?: PlanContext['directionReview'];
   /** #983: equal to an entry of `files`; bound into `sourceHash` only when present. */
   readonly planPicture?: JobFileIdentity;
   readonly subject: 'plan';
