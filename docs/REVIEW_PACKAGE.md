@@ -1064,7 +1064,7 @@ source hash and loads its sets through the published runtime. Scratch builds
 use their own model and do not inherit the inspected build's sidecar. Compare
 and standalone parts retain their existing inspection surfaces.
 
-The standing live-job contract ([Review #484](https://github.com/rig-c/review/issues/484)) retains `source.direction` and the `direction-review` verdict stage unchanged. [Review #797](https://github.com/rig-c/review/issues/797) wires plated take playback through the shared viewport and publication identity, superseding the playback core of #482/#483. [Review #373](https://github.com/rig-c/review/issues/373) remains parked.
+The standing live-job contract ([Review #484](https://github.com/rig-c/review/issues/484)) retains `source.direction` and the `direction-review` verdict stage unchanged. [Review #797](https://github.com/rig-c/review/issues/797) wires plated take playback through the shared viewport and publication identity, superseding the playback core of #482/#483. [Review #373](https://github.com/rig-c/review/issues/373) closed as not planned: the direction review covers authored camera work, and `CAMERA_APPLY_UNSUPPORTED` stays the refusal.
 
 ### Scene interview records
 
