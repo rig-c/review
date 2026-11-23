@@ -7,6 +7,12 @@ const object=(v:unknown):Record<string,any>|null=>v!==null&&typeof v==='object'&
 const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v);
 const clamp=(v:number,min:number,max:number)=>Math.max(min,Math.min(max,v))||0;
 const channels:Record<string,keyof BoneLocals>={rotate:'rotation',x:'x',y:'y',scaleX:'scaleX',scaleY:'scaleY',shearY:'shearY'};
+// Parts contract: docs/STABILITY.md:1188 (stable dial names) and docs/AUTHORING.md:7805 (character ID prefix).
+function unprefixedTurnName(name:unknown):string|undefined {
+ if(typeof name!=='string')return undefined;
+ const separator=name.indexOf(':');
+ return separator>0?name.slice(separator+1):name;
+}
 /** `body_turn` is the producer's compiled body slider animation, including a custom turn.body.slider bone.
  * This is compiled metadata only; no producer config or opaque Play document is read. */
 export function discoverTurnDials(model:unknown,durations?:readonly {name:string;duration:number}[]):TurnDial[] {
@@ -15,7 +21,8 @@ export function discoverTurnDials(model:unknown,durations?:readonly {name:string
  const result:TurnDial[]=[];
  for(const axis of ['yaw','pitch','body'] as const){
   const canonical=axis==='body'?'body_yaw_dial':axis+'_dial';
-  const candidates=m.constraints.filter((c:any)=>c&&c.kind==='slider'&&typeof c.name==='string'&&names.has(c.bone)&&(c.bone===canonical||axis==='body'&&c.animation==='body_turn'));
+  const candidates=m.constraints.filter((c:any)=>c&&c.kind==='slider'&&typeof c.name==='string'&&names.has(c.bone)&&
+   (unprefixedTurnName(c.bone)===canonical||axis==='body'&&unprefixedTurnName(c.animation)==='body_turn'));
   if(candidates.length!==1)continue;
   const c=candidates[0],duration=animations.find((a:any)=>a.name===c.animation)?.duration,from=c.from??0,to=c.to??0,scale=c.scale??1,channel=channels[c.property??'rotate'];
   if(!c.local||c.loop||!channel||![duration,from,to,scale].every(finite)||duration<=0||scale===0)continue;
@@ -23,7 +30,7 @@ export function discoverTurnDials(model:unknown,durations?:readonly {name:string
   const a=from-to/scale,b=from+(duration-to)/scale;
   if(!finite(a)||!finite(b)||a===b||Math.min(a,b)>0||Math.max(a,b)<0)continue;
   if(result.some(d=>d.bone===c.bone&&d.channel===channel))continue;
-  result.push({axis,bone:c.bone,slider:c.name,channel,min:Math.min(a,b),max:Math.max(a,b),provenance:`model slider ${c.name} → bone ${c.bone}, ${c.property??'rotate'}, animation ${c.animation}${c.bone!==canonical?' (compiled body_turn binding)':''}`});
+  result.push({axis,bone:c.bone,slider:c.name,channel,min:Math.min(a,b),max:Math.max(a,b),provenance:`model slider ${c.name} → bone ${c.bone}, ${c.property??'rotate'}, animation ${c.animation}${unprefixedTurnName(c.bone)!==canonical?' (compiled body_turn binding)':''}`});
  }return result;
 }
 export function sharedTurnDials(a:readonly TurnDial[],b:readonly TurnDial[]):TurnDial[]{
