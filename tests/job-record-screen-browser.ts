@@ -12,7 +12,6 @@ import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {recordViewportControls} from './helpers/record-viewport-controls.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
-import {ownedMacHeadlessShell} from './helpers/owned-chromium.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {optionSetsJobFixture,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_RGB} from './helpers/job-record-fixture.ts';
@@ -1202,8 +1201,6 @@ if(Bun.argv.includes('--serve')){
 }
 
 try{
- const shell=process.env.CHROME_BIN?undefined:ownedMacHeadlessShell();
- if(shell)process.env.CHROME_BIN=shell;
  // Reuse the shared launcher's browser discovery and process policy without a suite-local wrapper.
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
