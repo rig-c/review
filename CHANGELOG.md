@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.18.1
+
+Three record-screen fixes that the owner passed on their working screens. There is no export, act or contract change.
+
+### Fixed
+
+* A record question shows its text without the inspection-only lines. A record page drops the no-parts line and the path and sha256 line, and the navigation labels the item as the question (#1120).
+* A plan step's grounds list each waypoint prompt in its own row, in source order and verbatim. A waypoint with no usable prompt falls back to its legacy text, then to the localized absence label. Grounds resolve a known interview id before a plan step. The existing 4,096-row limit counts the expanded rows (#1129, closes #1123).
+* A record or interview stage with no picture keeps the five view controls (Zoom in, Zoom out, Fit, 1:1, View switch) in place and disabled. A question image or checkpoint pair enables them while it is mounted, and the disabled state returns when it is released (#1130, closes #1128).
+
+### Changed
+
+* Hidden parts checkpoint controls are left untouched when the parts screen opens (#1121).
+
 ## 4.18.0
 
 A direction-review sign-off now shows what the owner signs: the post version, the accepted direction verdict and the direction summary. It no longer lists the whole plan.
