@@ -1568,6 +1568,7 @@ export interface JobFormDependencies {
             }
             questionSet=jobQuestionSet(ask,prepared,t);
             interviewForm=createInterviewForm({question,id:'interview-answer-'+ask.askId,node,form,fieldset:fields,source,mainView:true,
+                presentation:prepared.metadata.recordSource?'record':'inspection',
                 images:question.images.map(image=>({name:image.name,src:jobPublicationRoutes(prepared.display,location.origin).instance(image.url),...(image.path&&image.sha256?{path:image.path,sha256:image.sha256}:{})})),answered:ask.status==='answered',
                 ...questionSet?.list});
             if (prepared.metadata.recordSource && (question.missingPicture || !question.images.length) && !prepared.metadata.manifest?.model) {

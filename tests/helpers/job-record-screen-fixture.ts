@@ -115,7 +115,7 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
 /** The real job page over a real session. One publication carries `count` question sets and each set
  * has its own pending ask. `answered` seeds that many unsent local drafts (the recommended pick of every prompt), so
  * the page opens with the same partly answered list the owner ruled on. */
-export async function optionSetsJobFixture(options:{count:number;answered?:number;painting?:Buffer;boundRig?:boolean}){
+export async function optionSetsJobFixture(options:Parameters<typeof createSyntheticOptionSetsRecordWorkspace>[1]&{answered?:number}){
  const scratch=await mkdtemp(join(tmpdir(),'review-1004-')),root=join(scratch,'input');await mkdir(root);
  const workspace=createSyntheticOptionSetsRecordWorkspace(root,options);
  const reader=createSyntheticRecordReader({onOption:()=>structuredClone(workspace.context)});
