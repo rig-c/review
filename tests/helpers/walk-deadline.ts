@@ -1,5 +1,9 @@
 import { appendFileSync, closeSync, fsyncSync, openSync } from 'node:fs';
 
+// #1152: local macOS remesh runs both input and revision checks before the
+// browser can reload. Those checks saturated the old 30 s Apply budget under load.
+export const PRODUCER_APPLY_DEADLINE_MS = process.platform === 'darwin' ? 60_000 : 30_000;
+
 export class WalkDeadlineError extends Error {
   constructor(key: string, ms: number) {
     super(`WALK_DEADLINE: ${key} (${ms}ms)`);
