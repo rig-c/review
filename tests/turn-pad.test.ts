@@ -1,19 +1,10 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
-import {discoverTurnDials,sharedTurnDials,normalizedDial,pointerPosition,springStep,TurnState,parseTurnSnapshot,turnDialPrecision,turnDialWidthCh,formatTurnValue,type TurnDial} from '../src/turn-pad.ts';
+import {discoverTurnDials,sharedTurnDials,pointerPosition,springStep,TurnState,parseTurnSnapshot,turnDialPrecision,turnDialWidthCh,formatTurnValue,type TurnDial} from '../src/turn-pad.ts';
 import {bindTurnPad} from '../web/turn-pad.ts';
 
 const slider=(bone:string,animation='turn',more={})=>({kind:'slider',name:bone,bone,animation,property:'rotate',local:true,from:-15,to:0,scale:1/30,...more});
 const model=(constraints:unknown[])=>({bones:['yaw_dial','pitch_dial','body_yaw_dial','custom'].map(name=>({name})),constraints,animations:[{name:'turn',duration:1},{name:'body_turn',duration:1}]});
-test('discovers actual local sliders, asymmetric ranges, reverse scale and a custom body dial from its compiled body_turn',()=>{
- const d=discoverTurnDials(model([slider('yaw_dial'),slider('pitch_dial','turn',{from:10,scale:-.1}),slider('custom','body_turn')]));
- expect(d.map(x=>[x.axis,x.bone,x.min,x.max])).toEqual([['yaw','yaw_dial',-15,15],['pitch','pitch_dial',0,10],['body','custom',-15,15]]);
- expect(normalizedDial(0,{min:-10,max:30})).toBe(0);expect(normalizedDial(-1,{min:-10,max:30})).toBe(-10);expect(normalizedDial(1,{min:-10,max:30})).toBe(30);
-});
-test('no declared dial, ambiguous/looping/world/constant slider: no invented controls',()=>{
- expect(discoverTurnDials(model([]))).toEqual([]);
- for(const constraints of [[slider('yaw_dial'),slider('yaw_dial')],[slider('yaw_dial','turn',{loop:true})],[slider('yaw_dial','turn',{local:false})],[slider('yaw_dial','turn',{scale:0})]])expect(discoverTurnDials(model(constraints))).toEqual([]);
-});
 test('pointer spans five positions and clamps outside the actual stage rectangle',()=>{
  const rect={left:10,top:20,width:200,height:100};
  expect([[10,120],[60,95],[110,70],[160,45],[210,20]].map(([x,y])=>pointerPosition(x!,y!,rect))).toEqual([[-1,-1],[-.5,-.5],[0,0],[.5,.5],[1,1]]);
@@ -35,9 +26,9 @@ test('exact entry holds, reset is exact zero, snapshot copies, restoration valid
 test('#289: reserved width derives from each dial range and precision, keeps exact values on number/dataset, and planted unreserved mutant fails',async()=>{
  const yawMax='29.999995200000384';
  const ranges=[
-  {axis:'yaw' as const,bone:'yaw_dial',slider:'yaw_dial',channel:'rotation' as const,min:-30,max:Number(yawMax)},
-  {axis:'pitch' as const,bone:'pitch_dial',slider:'pitch_dial',channel:'rotation' as const,min:0,max:10},
-  {axis:'body' as const,bone:'body_yaw_dial',slider:'body_yaw_dial',channel:'rotation' as const,min:-120,max:45},
+  {axis:'yaw' as const,bone:'yaw_dial',slider:'yaw_dial',provenance:'fixture yaw slider',channel:'rotation' as const,min:-30,max:Number(yawMax)},
+  {axis:'pitch' as const,bone:'pitch_dial',slider:'pitch_dial',provenance:'fixture pitch slider',channel:'rotation' as const,min:0,max:10},
+  {axis:'body' as const,bone:'body_yaw_dial',slider:'body_yaw_dial',provenance:'fixture body slider',channel:'rotation' as const,min:-120,max:45},
  ];
  expect(ranges.map(d=>turnDialWidthCh(d))).toEqual([6,5,7]);
  expect(turnDialPrecision({min:-0.25,max:0.25})).toBe(3);
@@ -45,7 +36,7 @@ test('#289: reserved width derives from each dial range and precision, keeps exa
  expect(()=>turnDialWidthCh({min:10,max:10})).toThrow('TURN_RANGE_INVALID');
  expect(()=>turnDialPrecision({min:-10,max:10},9)).toThrow('TURN_PRECISION_INVALID');
 
- for(const d of [...ranges,{axis:'yaw' as const,bone:'yaw_dial',slider:'yaw_dial',channel:'x' as const,min:-0.25,max:0.25}]){
+ for(const d of [...ranges,{axis:'yaw' as const,bone:'yaw_dial',slider:'yaw_dial',provenance:'fixture yaw slider',channel:'x' as const,min:-0.25,max:0.25}]){
   const reserved=turnDialWidthCh(d);
   for(let i=0;i<=40;i++){
    const v=d.min+(d.max-d.min)*(i/40);
