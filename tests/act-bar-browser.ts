@@ -15,6 +15,8 @@ import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 const out=Bun.argv[Bun.argv.indexOf('--out')+1]??'artifacts/act-bar';await mkdir(out,{recursive:true});
 const observations:unknown[]=[],failures:string[]=[];
 const flashOnly=Bun.argv.includes('--flash-only');
+const saveRetryOnly=Bun.argv.includes('--save-retry-only');
+type SaveRetrySnapshot={stateKind:string;stateText:string;stateTitle:string;messageText:string;messageError:boolean;messageVisible:boolean;saveDisabled:boolean};
 const sampleActBar=`(()=>{
  const samples=[];window.__actFlashSamples=samples;
  const visible=n=>!!n&&!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden'&&!n.closest('dialog:not([open])');
@@ -27,6 +29,7 @@ const sampleActBar=`(()=>{
 
 async function until(page:InputCdpSession,expression:string){const end=Date.now()+20000;while(Date.now()<end){if(await page.evaluate<boolean>(expression))return;await Bun.sleep(100);}throw Error('ACT_BAR_WAIT: '+expression);}
 for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','parts','signoff-model','signoff-record','checkpoint-pass','checkpoint-fail','interview','interview-rig','interview-parts','joined-interview','standalone'] as const){
+ if(saveRetryOnly&&!['rig','parts'].includes(mode))continue;
  const profile=await mkdtemp(join(tmpdir(),'review809-browser-'));let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
   let url:string,draftKey:string|undefined;
@@ -47,11 +50,14 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    const f=await recordScreenFixture(mode.startsWith('interview')?'interview-picks':mode==='signoff-record'?'signoff':'checkpoint',mode==='interview-rig'?true:mode==='interview-parts'?'parts':false);close=()=>f.close();url=f.ownerUrl;
   }
   const localized=new URL(url);localized.searchParams.set('lang',lang);url=localized.href;
-  let control:((method:string,params?:Record<string,unknown>)=>Promise<any>)|undefined;let held=0;
+  let control:((method:string,params?:Record<string,unknown>)=>Promise<any>)|undefined;let held=0,actSaveStep=0,heldActRequest:string|undefined;
   page=await launchCdpSession(profile,{browserArgs:['--force-device-scale-factor=2'],onEvent:async(event,send)=>{
    if(event.sessionId)control=(method,params)=>(send as any)(method,params,event.sessionId);
    if(event.method==='Fetch.requestPaused'&&control){
-    const cdp=control,request=event.params as {requestId:string};
+    const cdp=control,request=event.params as {requestId:string;request?:{url?:string}};
+    if(request.request?.url?.endsWith('/ui/acts')){
+     actSaveStep++;heldActRequest=request.requestId;return;
+    }
     const state=await cdp('Runtime.evaluate',{expression:`!!document.querySelector('#workspace-review-act')&&document.body.dataset.ready!=='true'`,returnByValue:true});
     if(state.result?.value){held++;await Bun.sleep(1000);}
     await cdp('Fetch.continueResponse',{requestId:request.requestId});
@@ -125,7 +131,48 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    }
   }
   if(['rig','direction','parts'].includes(mode)){
-   await click(page,'#save');
+   if(mode==='rig'||mode==='parts'){
+    const readSaveState=`(()=>{const s=document.getElementById('review-draft-state'),m=document.getElementById('review-message'),v=!!m&&!!m.getClientRects().length&&getComputedStyle(m).display!=='none'&&getComputedStyle(m).visibility!=='hidden';return {stateKind:s?.dataset.saveState??'',stateText:s?.textContent??'',stateTitle:s?.getAttribute('title')??'',messageText:m?.textContent??'',messageError:m?.classList.contains('error')??false,messageVisible:v,saveDisabled:document.getElementById('save')?.disabled??false};})()`;
+    await control('Fetch.enable',{patterns:[{urlPattern:'*ui/acts*',requestStage:'Request'}]});
+    const waitHeldAct=async()=>{const end=Date.now()+20000;while(Date.now()<end){if(heldActRequest)return heldActRequest;await Bun.sleep(50);}throw Error('ACT_BAR_WAIT: heldActRequest');};
+    const fulfillRefusal=async(requestId:string,code:string,status:number)=>{
+     heldActRequest=undefined;
+     await control!('Fetch.fulfillRequest',{requestId,responseCode:status,responseHeaders:[{name:'Content-Type',value:'application/json'}],
+      body:Buffer.from(JSON.stringify({ok:false,error:{code,message:code}})).toString('base64')});
+    };
+    const expectedSaving=lang==='ko'?'저장 중…':'Saving…';
+    await click(page,'#save');
+    const firstReq=await waitHeldAct();
+    const firstSaving=await page.evaluate<SaveRetrySnapshot>(readSaveState);
+    if(firstSaving.stateKind!=='saving'||firstSaving.stateText!==expectedSaving)
+     failures.push(`${mode}/${lang} first saving expected ${expectedSaving}, got ${firstSaving.stateKind}:${firstSaving.stateText}`);
+    await fulfillRefusal(firstReq,'JOB_ACT_INVALID',400);
+    await until(page,`!document.getElementById('save').disabled&&document.getElementById('review-draft-state')?.dataset.saveState==='failed'`);
+    const firstFailed=await page.evaluate<SaveRetrySnapshot>(readSaveState);
+    if(!firstFailed.messageError||!firstFailed.messageText||firstFailed.stateKind!=='failed'||firstFailed.stateText!==firstFailed.messageText||!firstFailed.stateTitle.startsWith('JOB_ACT_INVALID'))
+     failures.push(`${mode}/${lang} first failed state mismatch: ${JSON.stringify(firstFailed)}`);
+    await click(page,'#save');
+    const secondReq=await waitHeldAct();
+    const retrySaving=await page.evaluate<SaveRetrySnapshot>(readSaveState);
+    if(retrySaving.stateKind!=='saving'||retrySaving.stateText!==expectedSaving)
+     failures.push(`${mode}/${lang} retry saving expected ${expectedSaving}, got ${retrySaving.stateKind}:${retrySaving.stateText}`);
+    if(retrySaving.stateTitle!==''||retrySaving.messageError||retrySaving.messageText!==''||retrySaving.messageVisible)
+     failures.push(`${mode}/${lang} stale failure remained during retry: ${JSON.stringify(retrySaving)}`);
+    await fulfillRefusal(secondReq,'JOB_BODY_LIMIT',413);
+    await until(page,`!document.getElementById('save').disabled&&document.getElementById('review-draft-state')?.dataset.saveState==='failed'`);
+    const secondFailed=await page.evaluate<SaveRetrySnapshot>(readSaveState);
+    if(!secondFailed.messageError||!secondFailed.messageText||secondFailed.stateKind!=='failed'||secondFailed.stateText!==secondFailed.messageText||!secondFailed.stateTitle.startsWith('JOB_BODY_LIMIT')||secondFailed.messageText===firstFailed.messageText)
+     failures.push(`${mode}/${lang} second failed state mismatch: ${JSON.stringify(secondFailed)}`);
+    await click(page,'#save');
+    const thirdReq=await waitHeldAct();
+    const finalSaving=await page.evaluate<SaveRetrySnapshot>(readSaveState);
+    if(finalSaving.stateKind!=='saving'||finalSaving.stateText!==expectedSaving||finalSaving.messageError||finalSaving.messageText!=='')
+     failures.push(`${mode}/${lang} final retry saving mismatch: ${JSON.stringify(finalSaving)}`);
+    heldActRequest=undefined;
+    await control('Fetch.continueRequest',{requestId:thirdReq});
+   }else{
+    await click(page,'#save');
+   }
    await until(page,`document.querySelector('#save').hidden&&document.querySelector('#workspace-pending-ask').hidden`);
    const done=await page.evaluate<any>(`({question:document.querySelector('#workspace-ask-headline').textContent,primary:[...document.querySelectorAll('#workspace-review-act button.primary')].filter(n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])')).length})`);
    assert.equal(done.primary,0);

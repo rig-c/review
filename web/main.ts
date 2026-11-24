@@ -345,6 +345,7 @@ function markDirty(): void {
 }
 
 function updateSavedState(): void {
+  if (saving) { text('review-message', ''); el('review-message').classList?.toggle('error', false); }
   text('dirty', dirty ? 'Unsubmitted changes' : session.updatedAt ? 'Submitted' : 'Not submitted');
   el('dirty').classList.toggle('dirty', dirty);
   button('save').disabled = saving || draftConflict || !!readOnly || session.feedbackWarnings.length > 0;
@@ -1558,7 +1559,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
   if(saving||saveBlocked())return;
   if(partsSubject?.hasPendingComment()){if(!await partsSubject.commitDraft())return;}
   if(saving||saveBlocked())return;
-  saving=true;button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});renderDraftState();
+  saving=true;text('review-message','');el('review-message').classList?.toggle('error',false);button('save').disabled=true;state.setSaveState({kind:'saving',text:'Saving…'});renderDraftState();
   const frozen=structuredClone(issues),general=generalRows?.map(row=>row.summary);
   let submissionFailure:ReturnType<typeof jobSubmissionRefusal>|null=null,saveFailed=false;
   try{
