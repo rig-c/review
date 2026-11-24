@@ -165,6 +165,7 @@ const requestChanges=panelMake('button',{id:'request-changes',type:'button',hidd
 const requestChangesReason=panelMake('span',{id:'request-changes-reason',hidden:true});
 rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requestChangesReason,requestChanges);
 let pendingAnswers:readonly {kind:string;stage?:string}[]=[],answerSaved=false;
+let recordSaveStateShown=false;
 let jobProgress:JobProgressV3|null=null,progressTimer:ReturnType<typeof setInterval>|undefined;
 let askSentence='';
 let partsAnswerBlocked:()=>boolean=()=>false;
@@ -359,6 +360,16 @@ function updateSavedState(): void {
 /** C10: the act bar renders the latest local draft status; rig only classifies it. Nothing renders before the first status. */
 let liveIssueCount=()=>(session?.feedback.length??0)+(host?.verdictComments?.rows.length??0);
 function renderDraftState(): void {
+  const recordSubmission=host?.recordSubmission?.();
+  if(recordSubmission){
+    rigInspector.actBar.setSaveState(recordSubmission==='sending'?{kind:'saving',text:'Sending'}:{kind:'saved',text:'Submitted'});
+    recordSaveStateShown=true;
+    renderAnswerControls();return;
+  }
+  if(host?.recordSubmission&&recordSaveStateShown){
+    recordSaveStateShown=false;
+    rigInspector.actBar.setSaveState({kind:'unsaved',text:'Not submitted'});
+  }
   const live=host?.reviewState?.(liveIssueCount(),saving);
   renderAnswerControls();
   if (draftStatus === null && !live && !answerSaved && !dirty && !saving && !draftConflict && !actReadOnly && !session?.updatedAt) return;
@@ -1670,7 +1681,7 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
 const recordPanel=panelMake('section',{id:'job-record-asks',className:'workspace-interview-panel',hidden:true});
 recordPanel.tabIndex=-1;const recordTitle=panelMake('h2',{});recordPanel.append(panelMake('div',{className:'review-dialog-header'},recordTitle));
 const recordForms=()=>[...recordPanel.querySelectorAll<HTMLFormElement>('form[data-job-ask]')];
-viewDisposers.push(()=>{for(const form of recordForms())form.remove();recordPanel.hidden=true;});
+viewDisposers.push(()=>{for(const form of recordForms()){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}recordPanel.hidden=true;});
 let unregisterQuestion:(()=>void)|null=null;
 let activeInterviewImages:readonly {name:string;src:string;path?:string;sha256?:string}[]|null=null;
 let activeInterviewImage:{name:string;src:string;path?:string;sha256?:string}|null=null;
@@ -2021,7 +2032,12 @@ function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
  for(const form of forms){
   if(questionFormBindings.has(form))continue;questionFormBindings.add(form);
   form.addEventListener('submit',event=>{if(draftConflict||pendingAnswers.some(subject=>subject.kind.endsWith('verdict'))){event.preventDefault();event.stopImmediatePropagation();}},true);
-  form.addEventListener('job-answer-saved',()=>{answerSaved=true;renderDraftState();},{once:true});
+  if(form.dataset.interviewMain!==undefined){
+   form.addEventListener('job-answer-saved',()=>{answerSaved=true;renderDraftState();},{once:true});
+  }else{
+   form.addEventListener('job-answer-sending',renderDraftState);
+   form.addEventListener('job-answer-failed',renderDraftState);
+  }
  }
  const questionTabForms=forms.filter(form=>form.dataset.interviewMain!==undefined);
  for(const form of questionForms)if(!questionTabForms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
@@ -2077,6 +2093,7 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  pendingAnswers=subjects;
  if(host?.checkpointPair)syncCheckpointPair();
  if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
+ if(host?.recordSubmission?.()==='submitted')firstPublicationPrompt=false;
  renderAskHeadline(labels.join(' · ')||(firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
  if(subjects.length)firstPublicationPrompt=false;
  renderDraftState();
@@ -2084,7 +2101,7 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
 function syncJobActRow(subjects=pendingAnswers):void {
  const notice=el('review-message');
  const refusal=notice.classList.contains('error')&&!!notice.textContent?.trim();
- rigInspector.act.hidden=!subjects.length&&!firstPublicationPrompt&&!jobProgress&&!refusal;
+ rigInspector.act.hidden=!subjects.length&&!firstPublicationPrompt&&!jobProgress&&!refusal&&!host?.recordSubmission?.();
  rigInspector.syncActRow?.();
 }
 function setJobProgress(value:JobProgressV3|null):void {
@@ -2103,7 +2120,7 @@ function renderAskHeadline(sentence=askSentence):void {
  askSentence=sentence;
  stopProgressTimer();
  askHeadline.hidden=false;
- const progress=pendingAnswers.length ? null : jobProgress;
+ const progress=pendingAnswers.length||host?.recordSubmission?.()==='submitted' ? null : jobProgress;
  if(!progress){
   askHeadline.removeAttribute('translate');
   askHeadline.style?.removeProperty('white-space');

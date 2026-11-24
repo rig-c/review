@@ -1,5 +1,5 @@
 import {checkpointEvidencePair} from '../src/checkpoint-evidence-packet.ts';
-import {formFor, jobCheckpointContext, jobJson, jobPublicationRoutes, jobSourceDraftId, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection} from './job-session.ts';
+import {formFor, jobCheckpointContext, jobJson, jobPublicationRoutes, jobSourceDraftId, matchesJobRecordAct, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection, type JobWindowAsk} from './job-session.ts';
 import {commentPartsIssues,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
@@ -106,6 +106,7 @@ export interface JobRigMeshScreen extends RigHostScreen {
 export interface JobRigMeshHost extends RigHost {
   canSubmitMeshEdits?(): boolean;
   jobClosed?(): boolean;
+  recordSubmission?(): 'sending' | 'submitted' | null;
   readonly chestLandmarks?: readonly JobPublishedChestLandmark[];
 }
 export interface JobRigScreenPrepared {readonly jobRigScreen: true; readonly display: DisplayPublicationV3; readonly entry: string;
@@ -307,10 +308,24 @@ export function createJobRigScreen(options: {
     if(!result.ok)throw new Error(result.error.code,{cause:(result.error as {cause?:unknown}).cause});
     partsAttempts.delete(ask.askId);return options.translate('job.saved');
   }
-  const pendingSubjects=()=>options.window.state().pending.filter(ask=>ask.publicationId===mounted?.display.publication.publicationId&&ask.status==='pending').map(ask=>ask.subject);
+  const activeAsks=(pending:readonly JobWindowAsk[],publicationId:string|undefined)=>
+    pending.filter(ask=>ask.publicationId===publicationId&&ask.status==='pending');
+  const pendingSubjects=()=>activeAsks(options.window.state().pending,mounted?.display.publication.publicationId).map(ask=>ask.subject);
   function host(prepared: JobRigScreenPrepared, ready: {resolve(): void; reject(error: unknown): void}, navigation?:RigHostNavigation): JobRigMeshHost {
     const base = new URL(prepared.entry).pathname;
     const jobId = /^\/jobs\/([^/]+)\//.exec(base)?.[1];
+    const record = prepared.record ?? prepared.modals;
+    const recordSubmission = () => {
+      if (prepared !== mounted) return null;
+      const {pending, closed} = options.window.state();
+      const active = activeAsks(pending, prepared.display.publication.publicationId);
+      if (!closed && active.some(ask => record?.forms.get(ask.askId)?.submitting &&
+          (ask.subject.kind === 'signoff' || ask.subject.kind === 'checkpoint'))) return 'sending' as const;
+      // A publication can remount before it asks. Only the newest ask replaces the receipt.
+      const latest = pending.at(-1);
+      return !active.length && latest?.status === 'answered' &&
+        matchesJobRecordAct(latest, latest.act, jobId) ? 'submitted' as const : null;
+    };
     const draftId = jobSourceDraftId(prepared.display.publication.source);
     const previousPublicationId = prepared.display.publication.previousPublicationId;
     const access: InstanceAccess = {base, key: prepared.display.publication.instanceKey, capability: options.access.capability,
@@ -339,7 +354,7 @@ export function createJobRigScreen(options: {
       const question=record.inspection.interview?.questions[0];
       return {...evidencePair,...(backdrop?.subject?{subject:backdrop.subject}:{}),access:{...(backdrop?.access??access),capability:null,
         headers:init=>{const headers=options.access.headers(init);headers.delete('X-Review-Capability');return headers;}},
-        ownerActAccess:{capability:options.access.capability},
+        ownerActAccess:{capability:options.access.capability},recordSubmission,
         record:{...(jobId?{jobId}:{}),draftId,publicationId:prepared.display.publication.publicationId,previousPublicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,...record.inspection.planPicture?{planPicture:record.inspection.planPicture}:{},...questionPictures(record.inspection.interview?.questions),missingPicture:question?.missingPicture,questionPicture:question?.scenePicture || (question?.missingPicture && question.images.length ? true : undefined)},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
@@ -350,7 +365,7 @@ export function createJobRigScreen(options: {
     if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
     const {publicationId,source}=prepared.display.publication;
     const binding={...(jobId?{jobId}:{}),draftId,publicationId,previousPublicationId,sourceHash:source.sourceHash};
-    return {...evidencePair,access,pendingSubjects,navigation,jobClosed:()=>options.window.state().closed,...prepared.refusal?{unavailable:prepared.refusal}:{},
+    return {...evidencePair,access,pendingSubjects,recordSubmission,navigation,jobClosed:()=>options.window.state().closed,...prepared.refusal?{unavailable:prepared.refusal}:{},
       chestLandmarks:prepared.display.publication.chestLandmarks,
       ...(source.direction?{direction:binding}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
         prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review')}}:{}),
@@ -390,9 +405,16 @@ export function createJobRigScreen(options: {
     const record=mounted?.record??mounted?.modals,deps=options.formDependencies;if(!record||!deps)return;
     const state=options.window.state(),display=record.inspection.display;
     const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,mounted!.checkpoints)),ask=>{const previous=record.forms.get(ask.askId),saved=state.pending.find(item=>item.askId===ask.askId);if(previous&&saved?.act?.kind==='interview-picks'&&ask.status==='answered'&&!previous.submitting&&previous.form.dataset.interviewAnswered!=='true'){previous.dispose?.();return formFor(saved,record.inspection,deps);}return previous??formFor(saved??ask,record.inspection,deps);},true);
-    for(const [id,entry]of record.forms)if(!next.has(id)){entry.dispose?.();record.forms.delete(id);}
+    const jobId = jobPublicationRoutes(display, location.origin).jobId;
+    let removedAnswer = false;
+    for(const [id,entry]of record.forms)if(!next.has(id)){
+      const ask=state.pending.find(item=>item.askId===id);
+      if(ask?.status==='answered'&&matchesJobRecordAct(ask,ask.act,jobId))removedAnswer=true;
+      entry.dispose?.();record.forms.delete(id);
+    }
     for(const [id,entry]of next)record.forms.set(id,entry);
     for(const [id,entry]of record.forms){const ask=state.pending.find(ask=>ask.askId===id);entry.fieldset.disabled=entry.submitting||ask?.status!=='pending'||state.preparing||state.closed||!state.receipt||!options.access.capability;}
+    if(removedAnswer)deps.saveDraft();
     screen?.recordForms?.([...record.forms.values()].map(entry=>entry.form));
   }
   /** Mount the shared composition before source data exists; the first paint resumes it. */
