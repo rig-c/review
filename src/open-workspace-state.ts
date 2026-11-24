@@ -1,5 +1,5 @@
 import {createHmac, randomUUID} from 'node:crypto';
-import {lstat, mkdir, rename, unlink, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, mkdtemp, rename, rm, unlink, writeFile} from 'node:fs/promises';
 import type {Stats} from 'node:fs';
 import {isAbsolute, join} from 'node:path';
 import {appRoot} from './build.ts';
@@ -42,7 +42,24 @@ export async function readPrivate(path: string): Promise<unknown | null> {
   catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw workspaceError('WORKSPACE_STATE_INVALID');}
 }
 
-export async function writePrivate(path: string, value: unknown) {
+export async function writePrivate(path: string, value: unknown, populate?: (temporary: string) => Promise<void>) {
+  if (populate) {
+    const temporary = await mkdtemp(path + '.tmp-');
+    try {
+      await populate(temporary);
+      // A completed directory is nonempty, so a concurrent publisher wins intact.
+      try {
+        await lstat(path);
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      await rename(temporary, path).catch(error => {
+        if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) throw error;
+      });
+    } finally {await rm(temporary, {recursive: true, force: true});}
+    return;
+  }
   const text = JSON.stringify(value);
   if (Buffer.byteLength(text) > WORKSPACE_BODY_LIMIT) throw workspaceError('WORKSPACE_BODY_LIMIT');
   await readPrivate(path);
