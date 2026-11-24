@@ -2,7 +2,7 @@ import {nativeDifferenceAlignment} from '../src/parts-comparison.ts';
 import type {CheckpointPairView} from './rig-host.ts';
 import {clampZoom} from './camera-view.ts';
 import {hasTransientQuestionImage} from './interview-panel.ts';
-import {advanceTake,bindScenePlates,loadScenePlates,takeSample} from './scene-plates.ts';
+import {advanceTake,applyTakeStep,bindScenePlates,loadScenePlates,takeSample,type TakeStep} from './scene-plates.ts';
 import type {SceneInspection} from '../src/scene-inspection.ts';
 import type {JobProgressV3,RecordSource} from '../src/job-contract.ts';
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
@@ -713,10 +713,6 @@ async function showReference(id: string, bound?:{name:string;src:string}): Promi
 }
 
 function renderTransport(): void {
-  if(previousBuildView?.active()&&player){
-   try{previousBuildView.present(player);}
-   catch(error){leavePreviousBuild();renderLayout();message(errorText(error),true);}
-  }
   refreshAnimationInspection();
   const end = duration > 0 ? ` / ${duration.toFixed(4)}` : '';
   text('time-label', sequence&&!previousBuildView?.active() ? `Source ${(time + sequence.frames[0]!.t).toFixed(4)} ↔ ${time.toFixed(4)}${end} s` : `${time.toFixed(4)}${end} s`);
@@ -790,10 +786,23 @@ function seekFrame(frame: number): void {
   message(`F${frame} · Explicit time ${exact} s${!player && !video && !sequence ? ' (No playback reference · time display only)' : ''}`);
 }
 
-function drawRig(action:()=>void):void {
+function drawRig(action:()=>void,previousFrame?:'seek'|((view:NonNullable<typeof previousBuildView>)=>void)):void {
  if(rigDifference&&rigDifference.assets!==assets){leaveRigDifference();renderLayout();}
  inDrawRig=true;
- try{const box=sceneBox();if(box&&player?.renderer instanceof CanvasRenderer)player.renderer.viewport=box;action();if(box&&player){sceneComposite?.draw(player,box);}parts?.present('single');chestEditor?.syncJobTarget();if(box)viewport.fitCamera();if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);}
+ try{
+  const box=sceneBox();if(box&&player?.renderer instanceof CanvasRenderer)player.renderer.viewport=box;
+  action();if(box&&player)sceneComposite?.draw(player,box);
+  parts?.present('single');chestEditor?.syncJobTarget();
+  if(player&&previousBuildView?.active()){
+   try{
+    if(typeof previousFrame==='function')previousFrame(previousBuildView);
+    else previousBuildView.present(player,previousFrame==='seek');
+   }catch(error){leavePreviousBuild();renderLayout();message(errorText(error),true);}
+  }
+  if(box)viewport.fitCamera();
+  if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);
+  text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);
+ }
  catch(error){animationPanel?.capture(null,undefined);overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);throw error;}
  finally{inDrawRig=false;}
 }
@@ -809,7 +818,7 @@ function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): voi
   if (player && runtimeAnimation) {
     restartSetupPlayer();
     if(scene){player.play(name,{loop:canRepeatIdle()});player.pause();seek(0,move);}
-    else drawRig(()=>{player!.play(name,{loop:canRepeatIdle()});player!.pause();refreshAnimationInspection();player!.draw();});
+    else drawRig(()=>{player!.play(name,{loop:canRepeatIdle()});player!.pause();refreshAnimationInspection();player!.draw();},'seek');
   }
   else if (player && name){text('renderer-state',rendererStatus(null,'failed').label);message(`Animation "${name}" is not present in the rig.`, true);}
   renderTransport(); renderCues();renderIdle();
@@ -819,7 +828,7 @@ function seek(value: number, move?: ClipMove): void {
   if(rigDifference){leaveRigDifference();renderLayout();}
   time = duration > 0 ? Math.min(Math.max(0, value), duration) : Math.max(0, value);
   clipMoved(move ?? { kind: 'seek', to: time });
-  if (player && player.current) { try { player.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time); drawRig(()=>player!.draw()); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
+  if (player && player.current) { try { player.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time); drawRig(()=>player!.draw(),'seek'); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
   if (video && video.readyState >= 1 && !previousBuildView?.active()) holdVideoReference(video, referenceGeneration);
   renderSequenceFrame(); renderTransport();
 }
@@ -956,6 +965,20 @@ function tick(now: number): void {
   frameHandle=requestAnimationFrame(tick);
 }
 
+/** A callback can owe zero or several fixed steps. Each stepped rig draws once after the batch. */
+function drawRigSteps(current:RigPlayer,steps:readonly number[],held:boolean,take?:{direction:NonNullable<ReturnType<typeof activeScene>>;from:number}):void {
+ const paired=previousBuildView?.active();
+ const takeSteps:TakeStep[]|undefined=paired&&take?[]:undefined;
+ const advance=(rig:RigPlayer)=>{for(const step of steps)rig.advance(step);};
+ drawRig(()=>{
+  if(take)advanceTake(current,take.direction,take.from,steps,takeSteps);
+  else advance(current);
+  current.draw();
+ },paired?view=>view.step(takeSteps?rig=>{
+  for(const {kind,seconds} of takeSteps)applyTakeStep(rig,kind,seconds);
+ }:advance,held,take?1:current.timeScale):undefined);
+}
+
 /** Animate steps held physics under the standing environment; wind time and queued jolts stay frozen. */
 function tickHeldPhysics(now:number):void {
  const elapsed=lastFrame?Math.min((now-lastFrame)/1000,.1):0;lastFrame=now;
@@ -965,7 +988,7 @@ function tickHeldPhysics(now:number):void {
  if(!next.steps.length)return;
  try{
   player.hold(true);player.resume();
-  drawRig(()=>{for(const step of next.steps)player!.advance(step);player!.draw();});
+  drawRigSteps(player,next.steps,true);
  }catch(error){heldPhysicsFailed=true;player.pause();playbackCarry=0;message(errorText(error),true);}
 }
 
@@ -977,7 +1000,12 @@ function tickPlaying(now: number,useReference=true): void {
   const stepped = next.steps.reduce((sum, step) => sum + step, 0);
   // The wrap does what the replaced seek(0) did besides the player: restart the wind clock and re-hold the reference at the wrapped time.
   if (next.wrapped) { stopAudio(); clipMoved({ kind: 'replay' }); if (video && useReference) { if (video.readyState >= 1) holdVideoReference(video, referenceGeneration); void video.play().catch(error => { pause(); message(errorText(error), true); }); } }
-  if (player && player.current && next.steps.length) { try { const direction=activeScene();if(direction){stepEnvironment(stepped);drawRig(()=>{advanceTake(player!,direction,previous,next.steps);player!.draw();});}else{stepEnvironment(stepped); drawRig(()=>{ for (const step of next.steps) player!.advance(step); player!.draw(); });} } catch (error) { pause(); message(errorText(error), true); } }
+  if (player && player.current && next.steps.length) {
+   try {
+    const direction=activeScene();stepEnvironment(stepped);
+    drawRigSteps(player,next.steps,false,direction?{direction,from:previous}:undefined);
+   } catch (error) { pause(); message(errorText(error), true); }
+  }
   if (useReference && video && video.readyState >= 1 && time > video.duration) { if (referenceInput.state !== 'out-of-domain') holdVideoReference(video, referenceGeneration); } else if (useReference && video && referenceInput.state === 'loaded' && Math.abs(video.currentTime - time) > .15) video.currentTime = time;
   if (input('sync-audio').checked) for (const cue of activeCues()) if (cueDue(cue.time, previous, next, duration)) void audition(cue.clip);
   renderSequenceFrame(); renderTransport(); if (next.ended) pause(); lastFrame = now;
@@ -2410,7 +2438,8 @@ function bindReviewDialog():void {select('correction-stage').onchange=syncCorrec
 /** Rig world → rig-pane pixels for the current camera. */
 function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*viewport.state.rigScale,y:parseFloat(root.style.top||'0')-y*viewport.state.rigScale});}
 function redrawOverlay(fresh:boolean):void {
- if(rigDifference)return;
+ // Fit and editor notifications inside drawRig are followed by its fresh capture.
+ if(rigDifference||!fresh&&inDrawRig)return;
  animationPanel?.redraw(layers.bones);
  if(!overlays||!player)return;
  const project=rigProject();
@@ -2426,7 +2455,7 @@ function redrawOverlay(fresh:boolean):void {
 function syncPlayerLoop():void {
  const want=canRepeatIdle();
  if(!player?.current||player.composed||player.entry(0)?.loop===want)return;
- try{drawRig(()=>{player!.play(animation,{loop:want});if(!playing)player!.pause();player!.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time);player!.draw();});}
+ try{drawRig(()=>{player!.play(animation,{loop:want});if(!playing)player!.pause();player!.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time);player!.draw();},'seek');}
  catch(error){message(errorText(error),true);}
 }
 function canRepeatIdle():boolean{const direction=activeScene();if(direction)return direction.take.loop;return !!player&&!!assets?.animations.some(clip=>clip.name===animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
@@ -2466,14 +2495,14 @@ async function inspectControlTime(target:number,signal:AbortSignal,preserveSecon
  // #191: a control seek is a clip move like the transport's: a seek to 0 restarts the wind clock while the exported world is in use.
  clipMoved({kind:'seek',to:target});
  const media=!useReference||activeScene()?null:video;
- if(!media){time=target;if(player?.current){player.seek(activeScene()?takeSample(activeScene()!,target).sourceTime:target);drawRig(()=>player!.draw());}renderSequenceFrame();renderTransport();return;}
+ if(!media){time=target;if(player?.current){player.seek(activeScene()?takeSample(activeScene()!,target).sourceTime:target);drawRig(()=>player!.draw(),'seek');}renderSequenceFrame();renderTransport();return;}
  if(media.readyState<1||target>media.duration)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');
  const previousPosition=media.currentTime;
  const commit=(actual:number)=>{
   if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');
   if(!Number.isFinite(actual)||actual<0||actual>duration)throw new Error('CONTROL_TIME_OUTSIDE_DOMAIN');
   const seconds=preserveSeconds?target:actual;
-  if(player?.current){player.seek(seconds);drawRig(()=>player!.draw());}time=seconds;
+  if(player?.current){player.seek(seconds);drawRig(()=>player!.draw(),'seek');}time=seconds;
   controlledVideoSample={media,position:media.currentTime,time:actual};if(axisInspection&&duration>0){const axis=data.manifest.axes.find(item=>item.id===select('axis-select').value&&item.animation===animation);if(axis){const value=axis.min+actual/duration*(axis.max-axis.min);input('axis-value').value=String(value);text('axis-value-label',value.toFixed(3));}}renderSequenceFrame();renderTransport();
  };
  try{const actual=await decodedControlTime(media,target,signal);if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');commit(actual);if(Math.abs(actual-target)>1e-6)message(`Reference decoded ${actual.toFixed(4)} s · requested ${target.toFixed(4)} s. The rig and saved view use the decoded timestamp.`);}

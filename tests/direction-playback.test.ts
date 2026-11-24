@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
-import {RigPlayer} from '@rig-c/play';
+import {RigPlayer,type ModelAssets} from '@rig-c/play';
 import {advancePlayback,cueDue} from '../web/playback-clock.ts';
 import * as scene from '../web/scene-plates.ts';
 import {loadSetupAssets,setupRoot} from './helpers/setup-mesh.ts';
@@ -9,19 +9,67 @@ import type {DirectionInspection} from '../src/direction-inspection.ts';
 
 // Execute the actual workspace's transport functions, including the direction branch.
 const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
+const previous=await readFile(new URL('../web/previous-build-view.ts',import.meta.url),'utf8');
 const transpiler=new Bun.Transpiler({loader:'ts'});
-function transport(player:RigPlayer,direction:DirectionInspection){
- const tick=main.slice(main.indexOf('function tickPlaying('),main.indexOf('\nfunction configureTurnPad('));
+const priorCode=transpiler.transformSync(previous.slice(previous.indexOf('function present('),previous.indexOf('function show(')));
+function priorPresentation(assets:ModelAssets|null,clipMap:Record<string,string>,player:RigPlayer|null=null){
+ const scope={assets,player,root:setupRoot(),build:{clipMap},missing:{hidden:true},drawnGeneration:undefined,
+  RigPlayer:class extends RigPlayer{constructor(root:HTMLElement,assets:ModelAssets){super(root,assets,{mode:'canvas'});}}};
+ return new Function('scope',`with(scope){${priorCode};return {active:()=>true,present,step,player:()=>player};}`)(scope) as {
+  active():boolean;present(current:RigPlayer,seek?:boolean):void;
+  step(advance:(rig:RigPlayer)=>void,held:boolean,timeScale:number):void;player():RigPlayer|null;
+ };
+}
+function transport(player:RigPlayer,direction:DirectionInspection,peer?:RigPlayer){
+ const tick=main.slice(main.indexOf('function drawRigSteps('),main.indexOf('\nfunction configureTurnPad('));
  const seek=main.slice(main.indexOf('function seek(value:'),main.indexOf('\nfunction stopAudio('));
  const noop=()=>{};
+ const previousBuildView=peer?priorPresentation(null,{},peer):null;
  const scope={...scene,advancePlayback,cueDue,player,time:0,duration:direction.take.duration,playbackCarry:0,lastFrame:1000,idleHeld:false,video:null,rigDifference:null,
-  activeScene:()=>direction,canRepeatIdle:()=>direction.take.loop,stopAudio:noop,clipMoved:noop,stepEnvironment:noop,drawRig:(action:()=>void)=>action(),
+  previousBuildView,activeScene:()=>direction,canRepeatIdle:()=>direction.take.loop,stopAudio:noop,clipMoved:noop,stepEnvironment:noop,
+  drawRig(action:()=>void,paired?:'seek'|((view:NonNullable<typeof previousBuildView>)=>void)){
+   action();if(peer&&paired==='seek'){peer.seek(player.time);peer.draw();}
+   else if(previousBuildView&&typeof paired==='function')paired(previousBuildView);
+  },
+  heldPhysicsFailed:false,document:{hidden:false},selectedInspector:()=>'playback',seekingControl:false,
   input:()=>({checked:false}),renderSequenceFrame:noop,renderTransport:noop,pause:noop,message:(value:string)=>{throw Error(value);},errorText:String};
- const run=new Function('scope',`with(scope){${transpiler.transformSync(tick+'\n'+seek)};return {tick:tickPlaying,seek};}`)(scope);
+ const run=new Function('scope',`with(scope){${transpiler.transformSync(tick+'\n'+seek)};return {tick:tickPlaying,heldTick:tickHeldPhysics,seek};}`)(scope) as {
+  tick(now:number):void;heldTick(now:number):void;seek(seconds:number):void;
+ };
  return {...run,state:scope};
 }
 const vertices=(player:RigPlayer)=>{const mesh=player.posedFrame().order[0]!;if(mesh.kind!=='mesh')throw Error('Expected fixture mesh');return [...mesh.vertices];};
 const jumps=(a:number[],b:number[])=>a.filter((_,i)=>i%2===0).map((_,v)=>Math.hypot(a[v*2]!-b[v*2]!,a[v*2+1]!-b[v*2+1]!));
+
+function countPlayer(player:RigPlayer) {
+ const counts={advances:[] as number[],seeks:[] as number[],draws:0};
+ const {advance,seek,draw}=player;
+ player.advance=seconds=>{counts.advances.push(seconds);advance.call(player,seconds);};
+ player.seek=(seconds,schedule)=>{counts.seeks.push(seconds);seek.call(player,seconds,schedule);};
+ player.draw=()=>{counts.draws++;draw.call(player);};
+ return counts;
+}
+
+test('#1218 the retained setup draws geometry and a mapped clip settles during pause without seeking',async()=>{
+ const loaded=await loadSetupAssets(await directionPhysicsModel());
+ const current=new RigPlayer(setupRoot(),loaded.assets,{mode:'canvas'});
+ const prior=priorPresentation(loaded.assets,{inspect:'inspect'});
+ try{
+  prior.present(current,true);
+  expect(prior.player()!.current).toBeNull();expect(vertices(prior.player()!)).toHaveLength(8);
+  current.play('inspect',{loop:true});prior.present(current,true);
+  const peer=prior.player()!;expect(peer.current).toBe('inspect');
+  const rig=transport(current,loopingDirection(),peer);rig.seek(.25);
+  const before=vertices(peer),a=countPlayer(current),b=countPlayer(peer),time=current.time;
+  for(const dt of [0,1000/60,50,150])rig.heldTick(1000+dt);
+  expect(current.time).toBe(time);expect(peer.time).toBe(time);
+  expect(a).toEqual(b);expect(a.advances).toHaveLength(9);expect(a.draws).toBe(3);expect(a.seeks).toEqual([]);
+  expect(vertices(peer)).not.toEqual(before);expect(vertices(peer)).toEqual(vertices(current));
+  current.hold(false);rig.tick(1000+150+1000/60);
+  expect(current.time).toBeGreaterThan(time);expect(peer.time).toBe(current.time);
+  expect(a.seeks).toEqual([]);expect(a).toEqual(b);expect(vertices(peer)).toEqual(vertices(current));
+ }finally{current.dispose();prior.player()?.dispose();loaded.dispose();}
+});
 
 test('#930 direction playback preserves physics at both loop seams per mesh vertex',async()=>{
  const loaded=await loadSetupAssets(await directionPhysicsModel());
@@ -91,16 +139,23 @@ test('#930 continuous mapping advances; holds keep physics alive; authored jumps
  const loaded=await loadSetupAssets(await directionPhysicsModel());
  try{
   const player=new RigPlayer(setupRoot(),loaded.assets,{mode:'canvas'});player.play('inspect',{loop:true});
+  const peer=new RigPlayer(setupRoot(),loaded.assets,{mode:'canvas'});peer.play('inspect',{loop:true});
   try{
    const direction=loopingDirection([{time:0,source_time:0,easing:'hold'},{time:1.175,source_time:.5,easing:'linear'},{time:8,source_time:2,easing:'linear'}]);
-   const rig=transport(player,direction);rig.seek(0);
-   const seeks:number[]=[],seek=player.seek.bind(player);player.seek=value=>{seeks.push(value);seek(value);};
+   const rig=transport(player,direction,peer);rig.seek(0);
+   const currentCalls=countPlayer(player),previousCalls=countPlayer(peer);
    const first=vertices(player);
+   rig.tick(1000);
+   expect(currentCalls.draws).toBe(0);expect(previousCalls.draws).toBe(0);
    for(let frame=1;frame<=60;frame++)rig.tick(1000+frame*1000/60);
-   expect(player.time).toBe(0);expect(vertices(player)).not.toEqual(first);expect(seeks).toEqual([]);
+   expect(player.time).toBe(0);expect(peer.time).toBe(0);
+   expect(vertices(player)).not.toEqual(first);expect(vertices(peer)).toEqual(vertices(player));
+   expect(currentCalls).toEqual(previousCalls);expect(currentCalls.seeks).toEqual([]);
+   expect(currentCalls.draws).toBe(60);expect(currentCalls.advances).toHaveLength(60);
    for(let frame=61;frame<=90;frame++)rig.tick(1000+frame*1000/60);
-   expect(seeks).toEqual([.5]);expect(player.time).toBeCloseTo(scene.takeSample(direction,rig.state.time).sourceTime,12);
-  }finally{player.dispose();}
+   expect(currentCalls).toEqual(previousCalls);expect(currentCalls.seeks).toEqual([.5]);
+   expect(player.time).toBeCloseTo(scene.takeSample(direction,rig.state.time).sourceTime,12);expect(peer.time).toBe(player.time);
+  }finally{player.dispose();peer.dispose();}
  }finally{loaded.dispose();}
 });
 
@@ -110,11 +165,13 @@ test('#930 partial source loop is a true discontinuity, even when both endpoints
   for(const start of [0,1e-5]){
    const direction=loopingDirection([{time:0,source_time:start,easing:'linear'},{time:8,source_time:1.99999,easing:'linear'}]);
    const player=new RigPlayer(setupRoot(),loaded.assets,{mode:'canvas'});player.play('inspect',{loop:true});
+   const peer=new RigPlayer(setupRoot(),loaded.assets,{mode:'canvas'});peer.play('inspect',{loop:true});
    try{
-    const rig=transport(player,direction);rig.seek(0);const seeks:number[]=[],seek=player.seek.bind(player);player.seek=value=>{seeks.push(value);seek(value);};
+    const rig=transport(player,direction,peer);rig.seek(0);const currentCalls=countPlayer(player),previousCalls=countPlayer(peer);
     for(let frame=1;frame<=486;frame++)rig.tick(1000+frame*1000/60);
-    expect(seeks).toEqual([start]);expect(player.time).toBeCloseTo(scene.takeSample(direction,rig.state.time).sourceTime,12);
-   }finally{player.dispose();}
+    expect(currentCalls.seeks).toEqual([start]);expect(previousCalls).toEqual(currentCalls);
+    expect(player.time).toBeCloseTo(scene.takeSample(direction,rig.state.time).sourceTime,12);expect(peer.time).toBe(player.time);
+   }finally{player.dispose();peer.dispose();}
   }
  }finally{loaded.dispose();}
 });
@@ -138,16 +195,22 @@ test('#930 selected track entry supplies its own duration across multiple animat
  const loaded=await loadSetupAssets(doc);
  try{
   const player=new RigPlayer(setupRoot(),loaded.assets,{mode:'canvas'});
+  const peer=new RigPlayer(setupRoot(),loaded.assets,{mode:'canvas'});
+  const currentCalls=countPlayer(player),previousCalls=countPlayer(peer);
   try{
    for(const [name,duration] of [['other',3],['inspect',2]] as const){
     player.play(name,{loop:true});expect(player.entry(0)!.animation).toBe(name);expect(player.entry(0)!.duration).toBe(duration);
-    const direction=loopingDirection([{time:0,source_time:0,easing:'linear'},{time:8,source_time:duration,easing:'linear'}]),rig=transport(player,direction);rig.seek(0);
-    const seeks:number[]=[],seek=player.seek.bind(player);player.seek=value=>{seeks.push(value);seek(value);};
-    for(let frame=1;frame<=486;frame++)rig.tick(1000+frame*1000/60);
-    expect(seeks).toEqual([]);expect(player.entry(0)!.animationTime).toBeCloseTo(scene.takeSample(direction,rig.state.time).sourceTime,12);
-    player.seek=seek;
+    const peerDuration=duration===3?2:3;peer.play(name==='other'?'inspect':'other',{loop:true});
+    const direction=loopingDirection([{time:0,source_time:0,easing:'linear'},{time:8,source_time:duration,easing:'linear'}]),rig=transport(player,direction,peer);rig.seek(0);
+    const priorDraws=currentCalls.draws,seekCount=currentCalls.seeks.length;
+    for(let frame=1;frame<=243;frame++)rig.tick(1000+frame*1000/30);
+    expect(currentCalls).toEqual(previousCalls);expect(currentCalls.seeks).toHaveLength(seekCount);
+    expect(currentCalls.draws-priorDraws).toBe(243);
+    expect(player.entry(0)!.animationTime).toBeCloseTo(scene.takeSample(direction,rig.state.time).sourceTime,12);
+    expect(peer.time).toBe(player.time);expect(peer.time).toBeGreaterThan(duration);
+    expect(peer.entry(0)!.animationTime).toBeCloseTo(player.time%peerDuration,12);
    }
-  }finally{player.dispose();}
+  }finally{player.dispose();peer.dispose();}
  }finally{loaded.dispose();}
 });
 

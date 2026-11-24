@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {cp,mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
+import type {RigPlayer} from '@rig-c/play';
 import {loadReview,previousBuildFiles,type ReviewManifest} from '../src/manifest.ts';
 import {JOB_API_SCHEMA,JOB_PREVIOUS_BUILD_SCHEMA,type JobPreviousBuild,type JobResponseValues,type JobResult} from '../src/job-contract.ts';
 import type {ControlView} from '../src/control.ts';
@@ -19,7 +20,22 @@ type Language='en'|'ko';
 type Reading={
  current:string|null;previous:string|null;currentTime:number;previousTime:number|null;transport:number;
  playing:boolean;generation:number|null;camera:ControlView;layout:string;syncChecked:boolean;syncDisabled:boolean;
- labels:(string|null)[];missing:string|null;comments:{viewport:string;modelHash:string|null;reference:ControlView['cameras']['reference']}[];
+ labels:(string|null)[];missing:string|null;setupDrawn:boolean;comments:{viewport:string;modelHash:string|null;reference:ControlView['cameras']['reference']}[];
+};
+function countPlayback(rig:RigPlayer) {
+ const calls={advance:0,seek:0,draw:0};
+ const {advance,seek,draw}=rig;
+ rig.advance=dt=>{calls.advance++;advance.call(rig,dt);};
+ rig.seek=(time,schedule)=>{calls.seek++;seek.call(rig,time,schedule);};
+ rig.draw=()=>{calls.draw++;draw.call(rig);};
+ return {calls,restore(){Object.assign(rig,{advance,seek,draw});}};
+}
+function meshVertices(rig:RigPlayer):number[] {
+ return rig.posedFrame().order.flatMap(item=>item.kind==='mesh'?Array.from(item.vertices):[]);
+}
+type PlaybackControl={
+ rows:{transport:number;current:number;previous:number;currentCalls:ReturnType<typeof countPlayback>['calls'];previousCalls:ReturnType<typeof countPlayback>['calls']}[];
+ before:number[][];after:number[][];
 };
 type MenuEntry={id:string;label:string;disabled:boolean};
 type JobKind='rig'|'direction';
@@ -42,6 +58,20 @@ const servers:(()=>void)[]=[],errors:unknown[]=[],observations:unknown[]=[];
 const probe=`
 Object.assign(window,{__previous1214:{
  ready:()=>rigInput.state==='loaded'&&!!comments,
+ frames:async(held:boolean)=>{
+  const current=player!,prior=previousBuildView!.pane()!.player()!;
+  const count=${countPlayback.toString()},vertices=${meshVertices.toString()};
+  pause();if(!held)await playPreview();
+  const before=[vertices(current),vertices(prior)],a=count(current),b=count(prior);
+  try{
+   lastFrame=1000;playbackCarry=0;
+   const rows=[0,1000/60,50,150].map(dt=>{
+    if(held)tickHeldPhysics(1000+dt);else tickPlaying(1000+dt,false);
+    return {transport:time,current:current.time,previous:prior.time,currentCalls:{...a.calls},previousCalls:{...b.calls}};
+   });
+   return {rows,before,after:[vertices(current),vertices(prior)]};
+  }finally{a.restore();b.restore();pause();}
+ },
  read:()=>{
   const prior=typeof previousBuildView==='undefined'?null:previousBuildView?.pane()?.player();
   const markRows=session.feedback.flatMap(row=>{const mark=row.context?.comment;return mark?[{viewport:mark.viewport,modelHash:mark.modelHash,reference:mark.bookmark.view.cameras.reference}]:[];});
@@ -50,7 +80,10 @@ Object.assign(window,{__previous1214:{
    generation:prior?.generation??null,camera:viewport.numericView(),layout:el('view-menu').querySelector('[aria-pressed="true"][data-view]')?.dataset.view,
    syncChecked:input('camera-sync').checked,syncDisabled:input('camera-sync').disabled,
    labels:['previous-build-label','current-build-label'].map(id=>document.getElementById(id)?.textContent??null),
-   missing:missing&&!missing.hidden?missing.textContent:null,comments:markRows};
+   missing:missing&&!missing.hidden?missing.textContent:null,
+   setupDrawn:!!prior&&!prior.current&&prior.posedFrame().order.length>0&&
+    [...document.querySelectorAll<HTMLElement>('#previous-build-root :is(img,canvas)')].some(node=>node.getClientRects().length>0),
+   comments:markRows};
  }
 }});
 `;
@@ -142,6 +175,21 @@ function assertSharedCamera(value:Reading){
 function assertSharedTime(value:Reading){
  assert.equal(value.previous,'sealed-previous-clip');assert.notEqual(value.previousTime,null);
  assert.ok(Math.abs(value.currentTime-value.previousTime!)<1e-9,JSON.stringify(value));
+}
+async function playbackFrames(page:InputCdpSession,held:boolean):Promise<PlaybackControl>{
+ const reading=await page.evaluate<PlaybackControl>(`window.__previous1214.frames(${held})`);
+ const draws=[0,1,2,3];
+ for(const [index,row] of reading.rows.entries()){
+  assert.ok(Math.abs(row.current-row.previous)<1e-9,JSON.stringify(row));
+  assert.deepEqual(row.currentCalls,row.previousCalls);
+  assert.equal(row.currentCalls.seek,0);assert.equal(row.currentCalls.draw,draws[index]);
+  if(held){assert.equal(row.transport,reading.rows[0]!.transport);assert.equal(row.current,reading.rows[0]!.current);}
+ }
+ assert.ok(reading.rows.at(-1)!.currentCalls.advance>draws.at(-1)!);
+ if(held)for(const [side,before] of reading.before.entries()){
+  assert.ok(before.length>0);assert.notDeepEqual(reading.after[side],before,'held physics changed mesh vertices');
+ }
+ return reading;
 }
 
 async function jobFixture(kind:JobKind,root:string) {
@@ -247,11 +295,12 @@ async function liveJobControls(roots:Record<JobKind,string>):Promise<void> {
     const playing=await read(browser);
     assert.equal(playing.playing,true);assertSharedTime(playing);
     await click(browser,'#play');
+    const streaming=await playbackFrames(browser,false);
     await selectView(browser,'previous-version');
     await selectView(browser,'previous-version');
     await wait(browser,'!!document.getElementById("previous-build-root")');
     assert.equal(previousRequests().length,expected.length);
-    observations.push({job:kind,reviewPath:routes.apiBase+'review',assetRequests:previousRequests(),held,playing});
+    observations.push({job:kind,reviewPath:routes.apiBase+'review',assetRequests:previousRequests(),held,playing,streaming});
     await shot(browser,'job-'+kind);
    }catch(error){
     const state=await browser.evaluate<{ready:string|null;message:string|null;reading:Reading|null}>(`({
@@ -325,7 +374,7 @@ try{
    await control(page,'animation-select',clip,'change');await control(page,'scrub','.55','input');
    const missing=await read(page);
    assert.equal(missing.current,clip);assert.equal(missing.previous,null);assert.equal(missing.previousTime,0);
-   assert.equal(missing.missing,copy.missing);
+   assert.equal(missing.missing,copy.missing);assert.equal(missing.setupDrawn,true);
   }
   await click(page,'#play');await wait(page,'window.__previous1214.read().transport>.65');
   const missingDuringPlayback=await read(page);
@@ -368,7 +417,10 @@ try{
  await control(page,'scrub','3','input');
  const mapped=await read(page);assertSharedTime(mapped);assertSharedCamera(mapped);
  assert.equal(mapped.current,'inspect');assert.equal(mapped.transport,3);assert.notEqual(mapped.currentTime,mapped.transport);
- observations.push({direction:mapped,assetRequests:direction.requests});
+ await control(page,'scrub','0','input');
+ const heldPhysics=await playbackFrames(page,true);
+ const resumed=await playbackFrames(page,false);
+ observations.push({direction:mapped,assetRequests:direction.requests,heldPhysics,resumed});
  await page.close();page=undefined;
  await liveJobControls({rig:roots[1]!,direction:roots[2]!});
  assert.deepEqual(errors,[]);

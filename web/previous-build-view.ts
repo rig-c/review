@@ -22,9 +22,9 @@ export function createPreviousBuildView(build:JobPreviousBuild,host:Host) {
  missing.setAttribute('role','status');
  setSourceText(missing,'This clip is missing from the previous version. Showing the setup pose.');
  let assets:ModelAssets|null=null,player:RigPlayer|null=null,loading:Promise<void>|null=null;
- let rendered:{clip:string|null;time:number;loop:boolean}|null=null,active=false,syncDisabled=false;
+ let active=false,syncDisabled=false,drawnGeneration:number|undefined;
  const pane={target:'reference' as const,viewport,pane:left,root,player:()=>player,assets:()=>assets,
-  drawnGeneration:()=>player?.generation,scale:()=>{}};
+  drawnGeneration:()=>drawnGeneration,scale:()=>{}};
 
  async function load():Promise<void> {
   if(assets)return;
@@ -41,28 +41,48 @@ export function createPreviousBuildView(build:JobPreviousBuild,host:Host) {
   return loading;
  }
 
- function present(current:RigPlayer):void {
+ function present(current:RigPlayer,seek=false):void {
   const name=current.current;
   const mapped=name&&Object.hasOwn(build.clipMap,name)?build.clipMap[name]:null;
   const clip=assets?.animations.find(animation=>animation.name===mapped)?.name??null;
-  const time=clip?current.time:0,loop=!!clip&&!!current.entry(0)?.loop;
   const unavailable=!!name&&!clip;
   if(missing.hidden===unavailable)missing.hidden=!unavailable;
-  if(rendered?.clip===clip&&rendered.time===time&&rendered.loop===loop)return;
-  // Play's clear enters composed-track mode. A fresh player on the same cached assets
-  // gives the actual setup pose and can subsequently seek a mapped clip on one track.
-  if(!player||(!clip&&rendered?.clip)){player?.dispose();player=new RigPlayer(root,assets!);}
-  if(clip){
-   if(rendered?.clip!==clip||rendered.loop!==loop){player.play(clip,{loop});player.pause();}
-   player.seek(time);
+  // A fresh player has no drawn pose. Clear installs setup and composes tracks,
+  // so a player that presented setup must be replaced before single-track seeking.
+  if(!player||(player.current===null)!==(clip===null)){
+   player?.dispose();
+   drawnGeneration=undefined;
+   player=new RigPlayer(root,assets!);
   }
-  player.draw();
-  rendered={clip,time,loop};
+  if(!clip){
+   if(drawnGeneration===undefined){player.clear();draw(player);}
+   return;
+  }
+  const time=current.time,loop=current.entry(0)?.loop??false;
+  const changed=player.current!==clip||player.entry(0)?.loop!==loop;
+  if(!changed&&!seek&&Math.abs(player.time-time)<=1e-9)return;
+  if(changed)player.play(clip,{loop});
+  if(!changed||time!==0)player.seek(time);
+  draw(player);
+ }
+
+ function draw(rig:RigPlayer):void {
+  rig.draw();
+  drawnGeneration=rig.generation;
+ }
+
+ function step(advance:(player:RigPlayer)=>void,held:boolean,timeScale:number):void {
+  if(!player?.current)return;
+  player.timeScale=timeScale;
+  player.hold(held);
+  player.resume();
+  advance(player);
+  draw(player);
  }
 
  function show(current:RigPlayer):void {
   // Prepare a successful first draw before making the alias or layout visible.
-  present(current);
+  present(current,true);
   active=true;syncDisabled=sync.disabled;sync.disabled=true;
   left.setAttribute('aria-labelledby',previousLabel.id);right.setAttribute('aria-labelledby',currentLabel.id);
   left.append(previousLabel,missing);right.append(currentLabel);viewport.append(root);
@@ -77,7 +97,7 @@ export function createPreviousBuildView(build:JobPreviousBuild,host:Host) {
   root.remove();previousLabel.remove();currentLabel.remove();missing.remove();
  }
 
- return {load,show,hide,present,active:()=>active,
+ return {load,show,hide,present,step,active:()=>active,
   pane:()=>active?pane:null,
   dispose:()=>{hide();player?.dispose();assets?.dispose();player=null;assets=null;}};
 }
