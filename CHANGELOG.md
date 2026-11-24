@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.19.0
+
+A producer can now say which earlier direction comment a new post answers, and Review shows that comment in Comments as answered. A live sign-off or checkpoint answer now shows that it is being sent and then that it was submitted, where the row used to go blank.
+
+**Read before upgrading:**
+
+* **New optional field, no act change.** `JobPublishedContext` gains an optional `answeredDirectionFeedback: [{jobId, actId}]`, for direction packages with a `post` selector. Each entry must name the publishing job and resolve to a finalized `direction-review` verdict that Review retains for that job, bound to an earlier post. Without the field, publication bytes, behaviour and replay are unchanged. The act wire format is unchanged.
+* **New error code `JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID`.** It refuses the whole publication when any entry is malformed, names another job, names an unknown or ineligible act, or appears on anything other than a direction post publication. Review never drops an entry silently.
+
+### Added
+
+* The right Comments section shows each answered earlier comment read-only, with its kind, its original post version, the reviewer's text verbatim, and "Answered by v{0}" / 「v{0}에서 답변됨」. The reader has nothing to show until a producer sends the field: Create's writer is rig-c/create#955 (#1210, refs #1201).
+
+### Fixed
+
+* While a record sign-off or checkpoint answer is in flight, the act row stays, reads "Sending", and its Approve button is disabled. Once a finalized act matching the ask arrives, from the response or the stream, the row stays with "Nothing is waiting for your answer." and "Submitted" until the next ask replaces it. A failed send keeps the existing retry path and never shows Submitted. A retired pending `reopen` marker, which has no owner form, no longer counts as a waiting request (#1209, closes #1205).
+
 ## 4.18.9
 
 Durations on the direction page read like the timeline, and the pending sign-off line in English no longer says the post is already signed. Review pins Parts 2.56.0 for development. There is no export, act or contract change.
