@@ -1,5 +1,5 @@
 import {checkpointEvidencePair} from '../src/checkpoint-evidence-packet.ts';
-import {formFor, jobCheckpointContext, jobJson, jobPublicationRoutes, jobSourceDraftId, matchesJobRecordAct, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection, type JobWindowAsk} from './job-session.ts';
+import {formFor, isPendingOwnerAsk, jobCheckpointContext, jobJson, jobPublicationRoutes, jobSourceDraftId, matchesJobRecordAct, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection, type JobWindowAsk} from './job-session.ts';
 import {commentPartsIssues,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
@@ -309,7 +309,7 @@ export function createJobRigScreen(options: {
     partsAttempts.delete(ask.askId);return options.translate('job.saved');
   }
   const activeAsks=(pending:readonly JobWindowAsk[],publicationId:string|undefined)=>
-    pending.filter(ask=>ask.publicationId===publicationId&&ask.status==='pending');
+    pending.filter(ask=>ask.publicationId===publicationId&&isPendingOwnerAsk(ask));
   const pendingSubjects=()=>activeAsks(options.window.state().pending,mounted?.display.publication.publicationId).map(ask=>ask.subject);
   function host(prepared: JobRigScreenPrepared, ready: {resolve(): void; reject(error: unknown): void}, navigation?:RigHostNavigation): JobRigMeshHost {
     const base = new URL(prepared.entry).pathname;

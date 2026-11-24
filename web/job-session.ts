@@ -32,7 +32,7 @@ import {createJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts
 import type {JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl} from './view-controls.ts';
 import {createInterviewForm,interviewPicksRecord,interviewRecords,interviewErrors,type InterviewDisplayQuestion} from './interview-panel.ts';
-import {JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
+import {JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 
 /** Imported runtimes may throw arbitrary prose. Only registered refusal copy reaches the window. */
@@ -121,6 +121,9 @@ function sourceSnapshot(source: unknown): string {
 }
 function isRecordAnswer(kind: string): boolean {
     return kind === 'signoff' || kind === 'checkpoint';
+}
+export function isPendingOwnerAsk(ask: PendingAskV3): boolean {
+    return ask.status === 'pending' && JOB_ENABLED_ACT_KINDS.some(kind => kind === ask.subject.kind);
 }
 /** Match the finalized envelope to the displayed ask. Record acts omit the display-only direction summary. */
 export function matchesJobRecordAct(ask: PendingAskV3, act: ActV3 | undefined, jobId: string | undefined, submission?: UISubmissionV3): boolean {
@@ -379,7 +382,7 @@ export function createJobWindow<Prepared>(options: {
         recordAttempts.delete(ask.askId);
         // A newer request owns the row even if an older request finalizes later.
         if (observedGeneration !== undefined && observedGeneration < latestAskGeneration) return;
-        if ([...pending.values()].some(other => other.publicationId === ask.publicationId && other.status === 'pending')) return;
+        if ([...pending.values()].some(other => other.publicationId === ask.publicationId && isPendingOwnerAsk(other))) return;
         recordReceiptAskId = ask.askId;
     }
     function event(value: EventV3): void {
@@ -397,7 +400,7 @@ export function createJobWindow<Prepared>(options: {
         }
         else if (value.type === 'pending') {
             const previous = pending.get(value.ask.askId);
-            if (!previous && value.ask.status === 'pending') {
+            if (!previous && isPendingOwnerAsk(value.ask)) {
                 latestAskGeneration = Math.max(latestAskGeneration, value.generation);
                 recordReceiptAskId = undefined;
             }
