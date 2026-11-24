@@ -1622,7 +1622,7 @@ Under HQ ruling 7896ec71, the official D2 consumer gate is the supported
 record-checkpoint flow following Create #395 integration. Create owns the actual
 producer receipt. Review's plan-signoff rendering has synthetic UI coverage.
 Normal CLI plan-signoff bootstrap and `plan-approved` act@4 ingestion are a
-separate Create follow-up. (Naru, 2026-11-11)
+separate Create follow-up.
 
 ## Comments decoder contract
 
