@@ -794,6 +794,20 @@ export interface JobInterviewDiagnostics {
   readonly diagnostics: readonly JobInterviewDiagnostic[];
 }
 
+export interface JobAnsweredDirectionFeedbackReference {
+  readonly jobId: JobId;
+  readonly actId: JobActId;
+}
+
+export interface JobAnsweredDirectionFeedback extends JobAnsweredDirectionFeedbackReference {
+  readonly postVersion: number;
+  readonly answeredByPostVersion: number;
+  readonly comments: readonly {
+    readonly text: string;
+    readonly kind: 'general' | 'pinned';
+  }[];
+}
+
 export interface JobPublication {
   readonly publicationId: JobPublicationId;
   readonly instanceKey: JobSha256;
@@ -806,6 +820,7 @@ export interface JobPublication {
     readonly code: string;
   };
   readonly interview?: JobInterviewDiagnostics | null;
+  readonly answeredDirectionFeedback?: readonly JobAnsweredDirectionFeedback[];
   /** Producer-declared contour.bust for the displayed rig, sealed in source.sourceHash. */
   readonly chestLandmarks?: readonly JobPublishedChestLandmark[];
 }
@@ -891,6 +906,7 @@ export const JOB_ERROR_CODES = [
   'JOB_RECORD_INCOMPLETE',
   'JOB_RECORD_MOVED',
   'JOB_SOURCE_INVALID',
+  'JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID',
   'JOB_SOURCE_MISMATCH',
   'JOB_SOURCE_UNRETAINABLE',
   'JOB_ROOT_REPLACED',

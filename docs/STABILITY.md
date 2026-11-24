@@ -226,6 +226,7 @@ interface JobPublishedContext {
   readonly subjects: readonly JobSubject[];
   readonly partIds: readonly string[];
   readonly files: readonly JobFileIdentity[];
+  readonly answeredDirectionFeedback?: readonly {readonly jobId: JobId; readonly actId: JobActId}[];
 }
 
 type JobPartsManifestPath = string; // Work-root-relative, runtime validated.
@@ -301,6 +302,17 @@ interface InternalJobHostAttachResponse {
 bootstrap binding. `port` selects a loopback listener port, with `0` selecting an
 available port. `ownerUrl` opens the shipped standing owner page with its private
 UI capability fragment. `origin` and the returned `ports` belong to that host.
+
+`JobPublishedContext.answeredDirectionFeedback` is an additive optional field
+from the trusted `readPublished` callback for direction packages with a `post`
+selector. Every reference must resolve to a retained finalized direction
+feedback act of the same job bound to an earlier post version. A malformed
+field or entry, inapplicable selector, wrong job, unknown act or ineligible act
+refuses the publication with `JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID`. Review
+never silently drops entries. Resolved feedback is displayed read-only with
+reviewer text verbatim. With the field omitted, publication bytes, behavior and
+historical replay are unchanged. The act wire format is unchanged in both
+cases. See [Answered direction feedback on a post publication](REVIEW_PACKAGE.md#answered-direction-feedback-on-a-post-publication).
 
 A present `readPublished` callback requires a nonempty `readerId`. A present
 `installWriterBinding` callback requires a nonempty `bindingId`. A present

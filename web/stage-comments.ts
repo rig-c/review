@@ -2,6 +2,7 @@
 import type {ModelAssets,PosedFrame} from '@rig-c/play';
 import {paintInspectionViewport,pixelAlignedCrop,type ViewportCapture} from './viewport-capture.ts';
 import type {Feedback} from '../src/session.ts';
+import type {JobAnsweredDirectionFeedback} from '../src/job-contract.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
 import {drawnSlots,region,projectMark,unprojectMark,parseStageComment,feedbackTimingLabel,type MarkRegion,type MarkPoint,type StageComment} from '../src/stage-comment.ts';
 import {getLanguage as i18nLang,onLanguageChange as i18nOnChange,t as i18nT,tr as i18nTr} from './i18n.ts';
@@ -32,11 +33,17 @@ interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=Commen
  feedback:()=>Row[];locked:(id:string)=>boolean;
  add:(feedback:Row,side?:'a'|'b')=>void;changed:()=>void|Promise<void>;draftChanged?:()=>void;error:(message:string)=>void;
  general?:{create:(summary:string)=>Row;matches:(row:Row)=>boolean;rows?:Row[];available?:()=>boolean;refusal?:()=>string|null};
+ answeredDirectionFeedback?:readonly JobAnsweredDirectionFeedback[];
  /** #1062: the shown still picture a mark names, if any. A still picture has no clock, so its row shows the picture and the place, not a time. */
  picture?:(mark:StageComment)=>string|{name:string}|null;
  refusal?:()=>string|null;blocked:()=>boolean;busy?:()=>boolean;busyError?:(message:string)=>void;shortcutBlocked?:()=>boolean;shortcutActive?:()=>boolean;codec?:CommentCodec<Row,Pose>;
 }
 const markOf=(f:Feedback):StageComment|null=>{try{const c=f.context as Record<string,unknown>|undefined;return c?.comment?parseStageComment(c.comment):null;}catch{return null;}};
+function commentItem():HTMLDivElement {
+ const row=document.createElement('div');
+ row.className='stage-comment-item';
+ return row;
+}
 const commentLabels:Record<string,string>={setup:'Setup',animate:'Animate',compare:'Compare',rig:'Rig',reference:'Reference',a:'A',b:'B'};
 const copy=<T>(v:T):T=>JSON.parse(JSON.stringify(v));
 const t=(s:string)=>typeof i18nT==='function'?i18nT(s):s;
@@ -145,8 +152,22 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    ? (canPin?'Comment · C → click the image to pin':'No comments yet.')
    : (reason?'Read only · Escape closes':'Mark a point or region, then type. Enter saves · Escape cancels.'));
   list.append(empty);
- }for(const [i,f]of all.entries()){
-  const mark=readMark(f),row=document.createElement('div');row.className='stage-comment-item';row.dataset.commentId=f.id;
+ }
+ for(const feedback of host.answeredDirectionFeedback??[])for(const comment of feedback.comments){
+  const row=commentItem();
+  row.classList.add('stage-comment-answered');
+  row.setAttribute('translate','no');
+  const kind=document.createElement('span');
+  kind.textContent=`${t(comment.kind==='general'?'General comment':'Stage comments')} · v${feedback.postVersion}`;
+  const body=document.createElement('div');
+  body.textContent=comment.text;
+  const status=document.createElement('span');
+  status.textContent=t('Answered by v{0}').replace('{0}',String(feedback.answeredByPostVersion));
+  row.append(kind,body,status);
+  list.append(row);
+ }
+ for(const [i,f]of all.entries()){
+  const mark=readMark(f),row=commentItem();row.dataset.commentId=f.id;
   const picture=mark&&!host.codec?host.picture?.(mark as StageComment)??null:null;
   const [timing,frameReason]=mark&&!host.codec&&!picture&&!mark.frame?feedbackTimingLabel(f as unknown as Feedback).split(' · '):[];
   const place=picture?t(mark!.world.width>0||mark!.world.height>0?'Region':'Point'):'';

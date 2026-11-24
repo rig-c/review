@@ -5,13 +5,14 @@ import {
   type ActV3, type AgentRequestV3, type EventV3, type JobPartsEnumerator, type JobAct, type JobAgentRequest, type JobDisplayAcknowledgment,
   type JobDisplayPublication, type JobDisplayPublicationV3, type JobDisplayReceipt, type JobEvent, type JobFetchActRequest, type JobFetchActRequestV3,
   type JobHostPorts, type JobProgressLineV3, type JobProgressRequestV3, type JobProgressV3, type JobProgressValueV3,
-  type JobNextValue, type JobPendingAsk, type JobPublication, type JobPublicationMode, type JobReviewerBinding,
+  type JobAnsweredDirectionFeedback, type JobErrorCode, type JobNextValue, type JobPendingAsk, type JobPublication,
+  type JobPublicationMode, type JobReviewerBinding,
   type JobSubject, type NextValueV3, type PendingAskV3, type PublicationV3, type RecordPublicationReader, type RecordSubject, type StatusV3,
 } from './job-contract.ts';
 import { bindJobAsk, bindJobRecordAsk, finalizeJobAct, parseUISubmission, prepareJobRecordAct, prepareJobStill } from './job-act.ts';
 import { atSubject, isRecordSource, parseRecordSource, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct, parseChestLandmarksAct, jobApiSchemaForMode, jobHash, jobPartsEnumeratorVersion, jobWaitLimitMs, requestDigest, sameCapability } from './job-api.ts';
 import {
-  assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, prepareJobSource, retainedRigDraftVerdict, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
+  assertStoredCheckpointEvidence, assertJobRoot, assertJobSourceCurrent, assertRetainedSnapshotIntact, captureJobRoot, isRetainedRecordSource, loadRetainedJobReview, parseAnsweredDirectionFeedbackReferences, prepareJobSource, retainedRigDraftVerdict, jobSnapshotHash, removeOwnedJobSnapshot, verifyJobRecordSourceFresh,
   type JobPublicationReader, type JobRetainedSource, type JobRetainedSourceV3, type JobRootIdentity,
 } from './job-source.ts';
 import { JobError, JobStore, jobCropReferences, type JobSnapshotOwner, type StoredJob } from './job-store.ts';
@@ -19,6 +20,7 @@ import { canonicalStatePath } from './state-dir.ts';
 import { loadPartsView } from './parts-view.ts';
 import { validateStoredPartsComment } from './parts-comment-crops.ts';
 import { commentPartsIssues } from './parts-comment.ts';
+import { noteComments } from './feedback-export.ts';
 
 export type { JobDisplayPublicationV3 } from './job-contract.ts';
 
@@ -78,17 +80,25 @@ export interface JobSessionOptions {
   readonly afterDirectorySync?: (path: string) => void;
 }
 
-function assertStoredSchemas(data: JobData): void {
+function assertStoredSchemas(data: JobData, jobId: string): void {
   if (data.apiSchema !== JOB_API_SCHEMA || data.actSchema !== JOB_ACT_SCHEMA) {
     throw new JobError('JOB_SOURCE_UNRETAINABLE', 'JOB_STORED_SCHEMA_MISMATCH');
   }
-  assertStoredEvidence(data);
+  assertStoredEvidence(data, jobId);
 }
 
 /** Check optional evidence declarations and their durable copies, including committed replay values. */
-function assertStoredEvidence(data: JobData): void {
+function assertStoredEvidence(data: JobData, jobId: string): void {
   for (const stored of Object.values(data.publications)) {
     assertStoredCheckpointEvidence(stored.retained);
+    if (Object.hasOwn(stored.retained, 'answeredDirectionFeedback')) {
+      const code = 'JOB_SOURCE_MISMATCH';
+      if (isRetainedRecordSource(stored.retained) ||
+          !Object.hasOwn(stored.publication, 'answeredDirectionFeedback') ||
+          requestDigest(stored.publication.answeredDirectionFeedback) !== requestDigest(
+            resolveAnsweredDirectionFeedback(stored.retained, stored.publication, data, jobId, code),
+          )) throw new JobError(code);
+    }
     assertStoredEvidenceCopy(stored.publication, data, true);
   }
   for (const ask of Object.values(data.asks)) assertStoredEvidenceCopy(ask, data);
@@ -106,6 +116,36 @@ function assertStoredEvidence(data: JobData): void {
   }
 }
 
+function resolveAnsweredDirectionFeedback(
+  retained: JobRetainedSource, publication: Pick<PublicationV3, 'generation'>, data: JobData,
+  jobId: string, code: JobErrorCode = 'JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID',
+): readonly JobAnsweredDirectionFeedback[] {
+  const selector = retained.source.selector;
+  if (selector?.kind !== 'post' || !retained.source.direction) throw new JobError(code);
+  const references = parseAnsweredDirectionFeedbackReferences(retained.answeredDirectionFeedback, code);
+  return references.map(reference => {
+    if (reference.jobId !== jobId || !Object.hasOwn(data.acts, reference.actId)) throw new JobError(code);
+    const act = data.acts[reference.actId];
+    if (act?.actId !== reference.actId || act.jobId !== jobId || act.kind !== 'review-verdict' ||
+        act.value.stage !== 'direction-review' || !Object.hasOwn(data.publications, act.publicationId)) {
+      throw new JobError(code);
+    }
+    const earlier = data.publications[act.publicationId];
+    const post = act.source.selector;
+    if (post?.kind !== 'post' || !act.source.direction || post.version >= selector.version ||
+        earlier.publication.generation >= publication.generation ||
+        earlier.retained.source.sourceHash !== act.source.sourceHash ||
+        requestDigest(earlier.retained.source.selector) !== requestDigest(post) ||
+        requestDigest(earlier.retained.source.direction) !== requestDigest(act.source.direction)) throw new JobError(code);
+    const comments = act.schema === JOB_ACT_SCHEMA ? noteComments(act.value.words) :
+      act.schema === JOB_COMMENTS_ACT_SCHEMA || act.schema === JOB_COMMENT_CONTEXT_ACT_SCHEMA ? act.value.comments : undefined;
+    if (!Array.isArray(comments)) throw new JobError(code);
+    return {...reference, postVersion: post.version, answeredByPostVersion: selector.version,
+      comments: comments.map(({text, anchor}) => ({text, kind: anchor === undefined ? 'general' : 'pinned'})),
+    };
+  });
+}
+
 function hasStoredEvidence(source: object | undefined): boolean {
   return !!source && ('checkpointEvidence' in source || 'previousDraft' in source);
 }
@@ -116,7 +156,7 @@ function needsSnapshotRecheck(retained: JobRetainedSourceV3): boolean {
 
 function assertStoredEvidenceCopy(value: unknown, data: JobData, publication = false): void {
   if (!value || typeof value !== 'object') return;
-  const copy = value as {publicationId: string; source: JobPublication['source'] | PublicationV3['source']};
+  const copy = value as Pick<PublicationV3, 'publicationId' | 'source' | 'answeredDirectionFeedback'>;
   const stored = data.publications[copy.publicationId];
   const bound = stored?.retained.source;
   const seeds = stored && !isRetainedRecordSource(stored.retained) ? stored.retained.chestLandmarks : undefined;
@@ -127,6 +167,14 @@ function assertStoredEvidenceCopy(value: unknown, data: JobData, publication = f
     }
   }
   if (seeds && requestDigest(copy.source ?? null) !== requestDigest(bound)) throw new JobError('JOB_SOURCE_MISMATCH');
+  const carriesAnswered = Object.hasOwn(copy, 'answeredDirectionFeedback');
+  const boundAnswered = !!stored && Object.hasOwn(stored.retained, 'answeredDirectionFeedback');
+  if ((carriesAnswered || (publication && boundAnswered)) &&
+      (!publication || !carriesAnswered || !boundAnswered ||
+        requestDigest(copy.source ?? null) !== requestDigest(bound) ||
+        requestDigest(copy.answeredDirectionFeedback) !== requestDigest(stored.publication.answeredDirectionFeedback))) {
+    throw new JobError('JOB_SOURCE_MISMATCH');
+  }
   const carriesDirection = copy.source && Object.hasOwn(copy.source, 'directionReview');
   const boundDirection = bound && isRecordSource(bound) ? bound.directionReview : undefined;
   if (carriesDirection || (boundDirection && (publication || ('askId' in copy && !('actId' in copy))))) {
@@ -212,7 +260,7 @@ export class JobSession {
           publications: {}, asks: {}, acts: {}, events: [], replays: {}, pages: {},
         }), root.path);
       this.jobId = row.jobId;
-      assertStoredSchemas(row.data);
+      assertStoredSchemas(row.data, this.jobId);
       this.observedGeneration = row.closure?.generation ?? row.data.generation;
       assertJobRoot(row.data.root);
       if (row.rootKey !== rootKey || row.data.root.path !== root.path || row.data.fingerprint !== options.fingerprint) {
@@ -244,7 +292,7 @@ export class JobSession {
 
   private current(): StoredJob<JobData> {
     const row = this.store.get(this.jobId);
-    assertStoredSchemas(row.data);
+    assertStoredSchemas(row.data, this.jobId);
     if (!row.active) {
       row.data.fetchCapability = null;
       row.data.pages = {};
@@ -437,7 +485,7 @@ export class JobSession {
   }
 
   private replay(data: JobData, key: string, digest: string): Replay | null {
-    assertStoredSchemas(data);
+    assertStoredSchemas(data, this.jobId);
     const previous = data.replays[key];
     if (previous && previous.digest !== digest) throw new JobError('JOB_IDEMPOTENCY_CONFLICT');
     return previous ?? null;
@@ -517,7 +565,7 @@ export class JobSession {
       data.progressReceipt = { seq, at, writes: (data.progressReceipt?.writes ?? 0) + 1 };
       return { data };
     }, fresh => {
-      assertStoredSchemas(fresh.data);
+      assertStoredSchemas(fresh.data, this.jobId);
       if (!fresh.active) throw new JobError('JOB_CLOSED');
       const previous = fresh.data.progressReceipt;
       if (!previous || seq > previous.seq) return false;
@@ -667,6 +715,9 @@ export class JobSession {
               source: candidate!.source, label: candidate!.label, previousPublicationId: data.head, visual: candidate!.visual,
               ...(!isRetainedRecordSource(candidate!) && candidate!.interview !== undefined ? { interview: candidate!.interview } : {}),
               ...(!isRetainedRecordSource(candidate!) && candidate!.chestLandmarks ? {chestLandmarks: candidate!.chestLandmarks} : {}),
+              ...(!isRetainedRecordSource(candidate!) && candidate!.answeredDirectionFeedback ? {
+                answeredDirectionFeedback: resolveAnsweredDirectionFeedback(candidate!, {generation: data.generation}, data, this.jobId),
+              } : {}),
             };
             for (const ask of Object.values(data.asks)) {
               if (ask.status === 'pending') data.asks[ask.askId] = { ...ask, status: 'superseded' };

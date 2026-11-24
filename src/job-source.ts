@@ -12,7 +12,7 @@ import {
   planGroundsExceedLimit,
 } from './job-contract.ts';
 import type {
-  JobChestLandmarkValue, JobErrorCode, JobPublication, JobPublishedChestLandmark,
+  JobAnsweredDirectionFeedbackReference, JobChestLandmarkValue, JobErrorCode, JobPublication, JobPublishedChestLandmark,
   JobCheckpointEvidence, JobFileIdentity, JobInterviewDiagnostics, JobInterviewRecord, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
   JobPreviousDraft, JobSelector, JobSourceBinding, JobSubject, JobPlanTextProjection, JobPlanTextStep,
   OptionContext, OptionSource, PackageResultV3, PlanContext, PlanSource, ProjectRecord, PublishRequestV3,
@@ -34,6 +34,7 @@ import { isRigDraftVerdictSource,
   assertJobApiSchema,
   atSubject,
   buildRecordSource,
+  exactObject,
   isRecordSource,
   jobHash,
   jobId,
@@ -67,6 +68,7 @@ export interface JobRootIdentity {
  * enumeration belongs to the public Parts #1163 surface.
  */
 export interface JobPublishedContext {
+  readonly answeredDirectionFeedback?: readonly JobAnsweredDirectionFeedbackReference[];
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
   readonly previousDraft?: JobPreviousDraft;
   readonly chestLandmarks?: JobPublication['chestLandmarks'];
@@ -100,6 +102,7 @@ export interface JobRetainedSource {
   /** Private base preimage for optional declarations. Keeps its historical key. */
   readonly checkpointEvidencePackageHash?: string;
   readonly chestLandmarks?: JobPublication['chestLandmarks'];
+  readonly answeredDirectionFeedback?: JobPublishedContext['answeredDirectionFeedback'];
   readonly root: JobRootIdentity;
   readonly record: JobFileIdentity | null;
   readonly seals: readonly JobFileIdentity[];
@@ -1593,6 +1596,11 @@ export async function prepareJobSource(options: {
     throw new JobError('JOB_SOURCE_UNRETAINABLE', 'CREATE_PUBLICATION_CONTRACT_UNAVAILABLE');
   }
   if (requestDigest(context.selector) !== requestDigest(request.result.selector)) throw new JobError('JOB_SOURCE_MISMATCH');
+  const answeredDirectionFeedback = Object.hasOwn(context, 'answeredDirectionFeedback')
+    ? parseAnsweredDirectionFeedbackReferences(context.answeredDirectionFeedback) : undefined;
+  if (answeredDirectionFeedback && context.selector?.kind !== 'post') {
+    throw new JobError('JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID');
+  }
   const declared = publishedIdentities(context);
   const previous = previousDraftFields(context, context.selector, declared);
   const evidence = checkpointEvidenceFields(context, context.plan, context.subjects, declared);
@@ -1608,6 +1616,7 @@ export async function prepareJobSource(options: {
   } catch (error) {
     throw new JobError('JOB_SOURCE_MISMATCH', error instanceof HandoffError ? error.message : undefined);
   }
+  if (answeredDirectionFeedback && !review.direction) throw new JobError('JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID');
   const wanted = new Map<string, string | null>();
   function add(path: string, sha256: string | null = null): void {
     jobPath(path);
@@ -1722,6 +1731,7 @@ export async function prepareJobSource(options: {
       root, record, seals, snapshotRoot, snapshotIdentity,
       ...(source.checkpointEvidence || source.previousDraft || chestLandmarks ? {checkpointEvidencePackageHash: review.sourceHash} : {}),
       ...chest,
+      ...(answeredDirectionFeedback ? {answeredDirectionFeedback} : {}),
       manifestPath: retained.manifestPath,
       source,
       instanceKey: openKey({ mode: 'single', p: boundReview, inputs: { input: review.manifestPath },
@@ -1750,6 +1760,17 @@ export async function prepareJobSource(options: {
     if (error instanceof JobError) throw error;
     throw new JobError('JOB_SOURCE_MISMATCH');
   }
+}
+
+export function parseAnsweredDirectionFeedbackReferences(
+  value: unknown, code: JobErrorCode = 'JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID',
+): readonly JobAnsweredDirectionFeedbackReference[] {
+  if (!Array.isArray(value)) throw new JobError(code);
+  return Array.from(value, entry => {
+    const {jobId: rawJobId, actId} = exactObject(entry, ['jobId', 'actId'], code);
+    try { return {jobId: jobId(rawJobId), actId: jobId(actId)}; }
+    catch { throw new JobError(code); }
+  });
 }
 
 /** Authenticate optional declarations without opening live files or reclaimed snapshots. */
