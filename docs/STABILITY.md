@@ -1,6 +1,75 @@
 # Public API stability
 
-## Interview-stage project opening
+## What is stable
+
+| Surface | Schema or version | Stability | Since |
+| --- | --- | --- | --- |
+| [`@rig-c/review/job-host`](#managed-owner-host) | Installed Bun entry | Supported import contract. Changes to its public names and signatures require explicit public-contract review. See the [runtime inventory](#named-export-inventory) and [source exports](../src/job-host.ts). | Review #489 |
+| CLI and `@rig-c/review/package.json` | Installed CLI and package metadata subpath | Supported. | Before Review #489 |
+| [Interview-stage project opening](#interview-stage-project-opening) | `rig-review open` with `--project` and `--picks-dir` | Supported without a version or draft selector for an interview-stage project that has neither a recorded draft nor a recorded review package. | Review #731 |
+| [Package-only job API](REVIEW_PACKAGE.md#live-job-contract) | `rig-review/job-api@2` | Default package-only host contract. | C4 (Review #501) |
+| [Record-and-package job API](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam) | `rig-review/job-api@3` | Additive record mode with its own capability and reuse checks. | Review #588 |
+| [Finalized job acts](#act-and-ask-schemas-currently-accepted) | `rig-review/act@2` through `rig-review/act@9` | Consumers narrow by `schema`. Historical acts retain their original bytes and readers. | C4 (Review #501) and subsequent revisions |
+| [Previous accepted draft binding](REVIEW_PACKAGE.md#previous-accepted-draft-difference) | `rig-review-previous-draft/1` | Optional publication context gated by `JOB_PREVIOUS_DRAFT_SCHEMA`. The act and comment bindings require an admitted declaration. | Review #914 |
+| [Host-bound act wait](#host-bound-act-wait) | `waitForJobAct` | Uses the host's API schema and existing agent capability. | Review #1005 |
+| [Parts enumeration](#parts-enumeration-boundary) | `rig-review-job-source/2` and `JOB_PARTS_ENUMERATOR_RANGE` | Binds official Parts references in their original order, with roles and retained-byte hashes. | C4 (Review #501) |
+| [Package manifest `frames`](#package-manifest-frames-declaration) | Optional `rigc-frames/1` in `rig-review/1` | The declared record is validated and hashed. Older manifests without the field keep their source hash. | Review #1018 |
+
+## Act and ask schemas currently accepted
+
+| Act schema | Accepted form |
+| --- | --- |
+| `rig-review/act@2` | Historical package acts, including stored image-review acts. `JOB_ACT_SCHEMA` retains this value. |
+| `rig-review/act@3` | Historical rig verdict with a top-level still. |
+| `rig-review/act@4` | Record acts through `parseRecordAct`, including historical interview picks and reopen. Record checkpoint and signoff use this schema. |
+| `rig-review/act@5` | Historical parts verdict with pointed issues. |
+| `rig-review/act@6` | Structured comment acts through `parseCommentsAct`, including fresh package and record interview picks. |
+| `rig-review/act@7` | Context-aware comment acts through `parseContextCommentsAct`. Interview picks use @6. |
+| `rig-review/act@8` | `parseMeshEditsAct` accepts the @7 envelope with optional mesh edits on a rig Request changes verdict. Fresh verdicts carrying mesh edits without chest landmark edits use @8. |
+| `rig-review/act@9` | `parseChestLandmarksAct` accepts chest landmark edits on a compiled-rig Request changes verdict, with optional mesh edits and comment context. |
+
+See the [comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract),
+[mesh-edit compatibility](#mesh-edit-act-compatibility) and
+[chest landmark compatibility](#chest-landmark-act-compatibility).
+
+| Ask request schema | Accepted form |
+| --- | --- |
+| `rig-review/job-api@2` | `ask` with one `JobSubject`. A record-and-package listener also accepts the @2 request envelope. |
+| `rig-review/job-api@3` | `ask` with one package or record subject. `ask-batch` requires a record publication. |
+
+Package asks cover interview picks, checkpoint, parts verdict, rig or direction
+verdict, and signoff. Record asks cover interview picks for a declared option
+set and checkpoint or signoff for a declared plan subject. Fresh image-review
+and reopen asks are refused. See [Act kinds, plan identity and parts identity](REVIEW_PACKAGE.md#act-kinds-plan-identity-and-parts-identity)
+and [the record contract](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
+
+## Codes
+
+See [owner submit refusals](REVIEW_PACKAGE.md#owner-submit-refusals), the
+[rig-verdict refusal table](REVIEW_PACKAGE.md#rig-verdict-still-backend), and
+the [Parts mesh refusal table](PARTS_VIEW.md#mesh-geometry). The live job
+code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-contract.ts).
+
+## Cross-package dependencies
+
+- [Create #184](https://github.com/rig-c/create/issues/184) and [Create #182](https://github.com/rig-c/create/issues/182) are complete. Create supplies the production publication reader, official Parts enumerator and private writer binding. Create writers use the binding to fetch finalized acts.
+- [Parts #1163](https://github.com/rig-c/parts/issues/1163) is complete. The trusted host supplies `partsFileReferences(dir)` and its installed version in `>=2.25.0 <3.0.0`. Review has no Parts runtime dependency. See the [enumeration boundary](#parts-enumeration-boundary).
+- [Parts #1159](https://github.com/rig-c/parts/issues/1159) is complete. Its public `applyMeshEditAct` API is the typed in-process consumer of the edits that Create fetches on a finalized rig verdict. Standalone `--delta` remains available for the legacy export.
+- Create pins Review exactly. To publish the chest landmark declaration, Create must pin a Review release exporting `parseChestLandmarksAct` and support act@9. See [mesh-edit compatibility](#mesh-edit-act-compatibility) and [chest landmark compatibility](#chest-landmark-act-compatibility).
+
+## Removed
+
+| Name | Removed in | Replacement |
+| --- | --- | --- |
+| `rig-review interview` CLI command | 2.13.0 (#731) | [Interview-stage `rig-review open`](#interview-stage-project-opening). |
+| `startJobHub` and `JobHubOptions`, `JobHubJobOptions`, `JobHubJob`, `JobOwnerHub` | 4.0.0 (#806) | Standalone [`startJobHost`](#managed-owner-host) or the owner workspace. |
+| Image-set public surface, including `assertJobImageSetCapability` | 4.0.0 (#796, #798) | Direction publications use the existing inspection workspace. |
+| Fresh `image-review` publications and act@2 writer | #796 and #798 for publications, #1106 for the writer | Historical act@2 image-review bytes keep their readers. |
+| Fresh record `reopen` asks and acts | 4.10.0 (#989) | Historical records and acts keep their readers and compatibility types. |
+
+## History
+
+### Interview-stage project opening
 
 The additional CLI form is:
 
@@ -34,7 +103,7 @@ version/draft joins retain their existing readers and checks. This introduces
 no job API, act schema, consumer contract or package-export change; it does not
 replace the active standing review cycle with a picks-file handoff.
 
-## Managed owner host
+### Managed owner host
 
 `@rig-c/review/job-host` is the installed Bun entry for the full standing owner
 window and the semantic A/B host ports, introduced by Review #489. The CLI and
@@ -424,12 +493,12 @@ The runtime entry starts the full owner host with retained publication routes
 and shipped HTML, JavaScript and CSS. Raw Requests and the existing A/B ports
 preserve capability, origin, size, cancellation and replay checks.
 
-## Changelog
+### Changelog
 
 - Breaking, 4.0.0 (#806): remove `startJobHub` and its `JobHubOptions`, `JobHubJobOptions`, `JobHubJob` and `JobOwnerHub` types; the uncalled semantic-job hub is deleted.
 - Additive (#987): V3 hosts advertise `progress: true` in the `next` capabilities. The HTTP `progress` verb and optional `subscribeJobPage` port implement [job progress](REVIEW_PACKAGE.md#job-progress). `subscribeJob`, the durable event union, cursors and CLI preserve their existing contracts. The owner front opts into the page stream for V3 hosts, with the published web bundle consuming the extra line. Reload an owner page left open across a host upgrade to load the matching bundle.
 
-## Mesh-edit act compatibility
+### Mesh-edit act compatibility
 
 `rig-review/act@8` is additive to the managed-host act contract. Consumers
 narrow on `schema`. @8 uses the @7 envelope and comment rules, with optional
@@ -450,7 +519,7 @@ checks are part of the [act@8 wire contract](REVIEW_PACKAGE.md#mesh-edits-on-req
 The host facade adds `parseMeshEditsAct`, `JOB_MESH_EDITS_ACT_SCHEMA` and
 the three mesh edit types listed below.
 
-## Chest landmark act compatibility
+### Chest landmark act compatibility
 
 `rig-review/act@9` carries one or more `value.chestLandmarks` rows on a
 compiled rig's Request changes verdict. It accepts optional `meshEdits` and
@@ -469,7 +538,7 @@ Create must pin a Review release that exports `parseChestLandmarksAct` and
 support @9 before publishing the new declaration. Parts consumes the
 finalized act through the existing writer grant and source checks.
 
-## Named export inventory
+### Named export inventory
 
 The backend rig-still extension retains the original twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill` and `JobPartsVerdictAct` at act@5 (`PartsVerdictValue` with pointed `issues` and `words`, while preserving `JobLegacyPartsVerdictValue` at act@2 for historical acts). The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobPartsVerdictAct`, `JobLegacyPartsVerdictValue`, `PartsVerdictValue`, `JobPanelComposition`, `PanelComponent`, `JobRigStill` and `JobRigCapture` exports, [Review #563](https://github.com/rig-c/review/issues/563) adds five type-only exports (`JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`, `JobHostAttachField` and `JobHostAttachFailure`), and [Review #555](https://github.com/rig-c/review/issues/555) adds four type-only interview diagnostic exports (`JobInterviewJson`, `JobInterviewRecord`, `JobInterviewDiagnostic` and `JobInterviewDiagnostics`). [Review #588](https://github.com/rig-c/review/issues/588) activates record mode when `readRecordPublished` and `recordReaderId` are supplied to a host or session (`publicationMode: 'record-and-package'`), serving `rig-review/job-api@3` (`JOB_API_V3_SCHEMA`), `rig-review/act@4` (`JOB_RECORD_ACT_SCHEMA`) and normal owner URL model-free record inspection while keeping default package-only hosts and exact `package-only` `job-ui/<jobId>.json` descriptor bytes at @2 and enforcing `publicationMode` / `recordReaderId` reuse compatibility across ordinary reuse and strict `reuseOnly` attachment. It exports six additional record-mode runtime symbols (`JOB_API_V3_SCHEMA`, `JOB_RECORD_ACT_SCHEMA`, `JOB_RECORD_READER_ID`, `parseRecordAct`, `prepareJobRecordAct` and `prepareJobRecordSource`, for eighteen runtime exports total) and the V3/record type surface listed below. The rig and parts-verdict act revision constants, transport limits and the internal `POST /jobs/<jobId>/host` helper remain internal to their modules. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend) and [Model-free record mode and source seam](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
 
@@ -568,7 +637,7 @@ constant `JOB_PREVIOUS_DRAFT_SCHEMA` (`rig-review-previous-draft/1`), for twenty
 (`rig-review/act@8`), for thirty-one runtime exports total, plus the type-only
 `JobMeshEditValue`, `JobMeshEdit` and `JobMeshEditsAct`.
 
-### Host-bound act wait
+#### Host-bound act wait
 
 [Review #1005](https://github.com/rig-c/review/issues/1005) adds the host-bound
 finalized-act waiter `waitForJobAct`, for thirty-two runtime exports total, plus
@@ -829,7 +898,7 @@ without aliases or copied wire shapes.
 - `PartsCommentsVerdict`
 - `CheckpointEvidencePacketResult`
 
-## Parts enumeration boundary
+### Parts enumeration boundary
 
 C4 binds the exact public `partsFileReferences(dir)` array from `@rig-c/parts/src/parts.ts`, whose contract is frozen at Parts 2.25.0. The trusted host resolves an installed version in `JOB_PARTS_ENUMERATOR_RANGE` (`>=2.25.0 <3.0.0`), supplies its actual version and official callback through `partsEnumerator`, and declares `partsEnumeratorId`. `JobPartsIdentity.enumeratorVersion` carries that actual version. Manifest paths are work-root-relative and image paths are relative to the manifest directory. Each image carries `path`, bounded-string `role` and raw-byte `sha256`. Review compares the claimed array positionally with the official array, preserving its role/order/duplicate semantics. Upstream roles include `part`, `alternate`, `depth`, `painting` and `figure_mask`. Review bounds shape and paths, refuses traversal/symlinks, decodes PNGs and hashes retained bytes. Missing references refuse with row, role and path, including a missing sibling figure mask when a render copy exists. Unreferenced extras stay outside this parts identity. Composite source hashes use `rig-review-job-source/2`. Create #184 production reader/projection and official-hook wiring landed in [Create #251](https://github.com/rig-c/create/pull/251) and [Create #259](https://github.com/rig-c/create/pull/259).
 
@@ -837,7 +906,7 @@ The directory passed to the public callback holds the retained `parts.json` byte
 
 Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 4096. Individual raw files and decoded RGBA allocations are bounded at 64 MiB, and unique retained bytes at 256 MiB. Same-path multi-role references retain all rows and seal the physical bytes once. Parts' named manifest refusals are preserved through `PARTS_ENUMERATION_REFUSED`. Consumer refusals include `PARTS_REFERENCE_SET_MISMATCH`, `PARTS_REFERENCE_PATH_REFUSED`, `PARTS_REFERENCE_MISSING`, `PARTS_REFERENCE_PNG_INVALID`, `PARTS_REFERENCE_HASH_MISMATCH` and `PARTS_REFERENCE_LIMIT`. Details carry bounded row/role/path context where applicable. Failed publication preserves the committed head, source, generation and replay state.
 
-## Installed acceptance
+### Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
 A consumer checks the thirty-five runtime exports and the existing managed-host types, including
@@ -871,7 +940,7 @@ subpath. It restores the exact manifest bytes, verifies their SHA-256 and import
 again. The smoke prints the planned RED's raw exit and diagnostic. This control
 runs inside the ordinary installed smoke, alongside existing CLI coverage.
 
-## Record direction-review signoff
+### Record direction-review signoff
 
 Record publications accept `{kind: 'signoff', stage: 'direction-review'}` through
 the existing signoff path. Like `plan-approved`, `rigging-interview` and
@@ -885,7 +954,7 @@ The public `JOB_PLAN_BOUND_SIGNOFF_STAGES` remains the original three-entry
 package list. The fourth stage is record-only; package `direction-review`
 signoffs and historical comments acts still accept a nullable plan.
 
-## Record interview signoff
+### Record interview signoff
 
 Record publications also accept `{kind: 'signoff', stage: 'interview'}` through
 the existing modal and record act shape. A declared subject and non-empty displayed
@@ -893,7 +962,7 @@ plan remain required. The record stage type has five members; the public package
 plan-bound list remains at three. Package interview signoffs and historical acts
 retain their existing nullable-plan behavior. No schema or runtime export changes.
 
-## Record option sets
+### Record option sets
 
 An `option-set` publication may carry 2 to 64 sets ([Review #1004](https://github.com/rig-c/review/issues/1004)).
 `JobPublishResultV3` gains an optional `sets` (`{questionId, setId}` in order, the
@@ -910,7 +979,7 @@ while `subjects`, `optionSets` and `sourceHash` stay the publication's; an act
 whose per-act fields disagree refuses `JOB_ACT_INVALID` by name. One set's act
 bytes are unchanged. No runtime or type export is added. See the [option-set contract](REVIEW_PACKAGE.md#option-sets).
 
-## Record plan picture
+### Record plan picture
 
 A record-plan publication context and its retained source may carry an optional
 `planPicture: {path, sha256}` ([Review #983](https://github.com/rig-c/review/issues/983)):
@@ -932,7 +1001,7 @@ mark, labels are byte-identical to before. A label that does not parse back refu
 `COMMENT_PICTURE_LABEL_INVALID`. No act field or schema changes. See
 [pins on the plan picture](REVIEW_PACKAGE.md#pins-on-the-plan-picture).
 
-## Record interview comments
+### Record interview comments
 
 A historical record `interview-picks` act (`rig-review/act@4`) may carry an optional, additive
 `value.words` ([Review #1048](https://github.com/rig-c/review/issues/1048)): the
@@ -946,7 +1015,7 @@ record publications. Consumers of historical act@4 use `parseRecordAct`.
 Fresh picks carry structured comments through `parseCommentsAct` as described
 in the [comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
 
-## Package manifest `frames` declaration
+### Package manifest `frames` declaration
 
 `rig-review/1` manifests accept an optional `frames` field beside `model`: a
 literal package-relative path to a producer `rigc-frames/1` record inside the
