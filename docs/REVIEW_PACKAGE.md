@@ -1206,12 +1206,11 @@ pair in the publication's `files` closure. Existing limits apply: 4,096
 files, 64 MiB per raw file or decoded RGBA raster, and 256 MiB total.
 The declaration is limited to 4 KiB and the optional `diff` to 1 MiB.
 Parts `diff-drafts` writes `rig-parts-draft-diff/1` under `spec`
-([Parts #1369](https://github.com/rig-c/parts/issues/1369)). Review reads
-that marker under `schema` and looks for both declared composite hashes among
-the JSON string values, so the stock Parts report is refused
-(`JOB_SOURCE_MISMATCH`, detail `PREVIOUS_DRAFT_DIFF_INVALID`) until
-[Review #1163](https://github.com/rig-c/review/issues/1163). Review displays
-no figures for this operand.
+([Parts #1369](https://github.com/rig-c/parts/issues/1369)). Review accepts
+`rig-parts-draft-diff/1` under `spec` or legacy `schema` and requires the two
+markers to agree when both are present. Review looks for both declared
+composite hashes among the JSON string values. Review displays no figures
+for this operand.
 
 In assembled Difference, Painting is the default when `painting_in_rig`
 is available. The Previous accepted draft operand is offered only when
@@ -1253,7 +1252,7 @@ except for the limit refusal.
 | `PREVIOUS_DRAFT_PNG_INVALID operand=…` | A composite fails RGBA8 PNG validation. |
 | `PREVIOUS_DRAFT_SIZE operand=… expected=WxH received=WxH` | A composite differs from `rig_size`. |
 | `PREVIOUS_DRAFT_LIMIT operand=…` | A file or declaration exceeds a bound. The outer code is `JOB_SOURCE_UNRETAINABLE`. |
-| `PREVIOUS_DRAFT_DIFF_INVALID` | The optional file fails the schema-string or two-composite hash check. |
+| `PREVIOUS_DRAFT_DIFF_INVALID` | The optional report is malformed, has an unsupported marker value, or is missing either declared composite hash among its JSON string values. The detail appends `reason=marker-missing` when both markers are absent or `reason=marker-conflict` when both are present and disagree. |
 
 The publisher emits this field only when installed Review exports
 `JOB_PREVIOUS_DRAFT_SCHEMA` with value `rig-review-previous-draft/1` from
