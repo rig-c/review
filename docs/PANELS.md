@@ -255,6 +255,15 @@ Animate keeps its timeline in a panel of its own beside the other blocks, with T
 
 Curves show the compiled skeleton’s exact linear, stepped or cubic Bézier segments and stored handles. On an editable bone value track, **Segment** picks the outgoing key, **Mode** switches between linear, stepped and cubic Bézier, and dragging the two handles on the plot edits the segment’s `[cx1, cy1, cx2, cy2]` (`set_key_curve` / `set_key_ease` ops, coalesced on the same key and previewed live on the stage before **Apply · Rebuild**). The separately labeled **Runtime evaluation** cursor/readout uses Play’s ten-piece Float32 interpolation, which can differ from the cubic. Its local value includes setup rotation/translation and scale multiplication, in stored timeline order, before constraints and previews. Rotation is unwrapped local degrees. **Inspect time** accepts exact seconds; frame labels require the existing explicit clock. Nothing is written into the package. See [animation inspection](ANIMATION_INSPECTION.md) for the numeric validation and reproduction commands.
 
+The generated `idle` clip is never key-editable, and the refusal names why:
+
+| Refusal | Shows when | Remedy |
+| --- | --- | --- |
+| `ANIMATION_IDLE_GOVERNED_BY_TURN_PAD` | The model has a turn dial. `idle` is generated from the config's idle, blink and turn parameters. | Use the Turn & Idle controls. |
+| `ANIMATION_IDLE_NOT_KEY_EDITABLE` | The model has no turn dial. The producer generates `idle`. | Declare a clip in `motion.animations_from` and edit that clip's keys. |
+
+The timeline shows the refusal on its edit-lock line, and a key edit sent to `/api/rebuild` returns the same code as its error.
+
 ## Inspect a part
 
 The Parts explorer (left column; right on the compare page) selects an actual model slot on a specific single/A/B side. All rows follow the public held snapshot's exact draw-order z, including hidden/null slots. Search matches the exact source slot names: a row is shown when its name contains the typed text, case-sensitively, with no case folding or normalization. Arrow keys/Home/End move between result buttons, Enter/Space selects, and Escape returns to search. Whole rig restores full drawing. Selecting a drawn row fits its conservative world bounds within the existing camera zoom range; Sync cameras applies the same normalized camera action to every visible pane, while independent mode changes only that selected pane. Hidden/empty geometry reports `PART_FIT_UNAVAILABLE` and keeps the camera.
@@ -461,7 +470,7 @@ Historical interview chip wording:
 
 | Chip | Opens |
 | --- | --- |
-| 2 Interview | the interview over the screen; until that view lands it names `INTERVIEW_MODAL_UNAVAILABLE` |
+| 2 Interview | the interview over the screen |
 
 The former Stage 1 atlas frame is deleted;
 the Stage 1 paragraphs below describe the `/api/stage-parts` data that Setup reads.

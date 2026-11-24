@@ -60,8 +60,10 @@ mode match the screen and, in item view, it names the same part. Otherwise, a va
 its saved item or assembled mode, mesh, painting comparison and any recorded layer visibility,
 then writes the saved rig camera (adjusted for the part placement in item view with painting).
 The reference camera aligns only when camera sync is currently on; stale source or part bindings
-are refused. Atlas inspection remains read only for pointed comments. Joined compiled Stage 1 refuses issue authoring with
-`PARTS_JOINED_ISSUE_UNSUPPORTED` and directs the reviewer to the standing live job route. Its
+are refused. Atlas inspection remains read only for pointed comments. A standalone compiled session (`open --project --project-version N`) saves comments and
+Request changes locally and delivers nothing to the producer; feedback that must reach the producer goes through a
+[live job](REVIEW_PACKAGE.md#live-job-contract). A joined draft open refuses that save with `MODEL_UNAVAILABLE`.
+The joined draft verdict API refuses pointed issues with `PARTS_JOINED_ISSUE_UNSUPPORTED`. Its
 zero-issue approval path remains available.
 
 `rig-review-parts-verdict/4` stores `issues[]` of closed `rig-review-parts-comment/2` records (historical `rig-review-parts-verdict/2` and `/3` stored `comments[]` of `rig-review-parts-comment/1`; a historical `/1` verdict file reads with an empty array).

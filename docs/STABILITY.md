@@ -69,6 +69,8 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 
 ## History
 
+Each entry below was true when it was written. The sections above state what holds now.
+
 ### Interview-stage project opening
 
 The additional CLI form is:
