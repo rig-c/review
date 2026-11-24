@@ -2234,6 +2234,7 @@ export function mountComparePickedTools(host: ComparePickedToolsHost): ComparePi
     project: (x, y) => rigProject()(x, y),
     enabled: () => !!currentState().partModel && currentInspector() === 'playback',
     readOnlyReason: () => host.readOnly(),
+    hasTurnDial: () => currentState().partModel ? Boolean(currentSideData().feedbackCatalog.turnDials?.length) : undefined,
     pause: () => host.pause(),
     preview: fn => {
       sides[pickedSide].animAdjust = fn;

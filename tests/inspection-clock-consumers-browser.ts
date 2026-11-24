@@ -48,7 +48,7 @@ for(const lang of ['en','ko']){
   await wait('window.rigReviewEditor.idle.source()?.tracks?.length>0');
   await page.evaluate(`(()=>{document.querySelector('[data-mode="playback"]').click();const s=document.getElementById('animation-select');s.value='idle';s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   const idleGate=await page.evaluate<any>('window.rigReviewEditor.animation.gate()');
-  check(idleGate.code==='ANIMATION_IDLE_GOVERNED_BY_TURN_PAD','idle key editing remains refused '+JSON.stringify(idleGate));
+  check(idleGate.code==='ANIMATION_IDLE_NOT_KEY_EDITABLE','idle key editing remains refused '+JSON.stringify(idleGate));
   const paused=await loopPause();
   check(Math.abs(paused.panel-(red?paused.runtime:paused.display))<.001,'panel clock domain');
   await writeFile(join(out,lang+'-loop.png'),await page.screenshot());

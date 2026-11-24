@@ -72,6 +72,7 @@ export interface AnimationPanelOptions {
  pause?:()=>void;
  readOnlyReason?:string|null|(()=>string|null);
  hideGateBanner?:boolean;
+ hasTurnDial?:()=>boolean|undefined;
 }
 
 export interface SelectedAnimationKey {
@@ -667,7 +668,7 @@ export class AnimationInspectionPanel {
    return {editable:false,code:'ANIMATION_NOT_IN_SOURCE',reason:'No animation selected.',note:null};
   }
   if(this.animation==='idle'){
-   return checkAnimationEditGate('idle',this.source?.path??null);
+   return checkAnimationEditGate('idle',this.source?.path??null,undefined,this.options.hasTurnDial?.());
   }
   const ro=typeof this.options.readOnlyReason==='function'?this.options.readOnlyReason():this.options.readOnlyReason;
   if(ro||!this.options.apply||!this.options.preview){

@@ -2366,8 +2366,9 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     } catch { /* optional */ }
 
     const builder = new AnimationOpBuilder(baseAnimText, fallbackEasings);
+    const hasTurnDial = p.reviewedSource.rig ? Boolean(p.feedbackCatalog.turnDials?.length) : undefined;
     try {
-      for (const op of request.ops) builder.apply(op);
+      for (const op of request.ops) builder.apply(op, hasTurnDial);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const colon = msg.indexOf(': ');
