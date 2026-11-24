@@ -8,7 +8,7 @@ import {feedbackItemComments,feedbackTimingLabel,projectComments,timeOnlyBasis} 
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {createInterviewForm,interviewErrors,interviewPicksRecord} from '../web/interview-panel.ts';
-import {joinedInterviewForms} from '../web/job-session.ts';
+import {joinedInterviewForms,jobSubmissionRefusal} from '../web/job-session.ts';
 import {joinProject} from '../src/joined-project.ts';
 import {digest} from '../src/interview-project.ts';
 import {savePicks} from '../src/interview-picks.ts';
@@ -49,7 +49,7 @@ test('#839 Korean saved readback aliases use the requested conversational ending
 
 test('#788 active Rig still refusals have paired visible EN/KO messages without exemptions',()=>{
  for(const code of ['JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED'])for(const catalog of [enCatalog,koCatalog]) {
-  expect(catalog[code]).toBeUndefined();expect(catalog['job.submit.'+code]).toBeUndefined();
+  expect(catalog[code]).toBeUndefined();
  }
  for(const code of ['JOB_STILL_CAPTURE_FAILED',
   'JOB_STILL_BINDING_MISMATCH','JOB_STILL_UNAVAILABLE','JOB_STILL_OUTPUT_FAILED']) {
@@ -62,6 +62,18 @@ test('#788 active Rig still refusals have paired visible EN/KO messages without 
  }
  expect(WEB_STRING_EXEMPTIONS.some(row=>row.file==='web/job-rig-capture.ts')).toBe(false);
 });
+
+for(const [language,catalog] of [['en',enCatalog],['ko',koCatalog]] as const){
+ test(`#1166 still capture submission refusals render specific ${language} copy`,()=>{
+  const previous=getLanguagePreference();
+  try{
+   setLanguagePreference(language);
+   const codes=['JOB_STILL_CAMERA_NOT_FIXED','JOB_STILL_VIEW_UNSUPPORTED'];
+   expect(codes.map(code=>jobSubmissionRefusal(new Error(code)).text)).toEqual(codes.map(code=>
+    catalog['Review was not submitted: {0}']!.replace('{0}',catalog['job.submit.'+code]??code)));
+  }finally{setLanguagePreference(previous);}
+ });
+}
 
 test('Bar 1: English and Korean catalogues hold the exact same key and placeholder set, and a planted missing key fails it',()=>{
  expect(()=>assertCatalogParity(enCatalog,koCatalog)).not.toThrow();
