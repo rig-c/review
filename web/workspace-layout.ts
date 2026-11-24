@@ -5,6 +5,13 @@ export type WorkspacePanel=keyof WorkspacePanels;
 export type DesiredWorkspacePanels=Omit<WorkspacePanels,'communicationWidth'>&{communicationWidth?:number};
 /** `separator` is the drawn thickness of every resize handle in CSS pixels; its hit area is wider (styles.css `::after`). */
 export const workspaceMinimums=Object.freeze({stageWidth:240,stageHeight:180,separator:4});
+/** The smallest stack that fits the viewport and preferred chrome before anything scrolls more.
+ * Direction takes the lesser of its content height and a fraction of the stack.
+ * Solve that cap at the minimum stack size, independent of the previous Inspector allocation. */
+export function workspaceStageStackMinimum(chromeHeight:number,stageInsets:number,directionHeight:number,directionMaxFraction:number):number {
+ const fixed=workspaceMinimums.stageHeight+stageInsets+chromeHeight;
+ return Math.min(fixed+directionHeight,fixed/(1-directionMaxFraction));
+}
 export interface SeparatorRange {min:number;max:number;value:number;enabled:boolean}
 export type WorkspaceColumnKey=Exclude<WorkspacePanel,'inspectorHeight'>;
 /** Which saved width each side column uses; null means the page has no column on that side.

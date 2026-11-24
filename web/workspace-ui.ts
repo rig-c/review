@@ -1,6 +1,6 @@
 /** Browser workspace presentation. Source selection, player clocks and review decisions stay with the page. */
 import {WorkspacePreferenceStore,panelBounds,defaultWorkspacePanels,type WorkspaceLanguage,type WorkspacePanels,type WorkspacePreferences,type WorkspaceTheme} from './workspace-preferences.ts';
-import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,settleAnimationFrames,workspaceMinimums,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange,type DesiredWorkspacePanels} from './workspace-layout.ts';
+import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,settleAnimationFrames,workspaceMinimums,workspaceStageStackMinimum,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange,type DesiredWorkspacePanels} from './workspace-layout.ts';
 import {bindDomI18n,getLinkLanguage,resolveLanguage,setLanguagePreference,setLinkLanguage,tr,onLanguageChange} from './i18n.ts';
 import {panelMake,actionButton,labelledControl} from './view-controls.ts';
 
@@ -137,6 +137,13 @@ export interface WorkspaceRegions {
  /** False while no subject has mounted its blocks (a job waiting for its first publication): the frame keeps its bottom heading so it does not jump (#904). */
  bottomBound?:()=>boolean;
 }
+const pixels=(value:string)=>parseFloat(value)||0;
+const blockBorders=(style:CSSStyleDeclaration)=>pixels(style.borderTopWidth)+pixels(style.borderBottomWidth);
+const boxHeight=(node:Element)=>node.getBoundingClientRect().height;
+/** Use the preferred content height even after a previous layout has made this region scroll. */
+function preferredChromeHeight(node:HTMLElement,style:CSSStyleDeclaration):number {
+ return node.scrollHeight>node.clientHeight?Math.max(boxHeight(node),node.scrollHeight+blockBorders(style)):boxHeight(node);
+}
 /** `currentTheme`, when given, is the appearance the Settings theme select shows; otherwise it shows the saved default. */
 export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceRegions;changed:()=>void;defaultTheme:(theme:WorkspaceTheme)=>void;currentTheme?:()=>WorkspaceTheme|undefined;language?:HTMLSelectElement;bottomPanel?:{kind:string;strip:HTMLElement;act:HTMLElement;actHome:HTMLElement;collapse:HTMLButtonElement}}):WorkspaceUI {
  const scope=options.root??document,dialogs={} as Record<WorkspacePanel,HTMLDialogElement>;
@@ -165,6 +172,14 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  let languageMigrated=false;
  const store=new WorkspacePreferenceStore({onStatus:value=>{status.textContent=tr(value.detail);}});let desired={...store.get().panels};
  const stack=document.createElement('div');stack.className='workspace-stage-stack';for(const child of [...main.children])if(child!==inspector)stack.append(child);main.prepend(stack);
+ const rigPane=stage.querySelector<HTMLElement>('#rig-pane');
+ const rigViewport=rigPane?.querySelector<HTMLElement>('#rig-viewport');
+ const referencePane=rigViewport?stage.querySelector<HTMLElement>('#reference-pane'):null;
+ let rigPaneFloor:number|undefined;
+ const syncStageRows=()=>{
+  const stacked=referencePane&&!referencePane.hidden&&stage.dataset.orientation==='vertical';
+  stage.style.gridTemplateRows=stacked&&rigPaneFloor!==undefined?`minmax(0,1fr) minmax(${rigPaneFloor}px,1fr)`:'';
+ };
  const triggers=document.createElement('div');triggers.className='workspace-drawer-triggers';triggers.setAttribute('aria-label','Workspace panels');stack.prepend(triggers);
  const panels:Partial<Record<WorkspacePanel,HTMLElement>>={};if(columns.left)panels[columns.left]=left;if(columns.right&&explorer)panels[columns.right]=explorer;panels.inspectorHeight=inspector;
  const sides:Partial<Record<WorkspacePanel,'left'|'right'>>={};if(columns.left)sides[columns.left]='left';if(columns.right&&explorer)sides[columns.right]='right';
@@ -213,27 +228,69 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  function apply():void {
   if(disposed||applying)return;applying=true;
   try{
-   // Chrome shares the center width. It is not charged against the actual stage minimum.
-   // Authored JSON can fill the same slot as the rig while Direction metadata stays above it.
-   const chrome=[...stack.children].filter(node=>node!==stage&&node.id!=='direction-authored-body'&&!((node as HTMLElement).hidden)).reduce((sum,node)=>sum+(node as HTMLElement).getBoundingClientRect().height,0);
    const quiet=!!communicationKey&&!communicationShown(),shown:WorkspaceColumns=quiet?{...columns,right:null}:columns;shownColumns=shown;
    if(communicationKey){explorer!.hidden=quiet;handles[communicationKey].hidden=quiet;if(quiet){buttons[communicationKey].hidden=true;if(dialogs[communicationKey].open)dialogs[communicationKey].close();}}
-   available={width:Math.max(0,layout.clientWidth),height:Math.max(0,layout.clientHeight-chrome)};effective=allocateWorkspaceLayout(available,desired,shown);
+   const width=Math.max(0,layout.clientWidth),height=layout.clientHeight;
+   // Authored JSON can fill the same slot as the rig while Direction metadata stays above it.
+   const chrome=[...stack.children].filter((node):node is HTMLElement=>node!==stage&&node.id!=='direction-authored-body'&&!(node as HTMLElement).hidden);
+   const direction=rigPane&&!rigPane.hidden&&rigViewport&&!rigViewport.hidden&&!stage.hidden?chrome.find((node):node is HTMLDetailsElement=>node.id==='direction-panel'):undefined;
+   const authored=direction?.querySelector<HTMLDetailsElement>('#direction-authored-keys');
+   const rigStage=direction&&!(direction.open&&authored?.open&&!authored.hidden)?direction:undefined;
+   available={width,height:rigStage?0:Math.max(0,height-chrome.reduce((sum,node)=>sum+boxHeight(node),0))};
+   effective=allocateWorkspaceLayout(available,desired,shown);
    const mode=(panel:WorkspacePanel)=>effective[panel==='leftWidth'?'leftMode':panel==='rightWidth'?'rightMode':panel==='communicationWidth'?'communicationMode':'inspectorMode'];
-   for(const panel of present)if(!(quiet&&panel===communicationKey))dock(panel,mode(panel)==='drawer');
+   for(const panel of present)if(panel!=='inspectorHeight'&&!(quiet&&panel===communicationKey))dock(panel,mode(panel)==='drawer');
    const gap=workspaceMinimums.separator,side=(key:WorkspaceColumns['left'])=>key&&mode(key)==='panel'?{width:effective[key],separator:gap}:{width:0,separator:0},l=side(shown.left),r=side(shown.right);
    layout.style.setProperty('--workspace-columns',`${l.width}px ${l.separator}px minmax(0,1fr) ${r.separator}px ${r.width}px`);
+   let stackMinimum=0;
+   if(rigStage){
+    // Measure wrapped chrome at the new width after opening or closing Comments.
+    const stageStyle=getComputedStyle(stage),paneBorder=blockBorders(getComputedStyle(rigPane!));
+    const stageInsets=pixels(stageStyle.paddingTop)+pixels(stageStyle.paddingBottom)+blockBorders(stageStyle)+paneBorder;
+    stage.style.minHeight=`${workspaceMinimums.stageHeight+stageInsets}px`;
+    stage.style.flexBasis=stage.style.minHeight;
+    rigPaneFloor=workspaceMinimums.stageHeight+paneBorder;
+    syncStageRows();
+    const directionStyle=getComputedStyle(rigStage);
+    const fixedChrome=chrome.reduce((sum,node)=>{
+     if(node===rigStage)return sum;
+     if(node.id!=='turn-pad-host')return sum+boxHeight(node);
+     const style=getComputedStyle(node);
+     return sum+Math.min(pixels(style.maxHeight),preferredChromeHeight(node,style));
+    },0);
+    stackMinimum=workspaceStageStackMinimum(fixedChrome,stageInsets,preferredChromeHeight(rigStage,directionStyle),pixels(directionStyle.maxHeight)/100);
+    available.height=Math.max(0,height-stackMinimum+workspaceMinimums.stageHeight);
+    effective=allocateWorkspaceLayout(available,desired,shown);
+    stack.dataset.rigStageFloor='true';
+   }else if(stack.dataset.rigStageFloor){
+    delete stack.dataset.rigStageFloor;
+    stage.style.flexBasis='';
+    stage.style.minHeight='';
+    rigPaneFloor=undefined;
+    syncStageRows();
+   }
+   dock('inspectorHeight',effective.inspectorMode==='drawer');
+   const empty=bottomEmpty();inspector.hidden=empty;
    let bottomHeight=effective.inspectorHeight;
    if(bottom){
     const compact=collapsed||effective.inspectorMode==='drawer';bottomBody!.hidden=collapsed;
     if(bottom.act.parentElement!==bottom.actHome)bottom.actHome.append(bottom.act);
     const collapseLabel=tr(collapsed?'Expand bottom panel':'Collapse bottom panel');
     inspector.dataset.collapsed=String(compact);bottom.collapse.setAttribute('aria-expanded',String(!collapsed));bottom.collapse.textContent=collapsed?'⌃':'⌄';bottom.collapse.setAttribute('aria-label',collapseLabel);bottom.collapse.setAttribute('title',collapseLabel);
-    if(compact)bottomHeight=bottomHeading!.getBoundingClientRect().height;
+    if(compact)bottomHeight=boxHeight(bottomHeading!);
    }
-   const empty=bottomEmpty();inspector.hidden=empty;if(empty){handles.inspectorHeight.hidden=true;bottomHeight=0;}
-   main.style.gridTemplateRows=`minmax(0,1fr) ${effective.inspectorMode==='panel'&&!collapsed&&!empty?gap:0}px ${bottomHeight}px`;
-   layout.dataset.stageMinimum=String(effective.stageMinimumSatisfied);for(const binding of bindings)binding.refresh();options.changed();restore();
+   if(empty){handles.inspectorHeight.hidden=true;bottomHeight=0;}
+   const bottomGap=effective.inspectorMode==='panel'&&!collapsed&&!empty?gap:0;
+   // A compact heading still occupies a grid row. Its actual height sets the space available for scrolling chrome.
+   if(rigStage)stack.dataset.stageChromeScroll=String(!bottomGap&&height-bottomHeight<stackMinimum);
+   main.style.gridTemplateRows=`minmax(0,1fr) ${bottomGap}px ${bottomHeight}px`;
+   let stageMinimumSatisfied=effective.stageMinimumSatisfied;
+   if(rigStage){
+    const viewport=rigViewport!.getBoundingClientRect(),bounds=stack.getBoundingClientRect();
+    const visibleHeight=Math.min(viewport.bottom,bounds.bottom)-Math.max(viewport.top,bounds.top);
+    stageMinimumSatisfied=width>=workspaceMinimums.stageWidth&&visibleHeight>=workspaceMinimums.stageHeight;
+   }
+   layout.dataset.stageMinimum=String(stageMinimumSatisfied);for(const binding of bindings)binding.refresh();options.changed();restore();
   }finally{applying=false;}
  }
  const renderSettings=()=>{const value=store.get();
@@ -271,10 +328,42 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
   const content=new MutationObserver(()=>{if(panel.clientWidth<=0&&panel.clientHeight<=0)return;const next=extentOf(panel);if(next!==extentByTab.get(tab)){extentByTab.set(tab,next);if(tab===active())restore();}});content.observe(panel,{childList:true,subtree:true});
   disposers.push(()=>{if(timer)clearTimeout(timer);for(const type of ['wheel','pointerdown','touchstart','keydown','click'])panel.removeEventListener(type,intent,{capture:true});panel.removeEventListener('scroll',scrolled);content.disconnect();});
  }
- const observer=new ResizeObserver(schedule);observer.observe(layout);for(const node of [...stack.children])if(node!==stage)observer.observe(node);
+ const observer=new ResizeObserver(schedule);observer.observe(layout);
+ if(rigPane&&bottomHeading)observer.observe(bottomHeading);
  // A region above the stage that is shown or hidden (the chest editor bar, #1035) lays the workspace out before the
  // next frame, so the stage is never drawn under its minimum with a stale allocation.
- const chromeWatch=new MutationObserver(()=>{if(!applying)layoutNow();});chromeWatch.observe(stack,{childList:true});for(const node of [...stack.children])if(node!==stage)chromeWatch.observe(node,{attributes:true,attributeFilter:['hidden']});for(const tab of tabs)observer.observe(panelFor(tab));
+ const watchChrome=(node:Element)=>{
+  if(node===stage)return;
+  observer.observe(node);
+  chromeWatch.observe(node,{attributes:true,attributeFilter:node.id==='direction-panel'?['hidden','open']:['hidden']});
+  if(node.id==='direction-panel'||node.id==='turn-pad-host')for(const child of node.children)observer.observe(child);
+  if(node.id==='direction-panel'){
+   const keys=node.querySelector('#direction-authored-keys');
+   if(keys)chromeWatch.observe(keys,{attributes:true,attributeFilter:['hidden','open']});
+  }
+ };
+ const chromeWatch=new MutationObserver(records=>{
+  for(const record of records)if(record.type==='childList'){
+   for(const node of record.removedNodes)if(node instanceof Element){
+    observer.unobserve(node);
+    if(node.id==='direction-panel'||node.id==='turn-pad-host')for(const child of node.children)observer.unobserve(child);
+   }
+   for(const node of record.addedNodes)if(node instanceof Element)watchChrome(node);
+  }
+  if(!applying)layoutNow();
+ });
+ chromeWatch.observe(stack,{childList:true});
+ for(const node of stack.children)watchChrome(node);
+ if(rigPane)chromeWatch.observe(rigPane,{attributes:true,attributeFilter:['hidden']});
+ if(rigViewport)chromeWatch.observe(rigViewport,{attributes:true,attributeFilter:['hidden']});
+ chromeWatch.observe(stage,{attributes:true,attributeFilter:['hidden']});
+ if(referencePane){
+  const stageRowsWatch=new MutationObserver(()=>{if(rigPaneFloor!==undefined)syncStageRows();});
+  stageRowsWatch.observe(stage,{attributes:true,attributeFilter:['data-orientation']});
+  stageRowsWatch.observe(referencePane,{attributes:true,attributeFilter:['hidden']});
+  disposers.push(()=>stageRowsWatch.disconnect());
+ }
+ for(const tab of tabs)observer.observe(panelFor(tab));
  const resumed=()=>{if(!document.hidden)store.refresh();};document.addEventListener('visibilitychange',resumed);schedule();
  return {defaults:()=>store.get(),beforeTab:capture,afterTab:restore,scroll:()=>{capture();return JSON.stringify(memory.snapshot());},restoreScroll(value){if(typeof value!=='string')return;memory.replace(JSON.parse(value));restore();},revealInspector,revealCommunication,layoutNow,refresh:schedule,element:id=>require(id,true)??null,
   async settle(){layoutNow();await settleAnimationFrames();if(!disposed)apply();},
