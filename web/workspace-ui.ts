@@ -1,6 +1,6 @@
 /** Browser workspace presentation. Source selection, player clocks and review decisions stay with the page. */
 import {WorkspacePreferenceStore,panelBounds,defaultWorkspacePanels,type WorkspaceLanguage,type WorkspacePanels,type WorkspacePreferences,type WorkspaceTheme} from './workspace-preferences.ts';
-import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,settleAnimationFrames,workspaceMinimums,workspaceStageStackMinimum,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange,type DesiredWorkspacePanels} from './workspace-layout.ts';
+import {allocateWorkspaceLayout,bindWorkspaceSeparator,bindWorkspaceDrawer,defaultWorkspaceColumns,InspectorScrollMemory,inspectorTabs,settleAnimationFrames,workspaceMinimums,workspaceStageStackMinimum,type InspectorTab,type WorkspaceColumns,type WorkspacePanel,type SeparatorRange,type DesiredWorkspacePanels,type WorkspaceLayoutSpace} from './workspace-layout.ts';
 import {bindDomI18n,getLinkLanguage,resolveLanguage,setLanguagePreference,setLinkLanguage,tr,onLanguageChange} from './i18n.ts';
 import {panelMake,actionButton,labelledControl} from './view-controls.ts';
 
@@ -102,13 +102,13 @@ export function mountWorkspaceShell(options:WorkspaceHeaderOptions):WorkspaceHea
 }
 
 /** Reachable effective bounds, accounting for the other panel's saved desired size. */
-export function workspaceResizeRange(available:{width:number;height:number},desired:DesiredWorkspacePanels,panel:WorkspacePanel,columns:WorkspaceColumns=defaultWorkspaceColumns):SeparatorRange {
+export function workspaceResizeRange(available:WorkspaceLayoutSpace,desired:DesiredWorkspacePanels,panel:WorkspacePanel,columns:WorkspaceColumns=defaultWorkspaceColumns):SeparatorRange {
  const base=allocateWorkspaceLayout(available,desired,columns),range=base.separators[panel];if(!range.enabled)return range;
  const low=allocateWorkspaceLayout(available,{...desired,[panel]:panelBounds[panel].min},columns)[panel],high=allocateWorkspaceLayout(available,{...desired,[panel]:panelBounds[panel].max},columns)[panel];
  return {min:low,max:high,value:base[panel],enabled:high>low};
 }
 /** Invert the allocator instead of storing an already-clamped pixel value as a desktop desire. */
-export function workspaceResizeTarget(available:{width:number;height:number},desired:DesiredWorkspacePanels,panel:WorkspacePanel,target:number,columns:WorkspaceColumns=defaultWorkspaceColumns):number {
+export function workspaceResizeTarget(available:WorkspaceLayoutSpace,desired:DesiredWorkspacePanels,panel:WorkspacePanel,target:number,columns:WorkspaceColumns=defaultWorkspaceColumns):number {
  const range=workspaceResizeRange(available,desired,panel,columns);if(!range.enabled)return desired[panel]??defaultWorkspacePanels[panel];
  if(target<=range.min)return panelBounds[panel].min;if(target>=range.max)return panelBounds[panel].max;
  let low:number=panelBounds[panel].min,high:number=panelBounds[panel].max;
@@ -208,7 +208,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
  let collapsed=false;
  if(bottom){try{collapsed=localStorage.getItem(bottomCollapseKey)==='true';}catch{}}
  const memory=new InspectorScrollMemory();const active=():InspectorTab=>{const tab=selectedInspector(scope) as InspectorTab|undefined;return tab&&tabs.includes(tab)?tab:tabs[0]!;};
- let disposed=false,frame=0,applying=false,available={width:0,height:0},shownColumns:WorkspaceColumns=columns,effective=allocateWorkspaceLayout(available,desired,columns);
+ let disposed=false,frame=0,applying=false,available:WorkspaceLayoutSpace={width:0,height:0},shownColumns:WorkspaceColumns=columns,effective=allocateWorkspaceLayout(available,desired,columns);
  const panelFor=(tab:InspectorTab)=>require('inspector-'+tab);
  const userByTab=new Map<InspectorTab,boolean>(),extentByTab=new Map<InspectorTab,string>(),extentOf=(panel:HTMLElement)=>`${panel.scrollWidth}:${panel.scrollHeight}:${panel.clientWidth}:${panel.clientHeight}`;
  const capture=()=>{if(!tabs.length)return;const tab=active(),section=require('inspector-'+tab),panel=panelFor(tab),saved=memory.snapshot()[tab];if(!section.hidden&&(!saved||saved.x<=Math.max(0,panel.scrollWidth-panel.clientWidth)&&saved.y<=Math.max(0,panel.scrollHeight-panel.clientHeight)))memory.capture(tab,panel,false);};
@@ -242,6 +242,7 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
    for(const panel of present)if(panel!=='inspectorHeight'&&!(quiet&&panel===communicationKey))dock(panel,mode(panel)==='drawer');
    const gap=workspaceMinimums.separator,side=(key:WorkspaceColumns['left'])=>key&&mode(key)==='panel'?{width:effective[key],separator:gap}:{width:0,separator:0},l=side(shown.left),r=side(shown.right);
    layout.style.setProperty('--workspace-columns',`${l.width}px ${l.separator}px minmax(0,1fr) ${r.separator}px ${r.width}px`);
+   const empty=bottomEmpty();inspector.hidden=empty;
    let stackMinimum=0;
    if(rigStage){
     // Measure wrapped chrome at the new width after opening or closing Comments.
@@ -258,8 +259,17 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
      const style=getComputedStyle(node);
      return sum+Math.min(pixels(style.maxHeight),preferredChromeHeight(node,style));
     },0);
-    stackMinimum=workspaceStageStackMinimum(fixedChrome,stageInsets,preferredChromeHeight(rigStage,directionStyle),pixels(directionStyle.maxHeight)/100);
+    const directionHeight=preferredChromeHeight(rigStage,directionStyle),directionMaxFraction=pixels(directionStyle.maxHeight)/100;
+    stackMinimum=workspaceStageStackMinimum(fixedChrome,stageInsets,directionHeight,directionMaxFraction);
     available.height=Math.max(0,height-stackMinimum+workspaceMinimums.stageHeight);
+    const inspectorRoom=height-stackMinimum-gap,nominalInspectorMin=panelBounds.inspectorHeight.min;
+    if(bottomHeading&&!empty&&inspectorRoom>0&&inspectorRoom<nominalInspectorMin){
+     // Test the legacy allocator from its compact row, where Direction has the most room.
+     const compactHeight=boxHeight(bottomHeading);
+     const legacyDirection=Math.min(directionHeight,Math.max(0,height-compactHeight)*directionMaxFraction);
+     const legacyInspectorRoom=height-fixedChrome-legacyDirection-workspaceMinimums.stageHeight-gap;
+     available.keepInspectorDocked=legacyInspectorRoom>=nominalInspectorMin&&inspectorRoom>compactHeight+blockBorders(getComputedStyle(inspector));
+    }
     effective=allocateWorkspaceLayout(available,desired,shown);
     stack.dataset.rigStageFloor='true';
    }else if(stack.dataset.rigStageFloor){
@@ -270,7 +280,6 @@ export function bindWorkspaceUI(options:{root?:HTMLElement;regions?:WorkspaceReg
     syncStageRows();
    }
    dock('inspectorHeight',effective.inspectorMode==='drawer');
-   const empty=bottomEmpty();inspector.hidden=empty;
    let bottomHeight=effective.inspectorHeight;
    if(bottom){
     const compact=collapsed||effective.inspectorMode==='drawer';bottomBody!.hidden=collapsed;
