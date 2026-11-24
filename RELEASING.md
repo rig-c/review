@@ -18,7 +18,7 @@ with no reliance on a pre-existing GitHub Release.
 `bun test`, both in-memory browser builds, the bundled demo's `check`, and the
 empty-install smoke. The release runner installs ffmpeg/ffprobe for the full
 suite. `npm publish --dry-run --provenance --access public` runs the same gate
-without publishing. Full checks and builds run on the Nova pool during development.
+without publishing. Full checks and builds run on the remote job pool during development.
 
 The app ships its `src/` and `web/` sources. `bun run build` validates both web
 bundles in memory; it writes no bundle to pack. The installed server builds from

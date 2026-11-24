@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.18.5
+
+Review pins Play 1.25.0. Two changes keep a reviewer able to act, and an interview answer shows it is being sent. There is no export, act or contract change.
+
+### Changed
+
+* Pins `@rig-c/play` 1.25.0. In the before-and-after renders, the render area matched pixel for pixel (#1150, closes #1149).
+
+### Fixed
+
+* While an interview answer is being submitted, the disabled submit button shows Sending / 보내는 중 at a fixed width, and the form status announces it. The shared multi-set button stays busy until the last set settles. On a refusal or a network failure, the label returns, the picks and note are kept, and the form status shows the localized refusal (#1155, closes #1153).
+* With Direction expanded and Comments open, the rig stage keeps its 180 px minimum. Before this, it collapsed to 0 px at 1024×768 and no comment pin could be placed. Direction and the Turn Pad scroll instead, and the bottom dock goes compact where needed. A user's own bottom-panel resize still applies within the bound. An empty comment list now says how to pin: Comment · C → click the image to pin. The Comment button tooltip no longer mentions the mesh editor (#1160, closes #1154).
+
 ## 4.18.4
 
 Direction review shows only what a reviewer can use, and a composed direction take is drawn inside its authored stage. There is no export, act or contract change.
@@ -615,7 +628,7 @@ Retain exact pins to `@rig-c/play@1.24.0` and development-only `@rig-c/parts@2.3
 
 ## 2.9.0
 
-Return `@rig-c/review` to its `2.x` release line, with exact pins to `@rig-c/play@1.24.0` and development-only `@rig-c/parts@2.37.0` (rig-hq#22). Restore the Parts enumerator package range to `>=2.25.0 <3.0.0`.
+Return `@rig-c/review` to its `2.x` release line, with exact pins to `@rig-c/play@1.24.0` and development-only `@rig-c/parts@2.37.0`. Restore the Parts enumerator package range to `>=2.25.0 <3.0.0`.
 
 ## 3.7.0
 

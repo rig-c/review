@@ -22,7 +22,7 @@ The focused suite uses the published Play loader and real player, capturing loca
 bun test tests/animation-inspection.test.ts tests/preview.test.ts tests/part-selection.test.ts tests/animation-selection.test.ts tests/theme.test.ts
 ```
 
-`scripts/animation-inspection-fixture.ts --prepare` downloads pinned public getting-started inputs, reads installed producer signatures and checks input paths without solving. Without `--prepare`, it bootstraps the guide's hand-placed-joint route through step 9b using published parts 1.64.0 and core 2.70.0. It records commands, exits, source pins and compiled-model SHA-256 beneath `.review-state/215/guide-fixture/`. Heavy bootstrap and full suites follow the contributor Nova policy. Intermediate render/build files are removed after the checked package and receipt are retained.
+`scripts/animation-inspection-fixture.ts --prepare` downloads pinned public getting-started inputs, reads installed producer signatures and checks input paths without solving. Without `--prepare`, it bootstraps the guide's hand-placed-joint route through step 9b using published parts 1.64.0 and core 2.70.0. It records commands, exits, source pins and compiled-model SHA-256 beneath `.review-state/215/guide-fixture/`. Heavy bootstrap and full suites follow the contributor policy for the remote job pool. Intermediate render/build files are removed after the checked package and receipt are retained.
 
 `tests/animation-inspection.test.ts` covers stored key data, authored curve evaluation against the published Play runtime, selection routing and geometry picking. The public captures below record the inspected build and the views it displayed.
 

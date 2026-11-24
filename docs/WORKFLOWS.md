@@ -752,7 +752,7 @@ The materializer verifies the archive and each checkpoint sidecar before using
 disposable copies. Checkpoint commands identify the declared acts and option
 sets. The runner calls selected public consumers with explicit arguments.
 
-Run `bun tests/four-stage-browser.ts` in a bounded Nova job from the Review
+Run `bun tests/four-stage-browser.ts` in a bounded job on the remote job pool from the Review
 checkout after installing its frozen lock. Supply the original archive in
 `REVIEW_371_CREATE_ARCHIVE`, the directory with Create's frozen-lock
 `node_modules` in `REVIEW_371_CREATE_BENCH`, a new evidence directory in

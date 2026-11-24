@@ -338,7 +338,7 @@ test('Bar 6: feedback output (JSON and Issue Markdown) for one reviewed build is
 
 test('stage comments (#276) switch live between en and ko including hints, refusal note, and toolbar count while preserving open draft and reviewer summary',async()=>{
  class Node {
-  children:Node[]=[];parent:Node|null=null;style:any={};dataset:Record<string,string>={};className='';id='';textContent='';title='Comment · C (active mesh editor keeps C)';value='';placeholder='';type='';maxLength=0;hidden=false;disabled=false;readOnly=false;clientWidth=100;clientHeight=100;clientLeft=0;clientTop=0;captured=new Set<number>();attributes=new Map<string,string>();listeners=new Map<string,Function[]>();onclick:Function|null=null;onsubmit:Function|null=null;onkeydown:Function|null=null;
+  children:Node[]=[];parent:Node|null=null;style:any={};dataset:Record<string,string>={};className='';id='';textContent='';title='Comment · C';value='';placeholder='';type='';maxLength=0;hidden=false;disabled=false;readOnly=false;clientWidth=100;clientHeight=100;clientLeft=0;clientTop=0;captured=new Set<number>();attributes=new Map<string,string>();listeners=new Map<string,Function[]>();onclick:Function|null=null;onsubmit:Function|null=null;onkeydown:Function|null=null;
   classList={toggle:()=>{}};
   append(...nodes:Node[]){for(const n of nodes){n.parent=this;this.children.push(n);}}after(...nodes:Node[]){for(const n of nodes){n.parent=this.parent;this.parent?.children.push(n);}}replaceChildren(...nodes:Node[]){this.children=[];this.append(...nodes);}remove(){if(this.parent)this.parent.children=this.parent.children.filter(n=>n!==this);}setAttribute(k:string,v:string){this.attributes.set(k,v);}getAttribute(k:string){return this.attributes.get(k)??null;}closest(){return null;}focus(){}getBoundingClientRect(){return {left:0,top:0};}
   addEventListener(k:string,f:Function){this.listeners.set(k,[...(this.listeners.get(k)??[]),f]);}removeEventListener(k:string,f:Function){this.listeners.set(k,(this.listeners.get(k)??[]).filter(fn=>fn!==f));}dispatch(k:string,e:any={}){for(const f of this.listeners.get(k)??[])f(e);}async emit(k:string,e:any={}){await Promise.all((this.listeners.get(k)??[]).map(f=>f(e)));}setPointerCapture(id:number){this.captured.add(id);}hasPointerCapture(id:number){return this.captured.has(id);}releasePointerCapture(id:number){this.captured.delete(id);this.dispatch('lostpointercapture',{pointerId:id});}
@@ -379,7 +379,7 @@ test('stage comments (#276) switch live between en and ko including hints, refus
   const list=workspace.children.find(n=>n.id==='stage-comment-list')!;
   const refusalNote=toolbar.children.find(n=>n.id==='stage-comment-refusal')!;
   expect(toggle.textContent).toBe('Comment · C (1)');
-  expect(toggle.title).toBe('Comment · C (active mesh editor keeps C)');
+  expect(toggle.title).toBe('Comment · C');
 
   // Open existing comment in composer and type an in-progress draft edit.
   const rowBtn=list.children.find(n=>n.className==='stage-comment-item')!.children[0]!;
@@ -393,7 +393,7 @@ test('stage comments (#276) switch live between en and ko including hints, refus
   // Switch live to Korean: composer stays open, draft text is untouched, UI chrome and pin aria-label translate, while reviewer summary "Reset" stays untouched.
   setLanguagePreference('ko');
   expect(toggle.textContent).toBe('코멘트 · C (1)');
-  expect(toggle.title).toBe('코멘트 · C (활성 메시 편집기가 C 키를 사용함)');
+  expect(toggle.title).toBe('코멘트 · C');
   expect(list.getAttribute('aria-label')).toBe('코멘트');
   expect(list.children[0]!.textContent).toBe('코멘트');
   expect(composer.getAttribute('aria-label')).toBe('코멘트 작성기');
@@ -743,7 +743,7 @@ test('Bar 6 reviewer-text surfaces: renderProposals, renderFeedback, stage-comme
    const {doc,root}=makeTestDoc();
    const main=doc.createElement('main');
    const toolbar=doc.createElement('div');
-   const toggle=doc.createElement('button');toggle.id='stage-comment';toggle.title='Comment · C (active mesh editor keeps C)';
+   const toggle=doc.createElement('button');toggle.id='stage-comment';toggle.title='Comment · C';
    toolbar.append(toggle);
    const pane=doc.createElement('div');pane.clientWidth=100;pane.clientHeight=100;
    main.append(toolbar,pane);
@@ -1634,7 +1634,7 @@ test('#1026 stage comment row localizes producer and multi-digit reference frame
  const {doc,root}=makeTestDoc();
  const main=doc.createElement('main');
  const toolbar=doc.createElement('div');
- const toggle=doc.createElement('button');toggle.id='stage-comment';toggle.title='Comment · C (active mesh editor keeps C)';
+ const toggle=doc.createElement('button');toggle.id='stage-comment';toggle.title='Comment · C';
  toolbar.append(toggle);
  const pane=doc.createElement('div');pane.clientWidth=100;pane.clientHeight=100;
  main.append(toolbar,pane);

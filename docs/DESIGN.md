@@ -92,7 +92,7 @@ The owner's wording is retained verbatim.
 The owner's UI ruling requirement is retained verbatim.
 
 ```text
-HQ는 리뷰 UI 추가/변경은 오빠 판정 무조건 받아
+HQ must obtain the owner's ruling for every Review UI addition or change.
 ```
 
 The owner's comments clarification is retained verbatim.
@@ -299,10 +299,10 @@ These are source-policy guards, not browser or layout proof.
 
 The 24px strip/dock actions and 32px key inspector increase bottom-panel content.
 Check scrolling, tab overflow and the 240×180 minimum stage at 1280×720, both
-themes and EN/KO on Nova. The 24px comment pin replaces 26px; its source-point
+themes and EN/KO on the remote job pool. The 24px comment pin replaces 26px; its source-point
 translation is unchanged, but captured pin/composer geometry needs rechecking.
 Setup tables may wrap sooner with 11px minimum metadata. Wording, component
-placement and comparison control order are separate work. (Naru, 2026-11-16)
+placement and comparison control order are separate work.
 
 ## Comparison eligibility
 
