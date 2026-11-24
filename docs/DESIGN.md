@@ -62,17 +62,16 @@ change adds no screen, behavior or public contract.
   language and capability URLs as redirects or routes into the single entry.
   The owner rules on the shared shell layout before implementation.
 
-The main-view consistency requirement is retained verbatim.
+These rules restate the owner's rulings of 2026-11-11; the rulings are summarised
+here, not quoted.
 
-```text
-메인 뷰를 넣을거면 기준을 항상 규일하게 가져가(지침) * 메인뷰 하단 패널 리사이즈 * 뷰전환 기능 통일, * 에인뷰 코드가 하나가 아니라 여러개 복붙인지 확인
-```
-
-The single-entry architecture requirement is retained verbatim.
-
-```text
-뷰는 index.html 단일 진입점 하나고, 컴포넌트 조합으로 화면을 만들어내(ide like) 이거 안되면 진도 빼는거 의미없어, 이미 열린 헬 게이트를 더 활짝 여는 꼴이라고
-```
+- Main-view consistency (R3a, R4): wherever a main view is used it follows one
+  standard. Its bottom panel resizes, view switching works the same way
+  everywhere, and the main-view code is shared instead of copied per screen.
+- Single entry (R5): every view is served from the one `index.html` entry and a
+  screen is a composition of components, as in an IDE. The ruling makes this a
+  precondition: adding screen features before the structure exists only widens
+  the existing duplication.
 
 Act-field and downstream-consumer changes follow the existing HQ approval boundary
 for public contracts. Preserve historical record parsing, source binding and
@@ -81,37 +80,19 @@ in their contract references until an approved change maps the comments feature 
 those fields. [Live job contract](REVIEW_PACKAGE.md#live-job-contract),
 [Public API stability](STABILITY.md).
 
-The owner's wording is retained verbatim.
-
-```text
-위 지적 사항은 리뷰 UI 핵심 지침이야 모든 작업에 일관성 확보될 수 있게 기획을 업데이트 하거나 지침을 갈아 앞거나 해줘
-파츠 리뷰 툴바 * 툴바 메인 툴바 보조 툴바 영역 구분
-사용자 피드백 * 메모 기능은 모두 삭제, 모든 사용자 입력은 코멘트 하나로 통일
-```
-
-The owner's UI ruling requirement is retained verbatim.
-
-```text
-HQ must obtain the owner's ruling for every Review UI addition or change.
-```
-
-The owner's comments clarification is retained verbatim.
-
-```text
-코멘트가 왜 하나야? 미친거야?
-```
-
-The owner's survey and comment distinction is retained verbatim.
-
-```text
-설문과 코멘트는 다른 종류의 입력이야 / 설문은 여기 어떻게 할까요? 이고 / 코멘트는 유저가 여기 이상하니까 꼬쳐주세요! 라는 의미
-```
-
-The earlier shared-view requirement is also retained verbatim.
-
-```text
-뷰영역 공용 UX(리사이즈 등)
-```
+- Scope (R1 to R5): the points above are the core Review UI rules and apply to
+  every piece of work, so plans and guidance are brought in line with them.
+- Toolbars (R1): the parts review toolbar, like every toolbar, separates a main
+  area from a secondary area.
+- Feedback input (R2): memo features are removed and every piece of user
+  feedback goes through the one comments feature.
+- Owner ruling (R0): every Review UI addition or change needs the owner's ruling.
+- Number of comments (R2): one comments feature does not mean one comment. A
+  submission holds any number of comments.
+- Surveys and comments (R2): they are different kinds of input. A survey asks
+  the user how something should be done; a comment is the user saying that
+  something is wrong and should be fixed.
+- Shared view behaviour (R4): view areas share their UX, resizing included.
 
 ## Implemented foundation
 
@@ -169,7 +150,7 @@ The single review page is one inspection workspace: a left column, the stage, th
 - **Header.** **Setup · Animate · Compare** sits next to the package title and is the only mode switch (#741). Setup and Animate keep their existing `rig` / `playback` mode IDs. Compare is enabled with a second build and retains A/B with a reference; card D is parked. There is no second mode selector in the bottom panel. The pending ask is shown beside the act bar. **Historical:** numbered step chips and `stage-nav.ts` were removed; they must not be restored.
 - **View bars.** The main row holds Comment, camera sync and the shared controls in order: **Zoom in → Zoom out → Fit → 1:1 → View switch**, then zoom value. The separate secondary row holds layers and subject tools. `inspectionViewSwitch` in `view-controls.ts` defines **Side by side · Reference · Rig**, followed by **Difference** in Setup (#745 parts, #752 rig). Difference is disabled by name without a usable original reference; parts also require the declared rig-space painting operand, and rigs require a painting aligned to the native rig canvas. Outside Setup, rig Difference names `RIG_DIFFERENCE_SETUP_ONLY`. Compare retains its existing Side by side / Reference / Build A / Build B menu and legacy controls. Parts Overlay and Part opacity live in the secondary toolbar, not a grouped view menu. Appearance stays in Settings; numeric view state stays behind **View region**.
 - **Panel headers and scrolling.** The left column's header is a fixed row outside its scrolling body. The Inspector heading, the Settings title and each drawer's header (title and close) carry `.sticky-header` and are their panel's first child, so the body scrolls beneath them. Every scrolling region shares one thin scrollbar rule on `*` whose colours are the `--rv-scrollbar-*` tokens. Resize separators are drawn 4px with a 16px transparent hit area (22px on coarse pointers) and use `--rv-separator` / `--rv-separator-hover`, never a scrollbar colour.
-- **Chest-region editor.** In Setup only, the view bar's **Chest regions** toggle (`#chest-edit`, `aria-pressed`) opens `#chest-editor-bar` under the view bar: R / L groups (X, Y, R, Band), Mirror R → L, Download JSON, **Apply · Rebuild** and **Reset**. Apply sends the rows to the installed producer (`rig-parts remesh` on that part, then `rigc build`) through `POST /api/rebuild` (`src/rebuild.ts`, `src/producer.ts`) and loads the compiled scratch build in place; the producer's lines stream into `#chest-editor-status` and `#chest-editor-log`, a refusal shows its first named line verbatim, and Reset returns to the inspected build (README, *Chest regions*). The circles, their centre / core / band handles and labels are drawn on `#rig-overlay` through the crop → world mapping; handle drags (move, r, band) are clamped live with the example rebuild script's non-overlap rule (`CHEST_REGIONS_CLAMPED`) and never move the camera, while other drags and Space-drags pan. The values are the Setup **Chest regions · detail** block's fields, so its draft, export and binding apply unchanged; the block keeps names, bones, semi-axes, clip and the contour. Review builds no mesh: the rebuild is the producer's, into scratch under the state directory, never into the package. A **Circles** / **Landmarks** switch (`#bust-mode`, a hidden input the draft keeps) selects what Apply sends: Landmarks (#105) places the right apex, left apex and cleavage with draggable markers (`#lm-*`), alpha and clearance sliders and optional bone names, draws the producer's derived `bust_r` / `bust_l` live (`src/chest-landmarks.ts`, a transcription of parts' `deriveBustRegions`) and sends `{part, bust, configHash}`; review pre-checks only `CONFIG_BUST_CLEARANCE` and leaves bones and names to the producer. Chest landmarks and circles are a mesh-density hint, not a boundary: the owner's rule (2026-11-22) is 「가슴 지정은 메시 밀도를 높이기 위한 거고 원의 위치가 꼭 메시 안에 들어갈 필요는 없어」 (chest designation raises mesh density, and a circle need not sit inside the mesh). A circle or apex outside the mesh or part bounds is valid input and not a defect. Neither Review nor the producer refuses it; the only checks are the non-overlap clamp, the radius limits, the 1/GRID px grid within ±32768 px and `CONFIG_BUST_CLEARANCE`.
+- **Chest-region editor.** In Setup only, the view bar's **Chest regions** toggle (`#chest-edit`, `aria-pressed`) opens `#chest-editor-bar` under the view bar: R / L groups (X, Y, R, Band), Mirror R → L, Download JSON, **Apply · Rebuild** and **Reset**. Apply sends the rows to the installed producer (`rig-parts remesh` on that part, then `rigc build`) through `POST /api/rebuild` (`src/rebuild.ts`, `src/producer.ts`) and loads the compiled scratch build in place; the producer's lines stream into `#chest-editor-status` and `#chest-editor-log`, a refusal shows its first named line verbatim, and Reset returns to the inspected build (README, *Chest regions*). The circles, their centre / core / band handles and labels are drawn on `#rig-overlay` through the crop → world mapping; handle drags (move, r, band) are clamped live with the example rebuild script's non-overlap rule (`CHEST_REGIONS_CLAMPED`) and never move the camera, while other drags and Space-drags pan. The values are the Setup **Chest regions · detail** block's fields, so its draft, export and binding apply unchanged; the block keeps names, bones, semi-axes, clip and the contour. Review builds no mesh: the rebuild is the producer's, into scratch under the state directory, never into the package. A **Circles** / **Landmarks** switch (`#bust-mode`, a hidden input the draft keeps) selects what Apply sends: Landmarks (#105) places the right apex, left apex and cleavage with draggable markers (`#lm-*`), alpha and clearance sliders and optional bone names, draws the producer's derived `bust_r` / `bust_l` live (`src/chest-landmarks.ts`, a transcription of parts' `deriveBustRegions`) and sends `{part, bust, configHash}`; review pre-checks only `CONFIG_BUST_CLEARANCE` and leaves bones and names to the producer. Chest landmarks and circles are a mesh-density hint, not a boundary: the owner's rule (2026-11-22) is that chest designation raises mesh density, and a circle need not sit inside the mesh. A circle or apex outside the mesh or part bounds is valid input and not a defect. Neither Review nor the producer refuses it; the only checks are the non-overlap clamp, the radius limits, the 1/GRID px grid within ±32768 px and `CONFIG_BUST_CLEARANCE`.
 - **Mesh panel.** In Setup, after Chest regions · detail: `#mesh-panel` for the selected mesh part — mode-specific sliders with number fields (`#mesh-params`), regions (`#mesh-regions`; **Add circle**, **Draw polygon** and **Drag on stage** with `aria-pressed`), segments (`#mesh-segments`, bones from the loaded model, ribs stations per chain), the pending diff (`#mesh-diff`), the pre-check (`#mesh-precheck`), **Apply** / **Reset** / **Folds reading**, the status (`#mesh-status`), the counts (`#mesh-counts`) and the `TEXTURE_STRETCH` readout (`#mesh-readout`). Region colours are theme tokens (`--rv-mesh-region`, `--rv-mesh-region-fill`, `--rv-mesh-handle`).
 - **Weights.** In Setup, after the Mesh panel: `#weights` (#107), a watch layer. **Show weights** (`#weights-show`, `aria-pressed`) draws the selected slot's setup-pose mesh on `#rig-overlay` with each vertex coloured by the picked bone's stored weight (`#weights-bone`, influencing bones first) on the ramp tokens `--rv-weight-0` / `--rv-weight-half` / `--rv-weight-1`, or by its dominant bone (`#weights-mode` Max influence, `--rv-weight-bone-1…6`); `#weights-legend` and the hover readout `#weights-hover` sit under it. Weights are read from the compiled model document (`src/weights.ts` over the shared reader `src/setup-mesh.ts`); positions, triangles and hull come directly from published Play 1.14.0's `readSetupMesh` (`web/setup-pose.ts`, shared with Edit Mesh), including selected setup-slider deform. A never-played `RigPlayer` reads only public setup identity; its active skin selection stays distinct from the supplying table, and null identities are never guessed. A package without the document refuses `WEIGHTS_MODEL_UNAVAILABLE`. No edit, Apply or record; the Mesh edit preview wins when both are on.
 - **Bones.** In Setup, after Weights: `#bones-panel` (#109). **Edit bones on stage** (`#bones-edit`) draws the handoff config's bone anchors — `at`, chain `points`, `tip` — on `#rig-overlay` through the crop → world mapping (tokens `--rv-bone-line`, `-origin`, `-point`, `-tip`, `-pending`, `-selected`, `-ink`, `-label-bg`; the stage stays dark in both schemes, so both blocks carry the same values). A drag moves an anchor by whole rig px; each move is a `replace` op at its JSON Pointer naming the bone (`src/bone-anchors.ts`, `web/bones-panel.ts`). Check (`POST /api/bones-check`, `src/bones-check.ts`) runs `propose --from-config` and `compare` on a scratch copy of the patched config and shows their lines as printed; a LINT line blocks nothing. Apply is the generic patch runner's whole-rig `rig` op behind the reproduced baseline. Adding, removing or re-parenting bones is out of scope.
