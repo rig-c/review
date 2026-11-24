@@ -226,8 +226,6 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "3 Rig + animation": "3 Rig + animation",
   "4 Direction": "4 Direction",
   "Inspection stages": "Inspection stages",
-  "DIRECTION_NOT_AVAILABLE: Direction is not built yet.": "DIRECTION_NOT_AVAILABLE: Direction is not built yet.",
-  "INTERVIEW_MODAL_UNAVAILABLE: the interview over this screen is not built yet.": "INTERVIEW_MODAL_UNAVAILABLE: the interview over this screen is not built yet.",
   "{stage} · not available": "{stage} · not available",
   "INTERVIEW_UNAVAILABLE: No interview is attached to this inspection.": "INTERVIEW_UNAVAILABLE: No interview is attached to this inspection.",
   "DIRECTION_SOURCE_CHANGED: undeclared playback input": "DIRECTION_SOURCE_CHANGED: undeclared playback input",

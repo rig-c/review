@@ -226,8 +226,6 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "3 Rig + animation": "3 리그 + 애니메이션",
   "4 Direction": "4 연출",
   "Inspection stages": "검사 단계",
-  "DIRECTION_NOT_AVAILABLE: Direction is not built yet.": "DIRECTION_NOT_AVAILABLE: 연출은 아직 만들어지지 않았어요.",
-  "INTERVIEW_MODAL_UNAVAILABLE: the interview over this screen is not built yet.": "INTERVIEW_MODAL_UNAVAILABLE: 이 화면 위의 인터뷰는 아직 만들어지지 않았어요.",
   "{stage} · not available": "{stage} · 사용 불가",
   "INTERVIEW_UNAVAILABLE: No interview is attached to this inspection.": "INTERVIEW_UNAVAILABLE: 이 검토에 연결된 인터뷰가 없어요.",
   "DIRECTION_SOURCE_CHANGED: undeclared playback input": "DIRECTION_SOURCE_CHANGED: 선언되지 않은 재생 입력이에요.",
