@@ -201,14 +201,6 @@ function ensureMaps(): { enToKo: Map<string, string>; koToEn: Map<string, string
       if (!enToKoMap.has(enPre)) enToKoMap.set(enPre, koPre);
       if (!koToEnMap.has(koPre)) koToEnMap.set(koPre, enPre);
     }
-    const enParen = /^([^(){}]+)( \([^(){}]+\))$/.exec(en);
-    const koParen = /^([^(){}]+)( \([^(){}]+\))$/.exec(ko);
-    if (enParen && koParen && enParen[1] === koParen[1]) {
-      const enSub = enParen[2]!.slice(1);
-      const koSub = koParen[2]!.slice(1);
-      if (!enToKoMap.has(enSub)) enToKoMap.set(enSub, koSub);
-      if (!koToEnMap.has(koSub)) koToEnMap.set(koSub, enSub);
-    }
     const enCode = /^([A-Z][A-Z0-9_]{2,}):\s+([\s\S]+)$/.exec(en);
     const koCode = /^([A-Z][A-Z0-9_]{2,}):\s+([\s\S]+)$/.exec(ko);
     if (enCode && koCode && enCode[1] === koCode[1]) {
@@ -490,12 +482,9 @@ function translateCore(text: string, lang: ResolvedLanguage, depth: number): str
     for (let i = 0; i < pat.paramOrder.length; i++) {
       const idx = pat.paramOrder[i]!;
       const rawArg = m[i + 1] ?? '';
-      let translatedArg = shouldTranslateCapturedArg(rawArg, lang)
+      const translatedArg = shouldTranslateCapturedArg(rawArg, lang)
         ? translateCore(rawArg, lang, depth + 1)
         : rawArg;
-      if (rawArg.startsWith(' ') && !translatedArg.startsWith(' ') && rawArg.trim()) {
-        translatedArg = ' ' + translatedArg;
-      }
       values.set(idx, translatedArg);
     }
     return pat.targetTemplate.replace(/\{(\d+)\}/g, (full, d: string) => {

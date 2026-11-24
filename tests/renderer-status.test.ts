@@ -37,6 +37,12 @@ test('after-draw telemetry distinguishes observed backend from defaults, fallbac
   expect(canvasLabel).toBe(`Canvas frame · ${enBackend}`);
   expect(tr(canvasLabel,'ko')).toBe(`캔버스 프레임 · ${koBackend}`);
   expect(tr(tr(canvasLabel,'ko'),'en')).toBe(canvasLabel);
+  const heldBadge=new RendererBadge();
+  heldBadge.observe('drawn',dom({meshBackend:requested,meshBackendActive:'canvas2d',meshBackendFallbackReason:reason}));
+  const heldLabel=heldBadge.observe('held',null).label;
+  expect(heldLabel).toBe(`Last drawn · ${domLabel} · held`);
+  expect(tr(heldLabel,'ko')).toBe(`마지막 그림 · 새 메시 · ${koBackend} · 유지됨`);
+  expect(tr(tr(heldLabel,'ko'),'en')).toBe(heldLabel);
  }
  expect(rendererStatus(dom({meshBackend:'webgl',meshBackendActive:'canvas2d',meshBackendFallbackReason:'unknown' as any}),'succeeded').label).toBe('Fresh meshes · Canvas2D fallback');
  expect(rendererStatus({backend:'webgl',backendActive:'canvas2d',backendFallbackReason:'unknown' as any,framesReused:0,trianglesDrawn:4},'succeeded').label).toBe('Canvas frame · Canvas2D fallback');
