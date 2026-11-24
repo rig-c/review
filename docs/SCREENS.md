@@ -110,6 +110,8 @@ act bar, not another mode switch.
   reference. Parts additionally require the declared rig-space painting operand;
   rig Difference requires a loaded painting aligned to the declared native canvas.
   Rig Difference outside Setup names `RIG_DIFFERENCE_SETUP_ONLY`.
+- **Shipped (#957):** when a publication binds a previous accepted draft, parts
+  Difference can also compare with that draft.
 - Overlay is a secondary-toolbar control, not another menu group. Do not restore
   the superseded grouped Part/Overlay/Atlas menu.
 - Compare keeps its existing **Side by side · Reference · Build A · Build B**
@@ -196,7 +198,7 @@ inline Other text and per-question notes through the existing answer contract.
 - Parts submit the comments-based verdict; rig review retains its decision and
   submit action. Failed saves and drafts remain explicit.
 - **Shipped:** record checkpoint, signoff and interview asks open the
-  existing forms in a native dialog over this screen (#754), through the existing
+  existing forms in the right communication panel (#1041), through the existing
   act button. No-picture records use an explicitly empty inspection workspace.
 - **Planned:** C (#715) completes record-modal feedback cleanup; #756 removes
   the remaining job-window owner surfaces. Hosting a form on this screen is not
