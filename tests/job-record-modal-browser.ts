@@ -10,6 +10,7 @@ import {realJobWindowFixture,scriptedJobWindowFixture} from './helpers/job-windo
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
 import {parseRecordAct,parseCommentsAct,parseRecordSubject} from '../src/job-api.ts';
 import {JOB_API_SCHEMA,type JobApiResponse,type PendingAskV3} from '../src/job-contract.ts';
@@ -36,10 +37,6 @@ const visualRequests:{id:string;path:string;status?:number}[]=[];
 const errors:unknown[]=[],cases:unknown[]=[],commentPosts:string[]=[],actTransport:{method:string;path:string}[]=[];
 const dialogViewer='dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,#zoom-in,#zoom-out,#fit,#native-one,#view-menu)';
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(25);}throw new Error('715_WAIT '+label);}
-async function waitForRecordSaved(answeredLabel:string,label:string):Promise<void>{
- await wait(`(()=>{const state=document.getElementById('dirty');return state?.textContent===${JSON.stringify(answeredLabel)}&&state.dataset.saveState==='saved';})()&&
-  !document.querySelector('#job-record-asks:not([hidden])')`,label);
-}
 async function shot(out:string,name:string){await writeFile(join(out,name+'.png'),await page!.screenshot());}
 // #1041 B: the record form is a section of the right panel; the trigger brings it into view and focus, and no dialog opens.
 async function assertRecordInPanel(){assert.equal(await page!.evaluate(`document.activeElement.id`),'job-record-asks');assert.equal(await page!.evaluate<number>(`document.querySelectorAll('dialog[open]').length`),0,'no dialog holds the record form');}
@@ -137,7 +134,7 @@ try{
    await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'reopen after reload');
    if(kind==='checkpoint')await page.evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(selector)});f.querySelector('select[name=outcome]').value='pass';f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
    await shot(out,'before-submit');await click(page,selector+' button[type=submit]');
-   await waitForRecordSaved(language==='en'?'Answer saved':catalog['Answer saved'],`${kind} ${picture} ${language} saved in the topbar and its record section hidden`);
+   await expectRecordActSubmitted(page,wait,language,`${kind} ${picture} ${language} submitted`);
    const act=parseRecordAct(JSON.parse(await readFile(join(out,'one-screen.json'),'utf8')));assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);assert.notEqual(act.kind,'interview-picks');if(act.kind!=='interview-picks')assert.equal(act.value.words,expected);if(stageSignoff){assert.equal(act.kind,'signoff');assert.equal((act.value as {stage:string}).stage,signoffSubject.stage);assert.equal((act.value as {decision:string}).decision,'approved');}assert.equal('feedback' in act.value,false);assert.equal('comments' in act.value,false);
    await shot(out,'submitted');await page.evaluate(`(()=>{const d=JSON.parse(localStorage.getItem(${JSON.stringify(key)}));d.sourceHash='0'.repeat(64);localStorage.setItem(${JSON.stringify(key)},JSON.stringify(d));})()`);await page.goto('about:blank');await page.goto(url.href);if(picture){await wait(`globalThis.__access756==='pending'`,'reload capability');await page.evaluate(`globalThis.__releaseAccess756()`);}await wait(`!!document.querySelector('#stage-comment-list')&&!!document.querySelector(${JSON.stringify(selector)})`,'mismatched reload');assert.equal(await page.evaluate(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length`),0);
    assert.deepEqual(await jobInputHashes(fixture.root),before);const result={kind,picture,language,state,comments:draft.comments.length,sourceHash:act.source.sourceHash,sourceDraftRestored:true,mismatchedDraftRefused:true,pointedRefusedByReadOnly:picture==='parts',scalarOnly:true,words:expected,actPath:join(out,'one-screen.json')};cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('715_CASE_PASS '+kind+' '+picture+' '+language);
@@ -175,9 +172,7 @@ try{
    await click(page,'#save');await wait(`(()=>{const node=document.getElementById('review-draft-state');return node?.textContent===${JSON.stringify(catalog['job.review.approved'])}&&node.dataset.saveState==='saved';})()`,'mixed verdict approved before signoff');
    await wait(`!document.querySelector('#workspace-pending-ask').hidden&&!document.querySelector('#workspace-pending-ask').disabled`,'signoff offered after verdict');
    await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'mixed ask dialog opens');const state=await screen(out);const form=`form[data-job-ask="${asks[1]!.askId}"]`;await click(page,form+' button[type=submit]');
-   // #845 coalesces the completed answer's save state into the topbar; the verdict was asserted above.
-   const answeredLabel=language==='en'?'Answer saved':koCatalog['Answer saved'];
-   await wait(`['review-draft-state','dirty'].every(id=>{const node=document.getElementById(id);return node?.textContent===${JSON.stringify(answeredLabel)}&&node.dataset.saveState==='saved';})&&document.getElementById('workspace-act-row').hidden&&['dirty','review-draft-state','draft-state'].filter(id=>document.getElementById(id).getClientRects().length>0).join(',')==='dirty'&&!document.querySelector('#job-record-asks:not([hidden])')`,'mixed answer saved phase has one visible topbar save state and the record section hidden');
+   await expectRecordActSubmitted(page,wait,language,'sign-off submitted after mixed verdict');
    assert.equal(await page.evaluate<number>(`document.querySelectorAll(${JSON.stringify(form)}).length`),0,'saved signoff leaves the live forms');
    const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0}),next=await response.json();assert.equal(next.ok,true);const acts=next.value.events.filter((event:any)=>event.type==='act').map((event:any)=>event.act);assert.deepEqual(acts.map((act:any)=>act.kind),[parts?'parts-verdict':'review-verdict','signoff']);for(const act of acts){parseCommentsAct(act);assert.equal(act.source.sourceHash,publication.source.sourceHash);}assert.deepEqual(await jobInputHashes(fixture.input.root),before);await shot(out,'submitted');const submittedUi=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.value,saveDisabled:document.querySelector('#save')?.disabled,actState:['dirty','review-draft-state','draft-state'].map(id=>{const node=document.getElementById(id);return {id,text:node?.textContent,kind:node?.dataset.saveState,visible:!!node?.getClientRects().length};})})`);const result={kind:parts?'mixed-parts':'mixed',language,state,submittedUi,transport:actTransport.filter(event=>event.path.includes('/jobs/'+fixture.host.session.jobId+'/')),acts,sourceImmutable:true};cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('715_MIXED_PASS '+language);
   }catch(error){const ui=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.value,saveDisabled:document.querySelector('#save')?.disabled,activeElement:document.activeElement?.id,dialogs:[...document.querySelectorAll('dialog')].map(n=>({id:n.id,open:n.open}))})`);const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0});const next=await response.json();await writeFile(join(out,'failure-state.json'),JSON.stringify({error:String(error),ui,next,actTransport},null,2)+'\n');await shot(out,'failure');throw error;}finally{await page.goto('about:blank');await fixture.close();}
@@ -251,8 +246,7 @@ try{
    await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden]) ${checkpointForm}')`,'separate trigger opens the remaining checkpoint');
    await assertTextOnlyDialog();
    await click(page,`#job-record-asks ${checkpointForm} button[data-job-text="Pass"]`);
-   const catalog=language==='en'?enCatalog:koCatalog;
-   await waitForRecordSaved(language==='en'?'Answer saved':catalog['Answer saved'],'remaining checkpoint saved and its record section hidden');
+   await expectRecordActSubmitted(page,wait,language,'remaining checkpoint submitted after interview');
    assert.equal(await page.evaluate<boolean>(`!!document.querySelector(${JSON.stringify(selectedQuestion)})&&!!document.querySelector('${form}[data-interview-answered=true]')`),true);
    assert.equal(await page.evaluate<string>(visiblePainting),firstPainting);
    await shot(out,'question-saved');

@@ -32,7 +32,7 @@ import {createJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts
 import type {JobRigPresentation} from './viewport-capture.ts';
 import {labelledControl} from './view-controls.ts';
 import {createInterviewForm,interviewPicksRecord,interviewRecords,interviewErrors,type InterviewDisplayQuestion} from './interview-panel.ts';
-import {JOB_COMMENTS_ACT_SCHEMA, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
+import {JOB_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_ENABLED_ACT_KINDS, JOB_PANEL_COMPOSITION_SCHEMA, JOB_PARTS_VERDICT_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, parsePanelComposition} from '../src/job-contract.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
 
 /** Imported runtimes may throw arbitrary prose. Only registered refusal copy reaches the window. */
@@ -100,6 +100,7 @@ export interface JobWindowState {
     readonly failure?: unknown;
     readonly previousLabel: string | null;
     readonly pending: readonly JobWindowAsk[];
+    readonly recordReceiptAskId?: string;
     readonly retainedDrafts: readonly JobRetainedDraft[];
 }
 function unwrap<Value>(result: JobResult<Value>): Value {
@@ -117,6 +118,32 @@ function sourceSnapshot(source: unknown): string {
         const record = value as Record<string, unknown>;
         return Object.fromEntries(Object.keys(record).sort().map(key => [key, record[key]]));
     });
+}
+function isRecordAnswer(kind: string): boolean {
+    return kind === 'signoff' || kind === 'checkpoint';
+}
+export function isPendingOwnerAsk(ask: PendingAskV3): boolean {
+    return ask.status === 'pending' && JOB_ENABLED_ACT_KINDS.some(kind => kind === ask.subject.kind);
+}
+/** Match the finalized envelope to the displayed ask. Record acts omit the display-only direction summary. */
+export function matchesJobRecordAct(ask: PendingAskV3, act: ActV3 | undefined, jobId: string | undefined, submission?: UISubmissionV3): boolean {
+    if (!act || !jobId || act.jobId !== jobId || act.askId !== ask.askId || act.publicationId !== ask.publicationId ||
+        typeof act.actId !== 'string' || !act.actId || !Number.isFinite(Date.parse(act.at)) ||
+        act.authority?.actor !== 'human' || act.authority.channel !== 'review-ui' || !act.source || !act.value) return false;
+    const reviewer = act.authority.reviewer;
+    if (typeof reviewer?.id !== 'string' || !reviewer.id || (reviewer.role !== 'owner' && reviewer.role !== 'delegate')) return false;
+    const source = ask.source;
+    if (source.subject === 'plan') {
+        const {directionReview: _summary, ...binding} = source;
+        if (act.schema !== JOB_RECORD_ACT_SCHEMA || sourceSnapshot(act.source) !== sourceSnapshot(binding)) return false;
+    } else if ((act.schema !== JOB_ACT_SCHEMA && act.schema !== JOB_COMMENTS_ACT_SCHEMA && act.schema !== JOB_COMMENT_CONTEXT_ACT_SCHEMA) ||
+        sourceSnapshot(act.source) !== sourceSnapshot(source)) return false;
+    const subject = ask.subject;
+    if (subject.kind === 'signoff' && act.kind === 'signoff') return act.value.stage === subject.stage && act.value.decision === 'approved';
+    return subject.kind === 'checkpoint' && act.kind === 'checkpoint' && act.value.checkpointId === subject.checkpointId &&
+        act.value.planStepId === (('planStepId' in subject ? subject.planStepId : undefined) ?? subject.checkpointId) &&
+        (act.value.outcome === 'pass' || act.value.outcome === 'fail') &&
+        (submission?.kind !== 'checkpoint' || act.value.outcome === submission.value.outcome);
 }
 function assertJobAskSource(ask: PendingAskV3, display: DisplayPublicationV3): void {
     const source: SourceV3 = ask.subject.kind === 'interview-picks' &&
@@ -205,11 +232,14 @@ export function createJobWindow<Prepared>(options: {
 }) {
     const { transport, adapter, pageId } = options;
     const pending = new Map<string, JobWindowAsk>();
+    const recordAttempts = new Map<string, UISubmissionV3>();
     const rigAttempts = new WeakSet<UISubmissionV3>();
     const retainedDrafts: JobRetainedDraft[] = [];
     let initialDrafts: readonly JobRetainedDraft[] | null = options.initialRetainedDrafts
         ? [...options.initialRetainedDrafts] : null;
     let generation = 0;
+    let latestAskGeneration = 0;
+    let recordReceiptAskId: string | undefined;
     let displayed: DisplayPublicationV3 | null = null;
     let receipt: JobDisplayReceipt | null = null;
     let preparing = false;
@@ -227,6 +257,7 @@ export function createJobWindow<Prepared>(options: {
         return {
             generation, displayed, receipt, preparing, closed, error, previousLabel, ...(errorOrigin ? {errorOrigin} : {}), ...(failure !== undefined ? {failure} : {}),
             pending: [...pending.values()], retainedDrafts: [...retainedDrafts],
+            ...(recordReceiptAskId !== undefined ? {recordReceiptAskId} : {}),
         };
     }
     function changed(): void { adapter.changed(state()); }
@@ -346,6 +377,14 @@ export function createJobWindow<Prepared>(options: {
         });
         return queue;
     }
+    function settleRecordAsk(ask: JobWindowAsk, act: ActV3, observedGeneration = recordAttempts.get(ask.askId)?.expectedGeneration): void {
+        pending.set(ask.askId, {...ask, status: 'answered', act});
+        recordAttempts.delete(ask.askId);
+        // A newer request owns the row even if an older request finalizes later.
+        if (observedGeneration !== undefined && observedGeneration < latestAskGeneration) return;
+        if ([...pending.values()].some(other => other.publicationId === ask.publicationId && isPendingOwnerAsk(other))) return;
+        recordReceiptAskId = ask.askId;
+    }
     function event(value: EventV3): void {
         if (stopped || value.jobId !== options.jobId)
             return;
@@ -361,12 +400,18 @@ export function createJobWindow<Prepared>(options: {
         }
         else if (value.type === 'pending') {
             const previous = pending.get(value.ask.askId);
+            if (!previous && isPendingOwnerAsk(value.ask)) {
+                latestAskGeneration = Math.max(latestAskGeneration, value.generation);
+                recordReceiptAskId = undefined;
+            }
             pending.set(value.ask.askId, previous?.act ? {...value.ask, status: 'answered', act: previous.act} : value.ask);
         }
         else if (value.type === 'act') {
-            const ask = pending.get(value.act.askId);
-            if (ask)
+            const ask = pending.get(value.act?.askId);
+            if (ask && !isRecordAnswer(ask.subject.kind) && !isRecordAnswer(value.act.kind))
                 pending.set(ask.askId, { ...ask, status: 'answered', act: value.act });
+            else if (ask && !ask.act && matchesJobRecordAct(ask, value.act, options.jobId))
+                settleRecordAsk(ask, value.act);
         }
         else if (value.type === 'closed') {
             closed = true;
@@ -374,7 +419,7 @@ export function createJobWindow<Prepared>(options: {
         changed();
     }
     async function submit(input: UISubmissionV3): Promise<JobResult<ActV3>> {
-        if (closed)
+        if (closed || stopped)
             return { ok: false, error: { code: 'JOB_CLOSED', message: 'JOB_CLOSED' } };
         const ask = pending.get(input.askId);
         const retry = input.capture !== undefined && rigAttempts.has(input);
@@ -387,9 +432,16 @@ export function createJobWindow<Prepared>(options: {
         }
         // The backend authenticates the actual Request and validates the semantic value.
         if (input.capture !== undefined) rigAttempts.add(input);
+        const record = isRecordAnswer(input.kind);
+        if (record && ask) recordAttempts.set(ask.askId, input);
         const result = await transport.submit(input);
-        if (result.ok && ask) {
-            pending.set(ask.askId, {...ask, status: 'answered', act: result.value});
+        if (!result.ok && recordAttempts.get(input.askId) === input) recordAttempts.delete(input.askId);
+        const current = pending.get(input.askId);
+        // Keep the transport result for existing callers. Only a matching record act settles the local ask.
+        if (!stopped && result.ok && current && (!record ||
+            !current.act && matchesJobRecordAct(current, result.value, options.jobId, input))) {
+            if (record) settleRecordAsk(current, result.value, input.expectedGeneration);
+            else pending.set(current.askId, {...current, status: 'answered', act: result.value});
             changed();
         }
         return result;
@@ -1673,9 +1725,11 @@ export interface JobFormDependencies {
         const status = interviewForm?.status??node('p');
         status.setAttribute('role', 'status');
         form.append(status);
+        let disposed = false, recordSubmitted = false;
+        const dispose = () => {if (disposed) return; disposed = true; entry.submitting = false; disposeInterview?.();};
         const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
-            submitting: false, ...(disposeInterview?{dispose:disposeInterview}:{}) };
-        if(disposeInterview)form.addEventListener('job-form-dispose',disposeInterview);
+            submitting: false, dispose };
+        form.addEventListener('job-form-dispose', dispose);
         if(questionSet&&interviewForm)questionSet.join(entry,interviewForm.refresh);
         const updateInterviewSubmit = (sending: boolean) => {
             const key = sending ? 'Sending' : submitKey;
@@ -1685,9 +1739,10 @@ export interface JobFormDependencies {
             else submit.removeAttribute('aria-busy');
             status.className = sending ? 'sr-only' : '';
         };
+        const jobId = /^\/jobs\/([^/]+)\//.exec(prepared.display.routes.entry)?.[1];
         try {
             const primaryKey = localDraftKey(prepared.display);
-            const legacyPrefix = 'rig-review-job-draft/1:' + (/^\/jobs\/([^/]+)\//.exec(prepared.display.routes.entry)?.[1] ?? '') + ':';
+            const legacyPrefix = 'rig-review-job-draft/1:' + (jobId ?? '') + ':';
             const legacyCurrentKey = legacyPrefix + prepared.display.publication.publicationId + ':' + prepared.display.publication.source.sourceHash;
             const legacyPreviousKey = prepared.display.publication.previousPublicationId
                 ? legacyPrefix + prepared.display.publication.previousPublicationId + ':' + prepared.display.publication.source.sourceHash : '';
@@ -1737,10 +1792,11 @@ export interface JobFormDependencies {
             }
         }
         catch { /* Invalid or unavailable local drafts grant no submission authority. */ }
-        form.oninput = () => { entry.dirty = true; entry.submissionId = crypto.randomUUID(); saveDraft(); };
+        form.oninput = () => { if (disposed || recordSubmitted) return; entry.dirty = true; entry.submissionId = crypto.randomUUID(); saveDraft(); };
         let attemptedValue:string|undefined;
         form.onsubmit = async (event) => {
             event.preventDefault();
+            if (disposed || entry.submitting || recordSubmitted) return;
             const state = window.state();
             const receipt = state.receipt;
             if (!receipt || state.preparing || state.closed || !access.capability || !form.reportValidity())
@@ -1756,9 +1812,14 @@ export interface JobFormDependencies {
                     expectedGeneration: state.generation, submissionId: entry.submissionId, value } as UISubmissionV3;
                 const activeAsk = state.pending.find(item => item.askId === ask.askId);
                 if (!activeAsk) throw new Error('JOB_ASK_INVALID');
+                if (commentOnly && (activeAsk.status !== 'pending' || receipt.publicationId !== ask.publicationId)) return;
                 entry.submitting = true;
                 fields.disabled = true;
-                if (interviewForm) {
+                if (commentOnly) {
+                    delete status.dataset.jobText;
+                    status.textContent = '';
+                    form.dispatchEvent(new Event('job-answer-sending'));
+                } else if (interviewForm) {
                     interviewRefusal = undefined;
                     status.removeAttribute('title');
                     updateInterviewSubmit(true);
@@ -1767,20 +1828,27 @@ export interface JobFormDependencies {
                     if (questionSet) form.dispatchEvent(new Event('job-answer-sending'));
                 }
                 const frozen = await Promise.resolve(input);
+                if (disposed) return;
                 if (entry.submissionId !== frozen.submissionId) throw new Error('JOB_STILL_BINDING_MISMATCH');
                 const result = await window.submit(frozen);
+                if (disposed) return;
                 if (!result.ok)
                     throw new Error(result.error.code, {cause: (result.error as {cause?: unknown}).cause});
+                if (commentOnly && !matchesJobRecordAct(ask, result.value, jobId, frozen)) {
+                    throw new Error('JOB_ACT_INVALID');
+                }
+                recordSubmitted = commentOnly;
                 entry.submitting = false;
                 entry.dirty = false;
                 if (interviewForm) updateInterviewSubmit(false);
-                status.dataset.jobText = 'job.saved';
-                status.textContent = t('job.saved');
+                status.dataset.jobText = commentOnly ? 'Submitted' : 'job.saved';
+                status.textContent = t(status.dataset.jobText);
                 if(subject.kind==='interview-picks'){form.dataset.interviewAnswered='true';form.dispatchEvent(new Event('change'));}
                 saveDraft();
                 form.dispatchEvent(new Event('job-answer-saved',{bubbles:true}));
             }
             catch (error) {
+                if (disposed) return;
                 entry.submitting = false;
                 if (interviewForm) {
                     updateInterviewSubmit(false);
@@ -1792,7 +1860,9 @@ export interface JobFormDependencies {
                         ? error.message : 'JOB_ACT_INVALID';
                     status.textContent = jobWindowRefusal(error, 'JOB_ACT_INVALID');
                 }
-                fields.disabled = false;
+                const current = window.state();
+                fields.disabled = commentOnly && (current.closed || current.preparing || current.receipt?.publicationId !== ask.publicationId ||
+                    !current.pending.some(item => item.askId === ask.askId && item.status === 'pending'));
                 // A shared question-set submit waits on every member; a failed one must let it re-enable for the retry.
                 form.dispatchEvent(new Event('job-answer-failed'));
             }

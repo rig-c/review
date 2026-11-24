@@ -12,6 +12,7 @@ import {loadReview} from '../src/manifest.ts';
 import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 const out=Bun.argv[Bun.argv.indexOf('--out')+1]??'artifacts/act-bar';await mkdir(out,{recursive:true});
 const observations:unknown[]=[],failures:string[]=[];
 const flashOnly=Bun.argv.includes('--flash-only');
@@ -112,7 +113,8 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    const scrollToSubmit=`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`;
    if(interview)await page.evaluate<void>(scrollToSubmit);
    await click(page,selector);
-   await until(page,`${interview?questionSaved:recordDialogClosed}&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
+   if(interview)await until(page,`${questionSaved}&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
+   else await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`);
    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
    if(mode==='joined-interview'){
     assert.equal(await page.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false,'saved first answer leaves the opener enabled');

@@ -16,6 +16,7 @@ import {PNG} from 'pngjs';
 import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
 import {createJobHostPorts,jobHash,parseCommentsAct,parseRecordAct} from '../src/job-api.ts';
 import {JOB_API_V3_SCHEMA,jobRawActMediaType,type PendingAskV3} from '../src/job-contract.ts';
@@ -195,8 +196,7 @@ try{
      // Submit the plan sign-off: the signed words carry the A1 labels.
      await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'record section');
      await shot(out,'6-before-submit');await click(page,selector+' button[type=submit]');
-     await wait(`(()=>{const s=document.getElementById('dirty');return s?.textContent===${JSON.stringify(language==='en'?'Answer saved':catalog['Answer saved'])}&&s.dataset.saveState==='saved';})()&&
-      !document.querySelector('#job-record-asks:not([hidden])')`,'signoff saved');
+     await expectRecordActSubmitted(page,wait,language,'plan sign-off submitted');
     }else{
      // Submit the interview picks with the original pointed and general comments.
      for(const value of ['biped_std','density_high']){const option=selector+` label.interview-option:has(input[value="${value}"])`;
