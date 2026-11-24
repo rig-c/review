@@ -3556,6 +3556,8 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.submit.JOB_ACT_KIND_DISABLED": "아직 잡에서는 메시 편집을 제출할 수 없어요.",
   "job.submit.JOB_ACT_NOTHING_TO_SUBMIT": "판정이 선택되지 않았어요 — 승인, 수정 요청 또는 체크포인트 결과를 선택해 주세요.",
   "job.submit.JOB_STILL_CAPTURE_FAILED": "리그 이미지를 캡처하지 못했어요 — 리그가 다 그려질 때까지 기다린 뒤 다시 제출해 주세요.",
+  "job.submit.JOB_STILL_CAMERA_NOT_FIXED": "캡처에 자유 카메라나 기본값이 아닌 프레이밍이 적용됐어요 — 고정 카메라와 기본 프레이밍으로 되돌린 뒤 다시 제출해 주세요.",
+  "job.submit.JOB_STILL_VIEW_UNSUPPORTED": "전체 리그 뷰에서 캡처하지 않았어요 — 전체 리그 뷰로 돌아간 뒤 다시 제출해 주세요.",
   "job.submit.JOB_STILL_BINDING_MISMATCH": "표시된 프레임이나 원본이 바뀌었어요 — 현재 리그가 로드될 때까지 기다린 뒤 다시 제출해 주세요.",
   "job.submit.JOB_BODY_LIMIT": "댓글에 첨부된 이미지나 리그 캡처 때문에 리뷰 제출 데이터가 너무 커요 — 이미지 댓글을 일부 삭제하거나, 수정될 때까지 초안을 보존해 주세요.",
   "job.submit.JOB_ACT_SOURCE_STALE": "리뷰 원본이 바뀌었어요 — 리뷰를 새로고침하고 현재 원본을 확인한 뒤 제출해 주세요.",

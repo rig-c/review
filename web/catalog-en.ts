@@ -3556,6 +3556,8 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.submit.JOB_ACT_KIND_DISABLED": "This version cannot submit mesh edits in jobs.",
   "job.submit.JOB_ACT_NOTHING_TO_SUBMIT": "No decision was selected — choose Approved, Changes requested or a checkpoint outcome.",
   "job.submit.JOB_STILL_CAPTURE_FAILED": "The rig image could not be captured — wait for the rig to finish drawing and try again.",
+  "job.submit.JOB_STILL_CAMERA_NOT_FIXED": "The capture uses a free camera or nondefault framing — restore the fixed camera and default framing, then submit again.",
+  "job.submit.JOB_STILL_VIEW_UNSUPPORTED": "The capture is outside the whole-rig view — return to the whole-rig view and submit again.",
   "job.submit.JOB_STILL_BINDING_MISMATCH": "The displayed frame or source changed — wait for the current rig to load and submit again.",
   "job.submit.JOB_BODY_LIMIT": "The images attached to your comments or the rig still make this review too large to send — remove some image comments, or keep the draft until this is fixed.",
   "job.submit.JOB_ACT_SOURCE_STALE": "The review source changed — refresh the review and inspect the current source before submitting.",
