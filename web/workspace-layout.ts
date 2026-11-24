@@ -3,8 +3,17 @@ import {parseWorkspacePanels,panelBounds,type WorkspacePanels} from './workspace
 export type WorkspacePanel=keyof WorkspacePanels;
 /** Desired sizes; a page without the communication column may omit its width (the saved default applies). */
 export type DesiredWorkspacePanels=Omit<WorkspacePanels,'communicationWidth'>&{communicationWidth?:number};
+/** Allow a still-usable Inspector to stay docked if reserving the viewport insets would otherwise create a drawer. */
+export interface WorkspaceLayoutSpace {width:number;height:number;keepInspectorDocked?:boolean}
 /** `separator` is the drawn thickness of every resize handle in CSS pixels; its hit area is wider (styles.css `::after`). */
 export const workspaceMinimums=Object.freeze({stageWidth:240,stageHeight:180,separator:4});
+/** The smallest stack that fits the viewport and preferred chrome before anything scrolls more.
+ * Direction takes the lesser of its content height and a fraction of the stack.
+ * Solve that cap at the minimum stack size, independent of the previous Inspector allocation. */
+export function workspaceStageStackMinimum(chromeHeight:number,stageInsets:number,directionHeight:number,directionMaxFraction:number):number {
+ const fixed=workspaceMinimums.stageHeight+stageInsets+chromeHeight;
+ return Math.min(fixed+directionHeight,fixed/(1-directionMaxFraction));
+}
 export interface SeparatorRange {min:number;max:number;value:number;enabled:boolean}
 export type WorkspaceColumnKey=Exclude<WorkspacePanel,'inspectorHeight'>;
 /** Which saved width each side column uses; null means the page has no column on that side.
@@ -24,7 +33,7 @@ export function parseWorkspaceColumns(value:WorkspaceColumns):WorkspaceColumns {
 /** Input rectangle excludes app chrome. Drawer triggers must remain outside collapsed panel content.
  * Collapse the left column, then the right one when minima cannot coexist; Inspector becomes a drawer below its minimum.
  * Returned clamps never replace the user's desired desktop sizes. */
-export function allocateWorkspaceLayout(available:{width:number;height:number},desired:DesiredWorkspacePanels,columns:WorkspaceColumns=defaultWorkspaceColumns):EffectiveWorkspaceLayout {
+export function allocateWorkspaceLayout(available:WorkspaceLayoutSpace,desired:DesiredWorkspacePanels,columns:WorkspaceColumns=defaultWorkspaceColumns):EffectiveWorkspaceLayout {
  const panels=parseWorkspacePanels(desired),{left:leftKey,right:rightKey}=parseWorkspaceColumns(columns),{width,height}=available,{stageWidth:minWidth,stageHeight:minHeight,separator}=workspaceMinimums;
  if(![width,height].every(n=>Number.isFinite(n)&&n>=0&&n<=65536))throw new Error('WORKSPACE_RECTANGLE: finite 0..65536 CSS pixels required');
  const boundLeft=leftKey?panelBounds[leftKey].min:0,boundRight=rightKey?panelBounds[rightKey].min:0;
@@ -34,10 +43,12 @@ export function allocateWorkspaceLayout(available:{width:number;height:number},d
  if(left&&!right&&width<boundLeft+minWidth+separator)left=false;
  const count=Number(left)+Number(right),budget=Math.max(0,width-minWidth-count*separator),leftMin=left?boundLeft:0,rightMin=right?boundRight:0,wantLeft=left?panels[leftKey!]:0,wantRight=right?panels[rightKey!]:0;
  const slack=wantLeft+wantRight-leftMin-rightMin,ratio=slack>0?Math.min(1,Math.max(0,(budget-leftMin-rightMin)/slack)):1,leftSize=leftMin+(wantLeft-leftMin)*ratio,rightSize=rightMin+(wantRight-rightMin)*ratio;
- const inspector=height>=minHeight+panelBounds.inspectorHeight.min+separator,inspectorHeight=inspector?Math.min(panels.inspectorHeight,height-minHeight-separator):0;
+ const inspectorRoom=height-minHeight-separator;
+ const inspectorMin=available.keepInspectorDocked?Math.min(panelBounds.inspectorHeight.min,inspectorRoom):panelBounds.inspectorHeight.min;
+ const inspector=inspectorRoom>0&&inspectorRoom>=inspectorMin,inspectorHeight=inspector?Math.min(panels.inspectorHeight,inspectorRoom):0;
  const stageWidth=Math.max(0,width-leftSize-rightSize-count*separator),stageHeight=Math.max(0,height-inspectorHeight-(inspector?separator:0));
- const range=(visible:boolean,key:WorkspacePanel,value:number,max:number):SeparatorRange=>visible?{min:panelBounds[key].min,max:Math.max(panelBounds[key].min,Math.min(panelBounds[key].max,max)),value,enabled:true}:{min:0,max:0,value:0,enabled:false};
- const size:Record<WorkspaceColumnKey,number>={leftWidth:0,rightWidth:0,communicationWidth:0},mode:Record<WorkspaceColumnKey,WorkspacePanelMode>={leftWidth:'absent',rightWidth:'absent',communicationWidth:'absent'},separators:Record<WorkspacePanel,SeparatorRange>={leftWidth:range(false,'leftWidth',0,0),rightWidth:range(false,'rightWidth',0,0),communicationWidth:range(false,'communicationWidth',0,0),inspectorHeight:range(inspector,'inspectorHeight',inspectorHeight,height-minHeight-separator)};
+ const range=(visible:boolean,key:WorkspacePanel,value:number,max:number,min:number=panelBounds[key].min):SeparatorRange=>visible?{min,max:Math.max(min,Math.min(panelBounds[key].max,max)),value,enabled:true}:{min:0,max:0,value:0,enabled:false};
+ const size:Record<WorkspaceColumnKey,number>={leftWidth:0,rightWidth:0,communicationWidth:0},mode:Record<WorkspaceColumnKey,WorkspacePanelMode>={leftWidth:'absent',rightWidth:'absent',communicationWidth:'absent'},separators:Record<WorkspacePanel,SeparatorRange>={leftWidth:range(false,'leftWidth',0,0),rightWidth:range(false,'rightWidth',0,0),communicationWidth:range(false,'communicationWidth',0,0),inspectorHeight:range(inspector,'inspectorHeight',inspectorHeight,inspectorRoom,inspectorMin)};
  if(leftKey){size[leftKey]=leftSize;mode[leftKey]=left?'panel':'drawer';separators[leftKey]=range(left,leftKey,leftSize,width-rightSize-count*separator-minWidth);}
  if(rightKey){size[rightKey]=rightSize;mode[rightKey]=right?'panel':'drawer';separators[rightKey]=range(right,rightKey,rightSize,width-leftSize-count*separator-minWidth);}
  return {leftWidth:size.leftWidth,rightWidth:size.rightWidth,communicationWidth:size.communicationWidth,inspectorHeight,stageWidth,stageHeight,leftMode:mode.leftWidth,rightMode:mode.rightWidth,communicationMode:mode.communicationWidth,inspectorMode:inspector?'panel':'drawer',stageMinimumSatisfied:width>=minWidth&&height>=minHeight,separators};

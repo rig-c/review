@@ -261,7 +261,7 @@ for(const inline of [false,true])test('#276 Bar 2 '+(inline?'inline':'overlay')+
   expect(ui.side.children).toHaveLength(inline?1:0);
   expect(ui.list().className.includes('stage-comment-list-inline')).toBe(inline);
   expect(ui.list().children[0]!.textContent).toBe('Comments');
-  if(inline)expect(ui.list().children[1]!.textContent).toBe('No comments yet.');
+  if(inline)expect(ui.list().children[1]!.textContent).toBe('Comment · C → click the image to pin');
 
   // The top button and C toggle capture; Escape with nothing open keeps capture and the list as they are (#897).
   ui.toggle.onclick?.();

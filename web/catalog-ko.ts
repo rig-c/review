@@ -29,6 +29,7 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "job.chest.circlesOff": "이 잡에서는 랜드마크 모드로 가슴 영역을 편집해 주세요.",
   "job.chest.unpublished": "이 파츠는 가슴 설정이 게시되지 않아 편집할 수 없어요.",
   "Comment · C": "코멘트 · C",
+  "Comment · C → click the image to pin": "코멘트 · C → 이미지를 클릭해 핀 찍기",
 
   "project.json": "project.json",
   'job.commentsFromWorkspace': '작업 공간의 코멘트를 함께 제출해요. 코멘트는 아래 코멘트에서 추가하거나 고칠 수 있어요.',
@@ -3228,7 +3229,6 @@ export const koCatalog: Readonly<Record<string, string>> = {
   "○ Pending": "○ 보류 중",
   "✓ Pass": "✓ 통과",
   "한국어": "한국어",
-  "Comment · C (active mesh editor keeps C)": "코멘트 · C (활성 메시 편집기가 C 키를 사용함)",
   "Comment · C (0)": "코멘트 · C (0)",
   "Comment · C ({0})": "코멘트 · C ({0})",
   "Comment · C ({0}) · Rendering": "코멘트 · C ({0}) · 렌더링 중",
