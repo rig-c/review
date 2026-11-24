@@ -49,29 +49,3 @@ test('two composed actors with turn sliders expose no dials and refuse turn feed
    .toThrow('TURN_UNAVAILABLE: this inspected model has no supported turn dials');
  });
 });
-
-test('uncomposed dials retain their serialized ranges and provenance',()=>{
- expect(JSON.stringify(discoverTurnDials(fixture.uncomposed))).toBe(JSON.stringify([
-  {axis:'yaw',bone:'yaw_dial',slider:'yaw',channel:'rotation',min:-12,max:12,provenance:'model slider yaw → bone yaw_dial, rotate, animation turn'},
-  {axis:'pitch',bone:'pitch_dial',slider:'pitch',channel:'rotation',min:-12,max:12,provenance:'model slider pitch → bone pitch_dial, rotate, animation tilt'},
-  {axis:'body',bone:'body_yaw_dial',slider:'body_yaw_dial',channel:'rotation',min:-12,max:12,provenance:'model slider body_yaw_dial → bone body_yaw_dial, rotate, animation body_turn'},
- ]));
-});
-
-test('a custom body bone is discovered by its namespaced body_turn animation',()=>{
- expect(discoverTurnDials(fixture.custom)).toEqual([{
-  axis:'body',bone:'actor:body_dial',slider:'actor:body_dial',channel:'rotation',min:-15,max:15,
-  provenance:'model slider actor:body_dial → bone actor:body_dial, rotate, animation actor:body_turn (compiled body_turn binding)',
- }]);
-});
-
-test('only the first namespace separator is stripped from a bone or animation name',()=>{
- const source=fixture.single.constraints.find(c=>c.bone==='actor:body_yaw_dial')!;
- for(const prefix of ['a:b:',':']){
-  const bone=prefix+'body_yaw_dial',animation=prefix+'body_turn';
-  expect(discoverTurnDials({
-   bones:[{name:bone}],constraints:[{...source,bone,animation}],
-   animations:[{name:animation,duration:fixture.single.animations.find(a=>a.name===source.animation)!.duration}],
-  })).toEqual([]);
- }
-});

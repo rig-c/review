@@ -1,45 +1,16 @@
 /** Inspection dials, not keys. Read the compiled slider's mapping; never invent a degree range. */
-import type {BoneAdjust,BoneLocals} from '@rig-c/play';
-export type TurnAxis='yaw'|'pitch'|'body';
-export interface TurnDial {axis:TurnAxis;bone:string;slider:string;channel:keyof BoneLocals;min:number;max:number;provenance?:string}
+import {normalizedDial,type BoneAdjust,type TurnAxis,type TurnDial} from '@rig-c/play';
+export {discoverTurnDials,normalizedDial,type TurnAxis,type TurnDial} from '@rig-c/play';
 export interface TurnSnapshot {schema:'rig-review-turn/1';values:Partial<Record<TurnAxis,number>>;held:boolean;smoothing:number}
 const object=(v:unknown):Record<string,any>|null=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,any>:null;
 const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v);
 const clamp=(v:number,min:number,max:number)=>Math.max(min,Math.min(max,v))||0;
-const channels:Record<string,keyof BoneLocals>={rotate:'rotation',x:'x',y:'y',scaleX:'scaleX',scaleY:'scaleY',shearY:'shearY'};
-// Parts contract: docs/STABILITY.md:1188 (stable dial names) and docs/AUTHORING.md:7805 (character ID prefix).
-function unprefixedTurnName(name:unknown):string|undefined {
- if(typeof name!=='string')return undefined;
- const separator=name.indexOf(':');
- return separator>0?name.slice(separator+1):name;
-}
-/** `body_turn` is the producer's compiled body slider animation, including a custom turn.body.slider bone.
- * This is compiled metadata only; no producer config or opaque Play document is read. */
-export function discoverTurnDials(model:unknown,durations?:readonly {name:string;duration:number}[]):TurnDial[] {
- const m=object(model);if(!m||!Array.isArray(m.bones)||!Array.isArray(m.constraints))return [];
- const names=new Set(m.bones.map((b:any)=>b.name)),animations=durations??m.animations??[];
- const result:TurnDial[]=[];
- for(const axis of ['yaw','pitch','body'] as const){
-  const canonical=axis==='body'?'body_yaw_dial':axis+'_dial';
-  const candidates=m.constraints.filter((c:any)=>c&&c.kind==='slider'&&typeof c.name==='string'&&names.has(c.bone)&&
-   (unprefixedTurnName(c.bone)===canonical||axis==='body'&&unprefixedTurnName(c.animation)==='body_turn'));
-  if(candidates.length!==1)continue;
-  const c=candidates[0],duration=animations.find((a:any)=>a.name===c.animation)?.duration,from=c.from??0,to=c.to??0,scale=c.scale??1,channel=channels[c.property??'rotate'];
-  if(!c.local||c.loop||!channel||![duration,from,to,scale].every(finite)||duration<=0||scale===0)continue;
-  // Same inverse slider mapping as the official head-turn demo; max is not a clamp in the runtime.
-  const a=from-to/scale,b=from+(duration-to)/scale;
-  if(!finite(a)||!finite(b)||a===b||Math.min(a,b)>0||Math.max(a,b)<0)continue;
-  if(result.some(d=>d.bone===c.bone&&d.channel===channel))continue;
-  result.push({axis,bone:c.bone,slider:c.name,channel,min:Math.min(a,b),max:Math.max(a,b),provenance:`model slider ${c.name} → bone ${c.bone}, ${c.property??'rotate'}, animation ${c.animation}${unprefixedTurnName(c.bone)!==canonical?' (compiled body_turn binding)':''}`});
- }return result;
-}
 export function sharedTurnDials(a:readonly TurnDial[],b:readonly TurnDial[]):TurnDial[]{
  return a.flatMap(d=>{const other=b.find(e=>e.axis===d.axis);if(!other)return [];const min=Math.max(d.min,other.min),max=Math.min(d.max,other.max);return min<max?[{...d,min,max}]:[];});
 }
 export function pointerPosition(x:number,y:number,rect:{left:number;top:number;width:number;height:number}):[number,number]{
  return rect.width>0&&rect.height>0?[clamp((x-rect.left)/rect.width*2-1,-1,1),clamp(1-(y-rect.top)/rect.height*2,-1,1)]:[0,0];
 }
-export function normalizedDial(n:number,range:{min:number;max:number}):number {const v=clamp(n,-1,1),zero=clamp(0,range.min,range.max);return clamp(zero+Math.abs(v)*((v<0?range.min:range.max)-zero),range.min,range.max);}
 /** Display precision for `<output>` readouts: 2 decimals for spans >= 1, scaled up (at most 6) for sub-unit ranges. */
 export function turnDialPrecision(range:{min:number;max:number},precision?:number):number {
  if(precision!==undefined){if(!Number.isInteger(precision)||precision<0||precision>6)throw new Error('TURN_PRECISION_INVALID');return precision;}

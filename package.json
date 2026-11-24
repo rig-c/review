@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "1.0.11",
-    "@rig-c/play": "1.25.0",
+    "@rig-c/play": "1.26.0",
     "@types/pngjs": "6.0.5",
     "pngjs": "7.0.0"
   },
