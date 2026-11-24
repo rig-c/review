@@ -12,7 +12,11 @@ import { readFile, realpath, stat, lstat, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, posix } from 'node:path';
 import { isBuildRoot, parseHandoffDeclaration, resolveHandoff, type Handoff, type HandoffDeclaration, type HandoffFlags, type HandoffRecord } from './handoff.ts';
-import { parsePanelComposition, type JobPanelComposition } from './job-contract.ts';
+import { JOB_PREVIOUS_BUILD_SCHEMA, parsePanelComposition, type JobFileIdentity, type JobPanelComposition,
+  type JobPreviousBuild } from './job-contract.ts';
+import { exactObject, parseFileRow } from './job-api.ts';
+import { readCheckpointEvidenceBytes } from './job-checkpoint-evidence.ts';
+import { JobError, jobPathTextLimit } from './job-validation.ts';
 import { checkedPath } from './interview-project.ts';
 export { isPanelComponent, parsePanelComposition } from './job-contract.ts';
 
@@ -29,6 +33,7 @@ export interface ReviewManifest {
   /** Optional producer handoff (#101): package-relative literal paths; checked when the package loads. */
   producer?: HandoffDeclaration;
   panels?: JobPanelComposition;
+  previousBuild?: JobPreviousBuild;
 }
 export interface ReviewFrameSet { animation: string; fps: number; written: number; stride: number; duration: number }
 export interface ReviewFrames { path: string; sha256: string; sets: ReviewFrameSet[] }
@@ -72,6 +77,123 @@ export async function safeFile(root: string, path: string): Promise<string> {
   if (!rel || rel.startsWith('..' + '/') || rel === '..' || isAbsolute(rel)) fail(path, 'file inside package (symlinks may not escape)');
   if (!(await stat(full)).isFile()) fail(path, 'regular file'); return full;
 }
+const previousBuildInvalid = 'JOB_PREVIOUS_BUILD_INVALID';
+export const previousBuildByteLimit = 64 * 1024 * 1024;
+const previousBuildPageLimit = 64;
+const previousBuildTextLimit = 128;
+const previousBuildMapLimit = 256;
+const previousBuildDeclarationLimit = 64 * 1024;
+
+export function previousBuildLimit(bound: string, found: number, limit: number, path?: string): JobError {
+  return new JobError(previousBuildInvalid, `${previousBuildInvalid}: ${bound} found=${found} limit=${limit}` +
+    (path === undefined ? '' : ` path=${JSON.stringify(path)}`));
+}
+
+export function previousBuildFileError(path: string, reason: string): JobError {
+  return new JobError(previousBuildInvalid, `${previousBuildInvalid}: ${reason} path=${JSON.stringify(path)}`);
+}
+
+function previousBuildText(field: string, value: unknown): string {
+  if (typeof value !== 'string') throw new JobError(previousBuildInvalid);
+  const size = Buffer.byteLength(value);
+  if (size > previousBuildTextLimit) throw previousBuildLimit(field + ' UTF-8 bytes', size, previousBuildTextLimit);
+  if (!value.trim() || /[\x00-\x1f\x7f]/.test(value)) throw new JobError(previousBuildInvalid);
+  return value;
+}
+
+function previousBuildFile(field: string, value: unknown): JobFileIdentity {
+  if (value && typeof value === 'object' && 'path' in value &&
+      typeof value.path === 'string' && value.path.length > jobPathTextLimit)
+    throw previousBuildLimit(field + '.path code units', value.path.length, jobPathTextLimit);
+  try { return parseFileRow(value, previousBuildInvalid); }
+  catch { throw new JobError(previousBuildInvalid, `${previousBuildInvalid}: ${field} requires a literal package-relative path and SHA-256`); }
+}
+
+export function previousBuildFiles(build: JobPreviousBuild): readonly JobFileIdentity[] {
+  return [build.model, build.atlas, ...build.pages];
+}
+
+export function parsePreviousBuild(raw: unknown): JobPreviousBuild {
+  const item = exactObject(raw, ['schema', 'label', 'currentLabel', 'model', 'atlas', 'pages', 'clipMap'], previousBuildInvalid);
+  if (item.schema !== JOB_PREVIOUS_BUILD_SCHEMA || !Array.isArray(item.pages)) throw new JobError(previousBuildInvalid);
+  if (item.pages.length > previousBuildPageLimit) throw previousBuildLimit('pages count', item.pages.length, previousBuildPageLimit);
+  const map = item.clipMap;
+  if (!map || typeof map !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(map)))
+    throw new JobError(previousBuildInvalid);
+  const clips = Object.entries(map);
+  if (clips.length > previousBuildMapLimit) throw previousBuildLimit('clipMap entries', clips.length, previousBuildMapLimit);
+  const build: JobPreviousBuild = {
+    schema: JOB_PREVIOUS_BUILD_SCHEMA,
+    label: previousBuildText('label', item.label),
+    currentLabel: previousBuildText('currentLabel', item.currentLabel),
+    model: previousBuildFile('model', item.model),
+    atlas: previousBuildFile('atlas', item.atlas),
+    pages: Array.from(item.pages, (page, index) => previousBuildFile(`pages[${index}]`, page)),
+    clipMap: Object.fromEntries(clips.map(([current, previous]) =>
+      [previousBuildText('clipMap key', current), previousBuildText('clipMap value', previous)])),
+  };
+  const size = Buffer.byteLength(JSON.stringify(build));
+  if (size > previousBuildDeclarationLimit) throw previousBuildLimit('declaration bytes', size, previousBuildDeclarationLimit);
+  if (!build.model.path.endsWith('.model.json')) throw previousBuildFileError(build.model.path, 'expected compiled model');
+  if (!build.atlas.path.endsWith('.atlas')) throw previousBuildFileError(build.atlas.path, 'expected atlas');
+  const invalidPage = build.pages.find(page => !/\.(png|jpe?g|webp)$/i.test(page.path));
+  if (invalidPage) throw previousBuildFileError(invalidPage.path, 'expected page image');
+  const paths = new Set<string>();
+  for (const file of previousBuildFiles(build)) {
+    if (paths.has(file.path)) throw previousBuildFileError(file.path, 'duplicate asset');
+    paths.add(file.path);
+  }
+  return build;
+}
+
+export function readPreviousBuildFile(root: string, file: JobFileIdentity, bytesRead?: number): Buffer {
+  return readCheckpointEvidenceBytes(root, file, previousBuildByteLimit - (bytesRead ?? 0), (failure, size) => {
+    if (failure === 'limit') {
+      const bound = bytesRead === undefined ? 'asset bytes' : 'closure bytes through asset';
+      return previousBuildLimit(bound, (bytesRead ?? 0) + size, previousBuildByteLimit, file.path);
+    }
+    return previousBuildFileError(file.path, failure === 'hash' ? 'hash mismatch' : 'asset unavailable or outside package');
+  });
+}
+
+function modelPagePaths(modelPath: string, model: Record<string, unknown>, sealedPlayback = false): string[] {
+  if (model.spec !== 'rigc-compiled/3') fail('model.spec', 'rigc-compiled/3, produced by a gated rigc build');
+  if (!Array.isArray(model.pages)) fail('model.pages', 'array');
+  return model.pages.map(page => {
+    const name = string(object(page, 'model.pages[]').name, 'model.pages[].name');
+    if(isAbsolute(name)||/[:\\%?#\x00-\x1f]/.test(name)||name.split('/').some(v=>!v))fail('model.pages[].name','literal relative model page path');
+    if(sealedPlayback&&!/\.(png|jpe?g|webp)$/i.test(packagePath(name,'model.pages[].name')))fail('model.pages[].name','literal build page image');
+    return packagePath(posix.join(posix.dirname(modelPath), name), 'model page resolved inside package');
+  });
+}
+
+export function admitPreviousBuild(root: string, build: JobPreviousBuild): void {
+  let bytesRead = 0;
+  const read = (file: JobFileIdentity) => {
+    const bytes = readPreviousBuildFile(root, file, bytesRead);
+    bytesRead += bytes.length;
+    return bytes;
+  };
+  try {
+    const bytes = read(build.model);
+    const model = object(JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes)), 'previousBuild.model');
+    if (Array.isArray(model.pages) && model.pages.length > previousBuildPageLimit)
+      throw previousBuildLimit('model pages count', model.pages.length, previousBuildPageLimit, build.model.path);
+    const paths = modelPagePaths(build.model.path, model);
+    const modelUrl = new URL(build.model.path.split('/').map(encodeURIComponent).join('/'), 'http://127.0.0.1/');
+    const runtimePaths = (model.pages as {name: string}[])
+      .map(page => decodeURIComponent(new URL(page.name, modelUrl).pathname.slice(1)));
+    if (paths.length !== build.pages.length || new Set(paths).size !== build.pages.length ||
+        paths.some((path, i) => runtimePaths[i] !== path) || build.pages.some(page => !paths.includes(page.path)))
+      throw previousBuildFileError(build.model.path, 'runtime pages differ from declared closure');
+    read(build.atlas);
+    for (const page of build.pages) read(page);
+  } catch (error) {
+    if (error instanceof JobError && error.code === previousBuildInvalid) throw error;
+    throw previousBuildFileError(build.model.path, 'invalid compiled model or runtime page');
+  }
+}
+
 export function parseManifest(input: unknown): ReviewManifest {
   const m = object(input, 'review'); if (m.schema !== 'rig-review/1') fail('schema', 'rig-review/1');
   const audio = m.audio === undefined ? {} : object(m.audio, 'audio');
@@ -83,6 +205,7 @@ export function parseManifest(input: unknown): ReviewManifest {
   const manifest: ReviewManifest = {
     schema: 'rig-review/1', id: id(m.id, 'id'), title: string(m.title, 'title'), revision: string(m.revision, 'revision'),
     model: m.model === undefined ? undefined : packagePath(m.model, 'model'),
+    ...(Object.hasOwn(m, 'previousBuild') ? {previousBuild: parsePreviousBuild(m.previousBuild)} : {}),
     ...(m.frames===undefined?{}:{frames:packagePath(m.frames,'frames')}),
     ...(m.direction===undefined?{}:{direction:packagePath(m.direction,'direction')}),
     ...(m.scene===undefined?{}:{scene:packagePath(m.scene,'scene')}),
@@ -98,6 +221,7 @@ export function parseManifest(input: unknown): ReviewManifest {
     audio:{clips:list(audio.clips,'audio.clips',(v,f)=>({id:id(v.id,f+'.id'),label:optionalString(v.label,f+'.label'),path:packagePath(v.path,f+'.path')})),cues:list(audio.cues,'audio.cues',(v,f)=>({id:id(v.id,f+'.id'),clip:string(v.clip,f+'.clip'),time:number(v.time,f+'.time'),animation:optionalString(v.animation,f+'.animation')}))}
   };
   if(manifest.model&&!manifest.model.endsWith('.model.json'))fail('model','compiled model path ending .model.json (the play runtime input)');
+  if (manifest.previousBuild && !manifest.model) throw new JobError(previousBuildInvalid);
   if(manifest.sets&&!manifest.model)fail('sets','compiled model declaration');
   if(manifest.scene&&!manifest.direction)throw new Error('SCENE_REQUIRED: scene requires direction');
   if(manifest.direction&&!manifest.model)fail('direction','compiled model declaration');
@@ -191,14 +315,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     files.add(manifest.model); const bytes=await readFile(await assetFile(manifest.model));modelBytesHash=createHash('sha256').update(bytes).digest('hex');
     if(sealedPlayback&&modelBytesHash!==sealedPlayback.get(manifest.model))fail(manifest.model,'sealed playback hash');
     const model = object(JSON.parse(bytes.toString('utf8')),'model');
-    if(model.spec !== 'rigc-compiled/3') fail('model.spec','rigc-compiled/3, produced by a gated rigc build');
-    if(!Array.isArray(model.pages)) fail('model.pages','array');
-    for(const page of model.pages) {
-      const p = object(page,'model.pages[]'); const name = string(p.name,'model.pages[].name');
-      if(isAbsolute(name)||/[:\\%?#\x00-\x1f]/.test(name)||name.split('/').some(v=>!v))fail('model.pages[].name','literal relative model page path');
-      if(sealedPlayback&&!/\.(png|jpe?g|webp)$/i.test(packagePath(name,'model.pages[].name')))fail('model.pages[].name','literal build page image');
-      files.add(packagePath(posix.join(posix.dirname(manifest.model),name),'model page resolved inside package'));
-    }
+    for (const path of modelPagePaths(manifest.model, model, !!sealedPlayback)) files.add(path);
   }
   for(const r of manifest.references.filter(r=>r.type==='pose')) {
     const pose=object(JSON.parse(await readFile(await safeFile(root,r.path),'utf8')),`pose ${r.id}`);
@@ -230,6 +347,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     for(const [path,bytes] of await scenePlateBytes(root,scene))sceneBytes.set(path,bytes);
     for(const path of sceneBytes.keys())files.add(path);
   }
+  if (manifest.previousBuild) admitPreviousBuild(root, manifest.previousBuild);
   const hash = createHash('sha256');hash.update(JSON.stringify(manifest));hash.update('\0');const fileHashes=new Map<string,string>();
   for(const p of [...files].sort()) { const full=await assetFile(p); const before=await stat(full); hash.update(p);hash.update('\0');hash.update(String(before.size));hash.update('\0'); const fileHash=createHash('sha256');const metadataChunks:Buffer[]=[];const isDirection=p===manifest.direction;let bytesRead=0;
     if(isDirection&&before.size>DIRECTION_MAX_BYTES)throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');for await(const chunk of createReadStream(full)){hash.update(chunk);fileHash.update(chunk);if(isDirection&&(bytesRead+=chunk.length)>DIRECTION_MAX_BYTES)throw new Error('DIRECTION_SIZE: direction exceeds 256 KiB');if(p===reportPath||p===manifest.model||isDirection||p===manifest.frames)metadataChunks.push(chunk);}fileHashes.set(p,fileHash.digest('hex'));if(sceneBytes.has(p)&&createHash('sha256').update(sceneBytes.get(p)!).digest('hex')!==fileHashes.get(p))throw new Error('SCENE_SOURCE_MISMATCH: '+p); const after=await stat(full); if(before.size!==after.size||before.mtimeMs!==after.mtimeMs) throw new Error(`Asset ${p} changed while hashing; retry with stable package inputs`);

@@ -12,7 +12,10 @@ export function openGate(req:Request,identity:OpenIdentity|undefined):Response|n
  return null;
 }
 
-export function staleOpenStatus(identity:OpenIdentity):Response{return Response.json({schema:'rig-review-open-status/1',...identity,ready:false,error:'Inputs changed; open a new review binding'},{status:409,headers:{'Cache-Control':'no-store'}});}
+export function staleOpenStatus(identity:OpenIdentity, refusal?:{error:string;detail:string}):Response{
+ return Response.json({schema:'rig-review-open-status/1',...identity,ready:false,
+  ...(refusal??{error:'Inputs changed; open a new review binding'})},{status:409,headers:{'Cache-Control':'no-store'}});
+}
 /** Header names shared by the worker, the managed front and the page. */
 export const capabilityHeader='X-Review-Capability',openNonceHeader='X-Review-Open-Nonce',openKeyHeader='X-Review-Open-Key';
 export const capabilityPattern=/^[a-f0-9]{64}$/;

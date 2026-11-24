@@ -83,16 +83,18 @@ export function parseCheckpointTable(bytes: Buffer): JobCheckpointTable {
 
 /** Exact retained closure reads reuse regular-file, containment and descriptor bounds. */
 export function readCheckpointEvidenceBytes(root: string, file: JobFileIdentity, limit: number,
-  refuse: (failure: 'path' | 'limit' | 'hash') => JobError = failure => failure === 'hash'
+  refuse: (failure: 'path' | 'limit' | 'hash', size: number) => JobError = failure => failure === 'hash'
     ? new JobError('JOB_SOURCE_MISMATCH', 'CHECKPOINT_EVIDENCE_HASH_MISMATCH')
     : new JobError('JOB_SOURCE_UNRETAINABLE', 'CHECKPOINT_EVIDENCE_PATH_REFUSED')): Buffer {
   let bytes: Buffer | undefined;
+  let size = 0;
   try {
     if (realpathSync(root) !== root) throw new Error('Noncanonical evidence root');
     const path = checkedPath(root, jobPath(file.path));
     const before = lstatSync(path);
     if (!before.isFile()) throw new Error('Expected a regular evidence file');
-    if (before.size <= limit) {
+    size = before.size;
+    if (size <= limit) {
       bytes = readRegular(path, limit);
       const after = lstatSync(path);
       if (realpathSync(path) !== path || bytes.length !== before.size || before.dev !== after.dev ||
@@ -100,9 +102,9 @@ export function readCheckpointEvidenceBytes(root: string, file: JobFileIdentity,
           before.ctimeMs !== after.ctimeMs) throw new Error('Evidence file changed during read');
     }
   }
-  catch { throw refuse('path'); }
-  if (bytes === undefined) throw refuse('limit');
-  if (jobHash(bytes) !== file.sha256) throw refuse('hash');
+  catch { throw refuse('path', size); }
+  if (bytes === undefined) throw refuse('limit', size);
+  if (jobHash(bytes) !== file.sha256) throw refuse('hash', size);
   return bytes;
 }
 

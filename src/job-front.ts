@@ -10,8 +10,8 @@ import { assertJobRoot, assertRetainedSnapshotIntact, captureJobRoot, planTextMe
 import { checkedPath } from './interview-project.ts';
 import type { JobWorkerOptions } from './job-worker.ts';
 import { JobError, JobStore, jobCropReferences } from './job-store.ts';
-import { safeFile, packagePath, type ReviewPackage } from './manifest.ts';
-import { serveReference, assertReviewUnchanged } from './reference.ts';
+import { safeFile, packagePath, previousBuildFiles, type ReviewPackage } from './manifest.ts';
+import { servePreviousBuildAsset, serveReference, assertReviewUnchanged } from './reference.ts';
 import {preparePartsComment} from './parts-comment-crops.ts';
 import {differencePixels, nativeDifferenceAlignment, type DifferenceRaster} from './parts-comparison.ts';
 import { loadPartsView, partsViewJson, partsDifference, previousDraftDifference, decodeDifferencePng, servedImage, type PartsViewPackage } from './parts-view.ts';
@@ -311,13 +311,14 @@ export function retainedPublicationRoutes(session: JobSession) {
                     if (request.headers.get('if-none-match') === cached.ETag) return new Response(null, {status: 304, headers: cached});
                     return serveReference(request, file, seal.sha256, cached);
                 };
+                const previousBuild = isRetainedRecordSource(retained) ? undefined : retained.previousBuild;
                 const reviewMetadata = (review: ReviewPackage | null) => json({
                     ...checkpointEvidenceMetadata(retained.snapshotRoot, retained.source.checkpointEvidence),
                     ...(isRetainedRecordSource(retained) ? {recordSource: retained.source} : {}),
                     sourceHash: retained.source.sourceHash,
                     assetsBase: display.routes.assetsBase,
                     ...(review ? {
-                        manifest: review.manifest,
+                        manifest: previousBuild ? {...review.manifest, previousBuild} : review.manifest,
                         reviewedSource: review.reviewedSource,
                         initialAnimation: null,
                         setsHash: review.setsHash,
@@ -356,6 +357,8 @@ export function retainedPublicationRoutes(session: JobSession) {
                 const reviewAsset = (review: ReviewPackage | null) => {
                     if (!review) return failure('JOB_SOURCE_UNRETAINABLE', 404);
                     const asset = packagePath(decodeURIComponent(path.slice('assets/'.length)));
+                    const previous = previousBuild && previousBuildFiles(previousBuild).find(file => file.path === asset);
+                    if (previous) return servePreviousBuildAsset(request, review.root, previous, sealedHeaders(previous.sha256));
                     if (!review.files.has(asset)) return failure('JOB_SOURCE_UNRETAINABLE', 404);
                     return sealedFile(relative(retained.snapshotRoot, join(review.root, asset)).split('\\').join('/'));
                 };
@@ -561,7 +564,7 @@ export function retainedPublicationRoutes(session: JobSession) {
             const code = error instanceof JobError ? error.code :
                 error instanceof Error && error.message.startsWith('PARTS_COMMENT_STALE_SOURCE:')
                     ? 'PARTS_COMMENT_STALE_SOURCE' : 'JOB_SOURCE_MISMATCH';
-            const message = error instanceof JobError && (/^(CHECKPOINT_EVIDENCE|PLAN_TEXT)_[A-Z_]+$/.test(error.message) ||
+            const message = error instanceof JobError && (error.code === 'JOB_PREVIOUS_BUILD_INVALID' || /^(CHECKPOINT_EVIDENCE|PLAN_TEXT)_[A-Z_]+$/.test(error.message) ||
                 /^PREVIOUS_DRAFT_[A-Z_]+(?: |$)/.test(error.message) ||
                 error.code === 'JOB_SOURCE_UNRETAINABLE' && error.message.startsWith('snapshot reload '))
                 ? error.message : undefined;

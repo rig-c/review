@@ -128,9 +128,10 @@ export function eligibilityViewSwitch<L extends string>(state:{requested:L;effec
 /** Compare's View switch: Side by side · Reference · A · B, labelled with existing catalog keys. */
 export const compareViewModes:readonly (readonly [PairLayout,string])[]=Object.freeze([['compare','Side by side'],['reference','Reference'],['a','Build A'],['b','Build B']]);
 /** The existing rig menu's single definition; layout ids and visible labels remain unchanged. */
-export function inspectionViewSwitch(onChange?:((id:string)=>void),partsSetup=false):ViewSwitchConfig {
+export function inspectionViewSwitch(onChange?:((id:string)=>void),partsSetup=false,previousBuild=false):ViewSwitchConfig {
  return {currentMode:'compare',onChange,groups:[{modes:[
   {id:'compare',labelKey:'Side by side',pressed:true},
+  ...(previousBuild?[{id:'previous-version',labelKey:'Previous version',pressed:false}]:[]),
   {id:'reference',labelKey:'Reference',pressed:false},
   {id:'rig',labelKey:'Rig',pressed:false},
   ...(partsSetup?[{id:'difference',labelKey:'Difference',pressed:false}]:[]),

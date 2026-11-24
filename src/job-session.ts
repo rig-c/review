@@ -151,7 +151,8 @@ function hasStoredEvidence(source: object | undefined): boolean {
 }
 
 function needsSnapshotRecheck(retained: JobRetainedSourceV3): boolean {
-  return isRetainedRecordSource(retained) || hasStoredEvidence(retained.source) || retained.chestLandmarks !== undefined;
+  return isRetainedRecordSource(retained) || hasStoredEvidence(retained.source) || retained.chestLandmarks !== undefined ||
+    Object.hasOwn(retained, 'previousBuild');
 }
 
 function assertStoredEvidenceCopy(value: unknown, data: JobData, publication = false): void {
@@ -167,6 +168,8 @@ function assertStoredEvidenceCopy(value: unknown, data: JobData, publication = f
     }
   }
   if (seeds && requestDigest(copy.source ?? null) !== requestDigest(bound)) throw new JobError('JOB_SOURCE_MISMATCH');
+  if (stored && Object.hasOwn(stored.retained, 'previousBuild') &&
+      copy.source?.sourceHash !== bound?.sourceHash) throw new JobError('JOB_SOURCE_MISMATCH');
   const carriesAnswered = Object.hasOwn(copy, 'answeredDirectionFeedback');
   const boundAnswered = !!stored && Object.hasOwn(stored.retained, 'answeredDirectionFeedback');
   if ((carriesAnswered || (publication && boundAnswered)) &&

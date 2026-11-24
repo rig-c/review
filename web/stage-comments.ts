@@ -29,6 +29,7 @@ export interface CommentCodec<Row extends CommentRow,Pose extends CommentUiPose>
 interface Host<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose> {
  toolbar:HTMLElement;toggle?:HTMLButtonElement;listHost?:HTMLElement;openList?:()=>void;hasPicture?:()=>boolean;viewports:Partial<Record<StageComment['viewport'],HTMLElement>>;
  pose:(view:StageComment['viewport'])=>Pose|null;pause:()=>Promise<void>;
+ viewportAvailable?:(view:StageComment['viewport'])=>boolean;
  bookmark:()=>unknown;restore:(bookmark:unknown,timeOnly?:boolean,row?:Row)=>Promise<void>;
  feedback:()=>Row[];locked:(id:string)=>boolean;
  add:(feedback:Row,side?:'a'|'b')=>void;changed:()=>void|Promise<void>;draftChanged?:()=>void;error:(message:string)=>void;
@@ -78,6 +79,8 @@ async function crop(pose:CommentUiPose,r:MarkRegion):Promise<StageComment['crop'
  return {path:`comment-crops/${sha256}.png`,sha256,png,width:out.width,height:out.height};
 }
 export function bindStageComments<Row extends CommentRow=Feedback,Pose extends CommentUiPose=CommentPose>(host:Host<Row,Pose>):{refresh:()=>void;dispose:()=>void;active:()=>boolean;draft:()=>boolean;hasPendingComment:()=>boolean;commitDraft:()=>Promise<boolean>}{
+ const available=(view:StageComment['viewport'])=>host.viewportAvailable?.(view)!==false;
+ const poseFor=(view:StageComment['viewport'])=>available(view)?host.pose(view):null;
  const readMark=(row:Row):CommentUiMark|null=>host.codec?host.codec.read(row):markOf(row as unknown as Feedback);
  const toggle=host.toggle??document.getElementById('stage-comment') as HTMLButtonElement;if(!toggle)throw new Error('PARTS_WORKSPACE_NODE_REQUIRED: stage-comment');Object.assign(toggle.style,{whiteSpace:'nowrap',flex:'none'});
  const inline=!!host.listHost;
@@ -107,7 +110,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   const mark = readMark(row);if (!mark) return false;
   cancel();const generation = interaction, request = ++jumpGeneration;
   // Editing a mark already visible in this parts view must not replay its navigation bookmark.
-  const pose=host.pose(mark.viewport);
+  const pose=poseFor(mark.viewport);
   if(host.codec?.geometry&&pose&&host.codec.matches(mark,pose,row)){last='';return true;}
 
   hiddenPanes ??= Object.values(host.viewports).map(pane => ({pane: pane!, visibility: pane!.style.visibility}));
@@ -142,9 +145,9 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   // Refreshes never change the reviewer's scroll position.
   revealLatest();
   if(reason){setCapture(false);host.error(reason);return;}
-  setCapture(layers.size>0);for(const view of layers.keys())host.pose(view);
+  setCapture(layers.size>0);for(const view of layers.keys())poseFor(view);
  };
- const openComment=async(f:Row)=>{const mark=readMark(f);if(!mark){if(host.general?.matches(f))openComposer(null,{x:0,y:0,width:0,height:0},f);return;}if(list.hidden)setOpen(true);if(list.hidden)return;if(await jump(f)){const reason=updateRefusal();setCapture(!reason&&!host.blocked());const pose=host.pose(mark.viewport),picture=host.codec?null:host.picture?.(mark as StageComment),screen=pose&&(host.codec?.geometry||picture&&typeof picture==='object')?region(projectMark(mark.world,pose.camera),projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera)):mark.screen;openComposer(mark.viewport,screen,f,pose?.mode??mark.mode);}};
+ const openComment=async(f:Row)=>{const mark=readMark(f);if(!mark){if(host.general?.matches(f))openComposer(null,{x:0,y:0,width:0,height:0},f);return;}if(list.hidden)setOpen(true);if(list.hidden)return;if(await jump(f)){const reason=updateRefusal();setCapture(!reason&&!host.blocked());const pose=poseFor(mark.viewport),picture=host.codec?null:host.picture?.(mark as StageComment),screen=pose&&(host.codec?.geometry||picture&&typeof picture==='object')?region(projectMark(mark.world,pose.camera),projectMark({x:mark.world.x+mark.world.width,y:mark.world.y+mark.world.height},pose.camera)):mark.screen;openComposer(mark.viewport,screen,f,pose?.mode??mark.mode);}};
  const renderList=()=>{placeList();list.setAttribute('aria-label',t('Comments'));list.replaceChildren();const title=document.createElement('strong');title.textContent=t('Comments');list.append(title);const rawReason=host.refusal?.()??null,reason=rawReason?t(rawReason):null;if(reason){const note=document.createElement('small');note.className='stage-comment-refusal-note';note.title=reason;note.textContent=reason;Object.assign(note.style,{display:'block',marginTop:'4px',maxWidth:'100%',whiteSpace:inline?'normal':'nowrap',overflow:'hidden',textOverflow:'ellipsis'});list.append(note);}if(host.general&&host.general.available?.()!==false){const add=document.createElement('button');add.type='button';add.textContent=t('Add general comment');add.dataset.commentGeneral='';add.onclick=()=>openComposer(null,{x:0,y:0,width:0,height:0});list.append(add);}const all=host.feedback().filter(f=>readMark(f)||host.general?.matches(f));if(host.general?.rows)all.push(...host.general.rows);toggle.textContent=t(host.busy?.()?'Comment · C ({0}) · Rendering':'Comment · C ({0})').replace('{0}',String(all.length));if(!all.length){
   const empty=document.createElement('p');
   const canPin=!reason&&layers.size>0&&host.hasPicture?.()!==false;
@@ -177,12 +180,13 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
   list.append(row);
  }};
  const refresh=()=>{last='';renderList();renderPins();};
- const openComposer=(view:StageComment['viewport']|null,screen:MarkRegion,existing?:Row,placementMode=view?host.pose(view)?.mode:undefined)=>{
+ const openComposer=(view:StageComment['viewport']|null,screen:MarkRegion,existing?:Row,placementMode=view?poseFor(view)?.mode:undefined)=>{
+  if(view&&!available(view))return;
   const general=view===null;
   const generalAvailable=!general||host.general?.available?.()!==false;
   if(general&&(!host.general||(!existing&&!generalAvailable)))return;
   if(!existing){try{general?assertEdit(true):assertCapture();}catch{return;}}
-  const currentMode=view?host.pose(view)?.mode:undefined;
+  const currentMode=view?poseFor(view)?.mode:undefined;
   if(!general&&(!placementMode||currentMode&&currentMode!==placementMode)){cancel();return;}
   const locked=!!existing&&host.locked(existing.id),initialRefusal=existing?(general?generalRefusal():updateRefusal()):null;
   if(existing&&!initialRefusal&&host.blocked()){host.error(t('COMMENT_BUSY: wait for inspection'));return;}
@@ -269,7 +273,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    form.append(remove);
   }
   // Capture all view context now; camera or dial changes while typing cannot rebind the mark.
-  const pose=view?host.pose(view):null,bookmark=general?null:copy(host.bookmark()),turn=pose?.turn===undefined?null:copy(pose.turn);
+  const pose=view?poseFor(view):null,bookmark=general?null:copy(host.bookmark()),turn=pose?.turn===undefined?null:copy(pose.turn);
   const initialParts = pose ? host.codec?.chips?.(pose, screen, existing) : undefined;
   let selectedParts = initialParts?.selected.slice(),partsTouched=!!existing;
   const chipBox = initialParts ? document.createElement('div') : null;
@@ -311,7 +315,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     prepared=crop(pose,screen);prepared.catch(()=>{});last='';place();
    }};
   }
-  const submitComposer=composerSubmit=async():Promise<boolean>=>{if(busy)return false;if(generation!==interaction||view&&host.pose(view)&&host.pose(view!)?.mode!==placementMode){cancel();return false;}const summary=field.value.trim();if(!summary){field.focus();return false;}try{
+  const submitComposer=composerSubmit=async():Promise<boolean>=>{if(busy)return false;if(generation!==interaction||view&&(!available(view)||poseFor(view)&&poseFor(view)?.mode!==placementMode)){cancel();return false;}const summary=field.value.trim();if(!summary){field.focus();return false;}try{
    if(selectedParts && !selectedParts.length)throw new Error(t('Select at least one part.'));
    if(existing){
     assertEdit(general);if(host.locked(existing.id))throw new Error(t('COMMENT_SUBMITTED: submitted evidence is immutable'));
@@ -332,13 +336,13 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    }else{
     assertCapture();if(!pose||!host.codec&&!pose.frame&&!pose.timeBasis)throw new Error(t(pose?.frameReason??'COMMENT_FRAME_UNAVAILABLE: provide an explicit producer clock or a decoded reference frame index'));
     busy=true;field.disabled=true;syncChips();
-    if(host.codec){const pixels=await prepared;if(disposed||generation!==interaction)return false;assertCapture();const row=await host.codec.create(pose,view!,screen,pixels!,bookmark,summary,selectedParts?.slice());if(disposed||generation!==interaction)return false;assertCapture();if(host.pose(view!)?.mode!==placementMode)return false;host.add(row);}
+    if(host.codec){const pixels=await prepared;if(disposed||generation!==interaction)return false;assertCapture();const row=await host.codec.create(pose,view!,screen,pixels!,bookmark,summary,selectedParts?.slice());if(disposed||generation!==interaction)return false;assertCapture();if(poseFor(view!)?.mode!==placementMode)return false;host.add(row);}
     else {const rigPose=pose as unknown as CommentPose;
     const world=region(unprojectMark(screen,rigPose.camera),unprojectMark({x:screen.x+screen.width,y:screen.y+screen.height},rigPose.camera));
     const slots=rigPose.posed?drawnSlots(rigPose.posed,world):[];
     const comment:StageComment={schema:'rig-review-comment/1',mode:placementMode as StageComment['mode'],viewport:view!,frame:rigPose.frame,...(rigPose.timeBasis?{timeBasis:rigPose.timeBasis}:{}),time:rigPose.time,animation:rigPose.animation,sourceHash:rigPose.sourceHash,modelHash:rigPose.modelHash,referenceHash:rigPose.referenceHash,referenceId:rigPose.referenceId,camera:copy(rigPose.camera),screen,world,slots,crop:(await prepared)!,bookmark};
     assertCapture();
-    if(disposed||generation!==interaction||host.pose(view!)?.mode!==placementMode)return false;
+    if(disposed||generation!==interaction||poseFor(view!)?.mode!==placementMode)return false;
     const n=rigPose.frame?.index??null;host.add({id:crypto.randomUUID(),frameStart:n,frameEnd:n,target:slots[0]?{kind:'slot',name:slots[0].slot}:{kind:'rig',name:rigPose.rig},category:'defect',summary,context:{animation:rigPose.animation,time:rigPose.time,frame:rigPose.frame?.basis==='producer'?n:null,...(turn?{turn:turn as any}:{}),interval:n===null?null:{frameStart:n,frameEnd:n,inclusive:true},comment:comment as any} } as unknown as Row,rigPose.side);
     }
    }
@@ -355,6 +359,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  for(const [key,pane]of Object.entries(host.viewports)){
   const view=key as StageComment['viewport'],local=(e:PointerEvent)=>{const r=pane!.getBoundingClientRect();return {x:Math.max(0,Math.min(pane!.clientWidth,e.clientX-r.left-pane!.clientLeft)),y:Math.max(0,Math.min(pane!.clientHeight,e.clientY-r.top-pane!.clientTop))};};
   const down=(e:PointerEvent)=>{
+   if(!available(view))return;
    if(e.button!==0||!e.isPrimary||spaceHeld()){if(spaceHeld()&&(e.target as Element)?.closest?.('.stage-comment-pin'))suppressPinClick=true;return;}
    suppressPinClick=false;
    const target=e.target as Element,pin=host.codec?.geometry?target.closest<HTMLButtonElement>('.stage-comment-pin'):null;
@@ -370,7 +375,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
     e.preventDefault();e.stopImmediatePropagation();suppressPinClick=true;pinPress={id:e.pointerId,view,start:local(e),pin};pane!.setPointerCapture(e.pointerId);return;
    }
    if(target.closest('.stage-comment-ui,button,input')&&!(e.shiftKey&&handle&&host.codec?.geometry)){if(host.codec?.geometry)e.stopImmediatePropagation();return;}
-   if(enabled||!inline&&!list.hidden){try{assertCapture();}catch{return;}}if(!enabled||host.blocked())return;e.preventDefault();e.stopImmediatePropagation();cancel();const mode=host.pose(view)?.mode;if(!mode)return;const at=local(e),generation=interaction;pending={view,start:at,end:at,mode,id:e.pointerId,interaction:generation,settled:host.pause()};pending.settled.catch(e=>{if(interaction===generation&&!disposed)host.error(String(e));});pane!.setPointerCapture(e.pointerId);};
+   if(enabled||!inline&&!list.hidden){try{assertCapture();}catch{return;}}if(!enabled||host.blocked())return;e.preventDefault();e.stopImmediatePropagation();cancel();const mode=poseFor(view)?.mode;if(!mode)return;const at=local(e),generation=interaction;pending={view,start:at,end:at,mode,id:e.pointerId,interaction:generation,settled:host.pause()};pending.settled.catch(e=>{if(interaction===generation&&!disposed)host.error(String(e));});pane!.setPointerCapture(e.pointerId);};
   const move=(e:PointerEvent)=>{
    if(geometryDrag?.id===e.pointerId&&geometryEdit){
     e.preventDefault();e.stopImmediatePropagation();const p=local(e),g=geometryDrag,r=g.screen,dx=p.x-g.start.x,dy=p.y-g.start.y;
@@ -382,7 +387,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
    if(pinPress?.id===e.pointerId){
     const p=pinPress,at=local(e);if(Math.hypot(at.x-p.start.x,at.y-p.start.y)<4)return;
     e.preventDefault();e.stopImmediatePropagation();// Transfer the held pointer to new capture without releasing it.
-    const start=p.start;pinPress=null;cancel();const mode=host.pose(view)?.mode;if(!mode)return;
+    const start=p.start;pinPress=null;cancel();const mode=poseFor(view)?.mode;if(!mode)return;
     pending={view,start,end:at,mode,id:e.pointerId,interaction,settled:host.pause()};pending.settled.catch(error=>host.error(String(error)));
    }
    if(!pending||pending.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();pending.end=local(e);draftMark={view,mode:pending.mode,screen:region(pending.start,pending.end)};last='';};
@@ -402,7 +407,7 @@ export function bindStageComments<Row extends CommentRow=Feedback,Pose extends C
  const renderPins=()=>{if(disposed)return;if(enabled&&host.hasPicture?.()===false){cancel();setCapture(false);}if(!list.hidden)placeList();const refusal=updateRefusal();if(refusal&&(enabled||pending||composer&&!composerReadOnly&&!composerGeneral)){cancel();setCapture(false);host.error(refusal);}const all=host.feedback().map(f=>({f,mark:readMark(f)})).filter(x=>x.mark);
  // #356: a pose reads the pane's size (a forced layout after the played frame's writes); with no mark, draft or pending
  // capture there is nothing to place, so this per-frame loop skips it.
- const poses=new Map(all.length||draftMark||pending?[...layers.keys()].map(view=>[view,host.pose(view)]):[]);
+ const poses=new Map(all.length||draftMark||pending?[...layers.keys()].map(view=>[view,poseFor(view)]):[]);
  if(draftMark&&poses.get(draftMark.view)?.mode!==draftMark.mode||pending&&poses.get(pending.view)?.mode!==pending.mode)cancel();
  if(geometryEdit&&(geometryEdit.id&&host.locked(geometryEdit.id)||JSON.stringify(poses.get(geometryEdit.view)?.camera)!==geometryEdit.camera))cancel();
  const signature=JSON.stringify([geometryEdit?.screen,curLang(),refusal,all.map(({f,mark})=>[f.id,f.summary,mark!.mode,mark!.world]),[...poses].map(([view,p])=>[view,host.codec&&p?host.codec.signature(p):[p?.mode,p?.animation,p?.frame,p?.timeBasis,p?.time,p?.turn,p?.camera,p?.referenceId,p?.referenceHash]]),draftMark]);

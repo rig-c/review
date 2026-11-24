@@ -788,7 +788,10 @@ export function parseRecordPublishedContext(
 ): OptionContext | PlanContext {
   const selection = parseRecordResult(result);
   const checkedRecord = record === undefined ? undefined : parseProjectRecord(record, 'JOB_SOURCE_MISMATCH');
-  if (value && typeof value === 'object') previousDraftFields(value, null);
+  if (value && typeof value === 'object') {
+    if (Object.hasOwn(value, 'previousBuild')) throw new JobError('JOB_PREVIOUS_BUILD_INVALID');
+    previousDraftFields(value, null);
+  }
   const item = exactObject(value, ['label', 'parts', 'inputs', 'files', 'plan', 'subjects'], 'JOB_SOURCE_MISMATCH', ['checkpointEvidence', 'planPicture', 'directionReview']);
   const label = asCode(() => jobText(item.label), 'JOB_SOURCE_MISMATCH');
   const parts = parseRecordPartsIdentity(item.parts, 'JOB_SOURCE_MISMATCH');
