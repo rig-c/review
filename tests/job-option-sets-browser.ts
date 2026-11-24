@@ -24,9 +24,10 @@ type ListState={forms:{ask:string;visible:boolean;answered:boolean;editable:bool
  action:{text:string;disabled:boolean;first:boolean;visible:boolean}|null;actions:number};
 const profile=await mkdtemp(join(tmpdir(),'review-1004-browser-'));
 const exceptions:unknown[]=[],consoleErrors:unknown[]=[],cases:unknown[]=[];
+const sendingFailures:string[]=[];
 let page:InputCdpSession|undefined;
 let control:((method:string,params?:Record<string,unknown>)=>Promise<any>)|undefined;
-/** The one ui/acts request held for the retry case, by its ask; every other request goes through. */
+/** Hold one ui/acts request by its ask while the other requests go through. */
 let refuseAsk:string|undefined,heldRequest:string|undefined;
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('1004_BROWSER_TIMEOUT '+label);}
 async function waitFor(check:()=>boolean,label:string){const until=Date.now()+20000;while(Date.now()<until){if(check())return;await Bun.sleep(30);}throw new Error('1004_BROWSER_TIMEOUT '+label);}
@@ -49,6 +50,100 @@ async function selectRow(index:number){
 /** Pick the recommended (first) value of the shown set, the way a reviewer does. */
 async function answerShown(){
  await clickVisible(`${visibleForm} fieldset.interview-ask label.interview-option:first-of-type`);
+}
+
+type InterviewSubmitReadback = {
+ text:string; width:number; disabled:boolean; busy:string|null; status:string; title:string;
+ saved:boolean; actStatus:string|null; picks:string[]; note:string|null;
+};
+
+async function singleSetSubmission(language:'en'|'ko', outcome:'success'|'stale'|'network'){
+ const catalog=language==='ko'?koCatalog:enCatalog;
+ const fixture=await optionSetsJobFixture({count:1});
+ const form=`${visibleForm}.interview-answer`, submit=`${form} button[type="submit"]`;
+ const note='Public interview note\n선택 메모';
+ const readback=()=>page!.evaluate<InterviewSubmitReadback>(`(()=>{
+  const form=document.querySelector(${JSON.stringify(form)}), button=form.querySelector('button[type="submit"]');
+  const status=form.querySelector(':scope > [role="status"]');
+  return {text:button.textContent,width:button.getBoundingClientRect().width,disabled:button.matches(':disabled'),
+   busy:button.getAttribute('aria-busy'),status:status.textContent,title:status.title,
+   saved:form.dataset.interviewAnswered==='true',actStatus:document.querySelector('#review-draft-state')?.textContent??null,
+   picks:[...form.querySelectorAll('input[type=radio]:checked')].map(input=>input.value),
+   note:form.querySelector('textarea[name=note]')?.value??null};
+ })()`);
+ const capture=async(name:string)=>writeFile(join(output,`1153-${language}-${name}.png`),await page!.screenshot());
+ const verify=(condition:boolean,message:string)=>{if(!condition)sendingFailures.push(`${language} ${outcome}: ${message}`);};
+ try{
+  const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
+  await page!.setViewport(1440,900);await page!.goto(url.href,language);
+  await wait(`document.documentElement.lang==='${language}' && document.body.dataset.ready==='true' &&
+   document.querySelector('${submit}')?.checkVisibility()`,'1153 single set ready');
+  await answerShown();
+  await page!.evaluate<void>(`(()=>{
+   const note=document.querySelector('${form} textarea[name=note]');
+   note.value=${JSON.stringify(note)};note.dispatchEvent(new Event('input',{bubbles:true}));
+  })()`);
+  const before=await readback();
+  assert.equal(before.picks.length,1);
+  assert.equal(before.note,note);
+  assert.equal(before.disabled,false);
+  assert.equal(before.text,catalog['interview.save']);
+  assert.ok(control);
+  refuseAsk=fixture.asks[0]!.askId;heldRequest=undefined;
+  await control('Fetch.enable',{patterns:[{urlPattern:'*ui/acts*',requestStage:'Request'}]});
+  await clickVisible(submit);
+  await waitFor(()=>!!heldRequest,'1153 act POST held');
+  assert.ok(heldRequest);
+  const start=performance.now();
+  await Bun.sleep(350);
+  const held=await readback();
+  const heldMs=performance.now()-start;
+  if(outcome==='success')await capture('held');
+  switch(outcome){
+   case 'success': await control('Fetch.continueRequest',{requestId:heldRequest});break;
+   case 'stale': await control('Fetch.fulfillRequest',{requestId:heldRequest,responseCode:409,
+    responseHeaders:[{name:'Content-Type',value:'application/json'}],
+    body:Buffer.from(JSON.stringify({ok:false,error:{code:'JOB_ACT_SOURCE_STALE',message:'JOB_ACT_SOURCE_STALE'}})).toString('base64')});break;
+   case 'network': await control('Fetch.failRequest',{requestId:heldRequest,errorReason:'Failed'});break;
+  }
+  await wait(outcome==='success'
+   ? `document.querySelector('${form}').dataset.interviewAnswered==='true' &&
+      document.querySelector('#review-draft-state[data-save-state="saved"]')?.textContent.toLowerCase().includes(${JSON.stringify(language==='ko'?'저장':'saved')})`
+   : `!document.querySelector('${submit}').matches(':disabled')`,'1153 act settled');
+  const after=await readback();
+  if(outcome==='stale')await capture('error');
+  const acts=(await fixture.readEvents()).events.flatMap(event=>event.type==='act'?[event.act]:[]);
+  const observation={language,outcome,heldMs,before,held,after,acts:acts.length};
+  console.log('1153_SINGLE '+JSON.stringify(observation));
+  verify(held.disabled&&held.busy==='true'&&held.text===catalog['Sending'],'disabled Sending button');
+  verify(held.status===catalog['Sending'],'live status announces Sending');
+  verify(held.width===before.width,'button width stays fixed during POST');
+  verify(held.actStatus===before.actStatus,'act bar is unchanged during POST');
+  if(outcome==='success'){
+   assert.equal(after.status,catalog['job.saved']);
+   assert.equal(acts.length,1);
+   const act=acts[0]!;
+   assert.equal(act.kind,'interview-picks');
+   assert.equal(act.value.note,note);
+   assert.deepEqual(act.value.selections.map(selection=>selection.optionId),before.picks);
+  }else{
+   const code=outcome==='stale'?'JOB_ACT_SOURCE_STALE':'JOB_ACT_INVALID';
+   const reason=outcome==='stale'?catalog['job.submit.JOB_ACT_SOURCE_STALE']:catalog['job.submit.refused'];
+   const refusal=catalog['Review was not submitted: {0}']!.replace('{0}',reason!);
+   verify(after.status===refusal&&after.title.startsWith(code+' · '),'localized refusal and diagnostic code');
+   verify(after.text===before.text&&after.width===before.width&&!after.disabled&&after.busy===null,'restored submit button');
+   assert.deepEqual(after.picks,before.picks);
+   assert.equal(after.note,note);
+   assert.equal(after.saved,false);
+   assert.equal(acts.length,0);
+  }
+  cases.push(observation);
+ }finally{
+  refuseAsk=undefined;
+  await control?.('Fetch.disable').catch(()=>{});
+  heldRequest=undefined;
+  await page!.goto('about:blank');await fixture.close();
+ }
 }
 
 type RigReadback = {
@@ -238,6 +333,8 @@ try{
    await page.setViewport(1440,900);await page.goto('about:blank');await page.goto(url.href,language);
    await wait(`document.body.dataset.ready==='true'&&document.querySelectorAll('${root} form[data-job-ask]').length===4&&!!document.querySelector('${visibleForm} [data-job-questions-submit]')`,'retry four forms');
    assert.deepEqual((await state()).action,{text:label(2),disabled:false,first:true,visible:true});
+   const actionWidth=()=>page!.evaluate<number>(`document.querySelector('${visibleForm} [data-job-questions-submit]').getBoundingClientRect().width`);
+   const readyWidth=await actionWidth();
    // Hold the second set's request until the first set has landed, then refuse it: the refusal settles last.
    assert.ok(control);refuseAsk=asks[1];heldRequest=undefined;
    await control('Fetch.enable',{patterns:[{urlPattern:'*ui/acts*',requestStage:'Request'}]});
@@ -245,6 +342,12 @@ try{
    await waitFor(()=>pending().length===3&&!!heldRequest,'one act landed, one request held');
    assert.deepEqual(pending(),asks.slice(1));
    await wait(`document.querySelectorAll('${root} form[data-job-ask]')[0].dataset.interviewAnswered==='true'`,'first set answered');
+   const heldAction=(await state()).action;
+   const heldWidth=await actionWidth();
+   console.log('1153_SHARED '+JSON.stringify({language,heldAction,readyWidth,heldWidth,pending:pending().length}));
+   if(!heldAction?.disabled||heldAction.text!==catalog['Sending'])
+    sendingFailures.push(`${language} shared: Sending stays disabled after the first set settles`);
+   if(heldWidth!==readyWidth)sendingFailures.push(`${language} shared: button width stays fixed during POST`);
    await control('Fetch.fulfillRequest',{requestId:heldRequest!,responseCode:409,responseHeaders:[{name:'Content-Type',value:'application/json'}],
     body:Buffer.from(JSON.stringify({ok:false,error:{code:'JOB_ACT_INVALID',message:'JOB_ACT_INVALID'}})).toString('base64')});
    refuseAsk=undefined;await control('Fetch.disable');
@@ -266,6 +369,8 @@ try{
    cases.push(observation);
   }finally{refuseAsk=undefined;if(heldRequest)await control?.('Fetch.disable').catch(()=>{});await page.goto('about:blank');await fixture.close();}
  }
+ if(!rigOnly)for(const language of ['en','ko'] as const)
+  for(const outcome of ['success','stale','network'] as const)await singleSetSubmission(language,outcome);
  const rigFailures: string[]=[];
  for(const language of ['en','ko'] as const){
   try{cases.push(await groupedRigCase(language));}
@@ -273,8 +378,9 @@ try{
  }
  assert.deepEqual(rigFailures,[],'grouped rig browser scenario failed');
  assert.equal(exceptions.length,0,JSON.stringify(exceptions));
+ assert.deepEqual(sendingFailures,[],'1153 interview submission feedback');
  assert.equal(consoleErrors.length,0,JSON.stringify(consoleErrors));
  const result={cases:cases.length,languages:['en','ko'],exceptions:exceptions.length,consoleErrors:consoleErrors.length};
  await writeFile(join(output,'result.json'),JSON.stringify(result,null,2)+'\n');console.log('1004_BROWSER_PASS '+JSON.stringify(result));
-}catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),exceptions,consoleErrors,cases},null,2)+'\n');if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
+}catch(error){await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),exceptions,consoleErrors,sendingFailures,cases},null,2)+'\n');if(page)await writeFile(join(output,'failure.png'),await page.screenshot()).catch(()=>{});throw error;}
 finally{await page?.close();await rm(profile,{recursive:true,force:true});}

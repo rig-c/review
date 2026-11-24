@@ -1471,9 +1471,12 @@ function jobQuestionSet(ask: JobWindowAsk, prepared: JobPreparedInspection, t: t
     const ready = (entry: JobForm) => !answered(entry) && !entry.submitting && complete(entry.form);
     const refresh = () => {
         const members = [...rows.values()], count = members.filter(row => answered(row.entry) || ready(row.entry)).length;
+        const sending = members.some(row => row.entry.submitting);
         for (const row of members) {
-            row.action.textContent = t('interview.submitAnswered', [count, sets.length]);
-            row.action.disabled = !members.some(item => ready(item.entry)) || members.some(item => item.entry.submitting);
+            row.action.textContent = sending ? t('Sending') : t('interview.submitAnswered', [count, sets.length]);
+            row.action.disabled = sending || !members.some(item => ready(item.entry));
+            if (sending) row.action.setAttribute('aria-busy', 'true');
+            else row.action.removeAttribute('aria-busy');
             row.redraw();
         }
     };
@@ -1487,7 +1490,7 @@ function jobQuestionSet(ask: JobWindowAsk, prepared: JobPreparedInspection, t: t
             onSelect: (i: number) => rows.get(i)?.entry.form.dispatchEvent(new Event('job-question-select', {bubbles: true}))},
         join(entry: JobForm, redraw: () => void) {
             rows.set(index, {entry, action, redraw});
-            for (const type of ['input', 'change', 'job-answer-saved', 'job-answer-failed', 'job-form-language']) entry.form.addEventListener(type, refresh);
+            for (const type of ['input', 'change', 'job-answer-sending', 'job-answer-saved', 'job-answer-failed', 'job-form-language']) entry.form.addEventListener(type, refresh);
             entry.form.addEventListener('job-form-dispose', () => {if (rows.get(index)?.entry === entry) rows.delete(index); refresh();});
             refresh();
         },
@@ -1545,6 +1548,13 @@ export interface JobFormDependencies {
         let disposeInterview:(()=>void)|undefined;
         let interviewForm:ReturnType<typeof createInterviewForm>|undefined;
         let questionSet:ReturnType<typeof jobQuestionSet>;
+        let interviewRefusal: {error: unknown} | undefined;
+        const renderInterviewRefusal = () => {
+            if (!interviewForm || !interviewRefusal) return;
+            const refusal = jobSubmissionRefusal(interviewRefusal.error);
+            interviewForm.status.textContent = refusal.text;
+            interviewForm.status.title = refusal.title;
+        };
         if (subject.kind === 'interview-picks') {
             let question:InterviewDisplayQuestion|undefined = prepared.interview?.questions.find(item => item.set.id === subject.setId && item.set.question === subject.questionId);
             if (!question || !question.editable) throw new Error('JOB_ASK_INVALID');
@@ -1587,7 +1597,7 @@ export interface JobFormDependencies {
                         : 'This request has no picture.'));
             }
             const {localize,dispose,read:readInterview}=interviewForm;
-            const offLanguage=onLanguageChange(localize);
+            const offLanguage=onLanguageChange(()=>{localize();renderInterviewRefusal();});
             disposeInterview=()=>{offLanguage();dispose();};
             read=readInterview;
             submitKey = 'interview.save';
@@ -1667,6 +1677,14 @@ export interface JobFormDependencies {
             submitting: false, ...(disposeInterview?{dispose:disposeInterview}:{}) };
         if(disposeInterview)form.addEventListener('job-form-dispose',disposeInterview);
         if(questionSet&&interviewForm)questionSet.join(entry,interviewForm.refresh);
+        const updateInterviewSubmit = (sending: boolean) => {
+            const key = sending ? 'Sending' : submitKey;
+            submit.dataset.jobText = key;
+            submit.textContent = t(key);
+            if (sending) submit.setAttribute('aria-busy', 'true');
+            else submit.removeAttribute('aria-busy');
+            status.className = sending ? 'sr-only' : '';
+        };
         try {
             const primaryKey = localDraftKey(prepared.display);
             const legacyPrefix = 'rig-review-job-draft/1:' + (/^\/jobs\/([^/]+)\//.exec(prepared.display.routes.entry)?.[1] ?? '') + ':';
@@ -1740,13 +1758,22 @@ export interface JobFormDependencies {
                 if (!activeAsk) throw new Error('JOB_ASK_INVALID');
                 entry.submitting = true;
                 fields.disabled = true;
+                if (interviewForm) {
+                    interviewRefusal = undefined;
+                    status.removeAttribute('title');
+                    updateInterviewSubmit(true);
+                    status.dataset.jobText = 'Sending';
+                    status.textContent = t('Sending');
+                    if (questionSet) form.dispatchEvent(new Event('job-answer-sending'));
+                }
                 const frozen = await Promise.resolve(input);
                 if (entry.submissionId !== frozen.submissionId) throw new Error('JOB_STILL_BINDING_MISMATCH');
                 const result = await window.submit(frozen);
                 if (!result.ok)
-                    throw new Error(result.error.code);
+                    throw new Error(result.error.code, {cause: (result.error as {cause?: unknown}).cause});
                 entry.submitting = false;
                 entry.dirty = false;
+                if (interviewForm) updateInterviewSubmit(false);
                 status.dataset.jobText = 'job.saved';
                 status.textContent = t('job.saved');
                 if(subject.kind==='interview-picks'){form.dataset.interviewAnswered='true';form.dispatchEvent(new Event('change'));}
@@ -1755,9 +1782,16 @@ export interface JobFormDependencies {
             }
             catch (error) {
                 entry.submitting = false;
-                status.dataset.jobText = error instanceof Error && Object.hasOwn(enCatalog, error.message) && Object.hasOwn(koCatalog, error.message)
-                    ? error.message : 'JOB_ACT_INVALID';
-                status.textContent = jobWindowRefusal(error, 'JOB_ACT_INVALID');
+                if (interviewForm) {
+                    updateInterviewSubmit(false);
+                    delete status.dataset.jobText;
+                    interviewRefusal = {error};
+                    renderInterviewRefusal();
+                } else {
+                    status.dataset.jobText = error instanceof Error && Object.hasOwn(enCatalog, error.message) && Object.hasOwn(koCatalog, error.message)
+                        ? error.message : 'JOB_ACT_INVALID';
+                    status.textContent = jobWindowRefusal(error, 'JOB_ACT_INVALID');
+                }
                 fields.disabled = false;
                 // A shared question-set submit waits on every member; a failed one must let it re-enable for the retry.
                 form.dispatchEvent(new Event('job-answer-failed'));

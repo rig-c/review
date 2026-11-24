@@ -523,6 +523,8 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .interview-answer legend{margin-bottom:var(--space-1)}
 .interview-answer .interview-option{line-height:1.25}
 .interview-answer label:not(.interview-option),.interview-answer button[type=submit]{margin-top:var(--space-1)}
+.interview-answer[data-job-ask] button[type=submit]{inline-size:min(100%,144px)}
+.interview-answer [data-job-questions-submit]{inline-size:min(100%,172px)}
 .interview-answer textarea:not([hidden]){min-height:3rem;height:3rem;margin:var(--space-1) 0}
 .interview-answer>p[role=status]{grid-column:1 / -1;grid-row:2;margin:var(--space-1)}
 .interview-delegate{justify-self:start;font-size:var(--font-size-meta);color:var(--fg-muted)}
