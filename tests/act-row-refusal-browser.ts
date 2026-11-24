@@ -17,7 +17,7 @@ const at=Bun.argv.indexOf('--out'),output=resolve(at<0?'artifacts/act-row-refusa
 await mkdir(output,{recursive:true});
 type Box={x:number;y:number;right:number;bottom:number;width:number;height:number}|null;
 type Row={width:number;row:Box&{};scrollWidth:number;clientWidth:number;panelOpen:boolean;headline:Box;headlineFull:boolean;headlineOneLine:boolean;state:Box;stateFits:boolean;save:Box;changes:Box;answersFit:boolean;
- message:(Box&{text:string;natural:number;full:boolean;titled:boolean;lines:number})|null};
+ reasonVisible:boolean;message:(Box&{text:string;natural:number;full:boolean;titled:boolean;lines:number})|null};
 const measure=`(()=>{const box=n=>{if(!n||!n.getClientRects().length)return null;const b=n.getBoundingClientRect();return {x:b.x,y:b.y,right:b.right,bottom:b.bottom,width:b.width,height:b.height};};
  const fit=n=>!!n&&n.scrollWidth<=n.clientWidth+1&&n.scrollHeight<=n.clientHeight+1;
  const row=document.getElementById('workspace-act-row'),message=document.getElementById('review-message'),headline=document.getElementById('workspace-ask-headline'),state=document.getElementById('review-draft-state');
@@ -25,7 +25,7 @@ const measure=`(()=>{const box=n=>{if(!n||!n.getClientRects().length)return null
  return {width:innerWidth,row:box(row),scrollWidth:row.scrollWidth,clientWidth:row.clientWidth,panelOpen:!document.getElementById('workspace-communication').hidden,
   headline:box(headline),headlineFull:!!headline&&headline.title===headline.textContent,headlineOneLine:!!headline&&getComputedStyle(headline).whiteSpace==='nowrap'&&headline.getBoundingClientRect().height<=parseFloat(getComputedStyle(headline).fontSize)*1.6,
   state:box(state),stateFits:!state||!state.getClientRects().length||fit(state),save:box(document.getElementById('save')),changes:box(document.getElementById('request-changes')),
-  answersFit:fit(document.getElementById('save'))&&fit(document.getElementById('request-changes')),
+  answersFit:fit(document.getElementById('save'))&&fit(document.getElementById('request-changes')),reasonVisible:!!box(document.getElementById('request-changes-reason')),
   message:message?.classList.contains('error')?{...box(message),text:message.textContent,natural,full:fit(message),titled:message.title===message.textContent,
    lines:Math.round(message.getBoundingClientRect().height/(parseFloat(getComputedStyle(message).lineHeight)||parseFloat(getComputedStyle(message).fontSize)*1.25))}:null};})()`;
 const results:Record<string,unknown>[]=[],failures:string[]=[];
@@ -65,6 +65,8 @@ for(const language of ['en','ko'] as const)for(const [width,height] of [[1280,72
   for(const [name,row] of [['the chest editor',chest],['the refusal',refused],['after the refusal',after]] as const)
    check(row.row!.height===plain.row!.height,`${label} ${name} keeps the row height (${row.row!.height}/${plain.row!.height})`);
   check(refused.panelOpen,label+' the refusal is measured with the right panel open');
+  check(plain.reasonVisible,label+' the zero-comment reason is visible before the refusal');
+  check(!refused.reasonVisible,label+' the zero-comment reason yields to the visible refusal');
   for(const [name,row] of [['refusal',refused],['after',after]] as const){
    check(row.scrollWidth===row.clientWidth,`${label} the ${name} row does not widen (${row.scrollWidth}/${row.clientWidth})`);
    for(const [button,box] of [['Approve',row.save],['Request changes',row.changes]] as const)

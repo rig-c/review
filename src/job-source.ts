@@ -62,10 +62,9 @@ export interface JobRootIdentity {
   readonly ino: number;
 }
 
-/** Trusted Create #184 adapter boundary. These are host return values, not new
- * project record keys or an agent API payload. Until the producer publishes its
- * actual read contract, no default adapter invents plan/parts bindings. Parts
- * referenced-image enumeration belongs to the public Parts #1163 surface.
+/** Trusted Create host return values from the published record read contract.
+ * Review validates the producer's plan and parts bindings. Parts referenced-image
+ * enumeration belongs to the public Parts #1163 surface.
  */
 export interface JobPublishedContext {
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];

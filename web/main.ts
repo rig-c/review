@@ -161,7 +161,8 @@ const rigAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pen
 const recordAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-record-ask',hidden:true,type:'button'});
 const askHeadline=panelMake('span',{id:'workspace-ask-headline',className:'workspace-act-ask',hidden:true});
 const requestChanges=panelMake('button',{id:'request-changes',type:'button',hidden:true});
-rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requestChanges);
+const requestChangesReason=panelMake('span',{id:'request-changes-reason',hidden:true});
+rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requestChangesReason,requestChanges);
 let pendingAnswers:readonly {kind:string;stage?:string}[]=[],answerSaved=false;
 let jobProgress:JobProgressV3|null=null,progressTimer:ReturnType<typeof setInterval>|undefined;
 let askSentence='';
@@ -2161,14 +2162,18 @@ function renderAnswerControls():void {
  }
  rigAsk.classList.toggle('primary',dialog&&(questionPending||recordTrigger===rigAsk));
  recordAsk.classList.toggle('primary',dialog&&!questionPending&&!!recordKind);
+ let inlineReason='';
  if(verdict){
   const count=(host?.direction?recordComments.length:liveIssueCount())+(pendingPartComment||pendingStageComment?1:0);
   const hasChanges=count>0||!!host?.canSubmitMeshEdits?.()&&subjects.some(subject=>subject.kind==='review-verdict'&&subject.stage==='rig-review');
+  const verdictBlocked=blocked||!!readOnly||!!session?.feedbackWarnings?.length||(parts&&partsAnswerBlocked());
+  const missingChanges=host?.verdictComments&&!parts?'Add a comment or an edit where changes are needed.':'Add a comment where changes are needed.';
   setSourceText(save,'Approve');setSourceText(requestChanges,'Request changes');
-  save.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||(parts&&(partsAnswerBlocked()||count>0));
-  requestChanges.disabled=blocked||!!readOnly||!!session?.feedbackWarnings?.length||!hasChanges||(parts&&partsAnswerBlocked());
+  save.disabled=verdictBlocked||(parts&&count>0);
+  requestChanges.disabled=verdictBlocked||!hasChanges;
   setSourceAttribute(save,'title',parts&&count>0?'Remove the flagged parts comments before approving.':'');
-  setSourceAttribute(requestChanges,'title',needsPinnedPart?pinRefusal:hasChanges?'':host?.verdictComments&&!parts?'Add a comment or an edit where changes are needed.':'Add a comment where changes are needed.');
+  setSourceAttribute(requestChanges,'title',needsPinnedPart?pinRefusal:hasChanges?'':missingChanges);
+  if(!firstPublicationPrompt&&!verdictBlocked&&!hasChanges&&!needsPinnedPart&&!host?.jobClosed?.())inlineReason=missingChanges;
   if(!parts){
    save.onclick=event=>{session.status='approved';select('review-status').value=session.status;return verdictSubmit?.(event);};
   }
@@ -2176,6 +2181,10 @@ function renderAnswerControls():void {
  }
  for(const root of [recordPanel,...questionForms])for(const control of root.querySelectorAll<HTMLButtonElement>('button[type="submit"]'))control.disabled=blocked||verdict;
  // The waiting row is already visible: finish labels, state and handlers before revealing any answer.
+ setSourceText(requestChangesReason,inlineReason);
+ requestChangesReason.hidden=!inlineReason;
+ if(inlineReason)requestChanges.setAttribute('aria-describedby',requestChangesReason.id);
+ else requestChanges.removeAttribute('aria-describedby');
  save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;rigAsk.hidden=!dialog||firstPublicationPrompt||!questionPending&&recordTrigger!==rigAsk;
  recordAsk.hidden=!dialog||firstPublicationPrompt||recordTrigger!==recordAsk||!recordKind;
  if(host?.verdictComments){
