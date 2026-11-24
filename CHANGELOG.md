@@ -1,5 +1,23 @@
 # Changelog
 
+## 4.18.8
+
+Review takes its turn-dial discovery from Play 1.26.0. A standalone save says plainly that it stays local, the renderer status names why WebGL fell back, and the view toolbar wraps on narrow screens. There is no export, act or contract change.
+
+### Changed
+
+* Pins `@rig-c/play` 1.26.0. Review imports `discoverTurnDials`, `normalizedDial`, `TurnAxis` and `TurnDial` from Play and deletes its own copies. `TurnDial.provenance` is now required, as Play declares it. On malformed model rows, discovery now skips the binding where Review used to throw. Well-formed models give the same dials, and the Turn Pad's pixels are unchanged (#1198, closes #1194).
+
+### Fixed
+
+* A standalone session's verdict save says it stays local. Before saving: "Saves locally. The producer receives no feedback." After saving: "Saved locally". The footer reads "Saved locally. The producer received no feedback." Both lines are also translated for the Korean screen. A live job is unchanged (#1196, closes #1188).
+* When the mesh renderer falls back to Canvas2D, the status names the reason Play reports: WebGL unavailable, WebGL context lost or WebGL buffer unavailable. An explicit Canvas2D choice still reads "Canvas2D", and an unknown reason keeps "Canvas2D fallback" (#1197, closes #1151).
+* The view controls wrap instead of overflowing on narrow viewports, and the view menu stays on screen (#1191, closes #1172).
+
+### Tests
+
+* Browser walks that wait on the producer allow 60 s on macOS. The comparison-mode walk hit-tests its handles and reads both saved records (#1195, closes #1152).
+
 ## 4.18.7
 
 The idle key-edit lock gives the true reason on a model without a turn dial, still-capture refusals read in Korean, and the CLI help lists every command. The reference guides catch up with the code. There is no export, act or contract change.
