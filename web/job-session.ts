@@ -100,6 +100,7 @@ export interface JobWindowState {
     readonly failure?: unknown;
     readonly previousLabel: string | null;
     readonly pending: readonly JobWindowAsk[];
+    readonly recordReceiptAskId?: string;
     readonly retainedDrafts: readonly JobRetainedDraft[];
 }
 function unwrap<Value>(result: JobResult<Value>): Value {
@@ -228,11 +229,14 @@ export function createJobWindow<Prepared>(options: {
 }) {
     const { transport, adapter, pageId } = options;
     const pending = new Map<string, JobWindowAsk>();
+    const recordAttempts = new Map<string, UISubmissionV3>();
     const rigAttempts = new WeakSet<UISubmissionV3>();
     const retainedDrafts: JobRetainedDraft[] = [];
     let initialDrafts: readonly JobRetainedDraft[] | null = options.initialRetainedDrafts
         ? [...options.initialRetainedDrafts] : null;
     let generation = 0;
+    let latestAskGeneration = 0;
+    let recordReceiptAskId: string | undefined;
     let displayed: DisplayPublicationV3 | null = null;
     let receipt: JobDisplayReceipt | null = null;
     let preparing = false;
@@ -250,6 +254,7 @@ export function createJobWindow<Prepared>(options: {
         return {
             generation, displayed, receipt, preparing, closed, error, previousLabel, ...(errorOrigin ? {errorOrigin} : {}), ...(failure !== undefined ? {failure} : {}),
             pending: [...pending.values()], retainedDrafts: [...retainedDrafts],
+            ...(recordReceiptAskId !== undefined ? {recordReceiptAskId} : {}),
         };
     }
     function changed(): void { adapter.changed(state()); }
@@ -369,6 +374,14 @@ export function createJobWindow<Prepared>(options: {
         });
         return queue;
     }
+    function settleRecordAsk(ask: JobWindowAsk, act: ActV3, observedGeneration = recordAttempts.get(ask.askId)?.expectedGeneration): void {
+        pending.set(ask.askId, {...ask, status: 'answered', act});
+        recordAttempts.delete(ask.askId);
+        // A newer request owns the row even if an older request finalizes later.
+        if (observedGeneration !== undefined && observedGeneration < latestAskGeneration) return;
+        if ([...pending.values()].some(other => other.publicationId === ask.publicationId && other.status === 'pending')) return;
+        recordReceiptAskId = ask.askId;
+    }
     function event(value: EventV3): void {
         if (stopped || value.jobId !== options.jobId)
             return;
@@ -384,13 +397,18 @@ export function createJobWindow<Prepared>(options: {
         }
         else if (value.type === 'pending') {
             const previous = pending.get(value.ask.askId);
+            if (!previous && value.ask.status === 'pending') {
+                latestAskGeneration = Math.max(latestAskGeneration, value.generation);
+                recordReceiptAskId = undefined;
+            }
             pending.set(value.ask.askId, previous?.act ? {...value.ask, status: 'answered', act: previous.act} : value.ask);
         }
         else if (value.type === 'act') {
             const ask = pending.get(value.act?.askId);
-            if (ask && (!isRecordAnswer(ask.subject.kind) && !isRecordAnswer(value.act.kind) ||
-                !ask.act && matchesJobRecordAct(ask, value.act, options.jobId)))
+            if (ask && !isRecordAnswer(ask.subject.kind) && !isRecordAnswer(value.act.kind))
                 pending.set(ask.askId, { ...ask, status: 'answered', act: value.act });
+            else if (ask && !ask.act && matchesJobRecordAct(ask, value.act, options.jobId))
+                settleRecordAsk(ask, value.act);
         }
         else if (value.type === 'closed') {
             closed = true;
@@ -411,12 +429,16 @@ export function createJobWindow<Prepared>(options: {
         }
         // The backend authenticates the actual Request and validates the semantic value.
         if (input.capture !== undefined) rigAttempts.add(input);
+        const record = isRecordAnswer(input.kind);
+        if (record && ask) recordAttempts.set(ask.askId, input);
         const result = await transport.submit(input);
+        if (!result.ok && recordAttempts.get(input.askId) === input) recordAttempts.delete(input.askId);
         const current = pending.get(input.askId);
         // Keep the transport result for existing callers. Only a matching record act settles the local ask.
-        if (!stopped && result.ok && current && (!isRecordAnswer(input.kind) ||
+        if (!stopped && result.ok && current && (!record ||
             !current.act && matchesJobRecordAct(current, result.value, options.jobId, input))) {
-            pending.set(current.askId, {...current, status: 'answered', act: result.value});
+            if (record) settleRecordAsk(current, result.value, input.expectedGeneration);
+            else pending.set(current.askId, {...current, status: 'answered', act: result.value});
             changed();
         }
         return result;

@@ -31,6 +31,7 @@ import { enCatalog } from '../web/catalog-en.ts';
 import { koCatalog } from '../web/catalog-ko.ts';
 import { jobFixture, jobInputHashes } from './helpers/job-api-fixture.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
 
 const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -233,10 +234,10 @@ const argument = (key: string) => {
   const index = Bun.argv.indexOf(key);
   return index < 0 ? undefined : Bun.argv[index + 1];
 };
-const language = argument('--lang') ?? 'en';
-assert.ok(language === 'en' || language === 'ko');
+const requestedLanguage = argument('--lang') ?? 'en';
+assert.ok(requestedLanguage === 'en' || requestedLanguage === 'ko');
+const language = requestedLanguage;
 const catalog = language === 'ko' ? koCatalog : enCatalog;
-const answeredLabel = language === 'ko' ? koCatalog['Answer saved'] : 'Answer saved';
 const output = argument('--out') ?? `evidence/job-record-${language}`;
 await mkdir(output, { recursive: true });
 
@@ -358,7 +359,7 @@ async function edit(selector: string, value: string): Promise<void> {
   );
 }
 
-async function submitForm(askId: string, kind: 'record' | 'checkpoint' | 'interview' = 'record'): Promise<{ statusText: string; statusKey: string | null }> {
+async function submitForm(askId: string, kind: 'record' | 'checkpoint' | 'interview' = 'record', remainingAsk?: string): Promise<{ statusText: string; statusKey: string | null }> {
   const root = kind === 'interview' ? '#workspace-interview-answer' : '#job-record-asks';
   const selector = `${root} form[data-job-ask=${JSON.stringify(askId)}]`;
   const submitSelector=selector+(kind==='checkpoint'?' button[data-job-text="Pass"]':' button[type="submit"]');
@@ -373,11 +374,22 @@ async function submitForm(askId: string, kind: 'record' | 'checkpoint' | 'interv
   await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   await click(page!,submitSelector);
   if (kind !== 'interview') {
-    await wait(`(()=>{const state=document.getElementById('dirty');return state?.textContent===${JSON.stringify(answeredLabel)}&&state.dataset.saveState==='saved';})()&&
-      !document.querySelector(${JSON.stringify(selector)})`, `submitted form ${askId} was pruned and Answer saved is shown`);
-    return page!.evaluate<{statusText: string; statusKey: string | null}>(`(()=>{
-      const state=document.getElementById('dirty');return {statusText:state.textContent,statusKey:state.dataset.saveState??null};
+    await wait(`!document.querySelector(${JSON.stringify(selector)})`, `submitted form ${askId} was pruned`);
+    if (!remainingAsk) return expectRecordActSubmitted(page!, wait, language, `record act ${askId} submitted`);
+    const remainingForm = `#job-record-asks:not([hidden]) form[data-job-ask=${JSON.stringify(remainingAsk)}]`;
+    await wait(`!!document.querySelector(${JSON.stringify(remainingForm + ' fieldset:not(:disabled)')}) &&
+      !document.getElementById('workspace-pending-ask').disabled`, `remaining ask ${remainingAsk} stays enabled`);
+    const view = await page!.evaluate<{statusText: string; statusKey: string | null; headline: string; controls: string[]}>(`(() => {
+      const row = document.getElementById('workspace-act-row');
+      const status = row.querySelector('#review-draft-state');
+      const controls = [...row.querySelectorAll('#save,#request-changes,#workspace-pending-ask,#workspace-pending-record-ask')]
+        .filter(control => control.getClientRects().length > 0).map(control => control.id);
+      return {statusText: status.textContent, statusKey: status.dataset.saveState ?? null,
+        headline: row.querySelector('#workspace-ask-headline').textContent, controls};
     })()`);
+    assert.deepEqual(view.controls, ['workspace-pending-ask']);
+    assert.equal(view.headline, catalog['Approve this stage.']);
+    return {statusText: view.statusText, statusKey: view.statusKey};
   }
   await wait(
     `document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled && document.querySelector(${JSON.stringify(selector)}).querySelector(':scope > [role="status"]').dataset.jobText === 'job.saved'`,
@@ -789,14 +801,14 @@ try {
   await edit(`form[data-job-ask="${cpAsk.askId}"] select[name="outcome"]`, 'pass');
   const checkpointWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
   assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"],input[name="note"]').length`),0);
-  const cpSubmitStatus = await submitForm(cpAsk.askId,'checkpoint');
-  assert.equal(cpSubmitStatus.statusKey, 'saved');
-  assert.equal(cpSubmitStatus.statusText, answeredLabel);
+  const cpSubmitStatus = await submitForm(cpAsk.askId, 'checkpoint', signoffAsk.askId);
+  assert.equal(cpSubmitStatus.statusKey, 'unsaved');
+  assert.equal(cpSubmitStatus.statusText, catalog['Not submitted']);
 
   const signoffWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
   const signoffSubmitStatus = await submitForm(signoffAsk.askId);
   assert.equal(signoffSubmitStatus.statusKey, 'saved');
-  assert.equal(signoffSubmitStatus.statusText, answeredLabel);
+  assert.equal(signoffSubmitStatus.statusText, catalog['Submitted']);
 
   await wait(`!document.querySelector('#job-record-asks:not([hidden])')`,'record section hidden after the final record act');
 

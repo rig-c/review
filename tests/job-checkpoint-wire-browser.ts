@@ -11,6 +11,7 @@ import {join} from 'node:path';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import {JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, type JobNextValue, type JobPendingAsk, type JobSubject} from '../src/job-contract.ts';
 import {parseContextCommentsAct} from '../src/job-api.ts';
 import {projectComments,feedbackItemComments,parseStageComment} from '../src/stage-comment.ts';
@@ -442,8 +443,8 @@ try {
     await click(page,'#workspace-pending-ask');
     await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'checkpoint dialog');
     await click(page,`form[data-job-ask="${cpAsk.askId}"] button[data-job-text="Pass"]`);
-    await wait(`document.getElementById('dirty').textContent===${JSON.stringify(language==='en'?'Answer saved':koCatalog['Answer saved'])} &&
-      !document.querySelector('form[data-job-ask="${cpAsk.askId}"]') && !document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'checkpoint saved');
+    await expectRecordActSubmitted(page,wait,language,'checkpoint submitted');
+    assert.equal(await page.evaluate<boolean>(`!document.querySelector('form[data-job-ask="${cpAsk.askId}"]')`),true,'submitted checkpoint form is pruned');
     const cpEvents=await nextEvents(),cpActEvent=cpEvents.events.find(e=>e.type==='act'&&e.act.askId===cpAsk.askId);
     assert.ok(cpActEvent?.type==='act'&&cpActEvent.act.kind==='checkpoint');
     assert.equal(cpActEvent.act.schema,JOB_COMMENTS_ACT_SCHEMA);

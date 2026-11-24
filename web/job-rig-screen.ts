@@ -120,7 +120,7 @@ export function createJobRigScreen(options: {
   pageId: string;
   access: {readonly capability: string | null; headers(init?: HeadersInit): Headers};
   window: {state(): {readonly pending: readonly (PendingAskV3 & {readonly act?:ActV3})[]; readonly receipt: {readonly displayedNonce: string} | null;
-    readonly generation: number; readonly preparing: boolean; readonly closed: boolean}; submit(input: UISubmissionV3): Promise<JobResult<ActV3>>};
+    readonly generation: number; readonly preparing: boolean; readonly closed: boolean; readonly recordReceiptAskId?:string}; submit(input: UISubmissionV3): Promise<JobResult<ActV3>>};
   routes(display: DisplayPublicationV3): {entry: string; api(path: string): string};
   readPublication?(publicationId:string,signal:AbortSignal):Promise<JobResult<DisplayPublicationV3>>;
   formDependencies?:JobFormDependencies;
@@ -317,14 +317,11 @@ export function createJobRigScreen(options: {
     const record = prepared.record ?? prepared.modals;
     const recordSubmission = () => {
       if (prepared !== mounted) return null;
-      const {pending, closed} = options.window.state();
+      const {pending, closed, recordReceiptAskId} = options.window.state();
       const active = activeAsks(pending, prepared.display.publication.publicationId);
       if (!closed && active.some(ask => record?.forms.get(ask.askId)?.submitting &&
           (ask.subject.kind === 'signoff' || ask.subject.kind === 'checkpoint'))) return 'sending' as const;
-      // A publication can remount before it asks. Only the newest ask replaces the receipt.
-      const latest = pending.at(-1);
-      return !active.length && latest?.status === 'answered' &&
-        matchesJobRecordAct(latest, latest.act, jobId) ? 'submitted' as const : null;
+      return !active.length && recordReceiptAskId !== undefined ? 'submitted' as const : null;
     };
     const draftId = jobSourceDraftId(prepared.display.publication.source);
     const previousPublicationId = prepared.display.publication.previousPublicationId;

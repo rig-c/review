@@ -12,6 +12,7 @@ import {jobFixture} from './helpers/job-api-fixture.ts';
 import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
@@ -331,19 +332,26 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
     mode==='checkpoint'?'#job-record-asks button[data-job-text="Pass"]':'#job-record-asks button[type=submit]';
    if(mode==='interview')await page.evaluate<void>(`document.querySelector(${JSON.stringify(submit)}).scrollIntoView({block:'nearest',inline:'nearest'})`);
    await click(page,submit);
-   const answerSaved=mode==='interview'?`${questionSelected}&&!!document.querySelector('#workspace-interview-answer form.interview-answer[data-interview-answered=true]')`:'true';
-   await wait(page,`${recordDialogClosed}&&${answerSaved}&&document.getElementById('review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`);
+   if(mode==='interview'){
+    const answerSaved=`${questionSelected}&&!!document.querySelector('#workspace-interview-answer form.interview-answer[data-interview-answered=true]')`;
+    await wait(page,`${recordDialogClosed}&&${answerSaved}&&document.getElementById('review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`);
+   }else await expectRecordActSubmitted(page,expression=>wait(page!,expression),language,`${mode} submitted`);
    const saved:any=await capture(page,out,'answer-saved');
    const savedState:{pending:boolean;row:{kind:string;text:string};dirty:{kind:string;text:string}}=await page.evaluate(`(()=>{
     const state=id=>{const n=document.getElementById(id);return {kind:n.dataset.saveState,text:n.textContent};};
     return {pending:['save','request-changes','workspace-pending-ask'].some(id=>!document.getElementById(id).hidden),row:state('review-draft-state'),dirty:state('dirty')};
    })()`);
    await writeFile(join(out,'answer-saved-state.json'),JSON.stringify(savedState,null,2)+'\n');
-   assert.deepEqual(savedState.row,{kind:'saved',text:language==='ko'?koCatalog['Answer saved']:'Answer saved'});
-   if(savedState.pending)assertPending(saved,mode,width,expectedPendingFooter);
-   else{
-    assert.equal(saved.rowVisible,false);assert.deepEqual(saved.states,['dirty']);assert.deepEqual(saved.answers,[]);assert.deepEqual(saved.primary,[]);
-    assert.deepEqual(savedState.dirty,savedState.row,'completed answer keeps the exact saved state in its one visible state copy');
+   if(mode==='interview'){
+    assert.deepEqual(savedState.row,{kind:'saved',text:language==='ko'?koCatalog['Answer saved']:'Answer saved'});
+    if(savedState.pending)assertPending(saved,mode,width,expectedPendingFooter);
+    else{
+     assert.equal(saved.rowVisible,false);assert.deepEqual(saved.states,['dirty']);assert.deepEqual(saved.answers,[]);assert.deepEqual(saved.primary,[]);
+     assert.deepEqual(savedState.dirty,savedState.row,'completed answer keeps the exact saved state in its one visible state copy');
+    }
+   }else{
+    assert.equal(savedState.pending,false);assert.deepEqual(saved.primary,[]);
+    assert.deepEqual(savedState.dirty,savedState.row,'the hidden header copy mirrors the submitted state');
    }
   }
   if(mode==='rig'){
