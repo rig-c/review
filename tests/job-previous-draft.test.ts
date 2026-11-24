@@ -154,6 +154,46 @@ test('previous draft declaration, decoded raster and diff each have a bound', as
   await expectRefusal(s.f, 'LIMIT operand=diff');
 });
 
+test('sealed diff admits the stock Parts report and binds both composite hashes', async () => {
+  const s = await fixture(), {current, previous} = s.previousDraft.composites;
+  // Minimal standalone assemble layouts using the same synthetic PNGs that Review will seal.
+  const manifest = JSON.stringify({rig_size: [2, 2], scale_rig_per_source: 1, ghost_px: {},
+    parts: [{name: 'body', from: 'painting:body', x: 0, y: 0, w: 2, h: 2, opaque_px: 4,
+      projected_core_px: 4, source_px_taken: 4, refused_drift_px: 0, merged_px: 0, seam_override_px: 0}]});
+  for (const [side, file] of Object.entries(s.previousDraft.composites)) {
+    const raster = PNG.sync.read(readFileSync(join(s.f.root, file.path)));
+    writeWorkspaceFile(s.f.root, `${side}/rig/parts.json`, manifest);
+    // Encode the crop separately so its raw hash cannot stand in for the composite hash.
+    writeWorkspaceFile(s.f.root, `${side}/rig/parts/body.png`, PNG.sync.write(raster, {deflateLevel: 0}));
+  }
+  const out = join(s.f.scratch, 'stock-diff.json');
+  const partsCli = join(import.meta.dir, '../node_modules/@rig-c/parts/cli.ts');
+  const result = Bun.spawnSync([process.execPath, partsCli, 'diff-drafts', '--left', 'previous', '--right', 'current', '--out', out],
+    {cwd: s.f.root});
+  expect(result.exitCode, result.stderr.toString()).toBe(0);
+  const bytes = readFileSync(out), report = JSON.parse(bytes.toString('utf8'));
+  expect(report).toMatchObject({spec: 'rig-parts-draft-diff/1',
+    left: {composite_sha256: previous.sha256}, right: {composite_sha256: current.sha256}});
+  expect(report).not.toHaveProperty('schema');
+  expect(current.sha256).not.toBe(previous.sha256);
+
+  const context = withDiff(s, bytes);
+  s.f.setContext(context);
+  const publication = await s.f.publish(), retained = s.f.session.retainedSource(publication.publicationId);
+  const diff = context.previousDraft.diff;
+  expect(publication.source.previousDraft).toEqual(context.previousDraft);
+  expect(retained.seals).toContainEqual(diff);
+  expect(readPreviousDraftBytes(retained.snapshotRoot, diff, 'diff')).toEqual(bytes);
+
+  for (const operand of ['current', 'previous'] as const) {
+    const substitute = writeWorkspaceFile(s.f.root, `substitute/${operand}.png`, makeSyntheticPngBytes(56));
+    const composites = {...s.previousDraft.composites, [operand]: substitute};
+    s.f.setContext({...context, files: [composites.current, composites.previous, diff],
+      previousDraft: {...context.previousDraft, composites}});
+    await expectRefusal(s.f, 'DIFF_INVALID');
+  }
+});
+
 test('sealed diff admits exact hash values at arbitrary object and array depths and preserves its bytes', async () => {
   const s = await fixture(), {current, previous} = s.previousDraft.composites;
   const schema = 'rig-parts-draft-diff/1', depth = 24_000;
@@ -167,13 +207,37 @@ test('sealed diff admits exact hash values at arbitrary object and array depths 
   expect(readPreviousDraftBytes(retained.snapshotRoot, diff, 'diff')).toEqual(bytes);
 });
 
-test('sealed diff refuses wrong schema, missing or inexact hash values, JSON keys alone and invalid UTF-8', async () => {
+test('sealed diff admits equal spec and schema markers', async () => {
+  const s = await fixture(), {current, previous} = s.previousDraft.composites;
+  const schema = 'rig-parts-draft-diff/1';
+  const context = withDiff(s, JSON.stringify({schema, spec: schema, hashes: [current.sha256, previous.sha256]}));
+  s.f.setContext(context);
+  expect((await s.f.publish()).source.previousDraft).toEqual(context.previousDraft);
+});
+
+test('sealed diff names missing and conflicting markers', async () => {
+  const s = await fixture(), {current, previous} = s.previousDraft.composites;
+  const schema = 'rig-parts-draft-diff/1', hashes = [current.sha256, previous.sha256];
+  s.f.setContext(withDiff(s, JSON.stringify({payload: {schema, spec: schema}, hashes})));
+  await expectRefusal(s.f, 'DIFF_INVALID reason=marker-missing');
+  for (const markers of [
+    {schema, spec: 'rig-parts-draft-diff/2'},
+    {schema: 'rig-parts-draft-diff/2', spec: schema},
+    {schema, spec: null},
+  ]) {
+    s.f.setContext(withDiff(s, JSON.stringify({...markers, hashes})));
+    await expectRefusal(s.f, 'DIFF_INVALID reason=marker-conflict');
+  }
+});
+
+test('sealed diff refuses wrong markers, missing or inexact hash values, JSON keys alone and invalid UTF-8', async () => {
   const s = await fixture(), {current, previous} = s.previousDraft.composites;
   const schema = 'rig-parts-draft-diff/1';
   const hashes = [current.sha256, previous.sha256];
   for (const value of [
     {schema: 'rig-parts-draft-diff/2', hashes},
-    {payload: {schema, hashes}},
+    {spec: 'rig-parts-draft-diff/2', hashes},
+    {schema: 'rig-parts-draft-diff/2', spec: 'rig-parts-draft-diff/2', hashes},
     {schema, hashes: [previous.sha256]},
     {schema, hashes: [current.sha256, current.sha256]},
     {schema, hashes: [current.sha256, 'sha256:' + previous.sha256]},

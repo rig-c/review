@@ -341,11 +341,15 @@ function assertPartsReferencePng(data: Buffer, detail: string): {width: number; 
 
 /** The caller has already bounded and sealed the bytes. Parts owns the document's internal shape. */
 function assertPreviousDraftDiff(bytes: Buffer, composites: JobPreviousDraft['composites']): void {
-  const invalid = () => new JobError('JOB_SOURCE_MISMATCH', 'PREVIOUS_DRAFT_DIFF_INVALID');
+  const invalid = (reason?: 'marker-missing' | 'marker-conflict') =>
+    new JobError('JOB_SOURCE_MISMATCH', reason ? `PREVIOUS_DRAFT_DIFF_INVALID reason=${reason}` : 'PREVIOUS_DRAFT_DIFF_INVALID');
   let document: ReturnType<typeof jsonObject>;
   try { document = jsonObject(bytes); }
   catch { throw invalid(); }
-  if (document.schema !== 'rig-parts-draft-diff/1') throw invalid();
+  const {spec, schema} = document;
+  if (spec === undefined && schema === undefined) throw invalid('marker-missing');
+  if (spec !== undefined && schema !== undefined && spec !== schema) throw invalid('marker-conflict');
+  if ((spec ?? schema) !== 'rig-parts-draft-diff/1') throw invalid();
   const missing = new Set([composites.current.sha256, composites.previous.sha256]);
   const pending: unknown[] = [document];
   while (pending.length && missing.size) {
