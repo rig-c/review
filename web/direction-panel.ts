@@ -3,6 +3,7 @@ import type { DirectionInspection } from '../src/direction-inspection.ts';
 import type { PlanSource } from '../src/job-contract.ts';
 import type { TurnDial } from '../src/turn-pad.ts';
 import { onLanguageChange, t } from './i18n.ts';
+import { formatSeconds } from './format-seconds.ts';
 
 export interface DirectionView {
   model: { path: string; sha256: string; inspected: boolean } | null;
@@ -44,8 +45,8 @@ type DirectionSummarySource = Pick<NonNullable<PlanSource['directionReview']>, '
 
 function formatDirectionSummary({ take, camera }: DirectionSummarySource, version: string, language?: 'en' | 'ko'): string {
   const repeat = t(take.loop ? 'direction.loop' : 'direction.once', undefined, language);
-  if (camera === 'composed') return t('direction.composed', [version, String(take.duration), repeat], language);
-  return t('direction.summary', [version, String(take.duration), repeat,
+  if (camera === 'composed') return t('direction.composed', [version, formatSeconds(take.duration), repeat], language);
+  return t('direction.summary', [version, formatSeconds(take.duration), repeat,
     t(camera === 'fixed' ? 'direction.fixedCamera' : 'direction.movingCamera', undefined, language)], language);
 }
 

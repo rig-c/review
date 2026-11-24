@@ -29,6 +29,7 @@ import {controlComparison,type ControlCommand,type ControlInspection,type Contro
 import {pairEligibility,type InputState,type PairDomain} from '../src/comparison-eligibility.ts';
 import {parseBookmark,connectInspectionPersistence,serializableView,restoredZoom,restoreTransaction,captureInputs,restoreInputs,type InspectionBookmark,type InspectionBinding,type PersistenceConnection} from './inspection-persistence.ts';
 import {RendererBadge} from './renderer-status.ts';
+import {formatSeconds} from './format-seconds.ts';
 import {ComparePresentation,type PresentationState} from '../src/compare-presentation.ts';
 import {nextReferenceInterval,ReferenceSelectionUnavailable,inspectionReferenceFrame,lastSupportedReferenceFrame,producerFrameAssociations,referenceFrameAtTime,referenceSeekPosition,type ReferenceFrameIndex,type VideoInfo,type VideoFrame} from '../src/reference-frames.ts';
 import {mountComparePickedTools,type ComparePickedTools} from './compare-picked-tools.ts';
@@ -468,7 +469,7 @@ async function start(): Promise<void> {
     renderPairLayout();
     if (!domain) { showSurvivors(); return; }
     void loadFrameIndex();
-    input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${domain.end} s · Neither side is independently clamped or looped`); ready = true;
+    input('scrub').max = String(domain.end); input('time-input').max = String(domain.end); text('domain', `Shared range 0–${formatSeconds(domain.end)} s · Neither side is independently clamped or looped`); ready = true;
     input('scrub').disabled = false; input('time-input').disabled = false; button('seek').disabled = false; button('play').disabled = domain.end === 0;
     await seekTo(0);configureTurnPad();workspace?.refresh();activeCamera='a';if(cameraSync)setCameraSync(true);fit();for(const id of ['layer-images','layer-mesh','layer-bones'])input(id).disabled=false;renderIdle();const restored=await setupPersistence();setupComments();await pickedTools?.loadInitialSideStatuses();if(!restored&&canRepeatIdle())void playComparison().catch(error=>message(describe(error),true));
     if(!readOnly&&controlServed)controlDispose=connectControl({sourceHash:data.sourceHash,mode:'compare',route:access.route,headers:()=>access.headers(),observe:controlState,apply:applyControl,onStatus:value=>text('control-state',value)});

@@ -141,17 +141,17 @@ test('#1088 direction sign-off shows three localized rows for projected and hist
   const cases: {projection?: PlanSource['directionReview']; en: string[]; ko: string[]}[] = [
    {
     projection: {postVersion: 3, verdictActId: 'act-direction-accepted', take: {duration: 4.5, loop: true}, camera: 'composed'},
-    en: ['Signed post v3', 'Accepted direction verdict · act-direction-accepted', 'Direction · 4.5 s · loop'],
+    en: ['Post to sign: v3', 'Accepted direction verdict · act-direction-accepted', 'Direction · 4.5 s · loop'],
     ko: ['서명 대상 포스트 v3', '채택된 연출 판정 · act-direction-accepted', '연출 · 4.5초 · 반복'],
    },
    {
     projection: {postVersion: 4, verdictActId: null, take: {duration: 8, loop: true}, camera: 'fixed'},
-    en: ['Signed post v4', 'Direction verdict not supplied', 'Direction · 8 s · loop · fixed camera'],
+    en: ['Post to sign: v4', 'Direction verdict not supplied', 'Direction · 8 s · loop · fixed camera'],
     ko: ['서명 대상 포스트 v4', '연출 판정이 제공되지 않았어요.', '연출 · 8초 · 반복 · 카메라 고정'],
    },
    {
     projection: {postVersion: 1, verdictActId: 'act-moving', take: {duration: 2, loop: false}, camera: 'moving'},
-    en: ['Signed post v1', 'Accepted direction verdict · act-moving', 'Direction · 2 s · once · moving camera'],
+    en: ['Post to sign: v1', 'Accepted direction verdict · act-moving', 'Direction · 2 s · once · moving camera'],
     ko: ['서명 대상 포스트 v1', '채택된 연출 판정 · act-moving', '연출 · 2초 · 한 번 · 카메라 이동'],
    },
    {

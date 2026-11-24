@@ -9,7 +9,9 @@ import { startServer } from '../src/server.ts';
 import { freshSession } from '../src/session.ts';
 import { verifyCompiledModel } from '../src/strip-render.ts';
 import { directionRows, directionSummary } from '../web/direction-panel.ts';
-import { t } from '../web/i18n.ts';
+import { formatSeconds } from '../web/animation-inspection.ts';
+import { t, tr } from '../web/i18n.ts';
+import { frameAtTime, lastFrame as lastProducerFrame } from '../src/frame-clock.ts';
 import { formatTurnValue, TurnState } from '../src/turn-pad.ts';
 
 const fixture = 'tests/fixtures/direction-inspection';
@@ -18,6 +20,67 @@ const expected = {
   'derived/review/v1/out/check/build/rectangle.png': '6030af0b8c57d0f6f3a25cf417b7d4fb3b442c1e0a4f441e4918623db571e511',
   'evidence/direction/v2.json': '9bec50f753d4790ee0d9dde824a612126ed37e7b0e63d393505ac836118c50a4',
 };
+
+const fractionalTake = { duration: 10 / 3, loop: false };
+async function frameTransportRenderer() {
+  const main = await Bun.file(new URL('../web/main.ts', import.meta.url)).text();
+  const start = main.indexOf('function renderFrameTransport(): void {');
+  const end = main.indexOf('function activeTransportClock()', start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return new Function('scope', `with (scope) { ${main.slice(start, end).replace('(): void', '()')} renderFrameTransport(); }`);
+}
+
+for (const { language, summary, composed, label } of [
+  { language: 'en', summary: 'Direction · 3.3333 s · once · fixed camera', composed: 'Direction · 3.3333 s · once', label: 'Take · 3.3333 s' },
+  { language: 'ko', summary: '연출 · 3.3333초 · 한 번 · 카메라 고정', composed: '연출 · 3.3333초 · 한 번', label: '테이크 · 3.3333초' },
+] as const) {
+  test(`#1200 formats the direction summary in ${language}`, () => {
+    expect(directionSummary({ take: fractionalTake, camera: 'fixed' }, language)).toBe(summary);
+  });
+
+  test(`#1200 formats the composed direction summary in ${language}`, () => {
+    expect(directionSummary({ take: fractionalTake, camera: 'composed' }, language)).toBe(composed);
+  });
+
+  test(`#1200 formats the direction take label in ${language}`, async () => {
+    const render = await frameTransportRenderer();
+    const labels = new Map<string, string>();
+    render({
+      host: { direction: true },
+      data: { direction: { take: fractionalTake } },
+      time: 0,
+      formatSeconds,
+      activeTransportClock: () => null,
+      lastProducerFrame: () => null,
+      frameAtTime: () => null,
+      el: () => ({ hidden: false }),
+      text: (id: string, value: string) => labels.set(id, tr(value, language)),
+    });
+    expect(labels.get('rig-label')).toBe(label);
+  });
+}
+
+test('#1200 formats the frame0 label while mapping the original clock', async () => {
+  const render = await frameTransportRenderer();
+  const clock = { kind: 'uniform', fps: 24, frame0: 10 / 3, frameCount: 25 } as const;
+  const labels = new Map<string, string>();
+  const getField = () => ({ hidden: false, disabled: false, max: '', value: '' });
+  render({
+    host: null, player: null, animation: '', time: clock.frame0,
+    rigPaneLabel: () => '',
+    formatSeconds,
+    activeTransportClock: () => ({ clock }),
+    lastProducerFrame,
+    frameAtTime,
+    el: getField,
+    input: getField,
+    document: { activeElement: null },
+    text: (id: string, value: string) => labels.set(id, value),
+  });
+  expect(labels.get('frame-label')).toBe('F0 / 24');
+  expect(labels.get('frame-clock-label')).toBe('24 fps · frame0 3.3333 s');
+});
 
 test('pinned Create output loads in published Play and reports only its actual direction capabilities', async () => {
   const pkg = await loadReview(fixture);
