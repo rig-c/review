@@ -3509,7 +3509,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.openPlanStep": "View plan step",
   "job.openPlan": "View plan",
   "job.signoff": "Save stage approval",
-  "job.signoff.postVersion": "Signed post v{0}",
+  "job.signoff.postVersion": "Post to sign: v{0}",
   "job.signoff.postVersionAbsent": "Post version not supplied",
   "job.signoff.directionVerdict": "Accepted direction verdict · {0}",
   "job.signoff.directionVerdictAbsent": "Direction verdict not supplied",
