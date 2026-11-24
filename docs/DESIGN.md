@@ -157,7 +157,7 @@ Any future modeling edit needs provenance, undo/redo, explicit units and an expo
 
 ## Screen prototype
 
-[design-prototype.html](design-prototype.html) preserves the interactive screen concept. It is **illustrative**, with sample controls/data, separate from the implemented app. Its older motion key/curve editing concept is superseded by the current view/annotate/export boundary. It does not demonstrate completed mesh, motion, angle or audio editing.
+[design-prototype.html](https://github.com/rig-c/review/blob/main/docs/design-prototype.html) preserves the interactive screen concept. It is **illustrative**, with sample controls/data, separate from the implemented app. Its older motion key/curve editing concept is superseded by the current view/annotate/export boundary. It does not demonstrate completed mesh, motion, angle or audio editing.
 
 ## Workspace layout
 

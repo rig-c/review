@@ -118,10 +118,11 @@ non-empty collection requests changes. The live job host submits the same issue 
 review dialog. Reviewer wording stays verbatim.
 
 Historically, **Approve all** marked every pending part and available mesh clean and saved an approved
-sign-off. It preserved notes and existing clean outcomes, and refused flagged items with
-`PARTS_APPROVE_ALL_FLAGGED`. Per-part approval and mesh outcomes belong to that historical UI and
-`/1`–`/3` read compatibility. The existing `tests/parts-approve-all.test.ts` and
-`tests/parts-approve-all-browser.ts` now exercise the shared mount and current issue-based save flows.
+sign-off. It preserved notes and existing clean outcomes, and refused flagged items.
+Per-part approval and mesh outcomes belong to that historical UI and `/1`–`/3` read compatibility.
+The existing `tests/parts-approve-all.test.ts` and `tests/parts-approve-all-browser.ts` now exercise
+the shared mount and current issue-based save flows. A standalone approval with
+any issues refuses `PARTS_VERDICT_NOT_CLEAN`.
 
 New saves write `schema: "rig-review-parts-verdict/4"` (`status: "approved"` when `issues` is empty, `"changes-requested"` when `issues` is non-empty, `issues: PartsIssue[]`, `updatedAt`, and optional `by`) to `parts-review.json` beside `parts.json` (atlas mode: beside the model), or to `--verdict`. In historical `/1`..`/3` saves, each item was **pending**, **clean** or **flagged** with a note (a note is optional on clean), and an unnamed historical `/2` save had the following shape (preserved on read):
 
@@ -506,7 +507,8 @@ the original package `sourceHash`; original Review sessions/drafts remain scoped
 to their original `sourceHash`/`reviewedSource`. A standalone parts-only package
 names the absent draft instead of offering an Apply that cannot run.
 
-Correction-record export is unfinished, blocked on review#369/create#91. Existing
+The standalone [Correction handoff](WORKFLOWS.md#correction-handoff) workflow
+exports supported saved corrections for Create. Existing
 comments and feedback preserve reviewer wording, but are not a substitute for
 that shared export or for create-owned structure decisions.
 
