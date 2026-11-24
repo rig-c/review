@@ -9,6 +9,7 @@ import {loadReview} from '../src/manifest.ts';
 import {validatePackageFeedback,type Feedback} from '../src/session.ts';
 import {formatFeedbackIssues} from '../src/feedback-export.ts';
 import {freshSession} from '../src/session.ts';
+import {advancePlayback,PLAYBACK_STEP} from '../web/playback-clock.ts';
 
 const close=(a:number,b:number)=>expect(Math.abs(a-b)).toBeLessThan(1e-9);
 
@@ -140,7 +141,25 @@ test('issue export names the environment of a note; a note without one has no en
 
 test('the page records its evaluated environment; physics preview is explicit and Apply keeps the producer patch path',async()=>{
  const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8'),html=(rigWorkspaceMarkup+rigReviewDialogMarkup);
- expect(main).toContain('stepEnvironment(stepped); drawRig(()=>{ for (const step of next.steps) player!.advance(step); player!.draw(); });');
+ // Exercise the real playback tick and drawRigSteps in the ordinary single-rig path.
+ const calls:({kind:'environment'|'advance';seconds:number}|{kind:'draw'})[]=[];
+ const noop=()=>{};
+ const scope={
+  advancePlayback,time:0,duration:2,playbackCarry:0,lastFrame:1000,idleHeld:false,video:null,previousBuildView:null,
+  player:{current:'idle',advance:(seconds:number)=>calls.push({kind:'advance',seconds}),draw:()=>calls.push({kind:'draw'})},
+  canRepeatIdle:()=>false,activeScene:()=>undefined,input:()=>({checked:false}),
+  stepEnvironment:(seconds:number)=>calls.push({kind:'environment',seconds}),drawRig:(action:()=>void)=>action(),
+  renderSequenceFrame:noop,renderTransport:noop,pause:noop,message:(value:string)=>{throw Error(value);},errorText:String,
+ };
+ const playback=main.slice(main.indexOf('function drawRigSteps('),main.indexOf('\nfunction configureTurnPad('));
+ const code=new Bun.Transpiler({loader:'ts'}).transformSync(playback);
+ const tick=new Function('scope',`with(scope){${code};return tickPlaying;}`)(scope) as (now:number)=>void;
+ tick(1000);expect(calls).toEqual([]);
+ tick(1050);expect(calls).toEqual([
+  {kind:'environment',seconds:3*PLAYBACK_STEP},
+  {kind:'advance',seconds:PLAYBACK_STEP},{kind:'advance',seconds:PLAYBACK_STEP},{kind:'advance',seconds:PLAYBACK_STEP},
+  {kind:'draw'},
+ ]);
  expect(main).toContain('environment: feedbackEnvironment(),');
  expect(main).toContain('player.environment(null);if(player.current){player.seek(time);');
  const animate=html.slice(html.indexOf('<section id="inspector-playback"'),html.indexOf('</main>'));
