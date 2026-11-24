@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.18.9
+
+Durations on the direction page read like the timeline, and the pending sign-off line in English no longer says the post is already signed. Review pins Parts 2.56.0 for development. There is no export, act or contract change.
+
+### Changed
+
+* Pins the `@rig-c/parts` development dependency to 2.56.0, the current release. The pin follows each Parts release (#1170).
+
+### Fixed
+
+* The direction header and the take label print the take duration the way the timeline does: a 10/3 s take reads 3.3333 s, not 3.3333333333333335 s. The same formatting now applies to other labels:
+  * the comparison's shared range;
+  * the report seek's out-of-range message;
+  * the key-move status;
+  * the uniform clock's frame0 label.
+
+  Inputs, slider bounds and the values Review records keep full precision. `formatSeconds` moved unchanged to its own small module, and the timeline editor re-exports it (#1202, closes #1200).
+* A pending direction sign-off reads "Post to sign: v3" in English instead of "Signed post v3". The Korean line already said this (#1202).
+
 ## 4.18.8
 
 Review takes its turn-dial discovery from Play 1.26.0. A standalone save says plainly that it stays local, the renderer status names why WebGL fell back, and the view toolbar wraps on narrow screens. There is no export, act or contract change.
