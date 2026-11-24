@@ -615,7 +615,7 @@ Retain exact pins to `@rig-c/play@1.24.0` and development-only `@rig-c/parts@2.3
 
 ## 2.9.0
 
-Return `@rig-c/review` to its `2.x` release line, with exact pins to `@rig-c/play@1.24.0` and development-only `@rig-c/parts@2.37.0` (rig-hq#22). Restore the Parts enumerator package range to `>=2.25.0 <3.0.0`.
+Return `@rig-c/review` to its `2.x` release line, with exact pins to `@rig-c/play@1.24.0` and development-only `@rig-c/parts@2.37.0`. Restore the Parts enumerator package range to `>=2.25.0 <3.0.0`.
 
 ## 3.7.0
 
