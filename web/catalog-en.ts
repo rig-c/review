@@ -29,6 +29,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.chest.circlesOff": "Use Landmarks to edit the chest in this job.",
   "job.chest.unpublished": "Chest editing is unavailable: no bust spec was published for this part.",
   "Comment · C": "Comment · C",
+  "Comment · C → click the image to pin": "Comment · C → click the image to pin",
 
   "project.json": "project.json",
   'job.commentsFromWorkspace': 'Comments from the workspace are included. Add or edit them under Comments below.',
@@ -3228,7 +3229,6 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "○ Pending": "○ Pending",
   "✓ Pass": "✓ Pass",
   "한국어": "한국어",
-  "Comment · C (active mesh editor keeps C)": "Comment · C (active mesh editor keeps C)",
   "Comment · C (0)": "Comment · C (0)",
   "Comment · C ({0})": "Comment · C ({0})",
   "Comment · C ({0}) · Rendering": "Comment · C ({0}) · Rendering",
