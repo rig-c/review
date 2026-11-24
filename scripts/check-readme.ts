@@ -31,6 +31,13 @@ export function checkReadme(text: string): string[] {
     if (heading && !README_HEADINGS.some(allowed => allowed === heading)) failures.push(`README_HEADING: line ${i + 1}: ${heading}`);
     lines.push({text: line, line: i + 1});
   }
+  // A link or image to a file of this repository is a relative path: the package page renders it
+  // against the repository field, so the absolute form is only one more string to keep right.
+  for (const {text: line, line: number} of lines) {
+    for (const match of line.matchAll(/https:\/\/(?:github\.com\/rig-c\/review\/(?:blob|tree|raw)\/|raw\.githubusercontent\.com\/rig-c\/review\/)[^\s)"'>]*/gu)) {
+      failures.push(`README_ABSOLUTE_SAME_REPOSITORY_LINK: line ${number}: ${match[0]} (write the path relative to the repository root)`);
+    }
+  }
   // Render Markdown first so inline, reference-style and HTML links share visible labels.
   const entities: Record<string, string> = {amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' '};
   const labels = new Set<string>();

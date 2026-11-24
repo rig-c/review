@@ -31,6 +31,8 @@ const mutants = [
   {name: 'generic-here', code: 'README_GENERIC_LINK_TEXT', text: '[*Here*](a.md)'},
   {name: 'generic-docs', code: 'README_GENERIC_LINK_TEXT', text: '[DOCS][destination]\n\n[destination]: a.md'},
   {name: 'generic-the-reference', code: 'README_GENERIC_LINK_TEXT', text: '[the reference](a.md)'},
+  {name: 'absolute-same-repository-link', code: 'README_ABSOLUTE_SAME_REPOSITORY_LINK', text: '[Contributing workflows](https://github.com/rig-c/review/blob/main/CONTRIBUTING.md#development)'},
+  {name: 'absolute-same-repository-image', code: 'README_ABSOLUTE_SAME_REPOSITORY_LINK', text: '<img src="https://raw.githubusercontent.com/rig-c/review/main/assets/banner.svg" alt="banner"/>'},
 ] as const;
 
 for (const mutant of mutants) test(`#224 planted ${mutant.name} refuses by name`, () => {
@@ -90,19 +92,19 @@ test('#227: all historical README anchors and their reference destinations still
   for (const match of readme.matchAll(/\]\(([^)]+)\)/g)) {
     const target = match[1]!;
     if (target.startsWith('#')) { expect(headings(readme).has(target.slice(1))).toBe(true); continue; }
-    const local = target.replace('https://github.com/rig-c/review/blob/main/', '');
-    if (/^https?:/u.test(local)) continue;
-    const [path, anchor] = local.split('#');
+    if (/^https?:/u.test(target)) continue;
+    const [path, anchor] = target.split('#');
     const text = read(path!);
     if (anchor) expect(headings(text).has(anchor)).toBe(true);
   }
 });
 
-test('#224: installed README reference links ship, unshipped contributor links are absolute', () => {
+test('#224: README reference links ship, and every link to a file of this repository is relative', () => {
   const files = JSON.parse(read('package.json')).files as string[];
   for (const document of ['README.md', 'docs/WORKFLOWS.md', 'docs/PANELS.md', 'docs/REVIEW_PACKAGE.md',
     'docs/DESIGN.md', 'docs/ANIMATION_INSPECTION.md', 'docs/LIVE_FIXTURE.md', 'LICENSE']) expect(files).toContain(document);
-  expect(readme).toContain('https://github.com/rig-c/review/blob/main/CONTRIBUTING.md#development');
+  expect(readme).toContain('](CONTRIBUTING.md#development)');
+  expect(checkReadme('[Core](https://github.com/rig-c/core/blob/main/README.md) [issue](https://github.com/rig-c/review/issues/1)')).toEqual([]);
   const links = readme.split('## Links')[1]!;
   expect(links).toContain('Development and releasing:');
   expect(links).toContain('CONTRIBUTING.md#development');
@@ -128,7 +130,9 @@ test('#227: one task table replaces the stubs, retaining all WORKFLOWS/PANELS ta
   const fixture = JSON.parse(read('tests/fixtures/readme-headings.json')) as {headings: {id: string}[]};
   const expected = fixture.headings.slice(3, -1).filter(({id}) => !['development', 'releasing'].includes(id));
   const targets = [...section.matchAll(/\]\((docs\/(?:WORKFLOWS|PANELS)\.md#[^)]+)\)/gu)].map(match => match[1]!);
-  expect(targets).toHaveLength(22);
+  // 22 table rows, plus the two task lines above the table that link WORKFLOWS (interview, session).
+  expect(targets).toHaveLength(24);
+  expect(rows.flatMap(row => [...row.matchAll(/\]\((docs\/(?:WORKFLOWS|PANELS)\.md#[^)]+)\)/gu)])).toHaveLength(22);
   expect(targets.filter(target=>target==='docs/PANELS.md#stage-comments')).toHaveLength(1);
   expect(targets.filter(target=>target==='docs/PANELS.md#turn-pad')).toHaveLength(1);
   for (const {id} of expected) expect(targets.filter(target => target.endsWith('#' + id))).toHaveLength(1);

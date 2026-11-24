@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rig-c/review/main/assets/banner.svg" alt="@rig-c/review" width="100%" />
+  <img src="assets/banner.svg" alt="@rig-c/review" width="100%" />
 </p>
 
 <p align="center">
@@ -49,14 +49,14 @@ The CLI and `@rig-c/review/job-host` support owner hosting. See [Public API stab
 
 On a review link:
 
-- **Answer an interview.** Pick options, write your own under Other, add a note. [Interview — WORKFLOWS](https://github.com/rig-c/review/blob/main/docs/WORKFLOWS.md#create-choice-interview)
+- **Answer an interview.** Pick options, write your own under Other, add a note. [Interview — WORKFLOWS](docs/WORKFLOWS.md#create-choice-interview)
 - **Check parts before rigging.** `parts` shows each part as an image before any rig is built. [Parts view — PARTS_VIEW](docs/PARTS_VIEW.md)
 - **Review direction.** See the scene plates and the authored camera and timing, and pin comments on the take. [Direction — REVIEW_PACKAGE](docs/REVIEW_PACKAGE.md#direction-inspection)
 - **Sign off.** Approve, or Request changes with comments. Opening a link never approves anything. [Sign-off — PARTS_VIEW](docs/PARTS_VIEW.md#the-sign-off)
 
 For the publishing agent:
 
-- **Publish and ask.** `session open` prints a standing review link; `publish`, `ask`, `next` and `close` drive it. [Session — WORKFLOWS](https://github.com/rig-c/review/blob/main/docs/WORKFLOWS.md#standing-live-job-workflow)
+- **Publish and ask.** `session open` prints a standing review link; `publish`, `ask`, `next` and `close` drive it. [Session — WORKFLOWS](docs/WORKFLOWS.md#standing-live-job-workflow)
 
 | Task | Command or panel | Destination |
 | --- | --- | --- |
@@ -94,7 +94,7 @@ MIT. See [LICENSE](LICENSE).
 ## Links
 
 <a id="development"></a><a id="releasing"></a>
-Development and releasing: [Contributing workflows](https://github.com/rig-c/review/blob/main/CONTRIBUTING.md#development).
+Development and releasing: [Contributing workflows](CONTRIBUTING.md#development).
 
 - [Inspection workflows](docs/WORKFLOWS.md)
 - [Parts and atlas view](docs/PARTS_VIEW.md)
