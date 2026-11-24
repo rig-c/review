@@ -839,7 +839,7 @@ function seekMarker(clip: string | undefined, exact: number, what: string): bool
   pause();
   if (clip && player && !assets?.animations.some(item => item.name === clip)) { message(`${what} animation "${clip}" is absent from the current rig; no seek was performed.`, true); return false; }
   if (clip && assets?.animations.some(item => item.name === clip) && animation !== clip) chooseAnimation(clip);
-  if (duration > 0 && exact > duration) { message(`Explicit time ${exact} s is outside the current range of ${duration} s. No substitute time was used.`, true); return false; }
+  if (duration > 0 && exact > duration) { message(`Explicit time ${exact} s is outside the current range of ${formatSeconds(duration)} s. No substitute time was used.`, true); return false; }
   seek(exact);
   return true;
 }

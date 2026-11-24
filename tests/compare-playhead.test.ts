@@ -6,6 +6,7 @@ import { ComparePresentation } from '../src/compare-presentation.ts';
 import { ReferenceSelectionUnavailable, inspectionReferenceFrame, referenceFrameAtTime, referenceSeekPosition } from '../src/reference-frames.ts';
 import { requireCommonTime } from '../src/compare-playhead.ts';
 import { RendererBadge } from '../web/renderer-status.ts';
+import { formatSeconds } from '../web/format-seconds.ts';
 
 async function fixture(): Promise<ModelAssets> {
   const bytes = await readFile(new URL('./fixtures/compare-probe/skeleton.model.json', import.meta.url), 'utf8');
@@ -24,6 +25,19 @@ function player(assets: ModelAssets): RigPlayer {
 }
 
 describe('reference-locked compare playhead', () => {
+  test('#1200 formats the shared range label and preserves the exact input bounds', async () => {
+    const source = await readFile(new URL('../web/compare.ts', import.meta.url), 'utf8');
+    const line = source.split('\n').find(line => line.includes("text('domain', `Shared range"));
+    expect(line).toBeDefined();
+    const end = 10 / 3;
+    const fields = { scrub: { max: '' }, 'time-input': { max: '' } };
+    const labels = new Map<string, string>();
+    const render = new Function('domain', 'formatSeconds', 'input', 'text', 'let ready = false; ' + line);
+    render({ end }, formatSeconds, (id: keyof typeof fields) => fields[id], (id: string, value: string) => labels.set(id, value));
+    expect(labels.get('domain')).toBe('Shared range 0–3.3333 s · Neither side is independently clamped or looped');
+    expect(Object.values(fields).map(field => field.max)).toEqual([String(end), String(end)]);
+  });
+
   test('feedback requires a current successful pair and becomes ineligible after a seek or failure', () => {
     const success: CompareTrace = { reference: .25, a: .25, b: .25, source: 'video-frame' };
     expect(feedbackTrace(false, false, null)).toBeNull();
