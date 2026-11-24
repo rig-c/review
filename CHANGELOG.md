@@ -1,5 +1,20 @@
 # Changelog
 
+## 4.18.7
+
+The idle key-edit lock gives the true reason on a model without a turn dial, still-capture refusals read in Korean, and the CLI help lists every command. The reference guides catch up with the code. There is no export, act or contract change.
+
+### Fixed
+
+* On a model without a turn dial, the idle clip's key-edit lock now says why: the producer generates the idle clip, so its keys can't be edited here (`ANIMATION_IDLE_NOT_KEY_EDITABLE`). The tooltip and the `/api/rebuild` error name `motion.animations_from`. A model with a dial keeps `ANIMATION_IDLE_GOVERNED_BY_TURN_PAD` (#1179, closes #1156).
+* The `JOB_STILL_*` still-capture refusals are translated on the Korean screen, and `rig-review --help` lists the `strip` and `session` commands (#1178).
+* Two catalog entries for codes nothing emits, `DIRECTION_NOT_AVAILABLE` and `INTERVIEW_MODAL_UNAVAILABLE`, are removed (#1187, closes #1183).
+
+### Documentation
+
+* README covers the interview, direction and sign-off screens (#1177).
+* The guides agree with the code on the direction panel, the parts view, the draft-diff reader, the record-form communication panel and the idle-lock refusals. STABILITY states the current contract first and history last. The parts guide now says that a standalone compiled session saves comments and Request changes locally and delivers nothing to the producer. Feedback reaches the producer only through a live job (#1182, #1185, #1186, #1190).
+
 ## 4.18.6
 
 Review now reads stock Parts draft-diff reports and pins Parts 2.55.0 for development. A disabled Request changes says why, and a verdict save reads in Korean. There is no export or act change.
