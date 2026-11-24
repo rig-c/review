@@ -607,15 +607,15 @@ rig-review open /path/to/project/derived/review/v2/out \
   --project /path/to/project --project-version 2 --picks-dir scratch/review-picks
 ```
 
-Select **2 Interview**. The host checks the recorded version's package
+The host checks the recorded version's package
 inventory and pins the project digest and inspected source. A different
 project or version returns `INTERVIEW_SOURCE_MISMATCH`. A changed input
 requires reopening and a project without interview content reports
-`INTERVIEW_UNAVAILABLE`. Navigation retains the open form and part selection.
+`INTERVIEW_UNAVAILABLE`.
 Use **Save explicit picks** to persist pending choices. Historical answers
 remain read-only and opening or saving picks does not sign off any stage.
 
-To inspect authored direction in **4 Direction**, add `--post-version <post>`
+To show the Direction panel above the stage, add `--post-version <post>`
 to the joined command. The post must explicitly name the selected
 `--project-version` rig and bind an authored direction document. Reuse the
 printed feedback command, including the project, rig, post and picks arguments,
@@ -667,20 +667,20 @@ rig-review open /path/to/project/derived/drafts/chain/out/check \
   --parts-verdict-dir scratch/review-verdicts
 ```
 
-**1 Parts + mesh** displays the draft's recorded parts and matching mesh.
+The draft binds its recorded parts and matching mesh.
 Use **Save sign-off** to write a standard parts verdict with the part and mesh
 outcomes and notes. Its filename is bound to the inspected project and source.
 Keep the JSON file at its saved location for Create to resolve the source paths.
 The verdict does not sign the Create project. A closed parts review or an open
-without `--parts-verdict-dir` keeps this surface read-only. **2 Interview**
-offers the registered pending sets and displays historical answers read-only.
-**3 Rig + animation** and **4 Direction** report that the recorded rig review
-package is unavailable. Reopen with a rig version once Create records one.
+without `--parts-verdict-dir` keeps this surface read-only. The interview
+endpoint offers the registered pending sets and historical answers.
+The header reports `RIG_VERSION_UNAVAILABLE` for disabled modes. Reopen with a
+rig version once Create records one.
 
-When the recorded draft entry includes `config`, `parts`, `rig` and `check` directories and the draft is editable (`parts` or `parts-review` stage without an effective `parts-review` sign-off, and not `--view-only`), **1 Parts + mesh** also offers the Chest regions, Mesh parameters and Edit Mesh instruments for mesh-bearing parts regardless of whether `--parts-verdict-dir` is supplied. Selecting an instrument opens the Setup inspector for that part while direct selection of **3 Rig + animation** remains refused with `RIG_VERSION_UNAVAILABLE`. Apply runs the installed producer and compiler in scratch under the existing discovery and operation-capability floors while keeping the recorded draft producer as provenance, and returning to **1 Parts + mesh** or running Undo or Reset updates the displayed mesh and report readings from the active build (verdict saving remains read-only on scratch builds and when `--parts-verdict-dir` is omitted).
+When the recorded draft entry includes `config`, `parts`, `rig` and `check` directories and the draft is editable (`parts` or `parts-review` stage without an effective `parts-review` sign-off, and not `--view-only`), the draft also offers the Chest regions, Mesh parameters and Edit Mesh instruments for mesh-bearing parts regardless of whether `--parts-verdict-dir` is supplied. Selecting an instrument opens the Setup inspector for that part while the Animate mode remains disabled with `RIG_VERSION_UNAVAILABLE`. Apply runs the installed producer and compiler in scratch under the existing discovery and operation-capability floors while keeping the recorded draft producer as provenance, and running Undo or Reset updates the displayed mesh and report readings from the active build (verdict saving remains read-only on scratch builds and when `--parts-verdict-dir` is omitted).
 
 The interview opens over the review screen of a joined workspace (the `open`
-command above with `--picks-dir`): choose **2 Interview**. Select a question and inspect its bound parts
+command above with `--picks-dir`). Select a question and inspect its bound parts
 or source image. A direction set that binds only source inputs displays those
 inputs with the no-bound-parts notice. Each recommendation shows the retained
 reason and author/date. Choose an option for every prompt and save explicitly.
