@@ -37,7 +37,7 @@ type ScreenReadback = {
   form: boolean;
   formStatus: string;
   submitDisabled: boolean;
-  actions: string[];
+  actions: {id: string; disabled: boolean; opacityOverride: boolean}[];
 };
 
 // Add the DOM operations needed by the real act row to the existing record fixture host.
@@ -90,6 +90,7 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>) {
   const row = node('div', 'workspace-act-row'), dirty = node('span', 'dirty');
   const headline = node('span', 'workspace-ask-headline'), actStatus = node('p', 'review-draft-state');
   const rigAsk = node('button', 'workspace-pending-ask'), recordAsk = node('button', 'workspace-pending-record-ask');
+  rigAsk.className = recordAsk.className = 'workspace-act-ask';
   const save = node('button', 'save'), requestChanges = node('button', 'request-changes');
   const reason = node('span', 'request-changes-reason'), notice = node('p', 'review-message');
   const recordPanel = node('section', 'job-record-asks'), recordTitle = node('h2');
@@ -124,7 +125,9 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>) {
       return {row: !row.hidden, headline: headline.textContent!, status: actStatus.textContent!,
         form: !recordPanel.hidden && !!form, formStatus: form?.querySelector('[role=status]')?.textContent ?? '',
         submitDisabled: !form || !!form.querySelector('fieldset')?.disabled || !!form.querySelector<HTMLButtonElement>('button[type=submit]')?.disabled,
-        actions: [rigAsk, recordAsk, save, requestChanges].filter(control => !row.hidden && !control.hidden).map(control => control.id)};
+        actions: [rigAsk, recordAsk, save, requestChanges].filter(control => !row.hidden && !control.hidden).map(control => ({
+          id: control.id, disabled: control.disabled, opacityOverride: control.classList.contains('workspace-act-ask'),
+        }))};
     },
     dispose() {rigInspector.actBar.dispose();},
   };
@@ -213,8 +216,9 @@ async function signed(post: Post) {
   return {response, act: result.value};
 }
 
-const before = {row: true, headline: 'Approve this stage.', status: 'Not submitted', form: true, submitDisabled: false};
-const sending = {...before, status: 'Sending', submitDisabled: true};
+const opener = {id: 'workspace-pending-ask', disabled: false, opacityOverride: true};
+const before = {row: true, headline: 'Approve this stage.', status: 'Not submitted', form: true, submitDisabled: false, actions: [opener]};
+const sending = {...before, status: 'Sending', submitDisabled: true, actions: [{...opener, disabled: true, opacityOverride: false}]};
 const accepted = {row: true, headline: 'Nothing is waiting for your answer.', status: 'Submitted', form: false, actions: []};
 
 for (const order of ['response first', 'stream first'] as const) test(`#1205 sign-off shows before, sending and accepted (${order})`, async () => {
@@ -282,7 +286,7 @@ for (const failure of ['refusal', 'network rejection'] as const) test(`#1205 ${f
     retry.post.respond(response);
     await retry.submit;
     expect({inflight, failed, retrying, finished: h.read()}).toMatchObject({inflight: sending,
-      failed: {row: true, form: true, submitDisabled: false}, retrying: sending, finished: accepted});
+      failed: {row: true, form: true, submitDisabled: false, actions: [opener]}, retrying: sending, finished: accepted});
   } finally {await h.close();}
 });
 

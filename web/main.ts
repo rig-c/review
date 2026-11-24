@@ -2173,13 +2173,19 @@ function renderAnswerControls():void {
  const questionPending=subjects.some(subject=>subject.kind==='interview-picks');
  const recordKind=subjects.find(subject=>!subject.kind.endsWith('verdict')&&subject.kind!=='interview-picks')?.kind;
  const recordTrigger=questionForms.length?recordAsk:rigAsk;
+ const recordSending=(recordKind==='signoff'||recordKind==='checkpoint')&&host?.recordSubmission?.()==='sending';
  if(!questionPending||recordTrigger!==rigAsk){
   setSourceText(recordTrigger,recordKind==='signoff'?'Approve…':'Review…');
-  recordTrigger.disabled=!recordEnabled||blocked;
+  recordTrigger.disabled=!recordEnabled||blocked||recordSending;
  }
  if(questionPending||questionForms.length){
   setSourceText(rigAsk,'Answer…');
   rigAsk.disabled=(!questionEnabled&&!readable)||(questionEnabled&&blocked);
+ }
+ const sendingOpener=dialog&&!firstPublicationPrompt&&recordSending&&(!questionPending||recordTrigger!==rigAsk)?recordTrigger:null;
+ for(const opener of [rigAsk,recordAsk]){
+  if(opener===sendingOpener||opener.classList.contains?.('workspace-act-ask')===false)
+   opener.classList.toggle('workspace-act-ask',opener!==sendingOpener);
  }
  rigAsk.classList.toggle('primary',dialog&&(questionPending||recordTrigger===rigAsk));
  recordAsk.classList.toggle('primary',dialog&&!questionPending&&!!recordKind);
