@@ -128,7 +128,9 @@ test('#227: one task table replaces the stubs, retaining all WORKFLOWS/PANELS ta
   const fixture = JSON.parse(read('tests/fixtures/readme-headings.json')) as {headings: {id: string}[]};
   const expected = fixture.headings.slice(3, -1).filter(({id}) => !['development', 'releasing'].includes(id));
   const targets = [...section.matchAll(/\]\((docs\/(?:WORKFLOWS|PANELS)\.md#[^)]+)\)/gu)].map(match => match[1]!);
-  expect(targets).toHaveLength(22);
+  // 22 table rows, plus the two task lines above the table that link WORKFLOWS (interview, session).
+  expect(targets).toHaveLength(24);
+  expect(rows.flatMap(row => [...row.matchAll(/\]\((docs\/(?:WORKFLOWS|PANELS)\.md#[^)]+)\)/gu)])).toHaveLength(22);
   expect(targets.filter(target=>target==='docs/PANELS.md#stage-comments')).toHaveLength(1);
   expect(targets.filter(target=>target==='docs/PANELS.md#turn-pad')).toHaveLength(1);
   for (const {id} of expected) expect(targets.filter(target => target.endsWith('#' + id))).toHaveLength(1);
