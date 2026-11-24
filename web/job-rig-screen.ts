@@ -348,11 +348,11 @@ export function createJobRigScreen(options: {
         displayed:()=>ready.resolve(),failed:error=>ready.reject(error)};
     }
     if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
-    const {publicationId,source}=prepared.display.publication;
+    const {publicationId,source,answeredDirectionFeedback}=prepared.display.publication;
     const binding={...(jobId?{jobId}:{}),draftId,publicationId,previousPublicationId,sourceHash:source.sourceHash};
     return {...evidencePair,access,pendingSubjects,navigation,jobClosed:()=>options.window.state().closed,...prepared.refusal?{unavailable:prepared.refusal}:{},
       chestLandmarks:prepared.display.publication.chestLandmarks,
-      ...(source.direction?{direction:binding}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
+      ...(source.direction?{direction:{...binding,answeredDirectionFeedback}}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
         prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review')}}:{}),
       reviewState(issues,sending) {
         if(sending)return options.translate('job.parts.sending');

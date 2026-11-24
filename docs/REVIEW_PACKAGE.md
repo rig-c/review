@@ -1150,6 +1150,34 @@ retain their formats. See [Managed owner host](STABILITY.md#managed-owner-host).
 - **Snapshot preservation lifecycle.** Every open-job publication, pending ask, page and trusted publication handle pins its snapshot. Explicit close invalidates pending asks, pages and trusted handles, whose subsequent operations refuse `JOB_CLOSED`. Every finalized act permanently preserves its bound source bytes, hashes and retained reproduction evidence. Unfinalized snapshots become reclaimable only after close and explicitly counted asynchronous file reads have finished or cancelled. Event/replay/previous-publication identities remain readable without pinning bytes. No age-based deletion or consumer retain/release API exists. Reclaimed snapshots retain an immutable private publication ID, snapshot hash, reclamation time and `closed` or `superseded` reason, and references reaching the reclaimed-snapshot gate refuse `JOB_SNAPSHOT_RECLAIMED`. The private hash is SHA-256 of UTF-8 `JSON.stringify(orderedSeals.map(({path,sha256}) => ({path,sha256})))`, retaining order, strings and fixed keys. Existing public source-hash formulas remain the source binding. Close and capability revocation use additive durable records outside the bounded JSON document so they succeed at its exact 16 MiB boundary while preserving historical document/replay bytes. Unknown legacy ownership and interrupted-reader counts preserve bytes until ownership or explicit completion is proved. See [Public API stability](STABILITY.md#managed-owner-host).
 - **Finalized acts and cursor replay.** `JobNextRequest` (`verb` set to `'next'`, `after` cursor or `null`, and daemon-bounded `waitMs`) and `subscribeJob` replay complete durable `JobEvent` items (`published`, `pending`, `act`, `closed`) in order, returning `JobNextValue` (`events`, `cursor`, and `status` as `'events'`, `'timeout'` or `'closed'`). Waiting is abortable and never consumes an act. Invalid cursors refuse with `JOB_CURSOR_INVALID`.
 
+### Answered direction feedback on a post publication
+
+For a direction package with a `post` selector, the trusted producer's
+`readPublished` callback may return `answeredDirectionFeedback` in
+`JobPublishedContext`. The field is an array of `{jobId, actId}` references
+declaring which earlier direction feedback the selected post answers.
+
+Review validates the field when present. Each entry must name the publishing
+job and resolve to a finalized `review-verdict` act with stage
+`direction-review` retained by Review for that job. The act's bound `post`
+selector must name an earlier post version. The producer declaration establishes
+the answer relationship. Publication order alone does not establish it, and the
+referenced post need not be the immediately preceding publication. A malformed
+field or entry, use outside a direction `post` publication, a wrong job, an
+unknown act or an ineligible act refuses the publication with
+`JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID`. Review refuses the whole publication
+on any invalid reference and never silently drops an entry.
+
+The existing right-side Comments section shows the resolved feedback read-only,
+with its kind label and original post version. Reviewer text is displayed
+verbatim in both languages. The status reads `Answered by v{0}` in English or
+`v{0}에서 답변됨` in Korean, using the selected post's version.
+
+Omitting the field preserves existing publication bytes and behavior, including
+historical parsing and replay, with no answered-feedback row or new refusal.
+The field is publication display metadata. The finalized act wire format and
+recorded act bytes remain unchanged.
+
 ### Exact displayed source and local draft retention
 
 - **Daemon-derived source binding.** The original model branch of `JobSourceBinding` requires non-null `sourceHash` (`JobSha256`) and `package` (`id` and `revision`), and requires explicit values or explicit `null` for its typed nullable fields (`projectHash`, `selector` as `draft` / `rig` / `post`, `model`, `direction`, `optionSet`, `appliedResult`, `plan`, `parts`). Original input paths are literal project-relative or package-relative provenance only, and no public field names a Review state directory or stored document. The daemon derives `JobSourceBinding` from validated retained bytes and the actual displayed publication. Clients never provide trusted source hashes or transfer prior approval onto a new binding.

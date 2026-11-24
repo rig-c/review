@@ -2,7 +2,7 @@
  * (`main.ts`): the job keeps the transport, the screen keeps its own view. Unset, the screen is the package page. */
 import type {ModelAssets, PosedFrame} from '@rig-c/play';
 import type {PartsIssue} from '../src/parts-comment.ts';
-import type {JobCheckpointEvidence,JobComment,JobProgressV3, PendingAskV3} from '../src/job-contract.ts';
+import type {JobAnsweredDirectionFeedback,JobCheckpointEvidence,JobComment,JobProgressV3, PendingAskV3} from '../src/job-contract.ts';
 import type {ReviewSession} from '../src/session.ts';
 import type {InspectionBookmark} from './inspection-persistence.ts';
 import type {ControlView} from '../src/control.ts';
@@ -60,7 +60,7 @@ export interface RigHost {
   readonly waiting?:boolean;
   readonly subject?:'parts';
   readonly unavailable?:string;
-  readonly direction?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId:string;readonly previousPublicationId?:string|null;readonly sourceHash:string};
+  readonly direction?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId:string;readonly previousPublicationId?:string|null;readonly sourceHash:string;readonly answeredDirectionFeedback?:readonly JobAnsweredDirectionFeedback[]};
   readonly verdictComments?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId:string;readonly previousPublicationId?:string|null;readonly sourceHash:string;readonly rows:CommentRow[];readonly available:()=>boolean};
   readonly navigation?:RigHostNavigation;
   /** Derived from the displayed subject's finalized verdict; never a mode or another subject's act. */

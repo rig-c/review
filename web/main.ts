@@ -2292,7 +2292,7 @@ function bindInspector(partsSubject=false):void {
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
 function openReview():void {pause();if(!partsOnly)syncCorrectionStage();workspace?.revealCommunication();}
 /** Something to communicate: a pending question or record form, or at least one comment. */
-function communicationPending():boolean {return !!communicationPanel.querySelector('form[data-job-ask]')||!!communicationPanel.querySelector('.stage-comment-item');}
+function communicationPending():boolean {return !!communicationPanel.querySelector('form[data-job-ask], .stage-comment-item[data-comment-id]');}
 function unitScaleMessage(target:CameraTarget):void {message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');}
 function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');}
 
@@ -3781,7 +3781,7 @@ function restoreCommentInspection(value:unknown,timeOnly?:boolean,row?:CommentRo
 function setupComments():void {
  if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.length;if(host?.direction)dirty=dirty||recordComments.length>0;}
  if(host?.verdictComments){restoreRecordComments();if(host.verdictComments.rows.length)markDirty();}
- comments=bindStageComments<CommentRow,CommentPose>({general:host?.record||host?.direction||host?.verdictComments?{
+ comments=bindStageComments<CommentRow,CommentPose>({answeredDirectionFeedback:host?.direction?.answeredDirectionFeedback,general:host?.record||host?.direction||host?.verdictComments?{
   create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row),
   ...(host.verdictComments?{rows:host.verdictComments.rows,available:host.verdictComments.available,refusal:()=>readOnly}:{}),
  }:undefined,listHost:el('comments-list-host'),openList:openReview,hasPicture:()=>checkpointPair?.replayFor===undefined&&(!hasTransientQuestionImage(screenRoot)||!!shownPlanPicture()),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?(recordPictures()?{reference:el('reference-viewport')}:{}):{rig:el('rig-viewport'),reference:el('reference-viewport')},
