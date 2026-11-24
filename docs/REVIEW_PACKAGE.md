@@ -929,8 +929,9 @@ drawing an evicted, changed or pending build as current.
 Original `sourceHash`, `reviewedSource`, session/draft scope and parts verdict/2
 remain unchanged. The scratch parts digest changes with its geometry; original
 approvals never become scratch mesh approvals. Reset returns inspection to the
-original. Draft geometry is structure evidence only. Correction-record export
-remains blocked on review#369/create#91; no universal export, artwork Apply,
+original. Draft geometry is structure evidence only. Correction records are
+exported only through the standalone [Correction handoff](#correction-handoff)
+(review#422/create#99); no universal export, artwork Apply,
 source-key write or automatic message is introduced.
 
 
@@ -1166,7 +1167,7 @@ retain their formats. See [Managed owner host](STABILITY.md#managed-owner-host).
 - **`review-verdict`.** The model branch carries `stage` (`'rig-review'` or `'direction-review'`) and `verdict`, requiring non-null `source.model` with runtime stage, selector and direction consistency checks. Direction submits ordered [comments](#direction-verdict-comments) or legacy `words`. A declared `rig-review` ask can also bind a `draft` selector with `source.projectHash` and null `source.direction`. It uses the existing rig screen and still capture, and its finalized act preserves the retained draft publication's source hash, model and selector. A compiled rig's Request changes can carry [chest landmarks (act@9)](#chest-landmarks-on-request-changes-act9).
 - **`signoff`.** `JobActValues['signoff']` carries `stage` (validated by Create's writer), `decision` restricted to `'approved'` only (changes requested are a verdict, never a signoff) and required `words` preserved verbatim including empty or whitespace-only strings. A verdict, a signoff and a Create stage transition are three separate writes, and `JobAct` grants no transition authority. Every stage in `JOB_PLAN_BOUND_SIGNOFF_STAGES` (`'plan-approved'`, `'rigging-interview'`, `'post-interview'`) requires non-null `source.plan` with exact displayed step IDs and hashes before act creation, while other stages keep `source.plan` nullable where appropriate.
 - **Create-published step IDs and hashes.** `JobPlanIdentity` holds `steps` (`id` and `hash`) published by [Create #184](https://github.com/rig-c/create/issues/184) for the displayed plan. Review retains these values without importing or recomputing Create's internal `stepHash`. Create validates them through its existing `steps` and `step_hashes` writer logic, with no separate plan revision hash or additional revision gate in this contract.
-- **C4 manifest-referenced parts PNG identity.** C4 binds the exact public `partsFileReferences(dir)` array from `@rig-c/parts/src/parts.ts`, whose contract is frozen at Parts 2.25.0. The trusted host resolves an installed version in `JOB_PARTS_ENUMERATOR_RANGE` (`>=2.25.0 <3.0.0`), supplies its actual version and official callback through `partsEnumerator`, and declares `partsEnumeratorId`. `JobPartsIdentity.enumeratorVersion` carries that actual version. Manifest paths are work-root-relative and image paths are relative to the manifest directory. Each image carries `path`, bounded-string `role` and raw-byte `sha256`. Review compares the claimed array positionally with the official array, preserving its role/order/duplicate semantics. Upstream roles include `part`, `alternate`, `depth`, `painting` and `figure_mask`. Review bounds shape and paths, refuses traversal/symlinks, decodes PNGs and hashes retained bytes. Missing references refuse with row, role and path, including a missing sibling figure mask when a render copy exists. Unreferenced extras stay outside this parts identity. Composite source hashes use `rig-review-job-source/2`. Create #184 production reader/projection and official-hook wiring remain pending.
+- **C4 manifest-referenced parts PNG identity.** C4 binds the exact public `partsFileReferences(dir)` array from `@rig-c/parts/src/parts.ts`, whose contract is frozen at Parts 2.25.0. The trusted host resolves an installed version in `JOB_PARTS_ENUMERATOR_RANGE` (`>=2.25.0 <3.0.0`), supplies its actual version and official callback through `partsEnumerator`, and declares `partsEnumeratorId`. `JobPartsIdentity.enumeratorVersion` carries that actual version. Manifest paths are work-root-relative and image paths are relative to the manifest directory. Each image carries `path`, bounded-string `role` and raw-byte `sha256`. Review compares the claimed array positionally with the official array, preserving its role/order/duplicate semantics. Upstream roles include `part`, `alternate`, `depth`, `painting` and `figure_mask`. Review bounds shape and paths, refuses traversal/symlinks, decodes PNGs and hashes retained bytes. Missing references refuse with row, role and path, including a missing sibling figure mask when a render copy exists. Unreferenced extras stay outside this parts identity. Composite source hashes use `rig-review-job-source/2`. Create #184 production reader/projection and official-hook wiring landed in [Create #251](https://github.com/rig-c/create/pull/251) and [Create #259](https://github.com/rig-c/create/pull/259).
 
 ### Previous accepted draft Difference
 
@@ -1205,10 +1206,12 @@ pair in the publication's `files` closure. Existing limits apply: 4,096
 files, 64 MiB per raw file or decoded RGBA raster, and 256 MiB total.
 The declaration is limited to 4 KiB and the optional `diff` to 1 MiB.
 Parts `diff-drafts` writes `rig-parts-draft-diff/1` under `spec`
-([Parts #1369](https://github.com/rig-c/parts/issues/1369)). Review requires
+([Parts #1369](https://github.com/rig-c/parts/issues/1369)). Review reads
 that marker under `schema` and looks for both declared composite hashes among
-the JSON string values. Review therefore rejects the stock report with
-`PREVIOUS_DRAFT_DIFF_INVALID`. Review displays no figures for this operand.
+the JSON string values, so the stock Parts report is refused
+(`JOB_SOURCE_MISMATCH`, detail `PREVIOUS_DRAFT_DIFF_INVALID`) until
+[Review #1163](https://github.com/rig-c/review/issues/1163). Review displays
+no figures for this operand.
 
 In assembled Difference, Painting is the default when `painting_in_rig`
 is available. The Previous accepted draft operand is offered only when
@@ -1292,7 +1295,7 @@ The consumer writes successful stdout verbatim as act.json beside the PNG and ha
 
 API@1 and unsupported requests refuse `JOB_REQUEST_INVALID` with `JOB_API_SCHEMA_MISMATCH`, HTTP 400, the current API@2 response schema and unchanged generation. The CLI checks response schema before consuming its value. Consumer writers check act@2 for ordinary/historical acts and act@3 for new rig-review verdicts with a still. JobData and host descriptors carry explicit `apiSchema` and `actSchema` markers. Missing or old stored markers refuse `JOB_STORED_SCHEMA_MISMATCH` before credentials, status or replay. Authenticated active-listener reuse compares declared hook IDs, API/act schemas and the actual enumerator version. A stopped listener can be explicitly restarted for the same job with new valid hook IDs. Old retained documents and approvals remain under their original schemas and are never migrated or relabelled. Legacy one-shot contracts retain their documented boundaries.
 
-The manifest and complete retained image rows enter the composite source hash. Limits are 4096 rows, 128 UTF-16 role units, 4096 path units, 64 MiB per raw file or decoded RGBA allocation and 256 MiB unique retained bytes. Source-bound refusals retain the old head and generation. Reference-set, path, missing-file, PNG, hash and limit details are bounded. A missing row names its official zero-based index, role and manifest-relative path. Create #184 owns its production record projection and consumer checks, which remain pending. [Public boundary](STABILITY.md#parts-enumeration-boundary).
+The manifest and complete retained image rows enter the composite source hash. Limits are 4096 rows, 128 UTF-16 role units, 4096 path units, 64 MiB per raw file or decoded RGBA allocation and 256 MiB unique retained bytes. Source-bound refusals retain the old head and generation. Reference-set, path, missing-file, PNG, hash and limit details are bounded. A missing row names its official zero-based index, role and manifest-relative path. Create #184 owns its production record projection and consumer checks, which landed in [Create #251](https://github.com/rig-c/create/pull/251) and [Create #258](https://github.com/rig-c/create/pull/258). [Public boundary](STABILITY.md#parts-enumeration-boundary).
 
 ### Writer-owned sibling fetch capability and consumer writes
 

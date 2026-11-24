@@ -44,7 +44,7 @@ Use the current shared Setup workspace; these controls are not a second screen.
   region's own view keeps 4 page pixels around its box (dashed) so bleed is visible. Clicking a region opens it.
 - **Historical UI — Producer flags (removed in #745)**, read from the files rig-parts writes and shown on the part they name. None is re-measured here. Each reads as one labelled line (an opening's parts, animation, frame and cells; a seam pair's pixel counts; a gate's name, status and readings), with the producer's object verbatim under a collapsed **Producer line**.
 
-The [23-part EN/KO comparison](https://github.com/rig-c/review/tree/main/tests/fixtures/parts-approve-all-evidence) records the same 1600×1100 initial view against installed 1.8.0: row height 49.375 → 26.1875 px, with all 23 after rows on one line (`tests/parts-approve-all-browser.ts`).
+The [23-part EN/KO comparison](https://github.com/rig-c/review/tree/main/tests/fixtures/parts-approve-all-evidence) records the same 1600×1100 initial view against installed 1.8.0: row height 49.375 → 26.1875 px, with all 23 after rows on one line (measured by `tests/parts-approve-all-browser.ts`, removed in #758).
 
 ### Producer row groups
 
@@ -120,8 +120,7 @@ review dialog. Reviewer wording stays verbatim.
 Historically, **Approve all** marked every pending part and available mesh clean and saved an approved
 sign-off. It preserved notes and existing clean outcomes, and refused flagged items.
 Per-part approval and mesh outcomes belong to that historical UI and `/1`–`/3` read compatibility.
-The existing `tests/parts-approve-all.test.ts` and `tests/parts-approve-all-browser.ts` now exercise
-the shared mount and current issue-based save flows. A standalone approval with
+`tests/parts-view.test.ts` exercises the current issue-based save flow. A standalone approval with
 any issues refuses `PARTS_VERDICT_NOT_CLEAN`.
 
 New saves write `schema: "rig-review-parts-verdict/4"` (`status: "approved"` when `issues` is empty, `"changes-requested"` when `issues` is non-empty, `issues: PartsIssue[]`, `updatedAt`, and optional `by`) to `parts-review.json` beside `parts.json` (atlas mode: beside the model), or to `--verdict`. In historical `/1`..`/3` saves, each item was **pending**, **clean** or **flagged** with a note (a note is optional on clean), and an unnamed historical `/2` save had the following shape (preserved on read):
