@@ -2,19 +2,44 @@ import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {loadModel,RigPlayer} from '@rig-c/play';
 import {rendererStatus,RendererBadge,type RendererTelemetry} from '../web/renderer-status.ts';
+import {tr} from '../web/i18n.ts';
 import {ComparePresentation} from '../src/compare-presentation.ts';
 import {compareSeekStep,feedbackTrace,type InspectionPlayer} from '../src/compare-playhead.ts';
-const dom=(values:Partial<Extract<RendererTelemetry,{meshCount:number}>>={}):RendererTelemetry=>({meshBackend:'webgl',meshBackendActive:'webgl',meshCount:2,meshReuseCount:0,triangleCount:4,...values});
+const dom=(values:Partial<Extract<RendererTelemetry,{meshCount:number}>>={}):RendererTelemetry=>({meshBackend:'webgl',meshBackendActive:'webgl',meshBackendFallbackReason:null,meshCount:2,meshReuseCount:0,triangleCount:4,...values});
 test('after-draw telemetry distinguishes observed backend from defaults, fallback, cached-only and no meshes',()=>{
  expect(rendererStatus(dom(),'pending')).toMatchObject({kind:'pending',backend:null});expect(rendererStatus(dom(),'failed')).toMatchObject({kind:'failed',backend:null});
  expect(rendererStatus(dom(),'succeeded')).toMatchObject({kind:'fresh',backend:'webgl',label:'Fresh meshes · WebGL'});
  expect(rendererStatus(dom({meshBackendActive:'canvas2d'}),'succeeded').label).toBe('Fresh meshes · Canvas2D fallback');
- expect(rendererStatus(dom({meshBackend:'canvas2d',meshBackendActive:'canvas2d'}),'succeeded').label).toBe('Fresh meshes · Canvas2D');
+ expect(rendererStatus(dom({meshBackend:'canvas2d',meshBackendActive:'canvas2d',meshBackendFallbackReason:'not-requested'}),'succeeded').label).toBe('Fresh meshes · Canvas2D');
  expect(rendererStatus(dom({meshCount:0,meshReuseCount:3}),'succeeded')).toMatchObject({kind:'cached',backend:null,reused:3,label:'Cached mesh rasters reused'});
  expect(rendererStatus(dom({meshCount:0}),'succeeded')).toMatchObject({kind:'no-mesh',backend:null,label:'No mesh · DOM images'});
  expect(rendererStatus(dom({meshReuseCount:1}),'succeeded').label).toContain('Cached rasters also reused');
- const canvas={backend:'webgl' as const,backendActive:'canvas2d' as const,framesReused:0,trianglesDrawn:4};
+ const canvas={backend:'webgl' as const,backendActive:'canvas2d' as const,backendFallbackReason:null,framesReused:0,trianglesDrawn:4};
  expect(rendererStatus(canvas,'succeeded').label).toBe('Canvas frame · Canvas2D fallback');expect(rendererStatus({...canvas,framesReused:1},'succeeded')).toMatchObject({kind:'cached',backend:null});expect(rendererStatus({...canvas,trianglesDrawn:0},'succeeded')).toMatchObject({kind:'no-mesh',backend:null});
+ const reasons=[
+  ['creation-failed','Canvas2D (WebGL unavailable)','Canvas2D (WebGL 사용 불가)'],
+  ['context-lost','Canvas2D (WebGL context lost)','Canvas2D (WebGL 컨텍스트 손실)'],
+  ['over-grant','Canvas2D (WebGL buffer unavailable)','Canvas2D (WebGL 버퍼 부족)'],
+  ['not-requested','Canvas2D','Canvas2D'],
+  [null,'Canvas2D fallback','Canvas2D 폴백'],
+ ] as const;
+ for(const [reason,enBackend,koBackend] of reasons){
+  const requested=reason==='not-requested'?'canvas2d' as const:'webgl' as const;
+  const domLabel=rendererStatus(dom({meshBackend:requested,meshBackendActive:'canvas2d',meshBackendFallbackReason:reason}),'succeeded').label;
+  expect(domLabel).toBe(`Fresh meshes · ${enBackend}`);
+  expect(tr(domLabel,'ko')).toBe(`새 메시 · ${koBackend}`);
+  expect(tr(tr(domLabel,'ko'),'en')).toBe(domLabel);
+  const domReused=rendererStatus(dom({meshBackend:requested,meshBackendActive:'canvas2d',meshBackendFallbackReason:reason,meshReuseCount:1}),'succeeded').label;
+  expect(domReused).toBe(`Fresh meshes · ${enBackend} · Cached rasters also reused`);
+  expect(tr(domReused,'ko')).toBe(`새 메시 · ${koBackend} · 캐시된 래스터도 재사용됨`);
+  expect(tr(tr(domReused,'ko'),'en')).toBe(domReused);
+  const canvasLabel=rendererStatus({backend:requested,backendActive:'canvas2d',backendFallbackReason:reason,framesReused:0,trianglesDrawn:4},'succeeded').label;
+  expect(canvasLabel).toBe(`Canvas frame · ${enBackend}`);
+  expect(tr(canvasLabel,'ko')).toBe(`캔버스 프레임 · ${koBackend}`);
+  expect(tr(tr(canvasLabel,'ko'),'en')).toBe(canvasLabel);
+ }
+ expect(rendererStatus(dom({meshBackend:'webgl',meshBackendActive:'canvas2d',meshBackendFallbackReason:'unknown' as any}),'succeeded').label).toBe('Fresh meshes · Canvas2D fallback');
+ expect(rendererStatus({backend:'webgl',backendActive:'canvas2d',backendFallbackReason:'unknown' as any,framesReused:0,trianglesDrawn:4},'succeeded').label).toBe('Canvas frame · Canvas2D fallback');
 });
 test('late and unknown-timing pairs report their actual draws while feedback waits; partial failure invalidates both and paused inspection recovers',()=>{
  const badges={a:new RendererBadge(),b:new RendererBadge()},state=new ComparePresentation(),domain={start:0 as const,end:2};let now=0;
