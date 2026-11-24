@@ -12,47 +12,51 @@
 
 # @rig-c/review
 
-A local workspace for a person to inspect an agent's rig output, compare references, and export issue-ready feedback. The person opens a package or output folder instead of a custom viewer built per rig.
+A local page where a person looks at an agent's rig work, answers its questions, and sends back feedback tied to the exact files they saw.
 
-The app provides one inspection workspace for setup geometry and motion, compiled-model playback through `@rig-c/play`, local image, video and pose-sequence references, checkpoints, audio audition, and saved structured feedback. **The producer writes motion in scratch; review never authors keys.** Navigation changes inspection time; it never retimes, and review never writes the package's `motion.json`: motion edits are data (config patches, pose maps, retarget flags) the installed producer turns into a scratch build. Meshes are edited in setup space and rebuilt by the producer (`rig-parts remesh --delta`, #100/#135); weights and source art are not edited.
+Review never edits the package it shows. Motion and mesh edits go to the installed producer as data and come back as a scratch build.
 
 ## Place in the toolchain
 
-[Create](https://github.com/rig-c/create) → [Parts](https://github.com/rig-c/parts) → [Pose](https://github.com/rig-c/pose) →
-[Core / rigc](https://github.com/rig-c/core) → **Review** →
-[Play](https://github.com/rig-c/play) → **Adapter** (consumer integration).
+[Create](https://github.com/rig-c/create) drives the cycle with an agent. [Parts](https://github.com/rig-c/parts) turns a painting into parts and a rig, [Pose](https://github.com/rig-c/pose) retargets motion, [Core](https://github.com/rig-c/core) compiles the rig, and [Play](https://github.com/rig-c/play) plays it in the browser.
 
-Review is the human inspection and source-bound feedback gate in this delivery
-flow. It inspects the upstream build without replacing Core's compiler gate, and
-its motion edits are data the installed producer builds in scratch. Review itself uses the published Play runtime for previews;
-the chain describes delivery and feedback responsibilities, not runtime import
-order. Adapter denotes downstream consumer integration, without depending on the
-published adapters (`@rig-c/pixi`, `@rig-c/phaser`, `@rig-c/three`) or changing
-existing compilation/playback dependencies.
+**Review** is where a person looks and answers. Create publishes each result and question here and reads the answers back; see the [Create choice interview](docs/WORKFLOWS.md#create-choice-interview). Review previews with Play, does not replace Core's compile check, and needs none of the published adapters (`@rig-c/pixi`, `@rig-c/phaser`, `@rig-c/three`).
 
 ## Start
 
-Install beside the producing agent and open the output folder:
+If someone sent you a review link, open it in a browser.
+
+For your own output folder, install beside the producing agent:
 
 ```sh
 npm i -D @rig-c/review
 npx rig-review open /absolute/path/to/output
 ```
 
-`rig-review` is also the convenience package name: `npm i -D rig-review` installs
-the same CLI. `@rig-c/review` remains the canonical package.
-
-`rig-review` runs under **Bun 1.3.0 or later**, which must be on `PATH`; CI runs the installed package on 1.3.0 and on the latest Bun. `open` prints a loopback URL and exits; see [One-command owner handoff](#one-command-owner-handoff). `npx rig-review --help` lists every command.
-
-The CLI and `@rig-c/review/job-host` support owner hosting. See [Public API stability](docs/STABILITY.md) for exports and signatures.
-
-Example stdout from `open` (private capability omitted):
+`open` prints a loopback URL and exits:
 
 ```text
 http://127.0.0.1:4318/?workspace=<incarnation>#cap=…
 ```
 
+`rig-review` needs **Bun 1.3.0 or later** on `PATH`. `npm i -D rig-review` installs the same CLI.
+
+`npx rig-review --help` prints usage for `open`, `control`, `feedback`, `check`, `compare` and `parts`. `strip --help` and `session --help` print their own.
+
+The CLI and `@rig-c/review/job-host` support owner hosting. See [Public API stability](docs/STABILITY.md).
+
 ## What you can do
+
+On a review link:
+
+- **Answer an interview.** Pick options, write your own under Other, add a note. [Interview — WORKFLOWS](https://github.com/rig-c/review/blob/main/docs/WORKFLOWS.md#create-choice-interview)
+- **Check parts before rigging.** `parts` shows each part as an image before any rig is built. [Parts view — PARTS_VIEW](docs/PARTS_VIEW.md)
+- **Review direction.** See the scene plates and the authored camera and timing, and pin comments on the take. [Direction — REVIEW_PACKAGE](docs/REVIEW_PACKAGE.md#direction-inspection)
+- **Sign off.** Approve, or Request changes with comments. Opening a link never approves anything. [Sign-off — PARTS_VIEW](docs/PARTS_VIEW.md#the-sign-off)
+
+For the publishing agent:
+
+- **Publish and ask.** `session open` prints a standing review link; `publish`, `ask`, `next` and `close` drive it. [Session — WORKFLOWS](https://github.com/rig-c/review/blob/main/docs/WORKFLOWS.md#standing-live-job-workflow)
 
 | Task | Command or panel | Destination |
 | --- | --- | --- |
@@ -92,6 +96,8 @@ MIT. See [LICENSE](LICENSE).
 <a id="development"></a><a id="releasing"></a>
 Development and releasing: [Contributing workflows](https://github.com/rig-c/review/blob/main/CONTRIBUTING.md#development).
 
+- [Inspection workflows](docs/WORKFLOWS.md)
+- [Parts and atlas view](docs/PARTS_VIEW.md)
 - [Package contract](docs/REVIEW_PACKAGE.md)
 - [Product design](docs/DESIGN.md)
 - [Animation inspection](docs/ANIMATION_INSPECTION.md)
