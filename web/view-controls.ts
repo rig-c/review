@@ -169,8 +169,10 @@ export function createViewControls(options:ViewControlsOptions) {
   if(reason)item.button.setAttribute('aria-description',reason);else item.button.removeAttribute('aria-description');
  };
  let config=rig?options.viewSwitch:null;
+ let menuPlacement:ResizeObserver|null=null;
+ const stopMenuPlacement=()=>{menuPlacement?.disconnect();menuPlacement=null;};
  const configure=(next:ViewSwitchConfig)=>{
-  config=next;modes.clear();
+  config=next;modes.clear();stopMenuPlacement();
   for(const item of viewSwitch!.querySelectorAll?.('button')??[])(item as HTMLButtonElement).onclick=null;
   if(viewSwitch!.children.length)viewSwitch!.replaceChildren();
   viewSwitch!.open=false;
@@ -186,7 +188,20 @@ export function createViewControls(options:ViewControlsOptions) {
    viewSwitch!.ontoggle=()=>{if(viewSwitch!.open)viewSwitch!.open=false;};
   }else{
    viewSwitch!.removeAttribute('aria-disabled');
-   viewSwitch!.ontoggle=null;
+   viewSwitch!.ontoggle=()=>{
+    stopMenuPlacement();
+    const toolbar=viewSwitch!.closest('.workspace-main-toolbar');
+    if(!viewSwitch!.open||!toolbar)return;
+    const align=()=>{
+     if(!toolbar.isConnected||!viewSwitch!.open){stopMenuPlacement();return;}
+     const {left,right}=toolbar.getBoundingClientRect(),button=summary.getBoundingClientRect();
+     const width=list.getBoundingClientRect().width;
+     list.classList.toggle('view-menu-list-start',button.right-width<left&&button.left+width<=right);
+    };
+    align();
+    menuPlacement=new ResizeObserver(align);
+    for(const node of [toolbar,summary,list])menuPlacement.observe(node);
+   };
   }
   const list=panelMake('div',{className:'view-menu-list'});list.setAttribute('role','group');list.setAttribute('aria-label',t('View'));
   for(const [index,group] of groups.entries()){
