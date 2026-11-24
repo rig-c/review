@@ -5,7 +5,7 @@ import { launchChrome } from './helpers/software-capture.ts';
  * - Bar 2 (Inspector): edit a selected key's channel values -> set_key_value op (including multi-channel coalescing).
  * - Bar 3 (Pending preview): stage pose reflects pending edits before Apply without a build; measured pre-Apply preview pose vs post-Apply compiled build pose matches within Math.fround (0 ULP difference across bone locals, world transforms, and posed slot geometry).
  * - Bar 4 (Apply): sends the entire cumulative pending op list with handoff animationsFromHash; a second Apply sends the first edits too ([op1, op2]).
- * - Bar 5 (Read-only tracks): idle clip (ANIMATION_IDLE_GOVERNED_BY_TURN_PAD) and read-only tracks (bone.inherit, derive, lag, slot, group, physics, path, slider) state their reason by name and never look editable.
+ * - Bar 5 (Read-only tracks): idle clip (ANIMATION_IDLE_NOT_KEY_EDITABLE) and read-only tracks (bone.inherit, derive, lag, slot, group, physics, path, slider) state their reason by name and never look editable.
  * - Bar 6 (Apply control note, Ruling H2): states that an animation Apply builds from the handoff config.json and animations_from file into scratch and does not carry another kind's Apply on the stage.
  * - Bar 7 (U2 measurement, MAX_ANIMATION_OPS = 200 on hello): 16 tracks × 115 keys = 1,840 keys (14 editable bone tracks = 1,610 keys, 2 read-only group tracks = 230 keys); moving <= 200 keys (115 or 196 keys) succeeds, moving > 200 keys (210, 230, or 1,610 keys) refuses by name with ANIMATION_OPS_TOO_MANY and rolls back atomically.
  * - Bar 8 (Producer/compiler refusals): t > duration is not auto-extended by the client and is refused by the compiler verbatim (CE_COMPILE_KEY_AFTER_DURATION), leaving the stage build intact.
@@ -1023,7 +1023,7 @@ async function main() {
       const readOnlySelectOk = ed.selectKey(3, 0);
       const readOnlyStatusText = ed.status();
 
-      // Switch to 'idle' clip and verify ANIMATION_IDLE_GOVERNED_BY_TURN_PAD gate
+      // Switch to 'idle' clip and verify ANIMATION_IDLE_NOT_KEY_EDITABLE gate
       const animSelect = document.getElementById('animation-select');
       animSelect.value = 'idle';
       animSelect.dispatchEvent(new Event('change'));
@@ -1071,7 +1071,7 @@ async function main() {
     if (
       !bar5Result.readOnlySelectRefused ||
       !bar5Result.readOnlyStatusText.startsWith('ANIMATION_TRACK_READ_ONLY:') ||
-      bar5Result.idleGate.code !== 'ANIMATION_IDLE_GOVERNED_BY_TURN_PAD' ||
+      bar5Result.idleGate.code !== 'ANIMATION_IDLE_NOT_KEY_EDITABLE' ||
       bar5Result.idleEditableLanes !== 0
     ) {
       throw new Error(`Bar 5 failed on read-only / idle checks: ${JSON.stringify(bar5Result)}`);

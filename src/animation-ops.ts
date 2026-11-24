@@ -385,6 +385,7 @@ export interface AnimationEditGate {
     | 'OK'
     | 'ANIMATION_SOURCE_LOADING'
     | 'ANIMATION_IDLE_GOVERNED_BY_TURN_PAD'
+    | 'ANIMATION_IDLE_NOT_KEY_EDITABLE'
     | 'ANIMATION_SOURCE_MISSING'
     | 'ANIMATION_NOT_IN_SOURCE'
     | 'ANIMATION_COMPARE_READ_ONLY';
@@ -518,8 +519,17 @@ export function checkAnimationEditGate(
   animationName: string,
   animationsFrom: string | null | undefined,
   motionDocument?: unknown,
+  hasTurnDial?: boolean,
 ): AnimationEditGate {
   if (animationName === 'idle') {
+    if (hasTurnDial === false) {
+      return {
+        editable: false,
+        code: 'ANIMATION_IDLE_NOT_KEY_EDITABLE',
+        reason: 'The producer generates "idle". Keyed editing requires a clip from motion.animations_from.',
+        note: null,
+      };
+    }
     return {
       editable: false,
       code: 'ANIMATION_IDLE_GOVERNED_BY_TURN_PAD',
@@ -1116,9 +1126,10 @@ function resolveEditableTrack(
   text: string,
   animation: string,
   trackIndex: number,
+  hasTurnDial?: boolean,
 ): ValidatedTrackContext {
   const doc = JSON.parse(text) as unknown;
-  const gate = checkAnimationEditGate(animation, 'animations.json', doc);
+  const gate = checkAnimationEditGate(animation, 'animations.json', doc, hasTurnDial);
   if (!gate.editable) {
     throw new Error(`${gate.code}: ${gate.reason}`);
   }
@@ -1148,8 +1159,9 @@ export function applyAnimationOp(
   op: AnimationSourceOp,
   baseText?: string,
   fallbackEasings?: Readonly<Record<string, EasingTuple>>,
+  hasTurnDial?: boolean,
 ): AppliedAnimationOpsResult {
-  const { doc, classification, keys } = resolveEditableTrack(text, op.animation, op.track);
+  const { doc, classification, keys } = resolveEditableTrack(text, op.animation, op.track, hasTurnDial);
   const channels = classification.channels;
   const keysPath = ['animations', op.animation, 'tracks', op.track, 'keys'] as const;
 
@@ -1845,7 +1857,7 @@ export class AnimationOpBuilder {
     }
   }
 
-  apply(op: AnimationSourceOp): AppliedAnimationOpsResult {
+  apply(op: AnimationSourceOp, hasTurnDial?: boolean): AppliedAnimationOpsResult {
     const last = this.history.at(-1);
 
     // Coalesce a set_key_value into a trailing insert_key on the same (animation, track)
@@ -1863,6 +1875,7 @@ export class AnimationOpBuilder {
         this.currentText,
         op.animation,
         op.track,
+        hasTurnDial,
       );
       const targetKey = keys[op.key];
       if (targetKey && targetKey.t === cleanMotionNumber(last.op.time)) {
@@ -1904,6 +1917,7 @@ export class AnimationOpBuilder {
           coalescedInsert,
           this.baseText,
           this.fallbackEasings,
+          hasTurnDial,
         );
         this.history.pop();
         this.history.push({
@@ -1938,7 +1952,7 @@ export class AnimationOpBuilder {
         op.op === 'set_key_value' && last.op.op === 'set_key_value'
           ? coalesceSetKeyValueOp(replayFrom, last.op, op)
           : op;
-      const res = applyAnimationOp(replayFrom, coalescedOp, this.baseText, this.fallbackEasings);
+      const res = applyAnimationOp(replayFrom, coalescedOp, this.baseText, this.fallbackEasings, hasTurnDial);
       this.history.pop();
       if (res.text === replayFrom) {
         this.currentText = replayFrom;
@@ -1954,7 +1968,7 @@ export class AnimationOpBuilder {
       return res;
     }
 
-    const res = applyAnimationOp(this.currentText, op, this.baseText, this.fallbackEasings);
+    const res = applyAnimationOp(this.currentText, op, this.baseText, this.fallbackEasings, hasTurnDial);
     if (res.text === this.currentText) {
       return { text: this.currentText, changedSpans: [] };
     }
