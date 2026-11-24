@@ -1,5 +1,23 @@
 # Changelog
 
+## 4.18.6
+
+Review now reads stock Parts draft-diff reports and pins Parts 2.55.0 for development. A disabled Request changes says why, and a verdict save reads in Korean. There is no export or act change.
+
+### Changed
+
+* Pins the `@rig-c/parts` development dependency to 2.55.0, the current release. From now on the pin follows each Parts release when Review is cut (#1174, closes #1170).
+
+### Fixed
+
+* The previous-draft diff reader accepts the `spec` marker that `rig-parts diff-drafts` writes and still reads `schema`. A report with neither marker refuses as `PREVIOUS_DRAFT_DIFF_INVALID reason=marker-missing`, and two markers that disagree refuse as `reason=marker-conflict`. A test runs the pinned Parts CLI on every run, so the reader and the producer cannot drift apart unnoticed (#1169, closes #1163).
+* When Request changes is disabled only because there is no comment yet, the act bar shows the reason between Approve and Request changes (Add a comment where changes are needed. / 고칠 곳에 코멘트를 달아 주세요). At narrow widths it sits under the buttons. The line goes away after the first comment or pin. Other disabled states, such as saving, a closed job, warnings or a visible refusal, keep their own explanation (#1171, closes #1159).
+* A verdict save shows 저장 중… on the Korean screen instead of Saving…. When a save is retried, the previous failure text clears until the new result arrives (#1173, closes #1165).
+
+### Documentation
+
+* Reference docs drop retired codes and stale waits, document the `JOB_STILL_*` refusals, remove session signatures, and restate the Core UI rulings in English as rules (#1162, #1164, #1168).
+
 ## 4.18.5
 
 Review pins Play 1.25.0. Two changes keep a reviewer able to act, and an interview answer shows it is being sent. There is no export, act or contract change.
