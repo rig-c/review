@@ -1074,10 +1074,12 @@ test.each([true, false])('#1156 timeline keeps idle locked with supported dial=%
       panel.model(doc, 'idle');
       const gate = panel.gateInfo();
       const banner = host.querySelector('[data-animation-gate]')!;
+      const secondary = host.querySelector('[data-key-inspector-empty]')!;
       const apply = host.querySelector('[data-animation-apply]')!;
       expect(gate.editable).toBe(false);
       expect(banner.hidden).toBe(false);
       expect(banner.dataset.editable).toBe('false');
+      expect(secondary.hidden).toBe(false);
       expect(apply.disabled).toBe(true);
 
       const expected = hasDial ? {
@@ -1086,14 +1088,28 @@ test.each([true, false])('#1156 timeline keeps idle locked with supported dial=%
         ko: '애니메이션 "idle"은 config.json의 idle/blink/turn 파라미터로부터 rig-parts가 생성해요. 회전 및 아이들(Turn & Idle) 컨트롤을 사용하세요.',
       } : {
         code: 'ANIMATION_IDLE_NOT_KEY_EDITABLE' as const,
-        en: 'The producer generates "idle". Keyed editing requires a clip from motion.animations_from.',
-        ko: '제작 도구가 "idle" 클립을 생성해요. 키를 편집하려면 motion.animations_from에 선언된 클립이 필요해요.',
+        en: "The producer generates the idle clip, so its keys can't be edited here.",
+        ko: 'idle은 제작 도구가 자동으로 만든 클립이라 여기서 키를 고칠 수 없어요.',
       };
       const en = tr(banner.textContent, 'en'), ko = tr(banner.textContent, 'ko');
-      console.log('IDLE_GATE_UI', JSON.stringify({ hasDial, en, ko }));
+      const title = { en: tr(banner.title, 'en'), ko: tr(banner.title, 'ko') };
+      const secondaryTitle = { en: tr(secondary.title, 'en'), ko: tr(secondary.title, 'ko') };
+      const refusal = panel.applyOp({ op: 'set_key_time', animation: 'idle', track: 0, key: 1, time: 0.5 });
+      const status = host.querySelector('[data-animation-editor-status]')!;
+      console.log('IDLE_GATE_UI', JSON.stringify({ hasDial, en, ko, title, secondaryTitle, refusal }));
       expect(gate).toEqual({ editable: false, code: expected.code, reason: expected.en, note: null });
       expect(en).toBe(`Read-only clip · ${expected.code}: ${expected.en}`);
       expect(ko).toBe(`읽기 전용 클립 · ${expected.code}: ${expected.ko}`);
+      expect(title).toEqual(hasDial ? { en, ko } : {
+        en: 'ANIMATION_IDLE_NOT_KEY_EDITABLE: Key editing requires a clip declared in motion.animations_from.',
+        ko: 'ANIMATION_IDLE_NOT_KEY_EDITABLE: 키를 편집하려면 motion.animations_from에 선언된 클립이 필요해요.',
+      });
+      expect(tr(secondary.textContent, 'en')).toBe(`Key editing disabled (${expected.code})`);
+      expect(tr(secondary.textContent, 'ko')).toBe(`키 편집 비활성화됨 (${expected.code})`);
+      expect(secondaryTitle).toEqual({ en: `${expected.code}: ${expected.en}`, ko: `${expected.code}: ${expected.ko}` });
+      expect(refusal).toEqual({ ok: false, error: secondaryTitle.en });
+      expect(tr(status.textContent, 'en')).toBe(secondaryTitle.en);
+      expect(tr(status.textContent, 'ko')).toBe(secondaryTitle.ko);
     } finally {
       panel.dispose();
     }

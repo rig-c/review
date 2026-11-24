@@ -668,7 +668,10 @@ export class AnimationInspectionPanel {
    return {editable:false,code:'ANIMATION_NOT_IN_SOURCE',reason:'No animation selected.',note:null};
   }
   if(this.animation==='idle'){
-   return checkAnimationEditGate('idle',this.source?.path??null,undefined,this.options.hasTurnDial?.());
+   const gate=checkAnimationEditGate('idle',this.source?.path??null,undefined,this.options.hasTurnDial?.());
+   return gate.code==='ANIMATION_IDLE_NOT_KEY_EDITABLE'
+    ?{...gate,reason:"The producer generates the idle clip, so its keys can't be edited here."}
+    :gate;
   }
   const ro=typeof this.options.readOnlyReason==='function'?this.options.readOnlyReason():this.options.readOnlyReason;
   if(ro||!this.options.apply||!this.options.preview){
@@ -813,7 +816,9 @@ export class AnimationInspectionPanel {
    const notePart=gate.note?` · Note: ${gate.note}`:'';
    this.gateBanner.textContent=`Editable clip "${this.animation}" from ${srcPath}${hashShort}${notePart}`;
   }
-  this.gateBanner.title=this.gateBanner.textContent;
+  this.gateBanner.title=gate.code==='ANIMATION_IDLE_NOT_KEY_EDITABLE'
+   ?'ANIMATION_IDLE_NOT_KEY_EDITABLE: Key editing requires a clip declared in motion.animations_from.'
+   :this.gateBanner.textContent;
  }
 
  private renderEditorBar(){

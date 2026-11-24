@@ -10,7 +10,11 @@ import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts
 import {instrumentRigMount} from './helpers/mount-probe.ts';
 import {directionPhysicsModel} from './helpers/direction-playback.ts';
 type LoopReport={inside:number;wraps:number[][];frames:number;seeks:number};
-type Panel={title:string;rows:string[];keysHidden:boolean;scene:boolean;animation:string;repeat:boolean;idleGate:string;idleEditable:string};
+type Panel={
+ title:string;rows:string[];keysHidden:boolean;scene:boolean;animation:string;repeat:boolean;
+ idleGate:string;idleEditable:string;idleGateTitle:string;idleGateVisible:boolean;
+ idleSecondary:{text:string;title:string;visible:boolean;ariaLabel:string|null;ariaDescription:string|null};
+};
 const arg=Bun.argv.indexOf('--out'),out=resolve(arg<0?'artifacts/direction-composed-933':Bun.argv[arg+1]!);
 await mkdir(out,{recursive:true});const root=await mkdtemp(join(tmpdir(),'direction-composed-933-'));
 let page:InputCdpSession|undefined;const servers:{stop():void}[]=[],errors:unknown[]=[],observations:unknown[]=[];
@@ -24,15 +28,27 @@ tickPlaying=now=>{const before=time,previous=player?.current?vertices933():null;
  if(time<before)record933.wraps.push(jump);else record933.inside=Math.max(record933.inside,...jump);record933.frames++;
 };
 Object.assign(window,{__direction933:{playing:()=>playing,ready:()=>!!player?.current&&!!data?.direction,record:()=>{record933={inside:0,wraps:[],frames:0,seeks:0};const seek=player.seek.bind(player);player.seek=value=>{record933.seeks++;seek(value);};},report:()=>record933,
- panel:()=>{const host=document.querySelector('#direction-panel'),gate=document.querySelector('[data-animation-gate]');return {title:host.querySelector('summary').textContent,rows:[...host.querySelectorAll('li')].map(row=>row.textContent),
-  keysHidden:document.querySelector('#direction-authored-keys').hidden,scene:!!activeScene(),animation:player.current,repeat:canRepeatIdle(),idleGate:gate.textContent,idleEditable:gate.dataset.editable};}}});
+ panel:()=>{const host=document.querySelector('#direction-panel'),gate=document.querySelector('[data-animation-gate]'),secondary=document.querySelector('[data-key-inspector-empty]');
+  return {title:host.querySelector('summary').textContent,rows:[...host.querySelectorAll('li')].map(row=>row.textContent),
+   keysHidden:document.querySelector('#direction-authored-keys').hidden,scene:!!activeScene(),animation:player.current,repeat:canRepeatIdle(),idleGate:gate.textContent,idleEditable:gate.dataset.editable,
+   idleGateTitle:gate.title,idleGateVisible:gate.checkVisibility({visibilityProperty:true}),
+   idleSecondary:{text:secondary.textContent,title:secondary.title,visible:secondary.checkVisibility({visibilityProperty:true})&&!secondary.closest('[aria-hidden="true"]'),
+    ariaLabel:secondary.getAttribute('aria-label'),ariaDescription:secondary.getAttribute('aria-description')}};}}});
 `;
 const built=await Bun.build({entrypoints:['web/main.ts'],target:'browser',format:'esm',plugins:[{name:'direction-observer',setup(build){build.onLoad({filter:/web\/main\.ts$/},async({path})=>({loader:'ts',contents:instrumentRigMount(await readFile(path,'utf8'),probe)}));}}]});
 assert.ok(built.success,JSON.stringify(built.logs));
 async function wait(expression:string,ms=25000){const deadline=Date.now()+ms;while(Date.now()<deadline){const value=await page!.evaluate<any>(expression);if(value)return value;await Bun.sleep(50);}throw Error('DIRECTION_WAIT '+expression+' '+await page!.evaluate('document.body.innerText'));}
 const expected={
- en:{title:'Direction · 2 s · loop',idleReason:'Read-only clip · ANIMATION_IDLE_NOT_KEY_EDITABLE: The producer generates "idle". Keyed editing requires a clip from motion.animations_from.',hidden:['Plain rig view','CAMERA_PLAYBACK_UNAVAILABLE','CAMERA_APPLY_UNSUPPORTED','moving camera','fixed camera']},
- ko:{title:'연출 · 2초 · 반복',idleReason:'읽기 전용 클립 · ANIMATION_IDLE_NOT_KEY_EDITABLE: 제작 도구가 "idle" 클립을 생성해요. 키를 편집하려면 motion.animations_from에 선언된 클립이 필요해요.',hidden:['인물만 표시','CAMERA_PLAYBACK_UNAVAILABLE','CAMERA_APPLY_UNSUPPORTED','카메라 이동','카메라 고정']},
+ en:{title:'Direction · 2 s · loop',idleReason:"Read-only clip · ANIMATION_IDLE_NOT_KEY_EDITABLE: The producer generates the idle clip, so its keys can't be edited here.",
+  idleGateTitle:'ANIMATION_IDLE_NOT_KEY_EDITABLE: Key editing requires a clip declared in motion.animations_from.',
+  idleSecondaryText:'Key editing disabled (ANIMATION_IDLE_NOT_KEY_EDITABLE)',
+  idleSecondaryTitle:"ANIMATION_IDLE_NOT_KEY_EDITABLE: The producer generates the idle clip, so its keys can't be edited here.",
+  hidden:['Plain rig view','CAMERA_PLAYBACK_UNAVAILABLE','CAMERA_APPLY_UNSUPPORTED','moving camera','fixed camera']},
+ ko:{title:'연출 · 2초 · 반복',idleReason:'읽기 전용 클립 · ANIMATION_IDLE_NOT_KEY_EDITABLE: idle은 제작 도구가 자동으로 만든 클립이라 여기서 키를 고칠 수 없어요.',
+  idleGateTitle:'ANIMATION_IDLE_NOT_KEY_EDITABLE: 키를 편집하려면 motion.animations_from에 선언된 클립이 필요해요.',
+  idleSecondaryText:'키 편집 비활성화됨 (ANIMATION_IDLE_NOT_KEY_EDITABLE)',
+  idleSecondaryTitle:'ANIMATION_IDLE_NOT_KEY_EDITABLE: idle은 제작 도구가 자동으로 만든 클립이라 여기서 키를 고칠 수 없어요.',
+  hidden:['인물만 표시','CAMERA_PLAYBACK_UNAVAILABLE','CAMERA_APPLY_UNSUPPORTED','카메라 이동','카메라 고정']},
 } as const;
 try{
  const pkg=join(root,'package');await mkdir(pkg);
@@ -67,7 +83,13 @@ try{
   assert.equal(panel.rows.length,6,JSON.stringify(panel.rows));
   assert.ok(panel.rows.some(row=>row.startsWith('TURN_UNAVAILABLE')));
   assert.equal(panel.idleEditable,'false');
+  assert.equal(panel.idleGateVisible,true);
   assert.equal(panel.idleGate,expected[language].idleReason);
+  assert.equal(panel.idleGateTitle,expected[language].idleGateTitle);
+  assert.equal(panel.idleSecondary.visible,true);
+  assert.equal(panel.idleSecondary.text,expected[language].idleSecondaryText);
+  assert.equal(panel.idleSecondary.title,expected[language].idleSecondaryTitle);
+  for(const value of [panel.idleSecondary.ariaLabel,panel.idleSecondary.ariaDescription])assert.doesNotMatch(value??'',/motion\.animations_from/);
   for(const text of expected[language].hidden)assert.ok(!panel.rows.join('\n').includes(text)&&!panel.title.includes(text),text);
   assert.ok(panel.rows.join('\n').includes(model.sha256));
   await writeFile(join(out,language+'.png'),await page.screenshot());observations.push({language,report,panel});
