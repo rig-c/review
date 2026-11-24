@@ -6,7 +6,7 @@
       "name": "@rig-c/review",
       "dependencies": {
         "@napi-rs/canvas": "1.0.11",
-        "@rig-c/play": "1.24.0",
+        "@rig-c/play": "1.25.0",
         "@types/pngjs": "6.0.5",
         "pngjs": "7.0.0",
       },
@@ -46,7 +46,7 @@
 
     "@rig-c/parts": ["@rig-c/parts@2.51.0", "", { "dependencies": { "@rig-c/core": "3.8.1", "ag-psd": "^31.0.2" }, "bin": { "rig-parts": "bin/rig-parts.cjs", "spine-parts": "bin/rig-parts.cjs" } }, "sha512-2tZroJKFD05H2vjxFMeRA4XeRbBhO7/35cGEA4LEAAvYlHIY/GUuWtlGmUwkX5jxwfQRZ9TB8OBBLeZzsFWttA=="],
 
-    "@rig-c/play": ["@rig-c/play@1.24.0", "", {}, "sha512-VuDesBdywQtYjeaArFdy7TazSmm6HlOBee24JwoDC3Bb4B2gvR8PN9ugDKLKISrlD8hHjfSXGaUkTinla5J4Sw=="],
+    "@rig-c/play": ["@rig-c/play@1.25.0", "", {}, "sha512-BDyHQyKR8UqRFLlkEfoGlBoLc4/nOtJs5vBpyYblt0saYoWkNmw6Xj+RYfosIZPUY4KXeT39w+vwqoGScd+eUA=="],
 
     "@types/bun": ["@types/bun@1.4.3", "", { "dependencies": { "bun-types": "1.4.3" } }, "sha512-N67Pqy8JXbAY/j0tNraS3V5mubGvc6rrrNDmDCtZLlFzccbUJPDb0tvgUBC5q4m8ybkP93Jcn1QB+RYQ6PvBhw=="],
 
