@@ -23,6 +23,7 @@ import {discoverTurnDials,TurnState} from '../src/turn-pad.ts';
 import {bindTurnPad,type TurnPad} from './turn-pad.ts';
 import {PartExplorer,loadPartModel,partBounds,partCatalog,type PartEntry} from './part-selection.ts';
 import {AnimationInspectionPanel} from './animation-inspection.ts';
+import {formatSeconds} from './format-seconds.ts';
 import {PartThumbnails,pageRegionTable} from './part-thumbnails.ts';
 import { CanvasRenderer, loadModel, RigPlayer, type BoneAdjust, type ModelAssets, type PoseBounds } from '@rig-c/play';
 import {createViewportController,createViewportState,type CameraTarget} from './viewport-controller.ts';
@@ -669,7 +670,7 @@ function renderFeedbackTargets(preserve = false): void {
 function renderFrameTransport(): void {
   const active = activeTransportClock(), clock = active?.clock ?? null;
   const last = lastProducerFrame(clock), frame = frameAtTime(clock, time);
-  text('rig-label', host?.direction&&data.direction ? `Take · ${data.direction.take.duration} s` : rigPaneLabel({ hasPlayer: !!player, animation: player?.current ?? animation, time, frame }));
+  text('rig-label', host?.direction&&data.direction ? `Take · ${formatSeconds(data.direction.take.duration)} s` : rigPaneLabel({ hasPlayer: !!player, animation: player?.current ?? animation, time, frame }));
   el('frame-controls').hidden = last === null;
   if (!clock) { text('frame-label', data.report?.clock ? data.report.animation ? 'Frame unknown · report and current clip do not match' : 'Frame unknown · report animation not supplied' : 'rate unknown'); return; }
   if (last === null) { text('frame-label', 'F? / ? · frame range unknown'); return; }

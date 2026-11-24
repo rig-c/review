@@ -32,17 +32,13 @@ import {bindStagePick,domHoverPainter,type StagePick} from './stage-pick.ts';
 import {InspectionSelection} from './inspection-selection.ts';
 import {animationPreviewAdjust} from './preview.ts';
 import {actionButton as button} from './view-controls.ts';
+import {formatSeconds} from './format-seconds.ts';
+
+export {formatSeconds} from './format-seconds.ts';
 
 const NS='http://www.w3.org/2000/svg';
 const svg=(tag:string,attrs:Record<string,string|number>)=>{const n=document.createElementNS(NS,tag);for(const [k,v]of Object.entries(attrs))n.setAttribute(k,String(v));return n;};
 const numeric=(value:number)=>Object.is(value,-0)?'-0':String(value);
-
-/** Clean human-readable seconds without Float32 noise (e.g. 1.6 instead of 1.600000023841858). */
-export function formatSeconds(value:number):string {
- if(!Number.isFinite(value))return '0';
- const cleaned=Number(value.toFixed(4));
- return Object.is(cleaned,-0)?'0':String(cleaned);
-}
 
 /** Clean ruler tick positions from 0 to end for the given horizontal zoom factor. */
 export function buildRulerTicks(end:number,zoom=1):number[] {
