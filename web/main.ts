@@ -675,7 +675,7 @@ function renderFrameTransport(): void {
   if (!clock) { text('frame-label', data.report?.clock ? data.report.animation ? 'Frame unknown · report and current clip do not match' : 'Frame unknown · report animation not supplied' : 'rate unknown'); return; }
   if (last === null) { text('frame-label', 'F? / ? · frame range unknown'); return; }
   text('frame-label', `F${frame === null ? '?' : frame} / ${last}${frame === null ? ' · Out of range' : ''}`);
-  text('frame-clock-label', (clock.kind === 'uniform' ? `${clock.fps} fps · frame0 ${clock.frame0} s` : `frameTimes · ${clock.frameTimes.length} explicit times`) + (active?.source === 'stage' ? " · this build's report" : ''));
+  text('frame-clock-label', (clock.kind === 'uniform' ? `${clock.fps} fps · frame0 ${formatSeconds(clock.frame0)} s` : `frameTimes · ${clock.frameTimes.length} explicit times`) + (active?.source === 'stage' ? " · this build's report" : ''));
   input('frame-number').max = String(last);
   if (document.activeElement !== input('frame-number')) input('frame-number').value = frame === null ? '' : String(frame);
   input('frame-scrub').max = String(last); input('frame-scrub').hidden = frame === null;
@@ -839,7 +839,7 @@ function seekMarker(clip: string | undefined, exact: number, what: string): bool
   pause();
   if (clip && player && !assets?.animations.some(item => item.name === clip)) { message(`${what} animation "${clip}" is absent from the current rig; no seek was performed.`, true); return false; }
   if (clip && assets?.animations.some(item => item.name === clip) && animation !== clip) chooseAnimation(clip);
-  if (duration > 0 && exact > duration) { message(`Explicit time ${exact} s is outside the current range of ${formatSeconds(duration)} s. No substitute time was used.`, true); return false; }
+  if (duration > 0 && exact > duration) { message(`Explicit time ${formatSeconds(exact)} s is outside the current range of ${formatSeconds(duration)} s. No substitute time was used.`, true); return false; }
   seek(exact);
   return true;
 }

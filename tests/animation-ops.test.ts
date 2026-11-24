@@ -881,6 +881,34 @@ test('animationPreviewAdjust writes overlaid bone locals within Math.fround and 
   expect(poseNeck).toEqual({ rotation: -2, x: 0, y: 12, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 });
 });
 
+test('#1200 formats the key move status while forwarding the exact delta', async () => {
+  const { AnimationInspectionPanel } = await import('../web/animation-inspection.ts');
+  const deltas: number[] = [];
+  const messages: string[] = [];
+  const noop = () => {};
+  const panel = {
+    gateInfo: () => ({ editable: true }),
+    source: { available: true },
+    builder: {
+      moveSelection: (_animation: string, _keys: readonly unknown[], delta: number) => deltas.push(delta),
+      ops: [{}],
+    },
+    options: {},
+    animation: 'tilt',
+    syncEffectiveInspection: noop,
+    renderEditorBar: noop,
+    syncTimelineKeysInPlace: noop,
+    syncKeyInspectorInPlace: noop,
+    renderChannels: noop,
+    setEditorStatus: (value: string) => messages.push(value),
+  };
+  const move = AnimationInspectionPanel.prototype.moveSelection;
+  const delta = 10 / 3;
+  expect(move.call(panel as unknown as InstanceType<typeof AnimationInspectionPanel>, [{ track: 0, key: 0 }], delta).ok).toBe(true);
+  expect(deltas).toEqual([delta]);
+  expect(messages).toEqual(['Moved 1 selected key(s) by 3.3333 s (1 pending op(s)).']);
+});
+
 class StubElement extends EventTarget {
   tagName: string;
   id = '';

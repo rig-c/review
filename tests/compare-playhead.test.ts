@@ -6,7 +6,7 @@ import { ComparePresentation } from '../src/compare-presentation.ts';
 import { ReferenceSelectionUnavailable, inspectionReferenceFrame, referenceFrameAtTime, referenceSeekPosition } from '../src/reference-frames.ts';
 import { requireCommonTime } from '../src/compare-playhead.ts';
 import { RendererBadge } from '../web/renderer-status.ts';
-import { formatSeconds } from '../web/format-seconds.ts';
+import { formatSeconds } from '../web/animation-inspection.ts';
 
 async function fixture(): Promise<ModelAssets> {
   const bytes = await readFile(new URL('./fixtures/compare-probe/skeleton.model.json', import.meta.url), 'utf8');

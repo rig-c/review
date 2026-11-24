@@ -4,11 +4,11 @@ import {applyAnimationOps,parseAnimationSourceOp} from '../src/animation-ops.ts'
 import {createViewportController,createViewportState} from '../web/viewport-controller.ts';
 import {createRigViewportProvider} from '../web/rig-viewport-provider.ts';
 import {PartInspection,partCatalog} from '../web/part-selection.ts';
-import {formatSeconds} from '../web/format-seconds.ts';
+import {formatSeconds} from '../web/animation-inspection.ts';
 const main=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
 // Execute the actual consumer body with distinct clocks, without importing the page's startup side effects.
 const refresh=main.slice(main.indexOf('function refreshAnimationInspection()'),main.indexOf('\nlet overlays:'));
-test('#1200 formats the rejected seek range while retaining the exact requested time', () => {
+test('#1200 formats both rejected seek readouts while keeping the exact seek bounds', () => {
  const start = main.indexOf('function seekMarker(');
  const end = main.indexOf('function seekReportEvent()', start);
  expect(start).toBeGreaterThanOrEqual(0);
@@ -16,14 +16,21 @@ test('#1200 formats the rejected seek range while retaining the exact requested 
  const seekMarker = new Function('scope', 'with (scope) { ' +
   new Bun.Transpiler({loader: 'ts'}).transformSync(main.slice(start, end)) + ' return seekMarker; }');
  const messages: string[] = [];
- const exact = 10 / 3 + 0.000001;
+ const duration = 10 / 3;
+ const sought: number[] = [];
  const seek = seekMarker({
-  duration: 10 / 3, formatSeconds, pause: () => {},
+  duration, formatSeconds, pause: () => {},
   message: (value: string) => messages.push(value),
-  seek: () => { throw new Error('Unexpected seek outside the exact range'); },
+  seek: (value: number) => sought.push(value),
  });
- expect(seek(undefined, exact, 'Report')).toBe(false);
- expect(messages).toEqual([`Explicit time ${exact} s is outside the current range of 3.3333 s. No substitute time was used.`]);
+ expect(seek(undefined, 11 / 3, 'Report')).toBe(false);
+ expect(seek(undefined, duration + 0.000001, 'Report')).toBe(false);
+ expect(seek(undefined, duration - 0.000001, 'Report')).toBe(true);
+ expect(sought).toEqual([duration - 0.000001]);
+ expect(messages).toEqual([
+  'Explicit time 3.6667 s is outside the current range of 3.3333 s. No substitute time was used.',
+  'Explicit time 3.3333 s is outside the current range of 3.3333 s. No substitute time was used.',
+ ]);
 });
 
 test('inspection panel consumes shown time while the accumulated runtime remains untouched',()=>{

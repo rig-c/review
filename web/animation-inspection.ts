@@ -1104,7 +1104,7 @@ export class AnimationInspectionPanel {
    this.syncTimelineKeysInPlace();
    this.syncKeyInspectorInPlace();
    this.renderChannels();
-   this.setEditorStatus(`Moved ${selections.length} selected key(s) by ${deltaTime} s (${this.builder.ops.length} pending op(s)).`,false);
+   this.setEditorStatus(`Moved ${selections.length} selected key(s) by ${formatSeconds(deltaTime)} s (${this.builder.ops.length} pending op(s)).`,false);
    return {ok:true,ops:this.builder.ops};
   }catch(e){
    const msg=e instanceof Error?e.message:String(e);
