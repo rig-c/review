@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.18.10
+
+A live sign-off or checkpoint answer now shows that it is being sent and then that it was submitted. Before, the row went blank. There is no export, act or contract change.
+
+### Fixed
+
+* While a record sign-off or checkpoint answer is in flight, the act row stays and reads "Sending", and its Approve button is disabled. Once a finalized act matching the ask arrives, from the response or the stream, the row stays with "Nothing is waiting for your answer." and "Submitted" until the next ask replaces it. A failed send keeps the existing retry path and never shows Submitted. A retired pending `reopen` marker, which has no owner form, no longer counts as a waiting request (#1209, closes #1205).
+
 ## 4.18.9
 
 Durations on the direction page read like the timeline, and the pending sign-off line in English no longer says the post is already signed. Review pins Parts 2.56.0 for development. There is no export, act or contract change.
