@@ -1026,8 +1026,8 @@ requirements file refuses the handoff or Apply by name.
 
 ### Direction inspection
 
-In a single-package inspection, **4 Direction** keeps the stage, reference picker
-and Turn Pad visible. The panel names the current model and its SHA-256, the
+A single-package inspection with authored direction shows a collapsed Direction
+panel above the stage. The panel names the current model and its SHA-256, the
 package revision and source SHA-256, and the installed Play version. It reports
 the compiled sliders available through the Turn Pad and the attachment sets
 loaded through Play. Independent depth control is unavailable on this surface.

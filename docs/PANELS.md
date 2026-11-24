@@ -451,22 +451,19 @@ A reference-basis comment cannot become a producer-frame strip: CLI and browser 
 
 ## Four inspection stages
 
-The same numbered navigation appears on compiled and compare inspections:
-1 Parts + mesh, 2 Interview, 3 Rig + animation, 4 Direction. These are navigation,
-not create pipeline stages or sign-offs. Opening or switching never submits a
-verdict, applies an edit or starts a producer job. Each chip opens a mode of the
-one screen or names itself unavailable; no chip loads a separate page (#726):
+The numbered stage chips were removed. The inspection header uses Setup,
+Animate and Compare modes. Without a compiled model, unavailable modes name
+`MODEL_UNAVAILABLE` or, for a pre-rig draft, `RIG_VERSION_UNAVAILABLE`.
+When a single-package inspection supplies authored direction, a collapsible
+[Direction panel](REVIEW_PACKAGE.md#direction-inspection) appears above the stage.
+
+Historical interview chip wording:
 
 | Chip | Opens |
 | --- | --- |
-| 1 Parts + mesh | the Setup mode |
 | 2 Interview | the interview over the screen; until that view lands it names `INTERVIEW_MODAL_UNAVAILABLE` |
-| 3 Rig + animation | the Animate mode |
-| 4 Direction | nothing: it names `DIRECTION_NOT_AVAILABLE` |
 
-Without a rig on the stage, chips 1 and 3 and the Setup, Animate and Compare
-switch name `MODEL_UNAVAILABLE` or `RIG_VERSION_UNAVAILABLE`. The standalone
-`parts` page shows only its own chip. The former Stage 1 atlas frame is deleted;
+The former Stage 1 atlas frame is deleted;
 the Stage 1 paragraphs below describe the `/api/stage-parts` data that Setup reads.
 
 Stage 1 in a single compiled inspection with a producer handoff shows the
