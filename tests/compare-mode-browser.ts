@@ -874,11 +874,18 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       await addFormFeedback('b', 'quality', 'feedback on applied B');
       await addFormFeedback('a', 'quality', 'feedback on unapplied A');
       document.getElementById('submit').click();
-      await sleep(200);
 
-      const sessionAfterRegionsApply = await (await fetch(new URL('api/compare/session', location.href))).json();
-      const fbAppliedB = (sessionAfterRegionsApply.feedback || []).find(f => f.summary === 'feedback on applied B');
-      const fbUnappliedA = (sessionAfterRegionsApply.feedback || []).find(f => f.summary === 'feedback on unapplied A');
+      const sessionUrl = new URL('api/compare/session', location.href);
+      let fbAppliedB;
+      let fbUnappliedA;
+      for (let i = 0; i < 100; i++) {
+        const saved = await (await fetch(sessionUrl)).json();
+        fbAppliedB = saved.feedback?.find(f => f.summary === 'feedback on applied B');
+        fbUnappliedA = saved.feedback?.find(f => f.summary === 'feedback on unapplied A');
+        if (fbAppliedB && fbUnappliedA) break;
+        await sleep(50);
+      }
+      if (!fbAppliedB || !fbUnappliedA) throw Error('COMPARE_FEEDBACK_SUBMISSION_NOT_OBSERVED');
       const stageBApplied = window.rigReviewEditor.stage('b').applied;
 
       // Bar 1b: A patch Apply whose check FAILs on Build B is refused on Submit with EDIT_SUBMIT_UNCHECKED
@@ -1150,7 +1157,13 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       easeSel.value = 'cubic';
       easeSel.dispatchEvent(new Event('change'));
       await sleep(30);
-      const h1 = document.querySelector('#animation-inspection [data-curve-handle="1"]').getBoundingClientRect();
+      const handle = document.querySelector('#animation-inspection [data-curve-handle="1"]');
+      handle.scrollIntoView({ block: 'center', inline: 'nearest' });
+      const h1 = handle.getBoundingClientRect();
+      const hit = document.elementFromPoint(h1.left + h1.width / 2, h1.top + h1.height / 2);
+      if (!handle.contains(hit)) {
+        throw new Error('COMPARE_CURVE_HANDLE_NOT_HITTABLE ' + JSON.stringify({ rect: h1, hit: hit?.outerHTML.slice(0, 120) }));
+      }
       return {
         aPoseBaseline,
         bPoseBaseline,
@@ -1171,6 +1184,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
     }>(`(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       document.querySelector('#animation-inspection [data-animation-view="timeline"]').click();
+      document.getElementById('inspector-playback').scrollTop = 0;
       const layerBones = document.getElementById('layer-bones');
       if (layerBones && !layerBones.checked) layerBones.click();
       document.querySelector('#animation-inspection [data-stage-pose-mode="rotate"]').click();
@@ -1178,7 +1192,12 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
       scrub.value = '0.5';
       scrub.dispatchEvent(new Event('input', { bubbles: true }));
       await sleep(40);
-      const pick = document.querySelector('#b-viewport .animation-bone-pick[data-bone="rigid"]').getBoundingClientRect();
+      const target = document.querySelector('#b-viewport .animation-bone-pick[data-bone="rigid"]');
+      const pick = target.getBoundingClientRect();
+      const hit = document.elementFromPoint(pick.left + pick.width / 2, pick.top + pick.height / 2);
+      if (!target.contains(hit)) {
+        throw new Error('COMPARE_BONE_PICK_NOT_HITTABLE ' + JSON.stringify({ rect: pick, hit: hit?.outerHTML.slice(0, 120) }));
+      }
       return {
         rigidPickCenterB: { x: pick.left + pick.width / 2, y: pick.top + pick.height / 2 },
       };
@@ -1571,7 +1590,7 @@ console.log('rigc: wrote '+path.join(out,'skeleton.model.json'));`;
     }
 
     if (
-      compareAnimationEditCheck.bOpsBeforeSwitch.length < 3 ||
+      compareAnimationEditCheck.bOpsBeforeSwitch.length < 4 ||
       compareAnimationEditCheck.aOpsWhenSwitchedToA !== 0 ||
       compareAnimationEditCheck.aHasPreviewWhenSwitchedToA !== false ||
       compareAnimationEditCheck.bOpsWhenSwitchedBackToB !== compareAnimationEditCheck.bOpsBeforeSwitch.length ||

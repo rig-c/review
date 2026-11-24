@@ -11,12 +11,10 @@ import {loadReview} from '../src/manifest.ts';
 import {freshSession} from '../src/session.ts';
 import {rebuildDir} from '../src/rebuild.ts';
 import {startServer} from '../src/server.ts';
-import { WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
+import { PRODUCER_APPLY_DEADLINE_MS, WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
 import { assertNamedDeltaOps, dragStage1Delta } from './helpers/stage1-delta-target.ts';
 
 const CDP_SEND_DEADLINE_MS = 10_000;
-// Preserve the original Apply allowance of 1,200 × 25 ms.
-const APPLY_DEADLINE_MS = 30_000;
 // Default EN/KO baseline (n=2): 8,872.501 and 8,891.143 ms.
 // Four times the longer full CDP hold, rounded up to the next 10 s.
 const MESH_SETTLE_DEADLINE_MS = 40_000;
@@ -108,7 +106,7 @@ export function stage1ApplyRead(name: ApplyName, previous?: string): string {
 }
 
 export async function settleStage1Apply<T>(
-  page: Stage1Page, name: ApplyName, increment: number, timeout = APPLY_DEADLINE_MS,
+  page: Stage1Page, name: ApplyName, increment: number, timeout = PRODUCER_APPLY_DEADLINE_MS,
 ): Promise<T> {
   let detail: string | null | undefined;
   try {

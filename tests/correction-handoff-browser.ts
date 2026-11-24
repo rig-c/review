@@ -12,14 +12,13 @@ import {sessionFile} from '../src/session.ts';
 import {patchText} from '../src/config-patch.ts';
 import {rebuildDir} from '../src/rebuild.ts';
 import {startServer} from '../src/server.ts';
-import { WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
+import { PRODUCER_APPLY_DEADLINE_MS, WalkDeadlineError, withDeadline } from './helpers/walk-deadline.ts';
 
 const CDP_SEND_DEADLINE_MS = 10_000;
 const READINESS_DEADLINE_MS = 10_000;
 const DESCRIBED_DEADLINE_MS = 5_000;
-// One ordinary-pool run, n=2 (EN 7.390 s, KO 7.405 s).
-// Allow 4× the larger hold, rounded up to 30 s.
-const MESH_SETTLE_DEADLINE_MS = 30_000;
+// The 30 s base budget is 4× the ordinary-pool EN/KO holds (7.390 s, 7.405 s), rounded up.
+const MESH_SETTLE_DEADLINE_MS = PRODUCER_APPLY_DEADLINE_MS;
 
 type CorrectionPage = Pick<InputCdpSession, 'evaluate'>;
 
