@@ -573,6 +573,13 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
 .workspace-act-row #workspace-ask-headline{flex:1 1 0;min-width:0;font-size:var(--font-size-headline);font-weight:var(--font-weight-medium);font-variant-numeric:tabular-nums;color:var(--fg-strong);white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .workspace-act-row :is(#workspace-pending-ask,#workspace-pending-record-ask){order:2;flex:none}
 .workspace-act-row .review-dialog-actions{min-width:0;gap:var(--space-2);justify-content:flex-end}
+#request-changes-reason{flex:none;font-size:var(--font-size-meta);white-space:nowrap}
+@media(max-width:760px){
+ .workspace-act-row .workspace-act-bar:has(#request-changes:not([hidden])){flex-wrap:wrap;justify-content:flex-end}
+ .workspace-act-row .workspace-act-bar:has(#request-changes:not([hidden])) #workspace-ask-headline{flex-basis:100%}
+ .workspace-act-row .review-dialog-actions:has(>#request-changes-reason:not([hidden])){width:100%;flex-wrap:wrap}
+ .workspace-act-row #request-changes-reason{order:1;flex-basis:100%;text-align:end}
+}
 .workspace-act-row .review-message:not(.error){display:none}
 .workspace-act-row .review-message.error{max-width:none;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 /* A refusal in the row never widens it nor changes its height (#1040, #1041): while one shows, the row is one grid line.

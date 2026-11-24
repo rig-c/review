@@ -8,18 +8,19 @@ const end=main.indexOf('\nlet verdictSubmit:',start);
 const rowStart=main.indexOf('function syncJobActRow('),rowEnd=main.indexOf('function setJobProgress(',rowStart);
 const renderer=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(rowStart,rowEnd)+main.slice(start,end));
 function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
- const control=()=>({hidden:false,disabled:false,title:'',textContent:'',onclick:null as null|((e:unknown)=>unknown),classList:{values:new Set<string>(),toggle(name:string,on:boolean){on?this.values.add(name):this.values.delete(name);}}});
+ const control=()=>({hidden:false,disabled:false,title:'',textContent:'',onclick:null as null|((e:unknown)=>unknown),attributes:new Map<string,string>(),setAttribute(name:string,value:string){this.attributes.set(name,value);},removeAttribute(name:string){this.attributes.delete(name);},classList:{values:new Set<string>(),toggle(name:string,on:boolean){on?this.values.add(name):this.values.delete(name);}}});
  const save=control(),requestChanges=control(),rigAsk=control(),recordAsk=control(),select=control(),label=control(),submit=control();
+ const requestChangesReason={...control(),id:'request-changes-reason'};
  let state:{kind:string;text:string}|null=null;const rigInspector={act:{hidden:true},actBar:{saveState:()=>state,setSaveState:(value:{kind:string;text:string})=>{state=value;}}};
- const calls:string[]=[],session={feedbackWarnings:[],status:'pending'};
- const env={host:{pendingSubjects:()=>subjects},pendingAnswers:subjects,firstPublicationPrompt:false,jobProgress:null as object|null,saving:false,draftConflict:conflict,actReadOnly:null,readOnly:null,
-  questionForms:subjects.some(subject=>subject.kind==='interview-picks')?[{dataset:{},querySelector:()=>({disabled:false}),querySelectorAll:()=>[]}]:[],session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,rigAsk,recordAsk,
+ const calls:string[]=[],session={feedbackWarnings:[] as {id:string}[],status:'pending'};
+ const env={host:{pendingSubjects:()=>subjects,unavailable:false,canSubmitMeshEdits:()=>false,jobClosed:()=>false},pendingAnswers:subjects,firstPublicationPrompt:false,jobProgress:null as object|null,saving:false,draftConflict:conflict,actReadOnly:null as string|null,readOnly:null as string|null,
+  questionForms:subjects.some(subject=>subject.kind==='interview-picks')?[{dataset:{},querySelector:()=>({disabled:false}),querySelectorAll:()=>[]}]:[],session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,requestChangesReason,rigAsk,recordAsk,
   recordPanel:{querySelector:(selector:string)=>selector==='form[data-job-ask] fieldset:not(:disabled)'?{disabled:false}:null,querySelectorAll:()=>[submit]},
   button:()=>save,select:()=>select,document:{querySelector:()=>label},el:()=>({classList:{contains:()=>false}}),
   setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
   verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};
  const render=new Function('env',`with(env){${renderer};return renderAnswerControls;}`)(env);
- render();return {save,requestChanges,rigAsk,recordAsk,submit,session,calls,env,render,rigInspector};
+ render();return {save,requestChanges,requestChangesReason,rigAsk,recordAsk,submit,session,calls,env,render,rigInspector};
 }
 for(const stage of ['rig-review','direction-review'])test('#809 '+stage+' directly submits the selected answer and requires a comment for changes',()=>{
  const h=harness([{kind:'review-verdict',stage}]);
@@ -31,6 +32,37 @@ for(const stage of ['rig-review','direction-review'])test('#809 '+stage+' direct
 test('#809 parts preserves the existing issue-derived verdict contract',()=>{
  const h=harness([{kind:'parts-verdict'}]);expect(h.save.disabled).toBe(false);expect(h.requestChanges.disabled).toBe(true);
  h.env.liveIssueCount=()=>1;h.render();expect(h.save.disabled).toBe(true);expect(h.save.title).toBe('Remove the flagged parts comments before approving.');expect(h.requestChanges.disabled).toBe(false);
+});
+test('#1159 shows the existing reason only while missing changes blocks a visible verdict',()=>{
+ const h=harness([{kind:'review-verdict',stage:'rig-review'}]);
+ const {env,requestChanges,requestChangesReason,render}=h;
+ expect(requestChangesReason.hidden).toBe(false);
+ expect(requestChangesReason.textContent).toBe(requestChanges.title);
+ expect(requestChanges.attributes.get('aria-describedby')).toBe(requestChangesReason.id);
+ const blockedStates:Partial<typeof env>[]=[
+  {saving:true},{draftConflict:true},{actReadOnly:'Job closed'},{readOnly:'Read only'},
+  {host:{...env.host,unavailable:true}},{host:{...env.host,jobClosed:()=>true}},
+  {session:{...env.session,feedbackWarnings:[{id:'invalid'}]}},
+  {firstPublicationPrompt:true},
+ ];
+ for(const state of blockedStates){
+  const previous={...env};
+  Object.assign(env,state);render();
+  expect(requestChangesReason.hidden).toBe(true);
+  expect(requestChanges.attributes.has('aria-describedby')).toBe(false);
+  Object.assign(env,previous);render();
+  expect(requestChangesReason.hidden).toBe(false);
+ }
+ env.host.canSubmitMeshEdits=()=>true;render();
+ expect(requestChanges.disabled).toBe(false);
+ expect(requestChangesReason.hidden).toBe(true);
+ env.host.pendingSubjects=()=>[];render();
+ expect(requestChanges.hidden).toBe(true);
+ expect(requestChangesReason.hidden).toBe(true);
+ const parts=harness([{kind:'parts-verdict'}]);
+ parts.env.partsAnswerBlocked=()=>true;parts.render();
+ expect(parts.requestChanges.disabled).toBe(true);
+ expect(parts.requestChangesReason.hidden).toBe(true);
 });
 for(const kind of ['signoff','interview-picks','checkpoint'])test('#809 '+kind+' has one answer opener and no redundant submit',()=>{
  const h=harness([{kind}]);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(false);expect(h.rigAsk.disabled).toBe(false);expect(h.rigAsk.classList.values.has('primary')).toBe(true);
