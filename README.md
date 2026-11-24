@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rig-c/review/main/assets/banner.svg" alt="@rig-c/review" width="100%" />
+  <img src="assets/banner.svg" alt="@rig-c/review" width="100%" />
 </p>
 
 <p align="center">
@@ -94,7 +94,7 @@ MIT. See [LICENSE](LICENSE).
 ## Links
 
 <a id="development"></a><a id="releasing"></a>
-Development and releasing: [Contributing workflows](https://github.com/rig-c/review/blob/main/CONTRIBUTING.md#development).
+Development and releasing: [Contributing workflows](CONTRIBUTING.md#development).
 
 - [Inspection workflows](docs/WORKFLOWS.md)
 - [Parts and atlas view](docs/PARTS_VIEW.md)
