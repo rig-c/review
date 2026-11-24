@@ -36,6 +36,7 @@ export const HANDOFF_DECLARATION = 'rig-review open <dir> --config <path> [--par
 export const MODELING_INPUT_UNAVAILABLE = `MODELING_INPUT_UNAVAILABLE: config.json — looked at ${DISCOVERY_PLACES.join(', ')}; declare it with ${HANDOFF_DECLARATION}`;
 /** #149: the places looked at for the check package of a rig-parts build root, after the in-folder ones. */
 export const BUILD_DISCOVERY_PLACES = ['../config.json (in the build root)', '../../config.json (beside the build root)'] as const;
+export const BUILD_ROOT_FILES = ['parts.json', 'rig/rig.json', 'check/build/skeleton.model.json'] as const;
 export const BUILD_MODELING_INPUT_UNAVAILABLE = `MODELING_INPUT_UNAVAILABLE: config.json — looked at ${[...DISCOVERY_PLACES.slice(0, 2), ...BUILD_DISCOVERY_PLACES].join(', ')}; declare it with ${HANDOFF_DECLARATION}`;
 /** Files the producer reads by the config's own naming, resolved against the config's directory (rig-parts `relativeConfigPaths`). */
 export const CONFIG_NAMED_FILES = [['requirements'], ['motion', 'animations_from'], ['generation', 'control', 'skeleton']] as const;
@@ -233,8 +234,9 @@ async function entryIs(path: string, kind: 'file' | 'dir'): Promise<boolean> {
  * these is not a build root.
  */
 export async function isBuildRoot(dir: string): Promise<boolean> {
-  if (!(await entryIs(join(dir, 'parts.json'), 'file')) || !(await entryIs(join(dir, 'rig'), 'dir')) || !(await entryIs(join(dir, 'rig', 'rig.json'), 'file')) || !(await entryIs(join(dir, 'check'), 'dir'))) return false;
-  return exists(join(dir, 'check', 'build', 'skeleton.model.json'));
+  const [parts, rig, model] = BUILD_ROOT_FILES;
+  if (!(await entryIs(join(dir, parts), 'file')) || !(await entryIs(join(dir, 'rig'), 'dir')) || !(await entryIs(join(dir, rig), 'file')) || !(await entryIs(join(dir, 'check'), 'dir'))) return false;
+  return exists(join(dir, model));
 }
 /** The producer's own config places for the build whose check package is `root` (canonical), or null when `root` is not one. */
 interface BuildPlace { config: string; base: string; field: string }

@@ -134,7 +134,7 @@ async function verifyOpenLoad(p:OpenPackage,viewOnly:boolean,cwd=process.cwd()):
 }
 /** Managed is the default: the printed URL goes through the one loopback front (127.0.0.1:4318, or
  * RIG_REVIEW_FRONT_PORT) so browser storage keeps one origin across reopens. `direct` keeps the worker's own port. */
-export interface OpenOptions {stateDir?:string;idleMs?:number;graceMs?:number;direct?:boolean;viewOnly?:boolean;cwd?:string;frontPort?:number;frontIdleMs?:number}
+export interface OpenOptions {stateDir?:string;idleMs?:number;graceMs?:number;direct?:boolean;viewOnly?:boolean;cwd?:string;frontPort?:number;frontIdleMs?:number;onPrepared?:()=>void}
 export async function prepareOpenTarget(inputs: OpenInputs, options: OpenOptions = {}, fingerprint?: string) {
  const viewOnly=options.viewOnly??inputs.viewOnly??false;
  for(const path of [inputs.input,...(inputs.compare!==undefined?[inputs.compare]:[])])await assertOpenInput(path);
@@ -152,6 +152,7 @@ export async function prepareOpenTarget(inputs: OpenInputs, options: OpenOptions
 export async function openReview(inputs:OpenInputs,options:OpenOptions={}):Promise<{url:string;reused:boolean;nonce:string;inputs:OpenInputs;selection:AnimationSelection|null;direct:boolean;build:BuildOpen|null}>{
  const direct=true;
  const prepared=await prepareOpenTarget(inputs,options);
+ options.onPrepared?.();
  const {package:p,key,fingerprint,stateDir,viewOnly,build}=prepared;
  const control=join(stateDir,'open');await mkdir(control,{recursive:true,mode:0o700});const canonicalControl=await realpath(control);if((await lstat(control)).isSymbolicLink())throw new Error('open.state: control directory cannot be a symlink');
  const worker=await ensureWorker(p,key,fingerprint,stateDir,canonicalControl,options.idleMs??DEFAULT_UNOPENED_TIMEOUT_MS,options.graceMs,viewOnly,options.cwd);
