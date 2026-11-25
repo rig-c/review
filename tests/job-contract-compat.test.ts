@@ -42,6 +42,8 @@ test('#557/#588 control public job-host retains its runtime exports, record-mode
     'JOB_COMMENT_CONTEXT_ACT_SCHEMA', 'parseContextCommentsAct',
     'JOB_MESH_EDITS_ACT_SCHEMA', 'parseMeshEditsAct',
     'JOB_CHEST_LANDMARKS_ACT_SCHEMA', 'parseChestLandmarksAct',
+    // #1226: the act@10 comment-only decoder and its schema constant.
+    'JOB_COMMENT_ONLY_ACT_SCHEMA', 'parseCommentOnlyAct',
     // #914: the publisher's previous-draft support marker.
     'JOB_PREVIOUS_DRAFT_SCHEMA',
     // #1005: the host-bound finalized-act waiter.
@@ -50,7 +52,7 @@ test('#557/#588 control public job-host retains its runtime exports, record-mode
     'parseCheckpointEvidencePacket',
   ].sort();
   expect(legacyRuntimeExports).toHaveLength(16);
-  expect(expectedRuntimeExports).toHaveLength(35);
+  expect(expectedRuntimeExports).toHaveLength(37);
   expect(Object.keys(publicHost).sort()).toEqual(expectedRuntimeExports);
   for (const name of expectedRuntimeExports) {
     const missing = new Set(Object.keys(publicHost));

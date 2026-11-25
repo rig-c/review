@@ -24,7 +24,8 @@ const copy = {
   after:'Saved locally',
   footer:'Saved locally. The producer received no feedback.',
   reason:'Add a comment where changes are needed.',
-  liveBefore:'Reviewing · 0 issues',
+  // #1226 owner ruling: the bar shows the Send comments save state while a verdict ask is pending.
+  liveBefore:'Not submitted',
   liveAfter:'Approved · Next step',
   liveFooter:'Human action saved.',
  },
@@ -33,7 +34,7 @@ const copy = {
   after:'여기에만 저장됨',
   footer:'여기에만 저장했어요. 제작 도구에는 전달되지 않았어요.',
   reason:'고칠 곳에 코멘트를 달아 주세요',
-  liveBefore:'검수 중 · 이슈 0',
+  liveBefore:'제출되지 않음',
   liveAfter:'승인됨 · 다음 단계',
   liveFooter:'사용자 작업을 저장했어요.',
  },

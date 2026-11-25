@@ -503,3 +503,50 @@ test('#966 mountJobScreen passes translated confirm callback to createJobRigScre
     setLanguagePreference('en');
   }
 });
+
+test('#1226 a comment send retried after a lost response replays the same request and settles', async () => {
+  const f = await jobFixture(), savedDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {configurable: true, writable: true,
+    value: {title: '', body: null, getElementById: () => null, querySelector: () => null, createElement: () => ({style: {}, dataset: {}})}});
+  try {
+    const publication = await f.publish();
+    const page = await f.display(publication), requests: UISubmissionV3[] = [], results: unknown[] = [];
+    const initial = baseline();
+    initial.id = publication.source.package.id; initial.revision = publication.source.package.revision;
+    initial.sourceHash = publication.source.sourceHash;
+    const prepared: JobRigScreenPrepared = {jobRigScreen: true, display: {publication} as unknown as DisplayPublicationV3, entry: 'http://127.0.0.1:4318/retained/',
+      review: {manifest: parseManifest({schema: 'rig-review/1', id: initial.id, revision: initial.revision, title: 'Synthetic comments'}),
+        reviewedSource: initial.reviewedSource, sourceHash: initial.sourceHash}, checkpoints: new Set()};
+    let lose = true;
+    const screen = createJobRigScreen({host: {classList: {remove() {}}, replaceChildren() {}} as unknown as HTMLElement,
+      pageId: page.pageId, access: {capability: 'synthetic-ui', headers: () => new Headers()},
+      window: {
+        state: () => ({pending: f.session.status().pending as unknown as PendingAskV3[], receipt: page,
+          generation: f.session.status().generation, preparing: false, closed: false}),
+        async submit(input) {
+          requests.push(structuredClone(input));
+          const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
+          results.push(result);
+          // The daemon committed the act (and moved the generation), but the page never hears back.
+          if (lose) {lose = false; throw new Error('JOB_TRANSPORT_LOST');}
+          return result;
+        },
+      }, routes: () => ({entry: prepared.entry, api: path => path}), refusal: error => String(error),
+      translate: key => key,
+      async load() {rigHost()!.attach({message() {}} as unknown as JobRigMeshScreen); rigHost()!.displayed();}});
+    screen.commit(prepared);
+    await screen.painted(prepared, new AbortController().signal);
+    const generation = f.session.status().generation;
+    await expect(rigHost()!.submitComments!([], ['The motion reads a little fast.'])).rejects.toThrow('JOB_TRANSPORT_LOST');
+    expect(f.session.status().generation).toBeGreaterThan(generation);
+    expect(await rigHost()!.submitComments!([], ['The motion reads a little fast.'])).toBe('job.saved');
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]!);
+    expect(results[1]).toEqual(results[0]);
+  } finally {
+    setRigHost(null);
+    if (savedDocument) Object.defineProperty(globalThis, 'document', savedDocument);
+    else Reflect.deleteProperty(globalThis, 'document');
+    await f.close();
+  }
+});

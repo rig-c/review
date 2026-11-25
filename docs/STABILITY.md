@@ -9,11 +9,12 @@
 | [Interview-stage project opening](#interview-stage-project-opening) | `rig-review open` with `--project` and `--picks-dir` | Supported without a version or draft selector for an interview-stage project that has neither a recorded draft nor a recorded review package. | Review #731 |
 | [Package-only job API](REVIEW_PACKAGE.md#live-job-contract) | `rig-review/job-api@2` | Default package-only host contract. | C4 (Review #501) |
 | [Record-and-package job API](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam) | `rig-review/job-api@3` | Additive record mode with its own capability and reuse checks. | Review #588 |
-| [Finalized job acts](#act-and-ask-schemas-currently-accepted) | `rig-review/act@2` through `rig-review/act@9` | Consumers narrow by `schema`. Historical acts retain their original bytes and readers. | C4 (Review #501) and subsequent revisions |
+| [Finalized job acts](#act-and-ask-schemas-currently-accepted) | `rig-review/act@2` through `rig-review/act@10` | Consumers narrow by `schema`. Historical acts retain their original bytes and readers. | C4 (Review #501) and subsequent revisions |
 | [Previous accepted draft binding](REVIEW_PACKAGE.md#previous-accepted-draft-difference) | `rig-review-previous-draft/1` | Optional publication context gated by `JOB_PREVIOUS_DRAFT_SCHEMA`. The act and comment bindings require an admitted declaration. | Review #914 |
 | [Sealed previous build](REVIEW_PACKAGE.md#sealed-previous-build) | `rig-review-previous-build/1` | Optional shared standalone manifest and trusted rig/direction job reader declaration. | Review #1214 |
 | [Host-bound act wait](#host-bound-act-wait) | `waitForJobAct` | Uses the host's API schema and existing agent capability. | Review #1005 |
 | [Parts enumeration](#parts-enumeration-boundary) | `rig-review-job-source/2` and `JOB_PARTS_ENUMERATOR_RANGE` | Binds official Parts references in their original order, with roles and retained-byte hashes. | C4 (Review #501) |
+| [Publication commit](REVIEW_PACKAGE.md#publication-commit) | Optional `commit` in the trusted reader's publication context | 40 lowercase hex, sealed into `source.sourceHash` and echoed as `source.commit`. Absent stays absent, and the publication keeps its bytes. | Review #1226 |
 | [Package manifest `frames`](#package-manifest-frames-declaration) | Optional `rigc-frames/1` in `rig-review/1` | The declared record is validated and hashed. Older manifests without the field keep their source hash. | Review #1018 |
 
 ## Act and ask schemas currently accepted
@@ -28,6 +29,7 @@
 | `rig-review/act@7` | Context-aware comment acts through `parseContextCommentsAct`. Interview picks use @6. |
 | `rig-review/act@8` | `parseMeshEditsAct` accepts the @7 envelope with optional mesh edits on a rig Request changes verdict. Fresh verdicts carrying mesh edits without chest landmark edits use @8. |
 | `rig-review/act@9` | `parseChestLandmarksAct` accepts chest landmark edits on a compiled-rig Request changes verdict, with optional mesh edits and comment context. |
+| `rig-review/act@10` | Comment-only acts through `parseCommentOnlyAct`: comments and optional mesh-edit or chest-landmark carriers on the displayed publication, sent without an ask. No verdict, outcome, decision or selections. Historical @2–@9 acts keep their readers. |
 
 See the [comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract),
 [mesh-edit compatibility](#mesh-edit-act-compatibility) and
@@ -581,6 +583,22 @@ Create must pin a Review release that exports `parseChestLandmarksAct` and
 support @9 before publishing the new declaration. Parts consumes the
 finalized act through the existing writer grant and source checks.
 
+### Comment-only act compatibility
+
+`rig-review/act@10` is a new act with `kind: "comments"` and no `askId`. It is
+additive: no existing act or ask schema changes, and no ask kind is added.
+`JobAct` gains the `JobCommentOnlyAct` arm, whose `askId` is absent, so a
+consumer narrows by `schema` before reading `askId`. Older decoders refuse @10
+with `JOB_ACT_INVALID`. Create reads it only after moving its exact Review pin.
+The optional publication `commit` is absent unless the trusted reader declares
+it, so existing publications keep their bytes. See the
+[act@10 wire contract](REVIEW_PACKAGE.md#comment-only-act-act10).
+The rule that a comment sent on its own is not carried again by a later act is
+kept by the browser, not the daemon: the sent rows are recorded in page memory
+and `localStorage`. If that store is cleared, a later verdict act can carry
+those rows again. The verdict path that could carry them is removed in
+[Review #1232](https://github.com/rig-c/review/issues/1232).
+
 ### Named export inventory
 
 The backend rig-still extension retains the original twelve runtime exports and `JOB_ACT_SCHEMA` at act@2. `JobAct` additionally includes `JobRigReviewAct` at act@3 with top-level `JobRigStill` and `JobPartsVerdictAct` at act@5 (`PartsVerdictValue` with pointed `issues` and `words`, while preserving `JobLegacyPartsVerdictValue` at act@2 for historical acts). The facade adds type-only `JobLegacyAct`, `JobRigReviewAct`, `JobPartsVerdictAct`, `JobLegacyPartsVerdictValue`, `PartsVerdictValue`, `JobPanelComposition`, `PanelComponent`, `JobRigStill` and `JobRigCapture` exports, [Review #563](https://github.com/rig-c/review/issues/563) adds five type-only exports (`JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`, `JobHostAttachField` and `JobHostAttachFailure`), and [Review #555](https://github.com/rig-c/review/issues/555) adds four type-only interview diagnostic exports (`JobInterviewJson`, `JobInterviewRecord`, `JobInterviewDiagnostic` and `JobInterviewDiagnostics`). [Review #588](https://github.com/rig-c/review/issues/588) activates record mode when `readRecordPublished` and `recordReaderId` are supplied to a host or session (`publicationMode: 'record-and-package'`), serving `rig-review/job-api@3` (`JOB_API_V3_SCHEMA`), `rig-review/act@4` (`JOB_RECORD_ACT_SCHEMA`) and normal owner URL model-free record inspection while keeping default package-only hosts and exact `package-only` `job-ui/<jobId>.json` descriptor bytes at @2 and enforcing `publicationMode` / `recordReaderId` reuse compatibility across ordinary reuse and strict `reuseOnly` attachment. It exports six additional record-mode runtime symbols (`JOB_API_V3_SCHEMA`, `JOB_RECORD_ACT_SCHEMA`, `JOB_RECORD_READER_ID`, `parseRecordAct`, `prepareJobRecordAct` and `prepareJobRecordSource`, for eighteen runtime exports total) and the V3/record type surface listed below. The rig and parts-verdict act revision constants, transport limits and the internal `POST /jobs/<jobId>/host` helper remain internal to their modules. Consumer checks distinguish these act revisions as described in [Rig verdict still backend](REVIEW_PACKAGE.md#rig-verdict-still-backend) and [Model-free record mode and source seam](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
@@ -730,6 +748,10 @@ and `JobChestLandmarksAct`.
 evidence packet validator `parseCheckpointEvidencePacket`, for thirty-five
 runtime exports total, plus the type-only `CheckpointEvidencePacketResult`.
 
+[Review #1226](https://github.com/rig-c/review/issues/1226) adds
+`parseCommentOnlyAct` and `JOB_COMMENT_ONLY_ACT_SCHEMA` (`rig-review/act@10`),
+for thirty-seven runtime exports total, plus the type-only `JobCommentOnlyAct`.
+
 The exact runtime exports are listed below. Constants preserve their literal
 values from the frozen semantic contract.
 
@@ -741,6 +763,7 @@ values from the frozen semantic contract.
 - `parseContextCommentsAct`
 - `parseMeshEditsAct`
 - `parseChestLandmarksAct`
+- `parseCommentOnlyAct`
 - `parseCheckpointEvidencePacket`
 - `projectComments`
 - `parseCommentsSession`
@@ -751,6 +774,7 @@ values from the frozen semantic contract.
 - `JOB_COMMENT_CONTEXT_ACT_SCHEMA`
 - `JOB_MESH_EDITS_ACT_SCHEMA`
 - `JOB_CHEST_LANDMARKS_ACT_SCHEMA`
+- `JOB_COMMENT_ONLY_ACT_SCHEMA`
 - `REVIEW_COMMENTS_SESSION_SCHEMA`
 - `REVIEW_COMMENTS_COMPARE_SESSION_SCHEMA`
 - `PARTS_COMMENTS_VERDICT_SCHEMA`
@@ -952,7 +976,7 @@ Rows are capped at 4096, roles at 128 UTF-16 code units and literal paths at 409
 ### Installed acceptance
 
 `bun run smoke` packs the package and installs that tarball into an empty project.
-A consumer checks the thirty-five runtime exports and the existing managed-host types, including
+A consumer checks the thirty-seven runtime exports and the existing managed-host types, including
 `JobHostListenerIncarnation`, `JobHostReuseBinding`, `JobHostReuseExpectation`,
 `JobHostAttachField`, `JobHostAttachFailure`, `JobInterviewJson`,
 `JobInterviewRecord`, `JobInterviewDiagnostic`, `JobInterviewDiagnostics` and

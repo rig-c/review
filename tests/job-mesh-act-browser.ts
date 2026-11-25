@@ -178,6 +178,8 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
     let acceptNextDialog = true;
     const catalog = language === 'ko' ? koCatalog : enCatalog;
     const expectedConfirm = catalog['Send this Request changes with {0} mesh edit(s) to the producer?']!.replace('{0}', '1');
+    // #1226 owner ruling: once the verdict is answered the live rig row stays with the no-ask line and Send comments.
+    const verdictSettled = `document.querySelector('#save').hidden && !document.querySelector('#workspace-act-row').hidden && !document.querySelector('#send-comments').hidden && document.querySelector('#workspace-ask-headline').textContent === ${JSON.stringify(catalog["We're looking at the work together. Leave your thoughts as comments."])} && document.querySelector('#review-draft-state').dataset.saveState === 'saved'`;
     page = await launchCdpSession(profile, {onEvent: (event, command) => {
       send = command;
       if (event.method === 'Page.javascriptDialogOpening') {
@@ -535,7 +537,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       assert.equal(await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value"), before);
     }
     await click(screen, '#request-changes');
-    await wait("document.querySelector('#workspace-act-row').hidden");
+    await wait(verdictSettled);
     assert.deepEqual(dialogs, meshExpected ? [
       {type: 'confirm', message: expectedConfirm, accepted: false},
       ...(mode === 'with-comment' ? [{type: 'confirm', message: expectedConfirm, accepted: true}] : []),
@@ -604,7 +606,7 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
         assert.equal(await screen.evaluate<string>("document.querySelector('#mesh-edit-draft').value"), '');
         assert.equal(await screen.evaluate<boolean>("document.querySelector('#request-changes').disabled"), true);
         await click(screen, '#save');
-        await wait("document.querySelector('#workspace-act-row').hidden");
+        await wait(verdictSettled);
         assert.equal(dialogs.length, 2);
       }
       await writeFile(join(directory, 'still-size.json'), JSON.stringify({bytes: png.byteLength}));

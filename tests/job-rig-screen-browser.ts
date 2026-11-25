@@ -104,7 +104,9 @@ async function run(lang: 'en' | 'ko') {
     return samples.at(-1)!;
   }
   async function screen(name: string, pendingAct = true) {
-    if (!pendingAct) await wait(`document.getElementById('workspace-act-row')?.hidden===true`, name + '.act-row-complete');
+    // #1226 owner ruling: with no ask the live rig row stays, with the no-ask line, Send comments and its save state.
+    const noAskLine = catalog["We're looking at the work together. Leave your thoughts as comments."];
+    if (!pendingAct) await wait(`document.getElementById('workspace-act-row')?.hidden===false&&document.getElementById('save').hidden&&!document.getElementById('send-comments').hidden&&document.getElementById('workspace-ask-headline').textContent===${JSON.stringify(noAskLine)}`, name + '.act-row-complete');
     const state = await page!.evaluate<{
       language: string; counts: Record<string, number>; title: string; rigHash: string; fullRigHash: string | null; sourceHash: string;
       status: string; selectedLabel: string; actInHeading: boolean; actInRow: boolean; actRowDirect: boolean; actVisible: boolean; actRowHidden: boolean; visibleSaveStates: string[];
@@ -132,10 +134,10 @@ async function run(lang: 'en' | 'ko') {
     assert.equal(state.actInHeading, false, 'the live act leaves the bottom heading');
     assert.equal(state.actInRow, true, 'the decision and submit act nodes stay in the shared act row');
     assert.equal(state.actRowDirect, true, 'the act row sits directly beneath the topbar');
-    // #844/#845: pending acts occupy the row; completion returns the sole save state to the topbar.
-    assert.equal(state.actVisible, pendingAct, 'act bar visibility follows the pending act phase');
-    assert.equal(state.actRowHidden, !pendingAct, 'only a pending act owns the act row');
-    if (!pendingAct) assert.deepEqual(state.visibleSaveStates, ['dirty'], 'completed act has one visible topbar save state');
+    // #844/#845 then #1226: the live rig keeps the act row after the act completes; its one save state stays in the row.
+    assert.equal(state.actVisible, true, 'act bar stays for Send comments');
+    assert.equal(state.actRowHidden, false, 'the live rig act row stays');
+    if (!pendingAct) assert.deepEqual(state.visibleSaveStates, ['review-draft-state'], 'completed act has one visible save state in the row');
     if (Bun.argv.includes('--assert-default240')) assert.ok(Math.abs(state.inspectorHeight - 240) <= 1, 'default bottom height 240');
     await writeFile(join(out, name + '.png'), await page!.screenshot());
     return state;

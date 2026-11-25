@@ -407,7 +407,7 @@ export function createJobWindow<Prepared>(options: {
             pending.set(value.ask.askId, previous?.act ? {...value.ask, status: 'answered', act: previous.act} : value.ask);
         }
         else if (value.type === 'act') {
-            const ask = pending.get(value.act?.askId);
+            const ask = value.act.askId === undefined ? undefined : pending.get(value.act.askId);
             if (ask && !isRecordAnswer(ask.subject.kind) && !isRecordAnswer(value.act.kind))
                 pending.set(ask.askId, { ...ask, status: 'answered', act: value.act });
             else if (ask && !ask.act && matchesJobRecordAct(ask, value.act, options.jobId))
@@ -421,7 +421,8 @@ export function createJobWindow<Prepared>(options: {
     async function submit(input: UISubmissionV3): Promise<JobResult<ActV3>> {
         if (closed || stopped)
             return { ok: false, error: { code: 'JOB_CLOSED', message: 'JOB_CLOSED' } };
-        const ask = pending.get(input.askId);
+        // #1226: a comment-only submission answers no ask; the page receipt is its whole binding.
+        const ask = input.kind === 'comments' ? undefined : pending.get(input.askId);
         const retry = input.capture !== undefined && rigAttempts.has(input);
         if (preparing || !displayed || !receipt ||
             input.publicationId !== displayed.publication.publicationId ||
@@ -435,6 +436,7 @@ export function createJobWindow<Prepared>(options: {
         const record = isRecordAnswer(input.kind);
         if (record && ask) recordAttempts.set(ask.askId, input);
         const result = await transport.submit(input);
+        if (input.kind === 'comments') return result;
         if (!result.ok && recordAttempts.get(input.askId) === input) recordAttempts.delete(input.askId);
         const current = pending.get(input.askId);
         // Keep the transport result for existing callers. Only a matching record act settles the local ask.

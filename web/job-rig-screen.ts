@@ -10,7 +10,7 @@ import {canonicalJson} from '../src/canonical-json.ts';
 import {draftKey} from '../src/mesh-edit.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
-import {checkpointNoteComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
+import {checkpointNoteComments, feedbackContextComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
 import {createJobRigSubmission, freezeJobRigStage} from './job-rig-capture.ts';
 import {sha256Hex,type JobMeshDraftSubmission} from './mesh-editor.ts';
 import type {JobChestDraftSubmission} from './chest-editor.ts';
@@ -237,13 +237,15 @@ export function createJobRigScreen(options: {
     return freezeJobRigStage({...stage,source},ask.askId,++drawGeneration);
   }
 
-  async function submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionComments?: readonly JobComment[], general?:readonly string[]): Promise<string> {
+  async function submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionComments?: readonly JobComment[], general?:readonly string[], alreadySent?:(row:Feedback)=>boolean): Promise<string> {
     const prepared = mounted, state = options.window.state();
     if (!prepared || !state.receipt || state.preparing) throw new Error('JOB_ACT_SOURCE_STALE');
     if (state.closed) throw new Error('JOB_CLOSED');
     const refusal=jobRigScreenRefusal(prepared.display,state.pending,prepared.checkpoints);if(refusal)throw new Error(options.translate('job.refusal.'+refusal));
     if (!options.access.capability) throw new Error('JOB_CAPABILITY_REQUIRED');
-    const decisions=jobRigScreenDecisions(session, state.pending.filter(ask=>!prepared.modals?.forms.has(ask.askId)), prepared.display.publication.publicationId, general);
+    // #1226: the verdict carries only rows not already sent on their own; the committed baseline keeps every row.
+    const sendable=alreadySent?{...session,feedback:session.feedback.filter(row=>!alreadySent(row))}:session;
+    const decisions=jobRigScreenDecisions(sendable, state.pending.filter(ask=>!prepared.modals?.forms.has(ask.askId)), prepared.display.publication.publicationId, general);
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     const rigChanges=decisions.find(decision=>decision.kind==='review-verdict'&&decision.value.stage==='rig-review'&&decision.value.verdict==='changes-requested');
     const chestDraft=rigChanges?.kind==='review-verdict'?screen?.chestLandmarks?.():null;
@@ -308,6 +310,24 @@ export function createJobRigScreen(options: {
     if(!result.ok)throw new Error(result.error.code,{cause:(result.error as {cause?:unknown}).cause});
     partsAttempts.delete(ask.askId);return options.translate('job.saved');
   }
+  // The daemon's idempotency digest covers the whole submission, so a retry after a lost response replays the cached request unchanged.
+  let commentAttempt:{key:string;request:Extract<UISubmissionV3,{kind:'comments'}>}|null=null;
+  /** #1226: one comment-only act (act@10) bound by the page receipt; it answers no ask and leaves a pending one pending. */
+  async function submitComments(feedback:readonly Feedback[], general:readonly string[]):Promise<string>{
+    const prepared=mounted,state=options.window.state();
+    if(!prepared||prepared.parts||!state.receipt||state.preparing)throw new Error('JOB_ACT_SOURCE_STALE');
+    if(state.closed)throw new Error('JOB_CLOSED');
+    if(!options.access.capability)throw new Error('JOB_CAPABILITY_REQUIRED');
+    const comments=[...feedbackContextComments(feedback),...general.map(text=>({text}))];
+    if(!comments.length)throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
+    const value={comments},publicationId=prepared.display.publication.publicationId,displayedNonce=state.receipt.displayedNonce;
+    const key=JSON.stringify([publicationId,displayedNonce,value]);
+    if(commentAttempt?.key!==key)commentAttempt={key,request:{kind:'comments',publicationId,pageId:options.pageId,
+      displayedNonce,expectedGeneration:state.generation,submissionId:crypto.randomUUID(),value}};
+    const result=await options.window.submit(commentAttempt.request);
+    if(!result.ok)throw new Error(result.error.code,{cause:(result.error as {cause?:unknown}).cause});
+    commentAttempt=null;return options.translate('job.saved');
+  }
   const activeAsks=(pending:readonly JobWindowAsk[],publicationId:string|undefined)=>
     pending.filter(ask=>ask.publicationId===publicationId&&isPendingOwnerAsk(ask));
   const pendingSubjects=()=>activeAsks(options.window.state().pending,mounted?.display.publication.publicationId).map(ask=>ask.subject);
@@ -362,20 +382,27 @@ export function createJobRigScreen(options: {
     if(!review&&!prepared.parts)throw new Error('JOB_DISPLAY_MISMATCH');
     const {publicationId,source,answeredDirectionFeedback}=prepared.display.publication;
     const binding={...(jobId?{jobId}:{}),draftId,publicationId,previousPublicationId,sourceHash:source.sourceHash};
+    /** The verdict this page's latest rig/direction or parts verdict ask was answered with, or null. */
+    const answeredVerdict=()=>{
+      const kind=prepared.parts?'parts-verdict':'review-verdict';
+      const ask=options.window.state().pending.filter(ask=>ask.publicationId===prepared.display.publication.publicationId&&
+        ask.subject.kind===kind&&(ask.subject.kind!=='review-verdict'||(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review'))).at(-1);
+      const act=ask?.status==='answered'?ask.act:undefined;
+      return act?.kind===kind&&(act.kind==='parts-verdict'||act.kind==='review-verdict')?act.value.verdict:null;
+    };
     return {...evidencePair,access,pendingSubjects,recordSubmission,navigation,jobClosed:()=>options.window.state().closed,...prepared.refusal?{unavailable:prepared.refusal}:{},
       chestLandmarks:prepared.display.publication.chestLandmarks,
-      ...(source.direction?{direction:{...binding,answeredDirectionFeedback}}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>pendingSubjects().some(subject=>
-        prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review')}}:{}),
+      ...(source.direction?{direction:{...binding,answeredDirectionFeedback}}:jobRigScreenSubject(source, prepared.display.rigDraftVerdict)?{verdictComments:{...binding,rows:[],available:()=>{const subjects=pendingSubjects();
+        // #1226: with no ask pending, a rig general comment goes out as a comment-only act.
+        return !prepared.parts&&!subjects.length||subjects.some(subject=>
+        prepared.parts?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review');}}}:{}),
       reviewState(issues,sending) {
         if(sending)return options.translate('job.parts.sending');
-        const kind=prepared.parts?'parts-verdict':'review-verdict';
-        const ask=options.window.state().pending.filter(ask=>ask.publicationId===prepared.display.publication.publicationId&&
-          ask.subject.kind===kind&&(ask.subject.kind!=='review-verdict'||(ask.subject.stage==='rig-review'||ask.subject.stage==='direction-review'))).at(-1);
-        const act=ask?.status==='answered'?ask.act:undefined;
-        const verdict=act?.kind===kind&&(act.kind==='parts-verdict'||act.kind==='review-verdict')?act.value.verdict:null;
+        const verdict=answeredVerdict();
         return verdict==='changes-requested'?options.translate('job.parts.sent'):verdict==='approved'?options.translate('job.review.approved'):
           options.translate('job.parts.reviewing',[issues]);
-      },...prepared.parts?{subject:'parts' as const,submitParts}: {},
+      },
+      verdictAnswered:()=>answeredVerdict()!==null,...prepared.parts?{subject:'parts' as const,submitParts}: {},
       read(path, method) {
         if (method !== 'GET') return prepared.parts?undefined:Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
         if(prepared.parts){
@@ -391,7 +418,7 @@ export function createJobRigScreen(options: {
           feedbackWarnings: [], updatedAt: null} satisfies ReviewSession);
         return Promise.reject(new Error('JOB_REVIEW_READ_ONLY'));
       },
-      submit,
+      submit,submitComments,
       canSubmitMeshEdits:()=>!!(screen?.hasMeshEdits?.()||screen?.chestLandmarks?.()?.edits.length),
       attach: value => {screen = value;lastMessage=['',false];streamReport=null;screen.pendingSubjects?.(pendingSubjects());screen.progress?.(latestProgress);refreshRecordForms();},
       displayed: () => ready.resolve(),

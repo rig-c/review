@@ -3,7 +3,7 @@
 import type {ModelAssets, PosedFrame} from '@rig-c/play';
 import type {PartsIssue} from '../src/parts-comment.ts';
 import type {JobAnsweredDirectionFeedback,JobCheckpointEvidence,JobComment,JobProgressV3, PendingAskV3} from '../src/job-contract.ts';
-import type {ReviewSession} from '../src/session.ts';
+import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {InspectionBookmark} from './inspection-persistence.ts';
 import type {ControlView} from '../src/control.ts';
 import type {InstanceAccess} from './instance-access.ts';
@@ -65,8 +65,12 @@ export interface RigHost {
   readonly navigation?:RigHostNavigation;
   /** Derived from the displayed subject's finalized verdict; never a mode or another subject's act. */
   reviewState?(issues:number,sending:boolean):string;
+  /** #1226: this page's verdict ask was answered; the act bar keeps that outcome as its state. */
+  verdictAnswered?():boolean;
   readonly record?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId?:string;readonly previousPublicationId?:string|null;readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean;readonly planPicture?:{readonly name:string;readonly src:string;readonly path:string;readonly sha256:string};/** #1048: the sealed `files` entries of the record's question images. */readonly questionPictures?:readonly {readonly name:string;readonly path:string;readonly sha256:string}[];readonly missingPicture?:'rig'|'scene';readonly questionPicture?:true};
   submitParts?(issues:readonly PartsIssue[], general?:readonly string[]):Promise<string>;
+  /** #1226: unsent pinned rows and general comments go out as one comment-only act; it answers no ask. */
+  submitComments?(feedback:readonly Feedback[], general:readonly string[]):Promise<string>;
   readonly access: InstanceAccess;
   /** UI act authority is separate from a retained backdrop's immutable source access. */
   readonly ownerActAccess?: Pick<InstanceAccess, 'capability'>;
@@ -75,7 +79,8 @@ export interface RigHost {
   /** A read the host answers itself, or undefined to fetch it from the subject's routes. */
   read(path: string, method: string): Promise<unknown> | undefined;
   /** The act bar's Submit review: the session's decisions go out as the pending asks' acts. */
-  submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionComments?: readonly JobComment[], general?:readonly string[]): Promise<string>;
+  submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionComments?: readonly JobComment[], general?:readonly string[],
+    /** #1226: rows already sent on their own as act@10; the verdict does not carry them again. */ alreadySent?:(row:Feedback)=>boolean): Promise<string>;
   attach(screen: RigHostScreen): void;
   /** The first rig draw is on screen (or the open failed): the job acknowledges the display after it. */
   displayed(): void;

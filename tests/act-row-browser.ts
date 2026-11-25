@@ -317,11 +317,14 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
     }
    }
    await click(page,'#save');
-   await wait(page,`document.getElementById('workspace-act-row').hidden&&!document.getElementById('dirty').hidden&&document.getElementById('dirty').dataset.saveState==='saved'`);
-   const submitted:any=await capture(page,out,'submitted');assert.equal(submitted.rowVisible,false);
-   if(mode!=='embedded-rig')assert.deepEqual(submitted.states,['dirty']);
+   // #1226 owner ruling: a live rig with no ask keeps its row (no-ask line, Send comments); the approved outcome stays its state.
+   const liveRig=mode==='rig'||mode==='embedded-rig',stateId=liveRig?'review-draft-state':'dirty';
+   await wait(page,`document.getElementById('workspace-act-row').hidden===${!liveRig}&&!document.getElementById('${stateId}').hidden&&document.getElementById('${stateId}').dataset.saveState==='saved'`);
+   const submitted:any=await capture(page,out,'submitted');assert.equal(submitted.rowVisible,liveRig);
+   if(mode!=='embedded-rig')assert.deepEqual(submitted.states,[stateId]);
    const catalog=language==='en'?enCatalog:koCatalog;
-   assert.equal(await page.evaluate(`document.getElementById('dirty').textContent`),catalog['job.review.approved']);
+   assert.equal(await page.evaluate(`document.getElementById('${stateId}').textContent`),catalog['job.review.approved']);
+   if(liveRig)assert.equal(await page.evaluate(`document.getElementById('workspace-ask-headline').textContent`),catalog["We're looking at the work together. Leave your thoughts as comments."]);
   }else{
    assert.deepEqual(initial.answers.map((answer:any)=>answer.id),['workspace-pending-ask']);
    await click(page,'#workspace-pending-ask');await wait(page,mode==='interview'?interviewReady:`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`);

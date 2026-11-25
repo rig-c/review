@@ -2114,3 +2114,66 @@ config hash, and the act binds to that publication through `source.sourceHash`.
 Parts checks the named slot is a contour part before writing the landmarks
 file. See [Review compatibility](STABILITY.md#chest-landmark-act-compatibility)
 and [Parts #1382](https://github.com/rig-c/parts/issues/1382).
+
+### Comment-only act (act@10)
+
+`rig-review/act@10` carries a person's comments on the publication that was on
+screen, sent without an ask. It has `kind: "comments"` and is read with
+`parseCommentOnlyAct`. No existing act schema changes, and asking still works
+as before. [Review #1226](https://github.com/rig-c/review/issues/1226),
+[Create #982](https://github.com/rig-c/create/issues/982).
+
+| Field | Rule |
+| --- | --- |
+| `actId`, `jobId` | As in every act. |
+| `publicationId` | Required. The daemon checks that it is the head publication on the displayed page (page receipt and displayed nonce). |
+| `authority` | The existing `JobHumanAuthority` (`actor`, `channel`, `reviewer.id`, `reviewer.role`). |
+| `at` | The daemon's submission time. Comments carry no time of their own. |
+| `source` | The existing daemon-derived binding of that publication: `JobModelSourceBinding`, or a plan or option-set `RecordSource`. A record's display-only `directionReview` is left out, as in record acts. `selector` is `null` for a version-free publication. |
+| `value.comments[]` | `JobContextComment`: `text`, optional `anchor`, optional `context` without `subject`. 0–1000 rows. |
+| `value.carriers[]` | Optional, one to two rows, each kind once: `{kind: "mesh-edits", file, meshEdits}` or `{kind: "chest-landmarks", file, chestLandmarks}`. The payloads are the act@8 and act@9 payloads unchanged. `file` is `{path, sha256}` and must equal `source.model`. |
+| Absent | `askId`, `still`, `verdict`, `outcome`, `decision`, `selections`, `stage`, and a per-comment `id` or `at`. |
+
+Refusals:
+
+- An act with no comments and no carriers, an empty `carriers` array, a
+  checkpoint anchor, a question-image anchor (it has no content hash until
+  [Review #1230](https://github.com/rig-c/review/issues/1230)), a compare `side`,
+  a `context.subject`, or any absent field present refuses `JOB_ACT_INVALID`.
+- The UI submission names `publicationId`, `pageId`, `displayedNonce`,
+  `expectedGeneration`, `submissionId`, `kind: "comments"` and `value`. An
+  `askId` or a `capture` refuses `JOB_ACT_INVALID`. A page that is not the
+  displayed one refuses `JOB_DISPLAY_MISMATCH`. A publication that is no longer
+  the head refuses `JOB_ACT_SOURCE_STALE`.
+- A carrier whose `file` is not the displayed model, or whose mesh hash no
+  longer matches the retained model, refuses `JOB_ACT_SOURCE_STALE`. A carrier
+  topology mismatch, or a chest edit on an attachment the publication did not
+  seed, refuses `JOB_ACT_INVALID`. These are the act@8 and act@9 writer checks
+  without the verdict.
+
+The act answers no ask and supersedes none. A pending ask stays pending.
+Any number of comment acts can be sent on one publication. A retried
+submission with the same `pageId`, `submissionId` and body returns the same
+act; a changed body under the same identity refuses `JOB_IDEMPOTENCY_CONFLICT`.
+The act reaches the consumer as the ordinary `{type: "act", act}` event of
+`next` and through `fetch-act`. A comment sent on its own is not sent again
+inside a later act.
+
+Consumers narrow by `schema` before reading `askId`. Decoders older than this
+release refuse act@10 with `JOB_ACT_INVALID`. See
+[Review compatibility](STABILITY.md#comment-only-act-compatibility).
+
+#### Publication commit
+
+The trusted reader can return an optional `commit` in the package
+`JobPublishedContext` or in a record publication context. It is the producer's
+commit as 40 lowercase hex characters. Review does not read git. Review checks
+the format, seals the value into the publication's `source.sourceHash`, and
+echoes it unchanged as `source.commit`; acts on that publication carry it in
+their `source`. Any other value refuses `JOB_SOURCE_INVALID` before publication.
+When the field is absent it is left out of `source`, never written as `null`,
+and the publication's bytes and source hash are unchanged.
+
+`source.projectHash` names a record hash only where the publication declares a
+record: a package publication frozen without a `project.json` record has
+`projectHash: null`.

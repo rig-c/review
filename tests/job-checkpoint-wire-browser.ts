@@ -443,7 +443,7 @@ try {
     await click(page,'#workspace-pending-ask');
     await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'checkpoint dialog');
     await click(page,`form[data-job-ask="${cpAsk.askId}"] button[data-job-text="Pass"]`);
-    await expectRecordActSubmitted(page,wait,language,'checkpoint submitted');
+    await expectRecordActSubmitted(page,wait,language,'checkpoint submitted',true);
     assert.equal(await page.evaluate<boolean>(`!document.querySelector('form[data-job-ask="${cpAsk.askId}"]')`),true,'submitted checkpoint form is pruned');
     const cpEvents=await nextEvents(),cpActEvent=cpEvents.events.find(e=>e.type==='act'&&e.act.askId===cpAsk.askId);
     assert.ok(cpActEvent?.type==='act'&&cpActEvent.act.kind==='checkpoint');
