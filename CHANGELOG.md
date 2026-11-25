@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.20.0
+
+Review can open a rig beside its sealed previous build, either from a producer's job or from the command line, and play both side by side. A checkpoint's before and after evidence no longer needs a declared checkpoint subject.
+
+**Read before upgrading:**
+
+* **New optional declaration, no act change.** `JobPublishedContext` and the `rig-review/1` manifest gain an optional `previousBuild` (`rig-review-previous-build/1`). The producer chooses the predecessor and supplies both display labels. Without the field, publication bytes, behaviour and replay are unchanged. The act wire format and the job runtime export inventory are unchanged.
+* **New error code `JOB_PREVIOUS_BUILD_INVALID`.** A malformed declaration or a broken seal refuses the publication before the page shows it. The HTTP routes return 409.
+* **Checkpoint evidence is admitted more widely.** A packet binds to its plan step and no longer needs a declared `checkpoint` subject. A declared subject that names a different plan step still refuses, and record packets still need equal checkpoint and plan step ids. Every packet admitted before is still admitted.
+
+### Added
+
+* Previous version view: a sealed previous build plays beside the current one, with its own label, playback and missing-capability notes (#1218, refs #1214).
+* `rig-review open CURRENT --previous PREVIOUS` opens that view without a job. It accepts `--view-only`, `--current-label`, `--previous-label`, `--current-atlas`, `--previous-atlas`, `--map-clip CURRENT PREVIOUS` and `--no-clip-map`. Invalid combinations refuse with `OPEN_OPTION_INVALID`. A paired open finds the package's own producer even when launched from another directory (#1236, closes #1216).
+
+### Changed
+
+* A checkpoint evidence packet is checked against its plan step only (#1234, part of #1229).
+
 ## 4.19.0
 
 A producer can now say which earlier direction comment a new post answers, and Review shows that comment in Comments as answered. A live sign-off or checkpoint answer now shows that it is being sent and then that it was submitted, where the row used to go blank.

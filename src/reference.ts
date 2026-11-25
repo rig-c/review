@@ -1,7 +1,7 @@
 /** Explicit CLI video capability; package manifests never gain filesystem escapes. */
 import {createHash} from 'node:crypto';
 import {constants,createReadStream} from 'node:fs';
-import {open,realpath,stat} from 'node:fs/promises';
+import {open,realpath,stat,type FileHandle} from 'node:fs/promises';
 import {basename,resolve} from 'node:path';
 import {isDeepStrictEqual} from 'node:util';
 import {loadReview,previousBuildByteLimit,previousBuildFileError,previousBuildLimit,type ReviewPackage} from './manifest.ts';
@@ -31,8 +31,8 @@ export async function hashLocalVideo(input:string):Promise<{path:string;name:str
  const after=await stat(path);if(await realpath(input)!==path||before.dev!==after.dev||before.ino!==after.ino||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs)throw new Error('Reference inputs changed while hashing');
  return {path,name:basename(path),sha256:hash.digest('hex')};
 }
-export async function loadReferencedReview(input:string,reference?:string,handoff?:HandoffFlags,cwd?:string,handoffStarts?:readonly string[]):Promise<ReviewPackage>{
- const base=await loadReview(input,{handoff,...(cwd?{cwd}:{}),...(handoffStarts?{handoffStarts}:{})});if(reference===undefined)return base;
+export async function loadReferencedReview(input:string,reference?:string,handoff?:HandoffFlags,cwd?:string,handoffStarts?:readonly string[],originalProducerRoot?:string):Promise<ReviewPackage>{
+ const base=await loadReview(input,{handoff,cwd,handoffStarts,originalProducerRoot});if(reference===undefined)return base;
  const video=await hashLocalVideo(reference),id='open-reference-'+video.sha256;
  if(base.manifest.references.some(r=>r.id===id))throw new Error('reference: selected reference id collides with package reference');
  const binding:ReferenceBinding={packageSourceHash:base.sourceHash,reference:{id,name:video.name,sha256:video.sha256}};
@@ -42,7 +42,7 @@ export async function loadReferencedReview(input:string,reference?:string,handof
 export async function assertReviewUnchanged(p:ReviewPackage):Promise<void>{
  const assertCurrent=(p as BoundPackage)[sourceAssertion];
  if(assertCurrent)return assertCurrent();
- try{const current=await loadReferencedReview(p.manifestPath,selectedReference(p)?.path,p.handoffInputs,p.cwd,p.handoffStarts);if(current.sourceHash!==p.sourceHash||!isDeepStrictEqual(current.reviewedSource,p.reviewedSource)||!isDeepStrictEqual(referenceBinding(current),referenceBinding(p)))throw new Error('source binding differs');}
+ try{const current=await loadReferencedReview(p.manifestPath,selectedReference(p)?.path,p.handoffInputs,p.cwd,p.handoffStarts,p.originalProducerRoot);if(current.sourceHash!==p.sourceHash||!isDeepStrictEqual(current.reviewedSource,p.reviewedSource)||!isDeepStrictEqual(referenceBinding(current),referenceBinding(p)))throw new Error('source binding differs');}
  catch(error){if(error instanceof JobError&&error.code==='JOB_PREVIOUS_BUILD_INVALID')throw error;
   throw new Error('Package inputs changed or are unavailable. Restart review to bind feedback to current inputs.');}
 }
@@ -64,18 +64,29 @@ export async function servePreviousBuildAsset(req: Request, root: string, file: 
  }
 }
 
-/** Hash and serve the same opened file, bounded to 64 KiB buffers; never reopen a checked path. */
-export async function serveReference(req:Request,path:string,sha256:string,base:Record<string,string>,
- limit?:{bytes:number;exceeded:(found:number)=>JobError}):Promise<Response>{
- const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW).catch(()=>{throw new Error('Reference inputs changed or unavailable. Restart review to bind current video bytes.');});
- let closing:Promise<void>|undefined;const close=()=>closing??=file.close();
+type ReferenceLimit={bytes:number;exceeded:(found:number)=>JobError};
+
+/** Verify one canonical regular-file descriptor, with bounded buffers even for large references. */
+export async function hashReferenceFile(path:string,file?:FileHandle,limit?:ReferenceLimit){
+ const opened=file??await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
  try{
-  const before=await file.stat();if(!before.isFile())throw new Error('Reference inputs changed: expected regular video');
+  const before=await opened.stat();if(!before.isFile())throw new Error('Reference inputs changed: expected regular file');
   if(limit&&before.size>limit.bytes)throw limit.exceeded(before.size);
   const hash=createHash('sha256'),buffer=Buffer.alloc(65536);let position=0;
-  while(position<before.size){const {bytesRead}=await file.read(buffer,0,Math.min(buffer.length,before.size-position),position);if(!bytesRead)break;hash.update(buffer.subarray(0,bytesRead));position+=bytesRead;}
-  const after=await file.stat(),current=await stat(path);
-  if(await realpath(path)!==path||current.dev!==after.dev||current.ino!==after.ino||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs||hash.digest('hex')!==sha256)throw new Error('Reference inputs changed. Restart review to bind current video bytes.');
+  while(position<before.size){const {bytesRead}=await opened.read(buffer,0,Math.min(buffer.length,before.size-position),position);if(!bytesRead)break;hash.update(buffer.subarray(0,bytesRead));position+=bytesRead;}
+  const after=await opened.stat(),current=await stat(path);
+  if(await realpath(path)!==path||current.dev!==after.dev||current.ino!==after.ino||position!==before.size||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs)throw new Error('Reference inputs changed. Restart review to bind current video bytes.');
+  return {sha256:hash.digest('hex'),info:after};
+ }finally{if(!file)await opened.close();}
+}
+
+/** Hash and serve the same opened file; never reopen a checked path. */
+export async function serveReference(req:Request,path:string,sha256:string,base:Record<string,string>,limit?:ReferenceLimit):Promise<Response>{
+ const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK).catch(()=>{throw new Error('Reference inputs changed or unavailable. Restart review to bind current video bytes.');});
+ let closing:Promise<void>|undefined;const close=()=>closing??=file.close();
+ try{
+  const {sha256:actual,info:after}=await hashReferenceFile(path,file,limit);
+  if(actual!==sha256)throw new Error('Reference inputs changed. Restart review to bind current video bytes.');
   if(base.ETag&&req.headers.get('if-none-match')===base.ETag){await close();return new Response(null,{status:304,headers:base});}
   const size=after.size,headers={...base,'Content-Security-Policy':"default-src 'none'; script-src 'none'; sandbox",'Content-Type':Bun.file(path).type||'application/octet-stream','Accept-Ranges':'bytes'};
   const range=req.headers.get('range');let start=0,end=size-1,status=200;
@@ -84,7 +95,7 @@ export async function serveReference(req:Request,path:string,sha256:string,base:
   }
   const responseHeaders={...headers,'Content-Length':String(Math.max(0,end-start+1)),...(status===206?{'Content-Range':`bytes ${start}-${end}/${size}`}:{})};
   if(req.method==='HEAD'||size===0){await close();return new Response(null,{status,headers:responseHeaders});}
-  position=start;
+  let position=start;
   const body=new ReadableStream<Uint8Array>({
    async pull(controller){try{const chunk=new Uint8Array(Math.min(65536,end-position+1)),{bytesRead}=await file.read(chunk,0,chunk.length,position),now=await file.stat();if(!bytesRead||now.size!==after.size||now.mtimeMs!==after.mtimeMs||now.ctimeMs!==after.ctimeMs)throw new Error('Reference changed during streaming');position+=bytesRead;controller.enqueue(chunk.subarray(0,bytesRead));if(position>end){await close();controller.close();}}catch(error){await close();controller.error(error);}},
    async cancel(){await close();}

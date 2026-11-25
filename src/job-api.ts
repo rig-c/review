@@ -764,7 +764,7 @@ function parseRecordClosureAndSubjects(
   if (rawPlan === null) throw new JobError('JOB_SOURCE_MISMATCH');
   const { plan, stepIds } = parsePlanIdentity(rawPlan, 'JOB_SOURCE_MISMATCH');
   const subjects = parsePlanSubjects(rawSubjects, stepIds, hasDirectionReview ? 'JOB_SOURCE_INVALID' : 'JOB_SOURCE_MISMATCH');
-  return { kind: 'plan', inputs, files, plan, subjects, ...checkpointEvidenceFields(evidenceHolder, plan, subjects, files),
+  return { kind: 'plan', inputs, files, plan, subjects, ...checkpointEvidenceFields(evidenceHolder, plan, subjects, files, true),
     ...planPictureFields(evidenceHolder, plan, files), ...directionReviewFields(evidenceHolder, subjects) };
 }
 
@@ -954,7 +954,7 @@ export function serializeRecordSourceDigestPayload(input: RecordSourceDigestInpu
     plan,
     subjects,
     files,
-    ...checkpointEvidenceFields(item, plan, subjects, files),
+    ...checkpointEvidenceFields(item, plan, subjects, files, true),
     // #983: last, and only when present, so a record without it keeps its source hash.
     ...planPictureFields(item, plan, files),
   });
