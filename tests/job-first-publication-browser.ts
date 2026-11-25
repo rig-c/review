@@ -246,10 +246,23 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
           message:document.querySelector('#message').textContent,
           layoutState:document.querySelector('#layout-state').textContent,
           partStatus:document.querySelector('[data-part-status]').textContent,
-          sendComments:!!document.querySelector('#send-comments')?.checkVisibility()
-        }))()` ) as {sameNodes:boolean;rects:unknown[];prompt:string;visible:boolean;message:string;layoutState:string;partStatus:string;sendComments:boolean};
+          sendComments:!!document.querySelector('#send-comments')?.checkVisibility(),
+          panel:(()=>{const p=document.getElementById('workspace-communication');const {x,width}=p.getBoundingClientRect();return {visible:p.checkVisibility(),x,width};})()
+        }))()` ) as {sameNodes:boolean;rects:{x:number;y:number;width:number;height:number}[];prompt:string;visible:boolean;message:string;layoutState:string;partStatus:string;sendComments:boolean;panel:{visible:boolean;x:number;width:number}};
         assert.equal(filled.sameNodes,true,'first publication fills the original shell, viewport and bottom panel nodes');
-        assert.deepEqual(filled.rects,waiting.rects,'shared frame does not jump on first publication');
+        if(stage==='parts'){
+          // #1242 owner ruling 11-25: direction/parts open the right panel while a publication is displayed, so the stage
+          // and the bottom panel narrow by the panel's width; nothing else in the shared frame moves.
+          assert.equal(filled.panel.visible&&filled.panel.width>=240,true,'right panel opens on first publication '+JSON.stringify(filled.panel));
+          const selectors=await page.evaluate<string[]>('window.__review904GeometryNodes.map(({selector})=>selector)');
+          const stageAt=selectors.indexOf('#stage-layout'),narrowed=new Set([stageAt,selectors.indexOf('.inspector')]);
+          const delta=waiting.rects[stageAt]!.width-filled.rects[stageAt]!.width;
+          assert.ok(delta>=filled.panel.width,'stage narrows by the panel width '+JSON.stringify({delta,panel:filled.panel}));
+          assert.ok(filled.rects[stageAt]!.x+filled.rects[stageAt]!.width<=filled.panel.x,'stage ends before the panel');
+          assert.deepEqual(filled.rects.map((rect,i)=>narrowed.has(i)?{...rect,width:rect.width+delta}:rect),waiting.rects,'shared frame does not jump on first publication');
+          // The pending ask below is then measured against this published frame.
+          await page.evaluate(`window.__review904PublishedRects=${JSON.stringify(filled.rects)}`);
+        }else assert.deepEqual(filled.rects,waiting.rects,'shared frame does not jump on first publication');
         // #1226 owner ruling: a published rig with no ask shows the no-ask line (Send comments); #1242: parts too.
         assert.equal(filled.prompt,catalog["We're looking at the work together. Leave your thoughts as comments."],'no fabricated ask between publication and the actual pending subject');
         assert.equal(filled.sendComments,true,'a published source with no ask offers Send comments');
@@ -301,7 +314,7 @@ async function run(lang: 'en' | 'ko', timing: 'already-published' | 'first-publi
       const pendingFrame=await page.evaluate<{sameNodes:boolean;rects:unknown[];originalRects:unknown[];prompt:string}>(`(()=>({
         sameNodes:window.__review904Frame.every(({selector,node})=>document.querySelector(selector)===node),
         rects:window.__review904GeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};}),
-        originalRects:window.__review904Rects,prompt:document.querySelector('#workspace-ask-headline').textContent
+        originalRects:window.__review904PublishedRects??window.__review904Rects,prompt:document.querySelector('#workspace-ask-headline').textContent
       }))()`);
       cases.push({label:'actual-pending-frame-after-ask',pendingFrame});await save('RUNNING');
       assert.equal(pendingFrame.sameNodes,true,'actual pending prompt/verdict keeps the original shared nodes');

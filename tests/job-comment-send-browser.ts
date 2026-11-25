@@ -123,6 +123,31 @@ async function run(lang: 'en' | 'ko') {
 }
 
 type Screen = 'direction' | 'parts' | 'record';
+/** #1242 owner ruling 11-25: direction/parts open the right panel while a publication is displayed, as rig and record do. */
+const panelExpression = (text?: string) => `(()=>{const p=document.getElementById('workspace-communication'),g=document.querySelector('[data-comment-general]');
+  return {visible:!!p?.checkVisibility(),width:Math.round(p?.getBoundingClientRect().width??0),general:!!g?.checkVisibility()&&!!p?.contains(g),
+    listed:${text === undefined ? 'null' : `[...(p?.querySelectorAll('[data-comment-id]')??[])].some(row=>row.checkVisibility()&&row.textContent.includes(${JSON.stringify(text)}))`}};})()`;
+type Panel = {visible: boolean; width: number; general: boolean; listed: boolean | null};
+function assertPanel(panel: Panel, label: string) {
+  assert.equal(panel.visible && panel.width >= 240 && panel.general && panel.listed !== false, true, 'RIGHT_PANEL_MISSING ' + label + ' ' + JSON.stringify(panel));
+}
+/** The with-ask case: direction and parts with a pending verdict ask open the same panel. */
+async function panelWithAsk(screen: 'direction' | 'parts', lang: 'en' | 'ko') {
+  const fixture = await scriptedJobWindowFixture({c5Parts: 'mesh'});
+  const page = await launchCdpSession(await mkdtemp(join(tmpdir(), 'review-1242-ask-')), {sendDeadlineMs: 20_000});
+  try {
+    const publication = await fixture.publish(screen, screen);
+    await fixture.ask(publication, screen === 'parts' ? {kind: 'parts-verdict', draftId: 'synthetic-parts'} : {kind: 'review-verdict', stage: 'direction-review'});
+    const url = new URL(fixture.host.ownerUrl); url.searchParams.set('lang', lang);
+    await page.setViewport(1440, 900);
+    await page.goto(url.href);
+    await wait(page, `document.body?.dataset.ready==='true'&&!!document.getElementById('save')?.checkVisibility()`, 30_000);
+    const panel = await page.evaluate<Panel>(panelExpression());
+    await writeFile(join(output, `${screen}-${lang}-ask-panel.png`), await page.screenshot());
+    assertPanel(panel, screen + ' ' + lang + ' with ask');
+    return {screen, lang, ask: true, panel};
+  } finally {await page.close?.(); await fixture.close();}
+}
 const hintTail = 'Drafts save locally as you type · nothing is sent until you press Send comments';
 /** #1242: one screen's bar in its no-ask state, one general comment written and sent as act@10. */
 async function runScreen(screen: Screen, lang: 'en' | 'ko') {
@@ -163,6 +188,8 @@ async function runScreen(screen: Screen, lang: 'en' | 'ko') {
     assert.equal(idle.headline, catalog["We're looking at the work together. Leave your thoughts as comments."], screen);
     assert.equal(idle.primary, true, screen + ' Send comments leads with no ask');
     assert.equal(idle.disabled, true, screen + ' nothing to send yet');
+    const idlePanel = await page.evaluate<Panel>(panelExpression());
+    assertPanel(idlePanel, screen + ' ' + lang + ' no ask');
     // One general comment.
     await wait(page, `!!document.querySelector('[data-comment-general]:not(:disabled)')`);
     await page.evaluate(`document.querySelector('[data-comment-general]').click()`);
@@ -174,6 +201,7 @@ async function runScreen(screen: Screen, lang: 'en' | 'ko') {
     const written = await bar();
     assert.equal(written.state, catalog['Not submitted'], screen + ' ' + JSON.stringify(written));
     assert.equal(written.hint, catalog[hintTail], screen + ' hint tail');
+    assertPanel(await page.evaluate<Panel>(panelExpression(words[lang][1])), screen + ' ' + lang + ' comment written');
     await writeFile(join(output, `${screen}-${lang}-idle.png`), await page.screenshot());
     await page.evaluate(`document.getElementById('send-comments').click()`);
     await wait(page, `document.getElementById('review-draft-state')?.dataset.saveState==='saved'`);
@@ -199,6 +227,7 @@ const results: unknown[] = [];
 for (const lang of ['en', 'ko'] as const) {
   if (screens.includes('rig')) results.push(await run(lang));
   for (const screen of ['direction', 'parts', 'record'] as const) if (screens.includes(screen)) results.push(await runScreen(screen, lang));
+  for (const screen of ['direction', 'parts'] as const) if (screens.includes(screen)) results.push(await panelWithAsk(screen, lang));
 }
 await writeFile(join(output, 'report.json'), JSON.stringify(results, null, 2) + '\n');
 console.log('JOB_COMMENT_SEND_1226 ' + JSON.stringify(results));

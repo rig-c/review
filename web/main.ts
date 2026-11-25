@@ -2558,8 +2558,9 @@ function bindInspector(partsSubject=false):void {
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
 function openReview():void {pause();if(!partsOnly)syncCorrectionStage();workspace?.revealCommunication();}
 /** Something to communicate: a displayed record publication (#1228: its Comments and source stay open without an ask),
- * a pending question or record form, or at least one comment. */
-function communicationPending():boolean {return !!host?.record||!!communicationPanel.querySelector('form[data-job-ask], .stage-comment-item[data-comment-id]');}
+ * a displayed direction or parts publication (#1242 owner ruling 11-25), a pending question or record form, or at
+ * least one comment. */
+function communicationPending():boolean {return !!host?.record||!!host?.direction||!!(partsOnly&&host?.verdictComments)||!!communicationPanel.querySelector('form[data-job-ask], .stage-comment-item[data-comment-id]');}
 function unitScaleMessage(target:CameraTarget):void {message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');}
 function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');}
 
