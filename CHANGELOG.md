@@ -1,5 +1,26 @@
 # Changelog
 
+## 4.21.0
+
+A reviewer can send comments on their own, without answering a question. The new Send comments button in the top bar sends the unsent pinned and general comments as one comment-only act, and a pending question stays pending. An option-set publication can now carry no picks subject, as a set of images to look at and comment on.
+
+**Read before upgrading:**
+
+* **New act `rig-review/act@10`, additive.** `kind: "comments"`, with no `askId`, verdict or decision. No existing act or ask schema changes, and no ask kind is added. `JobAct` gains the `JobCommentOnlyAct` arm, so a consumer that reads `act.askId` narrows by `schema` first. Older decoders refuse @10 with `JOB_ACT_INVALID`. See the [act@10 wire contract](docs/REVIEW_PACKAGE.md#comment-only-act-act10).
+* **New optional `source.commit`, additive.** A publication may declare `commit` (40 lowercase hex). Review echoes it unchanged as `source.commit`. When it is absent it is omitted, never `null`, so existing publications keep their bytes.
+* **The already-sent record is kept by the browser.** A comment sent on its own is not carried again by a later act. That rule is kept by the page (memory and `localStorage`), not the daemon. If that store is cleared, a later verdict act can carry those rows again. The verdict path that could carry them is removed in [#1232](https://github.com/rig-c/review/issues/1232).
+* **Option sets without a picks subject.** An option-set publication with no `interview-picks` subject is accepted. The one-subject-per-set form is unchanged. A subject list that is neither empty nor one per set still refuses with `JOB_SOURCE_MISMATCH`.
+
+### Added
+
+* Comment-only act `rig-review/act@10` and the Send comments button. With no question pending, the top line reads "We're looking at the work together. Leave your thoughts as comments." and general comments can be added. Sent comments stay listed as Submitted and are not sent again (#1239, closes #1226).
+* The optional publication `commit`, echoed as `source.commit` (#1239).
+
+### Changed
+
+* Option-set publications may declare no picks subject (#1237, part of #1230).
+* The core job tests use the comment-only act as their sample act instead of checkpoint, sign-off or picks (#1240, closes #1235).
+
 ## 4.20.0
 
 Review can open a rig beside its sealed previous build, either from a producer's job or from the command line, and play both side by side. A checkpoint's before and after evidence no longer needs a declared checkpoint subject.
