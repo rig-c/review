@@ -4,7 +4,7 @@ import {jobFixture} from './helpers/job-api-fixture.ts';
 import {attachedPair as pair, recordAttachedPair} from './helpers/job-attach-fixture.ts';
 import {rm} from 'node:fs/promises';
 import {jobCommand} from '../src/job-cli.ts';
-import {JOB_COMMENTS_ACT_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA} from '../src/job-contract.ts';
+import {JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_RECORD_ACT_KINDS, JOB_RECORD_ACT_SCHEMA} from '../src/job-contract.ts';
 
 // Every UI submission here is an explicitly synthetic test fixture. No real
 // owner's review or producer acceptance is represented by these acts.
@@ -176,9 +176,11 @@ test('#1005 the waiter refuses unbounded deadlines before any request and surfac
 });
 
 // Driven from the contract constant: a record kind added there without a fixture case fails here.
-// Fresh reopen (#989) and signoff (#1227) asks are refused; old acts still parse but no live one can be committed.
+// Fresh reopen (#989), signoff (#1227) and interview-picks (#1230) asks are refused; old acts still parse but no live
+// one can be committed.
 // #1235: the comment-only act@10 runs the same record attachment path.
-for (const kind of [...JOB_RECORD_ACT_KINDS.filter(kind => kind !== 'reopen' && kind !== 'signoff'), 'comments' as const]) {
+const refusedRecordKinds: readonly string[] = ['reopen', 'signoff', 'interview-picks'];
+for (const kind of [...JOB_RECORD_ACT_KINDS.filter(kind => !refusedRecordKinds.includes(kind)), 'comments' as const]) {
   test(`#1005 a record-and-package attachment resolves a live-committed ${kind} act`, async () => {
     const {attached, commit, cursor} = await recordAttachedPair(scratches, hosts, kind);
     const {host, requests} = counted(attached);
@@ -198,8 +200,8 @@ for (const kind of [...JOB_RECORD_ACT_KINDS.filter(kind => kind !== 'reopen' && 
     if (outcome.kind !== 'act') throw new Error('unreachable');
     const row = outcome.next.events[0] as {type: string; act: {schema: string; kind: string; actId: string}};
     expect(row.type).toBe('act');
-    expect(row.act).toMatchObject({schema: kind === 'comments' ? JOB_COMMENT_ONLY_ACT_SCHEMA
-      : kind === 'interview-picks' ? JOB_COMMENTS_ACT_SCHEMA : JOB_RECORD_ACT_SCHEMA, kind, actId: saved.value.actId});
+    expect(row.act).toMatchObject({schema: kind === 'comments' ? JOB_COMMENT_ONLY_ACT_SCHEMA : JOB_RECORD_ACT_SCHEMA,
+      kind, actId: saved.value.actId});
     expect(sent).toEqual(['rig-review/job-api@3']);
     expect(requests).toHaveLength(1);
   });

@@ -11,9 +11,11 @@ import {
   JOB_API_V3_SCHEMA,
   JOB_RECORD_ACT_SCHEMA,
   JOB_COMMENTS_ACT_SCHEMA,
+  JOB_COMMENT_ONLY_ACT_SCHEMA,
   JOB_RECORD_READER_ID,
   parseRecordAct,
   parseCommentsAct,
+  parseCommentOnlyAct,
   startJobHost,
   type JobApiResponseV3,
   type JobEventV3,
@@ -23,12 +25,15 @@ import {
   type JobPublicationV3,
   type JobRecordAct,
   type JobCommentsAct,
+  type JobCommentOnlyAct,
   type JobRecordPartsIdentity,
   type JobRecordPublicationReader,
   type JobRecordReaderInput,
 } from '@rig-c/review/job-host';
+import { readProject } from '../src/interview-project.ts';
 import { enCatalog } from '../web/catalog-en.ts';
 import { koCatalog } from '../web/catalog-ko.ts';
+import { seedHistoricalPicksAct } from './helpers/historical-picks-act.ts';
 import { jobFixture, jobInputHashes } from './helpers/job-api-fixture.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
@@ -167,18 +172,29 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
       freeze: { kind: 'producer-held', holdId: 'preflight-hold-opt', record: { path: 'project.json', sha256: projectSha } },
     });
     if (pubOpt.verb !== 'publish' || !pubOpt.ok) throw new Error('Preflight option-set publish failed');
-    const askOpt = await call({
-      verb: 'ask',
-      expectedGeneration: pubOpt.generation,
-      idempotencyKey: 'preflight-ask-option-set',
-      publicationId: pubOpt.value.publicationId,
-      subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
+    // #1230: the declared picks subject parses on publish, but a fresh picks ask refuses by name.
+    const picksRes = await fetch(`${host!.origin}/jobs/${host!.session.jobId}/api`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        schema: JOB_API_V3_SCHEMA,
+        jobId: host!.session.jobId,
+        requestId: randomUUID(),
+        verb: 'ask',
+        expectedGeneration: pubOpt.generation,
+        idempotencyKey: 'preflight-ask-option-set',
+        publicationId: pubOpt.value.publicationId,
+        subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
+      }),
     });
-    if (askOpt.verb !== 'ask' || !askOpt.ok) throw new Error('Preflight option-set ask failed');
+    assert.equal(picksRes.status, 409);
+    const askOpt = (await picksRes.json()) as JobApiResponseV3;
+    if (askOpt.ok) throw new Error('Preflight option-set picks ask unexpectedly succeeded');
+    assert.equal(askOpt.error.code, 'JOB_ASK_INVALID');
 
     const pubPlan = await call({
       verb: 'publish',
-      expectedGeneration: askOpt.generation,
+      expectedGeneration: pubOpt.generation,
       idempotencyKey: 'preflight-publish-plan',
       result: { kind: 'plan' },
       freeze: { kind: 'producer-held', holdId: 'preflight-hold-plan', record: { path: 'project.json', sha256: projectSha } },
@@ -352,7 +368,7 @@ async function openPendingAsk(page: InputCdpSession): Promise<void> {
   let state: 'open' | 'ready' | null = null;
   await until(async () => {
     state = await page.evaluate<'open' | 'ready' | null>(`(() => {
-      if (document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])') || document.querySelector('#workspace-interview-answer:not([hidden]) form.interview-answer')) return 'open';
+      if (document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')) return 'open';
       const button = document.querySelector('#workspace-pending-ask');
       if (!button || button.hidden || button.disabled) return null;
       const rect = button.getBoundingClientRect();
@@ -371,31 +387,21 @@ async function edit(selector: string, value: string): Promise<void> {
   );
 }
 
-async function submitForm(askId: string, kind: 'record' | 'checkpoint' | 'interview' = 'record'): Promise<{ statusText: string; statusKey: string | null }> {
-  const root = kind === 'interview' ? '#workspace-interview-answer' : '#job-record-asks';
-  const selector = `${root} form[data-job-ask=${JSON.stringify(askId)}]`;
+async function submitForm(askId: string, kind: 'record' | 'checkpoint' = 'record'): Promise<{ statusText: string; statusKey: string | null }> {
+  const selector = `#job-record-asks form[data-job-ask=${JSON.stringify(askId)}]`;
   const submitSelector=selector+(kind==='checkpoint'?' button[data-job-text="Pass"]':' button[type="submit"]');
   await wait(
     `!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled`,
     `enabled form ${askId}`,
   );
-  if (kind !== 'interview') await openPendingAsk(page!);
+  await openPendingAsk(page!);
   await wait(`(()=>{const button=document.querySelector(${JSON.stringify(submitSelector)});return !!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
-  if (kind !== 'interview') assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`), true);
+  assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`), true);
   await page!.evaluate(`document.querySelector(${JSON.stringify(submitSelector)}).scrollIntoView({block:'center',inline:'nearest'})`);
   await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
   await click(page!,submitSelector);
-  if (kind !== 'interview') {
-    await wait(`!document.querySelector(${JSON.stringify(selector)})`, `submitted form ${askId} was pruned`);
-    return expectRecordActSubmitted(page!, wait, language, `record act ${askId} submitted`);
-  }
-  await wait(
-    `document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled && document.querySelector(${JSON.stringify(selector)}).querySelector(':scope > [role="status"]').dataset.jobText === 'job.saved'`,
-    `submitted form ${askId}`,
-  );
-  return page!.evaluate<{ statusText: string; statusKey: string | null }>(
-    `(()=>{const st=document.querySelector(${JSON.stringify(selector)}).querySelector(':scope > [role="status"]');return {statusText:st.textContent,statusKey:st.dataset.jobText??null};})()`,
-  );
+  await wait(`!document.querySelector(${JSON.stringify(selector)})`, `submitted form ${askId} was pruned`);
+  return expectRecordActSubmitted(page!, wait, language, `record act ${askId} submitted`);
 }
 
 try {
@@ -490,7 +496,7 @@ try {
   await page.goto(ownerUrl.href);
   const documentSentinel = await page.evaluate<string>('globalThis.__jobRecordOwnerSentinel = crypto.randomUUID()');
 
-  // 1. Publish model-free option-set via job-api@3 and ask interview-picks
+  // 1. Publish model-free option-set via job-api@3; fresh interview-picks ask refuses (#1230) while the page opens in comment mode
   const pubOpt = await callRecordApi({
     verb: 'publish',
     expectedGeneration: 0,
@@ -506,20 +512,32 @@ try {
   const optionPublication = pubOpt.value as JobPublicationV3;
   assert.equal(optionPublication.source.subject, 'option-set');
 
-  const askOpt = await callRecordApi({
-    verb: 'ask',
-    expectedGeneration: pubOpt.generation,
-    idempotencyKey: 'browser-ask-option-set',
-    publicationId: optionPublication.publicationId,
-    subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
+  const askOptRes = await fetch(`${recordHost.origin}/jobs/${recordHost.session.jobId}/api`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentToken}` },
+    body: JSON.stringify({
+      schema: JOB_API_V3_SCHEMA,
+      jobId: recordHost.session.jobId,
+      requestId: randomUUID(),
+      verb: 'ask',
+      expectedGeneration: pubOpt.generation,
+      idempotencyKey: 'browser-ask-option-set',
+      publicationId: optionPublication.publicationId,
+      subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
+    }),
   });
-  assert.ok(askOpt.verb === 'ask' && askOpt.ok);
-  const picksAsk = askOpt.value as JobPendingAskV3;
+  assert.equal(askOptRes.status, 409, '#1230: fresh interview-picks ask returns HTTP 409');
+  const askOpt = (await askOptRes.json()) as JobApiResponseV3;
+  assert.equal(askOpt.ok, false);
+  if (askOpt.ok) throw new Error('Expected interview-picks ask to be refused');
+  assert.equal(askOpt.error.code, 'JOB_ASK_INVALID');
 
   await wait(
-    `document.getElementById('package-title')?.textContent===${JSON.stringify(optionPublication.label)} &&
-     !!document.querySelector('form[data-job-ask=${JSON.stringify(picksAsk.askId)}]')`,
-    'option-set displayed on normal owner URL',
+    `document.body.dataset.ready==='true' &&
+     document.getElementById('package-title')?.textContent===${JSON.stringify(optionPublication.label)} &&
+     !!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])') &&
+     !document.getElementById('send-comments')?.hidden`,
+    'option-set displayed in comment mode on normal owner URL',
   );
 
   const optionDom = await page.evaluate<{
@@ -529,12 +547,11 @@ try {
     sourceBinding: Record<string, unknown>;
     stageHidden: boolean;
     rigCanvasCount: number;
-    questionHeading: string | null;
-    selectNames: string[]; jobSelects: number;
+    formCount: number;
+    headline: string | null;
   }>(`(async()=>{
     const sourceBinding = await (await fetch(${JSON.stringify(`/jobs/${recordHost.session.jobId}/publications/${optionPublication.publicationId}/instances/${optionPublication.instanceKey}/api/review`)})).json().then(body=>body.recordSource);
     const stage = document.getElementById('stage-layout');
-    const form = document.querySelector('form[data-job-ask=${JSON.stringify(picksAsk.askId)}]');
     return {
       lang: document.documentElement.lang,
       headerTitle: document.querySelector('#package-title').textContent,
@@ -542,9 +559,8 @@ try {
       sourceBinding,
       stageHidden: !!stage && (stage.hidden || getComputedStyle(stage).display === 'none'),
       rigCanvasCount: document.querySelectorAll('#rig-root canvas').length,
-      questionHeading: form?.querySelector('h3')?.textContent ?? null,
-      selectNames: [...new Set([...(form?.querySelectorAll('input[type=radio][name^="choice."]') ?? [])].map(s => s.name))],
-      jobSelects: form?.querySelectorAll('select').length ?? -1,
+      formCount: document.querySelectorAll('form[data-job-ask]').length,
+      headline: document.getElementById('workspace-ask-headline')?.textContent ?? null,
     };
   })()`);
 
@@ -555,12 +571,9 @@ try {
   assert.equal(Object.hasOwn(optionDom.sourceBinding, 'package'), false);
   assert.equal(Object.hasOwn(optionDom.sourceBinding, 'model'), false);
   assert.equal(Object.hasOwn(optionDom.sourceBinding, 'selector'), false);
-  // #715 / #796 and #750: record uses the shared empty viewport; no hidden legacy stage assertion.
   assert.equal(optionDom.rigCanvasCount, 0);
-  assert.equal(optionDom.questionHeading, 'bones');
-  assert.deepEqual(optionDom.selectNames, ['choice.chains', 'choice.placement', 'choice.length']);
-  assert.equal(optionDom.jobSelects, 0);
-  // #715 / #796: deleted raw wrapper summaries; recordSource/project digest remain checked below.
+  assert.equal(optionDom.formCount, 0, '#1230: option-set renders no ask form');
+  assert.equal(optionDom.headline, catalog["We're looking at the work together. Leave your thoughts as comments."]);
 
   const optionInstanceBase = `/jobs/${recordHost.session.jobId}/publications/${optionPublication.publicationId}/instances/${optionPublication.instanceKey}`;
   const optionRoutes = await page.evaluate<{
@@ -591,10 +604,6 @@ try {
   assert.ok(Array.isArray(optionQuestion.images),'captured the matching question image inventory');
   const optionImages = optionQuestion.images;
 
-  // #986: the owner URL opens Question automatically, with the shared main view reflecting the retained image inventory.
-  const picksForm = `#workspace-interview-answer form[data-job-ask="${picksAsk.askId}"]`;
-  // #1041: the question section of the right communication panel, under its heading.
-  const selectedQuestion='#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden]) .review-dialog-header h2';
   const visiblePainting = `(()=>{const image=document.querySelector('#reference-content img');return image?.complete&&image.naturalWidth>0&&image.getBoundingClientRect().width>0?image.currentSrc:'';})()`;
   const readOptionPicture = () => page!.evaluate<{painting:string;imageCount:number;imageModes:string[];emptyText:string;emptyVisible:boolean}>(`(()=>{
     const empty=document.getElementById('rig-empty'),rect=empty.getBoundingClientRect();
@@ -602,7 +611,6 @@ try {
       imageModes:[...document.querySelectorAll('#view-menu [data-view^="interview-image-"]')].map(button=>button.dataset.view),
       emptyText:empty.textContent,emptyVisible:rect.width>0&&rect.height>0&&getComputedStyle(empty).visibility==='visible'};
   })()`);
-  await wait(`document.body.dataset.ready==='true'&&!!document.querySelector('${selectedQuestion}')&&document.querySelector('${picksForm} fieldset:not(:disabled)')?.getClientRects().length>0`,'interview owner ready in Question');
   const firstImage = optionImages[0];
   const expectedPainting = firstImage ? new URL(optionInstanceBase+firstImage.url,recordHost.origin).href : '';
   if (firstImage) await wait(`${visiblePainting}===${JSON.stringify(expectedPainting)}`,'first retained option-set image visible in main view');
@@ -614,34 +622,62 @@ try {
     assert.equal(optionPictureBeforeSave.emptyText,catalog['This request has no picture.']);
     assert.equal(optionPictureBeforeSave.emptyVisible,true);
   }
-  const interviewShell = await page.evaluate<{dialogOpen:boolean;dialogViewers:number;questionLabel:string}>(`({
+  const commentShell = await page.evaluate<{dialogOpen:boolean;dialogViewers:number;notes:number}>(`({
     dialogOpen:!!document.querySelector('dialog[open]'),
     dialogViewers:document.querySelectorAll('dialog :is(.viewport,.interview-view,.interview-viewport,#reference-content,#rig-viewport,#view-menu)').length,
-    questionLabel:document.querySelector('${selectedQuestion}').textContent.trim(),
+    notes:document.querySelectorAll('input[name="note"],textarea[name="note"],.interview-note').length,
   })`);
-  assert.deepEqual(interviewShell,{dialogOpen:false,dialogViewers:0,questionLabel:catalog['Question']});
-  for (const name of optionDom.selectNames) {
-    const choice = `${picksForm} input[type="radio"][name="${name}"][value="keep"]`;
-    await page.evaluate<void>(`document.querySelector(${JSON.stringify(choice)}).scrollIntoView({block:'center',inline:'nearest'})`);
-    await click(page,choice);
-  }
-  // R2 / #901: one optional note textarea per editable question set; an existing note prefills it and shows as pre.interview-note when read-only.
+  assert.deepEqual(commentShell,{dialogOpen:false,dialogViewers:0,notes:0});
+
+  // Owner ruling 2026-11-26: historical answers and notes stay readable to agents and the CLI; Review shows no interview answers.
   const sourceProject=JSON.parse(await readFile(join(recordRoot,'project.json'),'utf8'));
   const existingNote=sourceProject.interview.waypoints.find((row:{id:string})=>row.id==='bones')?.guide?.choice?.note??'';
-  assert.equal(await page.evaluate(`document.querySelectorAll('input[name="note"]').length`),0);
-  assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').length`),1);
-  assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').value`),existingNote);
-  assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] .interview-note').length`),0);
-  const picksSubmitStatus = await submitForm(picksAsk.askId, 'interview');
-  assert.equal(picksSubmitStatus.statusKey, 'job.saved');
-  assert.equal(picksSubmitStatus.statusText, catalog['job.saved']);
-  assert.equal(await page.evaluate(`document.querySelectorAll('form[data-job-ask="${picksAsk.askId}"] textarea[name="note"]').length`),0);
-  if(existingNote)assert.equal(await page.evaluate(`document.querySelector('form[data-job-ask="${picksAsk.askId}"] .interview-note').textContent`),existingNote);
+  const projectRead=readProject(recordRoot);
+  assert.equal((projectRead.questions.find(q=>q.set.question==='bones')?.answer?.choice as {note?:string}|undefined)?.note??'',existingNote);
+
+  const optionCommentText = `Option-set comment · ${language}`;
+  await click(page, '[data-comment-general]');
+  await wait(`!!document.querySelector('.stage-comment-composer input')`, 'option-set general composer');
+  await page.evaluate(`(() => {
+    const f = document.querySelector('.stage-comment-composer');
+    f.querySelector('input').value = ${JSON.stringify(optionCommentText)};
+    f.requestSubmit();
+  })()`);
+  await wait(`!document.querySelector('.stage-comment-composer') && !document.getElementById('send-comments').disabled`, 'option-set comment saved');
+  await click(page, '#send-comments');
+  const optionCommentsStatus = await expectRecordActSubmitted(page, wait, language, 'option-set comments submitted');
   const optionPictureAfterSave = await readOptionPicture();
   assert.deepEqual(optionPictureAfterSave,optionPictureBeforeSave,'the shared main view keeps the retained picture or blank fallback after save');
-  assert.equal(await page.evaluate<boolean>(`!!document.querySelector('${selectedQuestion}')&&!document.querySelector('dialog[open]')`),true);
+
+  // Seed one pre-refusal historical interview-picks act@6 so consumer fetch-act exercises act@10, historical act@6 and act@4 together.
+  const historicalDisplayed = recordHost.session.ackDisplayed({
+    publicationId: optionPublication.publicationId,
+    pageId: 'historical-picks-page',
+    sourceHash: optionPublication.source.sourceHash,
+  });
+  seedHistoricalPicksAct(recordHost.session, {
+    publicationId: optionPublication.publicationId,
+    pageId: 'historical-picks-page',
+    displayedNonce: historicalDisplayed.displayedNonce,
+    expectedGeneration: recordHost.session.status().generation,
+    submissionId: 'historical-picks-sub',
+    questionId: 'bones',
+    setId: 'chain-bones',
+    optionSetSha256: optionPublication.source.optionSet!.sha256,
+    value: {
+      questionId: 'bones',
+      selections: [
+        { itemId: 'chains', optionId: 'keep', otherText: null },
+        { itemId: 'placement', optionId: 'keep', otherText: null },
+        { itemId: 'length', optionId: 'keep', otherText: null },
+      ],
+      note: existingNote,
+      comments: [],
+    },
+  });
+
   await writeFile(join(output, `record-option-set-${language}.png`), await page.screenshot());
-  await record('option-set-submitted', { optionDom, optionRoutes, picksSubmitStatus, interviewShell, optionPictureBeforeSave, optionPictureAfterSave });
+  await record('option-set-submitted', { optionDom, optionRoutes, optionCommentsStatus, commentShell, optionPictureBeforeSave, optionPictureAfterSave });
 
   // 2. Publish model-free plan via job-api@3 (still carrying signoff + reopen subjects) and ask checkpoint on the same standing owner window
   const pubPlan = await callRecordApi({
@@ -832,9 +868,9 @@ try {
   const actEvents = nextRes.value.events.filter(
     (e): e is Extract<JobEventV3, { type: 'act' }> => e.type === 'act',
   );
-  assert.equal(actEvents.length, 2);
+  assert.equal(actEvents.length, 3);
 
-  const fetchedActs: Record<string, JobRecordAct | JobCommentsAct> = {};
+  const fetchedActs: Record<string, JobRecordAct | JobCommentsAct | JobCommentOnlyAct> = {};
   for (const event of actEvents) {
     const jsonFetchRes: Response = await fetch(`${recordHost.origin}/jobs/${recordHost.session.jobId}/api`, {
       method: 'POST',
@@ -872,13 +908,14 @@ try {
       }),
     });
     assert.equal(rawFetchRes.status, 200);
-    const picks = event.act.kind === 'interview-picks';
-    const parse = picks ? parseCommentsAct : parseRecordAct;
+    const kind = event.act.kind;
+    const parse = kind === 'comments' ? parseCommentOnlyAct : kind === 'interview-picks' ? parseCommentsAct : parseRecordAct;
+    const expectedSchema = kind === 'comments' ? JOB_COMMENT_ONLY_ACT_SCHEMA : kind === 'interview-picks' ? JOB_COMMENTS_ACT_SCHEMA : JOB_RECORD_ACT_SCHEMA;
     const rawBytes = await rawFetchRes.text();
     const rawParsed = parse(JSON.parse(rawBytes));
     const envelopeParsed = parse(jsonFetched.value);
     assert.deepEqual(rawParsed, envelopeParsed);
-    assert.equal(envelopeParsed.schema, picks ? JOB_COMMENTS_ACT_SCHEMA : JOB_RECORD_ACT_SCHEMA);
+    assert.equal(envelopeParsed.schema, expectedSchema);
     assert.equal(rawBytes, JSON.stringify(jsonFetched.value));
     assert.deepEqual(envelopeParsed.authority, {
       actor: 'human',
@@ -887,6 +924,11 @@ try {
     });
     fetchedActs[envelopeParsed.kind] = envelopeParsed;
   }
+
+  assert.equal((fetchedActs.comments?.source as JobRecordAct['source'] | undefined)?.subject, 'option-set');
+  assert.deepEqual(fetchedActs.comments?.value, {
+    comments: [{ text: optionCommentText }],
+  });
 
   assert.equal((fetchedActs['interview-picks']?.source as JobRecordAct['source'] | undefined)?.subject, 'option-set');
   assert.deepEqual(fetchedActs['interview-picks']?.value, {

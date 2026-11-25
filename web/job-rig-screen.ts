@@ -31,8 +31,13 @@ export function jobRigScreenAnswers(ask: Pick<PendingAskV3, 'subject'>, checkpoi
     subject.kind === 'checkpoint' && checkpoints.has(subject.checkpointId);
 }
 /** #1048: the sealed identities the server attached to the record's question images (none elsewhere). */
-function questionPictures(questions:readonly {readonly images:readonly {readonly name:string;readonly path?:string;readonly sha256?:string}[]}[]|undefined):{questionPictures?:{name:string;path:string;sha256:string}[]} {
-  const rows=(questions??[]).flatMap(question=>question.images.flatMap(image=>image.path&&image.sha256?[{name:image.name,path:image.path,sha256:image.sha256}]:[]));
+function questionPictures(questions:readonly {readonly images:readonly {readonly name:string;readonly url:string;readonly path?:string;readonly sha256?:string}[]}[]|undefined,instance?:(url:string)=>string):{questionPictures?:{name:string;src?:string;path:string;sha256:string}[]} {
+  const seen=new Set<string>(),rows:{name:string;src?:string;path:string;sha256:string}[]=[];
+  for(const question of questions??[])for(const image of question.images){
+    if(!image.path||!image.sha256)continue;
+    const key=image.path+'\0'+image.sha256;if(seen.has(key))continue;seen.add(key);
+    rows.push({name:image.name,...(instance?{src:instance(image.url)}:{}),path:image.path,sha256:image.sha256});
+  }
   return rows.length?{questionPictures:rows}:{};
 }
 /** One ask-availability check for both the route and its retained modal forms. */
@@ -41,7 +46,6 @@ export function jobRigScreenAsk(display:DisplayPublicationV3,ask:PendingAskV3,ch
   if(ask.subject.kind==='checkpoint'){
     try {prepareJobForms(display,[ask],()=>jobCheckpointContext(ask,[]));return true;}catch{return false;}
   }
-  if(ask.subject.kind==='interview-picks')return true;
   return !!source.model&&jobRigScreenAnswers(ask,checkpoints)&&
     (ask.subject.kind!=='review-verdict'||ask.subject.stage===(source.direction?'direction-review':'rig-review'));
 }
@@ -187,7 +191,7 @@ export function createJobRigScreen(options: {
         }
         if(signal.aborted)throw new Error('JOB_PRELOAD_CANCELLED');
         const checkpoints = new Set<string>();
-        const forms = prepareJobForms(display, options.window.state().pending.filter(ask => jobRigScreenAsk(display, ask, checkpoints)), ask => formFor(ask, inspection, options.formDependencies!),true);
+        const forms = prepareJobForms(display, options.window.state().pending.filter(ask => jobRigScreenAsk(display, ask, checkpoints)), ask => formFor(ask, inspection, options.formDependencies!));
         return {jobRigScreen:true,display,entry,checkpoints,record:{inspection,forms,picture}};
       } catch(error) {inspection.dispose();throw error;}
     }
@@ -391,10 +395,12 @@ export function createJobRigScreen(options: {
     if(prepared.record){
       const record=prepared.record,backdrop=record.picture?host(record.picture,ready):null;
       const question=record.inspection.interview?.questions[0];
+      const questions=record.inspection.interview?.questions;
+      const instance=questions?.length&&prepared.display.routes?jobPublicationRoutes(prepared.display,new URL(prepared.entry).origin).instance:undefined;
       return {...evidencePair,...(backdrop?.subject?{subject:backdrop.subject}:{}),access:{...(backdrop?.access??access),capability:null,
         headers:init=>{const headers=options.access.headers(init);headers.delete('X-Review-Capability');return headers;}},
         ownerActAccess:{capability:options.access.capability},recordSubmission,
-        record:{...(jobId?{jobId}:{}),draftId,publicationId:prepared.display.publication.publicationId,previousPublicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,...record.inspection.planPicture?{planPicture:record.inspection.planPicture}:{},...questionPictures(record.inspection.interview?.questions),missingPicture:question?.missingPicture,questionPicture:question?.scenePicture || (question?.missingPicture && question.images.length ? true : undefined)},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
+        record:{...(jobId?{jobId}:{}),draftId,publicationId:prepared.display.publication.publicationId,previousPublicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,...record.inspection.planPicture?{planPicture:record.inspection.planPicture}:{},...questionPictures(questions,instance),missingPicture:question?.missingPicture,questionPicture:question?.scenePicture || (question?.missingPicture && question.images.length ? true : undefined)},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
@@ -452,7 +458,7 @@ export function createJobRigScreen(options: {
   function refreshRecordForms():void {
     const record=mounted?.record??mounted?.modals,deps=options.formDependencies;if(!record||!deps)return;
     const state=options.window.state(),display=record.inspection.display;
-    const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,mounted!.checkpoints)),ask=>{const previous=record.forms.get(ask.askId),saved=state.pending.find(item=>item.askId===ask.askId);if(previous&&saved?.act?.kind==='interview-picks'&&ask.status==='answered'&&!previous.submitting&&previous.form.dataset.interviewAnswered!=='true'){previous.dispose?.();return formFor(saved,record.inspection,deps);}return previous??formFor(saved??ask,record.inspection,deps);},true);
+    const next=prepareJobForms(display,state.pending.filter(ask=>ask.subject.kind!=='parts-verdict'&&ask.subject.kind!=='review-verdict'&&jobRigScreenAsk(display,ask,mounted!.checkpoints)),ask=>record.forms.get(ask.askId)??formFor(state.pending.find(item=>item.askId===ask.askId)??ask,record.inspection,deps));
     const jobId = jobPublicationRoutes(display, location.origin).jobId;
     let removedAnswer = false;
     for(const [id,entry]of record.forms)if(!next.has(id)){

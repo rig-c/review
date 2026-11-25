@@ -2,6 +2,8 @@ import {expect, test} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 import {JOB_API_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, type ActV3, type EventV3, type JobResult, type PendingAskV3, type UISubmissionV3} from '../src/job-contract.ts';
+import {createJobHostPorts} from '../src/job-api.ts';
+import {createJobFront, jobWindowResources, retainedPublicationRoutes} from '../src/job-front.ts';
 import {getLanguagePreference, setLanguagePreference, setSourceAttribute, setSourceText, sourceTextContent, t} from '../web/i18n.ts';
 import {mountRigInspector} from '../web/inspector-blocks.ts';
 import {createJobRigScreen, type JobRigScreenPrepared} from '../web/job-rig-screen.ts';
@@ -117,11 +119,11 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>) {
   const probe: {communicationPending?: () => boolean} = {};
   mountRecord({probe, communicationPanel, host, interview: undefined, rigInspector, recordPanel, recordTitle, rigAsk, recordAsk, askHeadline: headline, requestChanges, requestChangesReason: reason,
     document, el, button: el, select: el, text: (id: string, value: string) => setSourceText(el(id), value),
-    t, setSourceText, setSourceAttribute, sourceTextContent, pendingAnswers: [], questionForms: [], questionFormBindings: new WeakSet(),
-    recordForms, restoreRecordComments() {}, showQuestionForm() {}, recordCommentWords: () => '[general]\nCheck the timing',
+    t, setSourceText, setSourceAttribute, sourceTextContent, pendingAnswers: [], questionFormBindings: new WeakSet(),
+    recordForms, restoreRecordComments() {}, checkpointPair: null, syncQuestionImage() {}, recordCommentWords: () => '[general]\nCheck the timing',
     partsSubject: null, comments: null, recordComments: [], firstPublicationPrompt: true, jobProgress: null, progressTimer: undefined, askSentence: '',
-    draftStatus: null, answerSaved: false, dirty: false, saving: false, draftConflict: false, actReadOnly: null, session: null,
-    partsOnly: false, readOnly: null, verdictSubmit: null, workspace: null, unregisterQuestion: null, liveIssueCount: () => 0,
+    draftStatus: null, dirty: false, saving: false, draftConflict: false, actReadOnly: null, session: null,
+    partsOnly: false, readOnly: null, verdictSubmit: null, workspace: null, liveIssueCount: () => 0,
     disposed: false, suspended: false, hostStage: () => null, suspendScreen() {}, resumeScreen() {}, disposeScreen() {} });
   return {
     form: () => recordForms()[0],
@@ -451,4 +453,118 @@ test('#1227 viewer and comments work on a production-shaped publication when a p
       {type: 'act', act: {schema: JOB_COMMENT_ONLY_ACT_SCHEMA, kind: 'comments', value: {comments: [{text: 'Viewer comment after sign-off refusal'}]}}},
     ]}});
   } finally {await f.close();}
+});
+
+test('#1230 option-set publications render pictures and comments with no form across subjectless, refused-ask, and historical-subject cases', async () => {
+  for (const mode of ['subjectless', 'historical-subject'] as const) {
+    const fixture = await recordScreenFixture('interview-picks', false, undefined, undefined, false, true);
+    const dom = await recordScreenDom();
+    const previousLanguage = getLanguagePreference(), previousHost = rigHost();
+    setLanguagePreference('en');
+    dom.set('location', {origin: fixture.origin});
+    const ui = mountActDom(dom);
+    let screen: ReturnType<typeof mountRecordAct> | undefined;
+    try {
+      const realPorts = createJobHostPorts(fixture.session, fixture.origin);
+      const realFront = createJobFront({
+        origin: fixture.origin,
+        ports: realPorts,
+        publication: retainedPublicationRoutes(fixture.session),
+        resource: jobWindowResources(),
+      });
+      let display = fixture.display;
+      if (mode === 'subjectless') {
+        // Publish a genuine subjectless option-set record on the real session, alongside the historical picks-subject record.
+        (fixture.workspace as {context: object}).context = {...fixture.workspace.context, subjects: []};
+        const publishRes = await realPorts.handleJobApi(new Request(`${fixture.origin}/jobs/${fixture.session.jobId}/api`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + fixture.session.hostCredentials().agent},
+          body: JSON.stringify({
+            schema: 'rig-review/job-api@3', jobId: fixture.session.jobId, requestId: 'publish-subjectless-1230',
+            verb: 'publish', expectedGeneration: fixture.session.status().generation, idempotencyKey: 'publish-subjectless-1230',
+            result: fixture.workspace.result,
+            freeze: {kind: 'producer-held', holdId: 'subjectless-1230', record: fixture.workspace.record},
+          }),
+        }));
+        const published = await publishRes.json() as {ok: boolean; value: {publicationId: string}};
+        expect(published.ok).toBe(true);
+        display = fixture.session.displayPublication(published.value.publicationId);
+      }
+      const access = jobWindowAccess(fixture.ownerUrl, null, () => {});
+      const pageId = `test-1230-${mode}`;
+      const routeFetch = async (input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
+        const url = new URL(typeof input === 'string' || input instanceof URL ? String(input) : input.url, fixture.origin);
+        const headers = new Headers(init?.headers);
+        if (init?.method === 'POST') headers.set('Origin', fixture.origin);
+        return (await realFront.fetch(new Request(url, {...init, headers}))) ?? new Response(null, {status: 404});
+      };
+      const transport = createJobWindowTransport(access, Object.assign(routeFetch, {preconnect: fetch.preconnect}));
+      const formNode: JobFormDependencies['node'] = (tag, key) => {
+        const element = ui.node(tag);
+        if (key) {element.dataset.jobText = key; element.textContent = t(key);}
+        return element;
+      };
+      const drafts = createJobFormDrafts({jobId: access.jobId, current: () => view.mounted()?.record?.inspection ?? null,
+        forms: () => view.mounted()?.record?.forms ?? new Map(), storage: () => ({setItem() {}})});
+      const windowAccess = {state: () => window.state(), submit: (input: UISubmissionV3) => window.submit(input)};
+      const view = createJobRigScreen({host: ui.app, access, pageId, translate: t, refusal: String, window: windowAccess,
+        readPublication: transport.readPublication, routes: d => jobPublicationRoutes(d, fixture.origin),
+        formDependencies: {node: formNode, translate: t, access, pageId, window: windowAccess, ...drafts, draftStorage: () => ({getItem: () => null}),
+          helpers: {...createJobFormHelpers(formNode, t), jobCheckpointContext, assertJobAskSource: () => {}}},
+        async load() {screen?.dispose(); screen = mountRecordAct(ui);}});
+      const window = createJobWindow<JobRigScreenPrepared | null>({jobId: access.jobId, pageId, transport, adapter: {
+        prepare: view.prepare, captureDraft: () => null, commit: prepared => view.commit(prepared!),
+        painted: (prepared, signal) => view.painted(prepared!, signal), discard: prepared => prepared?.record?.inspection.dispose(), changed: view.changed,
+      }});
+      try {
+        const generation = display.publication.generation;
+        window.event({type: 'published', publication: display.publication, jobId: access.jobId, generation, cursor: String(generation)});
+        await window.settled();
+        expect(window.state().error).toBeNull();
+        if (mode === 'historical-subject') {
+          window.event({type: 'pending', ask: fixture.ask, jobId: access.jobId, generation: generation + 1, cursor: String(generation + 1)});
+        }
+        const readback = screen!.read();
+        expect(readback).toMatchObject({
+          row: true,
+          headline: "We're looking at the work together. Leave your thoughts as comments.",
+          form: false,
+          actions: [],
+        });
+        const host = rigHost()!;
+        expect(host.record?.questionPictures).toHaveLength(1);
+        expect(host.record?.questionPictures?.[0]?.src).toContain('/api/interview/image/');
+        const imageResponse = await routeFetch(host.record!.questionPictures![0]!.src!);
+        expect(imageResponse.status).toBe(200);
+
+        // Old producer still sending a picks ask gets a named refusal (409 JOB_ASK_INVALID); comments still commit cleanly.
+        const legacyAsk = await realPorts.handleJobApi(new Request(`${fixture.origin}/jobs/${fixture.session.jobId}/api`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + fixture.session.hostCredentials().agent},
+          body: JSON.stringify({
+            schema: 'rig-review/job-api@3', jobId: fixture.session.jobId, requestId: `legacy-picks-${mode}`,
+            verb: 'ask', expectedGeneration: fixture.session.status().generation, idempotencyKey: `legacy-picks-${mode}`,
+            publicationId: display.publication.publicationId,
+            subject: {kind: 'interview-picks', questionId: 'rig_type', setId: 'set_rig_type_01'},
+          }),
+        }));
+        expect(legacyAsk.status).toBe(409);
+        await expect(legacyAsk.json()).resolves.toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+
+        const commentResult = await window.submit({
+          kind: 'comments', publicationId: display.publication.publicationId, pageId,
+          displayedNonce: window.state().receipt!.displayedNonce,
+          expectedGeneration: generation,
+          submissionId: `comment-${mode}`, value: {comments: [{text: `Option comment (${mode})`}]},
+        });
+        expect(commentResult).toMatchObject({
+          ok: true, value: {schema: JOB_COMMENT_ONLY_ACT_SCHEMA, kind: 'comments', value: {comments: [{text: `Option comment (${mode})`}]}},
+        });
+      } finally {
+        window.stop(); screen?.dispose(); view.mounted()?.record?.inspection.dispose();
+      }
+    } finally {
+      setRigHost(previousHost); dom.restore(); setLanguagePreference(previousLanguage); await fixture.close();
+    }
+  }
 });

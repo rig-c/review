@@ -11,13 +11,12 @@ import {
 import { parsePartsIssue, type PartsIssue } from './parts-comment.ts';
 import {
   isRecordSource, isRigDraftVerdictSource, parseJobSelector, commentsObject, jobHash, jobId, jobInteger, jobObject,
-  commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, recordActSource, requestDigest, validateRecordAskSubject,
+  commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, requestDigest, validateRecordAskSubject,
   chestLandmarkIdentity, parseChestLandmarkEdits, parseChestLandmarksAct, parseCommentOnlyAct,
 } from './job-api.ts';
 import { checkpointNoteComments, noteComments, partsIssueComments } from './feedback-export.ts';
 import { feedbackContextComments } from './stage-comment.ts';
 import type { Feedback } from './session.ts';
-import { validatePicks } from './interview-picks.ts';
 import {
   isRetainedRecordSource,
   readJobEditMesh,
@@ -115,22 +114,6 @@ export function bindJobRecordAsk(subject: unknown, retained: JobRetainedRecordSo
     throw new JobError('JOB_ASK_INVALID');
   }
   switch (parsedSubject.kind) {
-    case 'interview-picks': {
-      if (source.subject !== 'option-set') throw new JobError('JOB_ASK_INVALID');
-      const question = retained.questions.find(
-        item => item.editable && item.set.question === parsedSubject.questionId && item.set.id === parsedSubject.setId,
-      );
-      // #1004: each set is bound by its own `optionSets` row; one set keeps the singular fields.
-      const bound = source.optionSets?.find(row => row.questionId === parsedSubject.questionId && row.setId === parsedSubject.setId) ?? source;
-      if (
-        !question ||
-        question.ref.path !== bound.optionSetFile.path ||
-        question.ref.sha256 !== bound.optionSet.sha256
-      ) {
-        throw new JobError('JOB_ASK_INVALID');
-      }
-      return source;
-    }
     case 'checkpoint': {
       if (
         source.subject !== 'plan' ||
@@ -155,11 +138,6 @@ export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRet
   const source = structuredClone(retained.source);
   const declared = retained.subjects.some(candidate => requestDigest(candidate) === requestDigest(subject));
   switch (subject.kind) {
-    case 'interview-picks': {
-      const question = retained.questions.find(item => item.editable && item.set.question === subject.questionId && item.set.id === subject.setId);
-      if (!question) throw new JobError('JOB_ASK_INVALID');
-      return { ...source, optionSet: { id: question.set.id, sha256: question.ref.sha256 } };
-    }
     case 'checkpoint': {
       requirePlan(source);
       const stepId = ('planStepId' in subject ? subject.planStepId : undefined) ?? subject.checkpointId;
@@ -182,6 +160,7 @@ export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRet
       if (subject.stage === 'image-review' || !source.model || (subject.stage === 'rig-review' ? source.selector?.kind !== 'rig' :
         source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ASK_INVALID');
       return source;
+    case 'interview-picks':
     case 'signoff':
     case 'reopen':
       throw new JobError('JOB_ASK_INVALID');
@@ -362,7 +341,8 @@ export function prepareJobRecordAct(options: {
   ) {
     throw new JobError('JOB_REQUEST_INVALID');
   }
-  if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(rawSubmission.kind) || rawSubmission.kind === 'signoff') {
+  if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(rawSubmission.kind) || rawSubmission.kind === 'signoff' ||
+      rawSubmission.kind === 'interview-picks') {
     throw new JobError('JOB_ACT_KIND_DISABLED');
   }
   if (ask.status !== 'pending') throw new JobError('JOB_ASK_SUPERSEDED');
@@ -418,63 +398,6 @@ export function prepareJobRecordAct(options: {
   };
 
   switch (askSubject.kind) {
-    case 'interview-picks': {
-      if (boundSource.subject !== 'option-set') throw new JobError('JOB_ACT_SOURCE_STALE');
-      const value = actObject(submission.value, ['questionId', 'selections', 'note', 'words', 'comments']);
-      if (
-        !('questionId' in value) ||
-        !('selections' in value) ||
-        !('note' in value) ||
-        value.questionId !== askSubject.questionId ||
-        !Array.isArray(value.selections)
-      ) {
-        throw new JobError('JOB_ACT_INVALID');
-      }
-      const question = retained.questions.find(
-        item => item.editable && item.set.id === askSubject.setId && item.set.question === askSubject.questionId,
-      );
-      if (!question) throw new JobError('JOB_ACT_SOURCE_STALE');
-      const selections = value.selections.map(raw => {
-        const item = actObject(raw, ['itemId', 'optionId', 'otherText']);
-        if (!('itemId' in item) || !('optionId' in item) || !('otherText' in item)) {
-          throw new JobError('JOB_ACT_INVALID');
-        }
-        if (item.otherText !== null && typeof item.otherText !== 'string') {
-          throw new JobError('JOB_ACT_INVALID');
-        }
-        return {
-          itemId: actIdField(item.itemId),
-          optionId: actIdField(item.optionId),
-          otherText: item.otherText === null ? null : words(item.otherText),
-        };
-      });
-      const note = words(value.note);
-      try {
-        validatePicks(
-          {
-            schema: 'rig-review/interview-picks@1',
-            set: question.ref,
-            by: 'user',
-            at,
-            picks: selections.map(item => ({
-              ask: item.itemId,
-              option_id: item.optionId,
-              ...(item.otherText === null ? {} : { other_text: item.otherText }),
-            })),
-            note,
-          },
-          question,
-        );
-      } catch {
-        throw new JobError('JOB_ACT_INVALID');
-      }
-      const source = recordActSource(boundSource, askSubject);
-      if (source.subject !== 'option-set') throw new JobError('JOB_ACT_SOURCE_STALE');
-      return commentsAct({
-        ...envelope, schema: JOB_COMMENTS_ACT_SCHEMA, kind: 'interview-picks', source,
-        value: { questionId: askSubject.questionId, selections, note, comments: submittedComments(value) },
-      });
-    }
     case 'checkpoint': {
       if (boundSource.subject !== 'plan') throw new JobError('JOB_ACT_SOURCE_STALE');
       const value = actObject(submission.value, ['checkpointId', 'outcome', 'words']);
@@ -498,6 +421,7 @@ export function prepareJobRecordAct(options: {
         },
       });
     }
+    case 'interview-picks':
     case 'signoff':
       throw new JobError('JOB_ACT_KIND_DISABLED');
   }
@@ -565,7 +489,8 @@ export function finalizeJobAct(options: {
       at: options.at,
     });
   }
-  if ((kind as string) === 'signoff' || (options.ask.subject.kind as string) === 'signoff') {
+  if (kind === 'interview-picks' || options.ask.subject.kind === 'interview-picks' ||
+      (kind as string) === 'signoff' || (options.ask.subject.kind as string) === 'signoff') {
     throw new JobError('JOB_ACT_KIND_DISABLED');
   }
   const { submission, ask, retained, reviewer } = options as {
@@ -589,27 +514,8 @@ export function finalizeJobAct(options: {
     at,
   };
   switch (submission.kind) {
-    case 'interview-picks': {
-      const value = commentsObject(submission.value, ['questionId', 'selections', 'note'], ['comments']);
-      const subject = ask.subject;
-      if (subject.kind !== 'interview-picks' || value.questionId !== subject.questionId || !Array.isArray(value.selections)) {
-        throw new JobError('JOB_ACT_INVALID');
-      }
-      const question = retained.questions.find(item => item.editable && item.set.id === subject.setId && item.set.question === subject.questionId)!;
-      const selections = value.selections.map(raw => {
-        const item = jobObject(raw, ['itemId', 'optionId', 'otherText']);
-        if (item.otherText !== null && typeof item.otherText !== 'string') throw new JobError('JOB_ACT_INVALID');
-        return { itemId: jobId(item.itemId), optionId: jobId(item.optionId), otherText: item.otherText as string | null };
-      });
-      const note = words(value.note);
-      try {
-        validatePicks({ schema: 'rig-review/interview-picks@1', set: question.ref, by: 'user', at,
-          picks: selections.map(item => ({ ask: item.itemId, option_id: item.optionId,
-            ...(item.otherText === null ? {} : { other_text: item.otherText }) })), note }, question);
-      } catch { throw new JobError('JOB_ACT_INVALID'); }
-      return commentsAct({ ...comments, kind: 'interview-picks', source: { ...source, optionSet: source.optionSet! },
-        value: { questionId: subject.questionId, selections, note, comments: submittedComments(value) } });
-    }
+    case 'interview-picks':
+      throw new JobError('JOB_ACT_KIND_DISABLED');
     case 'checkpoint': {
       const value = jobObject(submission.value, ['checkpointId', 'outcome', 'words']);
       const subject = ask.subject;

@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | [`@rig-c/review/job-host`](#managed-owner-host) | Installed Bun entry | Supported import contract. Changes to its public names and signatures require explicit public-contract review. See the [runtime inventory](#named-export-inventory) and [source exports](../src/job-host.ts). | Review #489 |
 | CLI and `@rig-c/review/package.json` | Installed CLI and package metadata subpath | Supported. | Before Review #489 |
-| [Interview-stage project opening](#interview-stage-project-opening) | `rig-review open` with `--project` and `--picks-dir` | Supported without a version or draft selector for an interview-stage project that has neither a recorded draft nor a recorded review package. | Review #731 |
+| [Interview-stage project opening](#interview-stage-project-opening) | `rig-review open` with `--project` and `--picks-dir` | CLI flag and `rig-review/interview-picks@1` file readers remain supported for compatibility; the workspace renders the named `INTERVIEW_PICKS_DISABLED` refusal instead of an answer form (#1230). | Review #731 |
 | [Package-only job API](REVIEW_PACKAGE.md#live-job-contract) | `rig-review/job-api@2` | Default package-only host contract. | C4 (Review #501) |
 | [Record-and-package job API](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam) | `rig-review/job-api@3` | Additive record mode with its own capability and reuse checks. | Review #588 |
 | [Finalized job acts](#act-and-ask-schemas-currently-accepted) | `rig-review/act@2` through `rig-review/act@10` | Consumers narrow by `schema`. Historical acts retain their original bytes and readers. | C4 (Review #501) and subsequent revisions |
@@ -25,8 +25,8 @@
 | `rig-review/act@3` | Historical rig verdict with a top-level still. |
 | `rig-review/act@4` | Record acts through `parseRecordAct`, including historical interview picks, signoff and reopen. Record checkpoint uses this schema. |
 | `rig-review/act@5` | Historical parts verdict with pointed issues. |
-| `rig-review/act@6` | Structured comment acts through `parseCommentsAct`, including fresh package and record interview picks. |
-| `rig-review/act@7` | Context-aware comment acts through `parseContextCommentsAct`. Interview picks use @6. |
+| `rig-review/act@6` | Structured comment acts through `parseCommentsAct`, including historical package and record interview picks. |
+| `rig-review/act@7` | Context-aware comment acts through `parseContextCommentsAct`. Historical interview picks use @6. |
 | `rig-review/act@8` | `parseMeshEditsAct` accepts the @7 envelope with optional mesh edits on a rig Request changes verdict. Fresh verdicts carrying mesh edits without chest landmark edits use @8. |
 | `rig-review/act@9` | `parseChestLandmarksAct` accepts chest landmark edits on a compiled-rig Request changes verdict, with optional mesh edits and comment context. |
 | `rig-review/act@10` | Comment-only acts through `parseCommentOnlyAct`: comments and optional mesh-edit or chest-landmark carriers on the displayed publication, sent without an ask. No verdict, outcome, decision or selections. Historical @2–@9 acts keep their readers. |
@@ -40,10 +40,10 @@ See the [comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract)
 | `rig-review/job-api@2` | `ask` with one `JobSubject`. A record-and-package listener also accepts the @2 request envelope. |
 | `rig-review/job-api@3` | `ask` with one package or record subject. `ask-batch` requires a record publication. |
 
-Package asks cover interview picks, checkpoint, parts verdict, and rig or
-direction verdict. Record asks cover interview picks for a declared option set
-and checkpoint for a declared plan subject. Fresh image-review, reopen, and
-signoff (including `plan-approved`) asks are refused. See [Act kinds, plan identity and parts identity](REVIEW_PACKAGE.md#act-kinds-plan-identity-and-parts-identity)
+Package asks cover checkpoint, parts verdict, and rig or direction verdict.
+Record asks cover checkpoint for a declared plan subject. Fresh image-review,
+reopen, signoff (including `plan-approved`), and interview-picks asks are
+refused. See [Act kinds, plan identity and parts identity](REVIEW_PACKAGE.md#act-kinds-plan-identity-and-parts-identity)
 and [the record contract](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
 
 ## Codes
@@ -70,6 +70,10 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | Fresh `image-review` publications and act@2 writer | #796 and #798 for publications, #1106 for the writer | Historical act@2 image-review bytes keep their readers. |
 | Fresh record `reopen` asks and acts | 4.10.0 (#989) | Historical records and acts keep their readers and compatibility types. |
 | Fresh `signoff` asks and acts (including `plan-approved`) | #1227 | Historical records and acts keep their readers and compatibility types. |
+| Fresh `interview-picks` asks and acts | #1230 | Declared picks subjects, historical acts and `rig-review/interview-picks@1` files keep their readers and compatibility types. |
+| Interview answer form | #1230 | Live job comments (`rig-review/act@10`); option-set pictures stay in the shared main view. |
+| `--picks-dir`'s UI | #1230 | Now the `INTERVIEW_PICKS_DISABLED` refusal on the workspace; CLI and file readers still read `rig-review/interview-picks@1`. |
+| Historical interview answer display | #1230 | A person can no longer see an old interview answer or its note on a Review screen; agents and the CLI read them byte for byte. |
 
 ## History
 
@@ -921,7 +925,7 @@ without aliases or copied wire shapes.
 - `JobRecordPartsIdentity`
 - `JobRecordActKind`
 - `JobRecordSignoffStage` (read-only compatibility: retained for declared subject parsing and historical record and act decoders, #1227)
-- `JobRecordPicksSubject`
+- `JobRecordPicksSubject` (read-only compatibility: declared subjects and old records and acts parse; new `interview-picks` asks refuse with `JOB_ASK_INVALID` and page submissions refuse with `JOB_ACT_KIND_DISABLED`, #1230)
 - `JobRecordCheckpointSubject`
 - `JobRecordSignoffSubject` (read-only compatibility: declared subjects and old records and acts parse; new `signoff` asks refuse with `JOB_ASK_INVALID` and page submissions refuse with `JOB_ACT_KIND_DISABLED`, #1227)
 - `JobRecordReopenSubject` (read-only compatibility: old records and acts parse; new `reopen` asks refuse with `JOB_ASK_INVALID` and Review neither renders nor builds `reopen`, #989)
@@ -1082,7 +1086,7 @@ accepts it with the checkpoint and signoff `words` check and still refuses any
 other extra key. A pin on a sealed question image takes the same label as a plan
 picture pin, and `api/interview` adds the image's sealed `path` and `sha256` on
 record publications. Consumers of historical act@4 use `parseRecordAct`.
-Fresh picks carry structured comments through `parseCommentsAct` as described
+Historical act@6 picks carry structured comments through `parseCommentsAct` as described
 in the [comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
 
 ### Package manifest `frames` declaration

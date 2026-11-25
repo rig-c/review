@@ -1177,7 +1177,7 @@ describe('thin entry compatibility', () => {
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
 import {readProject} from '../src/interview-project.ts';
 
-test('the real host carries a genuine retained pending question and its ask-specific option binding', async () => {
+test('#1230 the real host carries a genuine retained pending question; a fresh picks ask and act refuse by name', async () => {
     const f = await realWindow();
     await joinedVerdictFixture(f.input.root, '2-rigging-answers');
     const question = readProject(f.input.root).questions.find(item => item.editable)!;
@@ -1189,22 +1189,25 @@ test('the real host carries a genuine retained pending question and its ask-spec
     const shown = metadata.questions.find((item: {set: {id: string}}) => item.set.id === question.set.id);
     expect(shown).toBeDefined();
     expect(Object.hasOwn(shown, 'answer')).toBe(false);
-    const asked = await (await f.call({...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
+    const generation = f.host.session.status().generation;
+    const asked = await (await f.call({...f.input.base(), verb: 'ask', expectedGeneration: generation,
         idempotencyKey: 'actual-interview', publicationId: publication.publicationId,
         subject: {kind: 'interview-picks', questionId: question.set.question, setId: question.set.id}})).json();
-    expect(asked.ok).toBe(true);
-    expect(prepareJobForms(descriptor.value, [asked.value], ask => ask.askId).size).toBe(1);
-    expect(asked.value.source.optionSet).toEqual({id: question.set.id, sha256: question.ref.sha256});
+    expect(asked).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+    expect(f.host.session.status()).toMatchObject({generation, pending: []});
+    // A pending picks ask stored before the refusal, with the removed binder's ask-specific option binding, still prepares.
+    const historical = {askId: '00000000-0000-4000-8000-000000001230', publicationId: publication.publicationId, status: 'pending' as const,
+        subject: {kind: 'interview-picks' as const, questionId: question.set.question, setId: question.set.id},
+        source: {...publication.source, optionSet: {id: question.set.id, sha256: question.ref.sha256}}};
+    expect(prepareJobForms(descriptor.value, [historical], ask => ask.askId).size).toBe(1);
     const ack = await (await f.ui('displayed', {publicationId: publication.publicationId,
         pageId: 'interview-page', sourceHash: publication.source.sourceHash})).json();
     const before = await jobInputHashes(f.input.root);
     const selections = question.set.asks.map(item => ({itemId: item.id,
         optionId: item.options.find(option => option.kind === 'value' && option.recommended)!.id, otherText: null}));
-    const saved = await (await f.ui('acts', {...ack.value, askId: asked.value.askId, expectedGeneration: f.host.session.status().generation,
+    const saved = await (await f.ui('acts', {...ack.value, askId: historical.askId, expectedGeneration: f.host.session.status().generation,
         submissionId: 'actual-interview-save', kind: 'interview-picks', value: {questionId: question.set.question, selections, note: '  원문\n'}})).json();
-    expect(saved.ok).toBe(true);
-    expect(saved.value.value.note).toBe('  원문\n');
-    expect(saved.value.source.optionSet).toEqual(asked.value.source.optionSet);
+    expect(saved).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
     expect(await jobInputHashes(f.input.root)).toEqual(before);
 });
 
@@ -1898,7 +1901,6 @@ import {RigOverlays} from '../web/rig-overlays.ts';
 import {inspectionViewSwitch,labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls} from '../web/view-controls.ts';
 import {mountWorkspaceShell} from '../web/workspace-ui.ts';
 import {SENTINELS} from '../web/parts-render.ts';
-import {createInterviewForm, interviewAskGroup, interviewQuestionList, jobInterviewValue} from '../web/interview-panel.ts';
 import {JOB_PLAN_TEXT_FIELDS, type JobPlanTextProjection} from '../src/job-contract.ts';
 
 describe('#559 continuous Rig motion transport and job forms', () => {

@@ -87,6 +87,7 @@ async function audit(context:{screen:string;lang:string;scheme:string},phase:str
 }
 try{
  const {scriptedJobWindowFixture}=await import('./helpers/job-window-fixture.ts');
+ const {recordScreenFixture}=await import('./helpers/job-record-screen-fixture.ts');
  const {writeDifferencePackage}=await import('./helpers/parts-difference-package.ts');
  const {loadPartsView}=await import('../src/parts-view.ts');
  const {startPartsServer}=await import('../src/parts-server.ts');
@@ -98,7 +99,7 @@ try{
   {name:'rig',async setup(){const f=await scriptedJobWindowFixture({c5Parts:'mesh'});try{const p=await f.publish('rig');await f.ask(p,{kind:'review-verdict',stage:'rig-review'});return {url:f.host.ownerUrl,close:()=>f.close()};}catch(e){await f.close();throw e;}},ready:`document.body.dataset.ready==='true'&&!document.body.inert&&!!document.querySelector('#rig-root canvas')&&!document.getElementById('play').disabled`},
   {name:'parts',async setup(){const dir=join(work,'parts-fixture');await writeDifferencePackage(dir,false);const server=await startPartsServer(await loadPartsView(dir,{painting:join(dir,'painting.png')}),{port:0,exitOnClose:false,graceMs:3600000,unopenedTimeoutMs:3600000});return {url:'http://127.0.0.1:'+server.port+'/',close:async()=>{server.stop(true);}};},ready:`document.body.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'`},
   {name:'compare',async setup(){const dir=join(work,'compare-fixture'),fx=join(import.meta.dir,'fixtures/strip-probe');for(const side of ['a','b']){for(const d of ['build','images'])await cp(join(fx,d),join(dir,side,d),{recursive:true});for(const f of ['motion.json','gate.json'])await cp(join(fx,f),join(dir,side,f));}const reference=join(dir,'ref.mp4');await writeFile(reference,Buffer.from(PROBE_MP4_BASE64,'base64'));const server=await startCompareServer(await loadCompare({a:join(dir,'a'),b:join(dir,'b'),reference,animation:'inspect'}),{port:0,stateDir:join(dir,'state')});return {url:'http://127.0.0.1:'+server.port+'/',close:async()=>{server.stop(true);}};},ready:`!!document.querySelector('#a-root canvas,#a-root img')&&!!document.querySelector('#b-root canvas,#b-root img')&&!document.getElementById('play')?.disabled`},
-  {name:'interview',async setup(){const f=await scriptedJobWindowFixture({});try{const p=await f.publish('rig');await f.ask(p,{kind:'interview-picks',questionId:'bones',setId:'chain-bones'});return {url:f.host.ownerUrl,close:()=>f.close()};}catch(e){await f.close();throw e;}},ready:`document.body.dataset.ready==='true'&&!!document.querySelector('.interview-grid fieldset:not(:disabled)')&&!!document.querySelector('#rig-root canvas')`},
+  {name:'interview',async setup(){const f=await recordScreenFixture('option-set',true);return {url:f.ownerUrl,close:()=>f.close()};},ready:`document.body.dataset.ready==='true'&&!document.body.inert&&!!document.querySelector('#rig-root canvas')&&!!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')`},
  ];
  type Send=(method:string,params?:Record<string,unknown>)=>Promise<any>;
  let receive!:(send:Send)=>void;
@@ -118,10 +119,6 @@ try{
      const context={screen:screen.name,lang,scheme};
      try{
       await send('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:scheme}]});
-      if(screen.name==='interview'){
-       await page.evaluate(`(()=>{const form=[...document.querySelectorAll('.interview-grid')].some(n=>n.getBoundingClientRect().height>0&&!n.closest('[hidden]'));if(!form)document.querySelector('#workspace-pending-ask')?.click();})()`);
-       await until(`[...document.querySelectorAll('.interview-grid')].some(n=>n.getBoundingClientRect().height>0&&!n.closest('[hidden]'))`,'interview form');
-      }
       if(screen.name==='compare')await page.evaluate(`document.querySelector('[data-mode="compare"]')?.click()`);
       await audit(context,'entry');
       // Open the existing Setup view and Reference details, without style/value overrides.

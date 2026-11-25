@@ -25,6 +25,7 @@ import {PNG} from 'pngjs';
 import {preparePartsComment} from '../src/parts-comment-crops.ts';
 import {loadPartsView} from '../src/parts-view.ts';
 import type {PartsIssue} from '../src/parts-comment.ts';
+import {seedHistoricalPicksAct} from './helpers/historical-picks-act.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
 
@@ -410,8 +411,9 @@ test('real semantic next preserves verbatim issue summaries in act@6 parts-verdi
   });
 });
 
-test('real semantic next preserves verbatim nested human notes in interview-picks and rejects named in-memory mutations', async () => {
-  // Part B: interview-picks on real joined project fixture with `otherText` and `note`
+test('#1230 real semantic next preserves verbatim nested human notes in a historical interview-picks act and rejects named in-memory mutations', async () => {
+  // Part B: interview-picks on real joined project fixture with `otherText` and `note`. Fresh picks asks refuse
+  // (#1230); the act is stored as a pre-refusal Review committed it, and `next` must still carry it verbatim.
   const interviewFixture = await fixture();
   await joinedVerdictFixture(interviewFixture.root, '2-rigging-answers');
   const openedProject = readProject(interviewFixture.root);
@@ -427,11 +429,11 @@ test('real semantic next preserves verbatim nested human notes in interview-pick
   });
   const interviewBeforeHashes = await jobInputHashes(interviewFixture.root);
   const interviewPublication = await interviewFixture.publish();
-  const interviewAsk = await interviewFixture.ask(interviewPublication, {
-    kind: 'interview-picks',
-    questionId: pendingQuestion.set.question,
-    setId: pendingQuestion.set.id,
-  });
+  const refusedAsk = await (await interviewFixture.call({ ...interviewFixture.base(), verb: 'ask',
+    expectedGeneration: interviewFixture.session.status().generation, idempotencyKey: 'refused-picks',
+    publicationId: interviewPublication.publicationId,
+    subject: { kind: 'interview-picks', questionId: pendingQuestion.set.question, setId: pendingQuestion.set.id } })).json();
+  expect(refusedAsk).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
   const interviewPage = await interviewFixture.display(interviewPublication);
 
   const otherTextWords =
@@ -454,25 +456,21 @@ test('real semantic next preserves verbatim nested human notes in interview-pick
     note: interviewNoteWords,
   };
 
-  const committedInterview = await interviewFixture.ports.commitUIAct(
-    interviewFixture.session.jobId,
-    interviewFixture.uiRequest({
-      ...interviewPage,
-      askId: interviewAsk.askId,
-      expectedGeneration: interviewFixture.session.status().generation,
-      submissionId: 'verbatim-interview-picks',
-      kind: 'interview-picks',
-      value: interviewValue,
-    }),
-  );
-  expect(committedInterview.ok).toBe(true);
-  if (!committedInterview.ok) throw new Error(committedInterview.error.code);
+  const committedInterview = seedHistoricalPicksAct(interviewFixture.session, {
+    ...interviewPage,
+    expectedGeneration: interviewFixture.session.status().generation,
+    submissionId: 'verbatim-interview-picks',
+    value: interviewValue,
+    questionId: pendingQuestion.set.question,
+    setId: pendingQuestion.set.id,
+    optionSetSha256: pendingQuestion.ref.sha256,
+  });
 
   const expectedInterviewActs: ExpectedActOracleInput<'interview-picks'>[] = [
     {
-      actId: committedInterview.value.actId,
+      actId: committedInterview.actId,
       jobId: interviewFixture.session.jobId,
-      askId: interviewAsk.askId,
+      askId: committedInterview.askId,
       publicationId: interviewPublication.publicationId,
       kind: 'interview-picks',
       authority: EXPECTED_AUTHORITY,

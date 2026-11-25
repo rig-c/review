@@ -394,7 +394,7 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
    else livePublication={kind,fixture,publication,verdict};
    url=fixture.host.ownerUrl;
   }else{
-   const fixture=await recordScreenFixture(kind as RecordScreenKind,picture);close=()=>fixture.close();url=fixture.ownerUrl;
+   const fixture=await recordScreenFixture((kind==='interview-picks'?'option-set':kind) as RecordScreenKind,picture);close=()=>fixture.close();url=fixture.ownerUrl;
   }
   const target=new URL(url);target.searchParams.set('lang',lang);
   page=await launchCdpSession(join(profile,'chrome'),{sendDeadlineMs:20_000,async onEvent(event,send){
@@ -437,6 +437,7 @@ async function run(kind:string,lang:Language,picture=true,verdict:Verdict='appro
   if(kind==='interview-picks'){
    await wait(`document.querySelector('#reference-pane')?.checkVisibility()&&document.querySelector('#reference-content img')?.naturalWidth>0&&
     !!document.querySelector('#view-menu [data-view^="interview-image-"][aria-pressed="true"]')`);
+   assert.equal(await page.evaluate<number>(`document.querySelectorAll('#workspace-interview-answer,form.interview-answer').length`),0);
   }
   // #986 keeps the question painting visible in Comments. #1068: over a retained backdrop the sealed question image
   // takes pins like any other picture, so pin mode follows the backdrop for every kind.

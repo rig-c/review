@@ -13,8 +13,7 @@ import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
 import {parseRecordAct,parseCommentsAct} from '../src/job-api.ts';
-import {JOB_API_SCHEMA,type JobApiResponse,type PendingAskV3} from '../src/job-contract.ts';
-import {readProject} from '../src/interview-project.ts';
+import {JOB_API_SCHEMA,type PendingAskV3} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 const arg=(key:string)=>{const at=Bun.argv.indexOf(key);return at<0?undefined:Bun.argv[at+1];};
@@ -36,12 +35,13 @@ async function shot(out:string,name:string){await writeFile(join(out,name+'.png'
 // #1041 B: the record form is a section of the right panel; the trigger brings it into view and focus, and no dialog opens.
 async function assertRecordInPanel(){assert.equal(await page!.evaluate(`document.activeElement.id`),'job-record-asks');assert.equal(await page!.evaluate<number>(`document.querySelectorAll('dialog[open]').length`),0,'no dialog holds the record form');}
 const bottomState=`(()=>{const i=document.getElementById('workspace-inspector');return JSON.stringify({hidden:i?.hidden??null,rows:getComputedStyle(document.querySelector('.layout').parentElement).gridTemplateRows,height:Math.round(i?.getBoundingClientRect().height??0),tab:document.querySelector('.block-row [aria-selected=true]')?.dataset.blockTarget??null});})()`;
+const removedAnswerSelector='form.interview'+'-answer';
 async function assertTextOnlyDialog():Promise<void>{
  const state=await page!.evaluate<{modal:boolean;openDialogs:number;viewers:number;interviews:number}>(`({
   modal:!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])'),
   openDialogs:document.querySelectorAll('dialog[open]').length,
   viewers:document.querySelectorAll(${JSON.stringify(dialogViewer)}).length+document.querySelectorAll(${JSON.stringify(dialogViewer.replace('dialog ','#job-record-asks '))}).length,
-  interviews:document.querySelectorAll('#job-record-asks form.interview-answer').length,
+  interviews:document.querySelectorAll(${JSON.stringify('#job-record-asks '+removedAnswerSelector)}).length,
  })`);
  assert.deepEqual(state,{modal:true,openDialogs:0,viewers:0,interviews:0});
 }
@@ -55,7 +55,7 @@ type ModalScreen={
  editableInterviewSets:number;readOnlyInterviewNotes:number;focusContained:boolean;
  rect:{x:number;y:number;width:number;height:number};controls:string[];
 };
-async function screen(out:string,fixture?:Awaited<ReturnType<typeof recordScreenFixture>>){const state=await page!.evaluate<ModalScreen>(`(()=>{const d=document.querySelector('#job-record-asks'),r=d.getBoundingClientRect();return {open:!d.hidden&&!!d.closest('#workspace-communication:not([hidden])'),workspaceReady:document.body.dataset.ready,activeElement:{tag:document.activeElement?.tagName,id:document.activeElement?.id,name:document.activeElement?.getAttribute('name')},dialogState:[...document.querySelectorAll('dialog')].map(n=>({id:n.id,open:n.open,containsFocus:n.contains(document.activeElement)})),language:document.documentElement.lang,capabilityState:globalThis.__access756??'not-requested',ownerFieldsEnabled:!!d.querySelector('form fieldset:not(:disabled)'),backdropMessage:document.getElementById('message')?.textContent??'',visibleText:document.body.innerText,width:innerWidth,height:innerHeight,topbars:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,dialogs:document.querySelectorAll('#job-record-asks').length,legacy:document.querySelectorAll('[data-job-forms],[data-job-plan-workspace]').length,notes:d.querySelectorAll('textarea[name=note]').length,editableInterviewSets:d.querySelectorAll('form.interview-answer:not([data-interview-answered=true]) fieldset.interview-answer-fields:not(:disabled)').length,readOnlyInterviewNotes:d.querySelectorAll('form.interview-answer[data-interview-answered=true] textarea[name=note],form.interview-answer fieldset.interview-answer-fields:disabled textarea[name=note]').length,focusContained:d.contains(document.activeElement),rect:{x:r.x,y:r.y,width:r.width,height:r.height},controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(n=>n.id)};})()`);
+async function screen(out:string,fixture?:Awaited<ReturnType<typeof recordScreenFixture>>){const state=await page!.evaluate<ModalScreen>(`(()=>{const d=document.querySelector('#job-record-asks'),r=d.getBoundingClientRect(),answer=${JSON.stringify(removedAnswerSelector)};return {open:!d.hidden&&!!d.closest('#workspace-communication:not([hidden])'),workspaceReady:document.body.dataset.ready,activeElement:{tag:document.activeElement?.tagName,id:document.activeElement?.id,name:document.activeElement?.getAttribute('name')},dialogState:[...document.querySelectorAll('dialog')].map(n=>({id:n.id,open:n.open,containsFocus:n.contains(document.activeElement)})),language:document.documentElement.lang,capabilityState:globalThis.__access756??'not-requested',ownerFieldsEnabled:!!d.querySelector('form fieldset:not(:disabled)'),backdropMessage:document.getElementById('message')?.textContent??'',visibleText:document.body.innerText,width:innerWidth,height:innerHeight,topbars:document.querySelectorAll('.topbar').length,viewports:document.querySelectorAll('#rig-viewport').length,dialogs:document.querySelectorAll('#job-record-asks').length,legacy:document.querySelectorAll('[data-job-forms],[data-job-plan-workspace]').length,notes:d.querySelectorAll('textarea[name=note]').length,editableInterviewSets:d.querySelectorAll(answer+':not([data-interview-answered=true]) fieldset.interview-answer-fields:not(:disabled)').length,readOnlyInterviewNotes:d.querySelectorAll(answer+'[data-interview-answered=true] textarea[name=note],'+answer+' fieldset.interview-answer-fields:disabled textarea[name=note]').length,focusContained:d.contains(document.activeElement),rect:{x:r.x,y:r.y,width:r.width,height:r.height},controls:[...document.querySelectorAll('#zoom-in,#zoom-out,#fit,#native-one,#view-menu')].map(n=>n.id)};})()`);
  await writeFile(join(out,'screen-state.json'),JSON.stringify(state,null,2)+'\n');await assertTextOnlyDialog();assert.equal(state.open,true,'record section shows in the right panel before focus and geometry checks');assert.equal(state.width,1600);assert.equal(state.height,1000);assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.dialogs,1);assert.equal(state.legacy,0);assert.equal(state.notes,0);assert.equal(state.editableInterviewSets,0);assert.equal(state.readOnlyInterviewNotes,0);assert.equal(state.focusContained,true);assert.deepEqual(state.controls,['zoom-in','zoom-out','fit','native-one','view-menu']);assert.ok(state.rect.x>=0&&state.rect.y>=0&&state.rect.x+state.rect.width<=1600&&state.rect.y<1000,'record section starts inside the viewport');if(fixture){
   const chrome=await page!.evaluate<any>(`(()=>{const form=document.querySelector('form[data-job-ask]');return {text:form.textContent,source:{text:form.querySelector('.job-source').textContent,title:form.querySelector('.job-source').title},summaries:[...form.querySelectorAll('.job-plan-steps summary')].map(n=>({text:n.textContent,title:n.title})),restsOn:[...form.querySelectorAll('[data-job-plan-field="rests_on"] li')].map(n=>({text:n.textContent,title:n.title})),heading:{text:form.querySelector('h3')?.textContent,title:form.querySelector('h3')?.title},stageTitle:form.querySelector('fieldset').title,formCount:document.querySelectorAll('#job-record-asks form[data-job-ask]').length,reopenForms:document.querySelectorAll('#job-record-asks form[data-job-ask="ask-reopen"]').length,signoffForms:document.querySelectorAll('#job-record-asks form[data-job-ask="ask-signoff"],#job-record-asks form[data-direction-signoff]').length,reopenButtons:[...document.querySelectorAll('#job-record-asks button')].filter(n=>n.dataset.jobText==='job.reopen'||n.textContent==='Reopen stage'||n.textContent==='단계 다시 열기').length,signoffButtons:[...document.querySelectorAll('#job-record-asks button')].filter(n=>n.dataset.jobText==='job.signoff'||n.textContent==='Save stage approval'||n.textContent==='단계 승인 저장').length};})()`);
   const source=fixture.display.publication.source,catalog=state.language==='en'?enCatalog:koCatalog,metadata=await fixture.metadata();
@@ -177,100 +177,8 @@ try{
    const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0}),next=await response.json();assert.equal(next.ok,true);const acts=next.value.events.filter((event:any)=>event.type==='act').map((event:any)=>event.act);assert.deepEqual(acts.map((act:any)=>act.kind),parts?['parts-verdict']:['review-verdict','checkpoint']);for(const act of acts){parseCommentsAct(act);assert.equal(act.source.sourceHash,publication.source.sourceHash);}assert.deepEqual(await jobInputHashes(fixture.input.root),before);await shot(out,'submitted');const submittedUi=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.value,saveDisabled:document.querySelector('#save')?.disabled,actState:['dirty','review-draft-state','draft-state'].map(id=>{const node=document.getElementById(id);return {id,text:node?.textContent,kind:node?.dataset.saveState,visible:!!node?.getClientRects().length};})})`);const result={kind:parts?'mixed-parts':'mixed',language,state,submittedUi,transport:actTransport.filter(event=>event.path.includes('/jobs/'+fixture.host.session.jobId+'/')),acts,sourceImmutable:true};cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('715_MIXED_PASS '+language);
   }catch(error){const ui=await page.evaluate(`({message:document.getElementById('message')?.textContent,dirty:document.getElementById('dirty')?.textContent,review:document.querySelector('#review-status')?.value,saveDisabled:document.querySelector('#save')?.disabled,activeElement:document.activeElement?.id,dialogs:[...document.querySelectorAll('dialog')].map(n=>({id:n.id,open:n.open}))})`);const response=await fixture.call({schema:JOB_API_SCHEMA,jobId:fixture.host.session.jobId,requestId:randomUUID(),verb:'next',after:null,waitMs:0});const next=await response.json();await writeFile(join(out,'failure-state.json'),JSON.stringify({error:String(error),ui,next,actTransport},null,2)+'\n');await shot(out,'failure');throw error;}finally{await page.goto('about:blank');await fixture.close();}
  }
- // A package publication can carry both an interview and a checkpoint bound to the same source.
- if(!sample&&!boundary&&!restsOnQuestions&&!modalPreload)for(const language of ['en','ko'] as const){
-  const fixture=await realJobWindowFixture(),out=join(output,'mixed-question-checkpoint',language);
-  await mkdir(out,{recursive:true});
-  try{
-   await cp(new URL('./fixtures/interview-open-725/',import.meta.url),fixture.input.root,{recursive:true});
-   fixture.input.setRecordPath('project.json');
-   const [question]=readProject(fixture.input.root).questions;
-   assert.ok(question?.editable);
-   const questionSubject={kind:'interview-picks',questionId:question.set.question,setId:question.set.id} as const;
-   const context=fixture.input.getContext();
-   fixture.input.setContext({...context,subjects:[...context.subjects,questionSubject],
-    files:[...context.files,...question.images.map(image=>image.ref)]});
-   const before=await jobInputHashes(fixture.input.root),publication=await fixture.publish();
-   const asks:PendingAskV3[]=[];
-   // Deliver the text ask first to check that the Question takes the primary trigger on mixed load.
-   for(const subject of [{kind:'checkpoint',checkpointId:'step-one'},questionSubject] as const){
-    const response=await fixture.call({...fixture.input.base(),verb:'ask',expectedGeneration:fixture.host.session.status().generation,
-     idempotencyKey:randomUUID(),publicationId:publication.publicationId,subject});
-    const result=await response.json() as JobApiResponse;
-    assert.ok(result.ok&&result.verb==='ask',JSON.stringify(result));asks.push(result.value);
-   }
-   const [checkpoint,interview]=asks;
-   const form=`#workspace-interview-answer form[data-job-ask="${interview!.askId}"]`;
-   const checkpointForm=`form[data-job-ask="${checkpoint!.askId}"]`;
-   // #1041: the question section of the right communication panel, under its heading.
-   const selectedQuestion='#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden]) .review-dialog-header h2';
-   const awayTab='.block-row:not([hidden]) [data-block-target="animation-dock"]';
-   const questionTrigger='#workspace-pending-ask',recordTrigger='#workspace-pending-record-ask';
-   const visiblePainting=`(()=>{const img=document.querySelector('#reference-content img');return img?.naturalWidth===32&&img.getBoundingClientRect().width>0?img.currentSrc:'';})()`;
-   const url=new URL(fixture.host.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href);
-   await wait(`globalThis.__access756==='pending'`,'mixed Question capability');await page.evaluate<void>(`globalThis.__releaseAccess756()`);
-   await wait(`document.body.dataset.ready==='true'&&!!document.querySelector(${JSON.stringify(selectedQuestion)})&&
-    !!document.querySelector('${form} fieldset:not(:disabled)')&&!!document.querySelector('#job-record-asks ${checkpointForm} fieldset:not(:disabled)')&&
-    ['${questionTrigger}','${recordTrigger}'].every(selector=>{const button=document.querySelector(selector);return button&&!button.hidden&&!button.disabled;})&&Boolean(${visiblePainting})`,'mixed Question and text triggers ready');
-   assert.equal(await page.evaluate<boolean>(`!!document.querySelector('dialog[open]')`),false,'neither ask auto-opens a dialog');
-   const firstPainting:string=await page.evaluate(visiblePainting);
-   await shot(out,'question');
-   await click(page,awayTab);
-   // #1041: the Question lives in the right communication panel, so a bottom tab no longer hides it.
-   await wait(`document.querySelector('${awayTab}')?.getAttribute('aria-selected')==='true'&&!!document.querySelector(${JSON.stringify(selectedQuestion)})`,'different bottom tab selected beside the Question');
-   assert.equal(await page.evaluate<number>(`document.querySelectorAll('${form}').length`),1,'Question form remains mounted');
-   assert.equal(await page.evaluate<string>(visiblePainting),firstPainting,'painting stays visible on a different bottom tab');
-   await click(page,questionTrigger);
-   await wait(`!!document.querySelector(${JSON.stringify(selectedQuestion)})&&document.querySelector('${form}').getClientRects().length>0`,'primary trigger returns to Question');
-   // #1041 B: the checkpoint section stays in the same panel below the Question; neither is a dialog.
-   assert.equal(await page.evaluate<boolean>(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')&&!document.querySelector('dialog[open]')`),true);
-   assert.equal(await page.evaluate<string>(visiblePainting),firstPainting);
-   await click(page,recordTrigger);
-   await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'secondary trigger opens checkpoint');
-   const modal=await screen(out);
-   assert.equal(await page.evaluate<boolean>(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden]) ${checkpointForm} fieldset:not(:disabled)')&&!!document.querySelector(${JSON.stringify(selectedQuestion)})`),true);
-   await assertRecordInPanel();
-   assert.equal(await page.evaluate<string>(visiblePainting),firstPainting);
-   const pick=`${form} input[type="radio"][value="keep"]`,submit=`${form} button[type="submit"]`;
-   await page.evaluate<void>(`document.querySelector('${pick}').scrollIntoView({block:'center'})`);
-   await click(page,pick);
-   await page.evaluate<void>(`document.querySelector('${submit}').scrollIntoView({block:'center'})`);
-   await click(page,submit);
-   await wait(`document.querySelector('${form}')?.dataset.interviewAnswered==='true'&&
-    document.querySelector('${form} > [role="status"]')?.dataset.jobText==='job.saved'`,'mixed Question saved');
-   assert.equal(await page.evaluate<string>(visiblePainting),firstPainting,'painting stays visible with the answered Question mounted');
-   await wait(`document.querySelector('${questionTrigger}').hidden&&
-    !document.querySelector('${recordTrigger}').hidden&&!document.querySelector('${recordTrigger}').disabled&&
-    !!document.querySelector(${JSON.stringify(selectedQuestion)})`,'answered Question stays selected while the separate checkpoint trigger remains');
-   await click(page,recordTrigger);
-   await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden]) ${checkpointForm}')`,'separate trigger opens the remaining checkpoint');
-   await assertTextOnlyDialog();
-   await click(page,`#job-record-asks ${checkpointForm} button[data-job-text="Pass"]`);
-   await expectRecordActSubmitted(page,wait,language,'remaining checkpoint submitted after interview',true);
-   assert.equal(await page.evaluate<boolean>(`!!document.querySelector(${JSON.stringify(selectedQuestion)})&&!!document.querySelector('${form}[data-interview-answered=true]')`),true);
-   assert.equal(await page.evaluate<string>(visiblePainting),firstPainting);
-   await shot(out,'question-saved');
-   const response=await fixture.call({...fixture.input.base(),verb:'next',after:null,waitMs:0});
-   const next=await response.json() as JobApiResponse;
-   assert.ok(next.ok&&next.verb==='next',JSON.stringify(next));
-   const acts=next.value.events.flatMap(event=>event.type==='act'?[event.act]:[]);
-   assert.deepEqual(acts.map(act=>act.askId),[interview!.askId,checkpoint!.askId]);
-   const [picks,rawCheckpoint]=acts;
-   assert.ok(picks?.kind==='interview-picks');
-   assert.deepEqual(picks.source.optionSet,{id:question.set.id,sha256:question.ref.sha256});
-   assert.deepEqual(parseCommentsAct(picks).value,{questionId:question.set.question,selections:[{itemId:'reference',optionId:'keep',otherText:null}],note:'',comments:[]});
-   const checkpointAct=parseCommentsAct(rawCheckpoint);
-   assert.equal(checkpointAct.kind,'checkpoint');
-   assert.equal(checkpointAct.source.sourceHash,publication.source.sourceHash);
-   assert.deepEqual(checkpointAct.value,{checkpointId:'step-one',planStepId:'step-one',outcome:'pass',comments:[]});
-   assert.deepEqual(await jobInputHashes(fixture.input.root),before);
-   const result={kind:'mixed-question-checkpoint',language,modal,paintingPath:new URL(firstPainting).pathname,acts,sourceImmutable:true};
-   cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');
-   console.log('986_MIXED_QUESTION_PASS '+language);
-  }catch(error){await shot(out,'failure');throw error;}
-  finally{await page.goto('about:blank');await fixture.close();}
- }
- // A copied capability-free link has no act authority, even though its backdrop is still readable.
+  // #1230 removes the answer form; the mixed package Question + checkpoint form case is retired.
+  // A copied capability-free link has no act authority, even though its backdrop is still readable.
  if(!sample&&!boundary&&!restsOnQuestions&&!modalPreload)for(const picture of [true,'parts'] as const)for(const language of ['en','ko'] as const){
   const fixture=await recordScreenFixture('checkpoint',picture),out=join(output,'readonly-link',picture===true?'rig':'parts',language);await mkdir(out,{recursive:true});
   try{

@@ -1,5 +1,6 @@
-/** #750/#986 ordinary Nova browser checks for the shared Question panel and main viewport.
- * The live-job fixture uses retained record reader/writer doubles and public synthetic assets.
+/** #750/#986/#1230 browser checks for record option-set pictures, shared main viewport controls, communication panel resize and draft survival.
+ * Form-specific cases (long interview pick scroll/focus, survey hitbox layout, empty-note form baseline and joined --picks-dir form drawer)
+ * were removed (#1230 removes the answer form).
  * --serve starts a loopback fixture for interactive review without launching Chromium. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -10,96 +11,32 @@ import {isAbsolute,join,resolve} from 'node:path';
 import {PNG} from 'pngjs';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import {recordViewportControls} from './helpers/record-viewport-controls.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {optionSetsJobFixture,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_RGB} from './helpers/job-record-fixture.ts';
-import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
-import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
-import {parseOpenInputs} from '../src/cli.ts';
-import {prepareOpenTarget} from '../src/open.ts';
-import {startOpenWorkspace} from '../src/open-workspace.ts';
-import {readProject} from '../src/interview-project.ts';
-import {targetCapability} from '../src/open-workspace-state.ts';
-import {WORKSPACE_SCHEMA,type WorkspaceList} from '../src/open-workspace-contract.ts';
-import {buildWeb} from '../src/build.ts';
-import {prepareJobRecordAct} from '../src/job-act.ts';
-import type {JobRetainedRecordSource} from '../src/job-source.ts';
-import {parseCommentsAct} from '../src/job-api.ts';
+import {parseCommentOnlyAct} from '../src/job-api.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {partsDifferenceJobFixture,partsDifferenceOwnerUrl} from './helpers/parts-difference-job-fixture.ts';
-import {JOB_COMMENTS_ACT_SCHEMA} from '../src/job-contract.ts';
+import {JOB_COMMENTS_ACT_SCHEMA,JOB_COMMENT_ONLY_ACT_SCHEMA} from '../src/job-contract.ts';
 import {jobWindowResources} from '../src/job-front.ts';
 
 const arg=(name:string)=>{const i=Bun.argv.indexOf(name);return i<0?undefined:Bun.argv[i+1];};
 const interviewOnly=Bun.argv.includes('--interview-only');
 const completedPicture=Bun.argv.includes('--completed-picture')||Bun.argv.includes('--question-tab');
 const freshParts=Bun.argv.includes('--fresh-parts');
-const narrowQuestionResize=Bun.argv.includes('--question-narrow-resize');
 const postQuestionPictures=Bun.argv.includes('--post-question-pictures');
 const boundRigPictureOnly=Bun.argv.includes('--bound-rig-picture');
 const workspace986=Bun.argv.includes('--workspace-986');
-const questionRoot='#workspace-interview-answer';
-// #1041: the Question is a section of the right communication panel; this selector is its heading.
-const questionTab='#workspace-communication #workspace-interview-answer:not([hidden]) .review-dialog-header h2';
 const sharedControls=['zoom-in','zoom-out','fit','native-one','view-menu'];
 const controlSelector=sharedControls.map(id=>'#'+id).join(',');
 const dialogViewer='canvas,video,.viewport,.interview-view,.interview-viewport,.view-zoom,.zoom-controls,'+controlSelector;
 const paintingSelector='#reference-content img';
-const otherText='  Custom topology · 직접 입력\n';
 type Rect={x:number;y:number;width:number;height:number;left:number;top:number;right:number;bottom:number};
-const baseline=await Bun.file(new URL('./fixtures/interview-722-empty-note.json',import.meta.url)).json();
-// #1041: the question scrolls inside the right communication column; measure its nearest scrolling ancestor.
-const scrollerSource=`const scroller=form=>{for(let n=form.parentElement;n;n=n.parentElement){if(n.scrollHeight>n.clientHeight+1&&/(auto|scroll)/.test(getComputedStyle(n).overflowY))return n;}return form.closest('#workspace-interview-answer');};`;
-async function assertLastAskPickKeepsScrollAndFocus(mode:string){
- const scrollBefore=await page!.evaluate<number>(`(()=>{${scrollerSource}
-  const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=scroller(form);
-  const firstOption=form.querySelector('fieldset.interview-ask:last-of-type label.interview-option');
-  const pr=panel.getBoundingClientRect(),or=firstOption.getBoundingClientRect();
-  panel.scrollTop=Math.max(0,Math.min(panel.scrollHeight-panel.clientHeight,panel.scrollTop+(or.top-pr.top)-4));
-  return new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r(panel.scrollTop))));
- })()`);
- assert.ok(scrollBefore>0,`#875 ${mode} panel scrolls before changing pick`);
- await click(page!,'form[data-job-ask="ask-interview-picks"] label.interview-option:has(input[value="cloth_sim_other"])');
- await page!.evaluate<void>(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
- const afterOther=await page!.evaluate<{scrollTop:number;active:boolean}>(`(()=>{${scrollerSource}
-  const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=scroller(form);
-  const other=form.querySelector('input[type=radio][name="choice.cloth_sim"][value="cloth_sim_other"]');
-  return {scrollTop:panel.scrollTop,active:document.activeElement===other};
- })()`);
- assert.equal(afterOther.scrollTop,scrollBefore,`#875 ${mode} scrollTop unchanged after picking other in last ask`);
- assert.equal(afterOther.active,true,`#875 ${mode} document.activeElement unchanged after picking other in last ask`);
- await click(page!,'form[data-job-ask="ask-interview-picks"] label.interview-option:has(input[value="cloth_baked"])');
- await page!.evaluate<void>(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
- const afterBaked=await page!.evaluate<{scrollHeight:number;clientHeight:number;scrollTop:number;active:boolean}>(`(()=>{${scrollerSource}
-  const form=document.querySelector('form[data-job-ask="ask-interview-picks"]');
-  const panel=scroller(form);
-  const baked=form.querySelector('input[type=radio][name="choice.cloth_sim"][value="cloth_baked"]');
-  return {scrollHeight:panel.scrollHeight,clientHeight:panel.clientHeight,scrollTop:panel.scrollTop,active:document.activeElement===baked};
- })()`);
- assert.equal(afterBaked.scrollTop,scrollBefore,`#875 ${mode} scrollTop unchanged after changing pick in last ask`);
- assert.equal(afterBaked.active,true,`#875 ${mode} document.activeElement unchanged after changing pick in last ask`);
-}
-async function longInterviewScrollChecks(picturedBackdrop:boolean){
- for(const language of ['en','ko'] as const){
-  for(const questionImages of picturedBackdrop?[true]:[true,false]){
-   const fixture=await recordScreenFixture('interview-picks',picturedBackdrop,undefined,undefined,false,questionImages,undefined,true);
-   try{
-    const before=await jobInputHashes(fixture.root),url=fixtureUrl(fixture.ownerUrl,language);
-    await page!.setViewport(1440,900);
-    await page!.goto('about:blank');await page!.goto(url);
-    await waitForQuestion(`form[data-job-ask="${fixture.ask.askId}"]`);
-    if(questionImages)await readPainting(2);
-    await assertLastAskPickKeepsScrollAndFocus(questionImages?'pictured question':'pictureless question');
-    assert.deepEqual(await jobInputHashes(fixture.root),before);
-   }finally{await page!.goto('about:blank');await fixture.close();}
-  }
- }
-}
+
 const outputArg=arg('--out');
 const output=outputArg===undefined?await mkdtemp(join(tmpdir(),'review-750-evidence-')):resolve(outputArg);
 if(outputArg!==undefined)await mkdir(output,{recursive:true});
@@ -111,55 +48,13 @@ function fixtureUrl(ownerUrl:string,language:string){
  return url.href;
 }
 
-async function joinedFixture(){
- const fixture=await interviewOpenFixture();
- let host:Awaited<ReturnType<typeof startOpenWorkspace>>|undefined;
- try{
-  // Extend the public fixture with a visibly different second painting for a real menu switch.
-  {const optionPath=join(fixture.root,'evidence/options.json');
-  type ImageRef={path:string;sha256:string};
-  const options=JSON.parse(await readFile(optionPath,'utf8')) as {context:{files:ImageRef[]}};
-  const project=fixture.project as {inputs:ImageRef[];interview:{framing:{pending_options:ImageRef}[]}};
-  const alternate='<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240"><path fill="#e89220" d="M0 0h480v240H0z"/><circle cx="240" cy="120" r="80" fill="#254c88"/></svg>';
-  const ref={path:'alternate.svg',sha256:sha(alternate)};
-  await writeFile(join(fixture.root,ref.path),alternate);
-  options.context.files.push(ref);
-  project.inputs.push(ref);
-  const bytes=JSON.stringify(options);
-  await writeFile(optionPath,bytes);
-  project.interview.framing[0]!.pending_options.sha256=sha(bytes);
-  await writeFile(join(fixture.root,'project.json'),JSON.stringify(project));}
-  const inputs=parseOpenInputs([fixture.root,'--project',fixture.root,'--picks-dir','picks']);
-  const prepared=await prepareOpenTarget(inputs,{stateDir:fixture.stateDir});
-  host=await startOpenWorkspace({stateDir:fixture.stateDir,fingerprint:prepared.fingerprint,port:0});
-  const {record}=host;
-  const registered=await fetch(record.origin+'/workspace/api/register',{method:'POST',
-   headers:{Authorization:'Bearer '+record.registrationCapability,'Content-Type':'application/json'},
-   body:JSON.stringify({schema:WORKSPACE_SCHEMA,incarnation:record.incarnation,
-    targets:[{key:prepared.key,contentHash:prepared.package.contentHash,cwd:prepared.cwd,viewOnly:false,inputs:prepared.package.inputs}]})});
-  assert.equal(registered.status,200);
-  const list=await (await fetch(record.origin+'/workspace/api/targets',{headers:{'X-Review-Capability':record.ownerCapability}})).json() as WorkspaceList;
-  assert.equal(list.targets.length,1);
-  const url=new URL(list.targets[0]!.entry,record.origin);
-  url.hash='cap='+targetCapability(record.ownerCapability,record.incarnation,prepared.key);
-  const running=host;
-  return {root:fixture.root,ownerUrl:url.href,async close(){try{await running.stop();}finally{await fixture.close();}}};
- }catch(error){
-  try{await host?.stop();}finally{await fixture.close();}
-  throw error;
- }
-}
-
-if(Bun.argv.includes('--serve')){
+if(Bun.argv.includes('--serve')&&['live','joined-plan-1004','pictureless'].includes(arg('--fixture')??'')){
  const language=arg('--lang')??'en';
  assert.ok(language==='en'||language==='ko','--lang must be en or ko');
- const kind=arg('--fixture')??'live';
- assert.ok(kind==='live'||kind==='joined'||kind==='joined-plan-1004'||kind==='pictureless','--fixture must be live, joined, joined-plan-1004 or pictureless');
- const answered=Number(arg('--answered')??'0'),painting=arg('--painting');
+ const kind=arg('--fixture')!;
+ const painting=arg('--painting');
  assert.ok(painting===undefined||kind==='joined-plan-1004'&&isAbsolute(painting),'--painting takes an absolute PNG path with --fixture joined-plan-1004');
- assert.ok(kind!=='joined-plan-1004'||[0,2,4].includes(answered),'--answered must be 0, 2 or 4');
- // #1004: the real job page, K = 4 sets on one publication, `answered` drafts seeded (recommended picks).
- const fixture=kind==='joined-plan-1004'?await optionSetsJobFixture({count:4,answered,...painting!==undefined?{painting:await readFile(painting)}:{}}):kind==='joined'?await joinedFixture():await recordScreenFixture('interview-picks',false,output,undefined,false,kind==='live');
+ const fixture=kind==='joined-plan-1004'?await optionSetsJobFixture({count:4,subjectless:true,...painting!==undefined?{painting:await readFile(painting)}:{}}):await recordScreenFixture('option-set',false,output,undefined,false,kind==='live');
  try{
   console.log(fixtureUrl(fixture.ownerUrl,language));
   await new Promise<void>(resolve=>{process.once('SIGINT',resolve);process.once('SIGTERM',resolve);});
@@ -175,10 +70,14 @@ const exceptions:unknown[]=[],mutations:{method:string;path:string}[]=[],cases:u
 let persistedActs=0;
 async function wait(expression:string,label:string){const until=Date.now()+20000;while(Date.now()<until){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(30);}throw new Error('750_BROWSER_TIMEOUT '+label);}
 
-async function waitForQuestion(form:string,answered=false){
- const selector=questionRoot+' '+form+(answered?'[data-interview-answered=true] fieldset:disabled':' fieldset:not(:disabled)');
- await wait(`document.body?.dataset.ready==='true'&&!!document.querySelector(${JSON.stringify(selector)})&&document.querySelector(${JSON.stringify(questionTab)})?.getClientRects().length>0`,
-  '986 Question selected with '+(answered?'saved':'editable')+' form');
+async function waitForRecordComments(){
+ await wait(`document.body?.dataset.ready==='true'&&!!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')&&!document.getElementById('send-comments')?.hidden&&document.querySelectorAll('form[data-job-ask]').length===0`,'record option-set ready with Comments');
+}
+async function addGeneralComment(text:string){
+ await click(page!,'[data-comment-general]');
+ await wait(`!!document.querySelector('.stage-comment-composer input')`,'general composer open');
+ await page!.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(text)};f.requestSubmit();})()`);
+ await wait(`!document.querySelector('.stage-comment-composer')`,'general composer saved');
 }
 async function assertNoDialogViewer(){
  const contents=await page!.evaluate<{id:string;open:boolean;modal:boolean;viewers:number}[]>(`[...document.querySelectorAll('dialog')].map(dialog=>({
@@ -227,15 +126,14 @@ async function questionViewportControls(){
  swatch.data.fill(0x90);
  const bytes=PNG.sync.write(swatch);
  for(const language of ['en','ko'] as const){
-  const fixture=await recordScreenFixture('interview-picks',false,undefined,undefined,false,true,undefined,false,true,undefined,undefined,undefined,bytes);
+  const fixture=await recordScreenFixture('option-set',false,undefined,undefined,false,false);
   const open=async()=>page!.goto(fixtureUrl(fixture.ownerUrl,language));
   try{
    await open();
-   fixture.fake.publish(fixture.display);
    await wait(`document.body?.dataset.ready==='true'&&document.querySelector('#rig-empty')?.checkVisibility()&&
     document.querySelector('#view-menu [data-view="compare"]')`,'1128 empty record mounted');
    await recordViewportControls(page!,command!,language,true);
-   fixture.fake.pending(fixture.ask,fixture.display.publication.generation);
+   await fixture.republishOptionSet({questionImages:true,questionImage:bytes});
    await readPainting(width);
    await wait(`document.querySelector('#reference-empty').hidden`,'1128 image loaded');
    await recordViewportControls(page!,command!,language,false);
@@ -244,31 +142,18 @@ async function questionViewportControls(){
    await selectInterviewImage(0);
    await readPainting(width);
    assert.ok(await page!.evaluate(`document.querySelector('${paintingSelector}')!==globalThis.questionImage`),'View switch invokes the image handler');
-   fixture.fake.pending({...fixture.ask,status:'superseded'},fixture.display.publication.generation);
+   await fixture.republishOptionSet({questionImages:false});
    await wait(`!document.querySelector('${paintingSelector}')&&!document.querySelector('#view-menu [data-view="interview-image-0"]')`,'1128 question image released');
    await recordViewportControls(page!,command!,language,true);
-   // Replay a pending pictured ask when opening the same publication.
+   // Replay a pictured option-set publication when opening the page fresh.
    await page!.goto('about:blank');
-   fixture.fake.pending(fixture.ask,fixture.display.publication.generation);
+   await fixture.republishOptionSet({questionImages:true,questionImage:bytes});
    await open();
    await readPainting(width);
    await wait(`document.querySelector('#reference-empty').hidden`,'1128 image loaded at open');
    await recordViewportControls(page!,command!,language,false);
    console.log('1128_QUESTION_PASS '+language);
   }finally{await page!.goto('about:blank');await fixture.close();}
- }
-}
-async function clickFormControl(selector:string){
- await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`);
- await click(page!,selector);
-}
-async function answerInterview(form:string,note?:string){
- for(const value of ['topology_other','density_auto'])await clickFormControl(form+` label.interview-option:has(input[value="${value}"])`);
- await clickFormControl(form+' textarea[name="other.topology"]');
- await command!('Input.insertText',{text:otherText});
- if(note!==undefined){
-  await clickFormControl(form+' textarea[name="note"]');
-  await command!('Input.insertText',{text:note});
  }
 }
 type RememberedPainting={state:Painting;personSelectSame:boolean;nodeSame:boolean};
@@ -288,35 +173,16 @@ async function assertPaintingPersists(previous:Painting){
  assert.equal(state.mode,previous.mode);
  return {...identity,state};
 }
-async function selectBlock(target:string){
- if(target==='feedback'){
-  await click(page!,'#stage-comment');
-  // #1041: Comments and the Question are sections of one communication panel; Comment · C reveals Comments beside the Question.
-  await wait("!!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')",'986 Comments active');
-  return;
- }
- const selector=`.workspace-bottom-tabs>.block-row:not([hidden]) [data-block-target="${target}"]`;
- if(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)}).hasAttribute('data-tab-overflow')`)){
-  await click(page!,'.workspace-bottom-tabs>.block-row:not([hidden]) .workspace-tabs-more');await click(page!,`.workspace-tabs-menu:not([hidden]) [data-block-more-target="${target}"]`);
- }else await click(page!,selector);
-}
 
-/* #1041 retired the flag-only #839 questionTabChecks and followupQuestionChecks: the Question is no longer a bottom
- * strip tab. The handover maps each retired assertion to its right-panel home. */
-async function assertNoPictureQuestionTab(reason:string,catalog:Record<string,string>,selector='form.interview-answer'){
+async function assertNoPictureRecordControls(reason:string,catalog:Record<string,string>){
  const state=await page!.evaluate<{
-  tabOpen:boolean;
-  tabLabel:string;
-  formInTab:boolean;
-  tabHasReason:boolean;
+  commentsOpen:boolean;
+  stageHasReason:boolean;
   controls:{id:string;kind:string;ownLabel:string;accessibleName:string;ariaDescription:string|null;title:string|null}[];
  }>(`(()=>{
-  // #1041: the Question is a section of the right communication panel; its heading stands for the old tab.
-  const tab=document.querySelector(${JSON.stringify(questionTab)});
-  const tabRect=tab?.getBoundingClientRect();
-  const panel=document.querySelector('#workspace-interview-answer:not([hidden])');
-  const form=panel?.querySelector(${JSON.stringify(selector)});
-  const formRect=form?.getBoundingClientRect();
+  const panel=document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])');
+  const panelRect=panel?.getBoundingClientRect();
+  const empty=document.getElementById('rig-empty');
   const declaredLabels={
    'idle-blink-marker':${JSON.stringify(catalog['Blink time'])},
    'play':${JSON.stringify(catalog['Play'])},
@@ -334,17 +200,13 @@ async function assertNoPictureQuestionTab(reason:string,catalog:Record<string,st
    return {id:control.id||control.tagName.toLowerCase(),kind,ownLabel,accessibleName,ariaDescription:control.getAttribute('aria-description'),title:control.getAttribute('title')};
   });
   return {
-   tabOpen:!!tab&&!!tabRect&&tabRect.width>0&&tabRect.height>0,
-   tabLabel:tab?.textContent?.trim()??'',
-   formInTab:!!form&&!!formRect&&formRect.width>0&&formRect.height>0,
-   tabHasReason:!!panel&&panel.textContent.includes(${JSON.stringify(reason)}),
+   commentsOpen:!!panel&&!!panelRect&&panelRect.width>0&&panelRect.height>0,
+   stageHasReason:empty?.textContent===${JSON.stringify(reason)},
    controls,
   };
  })()`);
- assert.equal(state.tabOpen,true,'#955 Question tab is visible and selected on no-picture question page');
- assert.equal(state.tabLabel,catalog['Question'],'#955 Question tab label');
- assert.equal(state.formInTab,true,'#955 Question tab holds the question form');
- assert.equal(state.tabHasReason,true,'#955 Question tab states the missing-picture absence sentence');
+ assert.equal(state.commentsOpen,true,'#955/#1230 Comments panel is open on no-picture option-set page');
+ assert.equal(state.stageHasReason,true,'#955 stage states the missing-picture absence sentence');
  assert.ok(state.controls.some(c=>c.kind==='tab')&&state.controls.some(c=>c.kind==='checkbox')&&state.controls.some(c=>c.kind==='button'),'#955 unavailable tabs, checkboxes, and buttons are present');
  for(const control of state.controls){
   assert.ok(control.ownLabel.length>0,`#955 ${control.kind}#${control.id} has its own visible label`);
@@ -403,12 +265,12 @@ async function postQuestionPictureChecks(){
  await page!.setViewport(1440,900);
  const observations:{variant:string;language:string;sha256?:string}[]=[];
  for(const variant of ['scene','unsealed-scene','rig','legacy'] as const){
-  const fixture=await recordScreenFixture('interview-picks',false,undefined,undefined,false,true,undefined,false,false,variant);
+  const fixture=await recordScreenFixture('option-set',false,undefined,undefined,false,true,undefined,false,false,variant);
   try{
    for(const language of ['en','ko'] as const){
     const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
     await page!.goto('about:blank');await page!.goto(url.href);
-    await waitForQuestion('form.interview-answer');
+    await waitForRecordComments();
     assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
     const observation:{variant:string;language:string;sha256?:string}={variant,language};
     if(variant==='scene'){
@@ -426,17 +288,14 @@ async function postQuestionPictureChecks(){
      })()`);
      assert.ok(image.visible);
      assert.deepEqual(image.background,[17,91,203,255]);
-     assert.equal(await page!.evaluate<string>(`document.querySelector('#message').textContent`),'');
+     assert.equal(await page!.evaluate<string>(`document.querySelector('#message').textContent`),language==='ko'?koCatalog['Not submitted']:enCatalog['Not submitted']);
      assert.ok(new URL(image.src).pathname.startsWith(fixture.display.routes.apiBase+'interview/image/'));
      const response=await fetch(image.src);
      assert.equal(response.status,200);
      observation.sha256=sha(new Uint8Array(await response.arrayBuffer()));
      assert.equal(observation.sha256,sha(await readFile(join(fixture.root,'evidence/plate.png'))));
      const painting=await rememberPainting();
-     await selectBlock('feedback');
-     await assertPaintingPersists(painting);
-     await click(page!,'#workspace-pending-ask');
-     await waitForQuestion('form.interview-answer');
+     await click(page!,'#stage-comment');
      await assertPaintingPersists(painting);
     }else{
      const key=variant==='legacy'?'This request has no picture.':variant==='rig'?
@@ -447,7 +306,7 @@ async function postQuestionPictureChecks(){
      assert.equal(text,catalog[key]);
      if(variant!=='legacy') observation.sha256=await assertOriginalPainting(
       fixture.display.routes.apiBase,sha(await readFile(join(fixture.root,'inputs/reference.png'))));
-     await assertNoPictureQuestionTab(catalog[key],catalog);
+     await assertNoPictureRecordControls(catalog[key],catalog);
     }
     await writeFile(join(output,variant+'-'+language+'.png'),await page!.screenshot());
     observations.push(observation);
@@ -468,22 +327,13 @@ async function boundRigPictureChecks(){
  const viewport = {width:1440,height:900};
  await page!.setViewport(viewport.width,viewport.height);
  const observations: Record<string,unknown>[] = [];
- const samePublicationParity: Record<string,unknown>[] = [];
- const expectedValue = {
-  questionId:'post_timing',
-  selections:[
-   {itemId:'topology',optionId:'topology_other',otherText:'  Custom topology · 직접 입력\n'},
-   {itemId:'detail_level',optionId:'density_auto',otherText:null},
-  ],
-  note:'  Keep the idle · 원문 유지\n',
- };
+ const commentText = 'Keep the idle · 원문 유지';
  const values: string[] = [];
  for (const variant of ['bound-rig','rig-signoff-hash'] as const) for (const language of ['en','ko'] as const) {
   const out = join(output,'bound-rig-picture',variant,language);
   await mkdir(out,{recursive:true});
-  const fixture = await recordScreenFixture('interview-picks',false,out,undefined,false,true,undefined,false,false,variant);
+  const fixture = await recordScreenFixture('option-set',false,out,undefined,false,true,undefined,false,false,variant);
   const catalog = language === 'ko' ? koCatalog : enCatalog;
-  const selector = `form[data-job-ask="${fixture.ask.askId}"]`;
   try {
    const publication = fixture.display.publication;
    assert.equal(publication.previousPublicationId,null);
@@ -500,8 +350,9 @@ async function boundRigPictureChecks(){
     const priorAcknowledgments = fixture.fake.acknowledgments.length;
     await page!.goto('about:blank');
     if (suppressed) fixture.suppressRigPicture();
+    await page!.evaluate(`try{localStorage.clear();}catch{}`).catch(()=>{});
     await page!.goto(url.href);
-    await waitForQuestion(selector+'[data-interview-answered=false]');
+    await waitForRecordComments();
     assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
     await withDeadline('929 '+variant+' '+language+' '+visit+' receipt',20_000,async signal=>{
      while(fixture.fake.acknowledgments.length===priorAcknowledgments){
@@ -515,7 +366,7 @@ async function boundRigPictureChecks(){
     assert.equal(ack?.publicationId,publication.publicationId);
     assert.ok(ack?.pageId && !pageIds.includes(ack.pageId),'each visit has a new displayed receipt');
     pageIds.push(ack.pageId);
-    assert.equal(fixture.submissions.length,attempt,'opening did not answer the ask');
+    assert.equal(fixture.submissions.length,attempt,'opening did not submit an act');
 
     let paintedPixels = 0;
     let missingPicture: string | null = null;
@@ -524,10 +375,8 @@ async function boundRigPictureChecks(){
      const actualRig = catalog['@rig-c/play · Actual rig'];
      await wait(`document.querySelector('#player-state')?.textContent===${JSON.stringify(actualRig)}&&
       document.querySelector('#animation-select')?.value==='idle'&&
-      document.querySelector('#rig-empty')?.hidden===true&&
-      !!document.querySelector('#workspace-interview-answer ${selector}')&&
-      !!document.querySelector('${questionTab}')`,
-     '929 bound rig, idle and Question');
+      document.querySelector('#rig-empty')?.hidden===true`,
+     '929 bound rig, idle and Comments');
      const stage = await page!.evaluate<{left:number;top:number;right:number;bottom:number}>(`document.getElementById('rig-viewport').getBoundingClientRect().toJSON()`);
      const screen = await page!.screenshot();
      await writeFile(join(out,'question-'+visit+'.png'),screen);
@@ -542,30 +391,29 @@ async function boundRigPictureChecks(){
     } else {
      missingPicture = await page!.evaluate<string>(`document.querySelector('#rig-empty').textContent`);
      assert.equal(missingPicture,catalog['This question refers to a rig version that this publication does not include.']);
-     await assertNoPictureQuestionTab(missingPicture,catalog,selector);
+     await assertNoPictureRecordControls(missingPicture,catalog);
      if (variant==='rig-signoff-hash') {
       paintingSha256=await assertOriginalPainting(
        fixture.display.routes.apiBase,sha(await readFile(join(fixture.root,'inputs/reference.png'))));
       await assertCameraCaptionFollowsSync(catalog);
      }
      await writeFile(join(out,'question-'+visit+'.png'),await page!.screenshot());
-     await selectBlock('feedback');
-     await click(page!,'#workspace-pending-ask');
-     await waitForQuestion(selector);
     }
     const assetRequests = await page!.evaluate<string[]>(`performance.getEntriesByType('resource')
      .map(entry=>new URL(entry.name).pathname).filter(path=>path.includes('/assets/'))`);
     const base = fixture.display.routes.assetsBase;
     assert.deepEqual([...new Set(assetRequests)].sort(),pictured ? [base+SYNTHETIC_RIG_MODEL,base+SYNTHETIC_RIG_PAGE].sort() : []);
-    assert.equal(await page!.evaluate<boolean>(`(()=>{
-     const form=document.querySelector(${JSON.stringify(selector)});
-     return !form.querySelector('input:checked')&&[...form.querySelectorAll('textarea')].every(field=>field.value==='');
-    })()`),true,'each fresh page starts with an empty answer');
-    await answerInterview(selector,expectedValue.note);
-    await page!.evaluate<void>(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).scrollIntoView({block:'center'})`);
+
+    await page!.evaluate(`try{localStorage.clear();}catch{}`);
+    await page!.goto('about:blank');
+    await page!.goto(url.href);
+    await waitForRecordComments();
+    const currentAck = fixture.fake.acknowledgments.at(-1)?.body as {pageId:string};
+    await addGeneralComment(commentText);
+
     const controls = await page!.evaluate<{
      inspection:{id:string;text:string;enabled:boolean}[];
-     answer:{id:string;text:string;enabled:boolean};
+     sendComments:{id:string;text:string;enabled:boolean};
      verdictEnabled:boolean;
      editEnabled:boolean;
      edits:{id:string;text:string;enabled:boolean}[];
@@ -578,107 +426,53 @@ async function boundRigPictureChecks(){
      const edits=[...document.querySelectorAll('#mesh-edit,#mesh-apply,#chest-edit,#bust-apply,[data-animation-apply]')]
       .map(node=>control(node,node.id||'data-animation-apply'));
      return {
-      inspection,answer:control(document.querySelector(${JSON.stringify(selector+' button[type=submit]')})),
+      inspection,sendComments:control(document.getElementById('send-comments')),
       verdictEnabled:[...document.querySelectorAll('#save,#request-changes,#review-status')].some(enabled),
       editEnabled:edits.some(control=>control.enabled),edits,
      };
     })()`);
     assert.deepEqual(controls.inspection.map(control=>control.id),['zoom-in','zoom-out','fit','native-one','view-menu']);
     assert.ok(controls.inspection.every(control=>control.text.length>0));
-    assert.equal(controls.answer.text,catalog['interview.save']);
-    assert.equal(controls.answer.enabled,true);
+    assert.equal(controls.sendComments.text,catalog['Send comments']);
+    assert.equal(controls.sendComments.enabled,true);
     assert.equal(controls.verdictEnabled,false);
     assert.equal(controls.editEnabled,false,JSON.stringify(controls.edits));
-    await click(page!,selector+' button[type=submit]');
-    await waitForQuestion(selector,true);
+    await click(page!,'#send-comments');
+    await expectRecordActSubmitted(page!,wait,language,`${variant} ${visit} ${language} comments submitted`);
     assert.equal(fixture.submissions.length,attempt+1);
     assert.equal(fixture.files.length,attempt+1);
     const submission = fixture.submissions[attempt]!;
-    if (submission.kind !== 'interview-picks') throw new Error('Expected an interview-picks submission');
-    assert.equal(submission.pageId,ack.pageId);
+    if (submission.kind !== 'comments') throw new Error('Expected a comments submission');
+    assert.equal(submission.pageId,currentAck.pageId);
     assert.equal(submission.publicationId,publication.publicationId);
-    assert.equal(submission.askId,fixture.ask.askId);
-    assert.equal(submission.displayedNonce,`nonce-${publication.publicationId}-${ack.pageId}`);
+    assert.equal(submission.displayedNonce,`nonce-${publication.publicationId}-${currentAck.pageId}`);
     const actPath = fixture.files[attempt]!;
     assert.equal(actPath,fixture.files[0],'the fixture writer uses the same act path on both visits');
-    const bytes = await readFile(actPath), act = parseCommentsAct(JSON.parse(bytes.toString('utf8')));
-    // Keep the first raw bytes before the second visit overwrites the fixture writer's file.
+    const bytes = await readFile(actPath), act = parseCommentOnlyAct(JSON.parse(bytes.toString('utf8')));
     capturedActs.push(bytes);
     await writeFile(join(out,'act-'+visit+'.json'),bytes);
-    assert.equal(act.kind,'interview-picks');
+    assert.equal(act.schema,JOB_COMMENT_ONLY_ACT_SCHEMA);
+    assert.equal(act.kind,'comments');
     assert.deepEqual(act.source,publication.source);
-    assert.deepEqual(act.value,{...expectedValue,comments:[]});
+    assert.deepEqual(act.value,{comments:[{text:commentText}]});
     values.push(JSON.stringify(act.value));
-    const expected = prepareJobRecordAct({
-     jobId:fixture.session.jobId,submission:{...submission,value:expectedValue},ask:fixture.ask,
-     retained:retained as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},
-     actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z',
-    });
-    assert.deepEqual(bytes,Buffer.from(JSON.stringify(expected)));
     assert.deepEqual(await jobInputHashes(fixture.root),before);
     assert.deepEqual(await jobInputHashes(retained.snapshotRoot),retainedBefore);
     observations.push({variant,language,visit,suppressed,paintedPixels,paintingSha256,missingPicture,assetRequests,controls,sourceHash:publication.source.sourceHash,
-     actBytes:bytes.length,actSha256:sha(bytes),actValueSha256:sha(JSON.stringify(act.value)),fullActMatchesSourceOracle:true});
-   }
-   if (variant === 'bound-rig') {
-    assert.equal(capturedActs.length,2);
-    assert.notEqual(fixture.submissions[0]!.submissionId,fixture.submissions[1]!.submissionId);
-    assert.deepEqual(capturedActs[0],capturedActs[1],language+' full act bytes on the same sealed publication');
-    samePublicationParity.push({language,publicationId:publication.publicationId,sourceHash:publication.source.sourceHash,
-     actSha256:sha(capturedActs[0]!),actBytes:capturedActs[0]!.length,distinctPages:pageIds.length,fullActBytesEqual:true});
+     actBytes:bytes.length,actSha256:sha(bytes),actValueSha256:sha(JSON.stringify(act.value))});
    }
   } finally {
    await page!.goto('about:blank');
    await fixture.close();
   }
  }
- assert.equal(new Set(values).size,1,'pictured and signoff-mismatch acts carry identical answer bytes in EN and KO');
+ assert.equal(new Set(values).size,1,'pictured and signoff-mismatch acts carry identical comment bytes in EN and KO');
  assert.deepEqual(exceptions,[]);
- const result = {observations,samePublicationParity};
+ const result = {observations};
  await writeFile(join(output,'bound-rig-picture.json'),JSON.stringify(result,null,2)+'\n');
  console.log('929_BOUND_RIG_BROWSER_PASS '+JSON.stringify(result));
 }
 
-type RadioIdentity={name:string;value:string};
-type FormTarget={text:string;control:boolean;visible:boolean;hit:boolean;rect:Rect};
-type SurveyLayout={list:Rect;fields:Rect;progress:string;questions:number;optionCount:number;otherInputs:number;noteInputs:number;
- submitButtons:number;allVisible:boolean;allHit:boolean;controlsReached:number;targets:FormTarget[];
- scrollAncestors:{id:string;scrollHeight:number;clientHeight:number}[];documentScrollHeight:number;documentClientHeight:number};
-async function surveyLayout(selector:string){
- return page!.evaluate<SurveyLayout>(`(()=>{
-  const panel=document.querySelector('${questionRoot}'),form=panel.querySelector(${JSON.stringify(selector)});
-  const fields=form.querySelector('.interview-answer-fields'),list=form.querySelector('.interview-questions');
-  const visible=node=>{
-   const r=node.getBoundingClientRect();
-   if(r.width<=0||r.height<=0||r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight)return false;
-   for(let parent=node.parentElement;parent;parent=parent.parentElement){
-    const style=getComputedStyle(parent),box=parent.getBoundingClientRect();
-    if(/auto|scroll|hidden|clip/.test(style.overflowY)&&(r.top<box.top-1||r.bottom>box.bottom+1))return false;
-    if(parent===panel)break;
-   }
-   return true;
-  };
-  const targets=[...fields.querySelectorAll('.interview-option,.interview-recommended,.interview-option span,.interview-delegate,textarea:not([hidden]),legend,button[type=submit]')].map(node=>{
-   node.scrollIntoView({block:'nearest'});
-   const r=node.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
-   return {text:node.textContent||node.value,control:node.matches('label.interview-option,textarea:not([hidden]),button[type=submit]'),visible:visible(node),hit:!!hit&&node.contains(hit),rect:r.toJSON()};
-  });
-  panel.scrollTop=0;
-  const scrollAncestors=[];
-  for(let parent=fields;parent;parent=parent.parentElement){
-   if(/^(auto|scroll)$/.test(getComputedStyle(parent).overflowY))scrollAncestors.push({id:parent.id,scrollHeight:parent.scrollHeight,clientHeight:parent.clientHeight});
-   if(parent===panel)break;
-  }
-  return {list:list.getBoundingClientRect().toJSON(),fields:fields.getBoundingClientRect().toJSON(),progress:list.querySelector('p').textContent,
-   questions:list.querySelectorAll('.interview-question').length,optionCount:fields.querySelectorAll('.interview-option').length,
-   otherInputs:fields.querySelectorAll('textarea[name^="other."]:not([hidden])').length,noteInputs:form.querySelectorAll('textarea[name=note]').length,
-   submitButtons:fields.querySelectorAll('button[type=submit]:not([hidden])').length,
-   allVisible:targets.every(item=>item.visible),allHit:targets.every(item=>item.hit),controlsReached:targets.filter(item=>item.control&&item.visible&&item.hit).length,
-   targets,scrollAncestors,documentScrollHeight:Math.max(document.documentElement.scrollHeight,document.body.scrollHeight),documentClientHeight:document.documentElement.clientHeight};
- })()`);
-}
-
-// #1041: the Question is in the right communication panel; its own separator resizes it.
 async function resizeQuestionPanel(){
  const selector='.workspace-communicationWidth[role=separator]';
  const range=()=>page!.evaluate<{value:number;min:number;max:number}>(`(()=>{
@@ -700,18 +494,18 @@ async function liveQuestionDraftChecks(){
  const sizes=interviewOnly?[[1600,1000],[1440,900]] as const:[[1600,1000]] as const;
  for(const [width,height] of sizes){
   await page!.setViewport(width,height);
-  const fixture=await recordScreenFixture('interview-picks',false,undefined,undefined,freshParts);
-  const before=await jobInputHashes(fixture.root);
-  const selector=`form[data-job-ask="${fixture.ask.askId}"]`;
-  try{
-   for(const language of ['en','ko'] as const){
-    const catalog=language==='en'?enCatalog:koCatalog,out=join(output,`${width}x${height}`,'interview-picks','empty',language);
+  for(const language of ['en','ko'] as const){
+   const fixture=await recordScreenFixture('option-set',false,undefined,undefined,freshParts);
+   const before=await jobInputHashes(fixture.root);
+   try{
+    const catalog=language==='en'?enCatalog:koCatalog,out=join(output,`${width}x${height}`,'option-set','empty',language);
     await mkdir(out,{recursive:true});fixture.output(out);
     const url=fixtureUrl(fixture.ownerUrl,language);
-    await page!.goto('about:blank');holdImages=!freshParts;
+    await page!.goto('about:blank');
+    holdImages=!freshParts;
     if(holdImages)await command!('Page.navigate',{url});
     else await page!.goto(url);
-    await waitForQuestion(selector);
+    await waitForRecordComments();
     const dialogs=await assertNoDialogViewer();assert.ok(dialogs.every(dialog=>!dialog.open));
     const screen=await page!.evaluate<{language:string;width:number;height:number;legacySeen:boolean;legacyForms:number;topbars:number;viewports:number;noPicture:string;emptyListText:string;saveState:string;controls:string[]}>(`({
      language:document.documentElement.lang,width:innerWidth,height:innerHeight,legacySeen:globalThis.__record750legacySeen,
@@ -731,11 +525,11 @@ async function liveQuestionDraftChecks(){
      await wait(`document.querySelectorAll('[data-part-list] button').length>0`,'fresh parts list');
     }else{
      assert.equal(screen.emptyListText,'');assert.equal(screen.saveState,catalog['Not submitted']);
-     // Hold the image request while the editable Question form is already available.
+     // Hold the image request while the Comments panel is already available.
      await withDeadline('986 held painting request',5_000,async signal=>{
       while(!pausedImages.length){signal.throwIfAborted();await Bun.sleep(25);}
      });
-     await waitForQuestion(selector);
+     await waitForRecordComments();
      const stageRect=()=>page!.evaluate<Rect>(`document.querySelector('#stage-layout').getBoundingClientRect().toJSON()`);
      const loading=await stageRect();
      assert.ok(loading.width>0&&loading.height>0,'the shared stage has space while the painting request is held');
@@ -747,7 +541,7 @@ async function liveQuestionDraftChecks(){
      const loaded=await stageRect();
      assert.deepEqual(loaded,loading,'painting load preserves the shared stage geometry');
      observation.imageLoading={loading,loaded,loadedPainting};
-     const imageCount=fixture.session.retainedSourceV3(fixture.ask.publicationId).questions.find(question=>question.set.id===fixture.ask.source.optionSet?.id)!.images.length;
+     const imageCount=fixture.session.retainedSourceV3(fixture.display.publication.publicationId).questions[0]!.images.length;
      assert.ok(imageCount>0);
      assert.equal(await page!.evaluate<number>(`document.querySelectorAll('#view-menu [data-view^=interview-image-]').length`),imageCount);
      for(let index=0;index<imageCount;index++){
@@ -763,148 +557,49 @@ async function liveQuestionDraftChecks(){
       await writeFile(join(out,'option-image-'+index+'.png'),await page!.screenshot());
      }
      observation.optionImagesShown=imageCount;
-     const painting=await rememberPainting();
-     await selectBlock('feedback');
-     await assertPaintingPersists(painting);
-     await click(page!,'#workspace-pending-ask');await waitForQuestion(selector);
-     await assertPaintingPersists(painting);
-     await writeFile(join(out,'backdrop.png'),await page!.screenshot());
-    }
-    await answerInterview(selector);
-    const identities=await page!.evaluate<RadioIdentity[]>(`Array.from(document.querySelectorAll(${JSON.stringify(selector+' input[type=radio]')}),input=>({name:input.name,value:input.value}))`);
-    await page!.goto('about:blank');await page!.goto(url);await waitForQuestion(selector);
-    const reopened=await page!.evaluate<{identities:RadioIdentity[];checked:string[];other:string;note:string|null;otherVisible:boolean;selects:number;recommended:number;delegates:number}>(`(()=>{
-     const form=document.querySelector(${JSON.stringify(selector)});
-     return {identities:[...form.querySelectorAll('input[type=radio]')].map(input=>({name:input.name,value:input.value})),
-      checked:[...form.querySelectorAll('input:checked')].map(input=>input.value),other:form.querySelector('textarea[name="other.topology"]').value,
-      note:form.querySelector('textarea[name=note]')?.value??null,otherVisible:!form.querySelector('textarea[name="other.topology"]').hidden,
-      selects:form.querySelectorAll('select').length,recommended:form.querySelectorAll('.interview-recommended').length,delegates:form.querySelectorAll('.interview-delegate').length};
-    })()`);
-    assert.deepEqual(reopened,{identities,checked:['topology_other','density_auto'],other:otherText,note:'',otherVisible:true,selects:0,recommended:2,delegates:2});
-    observation.reopened=reopened;assert.ok((await assertNoDialogViewer()).every(dialog=>!dialog.open));
-    if(!freshParts){
-     await readPainting(2);
-     const layout=await surveyLayout(selector);
-     assert.equal(layout.questions,1,'both asks belong to the same question set');
-     assert.equal(layout.progress,catalog['interview.answered'].replace('{0}','0').replace('{1}','1'));
-     assert.equal(layout.optionCount,8);assert.equal(layout.otherInputs,1);assert.equal(layout.noteInputs,1);assert.equal(layout.submitButtons,1);
-     // #1041: the communication panel is narrow, so its container query stacks the question list above the fields.
-     assert.ok(layout.fields.top>=layout.list.bottom-1,'the Question panel stacks the list above the fields');
-     assert.equal(layout.controlsReached,11,JSON.stringify(layout.targets.filter(item=>item.control)));
-     assert.equal(layout.allHit,true,JSON.stringify(layout.targets));assert.equal(layout.allVisible,true,JSON.stringify(layout.targets));
-     assert.ok(layout.documentScrollHeight<=layout.documentClientHeight+1);
-     // #1041: the tall communication column may need no scrolling; if anything scrolls it is the question or its column.
-     assert.ok(layout.scrollAncestors.filter(node=>node.scrollHeight>node.clientHeight+1).every(node=>['workspace-interview-answer','workspace-communication'].includes(node.id)));
-     observation.layout=layout;
      observation.resized=await resizeQuestionPanel();
-     await writeFile(join(out,'radio-cards.png'),await page!.screenshot());
     }
-    const painting=freshParts?null:await rememberPainting();
-    observation['one-screenControls']=await page!.evaluate<RadioIdentity[]>(`[...document.querySelectorAll(${JSON.stringify(selector+' input:checked,'+selector+' textarea')})].map(input=>({name:input.name,value:input.value}))`);
-    const submit=selector+' button[type=submit]',status=selector+' > [role=status]';
-    await page!.evaluate<void>(`document.querySelector(${JSON.stringify(submit)}).scrollIntoView({block:'center'})`);
-    await writeFile(join(out,'one-screen-answered.png'),await page!.screenshot());
-    assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(submit)}).hidden`),false);
-    await click(page!,submit);
-    await waitForQuestion(selector,true);
-    await wait(`document.querySelector(${JSON.stringify(status)})?.textContent===${JSON.stringify(catalog['job.saved'])}`,'986 live answer saved');
-    if(painting)observation.savedPainting=await assertPaintingPersists(painting);
-    assert.equal(await page!.evaluate<boolean>(`document.querySelector(${JSON.stringify(submit)}).hidden`),true);
-    // Carried from the retired #839 questionTabChecks: the completed answer leaves no act controls and one saved state.
-    // #1048 lifted the question-image pin refusal for a sealed question image: pin mode now opens on it.
-    // #1242 owner ruling: the record screen keeps the rig screen's row with Send comments, so the saved state stays in that row.
-    assert.equal(await page!.evaluate<boolean>(`['workspace-pending-ask','save','request-changes'].every(id=>document.getElementById(id).hidden)&&!document.querySelector('#workspace-act-row').hidden&&!document.getElementById('send-comments').hidden`),true,'completed answer leaves only Send comments');
-    assert.deepEqual(await page!.evaluate<string[]>(`['dirty','review-draft-state','draft-state'].filter(id=>{const n=document.getElementById(id);return n.getClientRects().length>0&&!!n.textContent.trim();})`),['review-draft-state'],'single visible saved state');
+    const commentWords=`Option-set draft · ${language}`;
+    await addGeneralComment(commentWords);
+    await page!.goto('about:blank');await page!.goto(url);await waitForRecordComments();
+    await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1`,'comment draft survives reload');
+    const painting=freshParts?null:await (async()=>{await readPainting(2);return rememberPainting();})();
+    await click(page!,'#send-comments');
+    await expectRecordActSubmitted(page!,wait,language,'option-set comment submitted');
     if(painting){
+     observation.savedPainting=await assertPaintingPersists(painting);
      await click(page!,'#stage-comment');
      await wait(`!!document.querySelector('#reference-viewport.stage-comment-mode')&&!document.querySelector('#rig-viewport.stage-comment-mode')`,'sealed question image takes pin mode (#1048)');
      await click(page!,'#stage-comment');
      await wait(`!document.querySelector('#reference-viewport.stage-comment-mode')`,'pin mode closes again');
     }
-    const footer=await page!.evaluate<string>(`document.getElementById('message').textContent`);
-    assert.equal(footer,await page!.evaluate<string>(`document.getElementById('dirty').textContent`));
-    observation.savedFooter=footer;
-    assert.equal(await page!.evaluate<string>(`document.querySelector(${JSON.stringify(selector+' .interview-questions>p')}).textContent`),
-     catalog['interview.answered'].replace('{0}','1').replace('{1}','1'),'progress counts the saved question');
     const path=join(out,'one-screen.json');assert.ok(existsSync(path));
-    const bytes=await readFile(path,'utf8'),act=parseCommentsAct(JSON.parse(bytes));
-    assert.equal(act.at,'2026-11-08T12:00:00.000Z');
-    if(act.kind!=='interview-picks')throw new Error('Expected interview-picks');
-    const {comments,...survey}=act.value;
-    assert.deepEqual(comments,[]);
-    assert.equal(survey.note,'');assert.equal(JSON.stringify(survey),baseline.expectedValueBytes);
-    const expected=prepareJobRecordAct({jobId:fixture.session.jobId,submission:{...fixture.submissions.at(-1)!,value:JSON.parse(baseline.expectedValueBytes)},
-     ask:fixture.ask,retained:fixture.session.retainedSourceV3(fixture.ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},
-     actId:'act-interview-picks',at:'2026-11-08T12:00:00.000Z'});
-    assert.equal(bytes,JSON.stringify(expected),'structured writer matches the original 60d7f17 survey-value control');
-    observation.emptyNoteByteControl={sourceCommit:baseline.sourceCommit,recordWriterSourceSha256:baseline.recordWriterSourceSha256,
-     valueBytes:baseline.expectedValueBytes,historicalSurveyByteEqual:true,structuredActByteEqual:true};
-    assert.deepEqual(act.value.selections,[{itemId:'topology',optionId:'topology_other',otherText},{itemId:'detail_level',optionId:'density_auto',otherText:null}]);
+    const bytes=await readFile(path,'utf8'),act=parseCommentOnlyAct(JSON.parse(bytes));
+    assert.equal(act.schema,JOB_COMMENT_ONLY_ACT_SCHEMA);
+    assert.equal(act.kind,'comments');
+    assert.deepEqual(act.value,{comments:[{text:commentWords}]});
     observation.persistedAct={bytes:Buffer.byteLength(bytes),oneScreenSha256:sha(bytes),oneScreenFile:path};
     await writeFile(join(out,'one-screen-submitted.png'),await page!.screenshot());
     await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');cases.push(observation);persistedActs++;
     console.log('750_BROWSER_CASE_PASS '+language+' '+width+'x'+height+' bytes='+Buffer.byteLength(bytes));
-   }
-   assert.deepEqual(await jobInputHashes(fixture.root),before,'inspected source files remain immutable');
-  }finally{holdImages=false;for(const requestId of pausedImages.splice(0))await command!('Fetch.continueRequest',{requestId});await page!.goto('about:blank');await fixture.close();}
- }
- await longInterviewScrollChecks(false);
-}
-
-async function twoImageDrawerChecks(){
- const sizes=[{width:1440,height:900},{width:900,height:410}] as const;
- const form='form.interview-answer',drawer='#workspace-drawer-inspectorHeight';
- for(const language of ['en','ko'] as const)for(const {width,height} of sizes){
-  const fixture=await joinedFixture(),out=join(output,'joined',language,`${width}x${height}`);
-  await mkdir(out,{recursive:true});
-  try{
-   const question=readProject(fixture.root).questions[0]!;
-   assert.deepEqual(question.images.map(image=>image.name),['source.svg','alternate.svg']);
-   const before=await jobInputHashes(fixture.root),url=fixtureUrl(fixture.ownerUrl,language);
-   await page!.setViewport(width,height);await page!.goto('about:blank');await page!.goto(url);
-   await waitForQuestion(form);
-   const first=await readPainting(32);
-   const screen=await page!.evaluate<{lang:string;width:number;height:number;modelCanvas:number;commentHidden:boolean;controls:string[]}>(`({
-    lang:document.documentElement.lang,width:innerWidth,height:innerHeight,modelCanvas:document.querySelectorAll('#rig-root canvas').length,
-    commentHidden:document.getElementById('stage-comment').hidden,
-    controls:[...document.querySelectorAll(${JSON.stringify(controlSelector)})].map(node=>node.id)
-   })`);
-   assert.deepEqual(screen,{lang:language,width,height,modelCanvas:0,commentHidden:true,controls:sharedControls});
-   const narrow=width===900,dialogs=await assertNoDialogViewer();
-   assert.deepEqual(dialogs.filter(dialog=>dialog.open).map(dialog=>({id:dialog.id,modal:dialog.modal})),
-    narrow?[{id:'workspace-drawer-inspectorHeight',modal:false}]:[]);
-   if(narrow){
-    assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('${drawer}[open]:not(:modal) ${questionRoot} ${form}')`),true);
-   }
-   await writeFile(join(out,'question.png'),await page!.screenshot());
-   // Click the main toolbar while the narrow drawer still holds the form.
-   await selectInterviewImage(1);
-   const alternate=await readPainting(480,1);
-   assert.notEqual(alternate.src,first.src);
-   assert.ok(new URL(alternate.src).pathname.endsWith('/api/interview/image/'+question.ref.sha256+'/1'));
-   if(narrow)assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('${drawer}[open]:not(:modal)')`),true);
-   const camera=narrow?null:await sharedCameraChecks();
-   await writeFile(join(out,'alternate.png'),await page!.screenshot());
-   assert.deepEqual(await jobInputHashes(fixture.root),before);
-   const observation={language,width,height,screen,dialogs,first,alternate,camera};
-   await writeFile(join(out,'observations.json'),JSON.stringify(observation,null,2)+'\n');
-   cases.push(observation);
-  }finally{await page!.goto('about:blank');await fixture.close();}
+    assert.deepEqual(await jobInputHashes(fixture.root),before,'inspected source files remain immutable');
+   }finally{holdImages=false;for(const requestId of pausedImages.splice(0))await command!('Fetch.continueRequest',{requestId});await page!.goto('about:blank');await fixture.close();}
+  }
  }
 }
 
 async function draftSurvivalChecks(){
  holdImages=false;
  const out=join(output,'draft-survival');await mkdir(out,{recursive:true});
- const lookRoot=resolve('evidence/look');
+ const lookRoot=outputArg===undefined?resolve('evidence/look'):null;
  for(const lang of ['en','ko'] as const){
   await mkdir(join(out,'look',lang),{recursive:true});
-  await mkdir(join(lookRoot,lang),{recursive:true});
+  if(lookRoot)await mkdir(join(lookRoot,lang),{recursive:true});
  }
  const saveLook=async(lang:'en'|'ko',name:string)=>{
   const png=await page!.screenshot();
   await writeFile(join(out,'look',lang,name),png);
-  await writeFile(join(lookRoot,lang,name),png);
+  if(lookRoot)await writeFile(join(lookRoot,lang,name),png);
  };
  const fixture=await recordScreenFixture('checkpoint',false,out);
  try{
@@ -933,19 +628,17 @@ async function draftSurvivalChecks(){
   fixture.fake.publish(display2);fixture.fake.pending(ask2,pub2.generation);
   await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-2"] fieldset:not(:disabled)')`,'992 bar 2 republish');
   assert.equal((await readRows())[0]?.endsWith('c1 · reload survival'),true);
-  // Bar 4: Two tabs (tab A has c1, tab B adds c2, both survive in both tabs and after reload; removal in A does not come back from B)
+  // Bar 4: Two tabs
   await page!.evaluate<void>(`(()=>{
    const [key,raw]=Object.entries(localStorage).find(([k])=>k.startsWith('rig-review-record-comments/1:'));
    const saved=JSON.parse(raw);
    const next=JSON.stringify({...saved,comments:[...saved.comments,{id:'c2-id',summary:'c2 · from tab B'}]});
    localStorage.setItem(key,next);
    window.dispatchEvent(new StorageEvent('storage',{key,newValue:next}));
-   // Deliver a late/stale storage event carrying only [c1] after [c1,c2] is in localStorage; both must survive.
    window.dispatchEvent(new StorageEvent('storage',{key,newValue:raw}));
   })()`);
   await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===2`,'992 bar 4 storage event pickup');
   assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c1 · reload survival','c2 · from tab B']);
-  // Remove c1 in tab A; it must not come back on subsequent write or reload
   await page!.evaluate<void>(`document.querySelector('#stage-comment-list .stage-comment-summary').click()`);
   await wait(`!!document.querySelector('.stage-comment-composer .stage-comment-delete')`,'992 bar 4 delete button');
   await page!.evaluate<void>(`document.querySelector('.stage-comment-composer .stage-comment-delete').click()`);
@@ -1003,7 +696,6 @@ async function draftSurvivalChecks(){
   await page!.goto('about:blank');await page!.goto(url.href);
   await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===1&&!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 5 fallback');
   assert.deepEqual((await readRows()).map(s=>s.split(' · ').slice(2).join(' · ')),['c3 · legacy fallback']);
-  // Deleting all comments restored from a legacy key and reloading must stay at 0 rows (never resurrect from legacy key).
   await page!.evaluate<void>(`document.querySelector('#stage-comment-list .stage-comment-summary').click()`);
   await wait(`!!document.querySelector('.stage-comment-composer .stage-comment-delete')`,'992 bar 5 legacy delete button');
   await page!.evaluate<void>(`document.querySelector('.stage-comment-composer .stage-comment-delete').click()`);
@@ -1012,8 +704,7 @@ async function draftSurvivalChecks(){
   await wait(`!!document.querySelector('form[data-job-ask="ask-checkpoint-3"] fieldset:not(:disabled)')`,'992 bar 5 reload after legacy delete');
   assert.deepEqual(await readRows(),[]);
 
-  // #999 Bar: box-pin comment on parts-verdict draft page saves (even when box crosses part boundary into margin),
-  // displays catalog refusal sentence on status line when refused, survives reload, and is included in submitted act in EN and KO.
+  // #999 Bar: box-pin comment on parts-verdict draft page
   const parts999:Record<string,unknown>={};
   for(const lang of ['en','ko'] as const){
    const pf=await partsDifferenceJobFixture({scratchParent:out});
@@ -1026,7 +717,6 @@ async function draftSurvivalChecks(){
     const drawEdgeBox=async(text:string)=>{
      if(await page!.evaluate<boolean>(`!document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`))await click(page!,'#stage-comment');
      await wait(`document.querySelector('#rig-viewport').classList.contains('stage-comment-mode')`,'999 comment mode '+lang);
-     // Draw a box from (1.5, 1.5) to (10.5, 9.5) crossing body's top-left boundary (x=4, y=4) into empty margin (fails on da67304 with PARTS_COMMENT_OUT_OF_BOUNDS)
      const [from,to]=await page!.evaluate<[{x:number;y:number},{x:number;y:number}]>(`(()=>{
       const canvas=document.getElementById('parts-canvas'),rect=canvas.getBoundingClientRect();
       return [[1.5,1.5],[10.5,9.5]].map(([x,y])=>({x:rect.left+x*rect.width/canvas.width,y:rect.top+y*rect.height/canvas.height}));
@@ -1045,7 +735,6 @@ async function draftSurvivalChecks(){
     };
     const words=lang==='ko'?'검 손잡이가 손 뒤로 가야 함':'Sword grip must go behind the hand';
     await drawEdgeBox(words);
-    // Refusal sentence check: deselect the part chip and attempt save -> status line shows catalog sentence
     await click(page!,'.stage-comment-parts [data-comment-part="body"]');
     await page!.evaluate<void>(`document.querySelector('.stage-comment-composer').requestSubmit()`);
     const expectedRefusal=(lang==='ko'?koCatalog:enCatalog)['Select at least one part.']!;
@@ -1055,12 +744,10 @@ async function draftSurvivalChecks(){
       return {text:status.textContent,title:status.title};
     })()`);
     assert.ok(![footer.text,footer.title].some(value=>value.includes(expectedRefusal)), 'refusal stays out of the footer');
-    // Re-select the part chip (which replaces chip children) and press Enter / submit to save the box-pin comment
     await click(page!,'.stage-comment-parts [data-comment-part="body"]');
     assert.equal(await page!.evaluate<boolean>(`document.activeElement===document.querySelector('.stage-comment-composer input')`),true,'chip click restores focus to composer input');
     await page!.evaluate<void>(`document.querySelector('.stage-comment-composer').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))`);
     await wait(`!document.querySelector('.stage-comment-composer')&&document.querySelectorAll('.stage-comment-pin').length===1`,'999 box-pin saved '+lang);
-    // Reload survival on parts-verdict page
     await page!.goto('about:blank');await page!.goto(pUrl);
     await wait(`document.body?.dataset.ready==='true'&&document.querySelector('#parts-canvas')?.width>0&&document.querySelector('#stage-layout')?.getAttribute('aria-busy')==='false'&&document.querySelectorAll('.stage-comment-pin').length===1`,'999 box-pin survives reload '+lang);
     assert.equal(await page!.evaluate<boolean>(`[...document.querySelectorAll('#stage-comment-list .stage-comment-summary')].some(n=>n.textContent.includes(${JSON.stringify(words)}))`),true);
@@ -1068,7 +755,6 @@ async function draftSurvivalChecks(){
     await wait(`document.querySelector('#stage-comment-list .stage-comment-summary')?.checkVisibility()===true`,'999 comments panel visible '+lang);
     await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
     await saveLook(lang,'box-pin-edge.png');
-    // Delete the saved comment so committed comments are 0, then reopen the composer with text to prove Request changes is enabled by the open composer and auto-commits on click.
     await page!.evaluate<void>(`document.querySelector('#stage-comment-list .stage-comment-summary').click()`);
     await wait(`!!document.querySelector('.stage-comment-composer .stage-comment-delete')`,'999 delete button '+lang);
     await page!.evaluate<void>(`document.querySelector('.stage-comment-composer .stage-comment-delete').click()`);
@@ -1077,7 +763,6 @@ async function draftSurvivalChecks(){
     await wait(`document.querySelector('#request-changes')?.checkVisibility()&&!document.querySelector('#request-changes').disabled`,'999 request changes enabled with open composer '+lang);
     await page!.evaluate(`new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))`);
     await saveLook(lang,'request-changes-open-composer.png');
-    // Click Request changes (#request-changes) directly while the composer is open and verify the comment commits and the act is sent
     await click(page!,'#request-changes');
     let submittedAct:any=null;
     const deadline=Date.now()+15_000;
@@ -1106,15 +791,15 @@ async function draftSurvivalChecks(){
  }finally{await fixture.close();}
 }
 
-/** The waiting layout can dock the inspector before the first publication binds its Question tab. */
+/** The waiting layout can dock the inspector before the first option-set publication binds Comments in the right communication panel. */
 async function firstQuestionInDrawer(){
  holdImages=false;
  for(const language of ['en','ko'] as const){
   const out=join(output,'first-question-drawer',language);
   await mkdir(out,{recursive:true});
-  const fixture=await recordScreenFixture('interview-picks',false,out,undefined,false,true,undefined,false,true,'bound-rig');
+  const fixture=await recordScreenFixture('option-set',false,out,undefined,false,true,undefined,false,true,'bound-rig');
   const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);
-  const body='#workspace-drawer-inspectorHeight > .inspector-body',panel=body+' > #workspace-interview-answer';
+  const body='#workspace-drawer-inspectorHeight > .inspector-body';
   const errorsBefore=consoleErrors.length;
   try{
    await page!.setViewport(1000,320);
@@ -1126,18 +811,17 @@ async function firstQuestionInDrawer(){
    assert.deepEqual(before,{inRoot:false,drawerBodies:1,height:320});
    await writeFile(join(out,'before-delivery.json'),JSON.stringify(before));
    fixture.deliver();
-   // #1041: the first question opens in the right communication panel (docked or its non-modal drawer), not the bottom drawer.
-   const options='#workspace-communication #workspace-interview-answer form[data-job-ask] label.interview-option';
+   const generalButton='#workspace-communication #inspector-feedback [data-comment-general]';
    await withDeadline('941 first publication or refusal',20_000,async signal=>{
     while(!signal.aborted){
-     if(consoleErrors.length>errorsBefore||await page!.evaluate<boolean>(`!!document.querySelector('${options}')`))return;
+     if(consoleErrors.length>errorsBefore||await page!.evaluate<boolean>(`!!document.querySelector('${generalButton}')`))return;
      await Bun.sleep(30);
     }
     throw signal.reason;
    });
-   const after:{language:string;options:string[];drawerOpen:boolean}=await page!.evaluate(`({
+   const after:{language:string;generalVisible:boolean;drawerOpen:boolean}=await page!.evaluate(`({
     language:document.documentElement.lang,
-    options:[...document.querySelectorAll('${options}')].filter(node=>node.checkVisibility()).map(node=>node.textContent.trim()),
+    generalVisible:!!document.querySelector('${generalButton}')?.checkVisibility(),
     drawerOpen:!!document.querySelector('#workspace-communication')?.checkVisibility()
    })`);
    const errors=consoleErrors.slice(errorsBefore);
@@ -1146,7 +830,7 @@ async function firstQuestionInDrawer(){
    console.log('941_FIRST_QUESTION '+JSON.stringify({language,before,after,errors}));
    assert.equal(errors.length,0,JSON.stringify(errors));
    assert.equal(after.language,language);assert.equal(after.drawerOpen,true);
-   assert.ok(after.options.length>0,'first publication shows visible option labels in the communication panel');
+   assert.equal(after.generalVisible,true,'first option-set publication shows Comments in the communication panel');
   }finally{await fixture.close();}
  }
 }
@@ -1202,7 +886,6 @@ if(Bun.argv.includes('--serve')){
 }
 
 try{
- // Reuse the shared launcher's browser discovery and process policy without a suite-local wrapper.
  page=await launchCdpSession(profile,{sendDeadlineMs:20_000,onEvent:(event,send)=>{command=send;if(event.method==='Fetch.requestPaused'){const id=event.params!.requestId as string;if(holdImages)pausedImages.push(id);else void send('Fetch.continueRequest',{requestId:id});}if(event.method==='Runtime.consoleAPICalled'&&event.params?.type==='error')consoleErrors.push(event.params);if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);if(event.method==='Network.requestWillBeSent'){const request=event.params?.request as {method:string;url:string}|undefined;if(request&&request.method!=='GET')mutations.push({method:request.method,path:new URL(request.url).pathname});}}});
  await command!('Fetch.enable',{patterns:[{urlPattern:'*/api/interview/image/*'}]});
  await command!('Runtime.enable');await command!('Network.enable');await command!('Network.setCacheDisabled',{cacheDisabled:true});await command!('Page.addScriptToEvaluateOnNewDocument',{source:`globalThis.__record750legacySeen=false;new MutationObserver(()=>{if(document.body?.classList.contains('job-window')||document.querySelector('[data-job-forms]'))globalThis.__record750legacySeen=true;}).observe(document,{subtree:true,childList:true,attributes:true});`});
@@ -1215,7 +898,6 @@ try{
  await questionViewportControls();
  await firstQuestionInDrawer();
  if(!completedPicture||workspace986)await liveQuestionDraftChecks();
- if(workspace986)await twoImageDrawerChecks();
  if(!interviewOnly&&!freshParts&&!completedPicture){
   await postQuestionPictureChecks();
   await boundRigPictureChecks();
