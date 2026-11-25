@@ -237,13 +237,15 @@ export function createJobRigScreen(options: {
     return freezeJobRigStage({...stage,source},ask.askId,++drawGeneration);
   }
 
-  async function submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionComments?: readonly JobComment[], general?:readonly string[]): Promise<string> {
+  async function submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionComments?: readonly JobComment[], general?:readonly string[], alreadySent?:(row:Feedback)=>boolean): Promise<string> {
     const prepared = mounted, state = options.window.state();
     if (!prepared || !state.receipt || state.preparing) throw new Error('JOB_ACT_SOURCE_STALE');
     if (state.closed) throw new Error('JOB_CLOSED');
     const refusal=jobRigScreenRefusal(prepared.display,state.pending,prepared.checkpoints);if(refusal)throw new Error(options.translate('job.refusal.'+refusal));
     if (!options.access.capability) throw new Error('JOB_CAPABILITY_REQUIRED');
-    const decisions=jobRigScreenDecisions(session, state.pending.filter(ask=>!prepared.modals?.forms.has(ask.askId)), prepared.display.publication.publicationId, general);
+    // #1226: the verdict carries only rows not already sent on their own; the committed baseline keeps every row.
+    const sendable=alreadySent?{...session,feedback:session.feedback.filter(row=>!alreadySent(row))}:session;
+    const decisions=jobRigScreenDecisions(sendable, state.pending.filter(ask=>!prepared.modals?.forms.has(ask.askId)), prepared.display.publication.publicationId, general);
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     const rigChanges=decisions.find(decision=>decision.kind==='review-verdict'&&decision.value.stage==='rig-review'&&decision.value.verdict==='changes-requested');
     const chestDraft=rigChanges?.kind==='review-verdict'?screen?.chestLandmarks?.():null;

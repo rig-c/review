@@ -77,7 +77,8 @@ export interface RigHost {
   /** A read the host answers itself, or undefined to fetch it from the subject's routes. */
   read(path: string, method: string): Promise<unknown> | undefined;
   /** The act bar's Submit review: the session's decisions go out as the pending asks' acts. */
-  submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionComments?: readonly JobComment[], general?:readonly string[]): Promise<string>;
+  submit(session: ReviewSession, committed: (commit: RigHostCommit) => void | Promise<void>, directionComments?: readonly JobComment[], general?:readonly string[],
+    /** #1226: rows already sent on their own as act@10; the verdict does not carry them again. */ alreadySent?:(row:Feedback)=>boolean): Promise<string>;
   attach(screen: RigHostScreen): void;
   /** The first rig draw is on screen (or the open failed): the job acknowledges the display after it. */
   displayed(): void;

@@ -168,6 +168,7 @@ rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requ
 // #1226: Send comments sits in the act bar, leftmost of the answers; it sends a comment-only act that answers no ask.
 const sendComments=panelMake('button',{id:'send-comments',type:'button',hidden:true});setSourceText(sendComments,'Send comments');button('save').before(sendComments);
 let commentSendState:'idle'|'sent'='idle';
+let sentAloneCache:{key:string;rows:Record<string,string>}|null=null;
 let pendingAnswers:readonly {kind:string;stage?:string}[]=[],answerSaved=false;
 let recordSaveStateShown=false;
 let jobProgress:JobProgressV3|null=null,progressTimer:ReturnType<typeof setInterval>|undefined;
@@ -366,11 +367,30 @@ function updateSavedState(): void {
 }
 
 /** C10: the act bar renders the latest local draft status; rig only classifies it. Nothing renders before the first status. */
-let liveIssueCount=()=>(session?.feedback.length??0)+(host?.verdictComments?.rows.length??0);
+// #1226: a row already sent on its own does not count toward a later Request changes.
+let liveIssueCount=()=>{const fresh=(row:{id:string})=>!(typeof isSentAlone==='function'&&isSentAlone(row));
+  return (session?.feedback.filter(fresh).length??0)+(host?.verdictComments?.rows.filter(fresh).length??0);};
 /** #1226: a live rig screen (not parts, record or direction) can send its comments without an ask. */
 function commentHost():boolean {return !!host?.verdictComments&&!!host.submitComments&&!partsOnly;}
+/** #1226: rows sent on their own as act@10, by id with the exact content sent. Such a row is shown Submitted and
+ * is never sent again inside a later act (CONTRACT §1). Bound to the displayed publication and source. */
+function sentAloneRows():Record<string,string> {
+  const binding=host?.verdictComments,key=binding?`rig-review-sent-alone/1:${binding.publicationId}:${binding.sourceHash}`:'';
+  if(sentAloneCache?.key!==key){
+    const rows:Record<string,string>={};
+    try{const stored=key?JSON.parse(localStorage.getItem(key)??'{}'):{};
+      if(stored&&typeof stored==='object'&&!Array.isArray(stored))for(const [id,json] of Object.entries(stored))if(typeof json==='string')rows[id]=json;}catch{/* in memory only */}
+    sentAloneCache={key,rows};
+  }
+  return sentAloneCache!.rows;
+}
+function isSentAlone(row:{id:string}):boolean {return sentAloneRows()[row.id]===JSON.stringify(row);}
+function markSentAlone(rows:readonly {id:string}[]):void {
+  const sent=sentAloneRows();for(const row of rows)sent[row.id]=JSON.stringify(row);
+  try{if(sentAloneCache?.key)localStorage.setItem(sentAloneCache.key,JSON.stringify(sent));}catch{/* in memory only */}
+}
 const unsentFeedback=()=>(session?.feedback??[]).filter(row=>!isSubmittedFeedback(row.id));
-const hasUnsentComments=()=>!!host?.verdictComments?.rows.length||unsentFeedback().length>0;
+const hasUnsentComments=()=>!!host?.verdictComments?.rows.some(row=>!isSentAlone(row))||unsentFeedback().length>0;
 function renderDraftState(): void {
   const recordSubmission=host?.recordSubmission?.();
   if(recordSubmission){
@@ -386,7 +406,7 @@ function renderDraftState(): void {
   renderAnswerControls();
   // #1226: the save state stands in for "Reviewing · N issues" beside Send comments.
   if(typeof commentHost==='function'&&commentHost()&&!draftConflict&&!actReadOnly&&!(draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus))){
-    rigInspector.actBar.setSaveState(saving?{kind:'saving',text:'Sending'}:!hasUnsentComments()&&(commentSendState==='sent'||!!session?.updatedAt)?{kind:'saved',text:'Submitted'}:{kind:'unsaved',text:'Not submitted'});
+    rigInspector.actBar.setSaveState(saving?{kind:'saving',text:'Sending'}:!hasUnsentComments()&&(commentSendState==='sent'||!!session?.updatedAt||Object.keys(sentAloneRows()).length>0)?{kind:'saved',text:'Submitted'}:{kind:'unsaved',text:'Not submitted'});
     return;
   }
   if (draftStatus === null && !live && !answerSaved && !dirty && !saving && !draftConflict && !actReadOnly && !session?.updatedAt) return;
@@ -1144,6 +1164,7 @@ function applyAxis(): void {
 /** A changed draft with the same id is still editable; only the exact submitted row is locked. */
 function isSubmittedFeedback(id:string):boolean {
   const row=session.feedback.find(item=>item.id===id);
+  if(typeof isSentAlone==='function'){const sent=row??host?.verdictComments?.rows.find(item=>item.id===id);if(sent&&isSentAlone(sent))return true;}
   return !!row&&!!submittedBaseline?.updatedAt&&submittedBaseline.feedback.some(item=>item.id===id&&JSON.stringify(item)===JSON.stringify(row));
 }
 
@@ -1391,25 +1412,29 @@ function bind(): void {
     if (host) {
       let submissionFailure: ReturnType<typeof jobSubmissionRefusal> | null = null;
       const generalRows = host.verdictComments?.rows;
-      const general = generalRows?.map(row=>row.summary);
+      // #1226: a comment already sent on its own is not sent again inside the verdict (CONTRACT §1).
+      const alreadySent = typeof isSentAlone === 'function' ? (row: {id: string}) => isSentAlone(row) : () => false;
+      const verdictRows = generalRows?.filter(row => !alreadySent(row));
+      const general = verdictRows?.map(row=>row.summary);
       try {
         const sent = await host.submit(structuredClone(session), async committed => {
           submittedBaseline = {...submittedBaseline!, ...committed.review,
             checkpoints: {...submittedBaseline!.checkpoints, ...committed.checkpoints}, updatedAt: committed.at};
           session.updatedAt = committed.at;
-          if (generalRows && general?.length && committed.review) {
-            generalRows.splice(0,general.length);
+          if (generalRows && verdictRows?.length && committed.review) {
+            const sentIds = new Set(verdictRows.map(row => row.id));
+            generalRows.splice(0, generalRows.length, ...generalRows.filter(row => !sentIds.has(row.id)));
             persistRecordComments();
           }
           const ids = new Set([...Object.keys(session.checkpoints), ...Object.keys(submittedBaseline.checkpoints)]);
           dirty = session.status !== submittedBaseline.status || JSON.stringify(session.feedback) !== JSON.stringify(submittedBaseline.feedback) ||
-            !!generalRows?.length ||
+            !!generalRows?.some(row => !alreadySent(row)) ||
             [...ids].some(id => JSON.stringify(session.checkpoints[id] ?? {outcome: 'pending', note: ''}) !==
               JSON.stringify(submittedBaseline!.checkpoints[id] ?? {outcome: 'pending', note: ''}));
           if(host?.direction){for(const row of recordComments)submittedDirectionComments.add(row.id);try{localStorage.removeItem(recordCommentKey);}catch{}}
           await persistence?.submitted(submittedBaseline);
           comments?.refresh(); renderProposals();
-        },host.direction?recordJobComments():undefined,general);
+        },host.direction?recordJobComments():undefined,general,alreadySent);
         if (sent) message(sent);
       } catch (error) {
         submissionFailure = jobSubmissionRefusal(error);
@@ -1446,17 +1471,15 @@ function bind(): void {
   sendComments.onclick=async()=>{
     if(!commentHost()||sendComments.disabled||saving)return;
     if(comments?.hasPendingComment?.()&&!await comments.commitDraft())return;
-    const rows=host!.verdictComments!.rows,feedback=unsentFeedback(),general=rows.map(row=>row.summary);
+    const generalRows=host!.verdictComments!.rows.filter(row=>!isSentAlone(row)),feedback=unsentFeedback(),general=generalRows.map(row=>row.summary);
     if(!feedback.length&&!general.length)return;
     saving=true;updateSavedState();
     let failure:ReturnType<typeof jobSubmissionRefusal>|null=null;
     try{
       const sent=await host!.submitComments!(structuredClone(feedback),general);
-      rows.splice(0,general.length);persistRecordComments();
-      const ids=new Set(feedback.map(row=>row.id));
-      submittedBaseline={...submittedBaseline!,feedback:[...submittedBaseline!.feedback.filter(row=>!ids.has(row.id)),...structuredClone(feedback)],updatedAt:submittedBaseline!.updatedAt??new Date().toISOString()};
-      commentSendState='sent';dirty=session.status!==submittedBaseline.status||hasUnsentComments();
-      await persistence?.submitted(submittedBaseline);
+      // Sent rows stay in the list and show Submitted, pinned and general alike.
+      markSentAlone([...feedback,...generalRows]);
+      commentSendState='sent';dirty=hasUnsentComments();
       comments?.refresh();renderProposals();if(sent)message(sent);
     }catch(error){failure=jobSubmissionRefusal(error);message(failure.text,true);}
     finally{
