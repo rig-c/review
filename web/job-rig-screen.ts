@@ -378,9 +378,15 @@ export function createJobRigScreen(options: {
       pairs.set(packet.checkpointId,{checkpointId:packet.checkpointId,before:imageFor(pair.before),after:imageFor(pair.after),
         differenceUrl:options.routes(prepared.display).api(`checkpoint-evidence/${packet.checkpointId}/difference`)});
     }
-    // #1229: a record shows its first declared pair as an ordinary comparison; packages keep checkpointPairs for pin replay without mounting the pair view.
-    const firstPair=prepared.record?pairs.values().next().value:undefined;
-    const evidencePair=pairs.size?{checkpointPairs:pairs,...(prepared.record?{checkpointPair:()=>firstPair}:{})}:{};
+    let selectedPair=pairs.values().next().value;
+    const evidencePair=pairs.size?{checkpointPairs:pairs,...(prepared.record?{
+      checkpointPair:()=>selectedPair,
+      selectCheckpointPair:(checkpointId:string)=>{
+        const pair=pairs.get(checkpointId);
+        if(pair)selectedPair=pair;
+        return pair;
+      },
+    }:{})}:{};
     if(prepared.record){
       const record=prepared.record,backdrop=record.picture?host(record.picture,ready):null;
       const question=record.inspection.interview?.questions[0];

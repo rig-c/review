@@ -27,22 +27,23 @@ import {recordViewportControls} from './helpers/record-viewport-controls.ts';
 import legacy from './fixtures/comments-contract-legacy.json';
 
 type Route = 'plan' | 'package';
-type Variant = 'pair' | 'no-pair' | 'size-mismatch';
+type Variant = 'pair' | 'no-pair' | 'size-mismatch' | 'two-pairs';
 type Language = 'en' | 'ko';
 type Host = Awaited<ReturnType<typeof startJobHost>>;
 const languages = ['en', 'ko'] as const;
 const routes = ['plan', 'package'] as const;
 const checkpointId = 'step-one';
+const secondCheckpointId = 'step-two';
 const width = 144, height = 104;
 const catalogs = {en: enCatalog, ko: koCatalog};
 const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 const sorted = <T extends {path: string}>(files: T[]) => files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 
-function picture(kind: 'before' | 'after' | 'spare', w = width): Buffer {
+function picture(kind: 'before' | 'after' | 'spare', w = width, offset = 0): Buffer {
     const png = new PNG({width: w, height});
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < w; x++) {
-            const split = kind === 'before' ? 58 : 82;
+            const split = (kind === 'before' ? 58 : 82) + offset;
             const color = kind === 'spare' ? [31, 38, 51] : x < split ? [222, 77, 110] : [52, 164, 205];
             png.data.set([color[0]!, color[1]!, y < 40 ? color[2]! : 255 - color[2]!, 255], (y * w + x) * 4);
         }
@@ -50,20 +51,22 @@ function picture(kind: 'before' | 'after' | 'spare', w = width): Buffer {
     return PNG.sync.write(png);
 }
 
-function createEvidence(root: string, variant: Variant) {
-    const bytes = {before: picture('before'), after: picture('after', variant === 'size-mismatch' ? width + 16 : width),
+function createEvidence(root: string, variant: Variant, id = checkpointId) {
+    const directory = id === checkpointId ? 'evidence' : 'evidence/' + id;
+    const offset = id === checkpointId ? 0 : -20;
+    const bytes = {before: picture('before', width, offset), after: picture('after', variant === 'size-mismatch' ? width + 16 : width, offset),
         spare: picture('spare')};
     const tiles = (['after', 'spare', 'before'] as const).map(kind => ({
         id: 'tile-' + kind,
         // Duplicate labels and shuffled order force resolution by the declared seals.
         label: 'Synthetic checkpoint tile',
-        ...writeWorkspaceFile(root, 'evidence/' + kind + '.png', bytes[kind]),
+        ...writeWorkspaceFile(root, directory + '/' + kind + '.png', bytes[kind]),
     }));
     const [after, , before] = tiles;
     assert.ok(before && after);
     const table: JobCheckpointTable = {schema: 'rig-review-checkpoint-table/1', columns: ['Check'], rows: [['Public synthetic pair']]};
-    const tableSeal = writeWorkspaceFile(root, 'evidence/table.json', JSON.stringify(table));
-    const packet: JobCheckpointEvidence = {schema: 'rig-review-checkpoint-evidence/1', checkpointId, planStepId: checkpointId,
+    const tableSeal = writeWorkspaceFile(root, directory + '/table.json', JSON.stringify(table));
+    const packet: JobCheckpointEvidence = {schema: 'rig-review-checkpoint-evidence/1', checkpointId: id, planStepId: id,
         tiles, table: tableSeal, routesText: '(i) accept\n(ii) repair\n(iii) stop', recommendationText: '(ii) repair',
         ...(variant !== 'no-pair' ? {pair: {
             before: {id: before.id, sha256: before.sha256}, after: {id: after.id, sha256: after.sha256},
@@ -87,24 +90,28 @@ async function openFixture(scratch: string, route: Route, variant: Variant, lang
     const name = variant + (language ? '-' + language : '') + (deferAsk ? '-no-ask' : '');
     const root = pkg?.input.root ?? join(scratch, 'plan-' + name + '-' + randomUUID().slice(0, 8));
     const subject = {kind: 'checkpoint' as const, checkpointId};
+    const steps = [{id: checkpointId, hash: '1'.repeat(64)}];
+    if (variant === 'two-pairs') steps.push({id: secondCheckpointId, hash: '2'.repeat(64)});
     let host: Host | undefined = pkg?.host;
     const close = async () => {if (pkg) await pkg.close(); else host?.stop();};
     try {
         if (!pkg) await mkdir(root);
         const plan = createSyntheticPlanRecordWorkspace(root, {
-            steps: [{id: checkpointId, hash: '1'.repeat(64)}], subjects: [subject],
+            steps, subjects: [subject],
             text: {does: 'Inspect the evidence', produces: 'Checkpoint decision', bar: 'Match the declared tiles', rests_on: []},
         });
         const evidence = createEvidence(root, variant);
-        const files = sorted([...plan.files, ...evidence.files]);
+        const secondEvidence = variant === 'two-pairs' ? createEvidence(root, 'pair', secondCheckpointId) : undefined;
+        const files = sorted([...plan.files, ...evidence.files, ...(secondEvidence?.files ?? [])]);
+        const packets = [evidence.packet, ...(secondEvidence ? [secondEvidence.packet] : [])];
         let publication: JobPublication | JobPublicationV3;
         const schema = pkg ? JOB_API_SCHEMA : JOB_API_V3_SCHEMA;
         if (pkg) {
             pkg.input.setRecordPath('project.json');
-            pkg.input.setContext({...pkg.input.getContext(), files, subjects: [subject], checkpointEvidence: [evidence.packet]});
+            pkg.input.setContext({...pkg.input.getContext(), files, subjects: [subject], checkpointEvidence: packets});
             publication = await pkg.publish();
         } else {
-            const context = {...plan.context, files, checkpointEvidence: [evidence.packet]};
+            const context = {...plan.context, files, checkpointEvidence: packets};
             const {reader} = createSyntheticRecordReader({onPlan: () => structuredClone(context)});
             host = await startJobHost({root, stateDir: join(scratch, 'state-' + name + '-' + randomUUID().slice(0, 8)), fingerprint: 'a'.repeat(64),
                 reviewer: {id: 'synthetic-owner', role: 'owner'}, publicationMode: 'record-and-package',
@@ -132,7 +139,7 @@ async function openFixture(scratch: string, route: Route, variant: Variant, lang
             assert.equal(refused.body.ok, false);
             assert.equal(refused.body.error.code, 'JOB_ASK_INVALID');
         }
-        assert.deepEqual(publication.source.checkpointEvidence, [evidence.packet], 'retained checkpoint evidence identity');
+        assert.deepEqual(publication.source.checkpointEvidence, packets, 'retained checkpoint evidence identity');
         const display = host.session.displayPublication(publication.publicationId);
         const base = host.origin + '/jobs/' + host.session.jobId + '/publications/' + publication.publicationId +
             '/instances/' + display.publication.instanceKey;
@@ -150,7 +157,7 @@ async function openFixture(scratch: string, route: Route, variant: Variant, lang
             assert.equal(res.status, 200);
             assert.equal(sha256(Buffer.from(await res.arrayBuffer())), tile.sha256, tile.path);
         }
-        return {host, publication, evidence, close, refuseAsk, sourceHash: metadata.sourceHash as string};
+        return {host, publication, evidence, secondEvidence, close, refuseAsk, sourceHash: metadata.sourceHash as string};
     } catch (error) {
         await close();
         throw error;
@@ -265,11 +272,11 @@ const viewOrder = ['compare', 'before', 'after', 'difference'];
 const controls = ['zoom-in', 'zoom-out', 'fit', 'native-one', 'view-menu'];
 const alignment = 'PARTS_DIFFERENCE_ALIGNMENT: integer native placement and exact PNG dimensions required';
 
-async function capture(page: InputCdpSession, directory: string, name: string) {
+async function capture(page: InputCdpSession, directory: string, name: string, size = [1440, 900]) {
     await settle(page);
     const bytes = await page.screenshot();
     const {width, height} = PNG.sync.read(bytes);
-    assert.deepEqual([width, height], [1440, 900], name);
+    assert.deepEqual([width, height], size, name);
     await writeFile(join(directory, name + '.png'), bytes);
 }
 
@@ -278,7 +285,8 @@ async function chooseView(page: InputCdpSession, mode: string) {
     await click(page, '#view-menu [data-view="' + mode + '"]');
 }
 
-async function pairView(page: InputCdpSession, fixture: Fixture, language: Language, mode: PairView, enabled = true, timeoutMs = 25_000) {
+async function pairView(page: InputCdpSession, fixture: Pick<Fixture, 'evidence'>, language: Language, mode: PairView,
+    enabled = true, timeoutMs = 25_000, selectedPair?: string) {
     const {before, after, bytes} = fixture.evidence;
     const tile = (side: 'before' | 'after', pane: string) => {
         const png = PNG.sync.read(bytes[side]);
@@ -289,7 +297,7 @@ async function pairView(page: InputCdpSession, fixture: Fixture, language: Langu
     const view = await waitFor(language + ' ' + mode + ' painted', async () => {
         const view = await observe(page, fixture.evidence, language);
         const selected = view.menu.filter(option => option.pressed).map(option => option.id);
-        return selected.join() === mode && view.tiles.length === expected.length &&
+        return selected.join() === [mode, selectedPair].filter(Boolean).join() && view.tiles.length === expected.length &&
             view.differenceCanvases === Number(mode === 'difference') && view;
     }, timeoutMs);
     assert.deepEqual(view.tiles, expected, mode + ' draws the declared native tiles in order');
@@ -297,8 +305,9 @@ async function pairView(page: InputCdpSession, fixture: Fixture, language: Langu
         mode + ' has only the intended native images');
     assert.deepEqual(view.controls.map(control => control.id), controls, 'shared controls appear once and in order');
     assert.ok(view.controls.every(control => !control.disabled), 'shared controls remain available');
-    assert.deepEqual(view.menu.map(option => option.id), viewOrder);
-    assert.deepEqual(view.menu.map(option => option.text), [catalogs[language]['Side by side'],
+    const layoutMenu = selectedPair ? view.menu.slice(0, viewOrder.length) : view.menu;
+    assert.deepEqual(layoutMenu.map(option => option.id), viewOrder);
+    assert.deepEqual(layoutMenu.map(option => option.text), [catalogs[language]['Side by side'],
         language === 'en' ? 'Before' : '이전', language === 'en' ? 'After' : '이후', catalogs[language].Difference]);
     assert.equal(view.differenceEnabled, enabled);
     assert.equal(view.evidenceCount, 0, 'retired evidence grid stays absent');
@@ -704,6 +713,75 @@ function arg(name: string) {
     return value;
 }
 
+/** #1253 uses the same sealed fixtures on the base and the candidate at the owner's viewport size. */
+async function recordPairSelection(page: InputCdpSession, scratch: string, captures: string, baseline: boolean) {
+    const size = [1280, 800] as const;
+    const pairId = (id: string) => 'checkpoint-pair-' + id;
+    const menuHtml = () => page.evaluate<string>(`document.querySelector('#view-menu').outerHTML`);
+    const observations: Record<string, {singleMenu: string; twoPairMenu: string; pairTwoMenu?: string}> = {};
+    await page.setViewport(...size);
+    for (const language of languages) {
+        const single = await openFixture(scratch, 'plan', 'pair', language);
+        let singleMenu: string;
+        try {
+            await showFixture(page, single, language);
+            await pairView(page, single, language, 'after');
+            await click(page, '#view-menu summary');
+            await capture(page, captures, 'single-pair-' + language, [...size]);
+            singleMenu = await menuHtml();
+        } finally {
+            await page.goto('about:blank');
+            await single.close();
+        }
+        const multi = await openFixture(scratch, 'plan', 'two-pairs', language);
+        try {
+            const evidence = multi.secondEvidence;
+            assert.ok(evidence);
+            const first = pairId(checkpointId), second = pairId(secondCheckpointId);
+            await showFixture(page, multi, language);
+            assert.equal(await page.evaluate<number>(`document.querySelectorAll('form[data-job-ask]').length`), 0);
+            const opening = await pairView(page, multi, language, 'after', true, 6_000, baseline ? undefined : first);
+            await click(page, '#view-menu summary');
+            await capture(page, captures, 'two-pairs-' + language, [...size]);
+            const twoPairMenu = await menuHtml();
+            observations[language] = {singleMenu, twoPairMenu};
+            if (baseline) {
+                assert.equal(twoPairMenu, singleMenu, 'the base does not expose the second pair');
+            } else {
+                const labels = language === 'en' ? ['Pair 1', 'Pair 2'] : ['쌍 1', '쌍 2'];
+                assert.deepEqual(opening.menu.slice(4).map(({id, text}) => [id, text]),
+                    [[first, labels[0] + ' · ' + checkpointId], [second, labels[1] + ' · ' + secondCheckpointId]]);
+                assert.equal(await page.evaluate<number>(`document.querySelectorAll('#view-menu [role="separator"]').length`), 1);
+                for (const mode of ['after', 'compare', 'before', 'difference'] as const) {
+                    await chooseView(page, mode);
+                    await chooseView(page, second);
+                    await pairView(page, {evidence}, language, mode, true, 6_000, second);
+                    if (mode === 'after') {
+                        await click(page, '#view-menu summary');
+                        await capture(page, captures, 'pair-two-' + language, [...size]);
+                        observations[language]!.pairTwoMenu = await menuHtml();
+                    }
+                    if (mode === 'difference') await differenceBytes(page, evidence);
+                    await chooseView(page, first);
+                    await pairView(page, multi, language, mode, true, 6_000, first);
+                }
+                await chooseView(page, second);
+                await chooseView(page, 'after');
+                await startCapture(page);
+                const {id} = await placePin(page, 'Second pair pin', 'after', 0.5);
+                await chooseView(page, first);
+                await verifyReplay(page, id, 'Second pair pin');
+                await pairView(page, {evidence}, language, 'after', true, 6_000, second);
+            }
+            console.log('1253_RECORD_PAIR_SELECTION_PASS ' + language + (baseline ? ' baseline' : ' candidate'));
+        } finally {
+            await page.goto('about:blank');
+            await multi.close();
+        }
+    }
+    return observations;
+}
+
 /** #1229 fail-first case (owner ruling 11-25): a record publication with a declared pair and NO checkpoint ask
  * mounts and switches the pair view from the start. Fails on 8ee04367 where pair mounting required a pending ask. */
 async function recordPairWithoutAsk(page: InputCdpSession, scratch: string, captures: string) {
@@ -841,6 +919,13 @@ async function run() {
             assert.equal(event.params?.type, 'beforeunload', 'only departure with unsent test pins is allowed');
             await send('Page.handleJavaScriptDialog', {accept: true});
         }});
+        if (Bun.argv.includes('--pair-selection') || Bun.argv.includes('--pair-selection-baseline')) {
+            active = 'record-pair-selection';
+            results.cases.recordPairSelection = await recordPairSelection(page, scratch, captures,
+                Bun.argv.includes('--pair-selection-baseline'));
+            await writeFile(join(output, 'observations.json'), JSON.stringify(results, null, 2) + '\n');
+            return;
+        }
         await page.setViewport(1440, 900);
         if (!baseline) {
             active = 'record-pair-no-ask';
@@ -942,6 +1027,8 @@ async function run() {
             results.cases.outsidePair = await runOutsidePairControl(page, scratch);
             active = 'refused-checkpoint-ask-screen';
             results.cases.refusedCheckpointAskScreen = await checkpointAskRefusalKeepsScreen(page, scratch);
+            active = 'record-pair-selection';
+            results.cases.recordPairSelection = await recordPairSelection(page, scratch, captures, false);
         }
         await writeFile(join(output, 'observations.json'), JSON.stringify(results, null, 2) + '\n');
     } catch (error) {

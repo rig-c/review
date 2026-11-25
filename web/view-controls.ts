@@ -108,6 +108,8 @@ export function describeLayerToggles(root:{getElementById(id:string):unknown},re
 /** Finite composition: target rig; compare/Parts/job compatibility expires at steps 3/2/5. */
 export interface ViewSwitchMode {
  id:string;labelKey:string;pressed:boolean;hidden?:boolean;
+ /** Producer text kept verbatim after the localized label. */
+ labelSuffix?:string;
  /** Localized explanation shown on the disabled choice. */
  disabledReason?:string;
 }
@@ -210,8 +212,11 @@ export function createViewControls(options:ViewControlsOptions) {
    for(const mode of group){
     const button=actionButton(t(mode.labelKey),()=>{
      if(next.disabled||button.disabled)return;
-     setMode(mode.id);viewSwitch!.open=false;next.onChange?.(mode.id);
+     setMode(mode.id,index?null:mode.id);viewSwitch!.open=false;next.onChange?.(mode.id);
     });
+    if(mode.labelSuffix!==undefined){
+     const suffix=panelMake('span',{},' · '+mode.labelSuffix);suffix.setAttribute('translate','no');button.append(suffix);
+    }
     button.dataset.view=mode.id;button.setAttribute('aria-pressed',String(mode.pressed));
     modes.set(mode.id,{mode,button,group});
     if(mode.disabledReason)setDisabled(mode.id,mode.disabledReason);

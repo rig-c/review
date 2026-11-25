@@ -30,7 +30,7 @@ import {createRigViewportProvider,rigPanCarry} from './rig-viewport-provider.ts'
 import {mountViewportPair} from './viewport-pair.ts';
 import {createPreviousBuildView} from './previous-build-view.ts';
 import {rendererStatus} from './renderer-status.ts';
-import {panelMake,createRigLayerControls,createViewControls,inspectionViewSwitch,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,idlePreviewOnOpen,bookmarkCameraKept,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
+import {panelMake,createRigLayerControls,createViewControls,inspectionViewSwitch,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,idlePreviewOnOpen,bookmarkCameraKept,bindLayerShortcuts,describeLayerToggles,type ViewPoint,type ViewSwitchGroup} from './view-controls.ts';
 import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
 import {bindMeshPanel,type MeshPanel} from './mesh-panel.ts';
 import {bindDensityStrip,type DensityStripPanel,type DensityStripViewLike} from './density-strip-panel.ts';
@@ -183,6 +183,7 @@ let setupPartsPersistence:(()=>Promise<void>)|null=null;
 let rigDifference:{assets:ModelAssets;painting:HTMLImageElement;camera:ReturnType<typeof createViewportState>;hidden:Map<HTMLElement,boolean>;label:string;bookmark:InspectionBookmark}|null=null;
 let rigDifferenceFailure:string|null=null;
 const checkpointPairLabels={compare:'Side by side',before:'Before',after:'After',difference:'Difference'} as const;
+const checkpointPairPrefix='checkpoint-pair-';
 type CheckpointPairMode=keyof typeof checkpointPairLabels;
 type CheckpointPairTile={pair:CheckpointPairView;side:'before'|'after'};
 let checkpointPair:{pair:CheckpointPairView;mode:CheckpointPairMode;bookmark:InspectionBookmark;
@@ -595,7 +596,13 @@ async function choosePreviousBuild():Promise<void> {
 }
 
 async function chooseInspectionView(id:string):Promise<void> {
- if(checkpointPair){await showCheckpointPair(id as CheckpointPairMode);return;}
+ if(checkpointPair){
+  if(id.startsWith(checkpointPairPrefix)){
+   const pair=host?.selectCheckpointPair?.(id.slice(checkpointPairPrefix.length));
+   if(pair)await syncCheckpointPair(false,checkpointPair.mode);
+  }else await showCheckpointPair(id as CheckpointPairMode);
+  return;
+ }
  if(activeInterviewImages){const image=activeInterviewImages[Number(id.replace('interview-image-',''))];if(id.startsWith('interview-image-')&&image){activeInterviewImage=image;void showReference('',image);}return;}
  if(id==='previous-version'){await choosePreviousBuild();return;}
  leavePreviousBuild();
@@ -2140,17 +2147,21 @@ async function showCheckpointPair(mode:CheckpointPairMode):Promise<void> {
  viewport.requestFit();renderLayout();comments?.refresh();
 }
 
-function syncCheckpointPair(keepReplay=true):void {
+async function syncCheckpointPair(keepReplay=true,mode:CheckpointPairMode='after'):Promise<void> {
  const pair=host?.record?host.checkpointPair?.():undefined;
  if(keepReplay&&checkpointPair?.replayFor===(pair??null))return;
  if(pair===checkpointPair?.pair){
   if(checkpointPair)checkpointPair.replayFor=undefined;
   return;
  }
- if(mountCheckpointPair(pair))void showCheckpointPair('after');
+ const reason=pair&&mode==='difference'?checkpointDifferenceReason(pair):null;
+ if(mountCheckpointPair(pair,reason?'after':mode)){
+  await showCheckpointPair(reason?'after':mode);
+  if(reason)message(reason,true);
+ }
 }
 
-function mountCheckpointPair(pair:CheckpointPairView|undefined):boolean {
+function mountCheckpointPair(pair:CheckpointPairView|undefined,mode:CheckpointPairMode='after'):boolean {
  const hadPair=!!checkpointPair;checkpointPair?.release();
  if(!pair){if(hadPair)syncQuestionImage();return false;}
  releaseInterview?.();releaseInterview=null;
@@ -2166,9 +2177,15 @@ function mountCheckpointPair(pair:CheckpointPairView|undefined):boolean {
  const disabled=new Map(controls.zoomButtons.concat(controls.nativeOne!).map(button=>[button,button.disabled]));
  for(const button of disabled.keys())button.disabled=false;
  const bindings=button('zoom-in').onclick?[]:[viewport.bindControls(unitScaleMessage),viewport.bindNavigation()];
- const modes=Object.entries(checkpointPairLabels).map(([id,labelKey])=>({id,labelKey,pressed:id==='after'}));
- const restoreSwitch=controls.replaceViewSwitch({currentMode:'after',groups:[{modes}],onChange:chooseInspectionView});
- checkpointPair={pair,mode:'after',bookmark,difference:null,generation:0,release:()=>{
+ const modes=Object.entries(checkpointPairLabels).map(([id,labelKey])=>({id,labelKey,pressed:id===mode}));
+ const recordPairs=host?.selectCheckpointPair?host.checkpointPairs:undefined;
+ const groups:ViewSwitchGroup[]=[{modes}];
+ if(recordPairs&&recordPairs.size>1)groups.push({modes:[...recordPairs.values()].map((candidate,index)=>({
+  id:checkpointPairPrefix+candidate.checkpointId,labelKey:t('Pair {0}',[index+1],'en'),
+  labelSuffix:candidate.checkpointId,pressed:candidate===pair,
+ }))});
+ const restoreSwitch=controls.replaceViewSwitch({currentMode:mode,groups,onChange:chooseInspectionView});
+ checkpointPair={pair,mode,bookmark,difference:null,generation:0,release:()=>{
   checkpointPair=null;pair.after.image.remove();content.replaceChildren(...nodes);restoreSwitch();
   for(const {node,value}of hidden)node.hidden=value;
   for(const {id,value}of labels)text(id,value);
@@ -2178,6 +2195,7 @@ function mountCheckpointPair(pair:CheckpointPairView|undefined):boolean {
   viewport.cancelFit();Object.assign(viewport.state,camera);if(!disposed){renderLayout();comments?.refresh();}
  }};
  viewport.state.cameraSync=false;text('rig-label','After');setSourceAttribute(el('rig-pane'),'aria-label','After');
+ if(mode==='difference'){content.replaceChildren();text('reference-label','Difference');setSourceAttribute(el('reference-pane'),'aria-label','Difference');renderLayout();}
  if(sourceTextContent(el('message'))==='This request has no picture.')message(sourceTextContent(el('dirty')),false,true);
  return true;
 }
@@ -2244,7 +2262,7 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  // #1226: the comments hint names the button that actually sends them.
  const commentsHint=typeof commentHost==='function'&&commentHost()?rigInspector.comments.panel.querySelector('.review-dialog-header .hint'):null;
  if(commentsHint)setSourceText(commentsHint,'Drafts save locally as you type · nothing is sent until you press Send comments');
- if(host?.record&&host.checkpointPair)syncCheckpointPair();
+ if(host?.record&&host.checkpointPair)void syncCheckpointPair();
  if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
  if(host?.recordSubmission?.()==='submitted')firstPublicationPrompt=false;
  // #1228: a displayed record publication takes the comment line where the first-publication waiting line stood;
@@ -2449,7 +2467,7 @@ function bindInspector(partsSubject=false):void {
  inspectorTabs=bindInspectorTabs(()=>{const mode=inspectorTabs?.state();if(mode)inspectorBlocks?.activate(mode);if(!checkpointPair)syncQuestionImage();workspace?.afterTab();renderLayout();},()=>workspace?.beforeTab(),rigInspector.row);
  viewDisposers.push(bindHeaderModeAvailability(partsSubject?{model:false,parts:true}:{model:!!data.manifest.model,preRig:data.capabilities.preRig,parts:!!host?.record&&!data.manifest.model}));
  for(const mode of document.querySelectorAll<HTMLButtonElement>('[data-mode]'))if(mode.dataset.mode==='rig'||mode.dataset.mode==='playback')mode.onclick=()=>{
-  if(checkpointPair?.replayFor!==undefined)syncCheckpointPair(false);
+  if(checkpointPair?.replayFor!==undefined)void syncCheckpointPair(false);
   showInspector(mode.dataset.mode!);
  };
 }
