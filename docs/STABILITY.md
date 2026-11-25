@@ -593,6 +593,11 @@ with `JOB_ACT_INVALID`. Create reads it only after moving its exact Review pin.
 The optional publication `commit` is absent unless the trusted reader declares
 it, so existing publications keep their bytes. See the
 [act@10 wire contract](REVIEW_PACKAGE.md#comment-only-act-act10).
+The rule that a comment sent on its own is not carried again by a later act is
+kept by the browser, not the daemon: the sent rows are recorded in page memory
+and `localStorage`. If that store is cleared, a later verdict act can carry
+those rows again. The verdict path that could carry them is removed in
+[Review #1232](https://github.com/rig-c/review/issues/1232).
 
 ### Named export inventory
 
