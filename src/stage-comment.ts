@@ -2,7 +2,7 @@
 import type {PosedFrame} from '@rig-c/play';
 import type {ControlNumericCamera} from './control.ts';
 import {formatFixed} from './frame-clock.ts';
-import type {JobActValues, JobComment, JobCommentAnchor, JobCommentFeedbackAnchor} from './job-contract.ts';
+import type {JobActValues, JobComment, JobCommentAnchor, JobCommentContext, JobCommentFeedbackAnchor, JobContextComment} from './job-contract.ts';
 import type {Feedback} from './session.ts';
 import type {CompareFeedback} from './compare-session.ts';
 export interface MarkPoint {x:number;y:number}
@@ -70,6 +70,21 @@ export function projectCommentLabels(comments: readonly JobComment[], pictureFor
 /** Pure preparation only: the caller still decodes the complete source-bound envelope. */
 export function feedbackItemComments(items: readonly (Feedback | CompareFeedback)[]): {text: string; anchor: JobCommentFeedbackAnchor}[] {
   return items.map(({summary, ...anchor}) => ({text: summary, anchor: structuredClone(anchor)}));
+}
+/** A pinned row's comment with the view it was made in (act@7 context). The verdict writer adds the ask `subject`;
+ * act@10 (#1226) has no ask and sends none. */
+export function feedbackContextComments(items: readonly Feedback[], subject?: NonNullable<JobCommentContext['subject']>): JobContextComment[] {
+  return feedbackItemComments(items).map(comment => {
+    const rawMark = (comment.anchor.context as {comment?: unknown} | undefined)?.comment;
+    if (!hasStageComment(rawMark)) return comment;
+    const mark = parseStageComment(rawMark);
+    const selection = (mark.bookmark as {
+      selection: {inspector: JobCommentContext['tab']; part?: JobCommentContext['part'] | null};
+    }).selection;
+    return {...comment, context: {...(subject ? {subject} : {}), mode: mark.mode, tab: selection.inspector,
+      ...(selection.part ? {part: selection.part} : {}), region: mark.world, camera: mark.camera,
+      ...(mark.frame ? {frame: mark.frame} : {})}};
+  });
 }
 /** Mapping comes from the decoded plan/ask, never from an inferred checkpoint ID. */
 export function checkpointNoteComments(value: Pick<JobActValues['checkpoint'], 'checkpointId' | 'planStepId'> & {note: string}): JobComment[] {

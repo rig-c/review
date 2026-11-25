@@ -1423,7 +1423,8 @@ export type RecordUISubmission = {
   };
 }[keyof RecordUIActValues];
 
-export type UISubmissionV3 = JobUISubmission | RecordUISubmission;
+/** #1226: a comment-only submission is accepted beside the ask-bound ones. */
+export type UISubmissionV3 = JobUISubmission | RecordUISubmission | JobCommentUISubmission;
 
 export type RecordAct = Pick<JobLegacyAct,
   'actId' | 'jobId' | 'askId' | 'publicationId' | 'authority' | 'at'> & {

@@ -14,8 +14,8 @@ import {
   commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, recordActSource, requestDigest, validateRecordAskSubject,
   chestLandmarkIdentity, parseChestLandmarkEdits, parseChestLandmarksAct, parseCommentOnlyAct,
 } from './job-api.ts';
-import { checkpointNoteComments, feedbackItemComments, noteComments, partsIssueComments } from './feedback-export.ts';
-import { hasStageComment, parseStageComment } from './stage-comment.ts';
+import { checkpointNoteComments, noteComments, partsIssueComments } from './feedback-export.ts';
+import { feedbackContextComments } from './stage-comment.ts';
 import type { Feedback } from './session.ts';
 import { validatePicks } from './interview-picks.ts';
 import {
@@ -53,19 +53,6 @@ function submittedComments(value: Record<string, unknown>, legacyWordsRequired =
   return legacy.trim() ? [{text: legacy}] : [];
 }
 
-function rigVerdictFeedbackComments(feedback: readonly Feedback[], subject: NonNullable<JobCommentContext['subject']>): JobContextComment[] {
-  return feedbackItemComments(feedback).map(comment => {
-    const rawMark = (comment.anchor.context as {comment?: unknown} | undefined)?.comment;
-    if (!hasStageComment(rawMark)) return comment;
-    const mark = parseStageComment(rawMark);
-    const selection = (mark.bookmark as {
-      selection: {inspector: JobCommentContext['tab']; part?: JobCommentContext['part'] | null};
-    }).selection;
-    return {...comment, context: {subject, mode: mark.mode, tab: selection.inspector,
-      ...(selection.part ? {part: selection.part} : {}), region: mark.world, camera: mark.camera,
-      ...(mark.frame ? {frame: mark.frame} : {})}};
-  });
-}
 
 function validateRetainedMeshEdits(model: ReturnType<typeof readJobEditModel>, edits: readonly JobMeshEdit[]): void {
   for (const {edit} of edits) {
@@ -730,7 +717,7 @@ export function finalizeJobAct(options: {
         const selector = source.selector as Extract<NonNullable<JobSourceBinding['selector']>, {kind: 'rig' | 'draft'}>;
         let verdictComments: readonly JobContextComment[];
         try {
-          verdictComments = value.feedback === undefined ? noteComments(note) : rigVerdictFeedbackComments(value.feedback as Feedback[],
+          verdictComments = value.feedback === undefined ? noteComments(note) : feedbackContextComments(value.feedback as Feedback[],
             {ask: ask.subject, sourceHash: source.sourceHash, selector});
         } catch { throw new JobError('JOB_ACT_INVALID'); }
         const rigAct = {...act,

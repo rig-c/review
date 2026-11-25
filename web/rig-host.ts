@@ -3,7 +3,7 @@
 import type {ModelAssets, PosedFrame} from '@rig-c/play';
 import type {PartsIssue} from '../src/parts-comment.ts';
 import type {JobAnsweredDirectionFeedback,JobCheckpointEvidence,JobComment,JobProgressV3, PendingAskV3} from '../src/job-contract.ts';
-import type {ReviewSession} from '../src/session.ts';
+import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {InspectionBookmark} from './inspection-persistence.ts';
 import type {ControlView} from '../src/control.ts';
 import type {InstanceAccess} from './instance-access.ts';
@@ -67,6 +67,8 @@ export interface RigHost {
   reviewState?(issues:number,sending:boolean):string;
   readonly record?:{readonly jobId?:string;readonly draftId?:string;readonly publicationId?:string;readonly previousPublicationId?:string|null;readonly label:string;readonly sourceHash:string;readonly hasPicture:boolean;readonly planPicture?:{readonly name:string;readonly src:string;readonly path:string;readonly sha256:string};/** #1048: the sealed `files` entries of the record's question images. */readonly questionPictures?:readonly {readonly name:string;readonly path:string;readonly sha256:string}[];readonly missingPicture?:'rig'|'scene';readonly questionPicture?:true};
   submitParts?(issues:readonly PartsIssue[], general?:readonly string[]):Promise<string>;
+  /** #1226: unsent pinned rows and general comments go out as one comment-only act; it answers no ask. */
+  submitComments?(feedback:readonly Feedback[], general:readonly string[]):Promise<string>;
   readonly access: InstanceAccess;
   /** UI act authority is separate from a retained backdrop's immutable source access. */
   readonly ownerActAccess?: Pick<InstanceAccess, 'capability'>;

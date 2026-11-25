@@ -165,6 +165,9 @@ const askHeadline=panelMake('span',{id:'workspace-ask-headline',className:'works
 const requestChanges=panelMake('button',{id:'request-changes',type:'button',hidden:true});
 const requestChangesReason=panelMake('span',{id:'request-changes-reason',hidden:true});
 rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requestChangesReason,requestChanges);
+// #1226: Send comments sits in the act bar, leftmost of the answers; it sends a comment-only act that answers no ask.
+const sendComments=panelMake('button',{id:'send-comments',type:'button',hidden:true});setSourceText(sendComments,'Send comments');button('save').before(sendComments);
+let commentSendState:'idle'|'sent'='idle';
 let pendingAnswers:readonly {kind:string;stage?:string}[]=[],answerSaved=false;
 let recordSaveStateShown=false;
 let jobProgress:JobProgressV3|null=null,progressTimer:ReturnType<typeof setInterval>|undefined;
@@ -364,6 +367,10 @@ function updateSavedState(): void {
 
 /** C10: the act bar renders the latest local draft status; rig only classifies it. Nothing renders before the first status. */
 let liveIssueCount=()=>(session?.feedback.length??0)+(host?.verdictComments?.rows.length??0);
+/** #1226: a live rig screen (not parts, record or direction) can send its comments without an ask. */
+const commentHost=()=>!!host?.verdictComments&&!!host.submitComments&&!partsOnly;
+const unsentFeedback=()=>(session?.feedback??[]).filter(row=>!isSubmittedFeedback(row.id));
+const hasUnsentComments=()=>!!host?.verdictComments?.rows.length||unsentFeedback().length>0;
 function renderDraftState(): void {
   const recordSubmission=host?.recordSubmission?.();
   if(recordSubmission){
@@ -377,6 +384,11 @@ function renderDraftState(): void {
   }
   const live=host?.reviewState?.(liveIssueCount(),saving);
   renderAnswerControls();
+  // #1226: the save state stands in for "Reviewing · N issues" beside Send comments.
+  if(commentHost()&&!draftConflict&&!actReadOnly&&!(draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus))){
+    rigInspector.actBar.setSaveState(saving?{kind:'saving',text:'Sending'}:!hasUnsentComments()&&(commentSendState==='sent'||!!session?.updatedAt)?{kind:'saved',text:'Submitted'}:{kind:'unsaved',text:'Not submitted'});
+    return;
+  }
   if (draftStatus === null && !live && !answerSaved && !dirty && !saving && !draftConflict && !actReadOnly && !session?.updatedAt) return;
   const localVerdict = !host && !partsOnly && verdictSubmit !== null && !session?.feedbackWarnings.length;
   const unsaved = localVerdict ? 'Saves locally. The producer receives no feedback.' : 'Unsubmitted changes';
@@ -1417,6 +1429,27 @@ function bind(): void {
       message(dirty ? 'Changes were made during submission. Submit again.' : 'Saved locally. The producer received no feedback.');
     } catch (error) { message(`Submission failed: ${errorText(error)}`, true); } finally { saving = false; updateSavedState(); }
   };
+  sendComments.onclick=async()=>{
+    if(!commentHost()||sendComments.disabled||saving)return;
+    if(comments?.hasPendingComment?.()&&!await comments.commitDraft())return;
+    const rows=host!.verdictComments!.rows,feedback=unsentFeedback(),general=rows.map(row=>row.summary);
+    if(!feedback.length&&!general.length)return;
+    saving=true;updateSavedState();
+    let failure:ReturnType<typeof jobSubmissionRefusal>|null=null;
+    try{
+      const sent=await host!.submitComments!(structuredClone(feedback),general);
+      rows.splice(0,general.length);persistRecordComments();
+      const ids=new Set(feedback.map(row=>row.id));
+      submittedBaseline={...submittedBaseline!,feedback:[...submittedBaseline!.feedback.filter(row=>!ids.has(row.id)),...structuredClone(feedback)],updatedAt:submittedBaseline!.updatedAt??new Date().toISOString()};
+      commentSendState='sent';dirty=session.status!==submittedBaseline.status||hasUnsentComments();
+      await persistence?.submitted(submittedBaseline);
+      comments?.refresh();renderProposals();if(sent)message(sent);
+    }catch(error){failure=jobSubmissionRefusal(error);message(failure.text,true);}
+    finally{
+      saving=false;updateSavedState();
+      if(failure)rigInspector.actBar.setSaveState({kind:'failed',text:failure.text,title:failure.title});
+    }
+  };
   // Saved browser defaults seed a new inspection; explicit links and source drafts restore over them.
   directionPanel=bindDirectionPanel(el('stage-layout'),()=>{
     const inspected=!!inspectedModel&&(!stageSource||stageSource.url===inspectedModel.url);
@@ -2205,19 +2238,22 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  const labels=[...new Set(subjects.map(subject=>requests[subject.kind+':'+subject.stage]??requests[subject.kind]).filter((label):label is string=>!!label))];
  const liveVerdict=(subject:{kind:string;stage?:string})=>
   partsOnly?subject.kind==='parts-verdict':subject.kind==='review-verdict'&&subject.stage==='rig-review';
- const refreshVerdictComments=host?.verdictComments&&pendingAnswers.some(liveVerdict)!==subjects.some(liveVerdict);
+ const refreshVerdictComments=host?.verdictComments&&(pendingAnswers.some(liveVerdict)!==subjects.some(liveVerdict)||!pendingAnswers.length!==!subjects.length);
  pendingAnswers=subjects;
+ // #1226: the comments hint names the button that actually sends them.
+ const commentsHint=rigInspector.comments.panel.querySelector('.review-dialog-header .hint');
+ if(commentsHint&&commentHost())setSourceText(commentsHint,'Drafts save locally as you type · nothing is sent until you press Send comments');
  if(host?.checkpointPair)syncCheckpointPair();
  if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
  if(host?.recordSubmission?.()==='submitted')firstPublicationPrompt=false;
- renderAskHeadline(labels.join(' · ')||(firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
+ renderAskHeadline(labels.join(' · ')||(commentHost()?"We're looking at the work together. Leave your thoughts as comments.":firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
  if(subjects.length)firstPublicationPrompt=false;
  renderDraftState();
 }
 function syncJobActRow(subjects=pendingAnswers):void {
  const notice=el('review-message');
  const refusal=notice.classList.contains('error')&&!!notice.textContent?.trim();
- rigInspector.act.hidden=!subjects.length&&!firstPublicationPrompt&&!jobProgress&&!refusal&&!host?.recordSubmission?.();
+ rigInspector.act.hidden=!subjects.length&&!firstPublicationPrompt&&!jobProgress&&!refusal&&!host?.recordSubmission?.()&&!commentHost();
  rigInspector.syncActRow?.();
 }
 function setJobProgress(value:JobProgressV3|null):void {
@@ -2328,7 +2364,10 @@ function renderAnswerControls():void {
  requestChangesReason.hidden=!inlineReason;
  if(inlineReason)requestChanges.setAttribute('aria-describedby',requestChangesReason.id);
  else requestChanges.removeAttribute('aria-describedby');
- save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;rigAsk.hidden=!dialog||firstPublicationPrompt||!questionPending&&recordTrigger!==rigAsk;
+ save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;
+ sendComments.hidden=!commentHost()||!!host?.jobClosed?.();
+ sendComments.disabled=blocked||!!readOnly||!hasUnsentComments()&&!pendingStageComment;
+ sendComments.classList.toggle('primary',!verdict);rigAsk.hidden=!dialog||firstPublicationPrompt||!questionPending&&recordTrigger!==rigAsk;
  recordAsk.hidden=!dialog||firstPublicationPrompt||recordTrigger!==recordAsk||!recordKind;
  if(host?.verdictComments){
   const notice=el('review-message');
