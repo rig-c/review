@@ -528,7 +528,7 @@ test('#1226 a comment send retried after a lost response replays the same reques
           const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
           results.push(result);
           // The daemon committed the act (and moved the generation), but the page never hears back.
-          if (lose) {lose = false; return {ok: false, error: {code: 'JOB_TRANSPORT_LOST', message: 'JOB_TRANSPORT_LOST'}};}
+          if (lose) {lose = false; throw new Error('JOB_TRANSPORT_LOST');}
           return result;
         },
       }, routes: () => ({entry: prepared.entry, api: path => path}), refusal: error => String(error),
