@@ -11,7 +11,10 @@ import {createJobRigScreen, type JobRigMeshScreen, type JobRigScreenPrepared} fr
 import {rigHost, setRigHost, type RigHost, type RigHostCommit} from '../web/rig-host.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ActV3, DisplayPublicationV3, JobMeshEditValue, PendingAskV3, UISubmissionV3} from '../src/job-contract.ts';
-import {jobHash, parseCommentsAct, parseMeshEditsAct} from '../src/job-api.ts';
+import {jobHash, parseCommentOnlyAct, parseCommentsAct, parseContextCommentsAct, parseMeshEditsAct} from '../src/job-api.ts';
+import {canonicalJson} from '../src/canonical-json.ts';
+import {writeFile} from 'node:fs/promises';
+import type {JobChestLandmarkValue} from '../src/job-contract.ts';
 import {attachmentHashText, MeshEditSession, meshEditActValue} from '../src/mesh-edit.ts';
 import {parseManifest} from '../src/manifest.ts';
 import {setLanguagePreference} from '../web/i18n.ts';
@@ -296,7 +299,7 @@ for(const failure of ['abort','source-mismatch']as const)test(`#737 parts host p
  }finally{globalThis.fetch=originalFetch;}
 });
 
-test('#966 mesh-carrying Request changes asks confirm once; Cancel sends nothing and leaves draft; OK sends act@8', async () => {
+test('#966 #1231 mesh-carrying Request changes asks confirm once; Cancel sends nothing; OK sends the edits as act@10, then the verdict without them', async () => {
   const f = await jobFixture(), originalReader = Object.getOwnPropertyDescriptor(globalThis, 'FileReader');
   let loaded: Awaited<ReturnType<typeof loadSetupAssets>> | undefined;
   let player: RigPlayer | undefined;
@@ -380,9 +383,19 @@ test('#966 mesh-carrying Request changes asks confirm once; Cancel sends nothing
     accept = true;
     await app.save();
     expect(prompts).toHaveLength(2);
-    expect(requests).toHaveLength(1);
-    expect(acts).toHaveLength(1);
-    expect(parseMeshEditsAct(acts[0]!).value.meshEdits).toHaveLength(1);
+    expect(requests.map(request => request.kind)).toEqual(['comments', 'review-verdict']);
+    expect(acts).toHaveLength(2);
+    const carried = parseCommentOnlyAct(acts[0]!);
+    expect(carried.value.comments).toEqual([]);
+    expect(carried.value.carriers).toEqual([{kind: 'mesh-edits', file: publication.source.model!,
+      meshEdits: [{edit, sha256: jobHash(canonicalJson(edit))}]}]);
+    // #1231: the verdict no longer carries the ops; it is an ordinary comments verdict (@6 or @7).
+    expect('meshEdits' in (requests[1]!.value as object)).toBe(false);
+    expect(['rig-review/act@6', 'rig-review/act@7']).toContain(acts[1]!.schema);
+    const verdict = acts[1]!.schema === 'rig-review/act@7' ? parseContextCommentsAct(acts[1]!) : parseCommentsAct(acts[1]!);
+    expect(verdict.kind === 'review-verdict' && verdict.value.verdict).toBe('changes-requested');
+    expect('meshEdits' in verdict.value).toBe(false);
+    expect(() => parseMeshEditsAct(acts[1]!)).toThrow('JOB_ACT_INVALID');
     expect(cleared).toEqual([[edit]]);
     expect(app.state().dirty).toBe(false);
     expect(app.state().messages.at(-1)).toBe('job.saved');
@@ -544,6 +557,86 @@ test('#1226 a comment send retried after a lost response replays the same reques
     expect(requests).toHaveLength(2);
     expect(requests[1]).toEqual(requests[0]!);
     expect(results[1]).toEqual(results[0]);
+  } finally {
+    setRigHost(null);
+    if (savedDocument) Object.defineProperty(globalThis, 'document', savedDocument);
+    else Reflect.deleteProperty(globalThis, 'document');
+    await f.close();
+  }
+});
+
+test('#1231 Send comments carries pending Edit Mesh and chest drafts as act@10 carriers; a stale model refuses and keeps them', async () => {
+  const f = await jobFixture(), savedDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {configurable: true, writable: true,
+    value: {title: '', body: null, getElementById: () => null, querySelector: () => null, createElement: () => ({style: {}, dataset: {}})}});
+  try {
+    const shown = JSON.parse(await readFile(join(f.root, 'out/skeleton.model.json'), 'utf8'));
+    const entry = shown.skins.find((skin: {name: string}) => skin.name === 'default').attachments.mesh.mesh;
+    const frame = {width: shown.stage.width, height: shown.stage.height}, hash = jobHash(attachmentHashText(entry));
+    const meshEdit: JobMeshEditValue = {skin: 'default', slot: 'mesh', attachment: 'mesh', basis: 'setup',
+      source: {hash, frame, vertexCount: 4, triangleCount: 2, hullLength: 4, positions: [[48, 42], [48, 22], [68, 22], [68, 42]]},
+      ops: [{op: 'add', at: [60.12, 29.57]}]};
+    const chestEdit: JobChestLandmarkValue = {skin: 'default', slot: 'mesh', attachment: 'mesh', basis: 'setup',
+      source: {hash, frame}, bust: {apex_r: [16 + 1 / 256, 20], apex_l: [56, 20], alpha: 0.22}};
+    const path = 'producer-config.json', bytes = JSON.stringify({meshes: {mesh: {contour: {bust: chestEdit.bust}}}});
+    await writeFile(join(f.root, path), bytes);
+    const config = {path, sha256: jobHash(bytes)};
+    f.setContext({...f.getContext(), files: [config], chestLandmarks: [{...chestEdit, source: {...chestEdit.source, configHash: config.sha256}}]});
+    const publication = await f.publish();
+    const page = await f.display(publication), requests: UISubmissionV3[] = [], prompts: string[] = [];
+    const cleared: {mesh: unknown[][]; chest: unknown[][]} = {mesh: [], chest: []};
+    async function send(model: typeof publication.source.model, general = ['The chest sits low.']) {
+      const display = {publication: {...publication, source: {...publication.source, model}}} as unknown as DisplayPublicationV3;
+      const initial = baseline();
+      const prepared: JobRigScreenPrepared = {jobRigScreen: true, display, entry: 'http://127.0.0.1:4318/retained/',
+        review: {manifest: parseManifest({schema: 'rig-review/1', id: initial.id, revision: initial.revision, title: 'Synthetic carriers'}),
+          reviewedSource: initial.reviewedSource, sourceHash: publication.source.sourceHash}, checkpoints: new Set()};
+      const screen = createJobRigScreen({host: {classList: {remove() {}}, replaceChildren() {}} as unknown as HTMLElement,
+        pageId: page.pageId, access: {capability: 'synthetic-ui', headers: () => new Headers()},
+        // HQ ruling (#1231): Send comments never confirms, even with mesh edits; a confirm here would cancel the send.
+        confirm: text => {prompts.push(text); return false;},
+        window: {
+          state: () => ({pending: f.session.status().pending as unknown as PendingAskV3[], receipt: page,
+            generation: f.session.status().generation, preparing: false, closed: false}),
+          async submit(input) {requests.push(structuredClone(input)); return f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));},
+        }, routes: () => ({entry: prepared.entry, api: path => path}), refusal: error => String(error), translate: key => key,
+        async load() {
+          rigHost()!.attach({message() {},
+            meshEdits: async () => ({edits: [meshEdit], stale: 0, clear: (items: readonly unknown[]) => {cleared.mesh.push([...items]);}}),
+            chestLandmarks: () => ({edits: [chestEdit], clear: (items: readonly unknown[]) => {cleared.chest.push([...items]);}}),
+          } as unknown as JobRigMeshScreen);
+          rigHost()!.displayed();
+        }});
+      screen.commit(prepared);
+      await screen.painted(prepared, new AbortController().signal);
+      return rigHost()!.submitComments!([], general);
+    }
+    const file = publication.source.model!;
+    // A carrier bound to a model the daemon did not retain is a stale view; nothing is cleared.
+    await expect(send({...file, sha256: '1'.repeat(64)})).rejects.toThrow('JOB_ACT_SOURCE_STALE');
+    expect(cleared).toEqual({mesh: [], chest: []});
+    setRigHost(null);
+    expect(await send(file)).toBe('job.saved');
+    const meshEdits = [{edit: meshEdit, sha256: jobHash(canonicalJson(meshEdit))}];
+    const chestLandmarks = [{edit: chestEdit, sha256: jobHash(canonicalJson(chestEdit))}];
+    expect(requests.at(-1)).toMatchObject({kind: 'comments', value: {comments: [{text: 'The chest sits low.'}],
+      carriers: [{kind: 'mesh-edits', file, meshEdits}, {kind: 'chest-landmarks', file, chestLandmarks}]}});
+    expect('askId' in requests.at(-1)!).toBe(false);
+    const acts = (await (await f.call({...f.base(), verb: 'next', after: null, waitMs: 0})).json()).value.events
+      .flatMap((event: {type: string; act?: ActV3}) => event.type === 'act' ? [event.act!] : []);
+    expect(acts).toHaveLength(1);
+    const act = parseCommentOnlyAct(acts[0]);
+    expect(act.value.carriers).toEqual([{kind: 'mesh-edits', file, meshEdits}, {kind: 'chest-landmarks', file, chestLandmarks}]);
+    // Written and read back: the stored bytes are the act the decoder returns.
+    expect(f.session.readActExport(act.actId, false).toString()).toBe(JSON.stringify(act));
+    expect(JSON.stringify(parseCommentOnlyAct(JSON.parse(f.session.readActExport(act.actId, false).toString())))).toBe(JSON.stringify(act));
+    expect(cleared).toEqual({mesh: [[meshEdit]], chest: [[chestEdit]]});
+    // Edits alone, with no comment, are a valid Send comments act.
+    setRigHost(null);
+    expect(await send(file, [])).toBe('job.saved');
+    expect(requests.at(-1)).toMatchObject({kind: 'comments', value: {comments: [],
+      carriers: [{kind: 'mesh-edits', file, meshEdits}, {kind: 'chest-landmarks', file, chestLandmarks}]}});
+    expect(prompts).toEqual([]);
   } finally {
     setRigHost(null);
     if (savedDocument) Object.defineProperty(globalThis, 'document', savedDocument);

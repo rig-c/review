@@ -208,7 +208,7 @@ export function bindMeshEditor(host:MeshEditorHost):MeshEditor {
   const s=session.source,count=session.ops().length;
   const summary=`${note?note+' · ':''}${count} op${count===1?'':'s'} · setup pose · ${MESH_EDIT_PREVIEW_NOTE} · ${mode?hint[mode]:'no sub-mode — Escape again leaves mesh edit'} · Space-drag pans`;
   const reason=host.job==='read-only'?t('JOB_REVIEW_READ_ONLY'):job?
-   t('In a job, press Request changes to send this edit; the producer rebuilds it.'):null;
+   t('In a job, press Send comments to send this edit; the producer rebuilds it.'):null;
   const readout=host.job?[reason,held?.stale?t('job.mesh.staleDraft'):null,tr(summary)].filter(Boolean).join(' · '):summary;
   status.textContent=readout;
   status.title=t('{0} / {1} / {2} · {3} vertices · {4} triangles · hull {5} · {6}',
