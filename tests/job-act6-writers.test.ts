@@ -333,17 +333,19 @@ test('an empty or whitespace-only note has no comment form: zero comments, nothi
 
 test('a note whose act@6 projection exceeds 10,000 UTF-16 units is refused by name (JOB_ACT_INVALID)', async () => {
   const f = await fixture(), publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'signoff', stage: 'plan-approved'}), page = await f.display(publication);
+  // #1227: checkpoint until #1229 retires record asks
+  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'}), page = await f.display(publication);
   const generation = f.session.status().generation;
-  // Act@2 accepted words up to 10,000 units; the @6 scalar adds the "[general]\n" label inside the same bound.
-  const words = 'x'.repeat(10000 - '[general]\n'.length + 1);
+  // Act@2 accepted words up to 10,000 units; the @6 scalar adds the checkpoint label inside the same bound.
+  const label = '[' + JSON.stringify(['checkpoint', 'step-one']) + ']\n';
+  const words = 'x'.repeat(10000 - label.length + 1);
   const refused = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: generation, submissionId: 'too-long', kind: 'signoff', value: {stage: 'plan-approved', decision: 'approved', words}}));
+    expectedGeneration: generation, submissionId: 'too-long', kind: 'checkpoint', value: {checkpointId: 'step-one', outcome: 'pass', words}}));
   expect(refused).toEqual({ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}});
   expect(f.session.status().generation).toBe(generation);
   const fits = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: generation, submissionId: 'fits', kind: 'signoff',
-    value: {stage: 'plan-approved', decision: 'approved', words: words.slice(1)}}));
+    expectedGeneration: generation, submissionId: 'fits', kind: 'checkpoint',
+    value: {checkpointId: 'step-one', outcome: 'pass', words: words.slice(1)}}));
   expect(fits.ok).toBe(true);
 });
 

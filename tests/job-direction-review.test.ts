@@ -3,11 +3,11 @@ import {Database} from 'bun:sqlite';
 import {mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {prepareJobRecordAct} from '../src/job-act.ts';
-import {buildRecordSource, createJobHostPorts, parseCommentsAct, parseRecordAct, parseRecordPublishedContext,
+import {finalizeCommentOnlyAct} from '../src/job-act.ts';
+import {buildRecordSource, createJobHostPorts, parseCommentOnlyAct, parseCommentsAct, parseRecordAct, parseRecordPublishedContext,
   parseRecordSource, serializeRecordSourceDigestPayload} from '../src/job-api.ts';
-import {JOB_API_V3_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, jobRawActMediaType, type JobCommentsAct, type PendingAskV3, type PlanContext,
-  type PublicationV3, type UISubmissionV3} from '../src/job-contract.ts';
+import {JOB_API_V3_SCHEMA, JOB_COMMENTS_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, jobRawActMediaType, type JobCommentUISubmission, type JobCommentsAct, type PlanContext,
+  type PublicationV3} from '../src/job-contract.ts';
 import {retainedPublicationRoutes} from '../src/job-front.ts';
 import {JobSession, type JobSessionOptions} from '../src/job-session.ts';
 import {isRetainedRecordSource} from '../src/job-source.ts';
@@ -137,58 +137,43 @@ test('#1088 publish, ask, display, finalize, fetch and replay preserve act bytes
       expect(metadata.status).toBe(200);
       expect((await metadata.json()).recordSource).toEqual(publication.source);
 
-      const ask = {verb: 'ask-batch', expectedGeneration: 1, idempotencyKey: 'ask',
-        publicationId: publication.publicationId, subjects: [signoff]};
-      if (projection) {
-        inventory = retainedRead = drift;
-        expect(await (await api.call(ask)).json()).toMatchObject({ok: false, generation: 1,
-          error: {code: 'JOB_SOURCE_MISMATCH'}});
-        inventory = retainedRead = context;
-      }
-      const asked = await (await api.call(ask)).json();
-      expect(asked.ok).toBe(true);
-      const asks: PendingAskV3[] = asked.value.asks;
-      expect(asks).toHaveLength(1);
       const receipt = await api.display({publicationId: publication.publicationId, pageId: 'owner',
         sourceHash: retained.source.sourceHash});
       if (!receipt.ok) throw new Error(receipt.error.code);
 
-      const artifacts = [];
-      for (const pending of asks) {
-        expect(pending.source).toEqual(publication.source);
-        const fields = {...receipt.value, askId: pending.askId, submissionId: pending.subject.kind,
-          expectedGeneration: session.status().generation};
-        const words = '  Original approval · 원문\n';
-        const submission: UISubmissionV3 = {...fields, kind: 'signoff', value: {stage: signoff.stage, decision: 'approved', words}};
-        if (projection && pending.subject.kind === 'signoff') {
-          retainedRead = drift;
-          expect(await api.commit(submission)).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
-          expect(session.status().generation).toBe(fields.expectedGeneration);
-          retainedRead = context;
-        }
-        const committed = await api.commit(submission);
-        if (!committed.ok) throw new Error(committed.error.code);
-        const act = parseRecordAct(committed.value);
-        expect(Object.hasOwn(act.source, 'directionReview')).toBe(false);
-        expect(() => parseRecordAct({...act, source: {...act.source, directionReview}})).toThrow('JOB_ACT_INVALID');
-        if (act.kind !== 'signoff') throw new Error('Expected signoff act');
-        const comments = [{text: act.value.words}];
-        const commentsAct: JobCommentsAct =
-          {...act, schema: JOB_COMMENTS_ACT_SCHEMA, value: {stage: act.value.stage, decision: act.value.decision, comments}};
-        expect(parseCommentsAct(commentsAct)).toEqual(commentsAct);
-        expect(() => parseCommentsAct({...commentsAct, source: {...act.source, directionReview}})).toThrow('JOB_ACT_INVALID');
-        const response = await api.fetch(act.actId);
-        expect(response.status).toBe(200);
-        const raw = await response.text();
-        expect(raw).toBe(JSON.stringify(act));
-        // The production writer accepts fixed envelope fields, so compare the complete act across both inputs.
-        const fixedAsk = {...pending, askId: 'fixed-ask', publicationId: 'fixed-publication'};
-        const fixed = prepareJobRecordAct({jobId: 'fixed-job', ask: fixedAsk, retained, reviewer,
-          submission: {...submission, publicationId: fixedAsk.publicationId}, actId: 'fixed-act', at: '2026-11-23T00:00:00Z'});
-        expect(raw).toBe(JSON.stringify({...fixed, actId: act.actId, jobId: act.jobId, askId: act.askId,
-          publicationId: act.publicationId, at: act.at}));
-        artifacts.push({act, raw, submission, fixedBytes: JSON.stringify(fixed)});
+      const words = '  Original approval · 원문\n';
+      const submission: JobCommentUISubmission = {...receipt.value, submissionId: 'direction-comment',
+        expectedGeneration: session.status().generation, kind: 'comments', value: {comments: [{text: words}]}};
+      if (projection) {
+        retainedRead = drift;
+        expect(await api.commit(submission)).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
+        expect(session.status().generation).toBe(submission.expectedGeneration);
+        retainedRead = context;
       }
+      const committed = await api.commit(submission);
+      if (!committed.ok) throw new Error(committed.error.code);
+      const act = parseCommentOnlyAct(committed.value);
+      expect(Object.hasOwn(act.source, 'directionReview')).toBe(false);
+      expect(() => parseCommentOnlyAct({...act, source: {...act.source, directionReview}})).toThrow('JOB_ACT_INVALID');
+      const historicalRecord = parseRecordAct({schema: JOB_RECORD_ACT_SCHEMA, actId: act.actId, jobId: act.jobId,
+        askId: 'historical-signoff-ask', publicationId: act.publicationId, kind: 'signoff', authority: act.authority,
+        at: act.at, source: act.source, value: {stage: signoff.stage, decision: 'approved', words}});
+      if (historicalRecord.kind !== 'signoff') throw new Error('Expected signoff act');
+      expect(() => parseRecordAct({...historicalRecord, source: {...historicalRecord.source, directionReview}})).toThrow('JOB_ACT_INVALID');
+      const commentsAct: JobCommentsAct = {...historicalRecord, schema: JOB_COMMENTS_ACT_SCHEMA,
+        value: {stage: signoff.stage, decision: 'approved', comments: [{text: words}]}};
+      expect(parseCommentsAct(commentsAct)).toEqual(commentsAct);
+      expect(() => parseCommentsAct({...commentsAct, source: {...commentsAct.source, directionReview}})).toThrow('JOB_ACT_INVALID');
+      const response = await api.fetch(act.actId);
+      expect(response.status).toBe(200);
+      const raw = await response.text();
+      expect(raw).toBe(JSON.stringify(act));
+      const fixed = finalizeCommentOnlyAct({jobId: 'fixed-job', retained, reviewer,
+        submission: {...submission, publicationId: 'fixed-publication'}});
+      const canonicalFixed = {...fixed, actId: 'fixed-act', at: '2026-11-23T00:00:00Z'};
+      expect(raw).toBe(JSON.stringify({...canonicalFixed, actId: act.actId, jobId: act.jobId,
+        publicationId: act.publicationId, at: act.at}));
+      const artifacts = [{act, raw, submission, fixedBytes: JSON.stringify(canonicalFixed)}];
 
       session.dispose();
       const reopened = new JobSession(options);
@@ -196,7 +181,6 @@ test('#1088 publish, ask, display, finalize, fetch and replay preserve act bytes
       expect(reopened.jobId).toBe(session.jobId);
       const replay = host(reopened), readCount = calls.length;
       expect((await (await replay.call(publish)).json()).value).toEqual(publication);
-      expect((await (await replay.call(ask)).json()).value).toEqual(asked.value);
       for (const {act, raw, submission} of artifacts) {
         expect(await replay.commit(submission)).toEqual({ok: true, value: act});
         expect(await (await replay.fetch(act.actId)).text()).toBe(raw);
@@ -211,7 +195,6 @@ test('#1088 publish, ask, display, finalize, fetch and replay preserve act bytes
       expect(nextPublish.value.source.directionReview).toEqual(nextContext.directionReview);
       expect(nextPublish.value.publicationId).not.toBe(publication.publicationId);
       expect(await (await replay.call(publish)).json()).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
-      expect((await (await replay.call(ask)).json()).value).toEqual(asked.value);
       for (const {act, raw} of artifacts) expect(await (await replay.fetch(act.actId)).text()).toBe(raw);
 
       results.push({sourceHash: retained.source.sourceHash, projectHash: retained.source.projectHash,
@@ -226,10 +209,10 @@ test('#1088 publish, ask, display, finalize, fetch and replay preserve act bytes
           const id = reopened.jobId;
           const {document} = db.query<{document: string}, [string]>('SELECT document FROM jobs WHERE job_id=?').get(id)!;
           const update = db.query('UPDATE jobs SET document=? WHERE job_id=?');
-          for (const target of ['retained', 'ask-replay', 'act'] as const) {
+          for (const target of ['retained', 'ui-replay', 'act'] as const) {
             const data = JSON.parse(document);
             if (target === 'retained') data.publications[publication.publicationId].retained.context.directionReview = drift.directionReview;
-            if (target === 'ask-replay') delete data.replays['agent:ask'].value.asks[0].source.directionReview;
+            if (target === 'ui-replay') data.replays['ui:owner:direction-comment'].value.source.directionReview = projection;
             if (target === 'act') data.acts[artifacts[0]!.act.actId].source.directionReview = projection;
             update.run(JSON.stringify(data), id);
             expect(() => reopened.status(), target).toThrow('JOB_SOURCE_MISMATCH');

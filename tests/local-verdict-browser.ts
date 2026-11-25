@@ -143,7 +143,6 @@ async function checkLive(language:Language) {
  try{
   const publication=await fixture.publish('rig');
   const ask=await fixture.ask(publication,{kind:'review-verdict',stage:'rig-review'});
-  await fixture.ask(publication,{kind:'signoff',stage:'plan-approved'});
   page=await openPage(join(scratch,'chrome-'+name),fixture.host.ownerUrl,language);
   await wait(page,"document.body.dataset.ready==='true'&&document.getElementById('save')?.checkVisibility()&&!document.getElementById('save').disabled");
   if(await page.evaluate<boolean>("!!document.querySelector('dialog.workspace-drawer[open]')"))

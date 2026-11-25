@@ -2652,7 +2652,7 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
     });
 
     const pkgReceipt = await pkgFixture.display(pkgPub);
-    const validPkgAsk = await pkgFixture.ask(pkgPub, { kind: 'signoff', stage: 'plan-approved' });
+    const validPkgAsk = await pkgFixture.ask(pkgPub, { kind: 'review-verdict', stage: 'rig-review' });
 
     const badPkgAct = await pkgFixture.ports.commitUIAct(
       pkgFixture.session.jobId,

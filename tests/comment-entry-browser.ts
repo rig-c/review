@@ -70,10 +70,10 @@ async function openLiveVerdict(page:InputCdpSession,wait:Wait,live:LivePublicati
   assert.equal(await page.evaluate<boolean>(generalEntryVisible),kind==='rig','a published source alone offers general comments on a rig only');
   await page.evaluate(`window.__commentEntryBeforeAsk=true`);
 
-  const checkpointOnly=kind==='rig'&&live.verdict==='changes-requested';
-  const otherAsk=await fixture.ask(publication,checkpointOnly?{kind:'checkpoint',checkpointId:'step-one'}:{kind:'signoff',stage:'plan-approved'});
+  // #1227: checkpoint until #1229 retires record asks
+  const otherAsk=await fixture.ask(publication,{kind:'checkpoint',checkpointId:'step-one'});
   const catalog=lang==='ko'?koCatalog:enCatalog;
-  const otherPrompt=catalog[checkpointOnly?'Review this checkpoint.':'Approve this stage.'];
+  const otherPrompt=catalog['Review this checkpoint.'];
   await wait(`document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(otherPrompt)}`);
   assert.equal(await page.evaluate<boolean>(generalEntryVisible),false,'a live '+otherAsk.subject.kind+' alone does not offer verdict comments');
 
@@ -324,7 +324,7 @@ async function exerciseClosedDraft(page:InputCdpSession,wait:Wait,reload:Reload,
   assert.deepEqual(await rowIds(),[keep.id,remove.id]);
   const rowSelector=`[data-comment-id=${JSON.stringify(remove.id)}] .stage-comment-summary`;
   const catalog=lang==='ko'?koCatalog:enCatalog;
-  const closed=`document.querySelector('#save')?.hidden===true&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['Approve this stage.'])}`;
+  const closed=`document.querySelector('#save')?.hidden===true&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(catalog['Review this checkpoint.'])}`;
 
   const elsewhere=await finalizeElsewhere(live);
   await wait(closed);

@@ -151,7 +151,7 @@ try{
  if(!headlineOnly&&!rigFitOnly&&!Bun.argv.includes('--skip-job'))for(const lang of ['en','ko']as const){
   const fixture=await scriptedJobWindowFixture({c5Parts:'mesh'});
   try{
-   const publication=await fixture.publish('parts');await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});await fixture.ask(publication,{kind:'signoff',stage:'plan-approved'});
+   const publication=await fixture.publish('parts');await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});const secondAsk=await fixture.ask(publication,{kind:'parts-verdict',draftId:'synthetic-parts'});
    await page.goto(fixture.locator+'/?lang='+lang+'#cap='+fixture.credentials.ui);await settled();assert.deepEqual((await controls()).counts,[1,1,1,1,1]);await click(page,'[data-part-list] button');await click(page,'#part-solo');await settled();await click(page,'#fit');
    const savedCamera:string=await page.evaluate<string>(`document.querySelector('#rig-root').style.cssText`);
    for(let i=0;i<2;i++){if(await page.evaluate(`document.getElementById('stage-comment').getAttribute('aria-pressed')`)!=='true')await click(page,'#stage-comment');
@@ -163,7 +163,7 @@ try{
    while(Date.now()<end){const next=await fixture.next(),acts=next.events.filter(event=>event.type==='act'&&event.act.publicationId===publication.publicationId&&event.act.kind==='parts-verdict');assert.ok(acts.length<=1);const event=acts[0];if(event?.type==='act'){verdict=event.act;break;}await Bun.sleep(50);}
    assert.ok(verdict);const act=parseCommentsAct(verdict);assert.ok(act.kind==='parts-verdict');assert.equal(act.value.verdict,'changes-requested');assert.equal(act.value.comments.length,2);
    for(const comment of act.value.comments){const anchor=comment.anchor as Omit<PartsIssue,'summary'>;assert.equal(anchor.sourceHash,act.source.sourceHash);assert.ok(anchor.nativeCrop&&anchor.imageRegion);for(const crop of [anchor.crop,anchor.nativeCrop!]){const bytes=await readFile(resolvedCropPath(crop.path));assert.equal(new Bun.CryptoHasher('sha256').update(bytes).digest('hex'),crop.sha256);}const native=PNG.sync.read(await readFile(resolvedCropPath(anchor.nativeCrop!.path))),source=PNG.sync.read(await readFile(join(fixture.packageRoot,'parts',anchor.parts[0]!.name+'.png'))),region=anchor.imageRegion!;assert.equal(native.width,region.width);assert.equal(native.height,region.height);for(let y=0;y<native.height;y++)for(let x=0;x<native.width;x++)assert.deepEqual(native.data.subarray((y*native.width+x)*4,(y*native.width+x+1)*4),source.data.subarray(((y+region.y)*source.width+x+region.x)*4,((y+region.y)*source.width+x+region.x+1)*4));}
-   assert.equal(fixture.host.session.status().pending.find(ask=>ask.subject.kind==='signoff')?.status,'pending');await shot('job-parts-'+lang+'-submitted');report['job-'+lang]=act;
+   assert.equal(fixture.host.session.status().pending.find(ask=>ask.askId===secondAsk.askId)?.status,'pending');await shot('job-parts-'+lang+'-submitted');report['job-'+lang]=act;
   }finally{await fixture.close();}
  }
  await writeFile(join(output,'report.json'),JSON.stringify(report,null,2)+'\n');console.log('U3_BROWSER_PASS '+JSON.stringify({cases:Object.keys(report),viewport:[1600,1000]}));

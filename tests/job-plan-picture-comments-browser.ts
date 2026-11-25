@@ -33,8 +33,9 @@ function pictureBytes(shift=0):Buffer{
  return PNG.sync.write(png);
 }
 type Subject='plan'|'question'|'backdrop';
+// #1227: checkpoint until #1229 retires record asks
 const fixtureFor=(subject:Subject)=>subject==='plan'
- ?recordScreenFixture('signoff',true,undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,pictureBytes())
+ ?recordScreenFixture('checkpoint',true,undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,pictureBytes())
  :recordScreenFixture('interview-picks',subject==='backdrop',undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,undefined,pictureBytes());
 /** The sealed `files` entry the pins must name: the plan's `planPicture`, or the question image's entry. */
 function sealedPicture(subject:Subject,source:unknown):{path:string;sha256:string}{
@@ -193,10 +194,10 @@ try{
     const expected=projectComments(all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary}),[picture]);
     assert.equal(expected,`[${labels[0]}]\n${rows[0]!.summary}\n\n[${labels[1]}]\n${rows[1]!.summary}`+(general?`\n\n[general]\n${general}`:''),'A1 label');
     if(subject==='plan'){
-     // Submit the plan sign-off: the signed words carry the A1 labels.
+     // #1227: checkpoint until #1229 retires record asks; the words carry the A1 labels.
      await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'record section');
-     await shot(out,'6-before-submit');await click(page,selector+' button[type=submit]');
-     await expectRecordActSubmitted(page,wait,language,'plan sign-off submitted');
+     await shot(out,'6-before-submit');await click(page,selector+' button.primary[type=submit]');
+     await expectRecordActSubmitted(page,wait,language,'plan checkpoint submitted');
     }else{
      // Submit the interview picks with the original pointed and general comments.
      for(const value of ['biped_std','density_high']){const option=selector+` label.interview-option:has(input[value="${value}"])`;
@@ -207,12 +208,12 @@ try{
     }
     const bytes=await readFile(join(out,'one-screen.json'),'utf8');
     const act=subject==='plan'?parseRecordAct(JSON.parse(bytes)):parseCommentsAct(JSON.parse(bytes));
-    assert.equal(act.kind,subject==='plan'?'signoff':'interview-picks');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
+    assert.equal(act.kind,subject==='plan'?'checkpoint':'interview-picks');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
     assert.ok('record' in act.source&&act.source.files.some(file=>file.path===picture.path&&file.sha256===picture.sha256),'the label names a sealed files entry of the act source');
     if(act.schema==='rig-review/act@6'){
      assert.equal(JSON.stringify(act.value.comments),JSON.stringify(all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary})));
      assert.equal(JSON.stringify(act),bytes,'picks round-trip byte-for-byte');
-    }else assert.equal((act.value as {words?:string}).words,expected,'plan signoff keeps the A1 labels');
+    }else assert.equal((act.value as {words?:string}).words,expected,'plan checkpoint keeps the A1 labels');
     const replayActSha256=act.schema==='rig-review/act@6'?await verifyPicksReplay(fixture,out,act):null;
     await shot(out,'7-submitted');
     const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,...(act.schema==='rig-review/act@6'?{structuredComments:act.value.comments,replayActSha256}:{words:expected}),
