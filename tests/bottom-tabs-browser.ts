@@ -399,8 +399,9 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
  }
 }
 
-/** Record --plan, option-set backdrops and standalone package reuse the shipped shell. */
-async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview-parts'|'standalone'|'standalone-many',lang:'en'|'ko'){
+/** Record --plan, option-set backdrops and standalone package reuse the shipped shell.
+ * #1229 / #1230: both #job-record-asks and #workspace-interview-answer are retired with their forms. */
+async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'standalone'|'standalone-many',lang:'en'|'ko'){
  const profile=await mkdtemp(join(tmpdir(),'review838-shared-'));
  let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
@@ -411,7 +412,7 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
    const capability='b'.repeat(64),server=await startServer(await loadReview(join(f.root,'out')),{port:0,capability,stateDir:f.state});
    close=async()=>{server.stop(true);await f.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
   }else{
-   const f=await recordScreenFixture(kind==='checkpoint'?'checkpoint':kind==='plan'?'signoff':'option-set',kind==='interview-rig'?true:kind==='interview-parts'?'parts':false);
+   const f=await recordScreenFixture(kind==='plan'?'signoff':'option-set',kind==='interview-rig'?true:kind==='interview-parts'?'parts':false);
    close=()=>f.close();url=f.ownerUrl;
   }
   const target=new URL(url);target.searchParams.set('lang',lang);
@@ -419,22 +420,9 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
   for(const [width,height]of (Bun.argv.includes('--finish-residues')?[[1440,900],[1280,720]]:Bun.argv.includes('--standalone-widths')?[[240,900],[320,900],[540,720],[700,720],[900,720],[1100,800],[1280,720],[1440,900]]:[[1440,900],[1280,720],[1100,800]])){
    await page.setViewport(width,height);await page.goto(target.href,lang);
    await wait(page,kind.startsWith('standalone')?`!!document.querySelector('#rig-root canvas')`:`document.body.dataset.ready==='true'&&!document.body.inert`,kind+' ready');
-   if(Bun.argv.includes('--finish-residues')&&kind==='checkpoint'){
-    if(!await page.evaluate(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`))await click(page,'#workspace-pending-ask');
-    await wait(page,`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'record section');
-    // #1041 B: the record form is a section of the right communication panel, not a centred dialog.
-    const cap:any=await page.evaluate(`(()=>{const s=document.querySelector('#job-record-asks').getBoundingClientRect().toJSON(),p=document.querySelector('#workspace-communication').getBoundingClientRect().toJSON();return {...s,panel:p,dialogs:document.querySelectorAll('dialog[open]').length,heading:document.querySelector('#job-record-asks .review-dialog-header h2')?.textContent};})()`);
-    assert.ok(cap.width>0&&cap.left>=cap.panel.left-1&&cap.right<=cap.panel.right+1,'record section sits inside the communication panel');
-    assert.ok(Math.abs(cap.panel.right-width)<=1,'communication panel is the right column');
-    assert.ok(cap.left>=0&&cap.top>=0&&cap.right<=width,'record section stays in viewport');
-    assert.equal(cap.dialogs,0,'no dialog holds the record form');
-    assert.ok(cap.heading,'record section has a one-line heading');
-    await writeFile(join(output,`${kind}-${lang}-${width}x${height}-cap.json`),JSON.stringify(cap,null,2)+'\n');
-   }
    if(kind.startsWith('interview')){
     await wait(page,`!!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')&&!document.querySelector('#workspace-interview-answer')&&document.querySelector('#reference-content img')?.naturalWidth>0&&!!document.querySelector('#view-menu [data-view^="interview-image-"]')&&!document.querySelector('#send-comments')?.hidden`,kind+' option-set comments');
-    assert.equal(await page.evaluate<number>(`document.querySelectorAll('#workspace-interview-answer,form.interview-answer').length`),0);
-    assert.equal(await page.evaluate<boolean>(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`),false);
+    assert.equal(await page.evaluate<number>(`document.querySelectorAll('#workspace-interview-answer,form.interview-answer,[id="job-record-asks"]').length`),0);
     const catalog=lang==='en'?enCatalog:koCatalog;
     assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-ask-headline').textContent`),catalog["We're looking at the work together. Leave your thoughts as comments."]);
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-question.png`),await page.screenshot());
@@ -493,7 +481,7 @@ async function runSharedCase(kind:'checkpoint'|'plan'|'interview-rig'|'interview
 }
 
 for(const lang of ['en','ko'] as const){
- if(Bun.argv.includes('--finish-residues')){for(const kind of ['checkpoint','plan','standalone-many'] as const)await runSharedCase(kind,lang);continue;}
+ if(Bun.argv.includes('--finish-residues')){for(const kind of ['plan','standalone-many'] as const)await runSharedCase(kind,lang);continue;}
  if(Bun.argv.includes('--standalone-widths')){await runSharedCase('standalone',lang);continue;}
  for(const kind of ['rig','direction','parts'] as const){
   await runCase(kind,lang);

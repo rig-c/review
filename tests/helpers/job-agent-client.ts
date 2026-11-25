@@ -95,8 +95,9 @@ if (mode === 'sqlite-crash') {
     idempotencyKey: key, result: { path: 'out', selector: { kind: 'rig', version: 1 } },
     freeze: { kind: 'producer-held', holdId: 'agent-fixture-freeze', record: input.record } });
   const first = await publish(0, 'agent-first');
+  // #1229: fresh checkpoint asks refuse; exercise the separate-UID semantic loop on review-verdict.
   const asked = await invoke({ verb: 'ask', expectedGeneration: first.generation, idempotencyKey: 'agent-ask',
-    publicationId: first.value.publicationId, subject: { kind: 'checkpoint', checkpointId: 'step-one' } });
+    publicationId: first.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } });
   let next = await invoke({ verb: 'next', after: null, waitMs: 0 });
   let event = next.value.events.find((event: { type: string }) => event.type === 'act');
   while (!event) {

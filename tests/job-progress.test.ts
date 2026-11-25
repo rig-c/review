@@ -8,14 +8,14 @@ import { startJobHost, type JobHostOptions, type JobProgressLineV3, type JobProg
 import { JobSession } from '../src/job-session.ts';
 import { JobStore } from '../src/job-store.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
-import { createSyntheticPlanRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
+import { createSyntheticOptionSetsRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
 
 async function progressFixture() {
   const f = await jobFixture();
   const packageRecord = { path: 'record.json', sha256: jobHash(await readFile(join(f.root, 'record.json'))) } as const;
   const packageResult = { kind: 'package' as const, path: 'out', selector: { kind: 'rig' as const, version: 1 } };
-  let planContext: ReturnType<typeof createSyntheticPlanRecordWorkspace>['context'] | undefined;
-  const reader = createSyntheticRecordReader({ onPlan: () => planContext! });
+  let optionContext: ReturnType<typeof createSyntheticOptionSetsRecordWorkspace>['context'] | undefined;
+  const reader = createSyntheticRecordReader({ onOption: () => optionContext! });
   const stateDir = join(f.scratch, 'v3-progress');
   const options: JobHostOptions = {
     root: f.root, stateDir, fingerprint: '9'.repeat(64), reviewer: { id: 'declared-owner', role: 'owner' },
@@ -25,11 +25,10 @@ async function progressFixture() {
   };
   return {
     f, packageRecord, packageResult, options,
-    // #1227: checkpoint until #1229 retires record asks
-    writePlanRecord() {
-      const workspace = createSyntheticPlanRecordWorkspace(f.root, { subjects: [
-        { kind: 'checkpoint', checkpointId: 'step_layout' }, { kind: 'checkpoint', checkpointId: 'step_weights' }] });
-      planContext = workspace.context;
+    // #1229: checkpoint asks retired; ask-batch exercises multi-set option-set subjects.
+    writeOptionRecord() {
+      const workspace = createSyntheticOptionSetsRecordWorkspace(f.root, { count: 2 });
+      optionContext = workspace.context;
       return workspace;
     },
   };
@@ -120,7 +119,7 @@ test('#987 V3 progress closes the request shape and enforces the 1024-byte HTTP 
 });
 
 test('#987 only committed publish, ask, ask-batch and close clear the progress slot', async () => {
-  const { f, packageRecord, packageResult, options, writePlanRecord } = await progressFixture();
+  const { f, packageRecord, packageResult, options, writeOptionRecord } = await progressFixture();
   const session = new JobSession(options);
   const api = agentClient(session, f.origin);
   const store = new JobStore<{ progress?: JobProgressV3; events: EventV3[]; replays: object }>(options.stateDir, { readonly: true });
@@ -176,8 +175,8 @@ test('#987 only committed publish, ask, ask-batch and close clear the progress s
     expect(act.kind).toBe('comments');
     expect(snapshot().data.progress?.seq).toBe(4);
 
-    // #1227: checkpoint until #1229 retires record asks (`ask-batch` is record-only in production).
-    const workspace = writePlanRecord();
+    // #1229 / #1230: all fresh record asks refuse JOB_ASK_INVALID without clearing progress, while a replayed historical ask-batch receipt leaves newer progress intact.
+    const workspace = writeOptionRecord();
     const recordPublished = await api.call({ verb: 'publish', expectedGeneration: 3, idempotencyKey: 'progress-record-publish',
       result: workspace.result, freeze: { kind: 'producer-held', holdId: 'progress-record', record: workspace.record } });
     expect(recordPublished.ok).toBe(true);
@@ -185,11 +184,34 @@ test('#987 only committed publish, ask, ask-batch and close clear the progress s
     await api.progress(5);
     const batch = { verb: 'ask-batch', expectedGeneration: 4, idempotencyKey: 'progress-batch',
       publicationId: recordPublished.value.publicationId, subjects: workspace.context.subjects };
-    const batched = await api.call(batch);
-    expect(batched.ok).toBe(true);
+    const refusedBatch = await api.call(batch);
+    expect(refusedBatch).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+    expect(snapshot().data.progress?.seq).toBe(5);
+    const { parseJobRequestV3, parseRecordSource, requestDigest } = await import('../src/job-api.ts');
+    let seededBatchValue!: { asks: unknown[] };
+    ((session as unknown as { store: JobStore<{
+      generation: number; progress?: unknown; asks: Record<string, unknown>;
+      publications: Record<string, { retained: { source: unknown } }>;
+      replays: Record<string, unknown>;
+    }> }).store).update(session.jobId, null, current => {
+      const data = structuredClone(current.data);
+      const source = parseRecordSource(data.publications[recordPublished.value.publicationId]!.retained.source);
+      const asks = workspace.context.subjects.map((subject, idx) => {
+        data.generation++;
+        const seeded = { askId: `seeded-batch-ask-${idx}`, publicationId: recordPublished.value.publicationId, status: 'pending', subject, source };
+        data.asks[seeded.askId] = seeded;
+        return seeded;
+      });
+      delete data.progress;
+      seededBatchValue = { asks };
+      const parsed = parseJobRequestV3({ ...api.base, ...batch }) as unknown as Record<string, unknown>;
+      const { requestId: _requestId, ...semantic } = parsed;
+      data.replays['agent:' + batch.idempotencyKey] = { digest: requestDigest(semantic), value: seededBatchValue };
+      return { data };
+    });
     expect(snapshot().data.progress).toBeUndefined();
     await api.progress(6);
-    expect((await api.call(batch)).value).toEqual(batched.value);
+    expect((await api.call(batch)).value).toEqual(seededBatchValue);
     expect(snapshot().data.progress?.seq).toBe(6);
 
     const beforeClose = await api.next();

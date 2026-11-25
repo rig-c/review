@@ -29,7 +29,9 @@ const sampleActBar=`(()=>{
 })()`;
 
 async function until(page:InputCdpSession,expression:string){const end=Date.now()+20000;while(Date.now()<end){if(await page.evaluate<boolean>(expression))return;await Bun.sleep(100);}throw Error('ACT_BAR_WAIT: '+expression);}
-for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','parts','checkpoint-pass','checkpoint-fail','interview','interview-rig','interview-parts','standalone'] as const){
+// #1229 / #1230: checkpoint-pass, checkpoint-fail and joined-interview modes are retired with their forms;
+// option-set modes submit via Send comments (act@10), and standalone interview refusal is covered by tests/interview-open-browser.ts.
+for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','parts','interview','interview-rig','interview-parts','standalone'] as const){
  if(saveRetryOnly&&!['rig','parts'].includes(mode))continue;
  const profile=await mkdtemp(join(tmpdir(),'review809-browser-'));let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
@@ -44,7 +46,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await f.ask(p,mode==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:mode==='rig'?'rig-review':'direction-review'});
    url=f.locator+'/#cap='+f.credentials.ui;
   }else{
-   const f=await recordScreenFixture(mode.startsWith('interview')?'option-set':'checkpoint',mode==='interview-rig'?true:mode==='interview-parts'?'parts':false);close=()=>f.close();url=f.ownerUrl;
+   const f=await recordScreenFixture('option-set',mode==='interview-rig'?true:mode==='interview-parts'?'parts':false);close=()=>f.close();url=f.ownerUrl;
   }
   const localized=new URL(url);localized.searchParams.set('lang',lang);url=localized.href;
   let control:((method:string,params?:Record<string,unknown>)=>Promise<any>)|undefined;let held=0,actSaveStep=0,heldActRequest:string|undefined;
@@ -100,26 +102,16 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await until(page,`!document.querySelector('#save').disabled`);
   }
   if(!['rig','direction','parts'].includes(mode)){
-   if(interview){
-    assert.equal(await page.evaluate(`document.getElementById('workspace-pending-ask').hidden`),true);
-    await page.evaluate<void>(`document.querySelector('[data-comment-general]').scrollIntoView({block:'nearest'})`);
-    await click(page,'[data-comment-general]');
-    await until(page,`!!document.querySelector('.stage-comment-composer input')`);
-    await page.evaluate<void>(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Option set comment';form.requestSubmit();})()`);
-    await until(page,`!document.querySelector('.stage-comment-composer')&&!document.querySelector('#send-comments').disabled`);
-    await writeFile(join(out,`${mode}-${lang}-answer.png`),await page.screenshot());
-    await click(page,'#send-comments');
-    await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`);
-    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
-   }else{
-    await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`);
-    assert.equal(await page.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`),false);
-    const selector=mode==='checkpoint-fail'?'#job-record-asks button[data-job-text="job.fail"]':'#job-record-asks button[data-job-text="Pass"]';
-    await writeFile(join(out,`${mode}-${lang}-answer.png`),await page.screenshot());
-    await click(page,selector);
-    await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`);
-    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
-   }
+   assert.equal(await page.evaluate(`document.getElementById('workspace-pending-ask').hidden`),true);
+   await page.evaluate<void>(`document.querySelector('[data-comment-general]').scrollIntoView({block:'nearest'})`);
+   await click(page,'[data-comment-general]');
+   await until(page,`!!document.querySelector('.stage-comment-composer input')`);
+   await page.evaluate<void>(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Option set comment';form.requestSubmit();})()`);
+   await until(page,`!document.querySelector('.stage-comment-composer')&&!document.querySelector('#send-comments').disabled`);
+   await writeFile(join(out,`${mode}-${lang}-answer.png`),await page.screenshot());
+   await click(page,'#send-comments');
+   await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`);
+   await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
   }
   if(['rig','direction','parts'].includes(mode)){
    if(mode==='rig'||mode==='parts'){

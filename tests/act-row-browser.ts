@@ -23,7 +23,9 @@ const flashOnly=Bun.argv.includes('--flash-only');
 await mkdir(output,{recursive:true});
 const observations:unknown[]=[];
 const flashFailures:unknown[]=[],caseFailures:unknown[]=[];
-const modes=['rig','direction','parts','checkpoint','interview','embedded-rig','standalone'] as const;
+// #1229: removed checkpoint mode because the checkpoint Pass/Fail form and "Review…" opener are retired;
+// no-ask record act-row Send comments is covered by tests/job-comment-send-browser.ts.
+const modes=['rig','direction','parts','interview','embedded-rig','standalone'] as const;
 type Mode=typeof modes[number];
 const diagnostic=`(()=>{
  const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden],dialog:not([open])');
@@ -167,8 +169,8 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    const fixture=await jobFixture(),capability='b'.repeat(64);
    const server=await startServer(await loadReview(join(fixture.root,'out')),{port:0,capability,stateDir:fixture.state});
    close=async()=>{server.stop(true);await fixture.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
-  }else if(mode==='checkpoint'||mode==='interview'){
-   const fixture=await recordScreenFixture(mode==='interview'?'option-set':mode,false);
+  }else if(mode==='interview'){
+   const fixture=await recordScreenFixture('option-set',false);
    close=()=>fixture.close();url=fixture.ownerUrl;
   }else{
    const fixture=await scriptedJobWindowFixture({c5Parts:'mesh'});close=()=>fixture.close();
@@ -324,7 +326,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    const catalog=language==='en'?enCatalog:koCatalog;
    assert.equal(await page.evaluate(`document.getElementById('${stateId}').textContent`),catalog['job.review.approved']);
    if(liveRig)assert.equal(await page.evaluate(`document.getElementById('workspace-ask-headline').textContent`),catalog["We're looking at the work together. Leave your thoughts as comments."]);
-  }else if(mode==='interview'){
+  }else{
    const catalog=language==='en'?enCatalog:koCatalog;
    assert.deepEqual(initial.answers.map((answer:any)=>answer.id),['send-comments']);
    assert.deepEqual(initial.primary,['send-comments']);
@@ -348,22 +350,6 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(saved.rowVisible,true);assert.deepEqual(saved.states,['review-draft-state']);
    assert.deepEqual(saved.answers.map((answer:any)=>answer.id),['send-comments']);assert.deepEqual(saved.primary,['send-comments']);
    assert.deepEqual(savedState.row,{kind:'saved',text:catalog['Submitted']});
-   assert.deepEqual(savedState.dirty,savedState.row,'the hidden header copy mirrors the submitted state');
-  }else{
-   assert.deepEqual(initial.answers.map((answer:any)=>answer.id),['workspace-pending-ask']);
-   await click(page,'#workspace-pending-ask');await wait(page,`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`);
-   assert.equal(await page.evaluate(`document.getElementById('workspace-pending-ask').closest('#workspace-act-row')!==null`),true);
-   await capture(page,out,'answer-dialog');
-   const submit='#job-record-asks button[data-job-text="Pass"]';
-   await click(page,submit);
-   await expectRecordActSubmitted(page,expression=>wait(page!,expression),language,`${mode} submitted`);
-   const saved:any=await capture(page,out,'answer-saved');
-   const savedState:{pending:boolean;row:{kind:string;text:string};dirty:{kind:string;text:string}}=await page.evaluate(`(()=>{
-    const state=id=>{const n=document.getElementById(id);return {kind:n.dataset.saveState,text:n.textContent};};
-    return {pending:['save','request-changes','workspace-pending-ask'].some(id=>!document.getElementById(id).hidden),row:state('review-draft-state'),dirty:state('dirty')};
-   })()`);
-   await writeFile(join(out,'answer-saved-state.json'),JSON.stringify(savedState,null,2)+'\n');
-   assert.equal(savedState.pending,false);assert.deepEqual(saved.primary,['send-comments']);
    assert.deepEqual(savedState.dirty,savedState.row,'the hidden header copy mirrors the submitted state');
   }
   if(mode==='rig'){

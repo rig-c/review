@@ -120,7 +120,8 @@ function isRecordAnswer(kind: string): boolean {
     return kind === 'signoff' || kind === 'checkpoint';
 }
 export function isPendingOwnerAsk(ask: PendingAskV3): boolean {
-    return ask.status === 'pending' && ask.subject.kind !== 'signoff' && ask.subject.kind !== 'interview-picks' && JOB_ENABLED_ACT_KINDS.some(kind => kind === ask.subject.kind);
+    return ask.status === 'pending' && ask.subject.kind !== 'signoff' && ask.subject.kind !== 'checkpoint' &&
+        ask.subject.kind !== 'interview-picks' && JOB_ENABLED_ACT_KINDS.some(kind => kind === ask.subject.kind);
 }
 /** Match the finalized envelope to the displayed ask. Record acts omit the display-only direction summary. */
 export function matchesJobRecordAct(ask: PendingAskV3, act: ActV3 | undefined, jobId: string | undefined, submission?: UISubmissionV3): boolean {
@@ -193,24 +194,6 @@ export function jobPlanTextForSource(value: unknown, source: SourceV3): JobPlanT
         projection.steps.some((row, index) => row.id !== source.plan!.steps[index]?.id || row.hash !== source.plan!.steps[index]?.hash)))
         return mismatch();
     return projection;
-}
-
-/** C2 publishes the plan mapping in the ask. Legacy checkpoint metadata is optional guidance. */
-export function jobCheckpointContext(
-    ask: PendingAskV3,
-    checkpoints: readonly Pick<Checkpoint, 'id' | 'title' | 'note'>[],
-) {
-    if (ask.subject.kind !== 'checkpoint') throw new Error('JOB_ASK_INVALID');
-    const checkpointId = ask.subject.checkpointId;
-    const planStepId = ('planStepId' in ask.subject ? ask.subject.planStepId : undefined) ?? checkpointId;
-    const step = ask.source.plan?.steps.find(item => item.id === planStepId);
-    if (!step) throw new Error('JOB_ASK_INVALID');
-    const checkpoint = checkpoints.find(item => item.id === checkpointId);
-    return {
-        step,
-        title: checkpoint?.title ?? checkpointId,
-        note: checkpoint?.note ?? '',
-    };
 }
 
 /** No network, DOM or storage is accessed until the supplied adapter does so. */
@@ -1507,7 +1490,6 @@ export interface JobFormDependencies {
     translate: typeof import('./i18n.ts').t;
     helpers: ReturnType<typeof createJobFormHelpers> & {
         assertJobAskSource: typeof assertJobAskSource;
-        jobCheckpointContext: typeof jobCheckpointContext;
     };
     draftStorage(): Pick<Storage, 'getItem'>;
     localDraftKey(display: DisplayPublicationV3): string;
@@ -1522,186 +1504,11 @@ export interface JobFormDependencies {
 
 /** Build the existing answer form with explicit host dependencies. */
     function formFor(ask: JobWindowAsk, prepared: JobPreparedInspection, deps: JobFormDependencies): JobForm {
-        const {node, translate: t, helpers: {selectValues, planTextList, planStepText, assertJobAskSource, jobCheckpointContext},
-            draftStorage, localDraftKey, saveDraft, window, access, pageId} = deps;
+        const {helpers: {assertJobAskSource}} = deps;
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
         assertJobAskSource(ask, prepared.display);
-        // Rig verdicts belong to the shared screen; unsupported combinations have no job-window form.
-        if (ask.subject.kind === 'review-verdict' && ask.subject.stage === 'rig-review')
-            throw new Error('JOB_ACT_KIND_DISABLED');
-        const form = node('form') as JobForm['form'];
-        form.dataset.jobAsk = ask.askId;
-        form.dataset.jobPublication = ask.publicationId;
-        const fields = node('fieldset');
-        form.append(fields);
-        const source = node('p');
-        source.className = 'job-source';
-        source.textContent = ask.subject.kind === 'review-verdict'
-            ? prepared.display.publication.label + ' · ' + ask.source.sourceHash : prepared.display.publication.label;
-        if (ask.subject.kind !== 'review-verdict') {source.title = ask.source.sourceHash; source.setAttribute('translate', 'no');}
-        fields.append(source);
-        const subject = ask.subject;
-        if(subject.kind==='review-verdict')throw new Error('JOB_ACT_KIND_DISABLED');
-        const commentOnly = subject.kind === 'checkpoint';
-        if(commentOnly)fields.append(node('p','job.commentsFromWorkspace'));
-        let retainedCommentWords='';
-        const commentWords=()=>form.commentWords?.()??retainedCommentWords;
-        let read: () => UISubmissionV3['value'];
-        let submitKey = 'Submit review';
-        if (subject.kind === 'checkpoint') {
-            form.dataset.checkpointId = subject.checkpointId;
-            const checkpoint = jobCheckpointContext(ask, prepared.metadata.manifest?.checkpoints ?? []);
-            const heading = node('h3');
-            heading.textContent = checkpoint.title;
-            heading.title = subject.checkpointId;
-            heading.setAttribute('translate', 'no');
-            if (prepared.metadata.manifest?.checkpoints.find(item => item.id === subject.checkpointId)?.title == null)
-                planStepText(heading, checkpoint.step, prepared.metadata.planText);
-            fields.prepend(heading);
-            const guidance = node('p');
-            guidance.textContent = checkpoint.note;
-            guidance.setAttribute('translate', 'no');
-            fields.append(guidance, planTextList(ask.source.plan!, prepared.metadata.planText, checkpoint.step.id));
-            const evidence = prepared.checkpointEvidence?.find(item => item.packet.checkpointId === subject.checkpointId);
-            const declared = ask.source.checkpointEvidence?.find(item => item.checkpointId === subject.checkpointId);
-            if (Boolean(declared) !== Boolean(evidence) || evidence &&
-                (JSON.stringify(evidence.packet) !== JSON.stringify(declared) || evidence.packet.planStepId !== checkpoint.step.id)) {
-                throw new Error('CHECKPOINT_EVIDENCE_INVALID');
-            }
-            const outcome = selectValues(['', 'pass', 'fail'], ['Pending', 'Pass', 'job.fail']);
-            outcome.required = true;
-            outcome.hidden = true;
-            outcome.name = 'outcome';
-            fields.append(outcome);
-            read = () => ({ checkpointId: subject.checkpointId, outcome: outcome.value as 'pass' | 'fail', words: commentWords() });
-            submitKey = 'job.saveCheckpoint';
-        }
-        else if(subject.kind==='parts-verdict')throw new Error('JOB_ACT_KIND_DISABLED');
-        else {
-            throw new Error('JOB_ACT_KIND_DISABLED');
-        }
-        const submit = node('button', submitKey);
-        submit.type = 'submit';
-        submit.classList.add('primary');
-        if(subject.kind==='checkpoint'){
-            submit.dataset.jobText='Pass';submit.textContent=t('Pass');
-            submit.onclick=()=>{form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='pass';form.dispatchEvent(new Event('input'));};
-            const fail=node('button','job.fail');fail.type='submit';
-            fail.onclick=()=>{form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='fail';form.dispatchEvent(new Event('input'));};
-            fields.append(fail);
-        }
-        fields.append(submit);
-        const status = node('p');
-        status.setAttribute('role', 'status');
-        form.append(status);
-        let disposed = false, recordSubmitted = false;
-        const dispose = () => {if (disposed) return; disposed = true; entry.submitting = false;};
-        const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
-            submitting: false, dispose };
-        form.addEventListener('job-form-dispose', dispose);
-        const jobId = /^\/jobs\/([^/]+)\//.exec(prepared.display.routes.entry)?.[1];
-        try {
-            const primaryKey = localDraftKey(prepared.display);
-            const legacyPrefix = 'rig-review-job-draft/1:' + (jobId ?? '') + ':';
-            const legacyCurrentKey = legacyPrefix + prepared.display.publication.publicationId + ':' + prepared.display.publication.source.sourceHash;
-            const legacyPreviousKey = prepared.display.publication.previousPublicationId
-                ? legacyPrefix + prepared.display.publication.previousPublicationId + ':' + prepared.display.publication.source.sourceHash : '';
-            const primaryRaw = draftStorage().getItem(primaryKey);
-            const raw = primaryRaw ?? draftStorage().getItem(legacyCurrentKey) ?? (legacyPreviousKey ? draftStorage().getItem(legacyPreviousKey) : null);
-            const saved = JSON.parse(raw ?? 'null');
-            const validPublication = primaryRaw !== null
-                ? typeof saved?.publicationId === 'string' && saved.publicationId.length > 0
-                : saved?.publicationId === prepared.display.publication.publicationId ||
-                    (Boolean(prepared.display.publication.previousPublicationId) && saved?.publicationId === prepared.display.publication.previousPublicationId);
-            // A finalized answer is read back from its act; a local draft never overrides it.
-            if (ask.status !== 'answered' && validPublication &&
-                saved?.sourceHash === prepared.display.publication.source.sourceHash) {
-                assertJobAskSource({...ask, source: saved.source}, prepared.display);
-                const exact = saved.forms?.find((item: {
-                    askId: string;
-                }) => item.askId === ask.askId);
-                const original = exact ?? (saved.publicationId !== prepared.display.publication.publicationId
-                    ? [...(saved.forms ?? [])].reverse().find((item: {
-                        askId: string;
-                        value?: Record<string, unknown>;
-                    }) =>
-                        subject.kind === 'checkpoint' && item.value?.checkpointId === subject.checkpointId
-                    )
-                    : undefined);
-                if(commentOnly&&typeof original?.value?.words==='string'&&original.value.words.length<=10000)retainedCommentWords=original.value.words;
-                for (const input of form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')) {
-                    const restored = original?.controls?.find((item: {
-                        name: string;
-                        value: string;
-                    }) => item.name === input.name);
-                    if (restored && typeof restored.value === 'string') {
-                        input.value = restored.value;
-                        if (input instanceof HTMLSelectElement)input.dispatchEvent(new Event('change'));
-                    }
-                }
-                entry.dirty = !!original;
-            }
-        }
-        catch { /* Invalid or unavailable local drafts grant no submission authority. */ }
-        form.oninput = () => { if (disposed || recordSubmitted) return; entry.dirty = true; entry.submissionId = crypto.randomUUID(); saveDraft(); };
-        let attemptedValue:string|undefined;
-        form.onsubmit = async (event) => {
-            event.preventDefault();
-            if (disposed || entry.submitting || recordSubmitted) return;
-            const state = window.state();
-            const receipt = state.receipt;
-            if (!receipt || state.preparing || state.closed || !access.capability || !form.reportValidity())
-                return;
-            try {
-                const value=read();
-                const key=JSON.stringify(value);
-                if(commentOnly&&attemptedValue!==undefined&&attemptedValue!==key)entry.submissionId=crypto.randomUUID();
-                attemptedValue=key;
-                const input = { kind: subject.kind, publicationId: ask.publicationId,
-                    askId: ask.askId, pageId, displayedNonce: receipt.displayedNonce,
-                    expectedGeneration: state.generation, submissionId: entry.submissionId, value } as UISubmissionV3;
-                const activeAsk = state.pending.find(item => item.askId === ask.askId);
-                if (!activeAsk) throw new Error('JOB_ASK_INVALID');
-                if (commentOnly && (activeAsk.status !== 'pending' || receipt.publicationId !== ask.publicationId)) return;
-                entry.submitting = true;
-                fields.disabled = true;
-                if (commentOnly) {
-                    delete status.dataset.jobText;
-                    status.textContent = '';
-                    form.dispatchEvent(new Event('job-answer-sending'));
-                }
-                const frozen = await Promise.resolve(input);
-                if (disposed) return;
-                if (entry.submissionId !== frozen.submissionId) throw new Error('JOB_STILL_BINDING_MISMATCH');
-                const result = await window.submit(frozen);
-                if (disposed) return;
-                if (!result.ok)
-                    throw new Error(result.error.code, {cause: (result.error as {cause?: unknown}).cause});
-                if (commentOnly && !matchesJobRecordAct(ask, result.value, jobId, frozen)) {
-                    throw new Error('JOB_ACT_INVALID');
-                }
-                recordSubmitted = commentOnly;
-                entry.submitting = false;
-                entry.dirty = false;
-                status.dataset.jobText = commentOnly ? 'Submitted' : 'job.saved';
-                status.textContent = t(status.dataset.jobText);
-                saveDraft();
-                form.dispatchEvent(new Event('job-answer-saved',{bubbles:true}));
-            }
-            catch (error) {
-                if (disposed) return;
-                entry.submitting = false;
-                status.dataset.jobText = error instanceof Error && Object.hasOwn(enCatalog, error.message) && Object.hasOwn(koCatalog, error.message)
-                    ? error.message : 'JOB_ACT_INVALID';
-                status.textContent = jobWindowRefusal(error, 'JOB_ACT_INVALID');
-                const current = window.state();
-                fields.disabled = commentOnly && (current.closed || current.preparing || current.receipt?.publicationId !== ask.publicationId ||
-                    !current.pending.some(item => item.askId === ask.askId && item.status === 'pending'));
-                form.dispatchEvent(new Event('job-answer-failed'));
-            }
-        };
-        return entry;
+        throw new Error('JOB_ACT_KIND_DISABLED');
     }
 export {formFor};
 
@@ -1762,7 +1569,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     const drafts=createJobFormDrafts({jobId:access.jobId,current:()=>modalState()?.inspection??null,forms:()=>modalState()?.forms??emptyForms,storage:()=>localStorage});
     const transport=createJobWindowTransport(access);
     let stopped=false;
-    const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource,jobCheckpointContext},draftStorage:()=>localStorage,...drafts,access,pageId,
+    const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource},draftStorage:()=>localStorage,...drafts,access,pageId,
         window:{state:()=>window.state(),submit:input=>window.submit(input)}};
     const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),confirm:text=>globalThis.confirm(i18n.tr(text)),refusal:jobWindowRefusal,formDependencies:dependencies,
         window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),

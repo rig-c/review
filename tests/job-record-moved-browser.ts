@@ -23,8 +23,6 @@ for (const language of ['en', 'ko'] as const) {
   try {
     const publication = await fixture.publish('parts');
     const verdict = await fixture.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
-    // #1227: checkpoint until #1229 retires record asks
-    const checkpoint = await fixture.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
     const url = new URL(fixture.host.ownerUrl);
     const actsUrl = new URL('ui/acts', url);
     let send: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
@@ -73,32 +71,48 @@ for (const language of ['en', 'ko'] as const) {
     assert.deepEqual(Object.keys(before).filter(path => before[path] !== after[path]), ['project.json']);
     const ingestedRecord = await readFile(record, 'utf8');
     assert.doesNotThrow(() => JSON.parse(ingestedRecord));
-    await wait(`!document.querySelector('#workspace-pending-ask').hidden && !document.querySelector('#workspace-pending-ask').disabled`, 'checkpoint offered');
-    await click(page, '#workspace-pending-ask');
-    const form = `form[data-job-ask="${checkpoint.askId}"]`;
-    await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden]) ${form} fieldset:not(:disabled)')`, 'existing checkpoint in the record section');
-    await page.evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(form)});f.querySelector('select[name=outcome]').value='pass';f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-    await click(page, form + ' button[type=submit]');
-    const expected = catalog['JOB_RECORD_MOVED'];
-    await wait(`document.querySelector(${JSON.stringify(form + ' [role=status]')})?.textContent === ${JSON.stringify(expected)}`, 'translated moved-record refusal');
-    const status = await page.evaluate<any>(`(()=>{const n=document.querySelector(${JSON.stringify(form + ' [role=status]')}),r=n.getBoundingClientRect(),s=getComputedStyle(n);return {text:n.textContent,key:n.dataset.jobText,x:r.x,y:r.y,width:r.width,height:r.height,display:s.display,visibility:s.visibility,language:document.documentElement.lang,dialogOpen:!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])'),enabled:!document.querySelector(${JSON.stringify(form + ' fieldset')}).disabled};})()`);
-    assert.equal(status.key, 'JOB_RECORD_MOVED');
-    assert.equal(status.text, expected);
+    // #1229 / #1230: record and modal ask forms are retired; submit a post-ingest comment via Send comments (act@10) so assertJobSourceCurrent triggers translated JOB_RECORD_MOVED.
+    if (!await page.evaluate<boolean>(`!!document.querySelector('[data-comment-general]')?.checkVisibility()`)) {
+      await click(page, '#stage-comment');
+    }
+    await wait(`!!document.querySelector('[data-comment-general]')?.checkVisibility() && !document.querySelector('[data-comment-general]').disabled`, 'general comment button ready');
+    await page.evaluate(`document.querySelector('[data-comment-general]').scrollIntoView({block: 'nearest'})`);
+    await click(page, '[data-comment-general]');
+    await wait(`!!document.querySelector('.stage-comment-composer input')`, 'general comment composer');
+    await page.evaluate(`(() => {
+      const form = document.querySelector('.stage-comment-composer');
+      form.querySelector('input').value = ${JSON.stringify('Post-ingest comment · ' + language)};
+      form.requestSubmit();
+    })()`);
+    await wait(`!document.querySelector('.stage-comment-composer') && !document.getElementById('send-comments').hidden && !document.getElementById('send-comments').disabled`, 'Send comments enabled');
+    await click(page, '#send-comments');
+    const expected = catalog['Review was not submitted: {0}']!.replace('{0}', catalog['job.submit.refused']!);
+    await wait(`(() => {
+      const state = document.getElementById('review-draft-state');
+      return state?.dataset.saveState === 'failed' && state.textContent === ${JSON.stringify(expected)};
+    })()`, 'translated moved-record refusal', () => responses[1]?.status === 409);
+    const status = await page.evaluate<any>(`(() => {
+      const n = document.getElementById('review-draft-state'), r = n.getBoundingClientRect(), s = getComputedStyle(n);
+      return {text: n.textContent, title: n.title, x: r.x, y: r.y, width: r.width, height: r.height,
+        display: s.display, visibility: s.visibility, language: document.documentElement.lang,
+        enabled: !document.getElementById('send-comments').disabled};
+    })()`);
+    const expectedTitlePrefix = (language === 'ko' ? koCatalog['JOB_RECORD_MOVED']! : 'JOB_RECORD_MOVED') + ' · POST ';
+    assert.ok(status.title.startsWith(expectedTitlePrefix), status.title);
+    assert.equal(status.text, expected, status.text);
     assert.equal(status.language, language);
-    // #1041 B: the refusal stays readable in the record section of the right panel.
-    assert.equal(status.dialogOpen, true, 'record section stays shown');
     assert.equal(status.enabled, true);
     assert.equal(status.visibility, 'visible');
     assert.notEqual(status.display, 'none');
-    assert.ok(status.width > 0 && status.height > 0 && status.x >= 0 && status.y >= 0 && status.x + status.width <= 1600 && status.y + status.height <= 1000);
+    assert.ok(status.width > 0 && status.height > 0 && status.x >= 0 && status.x + status.width <= 1600 && status.y >= 0 && status.y + status.height <= 1000);
     assert.deepEqual(responses.map(response => response.status), [200, 409]);
     const final = await fixture.next();
-    assert.equal(final.events.filter(event => event.type === 'act').length, 1, 'stale checkpoint creates no second act');
+    assert.equal(final.events.filter(event => event.type === 'act').length, 1, 'stale Send comments creates no second act');
     await writeFile(join(output, 'record-moved-' + language + '.png'), await page.screenshot());
-    const observation = {language, fixture: 'synthetic package and consumer CLI record write; not installed Create ingest', approvedActId: approved.act.actId, checkpointAskId: checkpoint.askId, status, responses, ingest: {exit: ingestExit, stdout: ingestStdout, stderr: ingestStderr}, recordHashes: {before: before['project.json'], after: after['project.json']}};
+    const observation = {language, fixture: 'synthetic package and consumer CLI record write; not installed Create ingest', approvedActId: approved.act.actId, status, responses, ingest: {exit: ingestExit, stdout: ingestStdout, stderr: ingestStderr}, recordHashes: {before: before['project.json'], after: after['project.json']}};
     cases.push(observation);
     await writeFile(join(output, 'record-moved-' + language + '.json'), JSON.stringify(observation, null, 2) + '\n');
-    console.log('908_BROWSER_PASS ' + language + ' approve=200 synthetic-cli-ingest=0 checkpoint=409');
+    console.log('908_BROWSER_PASS ' + language + ' approve=200 synthetic-cli-ingest=0 comments=409');
   } catch (error) {
     if (page) await writeFile(join(output, 'failure-' + language + '.png'), await page.screenshot());
     throw error;

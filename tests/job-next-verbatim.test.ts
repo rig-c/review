@@ -19,6 +19,7 @@ import { jobHash } from '../src/job-api.ts';
 import { jobCommand } from '../src/job-cli.ts';
 import { readProject } from '../src/interview-project.ts';
 import { jobFixture, jobInputHashes, syntheticJobParts } from './helpers/job-api-fixture.ts';
+import { seedHistoricalCheckpointAct } from './helpers/historical-checkpoint-act.ts';
 import { joinedVerdictFixture } from './helpers/joined-verdict-fixture.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {PNG} from 'pngjs';
@@ -187,26 +188,17 @@ test('real semantic next preserves verbatim reviewer words across checkpoint and
   const rigVerdictWords =
     '  "Rig 검수 완료?" 아니오: 호흡(idle) 전환 시 목 회전 각도 +3.5° 조정 필요 🛠️\n\t다음 패스에서 다시 확인!  ';
 
-  // #1227: checkpoint until #1229 retires record asks
-  const checkpointAsk = await f.ask(publication, { kind: 'checkpoint', checkpointId: 'step-one' });
-  const verdictAsk = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
+  // #1229: fresh checkpoint asks/submissions are retired; seed the historical act@6 checkpoint in its exact writer order alongside a live rig verdict.
   const page = await f.display(publication);
-
+  const storedCheckpoint = seedHistoricalCheckpointAct(f.session, {
+    ...page,
+    expectedGeneration: f.session.status().generation,
+    submissionId: 'verbatim-checkpoint',
+    checkpointId: 'step-one',
+    value: { checkpointId: 'step-one', outcome: 'fail', words: checkpointWords },
+  });
+  const verdictAsk = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
   const rigCapture = rigStillCapture(publication, verdictAsk, page);
-
-  const committedCheckpoint = await f.ports.commitUIAct(
-    f.session.jobId,
-    f.uiRequest({
-      ...page,
-      askId: checkpointAsk.askId,
-      expectedGeneration: f.session.status().generation,
-      submissionId: 'verbatim-checkpoint',
-      kind: 'checkpoint',
-      value: { checkpointId: 'step-one', outcome: 'fail', words: checkpointWords },
-    }),
-  );
-  expect(committedCheckpoint.ok).toBe(true);
-  if (!committedCheckpoint.ok) throw new Error(committedCheckpoint.error.code);
 
   const committedVerdict = await f.ports.commitUIAct(
     f.session.jobId,
@@ -225,9 +217,9 @@ test('real semantic next preserves verbatim reviewer words across checkpoint and
 
   const expectedActs: ExpectedActOracleInput[] = [
     {
-      actId: committedCheckpoint.value.actId,
+      actId: storedCheckpoint.actId,
       jobId: f.session.jobId,
-      askId: checkpointAsk.askId,
+      askId: storedCheckpoint.askId,
       publicationId: publication.publicationId,
       kind: 'checkpoint',
       authority: EXPECTED_AUTHORITY,

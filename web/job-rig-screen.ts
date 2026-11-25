@@ -1,5 +1,5 @@
 import {checkpointEvidencePair} from '../src/checkpoint-evidence-packet.ts';
-import {formFor, isPendingOwnerAsk, jobCheckpointContext, jobJson, jobPublicationRoutes, jobSourceDraftId, matchesJobRecordAct, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection, type JobWindowAsk} from './job-session.ts';
+import {formFor, isPendingOwnerAsk, jobJson, jobPublicationRoutes, jobSourceDraftId, matchesJobRecordAct, prepareJobForms, prepareJobInspection, jobSubmissionRefusal, type JobForm, type JobFormDependencies, type JobPreparedInspection, type JobWindowAsk} from './job-session.ts';
 import {commentPartsIssues,partsIssueComments,type PartsIssue} from '../src/parts-comment.ts';
 import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
@@ -10,7 +10,7 @@ import {canonicalJson} from '../src/canonical-json.ts';
 import {draftKey} from '../src/mesh-edit.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
 import type {ReviewManifest, ReviewedSource} from '../src/manifest.ts';
-import {checkpointNoteComments, feedbackContextComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
+import {feedbackContextComments, feedbackItemComments, projectComments} from '../src/stage-comment.ts';
 import {createJobRigSubmission, freezeJobRigStage} from './job-rig-capture.ts';
 import {sha256Hex,type JobMeshDraftSubmission} from './mesh-editor.ts';
 import type {JobChestDraftSubmission} from './chest-editor.ts';
@@ -24,11 +24,10 @@ export function jobRigScreenSubject(source: SourceV3, rigDraftVerdict = false): 
   if(source.selector?.kind==='draft'&&source.parts)return true;
   return !!source.model && (source.direction ? source.selector?.kind === 'post' : source.selector === null || source.selector.kind === 'rig' || (source.selector.kind === 'draft' && rigDraftVerdict));
 }
-/** The asks the rig screen's act bar answers: the rig verdict and checkpoints the package declares. */
-export function jobRigScreenAnswers(ask: Pick<PendingAskV3, 'subject'>, checkpoints: ReadonlySet<string>): boolean {
+/** The asks the rig screen's act bar answers: the rig or direction verdict. A checkpoint is no longer an ask (#1229). */
+export function jobRigScreenAnswers(ask: Pick<PendingAskV3, 'subject'>, _checkpoints: ReadonlySet<string>): boolean {
   const subject = ask.subject;
-  return subject.kind === 'review-verdict' ? (subject.stage === 'rig-review' || subject.stage === 'direction-review') :
-    subject.kind === 'checkpoint' && checkpoints.has(subject.checkpointId);
+  return subject.kind === 'review-verdict' && (subject.stage === 'rig-review' || subject.stage === 'direction-review');
 }
 /** #1048: the sealed identities the server attached to the record's question images (none elsewhere). */
 function questionPictures(questions:readonly {readonly images:readonly {readonly name:string;readonly url:string;readonly path?:string;readonly sha256?:string}[]}[]|undefined,instance?:(url:string)=>string):{questionPictures?:{name:string;src?:string;path:string;sha256:string}[]} {
@@ -43,9 +42,7 @@ function questionPictures(questions:readonly {readonly images:readonly {readonly
 /** One ask-availability check for both the route and its retained modal forms. */
 export function jobRigScreenAsk(display:DisplayPublicationV3,ask:PendingAskV3,checkpoints:ReadonlySet<string>):boolean {
   const source=display.publication.source;
-  if(ask.subject.kind==='checkpoint'){
-    try {prepareJobForms(display,[ask],()=>jobCheckpointContext(ask,[]));return true;}catch{return false;}
-  }
+  if(ask.subject.kind==='checkpoint')return false;
   return !!source.model&&jobRigScreenAnswers(ask,checkpoints)&&
     (ask.subject.kind!=='review-verdict'||ask.subject.stage===(source.direction?'direction-review':'rig-review'));
 }
@@ -54,8 +51,14 @@ export function jobRigScreenRoute(display: DisplayPublicationV3, pending: readon
   const source=display.publication.source,id=display.publication.publicationId;
   if('record' in source)return false;
   if(source.selector?.kind==='draft'&&source.parts&&!display.rigDraftVerdict)return true;
+  const legacyModelCheckpoint=(ask:PendingAskV3)=>{
+    if(ask.subject.kind!=='checkpoint'||!source.model)return false;
+    const stepId='planStepId' in ask.subject&&ask.subject.planStepId?ask.subject.planStepId:ask.subject.checkpointId;
+    if(!source.plan?.steps.some(step=>step.id===stepId))return false;
+    try{prepareJobForms(display,[ask],()=>null);return true;}catch{return false;}
+  };
   return (jobRigScreenSubject(source, display.rigDraftVerdict)||!source.model&&!source.parts)&&pending.every(ask=>
-    ask.publicationId!==id||ask.status!=='pending'||jobRigScreenAsk(display,ask,checkpoints));
+    ask.publicationId!==id||ask.status!=='pending'||legacyModelCheckpoint(ask)||jobRigScreenAsk(display,ask,checkpoints));
 }
 
 /** Refusals describe missing producer inputs without granting a new act authority. */
@@ -71,22 +74,13 @@ export function jobRigScreenRefusal(display:DisplayPublicationV3,pending:readonl
 }
 
 export type JobRigScreenDecision =
-  | {readonly ask: PendingAskV3; readonly kind: 'checkpoint'; readonly value: Extract<JobUISubmission, {kind: 'checkpoint'}>['value']}
   | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review' | 'direction-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]; general?: readonly string[]}};
 /** The act bar's decisions as the pending asks' values. `words` is the comments' projection (act@6's), or empty;
- * a decision still pending is not sent, so a pending ask is never answered with "pending". Checkpoints go first. */
+ * a decision still pending is not sent, so a pending ask is never answered with "pending". */
 export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'checkpoints' | 'feedback'>,
   pending: readonly PendingAskV3[], publicationId: string, general?: readonly string[]): JobRigScreenDecision[] {
   const open = pending.filter(ask => ask.publicationId === publicationId && ask.status === 'pending');
   const decisions: JobRigScreenDecision[] = [];
-  for (const ask of open) {
-    if (ask.subject.kind !== 'checkpoint') continue;
-    const {checkpointId} = ask.subject, entry = session.checkpoints[checkpointId];
-    if (!entry || entry.outcome === 'pending') continue;
-    const planStepId = ('planStepId' in ask.subject ? ask.subject.planStepId : undefined) ?? checkpointId;
-    decisions.push({ask, kind: 'checkpoint', value: {checkpointId, outcome: entry.outcome,
-      words: entry.note.trim() ? projectComments(checkpointNoteComments({checkpointId, planStepId, note: entry.note})) : ''}});
-  }
   if (session.status === 'pending') return decisions;
   for (const verdict of open) {
     if (verdict.subject.kind !== 'review-verdict') continue;
@@ -158,8 +152,8 @@ export function createJobRigScreen(options: {
         const {entry} = options.routes(display);
         const {manifest, reviewedSource} = inspection.metadata;
         // #983: a declared plan picture ranks first; the walk below runs only without it.
-        const checkpoint = options.window.state().pending.find(ask=>ask.publicationId===display.publication.publicationId&&ask.status==='pending'&&ask.subject.kind==='checkpoint')?.subject;
-        const paired = checkpoint?.kind==='checkpoint'&&inspection.checkpointEvidence?.some(({packet})=>packet.checkpointId===checkpoint.checkpointId&&!!packet.pair);
+        // #1229: a declared Before / After pair is the record's comparison, with or without a checkpoint ask.
+        const paired = !!inspection.checkpointEvidence?.some(({packet})=>!!packet.pair);
         let picture: JobRigScreenPrepared | null = !paired && !inspection.planPicture && manifest?.model && reviewedSource?.rig
           ? {jobRigScreen:true, display, entry, checkpoints:new Set(), review:{...inspection.metadata, manifest, reviewedSource}}
           : null;
@@ -268,8 +262,7 @@ export function createJobRigScreen(options: {
       const key = JSON.stringify(value);
       let attempt = attempts.get(decision.ask.askId);
       if (!attempt || attempt.key !== key) attempts.set(decision.ask.askId, attempt = {key, submissionId: crypto.randomUUID(), rig: createJobRigSubmission(),
-        commit: decision.kind === 'checkpoint' ? {checkpoints: {[decision.value.checkpointId]: structuredClone(session.checkpoints[decision.value.checkpointId]!)}} :
-          {review: {status: decision.value.verdict, feedback: structuredClone(session.feedback)}}});
+        commit: {review: {status: decision.value.verdict, feedback: structuredClone(session.feedback)}}});
       const latest = options.window.state();
       if (!latest.receipt) throw new Error('JOB_ACT_SOURCE_STALE');
       const input = {kind: decision.kind, publicationId: decision.ask.publicationId, askId: decision.ask.askId, pageId: options.pageId,
@@ -360,13 +353,10 @@ export function createJobRigScreen(options: {
   function host(prepared: JobRigScreenPrepared, ready: {resolve(): void; reject(error: unknown): void}, navigation?:RigHostNavigation): JobRigMeshHost {
     const base = new URL(prepared.entry).pathname;
     const jobId = /^\/jobs\/([^/]+)\//.exec(base)?.[1];
-    const record = prepared.record ?? prepared.modals;
     const recordSubmission = () => {
       if (prepared !== mounted) return null;
-      const {pending, closed, recordReceiptAskId} = options.window.state();
+      const {pending, recordReceiptAskId} = options.window.state();
       const active = activeAsks(pending, prepared.display.publication.publicationId);
-      if (!closed && active.some(ask => record?.forms.get(ask.askId)?.submitting &&
-          ask.subject.kind === 'checkpoint')) return 'sending' as const;
       return !active.length && recordReceiptAskId !== undefined ? 'submitted' as const : null;
     };
     const draftId = jobSourceDraftId(prepared.display.publication.source);
@@ -388,10 +378,9 @@ export function createJobRigScreen(options: {
       pairs.set(packet.checkpointId,{checkpointId:packet.checkpointId,before:imageFor(pair.before),after:imageFor(pair.after),
         differenceUrl:options.routes(prepared.display).api(`checkpoint-evidence/${packet.checkpointId}/difference`)});
     }
-    const evidencePair=pairs.size?{checkpointPairs:pairs,checkpointPair:()=>{
-      const ask=pendingSubjects().find(subject=>subject.kind==='checkpoint');
-      return ask?.kind==='checkpoint'?pairs.get(ask.checkpointId):undefined;
-    }}:{};
+    // #1229: a record shows its first declared pair as an ordinary comparison; packages keep checkpointPairs for pin replay without mounting the pair view.
+    const firstPair=prepared.record?pairs.values().next().value:undefined;
+    const evidencePair=pairs.size?{checkpointPairs:pairs,...(prepared.record?{checkpointPair:()=>firstPair}:{})}:{};
     if(prepared.record){
       const record=prepared.record,backdrop=record.picture?host(record.picture,ready):null;
       const question=record.inspection.interview?.questions[0];

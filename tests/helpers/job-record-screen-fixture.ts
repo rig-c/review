@@ -63,11 +63,12 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
  const ports={...fake.ports,handleJobApi:real.handleJobApi,async commitUIAct(_job:string,request:Request){
   const input=await request.json() as UISubmissionV3;submissions.push(structuredClone(input));
   try{
+   // #1229 / #1230: record screens submit comments directly via Send comments (act@10); record ask forms are retired.
    const act:ActV3=input.kind==='comments'
     ?finalizeCommentOnlyAct({jobId:session.jobId,submission:input,retained:session.retainedSourceV3(input.publicationId),reviewer:{id:'synthetic-owner',role:'owner'}})
     :prepareJobRecordAct({jobId:session.jobId,submission:input,ask,retained:session.retainedSourceV3(ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-'+kind,at:'2026-11-08T12:00:00.000Z'});
    const path=join(writeRoot,mode+'.json');await mkdir(writeRoot,{recursive:true});await writeFile(path,JSON.stringify(act));files.push(path);
-   return {ok:true as const,value:act};
+   return {ok:true as const,value:act as never};
   }catch(error){await mkdir(writeRoot,{recursive:true});await writeFile(join(writeRoot,mode+'.refusal.json'),JSON.stringify({error:String(error),input},null,2)+'\n');const code=error instanceof JobError?error.code:'JOB_ACT_INVALID';return {ok:false as const,error:{code,message:String(error)}};}
  }};
  const routes=retainedPublicationRoutes(session);

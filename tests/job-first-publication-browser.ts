@@ -380,12 +380,13 @@ async function unchangedPublishedHeight(page:InputCdpSession,out:string){
  await writeFile(join(out,'already-published-after-minheight.png'),await page.screenshot());
 }
 
-/** Retained record routes with publication delivery held until the normal owner page is open. */
+/** Retained record routes with publication delivery held until the normal owner page is open.
+ * #1229 / #1230: both plan (`checkpoint`) and `option-set` records arrive in comment mode with Send comments and zero ask forms. */
 async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'option-set',alreadyPublished=false){
  const out=join(output,'record',alreadyPublished?'already-published':'first-publication',kind,lang);await mkdir(out,{recursive:true});
  const fixture=await recordScreenFixture(kind,false,undefined,undefined,false,true,undefined,false,!alreadyPublished);
  const profile=await mkdtemp(join(tmpdir(),'review-904-record-'));let page:InputCdpSession|undefined;
- const catalog=lang==='en'?enCatalog:koCatalog,prompt=catalog[kind==='checkpoint'?'Review this checkpoint.':"We're looking at the work together. Leave your thoughts as comments."];
+ const catalog=lang==='en'?enCatalog:koCatalog,prompt=catalog["We're looking at the work together. Leave your thoughts as comments."];
  try{
   const frozen=await jobInputHashes(fixture.root),owner=new URL(fixture.ownerUrl);owner.searchParams.set('lang',lang);
   if(alreadyPublished)assert.ok(fixture.session.status().publication,'positive control has publication before navigation');
@@ -397,13 +398,11 @@ async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'option-set',alreadyP
   }throw signal.reason;});
   assert.equal(await page.evaluate(`['#save','#request-changes','#workspace-pending-ask'].some(selector=>document.querySelector(selector)?.checkVisibility())`),false);
   assert.deepEqual(await page.evaluate(`['#message','#layout-state','[data-part-status]'].map(s=>document.querySelector(s)?.textContent)`),['','','']);
-  await page.evaluate(`window.__review904RecordFrame=['.topbar','.layout','#stage-layout','#rig-viewport','.inspector','#workspace-act-row'].map(selector=>({selector,node:document.querySelector(selector)}));window.__review904RecordGeometryNodes=window.__review904RecordFrame.filter(({selector})=>selector!=='#rig-viewport');window.__review904RecordRects=window.__review904RecordGeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};})`);
+  await page.evaluate(`window.__review904RecordFrame=['.topbar','.layout','#stage-layout','#rig-viewport','.inspector','#workspace-act-row'].map(selector=>({selector,node:document.querySelector(selector)}));window.__review904RecordFrameNodes=window.__review904RecordFrame;window.__review904RecordGeometryNodes=window.__review904RecordFrame.filter(({selector})=>selector!=='#rig-viewport');window.__review904RecordRects=window.__review904RecordGeometryNodes.map(({node})=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};})`);
   await writeFile(join(out,'waiting.png'),await page.screenshot());
-  fixture.deliver();
+  if(kind==='checkpoint')fixture.fake.publish(fixture.display);else fixture.deliver();
   }else assert.ok(fixture.session.status().publication,'positive control starts with an actual retained publication');
-  const filledReady=kind==='checkpoint'
-   ?`document.body.dataset.ready==='true'&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(prompt)}&&!!document.querySelector('form[data-job-ask] fieldset:not(:disabled)')`
-   :`document.body.dataset.ready==='true'&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(prompt)}&&!document.querySelector('form[data-job-ask]')&&!document.querySelector('#workspace-interview-answer')&&!!document.querySelector('#send-comments')?.checkVisibility()&&!!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')`;
+  const filledReady=`document.body.dataset.ready==='true'&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(prompt)}&&!document.querySelector('form[data-job-ask]')&&!document.querySelector('#workspace-interview-answer')&&!document.querySelector('[id="job-record-asks"]')&&!!document.querySelector('#send-comments')?.checkVisibility()&&!!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')`;
   await withDeadline('904.record.filled',20000,async signal=>{while(!signal.aborted){
    if(await page!.evaluate(filledReady))return;
    await Bun.sleep(25);

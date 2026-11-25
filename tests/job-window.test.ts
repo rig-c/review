@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {partsIssueComments} from '../src/feedback-export.ts';
-import {prepareJobInspection, resolveJobPanels, jobPartsReviewState, jobPartsPainting, type JobInspectionMetadataV3, createJobWindow, createJobReferenceSelection, prepareJobForms, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, type JobWindowState } from '../web/job-session.ts';
+import {prepareJobInspection, resolveJobPanels, jobPartsReviewState, jobPartsPainting, type JobInspectionMetadataV3, createJobWindow, createJobReferenceSelection, prepareJobForms, jobPublicationRoutes, jobWindowAccess, jobWindowEvents, startJobWindowEvents, jobWindowRefusal, jobSubmissionRefusal, type JobWindowState } from '../web/job-session.ts';
 import { JOB_RECORD_ACT_SCHEMA, type DisplayPublicationV3, type JobDisplayPublication, type JobDisplayReceipt, type JobProgressLineV3, type JobResult, type JobModelSourceBinding, type JobRigCapture, type PendingAskV3, type UISubmissionV3, type ActV3, type JobPartsVerdictAct, type RecordAct } from '../src/job-contract.ts';
 import { buildRecordSource, parseRecordAct, parseRecordPublishedContext, parseRecordSource, recordInstanceKey } from '../src/job-api.ts';
 import {createJobRigSubmission} from '../web/job-rig-capture.ts';
@@ -813,52 +813,48 @@ describe('required forms before the visible commit', () => {
 
     test('the preflight validates every required pending form and the exact source binding', () => {
         const display = fixturePublication(1);
-        const source = fixtureAct('checkpoint').source;
+        const source = fixtureAct('interview-picks').source;
         const candidate = {...display, publication: {...display.publication, source}};
         const ask: import('../src/job-contract.ts').JobPendingAsk = {
-            askId: 'checkpoint', publicationId: candidate.publication.publicationId,
-            source, status: 'pending', subject: {kind: 'checkpoint', checkpointId: 'inspect-body'},
+            askId: 'picks', publicationId: candidate.publication.publicationId,
+            source, status: 'pending', subject: {kind: 'interview-picks', questionId: 'framing', setId: source.optionSet!.id},
         };
         const calls: string[] = [];
         const prepared = prepareJobForms(candidate, [ask, {...ask, askId: 'answered', status: 'answered'}], item => {
             calls.push(item.askId);
-            return jobCheckpointContext(item, []);
+            return item.subject;
         });
-        expect(calls).toEqual(['checkpoint']);
-        expect(prepared.get('checkpoint')?.step.id).toBe('inspect-body');
-        expect(() => prepareJobForms(candidate, [{...ask, source: {...source, plan: null}}], () => null))
+        expect(calls).toEqual(['picks']);
+        expect(prepared.get('picks')).toEqual(ask.subject);
+        expect(() => prepareJobForms(candidate, [{...ask, source: {...source, optionSet: null}}], () => null))
             .toThrow('JOB_ACT_SOURCE_STALE');
     });
 });
 
-describe('C2 plan-bound checkpoint presentation', () => {
+// #1229: C2 jobCheckpointContext presentation helper retired with the checkpoint Pass/Fail form;
+// formFor('checkpoint') now refuses JOB_ACT_KIND_DISABLED alongside signoff and reopen.
+describe('C2 and #1229 retired checkpoint form refusal', () => {
+    const display = fixturePublication(1);
     const source = fixtureAct('checkpoint').source;
-    const ask: import('../src/job-contract.ts').JobPendingAsk = {
-        askId: 'checkpoint', publicationId: 'publication-1', source, status: 'pending',
+    const ask: PendingAskV3 = {
+        askId: 'checkpoint', publicationId: display.publication.publicationId, source, status: 'pending',
         subject: {kind: 'checkpoint', checkpointId: 'inspect-body'},
     };
-
-    test('a published plan step works without a legacy manifest checkpoint', () => {
-        const context = jobCheckpointContext(ask, []);
-        expect(context).toEqual({step: {id: 'inspect-body', hash: 'b'.repeat(64)}, title: 'inspect-body', note: ''});
-        expect(context).not.toHaveProperty('stage');
-    });
-
-    test('an explicit published mapping can add optional legacy guidance', () => {
-        const mapped = {...ask, subject: {kind: 'checkpoint' as const, checkpointId: 'silhouette', planStepId: 'inspect-body'}};
-        const context = jobCheckpointContext(mapped, [{id: 'silhouette', title: 'Body outline', note: '  original guidance\n'}]);
-        expect(context.step).toEqual({id: 'inspect-body', hash: 'b'.repeat(64)});
-        expect(context.title).toBe('Body outline');
-        expect(context.note).toBe('  original guidance\n');
-        expect(context).not.toHaveProperty('stage');
-    });
-
-    test('legacy metadata cannot invent a missing plan mapping or missing plan source', () => {
-        const unmapped = {...ask, subject: {kind: 'checkpoint' as const, checkpointId: 'silhouette'}};
-        expect(() => jobCheckpointContext(unmapped, [{id: 'silhouette', title: 'Body outline'}])).toThrow('JOB_ASK_INVALID');
-        expect(() => jobCheckpointContext({...ask, source: {...source, plan: null}}, [])).toThrow('JOB_ASK_INVALID');
-        expect(() => jobCheckpointContext({...ask, subject: {kind: 'checkpoint', checkpointId: 'silhouette', planStepId: 'unknown'}}, []))
-            .toThrow('JOB_ASK_INVALID');
+    test('formFor refuses checkpoint asks with JOB_ACT_KIND_DISABLED', () => {
+        const makeEl = (tag: string, key?: string): any => ({
+            tagName: tag.toUpperCase(), dataset: key ? {jobText: key} : {}, textContent: key ? t(key) : '',
+            title: '', disabled: false, classList: {add() {}}, style: {},
+            setAttribute() {}, removeAttribute() {}, addEventListener() {}, append() {}, prepend() {},
+            querySelector() { return null; }, querySelectorAll() { return []; },
+        });
+        const helpers = prepareJobForms.helpers(makeEl, t);
+        const inspection = {display: {...display, publication: {...display.publication, source}}, metadata: {}} as unknown as import('../web/job-session.ts').JobPreparedInspection;
+        expect(() => prepareJobForms.formFor(ask, inspection, {
+            node: makeEl, translate: t, helpers: {...helpers, assertJobAskSource() {}},
+            draftStorage: () => ({getItem: () => null}), localDraftKey: () => 'draft', saveDraft() {},
+            access: {capability: 'cap'}, pageId: 'page',
+            window: {state: () => ({receipt: null, preparing: false, closed: false, generation: 1, pending: [ask]}), submit: async () => ({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED', message: 'disabled'}})},
+        })).toThrow('JOB_ACT_KIND_DISABLED');
     });
 });
 
@@ -913,25 +909,30 @@ describe('the real standing owner host', () => {
         expect(await (await fetch(paths.asset(metadata.manifest.model))).arrayBuffer()).toEqual(bytes);
     });
 
-    test('authenticates the unmodified UI Request on the real UI paths and commits a plan checkpoint', async () => {
+    // #1229: converted from committing a package checkpoint act to verifying fresh checkpoint ask/act refusals and committing a comment-only act@10 on the real UI paths.
+    test('authenticates the unmodified UI Request on the real UI paths, refuses fresh checkpoint asks/acts, and commits a comment-only act', async () => {
         const f = await realWindow();
         const publication = await f.publish();
         const asked = await (await f.call({...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
             idempotencyKey: 'real-checkpoint', publicationId: publication.publicationId,
             subject: {kind: 'checkpoint', checkpointId: 'step-one'}})).json();
-        expect(asked.ok).toBe(true);
+        expect(asked).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
         const body = {publicationId: publication.publicationId, pageId: 'real-page', sourceHash: publication.source.sourceHash};
         expect((await f.ui('displayed', body, 'http://127.0.0.1:1')).status).toBe(403);
         expect((await f.ui('displayed', body, f.host.origin, f.credentials.agent)).status).toBe(403);
         const ack = await (await f.ui('displayed', body)).json();
         expect(ack.ok).toBe(true);
         const original = await jobInputHashes(f.input.root);
-        const saved = await (await f.ui('acts', {...ack.value, askId: asked.value.askId,
-            expectedGeneration: f.host.session.status().generation, submissionId: 'real-save', kind: 'checkpoint',
+        const refusedCheckpointAct = await (await f.ui('acts', {...ack.value, askId: '00000000-0000-4000-8000-000000001229',
+            expectedGeneration: f.host.session.status().generation, submissionId: 'real-refused-cp', kind: 'checkpoint',
             value: {checkpointId: 'step-one', outcome: 'pass', words: ''}})).json();
+        expect(refusedCheckpointAct).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+        const saved = await (await f.ui('acts', {...ack.value,
+            expectedGeneration: f.host.session.status().generation, submissionId: 'real-save', kind: 'comments',
+            value: {comments: [{text: 'real owner comment'}]}})).json();
         expect(saved.ok).toBe(true);
-        expect(saved.value.schema).toBe('rig-review/act@6');
-        expect(saved.value.value).toEqual({checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass', comments: []});
+        expect(saved.value.schema).toBe('rig-review/act@10');
+        expect(saved.value.value).toEqual({comments: [{text: 'real owner comment'}]});
         expect(saved.value.authority.reviewer).toEqual({id: 'declared-owner', role: 'owner'});
         expect(saved.value.source).toEqual(publication.source);
         expect(await jobInputHashes(f.input.root)).toEqual(original);
@@ -1478,7 +1479,7 @@ describe('standalone event subscription lifetime', () => {
                     createJobRigScreen: () => ({...screen, waiting: async () => {},
                         progress(value: JobProgressLineV3['progress']) {progress.push(value);screen.progress(value);}}),
                     createJobWindow: () => ({stop() {}, state: () => ({}), event() { delivered++; }}),
-                    startJobWindowEvents, assertJobAskSource() {}, jobCheckpointContext, jobPublicationRoutes,
+                    startJobWindowEvents, assertJobAskSource() {}, jobPublicationRoutes,
                     jobWindowRefusal, globalThis: {addEventListener() {}, removeEventListener() {}},
                 };
                 stop = await run(environment)({
@@ -1606,7 +1607,7 @@ describe('standalone event subscription lifetime', () => {
                     createJobWindowTransport: () => ({}),
                     createJobRigScreen: () => ({...screen, waiting: async () => {}}),
                     createJobWindow: (options: any) => { adapter = options.adapter; return {stop() {}, state: () => ({}), event() {}}; },
-                    startJobWindowEvents, assertJobAskSource() {}, jobCheckpointContext, jobPublicationRoutes,
+                    startJobWindowEvents, assertJobAskSource() {}, jobPublicationRoutes,
                     jobWindowRefusal, globalThis: {addEventListener() {}, removeEventListener() {}},
                 };
                 stop = await run(environment)({
@@ -1759,7 +1760,7 @@ describe('standalone event subscription lifetime', () => {
                         }),
                         createJobWindow: (opts: any) => { activeWindow = createJobWindow(opts); return activeWindow; },
                         startJobWindowEvents: () => ({done: Promise.resolve()}),
-                        assertJobAskSource() {}, jobCheckpointContext, jobPublicationRoutes,
+                        assertJobAskSource() {}, jobPublicationRoutes,
                         jobWindowRefusal, globalThis: {addEventListener() {}, removeEventListener() {}},
                     };
                     stop = await run(environment)({
@@ -1813,38 +1814,28 @@ describe('standalone event subscription lifetime', () => {
                 }
             }
 
-            // formFor submit catch path (JOB_ACT_INVALID fallback)
+            // #1229 / #1230: all formFor kinds are disabled; verify refusal on signoff, checkpoint and interview-picks plus submission fallback formatting.
             const display = fixturePublication(1);
-            const act = fixtureAct('checkpoint');
+            const act = fixtureAct('interview-picks');
             Object.assign(display, {publication: {...display.publication, source: act.source}});
             const ask: PendingAskV3 = {
                 askId: act.askId, publicationId: display.publication.publicationId,
                 source: act.source, status: 'pending',
-                subject: {kind: 'checkpoint', checkpointId: 'silhouette', planStepId: 'inspect-body'},
+                subject: {kind: 'interview-picks', questionId: 'framing', setId: 'set-1'},
             };
-            const makeEl = (tag: string, key?: string): any => {
-                const children: any[] = [];
-                return {
-                    tagName: tag.toUpperCase(), dataset: key ? {jobText: key} : {}, textContent: key ? t(key) : '',
-                    title: '', value: tag === 'select' ? 'pass' : '', disabled: false, classList: {add() {}}, style: {},
-                    setAttribute() {}, removeAttribute() {}, addEventListener() {}, dispatchEvent() { return true; },
-                    reportValidity() { return true; },
-                    append(...nodes: any[]) { children.push(...nodes); },
-                    prepend(...nodes: any[]) { children.unshift(...nodes); },
-                    querySelector() { return {value: 'pass'}; },
-                    querySelectorAll() { return []; },
-                    children,
-                };
-            };
-            let submitFailure: Error = new RangeError('boom-submit');
+            const makeEl = (tag: string, key?: string): any => ({
+                tagName: tag.toUpperCase(), dataset: key ? {jobText: key} : {}, textContent: key ? t(key) : '',
+                title: '', value: '', checked: true, type: '', name: '', htmlFor: '', id: '', hidden: false,
+                disabled: false, classList: {add() {}, toggle() {}}, style: {},
+                setAttribute() {}, removeAttribute() {}, getAttribute() { return null; }, addEventListener() {}, dispatchEvent() { return true; },
+                reportValidity() { return true; }, append() {}, prepend() {}, replaceChildren() {},
+                querySelector() { return null; }, querySelectorAll() { return []; }, children: [],
+            });
             const helpers = prepareJobForms.helpers(makeEl, t);
-            const inspection = {
-                display,
-                metadata: {manifest: {checkpoints: [{id: 'silhouette', title: 'Silhouette'}]}},
-            } as unknown as JobPreparedInspection;
+            const inspection = {display, metadata: {}} as unknown as JobPreparedInspection;
             const formDeps = {
                 node: makeEl, translate: t,
-                helpers: {...helpers, assertJobAskSource() {}, jobCheckpointContext},
+                helpers: {...helpers, assertJobAskSource() {}},
                 draftStorage: () => ({getItem: () => null}),
                 localDraftKey: () => 'draft', saveDraft() {},
                 access: {capability: 'cap'}, pageId: 'page-941',
@@ -1853,30 +1844,32 @@ describe('standalone event subscription lifetime', () => {
                         receipt: {publicationId: display.publication.publicationId, pageId: 'page-941', displayedNonce: 'nonce'},
                         preparing: false, closed: false, generation: 1, pending: [ask],
                     }),
-                    submit: async () => { throw submitFailure; },
+                    submit: async () => ({ok: false as const, error: {code: 'JOB_ACT_INVALID' as const, message: 'JOB_ACT_INVALID'}}),
                 },
             };
-            expect(() => prepareJobForms.formFor(
-                {...ask, subject: {kind: 'signoff', stage: 'plan-approved'}},
-                inspection,
-                formDeps,
-            )).toThrow('JOB_ACT_KIND_DISABLED');
-            const entry = prepareJobForms.formFor(ask, inspection, formDeps);
-            const statusNode = (entry.form as any).children.at(-1);
+            for (const disabledSubject of [
+                {kind: 'signoff' as const, stage: 'plan-approved' as const},
+                {kind: 'checkpoint' as const, checkpointId: 'silhouette'},
+                ask.subject,
+            ]) {
+                expect(() => prepareJobForms.formFor({...ask, subject: disabledSubject}, inspection, formDeps)).toThrow('JOB_ACT_KIND_DISABLED');
+            }
+            const submitFailure = new RangeError('boom-submit');
             calls.length = 0;
-            await (entry.form as any).onsubmit({preventDefault() {}});
-            expect(statusNode.dataset.jobText).toBe('JOB_ACT_INVALID');
-            expect(statusNode.textContent).toBe(t('JOB_ACT_INVALID'));
+            expect(jobWindowRefusal(submitFailure, 'JOB_ACT_INVALID')).toBe(t('JOB_ACT_INVALID'));
             expect(calls).toEqual([['[job-window]', 'JOB_ACT_INVALID', submitFailure]]);
             expect((calls[0]![2] as Error).name).toBe('RangeError');
             expect((calls[0]![2] as Error).message).toBe('boom-submit');
+            expect(jobSubmissionRefusal(submitFailure)).toMatchObject({
+                code: 'JOB_ACT_INVALID',
+                text: t('Review was not submitted: {0}', [t('job.submit.refused')]),
+            });
 
             calls.length = 0;
-            submitFailure = new Error('JOB_RECORD_MOVED');
-            await (entry.form as any).onsubmit({preventDefault() {}});
-            expect(statusNode.dataset.jobText).toBe('JOB_RECORD_MOVED');
-            expect(statusNode.textContent).toBe(t('JOB_RECORD_MOVED'));
+            const movedFailure = new Error('JOB_RECORD_MOVED');
+            expect(jobWindowRefusal(movedFailure, 'JOB_ACT_INVALID')).toBe(t('JOB_RECORD_MOVED'));
             expect(calls).toEqual([]);
+            expect(jobSubmissionRefusal(movedFailure).title).toContain('JOB_RECORD_MOVED');
         } finally {
             console.error = originalError;
         }

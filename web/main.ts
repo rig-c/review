@@ -159,11 +159,10 @@ for(const event of ['click','change'])secondaryToolbar.addEventListener(event,()
 const rigInspector=mountRigInspector(document,shell.actRow??undefined);
 rigInspector.act.hidden=true;
 const rigAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-ask',hidden:true});rigAsk.type='button';
-const recordAsk=panelMake('button',{className:'workspace-act-ask',id:'workspace-pending-record-ask',hidden:true,type:'button'});
 const askHeadline=panelMake('span',{id:'workspace-ask-headline',className:'workspace-act-ask',hidden:true});
 const requestChanges=panelMake('button',{id:'request-changes',type:'button',hidden:true});
 const requestChangesReason=panelMake('span',{id:'request-changes-reason',hidden:true});
-rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requestChangesReason,requestChanges);
+rigInspector.act.prepend(askHeadline,rigAsk);button('save').after(requestChangesReason,requestChanges);
 // #1226: Send comments sits in the act bar, leftmost of the answers; it sends a comment-only act that answers no ask.
 const sendComments=panelMake('button',{id:'send-comments',type:'button',hidden:true});setSourceText(sendComments,'Send comments');button('save').before(sendComments);
 let commentSendState:'idle'|'sent'='idle';let commentSending=false;
@@ -277,7 +276,7 @@ let idleHeld=false;
 let suspendedPreview=false;
 let controlDispose:(()=>void)|null=null;
 const viewDisposers:(()=>void)[]=[];
-if(host)viewDisposers.push(onLanguageChange(()=>{if(host?.checkpointPair&&checkpointPair)renderLayout();if(jobProgress&&!pendingAnswers.length)renderAskHeadline();}));
+if(host)viewDisposers.push(onLanguageChange(()=>{if(host?.checkpointPairs&&checkpointPair)renderLayout();if(jobProgress&&!pendingAnswers.length)renderAskHeadline();}));
 const layers={images:true,mesh:false,bones:false,meshOpacity:.65};
 let chestMapping:CropWorldMapping={available:false,reason:'CHEST_REGION_MAPPING_UNAVAILABLE: no compiled model drawn'};
 let setupChestWorld:{x:number;y:number}|null=null;
@@ -497,20 +496,13 @@ function renderProvenance(): void {
 }
 viewDisposers.push(onLanguageChange(()=>{if(session)renderProvenance();}));
 
-function checkpointEntry(): ReviewSession['checkpoints'][string] | undefined {
-  if (!checkpoint) return;
-  return session.checkpoints[checkpoint.id] ??= { outcome: 'pending', note: '' };
-}
-
 function renderCheckpoints(): void {
   const list = el('checkpoints'); list.replaceChildren();
   for (const point of data.manifest.checkpoints) {
     const item = document.createElement('button'); item.type = 'button'; item.className = 'checkpoint';
     item.setAttribute('aria-current', String(point.id === checkpoint?.id));
     const label = document.createElement('span'); label.textContent = point.title;
-    const status = document.createElement('small');
-    status.textContent = { pending: '○ Pending', pass: '✓ Pass', fail: '↗ Needs changes' }[session.checkpoints[point.id]?.outcome ?? 'pending'];
-    item.append(label, status); item.onclick = () => { void chooseCheckpoint(point); }; list.append(item);
+    item.append(label); item.onclick = () => { void chooseCheckpoint(point); }; list.append(item);
   }
   if (!data.manifest.checkpoints.length) list.textContent = 'No checkpoints supplied.';
 }
@@ -543,7 +535,6 @@ function renderCheckpoint(): void {
   text('detail-note', checkpoint?.note ?? 'Record checkpoint notes and outcomes.');
   const entry = checkpoint ? session.checkpoints[checkpoint.id] : undefined;
   el('checkpoint-note').textContent = entry?.note ?? '';
-  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="outcome"]')) { radio.checked = radio.value === (entry?.outcome ?? 'pending'); radio.disabled = !checkpoint; }
 }
 
 function setView(value: typeof view): void {leavePreviousBuild();view=value;renderLayout();}
@@ -1457,7 +1448,6 @@ function bind(): void {
   select('report-time').onchange = () => { selectedReportTime = Number(select('report-time').value); renderReportSelection(); seekReportEvent(); };
   select('report-target').onchange = () => { const value = select('report-target').value; selectedReportTarget = value ? Number(value) : undefined; prefillReportEvent(); };
   select('review-status').onchange = () => { session.status = select('review-status').value as ReviewSession['status']; markDirty(); };
-  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="outcome"]')) radio.onchange = () => { const entry = checkpointEntry(); if (entry) { entry.outcome = radio.value as typeof entry.outcome; markDirty(); renderCheckpoints(); } };
   select('feedback-target-kind').onchange = () => renderFeedbackTargets();
   button('add-proposal').onclick = async () => {
     const path=select('correction-path').value,capturedApply=appliedOnStage;
@@ -1617,10 +1607,10 @@ function bindWorkspace(hasModel=false,empty=false):void {
   }
   if(empty)return;
   bindReviewDialog();
-  // Record asks sit above Comments; Comment rows sit above the provenance block and the review form.
+  // Comment rows sit above the provenance block and the review form.
   const comments=rigInspector.comments.panel;comments.hidden=false;
   comments.querySelector('.review-dialog-header')?.after(el('comments-list-host'));
-  communicationPanel.append(recordPanel,comments);
+  communicationPanel.append(comments);
   inspectorBlocks=bindInspectorBlocks({sections:[el('inspector-rig'),el('inspector-playback')],available:host?.record&&(!host.record.hasPicture||!hasModel&&!partsOnly)?['feedback']:undefined,bottom:{strip:rigInspector.strip},changed:()=>{if(!checkpointPair)syncQuestionImage();workspace?.refresh();persistence?.save();}});
   workspace?.refresh();
 }
@@ -1906,16 +1896,11 @@ async function startRecord(interview?:InterviewSubjectEntry):Promise<void> {
  document.body.dataset.ready='true';
  if(!interview){host!.attach({recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:()=>null,redraw:()=>{},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host!.displayed();}
 }
-/** #1041 B: checkpoint, signoff and plan-approval forms are a right-panel section, below the question and above Comments. */
-const recordPanel=panelMake('section',{id:'job-record-asks',className:'workspace-interview-panel',hidden:true});
-recordPanel.tabIndex=-1;const recordTitle=panelMake('h2',{});recordPanel.append(panelMake('div',{className:'review-dialog-header'},recordTitle));
-const recordForms=()=>[...recordPanel.querySelectorAll<HTMLFormElement>('form[data-job-ask]')];
-viewDisposers.push(()=>{for(const form of recordForms()){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}recordPanel.hidden=true;});
+/** #1041 B: checkpoint, signoff and plan-approval forms are retired (#1227, #1229, #1230); record comments stay in Comments. */
 let hostAttached=false;
 let activeInterviewImages:readonly {name:string;src:string;path?:string;sha256?:string}[]|null=null;
 let activeInterviewImage:{name:string;src:string;path?:string;sha256?:string}|null=null;
 let releaseInterview:(()=>void)|null=null;
-let questionFormBindings=new WeakSet<HTMLElement>();
 
 /** Publication and source bind native comment drafts independently of inspection navigation. */
 function restoreRecordComments(form?:HTMLFormElement):void {
@@ -2071,22 +2056,10 @@ function checkpointPairTile(path:string|null,sha256:string|null):CheckpointPairT
   if(side)return {pair,side};
  }
 }
-function packageCheckpointWords(checkpointId:string|undefined):string {
- const rows=feedbackItemComments(session.feedback),pair=host?.checkpointPair?.();
- if(!pair||pair.checkpointId!==checkpointId)return projectComments(rows);
- const pictures=[pair.before,pair.after];
- return projectCommentLabels(rows,mark=>{
-  const {selection}=parseBookmark(mark.bookmark,inspectionBinding());
-  if(manifestReferenceMatches(mark,selection.reference))return undefined;
-  const picture=pictures.find(item=>item.path===mark.referenceId&&item.sha256===mark.referenceHash);
-  if(!picture||mark.sourceHash!==data.sourceHash||selection.reference!==mark.referenceId)throw new Error('COMMENT_REFERENCE_MISMATCH');
-  return picture;
- });
-}
 /** The sealed plan picture or question image while it is the reference view's shown image, with or without a retained
  * backdrop (#1068); null otherwise (#1048). */
 function shownPlanPicture():{name:string;path:string;sha256:string}|null {
- if(host?.checkpointPair&&checkpointPair){
+ if(host?.checkpointPairs&&checkpointPair){
   const before=checkpointPair.mode==='before'||checkpointPair.mode==='compare';
   return {...(before?checkpointPair.pair.before:checkpointPair.pair.after),name:before?'Before':'After'};
  }
@@ -2113,8 +2086,7 @@ function persistRecordComments():void {
    comments.splice(0,comments.length,...kept,...addedFromOther,...localNew);
   }
   knownIds.clear();for(const row of comments)knownIds.add(row.id);
-  const dialogPublication=recordPanel.querySelector<HTMLFormElement>('form[data-job-ask]')?.dataset.jobPublication;
-  const activePub=binding.publicationId??dialogPublication;
+  const activePub=binding.publicationId;
   const prefix=host?.verdictComments?'rig-review-verdict-comments/1:':'rig-review-record-comments/1:';
   if(typeof localStorage.removeItem==='function'){
    if(activePub&&`${prefix}${activePub}:${binding.sourceHash}`!==recordCommentKey)localStorage.removeItem(`${prefix}${activePub}:${binding.sourceHash}`);
@@ -2130,8 +2102,8 @@ function recordCommentsChanged():void {
  persistRecordComments();
  setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);
  renderDraftState();
- for(const form of recordForms())form.dispatchEvent(new Event('input',{bubbles:true}));
 }
+/** Comments remain native rows (#992); checkpoint pairs take the reference viewport (#1229). */
 function checkpointDifferenceReason({before,after}:CheckpointPairView):string|null {
  return before.image.naturalWidth!==after.image.naturalWidth||before.image.naturalHeight!==after.image.naturalHeight
   ?tr(nativeDifferenceAlignment):null;
@@ -2169,7 +2141,7 @@ async function showCheckpointPair(mode:CheckpointPairMode):Promise<void> {
 }
 
 function syncCheckpointPair(keepReplay=true):void {
- const pair=host?.checkpointPair?.();
+ const pair=host?.record?host.checkpointPair?.():undefined;
  if(keepReplay&&checkpointPair?.replayFor===(pair??null))return;
  if(pair===checkpointPair?.pair){
   if(checkpointPair)checkpointPair.replayFor=undefined;
@@ -2251,42 +2223,18 @@ function syncQuestionImage():void {
  void showReference('',activeInterviewImage);
 }
 /** Record forms take the record section in the right panel (#1041). */
-function renderRecordForms(forms:readonly HTMLElement[]):void {
- for(const form of forms){
-  if(questionFormBindings.has(form))continue;questionFormBindings.add(form);
-  form.addEventListener('submit',event=>{if(draftConflict||pendingAnswers.some(subject=>subject.kind.endsWith('verdict'))){event.preventDefault();event.stopImmediatePropagation();}},true);
-  form.addEventListener('job-answer-sending',renderDraftState);
-  form.addEventListener('job-answer-failed',renderDraftState);
- }
+function renderRecordForms(_forms:readonly HTMLElement[]):void {
  if((typeof checkpointPair==='undefined'||!checkpointPair)&&typeof syncQuestionImage==='function')syncQuestionImage();
  if(host?.record){
   for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
   setSourceText(rigInspector.comments.button,`Comments (${recordComments.length})`);comments?.refresh();partsSubject?.refreshComments();
  }
- if(!forms.length){
-  rigAsk.onclick=null;
-  for(const form of recordForms()){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
-  if(!recordPanel.hidden){recordPanel.hidden=true;workspace?.refresh();}
-  renderDraftState();return;
- }
- const trigger=rigAsk;
- // The ask line's Review… brings the section into view; it opens with the panel.
- const revealRecord=()=>{recordPanel.hidden=false;workspace?.revealCommunication();recordPanel.scrollIntoView?.({block:'nearest'});};
- trigger.onclick=()=>{if(draftConflict)return;if(checkpointPair?.replayFor!==undefined)syncCheckpointPair(false);revealRecord();recordPanel.focus({preventScroll:true});};
- for(const form of recordForms())if(!forms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
- if(forms[0])restoreRecordComments(forms[0] as HTMLFormElement);
- for(const form of forms){
-  (form as JobForm['form']).commentWords=()=>host?.record||host?.direction?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):packageCheckpointWords(form.dataset.checkpointId);
-  if(!recordPanel.contains(form))recordPanel.append(form);
- }
- setSourceText(recordTitle,'Checkpoint');
- if(recordPanel.hidden)revealRecord();
- if(host?.record)button('save').onclick=()=>trigger.click();
- renderAnswerControls();
+ rigAsk.onclick=null;
+ renderDraftState();
 }
 /** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {
- const requests:Record<string,string>={'parts-verdict':partsSubject?.items().some(item=>item.mesh)?'Check the parts and meshes.':'Check the parts.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.','checkpoint':'Review this checkpoint.'};
+ const requests:Record<string,string>={'parts-verdict':partsSubject?.items().some(item=>item.mesh)?'Check the parts and meshes.':'Check the parts.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.'};
  // #1004: several pending asks of one kind say their sentence once.
  const labels=[...new Set(subjects.map(subject=>requests[subject.kind+':'+subject.stage]??requests[subject.kind]).filter((label):label is string=>!!label))];
  const liveVerdict=(subject:{kind:string;stage?:string})=>
@@ -2296,7 +2244,7 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  // #1226: the comments hint names the button that actually sends them.
  const commentsHint=typeof commentHost==='function'&&commentHost()?rigInspector.comments.panel.querySelector('.review-dialog-header .hint'):null;
  if(commentsHint)setSourceText(commentsHint,'Drafts save locally as you type · nothing is sent until you press Send comments');
- if(host?.checkpointPair)syncCheckpointPair();
+ if(host?.record&&host.checkpointPair)syncCheckpointPair();
  if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
  if(host?.recordSubmission?.()==='submitted')firstPublicationPrompt=false;
  // #1228: a displayed record publication takes the comment line where the first-publication waiting line stood;
@@ -2363,9 +2311,7 @@ function renderAnswerControls():void {
  const subjects=host?.pendingSubjects?.()??pendingAnswers;
  const parts=subjects.some(subject=>subject.kind==='parts-verdict');
  const verdict=parts||subjects.some(subject=>subject.kind==='review-verdict');
- const recordKind=subjects.find(subject=>subject.kind==='checkpoint')?.kind;
- const dialog=!!recordKind&&!verdict;
- const recordEnabled=!!recordPanel.querySelector('form[data-job-ask] fieldset:not(:disabled)');
+ const dialog=false;
  const blocked=saving||draftConflict||!!actReadOnly||!!host?.unavailable;
  const save=button('save');
  const pendingPartComment=parts&&typeof partsSubject!=='undefined'&&!!partsSubject?.hasPendingComment?.();
@@ -2377,16 +2323,8 @@ function renderAnswerControls():void {
  select('review-status').hidden=true;document.querySelector<HTMLLabelElement>('label[for="review-status"]')!.hidden=true;
  save.classList.toggle('primary',verdict&&!hasPinnedPart);
  requestChanges.classList.toggle('primary',hasPinnedPart);
- const recordSending=recordKind==='checkpoint'&&host?.recordSubmission?.()==='sending';
- setSourceText(rigAsk,'Review…');
- rigAsk.disabled=!recordEnabled||blocked||recordSending;
- const sendingOpener=dialog&&!firstPublicationPrompt&&recordSending?rigAsk:null;
- for(const opener of [rigAsk,recordAsk]){
-  if(opener===sendingOpener||opener.classList.contains?.('workspace-act-ask')===false)
-   opener.classList.toggle('workspace-act-ask',opener!==sendingOpener);
- }
- rigAsk.classList.toggle('primary',dialog);
- recordAsk.classList.toggle('primary',false);
+ if(rigAsk.classList.contains?.('workspace-act-ask')===false)rigAsk.classList.toggle('workspace-act-ask',true);
+ rigAsk.classList.toggle('primary',false);
  let inlineReason='';
  if(verdict){
   const count=liveIssueCount()+(pendingPartComment||pendingStageComment?1:0);
@@ -2404,7 +2342,6 @@ function renderAnswerControls():void {
   }
   requestChanges.onclick=async()=>{if(requestChanges.disabled)return;if(parts){if(typeof partsSubject!=='undefined'&&partsSubject?.hasPendingComment?.()&&!await partsSubject.commitDraft())return;if(liveIssueCount()===0)return;void save.onclick?.call(save,new PointerEvent('click'));}else{if(typeof comments!=='undefined'&&comments?.hasPendingComment?.()&&!await comments.commitDraft())return;session.status='changes-requested';select('review-status').value=session.status;void verdictSubmit?.(new MouseEvent('click'));}};
  }
- for(const control of recordPanel.querySelectorAll<HTMLButtonElement>('button[type="submit"]'))control.disabled=blocked||verdict;
  // The waiting row is already visible: finish labels, state and handlers before revealing any answer.
  setSourceText(requestChangesReason,inlineReason);
  requestChangesReason.hidden=!inlineReason;
@@ -2417,8 +2354,7 @@ function renderAnswerControls():void {
   sendComments.disabled=blocked||!!(host?.record?actReadOnly:readOnly)||!hasUnsentContent()&&!(typeof partsOnly!=='undefined'&&partsOnly?!!partsSubject?.hasPendingComment?.():pendingStageComment);
   // One emphasised answer: Send comments leads only when no ask of any kind is waiting.
   sendComments.classList.toggle('primary',!subjects.length);
- }rigAsk.hidden=!dialog||firstPublicationPrompt;
- recordAsk.hidden=true;
+ }rigAsk.hidden=true;
  if(host?.verdictComments){
   const notice=el('review-message');
   if(needsPinnedPart&&!save.hidden&&!save.disabled){
@@ -4030,7 +3966,7 @@ function setupComments():void {
  }:undefined,listHost:el('comments-list-host'),openList:openReview,hasPicture:()=>checkpointPair?.replayFor===undefined&&(!activeInterviewImages||!!shownPlanPicture()),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?(recordPictures()?{reference:el('reference-viewport')}:{}):{rig:el('rig-viewport'),reference:el('reference-viewport')},
   viewportAvailable:view=>view!=='reference'||!previousBuildView?.active(),
   pose:view=>{
-   if(host?.checkpointPair&&checkpointPair||host?.record&&(!host.record.hasPicture||shownPlanPicture()))return planPicturePose(view);
+   if(host?.checkpointPairs&&checkpointPair||host?.record&&(!host.record.hasPicture||shownPlanPicture()))return planPicturePose(view);
    if(activeInterviewImages)return null;
    if(view!=='rig'&&view!=='reference')return null;const workspaceMode=document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode;if(workspaceMode!=='rig'&&workspaceMode!=='playback')return null;const camera=numericView().cameras[view],pane=el(view+'-viewport');if(!camera||pane.clientWidth<=0||pane.clientHeight<=0)return null;
    const renderer=player?.renderer;const current=time,index=frameAtTime(activeFrameClock(),current),referenceId=view==='reference'?select('reference-select').value||null:null,referenceHash=referenceId?data.referenceHashes?.[referenceId]??(data.explicitReference?.id===referenceId?data.explicitReference.sha256:null):null;
@@ -4045,7 +3981,7 @@ function setupComments():void {
    const record=host?.record,pictures=record?[...record.planPicture?[record.planPicture]:[],...record.questionPictures??[]]:[];
    return pictures.find(picture=>mark.referenceId===picture.path&&mark.referenceHash===picture.sha256)?.name??null;},
   refusal:()=>{
-   if(host?.checkpointPair&&checkpointPair)return shownPlanPicture()!.path.length>512?'COMMENT_PICTURE_LABEL_INVALID: picture identity':null;
+   if(host?.checkpointPairs&&checkpointPair)return shownPlanPicture()!.path.length>512?'COMMENT_PICTURE_LABEL_INVALID: picture identity':null;
    return host?.record&&(!host.record.hasPicture||shownPlanPicture())?null:commentCaptureRefusal();
   },blocked:()=>saving||!!persistence?.restoring()||seekingControl||!!video?.seeking||!!rebuildBusy||!!appliedOnStage,shortcutBlocked:()=>!!meshEditor?.active()
  });

@@ -35,8 +35,9 @@ import { enCatalog } from '../web/catalog-en.ts';
 import { koCatalog } from '../web/catalog-ko.ts';
 import { seedHistoricalPicksAct } from './helpers/historical-picks-act.ts';
 import { jobFixture, jobInputHashes } from './helpers/job-api-fixture.ts';
+import { seedHistoricalCheckpointAct } from './helpers/historical-checkpoint-act.ts';
+import { expectRecordActSubmitted } from './helpers/record-act-browser-status.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
-import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import { launchCdpSession, type InputCdpSession } from './parts-explorer-browser.ts';
 
 const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -200,14 +201,27 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
       freeze: { kind: 'producer-held', holdId: 'preflight-hold-plan', record: { path: 'project.json', sha256: projectSha } },
     });
     if (pubPlan.verb !== 'publish' || !pubPlan.ok) throw new Error('Preflight plan publish failed');
-    const askCp = await call({
-      verb: 'ask',
-      expectedGeneration: pubPlan.generation,
-      idempotencyKey: 'preflight-ask-checkpoint',
-      publicationId: pubPlan.value.publicationId,
-      subject: { kind: 'checkpoint', checkpointId: 'seethrough' },
+    // #1229: the declared checkpoint subject parses on publish, while a fresh checkpoint ask refuses JOB_ASK_INVALID.
+    const cpRes = await fetch(`${host!.origin}/jobs/${host!.session.jobId}/api`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        schema: JOB_API_V3_SCHEMA,
+        jobId: host!.session.jobId,
+        requestId: randomUUID(),
+        verb: 'ask',
+        expectedGeneration: pubPlan.generation,
+        idempotencyKey: 'preflight-ask-checkpoint',
+        publicationId: pubPlan.value.publicationId,
+        subject: { kind: 'checkpoint', checkpointId: 'seethrough' },
+      }),
     });
-    if (askCp.verb !== 'ask' || !askCp.ok) throw new Error('Preflight checkpoint ask failed');
+    assert.equal(cpRes.status, 409);
+    const askCp = (await cpRes.json()) as JobApiResponseV3;
+    assert.equal(askCp.schema, JOB_API_V3_SCHEMA);
+    assert.equal(askCp.ok, false);
+    if (askCp.ok) throw new Error('Preflight checkpoint ask unexpectedly succeeded');
+    assert.equal(askCp.error.code, 'JOB_ASK_INVALID');
     const signoffRes = await fetch(`${host!.origin}/jobs/${host!.session.jobId}/api`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -216,7 +230,7 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
         jobId: host!.session.jobId,
         requestId: randomUUID(),
         verb: 'ask',
-        expectedGeneration: askCp.generation,
+        expectedGeneration: pubPlan.generation,
         idempotencyKey: 'preflight-ask-signoff',
         publicationId: pubPlan.value.publicationId,
         subject: { kind: 'signoff', stage: 'rigging-interview' },
@@ -236,7 +250,7 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
         jobId: host!.session.jobId,
         requestId: randomUUID(),
         verb: 'ask',
-        expectedGeneration: askCp.generation,
+        expectedGeneration: pubPlan.generation,
         idempotencyKey: 'preflight-ask-reopen',
         publicationId: pubPlan.value.publicationId,
         subject: { kind: 'reopen', stage: 'plan-approved' },
@@ -362,46 +376,6 @@ async function until(check: () => Promise<boolean> | boolean, what: string): Pro
 
 async function wait(expression: string, what: string): Promise<void> {
   await until(() => page!.evaluate<boolean>(expression), what);
-}
-
-async function openPendingAsk(page: InputCdpSession): Promise<void> {
-  let state: 'open' | 'ready' | null = null;
-  await until(async () => {
-    state = await page.evaluate<'open' | 'ready' | null>(`(() => {
-      if (document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')) return 'open';
-      const button = document.querySelector('#workspace-pending-ask');
-      if (!button || button.hidden || button.disabled) return null;
-      const rect = button.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return null;
-      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-      return button.contains(hit) ? 'ready' : null;
-    })()`);
-    return state !== null;
-  }, 'pending ask dialog open or control ready');
-  if (state === 'ready') await click(page, '#workspace-pending-ask');
-}
-
-async function edit(selector: string, value: string): Promise<void> {
-  await page!.evaluate(
-    `(()=>{const node=document.querySelector(${JSON.stringify(selector)});if(!node)throw new Error('Missing '+${JSON.stringify(selector)});node.value=${JSON.stringify(value)};node.dispatchEvent(new Event('input',{bubbles:true}));node.dispatchEvent(new Event('change',{bubbles:true}));})()`,
-  );
-}
-
-async function submitForm(askId: string, kind: 'record' | 'checkpoint' = 'record'): Promise<{ statusText: string; statusKey: string | null }> {
-  const selector = `#job-record-asks form[data-job-ask=${JSON.stringify(askId)}]`;
-  const submitSelector=selector+(kind==='checkpoint'?' button[data-job-text="Pass"]':' button[type="submit"]');
-  await wait(
-    `!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled`,
-    `enabled form ${askId}`,
-  );
-  await openPendingAsk(page!);
-  await wait(`(()=>{const button=document.querySelector(${JSON.stringify(submitSelector)});return !!button&&!button.disabled&&button.getClientRects().length>0;})()`, `visible enabled submit ${askId}`);
-  assert.equal(await page!.evaluate<boolean>(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`), true);
-  await page!.evaluate(`document.querySelector(${JSON.stringify(submitSelector)}).scrollIntoView({block:'center',inline:'nearest'})`);
-  await page!.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
-  await click(page!,submitSelector);
-  await wait(`!document.querySelector(${JSON.stringify(selector)})`, `submitted form ${askId} was pruned`);
-  return expectRecordActSubmitted(page!, wait, language, `record act ${askId} submitted`);
 }
 
 try {
@@ -695,15 +669,23 @@ try {
   const planPublication = pubPlan.value as JobPublicationV3;
   assert.equal(planPublication.source.subject, 'plan');
 
-  const askCp = await callRecordApi({
-    verb: 'ask',
-    expectedGeneration: pubPlan.generation,
-    idempotencyKey: 'browser-ask-checkpoint',
-    publicationId: planPublication.publicationId,
-    subject: { kind: 'checkpoint', checkpointId: 'seethrough' },
+  // #1229: fresh checkpoint asks refuse JOB_ASK_INVALID; the plan record renders in comment mode without a checkpoint form,
+  // while historical checkpoint acts remain readable via consumer fetch-act and parseRecordAct.
+  const askCpRes = await fetch(`${recordHost.origin}/jobs/${recordHost.session.jobId}/api`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentToken}` },
+    body: JSON.stringify({
+      schema: JOB_API_V3_SCHEMA,
+      jobId: recordHost.session.jobId,
+      requestId: randomUUID(),
+      verb: 'ask',
+      expectedGeneration: pubPlan.generation,
+      idempotencyKey: 'browser-ask-checkpoint',
+      publicationId: planPublication.publicationId,
+      subject: { kind: 'checkpoint', checkpointId: 'seethrough' },
+    }),
   });
-  assert.ok(askCp.verb === 'ask' && askCp.ok);
-  const cpAsk = askCp.value as JobPendingAskV3;
+  const askCp = (await askCpRes.json()) as JobApiResponseV3;
 
   const askSignoffRes = await fetch(`${recordHost.origin}/jobs/${recordHost.session.jobId}/api`, {
     method: 'POST',
@@ -713,7 +695,7 @@ try {
       jobId: recordHost.session.jobId,
       requestId: randomUUID(),
       verb: 'ask',
-      expectedGeneration: askCp.generation,
+      expectedGeneration: pubPlan.generation,
       idempotencyKey: 'browser-ask-signoff',
       publicationId: planPublication.publicationId,
       subject: { kind: 'signoff', stage: 'rigging-interview' },
@@ -729,7 +711,7 @@ try {
       jobId: recordHost.session.jobId,
       requestId: randomUUID(),
       verb: 'ask',
-      expectedGeneration: askCp.generation,
+      expectedGeneration: pubPlan.generation,
       idempotencyKey: 'browser-ask-reopen',
       publicationId: planPublication.publicationId,
       subject: { kind: 'reopen', stage: 'plan-approved' },
@@ -738,37 +720,31 @@ try {
   const askReopen = (await askReopenRes.json()) as JobApiResponseV3;
 
   await wait(
-    `document.getElementById('package-title')?.textContent===${JSON.stringify(planPublication.label)} &&
-     !!document.querySelector('form[data-job-ask=${JSON.stringify(cpAsk.askId)}]')`,
-    'plan displayed with checkpoint form on normal owner URL',
+    `document.body.dataset.ready === 'true' &&
+     document.getElementById('package-title')?.textContent===${JSON.stringify(planPublication.label)} &&
+     !!document.getElementById('send-comments') && !document.getElementById('send-comments').hidden`,
+    'plan displayed in comment mode on normal owner URL',
   );
 
-  // #715 / #796 / #989 / #1227 / #1228: shared title and right-panel section; declared reopen and signoff subjects render no extra form or button; new signoff asks refuse.
-  await openPendingAsk(page);
+  // #715 / #796 / #989 / #1227 / #1228 / #1229: shared title; declared checkpoint, reopen and signoff subjects render no form or button; new asks refuse.
   const planDom = await page.evaluate<{
     sentinel: string;
     lang: string;
     headerTitle: string;
     sourceBinding: Record<string, unknown>;
-    recordLine: string | null;
-    renderedSteps: string[];
     stageHidden: boolean;
     rigCanvasCount: number;
-    cpFormHidden: boolean;
-    extraFormCount: number;
+    formCount: number;
+    retiredRecordDomCount: number;
     reopenButtonCount: number;
     signoffButtonCount: number;
-    cpStepText: string | null;
   }>(`(async()=>{
     const sourceBinding = await (await fetch(${JSON.stringify(`/jobs/${recordHost.session.jobId}/publications/${planPublication.publicationId}/instances/${planPublication.instanceKey}/api/review`)})).json().then(body=>body.recordSource);
     const stage = document.getElementById('stage-layout');
-    const cpForm = document.querySelector('form[data-job-ask=${JSON.stringify(cpAsk.askId)}]');
-    const forms = [...document.querySelectorAll('#job-record-asks form[data-job-ask]')];
-    const extraForms = forms.filter(f => f !== cpForm);
-    const reopenButtons = [...document.querySelectorAll('#job-record-asks button')].filter(
+    const reopenButtons = [...document.querySelectorAll('button')].filter(
       b => b.dataset.jobText === 'job.reopen' || b.textContent === 'Reopen stage' || b.textContent === '단계 다시 열기',
     );
-    const signoffButtons = [...document.querySelectorAll('#job-record-asks button')].filter(
+    const signoffButtons = [...document.querySelectorAll('button')].filter(
       b => b.dataset.jobText === 'job.signoff' || b.textContent === 'Save stage approval' || b.textContent === '단계 승인 저장',
     );
     return {
@@ -776,15 +752,12 @@ try {
       lang: document.documentElement.lang,
       headerTitle: document.querySelector('#package-title').textContent,
       sourceBinding,
-      recordLine: cpForm?.querySelector('.job-source')?.title??null,
-      renderedSteps: [...cpForm.querySelectorAll('.job-plan-steps summary')].map(row=>row.title),
       stageHidden: !!stage && (stage.hidden || getComputedStyle(stage).display === 'none'),
       rigCanvasCount: document.querySelectorAll('#rig-root canvas').length,
-      cpFormHidden: !cpForm || cpForm.hidden,
-      extraFormCount: extraForms.length,
+      formCount: document.querySelectorAll('form[data-job-ask]').length,
+      retiredRecordDomCount: document.querySelectorAll('[id="job-record-asks"], [id="workspace-pending-record-ask"]').length,
       reopenButtonCount: reopenButtons.length,
       signoffButtonCount: signoffButtons.length,
-      cpStepText: cpForm?.querySelector('.job-plan-steps summary')?.title??null,
     };
   })()`);
 
@@ -793,6 +766,11 @@ try {
   assert.equal(planDom.lang, language);
   assert.equal(planDom.headerTitle, planPublication.label);
   assert.deepEqual(planDom.sourceBinding, planPublication.source);
+  assert.equal(
+    planPublication.source.subjects.some(s => s.kind === 'checkpoint' && s.checkpointId === 'seethrough'),
+    true,
+    'plan publication still carries checkpoint subject',
+  );
   assert.equal(
     planPublication.source.subjects.some(s => s.kind === 'reopen' && s.stage === 'plan-approved'),
     true,
@@ -806,14 +784,16 @@ try {
   assert.equal(Object.hasOwn(planDom.sourceBinding, 'package'), false);
   assert.equal(Object.hasOwn(planDom.sourceBinding, 'model'), false);
   assert.equal(Object.hasOwn(planDom.sourceBinding, 'selector'), false);
-  assert.equal(planDom.recordLine,planPublication.source.sourceHash);
   assert.equal(planPublication.source.record.sha256,projectSha);
-  // #768:8: only the asked step is shown; its raw id/hash live in title, not visible prose.
   assert.equal(planDom.rigCanvasCount, 0);
-  assert.equal(planDom.cpFormHidden, false);
-  assert.equal(planDom.extraFormCount, 0, 'plan publication carrying reopen and signoff subjects renders no extra form');
+  assert.equal(planDom.formCount, 0, '#1229: plan publication carrying checkpoint, reopen and signoff subjects renders no record form');
+  assert.equal(planDom.retiredRecordDomCount, 0, '#1229: retired #job-record-asks and #workspace-pending-record-ask are absent');
   assert.equal(planDom.reopenButtonCount, 0, 'Bar 1: plan publication carrying reopen subjects renders no reopen button');
   assert.equal(planDom.signoffButtonCount, 0, '#1228: plan publication carrying signoff subjects renders no signoff button');
+  assert.equal(askCpRes.status, 409, '#1229: new checkpoint ask returns HTTP 409');
+  assert.equal(askCp.ok, false);
+  if (askCp.ok) throw new Error('Expected checkpoint ask to be refused');
+  assert.equal(askCp.error.code, 'JOB_ASK_INVALID');
   assert.equal(askSignoffRes.status, 409, '#1227: new signoff ask returns HTTP 409');
   assert.equal(askSignoff.ok, false);
   if (askSignoff.ok) throw new Error('Expected signoff ask to be refused');
@@ -825,8 +805,6 @@ try {
   await runRecordBrowserPreflightSetupCheck();
   const expectedCpStep = planSteps.find(step => step.id === 'seethrough');
   assert.ok(expectedCpStep, 'declared seethrough step exists in planSteps');
-  assert.ok(planDom.cpStepText?.includes(expectedCpStep.id));
-  assert.ok(planDom.cpStepText?.includes(expectedCpStep.hash));
 
   const planInstanceBase = `/jobs/${recordHost.session.jobId}/publications/${planPublication.publicationId}/instances/${planPublication.instanceKey}`;
   const planRoutes = await page.evaluate<{
@@ -844,17 +822,20 @@ try {
   assert.equal(Object.hasOwn(planRoutes.reviewBody, 'reviewedSource'), false);
   assert.deepEqual(planRoutes.reviewBody.recordSource, planPublication.source);
 
-  // Submit checkpoint through actual DOM form
-  await edit(`form[data-job-ask="${cpAsk.askId}"] select[name="outcome"]`, 'pass');
-  const checkpointWords=''; // Fixed fixture has no workspace comments; never use product output as expected bytes.
-  assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"],input[name="note"]').length`),0);
-  const cpSubmitStatus = await submitForm(cpAsk.askId, 'checkpoint');
-  assert.equal(cpSubmitStatus.statusKey, 'saved');
-  assert.equal(cpSubmitStatus.statusText, catalog['Submitted']);
-
-  await wait(`!document.querySelector('#job-record-asks:not([hidden])')`,'record section hidden after the final record act');
-
+  const checkpointWords = '';
+  assert.equal(await page.evaluate(`document.querySelectorAll('textarea[name="note"],input[name="note"]').length`), 0);
   await writeFile(join(output, `record-plan-${language}.png`), await page.screenshot());
+
+  // Seed a historical record checkpoint act (act@4) so authenticated consumer fetch-act and parseRecordAct remain verified end-to-end.
+  seedHistoricalCheckpointAct(recordHost.session, {
+    publicationId: planPublication.publicationId,
+    pageId: 'historical-record-page',
+    displayedNonce: 'historical-record-nonce',
+    expectedGeneration: recordHost.session.status().generation,
+    submissionId: 'historical-record-cp',
+    checkpointId: 'seethrough',
+    value: { checkpointId: 'seethrough', outcome: 'pass', words: checkpointWords },
+  });
 
   // 3. Authenticated consumer fetch-act and exported parseRecordAct verification
   const nextRes = await callRecordApi({
@@ -957,7 +938,6 @@ try {
   await record('record-acts-verified', {
     planDom,
     planRoutes,
-    cpSubmitStatus,
     acts: fetchedActs,
     readerPhasesCount: readerPhases.length,
   });

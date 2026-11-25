@@ -2,6 +2,7 @@ import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 useTemporaryReviewState();
 import {afterEach, expect, test} from 'bun:test';
 import {jobFixture} from './helpers/job-api-fixture.ts';
+import {seedHistoricalCheckpointAct, seedHistoricalCheckpointAsk} from './helpers/historical-checkpoint-act.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {jobRigScreenDecisions, jobRigScreenRoute, jobRigScreenSubject, jobRigScreenAsk, jobRigScreenRefusal} from '../web/job-rig-screen.ts';
 import {checkpointNoteComments, feedbackItemComments} from '../src/stage-comment.ts';
@@ -29,15 +30,16 @@ function actBytes(act: {actId: string; askId: string; at: string}): string {
   return JSON.stringify(rest);
 }
 
-test('#715 mixed rig verdict and supported modal asks stay on the shared screen', async () => {
+test('#715 and #1229 mixed rig verdict, supported modal asks and legacy pending checkpoint asks stay on the shared screen without mounting a checkpoint form', async () => {
   const f = await fixture(), publication = await f.publish();
   const display = {publication} as unknown as DisplayPublicationV3, ids = new Set(['step-one']);
   expect(jobRigScreenSubject(publication.source as DisplayPublicationV3['publication']['source'])).toBe(true);
   const verdict = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
-  const checkpoint = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+  const checkpoint = seedHistoricalCheckpointAsk(f.session, publication.publicationId, {kind: 'checkpoint', checkpointId: 'step-one'});
   const asks = [verdict, checkpoint] as unknown as PendingAskV3[];
   expect(jobRigScreenRoute(display, asks, ids)).toBe(true);
   expect(jobRigScreenRoute(display, asks, new Set())).toBe(true);
+  expect(jobRigScreenAsk(display, checkpoint as unknown as PendingAskV3, ids)).toBe(false);
   const signoff = {...verdict, askId: 'signoff', subject: {kind: 'signoff', stage: 'rig-review'}} as unknown as PendingAskV3;
   expect(jobRigScreenRoute(display, [...asks, signoff], ids)).toBe(false);
   expect(jobRigScreenRefusal(display, [...asks, signoff], ids)).toBe('JOB_ASK_UNSUPPORTED');
@@ -54,7 +56,8 @@ test('#715 mixed rig verdict and supported modal asks stay on the shared screen'
   const recordSource = {record: {path: 'project.json', sha256: 'a'.repeat(64)}, subject: 'plan', plan: {steps: [{id: 'step-one', hash: '1'.repeat(64)}]},
     subjects: [{kind: 'checkpoint', checkpointId: 'step-one'}, {kind: 'signoff', stage: 'plan-approved'}, {kind: 'reopen', stage: 'plan-approved'}]};
   const recordDisplay = {publication: {...publication, source: recordSource}} as unknown as DisplayPublicationV3;
-  expect(jobRigScreenAsk(recordDisplay, {...checkpoint, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(true);
+  // #1229: checkpoint asks no longer mount a record form, while interview-picks still does.
+  expect(jobRigScreenAsk(recordDisplay, {...checkpoint, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(false);
   expect(jobRigScreenAsk(recordDisplay, {...signoff, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(false);
   expect(jobRigScreenAsk(recordDisplay, {...interview, source: recordSource as never} as unknown as PendingAskV3, ids)).toBe(false);
   expect(jobRigScreenAsk(recordDisplay, {...signoff, source: recordSource as never, subject: {kind: 'reopen', stage: 'plan-approved'}} as unknown as PendingAskV3, ids)).toBe(false);
@@ -62,18 +65,18 @@ test('#715 mixed rig verdict and supported modal asks stay on the shared screen'
   expect(jobRigScreenRoute({publication: draft} as unknown as DisplayPublicationV3, [], ids)).toBe(false);
 });
 
-test('#709 pending decisions are never sent; the verdict goes last and words are the comments\' projection', async () => {
+test('#709 and #1229 pending decisions and retired checkpoint outcomes are never sent; only the verdict decision is emitted', async () => {
   const f = await fixture(), publication = await f.publish();
   const verdict = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
-  const checkpoint = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+  const checkpoint = seedHistoricalCheckpointAsk(f.session, publication.publicationId, {kind: 'checkpoint', checkpointId: 'step-one'});
   const asks = [verdict, checkpoint] as unknown as PendingAskV3[];
   expect(jobRigScreenDecisions(session({}), asks, publication.publicationId)).toEqual([]);
   expect(jobRigScreenDecisions(session({checkpoints: {'step-one': {outcome: 'pending', note: 'x'}}}), asks, publication.publicationId)).toEqual([]);
+  expect(jobRigScreenDecisions(session({checkpoints: {'step-one': {outcome: 'fail', note: 'x'}}}), asks, publication.publicationId)).toEqual([]);
   const decided = jobRigScreenDecisions(session({status: 'changes-requested', feedback: [feedback],
     checkpoints: {'step-one': {outcome: 'fail', note: ' '}}}), asks, publication.publicationId);
-  expect(decided.map(item => item.kind)).toEqual(['checkpoint', 'review-verdict']);
-  expect(decided[0]!.value).toEqual({checkpointId: 'step-one', outcome: 'fail', words: ''});
-  expect(decided[1]!.value).toEqual({stage: 'rig-review', verdict: 'changes-requested',
+  expect(decided.map(item => item.kind)).toEqual(['review-verdict']);
+  expect(decided[0]!.value).toEqual({stage: 'rig-review', verdict: 'changes-requested',
     words: '[["slot","sleeve",3,5,null]]\nSleeve tears at the elbow\nduring the swing', feedback: [feedback]});
   expect(jobRigScreenDecisions(session({status: 'approved'}), asks, 'other-publication')).toEqual([]);
 });
@@ -105,25 +108,15 @@ test('#746 the rig screen keeps act@6 and structured feedback instead of a gener
   expect(actBytes(screen)).not.toBe(actBytes(before));
 });
 
-test('#709 a checkpoint act from the rig screen has the job window\'s kind, version and shape; words are the projection', async () => {
-  const f = await fixture(), publication = await f.publish();
+// #1229: checkpoint decisions are retired from jobRigScreenDecisions; historical act@6 checkpoint acts still preserve projected words.
+test('#709 and #1229 historical act@6 checkpoint acts preserve projected words while fresh submissions refuse', async () => {
+  const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
   const note = projectComments(checkpointNoteComments({checkpointId: 'step-one', planStepId: 'step-one', note: 'Elbow seam opens'}));
-  async function commit(askId: string, value: unknown, submissionId: string) {
-    const page = await f.display(publication);
-    const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId, expectedGeneration: f.session.status().generation,
-      submissionId, kind: 'checkpoint', value}));
-    if (!result.ok) throw new Error(result.error.code);
-    return result.value as unknown as {actId: string; askId: string; at: string};
-  }
-  const today = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
-  const before = await commit(today.askId, {checkpointId: 'step-one', outcome: 'pass', words: note}, 'today');
-  const after = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
-  const [decision] = jobRigScreenDecisions(session({checkpoints: {'step-one': {outcome: 'pass', note: 'Elbow seam opens'}}}),
-    f.session.status().pending as unknown as PendingAskV3[], publication.publicationId);
-  expect(decision!.value).toEqual({checkpointId: 'step-one', outcome: 'pass', words: '[["checkpoint","step-one"]]\nElbow seam opens'});
-  expect(decision!.value.words).toBe(note);
-  const screen = await commit(after.askId, decision!.value, 'screen');
-  expect(actBytes(screen)).toBe(actBytes(before));
+  expect(note).toBe('[["checkpoint","step-one"]]\nElbow seam opens');
+  const stored = seedHistoricalCheckpointAct(f.session, {...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'historical-709', checkpointId: 'step-one', value: {checkpointId: 'step-one', outcome: 'pass', words: note}});
+  expect(parseCommentsAct(stored)).toMatchObject({schema: 'rig-review/act@6', kind: 'checkpoint',
+    value: {checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass'}});
 });
 
 test('#709 for the same comments[], words equal the job-host projectComments byte for byte; zero comments write empty words', () => {
@@ -134,11 +127,8 @@ test('#709 for the same comments[], words equal the job-host projectComments byt
     expect(decision!.value.words).toBe(projectComments(feedbackItemComments(rows)));
   }
   for (const note of ['', ' \n\t', 'Elbow seam opens', '  keep\nspacing  ']) {
-    const [decision] = jobRigScreenDecisions(session({checkpoints: {'step-one': {outcome: 'fail', note}}}),
-      [ask('c', {kind: 'checkpoint', checkpointId: 'step-one'})], 'p');
-    // An empty or whitespace-only note is no comment: comments [] project to '' and nothing is padded.
     const comments = note.trim() ? checkpointNoteComments({checkpointId: 'step-one', planStepId: 'step-one', note}) : [];
-    expect(decision!.value.words).toBe(projectComments(comments));
+    expect(projectComments(comments)).toBe(note.trim() ? `[["checkpoint","step-one"]]\n${note}` : '');
   }
   expect(projectComments([])).toBe('');
 });
@@ -206,15 +196,24 @@ test('#709 job-window rig verdict mount and capture path are deleted, not hidden
   for (const key of ['Approve\u2026', 'Approve this stage.', 'Sign-off', 'Checkpoint · Sign-off', 'job.signoff',
     'job.signoff.postVersion', 'job.signoff.postVersionAbsent', 'job.signoff.directionVerdict',
     'job.signoff.directionVerdictAbsent', 'job.signoff.directionSummaryAbsent',
+    'Review\u2026', 'Review this checkpoint.', 'job.commentsFromWorkspace', 'Checkpoint outcome',
+    'Needs changes', 'Pass', '↗ Needs changes', '○ Pending', '✓ Pass', 'job.fail', 'job.saveCheckpoint',
     'Answer' + '\u2026', 'Answer' + ' saved', 'Answer' + ' these questions.', 'interview.' + 'save',
     'interview.' + 'submitAnswered', 'interview.' + 'answered', 'interview.' + 'noteLabel', 'interview.' + 'notePlaceholder']) {
     expect(key in enCatalog).toBe(false);
     expect(key in koCatalog).toBe(false);
   }
+  expect(form).not.toContain("subject.kind === 'checkpoint'");
+  expect(source).not.toContain('jobCheckpointContext');
+  expect(mainSource).not.toContain('Review this checkpoint.');
+  expect(mainSource).not.toContain('Review…');
+  expect(mainSource).not.toContain('checkpointEntry');
+  expect(mainSource).not.toContain('job-record-asks');
+  expect(mainSource).not.toContain('workspace-pending-record-ask');
 });
 
-test('#756 package checkpoint modal requires the same-source plan mapping before leaving the legacy route',async()=>{
- const f=await fixture(),publication=await f.publish(),checkpoint=await f.ask(publication,{kind:'checkpoint',checkpointId:'step-one'});
+test('#756 and #1229 package legacy checkpoint ask requires the same-source plan mapping to stay on the rig route',async()=>{
+ const f=await fixture(),publication=await f.publish(),checkpoint=seedHistoricalCheckpointAsk(f.session,publication.publicationId,{kind:'checkpoint',checkpointId:'step-one'});
  const display={publication} as unknown as DisplayPublicationV3,ask=checkpoint as unknown as PendingAskV3;
  expect(jobRigScreenRoute(display,[ask],new Set())).toBe(true);
  const alias={...ask,subject:{kind:'checkpoint' as const,checkpointId:'not-a-manifest-checkpoint',planStepId:'step-one'}};
@@ -247,14 +246,14 @@ test('#773 direction publications use the shared rig screen and act bar with ord
   expect(main).toContain('directionPanel.show(!!data.direction)');
 });
 
-test('#784 model-less checkpoint routing uses its declared plan mapping independently of a model',async()=>{
+// #1229: model-less package publications still open with no ask, while checkpoint asks no longer mount a form.
+test('#784 and #1229 model-less package opens cleanly without asks while checkpoint asks mount no form',async()=>{
  const f=await fixture(),publication=await f.publish();
-
  const source={...publication.source,model:null,selector:null},display={publication:{...publication,source}} as unknown as DisplayPublicationV3;
  const ask={askId:'reference-check',publicationId:publication.publicationId,status:'pending',source,subject:{kind:'checkpoint',checkpointId:'photo-check',planStepId:'step-one'}} as PendingAskV3;
- expect(jobRigScreenAsk(display,ask,new Set(['photo-check']))).toBe(true);
- expect(jobRigScreenRoute(display,[ask],new Set(['photo-check']))).toBe(true);
- expect(jobRigScreenRefusal(display,[ask],new Set(['photo-check']),true)).toBeNull();
+ expect(jobRigScreenAsk(display,ask,new Set(['photo-check']))).toBe(false);
+ expect(jobRigScreenRoute(display,[ask],new Set(['photo-check']))).toBe(false);
+ expect(jobRigScreenRefusal(display,[ask],new Set(['photo-check']),true)).toBe('JOB_ASK_UNSUPPORTED');
  expect(jobRigScreenRefusal(display,[],new Set(),true)).toBeNull();
  const invalid={...ask,subject:{...ask.subject,planStepId:'missing'}} as PendingAskV3;
  expect(jobRigScreenAsk(display,invalid,new Set(['photo-check']))).toBe(false);

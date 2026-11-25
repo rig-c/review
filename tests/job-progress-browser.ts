@@ -1,8 +1,8 @@
-/** #987 owner readbacks against the shipped page stream, the #929 sealed scene option-set picture (#1230 comment mode) and a pending checkpoint ask. */
+/** #987 owner readbacks against the shipped page stream, the #929 sealed scene option-set picture (#1230 comment mode) and a pending rig review-verdict ask (#1229). */
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {realpathSync} from 'node:fs';
-import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {cp, mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {
@@ -12,7 +12,7 @@ import {
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
-import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './helpers/job-record-fixture.ts';
+import {createSyntheticOptionRecordWorkspace, createSyntheticRecordReader} from './helpers/job-record-fixture.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
@@ -41,14 +41,15 @@ async function startFixture(scratch: string) {
   await mkdir(root, {recursive: true});
   const workspace = createSyntheticOptionRecordWorkspace(root, {...interview, postPicture: 'scene'});
   const optionContext = {...workspace.context, subjects: [] as const};
-  let planWorkspace: ReturnType<typeof createSyntheticPlanRecordWorkspace> | null = null;
+  const packageSelector = {kind: 'rig' as const, version: 1};
   const {reader: readRecordPublished} = createSyntheticRecordReader({
     onOption: () => optionContext,
-    onPlan: () => planWorkspace!.context,
   });
   const host = await startJobHost({root, stateDir: join(scratch, 'state'), fingerprint: 'a'.repeat(64),
     reviewer: {id: 'declared-record-owner', role: 'owner'}, publicationMode: 'record-and-package',
-    readRecordPublished, recordReaderId: JOB_RECORD_READER_ID});
+    readRecordPublished, recordReaderId: JOB_RECORD_READER_ID,
+    readPublished: async () => ({selector: packageSelector, plan: null, parts: null, subjects: [], partIds: [], files: []}),
+    readerId: 'synthetic-progress-package-reader'});
   const {jobId} = host.session, token = host.session.hostCredentials().agent;
   async function agent(input: RequestBody): Promise<JobApiResponseV3> {
     const response = await fetch(`${host.origin}/jobs/${jobId}/api`, {
@@ -68,16 +69,17 @@ async function startFixture(scratch: string) {
     assert.ok(result.verb === 'publish' && result.ok);
     return result;
   }
-  async function publishPlan() {
-    planWorkspace = createSyntheticPlanRecordWorkspace(root, {subjects: [{kind: 'checkpoint', checkpointId: 'step_layout'}]});
-    const result = await agent({verb: 'publish', expectedGeneration: (await next()).generation, idempotencyKey: 'publish-plan',
-      result: planWorkspace.result, freeze: {kind: 'producer-held', holdId: 'plan-round', record: planWorkspace.record}});
+  async function publishRig() {
+    await cp(new URL('./fixtures/viewport-387/package', import.meta.url), join(root, 'out'), {recursive: true});
+    const result = await agent({verb: 'publish', expectedGeneration: (await next()).generation, idempotencyKey: 'publish-rig',
+      result: {kind: 'package', path: 'out', selector: packageSelector},
+      freeze: {kind: 'producer-held', holdId: 'rig-round', record: workspace.record}});
     assert.ok(result.verb === 'publish' && result.ok);
     return result;
   }
-  async function askCheckpoint(publication: Awaited<ReturnType<typeof publishPlan>>) {
+  async function askRigVerdict(publication: Awaited<ReturnType<typeof publishRig>>) {
     const {publicationId} = publication.value;
-    const result = await agent({verb: 'ask', publicationId, subject: {kind: 'checkpoint', checkpointId: 'step_layout'},
+    const result = await agent({verb: 'ask', publicationId, subject: {kind: 'review-verdict', stage: 'rig-review'},
       expectedGeneration: publication.generation, idempotencyKey: 'ask-' + publicationId});
     assert.ok(result.verb === 'ask' && result.ok);
     return result;
@@ -93,7 +95,7 @@ async function startFixture(scratch: string) {
     assert.ok(result.verb === 'next' && result.ok);
     return result.value.events.find(event => event.type === 'act' && event.act.publicationId === publicationId && event.act.kind === 'comments');
   }
-  return {host, root, publishInterview, publishPlan, askCheckpoint, progress, readCommentAct};
+  return {host, root, publishInterview, publishRig, askRigVerdict, progress, readCommentAct};
 }
 
 const readScreen = (page: InputCdpSession, askId = '') => page.evaluate<HeadlineReadback>(`(() => {
@@ -240,11 +242,11 @@ async function runBrowser(language: Language, output: string, scratch: string) {
     await capture('next-publication', state => state.ready && !state.sameWorkspace && state.title === publication.value.label &&
       state.headline === catalog[noAskHeadline] && state.sendCommentsVisible && state.translate === null && state.whiteSpace === firstLoad.whiteSpace);
 
-    const planPublication = await fixture.publishPlan();
-    const secondAsk = await fixture.askCheckpoint(planPublication);
+    const rigPublication = await fixture.publishRig();
+    const secondAsk = await fixture.askRigVerdict(rigPublication);
     askId = secondAsk.value.askId;
-    const pendingCaption = (state: HeadlineReadback) => state.barVisible && state.ready && state.editable && state.actionVisible &&
-      state.headline === catalog['Review this checkpoint.'] && state.translate === null;
+    const pendingCaption = (state: HeadlineReadback) => state.barVisible && state.ready && state.actionVisible &&
+      state.headline === catalog['Check the rig and motion.'] && state.translate === null;
     await capture('second-pending', pendingCaption);
     const pendingUpdate = await fixture.progress(3, 'measure');
     const witness = async (name: string, earlierRequests?: ReadonlySet<string>) => {

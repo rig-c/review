@@ -49,7 +49,7 @@ const dialogViewer='dialog :is(.viewport,.interview-view,.interview-viewport,#re
 const refusalSource='INTERVIEW_PICKS_DISABLED: the interview answer form has been removed; discuss options through live job comments.';
 type RefusalScreen={
  language:string;width:number;height:number;topbars:number;viewports:number;modals:number;dialogViewers:number;
- forms:number;questionPanels:number;modelCanvas:number;rigEmpty:string;footerMessage:string;
+ forms:number;questionPanels:number;retiredRecordDomCount:number;modelCanvas:number;rigEmpty:string;footerMessage:string;
  refusalVisible:boolean;refusalError:boolean;refusalTitle:string;refusalText:string;
  actRowVisible:boolean;saveDisabled:boolean;saveDescription:string;commentHidden:boolean;
  controls:string[];inspectorHidden:boolean;
@@ -91,6 +91,7 @@ try{
     modals:document.querySelectorAll('dialog:modal').length,dialogViewers:document.querySelectorAll(${JSON.stringify(dialogViewer)}).length,
     forms:document.querySelectorAll('form.interview-answer').length,
     questionPanels:document.querySelectorAll('#workspace-interview-answer').length,
+    retiredRecordDomCount:document.querySelectorAll('[id="workspace-pending-record-ask"],[id="job-record-asks"]').length,
     modelCanvas:document.querySelectorAll('#rig-root canvas').length,
     rigEmpty:document.getElementById('rig-empty').textContent.trim(),
     footerMessage:document.getElementById('message').textContent.trim(),
@@ -107,6 +108,7 @@ try{
   assert.equal(state.topbars,1);assert.equal(state.viewports,1);assert.equal(state.modals,0);assert.equal(state.dialogViewers,0);
   assert.equal(state.forms,0,'#1230 removes the answer form');
   assert.equal(state.questionPanels,0,'#1230 removes the question panel');
+  assert.equal(state.retiredRecordDomCount,0,'#1229 removes retired record-ask DOM');
   assert.equal(state.modelCanvas,0);
   assert.equal(state.refusalVisible,true,'named refusal is visible in the act row');
   assert.equal(state.refusalError,true);

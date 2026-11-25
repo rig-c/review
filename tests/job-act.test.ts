@@ -6,6 +6,7 @@ import { JOB_ENABLED_ACT_KINDS, JOB_RESERVED_ACT_KINDS, type JobPendingAsk, type
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { jobFixture, syntheticJobParts } from './helpers/job-api-fixture.ts';
+import { seedHistoricalCheckpointAct, seedHistoricalCheckpointAsk } from './helpers/historical-checkpoint-act.ts';
 import {rigStillInput, rigStillCapture} from './helpers/job-rig-still.ts';
 import {JobSession} from '../src/job-session.ts';
 import {Database} from 'bun:sqlite';
@@ -81,25 +82,29 @@ test('#646 closed-key-negative: mixed anchors, historical words and browser plan
   // The existing pending-checkpoint test below proves that port refuses browser planStepId.
 });
 
-test('#646 source-and-replay-negative: UI submissions keep words, the checkpoint writer emits act@6 and the replay digest stays authoritative', async () => {
-  const f = await fixture(), publication = await f.publish(), ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'}),
+// #1229: checkpoint asks and submissions are retired; historical act@6 checkpoint acts still replay and check digest conflicts.
+test('#646 and #1229 source-and-replay-negative: fresh checkpoint submissions refuse while historical act@6 replay digest stays authoritative', async () => {
+  const f = await fixture(), publication = await f.publish(),
+    ask = seedHistoricalCheckpointAsk(f.session, publication.publicationId, {kind: 'checkpoint', checkpointId: 'step-one'}),
     page = await f.display(publication);
   const base = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation, submissionId: '646-writer-off',
     kind: 'checkpoint', value: {checkpointId: 'step-one', outcome: 'pass', comments: [{text: 'one'}, {text: 'two'}]}};
   const generation = f.session.status().generation;
-  expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest(base))).ok).toBe(false);
+  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(base))).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
   expect(f.session.status().generation).toBe(generation);
-  const input = {...base, value: {checkpointId: 'step-one', outcome: 'pass', words: 'one\ntwo'}};
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  if (!saved.ok) throw new Error(saved.error.code);
-  expect(saved.value.schema).toBe('rig-review/act@6');
-  expect(saved.value.value).toEqual({checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass',
+  const stored = seedHistoricalCheckpointAct(f.session, {
+    ...page, expectedGeneration: generation, submissionId: '646-replayed',
+    checkpointId: 'step-one', value: {checkpointId: 'step-one', outcome: 'pass', words: 'one\ntwo'},
+  });
+  const input = {...page, askId: stored.askId, expectedGeneration: generation, submissionId: '646-replayed',
+    kind: 'checkpoint', value: {checkpointId: 'step-one', outcome: 'pass', words: 'one\ntwo'}};
+  expect(stored.schema).toBe('rig-review/act@6');
+  expect(stored.value).toEqual({checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass',
     comments: [{text: 'one\ntwo', anchor: {checkpointId: 'step-one', planStepId: 'step-one'}}]});
-  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
+  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual({ok: true, value: stored});
   const changed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, value: {...input.value, words: 'two\none'}}));
-  expect(changed.ok).toBe(false);
-  if (!changed.ok) expect(changed.error.code).toBe('JOB_IDEMPOTENCY_CONFLICT');
-  expect(f.session.readActExport(saved.value.actId, false).toString()).toBe(JSON.stringify(saved.value));
+  expect(changed).toMatchObject({ok: false, error: {code: 'JOB_IDEMPOTENCY_CONFLICT'}});
+  expect(f.session.readActExport(stored.actId, false).toString()).toBe(JSON.stringify(stored));
 });
 
 test('#646 parts-and-feedback-text-limits: reuse existing feedback and scalar limits', () => {
@@ -154,18 +159,49 @@ test('actual UI ports finalize exact whitespace-bearing comment text with host-d
   }
 });
 
-test('pending checkpoint and browser-supplied authority/plan mapping are refused; fail is a distinct nonapproval act', async () => {
-  const f = await fixture(), publication = await f.publish();
-  const ask = await f.ask(publication, { kind: 'checkpoint', checkpointId: 'step-one' }), page = await f.display(publication);
+// #1229: fresh checkpoint submissions refuse JOB_ACT_KIND_DISABLED while browser-supplied authority still refuses JOB_REQUEST_INVALID
+// and historical fail acts remain distinct nonapproval acts.
+test('browser-supplied authority and fresh checkpoint submissions are refused; historical fail is a distinct nonapproval act', async () => {
+  const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
+  const ask = seedHistoricalCheckpointAsk(f.session, publication.publicationId, { kind: 'checkpoint', checkpointId: 'step-one' });
   const input = { ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
     submissionId: 'checkpoint', kind: 'checkpoint', value: { checkpointId: 'step-one', outcome: 'pending', words: '' } };
-  expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).ok).toBe(false);
-  expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, authority: { actor: 'human' } }))).ok).toBe(false);
-  expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input,
-    value: { ...input.value, outcome: 'pass', planStepId: 'different' } }))).ok).toBe(false);
-  const failed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, value: { ...input.value, outcome: 'fail' } }));
-  expect(failed.ok).toBe(true);
-  if (failed.ok) { expect(failed.value.kind).toBe('checkpoint'); expect(failed.value.value).toHaveProperty('outcome', 'fail'); }
+  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toMatchObject({ ok: false, error: { code: 'JOB_ACT_KIND_DISABLED' } });
+  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input, authority: { actor: 'human' } }))).toMatchObject({ ok: false, error: { code: 'JOB_REQUEST_INVALID' } });
+  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input,
+    value: { ...input.value, outcome: 'pass', planStepId: 'different' } }))).toMatchObject({ ok: false, error: { code: 'JOB_ACT_KIND_DISABLED' } });
+  const failed = seedHistoricalCheckpointAct(f.session, { ...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'historical-fail', checkpointId: 'step-one', value: { checkpointId: 'step-one', outcome: 'fail', words: '' } });
+  expect(failed.kind).toBe('checkpoint');
+  expect(parseCommentsAct(failed).value).toHaveProperty('outcome', 'fail');
+});
+
+test('#1229 fresh package checkpoint asks refuse JOB_ASK_INVALID, fresh submissions refuse JOB_ACT_KIND_DISABLED, and stored acts replay byte-for-byte', async () => {
+  const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
+  const asked = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+    idempotencyKey: 'refused-checkpoint', publicationId: publication.publicationId,
+    subject: { kind: 'checkpoint', checkpointId: 'step-one' } })).json();
+  expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+
+  const legacyAsk = seedHistoricalCheckpointAsk(f.session, publication.publicationId, { kind: 'checkpoint', checkpointId: 'step-one' });
+  const freshSubmit = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: legacyAsk.askId,
+    expectedGeneration: f.session.status().generation, submissionId: 'fresh-checkpoint', kind: 'checkpoint',
+    value: { checkpointId: 'step-one', outcome: 'pass', words: 'fresh' } }));
+  expect(freshSubmit).toMatchObject({ ok: false, error: { code: 'JOB_ACT_KIND_DISABLED' } });
+
+  const replayGeneration = f.session.status().generation;
+  const stored = seedHistoricalCheckpointAct(f.session, {
+    ...page, expectedGeneration: replayGeneration, submissionId: 'replayed-checkpoint',
+    checkpointId: 'step-one', value: { checkpointId: 'step-one', outcome: 'pass', words: 'one\ntwo' },
+  });
+  const replayInput = { ...page, askId: stored.askId, expectedGeneration: replayGeneration,
+    submissionId: 'replayed-checkpoint', kind: 'checkpoint', value: { checkpointId: 'step-one', outcome: 'pass', words: 'one\ntwo' } };
+  const replayed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(replayInput));
+  expect(replayed).toEqual({ ok: true, value: stored });
+  expect(f.session.readActExport(stored.actId, false).toString()).toBe(JSON.stringify(stored));
+  const conflict = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...replayInput,
+    value: { checkpointId: 'step-one', outcome: 'fail', words: 'one\ntwo' } }));
+  expect(conflict).toMatchObject({ ok: false, error: { code: 'JOB_IDEMPOTENCY_CONFLICT' } });
 });
 
 test('#1227 fresh package sign-off asks refuse JOB_ASK_INVALID and page submissions refuse JOB_ACT_KIND_DISABLED while historical act@2 plan bounds stay', async () => {

@@ -19,7 +19,7 @@ import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
-import {createJobHostPorts,jobHash,parseCommentOnlyAct,parseCommentsAct,parseRecordAct} from '../src/job-api.ts';
+import {createJobHostPorts,jobHash,parseCommentOnlyAct,parseCommentsAct} from '../src/job-api.ts';
 import {JOB_API_V3_SCHEMA,JOB_COMMENT_ONLY_ACT_SCHEMA,jobRawActMediaType} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
@@ -34,7 +34,7 @@ function pictureBytes(shift=0):Buffer{
  return PNG.sync.write(png);
 }
 type Subject='plan'|'question'|'backdrop';
-// #1227: checkpoint until #1229 retires record asks; #1230: option-set takes comment-only acts without an ask.
+// #1229 / #1230: both plan and option-set records carry no ask form and submit picture pins through Send comments (act@10).
 const fixtureFor=(subject:Subject)=>subject==='plan'
  ?recordScreenFixture('checkpoint',true,undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,pictureBytes())
  :recordScreenFixture('option-set',subject==='backdrop',undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,undefined,pictureBytes());
@@ -193,29 +193,22 @@ try{
     const all=(await draft())[0]!.value.comments;assert.equal(all.length,rows.length+(general?1:0));
     const expected=projectComments(all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary}),[picture]);
     assert.equal(expected,`[${labels[0]}]\n${rows[0]!.summary}\n\n[${labels[1]}]\n${rows[1]!.summary}`+(general?`\n\n[general]\n${general}`:''),'A1 label');
-    if(subject==='plan'){
-     // #1227: checkpoint until #1229 retires record asks; the words carry the A1 labels.
-     await click(page,'#workspace-pending-ask');await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`,'record section');
-     await shot(out,'6-before-submit');await click(page,selector+' button.primary[type=submit]');
-     await expectRecordActSubmitted(page,wait,language,'plan checkpoint submitted');
-    }else{
-     // #1230: option-set submits pointed and general comments through Send comments as act@10.
-     await shot(out,'6-before-submit');await click(page,'#send-comments');
-     await expectRecordActSubmitted(page,wait,language,subject+' comments submitted');
-    }
+    // #1229 / #1230: both plan and option-set submit pointed and general comments through Send comments as act@10.
+    await wait(`!!document.getElementById('send-comments')&&!document.getElementById('send-comments').hidden&&!document.getElementById('send-comments').disabled`,subject+' Send comments ready');
+    await shot(out,'6-before-submit');await click(page,'#send-comments');
+    await expectRecordActSubmitted(page,wait,language,subject+' comments submitted');
     const bytes=await readFile(join(out,'one-screen.json'),'utf8');
-    const act=subject==='plan'?parseRecordAct(JSON.parse(bytes)):parseCommentOnlyAct(JSON.parse(bytes));
-    assert.equal(act.kind,subject==='plan'?'checkpoint':'comments');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
+    const act=parseCommentOnlyAct(JSON.parse(bytes));
+    assert.equal(act.schema,JOB_COMMENT_ONLY_ACT_SCHEMA);
+    assert.equal(act.kind,'comments');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
     assert.ok('record' in act.source&&act.source.files.some(file=>file.path===picture.path&&file.sha256===picture.sha256),'the label names a sealed files entry of the act source');
-    if(act.schema===JOB_COMMENT_ONLY_ACT_SCHEMA){
-     const plainComments=act.value.comments.map(row=>({text:row.text,...(row.anchor?{anchor:row.anchor}:{})}));
-     assert.deepEqual(plainComments,all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary}));
-     assert.equal(projectComments(plainComments,[picture]),expected,'comment-only act preserves the A1 labels');
-     assert.equal(JSON.stringify(act),bytes,'comments act round-trips byte-for-byte');
-    }else assert.equal((act.value as {words?:string}).words,expected,'plan checkpoint keeps the A1 labels');
-    const replayActSha256=act.schema===JOB_COMMENT_ONLY_ACT_SCHEMA?await verifyCommentActReplay(fixture,out,act):null;
+    const plainComments=act.value.comments.map(row=>({text:row.text,...(row.anchor?{anchor:row.anchor}:{})}));
+    assert.deepEqual(plainComments,all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary}));
+    assert.equal(projectComments(plainComments,[picture]),expected,'comment-only act preserves the A1 labels');
+    assert.equal(JSON.stringify(act),bytes,'comments act round-trips byte-for-byte');
+    const replayActSha256=await verifyCommentActReplay(fixture,out,act);
     await shot(out,'7-submitted');
-    const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,...(act.schema===JOB_COMMENT_ONLY_ACT_SCHEMA?{structuredComments:act.value.comments,replayActSha256}:{words:expected}),
+    const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,structuredComments:act.value.comments,replayActSha256,
      scales:{fresh:fresh.scale,reloaded:reloaded.scale,zoomed:zoomed.scale,fitted:fitted.scale}};
     cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1048_PINS_PASS '+subject+' '+name+' '+language);
    }catch(error){await shot(out,'failure').catch(()=>{});throw error;}finally{await page.goto('about:blank');await fixture.close();}

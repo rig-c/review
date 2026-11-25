@@ -4,6 +4,7 @@ import {join} from 'node:path';
 import {RigPlayer} from '@rig-c/play';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
+import {seedHistoricalCheckpointAsk} from './helpers/historical-checkpoint-act.ts';
 import {rigStillCapture} from './helpers/job-rig-still.ts';
 import {loadSetupAssets, setupRoot} from './helpers/setup-mesh.ts';
 import {fixturePublication} from './helpers/job-window-fixture.ts';
@@ -133,13 +134,15 @@ for (const language of ['en', 'ko'] as const) test(`#785 stream refusal retains 
   } finally {warning.mockRestore();setLanguagePreference('en');}
 });
 
-for (const rigPending of [false, true]) test(`#721 checkpoint commit leaves comments editable (${rigPending ? 'rig pending' : 'checkpoint only'})`, async () => {
+// #1229: fresh checkpoint asks/commits retired; legacy pending checkpoint asks are filtered out of pendingSubjects,
+// send no checkpoint submission, and leave unsent comments editable.
+for (const rigPending of [false, true]) test(`#721 and #1229 legacy pending checkpoint sends no checkpoint act and leaves comments editable (${rigPending ? 'rig pending' : 'checkpoint only'})`, async () => {
   const f = await jobFixture(), originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
   try {
     const publication = await f.publish();
-    await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
-    if (rigPending) await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
-    const page = await f.display(publication), requests: UISubmissionV3[] = [], acts: ActV3[] = [];
+    seedHistoricalCheckpointAsk(f.session, publication.publicationId, {kind: 'checkpoint', checkpointId: 'step-one'});
+    const verdictAsk = rigPending ? await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'}) : null;
+    const page = await f.display(publication), requests: UISubmissionV3[] = [];
     const initial = baseline();
     initial.id = publication.source.package.id; initial.revision = publication.source.package.revision;
     initial.sourceHash = publication.source.sourceHash;
@@ -155,9 +158,7 @@ for (const rigPending of [false, true]) test(`#721 checkpoint commit leaves comm
           generation: f.session.status().generation, preparing: false, closed: false}),
         async submit(input) {
           requests.push(input);
-          const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-          if (result.ok) acts.push(result.value as ActV3);
-          return result;
+          return f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
         },
       }, routes: () => ({entry: prepared.entry, api: path => path}), refusal: error => String(error), translate: key => key,
       async load() {rigHost()!.displayed();}});
@@ -165,21 +166,18 @@ for (const rigPending of [false, true]) test(`#721 checkpoint commit leaves comm
     await screen.painted(prepared, new AbortController().signal);
     await expect(rigHost()!.read('/api/session','PUT')).rejects.toThrow('JOB_REVIEW_READ_ONLY');
     await expect(rigHost()!.read('/api/unknown','GET')).rejects.toThrow('JOB_REVIEW_READ_ONLY');
-    expect(rigHost()!.pendingSubjects?.()).toEqual(f.session.status().pending.filter(ask=>ask.status==='pending').map(ask=>ask.subject));
+    expect(rigHost()!.pendingSubjects?.()).toEqual(verdictAsk ? [verdictAsk.subject] : []);
     const current = structuredClone(initial);
     current.checkpoints['step-one'] = {outcome: 'pass', note: 'checkpoint words'};
     current.feedback.push(structuredClone(comment));
     const app = await mainSave(current, initial, rigHost()!);
     await app.save();
-    expect(requests.map(input => input.kind)).toEqual(['checkpoint']);
-    expect(app.state().submittedBaseline.checkpoints).toEqual(current.checkpoints);
+    expect(requests).toEqual([]);
     expect(app.state().submittedBaseline.feedback).toEqual([]);
     expect(app.state().submittedBaseline.status).toBe('pending');
-    expect(app.state().session.updatedAt).toBe(acts[0]!.at);
     expect(app.state().dirty).toBe(true);
     expect(app.state().readouts.dirty).toBe('Unsubmitted changes');
     expect(app.locked(comment.id)).toBe(false);
-    expect(app.state().saved.at(-1)?.feedback).toEqual([]);
     current.feedback[0]!.summary = 'still editable';
     expect(app.locked(comment.id)).toBe(false);
   } finally {

@@ -7,29 +7,35 @@ import {createJobFront, jobWindowResources, retainedPublicationRoutes} from '../
 import {getLanguagePreference, setLanguagePreference, setSourceAttribute, setSourceText, sourceTextContent, t} from '../web/i18n.ts';
 import {mountRigInspector} from '../web/inspector-blocks.ts';
 import {createJobRigScreen, type JobRigScreenPrepared} from '../web/job-rig-screen.ts';
-import {createJobFormDrafts, createJobFormHelpers, createJobWindow, createJobWindowTransport, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, prepareJobForms, type JobFormDependencies} from '../web/job-session.ts';
+import {createJobFormDrafts, createJobFormHelpers, createJobWindow, createJobWindowTransport, jobPublicationRoutes, jobSubmissionRefusal, jobWindowAccess, prepareJobForms, type JobFormDependencies} from '../web/job-session.ts';
 import {rigHost, setRigHost} from '../web/rig-host.ts';
 import {recordScreenDom, recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 
 // Use the same source seam as act-bar-answers.test.ts, spanning the shared record
-// form and act renderers. The surrounding viewport has no role in a record sign-off.
+// comment-act and act-bar renderers. The surrounding viewport has no role here.
 const main = ts.createSourceFile('main.ts', readFileSync(new URL('../web/main.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
 const mount = main.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'mountRigScreen')!;
-const renderers = ['message', 'renderDraftState', 'renderRecordForms', 'renderPendingSubjects', 'syncJobActRow',
+const renderers = ['message', 'commentHost', 'sentAloneRows', 'isSentAlone', 'markSentAlone', 'unsentComments',
+  'renderDraftState', 'renderRecordForms', 'renderPendingSubjects', 'syncJobActRow',
   'setJobProgress', 'stopProgressTimer', 'renderAskHeadline', 'renderAnswerControls', 'communicationPending'];
 const snippets = renderers.map(name => {
   const renderer = mount.body!.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
   if (!renderer) throw new Error(`Missing production renderer: ${name}`);
   return renderer.getText(main);
 });
-const recordSaveState = mount.body!.statements.find(node => ts.isVariableStatement(node) &&
-  node.declarationList.declarations.some(({name}) => ts.isIdentifier(name) && name.text === 'recordSaveStateShown'));
-if (recordSaveState) snippets.push(recordSaveState.getText(main));
+for (const varName of ['commentBinding', 'hasUnsentComments', 'hasUnsentContent', 'recordSaveStateShown']) {
+  const variable = mount.body!.statements.find(node => ts.isVariableStatement(node) &&
+    node.declarationList.declarations.some(({name}) => ts.isIdentifier(name) && name.text === varName));
+  if (variable) snippets.push(variable.getText(main));
+}
+const sendCommentsClick = mount.body!.statements.find(node => ts.isExpressionStatement(node) && node.getText(main).startsWith('sendComments.onclick='));
+if (!sendCommentsClick) throw new Error('Missing production sendComments.onclick');
+snippets.push(sendCommentsClick.getText(main));
 const startRecord = mount.body!.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'startRecord')!;
 const attachment = startRecord.body!.statements.find(node => ts.isIfStatement(node) && node.getText(main).includes('host!.attach('))!;
-// #1228: the probe hands the production right-panel predicate back to the test.
-const mountRecord = new Function('env', `with(env) {${new Bun.Transpiler({loader: 'ts'}).transformSync(snippets.join('\n') + '\n' + attachment.getText(main) + '\nprobe.communicationPending = communicationPending;')}}`) as (env: object) => void;
+// #1228: the probe hands the production right-panel predicate and state refresh back to the test.
+const mountRecord = new Function('env', `with(env) {${new Bun.Transpiler({loader: 'ts'}).transformSync(snippets.join('\n') + '\n' + attachment.getText(main) + '\nprobe.communicationPending = communicationPending;\nprobe.refresh = renderDraftState;')}}`) as (env: object) => void;
 
 type EventPayload = {[Type in EventV3['type']]: Omit<Extract<EventV3, {type: Type}>, 'jobId' | 'generation' | 'cursor'>}[EventV3['type']];
 type Post = {input: UISubmissionV3; serve(): Promise<Response>; respond(response: Response): void; fail(error: Error): void};
@@ -38,6 +44,7 @@ type ScreenReadback = {
   communication: boolean;
   headline: string;
   status: string;
+  statusKind: string;
   form: boolean;
   formStatus: string;
   submitDisabled: boolean;
@@ -87,52 +94,58 @@ function mountActDom(dom: Awaited<ReturnType<typeof recordScreenDom>>) {
   return {root, document, node, app};
 }
 
-function mountRecordAct(dom: ReturnType<typeof mountActDom>) {
+function mountRecordAct(dom: ReturnType<typeof mountActDom>, localStore = new Map<string, string>()) {
   const {node, document} = dom;
   const root = document.getElementById('app')!;
   const host = rigHost()!;
   const row = node('div', 'workspace-act-row'), dirty = node('span', 'dirty');
   const headline = node('span', 'workspace-ask-headline'), actStatus = node('p', 'review-draft-state');
-  const rigAsk = node('button', 'workspace-pending-ask'), recordAsk = node('button', 'workspace-pending-record-ask');
-  rigAsk.className = recordAsk.className = 'workspace-act-ask';
+  const rigAsk = node('button', 'workspace-pending-ask');
+  rigAsk.className = 'workspace-act-ask';
+  const sendComments = node('button', 'send-comments'); sendComments.hidden = true; setSourceText(sendComments, 'Send comments');
   const save = node('button', 'save'), requestChanges = node('button', 'request-changes');
   const reason = node('span', 'request-changes-reason'), notice = node('p', 'review-message');
-  const recordPanel = node('section', 'job-record-asks'), recordTitle = node('h2');
   const communicationPanel = node('aside', 'workspace-communication');
-  recordPanel.hidden = true; recordPanel.append(recordTitle);
   const inspector = node('div'); inspector.className = 'inspector';
   const heading = node('div'); heading.className = 'inspector-heading';
   const body = node('div'); body.className = 'inspector-body';
   inspector.append(heading, body);
   const dialog = node('div', 'review-dialog'), dialogHeader = node('div'), dialogActions = node('div');
   dialogHeader.className = 'review-dialog-header'; dialogActions.className = 'review-dialog-actions';
-  dialogActions.append(save, reason, requestChanges, actStatus, notice); dialog.append(dialogHeader, dialogActions);
+  dialogActions.append(sendComments, save, reason, requestChanges, actStatus, notice); dialog.append(dialogHeader, dialogActions);
   const feedback = node('div', 'inspector-feedback'), verdict = node('select', 'review-status'), label = node('label');
   label.setAttribute('for', verdict.id); feedback.append(label, verdict);
-  communicationPanel.append(recordPanel);
   root.append(inspector, dialog, feedback, row, dirty, communicationPanel, node('p', 'message'), node('p', 'draft-state'), node('div', 'draft-recovery'),
     node('div', 'proposal-panel'), node('div', 'comments-list-host'), node('div', 'inspector-rig'), node('div', 'inspector-playback'));
   const rigInspector = mountRigInspector(document, row);
-  rigInspector.act.prepend(headline, rigAsk, recordAsk);
+  rigInspector.act.prepend(headline, rigAsk);
   const el = (id: string) => document.getElementById(id)!;
-  const recordForms = () => [...recordPanel.querySelectorAll<HTMLFormElement>('form[data-job-ask]')];
-  const probe: {communicationPending?: () => boolean} = {};
-  mountRecord({probe, communicationPanel, host, interview: undefined, rigInspector, recordPanel, recordTitle, rigAsk, recordAsk, askHeadline: headline, requestChanges, requestChangesReason: reason,
+  const recordComments: {id: string; summary: string}[] = [];
+  const probe: {communicationPending?: () => boolean; refresh?: () => void} = {};
+  mountRecord({probe, communicationPanel, host, interview: undefined, rigInspector, sendComments, rigAsk, askHeadline: headline, requestChanges, requestChangesReason: reason,
     document, el, button: el, select: el, text: (id: string, value: string) => setSourceText(el(id), value),
-    t, setSourceText, setSourceAttribute, sourceTextContent, pendingAnswers: [], questionFormBindings: new WeakSet(),
-    recordForms, restoreRecordComments() {}, checkpointPair: null, syncQuestionImage() {}, recordCommentWords: () => '[general]\nCheck the timing',
-    partsSubject: null, comments: null, recordComments: [], firstPublicationPrompt: true, jobProgress: null, progressTimer: undefined, askSentence: '',
+    t, setSourceText, setSourceAttribute, sourceTextContent, jobSubmissionRefusal,
+    localStorage: {getItem: (k: string) => localStore.get(k) ?? null, setItem: (k: string, v: string) => {localStore.set(k, v);}},
+    rowStoreCache: new Map(), submittedDirectionComments: new Set(), isAnswerCarried: () => false, isSubmittedFeedback: () => false,
+    pendingAnswers: [], restoreRecordComments() {}, checkpointPair: null, syncQuestionImage() {}, syncCheckpointPair() {},
+    commitAnswerCarried() {}, recordAnswered: false, commentSending: false, commentSendState: 'idle',
+    partsSubject: null, comments: null, recordComments, firstPublicationPrompt: true, jobProgress: null, progressTimer: undefined, askSentence: '',
     draftStatus: null, dirty: false, saving: false, draftConflict: false, actReadOnly: null, session: null,
     partsOnly: false, readOnly: null, verdictSubmit: null, workspace: null, liveIssueCount: () => 0,
     disposed: false, suspended: false, hostStage: () => null, suspendScreen() {}, resumeScreen() {}, disposeScreen() {} });
   return {
-    form: () => recordForms()[0],
+    addComment(summary: string, id = `c-${recordComments.length + 1}`) {
+      recordComments.push({id, summary});
+      probe.refresh!();
+    },
+    sendComments: () => sendComments,
     read(): ScreenReadback {
-      const form = recordForms()[0];
-      return {row: !row.hidden, communication: probe.communicationPending!(), headline: headline.textContent!, status: actStatus.textContent!,
-        form: !recordPanel.hidden && !!form, formStatus: form?.querySelector('[role=status]')?.textContent ?? '',
-        submitDisabled: !form || !!form.querySelector('fieldset')?.disabled || !!form.querySelector<HTMLButtonElement>('button[type=submit]')?.disabled,
-        actions: [rigAsk, recordAsk, save, requestChanges].filter(control => !row.hidden && !control.hidden).map(control => ({
+      const forms = root.querySelectorAll('form[data-job-ask]');
+      return {row: !row.hidden, communication: probe.communicationPending!(), headline: headline.textContent!,
+        status: actStatus.textContent!, statusKind: actStatus.dataset.saveState ?? '',
+        form: forms.length > 0, formStatus: notice.textContent ?? '',
+        submitDisabled: sendComments.hidden || sendComments.disabled,
+        actions: [rigAsk, sendComments, save, requestChanges].filter(control => !row.hidden && !control.hidden).map(control => ({
           id: control.id, disabled: control.disabled, opacityOverride: control.classList.contains('workspace-act-ask'),
         }))};
     },
@@ -140,15 +153,17 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>) {
   };
 }
 
-async function harness(republish = false, kind: 'checkpoint' | 'signoff' = 'checkpoint', ask = true) {
+// #1229 / #1230: all record ask forms are retired; live record submission status transitions exercise Send comments (act@10).
+async function harness(republish = false, kind: 'option-set' | 'interview-picks' | 'checkpoint' | 'signoff' = 'option-set', ask = false) {
   const picture = republish ? readFileSync(new URL('./fixtures/viewport-387/package/rigid.png', import.meta.url)) : undefined;
-  const fixture = await recordScreenFixture(kind, false, undefined, 'direction-review', false, true, undefined, false, false, undefined, undefined, picture);
+  const fixture = await recordScreenFixture(kind, false, undefined, 'direction-review', false, true, undefined, false, false, undefined, undefined, kind === 'interview-picks' || kind === 'option-set' ? undefined : picture, kind === 'interview-picks' || kind === 'option-set' ? picture : undefined);
   const dom = await recordScreenDom();
   const previousLanguage = getLanguagePreference();
   const previousHost = rigHost();
   setLanguagePreference('en');
   dom.set('location', {origin: fixture.origin});
   const ui = mountActDom(dom);
+  const localStore = new Map<string, string>();
   const access = jobWindowAccess(fixture.ownerUrl, null, () => {});
   const pageId = 'test-record-status-page';
   const posts: Post[] = [];
@@ -176,8 +191,8 @@ async function harness(republish = false, kind: 'checkpoint' | 'signoff' = 'chec
   const view = createJobRigScreen({host: ui.app, access, pageId, translate: t, refusal: String, window: windowAccess, readPublication: transport.readPublication,
     routes: display => jobPublicationRoutes(display, fixture.origin),
     formDependencies: {node: formNode, translate: t, access, pageId, window: windowAccess, ...drafts, draftStorage: () => ({getItem: () => null}),
-      helpers: {...createJobFormHelpers(formNode, t), jobCheckpointContext, assertJobAskSource: (ask, display) => {prepareJobForms(display, [ask], () => null);}}},
-    async load() {screen?.dispose(); screen = mountRecordAct(ui);}});
+      helpers: {...createJobFormHelpers(formNode, t), assertJobAskSource: (ask, display) => {prepareJobForms(display, [ask], () => null);}}},
+    async load() {screen?.dispose(); screen = mountRecordAct(ui, localStore);}});
   const window = createJobWindow<JobRigScreenPrepared | null>({jobId: access.jobId, pageId, transport, adapter: {
     prepare: view.prepare, captureDraft: () => null, commit: prepared => view.commit(prepared!),
     painted: (prepared, signal) => view.painted(prepared!, signal), discard: prepared => prepared?.record?.inspection.dispose(), changed: view.changed,
@@ -197,18 +212,15 @@ async function harness(republish = false, kind: 'checkpoint' | 'signoff' = 'chec
     expect(window.state().receipt?.publicationId).toBe(fixture.ask.publicationId);
     if (ask) event({type: 'pending', ask: fixture.ask});
     return {fixture, window, event, close, read: () => screen!.read(),
+      comment(text = 'Check the timing', id?: string) {screen!.addComment(text, id);},
       async start() {
-        const form = screen!.form()!;
-        expect(form).toBeDefined();
+        const button = screen!.sendComments();
         expect(screen!.read().submitDisabled).toBe(false);
         const previousPosts = posts.length;
-        const outcome = form.querySelector<HTMLSelectElement>('select[name=outcome]');
-        if (outcome) outcome.value = 'pass';
-        const submitter = form.querySelector<HTMLButtonElement>('button[data-job-text="Pass"], button[type=submit]')!;
-        const event = Object.assign(new Event('submit', {cancelable: true}), {submitter});
-        const submit = Promise.resolve(form.onsubmit!.call(form, event));
+        const submit = Promise.resolve(button.onclick?.call(button, {} as PointerEvent));
         await Promise.resolve();
-        if (posts.length !== previousPosts + 1) {await submit; throw new Error('Record form did not POST exactly once');}
+        await Promise.resolve();
+        if (posts.length !== previousPosts + 1) {await submit; throw new Error('Send comments did not POST exactly once');}
         return {submit, post: posts.at(-1)!};
       },
     };
@@ -219,75 +231,77 @@ async function recorded(post: Post) {
   const response = await post.serve();
   expect(response.status).toBe(200);
   const result = await response.clone().json() as JobResult<ActV3>;
-  if (!result.ok) throw new Error(`Expected record checkpoint act, received ${result.error.code}`);
-  if (result.value.schema !== JOB_RECORD_ACT_SCHEMA || result.value.kind !== 'checkpoint') throw new Error('Expected a record checkpoint act');
-  expect(result.value).toMatchObject({kind: 'checkpoint', askId: post.input.askId, publicationId: post.input.publicationId,
-    value: {...post.input.value, planStepId: 'step_layout'}});
+  if (!result.ok) throw new Error(`Expected comment-only act, received ${result.error.code}`);
+  if (result.value.schema !== JOB_COMMENT_ONLY_ACT_SCHEMA || result.value.kind !== 'comments') throw new Error('Expected a comment-only act');
+  expect(result.value).toMatchObject({kind: 'comments', publicationId: post.input.publicationId});
   return {response, act: result.value};
 }
 
-const opener = {id: 'workspace-pending-ask', disabled: false, opacityOverride: true};
-const before = {row: true, headline: 'Review this checkpoint.', status: 'Not submitted', form: true, submitDisabled: false, actions: [opener]};
-const sending = {...before, status: 'Sending', submitDisabled: true, actions: [{...opener, disabled: true, opacityOverride: false}]};
-const accepted = {row: true, headline: 'Nothing is waiting for your answer.', status: 'Submitted', form: false, actions: []};
+const commentMode = "We're looking at the work together. Leave your thoughts as comments.";
+const sendAction = (disabled: boolean) => ({id: 'send-comments', disabled, opacityOverride: false});
+const idle = {row: true, headline: commentMode, status: 'Not submitted', form: false, submitDisabled: true, actions: [sendAction(true)]};
+const before = {row: true, headline: commentMode, status: 'Not submitted', form: false, submitDisabled: false, actions: [sendAction(false)]};
+const sending = {...before, status: 'Sending', submitDisabled: true, actions: [sendAction(true)]};
+const accepted = {row: true, headline: commentMode, status: 'Submitted', form: false, submitDisabled: true, actions: [sendAction(true)]};
 
-for (const order of ['response first', 'stream first'] as const) test(`#1205 record submission shows before, sending and accepted (${order})`, async () => {
+for (const order of ['response first', 'stream first'] as const) test(`#1205 record comment submission shows before, sending and accepted (${order})`, async () => {
   const h = await harness();
   try {
+    expect(h.read()).toMatchObject(idle);
+    h.comment('Check the timing', 'c1');
     const prior = h.read();
     const {post, submit} = await h.start();
     const inflight = h.read();
-    expect(post.input).toMatchObject({kind: 'checkpoint', askId: h.fixture.ask.askId, publicationId: h.fixture.ask.publicationId,
+    expect(post.input).toMatchObject({kind: 'comments', publicationId: h.fixture.display.publication.publicationId,
       pageId: 'test-record-status-page', displayedNonce: h.window.state().receipt!.displayedNonce,
-      value: {checkpointId: 'step_layout', outcome: 'pass', words: '[general]\nCheck the timing'}});
+      value: {comments: [{text: 'Check the timing'}]}} );
     const {response, act} = await recorded(post);
-    let afterDifferentCheckpoint: ScreenReadback | null = null;
-    if (order === 'stream first') {
-      const wrongCheckpoint = {...act, actId: 'other-checkpoint', value: {...act.value, checkpointId: 'step_weights', planStepId: 'step_weights'}} as ActV3;
-      h.event({type: 'act', act: wrongCheckpoint});
-      afterDifferentCheckpoint = h.read();
-      h.event({type: 'act', act});
-    }
-    const afterFirst = order === 'stream first' ? h.read() : null;
+    if (order === 'stream first') h.event({type: 'act', act});
+    const afterStream = order === 'stream first' ? h.read() : null;
     post.respond(response);
     await submit;
     const afterResponse = h.read();
     if (order === 'response first') h.event({type: 'act', act});
-    expect({prior, inflight, afterDifferentCheckpoint, afterFirst, afterResponse, afterBoth: h.read()}).toMatchObject({prior: before, inflight: sending,
-      afterDifferentCheckpoint: order === 'stream first' ? sending : null, afterFirst: order === 'stream first' ? accepted : null, afterResponse: accepted, afterBoth: accepted});
+    expect({prior, inflight, afterStream, afterResponse, afterBoth: h.read()}).toMatchObject({
+      prior: before,
+      inflight: sending,
+      afterStream: order === 'stream first' ? sending : null,
+      afterResponse: accepted,
+      afterBoth: accepted,
+    });
   } finally {await h.close();}
 });
 
-test('#1205 the next ask takes over accepted record submission status', async () => {
+test('#1205 a new comment after accepted Send comments rearms Not submitted and Send comments', async () => {
   const h = await harness();
   try {
+    h.comment('First batch', 'c1');
     const {post, submit} = await h.start();
     const {response, act} = await recorded(post);
-    h.event({type: 'act', act});
-    const signedReadback = h.read();
-    const next: PendingAskV3 = {...h.fixture.ask, askId: 'next-checkpoint', subject: {kind: 'checkpoint', checkpointId: 'step_layout'}};
-    h.event({type: 'pending', ask: next});
-    const nextReadback = h.read();
     post.respond(response);
     await submit;
-    expect({signedReadback, nextReadback, afterOldResponse: h.read()}).toMatchObject({signedReadback: accepted,
-      nextReadback: before, afterOldResponse: before});
+    h.event({type: 'act', act});
+    const signedReadback = h.read();
+    h.comment('Follow-up batch', 'c2');
+    const nextReadback = h.read();
+    expect({signedReadback, nextReadback}).toMatchObject({signedReadback: accepted, nextReadback: before});
   } finally {await h.close();}
 });
 
-for (const failure of ['refusal', 'network rejection'] as const) test(`#1205 ${failure} restores the form for retry`, async () => {
+for (const failure of ['refusal', 'network rejection'] as const) test(`#1205 ${failure} restores Send comments for retry`, async () => {
   const h = await harness();
   try {
+    h.comment('Check the timing', 'c1');
     const first = await h.start();
     const inflight = h.read();
     if (failure === 'refusal') first.post.respond(Response.json({ok: false, error: {code: 'JOB_ACT_INVALID', message: 'fixture refusal'}}, {status: 400}));
     else first.post.fail(new TypeError('fixture connection lost'));
     await first.submit;
     const failed = h.read();
-    expect(failed.formStatus).toContain('JOB_ACT_INVALID');
-    expect(failed.status).not.toBe('Submitted');
-    expect(failed.status).not.toBe('Sending');
-    expect(h.window.state().pending[0]?.act).toBeUndefined();
+    const expectedRefusal = jobSubmissionRefusal(new Error('JOB_ACT_INVALID')).text;
+    expect(failed.status).toBe(expectedRefusal);
+    expect(failed.statusKind).toBe('failed');
+    expect(failed.formStatus).toBe(expectedRefusal);
     expect(h.fixture.files).toHaveLength(0);
     const retry = await h.start();
     const retrying = h.read();
@@ -295,14 +309,19 @@ for (const failure of ['refusal', 'network rejection'] as const) test(`#1205 ${f
     const {response} = await recorded(retry.post);
     retry.post.respond(response);
     await retry.submit;
-    expect({inflight, failed, retrying, finished: h.read()}).toMatchObject({inflight: sending,
-      failed: {row: true, form: true, submitDisabled: false, actions: [opener]}, retrying: sending, finished: accepted});
+    expect({inflight, failed, retrying, finished: h.read()}).toMatchObject({
+      inflight: sending,
+      failed: {row: true, form: false, submitDisabled: false, actions: [sendAction(false)]},
+      retrying: sending,
+      finished: accepted,
+    });
   } finally {await h.close();}
 });
 
-test('#1205 a superseding publication without an act never reports the form as accepted', async () => {
-  const h = await harness(true);
+test('#1205 a superseding publication without an act never reports the record screen as accepted', async () => {
+  const h = await harness(true, 'interview-picks', true);
   try {
+    h.comment('Check the timing', 'c1');
     const {post, submit} = await h.start();
     const inflight = h.read();
     const next = await h.fixture.republishPicture(readFileSync(new URL('./fixtures/viewport-387/package/mesh.png', import.meta.url)));
@@ -313,40 +332,39 @@ test('#1205 a superseding publication without an act never reports the form as a
     post.respond(Response.json({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE', message: 'publication superseded'}}, {status: 409}));
     await submit;
     for (const phase of [superseded, h.read()]) {
-      expect(phase.form).toBe(false);
       expect(phase.status).not.toBe('Submitted');
-      expect(phase.status).not.toBe('Sending');
     }
     expect(h.fixture.files).toHaveLength(0);
     await h.window.settled();
     expect(h.window.state().receipt?.publicationId).toBe(next.publication.publicationId);
-    h.event({type: 'pending', ask: {...h.fixture.ask, askId: 'replacement-checkpoint', publicationId: next.publication.publicationId, source: next.publication.source}});
+    h.comment('Comment on republished picture', 'c2');
     expect({inflight, replacement: h.read()}).toMatchObject({inflight: sending, replacement: before});
   } finally {await h.close();}
 });
 
-const commentMode = "We're looking at the work together. Leave your thoughts as comments.";
-test('#1228 a record sign-off publication and pending sign-off ask render no form, no opener and no error', async () => {
-  const h = await harness(false, 'signoff');
-  try {
-    expect(h.window.state().error).toBeNull();
-    const state = h.read();
-    expect(state.form).toBe(false);
-    expect(state.actions).toEqual([]);
-    expect(state.headline).not.toBe('Approve this stage.');
-  } finally {await h.close();}
+test('#1228, #1229 and #1230 record sign-off, checkpoint and interview-picks publications and pending asks render no form, no opener and no error', async () => {
+  for (const kind of ['signoff', 'checkpoint', 'interview-picks'] as const) {
+    const h = await harness(false, kind, true);
+    try {
+      expect(h.window.state().error).toBeNull();
+      const state = h.read();
+      expect(state.form).toBe(false);
+      expect(state.actions).toEqual([sendAction(true)]);
+      expect(state.headline).toBe(commentMode);
+    } finally {await h.close();}
+  }
 });
 
-// #1228: the displayed record publication, not an ask, holds the right panel open and sets the comment-mode line.
-for (const [name, kind, ask] of [['no pending ask', 'checkpoint', false], ['a pending sign-off subject', 'signoff', true]] as const)
-  test(`#1228 a displayed record publication with ${name} keeps Comments open and never says it is waiting`, async () => {
+// #1228 / #1229 / #1230: the displayed record publication, not an ask, holds the right panel open and sets the comment-mode line.
+for (const [name, kind, ask] of [['no pending ask', 'checkpoint', false], ['a pending sign-off subject', 'signoff', true], ['a pending checkpoint subject', 'checkpoint', true], ['a pending interview-picks subject', 'interview-picks', true]] as const)
+  test(`#1228/#1229/#1230 a displayed record publication with ${name} keeps Comments open and never says it is waiting`, async () => {
     const h = await harness(false, kind, ask);
     try {
       expect(h.window.state().error).toBeNull();
       expect(h.window.state().receipt?.publicationId).toBe(h.fixture.ask.publicationId);
       const state = h.read();
       expect(state.headline).not.toBe(t('job.waiting', undefined, 'en'));
-      expect(state).toMatchObject({row: true, communication: true, headline: commentMode, form: false, actions: []});
+      expect(state).toMatchObject({row: true, communication: true, headline: commentMode, form: false, actions: [sendAction(true)]});
     } finally {await h.close();}
   });
 
@@ -369,7 +387,7 @@ test('#1227 fresh sign-off submissions refuse and historical sign-off acts still
     await expect(response.json()).resolves.toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
   } finally {await f.close();}
 
-  const h = await harness(false, 'signoff');
+  const h = await harness(false, 'signoff', true);
   try {
     if (h.fixture.ask.source.subject !== 'plan') throw new Error('Expected plan source');
     const {directionReview: _summary, ...binding} = h.fixture.ask.source;
@@ -386,12 +404,13 @@ test('#1227 fresh sign-off submissions refuse and historical sign-off acts still
     expect(h.read()).toEqual({
       row: true,
       communication: true,
-      headline: 'Nothing is waiting for your answer.',
+      headline: commentMode,
       status: 'Submitted',
+      statusKind: 'saved',
       form: false,
       formStatus: '',
       submitDisabled: true,
-      actions: [],
+      actions: [sendAction(true)],
     });
   } finally {await h.close();}
 });
@@ -428,6 +447,14 @@ test('#1227 viewer and comments work on a production-shaped publication when a p
     });
     expect(signoffAsk.status).toBe(409);
     await expect(signoffAsk.json()).resolves.toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+
+    const checkpointAsk = await f.call({
+      schema: JOB_API_SCHEMA, jobId: f.host.session.jobId, requestId: 'producer-checkpoint-ask',
+      verb: 'ask', expectedGeneration: f.host.session.status().generation, idempotencyKey: 'producer-checkpoint-ask',
+      publicationId: publication.publicationId, subject: {kind: 'checkpoint', checkpointId: 'step-one'},
+    });
+    expect(checkpointAsk.status).toBe(409);
+    await expect(checkpointAsk.json()).resolves.toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
 
     const reviewAfterRefusal = await fetch(entry + 'api/review', {headers: {'X-Review-Capability': f.credentials.ui}});
     expect(reviewAfterRefusal.status).toBe(200);
@@ -510,7 +537,7 @@ test('#1230 option-set publications render pictures and comments with no form ac
       const view = createJobRigScreen({host: ui.app, access, pageId, translate: t, refusal: String, window: windowAccess,
         readPublication: transport.readPublication, routes: d => jobPublicationRoutes(d, fixture.origin),
         formDependencies: {node: formNode, translate: t, access, pageId, window: windowAccess, ...drafts, draftStorage: () => ({getItem: () => null}),
-          helpers: {...createJobFormHelpers(formNode, t), jobCheckpointContext, assertJobAskSource: () => {}}},
+          helpers: {...createJobFormHelpers(formNode, t), assertJobAskSource: () => {}}},
         async load() {screen?.dispose(); screen = mountRecordAct(ui);}});
       const window = createJobWindow<JobRigScreenPrepared | null>({jobId: access.jobId, pageId, transport, adapter: {
         prepare: view.prepare, captureDraft: () => null, commit: prepared => view.commit(prepared!),
@@ -529,7 +556,7 @@ test('#1230 option-set publications render pictures and comments with no form ac
           row: true,
           headline: "We're looking at the work together. Leave your thoughts as comments.",
           form: false,
-          actions: [],
+          actions: [sendAction(true)],
         });
         const host = rigHost()!;
         expect(host.record?.questionPictures).toHaveLength(1);

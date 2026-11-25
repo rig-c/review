@@ -1,31 +1,24 @@
-import { realpathSync, writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'bun:test';
 import { JobSession } from '../src/job-session.ts';
-import { createJobHostPorts, jobAskBatchLimit, parseJobRequestV3 } from '../src/job-api.ts';
+import { createJobHostPorts, jobAskBatchLimit, parseJobRequestV3, parseRecordSource, requestDigest } from '../src/job-api.ts';
 import { JOB_API_V3_SCHEMA, JOB_CAPABILITIES_V3, type NextValueV3, type PendingAskV3 } from '../src/job-contract.ts';
 import type { JobStore } from '../src/job-store.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
-import { createSyntheticPlanRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
+import { createSyntheticOptionSetsRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
 
-// Review #963: one `ask-batch` runs the record freshness check once for every listed subject.
-// Review-side synthetic reader only; no installed Create consumer conformance claim.
+// Review #963 / #1229 / #1230: fresh record asks and ask-batch requests refuse JOB_ASK_INVALID across all retired record subjects,
+// while request parsing bounds, head checks and pre-refusal stored ask-batch replay receipts remain intact.
 
 async function batchFixture(prefix: string) {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), prefix));
   const root = join(scratch, 'input');
   await mkdir(root);
-  // #1227: checkpoint until #1229 retires record asks
-  const steps = [
-    { id: 'step_layout', hash: '1'.repeat(64) },
-    { id: 'step_weights', hash: '2'.repeat(64) },
-    { id: 'step_motion', hash: '3'.repeat(64) },
-  ];
-  const workspace = createSyntheticPlanRecordWorkspace(root, { steps, subjects: steps.map(step => ({
-    kind: 'checkpoint' as const, checkpointId: step.id })) });
-  const reader = createSyntheticRecordReader({ onPlan: () => workspace.context });
+  const workspace = createSyntheticOptionSetsRecordWorkspace(root, { count: 3 });
+  const reader = createSyntheticRecordReader({ onOption: () => workspace.context });
   const session = new JobSession({ root, stateDir: join(scratch, 'state'), fingerprint: 'a'.repeat(64),
     reviewer: { id: 'synthetic-owner', role: 'owner' }, publicationMode: 'record-and-package', readRecordPublished: reader.reader });
   const origin = 'http://127.0.0.1:19963', ports = createJobHostPorts(session, origin), credentials = session.hostCredentials();
@@ -42,69 +35,76 @@ async function batchFixture(prefix: string) {
   const snapshot = () => { const row = store.get(session.jobId); return { revision: row.revision, data: JSON.stringify(row.data) }; };
   const batch = (subjects: readonly object[], idempotencyKey = 'batch') => call({ verb: 'ask-batch',
     expectedGeneration: session.status().generation, idempotencyKey, publicationId, subjects });
-  return { scratch, root, workspace, reader, session, store, call, batch, snapshot, publicationId,
+  function seedHistoricalBatch(subjects: readonly { kind: 'interview-picks'; questionId: string; setId: string }[], idempotencyKey: string, expectedGeneration: number) {
+    const internal = session as unknown as {
+      store: JobStore<any>;
+      event(data: unknown, value: unknown): void;
+      notify(): void;
+    };
+    let asks: PendingAskV3[] = [];
+    internal.store.update(session.jobId, null, current => {
+      const data = current.data;
+      const source = parseRecordSource(data.publications[publicationId].retained.source);
+      asks = subjects.map(subject => {
+        data.generation++;
+        const ask: PendingAskV3 = { askId: crypto.randomUUID(), publicationId, status: 'pending', subject, source };
+        data.asks[ask.askId] = ask;
+        internal.event(data, { type: 'pending', ask });
+        return ask;
+      });
+      const parsed = parseJobRequestV3({
+        schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'seed-' + idempotencyKey,
+        verb: 'ask-batch', expectedGeneration, idempotencyKey, publicationId, subjects,
+      }) as unknown as Record<string, unknown>;
+      const { requestId: _requestId, ...semantic } = parsed;
+      data.replays['agent:' + idempotencyKey] = { digest: requestDigest(semantic), value: { asks } };
+      return { data };
+    });
+    internal.notify();
+    return { asks };
+  }
+  return { scratch, root, workspace, reader, session, store, call, batch, seedHistoricalBatch, snapshot, publicationId,
     dispose: async () => { session.dispose(); await rm(scratch, { recursive: true, force: true }); } };
 }
 
-test('#963 one ask-batch creates N index-aligned asks, N pending events and generation +N with two reader calls', async () => {
-  const batched = await batchFixture('review-ask-batch-');
-  const single = await batchFixture('review-ask-single-');
+test('#963 / #1229 / #1230 fresh single record asks and ask-batch requests refuse JOB_ASK_INVALID without calling the reader or mutating generation', async () => {
+  const fixture = await batchFixture('review-ask-batch-refusal-');
   try {
-    const subjects = batched.workspace.context.subjects;
+    const subjects = fixture.workspace.context.subjects;
     expect(subjects.length).toBe(3);
+    const before = fixture.snapshot(), calls = fixture.reader.calls.length, generation = fixture.session.status().generation;
 
-    const singleBefore = single.reader.calls.length, singleGeneration = single.session.status().generation;
     for (const [index, subject] of subjects.entries()) {
-      const asked = await single.call({ verb: 'ask', expectedGeneration: single.session.status().generation,
-        idempotencyKey: 'single-' + index, publicationId: single.publicationId, subject });
-      expect(asked.ok).toBe(true);
+      const asked = await fixture.call({ verb: 'ask', expectedGeneration: generation,
+        idempotencyKey: 'single-' + index, publicationId: fixture.publicationId, subject });
+      expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
     }
-    const singleCalls = single.reader.calls.length - singleBefore;
-    expect(singleCalls).toBe(2 * subjects.length);
-    expect(single.session.status().generation).toBe(singleGeneration + subjects.length);
-
-    const before = batched.reader.calls.length, generation = batched.session.status().generation;
-    const eventsBefore = batched.store.get(batched.session.jobId).data.events.length;
-    const response = await batched.batch(subjects);
-    expect(response).toMatchObject({ schema: JOB_API_V3_SCHEMA, verb: 'ask-batch', ok: true });
-    const batchCalls = batched.reader.calls.length - before;
-    expect(batchCalls).toBe(2);
-    expect(batched.reader.calls.slice(before).map(call => call.phase)).toEqual(['inventory', 'retained']);
-
-    const asks = response.value.asks as PendingAskV3[];
-    expect(asks.map(ask => ask.subject)).toEqual([...subjects]);
-    expect(new Set(asks.map(ask => ask.askId)).size).toBe(subjects.length);
-    expect(asks.every(ask => ask.publicationId === batched.publicationId && ask.status === 'pending')).toBe(true);
-    expect(batched.session.status().generation).toBe(generation + subjects.length);
-    expect(response.generation).toBe(generation + subjects.length);
-    expect(batched.session.status().pending.map(ask => ask.askId)).toEqual(asks.map(ask => ask.askId));
-
-    const events = batched.store.get(batched.session.jobId).data.events.slice(eventsBefore) as
-      { type: string; generation: number; ask: PendingAskV3 }[];
-    expect(events.map(event => event.type)).toEqual(subjects.map(() => 'pending'));
-    expect(events.map(event => event.ask)).toEqual(asks);
-    expect(events.map(event => event.generation)).toEqual(subjects.map((_, index) => generation + 1 + index));
-
-    // The same subjects asked singly and in one batch bind the same sources.
-    expect(asks.map(ask => ask.source)).toEqual(single.session.status().pending.map(ask => ask.source));
-    console.log(`#963 reader calls: ${subjects.length} single asks = ${singleCalls}, one batch of ${subjects.length} = ${batchCalls}`);
+    const response = await fixture.batch(subjects);
+    expect(response).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID', message: 'subjects[0]: JOB_ASK_INVALID' } });
+    expect(fixture.reader.calls.length).toBe(calls);
+    expect(fixture.session.status().generation).toBe(generation);
+    expect(fixture.session.status().pending).toEqual([]);
+    expect(fixture.snapshot()).toEqual(before);
   } finally {
-    await batched.dispose();
-    await single.dispose();
+    await fixture.dispose();
   }
 });
 
-test('#963 an invalid subject refuses the whole batch under its index and leaves the store unchanged', async () => {
+test('#963 malformed, duplicate, out-of-bounds and retired subjects refuse the whole batch under their index and leave the store unchanged', async () => {
   const fixture = await batchFixture('review-ask-batch-atomic-');
   try {
     const subjects = fixture.workspace.context.subjects;
     const before = fixture.snapshot(), calls = fixture.reader.calls.length;
 
-    const undeclared = await fixture.batch([subjects[0]!, subjects[1]!, { kind: 'checkpoint', checkpointId: 'undeclared_step' }, subjects[2]!]);
-    expect(undeclared).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
-    expect(undeclared.error.message).toBe('subjects[2]: JOB_ASK_INVALID');
-    expect(fixture.snapshot()).toEqual(before);
-    expect(fixture.reader.calls.length).toBe(calls);
+    for (const [key, retired] of [
+      ['picks', subjects[0]!],
+      ['checkpoint', { kind: 'checkpoint', checkpointId: 'step_layout' }],
+      ['signoff', { kind: 'signoff', stage: 'plan-approved' }],
+      ['reopen', { kind: 'reopen', stage: 'plan-approved' }],
+    ] as const) {
+      const refused = await fixture.batch([retired], 'retired-' + key);
+      expect(refused).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID', message: 'subjects[0]: JOB_ASK_INVALID' } });
+    }
 
     const malformed = await fixture.batch([subjects[0]!, { kind: 'no-such-subject' }], 'malformed');
     expect(malformed.ok).toBe(false);
@@ -122,63 +122,32 @@ test('#963 an invalid subject refuses the whole batch under its index and leaves
   } finally { await fixture.dispose(); }
 });
 
-test('#963 a stale work root or a tampered retained snapshot refuses the batch and creates nothing', async () => {
+test('#963 non-head publications refuse ask-batch with JOB_ACT_SOURCE_STALE before subject binding', async () => {
   const fixture = await batchFixture('review-ask-batch-stale-');
   try {
     const subjects = fixture.workspace.context.subjects;
-    const before = fixture.snapshot();
-    const update = fixture.store.update.bind(fixture.store);
-    const patchUpdate = (change: () => void) => {
-      fixture.store.update = ((...args: Parameters<typeof update>) => {
-        fixture.store.update = update;
-        // The change lands after the freshness check and before the transaction's re-check.
-        change();
-        return update(...args);
-      }) as typeof update;
-    };
-
-    // Source changes between the freshness check and the commit.
-    const spec = join(fixture.root, 'inputs/spec.json');
-    const original = await Bun.file(spec).text();
-    patchUpdate(() => { writeFileSync(spec, original + ' '); });
-    const stale = await fixture.batch(subjects, 'stale');
-    expect(fixture.store.update).toBe(update);
-    expect(stale).toMatchObject({ ok: false, error: { code: 'JOB_SOURCE_MISMATCH' } });
-    expect(stale.error.message.startsWith('subjects[')).toBe(false);
-    expect(fixture.snapshot()).toEqual(before);
-    await writeFile(spec, original);
-
-    // Retained snapshot tampered between the freshness check and the commit.
-    const retained = fixture.session.retainedSourceV3(fixture.publicationId);
-    const sealed = join(retained.snapshotRoot, 'inputs/spec.json');
-    const sealedBytes = await Bun.file(sealed).text();
-    patchUpdate(() => { writeFileSync(sealed, sealedBytes + ' '); });
-    const tamperedInCommit = await fixture.batch(subjects, 'tampered-commit');
-    expect(fixture.store.update).toBe(update);
-    expect(tamperedInCommit).toMatchObject({ ok: false, error: { code: 'JOB_SOURCE_UNRETAINABLE' } });
-    expect(fixture.snapshot()).toEqual(before);
-
-    // Retained snapshot already tampered before the batch.
-    const calls = fixture.reader.calls.length;
-    const tampered = await fixture.batch(subjects, 'tampered');
-    expect(tampered).toMatchObject({ ok: false, error: { code: 'JOB_SOURCE_UNRETAINABLE' } });
+    const republished = await fixture.call({ verb: 'publish', expectedGeneration: fixture.session.status().generation, idempotencyKey: 'republish',
+      result: fixture.workspace.result, freeze: { kind: 'producer-held', holdId: 'synthetic-2', record: fixture.workspace.record } });
+    expect(republished.ok).toBe(true);
+    const before = fixture.snapshot(), calls = fixture.reader.calls.length;
+    const stale = await fixture.call({ verb: 'ask-batch', expectedGeneration: fixture.session.status().generation,
+      idempotencyKey: 'stale-head', publicationId: fixture.publicationId, subjects });
+    expect(stale).toMatchObject({ ok: false, error: { code: 'JOB_ACT_SOURCE_STALE' } });
     expect(fixture.reader.calls.length).toBe(calls);
     expect(fixture.snapshot()).toEqual(before);
-    expect((await readdir(retained.snapshotRoot)).length).toBeGreaterThan(0);
   } finally { await fixture.dispose(); }
 });
 
-test('#963 a replayed batch returns the same asks without reading the publisher again', async () => {
+test('#963 a replayed historical batch returns the same asks without reading the publisher again', async () => {
   const fixture = await batchFixture('review-ask-batch-replay-');
   try {
     const subjects = fixture.workspace.context.subjects.slice(0, 3);
     const generation = fixture.session.status().generation;
-    const first = await fixture.batch(subjects, 'replay');
-    expect(first.ok).toBe(true);
+    const seeded = fixture.seedHistoricalBatch(subjects, 'replay', generation);
     const calls = fixture.reader.calls.length, after = fixture.snapshot();
     const replayed = await fixture.call({ verb: 'ask-batch', expectedGeneration: generation, idempotencyKey: 'replay',
       publicationId: fixture.publicationId, subjects });
-    expect(replayed.value).toEqual(first.value);
+    expect(replayed.value).toEqual(seeded);
     expect(fixture.reader.calls.length).toBe(calls);
     expect(fixture.snapshot()).toEqual(after);
 
@@ -207,7 +176,7 @@ test('#963 next reports askBatch among the V3 capabilities and ask-batch parses 
     expect(next.value.capabilities.askBatch).toBe(true);
     expect(next.value.capabilities.progress).toBe(true);
   } finally { await fixture.dispose(); }
-  // #1227: checkpoint until #1229 retires record asks
+  // Request schema parsing still recognizes historical record subject shapes before bindJobRecordAsk refuses fresh asks.
   const request = { schema: JOB_API_V3_SCHEMA, jobId: 'job-1', requestId: 'request-1', verb: 'ask-batch',
     expectedGeneration: 0, idempotencyKey: 'key', publicationId: 'publication-1', subjects: [{ kind: 'checkpoint', checkpointId: 'step_layout' }] };
   expect(parseJobRequestV3(request)).toEqual(request as never);
@@ -241,13 +210,12 @@ test('#963 a package-retained head refuses ask-batch with JOB_REQUEST_INVALID an
   }
 });
 
-test('#1022 a replayed batch whose asks were superseded refuses by index and names the head', async () => {
+test('#1022 a replayed historical batch whose asks were superseded refuses by index and names the head', async () => {
   const fixture = await batchFixture('review-ask-batch-superseded-');
   try {
     const subjects = fixture.workspace.context.subjects.slice(0, 2);
     const generation = fixture.session.status().generation;
-    const first = await fixture.batch(subjects, 'superseded');
-    expect(first.ok).toBe(true);
+    const seeded = fixture.seedHistoricalBatch(subjects, 'superseded', generation);
     const republished = await fixture.call({ verb: 'publish', expectedGeneration: fixture.session.status().generation, idempotencyKey: 'publish-again',
       result: fixture.workspace.result, freeze: { kind: 'producer-held', holdId: 'synthetic', record: fixture.workspace.record } });
     expect(republished.ok).toBe(true);
@@ -255,7 +223,7 @@ test('#1022 a replayed batch whose asks were superseded refuses by index and nam
     const replayed = await fixture.call({ verb: 'ask-batch', expectedGeneration: generation, idempotencyKey: 'superseded',
       publicationId: fixture.publicationId, subjects });
     expect(replayed).toMatchObject({ ok: false, error: { code: 'JOB_ASK_SUPERSEDED',
-      message: `subjects[0]: ask ${first.value.asks[0].askId} is superseded; head ${republished.value.publicationId}` } });
+      message: `subjects[0]: ask ${seeded.asks[0]!.askId} is superseded; head ${republished.value.publicationId}` } });
     expect(fixture.snapshot()).toEqual(before);
   } finally { await fixture.dispose(); }
 });
