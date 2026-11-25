@@ -1272,8 +1272,9 @@ test('the declared browser inputs publish parts, rig and direction through the r
         expect(partsAsk.status).toBe('pending');
         const rig = await f.publish('rig');
         expect(rig.source.selector).toEqual({kind: 'rig', version: 2});
-        const interview = await f.ask(rig, {kind: 'interview-picks', questionId: f.question.set.question, setId: f.question.set.id});
-        expect(interview.source.optionSet?.sha256).toBe(f.question.ref.sha256);
+        // #1235: the rig sample ask is the rig verdict; the interview binding has its own retained-question test.
+        const verdict = await f.ask(rig, {kind: 'review-verdict', stage: 'rig-review'});
+        expect(verdict.status).toBe('pending');
         const direction = await f.publish('direction');
         expect(direction.source.direction?.sha256).toMatch(/^[a-f0-9]{64}$/);
         const descriptor = await (await fetch(f.locator + '/publications/' + direction.publicationId)).json();
