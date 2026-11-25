@@ -389,9 +389,10 @@ test('#966 #1231 mesh-carrying Request changes asks confirm once; Cancel sends n
     expect(carried.value.comments).toEqual([]);
     expect(carried.value.carriers).toEqual([{kind: 'mesh-edits', file: publication.source.model!,
       meshEdits: [{edit, sha256: jobHash(canonicalJson(edit))}]}]);
-    // #1231: the verdict no longer carries the ops; it is the ordinary context-comments verdict.
+    // #1231: the verdict no longer carries the ops; it is an ordinary comments verdict (@6 or @7).
     expect('meshEdits' in (requests[1]!.value as object)).toBe(false);
-    const verdict = parseContextCommentsAct(acts[1]!);
+    expect(['rig-review/act@6', 'rig-review/act@7']).toContain(acts[1]!.schema);
+    const verdict = acts[1]!.schema === 'rig-review/act@7' ? parseContextCommentsAct(acts[1]!) : parseCommentsAct(acts[1]!);
     expect(verdict.kind === 'review-verdict' && verdict.value.verdict).toBe('changes-requested');
     expect('meshEdits' in verdict.value).toBe(false);
     expect(() => parseMeshEditsAct(acts[1]!)).toThrow('JOB_ACT_INVALID');
