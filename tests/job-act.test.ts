@@ -260,33 +260,30 @@ test('pending UI act still refuses a rotated nonce, changed source and supersede
   if (!oldPublication.ok) expect(oldPublication.error.code).toBe('JOB_ACT_SOURCE_STALE');
 });
 
-test('synthetic private adapters validate ordered interview picks without exposing storage formats', async () => {
-  const f = await fixture(), publication = await f.publish();
+test('#1230 fresh package interview-picks asks refuse JOB_ASK_INVALID and submissions refuse JOB_ACT_KIND_DISABLED while historical picks acts decode byte-identically', async () => {
+  const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
+  const asked = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+    idempotencyKey: 'refused-picks', publicationId: publication.publicationId,
+    subject: { kind: 'interview-picks', questionId: 'question-one', setId: 'set-one' } })).json();
+  expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+  const verdictAsk = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
+  const value = { questionId: 'question-one', selections: [{ itemId: 'item-one', optionId: 'value-one', otherText: null }], note: '원문' };
+  const submitted = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: verdictAsk.askId,
+    expectedGeneration: f.session.status().generation, submissionId: 'refused-picks', kind: 'interview-picks', value }));
+  expect(submitted).toMatchObject({ ok: false, error: { code: 'JOB_ACT_KIND_DISABLED' } });
+  // A pending picks ask stored by an earlier Review no longer finalizes through the writer.
   const retained = f.session.retainedSource(publication.publicationId);
-  const question = { ref: { path: 'synthetic/options.json', sha256: '2'.repeat(64) }, editable: true,
-    set: { id: 'set-one', question: 'question-one', stage: 'interview', drafted_by: 'synthetic', drafted_at: '2020-01-01T00:00:00Z',
-      asks: [{ id: 'item-one', prompt: 'Choose', options: [{ id: 'value-one', kind: 'value', label: 'One', effect: 'One', recommended: true }] }],
-      assembly: { rule: 'single' } }, images: [], hasParts: false } as const;
-  const withQuestion = { ...retained, questions: [structuredClone(question)] } as unknown as typeof retained;
   const ask: JobPendingAsk = { askId: 'ask-one', publicationId: publication.publicationId,
     subject: { kind: 'interview-picks', questionId: 'question-one', setId: 'set-one' },
-    source: { ...retained.source, optionSet: { id: 'set-one', sha256: question.ref.sha256 } }, status: 'pending' };
-  const common = { publicationId: publication.publicationId, askId: ask.askId, pageId: 'page', displayedNonce: 'nonce',
-    expectedGeneration: 1, submissionId: 'submission' };
-  const submission: JobUISubmission = { ...common, kind: 'interview-picks', value: {
-    questionId: 'question-one', selections: [{ itemId: 'item-one', optionId: 'value-one', otherText: null }], note: '원문' } };
-  const act = finalizeJobAct({ jobId: f.session.jobId, submission, ask, retained: withQuestion,
-    reviewer: { id: 'owner', role: 'owner' } });
-  expect(act.kind).toBe('interview-picks');
-  expect(act.schema).toBe('rig-review/act@6');
-  expect(JSON.stringify(act)).toBe(JSON.stringify({
-    schema: 'rig-review/act@6', actId: act.actId, jobId: f.session.jobId, askId: ask.askId, publicationId: publication.publicationId,
-    authority: {actor: 'human', channel: 'review-ui', reviewer: {id: 'owner', role: 'owner'}}, at: act.at,
-    kind: 'interview-picks', source: ask.source, value: {...submission.value, comments: []},
-  }));
-  expect(() => finalizeJobAct({ jobId: f.session.jobId, submission: { ...submission, value: {
-    ...submission.value, selections: [{ itemId: 'different', optionId: 'value-one', otherText: null }] } },
-  ask, retained: withQuestion, reviewer: { id: 'owner', role: 'owner' } })).toThrow('JOB_ACT_INVALID');
+    source: { ...retained.source, optionSet: { id: 'set-one', sha256: '2'.repeat(64) } }, status: 'pending' };
+  const submission: JobUISubmission = { publicationId: publication.publicationId, askId: ask.askId, pageId: 'page',
+    displayedNonce: 'nonce', expectedGeneration: 1, submissionId: 'submission', kind: 'interview-picks', value };
+  expect(() => finalizeJobAct({ jobId: f.session.jobId, submission, ask, retained, reviewer: { id: 'owner', role: 'owner' } }))
+    .toThrow('JOB_ACT_KIND_DISABLED');
+  // Stored bytes in the removed writer's key order (questionId, selections, note, comments).
+  const bytes = JSON.stringify(parseCommentsAct(packagePicksCommentsAct()));
+  expect(JSON.parse(bytes).value).toMatchObject({ questionId: 'question-one', note: '  Survey note\r\n' });
+  expect(JSON.stringify(parseCommentsAct(JSON.parse(bytes)))).toBe(bytes);
 });
 
 function packagePicksCommentsAct() {

@@ -235,13 +235,13 @@ export async function verifyInterviewDiagnosticsFixtureDryRun(): Promise<void> {
       ],
     );
 
-    const pending = await fixture.ask(publication, {
+    // #1230: the current scene question is published and shown, but a fresh picks ask refuses by name.
+    await assert.rejects(fixture.ask(publication, {
       kind: 'interview-picks',
       questionId: probe.editableSceneQuestion.set.question,
       setId: probe.editableSceneQuestion.set.id,
-    });
-    assert.equal(pending.subject.kind, 'interview-picks');
-    assert.equal(pending.source.optionSet?.id, 'review551-scene-current');
+    }), /JOB_ASK_INVALID/);
+    assert.deepEqual(fixture.host.session.status().pending, []);
 
     const ackRes = await fixture.ui('displayed', {
       publicationId: publication.publicationId,
@@ -255,7 +255,7 @@ export async function verifyInterviewDiagnosticsFixtureDryRun(): Promise<void> {
     const recommended = askItem.options.find(opt => opt.kind === 'value' && opt.recommended) ?? askItem.options[0]!;
     const actRes = await fixture.ui('acts', {
       publicationId: publication.publicationId,
-      askId: pending.askId,
+      askId: '00000000-0000-4000-8000-000000001230',
       pageId: 'dry-run-page',
       displayedNonce: ackBody.value.displayedNonce,
       expectedGeneration: fixture.host.session.status().generation,
@@ -267,11 +267,9 @@ export async function verifyInterviewDiagnosticsFixtureDryRun(): Promise<void> {
         note: EXACT_SUBMITTED_NOTE_WORDS,
       },
     });
-    const actBody = (await actRes.json()) as {ok: boolean; value: {kind: string; value: {questionId: string; note: string}}};
-    assert.equal(actBody.ok, true);
-    assert.equal(actBody.value.kind, 'interview-picks');
-    assert.equal(actBody.value.value.questionId, 'post_composition');
-    assert.equal(actBody.value.value.note, EXACT_SUBMITTED_NOTE_WORDS);
+    const actBody = (await actRes.json()) as {ok: boolean; error?: {code: string}};
+    assert.equal(actBody.ok, false);
+    assert.equal(actBody.error?.code, 'JOB_ACT_KIND_DISABLED');
 
     await fixture.finish();
   } finally {

@@ -12,6 +12,7 @@ import type {JobRetainedRecordSource} from '../../src/job-source.ts';
 import {createJobFront, jobWindowResources, retainedPublicationRoutes} from '../../src/job-front.ts';
 import {JOB_API_V3_SCHEMA, type DisplayPublicationV3, type NextValueV3, type PendingAskV3, type PublicationV3, type UISubmissionV3, type RecordSignoffStage} from '../../src/job-contract.ts';
 import {createJobWindowFixture,scriptedJobWindowFixture} from './job-window-fixture.ts';
+import {seedHistoricalPicksAsks} from './historical-picks-act.ts';
 import {createSyntheticOptionRecordWorkspace, createSyntheticOptionSetsRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader,writeWorkspaceFile,type PostPictureCase} from './job-record-fixture.ts';
 
 export type RecordScreenKind='checkpoint'|'signoff'|'interview-picks';
@@ -131,7 +132,8 @@ export async function optionSetsJobFixture(options:Parameters<typeof createSynth
  try{
   const publication=await call<PublicationV3>({verb:'publish',expectedGeneration:0,idempotencyKey:'publish',result:workspace.result,freeze:{kind:'producer-held',holdId:'synthetic-1004',record:workspace.record}});
   const display=session.displayPublication(publication.publicationId);
-  const {asks}=await call<{asks:PendingAskV3[]}>({verb:'ask-batch',expectedGeneration:session.status().generation,idempotencyKey:'asks',publicationId:publication.publicationId,subjects:workspace.context.subjects});
+  // #1230: fresh picks asks refuse; these are the pending asks a pre-refusal Review stored for each declared set.
+  const asks=seedHistoricalPicksAsks(session,publication.publicationId,workspace.context.subjects);
   const retained=session.retainedSourceV3(publication.publicationId) as JobRetainedRecordSource;
   const forms=asks.slice(0,options.answered??0).map((ask,index)=>{const question=retained.questions[index]!;
    const selections=question.set.asks.map(item=>({itemId:item.id,optionId:item.options.find(option=>option.recommended)!.id,otherText:null}));

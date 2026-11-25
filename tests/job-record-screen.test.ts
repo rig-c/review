@@ -12,6 +12,8 @@ import {rigHost,setRigHost} from '../web/rig-host.ts';
 import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jobPublicationRoutes,prepareJobForms,prepareJobInspection,type JobFormDependencies} from '../web/job-session.ts';
 import {JOB_API_V3_SCHEMA,jobRawActMediaType,type ActV3,type DisplayPublicationV3,type JobFileIdentity,type PendingAskV3,type RecordSignoffStage,type UISubmissionV3} from '../src/job-contract.ts';
 import {optionSetsJobFixture,recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
+import {seedHistoricalPicksAct} from './helpers/historical-picks-act.ts';
+import type {JobError} from '../src/job-store.ts';
 import {rigPictureCases,SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_ROOT,type PostPictureCase} from './helpers/job-record-fixture.ts';
 
 async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'|'signoff'='checkpoint',boundParts=false,signoffStage?:RecordSignoffStage,postPicture?:PostPictureCase){
@@ -230,10 +232,10 @@ test('#774 all shared publications keep one stream; cancellation never mounts an
  }
 });
 
-test('#750 deterministic interview writer persists inline Other and note at a valid past timestamp',async()=>{
+test('#750 / #1230 the record interview writer refuses JOB_ACT_KIND_DISABLED and persists nothing',async()=>{
  const f=await recordScreenFixture('interview-picks');try{
   const result=await f.ports.commitUIAct(f.session.jobId,new Request(f.origin+'/ui/acts',{method:'POST',body:JSON.stringify({kind:'interview-picks',publicationId:f.ask.publicationId,askId:f.ask.askId,pageId:'page',displayedNonce:'nonce',expectedGeneration:f.display.publication.generation,submissionId:'submission',value:{questionId:(f.ask.subject as {questionId:string}).questionId,selections:[{itemId:'topology',optionId:'topology_other',otherText:'  original Other\n'},{itemId:'detail_level',optionId:'density_high',otherText:null}],note:'  original note\n'}})}));
-  expect(result.ok).toBe(true);const stored=JSON.parse(await readFile(f.files[0]!,'utf8'));expect(stored.at).toBe('2026-11-08T12:00:00.000Z');expect(stored.value.note).toBe('  original note\n');expect(stored.value.selections[0].otherText).toBe('  original Other\n');
+  expect(result).toMatchObject({ok:false,error:{code:'JOB_ACT_KIND_DISABLED'}});expect(f.files).toEqual([]);
  }finally{await f.close();}
 });
 
@@ -582,7 +584,7 @@ test('#839 disposed workspace cannot re-enter the transient image while tabs unr
  run();run();expect(released).toBe(1);expect(scope.releaseInterview).toBeNull();
 });
 
-test('#1112 a sealed rig question hides the option file row and exports the original binding', async () => {
+test('#1112 / #1230 a sealed rig question hides the option file row, refuses a fresh answer and exports the original binding of a historical act', async () => {
  type RigQuestion = InterviewDisplayQuestion & {set:{context:{kind:'rig';rig_version:number;parts:{files:JobFileIdentity[]}}}};
  const f = await optionSetsJobFixture({count:1,boundRig:true,sealAcceptedParts:true});
  const dom = await recordScreenDom();
@@ -623,12 +625,14 @@ test('#1112 a sealed rig question hides the option file row and exports the orig
    return element;
   };
   let act: ActV3 | undefined;
+  const refused: string[] = [];
   entry = formFor(ask,inspection,{node,translate:i18n.t,
    helpers:{...createJobFormHelpers(node,i18n.t),jobCheckpointContext,assertJobAskSource:(bound,display)=>{prepareJobForms(display,[bound],()=>null);}},
    draftStorage:()=>({getItem:()=>null}),localDraftKey:()=> 'review-1112',saveDraft(){},
    pageId,access:{capability:f.session.hostCredentials().ui},
    window:{state:()=>({...f.session.status(),receipt,preparing:false,closed:false}),
-    async submit(input){act=await f.session.commitUIAct(input);return {ok:true,value:act};}},
+    async submit(input){try{act=await f.session.commitUIAct(input);return {ok:true,value:act};}
+     catch(error){const code=(error as JobError).code;refused.push(code);return {ok:false as const,error:{code,message:String(error)}};}}},
   });
   const {form} = entry;
   const badge = form.querySelector('.job-source');
@@ -666,11 +670,15 @@ test('#1112 a sealed rig question hides the option file row and exports the orig
   assertQuestionList('인터뷰 질문','답변 0 / 1',false);
   const submitter = form.querySelector<HTMLButtonElement>('button[type=submit]');
   await form.onsubmit!(Object.assign(new Event('submit',{cancelable:true}),{submitter}));
+  // #1230: the pending ask is historical; a fresh picks submission refuses by name and nothing is answered.
+  expect(act).toBeUndefined();
+  expect(refused).toEqual(['JOB_ACT_KIND_DISABLED']);
+  assertQuestionList('인터뷰 질문','답변 0 / 1',false);
+  // The original binding is still exported for a picks act committed before the refusal.
+  act = seedHistoricalPicksAct(f.session,{publicationId:ask.publicationId,pageId,displayedNonce:receipt.displayedNonce,
+   expectedGeneration:f.session.status().generation,submissionId:'review-1112-historical',value:entry.read() as never,
+   questionId:question.set.question,setId:question.set.id,optionSetSha256:ref.sha256}) as unknown as ActV3;
   expect(act).toMatchObject({kind:'interview-picks',source:{optionSetFile:ref,optionSet:{id:question.set.id,sha256:ref.sha256}}});
-  if (!act) throw new Error('Expected a committed interview act');
-  assertQuestionList('인터뷰 질문','답변 1 / 1',true);
-  i18n.setLanguagePreference('en');
-  assertQuestionList('Interview question','Answered 1 / 1',true);
   const exported = await fetch(`${f.origin}/jobs/${f.session.jobId}/api`,{method:'POST',headers:{
    'Content-Type':'application/json',Accept:jobRawActMediaType,Authorization:'Bearer '+f.session.writerGrant().fetchCapability,
   },body:JSON.stringify({schema:JOB_API_V3_SCHEMA,jobId:f.session.jobId,requestId:'review-1112-export',verb:'fetch-act',actId:act.actId})});

@@ -862,7 +862,7 @@ export class JobSession {
     const current = this.current();
     const previous = this.replay(current.data, key, digest);
     if (previous) return previous.value as ActV3;
-    if (input.kind === 'signoff') throw new JobError('JOB_ACT_KIND_DISABLED');
+    if (input.kind === 'signoff' || input.kind === 'interview-picks') throw new JobError('JOB_ACT_KIND_DISABLED');
     if (current.active && input.expectedGeneration <= current.data.generation) {
       const page = current.data.pages[input.pageId];
       if (page && page.publicationId === input.publicationId && sameCapability(input.displayedNonce, page.displayedNonce) &&

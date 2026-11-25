@@ -5,6 +5,7 @@
 ### Changed
 
 * Fresh `signoff` asks (including `plan-approved`) now refuse with `JOB_ASK_INVALID`, and page `signoff` submissions refuse with `JOB_ACT_KIND_DISABLED`. Publications that declare `signoff` subjects and finalized historical `signoff` acts and records keep their readers and exports (#1227, refs #1225).
+* Fresh `interview-picks` asks now refuse with `JOB_ASK_INVALID`, and page `interview-picks` submissions refuse with `JOB_ACT_KIND_DISABLED`. Publications that declare picks subjects, finalized historical picks acts and `rig-review/interview-picks@1` files keep their readers, and a committed submission still replays its stored act (#1230, refs #1225).
 
 ## 4.21.0
 

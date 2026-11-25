@@ -167,18 +167,29 @@ export async function runRecordBrowserPreflightSetupCheck(): Promise<void> {
       freeze: { kind: 'producer-held', holdId: 'preflight-hold-opt', record: { path: 'project.json', sha256: projectSha } },
     });
     if (pubOpt.verb !== 'publish' || !pubOpt.ok) throw new Error('Preflight option-set publish failed');
-    const askOpt = await call({
-      verb: 'ask',
-      expectedGeneration: pubOpt.generation,
-      idempotencyKey: 'preflight-ask-option-set',
-      publicationId: pubOpt.value.publicationId,
-      subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
+    // #1230: the declared picks subject parses on publish, but a fresh picks ask refuses by name.
+    const picksRes = await fetch(`${host!.origin}/jobs/${host!.session.jobId}/api`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        schema: JOB_API_V3_SCHEMA,
+        jobId: host!.session.jobId,
+        requestId: randomUUID(),
+        verb: 'ask',
+        expectedGeneration: pubOpt.generation,
+        idempotencyKey: 'preflight-ask-option-set',
+        publicationId: pubOpt.value.publicationId,
+        subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
+      }),
     });
-    if (askOpt.verb !== 'ask' || !askOpt.ok) throw new Error('Preflight option-set ask failed');
+    assert.equal(picksRes.status, 409);
+    const askOpt = (await picksRes.json()) as JobApiResponseV3;
+    if (askOpt.ok) throw new Error('Preflight option-set picks ask unexpectedly succeeded');
+    assert.equal(askOpt.error.code, 'JOB_ASK_INVALID');
 
     const pubPlan = await call({
       verb: 'publish',
-      expectedGeneration: askOpt.generation,
+      expectedGeneration: pubOpt.generation,
       idempotencyKey: 'preflight-publish-plan',
       result: { kind: 'plan' },
       freeze: { kind: 'producer-held', holdId: 'preflight-hold-plan', record: { path: 'project.json', sha256: projectSha } },

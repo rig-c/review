@@ -11,6 +11,7 @@ import {JobSession} from '../src/job-session.ts';
 import {createJobHostPorts, parseCommentsAct} from '../src/job-api.ts';
 import {createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './helpers/job-record-fixture.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
+import { seedHistoricalPicksAct } from './helpers/historical-picks-act.ts';
 import { runRecordBrowserPreflightSetupCheck } from './job-record-browser.ts';
 import {
   createJobWindow,
@@ -1696,6 +1697,7 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
     expect(ackOptionRes.ok).toBe(true);
     if (!ackOptionRes.ok) throw new Error(ackOptionRes.error.code);
 
+    // #1230: a fresh picks ask on the declared set refuses by name; the publication itself still parses.
     const askOptionRes = await callApi({
       schema: HOST_JOB_API_V3_SCHEMA,
       jobId: host.session.jobId,
@@ -1706,8 +1708,8 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
       publicationId: optionPublication.publicationId,
       subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
     });
-    expect(askOptionRes.status).toBe(200);
-    const optionAsk = (await askOptionRes.json()).value as publicJobHost.JobPendingAskV3;
+    expect(askOptionRes.status).toBe(409);
+    expect(await askOptionRes.json()).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
 
     const [rigPoint] = feedbackItemComments(backdropPins.rows as unknown as Feedback[]);
     const referencePoint = structuredClone(rigPoint!);
@@ -1720,25 +1722,33 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
     const region = {text: 'Region · 영역', anchor: {name: 'reference.png',
       imageRegion: {x: 1, y: 2, width: 2, height: 3}, crop, nativeCrop: crop}};
     const comments = [referencePoint, region, {text: '  First line\n둘째 줄  '}, rigPoint!];
-    const submission = JSON.stringify({
+    const optionValue = {
+      questionId: 'bones',
+      selections: [
+        { itemId: 'chains', optionId: 'keep', otherText: null },
+        { itemId: 'placement', optionId: 'keep', otherText: null },
+        { itemId: 'length', optionId: 'keep', otherText: null },
+      ],
+      note: 'Keep synthetic bones options.', comments,
+    };
+    // Committed before the refusal (Review 4.21.0 or earlier).
+    const committedGeneration = host.session.status().generation;
+    const finalizedOptionAct = seedHistoricalPicksAct(host.session, {
+      publicationId: optionPublication.publicationId, pageId: 'page-create-option',
+      displayedNonce: ackOptionRes.value.displayedNonce, expectedGeneration: committedGeneration,
+      submissionId: 'sub-option-bones', value: optionValue, questionId: 'bones', setId: 'chain-bones', optionSetSha256: '',
+    }) as unknown as JobActV3;
+    const submission = (submissionId: string) => JSON.stringify({
       publicationId: optionPublication.publicationId,
-      askId: optionAsk.askId,
+      askId: finalizedOptionAct.askId,
       pageId: 'page-create-option',
       displayedNonce: ackOptionRes.value.displayedNonce,
-      expectedGeneration: host.session.status().generation,
-      submissionId: 'sub-option-bones',
+      expectedGeneration: committedGeneration,
+      submissionId,
       kind: 'interview-picks',
-      value: {
-        questionId: 'bones',
-        selections: [
-          { itemId: 'chains', optionId: 'keep', otherText: null },
-          { itemId: 'placement', optionId: 'keep', otherText: null },
-          { itemId: 'length', optionId: 'keep', otherText: null },
-        ],
-        note: 'Keep synthetic bones options.', comments,
-      },
+      value: optionValue,
     });
-    const commit = () => host.ports.commitUIAct(
+    const commit = (submissionId = 'sub-option-bones') => host.ports.commitUIAct(
       host.session.jobId,
       new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
         method: 'POST',
@@ -1747,13 +1757,9 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
           Origin: host.origin,
           'X-Review-Capability': credentials.ui,
         },
-        body: submission,
+        body: submission(submissionId),
       }),
     );
-    const committed = await commit();
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) throw new Error(committed.error.code);
-    const finalizedOptionAct = committed.value as JobActV3;
     const parsed = parseCommentsAct(finalizedOptionAct);
     expect(parsed.kind).toBe('interview-picks');
     expect(JSON.stringify(parsed.value.comments)).toBe(JSON.stringify(comments));
@@ -1761,6 +1767,7 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
     const replay = await commit();
     if (!replay.ok) throw new Error(replay.error.code);
     expect(JSON.stringify(replay.value)).toBe(JSON.stringify(finalizedOptionAct));
+    expect(await commit('sub-option-bones-fresh')).toMatchObject({ ok: false, error: { code: 'JOB_ACT_KIND_DISABLED' } });
     const fetchOptionRes = await callApi(
       {
         schema: HOST_JOB_API_V3_SCHEMA,
