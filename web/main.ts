@@ -168,7 +168,7 @@ rigInspector.act.prepend(askHeadline,rigAsk,recordAsk);button('save').after(requ
 // #1226: Send comments sits in the act bar, leftmost of the answers; it sends a comment-only act that answers no ask.
 const sendComments=panelMake('button',{id:'send-comments',type:'button',hidden:true});setSourceText(sendComments,'Send comments');button('save').before(sendComments);
 let commentSendState:'idle'|'sent'='idle';let commentSending=false;
-let sentAloneCache:{key:string;rows:Record<string,string>}|null=null;
+const rowStoreCache=new Map<string,{key:string;rows:Record<string,string>}>();
 let pendingAnswers:readonly {kind:string;stage?:string}[]=[],answerSaved=false;
 let recordSaveStateShown=false;
 let jobProgress:JobProgressV3|null=null,progressTimer:ReturnType<typeof setInterval>|undefined;
@@ -243,7 +243,7 @@ const recordComments:CommentRow[]=[];
 let recordCommentKey='';
 const submittedDirectionComments=new Set<string>();
 /** #1242: record rows as an answered record act carried them, by id; a row written or edited after it is unsent. */
-const answeredRecordRows=new Map<string,string>();let recordAnswered=false;
+let answerInFlightRows:readonly CommentRow[]=[];let recordAnswered=false;
 /** #1242: pinned parts issues an answered parts verdict carried (startParts owns the set). */
 let partsSubmittedIssues:ReadonlySet<string>=new Set();
 let view: 'compare' | 'reference' | 'rig' = 'compare';
@@ -380,27 +380,43 @@ const commentBinding=()=>host?.verdictComments??host?.direction??host?.record;
 function commentHost():boolean {return !!commentBinding()&&!!host?.submitComments;}
 /** #1226: rows sent on their own as act@10, by id with the exact content sent. Such a row is shown Submitted and
  * is never sent again inside a later act (CONTRACT §1). Bound to the displayed publication and source. */
-function sentAloneRows():Record<string,string> {
-  const binding=commentBinding(),key=binding?`rig-review-sent-alone/1:${binding.publicationId}:${binding.sourceHash}`:'';
-  if(sentAloneCache?.key!==key){
+function sentAloneRows(store='rig-review-sent-alone/1'):Record<string,string> {
+  const binding=commentBinding(),key=binding?`${store}:${binding.publicationId}:${binding.sourceHash}`:'';
+  let cached=rowStoreCache.get(store);
+  if(cached?.key!==key){
     const rows:Record<string,string>={};
     try{const stored=key?JSON.parse(localStorage.getItem(key)??'{}'):{};
       if(stored&&typeof stored==='object'&&!Array.isArray(stored))for(const [id,json] of Object.entries(stored))if(typeof json==='string')rows[id]=json;}catch{/* in memory only */}
-    sentAloneCache={key,rows};
+    cached={key,rows};rowStoreCache.set(store,cached);
   }
-  return sentAloneCache!.rows;
+  return cached.rows;
 }
 function isSentAlone(row:{id:string}):boolean {return sentAloneRows()[row.id]===JSON.stringify(row);}
-function markSentAlone(rows:readonly {id:string}[]):void {
-  const sent=sentAloneRows();for(const row of rows)sent[row.id]=JSON.stringify(row);
-  try{if(sentAloneCache?.key)localStorage.setItem(sentAloneCache.key,JSON.stringify(sent));}catch{/* in memory only */}
+function markSentAlone(rows:readonly {id:string}[],store='rig-review-sent-alone/1'):void {
+  const sent=sentAloneRows(store);for(const row of rows)sent[row.id]=JSON.stringify(row);
+  const key=rowStoreCache.get(store)?.key;
+  try{if(key)localStorage.setItem(key,JSON.stringify(sent));}catch{/* in memory only */}
+}
+/** #1242: rows a successful record answer carried, by id with the exact content, kept across reloads. Rows the
+ * answer did not carry (written later, or while it was in flight) stay for Send comments. */
+const answerCarriedStore='rig-review-answer-carried/1';
+const isAnswerCarried=(row:{id:string})=>sentAloneRows(answerCarriedStore)[row.id]===JSON.stringify(row);
+/** The rows the record answer being submitted carries; committed only when that answer is saved. Draft saves read
+ * the same words, so the snapshot holds still while an answer is in flight. */
+function carryRecordRows(rows:readonly CommentRow[]):readonly CommentRow[] {
+  if(host?.record&&host.recordSubmission?.()!=='sending')answerInFlightRows=rows.map(row=>structuredClone(row));
+  return rows;
+}
+function commitAnswerCarried():void {
+  if(answerInFlightRows.length)markSentAlone(answerInFlightRows,answerCarriedStore);
+  answerInFlightRows=[];
 }
 const unsentFeedback=()=>(session?.feedback??[]).filter(row=>!isSubmittedFeedback(row.id));
 /** #1242: what Send comments carries on this screen: rows neither sent on their own nor carried by an answered act. */
 function unsentComments():{feedback:Feedback[];general:{id:string;summary:string}[];issues:PartsIssue[]} {
   const fresh=(row:{id:string})=>!isSentAlone(row);
   if((host?.direction||host?.record)&&typeof recordComments!=='undefined'){
-    const rows=recordComments.filter(row=>fresh(row)&&!submittedDirectionComments.has(row.id)&&answeredRecordRows.get(row.id)!==JSON.stringify(row));
+    const rows=recordComments.filter(row=>fresh(row)&&!submittedDirectionComments.has(row.id)&&!isAnswerCarried(row));
     return {feedback:rows.filter(row=>'target' in row) as Feedback[],issues:rows.filter(row=>'schema' in row) as unknown as PartsIssue[],
       general:rows.filter(row=>!('target' in row)&&!('schema' in row))};
   }
@@ -440,10 +456,9 @@ sendComments.onclick=async()=>{
 function renderDraftState(): void {
   const recordSubmission=host?.recordSubmission?.();
   // #1242: the rows an answered record act carried are not sent again by Send comments.
-  if(typeof answeredRecordRows!=='undefined'&&host?.record){
-    const answered=recordSubmission==='submitted'||answerSaved;
-    if(answered&&!recordAnswered)for(const row of recordComments)answeredRecordRows.set(row.id,JSON.stringify(row));
-    recordAnswered=answered;
+  if(typeof commitAnswerCarried==='function'&&host?.record){
+    if(recordSubmission==='submitted'&&!recordAnswered)commitAnswerCarried();
+    recordAnswered=recordSubmission==='submitted';
   }
   // #1242: on a record screen a comment written after the answer falls to Send comments' own state.
   if(recordSubmission&&!(host?.record&&recordSubmission==='submitted'&&typeof commentHost==='function'&&commentHost()&&hasUnsentContent())){
@@ -2060,7 +2075,7 @@ function projectRecordComments(rows:readonly CommentRow[]):string {
 /** Comments remain native rows in the draft and feed both act encodings. */
 function recordCommentWords():string {
  // #1242: a row already sent on its own is not sent again inside a record answer (CONTRACT §1).
- return projectRecordComments(recordComments.filter(row=>!isSentAlone(row)));
+ return projectRecordComments(carryRecordRows(recordComments.filter(row=>!isSentAlone(row))));
 }
 function checkpointPairTile(path:string|null,sha256:string|null):CheckpointPairTile|undefined {
  for(const pair of host?.checkpointPairs?.values()??[]){
@@ -2250,7 +2265,7 @@ function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
   if(questionFormBindings.has(form))continue;questionFormBindings.add(form);
   form.addEventListener('submit',event=>{if(draftConflict||pendingAnswers.some(subject=>subject.kind.endsWith('verdict'))){event.preventDefault();event.stopImmediatePropagation();}},true);
   if(form.dataset.interviewMain!==undefined){
-   form.addEventListener('job-answer-saved',()=>{answerSaved=true;renderDraftState();},{once:true});
+   form.addEventListener('job-answer-saved',()=>{answerSaved=true;commitAnswerCarried();renderDraftState();},{once:true});
   }else{
    form.addEventListener('job-answer-sending',renderDraftState);
    form.addEventListener('job-answer-failed',renderDraftState);
@@ -2271,7 +2286,7 @@ function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
   unregisterQuestion?.();unregisterQuestion=null;rigAsk.onclick=null;
  }
  showQuestionForm();
- if(!standalone&&host?.record)for(const form of questionTabForms)(form as JobForm['form']).interviewComments=recordJobComments;
+ if(!standalone&&host?.record)for(const form of questionTabForms)(form as JobForm['form']).interviewComments=()=>recordJobComments(carryRecordRows(recordComments.filter(row=>!isSentAlone(row))));
  forms=forms.filter(form=>!questionTabForms.includes(form));
  if(!forms.length){
   for(const form of recordForms()){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
