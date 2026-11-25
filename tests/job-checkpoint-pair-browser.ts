@@ -85,7 +85,8 @@ async function call<T>(host: Host, schema: typeof JOB_API_SCHEMA | typeof JOB_AP
     return result.value as T;
 }
 
-async function openFixture(scratch: string, route: Route, variant: Variant, language?: Language, deferAsk = true) {
+async function openFixture(scratch: string, route: Route, variant: Variant, language?: Language, deferAsk = true,
+    secondVariant: 'pair' | 'size-mismatch' = 'pair') {
     const pkg = route === 'package' ? await realJobWindowFixture({scratchParent: scratch}) : null;
     const name = variant + (language ? '-' + language : '') + (deferAsk ? '-no-ask' : '');
     const root = pkg?.input.root ?? join(scratch, 'plan-' + name + '-' + randomUUID().slice(0, 8));
@@ -101,7 +102,7 @@ async function openFixture(scratch: string, route: Route, variant: Variant, lang
             text: {does: 'Inspect the evidence', produces: 'Checkpoint decision', bar: 'Match the declared tiles', rests_on: []},
         });
         const evidence = createEvidence(root, variant);
-        const secondEvidence = variant === 'two-pairs' ? createEvidence(root, 'pair', secondCheckpointId) : undefined;
+        const secondEvidence = variant === 'two-pairs' ? createEvidence(root, secondVariant, secondCheckpointId) : undefined;
         const files = sorted([...plan.files, ...evidence.files, ...(secondEvidence?.files ?? [])]);
         const packets = [evidence.packet, ...(secondEvidence ? [secondEvidence.packet] : [])];
         let publication: JobPublication | JobPublicationV3;
@@ -751,7 +752,11 @@ async function recordPairSelection(page: InputCdpSession, scratch: string, captu
                 const labels = language === 'en' ? ['Pair 1', 'Pair 2'] : ['쌍 1', '쌍 2'];
                 assert.deepEqual(opening.menu.slice(4).map(({id, text}) => [id, text]),
                     [[first, labels[0] + ' · ' + checkpointId], [second, labels[1] + ' · ' + secondCheckpointId]]);
-                assert.equal(await page.evaluate<number>(`document.querySelectorAll('#view-menu [role="separator"]').length`), 1);
+                assert.ok(await page.evaluate<boolean>(`(() => {
+                    const separators = document.querySelectorAll('#view-menu [role="separator"]');
+                    return separators.length === 1 && separators[0].getBoundingClientRect().width >=
+                        document.querySelector('#view-menu [data-view]').getBoundingClientRect().width;
+                })()`), 'one visible full-width separator');
                 for (const mode of ['after', 'compare', 'before', 'difference'] as const) {
                     await chooseView(page, mode);
                     await chooseView(page, second);
@@ -777,6 +782,23 @@ async function recordPairSelection(page: InputCdpSession, scratch: string, captu
         } finally {
             await page.goto('about:blank');
             await multi.close();
+        }
+        if (!baseline) {
+            const mismatch = await openFixture(scratch, 'plan', 'two-pairs', language, true, 'size-mismatch');
+            try {
+                const evidence = mismatch.secondEvidence;
+                assert.ok(evidence);
+                await showFixture(page, mismatch, language);
+                await chooseView(page, 'difference');
+                await pairView(page, mismatch, language, 'difference', true, 6_000, pairId(checkpointId));
+                await chooseView(page, pairId(secondCheckpointId));
+                const view = await pairView(page, {evidence}, language, 'after', false, 6_000, pairId(secondCheckpointId));
+                assert.equal(view.menu.find(option => option.id === 'difference')?.reason, catalogs[language][alignment]);
+                console.log('1253_RECORD_PAIR_UNALIGNED_PASS ' + language);
+            } finally {
+                await page.goto('about:blank');
+                await mismatch.close();
+            }
         }
     }
     return observations;

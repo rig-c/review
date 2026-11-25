@@ -2131,7 +2131,10 @@ async function showCheckpointPair(mode:CheckpointPairMode):Promise<void> {
    }));
   }catch(error){
    state.difference=null;
-   if(checkpointPair===state&&generation===state.generation){message(errorText(error),true);renderLayout();}
+   if(checkpointPair===state&&generation===state.generation){
+    if(state.mode==='difference')void showCheckpointPair('after');
+    message(errorText(error),true);renderLayout();
+   }
    return;
   }
  }
@@ -2151,14 +2154,11 @@ async function syncCheckpointPair(keepReplay=true,mode:CheckpointPairMode='after
  const pair=host?.record?host.checkpointPair?.():undefined;
  if(keepReplay&&checkpointPair?.replayFor===(pair??null))return;
  if(pair===checkpointPair?.pair){
-  if(checkpointPair)checkpointPair.replayFor=undefined;
+  if(checkpointPair?.replayFor!==undefined){checkpointPair.replayFor=undefined;comments?.refresh();}
   return;
  }
- const reason=pair&&mode==='difference'?checkpointDifferenceReason(pair):null;
- if(mountCheckpointPair(pair,reason?'after':mode)){
-  await showCheckpointPair(reason?'after':mode);
-  if(reason)message(reason,true);
- }
+ const nextMode=pair&&mode==='difference'&&checkpointDifferenceReason(pair)?'after':mode;
+ if(mountCheckpointPair(pair,nextMode))await showCheckpointPair(nextMode);
 }
 
 function mountCheckpointPair(pair:CheckpointPairView|undefined,mode:CheckpointPairMode='after'):boolean {
@@ -2180,7 +2180,7 @@ function mountCheckpointPair(pair:CheckpointPairView|undefined,mode:CheckpointPa
  const modes=Object.entries(checkpointPairLabels).map(([id,labelKey])=>({id,labelKey,pressed:id===mode}));
  const recordPairs=host?.selectCheckpointPair?host.checkpointPairs:undefined;
  const groups:ViewSwitchGroup[]=[{modes}];
- if(recordPairs&&recordPairs.size>1)groups.push({modes:[...recordPairs.values()].map((candidate,index)=>({
+ if(recordPairs&&recordPairs.size>1)groups.push({keepSummary:true,modes:[...recordPairs.values()].map((candidate,index)=>({
   id:checkpointPairPrefix+candidate.checkpointId,labelKey:t('Pair {0}',[index+1],'en'),
   labelSuffix:candidate.checkpointId,pressed:candidate===pair,
  }))});
