@@ -114,7 +114,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    if(interview)await page.evaluate<void>(scrollToSubmit);
    await click(page,selector);
    if(interview)await until(page,`${questionSaved}&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
-   else await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`);
+   else await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`,false);
    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
    if(mode==='joined-interview'){
     assert.equal(await page.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false,'saved first answer leaves the opener enabled');

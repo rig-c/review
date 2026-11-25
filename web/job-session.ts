@@ -25,7 +25,6 @@ import type {
 import {enCatalog} from './catalog-en.ts';
 import {koCatalog} from './catalog-ko.ts';
 import {t,onLanguageChange} from './i18n.ts';
-import {directionSummary} from './direction-panel.ts';
 import {hashCapabilityAccess, type InstanceAccess} from './instance-access.ts';
 import {JOB_PLAN_TEXT_FIELDS, parseJobPlanTextProjection, type JobPlanTextProjection} from '../src/job-contract.ts';
 import {createJobRigScreen, type JobRigScreenPrepared} from './job-rig-screen.ts';
@@ -123,7 +122,7 @@ function isRecordAnswer(kind: string): boolean {
     return kind === 'signoff' || kind === 'checkpoint';
 }
 export function isPendingOwnerAsk(ask: PendingAskV3): boolean {
-    return ask.status === 'pending' && JOB_ENABLED_ACT_KINDS.some(kind => kind === ask.subject.kind);
+    return ask.status === 'pending' && ask.subject.kind !== 'signoff' && JOB_ENABLED_ACT_KINDS.some(kind => kind === ask.subject.kind);
 }
 /** Match the finalized envelope to the displayed ask. Record acts omit the display-only direction summary. */
 export function matchesJobRecordAct(ask: PendingAskV3, act: ActV3 | undefined, jobId: string | undefined, submission?: UISubmissionV3): boolean {
@@ -1593,7 +1592,7 @@ export interface JobFormDependencies {
         fields.append(source);
         const subject = ask.subject;
         if(subject.kind==='review-verdict')throw new Error('JOB_ACT_KIND_DISABLED');
-        const commentOnly = subject.kind === 'checkpoint' || subject.kind === 'signoff';
+        const commentOnly = subject.kind === 'checkpoint';
         if(commentOnly)fields.append(node('p','job.commentsFromWorkspace'));
         let retainedCommentWords='';
         const commentWords=()=>form.commentWords?.()??retainedCommentWords;
@@ -1685,31 +1684,6 @@ export interface JobFormDependencies {
             submitKey = 'job.saveCheckpoint';
         }
         else if(subject.kind==='parts-verdict')throw new Error('JOB_ACT_KIND_DISABLED');
-        else if (subject.kind === 'signoff') {
-            fields.title = subject.stage;
-            if (subject.stage === 'direction-review') {
-                const direction = ask.source.subject === 'plan' ? ask.source.directionReview : undefined;
-                form.dataset.directionSignoff = '';
-                const list = node('ol');
-                const row = (id: string, render: () => string) => {
-                    const item = node('li');
-                    item.dataset.directionSignoffRow = id;
-                    item.setAttribute('translate', 'no');
-                    const localize = () => {item.textContent = render();};
-                    form.addEventListener('job-form-language', localize);
-                    localize();
-                    return item;
-                };
-                list.append(
-                    row('post-version', () => direction ? t('job.signoff.postVersion', [direction.postVersion]) : t('job.signoff.postVersionAbsent')),
-                    row('verdict-act-id', () => direction?.verdictActId != null ? t('job.signoff.directionVerdict', [direction.verdictActId]) : t('job.signoff.directionVerdictAbsent')),
-                    row('summary', () => direction ? directionSummary(direction) : t('job.signoff.directionSummaryAbsent')),
-                );
-                fields.append(list);
-            } else if (ask.source.plan) fields.append(planTextList(ask.source.plan, prepared.metadata.planText));
-            read = () => ({ stage: subject.stage, decision: 'approved', words: commentWords() });
-            submitKey = 'job.signoff';
-        }
         else {
             throw new Error('JOB_ACT_KIND_DISABLED');
         }
@@ -1768,9 +1742,7 @@ export interface JobFormDependencies {
                         value?: Record<string, unknown>;
                     }) =>
                         subject.kind === 'interview-picks' ? item.value?.questionId === subject.questionId :
-                        subject.kind === 'checkpoint' ? item.value?.checkpointId === subject.checkpointId :
-                        subject.kind === 'signoff' && item.value?.stage === subject.stage &&
-                            !('outcome' in (item.value ?? {})) && 'decision' in (item.value ?? {})
+                        subject.kind === 'checkpoint' && item.value?.checkpointId === subject.checkpointId
                     )
                     : undefined);
                 if(commentOnly&&typeof original?.value?.words==='string'&&original.value.words.length<=10000)retainedCommentWords=original.value.words;
@@ -1994,7 +1966,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
         discard:prepared=>{const modal=prepared?.record??prepared?.modals;for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();},
         changed(state){rigScreen.changed(state);if(!state.error&&rigScreen.mounted())bootstrapPrior=null;if(state.error&&(!rigScreen.mounted()||rigScreen.mounted()?.record))report(state.failure??state.error);},
     }});
-    const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);for(const form of host.querySelectorAll('form.interview-answer, form[data-direction-signoff]'))form.dispatchEvent(new Event('job-form-language'));});
+    const localize=i18n.onLanguageChange(()=>{for(const element of host.querySelectorAll<HTMLElement>('[data-job-text]'))element.textContent=t(element.dataset.jobText!);for(const form of host.querySelectorAll('form.interview-answer'))form.dispatchEvent(new Event('job-form-language'));});
     await rigScreen.waiting();
     startJobWindowEvents({access,signal:abort.signal,event:event=>window.event(event),progress:value=>rigScreen.progress(value),refused:error=>report(error,'JOB_STREAM_FAILED'),connected:clear});
     const stop=()=>{if(stopped)return;stopped=true;drafts.saveDraft();abort.abort();window.stop();const modal=modalState();for(const entry of modal?.forms.values()??[])entry.dispose?.();modal?.inspection.dispose();localize();globalThis.removeEventListener('pagehide',stop);};
