@@ -95,6 +95,14 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
  }});
  return {scratch,root,session,origin,display,ask,backdrop,workspace,reader,fake,files,submissions,ports,
   deliver(){fake.publish(display);if(kind!=='option-set')fake.pending(ask,publication.generation);},
+  async republishOptionSet(nextOptions:{questionImages:boolean;questionImage?:Buffer}){
+   if(!optionKind||picture)throw new Error('SYNTHETIC_1128_OPTION_RECORD_REQUIRED');
+   workspace=createSyntheticOptionRecordWorkspace(root,{boundParts,questionImages:nextOptions.questionImages,longInterview,...(nextOptions.questionImage?{inputImageBytes:nextOptions.questionImage}:{})});
+   if(kind==='option-set')(workspace as {context:unknown}).context={...workspace.context,subjects:[]};
+   const next=await call({verb:'publish',expectedGeneration:session.status().generation,idempotencyKey:'record-opt-'+session.status().generation,result:workspace.result,freeze:{kind:'producer-held',holdId:'synthetic-record-opt-'+session.status().generation,record:workspace.record}});
+   const nextDisplay=session.displayPublication(next.publicationId);fake.publish(nextDisplay);
+   return nextDisplay;
+  },
   /** #1048: republish the same plan (or option set) with new picture (or question image) bytes; the old publication is
    * the new one's previous. */
   async republishPicture(bytes:Buffer){
@@ -123,16 +131,15 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
  }catch(error){front?.stop();await server.stop(true);session.dispose();await rm(scratch,{recursive:true,force:true});throw error;}
 }
 
-/** The real job page over a real session. One publication carries `count` question sets and each set
- * has its own pending ask. `answered` seeds that many unsent local drafts (the recommended pick of every prompt), so
- * the page opens with the same partly answered list the owner ruled on. */
-export async function optionSetsJobFixture(options:Parameters<typeof createSyntheticOptionSetsRecordWorkspace>[1]&{answered?:number}){
+/** The real job page over a real session. One publication carries `count` question sets; `subjectless` publishes
+ * comment-only option sets (#1230), while omitting `subjectless` seeds legacy pre-refusal pending asks for refusal controls. */
+export async function optionSetsJobFixture(options:Parameters<typeof createSyntheticOptionSetsRecordWorkspace>[1]){
  const scratch=await mkdtemp(join(tmpdir(),'review-1004-')),root=join(scratch,'input');await mkdir(root);
  const workspace=createSyntheticOptionSetsRecordWorkspace(root,options);
  const reader=createSyntheticRecordReader({onOption:()=>structuredClone(workspace.context)});
  const session=new JobSession({root,stateDir:join(scratch,'state'),fingerprint:'4'.repeat(64),reviewer:{id:'synthetic-owner',role:'owner'},
   publicationMode:'record-and-package',readRecordPublished:reader.reader});
- let front:ReturnType<typeof createJobFront>|undefined,seed='';
+ let front:ReturnType<typeof createJobFront>|undefined;
  const server=Bun.serve({hostname:'127.0.0.1',port:0,idleTimeout:0,fetch:async request=>(await front?.fetch(request))??new Response(null,{status:404})});
  const origin=`http://127.0.0.1:${server.port}`,ports=createJobHostPorts(session,origin),credentials=session.hostCredentials();
  let sequence=0;
@@ -141,19 +148,9 @@ export async function optionSetsJobFixture(options:Parameters<typeof createSynth
  try{
   const publication=await call<PublicationV3>({verb:'publish',expectedGeneration:0,idempotencyKey:'publish',result:workspace.result,freeze:{kind:'producer-held',holdId:'synthetic-1004',record:workspace.record}});
   const display=session.displayPublication(publication.publicationId);
-  // #1230: fresh picks asks refuse; these are the pending asks a pre-refusal Review stored for each declared set.
-  const asks=seedHistoricalPicksAsks(session,publication.publicationId,workspace.context.subjects);
-  const retained=session.retainedSourceV3(publication.publicationId) as JobRetainedRecordSource;
-  const forms=asks.slice(0,options.answered??0).map((ask,index)=>{const question=retained.questions[index]!;
-   const selections=question.set.asks.map(item=>({itemId:item.id,optionId:item.options.find(option=>option.recommended)!.id,otherText:null}));
-   return {askId:ask.askId,value:{questionId:question.set.question,selections,note:''},controls:[...selections.map(item=>({name:'choice.'+item.itemId,value:item.optionId})),{name:'note',value:''}]};});
-  if(forms.length){
-   const key=`rig-review-job-draft/1:${session.jobId}:${workspace.result.questionId}:${workspace.result.setId}:${publication.source.sourceHash}`;
-   const value=JSON.stringify({publicationId:publication.publicationId,sourceHash:publication.source.sourceHash,source:publication.source,label:publication.label,forms});
-   seed=`try{if(!localStorage.getItem(${JSON.stringify(key)}))localStorage.setItem(${JSON.stringify(key)},${JSON.stringify(value)});}catch{}`;
-  }
+  const asks=options.subjectless?[]:seedHistoricalPicksAsks(session,publication.publicationId,workspace.context.subjects);
   const resources=jobWindowResources();
-  front=createJobFront({origin,ports,publication:retainedPublicationRoutes(session),resource:async name=>name==='main.js'&&seed?seed+'\n'+await new Response(await resources(name)).text():resources(name)});
+  front=createJobFront({origin,ports,publication:retainedPublicationRoutes(session),resource:resources});
   const readEvents=()=>call<NextValueV3>({verb:'next',after:null,waitMs:0});
   return {scratch,root,session,origin,workspace,publication,display,asks,call,readEvents,ownerUrl:origin+`/jobs/${session.jobId}/#cap=${credentials.ui}`,close};
  }catch(error){await close();throw error;}

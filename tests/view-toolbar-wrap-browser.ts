@@ -3,14 +3,10 @@ import assert from 'node:assert/strict';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {randomBytes} from 'node:crypto';
 import {PNG} from 'pngjs';
-import {parseOpenInputs} from '../src/cli.ts';
-import {loadOpenPackage} from '../src/open.ts';
 import {loadReview} from '../src/manifest.ts';
 import {startServer} from '../src/server.ts';
-import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
-import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
+import {optionSetsJobFixture, recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {clickPartsViewControl as click, type PartsViewRect} from './helpers/parts-view-shots.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
@@ -171,15 +167,11 @@ try{
   cleanup.push(()=>pkg.stop(true));
   targets.push({screen:'package',url:`http://127.0.0.1:${pkg.port}/`,ready:standaloneReady,widths:[390]});
 
-  const fixture=await interviewOpenFixture();
-  cleanup.push(()=>fixture.close());
-  const opened=await loadOpenPackage(parseOpenInputs([fixture.root,'--project',fixture.root,'--picks-dir','picks']));
-  assert.equal(opened.mode,'interview');
-  const capability=randomBytes(32).toString('hex');
-  const interview=await startServer(null,{port:0,stateDir:fixture.stateDir,joined:opened.joined,capability,graceMs:180_000});
-  cleanup.push(()=>interview.stop(true));
-  targets.push({screen:'interview',url:`http://127.0.0.1:${interview.port}/#cap=${capability}`,
-   ready:'document.body.dataset.ready==="true" && !!document.querySelector("#view-menu [data-view^=interview-image]")',widths:[390,768]});
+  // #1230: --picks-dir interview open now renders the INTERVIEW_PICKS_DISABLED refusal; measure the multi-image menu on an option-set record.
+  const optionSet=await optionSetsJobFixture({count:2,distinctImages:true,subjectless:true});
+  cleanup.push(()=>optionSet.close());
+  targets.push({screen:'interview',url:optionSet.ownerUrl,
+   ready:'document.body.dataset.ready==="true" && !document.body.inert && !!document.querySelector("#view-menu [data-view^=interview-image]") && !!document.querySelector("#reference-content img")?.naturalWidth',widths:[390,768]});
 
   // #1228: a displayed record publication with no ask holds the right panel open, so the 768 px stage stays 240 px.
   const job=await recordScreenFixture('checkpoint',true,undefined,'plan-approved',false,true,undefined,false,true);

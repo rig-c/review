@@ -1716,7 +1716,7 @@ async function start(): Promise<void> {
       await restorePublicationNavigation();document.body.dataset.ready='true';
       const screen:JobRigMeshScreen={recordForms:renderRecordForms,pendingSubjects:renderPendingSubjects,progress:setJobProgress,stage:hostStage,redraw:()=>{if(player&&!playing)drawRig(()=>player!.draw());},message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'rig' as const,bookmark:navigationBookmark()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen,
         hasMeshEdits:()=>!!meshEditor?.hasJobEdits(),meshEdits:async()=>meshEditor?.jobEdits()??null,chestLandmarks:()=>chestEditor?.jobEdits()??null};
-      host.attach(screen);showInspector(data.manifest.model?'playback':'rig');host.displayed();
+      hostAttached=true;host.attach(screen);showInspector(data.manifest.model?'playback':'rig');host.displayed();
     }
   } catch (error) { if(disposed)return;message(`Could not open review package: ${errorText(error)}`, true); text('dirty', 'Load failed'); host?.failed(error); }
 }
@@ -1839,7 +1839,7 @@ async function startParts(opened:PartsSubjectEntry,saved:PartsSubjectSession,wri
  await setupPartsPersistence();if(disposed)return;
  if(generalRows?.length)changed();
  renderPendingSubjects(host?.pendingSubjects?.()??[{kind:'parts-verdict'}]);
- if(host){await restorePublicationNavigation();host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,pendingSubjects:renderPendingSubjects,progress:setJobProgress,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
+ if(host){await restorePublicationNavigation();hostAttached=true;host.attach({recordForms:renderRecordForms,stage:()=>null,redraw:()=>partsSubject?.redraw(),message:(value,error,diagnostic)=>message(value,error,false,diagnostic),syncActRow:syncJobActRow,pendingSubjects:renderPendingSubjects,progress:setJobProgress,...host.record?{}:{incompatible:()=>navigationMissing,navigation:()=>({subject:'parts' as const,part:partsSubject!.selected(),solo:partsSubject!.solo(),view,camera:numericView()})},suspend:suspendScreen,resume:resumeScreen,dispose:disposeScreen});host.displayed();}
 
  document.body.dataset.ready='true';
 }
@@ -1911,6 +1911,7 @@ const recordPanel=panelMake('section',{id:'job-record-asks',className:'workspace
 recordPanel.tabIndex=-1;const recordTitle=panelMake('h2',{});recordPanel.append(panelMake('div',{className:'review-dialog-header'},recordTitle));
 const recordForms=()=>[...recordPanel.querySelectorAll<HTMLFormElement>('form[data-job-ask]')];
 viewDisposers.push(()=>{for(const form of recordForms()){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}recordPanel.hidden=true;});
+let hostAttached=false;
 let activeInterviewImages:readonly {name:string;src:string;path?:string;sha256?:string}[]|null=null;
 let activeInterviewImage:{name:string;src:string;path?:string;sha256?:string}|null=null;
 let releaseInterview:(()=>void)|null=null;
@@ -2212,13 +2213,14 @@ function mountCheckpointPair(pair:CheckpointPairView|undefined):boolean {
 /** Keep the shared reference viewport bound while a record picture or option image is active. */
 function syncQuestionImage():void {
  if(disposed){releaseInterview?.();releaseInterview=null;return;}
+ if(host?.record?.hasPicture&&!hostAttached)return;
  const recordImages=host?.record?.planPicture?[host.record.planPicture]:host?.record?.questionPictures?.flatMap(picture=>picture.src?[{name:picture.name,src:picture.src,path:picture.path,sha256:picture.sha256}]:[]);
  const images=recordImages?.length?recordImages:undefined;
  if(activeInterviewImages&&images?.length===activeInterviewImages.length&&images.every((image,index)=>{
   const previous=activeInterviewImages![index]!;
   return previous.name===image.name&&previous.src===image.src;
  })){
-  if(sourceTextContent(el('message'))==='This request has no picture.')message(sourceTextContent(el('dirty')),false,true);
+  if(['','This request has no picture.'].includes(sourceTextContent(el('message'))))message(sourceTextContent(el('dirty')),false,true);
   return;
  }
  releaseInterview?.();releaseInterview=null;
@@ -2245,7 +2247,7 @@ function syncQuestionImage():void {
   if(!disposed){renderLayout();workspace?.refresh();}
   Object.assign(viewport.state,previousCamera);if(!disposed)fitCamera();
  };
- if(sourceTextContent(el('message'))==='This request has no picture.')message(sourceTextContent(el('dirty')),false,true);
+ if(['','This request has no picture.'].includes(sourceTextContent(el('message'))))message(sourceTextContent(el('dirty')),false,true);
  void showReference('',activeInterviewImage);
 }
 /** Record forms take the record section in the right panel (#1041). */
@@ -3986,7 +3988,7 @@ function commentCaptureRefusal():string|null {
  * so `world` is the picture's natural pixels; the identity is the sealed `files` entry. */
 function sealedReferenceCamera(){
  const camera=numericView().cameras.reference;
- return host?.checkpointPair&&checkpointPair&&camera?{...camera,zoom:clampZoom(camera.zoom)}:camera;
+ return camera?{...camera,zoom:clampZoom(camera.zoom)}:camera;
 }
 function planPicturePose(view:StageComment['viewport']):CommentPose|null {
  const picture=shownPlanPicture(),pane=el('reference-viewport'),camera=sealedReferenceCamera();
