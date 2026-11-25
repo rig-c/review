@@ -395,11 +395,12 @@ export function createJobRigScreen(options: {
     if(prepared.record){
       const record=prepared.record,backdrop=record.picture?host(record.picture,ready):null;
       const question=record.inspection.interview?.questions[0];
-      const instance=jobPublicationRoutes(prepared.display,new URL(prepared.entry).origin).instance;
+      const questions=record.inspection.interview?.questions;
+      const instance=questions?.length&&prepared.display.routes?jobPublicationRoutes(prepared.display,new URL(prepared.entry).origin).instance:undefined;
       return {...evidencePair,...(backdrop?.subject?{subject:backdrop.subject}:{}),access:{...(backdrop?.access??access),capability:null,
         headers:init=>{const headers=options.access.headers(init);headers.delete('X-Review-Capability');return headers;}},
         ownerActAccess:{capability:options.access.capability},recordSubmission,
-        record:{...(jobId?{jobId}:{}),draftId,publicationId:prepared.display.publication.publicationId,previousPublicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,...record.inspection.planPicture?{planPicture:record.inspection.planPicture}:{},...questionPictures(record.inspection.interview?.questions,instance),missingPicture:question?.missingPicture,questionPicture:question?.scenePicture || (question?.missingPicture && question.images.length ? true : undefined)},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
+        record:{...(jobId?{jobId}:{}),draftId,publicationId:prepared.display.publication.publicationId,previousPublicationId,label:prepared.display.publication.label,sourceHash:prepared.display.publication.source.sourceHash,hasPicture:!!record.picture,...record.inspection.planPicture?{planPicture:record.inspection.planPicture}:{},...questionPictures(questions,instance),missingPicture:question?.missingPicture,questionPicture:question?.scenePicture || (question?.missingPicture && question.images.length ? true : undefined)},...prepared.refusal?{unavailable:prepared.refusal}:{},pendingSubjects,
         read:(path,method)=>method==='GET'&&backdrop?backdrop.read(path,method):Promise.reject(new Error('JOB_REVIEW_READ_ONLY')),
         submit:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},
         submitParts:async()=>{throw new Error('JOB_REVIEW_READ_ONLY');},

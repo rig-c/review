@@ -4,8 +4,6 @@ import {mkdir,mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
-import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
-import {joinProject} from '../src/joined-project.ts';
 import {startServer} from '../src/server.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
 import {loadReview} from '../src/manifest.ts';
@@ -13,6 +11,8 @@ import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
 import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
+import {enCatalog} from '../web/catalog-en.ts';
+import {koCatalog} from '../web/catalog-ko.ts';
 const out=Bun.argv[Bun.argv.indexOf('--out')+1]??'artifacts/act-bar';await mkdir(out,{recursive:true});
 const observations:unknown[]=[],failures:string[]=[];
 const flashOnly=Bun.argv.includes('--flash-only');
@@ -29,17 +29,13 @@ const sampleActBar=`(()=>{
 })()`;
 
 async function until(page:InputCdpSession,expression:string){const end=Date.now()+20000;while(Date.now()<end){if(await page.evaluate<boolean>(expression))return;await Bun.sleep(100);}throw Error('ACT_BAR_WAIT: '+expression);}
-for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','parts','checkpoint-pass','checkpoint-fail','interview','interview-rig','interview-parts','joined-interview','standalone'] as const){
+for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','parts','checkpoint-pass','checkpoint-fail','interview','interview-rig','interview-parts','standalone'] as const){
  if(saveRetryOnly&&!['rig','parts'].includes(mode))continue;
  const profile=await mkdtemp(join(tmpdir(),'review809-browser-'));let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
   let url:string,draftKey:string|undefined;
   if(mode==='standalone'){
    const f=await jobFixture(),capability='b'.repeat(64);const server=await startServer(await loadReview(join(f.root,'out')),{port:0,capability,stateDir:f.state});
-   close=async()=>{server.stop(true);await f.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
-  }else if(mode==='joined-interview'){
-   const f=await interviewOpenFixture(2);const capability='a'.repeat(64);
-   const server=await startServer(null,{port:0,capability,joined:joinProject(null,f.inputs.project),stateDir:f.stateDir});
    close=async()=>{server.stop(true);await f.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
   }else if(['rig','direction','parts'].includes(mode)){
    const f=await scriptedJobWindowFixture({c5Parts:'mesh'});close=()=>f.close();
@@ -48,7 +44,7 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await f.ask(p,mode==='parts'?{kind:'parts-verdict',draftId:'synthetic-parts'}:{kind:'review-verdict',stage:mode==='rig'?'rig-review':'direction-review'});
    url=f.locator+'/#cap='+f.credentials.ui;
   }else{
-   const f=await recordScreenFixture(mode.startsWith('interview')?'interview-picks':'checkpoint',mode==='interview-rig'?true:mode==='interview-parts'?'parts':false);close=()=>f.close();url=f.ownerUrl;
+   const f=await recordScreenFixture(mode.startsWith('interview')?'option-set':'checkpoint',mode==='interview-rig'?true:mode==='interview-parts'?'parts':false);close=()=>f.close();url=f.ownerUrl;
   }
   const localized=new URL(url);localized.searchParams.set('lang',lang);url=localized.href;
   let control:((method:string,params?:Record<string,unknown>)=>Promise<any>)|undefined;let held=0,actSaveStep=0,heldActRequest:string|undefined;
@@ -68,15 +64,11 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   await control('Network.enable');await control('Network.setCacheDisabled',{cacheDisabled:true});
   await control('Fetch.enable',{patterns:[{urlPattern:'*api/review*',requestStage:'Response'},{urlPattern:'*review-painting*',requestStage:'Response'},{urlPattern:'*api/stage-parts/image/*',requestStage:'Response'},{urlPattern:'*assets/*',requestStage:'Response'}]});
   await page.goto(url,lang);
-  await until(page,`(${mode==='standalone'}?!!document.querySelector('#rig-root canvas'):document.body.dataset.ready==='true')&&!document.body.inert&&(${mode==='joined-interview'||mode==='standalone'}||!!document.querySelector('#workspace-ask-headline')?.textContent)`);
-  const interview=mode.startsWith('interview')||mode==='joined-interview';
-  const answerRoot=interview?'#workspace-interview-answer':'#job-record-asks';
-  // #1041: the question is shown in the right communication panel, not a bottom tab.
-  const questionSelected=`(()=>{const n=document.querySelector('#workspace-interview-answer');return !!n&&!n.hidden&&!!n.closest('#workspace-communication:not([hidden])')&&n.getClientRects().length>0;})()`;
-  const recordDialogClosed=`!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`;
-  const questionReady=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer fieldset:not(:disabled)')`;
-  const questionSaved=`${questionSelected}&&${recordDialogClosed}&&!!document.querySelector('${answerRoot} form.interview-answer[data-interview-answered=true]')`;
-  if(interview)await until(page,questionReady);
+  await until(page,`(${mode==='standalone'}?!!document.querySelector('#rig-root canvas'):document.body.dataset.ready==='true')&&!document.body.inert&&(${mode==='standalone'}||!!document.querySelector('#workspace-ask-headline')?.textContent)`);
+  const interview=mode.startsWith('interview');
+  const catalog=lang==='ko'?koCatalog:enCatalog;
+  const optionReady=`!!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')&&!document.querySelector('#workspace-interview-answer')&&document.querySelector('#reference-content img')?.naturalWidth>0&&!!document.querySelector('#view-menu [data-view^="interview-image-"]')&&!document.querySelector('#send-comments')?.hidden`;
+  if(interview)await until(page,optionReady);
   const boot=await page.evaluate<any>(`(()=>{const visible=n=>!!n&&!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden'&&!n.closest('dialog:not([open])');const bar=document.querySelector('#workspace-review-act');const nodes=['review-message','review-draft-state','draft-state','dirty'].map(id=>{const n=document.getElementById(id);return {id,text:n?.textContent.trim(),visible:visible(n),inBar:!!n&&bar.contains(n)};});const primary=nodes.find(n=>n.id==='review-draft-state')?.text;return {samples:window.__actFlashSamples,held:${held},nodes,saveStates:nodes.filter(n=>n.visible&&n.inBar&&n.text&&(n.text===primary||/^(Not submitted|제출되지 않음)$/.test(n.text))),home:bar.parentElement?.id,inHeading:!!bar.closest('.inspector-heading'),rowVisible:!!document.querySelector('#workspace-act-row')?.getClientRects().length,visibleStates:nodes.filter(n=>n.visible&&['review-draft-state','draft-state','dirty'].includes(n.id)&&n.text).map(n=>n.id),standaloneSave:document.querySelector('#save').textContent};})()`);
   observations.push({mode,lang,boot});
   await writeFile(join(out,'loading-observations.json'),JSON.stringify(observations,null,2));
@@ -88,6 +80,10 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
   if(flashOnly||mode==='standalone')continue;
   const state=await page.evaluate<any>(`(()=>{const visible=n=>n.getClientRects().length>0&&!n.closest('dialog:not([open])');const headline=document.querySelector('#workspace-ask-headline');return {language:document.documentElement.lang,primary:[...document.querySelectorAll('#workspace-review-act button.primary')].filter(visible).map(n=>n.id),question:headline.textContent,whiteSpace:getComputedStyle(headline).whiteSpace,overflow:getComputedStyle(headline).textOverflow,changesDisabled:document.querySelector('#request-changes').disabled,saveHidden:document.querySelector('#save').hidden};})()`);
   assert.equal(state.language,lang);assert.equal(state.primary.length,1,mode+' one emphasised act-bar answer');assert.notEqual(state.whiteSpace,'nowrap');assert.notEqual(state.overflow,'ellipsis');
+  if(interview){
+   assert.deepEqual(state.primary,['send-comments']);
+   assert.equal(state.question,catalog["We're looking at the work together. Leave your thoughts as comments."]);
+  }
   if(['rig','direction','parts'].includes(mode))assert.equal(state.changesDisabled,true);
   await writeFile(join(out,`${mode}-${lang}-pending.png`),await page.screenshot());
   if(mode==='rig'){
@@ -104,32 +100,25 @@ for(const lang of ['en','ko'] as const)for(const mode of ['rig','direction','par
    await until(page,`!document.querySelector('#save').disabled`);
   }
   if(!['rig','direction','parts'].includes(mode)){
-   await click(page,'#workspace-pending-ask');await until(page,interview?questionReady:`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`);
-   assert.equal(await page.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`),false);
-   const chooseDefaults=`(()=>{const seen=new Set();for(const radio of document.querySelectorAll(${JSON.stringify(answerRoot+' input[type=radio]')}))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`;
-   if(interview)await page.evaluate<void>(chooseDefaults);
-   const selector=mode==='checkpoint-fail'?'#job-record-asks button[data-job-text="job.fail"]':mode==='checkpoint-pass'?'#job-record-asks button[data-job-text="Pass"]':answerRoot+' button[type=submit]';
-   await writeFile(join(out,`${mode}-${lang}-answer.png`),await page.screenshot());
-   const scrollToSubmit=`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`;
-   if(interview)await page.evaluate<void>(scrollToSubmit);
-   await click(page,selector);
-   if(interview)await until(page,`${questionSaved}&&document.querySelector('#review-draft-state')?.textContent.toLowerCase().includes(${JSON.stringify(lang==='ko'?'저장':'saved')})`);
-   else await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`);
-   await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
-   if(mode==='joined-interview'){
-    assert.equal(await page.evaluate(`document.querySelector('#workspace-pending-ask').disabled`),false,'saved first answer leaves the opener enabled');
-    await click(page,'#workspace-pending-ask');await until(page,questionSaved);
-    const secondQuestion=answerRoot+' .interview-questions li:nth-child(2) button';
-    await page.evaluate<void>(`document.querySelector(${JSON.stringify(secondQuestion)}).scrollIntoView({block:'nearest'})`);
-    await click(page,secondQuestion);
-    await until(page,`${questionReady}&&!document.querySelector('${answerRoot} form.interview-answer').matches('[data-interview-answered=true]')`);
-    await page.evaluate<void>(chooseDefaults);
-    await page.evaluate<void>(scrollToSubmit);
+   if(interview){
+    assert.equal(await page.evaluate(`document.getElementById('workspace-pending-ask').hidden`),true);
+    await page.evaluate<void>(`document.querySelector('[data-comment-general]').scrollIntoView({block:'nearest'})`);
+    await click(page,'[data-comment-general]');
+    await until(page,`!!document.querySelector('.stage-comment-composer input')`);
+    await page.evaluate<void>(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Option set comment';form.requestSubmit();})()`);
+    await until(page,`!document.querySelector('.stage-comment-composer')&&!document.querySelector('#send-comments').disabled`);
+    await writeFile(join(out,`${mode}-${lang}-answer.png`),await page.screenshot());
+    await click(page,'#send-comments');
+    await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`);
+    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
+   }else{
+    await click(page,'#workspace-pending-ask');await until(page,`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden])')`);
+    assert.equal(await page.evaluate(`!!document.querySelector('[data-job-checkpoint-evidence]')`),false);
+    const selector=mode==='checkpoint-fail'?'#job-record-asks button[data-job-text="job.fail"]':'#job-record-asks button[data-job-text="Pass"]';
+    await writeFile(join(out,`${mode}-${lang}-answer.png`),await page.screenshot());
     await click(page,selector);
-    await until(page,`${questionSaved}&&!document.querySelector('#workspace-pending-ask').disabled`);
-    const saved=await page.evaluate<number>(`fetch('/api/interview').then(r=>r.json()).then(data=>data.questions.filter(question=>question.saved).length)`);
-    assert.equal(saved,2,'both joined interview questions reached the real picks route');
-    await writeFile(join(out,`${mode}-${lang}-second-saved.png`),await page.screenshot());
+    await expectRecordActSubmitted(page,expression=>until(page!,expression),lang,`${mode} submitted`);
+    await writeFile(join(out,`${mode}-${lang}-saved.png`),await page.screenshot());
    }
   }
   if(['rig','direction','parts'].includes(mode)){

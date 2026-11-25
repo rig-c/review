@@ -13,9 +13,11 @@ import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {jobInputHashes} from './helpers/job-api-fixture.ts';
 import {withDeadline} from './helpers/walk-deadline.ts';
 import {launchCdpSession, type InputCdpSession} from './parts-explorer-browser.ts';
+import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
-import type {JobPublication} from '../src/job-contract.ts';
+import {JOB_API_SCHEMA, JOB_API_V3_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA, type JobPublication} from '../src/job-contract.ts';
 
 const arg = (key: string) => {const i = Bun.argv.indexOf(key); return i < 0 ? undefined : Bun.argv[i + 1];};
 const output = resolve(arg('--out') ?? 'artifacts/job-first-publication-904');
@@ -356,8 +358,10 @@ async function unchangedPublishedHeight(page:InputCdpSession,out:string){
  await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
  const sample=()=>page.evaluate<{row:{height:number};prompt:string;viewport:number[];answers:{id:string;text:string}[];barMinHeight:string;controlHeight:string}>(`(()=>{
   const row=document.querySelector('#workspace-act-row'),bar=document.querySelector('#workspace-review-act');
+  const askAnswers=[...row.querySelectorAll('#save,#request-changes,#workspace-pending-ask')].filter(node=>node.checkVisibility());
+  const answers=(askAnswers.length?askAnswers:[...row.querySelectorAll('#send-comments')].filter(node=>node.checkVisibility())).map(node=>({id:node.id,text:node.textContent}));
   return {row:row.getBoundingClientRect().toJSON(),prompt:document.querySelector('#workspace-ask-headline').textContent,
-    viewport:[innerWidth,innerHeight],answers:[...row.querySelectorAll('#save,#request-changes,#workspace-pending-ask')].filter(node=>node.checkVisibility()).map(node=>({id:node.id,text:node.textContent})),
+    viewport:[innerWidth,innerHeight],answers,
     barMinHeight:getComputedStyle(bar).minHeight,controlHeight:getComputedStyle(document.documentElement).getPropertyValue('--control-height').trim()};
  })()`);
  const finalBefore=await sample();assert.ok(finalBefore.row.height>0&&finalBefore.answers.length>0,'positive control has a visible pending publication and answer');let baseline:Awaited<ReturnType<typeof sample>>|undefined;
@@ -377,11 +381,11 @@ async function unchangedPublishedHeight(page:InputCdpSession,out:string){
 }
 
 /** Retained record routes with publication delivery held until the normal owner page is open. */
-async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'interview-picks',alreadyPublished=false){
+async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'option-set',alreadyPublished=false){
  const out=join(output,'record',alreadyPublished?'already-published':'first-publication',kind,lang);await mkdir(out,{recursive:true});
  const fixture=await recordScreenFixture(kind,false,undefined,undefined,false,true,undefined,false,!alreadyPublished);
  const profile=await mkdtemp(join(tmpdir(),'review-904-record-'));let page:InputCdpSession|undefined;
- const catalog=lang==='en'?enCatalog:koCatalog,prompt=catalog[kind==='checkpoint'?'Review this checkpoint.':'Answer these questions.'];
+ const catalog=lang==='en'?enCatalog:koCatalog,prompt=catalog[kind==='checkpoint'?'Review this checkpoint.':"We're looking at the work together. Leave your thoughts as comments."];
  try{
   const frozen=await jobInputHashes(fixture.root),owner=new URL(fixture.ownerUrl);owner.searchParams.set('lang',lang);
   if(alreadyPublished)assert.ok(fixture.session.status().publication,'positive control has publication before navigation');
@@ -397,19 +401,21 @@ async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'interview-picks',alr
   await writeFile(join(out,'waiting.png'),await page.screenshot());
   fixture.deliver();
   }else assert.ok(fixture.session.status().publication,'positive control starts with an actual retained publication');
+  const filledReady=kind==='checkpoint'
+   ?`document.body.dataset.ready==='true'&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(prompt)}&&!!document.querySelector('form[data-job-ask] fieldset:not(:disabled)')`
+   :`document.body.dataset.ready==='true'&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(prompt)}&&!document.querySelector('form[data-job-ask]')&&!document.querySelector('#workspace-interview-answer')&&!!document.querySelector('#send-comments')?.checkVisibility()&&!!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')`;
   await withDeadline('904.record.filled',20000,async signal=>{while(!signal.aborted){
-   if(await page!.evaluate(`document.body.dataset.ready==='true'&&document.querySelector('#workspace-ask-headline')?.textContent===${JSON.stringify(prompt)}&&!!document.querySelector('form[data-job-ask] fieldset:not(:disabled)')`))return;
+   if(await page!.evaluate(filledReady))return;
    await Bun.sleep(25);
   }throw signal.reason;});
-  if(kind==='interview-picks'){
+  if(kind==='option-set'){
    await withDeadline('904.record.question-image',5000,async signal=>{while(!signal.aborted){
-    if(await page!.evaluate<boolean>(`!!document.querySelector('#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden])')&&
-      document.querySelector('#reference-content img')?.naturalWidth===2&&!document.querySelector('#reference-pane').hidden`))return;
+    if(await page!.evaluate<boolean>(`document.querySelector('#reference-content img')?.naturalWidth===2&&!document.querySelector('#reference-pane').hidden`))return;
     await Bun.sleep(25);
    }throw signal.reason;});
   }
   assert.equal(await page.evaluate(`document.querySelector('#message')?.textContent`),
-   catalog[kind==='interview-picks'?'Not submitted':'This request has no picture.']);
+   catalog[kind==='option-set'?'Not submitted':'This request has no picture.']);
   assert.equal(await page.evaluate(`document.querySelector('[data-part-status]')?.textContent`),catalog['No compiled rig catalog available']);
   if(!alreadyPublished){
     await page.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
@@ -420,9 +426,9 @@ async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'interview-picks',alr
     }))()`);
     await writeFile(join(out,'actual-pending-frame.json'),JSON.stringify(frame,null,2));
     assert.equal(frame.sameNodes,true);
-    // #1041: the record's ask opens the right communication panel (interview) and its controller-less bottom panel
-    // collapses, so only the stage and bottom move. Topbar, layout and act row keep the original frame; the stage keeps
-    // its origin and does not lose height.
+    // #1041/#1228: the record opens the right communication panel (Comments on option-set, Checkpoint on checkpoint) and
+    // its controller-less bottom panel collapses, so only the stage and bottom move. Topbar, layout and act row keep the
+    // original frame; the stage keeps its origin and does not lose height.
     type Rect={x:number;y:number;width:number;height:number};const now=frame.rects as Rect[],was=frame.originalRects as Rect[];
     assert.deepEqual([now[0],now[1],now[4]],[was[0],was[1],was[4]],'record actual pending prompt keeps the original shared chrome');
     assert.deepEqual([now[2]!.x,now[2]!.y],[was[2]!.x,was[2]!.y],'stage keeps its origin');
@@ -438,6 +444,110 @@ async function recordFill(lang:'en'|'ko',kind:'checkpoint'|'interview-picks',alr
   if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});
   return {language:lang,kind,alreadyPublished,status:'RED',error:String(error)};
  }finally{await page?.close();await fixture.close();await rm(profile,{recursive:true,force:true});}
+}
+
+/** #1225 owner verification: if a producer still sends a picks ask, the server refuses by name (JOB_ASK_INVALID), an
+ * option-set record page keeps its picture and comments working without mounting a form, and a package page carrying a
+ * legacy pending picks ask shows JOB_ASK_UNSUPPORTED while keeping the rig picture and comments working. */
+async function legacyPicksAskRefusal(lang:'en'|'ko'){
+ const out=join(output,'legacy-picks-ask',lang);await mkdir(out,{recursive:true});
+ const recordFixture=await recordScreenFixture('interview-picks',false);
+ const pkgFixture=await scriptedJobWindowFixture();
+ const profile=await mkdtemp(join(tmpdir(),'review-1225-picks-'));
+ let page:InputCdpSession|undefined;
+ const exceptions:unknown[]=[],catalog=lang==='en'?enCatalog:koCatalog;
+ try{
+  const frozenRecord=await jobInputHashes(recordFixture.root);
+  const askRes=await fetch(`${recordFixture.origin}/jobs/${recordFixture.session.jobId}/api`,{
+   method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+recordFixture.agentToken},
+   body:JSON.stringify({schema:JOB_API_V3_SCHEMA,jobId:recordFixture.session.jobId,requestId:'legacy-picks-ask',verb:'ask',
+    expectedGeneration:recordFixture.session.status().generation,idempotencyKey:'legacy-picks-ask',
+    publicationId:recordFixture.display.publication.publicationId,subject:{kind:'interview-picks',questionId:'rig_type',setId:'set_rig_type_01'}}),
+  });
+  const askBody=await askRes.json() as {ok:boolean;error?:{code:string}};
+  assert.equal(askRes.status,409);
+  assert.equal(askBody.ok,false);
+  assert.equal(askBody.error?.code,'JOB_ASK_INVALID');
+
+  const publication=await pkgFixture.publish('rig','1225-legacy-picks');
+  const frozenPkg=await jobInputHashes(pkgFixture.input.root);
+  const pkgAskRes=await pkgFixture.call({schema:JOB_API_SCHEMA,jobId:pkgFixture.host.session.jobId,requestId:'legacy-pkg-picks',verb:'ask',
+   expectedGeneration:pkgFixture.host.session.status().generation,idempotencyKey:'legacy-pkg-picks',
+   publicationId:publication.publicationId,subject:{kind:'interview-picks',questionId:'rig_type',setId:'set_rig_type_01'}});
+  const pkgAskBody=await pkgAskRes.json() as {ok:boolean;error?:{code:string}};
+  assert.equal(pkgAskRes.status,409);
+  assert.equal(pkgAskBody.error?.code,'JOB_ASK_INVALID');
+  // Seed a pre-refusal pending picks ask on the package publication so the browser exercises the unsupported-ask screen path too.
+  const internal=pkgFixture.host.session as unknown as {store:{update(id:string,rev:null,op:(c:{data:any})=>{data:any}):void};event(d:unknown,v:unknown):void;notify():void};
+  internal.store.update(pkgFixture.host.session.jobId,null,current=>{
+   const data=current.data,retained=data.publications[publication.publicationId].retained;
+   data.generation++;
+   const ask={askId:'legacy-pkg-picks-ask',publicationId:publication.publicationId,status:'pending',
+    subject:{kind:'interview-picks',questionId:'rig_type',setId:'set_rig_type_01'},
+    source:{...structuredClone(retained.source),optionSet:{id:'set_rig_type_01',sha256:'8'.repeat(64)}}};
+   data.asks[ask.askId]=ask;
+   internal.event(data,{type:'pending',ask});
+   return {data};
+  });
+  internal.notify();
+
+  page=await launchCdpSession(profile,{onEvent(event){if(event.method==='Runtime.exceptionThrown')exceptions.push(event.params);}});
+  await page.setViewport(1600,1000);
+  const pkgUrl=new URL(pkgFixture.host.ownerUrl);pkgUrl.searchParams.set('lang',lang);
+  await page.goto(pkgUrl.href,lang);
+  await withDeadline('1225.picks.pkg-refusal',20000,async signal=>{while(!signal.aborted){
+   if(await page!.evaluate<boolean>(`document.body.dataset.ready==='true'&&!document.body.inert&&
+     document.getElementById('review-message')?.getAttribute('title')==='JOB_ASK_UNSUPPORTED'&&
+     !!document.querySelector('#rig-root canvas')&&
+     !document.querySelector('#workspace-interview-answer')&&!document.querySelector('form.interview-answer')`))return;
+   await Bun.sleep(25);
+  }throw signal.reason;});
+  const refusalState=await page.evaluate<{title:string;text:string;error:boolean;sendVisible:boolean}>(`(()=>{
+   const m=document.getElementById('review-message'),s=document.getElementById('send-comments');
+   return {title:m.getAttribute('title')??'',text:m.textContent.trim(),error:m.classList.contains('error'),sendVisible:!!s?.checkVisibility()};
+  })()`);
+  assert.deepEqual(refusalState,{title:'JOB_ASK_UNSUPPORTED',text:catalog['job.refusal.JOB_ASK_UNSUPPORTED'],error:true,sendVisible:true});
+  await writeFile(join(out,'legacy-pkg-picks-refusal.png'),await page.screenshot());
+
+  // Also verify the option-set record page renders the picture and submits comments cleanly with zero forms.
+  await page.goto('about:blank');
+  const recordUrl=new URL(recordFixture.ownerUrl);recordUrl.searchParams.set('lang',lang);
+  await page.goto(recordUrl.href,lang);
+  await withDeadline('1225.picks.record-ready',20000,async signal=>{while(!signal.aborted){
+   if(await page!.evaluate<boolean>(`document.body.dataset.ready==='true'&&!document.body.inert&&
+     document.querySelector('#reference-content img')?.naturalWidth===2&&
+     !!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')&&
+     !document.querySelector('#workspace-interview-answer')&&!document.querySelector('form.interview-answer')`))return;
+   await Bun.sleep(25);
+  }throw signal.reason;});
+  await page.evaluate<void>(`document.querySelector('[data-comment-general]').scrollIntoView({block:'nearest'})`);
+  await click(page,'[data-comment-general]');
+  await withDeadline('1225.picks.composer',5000,async signal=>{while(!signal.aborted){
+   if(await page!.evaluate<boolean>(`!!document.querySelector('.stage-comment-composer input')`))return;
+   await Bun.sleep(25);
+  }throw signal.reason;});
+  await page.evaluate<void>(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Legacy picks fallback comment';form.requestSubmit();})()`);
+  await withDeadline('1225.picks.comment-saved',5000,async signal=>{while(!signal.aborted){
+   if(await page!.evaluate<boolean>(`!document.querySelector('.stage-comment-composer')&&!document.getElementById('send-comments').disabled`))return;
+   await Bun.sleep(25);
+  }throw signal.reason;});
+  await click(page,'#send-comments');
+  await expectRecordActSubmitted(page,expression=>withDeadline('1225.picks.submitted',10000,async signal=>{while(!signal.aborted){if(await page!.evaluate<boolean>(expression))return;await Bun.sleep(25);}throw signal.reason;}),lang,'1225 comments submitted');
+  assert.equal(recordFixture.submissions.length,1);
+  assert.equal(recordFixture.submissions[0]?.kind,'comments');
+  const committedAct=JSON.parse(await Bun.file(recordFixture.files[0]!).text());
+  assert.equal(committedAct.schema,JOB_COMMENT_ONLY_ACT_SCHEMA);
+  assert.deepEqual(await jobInputHashes(recordFixture.root),frozenRecord);
+  assert.deepEqual(await jobInputHashes(pkgFixture.input.root),frozenPkg);
+  assert.deepEqual(exceptions,[]);
+  await writeFile(join(out,'legacy-picks-commented.png'),await page.screenshot());
+  await writeFile(join(out,'observations.json'),JSON.stringify({status:'PASS',lang,apiRefusal:askBody.error?.code,pkgApiRefusal:pkgAskBody.error?.code,screenRefusal:refusalState.title,actSchema:committedAct.schema},null,2));
+  return {language:lang,timing:'legacy-picks-ask',status:'PASS'};
+ }catch(error){
+  await writeFile(join(out,'observations.json'),JSON.stringify({status:'RED',lang,error:String(error),exceptions},null,2));
+  if(page)await writeFile(join(out,'failure.png'),await page.screenshot()).catch(()=>{});
+  return {language:lang,timing:'legacy-picks-ask',status:'RED',error:String(error)};
+ }finally{await page?.close();await recordFixture.close();await pkgFixture.close();await rm(profile,{recursive:true,force:true});}
 }
 
 
@@ -498,7 +608,8 @@ for (const timing of ['already-published', 'first-publication'] as const) {
   for(const stage of ['parts','rig'] as const)for(const lang of languages)results.push(await run(lang,timing,stage));
 }
 for(const lang of languages)results.push(await ackRetry(lang));
-for(const kind of ['checkpoint','interview-picks'] as const)for(const lang of languages)results.push(await recordFill(lang,kind));
-for(const lang of languages)results.push(await recordFill(lang,'interview-picks',true));
+for(const kind of ['checkpoint','option-set'] as const)for(const lang of languages)results.push(await recordFill(lang,kind));
+for(const lang of languages)results.push(await recordFill(lang,'option-set',true));
+for(const lang of languages)results.push(await legacyPicksAskRefusal(lang));
 await writeFile(join(output, 'results.json'), JSON.stringify(results, null, 2) + '\n');
 assert.equal(results.filter(result => result.status === 'RED').length, 0, JSON.stringify(results));

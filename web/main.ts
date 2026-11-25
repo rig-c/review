@@ -2217,7 +2217,10 @@ function syncQuestionImage():void {
  if(activeInterviewImages&&images?.length===activeInterviewImages.length&&images.every((image,index)=>{
   const previous=activeInterviewImages![index]!;
   return previous.name===image.name&&previous.src===image.src;
- }))return;
+ })){
+  if(sourceTextContent(el('message'))==='This request has no picture.')message(sourceTextContent(el('dirty')),false,true);
+  return;
+ }
  releaseInterview?.();releaseInterview=null;
  if(!images?.length)return;
  if(controls.viewModeIds.includes('previous-version'))leavePreviousBuild();
