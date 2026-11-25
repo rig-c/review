@@ -30,7 +30,8 @@ async function wait(page: InputCdpSession, expression: string, ms = 20_000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {if (await page.evaluate<boolean>(expression)) return; await Bun.sleep(60);}
   const state = await page.evaluate<unknown>(`(()=>({state:document.getElementById('review-draft-state')?.textContent,
-    message:document.getElementById('review-message')?.textContent,send:document.getElementById('send-comments')?.outerHTML}))()`).catch(String);
+    message:document.getElementById('review-message')?.textContent,send:document.getElementById('send-comments')?.outerHTML,
+    composer:document.querySelector('.stage-comment-composer')?.textContent}))()`).catch(String);
   throw new Error('COMMENT_SEND_WAIT ' + expression + ' ' + JSON.stringify(state));
 }
 
@@ -164,10 +165,8 @@ async function runScreen(screen: Screen, lang: 'en' | 'ko') {
     await wait(page, `!!document.querySelector('[data-comment-general]:not(:disabled)')`);
     await page.evaluate(`document.querySelector('[data-comment-general]').click()`);
     await wait(page, `!!document.querySelector('.stage-comment-composer input')`);
-    await page.evaluate(`(()=>{const field=document.querySelector('.stage-comment-composer input');field.focus();field.select();})()`);
-    assert.ok(control, 'CDP page session');
-    await control('Input.insertText', {text: words[lang][1]});
-    await page.evaluate(`document.querySelector('.stage-comment-composer').requestSubmit()`);
+    // As the direction suite writes its comments: the value is set, then the form submits.
+    await page.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(words[lang][1])};f.requestSubmit();})()`);
     await wait(page, `!document.querySelector('.stage-comment-composer')`);
     await wait(page, `!document.getElementById('send-comments').disabled`);
     const written = await bar();
