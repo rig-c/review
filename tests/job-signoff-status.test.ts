@@ -1,14 +1,14 @@
 import {expect, test} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
-import {JOB_RECORD_ACT_SCHEMA, type ActV3, type EventV3, type JobResult, type PendingAskV3, type UISubmissionV3} from '../src/job-contract.ts';
+import {JOB_API_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_RECORD_ACT_SCHEMA, type ActV3, type EventV3, type JobResult, type PendingAskV3, type UISubmissionV3} from '../src/job-contract.ts';
 import {getLanguagePreference, setLanguagePreference, setSourceAttribute, setSourceText, sourceTextContent, t} from '../web/i18n.ts';
 import {mountRigInspector} from '../web/inspector-blocks.ts';
-import {createJobRigScreen, type JobRigMeshScreen, type JobRigScreenPrepared} from '../web/job-rig-screen.ts';
+import {createJobRigScreen, type JobRigScreenPrepared} from '../web/job-rig-screen.ts';
 import {createJobFormDrafts, createJobFormHelpers, createJobWindow, createJobWindowTransport, jobCheckpointContext, jobPublicationRoutes, jobWindowAccess, prepareJobForms, type JobFormDependencies} from '../web/job-session.ts';
 import {rigHost, setRigHost} from '../web/rig-host.ts';
-import {panelMake} from '../web/view-controls.ts';
 import {recordScreenDom, recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
+import {realJobWindowFixture} from './helpers/job-window-fixture.ts';
 
 // Use the same source seam as act-bar-answers.test.ts, spanning the shared record
 // form and act renderers. The surrounding viewport has no role in a record sign-off.
@@ -133,9 +133,10 @@ function mountRecordAct(dom: ReturnType<typeof mountActDom>) {
   };
 }
 
-async function harness(republish = false) {
+async function harness(republish = false, kind: 'checkpoint' | 'signoff' = 'checkpoint') {
   const picture = republish ? readFileSync(new URL('./fixtures/viewport-387/package/rigid.png', import.meta.url)) : undefined;
-  const fixture = await recordScreenFixture('signoff', false, undefined, 'direction-review', false, true, undefined, false, false, undefined, undefined, picture);
+  // #1227: checkpoint until #1229 retires record asks; `kind === 'signoff'` tests the disabled page refusal.
+  const fixture = await recordScreenFixture(kind, false, undefined, 'direction-review', false, true, undefined, false, false, undefined, undefined, picture);
   const dom = await recordScreenDom();
   const previousLanguage = getLanguagePreference();
   const previousHost = rigHost();
@@ -195,47 +196,51 @@ async function harness(republish = false) {
         expect(form).toBeDefined();
         expect(screen!.read().submitDisabled).toBe(false);
         const previousPosts = posts.length;
-        const submitter = form.querySelector<HTMLButtonElement>('button[type=submit]')!;
+        const outcome = form.querySelector<HTMLSelectElement>('select[name=outcome]');
+        if (outcome && !outcome.value) outcome.value = 'pass';
+        const submitter = [...form.querySelectorAll<HTMLButtonElement>('button')].at(-1)!;
         const event = Object.assign(new Event('submit', {cancelable: true}), {submitter});
         const submit = Promise.resolve(form.onsubmit!.call(form, event));
         await Promise.resolve();
-        if (posts.length !== previousPosts + 1) {await submit; throw new Error('Sign-off form did not POST exactly once');}
+        if (posts.length !== previousPosts + 1) {await submit; throw new Error('Record form did not POST exactly once');}
         return {submit, post: posts.at(-1)!};
       },
     };
   } catch (error) {await close(); throw error;}
 }
 
-async function signed(post: Post) {
+async function answered(post: Post) {
   const response = await post.serve();
   expect(response.status).toBe(200);
   const result = await response.clone().json() as JobResult<ActV3>;
-  if (!result.ok) throw new Error(`Expected sign-off act, received ${result.error.code}`);
-  if (result.value.schema !== JOB_RECORD_ACT_SCHEMA || result.value.kind !== 'signoff') throw new Error('Expected a record sign-off act');
-  expect(result.value).toMatchObject({kind: 'signoff', askId: post.input.askId, publicationId: post.input.publicationId, value: post.input.value});
+  if (!result.ok) throw new Error(`Expected checkpoint act, received ${result.error.code}`);
+  if (result.value.schema !== JOB_RECORD_ACT_SCHEMA || result.value.kind !== 'checkpoint') throw new Error('Expected a record checkpoint act');
+  expect(result.value).toMatchObject({kind: 'checkpoint', askId: post.input.askId, publicationId: post.input.publicationId,
+    value: {...post.input.value, planStepId: 'step_layout'}});
   return {response, act: result.value};
 }
 
 const opener = {id: 'workspace-pending-ask', disabled: false, opacityOverride: true};
-const before = {row: true, headline: 'Approve this stage.', status: 'Not submitted', form: true, submitDisabled: false, actions: [opener]};
+const before = {row: true, headline: 'Review this checkpoint.', status: 'Not submitted', form: true, submitDisabled: false, actions: [opener]};
 const sending = {...before, status: 'Sending', submitDisabled: true, actions: [{...opener, disabled: true, opacityOverride: false}]};
 const accepted = {row: true, headline: 'Nothing is waiting for your answer.', status: 'Submitted', form: false, actions: []};
 
-for (const order of ['response first', 'stream first'] as const) test(`#1205 sign-off shows before, sending and accepted (${order})`, async () => {
+for (const order of ['response first', 'stream first'] as const) test(`#1205 record form shows before, sending and accepted (${order})`, async () => {
   const h = await harness();
   try {
     const prior = h.read();
     const {post, submit} = await h.start();
     const inflight = h.read();
-    expect(post.input).toMatchObject({kind: 'signoff', askId: h.fixture.ask.askId, publicationId: h.fixture.ask.publicationId,
+    expect(post.input).toMatchObject({kind: 'checkpoint', askId: h.fixture.ask.askId, publicationId: h.fixture.ask.publicationId,
       pageId: 'test-signoff-page', displayedNonce: h.window.state().receipt!.displayedNonce,
-      value: {stage: 'direction-review', decision: 'approved', words: '[general]\nCheck the timing'}});
-    const {response, act} = await signed(post);
-    let afterDifferentStage: ScreenReadback | null = null;
+      value: {checkpointId: 'step_layout', outcome: 'pass', words: '[general]\nCheck the timing'}});
+    const {response, act} = await answered(post);
+    let afterDifferentCheckpoint: ScreenReadback | null = null;
     if (order === 'stream first') {
-      const wrongStage = {...act, actId: 'other-stage', value: {...act.value, stage: 'plan-approved'}} as ActV3;
-      h.event({type: 'act', act: wrongStage});
-      afterDifferentStage = h.read();
+      const wrongCheckpoint = {...act, actId: 'other-checkpoint',
+        value: {...act.value, checkpointId: 'step_weights', planStepId: 'step_weights'}} as ActV3;
+      h.event({type: 'act', act: wrongCheckpoint});
+      afterDifferentCheckpoint = h.read();
       h.event({type: 'act', act});
     }
     const afterFirst = order === 'stream first' ? h.read() : null;
@@ -243,25 +248,25 @@ for (const order of ['response first', 'stream first'] as const) test(`#1205 sig
     await submit;
     const afterResponse = h.read();
     if (order === 'response first') h.event({type: 'act', act});
-    expect({prior, inflight, afterDifferentStage, afterFirst, afterResponse, afterBoth: h.read()}).toMatchObject({prior: before, inflight: sending,
-      afterDifferentStage: order === 'stream first' ? sending : null, afterFirst: order === 'stream first' ? accepted : null, afterResponse: accepted, afterBoth: accepted});
+    expect({prior, inflight, afterDifferentCheckpoint, afterFirst, afterResponse, afterBoth: h.read()}).toMatchObject({prior: before, inflight: sending,
+      afterDifferentCheckpoint: order === 'stream first' ? sending : null, afterFirst: order === 'stream first' ? accepted : null, afterResponse: accepted, afterBoth: accepted});
   } finally {await h.close();}
 });
 
-test('#1205 the next ask takes over accepted sign-off status', async () => {
+test('#1205 the next ask takes over accepted record form status', async () => {
   const h = await harness();
   try {
     const {post, submit} = await h.start();
-    const {response, act} = await signed(post);
+    const {response, act} = await answered(post);
     h.event({type: 'act', act});
-    const signedReadback = h.read();
-    const next: PendingAskV3 = {...h.fixture.ask, askId: 'next-checkpoint', subject: {kind: 'checkpoint', checkpointId: 'step_layout'}};
+    const answeredReadback = h.read();
+    const next: PendingAskV3 = {...h.fixture.ask, askId: 'next-checkpoint', subject: {kind: 'checkpoint', checkpointId: 'step_weights'}};
     h.event({type: 'pending', ask: next});
     const nextReadback = h.read();
     post.respond(response);
     await submit;
-    expect({signedReadback, nextReadback, afterOldResponse: h.read()}).toMatchObject({signedReadback: accepted,
-      nextReadback: {...before, headline: 'Review this checkpoint.'}, afterOldResponse: {...before, headline: 'Review this checkpoint.'}});
+    expect({answeredReadback, nextReadback, afterOldResponse: h.read()}).toMatchObject({answeredReadback: accepted,
+      nextReadback: before, afterOldResponse: before});
   } finally {await h.close();}
 });
 
@@ -282,7 +287,7 @@ for (const failure of ['refusal', 'network rejection'] as const) test(`#1205 ${f
     const retry = await h.start();
     const retrying = h.read();
     expect(retry.post.input).toEqual(first.post.input);
-    const {response} = await signed(retry.post);
+    const {response} = await answered(retry.post);
     retry.post.respond(response);
     await retry.submit;
     expect({inflight, failed, retrying, finished: h.read()}).toMatchObject({inflight: sending,
@@ -310,7 +315,96 @@ test('#1205 a superseding publication without an act never reports the form as a
     expect(h.fixture.files).toHaveLength(0);
     await h.window.settled();
     expect(h.window.state().receipt?.publicationId).toBe(next.publication.publicationId);
-    h.event({type: 'pending', ask: {...h.fixture.ask, askId: 'replacement-signoff', publicationId: next.publication.publicationId, source: next.publication.source}});
+    h.event({type: 'pending', ask: {...h.fixture.ask, askId: 'replacement-checkpoint', publicationId: next.publication.publicationId, source: next.publication.source}});
     expect({inflight, replacement: h.read()}).toMatchObject({inflight: sending, replacement: before});
   } finally {await h.close();}
+});
+
+test('#1227 a sign-off subject on a page refuses JOB_ACT_KIND_DISABLED and historical sign-off acts still read', async () => {
+  const h = await harness(false, 'signoff');
+  try {
+    const {post, submit} = await h.start();
+    expect(post.input).toMatchObject({kind: 'signoff', askId: h.fixture.ask.askId, publicationId: h.fixture.ask.publicationId});
+    const response = await post.serve();
+    const result = await response.clone().json() as JobResult<ActV3>;
+    expect(result).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+    post.respond(response);
+    await submit;
+    const failed = h.read();
+    expect(failed.formStatus).toContain('JOB_ACT_KIND_DISABLED');
+    expect(failed.status).not.toBe('Submitted');
+    expect(h.fixture.files).toHaveLength(0);
+
+    if (h.fixture.ask.source.subject !== 'plan') throw new Error('Expected plan source');
+    const {directionReview: _summary, ...binding} = h.fixture.ask.source;
+    const historical: ActV3 = {
+      schema: JOB_RECORD_ACT_SCHEMA, actId: 'historical-signoff-act', jobId: h.fixture.session.jobId,
+      askId: h.fixture.ask.askId, publicationId: h.fixture.ask.publicationId, kind: 'signoff',
+      at: '2026-11-08T12:00:00.000Z',
+      authority: {actor: 'human', channel: 'review-ui', reviewer: {id: 'synthetic-owner', role: 'owner'}},
+      source: binding,
+      value: {stage: 'direction-review', decision: 'approved', words: '[general]\nHistorical sign-off'},
+    };
+    h.event({type: 'act', act: historical});
+    expect(h.read()).toMatchObject(accepted);
+  } finally {await h.close();}
+});
+
+test('#1227 viewer and comments work on a production-shaped publication when a producer omits or still sends a sign-off ask', async () => {
+  const f = await realJobWindowFixture();
+  try {
+    expect(f.input.getContext().subjects).toContainEqual({kind: 'signoff', stage: 'plan-approved'});
+    const publication = await f.publish();
+    const entry = `${f.host.origin}/jobs/${f.host.session.jobId}/publications/${publication.publicationId}/instances/${publication.instanceKey}/`;
+    const reviewApi = await fetch(entry + 'api/review', {headers: {'X-Review-Capability': f.credentials.ui}});
+    expect(reviewApi.status).toBe(200);
+
+    const displayed = await (await f.ui('displayed', {
+      publicationId: publication.publicationId, pageId: 'prod-page', sourceHash: publication.source.sourceHash,
+    })).json() as JobResult<{displayedNonce: string}>;
+    if (!displayed.ok) throw new Error(JSON.stringify(displayed));
+
+    const firstComment = await f.ui('acts', {
+      submissionId: 'comment-without-signoff-ask', publicationId: publication.publicationId,
+      pageId: 'prod-page', displayedNonce: displayed.value.displayedNonce,
+      expectedGeneration: f.host.session.status().generation,
+      kind: 'comments', value: {comments: [{text: 'Viewer comment without sign-off ask'}]},
+    });
+    expect(firstComment.status).toBe(200);
+    await expect(firstComment.json()).resolves.toMatchObject({
+      ok: true, value: {schema: JOB_COMMENT_ONLY_ACT_SCHEMA, kind: 'comments', value: {comments: [{text: 'Viewer comment without sign-off ask'}]}},
+    });
+
+    const signoffAsk = await f.call({
+      schema: JOB_API_SCHEMA, jobId: f.host.session.jobId, requestId: 'producer-signoff-ask',
+      verb: 'ask', expectedGeneration: f.host.session.status().generation, idempotencyKey: 'producer-signoff-ask',
+      publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'plan-approved'},
+    });
+    expect(signoffAsk.status).toBe(409);
+    await expect(signoffAsk.json()).resolves.toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+
+    const reviewAfterRefusal = await fetch(entry + 'api/review', {headers: {'X-Review-Capability': f.credentials.ui}});
+    expect(reviewAfterRefusal.status).toBe(200);
+
+    const secondComment = await f.ui('acts', {
+      submissionId: 'comment-after-signoff-refusal', publicationId: publication.publicationId,
+      pageId: 'prod-page', displayedNonce: displayed.value.displayedNonce,
+      expectedGeneration: f.host.session.status().generation,
+      kind: 'comments', value: {comments: [{text: 'Viewer comment after sign-off refusal'}]},
+    });
+    expect(secondComment.status).toBe(200);
+    await expect(secondComment.json()).resolves.toMatchObject({
+      ok: true, value: {schema: JOB_COMMENT_ONLY_ACT_SCHEMA, kind: 'comments', value: {comments: [{text: 'Viewer comment after sign-off refusal'}]}},
+    });
+
+    const next = await (await f.call({
+      schema: JOB_API_SCHEMA, jobId: f.host.session.jobId, requestId: 'next-after-comments',
+      verb: 'next', after: null, waitMs: 0,
+    })).json();
+    expect(next).toMatchObject({ok: true, value: {status: 'events', events: [
+      {type: 'published', publication: {publicationId: publication.publicationId}},
+      {type: 'act', act: {schema: JOB_COMMENT_ONLY_ACT_SCHEMA, kind: 'comments', value: {comments: [{text: 'Viewer comment without sign-off ask'}]}}},
+      {type: 'act', act: {schema: JOB_COMMENT_ONLY_ACT_SCHEMA, kind: 'comments', value: {comments: [{text: 'Viewer comment after sign-off refusal'}]}}},
+    ]}});
+  } finally {await f.close();}
 });

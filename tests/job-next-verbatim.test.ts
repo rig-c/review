@@ -176,19 +176,18 @@ function assertPlantedMutantRejectedBySameOracle(
   return receipt;
 }
 
-test('real semantic next preserves verbatim reviewer words across checkpoint, signoff and rig review-verdict and rejects named in-memory word mutations', async () => {
+test('real semantic next preserves verbatim reviewer words across checkpoint and rig review-verdict and rejects named in-memory word mutations', async () => {
   const f = await fixture();
   const beforeHashes = await jobInputHashes(f.root);
   const publication = await f.publish();
 
   const checkpointWords =
     '  [검수/Checkpoint #1] 어깨 실루엣이 2px 어긋남 — needs exact hold! 🤔\n\t- line 2: 앞뒤 공백·탭·줄바꿈(CRLF 아님) & 기호(!@#$%^&*) 유지 ✨  ';
-  const signoffWords = ' \n\t  [Sign-off 승인] 계획 단계(plan-approved) 원문 그대로 통과합니다. ✅\n\t  ';
   const rigVerdictWords =
     '  "Rig 검수 완료?" 아니오: 호흡(idle) 전환 시 목 회전 각도 +3.5° 조정 필요 🛠️\n\t다음 패스에서 다시 확인!  ';
 
+  // #1227: checkpoint until #1229 retires record asks
   const checkpointAsk = await f.ask(publication, { kind: 'checkpoint', checkpointId: 'step-one' });
-  const signoffAsk = await f.ask(publication, { kind: 'signoff', stage: 'plan-approved' });
   const verdictAsk = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
   const page = await f.display(publication);
 
@@ -207,20 +206,6 @@ test('real semantic next preserves verbatim reviewer words across checkpoint, si
   );
   expect(committedCheckpoint.ok).toBe(true);
   if (!committedCheckpoint.ok) throw new Error(committedCheckpoint.error.code);
-
-  const committedSignoff = await f.ports.commitUIAct(
-    f.session.jobId,
-    f.uiRequest({
-      ...page,
-      askId: signoffAsk.askId,
-      expectedGeneration: f.session.status().generation,
-      submissionId: 'verbatim-signoff',
-      kind: 'signoff',
-      value: { stage: 'plan-approved', decision: 'approved', words: signoffWords },
-    }),
-  );
-  expect(committedSignoff.ok).toBe(true);
-  if (!committedSignoff.ok) throw new Error(committedSignoff.error.code);
 
   const committedVerdict = await f.ports.commitUIAct(
     f.session.jobId,
@@ -247,16 +232,6 @@ test('real semantic next preserves verbatim reviewer words across checkpoint, si
       authority: EXPECTED_AUTHORITY,
       source: { ...publication.source, plan: { steps: [{ id: 'step-one', hash: '1'.repeat(64) }] } },
       value: { checkpointId: 'step-one', planStepId: 'step-one', outcome: 'fail', words: checkpointWords },
-    },
-    {
-      actId: committedSignoff.value.actId,
-      jobId: f.session.jobId,
-      askId: signoffAsk.askId,
-      publicationId: publication.publicationId,
-      kind: 'signoff',
-      authority: EXPECTED_AUTHORITY,
-      source: publication.source,
-      value: { stage: 'plan-approved', decision: 'approved', words: signoffWords },
     },
     {
       actId: committedVerdict.value.actId,
@@ -312,17 +287,6 @@ test('real semantic next preserves verbatim reviewer words across checkpoint, si
         const event = cloned.value.events.find(e => e.type === 'act' && e.act.kind === 'checkpoint');
         if (!event || event.type !== 'act' || event.act.kind !== 'checkpoint') throw new Error('Missing checkpoint act');
         (event.act.value as unknown as { comments: { text: string }[] }).comments[0]!.text = checkpointWords.trim().replace(/\s+/g, ' ');
-      },
-    },
-    {
-      name: 'planted-mutant:signoff-stripped-emoji-and-korean',
-      targetField: 'events[signoff].act.value.comments[0].text',
-      originalWords: signoffWords,
-      mutatedWords: ' [Sign-off] plan-approved passed. ',
-      mutate(cloned) {
-        const event = cloned.value.events.find(e => e.type === 'act' && e.act.kind === 'signoff');
-        if (!event || event.type !== 'act' || event.act.kind !== 'signoff') throw new Error('Missing signoff act');
-        (event.act.value as unknown as { comments: { text: string }[] }).comments[0]!.text = ' [Sign-off] plan-approved passed. ';
       },
     },
     {

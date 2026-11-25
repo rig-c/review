@@ -23,7 +23,8 @@ for (const language of ['en', 'ko'] as const) {
   try {
     const publication = await fixture.publish('parts');
     const verdict = await fixture.ask(publication, {kind: 'parts-verdict', draftId: 'synthetic-parts'});
-    const signoff = await fixture.ask(publication, {kind: 'signoff', stage: 'plan-approved'});
+    // #1227: checkpoint until #1229 retires record asks
+    const checkpoint = await fixture.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
     const url = new URL(fixture.host.ownerUrl);
     const actsUrl = new URL('ui/acts', url);
     let send: ((method: string, params?: Record<string, unknown>) => Promise<any>) | undefined;
@@ -72,10 +73,11 @@ for (const language of ['en', 'ko'] as const) {
     assert.deepEqual(Object.keys(before).filter(path => before[path] !== after[path]), ['project.json']);
     const ingestedRecord = await readFile(record, 'utf8');
     assert.doesNotThrow(() => JSON.parse(ingestedRecord));
-    await wait(`!document.querySelector('#workspace-pending-ask').hidden && !document.querySelector('#workspace-pending-ask').disabled`, 'stage approval offered');
+    await wait(`!document.querySelector('#workspace-pending-ask').hidden && !document.querySelector('#workspace-pending-ask').disabled`, 'checkpoint offered');
     await click(page, '#workspace-pending-ask');
-    const form = `form[data-job-ask="${signoff.askId}"]`;
-    await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden]) ${form} fieldset:not(:disabled)')`, 'existing signoff in the record section');
+    const form = `form[data-job-ask="${checkpoint.askId}"]`;
+    await wait(`!!document.querySelector('#workspace-communication:not([hidden]) #job-record-asks:not([hidden]) ${form} fieldset:not(:disabled)')`, 'existing checkpoint in the record section');
+    await page.evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(form)});f.querySelector('select[name=outcome]').value='pass';f.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await click(page, form + ' button[type=submit]');
     const expected = catalog['JOB_RECORD_MOVED'];
     await wait(`document.querySelector(${JSON.stringify(form + ' [role=status]')})?.textContent === ${JSON.stringify(expected)}`, 'translated moved-record refusal');
@@ -91,12 +93,12 @@ for (const language of ['en', 'ko'] as const) {
     assert.ok(status.width > 0 && status.height > 0 && status.x >= 0 && status.y >= 0 && status.x + status.width <= 1600 && status.y + status.height <= 1000);
     assert.deepEqual(responses.map(response => response.status), [200, 409]);
     const final = await fixture.next();
-    assert.equal(final.events.filter(event => event.type === 'act').length, 1, 'stale signoff creates no second act');
+    assert.equal(final.events.filter(event => event.type === 'act').length, 1, 'stale checkpoint creates no second act');
     await writeFile(join(output, 'record-moved-' + language + '.png'), await page.screenshot());
-    const observation = {language, fixture: 'synthetic package and consumer CLI record write; not installed Create ingest', approvedActId: approved.act.actId, signoffAskId: signoff.askId, status, responses, ingest: {exit: ingestExit, stdout: ingestStdout, stderr: ingestStderr}, recordHashes: {before: before['project.json'], after: after['project.json']}};
+    const observation = {language, fixture: 'synthetic package and consumer CLI record write; not installed Create ingest', approvedActId: approved.act.actId, checkpointAskId: checkpoint.askId, status, responses, ingest: {exit: ingestExit, stdout: ingestStdout, stderr: ingestStderr}, recordHashes: {before: before['project.json'], after: after['project.json']}};
     cases.push(observation);
     await writeFile(join(output, 'record-moved-' + language + '.json'), JSON.stringify(observation, null, 2) + '\n');
-    console.log('908_BROWSER_PASS ' + language + ' approve=200 synthetic-cli-ingest=0 signoff=409');
+    console.log('908_BROWSER_PASS ' + language + ' approve=200 synthetic-cli-ingest=0 checkpoint=409');
   } catch (error) {
     if (page) await writeFile(join(output, 'failure-' + language + '.png'), await page.screenshot());
     throw error;

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+* Fresh `signoff` asks (including `plan-approved`) now refuse with `JOB_ASK_INVALID`, and page `signoff` submissions refuse with `JOB_ACT_KIND_DISABLED`. Publications that declare `signoff` subjects and finalized historical `signoff` acts and records keep their readers and exports (#1227, refs #1225).
+
 ## 4.21.0
 
 A reviewer can send comments on their own, without answering a question. The new Send comments button in the top bar sends the unsent pinned and general comments as one comment-only act, and a pending question stays pending. An option-set publication can now carry no picks subject, as a set of images to look at and comment on.

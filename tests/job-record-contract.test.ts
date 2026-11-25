@@ -1576,54 +1576,31 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
       }),
     ).toThrow('JOB_ACT_INVALID');
 
-    // 5. Ask a declared signoff subject, verify undeclared stage refuses JOB_ACT_INVALID, then finalize and fetch over job-api@3
+    // 5. Declared signoff subjects still parse on the published source, while fresh asks refuse JOB_ASK_INVALID,
+    // page submissions refuse JOB_ACT_KIND_DISABLED, and stored rig-review/act@4 signoff acts keep reading (#1227).
+    if (planPublication.source.subject !== 'plan') throw new Error('Expected plan source');
+    expect(planPublication.source.subjects).toContainEqual({ kind: 'signoff', stage: 'rigging-interview' });
+    const generationBeforeSignoff = host.session.status().generation;
     const askSignoffRes = await callApi({
       schema: HOST_JOB_API_V3_SCHEMA,
       jobId: host.session.jobId,
       requestId: `req-${++seq}`,
       verb: 'ask',
-      expectedGeneration: host.session.status().generation,
+      expectedGeneration: generationBeforeSignoff,
       idempotencyKey: 'ask-signoff-rigging-interview',
       publicationId: planPublication.publicationId,
       subject: { kind: 'signoff', stage: 'rigging-interview' },
     });
-    expect(askSignoffRes.status).toBe(200);
+    expect(askSignoffRes.status).toBe(409);
     const askSignoffJson = await askSignoffRes.json();
-    expect(askSignoffJson.schema).toBe(HOST_JOB_API_V3_SCHEMA);
-    expect(askSignoffJson.ok).toBe(true);
-    const signoffAsk = askSignoffJson.value as publicJobHost.JobPendingAskV3;
-
-    const badSignoffActRes = await host.ports.commitUIAct(
-      host.session.jobId,
-      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Origin: host.origin,
-          'X-Review-Capability': credentials.ui,
-        },
-        body: JSON.stringify({
-          publicationId: planPublication.publicationId,
-          askId: signoffAsk.askId,
-          pageId: 'page-create-plan',
-          displayedNonce,
-          expectedGeneration: host.session.status().generation,
-          submissionId: 'sub-bad-signoff',
-          kind: 'signoff',
-          value: {
-            stage: 'post-interview',
-            decision: 'approved',
-            words: 'Undeclared stage',
-          },
-        }),
-      }),
-    );
-    expect(badSignoffActRes).toEqual({
+    expect(askSignoffJson).toMatchObject({
+      schema: HOST_JOB_API_V3_SCHEMA,
       ok: false,
-      error: { code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID' },
+      generation: generationBeforeSignoff,
+      error: { code: 'JOB_ASK_INVALID' },
     });
 
-    const commitSignoffRes = await host.ports.commitUIAct(
+    const disabledSignoffActRes = await host.ports.commitUIAct(
       host.session.jobId,
       new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
         method: 'POST',
@@ -1634,7 +1611,7 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
         },
         body: JSON.stringify({
           publicationId: planPublication.publicationId,
-          askId: signoffAsk.askId,
+          askId: checkpointAsk.askId,
           pageId: 'page-create-plan',
           displayedNonce,
           expectedGeneration: host.session.status().generation,
@@ -1648,28 +1625,30 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
         }),
       }),
     );
-    expect(commitSignoffRes.ok).toBe(true);
-    if (!commitSignoffRes.ok) throw new Error(commitSignoffRes.error.code);
-    const finalizedSignoffAct = commitSignoffRes.value as unknown as JobRecordAct;
-    expect(finalizedSignoffAct.schema).toBe(HOST_JOB_RECORD_ACT_SCHEMA);
+    expect(disabledSignoffActRes).toEqual({
+      ok: false,
+      error: { code: 'JOB_ACT_KIND_DISABLED', message: 'JOB_ACT_KIND_DISABLED' },
+    });
 
-    const fetchSignoffReq: JobFetchActRequestV3 = {
-      schema: HOST_JOB_API_V3_SCHEMA,
+    const historicalSignoffAct = parseRecordActFromHost({
+      schema: HOST_JOB_RECORD_ACT_SCHEMA,
+      actId: 'historical-signoff-act',
       jobId: host.session.jobId,
-      requestId: `req-${++seq}`,
-      verb: 'fetch-act',
-      actId: finalizedSignoffAct.actId,
-    };
-    const fetchSignoffRes = await callApi(fetchSignoffReq, consumerGrant!.fetchCapability);
-    expect(fetchSignoffRes.status).toBe(200);
-    const fetchSignoffJson = await fetchSignoffRes.json();
-    expect(fetchSignoffJson.schema).toBe(HOST_JOB_API_V3_SCHEMA);
-    expect(fetchSignoffJson.ok).toBe(true);
-    const parsedSignoffAct = parseRecordActFromHost(fetchSignoffJson.value);
-    expect(parsedSignoffAct).toEqual(finalizedSignoffAct);
-    expect(parsedSignoffAct.kind).toBe('signoff');
-    if (parsedSignoffAct.kind === 'signoff') {
-      expect(parsedSignoffAct.value).toEqual({
+      askId: 'historical-signoff-ask',
+      publicationId: planPublication.publicationId,
+      kind: 'signoff',
+      authority: finalizedCheckpointAct.authority,
+      at: finalizedCheckpointAct.at,
+      source: finalizedCheckpointAct.source,
+      value: {
+        stage: 'rigging-interview',
+        decision: 'approved',
+        words: 'Approve rigging-interview plan.\n',
+      },
+    });
+    expect(historicalSignoffAct.kind).toBe('signoff');
+    if (historicalSignoffAct.kind === 'signoff') {
+      expect(historicalSignoffAct.value).toEqual({
         stage: 'rigging-interview',
         decision: 'approved',
         words: 'Approve rigging-interview plan.\n',
@@ -1814,7 +1793,7 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
       value: { status: 'closed' },
     });
 
-    const postCloseFetchRes = await callApi(fetchSignoffReq, consumerGrant!.fetchCapability);
+    const postCloseFetchRes = await callApi(fetchCheckpointReq, consumerGrant!.fetchCapability);
     expect(postCloseFetchRes.status).toBe(409);
     expect(await postCloseFetchRes.json()).toMatchObject({
       schema: HOST_JOB_API_V3_SCHEMA,
@@ -2404,7 +2383,12 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
       publicationId: planPublication.publicationId,
       subject: { kind: 'signoff', stage: 'rigging-interview' },
     });
-    const signoffAsk = (await askSignoffRes.json()).value as publicJobHost.JobPendingAskV3;
+    expect(askSignoffRes.status).toBe(409);
+    expect(await askSignoffRes.json()).toMatchObject({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      ok: false,
+      error: { code: 'JOB_ASK_INVALID' },
+    });
 
     // 2. Drive normal owner URL access -> transport -> createJobWindow -> prepareJobInspection -> prepareJobForms -> submit
     const slots = new Map<string, string>();
@@ -2460,7 +2444,7 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
     };
     let preparedPlanInspection: Awaited<ReturnType<typeof prepareJobInspection>> | null = null;
     let preparedPlanForms: Map<string, { askId: string; kind: string }> | null = null;
-    const pendingPlanAsks: readonly publicJobHost.JobPendingAskV3[] = [cpAsk, signoffAsk];
+    const pendingPlanAsks: readonly publicJobHost.JobPendingAskV3[] = [cpAsk];
     const window = createJobWindow<PreparedWindowView>({
       jobId: host.session.jobId,
       pageId: 'owner-window-page-1',
@@ -2508,13 +2492,6 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
       cursor: 'c-2',
       ask: cpAsk,
     });
-    window.event({
-      type: 'pending',
-      jobId: host.session.jobId,
-      generation: 3,
-      cursor: 'c-3',
-      ask: signoffAsk,
-    });
     await window.settled();
 
     expect(window.state().error).toBeNull();
@@ -2528,9 +2505,35 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
     expect(committedPlanInspection.metadata.recordSource).toEqual(
       planPublication.source as publicJobHost.JobRecordSource,
     );
-    expect(committedPlanForms.size).toBe(2);
+    expect(committedPlanForms.size).toBe(1);
 
     const receipt = window.state().receipt!;
+    const submitSignoff = await host.ports.commitUIAct(
+      host.session.jobId,
+      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: host.origin,
+          'X-Review-Capability': host.session.hostCredentials().ui,
+        },
+        body: JSON.stringify({
+          publicationId: planPublication.publicationId,
+          askId: cpAsk.askId,
+          pageId: 'owner-window-page-1',
+          displayedNonce: receipt.displayedNonce,
+          expectedGeneration: host.session.status().generation,
+          submissionId: 'owner-window-signoff-1',
+          kind: 'signoff',
+          value: { stage: 'rigging-interview', decision: 'approved', words: 'Approved via owner window' },
+        }),
+      }),
+    );
+    expect(submitSignoff).toEqual({
+      ok: false,
+      error: { code: 'JOB_ACT_KIND_DISABLED', message: 'JOB_ACT_KIND_DISABLED' },
+    });
+
     const submitCp = await window.submit({
       publicationId: planPublication.publicationId,
       askId: cpAsk.askId,
@@ -2544,20 +2547,6 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
     expect(submitCp.ok).toBe(true);
     if (!submitCp.ok) throw new Error(submitCp.error.code);
     expect(submitCp.value.schema).toBe(HOST_JOB_RECORD_ACT_SCHEMA);
-
-    const submitSignoff = await window.submit({
-      publicationId: planPublication.publicationId,
-      askId: signoffAsk.askId,
-      pageId: 'owner-window-page-1',
-      displayedNonce: receipt.displayedNonce,
-      expectedGeneration: window.state().generation,
-      submissionId: 'owner-window-signoff-1',
-      kind: 'signoff',
-      value: { stage: 'rigging-interview', decision: 'approved', words: 'Approved via owner window' },
-    });
-    expect(submitSignoff.ok).toBe(true);
-    if (!submitSignoff.ok) throw new Error(submitSignoff.error.code);
-    expect(submitSignoff.value.schema).toBe(HOST_JOB_RECORD_ACT_SCHEMA);
 
     // 3. Publish option-set record and verify prepareJobInspection loads retained interview questions
     const pubOptRes = await callApi({
@@ -2652,7 +2641,7 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
     });
 
     const pkgReceipt = await pkgFixture.display(pkgPub);
-    const validPkgAsk = await pkgFixture.ask(pkgPub, { kind: 'signoff', stage: 'plan-approved' });
+    const validPkgAsk = await pkgFixture.ask(pkgPub, { kind: 'review-verdict', stage: 'rig-review' });
 
     const badPkgAct = await pkgFixture.ports.commitUIAct(
       pkgFixture.session.jobId,
@@ -2902,7 +2891,7 @@ test('#586 live host and session reopen lifecycle: package-only host refuses reo
 });
 
 // Review-side synthetic reader only; no installed Create consumer conformance claim.
-test('#800 all five record signoffs retain UI submission bytes through consumer fetch and refuse unbound acts', async () => {
+test('#800 / #1227 all five record signoffs still parse on publications and historical acts while fresh asks and submissions refuse', async () => {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-direction-signoff-'));
   const root = join(scratch, 'input');
   await mkdir(root);
@@ -2928,32 +2917,42 @@ test('#800 all five record signoffs retain UI submission bytes through consumer 
       result: workspace.result, freeze: {kind: 'producer-held', holdId: 'synthetic', record: workspace.record}})).json();
     expect(published.ok).toBe(true);
     const publication = published.value;
+    expect(publication.source.subjects).toEqual(stages.map(stage => ({kind: 'signoff', stage})));
     const unknown = await (await call({verb: 'ask', expectedGeneration: session.status().generation, idempotencyKey: 'unknown',
       publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'unknown-stage'}})).json();
     expect(unknown).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
     for (const stage of stages) {
-      const asked = await (await call({verb: 'ask', expectedGeneration: session.status().generation, idempotencyKey: stage,
-        publicationId: publication.publicationId, subject: {kind: 'signoff', stage}})).json();
-      expect(asked.ok).toBe(true);
+      const askedRes = await call({verb: 'ask', expectedGeneration: session.status().generation, idempotencyKey: stage,
+        publicationId: publication.publicationId, subject: {kind: 'signoff', stage}});
+      expect(askedRes.status).toBe(409);
+      expect(await askedRes.json()).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
       const receipt = await ports.ackDisplayed(session.jobId, new Request(origin + `/jobs/${session.jobId}/ui/displayed`, {
         method: 'POST', headers: {'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': credentials.ui},
         body: JSON.stringify({publicationId: publication.publicationId, pageId: stage, sourceHash: publication.source.sourceHash}),
       }));
       expect(receipt.ok).toBe(true);
       if (!receipt.ok) throw new Error(receipt.error.code);
-      const value = {stage, decision: 'approved', words: '  Original approval · 원문\n'};
+      const value = {stage, decision: 'approved' as const, words: '  Original approval · 원문\n'};
       const committed = await ports.commitUIAct(session.jobId, new Request(origin + `/jobs/${session.jobId}/ui/acts`, {
         method: 'POST', headers: {'Content-Type': 'application/json', Origin: origin, 'X-Review-Capability': credentials.ui},
-        body: JSON.stringify({kind: 'signoff', publicationId: publication.publicationId, askId: asked.value.askId, pageId: stage,
-          displayedNonce: receipt.value.displayedNonce, expectedGeneration: session.status().generation, submissionId: stage, value}),
+        body: JSON.stringify({kind: 'signoff', publicationId: publication.publicationId, askId: '00000000-0000-4000-8000-000000000001',
+          pageId: stage, displayedNonce: receipt.value.displayedNonce, expectedGeneration: session.status().generation, submissionId: stage, value}),
       }));
-      expect(committed.ok).toBe(true);
-      if (!committed.ok) throw new Error(committed.error.code);
-      expect(committed.value.value).toEqual(value);
-      const raw = await call({verb: 'fetch-act', actId: committed.value.actId}, session.writerGrant().fetchCapability, 'application/vnd.rig-review.act+json');
-      expect(raw.status).toBe(200);
-      expect(await raw.text()).toBe(JSON.stringify(committed.value));
-      const act = parseRecordAct(committed.value), source = act.source;
+      expect(committed).toEqual({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED', message: 'JOB_ACT_KIND_DISABLED'}});
+      const storedAct = {
+        schema: HOST_JOB_RECORD_ACT_SCHEMA,
+        actId: `act-${stage}`,
+        jobId: session.jobId,
+        askId: `ask-${stage}`,
+        publicationId: publication.publicationId,
+        kind: 'signoff' as const,
+        authority: {actor: 'human' as const, channel: 'review-ui' as const, reviewer: {id: 'synthetic-owner', role: 'owner' as const}},
+        at: '2026-11-25T00:00:00.000Z',
+        source: publication.source,
+        value,
+      };
+      const act = parseRecordAct(storedAct), source = act.source;
+      expect(JSON.stringify(act)).toBe(JSON.stringify(storedAct));
       if (source.subject !== 'plan') throw new Error('Expected plan-bound signoff');
       expect(act.source.projectHash).toBe(workspace.record.sha256);
       expect(act.source.selection).toEqual({kind: 'plan'});

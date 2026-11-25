@@ -23,7 +23,7 @@ const flashOnly=Bun.argv.includes('--flash-only');
 await mkdir(output,{recursive:true});
 const observations:unknown[]=[];
 const flashFailures:unknown[]=[],caseFailures:unknown[]=[];
-const modes=['rig','direction','parts','signoff','checkpoint','interview','embedded-rig','standalone'] as const;
+const modes=['rig','direction','parts','checkpoint','interview','embedded-rig','standalone'] as const;
 type Mode=typeof modes[number];
 const diagnostic=`(()=>{
  const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden],dialog:not([open])');
@@ -166,7 +166,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    const fixture=await jobFixture(),capability='b'.repeat(64);
    const server=await startServer(await loadReview(join(fixture.root,'out')),{port:0,capability,stateDir:fixture.state});
    close=async()=>{server.stop(true);await fixture.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
-  }else if(mode==='signoff'||mode==='checkpoint'||mode==='interview'){
+  }else if(mode==='checkpoint'||mode==='interview'){
    const fixture=await recordScreenFixture(mode==='interview'?'interview-picks':mode,false);
    close=()=>fixture.close();url=fixture.ownerUrl;
   }else{
