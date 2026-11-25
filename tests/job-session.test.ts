@@ -13,6 +13,7 @@ import { JobSession } from '../src/job-session.ts';
 import { createJobHostPorts } from '../src/job-api.ts';
 import { JOB_API_V3_SCHEMA } from '../src/job-contract.ts';
 import { createSyntheticOptionRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
+import { seedHistoricalPicksAsks } from './helpers/historical-picks-act.ts';
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 const stores: JobStore<unknown>[] = [];
@@ -420,14 +421,19 @@ test('#1022 a byte-identical retry of a replaced option-set publish and ask refu
       ask: (publicationId: string) => ({ verb: 'ask', expectedGeneration: session.status().generation, idempotencyKey: 'ask-' + key,
         publicationId, subject: set.context.subjects[0] }) });
     const first = requests(a, 'a'), publishedA = await call(first.publish), askBodyA = first.ask(publishedA.value.publicationId);
-    const askedA = await call(askBodyA);
+    // #1230: fresh picks asks refuse; A's ask and its receipt are the ones a pre-refusal Review stored for the producer.
+    expect(await call(askBodyA)).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+    const askRequestA = { schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'r', ...askBodyA };
+    const [storedAskA] = seedHistoricalPicksAsks(session, publishedA.value.publicationId, [a.context.subjects[0]!], askRequestA);
+    const askedA = { value: storedAskA! };
+    expect(await call(askBodyA)).toMatchObject({ ok: true, value: storedAskA });
     const second = requests(b, 'b'), publishedB = await call(second.publish);
-    expect((await call(second.ask(publishedB.value.publicationId))).ok).toBe(true);
+    expect(await call(second.ask(publishedB.value.publicationId))).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
     const head = 'head ' + publishedB.value.publicationId;
     expect(await call(first.publish)).toMatchObject({ ok: false, error: { code: 'JOB_ACT_SOURCE_STALE',
       message: `publication ${publishedA.value.publicationId} is superseded; ${head}` } });
     expect(await call(askBodyA)).toMatchObject({ ok: false, error: { code: 'JOB_ASK_SUPERSEDED',
       message: `ask ${askedA.value.askId} is superseded; ${head}` } });
-    expect(session.status().pending.map(ask => ask.subject)).toEqual([b.context.subjects[0]]);
+    expect(session.status().pending).toEqual([]);
   } finally { session.dispose(); }
 });

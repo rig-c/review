@@ -1,5 +1,5 @@
 import { parseUISubmission } from '../../src/job-act.ts';
-import { isRecordSource, parseCommentsAct, parseRecordSource, recordActSource, requestDigest } from '../../src/job-api.ts';
+import { isRecordSource, parseCommentsAct, parseJobRequestV3, parseRecordSource, recordActSource, requestDigest } from '../../src/job-api.ts';
 import type { JobCommentsAct, PendingAskV3 } from '../../src/job-contract.ts';
 import type { JobSession } from '../../src/job-session.ts';
 
@@ -56,7 +56,9 @@ export function seedHistoricalPicksAct(session: JobSession, input: {
 /** #1230: a pending picks ask stored by Review 4.21.0 or earlier, bound as the removed binder did (a record ask keeps
  * the record source). The page can still show it; a fresh submission against it refuses JOB_ACT_KIND_DISABLED. */
 export function seedHistoricalPicksAsks(session: JobSession, publicationId: string,
-  subjects: readonly { readonly kind: string; readonly questionId?: string; readonly setId?: string }[]): PendingAskV3[] {
+  subjects: readonly { readonly kind: string; readonly questionId?: string; readonly setId?: string }[],
+  /** The agent `ask` request that stored a single ask, so its idempotent receipt is replayable as before. */
+  agentRequest?: Record<string, unknown>): PendingAskV3[] {
   const internal = session as unknown as {
     store: { update(jobId: string, revision: null, operation: (current: { data: any }) => { data: any }): void };
     event(data: unknown, value: unknown): void; notify(): void;
@@ -73,6 +75,11 @@ export function seedHistoricalPicksAsks(session: JobSession, publicationId: stri
       data.asks[ask.askId] = ask;
       internal.event(data, { type: 'pending', ask });
       asks.push(ask);
+    }
+    if (agentRequest) {
+      if (asks.length !== 1) throw new Error('SYNTHETIC_1230_ONE_ASK_PER_RECEIPT');
+      const { requestId: _requestId, ...semantic } = parseJobRequestV3(agentRequest) as unknown as Record<string, unknown>;
+      data.replays['agent:' + String(agentRequest.idempotencyKey)] = { digest: requestDigest(semantic), value: asks[0] };
     }
     return { data };
   });
