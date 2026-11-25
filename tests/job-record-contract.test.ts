@@ -9,13 +9,13 @@ import backdropPins from './fixtures/record-backdrop-rig-pins-1068.json';
 import type {Feedback} from '../src/session.ts';
 import {JobSession} from '../src/job-session.ts';
 import {createJobHostPorts, parseCommentsAct} from '../src/job-api.ts';
-import {createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './helpers/job-record-fixture.ts';
+import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './helpers/job-record-fixture.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
+import { seedHistoricalCheckpointAct } from './helpers/historical-checkpoint-act.ts';
 import { runRecordBrowserPreflightSetupCheck } from './job-record-browser.ts';
 import {
   createJobWindow,
   createJobWindowTransport,
-  jobCheckpointContext,
   jobWindowAccess,
   prepareJobForms,
   prepareJobInspection,
@@ -1445,7 +1445,8 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
     if (!ackPlanRes.ok) throw new Error(ackPlanRes.error.code);
     const displayedNonce = ackPlanRes.value.displayedNonce;
 
-    // 4. Ask a declared checkpoint subject, verify undeclared/mismatched act value refuses JOB_ACT_INVALID, then finalize and fetch over job-api@3
+    // 4. Declared checkpoint subjects still parse on the published source (#1229), while fresh asks refuse JOB_ASK_INVALID,
+    // fresh submissions refuse JOB_ACT_KIND_DISABLED, and stored rig-review/act@4 checkpoint acts fetch and validate over job-api@3.
     const askCheckpointRes = await callApi({
       schema: HOST_JOB_API_V3_SCHEMA,
       jobId: host.session.jobId,
@@ -1456,43 +1457,32 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
       publicationId: planPublication.publicationId,
       subject: { kind: 'checkpoint', checkpointId: 'seethrough' },
     });
-    expect(askCheckpointRes.status).toBe(200);
+    expect(askCheckpointRes.status).toBe(409);
     const askCheckpointJson = await askCheckpointRes.json();
-    expect(askCheckpointJson.schema).toBe(HOST_JOB_API_V3_SCHEMA);
-    expect(askCheckpointJson.ok).toBe(true);
-    const checkpointAsk = askCheckpointJson.value as publicJobHost.JobPendingAskV3;
-
-    const badCheckpointActRes = await host.ports.commitUIAct(
-      host.session.jobId,
-      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Origin: host.origin,
-          'X-Review-Capability': credentials.ui,
-        },
-        body: JSON.stringify({
-          publicationId: planPublication.publicationId,
-          askId: checkpointAsk.askId,
-          pageId: 'page-create-plan',
-          displayedNonce,
-          expectedGeneration: host.session.status().generation,
-          submissionId: 'sub-bad-checkpoint',
-          kind: 'checkpoint',
-          value: {
-            checkpointId: 'undeclared_step',
-            outcome: 'pass',
-            words: 'Mismatched checkpoint ID',
-          },
-        }),
-      }),
-    );
-    expect(badCheckpointActRes).toEqual({
+    expect(askCheckpointJson).toMatchObject({
+      schema: HOST_JOB_API_V3_SCHEMA,
       ok: false,
-      error: { code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID' },
+      error: { code: 'JOB_ASK_INVALID' },
     });
 
-    const commitCheckpointRes = await host.ports.commitUIAct(
+    const replayGen = host.session.status().generation;
+    const finalizedCheckpointAct = seedHistoricalCheckpointAct(host.session, {
+      publicationId: planPublication.publicationId,
+      pageId: 'page-create-plan',
+      displayedNonce,
+      expectedGeneration: replayGen,
+      submissionId: 'sub-checkpoint-seethrough',
+      checkpointId: 'seethrough',
+      value: {
+        checkpointId: 'seethrough',
+        outcome: 'pass',
+        words: 'Seethrough checkpoint verified.',
+      },
+    }) as JobRecordAct;
+    expect(finalizedCheckpointAct.schema).toBe(HOST_JOB_RECORD_ACT_SCHEMA);
+    const checkpointAsk = { askId: finalizedCheckpointAct.askId };
+
+    const freshCheckpointActRes = await host.ports.commitUIAct(
       host.session.jobId,
       new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
         method: 'POST',
@@ -1507,20 +1497,20 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
           pageId: 'page-create-plan',
           displayedNonce,
           expectedGeneration: host.session.status().generation,
-          submissionId: 'sub-checkpoint-seethrough',
+          submissionId: 'sub-fresh-checkpoint',
           kind: 'checkpoint',
           value: {
             checkpointId: 'seethrough',
             outcome: 'pass',
-            words: 'Seethrough checkpoint verified.',
+            words: 'Fresh checkpoint refused',
           },
         }),
       }),
     );
-    expect(commitCheckpointRes.ok).toBe(true);
-    if (!commitCheckpointRes.ok) throw new Error(commitCheckpointRes.error.code);
-    const finalizedCheckpointAct = commitCheckpointRes.value as unknown as JobRecordAct;
-    expect(finalizedCheckpointAct.schema).toBe(HOST_JOB_RECORD_ACT_SCHEMA);
+    expect(freshCheckpointActRes).toEqual({
+      ok: false,
+      error: { code: 'JOB_ACT_KIND_DISABLED', message: 'JOB_ACT_KIND_DISABLED' },
+    });
 
     const fetchCheckpointReq: JobFetchActRequestV3 = {
       schema: HOST_JOB_API_V3_SCHEMA,
@@ -2140,42 +2130,70 @@ test('#588 record-move and freshness boundaries: publish, ask, and commitUIAct r
     expect(host.session.status().generation).toBe(1);
 
     // 3. During ask, if project.json moves right after retained reader returns, ask refuses JOB_RECORD_MOVED without advancing generation
-    mode = 'move-after-retained-read';
-    const moveAskRes = await callApi({
-      schema: HOST_JOB_API_V3_SCHEMA,
-      jobId: host.session.jobId,
-      requestId: `req-${++seq}`,
-      verb: 'ask',
-      expectedGeneration: 1,
-      idempotencyKey: 'ask-move-after-retained',
-      publicationId: publication.publicationId,
-      subject: { kind: 'checkpoint', checkpointId: 'step-1' },
-    });
-    expect(moveAskRes.status).toBe(409);
-    expect(await moveAskRes.json()).toMatchObject({
-      schema: HOST_JOB_API_V3_SCHEMA,
-      ok: false,
-      error: { code: 'JOB_RECORD_MOVED' },
-    });
-    expect(host.session.status().generation).toBe(1);
-    expect(host.session.status().pending).toHaveLength(0);
+    // (#1229: fresh checkpoint/signoff/reopen asks refuse at bindJobRecordAsk, so exercise ask's retained record-move check on an option-set publication.)
+    const optScratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-588-ask-move-'));
+    try {
+      const optRoot = join(optScratch, 'project');
+      await mkdir(optRoot, { recursive: true });
+      const optWorkspace = createSyntheticOptionRecordWorkspace(optRoot);
+      const optOriginal = await readFile(join(optRoot, 'project.json'), 'utf8');
+      let optMove = false;
+      const optHost = await startJobHost({
+        root: optRoot,
+        stateDir: join(optScratch, 'state'),
+        fingerprint: 'e'.repeat(64),
+        reviewer: { id: 'reviewer-move-boundary', role: 'owner' },
+        publicationMode: 'record-and-package',
+        readerId: HOST_JOB_RECORD_READER_ID,
+        readRecordPublished: (async (input: publicJobHost.JobRecordReaderInput) => {
+          const ctx = structuredClone(optWorkspace.context);
+          if (input.phase === 'retained' && optMove) {
+            await writeFile(join(optRoot, 'project.json'), optOriginal + '\n');
+          }
+          return ctx;
+        }) as publicJobHost.JobRecordPublicationReader,
+      });
+      try {
+        const optToken = optHost.session.hostCredentials().agent;
+        const callOpt = (body: Record<string, unknown>) =>
+          optHost.ports.handleJobApi(new Request(`${optHost.origin}/jobs/${optHost.session.jobId}/api`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${optToken}` },
+            body: JSON.stringify(body),
+          }));
+        const optPubRes = await callOpt({
+          schema: HOST_JOB_API_V3_SCHEMA, jobId: optHost.session.jobId, requestId: 'opt-pub',
+          verb: 'publish', expectedGeneration: 0, idempotencyKey: 'opt-pub',
+          result: optWorkspace.result,
+          freeze: { kind: 'producer-held', holdId: 'opt-hold', record: optWorkspace.record },
+        });
+        expect(optPubRes.status).toBe(200);
+        const optPub = (await optPubRes.json()).value as publicJobHost.JobPublicationV3;
+        optMove = true;
+        const moveAskRes = await callOpt({
+          schema: HOST_JOB_API_V3_SCHEMA, jobId: optHost.session.jobId, requestId: 'opt-ask-move',
+          verb: 'ask', expectedGeneration: 1, idempotencyKey: 'ask-move-after-retained',
+          publicationId: optPub.publicationId,
+          subject: optWorkspace.context.subjects[0]!,
+        });
+        expect(moveAskRes.status).toBe(409);
+        expect(await moveAskRes.json()).toMatchObject({
+          schema: HOST_JOB_API_V3_SCHEMA,
+          ok: false,
+          error: { code: 'JOB_RECORD_MOVED' },
+        });
+        expect(optHost.session.status().generation).toBe(1);
+        expect(optHost.session.status().pending).toHaveLength(0);
+      } finally {
+        optHost.stop();
+      }
+    } finally {
+      await rm(optScratch, { recursive: true, force: true });
+    }
 
-    // 4. Restore project.json, ask cleanly, acknowledge display, then move project.json during commitUIAct retained check
+    // 4. Restore project.json, acknowledge display, then move project.json during commitUIAct retained check (#1229: comments act@10 exercises the live record UI commit boundary)
     await writeFile(join(root, 'project.json'), originalProject);
     mode = 'normal';
-    const cleanAskRes = await callApi({
-      schema: HOST_JOB_API_V3_SCHEMA,
-      jobId: host.session.jobId,
-      requestId: `req-${++seq}`,
-      verb: 'ask',
-      expectedGeneration: 1,
-      idempotencyKey: 'ask-clean',
-      publicationId: publication.publicationId,
-      subject: { kind: 'checkpoint', checkpointId: 'step-1' },
-    });
-    expect(cleanAskRes.status).toBe(200);
-    const ask = (await cleanAskRes.json()).value as publicJobHost.JobPendingAskV3;
-    expect(host.session.status().generation).toBe(2);
 
     const ackRes = await host.ports.ackDisplayed(
       host.session.jobId,
@@ -2208,13 +2226,12 @@ test('#588 record-move and freshness boundaries: publish, ask, and commitUIAct r
         },
         body: JSON.stringify({
           publicationId: publication.publicationId,
-          askId: ask.askId,
           pageId: 'page-move-boundary',
           displayedNonce: ackRes.value.displayedNonce,
-          expectedGeneration: 2,
+          expectedGeneration: 1,
           submissionId: 'sub-move-after-retained',
-          kind: 'checkpoint',
-          value: { checkpointId: 'step-1', outcome: 'pass', words: 'Should refuse' },
+          kind: 'comments',
+          value: { comments: [{ text: 'Should refuse' }] },
         }),
       }),
     );
@@ -2222,8 +2239,7 @@ test('#588 record-move and freshness boundaries: publish, ask, and commitUIAct r
       ok: false,
       error: { code: 'JOB_RECORD_MOVED', message: 'JOB_RECORD_MOVED' },
     });
-    expect(host.session.status().generation).toBe(2);
-    expect(host.session.status().pending[0]?.status).toBe('pending');
+    expect(host.session.status().generation).toBe(1);
   } finally {
     host.stop();
     await rm(scratch, { recursive: true, force: true });
@@ -2344,7 +2360,7 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
         }),
       );
 
-    // 1. Publish plan record and ask checkpoint + signoff
+    // 1. Publish plan record and verify fresh checkpoint (#1229) and signoff (#1227) asks refuse JOB_ASK_INVALID
     const pubPlanRes = await callApi({
       schema: HOST_JOB_API_V3_SCHEMA,
       jobId: host.session.jobId,
@@ -2371,7 +2387,12 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
       publicationId: planPublication.publicationId,
       subject: { kind: 'checkpoint', checkpointId: 'seethrough' },
     });
-    const cpAsk = (await askCpRes.json()).value as publicJobHost.JobPendingAskV3;
+    expect(askCpRes.status).toBe(409);
+    expect(await askCpRes.json()).toMatchObject({
+      schema: HOST_JOB_API_V3_SCHEMA,
+      ok: false,
+      error: { code: 'JOB_ASK_INVALID' },
+    });
 
     const askSignoffRes = await callApi({
       schema: HOST_JOB_API_V3_SCHEMA,
@@ -2390,7 +2411,7 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
       error: { code: 'JOB_ASK_INVALID' },
     });
 
-    // 2. Drive normal owner URL access -> transport -> createJobWindow -> prepareJobInspection -> prepareJobForms -> submit
+    // 2. Drive normal owner URL access -> transport -> createJobWindow -> prepareJobInspection -> comment-only act@10 submit
     const slots = new Map<string, string>();
     const access = jobWindowAccess(
       host.ownerUrl,
@@ -2444,7 +2465,6 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
     };
     let preparedPlanInspection: Awaited<ReturnType<typeof prepareJobInspection>> | null = null;
     let preparedPlanForms: Map<string, { askId: string; kind: string }> | null = null;
-    const pendingPlanAsks: readonly publicJobHost.JobPendingAskV3[] = [cpAsk];
     const window = createJobWindow<PreparedWindowView>({
       jobId: host.session.jobId,
       pageId: 'owner-window-page-1',
@@ -2452,13 +2472,7 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
       adapter: {
         async prepare(display, signal): Promise<PreparedWindowView> {
           const inspection = await prepareJobInspection(display, signal);
-          const forms = prepareJobForms(display, pendingPlanAsks, ask => {
-            if (ask.subject.kind === 'checkpoint') {
-              const cp = jobCheckpointContext(ask, inspection.metadata.manifest?.checkpoints ?? []);
-              expect(cp.step.id).toBe('seethrough');
-            }
-            return { askId: ask.askId, kind: ask.subject.kind };
-          });
+          const forms = prepareJobForms(display, [], ask => ({ askId: ask.askId, kind: ask.subject.kind }));
           return { inspection, forms };
         },
         captureDraft: () => null,
@@ -2485,13 +2499,6 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
       cursor: 'c-1',
       publication: planPublication,
     });
-    window.event({
-      type: 'pending',
-      jobId: host.session.jobId,
-      generation: 2,
-      cursor: 'c-2',
-      ask: cpAsk,
-    });
     await window.settled();
 
     expect(window.state().error).toBeNull();
@@ -2505,48 +2512,52 @@ test('#588 normal owner URL model-free record inspection: retainedPublicationRou
     expect(committedPlanInspection.metadata.recordSource).toEqual(
       planPublication.source as publicJobHost.JobRecordSource,
     );
-    expect(committedPlanForms.size).toBe(1);
+    expect(committedPlanForms.size).toBe(0);
 
     const receipt = window.state().receipt!;
-    const submitSignoff = await host.ports.commitUIAct(
-      host.session.jobId,
-      new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Origin: host.origin,
-          'X-Review-Capability': host.session.hostCredentials().ui,
-        },
-        body: JSON.stringify({
-          publicationId: planPublication.publicationId,
-          askId: cpAsk.askId,
-          pageId: 'owner-window-page-1',
-          displayedNonce: receipt.displayedNonce,
-          expectedGeneration: host.session.status().generation,
-          submissionId: 'owner-window-signoff-1',
-          kind: 'signoff',
-          value: { stage: 'rigging-interview', decision: 'approved', words: 'Approved via owner window' },
+    for (const [kind, value] of [
+      ['signoff', { stage: 'rigging-interview', decision: 'approved', words: 'Approved via owner window' }],
+      ['checkpoint', { checkpointId: 'seethrough', outcome: 'pass', words: 'Checked via owner window' }],
+    ] as const) {
+      const refused = await host.ports.commitUIAct(
+        host.session.jobId,
+        new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: host.origin,
+            'X-Review-Capability': host.session.hostCredentials().ui,
+          },
+          body: JSON.stringify({
+            publicationId: planPublication.publicationId,
+            askId: `legacy-${kind}-ask`,
+            pageId: 'owner-window-page-1',
+            displayedNonce: receipt.displayedNonce,
+            expectedGeneration: host.session.status().generation,
+            submissionId: `owner-window-${kind}-1`,
+            kind,
+            value,
+          }),
         }),
-      }),
-    );
-    expect(submitSignoff).toEqual({
-      ok: false,
-      error: { code: 'JOB_ACT_KIND_DISABLED', message: 'JOB_ACT_KIND_DISABLED' },
-    });
+      );
+      expect(refused).toEqual({
+        ok: false,
+        error: { code: 'JOB_ACT_KIND_DISABLED', message: 'JOB_ACT_KIND_DISABLED' },
+      });
+    }
 
-    const submitCp = await window.submit({
+    const submitComments = await window.submit({
       publicationId: planPublication.publicationId,
-      askId: cpAsk.askId,
       pageId: 'owner-window-page-1',
       displayedNonce: receipt.displayedNonce,
       expectedGeneration: window.state().generation,
-      submissionId: 'owner-window-cp-1',
-      kind: 'checkpoint',
-      value: { checkpointId: 'seethrough', outcome: 'pass', words: 'Checked via owner window' },
+      submissionId: 'owner-window-comments-1',
+      kind: 'comments',
+      value: { comments: [{ text: 'Checked via owner window' }] },
     });
-    expect(submitCp.ok).toBe(true);
-    if (!submitCp.ok) throw new Error(submitCp.error.code);
-    expect(submitCp.value.schema).toBe(HOST_JOB_RECORD_ACT_SCHEMA);
+    expect(submitComments.ok).toBe(true);
+    if (!submitComments.ok) throw new Error(submitComments.error.code);
+    expect(submitComments.value.schema).toBe('rig-review/act@10');
 
     // 3. Publish option-set record and verify prepareJobInspection loads retained interview questions
     const pubOptRes = await callApi({

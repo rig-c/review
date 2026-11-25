@@ -8,7 +8,7 @@ import { createJobHostPorts, jobAskBatchLimit, parseJobRequestV3 } from '../src/
 import { JOB_API_V3_SCHEMA, JOB_CAPABILITIES_V3, type NextValueV3, type PendingAskV3 } from '../src/job-contract.ts';
 import type { JobStore } from '../src/job-store.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
-import { createSyntheticPlanRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
+import { createSyntheticOptionSetsRecordWorkspace, createSyntheticRecordReader } from './helpers/job-record-fixture.ts';
 
 // Review #963: one `ask-batch` runs the record freshness check once for every listed subject.
 // Review-side synthetic reader only; no installed Create consumer conformance claim.
@@ -17,15 +17,9 @@ async function batchFixture(prefix: string) {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), prefix));
   const root = join(scratch, 'input');
   await mkdir(root);
-  // #1227: checkpoint until #1229 retires record asks
-  const steps = [
-    { id: 'step_layout', hash: '1'.repeat(64) },
-    { id: 'step_weights', hash: '2'.repeat(64) },
-    { id: 'step_motion', hash: '3'.repeat(64) },
-  ];
-  const workspace = createSyntheticPlanRecordWorkspace(root, { steps, subjects: steps.map(step => ({
-    kind: 'checkpoint' as const, checkpointId: step.id })) });
-  const reader = createSyntheticRecordReader({ onPlan: () => workspace.context });
+  // #1229: checkpoint asks retired; ask-batch exercises multi-set option-set subjects.
+  const workspace = createSyntheticOptionSetsRecordWorkspace(root, { count: 3 });
+  const reader = createSyntheticRecordReader({ onOption: () => workspace.context });
   const session = new JobSession({ root, stateDir: join(scratch, 'state'), fingerprint: 'a'.repeat(64),
     reviewer: { id: 'synthetic-owner', role: 'owner' }, publicationMode: 'record-and-package', readRecordPublished: reader.reader });
   const origin = 'http://127.0.0.1:19963', ports = createJobHostPorts(session, origin), credentials = session.hostCredentials();
@@ -100,11 +94,16 @@ test('#963 an invalid subject refuses the whole batch under its index and leaves
     const subjects = fixture.workspace.context.subjects;
     const before = fixture.snapshot(), calls = fixture.reader.calls.length;
 
-    const undeclared = await fixture.batch([subjects[0]!, subjects[1]!, { kind: 'checkpoint', checkpointId: 'undeclared_step' }, subjects[2]!]);
+    const undeclared = await fixture.batch([subjects[0]!, subjects[1]!, { kind: 'interview-picks', questionId: 'undeclared_q', setId: 'undeclared_s' }, subjects[2]!]);
     expect(undeclared).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
     expect(undeclared.error.message).toBe('subjects[2]: JOB_ASK_INVALID');
     expect(fixture.snapshot()).toEqual(before);
     expect(fixture.reader.calls.length).toBe(calls);
+
+    // #1229: checkpoint subjects also refuse under their index as JOB_ASK_INVALID.
+    const retiredCheckpoint = await fixture.batch([subjects[0]!, { kind: 'checkpoint', checkpointId: 'step_layout' }], 'retired-cp');
+    expect(retiredCheckpoint).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID', message: 'subjects[1]: JOB_ASK_INVALID' } });
+    expect(fixture.snapshot()).toEqual(before);
 
     const malformed = await fixture.batch([subjects[0]!, { kind: 'no-such-subject' }], 'malformed');
     expect(malformed.ok).toBe(false);

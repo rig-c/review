@@ -35,6 +35,9 @@ import {
   createSyntheticPlanRecordWorkspace,
   createSyntheticRecordReader,
 } from './helpers/job-record-fixture.ts';
+import { seedHistoricalCheckpointAct, seedHistoricalCheckpointAsk } from './helpers/historical-checkpoint-act.ts';
+import { JobSession } from '../src/job-session.ts';
+import { createJobHostPorts } from '../src/job-api.ts';
 
 const tempDirs: string[] = [];
 
@@ -48,6 +51,115 @@ afterEach(() => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()!;
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('#1229 fresh record checkpoint asks refuse JOB_ASK_INVALID, fresh submissions refuse JOB_ACT_KIND_DISABLED, and stored act@4 replays byte-for-byte', async () => {
+  const workRoot = makeTempDir('review-1229-plan-root-');
+  const stateRoot = makeTempDir('review-1229-plan-state-');
+  const ws = createSyntheticPlanRecordWorkspace(workRoot);
+  const { reader } = createSyntheticRecordReader({ onPlan: () => structuredClone(ws.context) });
+  const session = new JobSession({
+    root: workRoot,
+    stateDir: stateRoot,
+    fingerprint: 'a'.repeat(64),
+    reviewer: { id: 'synthetic-owner', role: 'owner' },
+    publicationMode: 'record-and-package',
+    readRecordPublished: reader,
+  });
+  try {
+    const origin = 'http://127.0.0.1:19129';
+    const ports = createJobHostPorts(session, origin);
+    const agent = session.hostCredentials().agent;
+    const ui = session.hostCredentials().ui;
+    const call = async (body: object) => (await ports.handleJobApi(new Request(origin + `/jobs/${session.jobId}/api`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + agent },
+      body: JSON.stringify({ schema: JOB_API_V3_SCHEMA, jobId: session.jobId, requestId: 'req-1229', ...body }),
+    }))).json();
+    const uiPost = (body: object) => new Request(origin + `/jobs/${session.jobId}/ui/acts`, {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json', 'X-Review-Capability': ui },
+      body: JSON.stringify(body),
+    });
+
+    const pubRes = await call({
+      verb: 'publish',
+      expectedGeneration: 0,
+      idempotencyKey: 'pub-1229',
+      result: ws.result,
+      freeze: { kind: 'producer-held', holdId: 'hold-1229', record: ws.record },
+    });
+    expect(pubRes.ok).toBe(true);
+    const publicationId = pubRes.value.publicationId as string;
+    expect(pubRes.value.source.subjects).toContainEqual({ kind: 'checkpoint', checkpointId: 'step_layout' });
+
+    const askRes = await call({
+      verb: 'ask',
+      expectedGeneration: session.status().generation,
+      idempotencyKey: 'ask-1229',
+      publicationId,
+      subject: { kind: 'checkpoint', checkpointId: 'step_layout' },
+    });
+    expect(askRes).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+
+    const batchRes = await call({
+      verb: 'ask-batch',
+      expectedGeneration: session.status().generation,
+      idempotencyKey: 'batch-1229',
+      publicationId,
+      subjects: [{ kind: 'checkpoint', checkpointId: 'step_layout' }],
+    });
+    expect(batchRes).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
+
+    const ackRes = await ports.ackDisplayed(session.jobId, new Request(origin + `/jobs/${session.jobId}/ui/displayed`, {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json', 'X-Review-Capability': ui },
+      body: JSON.stringify({ publicationId, pageId: 'page-1229', sourceHash: pubRes.value.source.sourceHash }),
+    }));
+    expect(ackRes.ok).toBe(true);
+    if (!ackRes.ok) throw new Error(ackRes.error.code);
+    const displayedNonce = ackRes.value.displayedNonce;
+
+    const legacyAsk = seedHistoricalCheckpointAsk(session, publicationId, { kind: 'checkpoint', checkpointId: 'step_layout' });
+    const freshSubmit = await ports.commitUIAct(session.jobId, uiPost({
+      publicationId,
+      askId: legacyAsk.askId,
+      pageId: 'page-1229',
+      displayedNonce,
+      expectedGeneration: session.status().generation,
+      submissionId: 'fresh-rec-cp',
+      kind: 'checkpoint',
+      value: { checkpointId: 'step_layout', outcome: 'pass', words: '' },
+    }));
+    expect(freshSubmit).toMatchObject({ ok: false, error: { code: 'JOB_ACT_KIND_DISABLED' } });
+
+    const replayGeneration = session.status().generation;
+    const stored = seedHistoricalCheckpointAct(session, {
+      publicationId,
+      pageId: 'page-1229',
+      displayedNonce,
+      expectedGeneration: replayGeneration,
+      submissionId: 'replay-rec-cp',
+      checkpointId: 'step_layout',
+      value: { checkpointId: 'step_layout', outcome: 'fail', words: '  Needs repair  ' },
+    });
+    expect(stored.schema).toBe(JOB_RECORD_ACT_SCHEMA);
+    const replayBody = {
+      publicationId,
+      askId: stored.askId,
+      pageId: 'page-1229',
+      displayedNonce,
+      expectedGeneration: replayGeneration,
+      submissionId: 'replay-rec-cp',
+      kind: 'checkpoint',
+      value: { checkpointId: 'step_layout', outcome: 'fail', words: '  Needs repair  ' },
+    };
+    const replayed = await ports.commitUIAct(session.jobId, uiPost(replayBody));
+    expect(replayed).toEqual({ ok: true, value: stored });
+    expect(session.readActExport(stored.actId, false).toString()).toBe(JSON.stringify(stored));
+  } finally {
+    session.dispose();
   }
 });
 
@@ -166,9 +278,13 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       bindJobRecordAsk({ kind: 'mesh-edit' }, optRetained),
     ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
 
-    // Binds declared checkpoints; declared signoffs still parse on the source but refuse fresh asks (#1227)
-    expect(bindJobRecordAsk({ kind: 'checkpoint', checkpointId: 'step_layout' }, planRetained)).toEqual(
-      planRetained.source,
+    // Declared checkpoints (#1229) and signoffs (#1227) still parse on the source, while fresh asks refuse JOB_ASK_INVALID
+    expect(planRetained.source.subjects).toContainEqual({ kind: 'checkpoint', checkpointId: 'step_layout' });
+    expect(() => bindJobRecordAsk({ kind: 'checkpoint', checkpointId: 'step_layout' }, planRetained)).toThrow(
+      expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
+    );
+    expect(() => bindJobAsk({ kind: 'checkpoint', checkpointId: 'step_layout' }, planRetained)).toThrow(
+      expect.objectContaining({ code: 'JOB_ASK_INVALID' }),
     );
     for (const stage of ['plan-approved', 'rigging-interview', 'post-interview'] as const) {
       expect(planRetained.source.subjects).toContainEqual({ kind: 'signoff', stage });
@@ -394,7 +510,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
     ).toThrow(expect.objectContaining({ code: 'JOB_ACT_INVALID' }));
   });
 
-  test('[SYNTHETIC] prepares rig-review/act@4 checkpoint (pass/fail with planStepId===checkpointId) and plan-bound signoff acts', async () => {
+  test('[SYNTHETIC] refuses fresh checkpoint and signoff record submissions while historical rig-review/act@4 checkpoint and signoff acts read byte-exact', async () => {
     const workRoot = makeTempDir('review-561-plan-act-root-');
     const stateRoot = makeTempDir('review-561-plan-act-state-');
     const fixture = createSyntheticPlanRecordWorkspace(workRoot);
@@ -418,67 +534,87 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       'pub_plan_1',
       'ask_cp_1',
       checkpointSubject,
-      bindJobRecordAsk(checkpointSubject, retained),
+      retained.source,
     );
     const reviewer: JobReviewerBinding = { id: 'reviewer_1', role: 'owner' };
+    const { directionReview: _directionReview, ...actSource } = retained.source;
 
     for (const outcome of ['pass', 'fail'] as const) {
-      const cpAct = prepareJobRecordAct({
-        jobId: 'job_plan_1',
-        submission: {
-          publicationId: 'pub_plan_1',
-          askId: 'ask_cp_1',
-          pageId: 'page_1',
-          displayedNonce: 'nonce_1',
-          expectedGeneration: 2,
-          submissionId: `sub_${outcome}`,
-          kind: 'checkpoint',
-          value: {
-            checkpointId: 'step_layout',
-            outcome,
-            words: outcome === 'fail' ? '   Needs joint placement adjustment   ' : '',
-          },
+      const submission: JobUISubmission = {
+        publicationId: 'pub_plan_1',
+        askId: 'ask_cp_1',
+        pageId: 'page_1',
+        displayedNonce: 'nonce_1',
+        expectedGeneration: 2,
+        submissionId: `sub_${outcome}`,
+        kind: 'checkpoint',
+        value: {
+          checkpointId: 'step_layout',
+          outcome,
+          words: outcome === 'fail' ? '   Needs joint placement adjustment   ' : '',
         },
-        ask: checkpointAsk,
-        retained,
-        reviewer,
+      };
+      expect(() =>
+        prepareJobRecordAct({
+          jobId: 'job_plan_1',
+          submission,
+          ask: checkpointAsk,
+          retained,
+          reviewer,
+          actId: `act_cp_${outcome}`,
+          at: '2026-11-08T12:00:00.000Z',
+        }),
+      ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
+      expect(() =>
+        finalizeJobAct({
+          jobId: 'job_plan_1',
+          submission,
+          ask: checkpointAsk,
+          retained,
+          reviewer,
+          actId: `act_cp_${outcome}`,
+          at: '2026-11-08T12:00:00.000Z',
+        }),
+      ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
+
+      const storedCheckpointAct = {
+        schema: JOB_RECORD_ACT_SCHEMA,
         actId: `act_cp_${outcome}`,
+        jobId: 'job_plan_1',
+        askId: 'ask_cp_1',
+        publicationId: 'pub_plan_1',
+        kind: 'checkpoint' as const,
+        authority: { actor: 'human' as const, channel: 'review-ui' as const, reviewer },
         at: '2026-11-08T12:00:00.000Z',
-      });
-      expect(cpAct.schema).toBe(JOB_RECORD_ACT_SCHEMA);
-      expect(cpAct.kind).toBe('checkpoint');
-      if (cpAct.kind === 'checkpoint') {
-        expect(cpAct.value).toEqual({
+        source: actSource,
+        value: {
           checkpointId: 'step_layout',
           planStepId: 'step_layout',
           outcome,
           words: outcome === 'fail' ? '   Needs joint placement adjustment   ' : '',
-        });
-      }
-      expect(JSON.stringify(parseRecordAct(cpAct))).toBe(JSON.stringify(cpAct));
+        },
+      };
+      expect(JSON.stringify(parseRecordAct(storedCheckpointAct))).toBe(JSON.stringify(storedCheckpointAct));
     }
 
-    // Pending outcome on checkpoint refuses
+    // Pending outcome on stored checkpoint act refuses JOB_ACT_INVALID
     expect(() =>
-      prepareJobRecordAct({
+      parseRecordAct({
+        schema: JOB_RECORD_ACT_SCHEMA,
+        actId: 'act_cp_pending',
         jobId: 'job_plan_1',
-        submission: {
-          publicationId: 'pub_plan_1',
-          askId: 'ask_cp_1',
-          pageId: 'page_1',
-          displayedNonce: 'nonce_1',
-          expectedGeneration: 2,
-          submissionId: 'sub_pending',
-          kind: 'checkpoint',
-          value: {
-            checkpointId: 'step_layout',
-            outcome: 'pending' as unknown as 'pass',
-            words: '',
-          },
+        askId: 'ask_cp_1',
+        publicationId: 'pub_plan_1',
+        kind: 'checkpoint',
+        authority: { actor: 'human', channel: 'review-ui', reviewer },
+        at: '2026-11-08T12:00:00.000Z',
+        source: actSource,
+        value: {
+          checkpointId: 'step_layout',
+          planStepId: 'step_layout',
+          outcome: 'pending',
+          words: '',
         },
-        ask: checkpointAsk,
-        retained,
-        reviewer,
       }),
     ).toThrow(expect.objectContaining({ code: 'JOB_ACT_INVALID' }));
 
@@ -543,9 +679,10 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
   test('[SYNTHETIC] refuses capture/still, extra submission authority/source fields, invalid reviewer authority, superseded asks, and stale sources', async () => {
     const workRoot = makeTempDir('review-561-guards-root-');
     const stateRoot = makeTempDir('review-561-guards-state-');
-    const fixture = createSyntheticPlanRecordWorkspace(workRoot);
+    // #1229: checkpoint submissions are retired; exercise live prepareJobRecordAct guards on an option-set ask.
+    const fixture = createSyntheticOptionRecordWorkspace(workRoot);
     const { reader } = createSyntheticRecordReader({
-      onPlan: () => structuredClone(fixture.context),
+      onOption: () => structuredClone(fixture.context),
     });
 
     const retained = await prepareJobRecordSource({
@@ -559,7 +696,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       readRecordPublished: reader,
     });
 
-    const subject: RecordSubject = { kind: 'checkpoint', checkpointId: 'step_layout' };
+    const subject: RecordSubject = { kind: 'interview-picks', questionId: 'rig_type', setId: 'set_rig_type_01' };
     const ask = buildPendingRecordAsk('pub_1', 'ask_1', subject, bindJobRecordAsk(subject, retained));
     const baseSubmission: JobUISubmission = {
       publicationId: 'pub_1',
@@ -568,11 +705,14 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       displayedNonce: 'nonce_1',
       expectedGeneration: 1,
       submissionId: 'sub_1',
-      kind: 'checkpoint',
+      kind: 'interview-picks',
       value: {
-        checkpointId: 'step_layout',
-        outcome: 'pass',
-        words: 'ok',
+        questionId: 'rig_type',
+        selections: [
+          { itemId: 'topology', optionId: 'biped_std', otherText: null },
+          { itemId: 'detail_level', optionId: 'density_high', otherText: null },
+        ],
+        note: 'ok',
       },
     };
     const validReviewer: JobReviewerBinding = { id: 'rev_1', role: 'owner' };

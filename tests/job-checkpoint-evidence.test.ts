@@ -16,6 +16,7 @@ import {JobSession} from '../src/job-session.ts';
 import {JobError} from '../src/job-store.ts';
 import {loadReview} from '../src/manifest.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
+import {seedHistoricalCheckpointAct, seedHistoricalCheckpointAsk} from './helpers/historical-checkpoint-act.ts';
 import {createSyntheticPlanRecordWorkspace, createSyntheticOptionRecordWorkspace, createSyntheticRecordReader,
   makeSyntheticPngBytes, writeWorkspaceFile} from './helpers/job-record-fixture.ts';
 
@@ -160,21 +161,29 @@ test('#1229 a packet is an ordinary comparison: admitted without a checkpoint su
   expect(checkpointEvidenceFields({checkpointEvidence: [packet]}, plan, [], files, true)).toEqual({checkpointEvidence: [packet]});
 });
 
-test('package checkpoint aliases follow admitted subject mapping and daemon derives planStepId', async () => {
+// #1229: fresh checkpoint asks/submissions refuse; historical act@6 checkpoint aliases retain their planStepId mapping and replay.
+test('package checkpoint aliases follow admitted subject mapping on historical act@6 while fresh asks and submissions refuse', async () => {
   const f = await packageFixture(), packet = evidence(f.root, 'motion-card', 'step-one');
   const {context} = contextWithEvidence(f, packet);
   f.setContext({...context, subjects: [{kind: 'checkpoint', checkpointId: 'motion-card', planStepId: 'step-one'}]});
-  const publication = await f.publish(), ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'motion-card', planStepId: 'step-one'});
+  const publication = await f.publish();
+  const refusedAsk = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+    idempotencyKey: 'alias-ask', publicationId: publication.publicationId,
+    subject: {kind: 'checkpoint', checkpointId: 'motion-card', planStepId: 'step-one'}})).json();
+  expect(refusedAsk).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
   const page = await f.display(publication);
-  const submission = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation, submissionId: 'alias',
+  const replayGen = f.session.status().generation;
+  const stored = seedHistoricalCheckpointAct(f.session, {...page, expectedGeneration: replayGen, submissionId: 'alias',
+    checkpointId: 'motion-card', planStepId: 'step-one',
+    value: {checkpointId: 'motion-card', outcome: 'fail', words: '  (iii)\nverbatim 한글  '}});
+  const submission = {...page, askId: stored.askId, expectedGeneration: replayGen, submissionId: 'alias',
     kind: 'checkpoint', value: {checkpointId: 'motion-card', outcome: 'fail' as const, words: '  (iii)\nverbatim 한글  '}};
   const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submission));
-  expect(result.ok).toBe(true);
-  if (!result.ok) throw new Error(JSON.stringify(result));
-  expect(result.value.value).toEqual({checkpointId: 'motion-card', planStepId: 'step-one', outcome: 'fail',
+  expect(result).toEqual({ok: true, value: stored});
+  expect(stored.value).toEqual({checkpointId: 'motion-card', planStepId: 'step-one', outcome: 'fail',
     comments: [{text: submission.value.words, anchor: {checkpointId: 'motion-card', planStepId: 'step-one'}}]});
   expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...submission, submissionId: 'forged',
-    value: {...submission.value, planStepId: 'step-one'}}))).toMatchObject({ok: false});
+    value: {...submission.value, planStepId: 'step-one'}}))).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
 });
 
 test('retained metadata delivers all 103 rows and four exact pinned tiles after live drift', async () => {
@@ -267,19 +276,21 @@ test('record two-phase evidence mismatch refuses and fresh mutations detect meta
     publicationId: publication.publicationId, subject: {kind: 'checkpoint', checkpointId: 'step_layout'}}, new AbortController().signal)).rejects.toThrow();
 });
 
-for (const outcome of ['pass', 'fail'] as const) test(`record ${outcome} commits normal owner words, reopens and retries exact act after live output drift`, async () => {
+// #1229: historical record act@4 checkpoint acts reopen and retry byte-for-byte after live output drift while fresh submissions refuse.
+for (const outcome of ['pass', 'fail'] as const) test(`record ${outcome} historical act@4 reopens and retries exact act after live output drift`, async () => {
   const f = recordFixture(), signal = new AbortController().signal;
   const publication = await f.session.execute(f.request, signal) as PublicationV3;
-  const ask = await f.session.execute({...f.request, verb: 'ask', requestId: 'ask', idempotencyKey: 'ask', expectedGeneration: 1,
-    publicationId: publication.publicationId, subject: {kind: 'checkpoint', checkpointId: 'step_layout'}}, signal) as any;
   const ports = createJobHostPorts(f.session, 'http://127.0.0.1:19484');
   const ack = await ports.ackDisplayed(f.session.jobId, new Request(`http://127.0.0.1:19484/jobs/${f.session.jobId}/ui/displayed`, {
     method: 'POST', headers: {'Content-Type': 'application/json', Origin: 'http://127.0.0.1:19484', 'X-Review-Capability': f.session.hostCredentials().ui},
     body: JSON.stringify({publicationId: publication.publicationId, pageId: 'page', sourceHash: publication.source.sourceHash})}));
   if (!ack.ok) throw new Error(JSON.stringify(ack));
-  const submission = {...ack.value, askId: ask.askId, expectedGeneration: f.session.status().generation, submissionId: `owner-${outcome}`,
+  const replayGen = f.session.status().generation;
+  const act = seedHistoricalCheckpointAct(f.session, {...ack.value, expectedGeneration: replayGen,
+    submissionId: `owner-${outcome}`, checkpointId: 'step_layout',
+    value: {checkpointId: 'step_layout', outcome, words: '  owner 한글\nunchanged  '}});
+  const submission = {...ack.value, askId: act.askId, expectedGeneration: replayGen, submissionId: `owner-${outcome}`,
     kind: 'checkpoint', value: {checkpointId: 'step_layout', outcome, words: '  owner 한글\nunchanged  '}};
-  const act = await f.session.commitUIAct(submission);
   expect(act.value).toEqual({...submission.value, planStepId: 'step_layout'});
   if (act.schema !== 'rig-review/act@4') throw new Error('record act expected');
   expect(parseRecordAct(act)).toEqual(act);
@@ -297,16 +308,14 @@ for (const outcome of ['pass', 'fail'] as const) test(`record ${outcome} commits
   expect(JSON.parse(reopened.readActExport(act.actId, false).toString())).toEqual(act);
   const events = await reopened.execute({schema: 'rig-review/job-api@3', jobId: f.session.jobId, requestId: 'next', verb: 'next', after: null, waitMs: 0}, signal) as any;
   expect(events.events.find((event: any) => event.type === 'act').act).toEqual(act);
-  await expect(reopened.commitUIAct({...submission, submissionId: 'fresh'})).rejects.toThrow();
+  await expect(reopened.commitUIAct({...submission, submissionId: 'fresh'})).rejects.toThrow('JOB_ACT_KIND_DISABLED');
 });
 
 for (const target of ['retained', 'publication', 'context', 'event', 'replay', 'ask', 'act'] as const) {
   test(`stored record evidence corruption in ${target} refuses reads and exact retry`, async () => {
     const f = recordFixture(), signal = new AbortController().signal;
     const publication = await f.session.execute(f.request, signal) as PublicationV3;
-    const askRequest = {...f.request, verb: 'ask' as const, requestId: 'ask', idempotencyKey: 'ask', expectedGeneration: 1,
-      publicationId: publication.publicationId, subject: {kind: 'checkpoint' as const, checkpointId: 'step_layout'}};
-    const ask: any = await f.session.execute(askRequest, signal);
+    const ask = seedHistoricalCheckpointAsk(f.session, publication.publicationId, {kind: 'checkpoint', checkpointId: 'step_layout'});
     // Only ordinary tests construct deliberate persisted-corruption controls.
     tamper(f.state, f.session.jobId, data => {
       const stored = data.publications[publication.publicationId];
@@ -420,21 +429,26 @@ test('tile and table declarations retain closed required and optional key semant
   expect(() => checkpointEvidenceFields({checkpointEvidence: [{...packet, tiles: [{...packet.tiles[0], frame0: 'duplicate'}]}]}, plan, subjects, files)).toThrow();
 });
 
-test('fresh package ask and finalization refuse corrupted retained evidence but exact act retry stays pinned', async () => {
+test('fresh package ask and finalization refuse corrupted retained evidence while historical act retry stays pinned', async () => {
   const f = await packageFixture(); contextWithEvidence(f);
   const request = await f.publishRequest('publication-retry'), first: any = await (await f.call(request)).json();
   expect(first.ok).toBe(true); const publication = first.value;
-  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'}), page = await f.display(publication);
-  const submission = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation, submissionId: 'package-act',
+  const page = await f.display(publication);
+  const replayGen = f.session.status().generation;
+  const act = seedHistoricalCheckpointAct(f.session, {...page, expectedGeneration: replayGen, submissionId: 'package-act',
+    checkpointId: 'step-one', value: {checkpointId: 'step-one', outcome: 'pass', words: ''}});
+  const submission = {...page, askId: act.askId, expectedGeneration: replayGen, submissionId: 'package-act',
     kind: 'checkpoint', value: {checkpointId: 'step-one', outcome: 'pass', words: ''}};
-  const act = await f.session.commitUIAct(submission), retained = f.session.retainedSource(publication.publicationId);
+  const retained = f.session.retainedSource(publication.publicationId);
   writeFileSync(join(retained.snapshotRoot, 'evidence/table.json'), '{}');
   expect(await f.session.commitUIAct(submission)).toEqual(act);
   expect((await (await f.call(request)).json()).value).toEqual(publication);
+  // #1229: test corrupted retained evidence on a live review-verdict ask and comment submission.
   const result = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
-    idempotencyKey: 'fresh-ask', publicationId: publication.publicationId, subject: {kind: 'checkpoint', checkpointId: 'step-one'}})).json();
+    idempotencyKey: 'fresh-ask', publicationId: publication.publicationId, subject: {kind: 'review-verdict', stage: 'rig-review'}})).json();
   expect(result.ok).toBe(false);
-  await expect(f.session.commitUIAct({...submission, submissionId: 'fresh-act'})).rejects.toThrow();
+  await expect(f.session.commitUIAct({...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'fresh-act', kind: 'comments', value: {comments: [{text: 'corrupt'}]}})).rejects.toThrow();
 });
 
 test('all durable record copies losing evidence cannot preserve the old sealed identity', async () => {
@@ -631,8 +645,7 @@ for (const target of ['retained', 'publication', 'ask', 'act', 'event', 'replay'
     test(`v3 malformed ${target} source ${String(missing)} yields named JobError with bound evidence`, async () => {
       const f = recordFixture(), signal = new AbortController().signal;
       const publication = await f.session.execute(f.request, signal) as PublicationV3;
-      const ask: any = await f.session.execute({...f.request, verb: 'ask', requestId: 'ask', idempotencyKey: 'ask', expectedGeneration: 1,
-        publicationId: publication.publicationId, subject: {kind: 'checkpoint', checkpointId: 'step_layout'}}, signal);
+      const ask = seedHistoricalCheckpointAsk(f.session, publication.publicationId, {kind: 'checkpoint', checkpointId: 'step_layout'});
       tamper(f.state, f.session.jobId, data => {
         const stored = data.publications[publication.publicationId];
         if (target === 'retained') stored.retained.source = missing;
@@ -975,17 +988,13 @@ test('#716 pair validator: valid pair canonicalizes as last key and round-trips 
   contextWithEvidence(f, {...pkgEvidence, packet: pairedPacket});
   const publication = await f.publish();
   expect(publication.source.checkpointEvidence).toEqual([pairedPacket]);
-  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
   const page = await f.display(publication);
-  const committed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({
+  const stored = seedHistoricalCheckpointAct(f.session, {
     ...page,
-    askId: ask.askId,
     expectedGeneration: f.session.status().generation,
     submissionId: 'paired-checkpoint',
-    kind: 'checkpoint',
+    checkpointId: 'step-one',
     value: {checkpointId: 'step-one', outcome: 'pass', words: 'paired ok'},
-  }));
-  expect(committed.ok).toBe(true);
-  if (!committed.ok) throw new Error(JSON.stringify(committed));
-  expect(parseCommentsAct(committed.value).source.checkpointEvidence).toEqual([pairedPacket]);
+  });
+  expect(parseCommentsAct(stored).source.checkpointEvidence).toEqual([pairedPacket]);
 });

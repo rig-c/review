@@ -14,6 +14,7 @@ import type {Feedback} from '../src/session.ts';
 import type {Json} from '../src/manifest.ts';
 import {readProject} from '../src/interview-project.ts';
 import {jobFixture, jobInputHashes, syntheticJobParts} from './helpers/job-api-fixture.ts';
+import {seedHistoricalCheckpointAct} from './helpers/historical-checkpoint-act.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
 import {rigStillInput} from './helpers/job-rig-still.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
@@ -95,26 +96,32 @@ async function rawAct(f: Awaited<ReturnType<typeof fixture>>, actId: string) {
   return payload;
 }
 
-test('checkpoint UI acts are written as act@6 while fresh signoff asks/acts refuse and historical act@6 signoff decodes', async () => {
+// #1229: fresh checkpoint and signoff asks/acts refuse while historical act@6 checkpoint and signoff acts decode and round-trip.
+test('fresh checkpoint and signoff asks/acts refuse while historical act@6 checkpoint and signoff acts decode', async () => {
   const f = await fixture(), publication = await f.publish();
-  const checkpointAsk = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
-  const refusedAsk = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+  const refusedCheckpointAsk = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+    idempotencyKey: 'act6-checkpoint-ask', publicationId: publication.publicationId, subject: {kind: 'checkpoint', checkpointId: 'step-one'}})).json();
+  expect(refusedCheckpointAsk).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  const refusedSignoffAsk = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
     idempotencyKey: 'act6-signoff-ask', publicationId: publication.publicationId, subject: {kind: 'signoff', stage: 'plan-approved'}})).json();
-  expect(refusedAsk).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+  expect(refusedSignoffAsk).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
   const page = await f.display(publication);
-  const checkpoint = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: checkpointAsk.askId,
-    expectedGeneration: f.session.status().generation, submissionId: 'act6-checkpoint', kind: 'checkpoint',
-    value: {checkpointId: 'step-one', outcome: 'fail', words: '  Exact 한글\n'}}));
-  if (!checkpoint.ok) throw new Error(checkpoint.error.code);
-  expect(checkpoint.value).toMatchObject({schema: 'rig-review/act@6', kind: 'checkpoint', value: {
+  const checkpoint = seedHistoricalCheckpointAct(f.session, {...page,
+    expectedGeneration: f.session.status().generation, submissionId: 'act6-checkpoint', checkpointId: 'step-one',
+    value: {checkpointId: 'step-one', outcome: 'fail', words: '  Exact 한글\n'}});
+  expect(checkpoint).toMatchObject({schema: 'rig-review/act@6', kind: 'checkpoint', value: {
     checkpointId: 'step-one', planStepId: 'step-one', outcome: 'fail',
     comments: [{text: '  Exact 한글\n', anchor: {checkpointId: 'step-one', planStepId: 'step-one'}}]}});
-  roundTrip(f, checkpoint.value);
-  const signoff = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: checkpointAsk.askId,
+  roundTrip(f, checkpoint);
+  const freshCheckpoint = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: checkpoint.askId,
+    expectedGeneration: f.session.status().generation, submissionId: 'act6-fresh-checkpoint', kind: 'checkpoint',
+    value: {checkpointId: 'step-one', outcome: 'fail', words: '  Exact 한글\n'}}));
+  expect(freshCheckpoint).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+  const signoff = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: checkpoint.askId,
     expectedGeneration: f.session.status().generation, submissionId: 'act6-signoff', kind: 'signoff',
     value: {stage: 'plan-approved', decision: 'approved', words: ' \n원문 그대로\t '}}));
   expect(signoff).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
-  const historicalSignoff = parseCommentsAct({...checkpoint.value, actId: 'historical-act6-signoff', kind: 'signoff',
+  const historicalSignoff = parseCommentsAct({...checkpoint, actId: 'historical-act6-signoff', kind: 'signoff',
     value: {stage: 'plan-approved', decision: 'approved', comments: [{text: ' \n원문 그대로\t '}]}});
   expect(JSON.stringify(parseCommentsAct(JSON.parse(JSON.stringify(historicalSignoff))))).toBe(JSON.stringify(historicalSignoff));
 });
@@ -334,20 +341,20 @@ test('an empty or whitespace-only note has no comment form: zero comments, nothi
 });
 
 test('a note whose act@6 projection exceeds 10,000 UTF-16 units is refused by name (JOB_ACT_INVALID)', async () => {
-  const f = await fixture(), publication = await f.publish();
-  // #1227: checkpoint until #1229 retires record asks
-  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'}), page = await f.display(publication);
+  // #1229: checkpoint retired; exercise the 10,000-unit act@6 scalar bound on a live direction-review verdict.
+  const {f, publication} = await postFixture();
+  const ask = await f.ask(publication, {kind: 'review-verdict', stage: 'direction-review'}), page = await f.display(publication);
   const generation = f.session.status().generation;
-  // Act@2 accepted words up to 10,000 units; the @6 scalar adds the checkpoint label inside the same bound.
-  const label = '[' + JSON.stringify(['checkpoint', 'step-one']) + ']\n';
+  const label = '[general]\n';
   const words = 'x'.repeat(10000 - label.length + 1);
   const refused = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: generation, submissionId: 'too-long', kind: 'checkpoint', value: {checkpointId: 'step-one', outcome: 'pass', words}}));
+    expectedGeneration: generation, submissionId: 'too-long', kind: 'review-verdict',
+    value: {stage: 'direction-review', verdict: 'changes-requested', words}}));
   expect(refused).toEqual({ok: false, error: {code: 'JOB_ACT_INVALID', message: 'JOB_ACT_INVALID'}});
   expect(f.session.status().generation).toBe(generation);
   const fits = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: generation, submissionId: 'fits', kind: 'checkpoint',
-    value: {checkpointId: 'step-one', outcome: 'pass', words: words.slice(1)}}));
+    expectedGeneration: generation, submissionId: 'fits', kind: 'review-verdict',
+    value: {stage: 'direction-review', verdict: 'changes-requested', words: words.slice(1)}}));
   expect(fits.ok).toBe(true);
 });
 

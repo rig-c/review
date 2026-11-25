@@ -23,7 +23,7 @@
 | --- | --- |
 | `rig-review/act@2` | Historical package acts, including stored image-review acts. `JOB_ACT_SCHEMA` retains this value. |
 | `rig-review/act@3` | Historical rig verdict with a top-level still. |
-| `rig-review/act@4` | Record acts through `parseRecordAct`, including historical interview picks, signoff and reopen. Record checkpoint uses this schema. |
+| `rig-review/act@4` | Record acts through `parseRecordAct`, including historical interview picks, checkpoint, signoff and reopen. |
 | `rig-review/act@5` | Historical parts verdict with pointed issues. |
 | `rig-review/act@6` | Structured comment acts through `parseCommentsAct`, including fresh package and record interview picks. |
 | `rig-review/act@7` | Context-aware comment acts through `parseContextCommentsAct`. Interview picks use @6. |
@@ -40,10 +40,10 @@ See the [comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract)
 | `rig-review/job-api@2` | `ask` with one `JobSubject`. A record-and-package listener also accepts the @2 request envelope. |
 | `rig-review/job-api@3` | `ask` with one package or record subject. `ask-batch` requires a record publication. |
 
-Package asks cover interview picks, checkpoint, parts verdict, and rig or
-direction verdict. Record asks cover interview picks for a declared option set
-and checkpoint for a declared plan subject. Fresh image-review, reopen, and
-signoff (including `plan-approved`) asks are refused. See [Act kinds, plan identity and parts identity](REVIEW_PACKAGE.md#act-kinds-plan-identity-and-parts-identity)
+Package asks cover interview picks, parts verdict, and rig or direction
+verdict. Record asks cover interview picks for a declared option set. Fresh
+image-review, reopen, signoff (including `plan-approved`), and checkpoint asks
+are refused. See [Act kinds, plan identity and parts identity](REVIEW_PACKAGE.md#act-kinds-plan-identity-and-parts-identity)
 and [the record contract](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam).
 
 ## Codes
@@ -70,6 +70,7 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | Fresh `image-review` publications and act@2 writer | #796 and #798 for publications, #1106 for the writer | Historical act@2 image-review bytes keep their readers. |
 | Fresh record `reopen` asks and acts | 4.10.0 (#989) | Historical records and acts keep their readers and compatibility types. |
 | Fresh `signoff` asks and acts (including `plan-approved`) | #1227 | Historical records and acts keep their readers and compatibility types. |
+| Fresh `checkpoint` asks and acts | #1229 | Declared checkpoint subjects, historical records and acts, and standalone `rig-review-session/1` checkpoint outcomes keep their readers and compatibility types; records show declared pairs without an ask. |
 
 ## History
 
@@ -922,7 +923,7 @@ without aliases or copied wire shapes.
 - `JobRecordActKind`
 - `JobRecordSignoffStage` (read-only compatibility: retained for declared subject parsing and historical record and act decoders, #1227)
 - `JobRecordPicksSubject`
-- `JobRecordCheckpointSubject`
+- `JobRecordCheckpointSubject` (read-only compatibility: declared subjects and old records and acts parse; new `checkpoint` asks refuse with `JOB_ASK_INVALID` and page submissions refuse with `JOB_ACT_KIND_DISABLED`, #1229)
 - `JobRecordSignoffSubject` (read-only compatibility: declared subjects and old records and acts parse; new `signoff` asks refuse with `JOB_ASK_INVALID` and page submissions refuse with `JOB_ACT_KIND_DISABLED`, #1227)
 - `JobRecordReopenSubject` (read-only compatibility: old records and acts parse; new `reopen` asks refuse with `JOB_ASK_INVALID` and Review neither renders nor builds `reopen`, #989)
 - `JobRecordPlanSubject`

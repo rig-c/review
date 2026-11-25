@@ -11,10 +11,10 @@ import {
 import { parsePartsIssue, type PartsIssue } from './parts-comment.ts';
 import {
   isRecordSource, isRigDraftVerdictSource, parseJobSelector, commentsObject, jobHash, jobId, jobInteger, jobObject,
-  commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordAct, parseRecordSource, recordActSource, requestDigest, validateRecordAskSubject,
+  commentsActForEmission, meshEditsActForEmission, parseCommentsAct, parseMeshEdits, parseRecordSource, recordActSource, requestDigest, validateRecordAskSubject,
   chestLandmarkIdentity, parseChestLandmarkEdits, parseChestLandmarksAct, parseCommentOnlyAct,
 } from './job-api.ts';
-import { checkpointNoteComments, noteComments, partsIssueComments } from './feedback-export.ts';
+import { noteComments, partsIssueComments } from './feedback-export.ts';
 import { feedbackContextComments } from './stage-comment.ts';
 import type { Feedback } from './session.ts';
 import { validatePicks } from './interview-picks.ts';
@@ -101,10 +101,6 @@ function choice<Value extends string>(value: unknown, allowed: readonly Value[])
   return value as Value;
 }
 
-function requirePlan(source: JobSourceBinding): void {
-  if (!source.plan?.steps.length) throw new JobError('JOB_ASK_INVALID', 'Published plan step identities are required');
-}
-
 export function bindJobRecordAsk(subject: unknown, retained: JobRetainedRecordSource): RecordSource {
   const source = structuredClone(parseRecordSource(retained.source));
   const parsedSubject = validateRecordAskSubject(subject, source);
@@ -131,16 +127,6 @@ export function bindJobRecordAsk(subject: unknown, retained: JobRetainedRecordSo
       }
       return source;
     }
-    case 'checkpoint': {
-      if (
-        source.subject !== 'plan' ||
-        !source.plan.steps.length ||
-        !source.plan.steps.some(step => step.id === parsedSubject.checkpointId)
-      ) {
-        throw new JobError('JOB_ASK_INVALID');
-      }
-      return source;
-    }
   }
   throw new JobError('JOB_ASK_INVALID');
 }
@@ -160,12 +146,6 @@ export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRet
       if (!question) throw new JobError('JOB_ASK_INVALID');
       return { ...source, optionSet: { id: question.set.id, sha256: question.ref.sha256 } };
     }
-    case 'checkpoint': {
-      requirePlan(source);
-      const stepId = ('planStepId' in subject ? subject.planStepId : undefined) ?? subject.checkpointId;
-      if (!declared || !source.plan!.steps.some(step => step.id === stepId)) throw new JobError('JOB_ASK_INVALID');
-      return source;
-    }
     case 'parts-verdict':
       if (!declared || !source.projectHash || !source.parts || source.selector?.kind !== 'draft' ||
           source.selector.id !== subject.draftId || !retained.partIds.length) throw new JobError('JOB_ASK_INVALID');
@@ -182,6 +162,7 @@ export function bindJobAsk(subject: JobSubject | RecordSubject, retained: JobRet
       if (subject.stage === 'image-review' || !source.model || (subject.stage === 'rig-review' ? source.selector?.kind !== 'rig' :
         source.selector?.kind !== 'post' || !source.direction)) throw new JobError('JOB_ASK_INVALID');
       return source;
+    case 'checkpoint':
     case 'signoff':
     case 'reopen':
       throw new JobError('JOB_ASK_INVALID');
@@ -362,7 +343,8 @@ export function prepareJobRecordAct(options: {
   ) {
     throw new JobError('JOB_REQUEST_INVALID');
   }
-  if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(rawSubmission.kind) || rawSubmission.kind === 'signoff') {
+  if ((JOB_RESERVED_ACT_KINDS as readonly unknown[]).includes(rawSubmission.kind) || rawSubmission.kind === 'signoff' ||
+      rawSubmission.kind === 'checkpoint') {
     throw new JobError('JOB_ACT_KIND_DISABLED');
   }
   if (ask.status !== 'pending') throw new JobError('JOB_ASK_SUPERSEDED');
@@ -388,7 +370,6 @@ export function prepareJobRecordAct(options: {
   ) {
     throw new JobError('JOB_ACT_SOURCE_STALE');
   }
-  const {directionReview: _directionReview, ...actSource} = boundSource;
   if (
     !reviewer ||
     typeof reviewer !== 'object' ||
@@ -475,29 +456,7 @@ export function prepareJobRecordAct(options: {
         value: { questionId: askSubject.questionId, selections, note, comments: submittedComments(value) },
       });
     }
-    case 'checkpoint': {
-      if (boundSource.subject !== 'plan') throw new JobError('JOB_ACT_SOURCE_STALE');
-      const value = actObject(submission.value, ['checkpointId', 'outcome', 'words']);
-      if (
-        !('checkpointId' in value) ||
-        !('outcome' in value) ||
-        !('words' in value) ||
-        value.checkpointId !== askSubject.checkpointId
-      ) {
-        throw new JobError('JOB_ACT_INVALID');
-      }
-      return parseRecordAct({
-        ...envelope,
-        kind: 'checkpoint',
-        source: actSource,
-        value: {
-          checkpointId: askSubject.checkpointId,
-          planStepId: askSubject.checkpointId,
-          outcome: choice(value.outcome, ['pass', 'fail'] as const),
-          words: words(value.words),
-        },
-      });
-    }
+    case 'checkpoint':
     case 'signoff':
       throw new JobError('JOB_ACT_KIND_DISABLED');
   }
@@ -565,7 +524,8 @@ export function finalizeJobAct(options: {
       at: options.at,
     });
   }
-  if ((kind as string) === 'signoff' || (options.ask.subject.kind as string) === 'signoff') {
+  if ((kind as string) === 'signoff' || (options.ask.subject.kind as string) === 'signoff' ||
+      (kind as string) === 'checkpoint' || (options.ask.subject.kind as string) === 'checkpoint') {
     throw new JobError('JOB_ACT_KIND_DISABLED');
   }
   const { submission, ask, retained, reviewer } = options as {
@@ -610,17 +570,8 @@ export function finalizeJobAct(options: {
       return commentsAct({ ...comments, kind: 'interview-picks', source: { ...source, optionSet: source.optionSet! },
         value: { questionId: subject.questionId, selections, note, comments: submittedComments(value) } });
     }
-    case 'checkpoint': {
-      const value = jobObject(submission.value, ['checkpointId', 'outcome', 'words']);
-      const subject = ask.subject;
-      if (subject.kind !== 'checkpoint' || value.checkpointId !== subject.checkpointId) throw new JobError('JOB_ACT_INVALID');
-      const planStepId = subject.planStepId ?? subject.checkpointId, note = words(value.words);
-      return commentsAct({ ...comments, kind: 'checkpoint', source: { ...source, plan: source.plan! }, value: {
-        checkpointId: subject.checkpointId, planStepId,
-        outcome: choice(value.outcome, ['pass', 'fail'] as const),
-        comments: note.trim() ? checkpointNoteComments({checkpointId: subject.checkpointId, planStepId, note}) : [],
-      } });
-    }
+    case 'checkpoint':
+      throw new JobError('JOB_ACT_KIND_DISABLED');
     case 'parts-verdict': {
       const value = jobObject(submission.value, ['verdict', 'issues', 'words', 'general']);
       const verdict = choice(value.verdict, ['approved', 'changes-requested'] as const);

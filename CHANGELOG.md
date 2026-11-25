@@ -5,6 +5,7 @@
 ### Changed
 
 * Fresh `signoff` asks (including `plan-approved`) now refuse with `JOB_ASK_INVALID`, and page `signoff` submissions refuse with `JOB_ACT_KIND_DISABLED`. Publications that declare `signoff` subjects and finalized historical `signoff` acts and records keep their readers and exports (#1227, refs #1225).
+* Fresh `checkpoint` asks now refuse with `JOB_ASK_INVALID`, and page `checkpoint` submissions refuse with `JOB_ACT_KIND_DISABLED`; records show declared pairs without an ask and packages show the rig screen without the Pass/Fail form. Publications declaring `checkpoint` subjects, finalized historical `checkpoint` acts and records, and standalone `rig-review-session/1` checkpoint outcomes keep their readers, and a committed submission still replays its stored act (#1229, refs #1225).
 
 ## 4.21.0
 

@@ -3,8 +3,10 @@ import { chmod, copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { createJobHostPorts, jobHash } from '../src/job-api.ts';
+import type { JobPendingAsk, JobPublication } from '../src/job-contract.ts';
 import { JobError } from '../src/job-store.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
+import { rigStillCapture } from './helpers/job-rig-still.ts';
 
 function isolationHole(detail: string): never {
   throw new JobError('JOB_AGENT_ISOLATION_HOLE', 'JOB_AGENT_ISOLATION_HOLE: ' + detail);
@@ -89,9 +91,11 @@ async function runFlow(ownUid: boolean) {
       }));
       expect(displayed.ok).toBe(true);
       if (!displayed.ok) throw new Error(displayed.error.code);
+      const { capture } = rigStillCapture(source as JobPublication, outcome.ask as JobPendingAsk, displayed.value);
+      // #1229: fresh checkpoint asks/submissions refuse; exercise the isolated UI commit on review-verdict.
       const saved = await ports.commitUIAct(f.session.jobId, ui('acts', { ...displayed.value,
         askId: outcome.ask.askId, submissionId: 'isolated-ui', expectedGeneration: f.session.status().generation,
-        kind: 'checkpoint', value: { checkpointId: 'step-one', outcome: 'pass', words: 'isolated exact words' } }));
+        kind: 'review-verdict', value: { stage: 'rig-review', verdict: 'approved', words: 'isolated exact words' }, capture }));
       expect(saved.ok).toBe(true);
     }
     const [exit, stdout, stderr] = await Promise.all([child.exited, output, errors]);

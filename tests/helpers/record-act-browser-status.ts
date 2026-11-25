@@ -11,10 +11,11 @@ type RecordActStatus = {
   headline: string | null;
   visibleStates: string[];
   visibleControls: string[];
-  recordPanelVisible: boolean;
+  retiredRecordDomCount: number;
 };
 
-/** Read the shared workspace after the last active record ask is accepted. */
+/** Read the shared workspace after the last active record ask is accepted.
+ * #1229: the checkpoint Pass/Fail form, #job-record-asks panel and #workspace-pending-record-ask opener are removed. */
 export async function expectRecordActSubmitted(
   page: Pick<CdpSession, 'evaluate'>,
   wait: (expression: string, label: string) => Promise<void>,
@@ -28,8 +29,7 @@ export async function expectRecordActSubmitted(
   const submitted = catalog['Submitted'];
   await wait(`(() => {
     const status = document.querySelector('#workspace-act-row #review-draft-state');
-    return status?.textContent === ${JSON.stringify(submitted)} && status.dataset.saveState === 'saved' &&
-      !document.querySelector('#job-record-asks:not([hidden])');
+    return status?.textContent === ${JSON.stringify(submitted)} && status.dataset.saveState === 'saved';
   })()`, label);
   const readback = await page.evaluate<RecordActStatus>(`(() => {
     const visible = node => !!node && !node.closest('[hidden]') && node.getClientRects().length > 0 &&
@@ -43,14 +43,14 @@ export async function expectRecordActSubmitted(
       rowVisible: visible(row), statusInRow: row.contains(status),
       headline: visible(headline) ? headline.textContent : null,
       visibleStates: shown(['review-draft-state', 'dirty', 'draft-state']),
-      visibleControls: shown(['send-comments', 'save', 'request-changes', 'workspace-pending-ask', 'workspace-pending-record-ask']),
-      recordPanelVisible: visible(document.getElementById('job-record-asks')),
+      visibleControls: shown(['send-comments', 'save', 'request-changes', 'workspace-pending-ask']),
+      retiredRecordDomCount: document.querySelectorAll('[id="job-record-asks"], [id="workspace-pending-record-ask"]').length,
     };
   })()`);
   assert.deepEqual(readback, {
     statusText: submitted, statusKey: 'saved', rowVisible: true, statusInRow: true,
     headline: catalog[liveRig ? "We're looking at the work together. Leave your thoughts as comments." : 'Nothing is waiting for your answer.'],
-    visibleStates: ['review-draft-state'], visibleControls: liveRig ? ['send-comments'] : [], recordPanelVisible: false,
+    visibleStates: ['review-draft-state'], visibleControls: liveRig ? ['send-comments'] : [], retiredRecordDomCount: 0,
   }, label);
   return {statusText: readback.statusText, statusKey: readback.statusKey};
 }

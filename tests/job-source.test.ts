@@ -688,7 +688,7 @@ test('#606 literal package/record canonical, durable, replay and export compatib
 import {retainedPublicationRoutes} from '../src/job-front.ts';
 import {planTextMetadata, projectRetainedPlanText, isRetainedRecordSource} from '../src/job-source.ts';
 import {parseJobPlanTextProjection, JOB_RECORD_READER_ID, type JobPlanTextProjection} from '../src/job-contract.ts';
-import {jobCheckpointContext, jobPlanTextForSource} from '../web/job-session.ts';
+import {jobPlanTextForSource} from '../web/job-session.ts';
 import {createSyntheticPlanRecordWorkspace} from './helpers/job-record-fixture.ts';
 
 const exact606 = {does:'  <mark>do</mark> 한글 e\u0301\r\n\t ', produces:'',bar:' bar\r\nvalue ',rests_on:['bones','bones','']};
@@ -745,9 +745,9 @@ test('#606 D1/D2 normal metadata authenticates retained project and preserves fo
       expect(JSON.stringify(retained.source)).toBe(before);
       expect(jobPlanTextForSource(body.planText,retained.source)).toEqual(body.planText);
       if (kind === 'package') {
-        const checkpoint = jobCheckpointContext({subject:{kind:'checkpoint',checkpointId:'alias',planStepId:'step_layout'},source:retained.source} as any,[]);
-        expect(checkpoint.step.id).toBe('step_layout');
-        expect(body.planText.steps.find((row:any)=>row.id===checkpoint.step.id&&row.hash===checkpoint.step.hash).bar).toBe(exact606.bar);
+        // #1229: jobCheckpointContext retired with the checkpoint form; plan step projection remains source-bound.
+        expect(retained.source.plan?.steps[0]?.id).toBe('step_layout');
+        expect(body.planText.steps.find((row:any)=>row.id===retained.source.plan!.steps[0]!.id&&row.hash===retained.source.plan!.steps[0]!.hash).bar).toBe(exact606.bar);
       } else expect(body.recordSource).toEqual(retained.source);
       const altered = structuredClone(body.planText);altered.steps[0].bar = 'type-valid post-server text';
       expect(jobPlanTextForSource(altered,retained.source)?.status).toBe('projected');
