@@ -84,8 +84,8 @@ export function parseCheckpointTable(bytes: Buffer): JobCheckpointTable {
   }
 }
 
-/** Exact retained closure reads reuse regular-file, containment and descriptor bounds. */
-export function readCheckpointEvidenceBytes(root: string, file: JobFileIdentity, limit: number,
+/** Exact closure reads reuse regular-file, containment and descriptor bounds. Pair preparation passes null before sealing. */
+export function readCheckpointEvidenceBytes(root: string, file: {path: string; sha256: string | null}, limit: number,
   refuse: (failure: 'path' | 'limit' | 'hash', size: number) => JobError = failure => failure === 'hash'
     ? new JobError('JOB_SOURCE_MISMATCH', 'CHECKPOINT_EVIDENCE_HASH_MISMATCH')
     : new JobError('JOB_SOURCE_UNRETAINABLE', 'CHECKPOINT_EVIDENCE_PATH_REFUSED')): Buffer {
@@ -107,7 +107,7 @@ export function readCheckpointEvidenceBytes(root: string, file: JobFileIdentity,
   }
   catch { throw refuse('path', size); }
   if (bytes === undefined) throw refuse('limit', size);
-  if (jobHash(bytes) !== file.sha256) throw refuse('hash', size);
+  if (file.sha256 !== null && jobHash(bytes) !== file.sha256) throw refuse('hash', size);
   return bytes;
 }
 

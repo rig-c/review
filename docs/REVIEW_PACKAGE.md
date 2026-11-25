@@ -1307,10 +1307,10 @@ reader. The same declaration is used in both places. A producer that cannot
 seal a predecessor omits the whole declaration. Review refuses a partial
 declaration before the owner's page can display the publication.
 
-A standalone `review.json` opens a build beside an earlier one without a job,
-the use Compare served. Open the package through the existing CLI with its
-manifest. A writer CLI for preparing the declaration is a follow-up before
-[Compare retirement (#1213)](https://github.com/rig-c/review/issues/1213).
+A standalone `review.json` opens a build beside an earlier one without a job.
+`rig-review open CURRENT --previous PREVIOUS` retains byte-identical package
+files in pair-specific review state and generates a manifest there with the
+admitted declaration. The two input packages remain unchanged.
 
 ```ts
 previousBuild?: {

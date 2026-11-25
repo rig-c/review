@@ -34,6 +34,7 @@ export async function openWorkspace(inputs: readonly OpenInputs[], options: Open
     inputs: {...target.package.inputs, viewOnly: target.viewOnly}}));
   if (Buffer.byteLength(JSON.stringify(designations)) > WORKSPACE_BODY_LIMIT - 256) throw workspaceError('WORKSPACE_BODY_LIMIT');
   const directory = await workspaceDirectory(stateDir), port = frontPort(options.frontPort);
+  options.onPrepared?.();
   const nonce = randomUUID();
   const reuse = () => probeWorkspace(directory, fingerprint, port);
   const ready = await reuse();

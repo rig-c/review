@@ -113,6 +113,8 @@ rig-review open /absolute/output --config /absolute/output/rig/config.json [--pa
 rig-review feedback /absolute/output --config /absolute/output/rig/config.json
 ```
 
+`rig-review open CURRENT --previous PREVIOUS [--view-only] [--current-label L] [--previous-label L] [--current-atlas RELPATH] [--previous-atlas RELPATH] [--map-clip CUR PREV]… [--no-clip-map]` accepts a manifest or recognized output folder on each side. Labels default to the package directory names and each atlas defaults to the sole `.atlas` beside its model. Explicit mappings override or extend the same-name intersection. Use `--no-clip-map` on its own for an empty map. Use `--view-only` for a package without a usable producer handoff. The map, unmapped current clips, retained pair state and feedback manifest are printed to stderr before the URL. See [Sealed previous build](REVIEW_PACKAGE.md#sealed-previous-build).
+
 `--config`, `--parts`, `--source`, `--full`, `--head` and `--keypoints` declare the producer
 handoff (see `docs/REVIEW_PACKAGE.md`, *Producer handoff*). They win over the
 review.json `producer` block, which wins over discovery (`config.json`, then

@@ -7,7 +7,7 @@ import {createControlServer,type ControlIdentity} from './control-server.ts';
 import { readFile } from 'node:fs/promises';
 import { JobError } from './job-validation.ts';
 import { appRoot, buildWeb } from './build.ts';
-import { packagePath, previousBuildFiles, safeFile, type ReviewPackage } from './manifest.ts';
+import { packagePath, previousBuildFiles, reviewProducerStarts, safeFile, type ReviewPackage } from './manifest.ts';
 import { exportReviewStrip, stripJson } from './strip-export.ts';
 import {assertReviewUnchanged,referenceBinding,selectedReference,safeSelectedReference,servePreviousBuildAsset,serveReference} from './reference.ts';
 import {openGate,staleOpenStatus,accessGate,openNonceGate,openNonceHeader,sameSecret,stampOpen,type OpenIdentity} from './open-protocol.ts';
@@ -71,7 +71,7 @@ export async function createReviewRequestContext(p: ReviewPackage | null, option
   const bundle=options.bundle??await buildWeb();
   const unchanged=()=>p?assertReviewUnchanged(p):joined!.assertCurrent();
   const services=p?(()=>{
-  const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=[p.root,options.cwd??process.cwd()];
+  const stateDir=options.stateDir??process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review'),starts=reviewProducerStarts(p,options.cwd);
   const rebuilds=createRebuilds(p,{stateDir,starts,unchanged,bones:p.feedbackCatalog.bones,...(options.stripConcurrency?{stripConcurrency:options.stripConcurrency}:{}),...(options.viewOnly??p.viewOnly?{viewOnly:true}:{}),...(joined?.draft?{draft:draftRebuildOption(joined,starts)}:{})});
   const stageParts=stagePartsRoutes({single:p},undefined,rebuilds.stageDraft,joined?.draft?{
     joined,viewOnly:options.viewOnly??p.viewOnly??false,readInput:async req=>{

@@ -68,7 +68,7 @@ export async function producerInputs(handoff: Handoff | null, reason: string | n
   if (configHash !== handoff.record.config.sha256) throw new RebuildError('REBUILD_INPUTS_CHANGED', `${handoff.record.config.path} changed since the review was opened; restart review`);
   let config: unknown;
   try { config = JSON.parse(configText); } catch { /* the producer diagnoses invalid JSON */ }
-  const searchStarts = [dirname(handoff.config), handoff.root, ...(starts ?? handoff.starts ?? [process.cwd()])];
+  const searchStarts = handoff.originalConfigStarts ?? [dirname(handoff.config), handoff.root, ...(starts ?? handoff.starts ?? [process.cwd()])];
   const { partsRoot, references } = config !== undefined ? configNamedReferences(config, searchStarts) : { partsRoot: null, references: [] };
   const reqRef = references.find(ref => ref.kind === 'requirements');
   const value = reqRef?.value ?? namedFile(config, ['requirements']);
@@ -744,9 +744,9 @@ const namedFile = (doc: unknown, keys: readonly string[]): unknown => keys.reduc
  * loader resolves against the config's directory made
  * absolute when it names a file there, so the scratch copy reads the same files as the handoff config.
  */
-export function scratchConfigText(configPath: string, doc: JsonValue, starts: readonly string[] = [process.cwd()]): string {
+export function scratchConfigText(configPath: string, doc: JsonValue, starts: readonly string[] = [process.cwd()], originalConfigStarts?: readonly string[]): string {
   const configDir = dirname(resolve(configPath)), out = structuredClone(doc) as Record<string, unknown>;
-  const { references } = configNamedReferences(out, [configDir, ...starts]);
+  const { references } = configNamedReferences(out, originalConfigStarts ?? [configDir, ...starts]);
   for (const ref of references) {
     if (!isAbsolute(ref.value) && existsSync(resolve(configDir, ref.value))) {
       ref.set(resolve(configDir, ref.value));
@@ -1015,6 +1015,7 @@ async function hashBuild(build: string, id: string, assetPrefix = '/rebuild'): P
 
 /** One rebuild at a time per review instance; finished jobs stay readable by id. */
 export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
+  const originalConfigStarts = p.handoff?.originalConfigStarts;
   const handoffBuildPlan = (config: JsonValue) => buildPlan(p.handoff!, config, abs => relative(p.root, abs).split(sep).join('/'));
   const assetPrefix = options.assetPrefix ?? '/rebuild', stripPrefix = options.stripPrefix ?? '/density-strip';
   const jobs = new Map<string, RebuildJob | PatchJob | DeltaJob | RetargetJob | AnimationJob>();
@@ -1681,7 +1682,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     let counts: RemeshCounts | null = null;
     let built: ProcessResult | null = null;
     async function writePatchConfig(): Promise<void> {
-      const doc = JSON.parse(scratchConfigText(inputs.config, patched, options.starts)) as Record<string, unknown>;
+      const doc = JSON.parse(scratchConfigText(inputs.config, patched, options.starts, originalConfigStarts)) as Record<string, unknown>;
       await stageRequirements(dir, inputs.requirements, doc);
       await writeFile(join(dir, 'config.json'), JSON.stringify(doc, null, 2) + '\n', { mode: 0o600 });
     }
@@ -1707,7 +1708,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       const c = job.cloth!, plan2 = cloth!;
       // cloth.json: the patched handoff config with every path it names made absolute (the scratch copy reads the
       // handoff's files), so the config propose writes beside it builds from the same files.
-      const input = JSON.parse(scratchConfigText(inputs.config, patched, options.starts)) as Record<string, unknown>;
+      const input = JSON.parse(scratchConfigText(inputs.config, patched, options.starts, originalConfigStarts)) as Record<string, unknown>;
       absolutizeBuildFiles(input, value => (isAbsolute(value) ? value : resolve(dirname(inputs.config), value)));
       await stageRequirements(dir, inputs.requirements, input);
       await writeFile(join(dir, 'cloth.json'), JSON.stringify(input, null, 2) + '\n', { mode: 0o600 });
@@ -1766,7 +1767,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
         if (job.op === 'cloth' && cloth) return runCloth(push);
         if (job.op === 'build' && plan) {
           // #115: assemble → rig → check from the painting and the runs, the patched config's assemble-read files absolute.
-          const doc = JSON.parse(scratchConfigText(inputs.config, patched, options.starts)) as Record<string, unknown>;
+          const doc = JSON.parse(scratchConfigText(inputs.config, patched, options.starts, originalConfigStarts)) as Record<string, unknown>;
           absolutizeBuildFiles(doc, value => (isAbsolute(value) ? value : resolve(dirname(inputs.config), value)));
           await stageRequirements(dir, inputs.requirements, doc);
           await writeFile(join(dir, 'config.json'), JSON.stringify(doc, null, 2) + '\n', { mode: 0o600 });
@@ -1871,7 +1872,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       patched = applyConfigPatch(original, patch.ops);
       if (patch.op.cmd === 'remesh') part = remeshPart(patch);
     } catch (e) { if (e instanceof ConfigPatchError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
-    assertNamedFilesHeld(original, patched, [dirname(inputs.config), ...options.starts]);
+    assertNamedFilesHeld(original, patched, originalConfigStarts ?? [dirname(inputs.config), ...options.starts]);
     // #111: a cloth recipe patch (every op under /cloth) runs propose --cloth --write-config, then builds what it wrote.
     // Decision 1: without the declared keypoints the draft moves the body bones, so it is refused before anything else.
     const clothKind = clothPatchKind(patch.ops);
@@ -1962,7 +1963,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
       let patched: JsonValue;
       try { assertPatchFresh(patch, inputs.configHash); assertOpNames(original, patch.ops); patched = applyConfigPatch(original, patch.ops); remeshPart(patch); }
       catch (e) { if (e instanceof ConfigPatchError) throw new RebuildError(e.code, e.message.slice(e.code.length + 2)); throw e; }
-      assertNamedFilesHeld(original, patched, [dirname(inputs.config), ...options.starts]);
+      assertNamedFilesHeld(original, patched, originalConfigStarts ?? [dirname(inputs.config), ...options.starts]);
       planned.push({ patch, patched });
     }
     const resolved = resolveProducer(options.starts);
@@ -2407,7 +2408,7 @@ export function createRebuilds(p: ReviewPackage, options: RebuildOptions) {
     if (current?.status === 'running') return { status: 202, body: snapshot(current) };
     if (busy()) return { status: 200, body: { status: 'refused', error: busy(), producerLine: null } };
 
-    const scratchDoc = JSON.parse(scratchConfigText(inputs.config, configDoc as unknown as JsonValue, options.starts)) as Record<string, unknown>;
+    const scratchDoc = JSON.parse(scratchConfigText(inputs.config, configDoc as unknown as JsonValue, options.starts, originalConfigStarts)) as Record<string, unknown>;
     (scratchDoc.motion as Record<string, unknown>).animations_from = 'animations.json';
     const scratchCfgText = JSON.stringify(scratchDoc, null, 2) + '\n';
     const recordedBody = {
