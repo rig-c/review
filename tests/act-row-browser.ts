@@ -1,5 +1,5 @@
 /** #840 ordinary Nova only. Synthetic inputs reuse the shipped job/record/CDP fixtures.
- * Covers eight screens × EN/KO × two sizes; no producer conformance claim. */
+ * Covers seven screens × EN/KO × two sizes; no producer conformance claim. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
@@ -332,8 +332,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(await page.evaluate(`document.getElementById('workspace-pending-ask').closest('#workspace-act-row')!==null`),true);
    if(mode==='interview')await page.evaluate<void>(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#workspace-interview-answer input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
    await capture(page,out,mode==='interview'?'answer-question':'answer-dialog');
-   const submit=mode==='interview'?'#workspace-interview-answer button[type=submit]':
-    mode==='checkpoint'?'#job-record-asks button[data-job-text="Pass"]':'#job-record-asks button[type=submit]';
+   const submit=mode==='interview'?'#workspace-interview-answer button[type=submit]':'#job-record-asks button[data-job-text="Pass"]';
    if(mode==='interview')await page.evaluate<void>(`document.querySelector(${JSON.stringify(submit)}).scrollIntoView({block:'nearest',inline:'nearest'})`);
    await click(page,submit);
    if(mode==='interview'){

@@ -41,7 +41,7 @@ export function jobRigScreenAsk(display:DisplayPublicationV3,ask:PendingAskV3,ch
   if(ask.subject.kind==='checkpoint'){
     try {prepareJobForms(display,[ask],()=>jobCheckpointContext(ask,[]));return true;}catch{return false;}
   }
-  if(ask.subject.kind==='signoff'||ask.subject.kind==='interview-picks')return true;
+  if(ask.subject.kind==='interview-picks')return true;
   return !!source.model&&jobRigScreenAnswers(ask,checkpoints)&&
     (ask.subject.kind!=='review-verdict'||ask.subject.stage===(source.direction?'direction-review':'rig-review'));
 }
@@ -281,7 +281,7 @@ export function createJobRigScreen(options: {
     return options.translate('job.saved');
   }
   const partsAttempts=new Map<string,{key:string;submissionId:string}>();
-  /** One parts verdict act. A pending signoff remains independent and is never synthesized here. */
+  /** One parts verdict act. */
   async function submitParts(issues:readonly PartsIssue[], general?:readonly string[]):Promise<string>{
     const prepared=mounted,state=options.window.state();
     if(!prepared?.parts||!state.receipt||state.preparing)throw new Error('JOB_ACT_SOURCE_STALE');
@@ -362,7 +362,7 @@ export function createJobRigScreen(options: {
       const {pending, closed, recordReceiptAskId} = options.window.state();
       const active = activeAsks(pending, prepared.display.publication.publicationId);
       if (!closed && active.some(ask => record?.forms.get(ask.askId)?.submitting &&
-          (ask.subject.kind === 'signoff' || ask.subject.kind === 'checkpoint'))) return 'sending' as const;
+          ask.subject.kind === 'checkpoint')) return 'sending' as const;
       return !active.length && recordReceiptAskId !== undefined ? 'submitted' as const : null;
     };
     const draftId = jobSourceDraftId(prepared.display.publication.source);

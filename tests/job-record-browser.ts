@@ -371,7 +371,7 @@ async function edit(selector: string, value: string): Promise<void> {
   );
 }
 
-async function submitForm(askId: string, kind: 'record' | 'checkpoint' | 'interview' = 'record', remainingAsk?: string): Promise<{ statusText: string; statusKey: string | null }> {
+async function submitForm(askId: string, kind: 'record' | 'checkpoint' | 'interview' = 'record'): Promise<{ statusText: string; statusKey: string | null }> {
   const root = kind === 'interview' ? '#workspace-interview-answer' : '#job-record-asks';
   const selector = `${root} form[data-job-ask=${JSON.stringify(askId)}]`;
   const submitSelector=selector+(kind==='checkpoint'?' button[data-job-text="Pass"]':' button[type="submit"]');
@@ -387,21 +387,7 @@ async function submitForm(askId: string, kind: 'record' | 'checkpoint' | 'interv
   await click(page!,submitSelector);
   if (kind !== 'interview') {
     await wait(`!document.querySelector(${JSON.stringify(selector)})`, `submitted form ${askId} was pruned`);
-    if (!remainingAsk) return expectRecordActSubmitted(page!, wait, language, `record act ${askId} submitted`);
-    const remainingForm = `#job-record-asks:not([hidden]) form[data-job-ask=${JSON.stringify(remainingAsk)}]`;
-    await wait(`!!document.querySelector(${JSON.stringify(remainingForm + ' fieldset:not(:disabled)')}) &&
-      !document.getElementById('workspace-pending-ask').disabled`, `remaining ask ${remainingAsk} stays enabled`);
-    const view = await page!.evaluate<{statusText: string; statusKey: string | null; headline: string; controls: string[]}>(`(() => {
-      const row = document.getElementById('workspace-act-row');
-      const status = row.querySelector('#review-draft-state');
-      const controls = [...row.querySelectorAll('#save,#request-changes,#workspace-pending-ask,#workspace-pending-record-ask')]
-        .filter(control => control.getClientRects().length > 0).map(control => control.id);
-      return {statusText: status.textContent, statusKey: status.dataset.saveState ?? null,
-        headline: row.querySelector('#workspace-ask-headline').textContent, controls};
-    })()`);
-    assert.deepEqual(view.controls, ['workspace-pending-ask']);
-    assert.equal(view.headline, catalog['Approve this stage.']);
-    return {statusText: view.statusText, statusKey: view.statusKey};
+    return expectRecordActSubmitted(page!, wait, language, `record act ${askId} submitted`);
   }
   await wait(
     `document.querySelector(${JSON.stringify(selector)}).querySelector('fieldset').disabled && document.querySelector(${JSON.stringify(selector)}).querySelector(':scope > [role="status"]').dataset.jobText === 'job.saved'`,
@@ -657,7 +643,7 @@ try {
   await writeFile(join(output, `record-option-set-${language}.png`), await page.screenshot());
   await record('option-set-submitted', { optionDom, optionRoutes, picksSubmitStatus, interviewShell, optionPictureBeforeSave, optionPictureAfterSave });
 
-  // 2. Publish model-free plan via job-api@3 and ask checkpoint + signoff on the same standing owner window
+  // 2. Publish model-free plan via job-api@3 (still carrying signoff + reopen subjects) and ask checkpoint on the same standing owner window
   const pubPlan = await callRecordApi({
     verb: 'publish',
     expectedGeneration: recordHost.session.status().generation,
@@ -721,7 +707,7 @@ try {
     'plan displayed with checkpoint form on normal owner URL',
   );
 
-  // #715 / #796 / #989 / #1227: shared title and native dialog; declared reopen and signoff subjects render no extra form.
+  // #715 / #796 / #989 / #1227 / #1228: shared title and right-panel section; declared reopen and signoff subjects render no extra form or button; new signoff asks refuse.
   await openPendingAsk(page);
   const planDom = await page.evaluate<{
     sentinel: string;
@@ -735,6 +721,7 @@ try {
     cpFormHidden: boolean;
     extraFormCount: number;
     reopenButtonCount: number;
+    signoffButtonCount: number;
     cpStepText: string | null;
   }>(`(async()=>{
     const sourceBinding = await (await fetch(${JSON.stringify(`/jobs/${recordHost.session.jobId}/publications/${planPublication.publicationId}/instances/${planPublication.instanceKey}/api/review`)})).json().then(body=>body.recordSource);
@@ -744,6 +731,9 @@ try {
     const extraForms = forms.filter(f => f !== cpForm);
     const reopenButtons = [...document.querySelectorAll('#job-record-asks button')].filter(
       b => b.dataset.jobText === 'job.reopen' || b.textContent === 'Reopen stage' || b.textContent === '단계 다시 열기',
+    );
+    const signoffButtons = [...document.querySelectorAll('#job-record-asks button')].filter(
+      b => b.dataset.jobText === 'job.signoff' || b.textContent === 'Save stage approval' || b.textContent === '단계 승인 저장',
     );
     return {
       sentinel: globalThis.__jobRecordOwnerSentinel,
@@ -757,6 +747,7 @@ try {
       cpFormHidden: !cpForm || cpForm.hidden,
       extraFormCount: extraForms.length,
       reopenButtonCount: reopenButtons.length,
+      signoffButtonCount: signoffButtons.length,
       cpStepText: cpForm?.querySelector('.job-plan-steps summary')?.title??null,
     };
   })()`);
@@ -784,8 +775,9 @@ try {
   // #768:8: only the asked step is shown; its raw id/hash live in title, not visible prose.
   assert.equal(planDom.rigCanvasCount, 0);
   assert.equal(planDom.cpFormHidden, false);
-  assert.equal(planDom.extraFormCount, 0, 'plan publication renders only the checkpoint form');
+  assert.equal(planDom.extraFormCount, 0, 'plan publication carrying reopen and signoff subjects renders no extra form');
   assert.equal(planDom.reopenButtonCount, 0, 'Bar 1: plan publication carrying reopen subjects renders no reopen button');
+  assert.equal(planDom.signoffButtonCount, 0, '#1228: plan publication carrying signoff subjects renders no signoff button');
   assert.equal(askSignoffRes.status, 409, '#1227: new signoff ask returns HTTP 409');
   assert.equal(askSignoff.ok, false);
   if (askSignoff.ok) throw new Error('Expected signoff ask to be refused');

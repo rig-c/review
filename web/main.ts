@@ -2279,7 +2279,7 @@ function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
   renderDraftState();return;
  }
  const trigger=questionForms.length?recordAsk:rigAsk;
- // The ask line's Review…/Approve… brings the section into view; it opens with the panel like a pending question.
+ // The ask line's Review… brings the section into view; it opens with the panel like a pending question.
  const revealRecord=()=>{recordPanel.hidden=false;workspace?.revealCommunication();recordPanel.scrollIntoView?.({block:'nearest'});};
  trigger.onclick=()=>{if(draftConflict)return;if(checkpointPair?.replayFor!==undefined)syncCheckpointPair(false);revealRecord();recordPanel.focus({preventScroll:true});};
  for(const form of recordForms())if(!forms.includes(form)){form.dispatchEvent(new Event('job-form-dispose'));form.remove();}
@@ -2288,9 +2288,7 @@ function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
   if(!standalone)(form as JobForm['form']).commentWords=()=>host?.record||host?.direction?recordCommentWords():partsOnly?projectComments(partsIssueComments(partsSubject?.issues()??[])):packageCheckpointWords(form.dataset.checkpointId);
   if(!recordPanel.contains(form))recordPanel.append(form);
  }
- // One line, like Question and Comments: a checkpoint form carries the outcome select, a signoff (stage or plan approval) does not.
- const checkpoints=forms.filter(form=>form.querySelector('select[name=outcome]')).length;
- setSourceText(recordTitle,checkpoints===forms.length?'Checkpoint':checkpoints?'Checkpoint · Sign-off':'Sign-off');
+ setSourceText(recordTitle,'Checkpoint');
  if(recordPanel.hidden)revealRecord();
  if(host?.record){
   for(const child of el('proposal-panel').children)if(child.id!=='comments-list-host')(child as HTMLElement).hidden=true;
@@ -2301,7 +2299,7 @@ function renderRecordForms(forms:readonly HTMLElement[],standalone=false):void {
 }
 /** The ask heading reads only already-pending subjects. It never synthesizes an agent request. */
 function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):void {
- const requests:Record<string,string>={'parts-verdict':partsSubject?.items().some(item=>item.mesh)?'Check the parts and meshes.':'Check the parts.','interview-picks':'Answer these questions.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.','checkpoint':'Review this checkpoint.','signoff':'Approve this stage.'};
+ const requests:Record<string,string>={'parts-verdict':partsSubject?.items().some(item=>item.mesh)?'Check the parts and meshes.':'Check the parts.','interview-picks':'Answer these questions.','review-verdict:rig-review':'Check the rig and motion.','review-verdict:direction-review':'Check the direction.','checkpoint':'Review this checkpoint.'};
  // #1004: several pending asks of one kind say their sentence once.
  const labels=[...new Set(subjects.map(subject=>requests[subject.kind+':'+subject.stage]??requests[subject.kind]).filter((label):label is string=>!!label))];
  const liveVerdict=(subject:{kind:string;stage?:string})=>
@@ -2314,7 +2312,10 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  if(host?.checkpointPair)syncCheckpointPair();
  if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
  if(host?.recordSubmission?.()==='submitted')firstPublicationPrompt=false;
- renderAskHeadline(labels.join(' · ')||(typeof commentHost==='function'&&commentHost()?"We're looking at the work together. Leave your thoughts as comments.":firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
+ // #1228: a displayed record publication takes the comment line where the first-publication waiting line stood;
+ // answered and submitted states keep their own line, and progress still takes over the headline.
+ const recordCommentMode=!!host?.record&&firstPublicationPrompt;
+ renderAskHeadline(labels.join(' · ')||((typeof commentHost==='function'&&commentHost())||recordCommentMode?"We're looking at the work together. Leave your thoughts as comments.":firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
  if(subjects.length)firstPublicationPrompt=false;
  renderDraftState();
 }
@@ -2375,7 +2376,7 @@ function renderAnswerControls():void {
  const subjects=host?.pendingSubjects?.()??pendingAnswers;
  const parts=subjects.some(subject=>subject.kind==='parts-verdict');
  const verdict=parts||subjects.some(subject=>subject.kind==='review-verdict');
- const dialog=subjects.some(subject=>!subject.kind.endsWith('verdict'))&&!verdict;
+ const dialog=subjects.some(subject=>subject.kind==='interview-picks'||subject.kind==='checkpoint')&&!verdict;
  const readable=questionForms.some(form=>form.dataset.interviewAnswered==='true');
  const questionEnabled=questionForms.some(form=>form.querySelector('fieldset:not(:disabled)'));
  const recordEnabled=!!recordPanel.querySelector('form[data-job-ask] fieldset:not(:disabled)');
@@ -2391,11 +2392,11 @@ function renderAnswerControls():void {
  save.classList.toggle('primary',verdict&&!hasPinnedPart);
  requestChanges.classList.toggle('primary',hasPinnedPart);
  const questionPending=subjects.some(subject=>subject.kind==='interview-picks');
- const recordKind=subjects.find(subject=>!subject.kind.endsWith('verdict')&&subject.kind!=='interview-picks')?.kind;
+ const recordKind=subjects.find(subject=>subject.kind==='checkpoint')?.kind;
  const recordTrigger=questionForms.length?recordAsk:rigAsk;
- const recordSending=(recordKind==='signoff'||recordKind==='checkpoint')&&host?.recordSubmission?.()==='sending';
+ const recordSending=recordKind==='checkpoint'&&host?.recordSubmission?.()==='sending';
  if(!questionPending||recordTrigger!==rigAsk){
-  setSourceText(recordTrigger,recordKind==='signoff'?'Approve…':'Review…');
+  setSourceText(recordTrigger,'Review…');
   recordTrigger.disabled=!recordEnabled||blocked||recordSending;
  }
  if(questionPending||questionForms.length){
@@ -2541,8 +2542,9 @@ function bindInspector(partsSubject=false):void {
 }
 /** Pause at the held time and reveal the existing act without changing Setup/Animate mode. */
 function openReview():void {pause();if(!partsOnly)syncCorrectionStage();workspace?.revealCommunication();}
-/** Something to communicate: a pending question or record form, or at least one comment. */
-function communicationPending():boolean {return !!communicationPanel.querySelector('form[data-job-ask], .stage-comment-item[data-comment-id]');}
+/** Something to communicate: a displayed record publication (#1228: its Comments and source stay open without an ask),
+ * a pending question or record form, or at least one comment. */
+function communicationPending():boolean {return !!host?.record||!!communicationPanel.querySelector('form[data-job-ask], .stage-comment-item[data-comment-id]');}
 function unitScaleMessage(target:CameraTarget):void {message(partsOnly?'1:1':target==='rig'?'1:1 · one CSS pixel per model coordinate unit.':'1:1 · one CSS pixel per reference grid unit.');}
 function bindReviewDialog():void {select('correction-stage').onchange=syncCorrectionStage;button('native-one').title=tr('One CSS pixel per current pane coordinate unit; synchronized panes retain relative zoom.');}
 
