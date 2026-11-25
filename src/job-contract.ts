@@ -498,6 +498,19 @@ export interface JobPreviousDraft {
   readonly diff?: JobFileIdentity;
 }
 
+export const JOB_PREVIOUS_BUILD_SCHEMA = 'rig-review-previous-build/1';
+
+/** Package-relative seals for the producer-selected read-only comparison. */
+export interface JobPreviousBuild {
+  readonly schema: typeof JOB_PREVIOUS_BUILD_SCHEMA;
+  readonly label: string;
+  readonly currentLabel: string;
+  readonly model: JobFileIdentity;
+  readonly atlas: JobFileIdentity;
+  readonly pages: readonly JobFileIdentity[];
+  readonly clipMap: Readonly<Record<string, string>>;
+}
+
 export type JobSelector =
   | { readonly kind: 'draft'; readonly id: string }
   | { readonly kind: 'rig'; readonly version: number }
@@ -907,6 +920,7 @@ export const JOB_ERROR_CODES = [
   'JOB_RECORD_MOVED',
   'JOB_SOURCE_INVALID',
   'JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID',
+  'JOB_PREVIOUS_BUILD_INVALID',
   'JOB_SOURCE_MISMATCH',
   'JOB_SOURCE_UNRETAINABLE',
   'JOB_ROOT_REPLACED',

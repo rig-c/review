@@ -14,14 +14,15 @@ import {
 import type {
   JobAnsweredDirectionFeedbackReference, JobChestLandmarkValue, JobErrorCode, JobPublication, JobPublishedChestLandmark,
   JobCheckpointEvidence, JobFileIdentity, JobInterviewDiagnostics, JobInterviewRecord, JobModelSourceBinding, JobPartsEnumerator, JobPartsFileReference, JobPartsIdentity, JobPlanIdentity, JobPublishRequest,
-  JobPreviousDraft, JobSelector, JobSourceBinding, JobSubject, JobPlanTextProjection, JobPlanTextStep,
+  JobPreviousBuild, JobPreviousDraft, JobSelector, JobSourceBinding, JobSubject, JobPlanTextProjection, JobPlanTextStep,
   OptionContext, OptionSource, PackageResultV3, PlanContext, PlanSource, ProjectRecord, PublishRequestV3,
   RecordFreeze, RecordOptionResult, RecordPlanResult, RecordPublicationReader, RecordPublishedContext,
   RecordReaderInput, RecordResult, RecordSource, RecordSubject,
 } from './job-contract.ts';
 import { checkedPath, inspectSceneQuestion, jsonObject, readProject, readRegular, type InterviewQuestion, type InterviewSet } from './interview-project.ts';
 import { acceptedRigReview } from './interview-scene.ts';
-import { BUILD_MODEL_PATH, loadJobReview, loadReview } from './manifest.ts';
+import { admitPreviousBuild, BUILD_MODEL_PATH, loadJobReview, loadReview, parsePreviousBuild,
+  previousBuildFileError, previousBuildFiles, readPreviousBuildFile } from './manifest.ts';
 import { HandoffError } from './handoff.ts';
 import { openKey } from './open.ts';
 import { attachmentHashText, MESH_EDIT_CODES } from './mesh-edit.ts';
@@ -71,6 +72,7 @@ export interface JobPublishedContext {
   readonly answeredDirectionFeedback?: readonly JobAnsweredDirectionFeedbackReference[];
   readonly checkpointEvidence?: readonly JobCheckpointEvidence[];
   readonly previousDraft?: JobPreviousDraft;
+  readonly previousBuild?: JobPreviousBuild;
   readonly chestLandmarks?: JobPublication['chestLandmarks'];
   readonly selector: JobSelector | null;
   readonly plan: JobPlanIdentity | null;
@@ -103,6 +105,7 @@ export interface JobRetainedSource {
   readonly checkpointEvidencePackageHash?: string;
   readonly chestLandmarks?: JobPublication['chestLandmarks'];
   readonly answeredDirectionFeedback?: JobPublishedContext['answeredDirectionFeedback'];
+  readonly previousBuild?: JobPreviousBuild;
   readonly root: JobRootIdentity;
   readonly record: JobFileIdentity | null;
   readonly seals: readonly JobFileIdentity[];
@@ -1471,10 +1474,20 @@ export async function verifyJobRecordSourceFresh(options: {
   return freshSource;
 }
 
+/** The wire paths are package-relative, but the trusted job closure is work-root-relative. */
+function jobPreviousBuildFiles(build: JobPreviousBuild, root: string, packageRoot: string, files: readonly JobFileIdentity[]) {
+  const declared = new Map(files.map(file => [file.path, file.sha256]));
+  return new Map(previousBuildFiles(build).map(file => {
+    const path = rootRelative(root, resolve(packageRoot, file.path));
+    if (declared.get(path) !== file.sha256) throw previousBuildFileError(file.path, 'missing matching publication seal');
+    return [path, file];
+  }));
+}
+
 /** Preserve the existing composite preimage, conditionally appending the declaration. */
 function packageSourceDigest(packageSourceHash: string, record: JobFileIdentity | null,
   source: Pick<JobModelSourceBinding, 'selector' | 'plan' | 'parts'>, files: readonly JobFileIdentity[],
-  evidence: Pick<JobModelSourceBinding, 'checkpointEvidence' | 'previousDraft'> & Pick<JobPublication, 'chestLandmarks'>): string {
+  evidence: Pick<JobModelSourceBinding, 'checkpointEvidence' | 'previousDraft'> & Pick<JobPublication, 'chestLandmarks'> & Pick<JobRetainedSource, 'previousBuild'>): string {
   return jobHash(JSON.stringify({schema: 'rig-review-job-source/2', packageSourceHash, record,
     selector: source.selector, plan: source.plan, parts: source.parts, files, ...evidence}));
 }
@@ -1601,6 +1614,10 @@ export async function prepareJobSource(options: {
   if (answeredDirectionFeedback && context.selector?.kind !== 'post') {
     throw new JobError('JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID');
   }
+  const previousBuild = Object.hasOwn(context, 'previousBuild') ? parsePreviousBuild(context.previousBuild) : undefined;
+  if (previousBuild && context.selector?.kind !== 'rig' && context.selector?.kind !== 'post')
+    throw new JobError('JOB_PREVIOUS_BUILD_INVALID');
+  const build = previousBuild ? {previousBuild} : {};
   const declared = publishedIdentities(context);
   const previous = previousDraftFields(context, context.selector, declared);
   const evidence = checkpointEvidenceFields(context, context.plan, context.subjects, declared);
@@ -1614,14 +1631,27 @@ export async function prepareJobSource(options: {
     // Resolve producer references from the designated job root for both copies.
     review = await loadJobReview(target, root.path);
   } catch (error) {
+    if (error instanceof JobError && error.code === 'JOB_PREVIOUS_BUILD_INVALID') throw error;
     throw new JobError('JOB_SOURCE_MISMATCH', error instanceof HandoffError ? error.message : undefined);
+  }
+  if (review.manifest.previousBuild && requestDigest(review.manifest.previousBuild) !== requestDigest(previousBuild ?? null))
+    throw new JobError('JOB_PREVIOUS_BUILD_INVALID');
+  const previousBuildSeals = previousBuild && jobPreviousBuildFiles(previousBuild, root.path, review.root, declared);
+  if (previousBuild) {
+    if (!review.manifest.model || (context.selector?.kind === 'post' && !review.direction))
+      throw new JobError('JOB_PREVIOUS_BUILD_INVALID');
+    if (!review.manifest.previousBuild) admitPreviousBuild(review.root, previousBuild);
   }
   if (answeredDirectionFeedback && !review.direction) throw new JobError('JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID');
   const wanted = new Map<string, string | null>();
   function add(path: string, sha256: string | null = null): void {
     jobPath(path);
     const existing = wanted.get(path);
-    if (existing && sha256 && existing !== sha256) throw new JobError('JOB_SOURCE_MISMATCH');
+    if (existing && sha256 && existing !== sha256) {
+      const previousFile = previousBuildSeals?.get(path);
+      if (previousFile) throw previousBuildFileError(previousFile.path, 'conflicting publication seals');
+      throw new JobError('JOB_SOURCE_MISMATCH');
+    }
     wanted.set(path, sha256 ?? existing ?? null);
   }
   for (const path of review.files) add(rootRelative(root.path, resolve(review.root, path)));
@@ -1658,7 +1688,10 @@ export async function prepareJobSource(options: {
     let size = 0;
     const directories = new Set([snapshotRoot, dirname(snapshotRoot), options.stateRoot]);
     for (const [path, expected] of [...wanted].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
-      const bytes = previousAssets?.get(path) ?? parts.bytes.get(path) ?? sourceBytes(root.path, path), sha256 = jobHash(bytes);
+      const previousFile = previousBuildSeals?.get(path);
+      const bytes = previousFile ? readPreviousBuildFile(review.root, previousFile) :
+        previousAssets?.get(path) ?? parts.bytes.get(path) ?? sourceBytes(root.path, path);
+      const sha256 = previousFile?.sha256 ?? jobHash(bytes);
       size += bytes.length;
       if (size > maxSourceBytes) {
         throw new JobError('JOB_SOURCE_UNRETAINABLE', `retained source bytes ${size} exceed the ${maxSourceBytes}-byte limit`);
@@ -1700,8 +1733,8 @@ export async function prepareJobSource(options: {
       assertPublishedChestLandmarks(snapshotRoot, model, handoffConfig ? [handoffConfig] : declared, chestLandmarks);
     }
     const modelSource: JobModelSourceBinding = {
-      sourceHash: project || context.plan || context.parts || chestLandmarks ? packageSourceDigest(review.sourceHash, record,
-        {selector: context.selector, plan: context.plan, parts: parts.identity}, seals, {...evidence, ...previous, ...chest}) : review.sourceHash,
+      sourceHash: project || context.plan || context.parts || chestLandmarks || previousBuild ? packageSourceDigest(review.sourceHash, record,
+        {selector: context.selector, plan: context.plan, parts: parts.identity}, seals, {...evidence, ...previous, ...chest, ...build}) : review.sourceHash,
       projectHash: project?.hash ?? null,
       package: { id: review.manifest.id, revision: review.manifest.revision },
       selector: context.selector,
@@ -1729,8 +1762,9 @@ export async function prepareJobSource(options: {
       : null;
     const prepared: JobRetainedSource = {
       root, record, seals, snapshotRoot, snapshotIdentity,
-      ...(source.checkpointEvidence || source.previousDraft || chestLandmarks ? {checkpointEvidencePackageHash: review.sourceHash} : {}),
+      ...(source.checkpointEvidence || source.previousDraft || chestLandmarks || previousBuild ? {checkpointEvidencePackageHash: review.sourceHash} : {}),
       ...chest,
+      ...build,
       ...(answeredDirectionFeedback ? {answeredDirectionFeedback} : {}),
       manifestPath: retained.manifestPath,
       source,
@@ -1753,7 +1787,7 @@ export async function prepareJobSource(options: {
     };
     await options.afterSnapshot?.();
     assertJobSourceCurrent(prepared);
-    if (source.checkpointEvidence || source.previousDraft || chestLandmarks) assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity);
+    if (source.checkpointEvidence || source.previousDraft || chestLandmarks || previousBuild) assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity);
     return prepared;
   } catch (error) {
     if (snapshotIdentity) await removeOwnedJobSnapshot(options.stateRoot, {snapshotRoot, ...snapshotIdentity});
@@ -1780,7 +1814,7 @@ export function assertStoredCheckpointEvidence(retained: JobRetainedSourceV3): v
   }
   const hasEvidence = 'checkpointEvidence' in retained.source;
   if (isRetainedRecordSource(retained)) {
-    if ('chestLandmarks' in retained) throw new JobError('JOB_SOURCE_MISMATCH');
+    if ('chestLandmarks' in retained || 'previousBuild' in retained) throw new JobError('JOB_SOURCE_MISMATCH');
     const parsed = parseRecordSource(retained.source);
     if (!hasEvidence && !('planPicture' in retained.source) && !('checkpointEvidence' in retained.context) &&
         !('planPicture' in retained.context) && !('previousDraft' in retained.context) &&
@@ -1797,8 +1831,9 @@ export function assertStoredCheckpointEvidence(retained: JobRetainedSourceV3): v
   if (Object.hasOwn(source, 'directionReview')) throw new JobError('JOB_SOURCE_INVALID');
   const hasPreviousDraft = 'previousDraft' in source;
   const hasChest = 'chestLandmarks' in retained;
-  if (!hasEvidence && !hasPreviousDraft && !hasChest && !('checkpointEvidencePackageHash' in retained)) return;
-  if (!(hasEvidence || hasPreviousDraft || hasChest) || !retained.record || (hasPreviousDraft && !source.parts) ||
+  const hasPreviousBuild = Object.hasOwn(retained, 'previousBuild');
+  if (!hasEvidence && !hasPreviousDraft && !hasChest && !hasPreviousBuild && !('checkpointEvidencePackageHash' in retained)) return;
+  if (!(hasEvidence || hasPreviousDraft || hasChest || hasPreviousBuild) || !retained.record || (hasPreviousDraft && !source.parts) ||
       (hasChest && (source.selector?.kind !== 'rig' || !source.model))) {
     throw new JobError('JOB_SOURCE_MISMATCH');
   }
@@ -1809,7 +1844,13 @@ export function assertStoredCheckpointEvidence(retained: JobRetainedSourceV3): v
   if (chest.chestLandmarks?.some(seed => !retained.seals.some(file => file.sha256 === seed.source.configHash))) {
     throw new JobError('JOB_SOURCE_MISMATCH');
   }
-  const expected = packageSourceDigest(packageSourceHash, retained.record, source, retained.seals, {...evidence, ...previous, ...chest});
+  const build = hasPreviousBuild ? {previousBuild: parsePreviousBuild(retained.previousBuild)} : {};
+  if (build.previousBuild) {
+    if (!source.model || (source.selector?.kind !== 'rig' && source.selector?.kind !== 'post') ||
+        (source.selector.kind === 'post' && !source.direction)) throw new JobError('JOB_SOURCE_MISMATCH');
+    jobPreviousBuildFiles(build.previousBuild, retained.snapshotRoot, dirname(retained.manifestPath), retained.seals);
+  }
+  const expected = packageSourceDigest(packageSourceHash, retained.record, source, retained.seals, {...evidence, ...previous, ...chest, ...build});
   if (expected !== source.sourceHash ||
       requestDigest(evidence.checkpointEvidence ?? null) !== requestDigest(source.checkpointEvidence ?? null) ||
       requestDigest(previous.previousDraft ?? null) !== requestDigest(source.previousDraft ?? null)) {

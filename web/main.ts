@@ -2,7 +2,7 @@ import {nativeDifferenceAlignment} from '../src/parts-comparison.ts';
 import type {CheckpointPairView} from './rig-host.ts';
 import {clampZoom} from './camera-view.ts';
 import {hasTransientQuestionImage} from './interview-panel.ts';
-import {advanceTake,bindScenePlates,loadScenePlates,takeSample} from './scene-plates.ts';
+import {advanceTake,applyTakeStep,bindScenePlates,loadScenePlates,takeSample,type TakeStep} from './scene-plates.ts';
 import type {SceneInspection} from '../src/scene-inspection.ts';
 import type {JobProgressV3,RecordSource} from '../src/job-contract.ts';
 import type {InterviewSubjectEntry} from '../src/joined-project.ts';
@@ -29,6 +29,7 @@ import { CanvasRenderer, loadModel, RigPlayer, type BoneAdjust, type ModelAssets
 import {createViewportController,createViewportState,type CameraTarget} from './viewport-controller.ts';
 import {createRigViewportProvider,rigPanCarry} from './rig-viewport-provider.ts';
 import {mountViewportPair} from './viewport-pair.ts';
+import {createPreviousBuildView} from './previous-build-view.ts';
 import {rendererStatus} from './renderer-status.ts';
 import {panelMake,createRigLayerControls,createViewControls,inspectionViewSwitch,actionButton,bindAppearance,syncStageLayout,bindInspectorTabs,idleAvailable,initialIdleAnimation,automaticIdlePreview,idlePreviewOnOpen,bookmarkCameraKept,bindLayerShortcuts,describeLayerToggles,type ViewPoint} from './view-controls.ts';
 import {RigOverlays,type OverlayCircle,type OverlayMarker,type OverlayRegion,type OverlaySnapshot} from './rig-overlays.ts';
@@ -171,6 +172,9 @@ let askSentence='';
 let partsAnswerBlocked:()=>boolean=()=>false;
 mountViewportPair(el('stage-layout'));
 const viewportState=createViewportState();
+let previousBuildView:ReturnType<typeof createPreviousBuildView>|null=null;
+let previousBuildEnteredFromDifference=false,previousBuildSelection=0;
+let previousBuildCamera:{camera:typeof viewportState;referenceGeneration:number}|null=null;
 const partsCanvas=document.createElement('canvas'),partsReference=document.createElement('canvas');partsCanvas.width=partsCanvas.height=partsReference.width=partsReference.height=0;
 let partsSubject:ReturnType<typeof bindPartsSubject>|null=null;
 let setupPartsPersistence:(()=>Promise<void>)|null=null;
@@ -193,13 +197,14 @@ const rigRaster={el,canvas:partsCanvas,message,reference:()=>null,
  frameSize:(target:CameraTarget)=>checkpointPair?pairFrame(target):activeInterviewImage
   ?target==='reference'&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:null
   :{w:partsCanvas.width,h:partsCanvas.height},
- active:()=>!!checkpointPair||!!rigDifference||!!activeInterviewImage};
+ active:()=>!!checkpointPair||!!rigDifference||!!activeInterviewImage,
+ pairedRig:()=>previousBuildView?.pane()??null};
 if(partsOnly){partsCanvas.id='parts-canvas';el('rig-root').append(partsCanvas);el('reference-content').append(partsReference);}
 let sceneComposite:ReturnType<typeof bindScenePlates>|undefined;
 const activeScene=()=>sceneComposite&&data.direction&&(!stageSource||stageSource.url===inspectedModel?.url)?data.direction:undefined;
 const sceneBox=()=>{const direction=activeScene();return direction?takeSample(direction,time).box:null;};
 const rebuildFramingBoxes=new WeakMap<ModelAssets,PoseBounds>();
-let viewportProvider=partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>target==='reference'&&activeInterviewImage&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',framingBox:()=>sceneBox()??(assets?rebuildFramingBoxes.get(assets)??null:null),el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,raster:rigRaster},viewportState);
+let viewportProvider=partsOnly?createPartsViewportProvider({el,canvas:partsCanvas,message,reference:()=>partsReference.width>0?partsReference:null,frameSize:target=>target==='reference'&&activeInterviewImage&&referenceSize?{w:referenceSize.width,h:referenceSize.height}:partsSubject?.frameSize(target)??null},viewportState):createRigViewportProvider({fitLabel:'Fit',framingBox:()=>sceneBox()??(assets?rebuildFramingBoxes.get(assets)??null:null),el,player:()=>player,assets:()=>assets,referenceSize:()=>referenceSize,view:()=>view,referenceGeneration:()=>referenceGeneration,parts:()=>parts,text,message,redrawOverlay,raster:rigRaster,pairedRig:rigRaster.pairedRig},viewportState);
 // The first publication selects the existing provider without replacing the empty viewport.
 const viewport=createViewportController(new Proxy(viewportProvider,{get:(_target,key)=>{
  const value=Reflect.get(viewportProvider,key,viewportProvider);return typeof value==='function'?value.bind(viewportProvider):value;
@@ -337,9 +342,9 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 function referenceUrl(reference:Reference):string {return data.explicitReference?.id===reference.id?access.route(data.explicitReference.url):data.sourcePainting?.id===reference.id?access.route(data.sourcePainting.url):assetUrl(reference.path);}
 
-function assetUrl(path: string): string {
+function assetUrl(path: string, base=access.route('/assets/')): string {
   if (!path || path.startsWith('/') || /[\\%?#\x00-\x1f]/.test(path) || /^[a-zA-Z]:/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..')) throw new Error(`Unsupported package asset path: ${path}`);
-  return access.route('/assets/' + path.split('/').map(encodeURIComponent).join('/'));
+  return base + path.split('/').map(encodeURIComponent).join('/');
 }
 
 function markDirty(): void {
@@ -441,10 +446,68 @@ function renderCheckpoint(): void {
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="outcome"]')) { radio.checked = radio.value === (entry?.outcome ?? 'pending'); radio.disabled = !checkpoint; }
 }
 
-function setView(value: typeof view): void {view=value;renderLayout();}
+function setView(value: typeof view): void {leavePreviousBuild();view=value;renderLayout();}
+
+function leavePreviousBuild():void {
+ ++previousBuildSelection;
+ if(!previousBuildCamera)return;
+ const {camera,referenceGeneration:priorReference}=previousBuildCamera;
+ previousBuildView?.hide();
+ viewport.cancelFit();
+ // Preserve a reference explicitly selected while the retained build was visible.
+ if(priorReference!==referenceGeneration){
+  camera.referenceCenter=viewport.state.referenceCenter;
+  delete camera.cameraFrames.reference;
+ }
+ Object.assign(viewport.state,camera);
+ previousBuildCamera=null;
+ if(video&&video.readyState>=1){
+  holdVideoReference(video,referenceGeneration);
+  if(playing&&referenceInput.state==='loaded')void video.play().catch(()=>{});
+ }
+ renderTransport();
+ comments?.refresh();
+}
+
+async function choosePreviousBuild():Promise<void> {
+ const previous=previousBuildView;
+ if(!previous)return;
+ if(previous.active()){
+  const difference=previousBuildEnteredFromDifference;
+  leavePreviousBuild();
+  if(difference&&!rigDifferenceReason())await chooseInspectionView('difference');
+  else renderLayout();
+  return;
+ }
+ const selection=++previousBuildSelection;
+ renderLayout();
+ try{
+  await previous.load();
+  if(disposed||selection!==previousBuildSelection||checkpointPair||activeInterviewImages||rigInput.state!=='loaded'||!player)return;
+  if(el('reference-viewport').querySelector('.stage-comment-composer')){
+   message('COMMENT_BUSY: close the active editor or wait for the inspection to settle',true);
+   return;
+  }
+  previousBuildEnteredFromDifference=!!rigDifference;
+  leaveRigDifference();
+  previousBuildCamera={camera:structuredClone(viewport.state),referenceGeneration};
+  viewport.state.activeCamera='rig';
+  previous.show(player);
+  video?.pause();
+  renderLayout();
+  renderTransport();
+  comments?.refresh();
+ }catch(error){
+  if(disposed||selection!==previousBuildSelection)return;
+  leavePreviousBuild();renderLayout();message(errorText(error),true);
+ }
+}
+
 async function chooseInspectionView(id:string):Promise<void> {
  if(checkpointPair){await showCheckpointPair(id as CheckpointPairMode);return;}
  if(activeInterviewImages){const image=activeInterviewImages[Number(id.replace('interview-image-',''))];if(id.startsWith('interview-image-')&&image){activeInterviewImage=image;void showReference('',image);}return;}
+ if(id==='previous-version'){await choosePreviousBuild();return;}
+ leavePreviousBuild();
  if(!partsSubject){
   if(id==='difference'){
    const reason=rigDifferenceReason();if(reason){message(reason,true);renderLayout();return;}
@@ -497,9 +560,10 @@ function renderLayout():void {
   text('layout-state',checkpointPairLabels[mode]);
   fitCamera();return;
  }
+ if(controls.viewModeIds.includes('previous-version')&&renderPreviousBuildLayout())return;
  if(rigDifference&&(rigDifferenceReason()||rigDifference.assets!==assets||rigDifference.painting!==el('reference-content').querySelector('img')))leaveRigDifference();
  const state=layoutEligibility();effectiveView=state.effective;
- for(const id of controls.viewModeIds)if(id!=='difference')controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
+ for(const id of controls.viewModeIds)if(id!=='difference'&&id!=='previous-version')controls.setDisabled(id,state.reasons[id as SingleLayout]??null);
  if(activeInterviewImages)controls.setMode('interview-image-'+activeInterviewImages.indexOf(activeInterviewImage!));
  else controls.setMode(rigDifference||partsSubject?.comparison().mode==='difference'?'difference':state.effective,state.effective??state.requested);
  if(partsSubject){
@@ -519,6 +583,17 @@ function renderLayout():void {
  const shown={compare:'Side by side',reference:'Reference only',rig:'Rig only'};
  text('layout-state',state.effective===null?`No input rendered · ${state.reasons.compare??''}`:state.effective===state.requested?shown[state.effective]:`${shown[state.effective]} · ${shown[state.requested]} unavailable: ${state.reasons[state.requested]??''}`);
  fitCamera();
+}
+function renderPreviousBuildLayout():boolean {
+ const ready=rigInput.state==='loaded';
+ controls.setDisabled('previous-version',ready?null:tr(layoutEligibility().reasons.rig??''));
+ if(!ready||!previousBuildView?.active())return false;
+ effectiveView='compare';
+ el('reference-pane').hidden=el('rig-pane').hidden=false;
+ controls.setMode('previous-version');
+ text('layout-state','Previous version');
+ fitCamera();
+ return true;
 }
 function setReferenceInput(value:InputState):void {const leaving=referenceInput.state==='out-of-domain'&&value.state!=='out-of-domain';referenceInput=value;if(value.state==='out-of-domain')message(`REFERENCE_OUT_OF_DOMAIN: ${value.reason}. The reference was not clamped.`,true);else if(leaving)message('Reference back in its domain at the held time.');renderLayout();}
 /** A video counts only after `seeked` at the held time with a decoded frame (readyState >= 2). */
@@ -640,7 +715,7 @@ async function showReference(id: string, bound?:{name:string;src:string}): Promi
 function renderTransport(): void {
   refreshAnimationInspection();
   const end = duration > 0 ? ` / ${duration.toFixed(4)}` : '';
-  text('time-label', sequence ? `Source ${(time + sequence.frames[0]!.t).toFixed(4)} ↔ ${time.toFixed(4)}${end} s` : `${time.toFixed(4)}${end} s`);
+  text('time-label', sequence&&!previousBuildView?.active() ? `Source ${(time + sequence.frames[0]!.t).toFixed(4)} ↔ ${time.toFixed(4)}${end} s` : `${time.toFixed(4)}${end} s`);
   input('scrub').max = String(Math.max(duration, .001)); input('scrub').value = String(time); input('scrub').disabled = duration <= 0;
   button('play').disabled = (!player && !video && !sequence) || duration <= 0;
   renderFrameTransport();
@@ -711,10 +786,23 @@ function seekFrame(frame: number): void {
   message(`F${frame} · Explicit time ${exact} s${!player && !video && !sequence ? ' (No playback reference · time display only)' : ''}`);
 }
 
-function drawRig(action:()=>void):void {
+function drawRig(action:()=>void,previousFrame?:'seek'|((view:NonNullable<typeof previousBuildView>)=>void)):void {
  if(rigDifference&&rigDifference.assets!==assets){leaveRigDifference();renderLayout();}
  inDrawRig=true;
- try{const box=sceneBox();if(box&&player?.renderer instanceof CanvasRenderer)player.renderer.viewport=box;action();if(box&&player){sceneComposite?.draw(player,box);}parts?.present('single');chestEditor?.syncJobTarget();if(box)viewport.fitCamera();if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);}
+ try{
+  const box=sceneBox();if(box&&player?.renderer instanceof CanvasRenderer)player.renderer.viewport=box;
+  action();if(box&&player)sceneComposite?.draw(player,box);
+  parts?.present('single');chestEditor?.syncJobTarget();
+  if(player&&previousBuildView?.active()){
+   try{
+    if(typeof previousFrame==='function')previousFrame(previousBuildView);
+    else previousBuildView.present(player,previousFrame==='seek');
+   }catch(error){leavePreviousBuild();renderLayout();message(errorText(error),true);}
+  }
+  if(box)viewport.fitCamera();
+  if(player&&inspectionSourceState==='ready')animationPanel?.capture(player,parts?.frame('single'));else animationPanel?.capture(null,undefined);
+  text('renderer-state',rendererStatus(player?.renderer??null,'succeeded').label);redrawOverlay(true);
+ }
  catch(error){animationPanel?.capture(null,undefined);overlays?.clear();text('renderer-state',rendererStatus(null,'failed').label);throw error;}
  finally{inDrawRig=false;}
 }
@@ -730,7 +818,7 @@ function chooseAnimation(name: string, move: ClipMove = { kind: 'choose' }): voi
   if (player && runtimeAnimation) {
     restartSetupPlayer();
     if(scene){player.play(name,{loop:canRepeatIdle()});player.pause();seek(0,move);}
-    else drawRig(()=>{player!.play(name,{loop:canRepeatIdle()});player!.pause();refreshAnimationInspection();player!.draw();});
+    else drawRig(()=>{player!.play(name,{loop:canRepeatIdle()});player!.pause();refreshAnimationInspection();player!.draw();},'seek');
   }
   else if (player && name){text('renderer-state',rendererStatus(null,'failed').label);message(`Animation "${name}" is not present in the rig.`, true);}
   renderTransport(); renderCues();renderIdle();
@@ -740,8 +828,8 @@ function seek(value: number, move?: ClipMove): void {
   if(rigDifference){leaveRigDifference();renderLayout();}
   time = duration > 0 ? Math.min(Math.max(0, value), duration) : Math.max(0, value);
   clipMoved(move ?? { kind: 'seek', to: time });
-  if (player && player.current) { try { player.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time); drawRig(()=>player!.draw()); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
-  if (video && video.readyState >= 1) holdVideoReference(video, referenceGeneration);
+  if (player && player.current) { try { player.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time); drawRig(()=>player!.draw(),'seek'); } catch (error) {text('renderer-state',rendererStatus(null,'failed').label); message(errorText(error), true); } }
+  if (video && video.readyState >= 1 && !previousBuildView?.active()) holdVideoReference(video, referenceGeneration);
   renderSequenceFrame(); renderTransport();
 }
 
@@ -872,9 +960,23 @@ function seekReading(clip: string, frame: number, exact: number | null, label: s
 function tick(now: number): void {
   if(suspended||disposed||!screenRoot.isConnected)return;
   // #356: the scrub box is read before this frame writes anything (a read after the writes forces a layout).
-  if (playing) try { holdScrubBox(input('scrub')); tickPlaying(now); } finally { releaseScrubBox(); }
+  if (playing) try { holdScrubBox(input('scrub')); tickPlaying(now,!previousBuildView?.active()); } finally { releaseScrubBox(); }
   else tickHeldPhysics(now);
   frameHandle=requestAnimationFrame(tick);
+}
+
+/** A callback can owe zero or several fixed steps. Each stepped rig draws once after the batch. */
+function drawRigSteps(current:RigPlayer,steps:readonly number[],held:boolean,take?:{direction:NonNullable<ReturnType<typeof activeScene>>;from:number}):void {
+ const paired=previousBuildView?.active();
+ const takeSteps:TakeStep[]|undefined=paired&&take?[]:undefined;
+ const advance=(rig:RigPlayer)=>{for(const step of steps)rig.advance(step);};
+ drawRig(()=>{
+  if(take)advanceTake(current,take.direction,take.from,steps,takeSteps);
+  else advance(current);
+  current.draw();
+ },paired?view=>view.step(takeSteps?rig=>{
+  for(const {kind,seconds} of takeSteps)applyTakeStep(rig,kind,seconds);
+ }:advance,held,take?1:current.timeScale):undefined);
 }
 
 /** Animate steps held physics under the standing environment; wind time and queued jolts stay frozen. */
@@ -886,20 +988,25 @@ function tickHeldPhysics(now:number):void {
  if(!next.steps.length)return;
  try{
   player.hold(true);player.resume();
-  drawRig(()=>{for(const step of next.steps)player!.advance(step);player!.draw();});
+  drawRigSteps(player,next.steps,true);
  }catch(error){heldPhysicsFailed=true;player.pause();playbackCarry=0;message(errorText(error),true);}
 }
 
-function tickPlaying(now: number): void {
+function tickPlaying(now: number,useReference=true): void {
   const dt = lastFrame ? Math.min((now - lastFrame) / 1000, .1) : 0;
   // #346: fixed PLAYBACK_STEP steps from wall-clock time; a repeating clip wraps here with no seek, so physics carries across the loop.
   const previous = time, next = advancePlayback({ time, duration, carry: playbackCarry, elapsed: dt, repeat: canRepeatIdle() && !idleHeld });
   playbackCarry = next.carry; time = next.time;
   const stepped = next.steps.reduce((sum, step) => sum + step, 0);
   // The wrap does what the replaced seek(0) did besides the player: restart the wind clock and re-hold the reference at the wrapped time.
-  if (next.wrapped) { stopAudio(); clipMoved({ kind: 'replay' }); if (video) { if (video.readyState >= 1) holdVideoReference(video, referenceGeneration); void video.play().catch(error => { pause(); message(errorText(error), true); }); } }
-  if (player && player.current && next.steps.length) { try { const direction=activeScene();if(direction){stepEnvironment(stepped);drawRig(()=>{advanceTake(player!,direction,previous,next.steps);player!.draw();});}else{stepEnvironment(stepped); drawRig(()=>{ for (const step of next.steps) player!.advance(step); player!.draw(); });} } catch (error) { pause(); message(errorText(error), true); } }
-  if (video && video.readyState >= 1 && time > video.duration) { if (referenceInput.state !== 'out-of-domain') holdVideoReference(video, referenceGeneration); } else if (video && referenceInput.state === 'loaded' && Math.abs(video.currentTime - time) > .15) video.currentTime = time;
+  if (next.wrapped) { stopAudio(); clipMoved({ kind: 'replay' }); if (video && useReference) { if (video.readyState >= 1) holdVideoReference(video, referenceGeneration); void video.play().catch(error => { pause(); message(errorText(error), true); }); } }
+  if (player && player.current && next.steps.length) {
+   try {
+    const direction=activeScene();stepEnvironment(stepped);
+    drawRigSteps(player,next.steps,false,direction?{direction,from:previous}:undefined);
+   } catch (error) { pause(); message(errorText(error), true); }
+  }
+  if (useReference && video && video.readyState >= 1 && time > video.duration) { if (referenceInput.state !== 'out-of-domain') holdVideoReference(video, referenceGeneration); } else if (useReference && video && referenceInput.state === 'loaded' && Math.abs(video.currentTime - time) > .15) video.currentTime = time;
   if (input('sync-audio').checked) for (const cue of activeCues()) if (cueDue(cue.time, previous, next, duration)) void audition(cue.clip);
   renderSequenceFrame(); renderTransport(); if (next.ended) pause(); lastFrame = now;
 }
@@ -916,8 +1023,8 @@ function configureTurnPad(model:unknown):void {
 /** Verify the same response consumed by Play, rather than a second read of its source. One request per input per
  * load (#1050): the verified response is kept for this load, and the part catalog and model document read it again
  * through the same fetch. A new load (a rebuild, another build) calls this again and gets a fresh request. */
-function stageLoadInputs(modelUrl:string, modelHash:string) {
- const setsUrl=modelUrl===inspectedModel?.url&&data.manifest.sets&&data.setsHash
+function stageLoadInputs(modelUrl:string, modelHash:string, previousSignal?:AbortSignal) {
+ const setsUrl=!previousSignal&&modelUrl===inspectedModel?.url&&data.manifest.sets&&data.setsHash
   ?new URL(assetUrl(data.manifest.sets),location.href).href:null;
  const verified=new Map<string,Promise<Response>>();
  const checkedFetch=new Proxy(fetch,{apply:async(_target,_this,args:Parameters<typeof fetch>)=>{
@@ -925,7 +1032,7 @@ function stageLoadInputs(modelUrl:string, modelHash:string) {
   if(!expected)throw new Error('DIRECTION_SOURCE_CHANGED: undeclared playback input');
   let pending=verified.get(url);
   if(!pending){pending=(async()=>{
-   const response=await fetch(...args);
+   const response=previousSignal?await fetch(args[0],{...args[1],signal:previousSignal}):await fetch(...args);
    if(!response.ok)return response;
    const bytes=await response.arrayBuffer();
    const sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');
@@ -1445,6 +1552,14 @@ async function start(): Promise<void> {
     const [saved,accessState]=await Promise.all([api<ReviewSession|PartsSubjectSession>('/api/session'),api<{capabilityRequired:boolean;control?:boolean}>('/api/access')]);
     if('subject' in opened&&opened.subject==='parts'){await startParts(opened,saved as PartsSubjectSession,accessState);return;}
     data=opened as ReviewResponse;session=saved as ReviewSession;writes=accessState;
+    const previous=data.manifest?.previousBuild;
+    if(previous){
+      const base=data.assetsBase==='/assets/'?access.route(data.assetsBase):data.assetsBase;
+      previousBuildView=createPreviousBuildView(previous,{el,signal:lifecycle.signal,
+        url:path=>new URL(assetUrl(path,base),location.href).href,
+        modelFetch:(url,hash)=>stageLoadInputs(url,hash,lifecycle.signal).fetch});
+      viewDisposers.push(previousBuildView.dispose,controls.replaceViewSwitch(inspectionViewSwitch(chooseInspectionView,true,true)));
+    }
     // A sealed record rig is the question's picture, so open its existing rig-only view.
     if(host?.record && data.recordSource)view='rig';
     readOnly = host?.unavailable?t('job.refusal.'+host.unavailable):host?.record ? tr('JOB_REVIEW_READ_ONLY') : readOnlyReason(access, writes.capabilityRequired);
@@ -1963,7 +2078,7 @@ function mountCheckpointPair(pair:CheckpointPairView|undefined):boolean {
  const hadPair=!!checkpointPair;checkpointPair?.release();
  if(!pair){if(hadPair)syncQuestionImage();return false;}
  releaseInterview?.();releaseInterview=null;
- leaveRigDifference();pause();++referenceGeneration;
+ leavePreviousBuild();leaveRigDifference();pause();++referenceGeneration;
  const bookmark=inspectionBookmark(),camera=structuredClone(viewport.state),content=el('reference-content'),nodes=[...content.childNodes];
  const hidden=[...el('rig-root').children,...el('rig-viewport').children,el('reference-empty')]
   .filter((node):node is HTMLElement=>node instanceof HTMLElement&&node!==el('rig-root')&&!node.classList.contains('stage-comment-layer'))
@@ -2002,6 +2117,7 @@ function syncQuestionImage():void {
  }))return;
  releaseInterview?.();releaseInterview=null;
  if(!images?.length)return;
+ if(controls.viewModeIds.includes('previous-version'))leavePreviousBuild();
  const previousView=view,previousCamera=structuredClone(viewport.state);viewport.cancelFit();
  const previousReferenceNodes=[...el('reference-content').childNodes],previousReferenceInput=referenceInput,previousReferenceSize=referenceSize;
  const previousMedia={video,controlledVideoSample,sequence,sequenceSvg,selectedPerson,lastPoseFrame};
@@ -2322,7 +2438,8 @@ function bindReviewDialog():void {select('correction-stage').onchange=syncCorrec
 /** Rig world → rig-pane pixels for the current camera. */
 function rigProject(){const root=el('rig-root');return (x:number,y:number)=>({x:parseFloat(root.style.left||'0')+x*viewport.state.rigScale,y:parseFloat(root.style.top||'0')-y*viewport.state.rigScale});}
 function redrawOverlay(fresh:boolean):void {
- if(rigDifference)return;
+ // Fit and editor notifications inside drawRig are followed by its fresh capture.
+ if(rigDifference||!fresh&&inDrawRig)return;
  animationPanel?.redraw(layers.bones);
  if(!overlays||!player)return;
  const project=rigProject();
@@ -2338,7 +2455,7 @@ function redrawOverlay(fresh:boolean):void {
 function syncPlayerLoop():void {
  const want=canRepeatIdle();
  if(!player?.current||player.composed||player.entry(0)?.loop===want)return;
- try{drawRig(()=>{player!.play(animation,{loop:want});if(!playing)player!.pause();player!.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time);player!.draw();});}
+ try{drawRig(()=>{player!.play(animation,{loop:want});if(!playing)player!.pause();player!.seek(activeScene()?takeSample(activeScene()!,time).sourceTime:time);player!.draw();},'seek');}
  catch(error){message(errorText(error),true);}
 }
 function canRepeatIdle():boolean{const direction=activeScene();if(direction)return direction.take.loop;return !!player&&!!assets?.animations.some(clip=>clip.name===animation)&&!axisInspection&&input('idle-repeat').checked&&duration>0;}
@@ -2346,7 +2463,7 @@ function renderIdle():void {text('idle-state',canRepeatIdle()?animation&&animati
 async function playPreview():Promise<void> {
  if((!player&&!video&&!sequence)||duration<=0)return;
  const intent=++playbackIntent;desiredPlay=true;idleHeld=false;syncPlayerLoop();if(time>=duration)seek(0,{kind:'replay'});
- if(video&&referenceInput.state==='loaded'){try{await video.play();}catch(error){pause();message(`Playback is paused: ${errorText(error)}. Use Play to retry.`,true);return;}}
+ if(video&&referenceInput.state==='loaded'&&!previousBuildView?.active()){try{await video.play();}catch(error){pause();message(`Playback is paused: ${errorText(error)}. Use Play to retry.`,true);return;}}
  if(intent!==playbackIntent||!desiredPlay){if(!desiredPlay)video?.pause();return;}playing=true;lastFrame=0;player?.hold(false);player?.resume();button('play').textContent='Ⅱ';button('play').setAttribute('aria-label','Pause');
 }
 function localDraft():boolean{return !!comments?.draft()||dirty||!!input('feedback-start').value.trim()||!!input('feedback-end').value.trim()||!!select('feedback-category').value||!!input('feedback-target-name').value.trim()&&input('feedback-target-name').value!==data.manifest.id;}
@@ -2370,22 +2487,22 @@ async function applyControl(command:ControlCommand,signal:AbortSignal):Promise<v
  if(command.type==='playback'){if(command.value==='pause')pause();else{await playPreview();if(!playing)throw new Error('CONTROL_PLAYBACK_REFUSED');}return;}
  if(command.type==='time'){
   if(!Number.isFinite(command.seconds)||command.seconds<0||command.seconds>duration)throw new Error('CONTROL_TIME_OUTSIDE_DOMAIN');
-  pause();seekingControl=true;try{await inspectControlTime(command.seconds,signal);}finally{seekingControl=false;}
+  pause();seekingControl=true;try{await inspectControlTime(command.seconds,signal,false,!previousBuildView?.active());}finally{seekingControl=false;}
  }
 }
-async function inspectControlTime(target:number,signal:AbortSignal,preserveSeconds=false):Promise<void> {
+async function inspectControlTime(target:number,signal:AbortSignal,preserveSeconds=false,useReference=true):Promise<void> {
  if(signal.aborted)throw new Error('CONTROL_SUPERSEDED');
  // #191: a control seek is a clip move like the transport's: a seek to 0 restarts the wind clock while the exported world is in use.
  clipMoved({kind:'seek',to:target});
- const media=activeScene()?null:video;
- if(!media){time=target;if(player?.current){player.seek(activeScene()?takeSample(activeScene()!,target).sourceTime:target);drawRig(()=>player!.draw());}renderSequenceFrame();renderTransport();return;}
+ const media=!useReference||activeScene()?null:video;
+ if(!media){time=target;if(player?.current){player.seek(activeScene()?takeSample(activeScene()!,target).sourceTime:target);drawRig(()=>player!.draw(),'seek');}renderSequenceFrame();renderTransport();return;}
  if(media.readyState<1||target>media.duration)throw new Error('CONTROL_REFERENCE_UNAVAILABLE');
  const previousPosition=media.currentTime;
  const commit=(actual:number)=>{
   if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');
   if(!Number.isFinite(actual)||actual<0||actual>duration)throw new Error('CONTROL_TIME_OUTSIDE_DOMAIN');
   const seconds=preserveSeconds?target:actual;
-  if(player?.current){player.seek(seconds);drawRig(()=>player!.draw());}time=seconds;
+  if(player?.current){player.seek(seconds);drawRig(()=>player!.draw(),'seek');}time=seconds;
   controlledVideoSample={media,position:media.currentTime,time:actual};if(axisInspection&&duration>0){const axis=data.manifest.axes.find(item=>item.id===select('axis-select').value&&item.animation===animation);if(axis){const value=axis.min+actual/duration*(axis.max-axis.min);input('axis-value').value=String(value);text('axis-value-label',value.toFixed(3));}}renderSequenceFrame();renderTransport();
  };
  try{const actual=await decodedControlTime(media,target,signal);if(signal.aborted||media!==video)throw new Error('CONTROL_SUPERSEDED');commit(actual);if(Math.abs(actual-target)>1e-6)message(`Reference decoded ${actual.toFixed(4)} s · requested ${target.toFixed(4)} s. The rig and saved view use the decoded timestamp.`);}
@@ -2412,10 +2529,18 @@ async function decodedControlTime(media:HTMLVideoElement,target:number,signal:Ab
   media.currentTime=target;
  });
 }
-function numericView():ControlView {return viewport.numericView();}
+function numericView():ControlView {
+ const value=viewport.numericView();
+ if(previousBuildView?.active()){
+  // The two world cameras are shown in the viewport readout. Source-bound evidence
+  // still has one rig and never treats the previous build as a reference asset.
+  value.cameras.reference=null;value.cameraSync=viewport.state.cameraSync;
+ }
+ return value;
+}
 function inspectionBinding():InspectionBinding{return {mode:'single',sourceHash:data?.sourceHash??host!.record!.sourceHash,rigs:[data?.reviewedSource.rig?.sha256??null]};}
 // Persist the displayed inspection clock; the runtime clock accumulates across idle loops for physics.
-function inspectionBookmark():InspectionBookmark {if(rigDifference)return structuredClone(rigDifference.bookmark);return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode??selectedInspector()??'rig',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
+function inspectionBookmark():InspectionBookmark {if(rigDifference)return structuredClone(rigDifference.bookmark);return {schema:'rig-review-inspection/1',binding:inspectionBinding(),animation:animation||null,time,theme:appearance?.get()??'system',layers:{images:layers.images,meshes:layers.mesh,bones:layers.bones},view:numericView(),selection:{...(turnPad?{turn:turnPad.snapshot()}:{}),part:parts?.value()??null,view:view==='reference'&&previousBuildView?.active()?'rig':view,checkpoint:checkpoint?.id??null,reference:select('reference-select').value||null,person:selectedPerson||null,inspector:document.querySelector<HTMLElement>('[data-mode][aria-pressed="true"]')?.dataset.mode??selectedInspector()??'rig',partSet:select('part-set').disabled?null:select('part-set').value,axis:axisInspection?{id:select('axis-select').value,value:Number(input('axis-value').value)}:null}};}
 async function restoreInspection(bookmark:InspectionBookmark,signal:AbortSignal,preserveSeconds=false,keepCamera=true,feedback?:Feedback):Promise<void> {
  const pictureHost=feedback&&(host?.checkpointPairs||host?.record);
  if(pictureHost){
@@ -3808,6 +3933,7 @@ function setupComments():void {
   create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row),
   ...(host.verdictComments?{rows:host.verdictComments.rows,available:host.verdictComments.available,refusal:()=>readOnly}:{}),
  }:undefined,listHost:el('comments-list-host'),openList:openReview,hasPicture:()=>checkpointPair?.replayFor===undefined&&(!hasTransientQuestionImage(screenRoot)||!!shownPlanPicture()),toolbar:el('stage-comment').parentElement!,viewports:host?.record&&!host.record.hasPicture?(recordPictures()?{reference:el('reference-viewport')}:{}):{rig:el('rig-viewport'),reference:el('reference-viewport')},
+  viewportAvailable:view=>view!=='reference'||!previousBuildView?.active(),
   pose:view=>{
    if(host?.checkpointPair&&checkpointPair||host?.record&&(!host.record.hasPicture||shownPlanPicture()))return planPicturePose(view);
    if(hasTransientQuestionImage(screenRoot))return null;
@@ -3815,7 +3941,7 @@ function setupComments():void {
    const renderer=player?.renderer;const current=time,index=frameAtTime(activeFrameClock(),current),referenceId=view==='reference'?select('reference-select').value||null:null,referenceHash=referenceId?data.referenceHashes?.[referenceId]??(data.explicitReference?.id===referenceId?data.explicitReference.sha256:null):null;
    return {mode:workspaceMode==='playback'?'animate':'setup',capture:{pane,root:view==='rig'?el('rig-root'):undefined,images:view==='reference'||layers.images,canvas:view==='rig'&&renderer instanceof CanvasRenderer?renderer.canvas:undefined,backend:renderer instanceof CanvasRenderer?renderer.backendActive:renderer?.meshBackendActive??'canvas2d'},camera,frame:index===null?null:{index,basis:'producer'},...(index===null?{timeBasis:timeOnlyBasis}:{}),time:current,animation:animation||null,turn:turnPad?.snapshot()??null,sourceHash:data.sourceHash,modelHash:view==='reference'?null:stageModelHash,referenceHash,referenceId,rig:data.manifest.id,...(view==='reference'?{media:video??el('reference-content').querySelector('img')??undefined}:{posed:parts?.frame('single'),assets:assets??undefined})} as CommentPose;
   },
-  pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:()=>shownPlanPicture()?planPictureBookmark():inspectionBookmark(),restore:restoreCommentInspection,feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
+  pause:async()=>{const running=playing||!!video&&!video.paused;pause();if(running&&video&&video.readyState>=1&&!video.closest?.('[data-previous-build-active]')){seekingControl=true;try{await inspectControlTime(time,new AbortController().signal);}finally{seekingControl=false;}}if(turnPad)turnPad.restore({...turnPad.snapshot(),held:true},false);},bookmark:()=>shownPlanPicture()?planPictureBookmark():inspectionBookmark(),restore:restoreCommentInspection,feedback:()=>host?.record||host?.direction?recordComments:session.feedback,
   locked:host?.record?()=>false:host?.direction?id=>submittedDirectionComments.has(id):isSubmittedFeedback,add:f=>{if(host?.record||host?.direction)recordComments.push(f);else session.feedback.push(f as Feedback);},changed:()=>{if(/^The source changed, so /.test(draftStatus??''))draftStatus=null;if(host?.record||host?.direction){recordCommentsChanged();if(host?.direction){markDirty();comments?.refresh();}return;}if(host?.verdictComments)persistRecordComments();markDirty();renderProposals();return persistence?.save();},draftChanged:()=>{if(typeof renderAnswerControls==='function')renderAnswerControls();},error:value=>message(value,true),
   picture:mark=>{
    if(mark.viewport!=='reference'||manifestReferenceMatches(mark,(mark.bookmark as InspectionBookmark).selection.reference))return null;

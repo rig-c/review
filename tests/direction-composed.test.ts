@@ -85,11 +85,11 @@ const main = await readFile(new URL('../web/main.ts', import.meta.url), 'utf8');
 const transpiler = new Bun.Transpiler({loader: 'ts'});
 function workspace(player: RigPlayer, direction: DirectionInspection, duration: number) {
   const pick = (from: string, to: string) => main.slice(main.indexOf(from), main.indexOf(to));
-  const source = [pick('const activeScene=', '\nconst sceneBox='), pick('function tickPlaying(', '\nfunction configureTurnPad('),
+  const source = [pick('const activeScene=', '\nconst sceneBox='), pick('function drawRigSteps(', '\nfunction configureTurnPad('),
     pick('function canRepeatIdle()', '\nfunction renderIdle(')].join('\n');
   const noop = () => {};
   const scope = {...scene, advancePlayback, cueDue, idleAvailable, player, time: 0, duration, playbackCarry: 0, lastFrame: 1000, idleHeld: false,
-    video: null, sceneComposite: undefined, stageSource: null, inspectedModel: null, data: {direction}, assets: {animations: [{name: 'idle'}]},
+    video: null, previousBuildView: null, sceneComposite: undefined, stageSource: null, inspectedModel: null, data: {direction}, assets: {animations: [{name: 'idle'}]},
     animation: 'idle', axisInspection: null, stopAudio: noop, clipMoved: noop, stepEnvironment: noop, drawRig: (action: () => void) => action(),
     input: (id: string) => ({checked: id === 'idle-repeat'}), renderSequenceFrame: noop, renderTransport: noop, pause: noop,
     message: (value: string) => { throw Error(value); }, errorText: String, activeCues: () => []};

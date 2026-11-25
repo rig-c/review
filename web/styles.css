@@ -640,3 +640,7 @@ main{position:relative}.toolbar{anchor-name:--stage-comment-bar}#stage-comment{w
  .workspace-communication .workspace-interview-panel .interview-answer-fields{grid-column:1;grid-row:auto}
  .workspace-communication .workspace-interview-panel .interview-answer>p[role=status]{grid-column:1;grid-row:auto}
 }
+#stage-layout[data-previous-build-active] :is(#reference-content,#reference-empty,#reference-label,#rig-label){visibility:hidden}
+#previous-build-root{position:absolute;transform-origin:0 0;pointer-events:none}
+.previous-build-version{white-space:pre}
+#stage-layout .previous-build-missing{top:auto;bottom:10px;max-width:calc(100% - 20px);white-space:normal}

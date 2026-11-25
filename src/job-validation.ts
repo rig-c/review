@@ -25,8 +25,10 @@ export function jobSha(value: unknown): string {
   return value;
 }
 
+export const jobPathTextLimit = 4096;
+
 export function jobPath(value: unknown): string {
-  const path = jobText(value, 4096);
+  const path = jobText(value, jobPathTextLimit);
   if (path.split('/').some(part => !part || part === '.' || part === '..') || /[\\:%?#]/.test(path)) {
     throw new JobError('JOB_REQUEST_INVALID');
   }

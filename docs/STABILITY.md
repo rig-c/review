@@ -11,6 +11,7 @@
 | [Record-and-package job API](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam) | `rig-review/job-api@3` | Additive record mode with its own capability and reuse checks. | Review #588 |
 | [Finalized job acts](#act-and-ask-schemas-currently-accepted) | `rig-review/act@2` through `rig-review/act@9` | Consumers narrow by `schema`. Historical acts retain their original bytes and readers. | C4 (Review #501) and subsequent revisions |
 | [Previous accepted draft binding](REVIEW_PACKAGE.md#previous-accepted-draft-difference) | `rig-review-previous-draft/1` | Optional publication context gated by `JOB_PREVIOUS_DRAFT_SCHEMA`. The act and comment bindings require an admitted declaration. | Review #914 |
+| [Sealed previous build](REVIEW_PACKAGE.md#sealed-previous-build) | `rig-review-previous-build/1` | Optional shared standalone manifest and trusted rig/direction job reader declaration. | Review #1214 |
 | [Host-bound act wait](#host-bound-act-wait) | `waitForJobAct` | Uses the host's API schema and existing agent capability. | Review #1005 |
 | [Parts enumeration](#parts-enumeration-boundary) | `rig-review-job-source/2` and `JOB_PARTS_ENUMERATOR_RANGE` | Binds official Parts references in their original order, with roles and retained-byte hashes. | C4 (Review #501) |
 | [Package manifest `frames`](#package-manifest-frames-declaration) | Optional `rigc-frames/1` in `rig-review/1` | The declared record is validated and hashed. Older manifests without the field keep their source hash. | Review #1018 |
@@ -227,6 +228,15 @@ interface JobPublishedContext {
   readonly partIds: readonly string[];
   readonly files: readonly JobFileIdentity[];
   readonly answeredDirectionFeedback?: readonly {readonly jobId: JobId; readonly actId: JobActId}[];
+  readonly previousBuild?: {
+    readonly schema: 'rig-review-previous-build/1';
+    readonly label: string;
+    readonly currentLabel: string;
+    readonly model: JobFileIdentity;
+    readonly atlas: JobFileIdentity;
+    readonly pages: readonly JobFileIdentity[];
+    readonly clipMap: Readonly<Record<string, string>>;
+  };
 }
 
 type JobPartsManifestPath = string; // Work-root-relative, runtime validated.
@@ -313,6 +323,28 @@ never silently drops entries. Resolved feedback is displayed read-only with
 reviewer text verbatim. With the field omitted, publication bytes, behavior and
 historical replay are unchanged. The act wire format is unchanged in both
 cases. See [Answered direction feedback on a post publication](REVIEW_PACKAGE.md#answered-direction-feedback-on-a-post-publication).
+
+`JobPublishedContext.previousBuild` and `rig-review/1` manifest
+`previousBuild` share the same [sealed previous build declaration](REVIEW_PACKAGE.md#sealed-previous-build).
+The producer selects the predecessor and supplies both display labels, each
+at most 128 UTF-8 bytes. Review preserves the labels verbatim and binds the
+admitted declaration to the source identity. The metadata response exposes
+it under `manifest.previousBuild`. Invalid declarations or seals refuse with
+`JOB_PREVIOUS_BUILD_INVALID`. Limit refusals report the bound, observed
+value and limit. File diagnostics use package-relative paths. The job and
+standalone HTTP routes return 409 and keep the refusal code distinct from
+the detail. The 64 MiB cap exceeds the measured 8.84 MB for model, pages
+and atlas and 5.03 MB for a second full listed build including producer
+motion. The second build's model, pages and atlas totaled 4.21 MB. The job runtime export inventory and act wire
+shape are unchanged. Omission preserves existing publication bytes and
+behavior. The producer omits the whole declaration when it cannot seal a
+predecessor. Review refuses a partial declaration before the owner's page
+can display the publication.
+
+The standalone manifest lets a reviewer open a build beside an earlier one
+without a job, the use Compare served. The existing package CLI takes the
+manifest as before. A writer CLI is a follow-up before
+[Compare retirement (#1213)](https://github.com/rig-c/review/issues/1213).
 
 A present `readPublished` callback requires a nonempty `readerId`. A present
 `installWriterBinding` callback requires a nonempty `bindingId`. A present

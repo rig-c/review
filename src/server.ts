@@ -5,10 +5,11 @@ import {appliedValue,parseCorrection,projectSessionCorrection} from './correctio
 import {stagePartsRoutes,stageVerdictLimit} from './stage-parts.ts';
 import {createControlServer,type ControlIdentity} from './control-server.ts';
 import { readFile } from 'node:fs/promises';
+import { JobError } from './job-validation.ts';
 import { appRoot, buildWeb } from './build.ts';
-import { packagePath, safeFile, type ReviewPackage } from './manifest.ts';
+import { packagePath, previousBuildFiles, safeFile, type ReviewPackage } from './manifest.ts';
 import { exportReviewStrip, stripJson } from './strip-export.ts';
-import {assertReviewUnchanged,referenceBinding,selectedReference,safeSelectedReference,serveReference} from './reference.ts';
+import {assertReviewUnchanged,referenceBinding,selectedReference,safeSelectedReference,servePreviousBuildAsset,serveReference} from './reference.ts';
 import {openGate,staleOpenStatus,accessGate,openNonceGate,openNonceHeader,sameSecret,stampOpen,type OpenIdentity} from './open-protocol.ts';
 import { readSession, saveSession } from './session.ts';
 import { createRebuilds, draftRebuildOption, RebuildError } from './rebuild.ts';
@@ -117,7 +118,10 @@ export async function createReviewRequestContext(p: ReviewPackage | null, option
     if (interviewRequest(path)) {
       return await interview?.(req, origin) ?? json({error:interviewUnavailable},404);
     }
-    options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await unchanged();}catch{return staleOpenStatus(options.open!);}if(!live.rearmUnopened())return json({error:'Server is closing'},503);}return gate;}
+    options.activity?.();const gate=openGate(req,options.open);if(gate){if(gate.status===200){try{await unchanged();}catch(error){
+      return staleOpenStatus(options.open!,error instanceof JobError&&error.code==='JOB_PREVIOUS_BUILD_INVALID'
+        ? {error:error.code,detail:error.message}:undefined);}
+      if(!live.rearmUnopened())return json({error:'Server is closing'},503);}return gate;}
     if(req.method==='GET'||req.method==='HEAD'){
       if(url.pathname==='/main.js')return new Response(req.method==='HEAD'?null:bundle,{headers:{...headers,'Content-Type':'text/javascript'}});
       if(url.pathname==='/'||url.pathname==='/index.html')return new Response(req.method==='HEAD'?null:await readFile(appRoot+'web/index.html'),{headers:{...headers,'Content-Type':'text/html; charset=utf-8'}});
@@ -245,7 +249,10 @@ export async function createReviewRequestContext(p: ReviewPackage | null, option
       // #329: the handoff's source painting sits outside the package, so it is served by its pinned hash at one fixed route.
       if(url.pathname==='/review-painting'&&p.sourcePainting&&p.handoff?.source)return await serveReference(req,p.handoff.source,p.sourcePainting.sha256,headers);
       if(url.pathname.startsWith('/assets/')){
-        const path=packagePath(decodeURIComponent(url.pathname.slice('/assets/'.length)));if(!p.files.has(path))return json({error:'Asset not declared by package'},404);
+        const path=packagePath(decodeURIComponent(url.pathname.slice('/assets/'.length)));
+        const previous=p.manifest.previousBuild&&previousBuildFiles(p.manifest.previousBuild).find(file=>file.path===path);
+        if(previous)return await servePreviousBuildAsset(req,p.root,previous,headers);
+        if(!p.files.has(path))return json({error:'Asset not declared by package'},404);
         const file=Bun.file(await safeFile(p.root,path));const size=file.size;
         const assetHeaders={...headers,'Content-Security-Policy':"default-src 'none'; script-src 'none'; sandbox",'Content-Type':file.type||'application/octet-stream','Accept-Ranges':'bytes'};
         const range=req.headers.get('range');
@@ -260,7 +267,11 @@ export async function createReviewRequestContext(p: ReviewPackage | null, option
       }
       return json({error:'Not found'},404);
       } finally { live.onRequestEnd(url.pathname); }
-    }catch(e){const message=e instanceof Error?e.message:'Request failed';return json({error:message},message===directionStale || message.startsWith(interviewStale) || message.includes('inputs changed')?409:400);}};
+    }catch(e){
+      if(e instanceof JobError&&e.code==='JOB_PREVIOUS_BUILD_INVALID')return json({error:e.code,detail:e.message},409);
+      const message=e instanceof Error?e.message:'Request failed';
+      return json({error:message},message===directionStale || message.startsWith(interviewStale) || message.includes('inputs changed')?409:400);
+    }};
   return {
     live,
     busy,

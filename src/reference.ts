@@ -4,7 +4,10 @@ import {constants,createReadStream} from 'node:fs';
 import {open,realpath,stat} from 'node:fs/promises';
 import {basename,resolve} from 'node:path';
 import {isDeepStrictEqual} from 'node:util';
-import {loadReview,type ReviewPackage} from './manifest.ts';
+import {loadReview,previousBuildByteLimit,previousBuildFileError,previousBuildLimit,type ReviewPackage} from './manifest.ts';
+import {checkedPath} from './interview-project.ts';
+import type {JobFileIdentity} from './job-contract.ts';
+import {JobError} from './job-validation.ts';
 import type {HandoffFlags} from './handoff.ts';
 export interface ReferenceBinding {packageSourceHash:string;reference:{id:string;name:string;sha256:string}}
 export interface PinnedReference {path:string;binding:ReferenceBinding}
@@ -40,23 +43,40 @@ export async function assertReviewUnchanged(p:ReviewPackage):Promise<void>{
  const assertCurrent=(p as BoundPackage)[sourceAssertion];
  if(assertCurrent)return assertCurrent();
  try{const current=await loadReferencedReview(p.manifestPath,selectedReference(p)?.path,p.handoffInputs,p.cwd,p.handoffStarts);if(current.sourceHash!==p.sourceHash||!isDeepStrictEqual(current.reviewedSource,p.reviewedSource)||!isDeepStrictEqual(referenceBinding(current),referenceBinding(p)))throw new Error('source binding differs');}
- catch{throw new Error('Package inputs changed or are unavailable. Restart review to bind feedback to current inputs.');}
+ catch(error){if(error instanceof JobError&&error.code==='JOB_PREVIOUS_BUILD_INVALID')throw error;
+  throw new Error('Package inputs changed or are unavailable. Restart review to bind feedback to current inputs.');}
 }
 export async function safeSelectedReference(p:ReviewPackage):Promise<string>{
  const selected=selectedReference(p);if(!selected)throw new Error('reference: no explicit video selected');
  try{const current=await realpath(selected.path);if(current!==selected.path||!(await stat(current)).isFile())throw new Error('not original file');return current;}
  catch{throw new Error('reference: originally selected canonical regular file unavailable (no symlink replacement)');}
 }
+export async function servePreviousBuildAsset(req: Request, root: string, file: JobFileIdentity, headers: Record<string, string>) {
+ try {
+  if (await realpath(root) !== root) throw previousBuildFileError(file.path, 'asset unavailable or outside package');
+  return await serveReference(req, checkedPath(root, file.path), file.sha256, headers, {
+   bytes: previousBuildByteLimit,
+   exceeded: size => previousBuildLimit('asset bytes', size, previousBuildByteLimit, file.path),
+  });
+ } catch (error) {
+  if (error instanceof JobError && error.code === 'JOB_PREVIOUS_BUILD_INVALID') throw error;
+  throw previousBuildFileError(file.path, 'asset unavailable, outside package or hash mismatch');
+ }
+}
+
 /** Hash and serve the same opened file, bounded to 64 KiB buffers; never reopen a checked path. */
-export async function serveReference(req:Request,path:string,sha256:string,base:Record<string,string>):Promise<Response>{
+export async function serveReference(req:Request,path:string,sha256:string,base:Record<string,string>,
+ limit?:{bytes:number;exceeded:(found:number)=>JobError}):Promise<Response>{
  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW).catch(()=>{throw new Error('Reference inputs changed or unavailable. Restart review to bind current video bytes.');});
  let closing:Promise<void>|undefined;const close=()=>closing??=file.close();
  try{
   const before=await file.stat();if(!before.isFile())throw new Error('Reference inputs changed: expected regular video');
+  if(limit&&before.size>limit.bytes)throw limit.exceeded(before.size);
   const hash=createHash('sha256'),buffer=Buffer.alloc(65536);let position=0;
   while(position<before.size){const {bytesRead}=await file.read(buffer,0,Math.min(buffer.length,before.size-position),position);if(!bytesRead)break;hash.update(buffer.subarray(0,bytesRead));position+=bytesRead;}
   const after=await file.stat(),current=await stat(path);
   if(await realpath(path)!==path||current.dev!==after.dev||current.ino!==after.ino||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs||hash.digest('hex')!==sha256)throw new Error('Reference inputs changed. Restart review to bind current video bytes.');
+  if(base.ETag&&req.headers.get('if-none-match')===base.ETag){await close();return new Response(null,{status:304,headers:base});}
   const size=after.size,headers={...base,'Content-Security-Policy':"default-src 'none'; script-src 'none'; sandbox",'Content-Type':Bun.file(path).type||'application/octet-stream','Accept-Ranges':'bytes'};
   const range=req.headers.get('range');let start=0,end=size-1,status=200;
   if(range){const match=/^bytes=(\d*)-(\d*)$/.exec(range);if(match&&(match[1]||match[2])){if(!match[1])start=Math.max(0,size-Number(match[2]));else{start=Number(match[1]);if(match[2])end=Math.min(end,Number(match[2]));}}else start=-1;
@@ -70,5 +90,6 @@ export async function serveReference(req:Request,path:string,sha256:string,base:
    async cancel(){await close();}
   });
   return new Response(body,{status,headers:responseHeaders});
- }catch{await close();throw new Error('Reference inputs changed or unavailable. Restart review to bind current video bytes.');}
+ }catch(error){await close();if(error instanceof JobError)throw error;
+  throw new Error('Reference inputs changed or unavailable. Restart review to bind current video bytes.');}
 }

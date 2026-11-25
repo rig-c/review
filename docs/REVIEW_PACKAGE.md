@@ -69,6 +69,8 @@ Audio clips contain `id`, local `path` and optional `label`. Cues require `id`, 
 
 ## HTTP contract
 
+Standalone packages can expose a [sealed previous build](#sealed-previous-build) through this same metadata and asset API.
+
 - `GET /api/review` returns `{manifest, sourceHash, reviewedSource, report, feedbackCatalog, assetsBase:"/assets/", capabilities}`. `report` is the normalized read-only finding data described below, or null. `capabilities` is `{playback:boolean, modeling:false, motion:false, feedback:true, audio:true}`. The modeling/motion flags mean source editing capability; setup and motion inspection share one workspace. `audio:true` denotes the audition facility; clip presence determines what can play.
 - `GET /assets/<path>` serves an allowlisted local asset. Encode each path segment when building the URL. Responses use no-store and nosniff headers.
 - `GET /api/session` returns the current session or a fresh pending session.
@@ -1294,6 +1296,73 @@ named reads of `selector`, `files` and `plan` at `:1339–1340` and
 `:223–233`. `prepareJobSource` reads the known context fields without an
 exact-key check on the context. The nested `context.parts` check is at
 `:265`. [HQ compatibility and emission ruling](https://github.com/rig-c/review/issues/914#issuecomment-7001361948)
+
+### Sealed previous build
+
+A producer can choose a predecessor by supplying optional `previousBuild` in
+the standalone `review.json` manifest or in the trusted `readPublished`
+result for a compiled rig or direction job (`rig` or `post` selector).
+A job manifest that also contains the field must agree with the trusted
+reader. The same declaration is used in both places. A producer that cannot
+seal a predecessor omits the whole declaration. Review refuses a partial
+declaration before the owner's page can display the publication.
+
+A standalone `review.json` opens a build beside an earlier one without a job,
+the use Compare served. Open the package through the existing CLI with its
+manifest. A writer CLI for preparing the declaration is a follow-up before
+[Compare retirement (#1213)](https://github.com/rig-c/review/issues/1213).
+
+```ts
+previousBuild?: {
+  schema: 'rig-review-previous-build/1';
+  label: string;
+  currentLabel: string;
+  model: {path: string; sha256: string};
+  atlas: {path: string; sha256: string};
+  pages: readonly {path: string; sha256: string}[];
+  clipMap: Readonly<Record<string, string>>;
+}
+```
+
+`label` and `currentLabel` are the previous and current version's display
+text. Review preserves both verbatim. Each must be nonblank, free of ASCII
+control characters and at most 128 UTF-8 bytes. Package ID and revision
+continue to identify the current package. `clipMap` maps opaque current clip
+names to previous clip names using the same text bounds. The map is required
+and can be empty. An absent own entry or unavailable mapped clip means the
+previous player shows its setup pose while the current clip plays.
+
+Every file row carries a literal package-relative path and lowercase SHA-256.
+The model is a `rigc-compiled/3` document at a `.model.json` path, the atlas
+uses a `.atlas` path, and the declared PNG, JPEG or WebP page paths must
+exactly match the model's runtime pages after resolution relative to its
+directory. Every path is unique, stays inside the package and names a regular
+file with no symlink components. A job reader includes the corresponding
+work-root-relative path and hash in its existing `files` closure. Review
+checks actual bytes and caps the declaration at 64 KiB, the closure at 64 MiB
+total with up to 64 pages, and the map at 256 entries. Each path is at most
+4,096 UTF-16 code units. The 64 MiB cap exceeds the measured 8.84 MB for
+one build's model, pages and atlas and 5.03 MB for a second full listed build
+including producer motion. The second build's model, pages and atlas totaled
+4.21 MB.
+
+A malformed declaration, invalid scope, missing seal, file or page, or
+mismatched hash refuses with `JOB_PREVIOUS_BUILD_INVALID`. A limit refusal
+names the bound, observed value and limit. Closure size reports the bytes
+counted through the offending asset. File diagnostics can name the
+package-relative path. Job HTTP errors retain the code in `error.code` and
+detail in `error.message`. Standalone HTTP errors use `error` for the code and
+`detail` for the diagnostic. Both return HTTP 409.
+
+Both metadata routes expose the admitted declaration at
+`manifest.previousBuild`. When the previous view is opened, the browser uses
+the existing `assetsBase` route for the model and its model-relative pages.
+The server serves only admitted paths and verifies the requested file against
+its pinned hash. The declaration contributes to source identity and persists
+with a job snapshot for historical inspection. The current build remains the
+subject of edits, comments and verdicts using the existing act shape.
+Omitting the declaration preserves historical metadata, identity, publication
+bytes and behavior.
 
 ### Rig verdict still backend
 
