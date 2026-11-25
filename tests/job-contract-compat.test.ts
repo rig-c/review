@@ -52,7 +52,7 @@ test('#557/#588 control public job-host retains its runtime exports, record-mode
     'parseCheckpointEvidencePacket',
   ].sort();
   expect(legacyRuntimeExports).toHaveLength(16);
-  expect(expectedRuntimeExports).toHaveLength(35);
+  expect(expectedRuntimeExports).toHaveLength(37);
   expect(Object.keys(publicHost).sort()).toEqual(expectedRuntimeExports);
   for (const name of expectedRuntimeExports) {
     const missing = new Set(Object.keys(publicHost));
