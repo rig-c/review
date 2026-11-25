@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { expect, test } from 'bun:test';
 import { JobSession } from '../src/job-session.ts';
 import { createJobHostPorts, parseCommentsAct } from '../src/job-api.ts';
+import { retainedPublicationRoutes } from '../src/job-front.ts';
 import { JOB_API_V3_SCHEMA, type OptionContext, type PendingAskV3, type PublicationV3, type RecordSubject } from '../src/job-contract.ts';
 import {
   createSyntheticOptionRecordWorkspace, createSyntheticOptionSetsRecordWorkspace, createSyntheticRecordReader, type SyntheticOptionWorkspace,
@@ -203,4 +204,36 @@ test('#1004 an act whose set fields disagree is refused by name (JOB_ACT_INVALID
       .toEqual({ code: 'JOB_ACT_INVALID', message: 'act set constraints/rig-nowhere-01 is not published' });
     expect(refused(() => {})).toBeNull();
   } finally { await fixture.dispose(); }
+});
+
+test('#1230 option sets publish with no subject as pictures to look at; their images stay served', async () => {
+  // Control: the historical one-subject-per-set list and the subjectless list serve the same question images.
+  const images = async (subjects: 'declared' | 'none') => {
+    const fixture = await setsFixture('review-1230-' + subjects + '-', root => createSyntheticOptionRecordWorkspace(root, { questionImages: true }),
+      workspace => ({ ...workspace.context, subjects: subjects === 'none' ? [] : workspace.context.subjects }));
+    try {
+      const published = await fixture.publish();
+      expect(published.ok).toBe(true);
+      const publication = published.value as PublicationV3;
+      expect((publication.source as { subjects: readonly RecordSubject[] }).subjects.length).toBe(subjects === 'none' ? 0 : 1);
+      expect(fixture.session.status().pending).toEqual([]);
+      const response = await retainedPublicationRoutes(fixture.session)(fixture.session.jobId, publication.publicationId,
+        publication.instanceKey, 'api/interview', new Request('http://127.0.0.1/api/interview'));
+      expect(response.status).toBe(200);
+      const body = await response.json() as { questions: { set: { question: string }; images: { name: string; path?: string }[] }[] };
+      return body.questions.map(question => [question.set.question, question.images.map(image => [image.name, image.path])]);
+    } finally { await fixture.dispose(); }
+  };
+  const declared = await images('declared');
+  expect(declared.flatMap(([, rows]) => rows as unknown[]).length).toBeGreaterThan(0);
+  expect(await images('none')).toEqual(declared);
+});
+
+test('#1230 a subject list that is neither empty nor one per set still refuses', async () => {
+  const partial = await setsFixture('review-1230-partial-', root => createSyntheticOptionSetsRecordWorkspace(root, { count: 2 }),
+    workspace => ({ ...workspace.context, subjects: [workspace.context.subjects[0]!] }));
+  try {
+    expect(await partial.publish()).toMatchObject({ ok: false, error: { code: 'JOB_SOURCE_MISMATCH' } });
+    expect(partial.session.status()).toMatchObject({ generation: 0, publication: null });
+  } finally { await partial.dispose(); }
 });

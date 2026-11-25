@@ -1316,7 +1316,7 @@ export async function prepareJobRecordSource(options: {
     );
     assertJobSourceCurrent({ root, record, seals });
     assertRetainedSnapshotIntact(snapshotRoot, seals, snapshotIdentity, 'JOB_SOURCE_UNRETAINABLE');
-    assertEqualRecordContexts(inventory, retainedContext);
+    assertEqualRecordContexts(inventory, retainedContext, result);
     const decoded = decodeRetainedRecordProject(snapshotRoot, seals, result, retainedContext);
     checkpointEvidenceMetadata(snapshotRoot, retainedContext.checkpointEvidence);
     const source = parseRecordSource(
@@ -1422,7 +1422,7 @@ export async function verifyJobRecordSourceFresh(options: {
     'JOB_SOURCE_UNRETAINABLE',
   );
   try {
-    assertEqualRecordContexts(inventory, retainedContext);
+    assertEqualRecordContexts(inventory, retainedContext, retained.result);
   } catch (error) {
     if (phase === 'finalize') throw new JobError('JOB_ACT_SOURCE_STALE');
     throw error;
