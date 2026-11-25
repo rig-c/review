@@ -368,7 +368,7 @@ function updateSavedState(): void {
 /** C10: the act bar renders the latest local draft status; rig only classifies it. Nothing renders before the first status. */
 let liveIssueCount=()=>(session?.feedback.length??0)+(host?.verdictComments?.rows.length??0);
 /** #1226: a live rig screen (not parts, record or direction) can send its comments without an ask. */
-const commentHost=()=>!!host?.verdictComments&&!!host.submitComments&&!partsOnly;
+function commentHost():boolean {return !!host?.verdictComments&&!!host.submitComments&&!partsOnly;}
 const unsentFeedback=()=>(session?.feedback??[]).filter(row=>!isSubmittedFeedback(row.id));
 const hasUnsentComments=()=>!!host?.verdictComments?.rows.length||unsentFeedback().length>0;
 function renderDraftState(): void {
@@ -385,7 +385,7 @@ function renderDraftState(): void {
   const live=host?.reviewState?.(liveIssueCount(),saving);
   renderAnswerControls();
   // #1226: the save state stands in for "Reviewing · N issues" beside Send comments.
-  if(commentHost()&&!draftConflict&&!actReadOnly&&!(draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus))){
+  if(typeof commentHost==='function'&&commentHost()&&!draftConflict&&!actReadOnly&&!(draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus))){
     rigInspector.actBar.setSaveState(saving?{kind:'saving',text:'Sending'}:!hasUnsentComments()&&(commentSendState==='sent'||!!session?.updatedAt)?{kind:'saved',text:'Submitted'}:{kind:'unsaved',text:'Not submitted'});
     return;
   }
@@ -1429,6 +1429,20 @@ function bind(): void {
       message(dirty ? 'Changes were made during submission. Submit again.' : 'Saved locally. The producer received no feedback.');
     } catch (error) { message(`Submission failed: ${errorText(error)}`, true); } finally { saving = false; updateSavedState(); }
   };
+  // Saved browser defaults seed a new inspection; explicit links and source drafts restore over them.
+  directionPanel=bindDirectionPanel(el('stage-layout'),()=>{
+    const inspected=!!inspectedModel&&(!stageSource||stageSource.url===inspectedModel.url);
+    const model=player&&stageModelHash?{path:inspected?data.manifest.model!:new URL(stageSource!.url).pathname,sha256:stageModelHash,inspected}:null;
+    return {model,revision:data.manifest.revision,sourceHash:data.sourceHash,runtime:data.reviewedSource.runtimeVersion,
+      dials:player?turnPad?.state.dials??[]:[],sets:player?.sets().map(set=>set.name)??[],activeSet:select('part-set').value,authored:data.direction,scene:data.scene};
+  },name=>{
+    const picker=select('part-set');picker.value=name;picker.dispatchEvent(new Event('change',{bubbles:true}));
+  });
+  directionPanel.show(!!data.direction);
+  viewDisposers.push(()=>directionPanel?.dispose());
+  bindWorkspace(!!data.manifest.model);
+  overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
+  verdictSubmit=button('save').onclick as ((event:MouseEvent)=>unknown)|null;
   sendComments.onclick=async()=>{
     if(!commentHost()||sendComments.disabled||saving)return;
     if(comments?.hasPendingComment?.()&&!await comments.commitDraft())return;
@@ -1450,20 +1464,6 @@ function bind(): void {
       if(failure)rigInspector.actBar.setSaveState({kind:'failed',text:failure.text,title:failure.title});
     }
   };
-  // Saved browser defaults seed a new inspection; explicit links and source drafts restore over them.
-  directionPanel=bindDirectionPanel(el('stage-layout'),()=>{
-    const inspected=!!inspectedModel&&(!stageSource||stageSource.url===inspectedModel.url);
-    const model=player&&stageModelHash?{path:inspected?data.manifest.model!:new URL(stageSource!.url).pathname,sha256:stageModelHash,inspected}:null;
-    return {model,revision:data.manifest.revision,sourceHash:data.sourceHash,runtime:data.reviewedSource.runtimeVersion,
-      dials:player?turnPad?.state.dials??[]:[],sets:player?.sets().map(set=>set.name)??[],activeSet:select('part-set').value,authored:data.direction,scene:data.scene};
-  },name=>{
-    const picker=select('part-set');picker.value=name;picker.dispatchEvent(new Event('change',{bubbles:true}));
-  });
-  directionPanel.show(!!data.direction);
-  viewDisposers.push(()=>directionPanel?.dispose());
-  bindWorkspace(!!data.manifest.model);
-  overlays=new RigOverlays({canvas:el<HTMLCanvasElement>('rig-overlay'),rigRoot:el('rig-root')});
-  verdictSubmit=button('save').onclick as ((event:MouseEvent)=>unknown)|null;
   chestEditor=bindChestEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>activeChestMapping(),
    job:host?(readOnly||host.direction?'read-only':{
     hasPublishedSpec:()=>!!host?.chestLandmarks?.length,
@@ -2241,19 +2241,19 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  const refreshVerdictComments=host?.verdictComments&&(pendingAnswers.some(liveVerdict)!==subjects.some(liveVerdict)||!pendingAnswers.length!==!subjects.length);
  pendingAnswers=subjects;
  // #1226: the comments hint names the button that actually sends them.
- const commentsHint=rigInspector.comments.panel.querySelector('.review-dialog-header .hint');
- if(commentsHint&&commentHost())setSourceText(commentsHint,'Drafts save locally as you type · nothing is sent until you press Send comments');
+ const commentsHint=typeof commentHost==='function'&&commentHost()?rigInspector.comments.panel.querySelector('.review-dialog-header .hint'):null;
+ if(commentsHint)setSourceText(commentsHint,'Drafts save locally as you type · nothing is sent until you press Send comments');
  if(host?.checkpointPair)syncCheckpointPair();
  if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
  if(host?.recordSubmission?.()==='submitted')firstPublicationPrompt=false;
- renderAskHeadline(labels.join(' · ')||(commentHost()?"We're looking at the work together. Leave your thoughts as comments.":firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
+ renderAskHeadline(labels.join(' · ')||(typeof commentHost==='function'&&commentHost()?"We're looking at the work together. Leave your thoughts as comments.":firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
  if(subjects.length)firstPublicationPrompt=false;
  renderDraftState();
 }
 function syncJobActRow(subjects=pendingAnswers):void {
  const notice=el('review-message');
  const refusal=notice.classList.contains('error')&&!!notice.textContent?.trim();
- rigInspector.act.hidden=!subjects.length&&!firstPublicationPrompt&&!jobProgress&&!refusal&&!host?.recordSubmission?.()&&!commentHost();
+ rigInspector.act.hidden=!subjects.length&&!firstPublicationPrompt&&!jobProgress&&!refusal&&!host?.recordSubmission?.()&&!(typeof commentHost==='function'&&commentHost());
  rigInspector.syncActRow?.();
 }
 function setJobProgress(value:JobProgressV3|null):void {
@@ -2365,9 +2365,11 @@ function renderAnswerControls():void {
  if(inlineReason)requestChanges.setAttribute('aria-describedby',requestChangesReason.id);
  else requestChanges.removeAttribute('aria-describedby');
  save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;
- sendComments.hidden=!commentHost()||!!host?.jobClosed?.();
- sendComments.disabled=blocked||!!readOnly||!hasUnsentComments()&&!pendingStageComment;
- sendComments.classList.toggle('primary',!verdict);rigAsk.hidden=!dialog||firstPublicationPrompt||!questionPending&&recordTrigger!==rigAsk;
+ if(typeof sendComments!=='undefined'){
+  sendComments.hidden=!commentHost()||!!host?.jobClosed?.();
+  sendComments.disabled=blocked||!!readOnly||!hasUnsentComments()&&!pendingStageComment;
+  sendComments.classList.toggle('primary',!verdict);
+ }rigAsk.hidden=!dialog||firstPublicationPrompt||!questionPending&&recordTrigger!==rigAsk;
  recordAsk.hidden=!dialog||firstPublicationPrompt||recordTrigger!==recordAsk||!recordKind;
  if(host?.verdictComments){
   const notice=el('review-message');
