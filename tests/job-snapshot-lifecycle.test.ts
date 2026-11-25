@@ -422,7 +422,7 @@ test('planted reclaim refuses every open publication including superseded, pendi
   const f = await fixture(), first = await f.publish();
   const retained = f.session.retainedSource(first.publicationId);
   const before = await readFile(retained.manifestPath);
-  await f.ask(first, {kind: 'checkpoint', checkpointId: 'step-one'});
+  await f.ask(first, {kind: 'review-verdict', stage: 'rig-review'});
   await f.display(first);
   await expect(f.session.reclaimSnapshot(first.publicationId, jobSnapshotHash(retained.seals)))
     .rejects.toMatchObject({code: 'JOB_SOURCE_UNRETAINABLE', message: 'JOB_SNAPSHOT_PINNED'});
@@ -439,11 +439,10 @@ test('finalized consumer acts permanently pin exact sealed bytes and original re
   const f = await fixture(), publication = await f.publish();
   const retained = f.session.retainedSource(publication.publicationId);
   const before = await Promise.all(retained.seals.map(seal => readFile(join(retained.snapshotRoot, seal.path))));
-  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+  // #1235: the finalized sample act is the comment-only act@10.
   const page = await f.display(publication);
-  const submission = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: 'preserved-act', kind: 'checkpoint',
-    value: {checkpointId: 'step-one', outcome: 'fail', words: '  exact\nwords  '}};
+  const submission = {...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'preserved-act', kind: 'comments', value: {comments: [{text: '  exact\nwords  '}]}};
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submission));
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error('Expected finalized act');
@@ -472,7 +471,7 @@ test('finalized consumer acts permanently pin exact sealed bytes and original re
 
 test('exactly 16MiB historical document closes atomically, revokes capability and invalidates asks/pages without rewriting history', async () => {
   const f = await fixture(), publication = await f.publish();
-  await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+  await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
   const page = await f.display(publication), grant = f.session.writerGrant();
   const database = new Database(join(f.state, 'jobs.sqlite'));
   const data = {...JSON.parse(stored(f).document), lifecyclePadding: ''};

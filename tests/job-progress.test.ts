@@ -11,7 +11,10 @@ import { createSyntheticPlanRecordWorkspace, createSyntheticRecordReader } from 
 
 async function progressFixture() {
   const f = await jobFixture();
-  const workspace = createSyntheticPlanRecordWorkspace(f.root);
+  // #1235: the plan's sample subjects are its signoffs; checkpoint is no longer a sample subject.
+  const workspace = createSyntheticPlanRecordWorkspace(f.root, { subjects: [
+    { kind: 'signoff', stage: 'plan-approved' }, { kind: 'signoff', stage: 'rigging-interview' },
+    { kind: 'signoff', stage: 'post-interview' }] });
   const reader = createSyntheticRecordReader({ onPlan: () => workspace.context });
   const stateDir = join(f.scratch, 'v3-progress');
   const options: JobHostOptions = {
@@ -155,11 +158,11 @@ test('#987 only committed publish, ask, ask-batch and close clear the progress s
     expect(snapshot().data.progress).toBeUndefined();
 
     await api.progress(4);
-    if (subject?.kind !== 'checkpoint') throw new Error('Synthetic plan requires its first checkpoint');
+    // #1235: the sample act is the comment-only act@10; it answers no ask.
     const page = session.ackDisplayed({ publicationId, pageId: 'progress-page', sourceHash: published.value.source.sourceHash });
-    const act = await session.commitUIAct({ ...page, askId: asked.value.askId, expectedGeneration: 2,
-      submissionId: 'progress-act', kind: 'checkpoint', value: { checkpointId: subject.checkpointId, outcome: 'pass', words: '' } });
-    expect(act.kind).toBe('checkpoint');
+    const act = await session.commitUIAct({ ...page, expectedGeneration: 2,
+      submissionId: 'progress-act', kind: 'comments', value: { comments: [{ text: 'progress comment' }] } });
+    expect(act.kind).toBe('comments');
     expect(snapshot().data.progress?.seq).toBe(4);
     const batch = { verb: 'ask-batch', expectedGeneration: 3, idempotencyKey: 'progress-batch', publicationId, subjects };
     const batched = await api.call(batch);

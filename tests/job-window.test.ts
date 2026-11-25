@@ -1228,16 +1228,14 @@ test('explicit close ends the real job and a later open starts a fresh incarnati
 test('the real UI act stays valid across an unrelated ask while future generations refuse', async () => {
     const f = await realWindow();
     const publication = await f.publish();
-    const ask = await (await f.call({...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
-        idempotencyKey: 'original-ask', publicationId: publication.publicationId,
-        subject: {kind: 'checkpoint', checkpointId: 'step-one'}})).json();
+    // #1235: the captured sample is the comment-only act@10; the unrelated ask is the rig verdict.
     const displayed = await (await f.ui('displayed', {publicationId: publication.publicationId,
         pageId: 'generation-page', sourceHash: publication.source.sourceHash})).json();
-    const captured = {...displayed.value, askId: ask.value.askId, expectedGeneration: f.host.session.status().generation,
-        submissionId: 'generation-save', kind: 'checkpoint', value: {checkpointId: 'step-one', outcome: 'pass', words: ''}};
+    const captured = {...displayed.value, expectedGeneration: f.host.session.status().generation,
+        submissionId: 'generation-save', kind: 'comments', value: {comments: [{text: 'generation save'}]}};
     const unrelated = await (await f.call({...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
         idempotencyKey: 'unrelated-ask', publicationId: publication.publicationId,
-        subject: {kind: 'signoff', stage: 'plan-approved'}})).json();
+        subject: {kind: 'review-verdict', stage: 'rig-review'}})).json();
     expect(unrelated.ok).toBe(true);
     const saved = await (await f.ui('acts', captured)).json();
     expect(saved.ok).toBe(true);

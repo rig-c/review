@@ -34,15 +34,23 @@ function post(f: Awaited<ReturnType<typeof fixture>>, version: number, field: ob
 }
 
 async function finalize(f: Awaited<ReturnType<typeof fixture>>, publication: JobPublication,
-  options: {checkpoint?: boolean; verdict?: JobVerdict; comments?: readonly JobComment[]} = {}) {
-  const decision = options.checkpoint ? {kind: 'checkpoint', checkpointId: 'step-one'} as const : subject;
+  options: {other?: boolean; verdict?: JobVerdict; comments?: readonly JobComment[]} = {}) {
+  // #1235: the "other act kind" sample is the comment-only act@10, which answers no ask.
+  if (options.other) {
+    const page = await f.display(publication);
+    const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page,
+      expectedGeneration: f.session.status().generation, submissionId: 'other-kind', kind: 'comments',
+      value: {comments: [{text: 'Comment-only act'}]}}));
+    if (!saved.ok) throw new Error(saved.error.code);
+    return saved.value;
+  }
+  const decision = subject;
   const ask = await f.ask(publication, decision);
   const page = await f.display(publication);
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({
     ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
     submissionId: ask.askId, kind: decision.kind,
-    value: options.checkpoint ? {checkpointId: 'step-one', outcome: 'fail', words: 'Checkpoint comment'} :
-      {stage, verdict: options.verdict ?? 'changes-requested', comments: options.comments ?? comments},
+    value: {stage, verdict: options.verdict ?? 'changes-requested', comments: options.comments ?? comments},
   }));
   if (!saved.ok) throw new Error(saved.error.code);
   return saved.value;
@@ -98,7 +106,7 @@ test.each(['wrong job', 'unknown act', 'inherited act ID', 'pending ask', 'other
   const f = await fixture();
   post(f, 2);
   const earlier = await f.publish();
-  const act = await finalize(f, earlier, {checkpoint: reason === 'other act kind'});
+  const act = await finalize(f, earlier, {other: reason === 'other act kind'});
   const pending = reason === 'pending ask' ? await f.ask(earlier, subject) : undefined;
   const field = {answeredDirectionFeedback: [{
     jobId: reason === 'wrong job' ? 'other-job' : f.session.jobId,

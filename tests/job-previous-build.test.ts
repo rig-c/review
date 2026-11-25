@@ -83,14 +83,14 @@ test.each(['rig', 'post'] as const)('job %s retains one sealed prior build acros
   expect((await read.asset('prior/build/undeclared.png'))!.status).toBe(404);
   expect((await read.asset(build.model.path, {method: 'PUT'}))!.status).toBe(405);
 
-  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
-  expect(ask.source.sourceHash).toBe(publication.source.sourceHash);
+  // #1235: the sample act is the comment-only act@10; its source is the publication's, without the prior build.
   const page = await f.display(publication);
-  const submit = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: ask.askId, kind: 'checkpoint', value: {checkpointId: 'step-one', outcome: 'pass', words: 'Current only'}};
+  const submit = {...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'current-only', kind: 'comments', value: {comments: [{text: 'Current only'}]}};
   const result = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(submit));
   expect(result.ok).toBe(true);
   if (!result.ok) throw new Error(result.error.code);
+  expect(result.value.source.sourceHash).toBe(publication.source.sourceHash);
   expect(result.value.source).not.toHaveProperty('previousBuild');
 
   await writeFile(join(packageRoot, build.model.path), 'changed producer source');

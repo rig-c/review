@@ -84,16 +84,24 @@ async function inputFor(f: Fixture, operation: Operation): Promise<ReplayRaceInp
     return { ...common, kind: 'agent', request: {
       ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
       idempotencyKey: 'same-key-ask', publicationId: publication.publicationId,
-      subject: { kind: 'checkpoint', checkpointId: 'step-one' },
+      // #1235: an ask-verb race needs an ask; the rig verdict is the one package ask that is not a fixture act.
+      subject: { kind: 'review-verdict', stage: 'rig-review' },
     } };
   }
-  const ask = await f.ask(publication, { kind: 'checkpoint', checkpointId: 'step-one' });
+  // #1235: the UI sample act is the comment-only act@10; it answers no ask.
   const page = await f.display(publication);
   return { ...common, kind: 'ui', request: {
-    ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: 'same-ui-submission', kind: 'checkpoint',
-    value: { checkpointId: 'step-one', outcome: 'pass', words: '' },
+    ...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'same-ui-submission', kind: 'comments',
+    value: { comments: [{ text: 'same ui comment' }] },
   } };
+}
+
+/** The ask-bound UI sample: the rig verdict with its synthetic still (#1235). */
+async function askedUIInput(f: Fixture): Promise<ReplayRaceInput> {
+  const prepared = await rigStillInput(f);
+  return { options: { root: f.root, stateDir: f.state, fingerprint: 'f'.repeat(64),
+    reviewer: { id: 'declared-owner', role: 'owner' } }, context: f.getContext(), gated: true, kind: 'ui', request: prepared.input };
 }
 
 async function commit(input: ReplayRaceInput) {
@@ -136,13 +144,13 @@ async function race(f: Fixture, input: ReplayRaceInput, control: string, whileBl
 function changed(input: ReplayRaceInput, scenario: 'conflict' | 'different-key'): ReplayRaceInput {
   if (input.kind === 'ui') {
     if (scenario === 'different-key') return { ...input, request: { ...input.request, submissionId: 'different-ui' } };
-    if (input.request.kind !== 'checkpoint') throw new Error('REPLAY_RACE_CHECKPOINT_REQUIRED');
-    return { ...input, request: { ...input.request, value: { ...input.request.value, words: 'changed payload' } } };
+    if (input.request.kind !== 'comments') throw new Error('REPLAY_RACE_COMMENTS_REQUIRED');
+    return { ...input, request: { ...input.request, value: { comments: [{ text: 'changed payload' }] } } };
   }
   if (scenario === 'different-key') return { ...input, request: { ...input.request, idempotencyKey: 'different-agent' } };
   return input.request.verb === 'publish'
     ? { ...input, request: { ...input.request, freeze: { ...input.request.freeze, holdId: 'changed-hold' } } }
-    : { ...input, request: { ...input.request, subject: { kind: 'signoff', stage: 'plan-approved' } } };
+    : { ...input, request: { ...input.request, subject: { kind: 'review-verdict', stage: 'direction-review' } } };
 }
 
 for (const scenario of ['same-capture', 'changed-capture'] as const) {
@@ -198,11 +206,18 @@ for (const operation of ['publish', 'ask', 'ui'] as const) {
         const replayKey = input.kind === 'agent' ? 'agent:' + input.request.idempotencyKey
           : `ui:${input.request.pageId}:${input.request.submissionId}`;
         expect(sealed.replays[replayKey].value).toEqual(committed.result.outcome!.value);
-        expect(result.after).toEqual(result.sealed);
         expect(await jobInputHashes(f.root)).toEqual(hashes);
+        if (operation === 'ui' && scenario === 'different-key') {
+          // #1235: a comment act answers no ask, so a different submission on the same page is a second act.
+          expect(result.caller.result.outcome).toHaveProperty('value');
+          expect(result.after.revision).toBe(result.sealed.revision + 1);
+          expect(Object.keys(JSON.parse(result.after.document).acts)).toHaveLength(2);
+          return;
+        }
+        expect(result.after).toEqual(result.sealed);
         if (scenario === 'same-key') expect(result.caller.result.outcome).toEqual(committed.result.outcome);
         else expect(result.caller.result.outcome).toEqual({ code: scenario === 'conflict'
-          ? 'JOB_IDEMPOTENCY_CONFLICT' : operation === 'ui' ? 'JOB_ASK_SUPERSEDED' : 'JOB_GENERATION_STALE' });
+          ? 'JOB_IDEMPOTENCY_CONFLICT' : 'JOB_GENERATION_STALE' });
       } finally { await f.close(); }
     });
   }
@@ -241,11 +256,13 @@ for (const scenario of ['older-generation', 'future-generation', 'rotated-nonce'
   test(`UI ${scenario} is validated on the fresh locked row`, async () => {
     const f = await jobFixture();
     try {
-      const input = await inputFor(f, 'ui');
+      // #1235: ask-bound scenarios keep the asked UI sample; the rest race the comment act.
+      const asked = scenario === 'answered-ask' || scenario === 'unknown-ask';
+      const input = asked ? await askedUIInput(f) : await inputFor(f, 'ui');
       if (input.kind !== 'ui') throw new Error('REPLAY_RACE_UI_REQUIRED');
       if (scenario === 'future-generation') input.request = { ...input.request,
         expectedGeneration: input.request.expectedGeneration + 2 };
-      if (scenario === 'unknown-ask') input.request = { ...input.request, askId: 'unknown-ask' };
+      if (scenario === 'unknown-ask' && input.request.askId) input.request = { ...input.request, askId: 'unknown-ask' };
       const publication = f.session.status().publication!;
       const result = await race(f, input, `REVIEW540_UI_${scenario}`, async () => {
         switch (scenario) {
@@ -272,7 +289,7 @@ for (const scenario of ['older-generation', 'future-generation', 'rotated-nonce'
         const data = JSON.parse(result.after.document), before = JSON.parse(result.sealed.document);
         expect(data.generation).toBe(before.generation + 1);
         expect(Object.keys(data.acts)).toHaveLength(1);
-        expect(data.asks[input.request.askId].status).toBe('answered');
+        // The comment act answers no ask: the winner's ask stays the one pending ask.
         expect(Object.values<{ status: string }>(data.asks).filter(ask => ask.status === 'pending')).toHaveLength(1);
         expect(data.pages).toEqual(before.pages);
         expect(result.after.owners).toEqual(result.sealed.owners);
