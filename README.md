@@ -18,7 +18,7 @@ Review never edits the package it shows. Motion and mesh edits go to the install
 
 ## Place in the toolchain
 
-[Create](https://github.com/rig-c/create) drives the cycle with an agent. [Parts](https://github.com/rig-c/parts) turns a painting into parts and a rig, [Pose](https://github.com/rig-c/pose) retargets motion, [Core](https://github.com/rig-c/core) compiles the rig, and [Play](https://github.com/rig-c/play) plays it in the browser.
+[Create](https://github.com/rig-c/create) drives the cycle with an agent. [Parts](https://github.com/rig-c/parts) turns a painting into parts and a rig, [Pose](https://github.com/rig-c/pose) retargets motion, [Core](https://github.com/rig-c/core) compiles the rig, and [Play](https://github.com/rig-c/play) plays it. [The whole toolchain](https://github.com/rig-c/getting-started#the-whole-thing-in-one-glance).
 
 **Review** is where a person looks and answers. Create publishes each result and question here and reads the answers back; see the [Create choice interview](docs/WORKFLOWS.md#create-choice-interview). Review previews with Play, does not replace Core's compile check, and needs none of the published adapters (`@rig-c/pixi`, `@rig-c/phaser`, `@rig-c/three`).
 
