@@ -1,9 +1,0 @@
-{
-  "sourceCommit": "60d7f17",
-  "sourcePath": "web/interview-panel.ts",
-  "sourceSha256": "e6593bf0baa53fe2d28d4d3633a6270748f7d4fe2fdf65508367f3cb885baab3",
-  "functionSha256": "62b4628d1c2bc6c5e8bdce052e564fc1a7788d4f0290edc0a8996d3e66eeeec5",
-  "scope": "Original 60d7f17 jobInterviewValue called with empty note; option-set source Other and auto IDs unchanged",
-  "expectedValueBytes": "{\"questionId\":\"rig_type\",\"selections\":[{\"itemId\":\"topology\",\"optionId\":\"topology_other\",\"otherText\":\"  Custom topology · 직접 입력\\n\"},{\"itemId\":\"detail_level\",\"optionId\":\"density_auto\",\"otherText\":null}],\"note\":\"\"}",
-  "recordWriterSourceSha256": "fb2939fccaca3d71eea5f124e91865af33bf569de2476657345b01f208ffdf74"
-}

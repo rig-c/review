@@ -11,7 +11,7 @@ import {
   type RecordSubject,
   type RecordUISubmission,
 } from '../src/job-contract.ts';
-import { parseRecordAct, buildRecordSource, jobHash } from '../src/job-api.ts';
+import { parseRecordAct, parseRecordSource, buildRecordSource, jobHash } from '../src/job-api.ts';
 
 /** #1048: JSON bytes of the synthetic interview-picks act below, as 285a59f's writer emitted them. */
 const PICKS_ACT_SHA256_285A59F = 'a7840d56090451e06143b4c5496e43338de57d387a255849ccb282f1776162e1';
@@ -249,14 +249,14 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       readRecordPublished: reader,
     });
 
-    const boundOpt = bindJobRecordAsk(
-      { kind: 'interview-picks', questionId: 'rig_type', setId: 'set_rig_type_01' },
-      optRetained,
-    );
-    expect(boundOpt).toEqual(optRetained.source);
-    expect(
+    // #1230: a declared picks subject still parses on the source but refuses a fresh ask
+    expect(optRetained.source.subjects).toContainEqual({ kind: 'interview-picks', questionId: 'rig_type', setId: 'set_rig_type_01' });
+    expect(() =>
+      bindJobRecordAsk({ kind: 'interview-picks', questionId: 'rig_type', setId: 'set_rig_type_01' }, optRetained),
+    ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
+    expect(() =>
       bindJobAsk({ kind: 'interview-picks', questionId: 'rig_type', setId: 'set_rig_type_01' }, optRetained),
-    ).toEqual(optRetained.source);
+    ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
 
     // Refuses wrong questionId/setId or plan/package subjects on option-set source
     expect(() =>
@@ -340,7 +340,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
     ).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
   });
 
-  test('[SYNTHETIC] prepares rig-review/act@6 interview-picks with in-memory validatePicks, verbatim text preservation, and zero disk writes', async () => {
+  test('[SYNTHETIC] #1230 refuses interview-picks record submissions JOB_ACT_KIND_DISABLED with zero disk writes while historical act@4 picks bytes decode', async () => {
     const workRoot = makeTempDir('review-561-picks-root-');
     const stateRoot = makeTempDir('review-561-picks-state-');
     const fixture = createSyntheticOptionRecordWorkspace(workRoot);
@@ -364,7 +364,8 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       questionId: 'rig_type',
       setId: 'set_rig_type_01',
     };
-    const boundSource = bindJobRecordAsk(subject, retained);
+    // A pending picks ask stored by an earlier Review, bound to the retained source as the removed binder did.
+    const boundSource = parseRecordSource(retained.source);
     const ask = buildPendingRecordAsk('pub_opt_1', 'ask_opt_1', subject, boundSource);
 
     const reviewer: JobReviewerBinding = {
@@ -394,120 +395,44 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
     const beforeSubmission = structuredClone(submission);
     const beforeAsk = structuredClone(ask);
     const beforeRetained = structuredClone(retained);
-    const beforeReviewer = structuredClone(reviewer);
     const workEntriesBefore = readdirSync(workRoot);
 
-    const act = prepareJobRecordAct({
-      jobId: 'job_1',
-      submission,
-      ask,
-      retained,
-      reviewer,
-      actId: 'act_picks_1',
-      at: '2026-11-08T12:00:00.000Z',
-    });
+    expect(() =>
+      prepareJobRecordAct({
+        jobId: 'job_1', submission, ask, retained, reviewer, actId: 'act_picks_1', at: '2026-11-08T12:00:00.000Z',
+      }),
+    ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
+    // Also through the finalizeJobAct overload
+    expect(() =>
+      finalizeJobAct({
+        jobId: 'job_1', submission: { ...submission, value: { ...submission.value, note: '' } }, ask, retained,
+        reviewer: { id: 'delegate_1', role: 'delegate' }, actId: 'act_picks_2', at: '2026-11-08T12:05:00.000Z',
+      }),
+    ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
 
-    expect(act.schema).toBe('rig-review/act@6');
-    expect(act.kind).toBe('interview-picks');
-    expect(act.authority).toEqual({
-      actor: 'human',
-      channel: 'review-ui',
-      reviewer,
-    });
-    expect(act.source).toEqual(boundSource);
-    if (act.kind === 'interview-picks') {
-      expect(act.value.note).toBe(verbatimNote);
-      expect(act.value.selections[0]!.otherText).toBe(verbatimOther);
-      expect(act.value.selections[1]!.otherText).toBeNull();
-    }
-    expect(JSON.stringify(parseCommentsAct(act))).toBe(JSON.stringify(act));
-
-    // Also works through the finalizeJobAct overload
-    const viaFinalize = finalizeJobAct({
-      jobId: 'job_1',
-      submission: {
-        ...submission,
-        value: {
-          ...submission.value,
-          note: '',
-        },
-      },
-      ask,
-      retained,
-      reviewer: { id: 'delegate_1', role: 'delegate' },
-      actId: 'act_picks_2',
-      at: '2026-11-08T12:05:00.000Z',
-    });
-    expect(viaFinalize.schema).toBe('rig-review/act@6');
-    if (viaFinalize.kind === 'interview-picks') {
-      expect(viaFinalize.value.note).toBe('');
-    }
-
-    if (act.schema !== 'rig-review/act@6') throw new Error('Expected structured picks');
-    const {comments, ...survey} = act.value;
-    expect(comments).toEqual([]);
-    const historical = {...act, schema: JOB_RECORD_ACT_SCHEMA, value: survey};
+    // The act@4 picks bytes 285a59f's writer emitted for this submission still decode byte-identically.
+    const survey = { questionId: 'rig_type', selections: submission.value.selections, note: verbatimNote };
+    const historical = {
+      schema: JOB_RECORD_ACT_SCHEMA, actId: 'act_picks_1', jobId: 'job_1', askId: 'ask_opt_1', publicationId: 'pub_opt_1',
+      kind: 'interview-picks', authority: { actor: 'human', channel: 'review-ui', reviewer }, at: '2026-11-08T12:00:00.000Z',
+      source: boundSource, value: survey,
+    };
     const bytes = JSON.stringify(historical);
     expect(jobHash(bytes)).toBe(PICKS_ACT_SHA256_285A59F);
     expect(JSON.stringify(parseRecordAct(JSON.parse(bytes)))).toBe(bytes);
     const words = projectComments([{text: 'general'}]);
     const historicalWords = {...historical, value: {...survey, words}};
     expect(JSON.stringify(parseRecordAct(historicalWords))).toBe(JSON.stringify(historicalWords));
-    const oldSubmission = prepareJobRecordAct({jobId: 'job_1', submission: {...submission, value: {...submission.value, words}},
-      ask, retained, reviewer, actId: 'act_picks_1', at: '2026-11-08T12:00:00.000Z'});
-    expect(oldSubmission.value).toEqual({...survey, comments: [{text: words}]});
+    // And the act@6 form the writer emitted before the refusal.
+    const act6 = {...historical, schema: 'rig-review/act@6', value: {...survey, comments: []}};
+    expect(JSON.stringify(parseCommentsAct(act6))).toBe(JSON.stringify(act6));
 
     // Inputs and filesystem are completely untouched
     expect(submission).toEqual(beforeSubmission);
     expect(ask).toEqual(beforeAsk);
     expect(retained).toEqual(beforeRetained);
-    expect(reviewer).toEqual(beforeReviewer);
     expect(readdirSync(workRoot)).toEqual(workEntriesBefore);
     assertRetainedSnapshotIntact(retained.snapshotRoot, retained.seals, retained.snapshotIdentity);
-
-    // Disallowed constraint tuple refuses with JOB_ACT_INVALID
-    expect(() =>
-      prepareJobRecordAct({
-        jobId: 'job_1',
-        submission: {
-          ...submission,
-          value: {
-            questionId: 'rig_type',
-            selections: [
-              { itemId: 'topology', optionId: 'quad_alt', otherText: null },
-              { itemId: 'detail_level', optionId: 'density_high', otherText: null },
-            ],
-            note: 'disallowed combination',
-          },
-        },
-        ask,
-        retained,
-        reviewer,
-        at: '2026-11-08T12:00:00.000Z',
-      }),
-    ).toThrow(expect.objectContaining({ code: 'JOB_ACT_INVALID' }));
-
-    // 'other' option with whitespace-only otherText refuses via validatePicks
-    expect(() =>
-      prepareJobRecordAct({
-        jobId: 'job_1',
-        submission: {
-          ...submission,
-          value: {
-            questionId: 'rig_type',
-            selections: [
-              { itemId: 'topology', optionId: 'topology_other', otherText: '   ' },
-              { itemId: 'detail_level', optionId: 'density_high', otherText: null },
-            ],
-            note: '',
-          },
-        },
-        ask,
-        retained,
-        reviewer,
-        at: '2026-11-08T12:00:00.000Z',
-      }),
-    ).toThrow(expect.objectContaining({ code: 'JOB_ACT_INVALID' }));
   });
 
   test('[SYNTHETIC] refuses fresh checkpoint and signoff record submissions while historical rig-review/act@4 checkpoint and signoff acts read byte-exact', async () => {
@@ -676,10 +601,11 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
     }
   });
 
-  test('[SYNTHETIC] refuses capture/still, extra submission authority/source fields, invalid reviewer authority, superseded asks, and stale sources', async () => {
+  test('[SYNTHETIC] refuses capture/still, extra submission authority/source fields, retired record ask kinds, and invalid comment-act reviewer bindings', async () => {
+    const { finalizeCommentOnlyAct } = await import('../src/job-act.ts');
     const workRoot = makeTempDir('review-561-guards-root-');
     const stateRoot = makeTempDir('review-561-guards-state-');
-    // #1229: checkpoint submissions are retired; exercise live prepareJobRecordAct guards on an option-set ask.
+    // #1229 / #1230: all record ask kinds are retired; prepareJobRecordAct still rejects envelope injections first and then JOB_ACT_KIND_DISABLED, while finalizeCommentOnlyAct enforces reviewer and carrier guards on live record acts.
     const fixture = createSyntheticOptionRecordWorkspace(workRoot);
     const { reader } = createSyntheticRecordReader({
       onOption: () => structuredClone(fixture.context),
@@ -697,7 +623,8 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
     });
 
     const subject: RecordSubject = { kind: 'interview-picks', questionId: 'rig_type', setId: 'set_rig_type_01' };
-    const ask = buildPendingRecordAsk('pub_1', 'ask_1', subject, bindJobRecordAsk(subject, retained));
+    expect(() => bindJobRecordAsk(subject, retained)).toThrow(expect.objectContaining({ code: 'JOB_ASK_INVALID' }));
+    const ask = buildPendingRecordAsk('pub_1', 'ask_1', subject, retained.source);
     const baseSubmission: JobUISubmission = {
       publicationId: 'pub_1',
       askId: 'ask_1',
@@ -717,7 +644,7 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
     };
     const validReviewer: JobReviewerBinding = { id: 'rev_1', role: 'owner' };
 
-    // Rejects capture or still or injected authority/source on submission
+    // Rejects capture or still or injected authority/source on submission before kind refusal
     expect(() =>
       prepareJobRecordAct({
         jobId: 'job_1',
@@ -759,71 +686,55 @@ describe('Review #561 model-free record ask binding and act@4 preparation (SYNTH
       }),
     ).toThrow(expect.objectContaining({ code: 'JOB_REQUEST_INVALID' }));
 
-    // Rejects invalid reviewer bindings
+    // Retired record ask kinds refuse with JOB_ACT_KIND_DISABLED
+    for (const disabledKind of ['interview-picks', 'checkpoint', 'signoff'] as const) {
+      expect(() =>
+        prepareJobRecordAct({
+          jobId: 'job_1',
+          submission: { ...baseSubmission, kind: disabledKind } as unknown as import('../src/job-contract.ts').UISubmissionV3,
+          ask,
+          retained,
+          reviewer: validReviewer,
+        }),
+      ).toThrow(expect.objectContaining({ code: 'JOB_ACT_KIND_DISABLED' }));
+    }
+
+    // Live record comment-only acts reject invalid reviewer bindings and model carriers
+    const commentSubmission: Extract<import('../src/job-contract.ts').UISubmissionV3, { kind: 'comments' }> = {
+      publicationId: 'pub_1',
+      pageId: 'page_1',
+      displayedNonce: 'nonce_1',
+      expectedGeneration: 1,
+      submissionId: 'sub_comments_1',
+      kind: 'comments',
+      value: { comments: [{ text: 'ok' }] },
+    };
     expect(() =>
-      prepareJobRecordAct({
+      finalizeCommentOnlyAct({
         jobId: 'job_1',
-        submission: baseSubmission,
-        ask,
+        submission: commentSubmission,
         retained,
         reviewer: { id: '', role: 'owner' },
       }),
     ).toThrow(expect.objectContaining({ code: 'JOB_AUTHORITY_REFUSED' }));
 
     expect(() =>
-      prepareJobRecordAct({
+      finalizeCommentOnlyAct({
         jobId: 'job_1',
-        submission: baseSubmission,
-        ask,
+        submission: commentSubmission,
         retained,
         reviewer: { id: 'rev_1', role: 'admin' as unknown as 'owner' },
       }),
     ).toThrow(expect.objectContaining({ code: 'JOB_AUTHORITY_REFUSED' }));
 
     expect(() =>
-      prepareJobRecordAct({
+      finalizeCommentOnlyAct({
         jobId: 'job_1',
-        submission: baseSubmission,
-        ask,
-        retained,
-        reviewer: { id: 'rev_1', role: 'owner', by: 'owner' } as unknown as JobReviewerBinding,
-      }),
-    ).toThrow(expect.objectContaining({ code: 'JOB_AUTHORITY_REFUSED' }));
-
-    // Superseded ask refuses with JOB_ASK_SUPERSEDED
-    expect(() =>
-      prepareJobRecordAct({
-        jobId: 'job_1',
-        submission: baseSubmission,
-        ask: { ...ask, status: 'answered' },
+        submission: { ...commentSubmission, value: { comments: [{ text: 'ok' }], carriers: [] } },
         retained,
         reviewer: validReviewer,
       }),
-    ).toThrow(expect.objectContaining({ code: 'JOB_ASK_SUPERSEDED' }));
-
-    // Stale publicationId or sourceHash refuses with JOB_ACT_SOURCE_STALE
-    expect(() =>
-      prepareJobRecordAct({
-        jobId: 'job_1',
-        submission: { ...baseSubmission, publicationId: 'pub_other' },
-        ask,
-        retained,
-        reviewer: validReviewer,
-      }),
-    ).toThrow(expect.objectContaining({ code: 'JOB_ACT_SOURCE_STALE' }));
-
-    expect(() =>
-      prepareJobRecordAct({
-        jobId: 'job_1',
-        submission: baseSubmission,
-        ask: {
-          ...ask,
-          source: { ...ask.source, sourceHash: 'f'.repeat(64) },
-        },
-        retained,
-        reviewer: validReviewer,
-      }),
-    ).toThrow(expect.objectContaining({ code: 'JOB_ACT_SOURCE_STALE' }));
+    ).toThrow(expect.objectContaining({ code: 'JOB_ACT_INVALID' }));
   });
 
   test('#586 / #989 refuses declared reopen asks and submissions while decoding stored rig-review/act@4 reopen acts with verbatim words', async () => {

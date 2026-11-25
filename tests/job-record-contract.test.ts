@@ -12,6 +12,7 @@ import {createJobHostPorts, parseCommentsAct} from '../src/job-api.ts';
 import {createSyntheticOptionRecordWorkspace, createSyntheticPlanRecordWorkspace, createSyntheticRecordReader} from './helpers/job-record-fixture.ts';
 import { jobFixture } from './helpers/job-api-fixture.ts';
 import { seedHistoricalCheckpointAct } from './helpers/historical-checkpoint-act.ts';
+import { seedHistoricalPicksAct } from './helpers/historical-picks-act.ts';
 import { runRecordBrowserPreflightSetupCheck } from './job-record-browser.ts';
 import {
   createJobWindow,
@@ -1686,6 +1687,7 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
     expect(ackOptionRes.ok).toBe(true);
     if (!ackOptionRes.ok) throw new Error(ackOptionRes.error.code);
 
+    // #1230: a fresh picks ask on the declared set refuses by name; the publication itself still parses.
     const askOptionRes = await callApi({
       schema: HOST_JOB_API_V3_SCHEMA,
       jobId: host.session.jobId,
@@ -1696,8 +1698,8 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
       publicationId: optionPublication.publicationId,
       subject: { kind: 'interview-picks', questionId: 'bones', setId: 'chain-bones' },
     });
-    expect(askOptionRes.status).toBe(200);
-    const optionAsk = (await askOptionRes.json()).value as publicJobHost.JobPendingAskV3;
+    expect(askOptionRes.status).toBe(409);
+    expect(await askOptionRes.json()).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
 
     const [rigPoint] = feedbackItemComments(backdropPins.rows as unknown as Feedback[]);
     const referencePoint = structuredClone(rigPoint!);
@@ -1710,25 +1712,33 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
     const region = {text: 'Region · 영역', anchor: {name: 'reference.png',
       imageRegion: {x: 1, y: 2, width: 2, height: 3}, crop, nativeCrop: crop}};
     const comments = [referencePoint, region, {text: '  First line\n둘째 줄  '}, rigPoint!];
-    const submission = JSON.stringify({
+    const optionValue = {
+      questionId: 'bones',
+      selections: [
+        { itemId: 'chains', optionId: 'keep', otherText: null },
+        { itemId: 'placement', optionId: 'keep', otherText: null },
+        { itemId: 'length', optionId: 'keep', otherText: null },
+      ],
+      note: 'Keep synthetic bones options.', comments,
+    };
+    // Committed before the refusal (Review 4.21.0 or earlier).
+    const committedGeneration = host.session.status().generation;
+    const finalizedOptionAct = seedHistoricalPicksAct(host.session, {
+      publicationId: optionPublication.publicationId, pageId: 'page-create-option',
+      displayedNonce: ackOptionRes.value.displayedNonce, expectedGeneration: committedGeneration,
+      submissionId: 'sub-option-bones', value: optionValue, questionId: 'bones', setId: 'chain-bones', optionSetSha256: '',
+    }) as unknown as JobActV3;
+    const submission = (submissionId: string) => JSON.stringify({
       publicationId: optionPublication.publicationId,
-      askId: optionAsk.askId,
+      askId: finalizedOptionAct.askId,
       pageId: 'page-create-option',
       displayedNonce: ackOptionRes.value.displayedNonce,
-      expectedGeneration: host.session.status().generation,
-      submissionId: 'sub-option-bones',
+      expectedGeneration: committedGeneration,
+      submissionId,
       kind: 'interview-picks',
-      value: {
-        questionId: 'bones',
-        selections: [
-          { itemId: 'chains', optionId: 'keep', otherText: null },
-          { itemId: 'placement', optionId: 'keep', otherText: null },
-          { itemId: 'length', optionId: 'keep', otherText: null },
-        ],
-        note: 'Keep synthetic bones options.', comments,
-      },
+      value: optionValue,
     });
-    const commit = () => host.ports.commitUIAct(
+    const commit = (submissionId = 'sub-option-bones') => host.ports.commitUIAct(
       host.session.jobId,
       new Request(`${host.origin}/jobs/${host.session.jobId}/ui/acts`, {
         method: 'POST',
@@ -1737,13 +1747,9 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
           Origin: host.origin,
           'X-Review-Capability': credentials.ui,
         },
-        body: submission,
+        body: submission(submissionId),
       }),
     );
-    const committed = await commit();
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) throw new Error(committed.error.code);
-    const finalizedOptionAct = committed.value as JobActV3;
     const parsed = parseCommentsAct(finalizedOptionAct);
     expect(parsed.kind).toBe('interview-picks');
     expect(JSON.stringify(parsed.value.comments)).toBe(JSON.stringify(comments));
@@ -1751,6 +1757,7 @@ test('#588 archive-backed reader-double evidence: host started with readRecordPu
     const replay = await commit();
     if (!replay.ok) throw new Error(replay.error.code);
     expect(JSON.stringify(replay.value)).toBe(JSON.stringify(finalizedOptionAct));
+    expect(await commit('sub-option-bones-fresh')).toMatchObject({ ok: false, error: { code: 'JOB_ACT_KIND_DISABLED' } });
     const fetchOptionRes = await callApi(
       {
         schema: HOST_JOB_API_V3_SCHEMA,
@@ -2129,15 +2136,13 @@ test('#588 record-move and freshness boundaries: publish, ask, and commitUIAct r
     const publication = (await cleanPublishRes.json()).value as publicJobHost.JobPublicationV3;
     expect(host.session.status().generation).toBe(1);
 
-    // 3. During ask, if project.json moves right after retained reader returns, ask refuses JOB_RECORD_MOVED without advancing generation
-    // (#1229: fresh checkpoint/signoff/reopen asks refuse at bindJobRecordAsk, so exercise ask's retained record-move check on an option-set publication.)
+    // 3. #1229 / #1230: all fresh record asks refuse JOB_ASK_INVALID at bindJobRecordAsk before reader invocation, without advancing generation
     const optScratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-588-ask-move-'));
     try {
       const optRoot = join(optScratch, 'project');
       await mkdir(optRoot, { recursive: true });
       const optWorkspace = createSyntheticOptionRecordWorkspace(optRoot);
-      const optOriginal = await readFile(join(optRoot, 'project.json'), 'utf8');
-      let optMove = false;
+      let optReads = 0;
       const optHost = await startJobHost({
         root: optRoot,
         stateDir: join(optScratch, 'state'),
@@ -2145,13 +2150,10 @@ test('#588 record-move and freshness boundaries: publish, ask, and commitUIAct r
         reviewer: { id: 'reviewer-move-boundary', role: 'owner' },
         publicationMode: 'record-and-package',
         readerId: HOST_JOB_RECORD_READER_ID,
-        readRecordPublished: (async (input: publicJobHost.JobRecordReaderInput) => {
-          const ctx = structuredClone(optWorkspace.context);
-          if (input.phase === 'retained' && optMove) {
-            await writeFile(join(optRoot, 'project.json'), optOriginal + '\n');
-          }
-          return ctx;
-        }) as publicJobHost.JobRecordPublicationReader,
+        readRecordPublished: (async () => {
+          optReads++;
+          return structuredClone(optWorkspace.context);
+        }) as unknown as publicJobHost.JobRecordPublicationReader,
       });
       try {
         const optToken = optHost.session.hostCredentials().agent;
@@ -2169,19 +2171,20 @@ test('#588 record-move and freshness boundaries: publish, ask, and commitUIAct r
         });
         expect(optPubRes.status).toBe(200);
         const optPub = (await optPubRes.json()).value as publicJobHost.JobPublicationV3;
-        optMove = true;
-        const moveAskRes = await callOpt({
+        const readsAfterPublish = optReads;
+        const refusedAskRes = await callOpt({
           schema: HOST_JOB_API_V3_SCHEMA, jobId: optHost.session.jobId, requestId: 'opt-ask-move',
           verb: 'ask', expectedGeneration: 1, idempotencyKey: 'ask-move-after-retained',
           publicationId: optPub.publicationId,
           subject: optWorkspace.context.subjects[0]!,
         });
-        expect(moveAskRes.status).toBe(409);
-        expect(await moveAskRes.json()).toMatchObject({
+        expect(refusedAskRes.status).toBe(409);
+        expect(await refusedAskRes.json()).toMatchObject({
           schema: HOST_JOB_API_V3_SCHEMA,
           ok: false,
-          error: { code: 'JOB_RECORD_MOVED' },
+          error: { code: 'JOB_ASK_INVALID' },
         });
+        expect(optReads).toBe(readsAfterPublish);
         expect(optHost.session.status().generation).toBe(1);
         expect(optHost.session.status().pending).toHaveLength(0);
       } finally {

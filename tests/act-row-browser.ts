@@ -12,6 +12,7 @@ import {jobFixture} from './helpers/job-api-fixture.ts';
 import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
@@ -47,7 +48,7 @@ const sampler=`(()=>{
  let previous='',frame=0,sequence=0;
  const sample=trigger=>{const bar=document.getElementById('workspace-review-act');if(!bar)return;
   const save=document.getElementById('save'),row=document.getElementById('workspace-act-row'),headline=document.getElementById('workspace-ask-headline');
-  const controls=[...document.querySelectorAll('#save,#request-changes,#workspace-pending-ask')].filter(visible).map(n=>({id:n.id,text:n.textContent.trim(),disabled:n.disabled,rect:n.getBoundingClientRect().toJSON()}));
+  const controls=[...document.querySelectorAll('#send-comments,#save,#request-changes,#workspace-pending-ask')].filter(visible).map(n=>({id:n.id,text:n.textContent.trim(),disabled:n.disabled,rect:n.getBoundingClientRect().toJSON()}));
   const state={row:visible(row),bar:visible(bar),ready:document.body?.dataset.ready==='true',headlinePresent:!!headline,headlineVisible:visible(headline),headline:headline?.textContent.trim()??'',controls,
    legacySave:visible(save)&&/^(Submit review|리뷰 제출)$/.test(save.textContent.trim()),status:visible(document.getElementById('review-status')),label:visible(document.querySelector('label[for="review-status"]'))};
   const signature=JSON.stringify(state);if(signature===previous&&trigger!=='animation-frame')return;previous=signature;
@@ -73,7 +74,8 @@ const geometry=`(()=>{
  const visible=n=>!!n&&!!n.getClientRects().length&&!n.closest('[hidden],dialog:not([open])')&&getComputedStyle(n).visibility!=='hidden';
  const rect=n=>n?.getBoundingClientRect().toJSON()??null;
  const row=document.getElementById('workspace-act-row'),bar=document.getElementById('workspace-review-act'),header=document.querySelector('.topbar'),heading=document.querySelector('.inspector-heading');
- const answers=[...bar.querySelectorAll('#save,#request-changes,#workspace-pending-ask')].filter(visible);
+ const askAnswers=[...bar.querySelectorAll('#save,#request-changes,#workspace-pending-ask')].filter(visible);
+ const answers=askAnswers.length?askAnswers:[...bar.querySelectorAll('#send-comments')].filter(visible);
  const style=n=>{if(!n)return null;const s=getComputedStyle(n);return {rect:rect(n),text:n.textContent.trim(),size:parseFloat(s.fontSize),weight:Number(s.fontWeight),color:s.color,whiteSpace:s.whiteSpace,overflow:s.textOverflow,overflowX:s.overflowX,overflowY:s.overflowY,clientWidth:n.clientWidth,scrollWidth:n.scrollWidth,clientHeight:n.clientHeight,scrollHeight:n.scrollHeight};};
  const colorProbe=document.createElement('canvas').getContext('2d');const color=value=>{colorProbe.fillStyle=value;return colorProbe.fillStyle;};
  const rootStyle=getComputedStyle(document.documentElement);
@@ -168,7 +170,7 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    const server=await startServer(await loadReview(join(fixture.root,'out')),{port:0,capability,stateDir:fixture.state});
    close=async()=>{server.stop(true);await fixture.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
   }else if(mode==='interview'){
-   const fixture=await recordScreenFixture('interview-picks',false);
+   const fixture=await recordScreenFixture('option-set',false);
    close=()=>fixture.close();url=fixture.ownerUrl;
   }else{
    const fixture=await scriptedJobWindowFixture({c5Parts:'mesh'});close=()=>fixture.close();
@@ -213,10 +215,8 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
   await control('Fetch.enable',{patterns:[{urlPattern:'*assets/*',requestStage:'Response'},{urlPattern:'*review-painting*',requestStage:'Response'},{urlPattern:'*api/stage-parts/image/*',requestStage:'Response'}]});
   await page.goto(url,language);
   await wait(page,mode==='standalone'?`!!document.querySelector('#rig-root canvas')&&!document.body.inert`:`document.body.dataset.ready==='true'&&!document.body.inert&&!!document.querySelector('#workspace-ask-headline')?.textContent`);
-  // #1041: the question is shown in the right communication panel, not a bottom tab.
-  const questionSelected=`(()=>{const n=document.querySelector('#workspace-interview-answer');return !!n&&!n.hidden&&!!n.closest('#workspace-communication:not([hidden])')&&n.getClientRects().length>0;})()`;
-  const interviewReady=`${questionSelected}&&!!document.querySelector('#workspace-interview-answer form.interview-answer fieldset:not(:disabled)')`;
-  if(mode==='interview')await wait(page,interviewReady);
+  const optionReady=`!!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')&&!document.querySelector('#workspace-interview-answer')&&document.querySelector('#reference-content img')?.naturalWidth>0&&!document.querySelector('#send-comments')?.hidden`;
+  if(mode==='interview')await wait(page,optionReady);
   if(mode==='embedded-rig'){
    const embedding:{requestSearch:string;renderSearch:string;publicEmbeddedRoute:boolean}=await page.evaluate(`window.__embeddedActRowFixture`);
    assert.equal(embedding.requestSearch,'?lang='+language);
@@ -327,29 +327,30 @@ for(const language of ['en','ko'] as const)for(const [width,height]of [[1440,900
    assert.equal(await page.evaluate(`document.getElementById('${stateId}').textContent`),catalog['job.review.approved']);
    if(liveRig)assert.equal(await page.evaluate(`document.getElementById('workspace-ask-headline').textContent`),catalog["We're looking at the work together. Leave your thoughts as comments."]);
   }else{
-   assert.deepEqual(initial.answers.map((answer:any)=>answer.id),['workspace-pending-ask']);
-   await click(page,'#workspace-pending-ask');await wait(page,interviewReady);
-   assert.equal(await page.evaluate(`document.getElementById('workspace-pending-ask').closest('#workspace-act-row')!==null`),true);
-   await page.evaluate<void>(`(()=>{const seen=new Set();for(const radio of document.querySelectorAll('#workspace-interview-answer input[type=radio]'))if(!seen.has(radio.name)){seen.add(radio.name);radio.click();}})()`);
+   const catalog=language==='en'?enCatalog:koCatalog;
+   assert.deepEqual(initial.answers.map((answer:any)=>answer.id),['send-comments']);
+   assert.deepEqual(initial.primary,['send-comments']);
+   assert.equal(initial.headline.text,catalog["We're looking at the work together. Leave your thoughts as comments."]);
+   await page.evaluate<void>(`document.querySelector('[data-comment-general]').scrollIntoView({block:'nearest'})`);
+   await click(page,'[data-comment-general]');
+   await wait(page,`!!document.querySelector('.stage-comment-composer input')`);
+   await page.evaluate<void>(`(()=>{const form=document.querySelector('.stage-comment-composer');form.querySelector('input').value='Option set comment';form.requestSubmit();})()`);
+   await wait(page,`!document.querySelector('.stage-comment-composer')&&!document.querySelector('#send-comments').disabled`);
    await capture(page,out,'answer-question');
-   const submit='#workspace-interview-answer button[type=submit]';
-   await page.evaluate<void>(`document.querySelector(${JSON.stringify(submit)}).scrollIntoView({block:'nearest',inline:'nearest'})`);
-   await click(page,submit);
-   const answerSaved=`${questionSelected}&&!!document.querySelector('#workspace-interview-answer form.interview-answer[data-interview-answered=true]')`;
-   await wait(page,`${answerSaved}&&document.getElementById('review-draft-state').textContent.includes(${JSON.stringify(language==='ko'?'저장':'saved')})`);
+   await click(page,'#send-comments');
+   await expectRecordActSubmitted(page,expression=>wait(page!,expression),language,`${mode} submitted`);
    const saved:any=await capture(page,out,'answer-saved');
    const savedState:{pending:boolean;row:{kind:string;text:string};dirty:{kind:string;text:string}}=await page.evaluate(`(()=>{
     const state=id=>{const n=document.getElementById(id);return {kind:n.dataset.saveState,text:n.textContent};};
     return {pending:['save','request-changes','workspace-pending-ask'].some(id=>!document.getElementById(id).hidden),row:state('review-draft-state'),dirty:state('dirty')};
    })()`);
    await writeFile(join(out,'answer-saved-state.json'),JSON.stringify(savedState,null,2)+'\n');
-   assert.deepEqual(savedState.row,{kind:'saved',text:language==='ko'?koCatalog['Answer saved']:'Answer saved'});
-   if(savedState.pending)assertPending(saved,mode,width,expectedPendingFooter);
-   else{
-    // #1242 owner ruling: the record screen keeps its row with Send comments, so the answer's state stays in the row.
-    assert.equal(saved.rowVisible,true);assert.deepEqual(saved.states,['review-draft-state']);assert.deepEqual(saved.answers,[]);assert.deepEqual(saved.primary,[]);
-    assert.deepEqual(savedState.dirty,savedState.row,'completed answer keeps the exact saved state in its one visible state copy');
-   }
+   // #1242 owner ruling: the record screen keeps its row with Send comments, so the submitted state stays in the row.
+   assert.equal(savedState.pending,false);
+   assert.equal(saved.rowVisible,true);assert.deepEqual(saved.states,['review-draft-state']);
+   assert.deepEqual(saved.answers.map((answer:any)=>answer.id),['send-comments']);assert.deepEqual(saved.primary,['send-comments']);
+   assert.deepEqual(savedState.row,{kind:'saved',text:catalog['Submitted']});
+   assert.deepEqual(savedState.dirty,savedState.row,'the hidden header copy mirrors the submitted state');
   }
   if(mode==='rig'){
    // Fail the first hosted metadata clone while #904's waiting row is visible and

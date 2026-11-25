@@ -14,11 +14,13 @@ import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {PNG} from 'pngjs';
 import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
+import {seedHistoricalPicksAct} from './helpers/historical-picks-act.ts';
 import {launchCdpSession,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
+import {expectRecordActSubmitted} from './helpers/record-act-browser-status.ts';
 import {feedbackItemComments,projectComments} from '../src/stage-comment.ts';
 import {createJobHostPorts,jobHash,parseCommentOnlyAct,parseCommentsAct} from '../src/job-api.ts';
-import {JOB_API_V3_SCHEMA,jobRawActMediaType,type PendingAskV3} from '../src/job-contract.ts';
+import {JOB_API_V3_SCHEMA,JOB_COMMENT_ONLY_ACT_SCHEMA,jobRawActMediaType} from '../src/job-contract.ts';
 import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 
@@ -32,33 +34,31 @@ function pictureBytes(shift=0):Buffer{
  return PNG.sync.write(png);
 }
 type Subject='plan'|'question'|'backdrop';
-// #1229: plan records carry no checkpoint form and submit picture pins through Send comments (act@10).
+// #1229 / #1230: both plan and option-set records carry no ask form and submit picture pins through Send comments (act@10).
 const fixtureFor=(subject:Subject)=>subject==='plan'
  ?recordScreenFixture('checkpoint',true,undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,pictureBytes())
- :recordScreenFixture('interview-picks',subject==='backdrop',undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,undefined,pictureBytes());
+ :recordScreenFixture('option-set',subject==='backdrop',undefined,'plan-approved',false,true,undefined,false,false,undefined,undefined,undefined,pictureBytes());
 /** The sealed `files` entry the pins must name: the plan's `planPicture`, or the question image's entry. */
 function sealedPicture(subject:Subject,source:unknown):{path:string;sha256:string}{
  const value=source as {planPicture?:{path:string;sha256:string};files:{path:string;sha256:string}[]};
  const picture=subject==='plan'?value.planPicture:value.files.find(file=>file.path==='inputs/reference.png');
  assert.ok(picture,'the publication seals its '+subject+' picture');return picture;
 }
-/** Commit the captured browser submission through the real retained session and consumer transport. */
-async function verifyPicksReplay(fixture: Awaited<ReturnType<typeof fixtureFor>>, out: string, act: ReturnType<typeof parseCommentsAct>) {
+/** Commit the captured browser comment-only submission through the real retained session and consumer transport. */
+async function verifyCommentActReplay(fixture: Awaited<ReturnType<typeof fixtureFor>>, out: string, act: ReturnType<typeof parseCommentOnlyAct>) {
  const {session,origin,submissions}=fixture,submitted=submissions.at(-1);
- assert.ok(submitted?.kind==='interview-picks');
- const {publicationId}=submitted,expectedGeneration=session.status().generation,signal=new AbortController().signal;
+ assert.ok(submitted?.kind==='comments');
+ const {publicationId}=submitted;
  const base={schema:JOB_API_V3_SCHEMA,jobId:session.jobId} as const;
- const ask=await session.execute({...base,verb:'ask',requestId:'picks-replay-ask',idempotencyKey:'picks-replay-ask',
-  expectedGeneration,publicationId,subject:fixture.ask.subject},signal) as PendingAskV3;
- const display=session.ackDisplayed({publicationId,pageId:submitted.pageId,sourceHash:ask.source.sourceHash});
- const input={...submitted,...display,askId:ask.askId,expectedGeneration:session.status().generation};
+ const display=session.ackDisplayed({publicationId,pageId:submitted.pageId,sourceHash:fixture.display.publication.source.sourceHash});
+ const input={...submitted,...display,expectedGeneration:session.status().generation};
  const saved=await session.commitUIAct(input),bytes=JSON.stringify(saved);
- assert.equal(JSON.stringify(parseCommentsAct(saved)),bytes);
+ assert.equal(JSON.stringify(parseCommentOnlyAct(saved)),bytes);
  assert.equal(JSON.stringify(saved.value),JSON.stringify(act.value));
  assert.equal(JSON.stringify(await session.commitUIAct(input)),bytes);
  const consumer=await createJobHostPorts(session,origin).handleJobApi(new Request(origin+'/jobs/'+session.jobId+'/api',{
   method:'POST',headers:{'Content-Type':'application/json',Accept:jobRawActMediaType,Authorization:'Bearer '+session.writerGrant().fetchCapability},
-  body:JSON.stringify({...base,verb:'fetch-act',requestId:'picks-replay-fetch',actId:saved.actId}),
+  body:JSON.stringify({...base,verb:'fetch-act',requestId:'comments-replay-fetch',actId:saved.actId}),
  }));
  assert.equal(consumer.status,200);
  const fetched=await consumer.text();
@@ -95,6 +95,7 @@ const at=(g:Geometry,x:number,y:number)=>({x:g.left+x*g.scale,y:g.top+y*g.scale}
 async function save(text:string){await wait(`!!document.querySelector('.stage-comment-composer input')`,'composer');
  await page!.evaluate(`(()=>{const f=document.querySelector('.stage-comment-composer');f.querySelector('input').value=${JSON.stringify(text)};f.requestSubmit();})()`);
  await wait(`!document.querySelector('.stage-comment-composer')`,'composer saved');}
+async function openGeneral(){const until=Date.now()+10_000;while(Date.now()<until){await page!.evaluate(`document.querySelector('[data-comment-general]')?.click()`);await Bun.sleep(40);if(await page!.evaluate<boolean>(`!!document.querySelector('.stage-comment-composer input')`))return;}throw new Error('1048_WAIT general composer');}
 async function captureOn(){await wait(`!!document.querySelector('#stage-comment-list')`,'comments bound');
  if(await page!.evaluate<boolean>(`!document.querySelector('#reference-viewport.stage-comment-mode')`))await click(page!,'#stage-comment');
  await wait(`!!document.querySelector('#reference-viewport.stage-comment-mode')`,'pin mode on the picture');}
@@ -185,56 +186,37 @@ try{
     const labels=rows.map(row=>{const w=row.context.comment.world;return JSON.stringify(['rig-review-comment/1','setup','reference',picture.path,picture.sha256,Math.round(w.x),Math.round(w.y),Math.round(w.width),Math.round(w.height)]);});
     let general:string|null=null;
     if(subject!=='plan'){
-     // Bar 3: a general comment on an interview host now reaches the act with the pins.
-     general='General · 일반 '+language;await page.evaluate(`document.querySelector('[data-comment-general]').click()`);await save(general);
+     // Bar 3: a general comment on an option-set host reaches the act with the pins.
+     general='General · 일반 '+language;await openGeneral();await save(general);
      await wait(`document.querySelectorAll('#stage-comment-list .stage-comment-item').length===3`,'general comment listed');
     }
     const all=(await draft())[0]!.value.comments;assert.equal(all.length,rows.length+(general?1:0));
     const expected=projectComments(all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary}),[picture]);
     assert.equal(expected,`[${labels[0]}]\n${rows[0]!.summary}\n\n[${labels[1]}]\n${rows[1]!.summary}`+(general?`\n\n[general]\n${general}`:''),'A1 label');
-    if(subject==='plan'){
-     // #1229: converted from the removed checkpoint Pass/Fail form to Send comments (act@10); structured comments carry the A1 labels.
-     await wait(`!!document.getElementById('send-comments')&&!document.getElementById('send-comments').hidden&&!document.getElementById('send-comments').disabled`,'plan Send comments ready');
-     await shot(out,'6-before-submit');await click(page,'#send-comments');
-     await wait(`document.getElementById('review-draft-state')?.dataset.saveState==='saved'`,'plan comments sent');
-    }else{
-     // Submit the interview picks with the original pointed and general comments.
-     for(const value of ['biped_std','density_high']){const option=selector+` label.interview-option:has(input[value="${value}"])`;
-      await page.evaluate(`document.querySelector(${JSON.stringify(option)}).scrollIntoView({block:'center'})`);await click(page,option);}
-     await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).scrollIntoView({block:'center'})`);
-     await shot(out,'6-before-submit');await click(page,selector+' button[type=submit]');
-     await wait(`!!document.querySelector(${JSON.stringify(selector+'[data-interview-answered=true]')})`,'interview saved');
-    }
+    // #1229 / #1230: both plan and option-set submit pointed and general comments through Send comments as act@10.
+    await wait(`!!document.getElementById('send-comments')&&!document.getElementById('send-comments').hidden&&!document.getElementById('send-comments').disabled`,subject+' Send comments ready');
+    await shot(out,'6-before-submit');await click(page,'#send-comments');
+    await expectRecordActSubmitted(page,wait,language,subject+' comments submitted');
     const bytes=await readFile(join(out,'one-screen.json'),'utf8');
-    if(subject==='plan'){
-     const act=parseCommentOnlyAct(JSON.parse(bytes));
-     assert.equal(act.kind,'comments');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
-     assert.ok('record' in act.source&&act.source.files.some(file=>file.path===picture.path&&file.sha256===picture.sha256),'the label names a sealed files entry of the act source');
-     const plainComments=act.value.comments.map(({context:_context,...comment})=>comment);
-     assert.equal(JSON.stringify(plainComments),JSON.stringify(all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary})));
-     assert.equal(projectComments(plainComments,[picture]),expected,'plan comment-only act keeps the A1 labels');
-     await shot(out,'7-submitted');
-     const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,structuredComments:plainComments,words:expected,
-      scales:{fresh:fresh.scale,reloaded:reloaded.scale,zoomed:zoomed.scale,fitted:fitted.scale}};
-     cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1048_PINS_PASS '+subject+' '+name+' '+language);
-    }else{
-     const act=parseCommentsAct(JSON.parse(bytes));
-     assert.equal(act.kind,'interview-picks');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
-     assert.ok('record' in act.source&&act.source.files.some(file=>file.path===picture.path&&file.sha256===picture.sha256),'the label names a sealed files entry of the act source');
-     assert.equal(JSON.stringify(act.value.comments),JSON.stringify(all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary})));
-     assert.equal(JSON.stringify(act),bytes,'picks round-trip byte-for-byte');
-     const replayActSha256=await verifyPicksReplay(fixture,out,act);
-     await shot(out,'7-submitted');
-     const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,structuredComments:act.value.comments,replayActSha256,
-      scales:{fresh:fresh.scale,reloaded:reloaded.scale,zoomed:zoomed.scale,fitted:fitted.scale}};
-     cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1048_PINS_PASS '+subject+' '+name+' '+language);
-    }
+    const act=parseCommentOnlyAct(JSON.parse(bytes));
+    assert.equal(act.schema,JOB_COMMENT_ONLY_ACT_SCHEMA);
+    assert.equal(act.kind,'comments');assert.equal(act.source.sourceHash,fixture.display.publication.source.sourceHash);
+    assert.ok('record' in act.source&&act.source.files.some(file=>file.path===picture.path&&file.sha256===picture.sha256),'the label names a sealed files entry of the act source');
+    const plainComments=act.value.comments.map(row=>({text:row.text,...(row.anchor?{anchor:row.anchor}:{})}));
+    assert.deepEqual(plainComments,all.map(row=>'target' in row?feedbackItemComments([row as never])[0]!:{text:row.summary}));
+    assert.equal(projectComments(plainComments,[picture]),expected,'comment-only act preserves the A1 labels');
+    assert.equal(JSON.stringify(act),bytes,'comments act round-trips byte-for-byte');
+    const replayActSha256=await verifyCommentActReplay(fixture,out,act);
+    await shot(out,'7-submitted');
+    const result={case:'pins',subject,size:name,language,picture,rowText,rows:rows.map(row=>({summary:row.summary,world:row.context.comment.world})),labels,general,structuredComments:act.value.comments,replayActSha256,
+     scales:{fresh:fresh.scale,reloaded:reloaded.scale,zoomed:zoomed.scale,fitted:fitted.scale}};
+    cases.push(result);await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1048_PINS_PASS '+subject+' '+name+' '+language);
    }catch(error){await shot(out,'failure').catch(()=>{});throw error;}finally{await page.goto('about:blank');await fixture.close();}
   }
   // #1068: restored rig-backdrop rows keep main's stored bytes and travel as structured pins.
   if(subject==='backdrop'){const golden=JSON.parse(await readFile(new URL('./fixtures/record-backdrop-rig-pins-1068.json',import.meta.url),'utf8')) as {rows:Row[];general:string;words:string;rowTextEn:string[]};
    const fixture=await fixtureFor(subject),out=join(output,subject,'rig-golden',name,language);await mkdir(out,{recursive:true});fixture.output(out);
-   const selector=`form[data-job-ask="${fixture.ask.askId}"]`,source=fixture.display.publication.source,ask=fixture.ask.subject as {questionId:string;setId:string};
+   const source=fixture.display.publication.source,ask=fixture.ask.subject as {questionId:string;setId:string};
    try{
     const url=new URL(fixture.ownerUrl);url.searchParams.set('lang',language);await page.goto(url.href,language);
     await wait(pictureDrawn,'backdrop question image drawn');
@@ -243,18 +225,29 @@ try{
     await page.goto('about:blank');await page.goto(url.href,language);
     await wait(`${pictureDrawn}&&document.querySelectorAll('#stage-comment-list .stage-comment-item').length===${golden.rows.length}`,'rig rows restored');
     if(language==='en')assert.deepEqual(await page.evaluate<string[]>(`[...document.querySelectorAll('#stage-comment-list .stage-comment-item')].map(row=>row.textContent)`),golden.rowTextEn,'rig rows read as on main');
-    await page.evaluate(`document.querySelector('[data-comment-general]').click()`);await save(golden.general);
+    await openGeneral();await save(golden.general);
     const stored=(await draft())[0]!.value.comments;assert.equal(stored.length,golden.rows.length+1);
     assert.equal(JSON.stringify(stored.slice(0,golden.rows.length)),JSON.stringify(golden.rows),'1068_RIG_ROWS: stored rig rows are byte-identical to main');
-    for(const value of ['biped_std','density_high']){const option=selector+` label.interview-option:has(input[value="${value}"])`;
-     await page.evaluate(`document.querySelector(${JSON.stringify(option)}).scrollIntoView({block:'center'})`);await click(page,option);}
-    await page.evaluate(`document.querySelector(${JSON.stringify(selector+' button[type=submit]')}).scrollIntoView({block:'center'})`);await click(page,selector+' button[type=submit]');
-    await wait(`!!document.querySelector(${JSON.stringify(selector+'[data-interview-answered=true]')})`,'interview saved');
-    const bytes=await readFile(join(out,'one-screen.json'),'utf8'),act=parseCommentsAct(JSON.parse(bytes));
+    // #1230: fresh picks submissions are removed; verify the restored rows on a historical act@6 through the real consumer fetch.
+    const displayed=fixture.session.ackDisplayed({publicationId:fixture.display.publication.publicationId,pageId:'rig-golden-'+language,sourceHash:source.sourceHash});
+    const seeded=seedHistoricalPicksAct(fixture.session,{
+     publicationId:fixture.display.publication.publicationId,pageId:'rig-golden-'+language,displayedNonce:displayed.displayedNonce,
+     expectedGeneration:fixture.session.status().generation,submissionId:'rig-golden-sub-'+language,
+     questionId:ask.questionId,setId:ask.setId,optionSetSha256:(source as {optionSet:{sha256:string}}).optionSet.sha256,
+     value:{questionId:ask.questionId,selections:[{itemId:'topology',optionId:'biped_std',otherText:null},{itemId:'detail_level',optionId:'density_high',otherText:null}],
+      note:'',comments:[...feedbackItemComments(golden.rows as never),{text:golden.general}]},
+    });
+    const consumer=await createJobHostPorts(fixture.session,fixture.origin).handleJobApi(new Request(fixture.origin+'/jobs/'+fixture.session.jobId+'/api',{
+     method:'POST',headers:{'Content-Type':'application/json',Accept:jobRawActMediaType,Authorization:'Bearer '+fixture.session.writerGrant().fetchCapability},
+     body:JSON.stringify({schema:JOB_API_V3_SCHEMA,jobId:fixture.session.jobId,requestId:'rig-golden-fetch-'+language,verb:'fetch-act',actId:seeded.actId}),
+    }));
+    assert.equal(consumer.status,200);
+    const bytes=await consumer.text(),act=parseCommentsAct(JSON.parse(bytes));
+    await writeFile(join(out,'one-screen.json'),bytes);
     assert.equal(JSON.stringify(act.value.comments),JSON.stringify([...feedbackItemComments(golden.rows as never),{text:golden.general}]));
     assert.equal(projectComments(act.value.comments),golden.words,'1068_RIG_LABELS: the projected rig labels are byte-identical to main');
     assert.equal(JSON.stringify(act),bytes);
-    const replayActSha256=await verifyPicksReplay(fixture,out,act);
+    const replayActSha256=jobHash(bytes);
     await shot(out,'1-rig-rows-submitted');
     const result={case:'rig-golden',subject,size:name,language,rows:golden.rows.length,words:golden.words,replayActSha256};cases.push(result);
     await writeFile(join(out,'observations.json'),JSON.stringify(result,null,2)+'\n');console.log('1068_RIG_GOLDEN_PASS '+name+' '+language);

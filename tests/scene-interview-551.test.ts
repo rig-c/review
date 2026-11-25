@@ -629,6 +629,6 @@ test('legacy transport SYNTHETIC historical issues keep full original records th
  expect(retained.answer.verbatim).toBe(answer.verbatim); expect(retained.answer.source).toBe(answer.source);
  expect(retained.answer.at).toBe(iso(DRAFT + 3000)); expect(retained.ref).toEqual(answer.choice.set);
 });
-test('standing SYNTHETIC browser probe fixture dry check uses current post_composition reader subjects through publish, ask, UI act, and close (#555)', async () => {
+test('standing SYNTHETIC browser probe fixture dry check uses current post_composition reader subjects through publish, refused picks ask and UI act, and close (#555, #1230)', async () => {
  await verifyInterviewDiagnosticsFixtureDryRun();
 });

@@ -17,12 +17,13 @@ import {jobFixture, jobInputHashes, syntheticJobParts} from './helpers/job-api-f
 import {seedHistoricalCheckpointAct} from './helpers/historical-checkpoint-act.ts';
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
 import {rigStillInput} from './helpers/job-rig-still.ts';
+import {seedHistoricalPicksAct} from './helpers/historical-picks-act.ts';
 import {useTemporaryReviewState} from './helpers/temporary-review-state.ts';
 import vendored from './fixtures/act6-projection-create-c8382ba5.json';
 useTemporaryReviewState();
 
 // #713: fresh checkpoint, signoff, parts-verdict and rig/post review-verdict acts are act@6.
-// Interview-picks joins act@6 under #646. Image-review stays act@2.
+// Interview-picks joined act@6 under #646; #1230 refuses fresh picks and keeps historical act@6 readers. Image-review stays act@2.
 
 const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => {for (const f of fixtures.splice(0)) await f.close();});
@@ -279,32 +280,33 @@ test('#1136 words-only direction retains its anchorless export and replay bytes'
   expect(await rawAct(f, saved.value.actId)).toBe(expected);
 });
 
-test('interview-picks writes act@6 with its note and comments', async () => {
+test('#1230 the interview-picks writer refuses JOB_ACT_KIND_DISABLED and a historical act@6 with its note decodes byte-identically', async () => {
   const f = await fixture(), publication = await f.publish();
   const retained = f.session.retainedSource(publication.publicationId);
-  const question = {ref: {path: 'synthetic/options.json', sha256: '2'.repeat(64)}, editable: true,
-    set: {id: 'set-one', question: 'question-one', stage: 'interview', drafted_by: 'synthetic', drafted_at: '2020-01-01T00:00:00Z',
-      asks: [{id: 'item-one', prompt: 'Choose', options: [{id: 'value-one', kind: 'value', label: 'One', effect: 'One', recommended: true}]}],
-      assembly: {rule: 'single'}}, images: [], hasParts: false} as const;
-  const withQuestion = {...retained, questions: [structuredClone(question)]} as unknown as typeof retained;
   const ask: JobPendingAsk = {askId: 'ask-one', publicationId: publication.publicationId,
     subject: {kind: 'interview-picks', questionId: 'question-one', setId: 'set-one'},
-    source: {...retained.source, optionSet: {id: 'set-one', sha256: question.ref.sha256}}, status: 'pending'};
+    source: {...retained.source, optionSet: {id: 'set-one', sha256: '2'.repeat(64)}}, status: 'pending'};
   const submission: JobUISubmission = {publicationId: publication.publicationId, askId: ask.askId, pageId: 'page',
     displayedNonce: 'nonce', expectedGeneration: 1, submissionId: 'submission', kind: 'interview-picks', value: {
       questionId: 'question-one', selections: [{itemId: 'item-one', optionId: 'value-one', otherText: null}], note: '  원문 '}};
-  const act = finalizeJobAct({jobId: f.session.jobId, submission, ask, retained: withQuestion, reviewer});
-  expect(act.schema).toBe('rig-review/act@6');
-  expect(act.value).toEqual({...submission.value, comments: []});
+  expect(() => finalizeJobAct({jobId: f.session.jobId, submission, ask, retained, reviewer})).toThrow('JOB_ACT_KIND_DISABLED');
+  const historical = {schema: 'rig-review/act@6', actId: 'historical-picks', jobId: f.session.jobId, askId: ask.askId,
+    publicationId: publication.publicationId, authority: {actor: 'human', channel: 'review-ui', reviewer}, at: '2026-11-01T00:00:00.000Z',
+    kind: 'interview-picks', source: ask.source, value: {...submission.value, comments: []}};
+  const bytes = JSON.stringify(historical);
+  expect(JSON.stringify(parseCommentsAct(JSON.parse(bytes)))).toBe(bytes);
 });
 
-test('#1136 retained picks preserve Feedback, PartsIssue and anchorless projection, export and replay bytes', async () => {
+test('#1136 / #1230 a historical picks act keeps Feedback, PartsIssue and anchorless projection, export and replay bytes while a fresh submission refuses', async () => {
   const f = await fixture();
   await joinedVerdictFixture(f.root, '2-rigging-answers');
   f.setRecordPath('project.json');
   const question = readProject(f.root).questions.find(item => item.editable)!;
   const publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'interview-picks', questionId: question.set.question, setId: question.set.id});
+  const subject = {kind: 'interview-picks', questionId: question.set.question, setId: question.set.id};
+  const asked = await (await f.call({...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+    idempotencyKey: 'refused-picks', publicationId: publication.publicationId, subject})).json();
+  expect(asked).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
   const page = await f.display(publication);
   const [vendoredIssue, vendoredNote] = vendored.cases.partsIssuesAndNote.comments;
   const camera = {zoom: 1, center: {x: 0, y: 0}, viewport: {width: 100, height: 100}};
@@ -318,21 +320,25 @@ test('#1136 retained picks preserve Feedback, PartsIssue and anchorless projecti
   const selections = question.set.asks.map(item => ({itemId: item.id,
     optionId: item.options.find(option => option.kind === 'value' && option.recommended)!.id, otherText: null}));
   const value = {questionId: question.set.question, selections, note: '  Picks 연출\r\n', comments};
-  const input = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
+  // Committed by Review 4.21.0 or earlier, before fresh picks asks refused.
+  const stored = seedHistoricalPicksAct(f.session, {...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'old-picks', value, questionId: question.set.question, setId: question.set.id, optionSetSha256: question.ref.sha256});
+  const input = {...page, askId: stored.askId, expectedGeneration: f.session.status().generation - 1,
     submissionId: 'old-picks', kind: 'interview-picks', value};
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
-  if (!saved.ok) throw new Error(saved.error.code);
-  expect(saved.value.schema).toBe('rig-review/act@6');
-  const {value: _value, ...envelope} = saved.value;
+  const {value: _value, ...envelope} = stored;
   const expected = JSON.stringify({...envelope, value});
-  const bytes = await rawAct(f, saved.value.actId);
+  const bytes = await rawAct(f, stored.actId);
   expect(bytes).toBe(expected);
+  expect(f.session.readActExport(stored.actId, false).toString()).toBe(expected);
   const parsed = parseCommentsAct(JSON.parse(bytes));
   expect(parsed.source.optionSet).toEqual({id: question.set.id, sha256: question.ref.sha256});
   expect(projectComments(parsed.value.comments)).toBe('[["slot","sleeve",3,5,null]]\n  Sleeve 그대로 \n\n' +
     vendored.cases.partsIssuesAndNote.projected);
-  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
-  expect(await rawAct(f, saved.value.actId)).toBe(bytes);
+  // The replay lookup runs before the refusal: the stored act returns unchanged; a new submission refuses by name.
+  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual({ok: true, value: stored});
+  expect(await rawAct(f, stored.actId)).toBe(bytes);
+  expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...input, submissionId: 'new-picks'})))
+    .toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
 });
 
 test('an empty or whitespace-only note has no comment form: zero comments, nothing padded', () => {

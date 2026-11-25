@@ -1178,7 +1178,7 @@ describe('thin entry compatibility', () => {
 import {joinedVerdictFixture} from './helpers/joined-verdict-fixture.ts';
 import {readProject} from '../src/interview-project.ts';
 
-test('the real host carries a genuine retained pending question and its ask-specific option binding', async () => {
+test('#1230 the real host carries a genuine retained pending question; a fresh picks ask and act refuse by name', async () => {
     const f = await realWindow();
     await joinedVerdictFixture(f.input.root, '2-rigging-answers');
     const question = readProject(f.input.root).questions.find(item => item.editable)!;
@@ -1190,22 +1190,25 @@ test('the real host carries a genuine retained pending question and its ask-spec
     const shown = metadata.questions.find((item: {set: {id: string}}) => item.set.id === question.set.id);
     expect(shown).toBeDefined();
     expect(Object.hasOwn(shown, 'answer')).toBe(false);
-    const asked = await (await f.call({...f.input.base(), verb: 'ask', expectedGeneration: f.host.session.status().generation,
+    const generation = f.host.session.status().generation;
+    const asked = await (await f.call({...f.input.base(), verb: 'ask', expectedGeneration: generation,
         idempotencyKey: 'actual-interview', publicationId: publication.publicationId,
         subject: {kind: 'interview-picks', questionId: question.set.question, setId: question.set.id}})).json();
-    expect(asked.ok).toBe(true);
-    expect(prepareJobForms(descriptor.value, [asked.value], ask => ask.askId).size).toBe(1);
-    expect(asked.value.source.optionSet).toEqual({id: question.set.id, sha256: question.ref.sha256});
+    expect(asked).toMatchObject({ok: false, error: {code: 'JOB_ASK_INVALID'}});
+    expect(f.host.session.status()).toMatchObject({generation, pending: []});
+    // A pending picks ask stored before the refusal, with the removed binder's ask-specific option binding, still prepares.
+    const historical = {askId: '00000000-0000-4000-8000-000000001230', publicationId: publication.publicationId, status: 'pending' as const,
+        subject: {kind: 'interview-picks' as const, questionId: question.set.question, setId: question.set.id},
+        source: {...publication.source, optionSet: {id: question.set.id, sha256: question.ref.sha256}}};
+    expect(prepareJobForms(descriptor.value, [historical], ask => ask.askId).size).toBe(1);
     const ack = await (await f.ui('displayed', {publicationId: publication.publicationId,
         pageId: 'interview-page', sourceHash: publication.source.sourceHash})).json();
     const before = await jobInputHashes(f.input.root);
     const selections = question.set.asks.map(item => ({itemId: item.id,
         optionId: item.options.find(option => option.kind === 'value' && option.recommended)!.id, otherText: null}));
-    const saved = await (await f.ui('acts', {...ack.value, askId: asked.value.askId, expectedGeneration: f.host.session.status().generation,
+    const saved = await (await f.ui('acts', {...ack.value, askId: historical.askId, expectedGeneration: f.host.session.status().generation,
         submissionId: 'actual-interview-save', kind: 'interview-picks', value: {questionId: question.set.question, selections, note: '  원문\n'}})).json();
-    expect(saved.ok).toBe(true);
-    expect(saved.value.value.note).toBe('  원문\n');
-    expect(saved.value.source.optionSet).toEqual(asked.value.source.optionSet);
+    expect(saved).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
     expect(await jobInputHashes(f.input.root)).toEqual(before);
 });
 
@@ -1811,7 +1814,7 @@ describe('standalone event subscription lifetime', () => {
                 }
             }
 
-            // formFor submit catch path (JOB_ACT_INVALID fallback)
+            // #1229 / #1230: all formFor kinds are disabled; verify refusal on signoff, checkpoint and interview-picks plus submission fallback formatting.
             const display = fixturePublication(1);
             const act = fixtureAct('interview-picks');
             Object.assign(display, {publication: {...display.publication, source: act.source}});
@@ -1820,43 +1823,16 @@ describe('standalone event subscription lifetime', () => {
                 source: act.source, status: 'pending',
                 subject: {kind: 'interview-picks', questionId: 'framing', setId: 'set-1'},
             };
-            const makeEl = (tag: string, key?: string): any => {
-                const children: any[] = [];
-                return {
-                    tagName: tag.toUpperCase(), dataset: key ? {jobText: key} : {}, textContent: key ? t(key) : '',
-                    title: '', value: '', checked: true, type: '', name: '', htmlFor: '', id: '', hidden: false,
-                    disabled: false, classList: {add() {}, toggle() {}}, style: {},
-                    setAttribute() {}, removeAttribute() {}, getAttribute() { return null; }, addEventListener() {}, dispatchEvent() { return true; },
-                    reportValidity() { return true; },
-                    append(...nodes: any[]) { children.push(...nodes); },
-                    prepend(...nodes: any[]) { children.unshift(...nodes); },
-                    replaceChildren(...nodes: any[]) { children.splice(0, children.length, ...nodes); },
-                    querySelector(selector: string) {
-                        if (selector.startsWith('textarea[name="note"]')) return {value: ''};
-                        if (selector.includes(':checked')) return {value: 'opt-1'};
-                        return null;
-                    },
-                    querySelectorAll() { return []; },
-                    children,
-                };
-            };
-            let submitFailure: Error = new RangeError('boom-submit');
+            const makeEl = (tag: string, key?: string): any => ({
+                tagName: tag.toUpperCase(), dataset: key ? {jobText: key} : {}, textContent: key ? t(key) : '',
+                title: '', value: '', checked: true, type: '', name: '', htmlFor: '', id: '', hidden: false,
+                disabled: false, classList: {add() {}, toggle() {}}, style: {},
+                setAttribute() {}, removeAttribute() {}, getAttribute() { return null; }, addEventListener() {}, dispatchEvent() { return true; },
+                reportValidity() { return true; }, append() {}, prepend() {}, replaceChildren() {},
+                querySelector() { return null; }, querySelectorAll() { return []; }, children: [],
+            });
             const helpers = prepareJobForms.helpers(makeEl, t);
-            const inspection = {
-                display,
-                metadata: {},
-                interview: {
-                    questions: [{
-                        editable: true, hasParts: false, images: [],
-                        ref: {path: 'interview/options/framing.json', sha256: act.source.optionSet!.sha256},
-                        set: {
-                            schema: 'rig-create/interview-options@1', id: 'set-1', question: 'framing', stage: 'interview',
-                            drafted_by: 'ai', drafted_at: '2026-11-01T00:00:00.000Z', assembly: {rule: 'single'},
-                            asks: [{id: 'item-1', prompt: 'Framing?', options: [{id: 'opt-1', kind: 'value', label: 'Wide', effect: 'Wide', recommended: true}]}],
-                        },
-                    }],
-                },
-            } as unknown as JobPreparedInspection;
+            const inspection = {display, metadata: {}} as unknown as JobPreparedInspection;
             const formDeps = {
                 node: makeEl, translate: t,
                 helpers: {...helpers, assertJobAskSource() {}},
@@ -1868,35 +1844,32 @@ describe('standalone event subscription lifetime', () => {
                         receipt: {publicationId: display.publication.publicationId, pageId: 'page-941', displayedNonce: 'nonce'},
                         preparing: false, closed: false, generation: 1, pending: [ask],
                     }),
-                    submit: async () => { throw submitFailure; },
+                    submit: async () => ({ok: false as const, error: {code: 'JOB_ACT_INVALID' as const, message: 'JOB_ACT_INVALID'}}),
                 },
             };
-            expect(() => prepareJobForms.formFor(
-                {...ask, subject: {kind: 'signoff', stage: 'plan-approved'}},
-                inspection,
-                formDeps,
-            )).toThrow('JOB_ACT_KIND_DISABLED');
-            expect(() => prepareJobForms.formFor(
-                {...ask, subject: {kind: 'checkpoint', checkpointId: 'silhouette'}},
-                inspection,
-                formDeps,
-            )).toThrow('JOB_ACT_KIND_DISABLED');
-            const entry = prepareJobForms.formFor(ask, inspection, formDeps);
-            const statusNode = (entry.form as any).children.at(-1);
+            for (const disabledSubject of [
+                {kind: 'signoff' as const, stage: 'plan-approved' as const},
+                {kind: 'checkpoint' as const, checkpointId: 'silhouette'},
+                ask.subject,
+            ]) {
+                expect(() => prepareJobForms.formFor({...ask, subject: disabledSubject}, inspection, formDeps)).toThrow('JOB_ACT_KIND_DISABLED');
+            }
+            const submitFailure = new RangeError('boom-submit');
             calls.length = 0;
-            await (entry.form as any).onsubmit({preventDefault() {}});
-            expect(statusNode.title).toContain('JOB_ACT_INVALID');
-            expect(statusNode.textContent).toBe(jobSubmissionRefusal(submitFailure).text);
+            expect(jobWindowRefusal(submitFailure, 'JOB_ACT_INVALID')).toBe(t('JOB_ACT_INVALID'));
             expect(calls).toEqual([['[job-window]', 'JOB_ACT_INVALID', submitFailure]]);
             expect((calls[0]![2] as Error).name).toBe('RangeError');
             expect((calls[0]![2] as Error).message).toBe('boom-submit');
+            expect(jobSubmissionRefusal(submitFailure)).toMatchObject({
+                code: 'JOB_ACT_INVALID',
+                text: t('Review was not submitted: {0}', [t('job.submit.refused')]),
+            });
 
             calls.length = 0;
-            submitFailure = new Error('JOB_RECORD_MOVED');
-            await (entry.form as any).onsubmit({preventDefault() {}});
-            expect(statusNode.title).toContain('JOB_RECORD_MOVED');
-            expect(statusNode.textContent).toBe(jobSubmissionRefusal(submitFailure).text);
+            const movedFailure = new Error('JOB_RECORD_MOVED');
+            expect(jobWindowRefusal(movedFailure, 'JOB_ACT_INVALID')).toBe(t('JOB_RECORD_MOVED'));
             expect(calls).toEqual([]);
+            expect(jobSubmissionRefusal(movedFailure).title).toContain('JOB_RECORD_MOVED');
         } finally {
             console.error = originalError;
         }
@@ -1921,7 +1894,6 @@ import {RigOverlays} from '../web/rig-overlays.ts';
 import {inspectionViewSwitch,labelledControl, createViewControls, bindLayerShortcuts, describeLayerToggles, layerShortcuts, createRigLayerControls} from '../web/view-controls.ts';
 import {mountWorkspaceShell} from '../web/workspace-ui.ts';
 import {SENTINELS} from '../web/parts-render.ts';
-import {createInterviewForm, interviewAskGroup, interviewQuestionList, jobInterviewValue} from '../web/interview-panel.ts';
 import {JOB_PLAN_TEXT_FIELDS, type JobPlanTextProjection} from '../src/job-contract.ts';
 
 describe('#559 continuous Rig motion transport and job forms', () => {

@@ -358,7 +358,7 @@ test('ordinary canonical Review work-root publishing needs no Create adapter', a
   expect(publication.source.projectHash).toBeNull();
 });
 
-test('actual readProject pending questions publish, ask and save an act while optional answer absence stays persistable', async () => {
+test('#1230 actual readProject pending questions publish while optional answer absence stays persistable; a fresh picks ask and submission refuse by name', async () => {
   const f = await fixture();
   await joinedVerdictFixture(f.root, '2-rigging-answers');
   const opened = readProject(f.root), pending = opened.questions.find(question => question.editable)!;
@@ -380,20 +380,18 @@ test('actual readProject pending questions publish, ask and save an act while op
   const savedPending = retained.questions.find(question => question.set.id === pending.set.id)!;
   expect(Object.hasOwn(savedPending, 'answer')).toBe(false);
   expect(retained.questions.find(question => question.set.id === historical.set.id)?.answer).toEqual(historical.answer);
-  const ask = await f.ask(published.value, { kind: 'interview-picks', questionId: pending.set.question, setId: pending.set.id });
+  const asked = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation,
+    idempotencyKey: 'real-pending-ask', publicationId: published.value.publicationId,
+    subject: { kind: 'interview-picks', questionId: pending.set.question, setId: pending.set.id } })).json();
+  expect(asked).toMatchObject({ ok: false, error: { code: 'JOB_ASK_INVALID' } });
   const page = await f.display(published.value);
   const selections = pending.set.asks.map(item => ({ itemId: item.id,
     optionId: item.options.find(option => option.kind === 'value' && option.recommended)!.id, otherText: null }));
   const note = '실제 pending 원문\nunchanged';
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: ask.askId,
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: '00000000-0000-4000-8000-000000001230',
     expectedGeneration: f.session.status().generation, submissionId: 'real-pending-save',
     kind: 'interview-picks', value: { questionId: pending.set.question, selections, note } }));
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error(saved.error.code);
-  expect(saved.value.kind).toBe('interview-picks');
-  expect(saved.value.value).toEqual({ questionId: pending.set.question, selections, note, comments: [] });
-  expect(saved.value.source.optionSet).toEqual({ id: pending.set.id, sha256: pending.ref.sha256 });
-  expect(saved.value.source.projectHash).toBe(opened.hash);
+  expect(saved).toMatchObject({ ok: false, error: { code: 'JOB_ACT_KIND_DISABLED' } });
   expect(await jobInputHashes(f.root)).toEqual(before);
 });
 

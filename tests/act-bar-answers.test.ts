@@ -14,7 +14,7 @@ function harness(subjects:{kind:string;stage?:string}[],count=0,conflict=false){
  let state:{kind:string;text:string}|null=null;const rigInspector={act:{hidden:true},actBar:{saveState:()=>state,setSaveState:(value:{kind:string;text:string})=>{state=value;}}};
  const calls:string[]=[],session={feedbackWarnings:[] as {id:string}[],status:'pending'};
  const env={host:{pendingSubjects:()=>subjects,unavailable:false,canSubmitMeshEdits:()=>false,jobClosed:()=>false},pendingAnswers:subjects,firstPublicationPrompt:false,jobProgress:null as object|null,saving:false,draftConflict:conflict,actReadOnly:null as string|null,readOnly:null as string|null,
-  questionForms:subjects.some(subject=>subject.kind==='interview-picks')?[{dataset:{},querySelector:()=>({disabled:false}),querySelectorAll:()=>[submit]}]:[],session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,requestChangesReason,rigAsk,
+  session,rigInspector,recordComments:[],liveIssueCount:()=>count,partsAnswerBlocked:()=>false,requestChanges,requestChangesReason,rigAsk,
   button:()=>save,select:()=>select,document:{querySelector:()=>label},el:()=>({classList:{contains:()=>false}}),
   setSourceText:(node:any,text:string)=>node.textContent=text,setSourceAttribute:(node:any,key:string,value:string)=>node[key]=value,
   verdictSubmit:()=>calls.push(session.status),MouseEvent:class{constructor(public type:string){}}};
@@ -63,17 +63,14 @@ test('#1159 shows the existing reason only while missing changes blocks a visibl
  expect(parts.requestChanges.disabled).toBe(true);
  expect(parts.requestChangesReason.hidden).toBe(true);
 });
-// #1229: checkpoint answer opener retired; interview-picks is the sole modal/panel opener.
-test('#809 interview-picks has one answer opener and no redundant submit',()=>{
- const h=harness([{kind:'interview-picks'}]);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(false);expect(h.rigAsk.disabled).toBe(false);expect(h.rigAsk.classList.values.has('primary')).toBe(true);
- const mixed=harness([{kind:'review-verdict',stage:'rig-review'},{kind:'interview-picks'}]);expect(mixed.rigAsk.hidden).toBe(true);expect(mixed.submit.disabled).toBe(true);
-});
-// #1229: converted from #986 mixed Question + checkpoint opener check — checkpoint opens no control while Question keeps Answer….
-test('#986 and #1229 mixed Question and legacy checkpoint pending keeps only the Question Answer… opener',()=>{
- const h=harness([{kind:'interview-picks'},{kind:'checkpoint'}]);
- expect(h.rigAsk).toMatchObject({hidden:false,disabled:false,textContent:'Answer…'});
- expect(h.rigAsk.classList.values.has('primary')).toBe(true);
- expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);
+// #1229 / #1230: both checkpoint and interview-picks openers are retired; mixed legacy subjects leave only verdict actions visible.
+test('#809 and #986 retired interview-picks and checkpoint subjects open no dialog opener alongside or without a verdict',()=>{
+ for(const kind of ['interview-picks','checkpoint']){
+  const h=harness([{kind}]);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);expect(h.rigAsk.classList.values.has('primary')).toBe(false);
+  const mixed=harness([{kind:'review-verdict',stage:'rig-review'},{kind}]);expect(mixed.rigAsk.hidden).toBe(true);expect(mixed.save.hidden).toBe(false);expect(mixed.requestChanges.hidden).toBe(false);
+ }
+ const both=harness([{kind:'interview-picks'},{kind:'checkpoint'}]);
+ expect(both.rigAsk.hidden).toBe(true);expect(both.save.hidden).toBe(true);expect(both.requestChanges.hidden).toBe(true);
 });
 test('#809 no pending ask has no emphasised action',()=>{
  const h=harness([]);expect(h.save.hidden).toBe(true);expect(h.rigAsk.hidden).toBe(true);expect(h.save.classList.values.size+h.rigAsk.classList.values.size).toBe(0);expect(h.rigInspector.act.hidden).toBe(true);
@@ -84,27 +81,26 @@ test('#987 progress reveals the act row with the existing actions hidden',()=>{
  expect([h.save,h.requestChanges,h.rigAsk].every(control=>control.hidden)).toBe(true);
  h.env.jobProgress=null;h.render();expect(h.rigInspector.act.hidden).toBe(true);
 });
-// #1229: checkpoint submitting controls retired; verdict and interview-picks controls remain blocked on restore conflict.
-for(const kind of ['review-verdict','parts-verdict','interview-picks'])test('#825 restore conflict blocks all '+kind+' submitting controls',()=>{
+// #1229 / #1230: checkpoint and interview-picks submitting controls retired; verdict controls remain blocked on restore conflict.
+for(const kind of ['review-verdict','parts-verdict'])test('#825 restore conflict blocks all '+kind+' submitting controls',()=>{
  const h=harness([{kind}],3,true);
- if(kind.endsWith('verdict')){expect(h.rigAsk.hidden).toBe(true);expect(h.save.disabled).toBe(true);expect(h.requestChanges.disabled).toBe(true);}
- else{expect(h.rigAsk.disabled).toBe(true);expect(h.submit.disabled).toBe(true);}
+ expect(h.rigAsk.hidden).toBe(true);expect(h.save.disabled).toBe(true);expect(h.requestChanges.disabled).toBe(true);
 });
 
-test('#825 draft failure leads the live job state; saved answers use the act-bar saved label',()=>{
+test('#825 draft failure leads the live job state; saved sessions use the act-bar saved label',()=>{
  const begin=main.indexOf('function renderDraftState(): void {'),end=main.indexOf('\nfunction renderProvenance',begin);
  const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end));
  const states:any[]=[];
- const env={host:{reviewState:()=> 'Reviewing · 0 issues'},liveIssueCount:()=>0,saving:false,draftConflict:true,draftStatus:'Saved local draft was not restored: fixture.',answerSaved:false,actReadOnly:null,dirty:false,
+ const env={host:{reviewState:()=> 'Reviewing · 0 issues'},liveIssueCount:()=>0,saving:false,draftConflict:true,draftStatus:'Saved local draft was not restored: fixture.',actReadOnly:null,dirty:false,partsOnly:false,verdictSubmit:null,session:{updatedAt:'2026-11-20T00:00:00.000Z',feedbackWarnings:[]},
   renderAnswerControls(){},rigInspector:{actBar:{setSaveState:(state:any)=>states.push(state)}}};
  const render=new Function('env',`with(env){${script};return renderDraftState;}`)(env);render();
  expect(states.at(-1).kind).toBe('failed');expect(states.at(-1).text).toBe('Saved draft could not be restored. Your draft has not been deleted. Download or discard it before submitting.');
  env.draftConflict=false;env.draftStatus='Local draft could not be saved: Draft exceeds 512 KiB. Export feedback before leaving.';render();expect(states.at(-1).text).toBe(env.draftStatus);
- env.answerSaved=true;render();expect(states.at(-1).text).toBe('Answer saved');
+ (env as any).draftStatus=null;(env as any).host=null;render();expect(states.at(-1)).toEqual({kind:'saved',text:'Submitted'});
 });
 
 test('#833 live act reveals only after controls render and initialises the shared save state once',()=>{
- const h=harness([{kind:'interview-picks'}]);expect(h.rigInspector.act.hidden).toBe(false);
+ const h=harness([{kind:'review-verdict',stage:'rig-review'}]);expect(h.rigInspector.act.hidden).toBe(false);
  const state=h.rigInspector.actBar.saveState();expect(state).toEqual({kind:'unsaved',text:'Not submitted'});
  h.render();expect(h.rigInspector.actBar.saveState()).toBe(state);
 });
@@ -132,31 +128,6 @@ for(const item of [
  expect(legacy.map(control=>control.hidden)).toEqual(item.reveal&&!item.rendered?[true,true,true]:[false,false,false]);
 });
 
-test('#839 answered Question readback does not reveal completed answer controls or the act row',()=>{
- const h=harness([]);(h.env as any).questionForms=[{dataset:{interviewAnswered:'true'},querySelector:()=>({disabled:true}),querySelectorAll:()=>[]}];h.render();
- expect(h.rigAsk.hidden).toBe(true);expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);expect(h.rigAsk.classList.values.has('primary')).toBe(false);expect(h.rigInspector.act.hidden).toBe(true);
-});
-
-
-for(const sample of [
- {name:'saved interview-only',record:true,subjects:[],saved:true,expected:'Answer saved'},
- {name:'pending interview',record:true,subjects:[{kind:'interview-picks'}],saved:false,expected:'Not submitted'},
- {name:'rig verdict after an interview answer',record:false,subjects:[{kind:'review-verdict',stage:'rig-review'}],saved:true,expected:'Not submitted'},
- {name:'parts verdict after an interview answer',record:false,subjects:[{kind:'parts-verdict'}],saved:true,expected:'Not submitted'},
- {name:'record host with a pending verdict',record:true,subjects:[{kind:'review-verdict',stage:'rig-review'}],saved:true,expected:'Not submitted'},
- {name:'saved interview with a pending checkpoint',record:true,subjects:[{kind:'checkpoint'}],saved:true,expected:'Not submitted'},
- {name:'saved interview with an act-row refusal',record:true,subjects:[],saved:true,error:true,expected:'Not submitted'},
-])test('#851 footer '+sample.name+' reads the production footer node',()=>{
- const begin=main.indexOf('function renderDraftState(): void {'),end=main.indexOf('\nfunction renderProvenance',begin);
- const messageBegin=main.indexOf('function message(value:'),messageEnd=main.indexOf('\nasync function api',messageBegin);
- const script=new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(messageBegin,messageEnd)+'\n'+main.slice(begin,end));
- const node=(textContent:string,error=false)=>({textContent,title:'',classList:{error,contains(name:string){return name==='error'&&this.error;},toggle(name:string,on:boolean){if(name==='error')this.error=on;}}});
- const nodes={message:node('Not submitted'),'review-message':node(sample.error?'JOB_VISUAL_UNAVAILABLE':'',sample.error),dirty:node('Not submitted')};
- const env={host:{...(sample.record?{record:{hasPicture:true}}:{}),pendingSubjects:()=>sample.subjects,reviewState:()=> 'Reviewing'},pendingAnswers:sample.subjects,liveIssueCount:()=>0,saving:false,draftConflict:false,draftStatus:null,answerSaved:sample.saved,actReadOnly:null,dirty:false,renderAnswerControls(){},rigInspector:{actBar:{setSaveState(state:{text:string}){nodes.dirty.textContent=state.text;}},act:{hidden:false}},sourceTextContent:(node:{textContent:string})=>node.textContent,el:(id:keyof typeof nodes)=>nodes[id],text:(id:keyof typeof nodes,value:string)=>{nodes[id].textContent=value;}};
- const render=new Function('env',`with(env){${script};return renderDraftState;}`)(env);render();
- const footerText=()=>nodes.message.textContent;expect(footerText()).toBe(sample.expected);
-});
-
 // A first publication with no ask must not invent an answer or emphasise a verdict.
 test('#904 first publication keeps its waiting row until an actual subject arrives',()=>{
  const h=harness([]);h.env.firstPublicationPrompt=true;h.render();
@@ -164,8 +135,8 @@ test('#904 first publication keeps its waiting row until an actual subject arriv
  expect(h.save.classList.values.has('primary')).toBe(false);expect(h.requestChanges.classList.values.has('primary')).toBe(false);
 });
 
-// #1229: checkpoint answer opener retired; synchronous reveal covers verdict and interview-picks labels.
-for(const kind of ['review-verdict','parts-verdict','interview-picks'])test('#904 synchronous reveal prepares '+kind+' labels and keeps pending controls hidden under the waiting prompt',()=>{
+// #1229 / #1230: checkpoint and interview-picks answer openers retired; synchronous reveal covers verdict labels.
+for(const kind of ['review-verdict','parts-verdict'])test('#904 synchronous reveal prepares '+kind+' labels and keeps pending controls hidden under the waiting prompt',()=>{
  const h=harness([{kind,stage:'rig-review'}]);h.rigInspector.act.hidden=false;
  const controls=[['save',h.save],['request-changes',h.requestChanges],['workspace-pending-ask',h.rigAsk]] as const;
  const reveals:{id:string;text:string;disabled:boolean}[]=[];
@@ -179,9 +150,7 @@ for(const kind of ['review-verdict','parts-verdict','interview-picks'])test('#90
  // Execute the real renderer from the legacy initial labels after the actual subject has been written.
  h.save.textContent='Submit review';h.requestChanges.textContent='';h.rigAsk.textContent='';
  h.env.firstPublicationPrompt=false;h.render();
- const verdict=kind.endsWith('verdict');
- expect(reveals).toEqual(verdict?[{id:'save',text:'Approve',disabled:false},{id:'request-changes',text:'Request changes',disabled:true}]:
-  [{id:'workspace-pending-ask',text:'Answer…',disabled:false}]);
+ expect(reveals).toEqual([{id:'save',text:'Approve',disabled:false},{id:'request-changes',text:'Request changes',disabled:true}]);
 });
 
 test('#1228 and #1229 pending signoff and checkpoint subjects open no answer control and show neither retired opener nor retired headline',()=>{
@@ -203,4 +172,22 @@ test('#1228 and #1229 pending signoff and checkpoint subjects open no answer con
  renderSubjects([{kind:'signoff',stage:'plan-approved'}]);
  renderSubjects([{kind:'checkpoint',checkpointId:'step-one'}]);
  expect(headlines).toEqual(['Nothing is waiting for your answer.','Nothing is waiting for your answer.']);
+});
+
+test('#1230 a pending interview-picks subject opens no answer control and shows neither the removed opener nor the question headline',()=>{
+ const h=harness([{kind:'interview-picks'}]);
+ expect(h.save.hidden).toBe(true);expect(h.requestChanges.hidden).toBe(true);
+ expect(h.rigAsk.hidden).toBe(true);
+ expect(h.rigAsk.textContent).not.toBe('Answer'+'\u2026');
+ expect(h.rigInspector.actBar.saveState()).toBeNull();
+ // Once isPendingOwnerAsk filters interview-picks out of pendingSubjects(), the act row stays hidden without a record prompt.
+ const filtered=harness([]);
+ expect(filtered.rigInspector.act.hidden).toBe(true);
+ const begin=main.indexOf('function renderPendingSubjects('),end=main.indexOf('\nfunction syncJobActRow(',begin);
+ const headlines:string[]=[];
+ const scope={partsSubject:null,partsOnly:false,host:null,pendingAnswers:[] as {kind:string;stage?:string}[],firstPublicationPrompt:false,
+  renderAskHeadline:(value:string)=>headlines.push(value),renderDraftState(){}};
+ const renderSubjects=new Function('scope',`with(scope){${new Bun.Transpiler({loader:'ts'}).transformSync(main.slice(begin,end))};return renderPendingSubjects;}`)(scope);
+ renderSubjects([{kind:'interview-picks'}]);
+ expect(headlines).toEqual(['Nothing is waiting for your answer.']);
 });

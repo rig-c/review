@@ -8,10 +8,8 @@ import {enCatalog} from '../web/catalog-en.ts';
 import {koCatalog} from '../web/catalog-ko.ts';
 import {scriptedJobWindowFixture} from './helpers/job-window-fixture.ts';
 import {recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
-import {interviewOpenFixture} from './helpers/interview-open-fixture.ts';
 import {jobFixture} from './helpers/job-api-fixture.ts';
 import {startServer} from '../src/server.ts';
-import {joinProject} from '../src/joined-project.ts';
 import {loadReview} from '../src/manifest.ts';
 import {launchCdpSession,buildTwentySlotModel,type InputCdpSession} from './parts-explorer-browser.ts';
 import {clickPartsViewControl as click} from './helpers/parts-view-shots.ts';
@@ -401,9 +399,9 @@ async function runCase(kind:'rig'|'direction'|'parts',lang:'en'|'ko'){
  }
 }
 
-/** Record --plan, interview backdrops and standalone package/--question reuse the shipped shell.
- * #1229: removed checkpoint #job-record-asks residue checks because the checkpoint Pass/Fail form and #job-record-asks section are retired. */
-async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'interview-standalone'|'standalone'|'standalone-many',lang:'en'|'ko'){
+/** Record --plan, option-set backdrops and standalone package reuse the shipped shell.
+ * #1229 / #1230: both #job-record-asks and #workspace-interview-answer are retired with their forms. */
+async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'standalone'|'standalone-many',lang:'en'|'ko'){
  const profile=await mkdtemp(join(tmpdir(),'review838-shared-'));
  let page:InputCdpSession|undefined,close:(()=>Promise<void>)|undefined;
  try{
@@ -413,11 +411,8 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
    if(kind==='standalone-many')await writeFile(join(f.root,'out/skeleton.model.json'),await buildTwentySlotModel());
    const capability='b'.repeat(64),server=await startServer(await loadReview(join(f.root,'out')),{port:0,capability,stateDir:f.state});
    close=async()=>{server.stop(true);await f.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
-  }else if(kind==='interview-standalone'){
-   const f=await interviewOpenFixture(2),capability='a'.repeat(64),server=await startServer(null,{port:0,capability,joined:joinProject(null,f.inputs.project),stateDir:f.stateDir});
-   close=async()=>{server.stop(true);await f.close();};url=`http://127.0.0.1:${server.port}/#cap=${capability}`;
   }else{
-   const f=await recordScreenFixture(kind==='plan'?'signoff':'interview-picks',kind==='interview-rig'?true:kind==='interview-parts'?'parts':false);
+   const f=await recordScreenFixture(kind==='plan'?'signoff':'option-set',kind==='interview-rig'?true:kind==='interview-parts'?'parts':false);
    close=()=>f.close();url=f.ownerUrl;
   }
   const target=new URL(url);target.searchParams.set('lang',lang);
@@ -426,17 +421,10 @@ async function runSharedCase(kind:'plan'|'interview-rig'|'interview-parts'|'inte
    await page.setViewport(width,height);await page.goto(target.href,lang);
    await wait(page,kind.startsWith('standalone')?`!!document.querySelector('#rig-root canvas')`:`document.body.dataset.ready==='true'&&!document.body.inert`,kind+' ready');
    if(kind.startsWith('interview')){
-    await wait(page,`!!document.querySelector('#workspace-interview-answer .interview-grid fieldset:not(:disabled)')&&!!document.querySelector('#workspace-communication:not([hidden]) #workspace-interview-answer:not([hidden])')`,kind+' Question section');
-    assert.equal(await page.evaluate<number>(`document.querySelectorAll('#workspace-interview-answer form.interview-answer').length`),1);
-    assert.equal(await page.evaluate<number>(`document.querySelectorAll('[id="job-record-asks"]').length`),0);
+    await wait(page,`!!document.querySelector('#workspace-communication:not([hidden]) #inspector-feedback:not([hidden])')&&!document.querySelector('#workspace-interview-answer')&&document.querySelector('#reference-content img')?.naturalWidth>0&&!!document.querySelector('#view-menu [data-view^="interview-image-"]')&&!document.querySelector('#send-comments')?.hidden`,kind+' option-set comments');
+    assert.equal(await page.evaluate<number>(`document.querySelectorAll('#workspace-interview-answer,form.interview-answer,[id="job-record-asks"]').length`),0);
     const catalog=lang==='en'?enCatalog:koCatalog;
-    assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-interview-answer .review-dialog-header h2').textContent`),catalog['Question']);
-    if(kind==='interview-standalone'){
-     const panel:{left:number;top:number;right:number;bottom:number;width:number;height:number}=await page.evaluate(`document.querySelector('#workspace-interview-answer').getBoundingClientRect().toJSON()`);
-     // #1041: the question is a section of the scrolling communication column; its top edge shows inside the viewport.
-     assert.ok(panel.width>0&&panel.height>0&&panel.left>=0&&panel.top>=0&&panel.right<=width&&panel.top<height);
-     assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-pending-ask').textContent`),catalog['Answer…']);
-    }
+    assert.equal(await page.evaluate<string>(`document.querySelector('#workspace-ask-headline').textContent`),catalog["We're looking at the work together. Leave your thoughts as comments."]);
     await writeFile(join(output,`${kind}-${lang}-${width}x${height}-question.png`),await page.screenshot());
    }
    if(kind==='standalone-many'){
@@ -498,7 +486,7 @@ for(const lang of ['en','ko'] as const){
  for(const kind of ['rig','direction','parts'] as const){
   await runCase(kind,lang);
  }
- for(const kind of ['plan','interview-rig','interview-parts','interview-standalone','standalone','standalone-many'] as const)await runSharedCase(kind,lang);
+ for(const kind of ['plan','interview-rig','interview-parts','standalone','standalone-many'] as const)await runSharedCase(kind,lang);
 }
 await writeFile(join(output,'observations.json'),JSON.stringify(observations,null,2)+'\n');
 console.log(`BOTTOM_TABS_838_OK cases=${observations.length}`);

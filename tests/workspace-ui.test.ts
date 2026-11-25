@@ -465,7 +465,7 @@ for(const live of [false,true])test('#840 '+(live?'live row':'standalone heading
    headline.hidden=false;save.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);expect(save.hidden).toBe(false);
   }
   mounted.act.hidden=false;mounted.syncActRow();expect(dirtyState.hidden).toBe(live);expect(draftState.hidden).toBe(live);expect(draftRecovery.hidden).toBe(live);
-  mounted.actBar.setSaveState({kind:'saved',text:'Answer saved'});expect((live?dirtyState:draftState).textContent).toBe('Answer saved');
+  mounted.actBar.setSaveState({kind:'saved',text:'Submitted'});expect((live?dirtyState:draftState).textContent).toBe('Submitted');
   if(live){expect([...mounted.strip.parentElement!.children]).toEqual([mounted.strip,mounted.collapse]);mounted.act.hidden=true;mounted.syncActRow();expect(actRow.hidden).toBe(true);expect(dirtyState.hidden).toBe(false);mounted.act.hidden=false;mounted.syncActRow();expect(actRow.hidden).toBe(false);}
   expect(new Set(owners).size).toBe(2);expect([...mounted.strip.children]).toEqual([]);expect(mounted.comments.button.hidden).toBe(true);expect(mounted.comments.panel.getAttribute('aria-labelledby')).toBe('stage-comment');expect(document.getElementById('proposal-panel')!.children[0]!.id).toBe('comments-list-host');
   for(const [index,tab] of row.tabs.entries()){
@@ -638,10 +638,10 @@ test('#809 pending ask heading uses full subject sentences in EN/KO and names th
  const raw={text:'',hidden:false,removeAttribute(){}};
  let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','renderDraftState','t','setSourceAttribute','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null,askSentence="",jobProgress=null,progressTimer;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},()=>{statusRefreshes++;},t,()=>{});
  render([]);expect(raw.hidden).toBe(false);expect(t(raw.text,undefined,'en')).toBe('Nothing is waiting for your answer.');expect(t(raw.text,undefined,'ko')).toBe('답변을 기다리는 요청이 없어요.');
- // #1229: checkpoint asks are retired and produce no ask sentence; active subjects still join with full EN/KO sentences.
- render([{kind:'review-verdict',stage:'rig-review'},{kind:'interview-picks'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
- expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Answer these questions.');
- expect(t(raw.text,undefined,'ko')).toBe('리그와 모션을 확인해 주세요. · 이 질문에 답해 주세요.');
+ // #1229 / #1230: checkpoint and interview-picks asks are retired and produce no ask sentence; active verdict subjects join with full EN/KO sentences.
+ render([{kind:'review-verdict',stage:'rig-review'},{kind:'parts-verdict'},{kind:'interview-picks'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
+ expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Check the parts.');
+ expect(t(raw.text,undefined,'ko')).toBe('리그와 모션을 확인해 주세요. · 파츠를 확인해 주세요.');
  render([]);expect(raw.hidden).toBe(false);expect(raw.text).toBe('Nothing is waiting for your answer.');expect(statusRefreshes).toBe(3);
 });
 
@@ -709,8 +709,8 @@ for(const language of ['en','ko'] as const)test('#987 ticks the current age and 
  now+=60000;activeTick?.();
  expect(parts).toBe(quietParts);
  expect(read()).toBe(t('job.progress.quiet',[2,phase],language));
- render.renderPendingSubjects([{kind:'interview-picks'}]);
- expect(read()).toBe(catalog['Answer these questions.']);
+ render.renderPendingSubjects([{kind:'review-verdict',stage:'rig-review'}]);
+ expect(read()).toBe(catalog['Check the rig and motion.']);
  expect(attributes.has('translate')).toBe(false);
  expect(activeTick).toBeUndefined();
 });
