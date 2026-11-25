@@ -395,7 +395,9 @@ function nextValue(value: unknown, request: JobNextRequest | JobNextRequestV3): 
           break;
         }
         const act = parseConsumerAct(Buffer.from(JSON.stringify(event.act)), request.jobId, actId);
-        if (!(JOB_ENABLED_ACT_KINDS as readonly string[]).includes(act.kind)) throw new JobError('JOB_ACT_INVALID');
+        // #1226: an act@10 answers no ask, so its kind is not an ask kind; its decoder already proved the shape.
+        const commentOnly = act.schema === JOB_COMMENT_ONLY_ACT_SCHEMA && act.kind === 'comments';
+        if (!commentOnly && !(JOB_ENABLED_ACT_KINDS as readonly string[]).includes(act.kind)) throw new JobError('JOB_ACT_INVALID');
         break;
       }
       case 'published':

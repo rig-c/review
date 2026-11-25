@@ -92,6 +92,22 @@ test('#1226 a person sends comments with no ask; next and fetch-act deliver the 
   } finally { await f.close(); }
 });
 
+test('#1226 the job next CLI delivers an act@10 event (--until act and plain next)', async () => {
+  const {f, submit} = await live();
+  try {
+    const saved = await submit({comments: [{text: 'general'}]});
+    if (!saved.ok) throw new Error(saved.error.code);
+    const locator = f.origin + '/jobs/' + f.session.jobId;
+    for (const args of [['next', locator, '--wait-ms', '0'], ['next', locator, '--until', 'act', '--wait-ms', '100']]) {
+      const lines: string[] = [];
+      await jobCommand(args, {agentCapability: f.credentials.agent, write: line => lines.push(line),
+        fetch: ((url, init) => f.ports.handleJobApi(new Request(url, init))) as typeof fetch});
+      const events = JSON.parse(lines.at(-1)!).value.events as {type: string; act?: unknown}[];
+      expect(events.filter(event => event.type === 'act').map(event => event.act)).toEqual([saved.value]);
+    }
+  } finally { await f.close(); }
+});
+
 test('#1226 a pending ask stays pending when comments are sent beside it', async () => {
   const {f, publication, submit} = await live();
   try {
