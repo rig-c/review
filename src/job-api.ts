@@ -669,7 +669,8 @@ function parsePlanSubjects(
   });
 }
 
-/** One `interview-picks` subject per published set, in set order. Two subjects for one set refuse by name. */
+/** No subject (#1230: the sets are published as pictures to look at and discuss), or the historical list of one
+ * `interview-picks` subject per published set, in set order. Two subjects for one set refuse by name. */
 function parseOptionSubjects(
   rawSubjects: unknown,
   selection: RecordOptionResult,
@@ -679,6 +680,7 @@ function parseOptionSubjects(
   if (!Array.isArray(rawSubjects) || rawSubjects.length > jobAskBatchLimit) {
     throw new JobError(code);
   }
+  if (rawSubjects.length === 0) return [];
   const seen = new Set<string>();
   const subjects = rawSubjects.map(raw => {
     const parsed = asCode(() => parseRecordSubject(raw), code);
@@ -828,8 +830,11 @@ export function parseRecordPublishedContext(
 export function assertEqualRecordContexts(
   inventory: OptionContext | PlanContext,
   retained: OptionContext | PlanContext,
+  /** #1230: an option-set publication may declare no subject, so the published selection names its sets. */
+  published?: RecordResult,
 ): void {
   const inferResult = (ctx: OptionContext | PlanContext): RecordResult => {
+    if (published) return published;
     if (ctx.plan === null) {
       const first = Array.isArray(ctx.subjects) ? ctx.subjects[0] : undefined;
       if (!first || first.kind !== 'interview-picks') throw new JobError('JOB_SOURCE_MISMATCH');
