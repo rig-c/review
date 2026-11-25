@@ -758,9 +758,28 @@ async function recordPairSelection(page: InputCdpSession, scratch: string, captu
                         document.querySelector('#view-menu [data-view]').getBoundingClientRect().width;
                 })()`), 'one visible full-width separator');
                 for (const mode of ['after', 'compare', 'before', 'difference'] as const) {
-                    await chooseView(page, mode);
-                    await chooseView(page, second);
-                    await pairView(page, {evidence}, language, mode, true, 6_000, second);
+                    // Hold pair one's fetch until pair two paints to prove the choice carries the pending mode.
+                    if (mode === 'difference') await page.evaluate(`(() => {
+                        const original = window.fetch;
+                        const gate = new Promise(resolve => {window.releaseFirstPairDifference = resolve;});
+                        window.fetch = async (input, init) => {
+                            if (String(input).endsWith('/checkpoint-evidence/${checkpointId}/difference')) {
+                                window.fetch = original;
+                                document.body.dataset.firstPairDifferencePending = 'true';
+                                await gate;
+                            }
+                            return original.call(window, input, init);
+                        };
+                    })()`);
+                    try {
+                        await chooseView(page, mode);
+                        if (mode === 'difference') await waitFor(language + ' first pair Difference requested', () =>
+                            page.evaluate<boolean>(`document.body.dataset.firstPairDifferencePending === 'true'`));
+                        await chooseView(page, second);
+                        await pairView(page, {evidence}, language, mode, true, 6_000, second);
+                    } finally {
+                        if (mode === 'difference') await page.evaluate('window.releaseFirstPairDifference()');
+                    }
                     if (mode === 'after') {
                         await click(page, '#view-menu summary');
                         await capture(page, captures, 'pair-two-' + language, [...size]);

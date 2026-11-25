@@ -186,7 +186,7 @@ const checkpointPairLabels={compare:'Side by side',before:'Before',after:'After'
 const checkpointPairPrefix='checkpoint-pair-';
 type CheckpointPairMode=keyof typeof checkpointPairLabels;
 type CheckpointPairTile={pair:CheckpointPairView;side:'before'|'after'};
-let checkpointPair:{pair:CheckpointPairView;mode:CheckpointPairMode;bookmark:InspectionBookmark;
+let checkpointPair:{pair:CheckpointPairView;mode:CheckpointPairMode;requestedMode:CheckpointPairMode;bookmark:InspectionBookmark;
  /** An explicit replay lasts while this pending pair (or its absence) holds. */
  replayFor?:CheckpointPairView|null;
  difference:Promise<HTMLCanvasElement>|null;generation:number;release:()=>void}|null=null;
@@ -599,7 +599,7 @@ async function chooseInspectionView(id:string):Promise<void> {
  if(checkpointPair){
   if(id.startsWith(checkpointPairPrefix)){
    const pair=host?.selectCheckpointPair?.(id.slice(checkpointPairPrefix.length));
-   if(pair)await syncCheckpointPair(false,checkpointPair.mode);
+   if(pair)await syncCheckpointPair(false,checkpointPair.requestedMode);
   }else await showCheckpointPair(id as CheckpointPairMode);
   return;
  }
@@ -2118,10 +2118,11 @@ function checkpointDifferenceReason({before,after}:CheckpointPairView):string|nu
 
 async function showCheckpointPair(mode:CheckpointPairMode):Promise<void> {
  const state=checkpointPair;if(!state)return;
+ if(mode==='difference'&&checkpointDifferenceReason(state.pair)){renderLayout();return;}
  const {pair}=state,generation=++state.generation;
+ state.requestedMode=mode;
  let pixels:HTMLCanvasElement|undefined;
  if(mode==='difference'){
-  if(checkpointDifferenceReason(pair)){renderLayout();return;}
   try{
    pixels=await (state.difference??=fetch(pair.differenceUrl,{signal:lifecycle.signal}).then(async response=>{
     if(!response.ok)throw new Error((await response.json()).error.message);
@@ -2131,7 +2132,9 @@ async function showCheckpointPair(mode:CheckpointPairMode):Promise<void> {
    }));
   }catch(error){
    state.difference=null;
-   if(checkpointPair===state&&generation===state.generation){message(errorText(error),true);renderLayout();}
+   if(checkpointPair===state&&generation===state.generation){
+    state.requestedMode=state.mode;message(errorText(error),true);renderLayout();
+   }
    return;
   }
  }
@@ -2182,7 +2185,7 @@ function mountCheckpointPair(pair:CheckpointPairView|undefined,mode:CheckpointPa
   labelSuffix:candidate.checkpointId,pressed:candidate===pair,
  }))});
  const restoreSwitch=controls.replaceViewSwitch({currentMode:mode,groups,onChange:chooseInspectionView});
- checkpointPair={pair,mode,bookmark,difference:null,generation:0,release:()=>{
+ checkpointPair={pair,mode,requestedMode:mode,bookmark,difference:null,generation:0,release:()=>{
   checkpointPair=null;pair.after.image.remove();content.replaceChildren(...nodes);restoreSwitch();
   for(const {node,value}of hidden)node.hidden=value;
   for(const {id,value}of labels)text(id,value);
