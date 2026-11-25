@@ -7,8 +7,8 @@ import {join, resolve} from 'node:path';
 import {PNG} from 'pngjs';
 import {canonicalJson} from '../src/canonical-json.ts';
 import type {ControlNumericCamera} from '../src/control.ts';
-import {jobBodyLimit, jobHash, parseChestLandmarksAct, parseContextCommentsAct, parseMeshEditsAct} from '../src/job-api.ts';
-import {JOB_API_SCHEMA, JOB_CHEST_LANDMARKS_ACT_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_MESH_EDITS_ACT_SCHEMA,
+import {jobBodyLimit, jobHash, parseCommentOnlyAct, parseCommentsAct, parseContextCommentsAct} from '../src/job-api.ts';
+import {JOB_API_SCHEMA, JOB_COMMENT_CONTEXT_ACT_SCHEMA, JOB_COMMENT_ONLY_ACT_SCHEMA, JOB_COMMENTS_ACT_SCHEMA,
   type JobChestLandmarkValue, type JobPublishedChestLandmark, type JobResponseValues, type JobResult} from '../src/job-contract.ts';
 import type {ReviewManifest} from '../src/manifest.ts';
 import {enCatalog} from '../web/catalog-en.ts';
@@ -255,17 +255,19 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
     assert.equal(await screen.evaluate<string>('document.documentElement.lang'), language);
     assert.equal(await screen.evaluate<boolean>("document.querySelector('#request-changes').disabled"), true);
     const inputHashes = chestCase ? await jobInputHashes(fixture.input.root) : null;
-    async function latestAct() {
+    /** #1231: drafts go first as an act@10 carrier act, then the verdict without them. */
+    async function finalizedActs(count: number) {
       const response = await fixture.call({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId,
         requestId: randomUUID(), verb: 'next', after: null, waitMs: 0});
       const result: JobResult<JobResponseValues['next']> = await response.json();
       assert.ok(result.ok, JSON.stringify(result));
       const acts = result.value.events.flatMap(event => event.type === 'act' ? [event.act] : []);
-      assert.equal(acts.length, 1, `${language} ${mode}: expected one finalized act`);
-      const act = acts[0]!;
-      const raw = fixture.host.session.readActExport(act.actId, false).toString();
-      assert.equal(raw, JSON.stringify(act));
-      return {act, raw};
+      assert.equal(acts.length, count, `${language} ${mode}: expected ${count} finalized act(s)`);
+      return acts.map(act => {
+        const raw = fixture.host.session.readActExport(act.actId, false).toString();
+        assert.equal(raw, JSON.stringify(act));
+        return {act, raw};
+      });
     }
     async function selectCarrier() {
       await click(screen, '[data-mode="rig"]');
@@ -543,44 +545,55 @@ async function runBrowser(language: 'en' | 'ko', mode: BrowserMode) {
       ...(mode === 'with-comment' ? [{type: 'confirm', message: expectedConfirm, accepted: true}] : []),
       {type: 'confirm', message: expectedConfirm, accepted: true},
     ] : []);
-    const {act: finalized, raw} = await latestAct();
-    const expectedSchema = chestSeed ? JOB_CHEST_LANDMARKS_ACT_SCHEMA : meshExpected ? JOB_MESH_EDITS_ACT_SCHEMA : JOB_COMMENT_CONTEXT_ACT_SCHEMA;
+    const carried = !!chestSeed || meshExpected;
+    const finalizedRows = await finalizedActs(carried ? 2 : 1);
+    const {act: finalized, raw} = finalizedRows.at(-1)!;
+    const expectedSchema = mode === 'with-comment' || !carried ? JOB_COMMENT_CONTEXT_ACT_SCHEMA : JOB_COMMENTS_ACT_SCHEMA;
     assert.equal(finalized.schema, expectedSchema,
       `${language} ${mode}: unexpected schema from the production writer`);
+    // #1231: the Request changes verdict no longer carries Edit Mesh or chest drafts.
+    assert.equal(finalized.kind, 'review-verdict');
+    assert.equal('meshEdits' in finalized.value, false);
+    assert.equal('chestLandmarks' in finalized.value, false);
+    if (carried) {
+      assert.equal(finalizedRows[0]!.act.schema, JOB_COMMENT_ONLY_ACT_SCHEMA);
+      const carrier = parseCommentOnlyAct(finalizedRows[0]!.act);
+      assert.deepEqual(carrier.value.comments, []);
+      assert.equal(carrier.publicationId, fixture.publication.publicationId);
+      assert.deepEqual(carrier.source, fixture.publication.source);
+      assert.equal(carrier.value.carriers?.length, 1);
+      const verdict = parseCommentsAct(finalized);
+      assert.equal(verdict.kind === 'review-verdict' && verdict.value.verdict, 'changes-requested');
+    }
     if (chestSeed) {
+      const carrierAct = finalizedRows[0]!.act;
       assert.ok(fixture.fetchCapability);
       const response = await fetch(fixture.locator + '/api', {
         method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + fixture.fetchCapability},
         body: JSON.stringify({schema: JOB_API_SCHEMA, jobId: fixture.host.session.jobId, requestId: randomUUID(),
-          verb: 'fetch-act', actId: finalized.actId}),
+          verb: 'fetch-act', actId: carrierAct.actId}),
       });
       const fetched: JobResult<JobResponseValues['fetch-act']> = await response.json();
       assert.ok(fetched.ok, JSON.stringify(fetched));
-      assert.deepEqual(fetched.value, finalized);
-      assert.throws(() => parseMeshEditsAct(fetched.value), /JOB_ACT_INVALID/);
-      const act = parseChestLandmarksAct(fetched.value);
-      assert.equal(act.kind, 'review-verdict');
-      assert.equal(act.value.stage, 'rig-review');
-      assert.equal(act.value.verdict, 'changes-requested');
-      assert.deepEqual(act.value.comments, []);
-      assert.equal(act.value.meshEdits, undefined);
-      assert.equal(act.publicationId, fixture.publication.publicationId);
-      assert.equal(act.source.sourceHash, fixture.publication.source.sourceHash);
-      assert.deepEqual(act.source.model, fixture.publication.source.model);
+      assert.deepEqual(fetched.value, carrierAct);
+      const [carrier] = parseCommentOnlyAct(fetched.value).value.carriers!;
+      assert.equal(carrier?.kind, 'chest-landmarks');
+      assert.deepEqual(carrier?.file, fixture.publication.source.model);
       const {hash, frame} = chestSeed.source;
       const edit: JobChestLandmarkValue = {...chestSeed, source: {hash, frame}, bust: {...chestSeed.bust, apex_r: correctedApex}};
-      assert.deepEqual(act.value.chestLandmarks, [{edit, sha256: jobHash(canonicalJson(edit))}]);
+      assert.deepEqual(carrier?.kind === 'chest-landmarks' && carrier.chestLandmarks, [{edit, sha256: jobHash(canonicalJson(edit))}]);
       await writeFile(join(directory, 'submitted.png'), await screen.screenshot());
     } else if (meshExpected) {
-      const act = parseMeshEditsAct(finalized);
-      assert.equal(act.kind, 'review-verdict');
-      assert.equal(act.value.stage, 'rig-review');
+      const act = mode === 'with-comment' ? parseContextCommentsAct(finalized) : parseCommentsAct(finalized);
+      assert.ok(act.kind === 'review-verdict' && act.value.stage === 'rig-review');
       assert.equal(act.value.verdict, 'changes-requested');
       assert.deepEqual(act.value.comments.map(comment => comment.text), mode === 'with-comment' ? ['Adjust the mesh'] : []);
-      if (mode === 'with-comment') assert.equal(act.value.comments[0]?.context?.subject?.sourceHash, act.source.sourceHash);
-      assert.ok(act.value.meshEdits, `${language} ${mode}: finalized act@8 is missing meshEdits`);
-      assert.equal(act.value.meshEdits.length, 1);
-      const {edit, sha256} = act.value.meshEdits[0]!;
+      if (mode === 'with-comment') assert.equal(parseContextCommentsAct(finalized).value.comments[0]?.context?.subject?.sourceHash, act.source.sourceHash);
+      const [carrier] = parseCommentOnlyAct(finalizedRows[0]!.act).value.carriers!;
+      assert.ok(carrier?.kind === 'mesh-edits', `${language} ${mode}: the act@10 is missing its mesh-edits carrier`);
+      assert.deepEqual(carrier.file, fixture.publication.source.model);
+      assert.equal(carrier.meshEdits.length, 1);
+      const {edit, sha256} = carrier.meshEdits[0]!;
       const expected = largeCapture ? [[16, 56], [16, 8], [64, 8], [64, 56]] :
         [[48, 50], [48, 30], [68, 30], [68, 50]];
       assert.equal(edit.source.positions.length, expected.length);
