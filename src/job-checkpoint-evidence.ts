@@ -10,9 +10,10 @@ export type {CheckpointEvidencePacketResult} from './job-contract.ts';
 export {parseCheckpointEvidencePacket} from './checkpoint-evidence-packet.ts';
 const tableSchema = 'rig-review-checkpoint-table/1';
 
-/** Canonical optional declaration. Absence must not materialize a historical field. */
+/** Canonical optional declaration. Absence must not materialize a historical field. Record plans name
+ * a checkpoint by its plan step, so a record packet's checkpoint and plan step IDs are equal. */
 export function checkpointEvidenceFields(holder: object, plan: JobPlanIdentity | null,
-  subjects: readonly (JobSubject | RecordSubject)[], files: readonly JobFileIdentity[]): {checkpointEvidence?: readonly JobCheckpointEvidence[]} {
+  subjects: readonly (JobSubject | RecordSubject)[], files: readonly JobFileIdentity[], record = false): {checkpointEvidence?: readonly JobCheckpointEvidence[]} {
   if (!('checkpointEvidence' in holder)) return {};
   try {
     const raw = holder.checkpointEvidence;
@@ -23,9 +24,11 @@ export function checkpointEvidenceFields(holder: object, plan: JobPlanIdentity |
       if (!parsed.ok) throw new Error(parsed.reason);
       const {packet} = parsed;
       const {checkpointId, planStepId, tiles, table} = packet;
-      if (seen.has(checkpointId) || !plan.steps.some(step => step.id === planStepId) ||
-          !subjects.some(subject => subject.kind === 'checkpoint' && subject.checkpointId === checkpointId &&
-            (('planStepId' in subject ? subject.planStepId : undefined) ?? subject.checkpointId) === planStepId)) throw new Error('association');
+      // #1229: a packet is an ordinary comparison bound to its plan step. A declared checkpoint subject
+      // is no longer required; one that is declared must still name the same plan step.
+      if (seen.has(checkpointId) || !plan.steps.some(step => step.id === planStepId) || record && checkpointId !== planStepId ||
+          subjects.some(subject => subject.kind === 'checkpoint' && subject.checkpointId === checkpointId &&
+            (('planStepId' in subject ? subject.planStepId : undefined) ?? subject.checkpointId) !== planStepId)) throw new Error('association');
       seen.add(checkpointId);
       for (const file of [...tiles, table]) {
         if (!files.some(seal => seal.path === file.path && seal.sha256 === file.sha256)) throw new Error('closure');
