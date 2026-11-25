@@ -5,7 +5,7 @@ import type {PartsSubjectData} from './parts-viewport-provider.ts';
 /** Card I (#709): a rig publication of a live job opens the one review screen (`main.ts`) instead of the job
  * window. The job stays the transport: same asks, act kinds, still, displayed-ack and submission idempotency.
  * Rig verdicts use the act bar, interviews use the Question tab, and text approvals use the shared ask dialog. */
-import {JOB_CHEST_LANDMARKS_ACT_SCHEMA,JOB_MESH_EDITS_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobChestLandmarkEdit,type JobComment,type JobMeshEdit,type JobProgressV3,type JobPublishedChestLandmark,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
+import {JOB_COMMENT_ONLY_ACT_SCHEMA,type ActV3,type DisplayPublicationV3,type JobComment,type JobCommentCarrier,type JobContextComment,type JobProgressV3,type JobPublishedChestLandmark,type JobResult,type JobUISubmission,type PendingAskV3,type SourceV3,type UISubmissionV3} from '../src/job-contract.ts';
 import {canonicalJson} from '../src/canonical-json.ts';
 import {draftKey} from '../src/mesh-edit.ts';
 import type {Feedback, ReviewSession} from '../src/session.ts';
@@ -68,7 +68,7 @@ export function jobRigScreenRefusal(display:DisplayPublicationV3,pending:readonl
 
 export type JobRigScreenDecision =
   | {readonly ask: PendingAskV3; readonly kind: 'checkpoint'; readonly value: Extract<JobUISubmission, {kind: 'checkpoint'}>['value']}
-  | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review' | 'direction-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]; general?: readonly string[]; meshEdits?: readonly JobMeshEdit[]; chestLandmarks?: readonly JobChestLandmarkEdit[]}};
+  | {readonly ask: PendingAskV3; readonly kind: 'review-verdict'; readonly value: {stage: 'rig-review' | 'direction-review'; verdict: 'approved' | 'changes-requested'; words: string; feedback?: readonly Feedback[]; general?: readonly string[]}};
 /** The act bar's decisions as the pending asks' values. `words` is the comments' projection (act@6's), or empty;
  * a decision still pending is not sent, so a pending ask is never answered with "pending". Checkpoints go first. */
 export function jobRigScreenDecisions(session: Pick<ReviewSession, 'status' | 'checkpoints' | 'feedback'>,
@@ -248,18 +248,14 @@ export function createJobRigScreen(options: {
     const decisions=jobRigScreenDecisions(sendable, state.pending.filter(ask=>!prepared.modals?.forms.has(ask.askId)), prepared.display.publication.publicationId, general);
     if (!decisions.length) throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
     const rigChanges=decisions.find(decision=>decision.kind==='review-verdict'&&decision.value.stage==='rig-review'&&decision.value.verdict==='changes-requested');
-    const chestDraft=rigChanges?.kind==='review-verdict'?screen?.chestLandmarks?.():null;
-    const meshDraft=rigChanges?.kind==='review-verdict'?await screen?.meshEdits?.():null;
-    if(rigChanges?.kind==='review-verdict'){
-      if(meshDraft?.edits.length){
-        const edits=meshDraft.edits.map(edit=>({key:draftKey(edit),edit}));
-        edits.sort((a,b)=>a.key<b.key?-1:a.key>b.key?1:0);
-        rigChanges.value.meshEdits=await Promise.all(edits.map(async ({edit})=>({edit,sha256:await sha256Hex(canonicalJson(edit))})));
-      }
-      if(chestDraft?.edits.length)rigChanges.value.chestLandmarks=await Promise.all(chestDraft.edits.map(async edit=>({edit,sha256:await sha256Hex(canonicalJson(edit))})));
+    // #1231: Edit Mesh and chest drafts no longer ride the verdict. Request changes sends them first as an act@10.
+    const drafts=rigChanges?await draftCarriers(prepared):null;
+    if(drafts?.carriers.length){
       const latest=options.window.state();
       if(mounted!==prepared||latest.preparing||latest.receipt?.displayedNonce!==state.receipt.displayedNonce)throw new Error('JOB_ACT_SOURCE_STALE');
-      if(rigChanges.value.meshEdits?.length&&options.confirm&&!options.confirm(options.translate('Send this Request changes with {0} mesh edit(s) to the producer?',[rigChanges.value.meshEdits.length])))return '';
+      const meshEdits=drafts.carriers.find(carrier=>carrier.kind==='mesh-edits')?.meshEdits.length;
+      if(meshEdits&&options.confirm&&!options.confirm(options.translate('Send this Request changes with {0} mesh edit(s) to the producer?',[meshEdits])))return '';
+      await sendCommentAct(prepared,state.receipt.displayedNonce,[],drafts);
     }
     for (const decision of decisions) {
       const value = directionComments !== undefined && decision.kind === 'review-verdict' && decision.value.stage === 'direction-review'
@@ -280,17 +276,6 @@ export function createJobRigScreen(options: {
       const result = await options.window.submit(frozen);
       if (!result.ok) throw new Error(result.error.code, {cause: (result.error as {cause?: unknown}).cause});
       attempts.delete(ask.askId);
-      const act=result.value;
-      if(decision===rigChanges&&rigChanges.kind==='review-verdict'&&act.kind==='review-verdict'){
-        if(meshDraft&&(act.schema===JOB_MESH_EDITS_ACT_SCHEMA||act.schema===JOB_CHEST_LANDMARKS_ACT_SCHEMA)&&act.value.meshEdits){
-          const accepted=new Set(act.value.meshEdits.map(row=>row.sha256));
-          meshDraft.clear(rigChanges.value.meshEdits?.filter(row=>accepted.has(row.sha256)).map(row=>row.edit)??[]);
-        }
-        if(chestDraft&&act.schema===JOB_CHEST_LANDMARKS_ACT_SCHEMA){
-          const accepted=new Set(act.value.chestLandmarks.map(row=>row.sha256));
-          chestDraft.clear(rigChanges.value.chestLandmarks?.filter(row=>accepted.has(row.sha256)).map(row=>row.edit)??[]);
-        }
-      }
       await committed({...current.commit, at: result.value.at});
     }
     return options.translate('job.saved');
@@ -312,21 +297,57 @@ export function createJobRigScreen(options: {
   }
   // The daemon's idempotency digest covers the whole submission, so a retry after a lost response replays the cached request unchanged.
   let commentAttempt:{key:string;request:Extract<UISubmissionV3,{kind:'comments'}>}|null=null;
-  /** #1226: one comment-only act (act@10) bound by the page receipt; it answers no ask and leaves a pending one pending. */
+  type DraftCarriers={carriers:JobCommentCarrier[];mesh:JobMeshDraftSubmission|null;chest:JobChestDraftSubmission|null};
+  /** #1231: the pending Edit Mesh and chest drafts as act@10 carriers on the displayed model; rows as act@8/@9 sent them. */
+  async function draftCarriers(prepared:JobRigScreenPrepared):Promise<DraftCarriers>{
+    const {source}=prepared.display.publication,model='model' in source?source.model:null;
+    const file=model?{path:model.path,sha256:model.sha256}:null,carriers:JobCommentCarrier[]=[];
+    const chest=file?screen?.chestLandmarks?.()??null:null,mesh=file?await screen?.meshEdits?.()??null:null;
+    const bind=<T,>(edit:T)=>sha256Hex(canonicalJson(edit)).then(sha256=>({edit,sha256}));
+    if(file&&mesh?.edits.length){
+      const edits=mesh.edits.map(edit=>({key:draftKey(edit),edit})).sort((a,b)=>a.key<b.key?-1:a.key>b.key?1:0);
+      carriers.push({kind:'mesh-edits',file,meshEdits:await Promise.all(edits.map(({edit})=>bind(edit)))});
+    }
+    if(file&&chest?.edits.length)carriers.push({kind:'chest-landmarks',file,chestLandmarks:await Promise.all(chest.edits.map(bind))});
+    return {carriers,mesh,chest};
+  }
+  /** #1226: one comment-only act (act@10) bound by the page receipt; it answers no ask and leaves a pending one pending.
+   * #1231: the drafts it carried, as the daemon accepted them, are cleared. */
+  async function sendCommentAct(prepared:JobRigScreenPrepared,displayedNonce:string,comments:readonly JobContextComment[],drafts:DraftCarriers):Promise<void>{
+    const state=options.window.state();
+    if(mounted!==prepared||state.preparing||state.receipt?.displayedNonce!==displayedNonce)throw new Error('JOB_ACT_SOURCE_STALE');
+    const value={comments,...drafts.carriers.length?{carriers:drafts.carriers}:{}},publicationId=prepared.display.publication.publicationId;
+    const key=JSON.stringify([publicationId,displayedNonce,value]);
+    if(commentAttempt?.key!==key)commentAttempt={key,request:{kind:'comments',publicationId,pageId:options.pageId,
+      displayedNonce,expectedGeneration:state.generation,submissionId:crypto.randomUUID(),value}};
+    const result=await options.window.submit(commentAttempt.request);
+    if(!result.ok)throw new Error(result.error.code,{cause:(result.error as {cause?:unknown}).cause});
+    commentAttempt=null;
+    const act=result.value;
+    if(act.schema!==JOB_COMMENT_ONLY_ACT_SCHEMA)return;
+    for(const carrier of act.value.carriers??[]){
+      const sent=drafts.carriers.find(row=>row.kind===carrier.kind);
+      if(carrier.kind==='mesh-edits'&&sent?.kind==='mesh-edits'){
+        const accepted=new Set(carrier.meshEdits.map(row=>row.sha256));
+        drafts.mesh?.clear(sent.meshEdits.filter(row=>accepted.has(row.sha256)).map(row=>row.edit));
+      }
+      if(carrier.kind==='chest-landmarks'&&sent?.kind==='chest-landmarks'){
+        const accepted=new Set(carrier.chestLandmarks.map(row=>row.sha256));
+        drafts.chest?.clear(sent.chestLandmarks.filter(row=>accepted.has(row.sha256)).map(row=>row.edit));
+      }
+    }
+  }
+  /** Send comments: the person's comments, with any pending Edit Mesh and chest drafts as carriers (#1231). */
   async function submitComments(feedback:readonly Feedback[], general:readonly string[]):Promise<string>{
     const prepared=mounted,state=options.window.state();
     if(!prepared||prepared.parts||!state.receipt||state.preparing)throw new Error('JOB_ACT_SOURCE_STALE');
     if(state.closed)throw new Error('JOB_CLOSED');
     if(!options.access.capability)throw new Error('JOB_CAPABILITY_REQUIRED');
     const comments=[...feedbackContextComments(feedback),...general.map(text=>({text}))];
-    if(!comments.length)throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
-    const value={comments},publicationId=prepared.display.publication.publicationId,displayedNonce=state.receipt.displayedNonce;
-    const key=JSON.stringify([publicationId,displayedNonce,value]);
-    if(commentAttempt?.key!==key)commentAttempt={key,request:{kind:'comments',publicationId,pageId:options.pageId,
-      displayedNonce,expectedGeneration:state.generation,submissionId:crypto.randomUUID(),value}};
-    const result=await options.window.submit(commentAttempt.request);
-    if(!result.ok)throw new Error(result.error.code,{cause:(result.error as {cause?:unknown}).cause});
-    commentAttempt=null;return options.translate('job.saved');
+    const drafts=await draftCarriers(prepared);
+    if(!comments.length&&!drafts.carriers.length)throw new Error('JOB_ACT_NOTHING_TO_SUBMIT');
+    await sendCommentAct(prepared,state.receipt.displayedNonce,comments,drafts);
+    return options.translate('job.saved');
   }
   const activeAsks=(pending:readonly JobWindowAsk[],publicationId:string|undefined)=>
     pending.filter(ask=>ask.publicationId===publicationId&&isPendingOwnerAsk(ask));

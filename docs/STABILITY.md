@@ -318,7 +318,9 @@ UI capability fragment. `origin` and the returned `ports` belong to that host.
 `JobPublishedContext.answeredDirectionFeedback` is an additive optional field
 from the trusted `readPublished` callback for direction packages with a `post`
 selector. Every reference must resolve to a retained finalized direction
-feedback act of the same job bound to an earlier post version. A malformed
+feedback act of the same job bound to an earlier post version: a
+`direction-review` verdict, or from Review #1231 a comment-only act@10 bound to
+a direction post. A malformed
 field or entry, inapplicable selector, wrong job, unknown act or ineligible act
 refuses the publication with `JOB_ANSWERED_DIRECTION_FEEDBACK_INVALID`. Review
 never silently drops entries. Resolved feedback is displayed read-only with

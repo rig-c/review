@@ -126,19 +126,22 @@ function resolveAnsweredDirectionFeedback(
   return references.map(reference => {
     if (reference.jobId !== jobId || !Object.hasOwn(data.acts, reference.actId)) throw new JobError(code);
     const act = data.acts[reference.actId];
-    if (act?.actId !== reference.actId || act.jobId !== jobId || act.kind !== 'review-verdict' ||
-        act.value.stage !== 'direction-review' || !Object.hasOwn(data.publications, act.publicationId)) {
+    // #1231: direction feedback is a finished direction verdict or a comment-only act@10 on a post (checked below).
+    const commentOnly = act?.schema === JOB_COMMENT_ONLY_ACT_SCHEMA && act.kind === 'comments';
+    if (act?.actId !== reference.actId || act.jobId !== jobId ||
+        !(commentOnly || (act.kind === 'review-verdict' && act.value.stage === 'direction-review')) ||
+        !Object.hasOwn(data.publications, act.publicationId)) {
       throw new JobError(code);
     }
     const earlier = data.publications[act.publicationId];
-    const post = act.source.selector;
-    if (post?.kind !== 'post' || !act.source.direction || post.version >= selector.version ||
+    const post = 'record' in act.source ? null : act.source.selector;
+    if (post?.kind !== 'post' || !('direction' in act.source) || !act.source.direction || post.version >= selector.version ||
         earlier.publication.generation >= publication.generation ||
         earlier.retained.source.sourceHash !== act.source.sourceHash ||
         requestDigest(earlier.retained.source.selector) !== requestDigest(post) ||
         requestDigest(earlier.retained.source.direction) !== requestDigest(act.source.direction)) throw new JobError(code);
     const comments = act.schema === JOB_ACT_SCHEMA ? noteComments(act.value.words) :
-      act.schema === JOB_COMMENTS_ACT_SCHEMA || act.schema === JOB_COMMENT_CONTEXT_ACT_SCHEMA ? act.value.comments : undefined;
+      act.schema === JOB_COMMENTS_ACT_SCHEMA || act.schema === JOB_COMMENT_CONTEXT_ACT_SCHEMA || commentOnly ? act.value.comments : undefined;
     if (!Array.isArray(comments)) throw new JobError(code);
     return {...reference, postVersion: post.version, answeredByPostVersion: selector.version,
       comments: comments.map(({text, anchor}) => ({text, kind: anchor === undefined ? 'general' : 'pinned'})),

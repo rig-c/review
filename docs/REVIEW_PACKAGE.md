@@ -1161,7 +1161,8 @@ declaring which earlier direction feedback the selected post answers.
 
 Review validates the field when present. Each entry must name the publishing
 job and resolve to a finalized `review-verdict` act with stage
-`direction-review` retained by Review for that job. The act's bound `post`
+`direction-review`, or a [comment-only act@10](#comment-only-act-act10) bound
+to a direction `post`, retained by Review for that job. The act's bound `post`
 selector must name an earlier post version. The producer declaration establishes
 the answer relationship. Publication order alone does not establish it, and the
 referenced post need not be the immediately preceding publication. A malformed
@@ -2041,7 +2042,11 @@ the stored entry, or an op that cannot replay over the stored topology. An
 attachment hash that differs from the retained displayed model refuses
 `JOB_ACT_SOURCE_STALE`. Existing browser `MESH_EDIT_*` refusals still apply.
 Starting in 4.8.0, eligible submissions carrying edits emit act@8. Review
-decoders older than 4.7.0 refuse act@8 with `JOB_ACT_INVALID`. See
+decoders older than 4.7.0 refuse act@8 with `JOB_ACT_INVALID`. The review page
+no longer puts edits on a verdict: it sends them as
+[act@10 carriers](#comment-only-act-act10) ([Review #1231](https://github.com/rig-c/review/issues/1231)).
+The writer still accepts them on a verdict, and historical act@8 and act@9 read
+unchanged. See
 [Create compatibility](STABILITY.md#mesh-edit-act-compatibility).
 Review refuses `JOB_BODY_LIMIT` if the canonical UTF-8 JSON of
 `value.meshEdits` exceeds 256 KiB. Rig stills and inline comment images
@@ -2150,6 +2155,14 @@ Refusals:
   topology mismatch, or a chest edit on an attachment the publication did not
   seed, refuses `JOB_ACT_INVALID`. These are the act@8 and act@9 writer checks
   without the verdict.
+
+The review page puts its pending Edit Mesh and chest landmark drafts in
+`carriers` when a person sends comments. Request changes sends them first as
+an act@10 with no comments, then sends the verdict without them, so a verdict
+from the page carries no edits ([Review #1231](https://github.com/rig-c/review/issues/1231)).
+Parts reads the chest carrier. Create reads the mesh-edit carrier from
+[Create #982](https://github.com/rig-c/create/issues/982); until then Create
+records it without applying it.
 
 The act answers no ask and supersedes none. A pending ask stays pending.
 Any number of comment acts can be sent on one publication. A retried
