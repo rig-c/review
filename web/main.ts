@@ -391,6 +391,10 @@ function markSentAlone(rows:readonly {id:string}[]):void {
 }
 const unsentFeedback=()=>(session?.feedback??[]).filter(row=>!isSubmittedFeedback(row.id));
 const hasUnsentComments=()=>!!host?.verdictComments?.rows.some(row=>!isSentAlone(row))||unsentFeedback().length>0;
+/** #1231: a pending Edit Mesh or chest edit is content Send comments carries, as an unsent comment is. */
+const hasUnsentContent=()=>hasUnsentComments()||!!host?.canSubmitMeshEdits?.();
+/** An edit draft changes the answer controls and, beside Send comments, the save state (#1231). */
+const renderEditDraftState=()=>commentHost()?renderDraftState():renderAnswerControls();
 function renderDraftState(): void {
   const recordSubmission=host?.recordSubmission?.();
   if(recordSubmission){
@@ -407,7 +411,7 @@ function renderDraftState(): void {
   // #1226: the save state stands in for "Reviewing · N issues" beside Send comments. A verdict being saved keeps
   // "Saving…", and an answered verdict keeps its outcome until a new comment is written.
   if(typeof commentHost==='function'&&commentHost()&&!(saving&&!commentSending)&&!draftConflict&&!actReadOnly&&!(draftStatus&&/^(The source changed, so |Local draft could not be saved|Local draft storage unavailable|Local draft needs explicit recovery)/.test(draftStatus))){
-    const unsent=hasUnsentComments();
+    const unsent=hasUnsentContent();
     rigInspector.actBar.setSaveState(saving?{kind:'saving',text:'Sending'}:!unsent&&live&&host?.verdictAnswered?.()?{kind:'saved',text:live}:
       !unsent&&(commentSendState==='sent'||!!session?.updatedAt||Object.keys(sentAloneRows()).length>0)?{kind:'saved',text:'Submitted'}:{kind:'unsaved',text:'Not submitted'});
     return;
@@ -1475,14 +1479,14 @@ function bind(): void {
     if(!commentHost()||sendComments.disabled||saving)return;
     if(comments?.hasPendingComment?.()&&!await comments.commitDraft())return;
     const generalRows=host!.verdictComments!.rows.filter(row=>!isSentAlone(row)),feedback=unsentFeedback(),general=generalRows.map(row=>row.summary);
-    if(!feedback.length&&!general.length)return;
+    if(!feedback.length&&!general.length&&!host!.canSubmitMeshEdits?.())return;
     saving=true;commentSending=true;updateSavedState();
     let failure:ReturnType<typeof jobSubmissionRefusal>|null=null;
     try{
       const sent=await host!.submitComments!(structuredClone(feedback),general);
       // Sent rows stay in the list and show Submitted, pinned and general alike.
       markSentAlone([...feedback,...generalRows]);
-      commentSendState='sent';dirty=hasUnsentComments();
+      commentSendState='sent';dirty=hasUnsentContent();
       comments?.refresh();renderProposals();if(sent)message(sent);
     }catch(error){failure=jobSubmissionRefusal(error);message(failure.text,true);}
     finally{
@@ -1497,11 +1501,11 @@ function bind(): void {
     selection:()=>{const part=parts?.value();return part?{slot:part.slot,skin:part.identity?.skin??null,attachment:part.identity?.attachment??null}:null;},
     download:edit=>download('chest-landmarks.json',JSON.stringify(edit,null,2)+'\n','application/json'),
    }):undefined,
-   changed:()=>{renderChest();if(host)renderAnswerControls();},download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
+   changed:()=>{renderChest();if(host)renderEditDraftState();},download:()=>{void exportChest();},apply:()=>{void applyRebuild();},reset:()=>{void resetRebuild();},message,inspector:()=>selectedInspector()});viewDisposers.push(()=>chestEditor?.dispose());
   const editRefusal=sealedRecordRigReadOnly();
   if(editRefusal)chestEditor.unavailable(editRefusal);
   meshEditor=bindMeshEditor({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,mapping:()=>chestMapping,inspector:()=>selectedInspector(),readOnly:!!editRefusal,source:meshSource,pause,
-   job:host?(host.record||host.direction||!host.access.capability?'read-only':{slots:()=>data.feedbackCatalog.slots??[],modelHash:()=>inspectionSourceState==='ready'&&chestMapping.available?stageModelHash:null}):undefined,changed:()=>{if(host)renderAnswerControls();redrawOverlay(false);},download:doc=>{void exportMesh(doc);},
+   job:host?(host.record||host.direction||!host.access.capability?'read-only':{slots:()=>data.feedbackCatalog.slots??[],modelHash:()=>inspectionSourceState==='ready'&&chestMapping.available?stageModelHash:null}):undefined,changed:()=>{if(host)renderEditDraftState();redrawOverlay(false);},download:doc=>{void exportMesh(doc);},
    apply:(doc,line)=>applyMeshDelta(doc,line),applied:()=>appliedOnStage?.schema==='rig-review-applied/3',resetBuild:()=>resetRebuild(stageWorld()),message,confirm:text=>window.confirm(tr(text)),token:name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim()});viewDisposers.push(()=>meshEditor?.dispose());
   weightsView=bindWeightsView({pane:el('rig-pane'),canvas:el('rig-overlay'),project:()=>player?rigProject():null,inspector:()=>selectedInspector(),slot:()=>parts?.value()?.slot??stageDraftSelection?.slot??null,
    model:()=>hasStageModel()?partModel??undefined:null,setup:slot=>assets?setupPoseMesh(assets,partModel,slot,document.createElement('div')):null,changed:()=>redrawOverlay(false),
@@ -2391,7 +2395,7 @@ function renderAnswerControls():void {
  save.hidden=!verdict||firstPublicationPrompt;requestChanges.hidden=save.hidden;
  if(typeof sendComments!=='undefined'){
   sendComments.hidden=!commentHost()||!!host?.jobClosed?.();
-  sendComments.disabled=blocked||!!readOnly||!hasUnsentComments()&&!pendingStageComment;
+  sendComments.disabled=blocked||!!readOnly||!hasUnsentContent()&&!pendingStageComment;
   // One emphasised answer: Send comments leads only when no ask of any kind is waiting.
   sendComments.classList.toggle('primary',!subjects.length);
  }rigAsk.hidden=!dialog||firstPublicationPrompt||!questionPending&&recordTrigger!==rigAsk;

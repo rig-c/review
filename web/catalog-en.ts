@@ -23,7 +23,7 @@ export const enCatalog: Readonly<Record<string, string>> = {
   "job.refusal.JOB_MODEL_MISSING": "This request has no compiled model. The producer must publish a compiled model before requesting a rig verdict.",
   "JOB_ASK_UNSUPPORTED": "JOB_ASK_UNSUPPORTED",
   "job.refusal.JOB_ASK_UNSUPPORTED": "This request lacks a supported source or checkpoint mapping. The producer must publish the matching source and plan mapping before asking again.",
-  "In a job, press Request changes to send this edit; the producer rebuilds it.": "In a job, press Request changes to send this edit; the producer rebuilds it.",
+  "In a job, press Send comments to send this edit; the producer rebuilds it.": "In a job, press Send comments to send this edit; the producer rebuilds it.",
   "Send this Request changes with {0} mesh edit(s) to the producer?": "Send this Request changes with {0} mesh edit(s) to the producer?",
   "job.mesh.staleDraft": "Some saved mesh edits could not be restored on this model and will be left out.",
   "job.chest.sendHint": "Press Request changes to rebuild with the edited landmarks.",

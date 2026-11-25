@@ -35,7 +35,7 @@ function post(f: Awaited<ReturnType<typeof fixture>>, version: number, field: ob
 
 async function finalize(f: Awaited<ReturnType<typeof fixture>>, publication: JobPublication,
   options: {other?: boolean; verdict?: JobVerdict; comments?: readonly JobComment[]} = {}) {
-  // #1235: the "other act kind" sample is the comment-only act@10, which answers no ask.
+  // #1235: the comment-only act@10 sample, which answers no ask (#1231: it is direction feedback on a post).
   if (options.other) {
     const page = await f.display(publication);
     const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page,
@@ -101,12 +101,13 @@ test.each([
   expect(f.session.status().publication).toBeNull();
 });
 
-test.each(['wrong job', 'unknown act', 'inherited act ID', 'pending ask', 'other act kind', 'same version', 'future version',
+// #1231: a comment-only act@10 on the post is direction feedback now, so it left this list (see the test below).
+test.each(['wrong job', 'unknown act', 'inherited act ID', 'pending ask', 'same version', 'future version',
   'non-post selector', 'no direction asset', 'mixed valid and unknown'])('#1201 refuses ineligible answeredDirectionFeedback (%s) by name', async reason => {
   const f = await fixture();
   post(f, 2);
   const earlier = await f.publish();
-  const act = await finalize(f, earlier, {other: reason === 'other act kind'});
+  const act = await finalize(f, earlier);
   const pending = reason === 'pending ask' ? await f.ask(earlier, subject) : undefined;
   const field = {answeredDirectionFeedback: [{
     jobId: reason === 'wrong job' ? 'other-job' : f.session.jobId,
@@ -125,6 +126,27 @@ test.each(['wrong job', 'unknown act', 'inherited act ID', 'pending ask', 'other
   expect(response.status).toBe(409);
   expect(f.session.status()).toEqual(before);
   expect(f.session.readActExport(act.actId, false).toString()).toBe(JSON.stringify(act));
+});
+
+test('#1231 an act@10 sent on an earlier post resolves as answered direction feedback and survives restart', async () => {
+  const f = await fixture();
+  post(f, 1);
+  const earlier = await f.publish();
+  const act = await finalize(f, earlier, {other: true});
+  expect(act.schema).toBe('rig-review/act@10');
+  post(f, 2, {answeredDirectionFeedback: [{jobId: f.session.jobId, actId: act.actId}]});
+  const response = await f.call(await f.publishRequest('answer-act10'));
+  const body = await response.json() as {ok: boolean; value: JobPublication};
+  expect(body.ok).toBe(true);
+  const entries: readonly JobAnsweredDirectionFeedback[] = [{jobId: f.session.jobId, actId: act.actId, postVersion: 1,
+    answeredByPostVersion: 2, comments: [{text: 'Comment-only act', kind: 'general'}]}];
+  expect(body.value.answeredDirectionFeedback).toEqual(entries);
+  const bytes = JSON.stringify(body.value);
+  const reopened = reopen(f);
+  try {
+    expect(JSON.stringify(reopened.displayPublication(body.value.publicationId).publication)).toBe(bytes);
+    expect(reopened.readActExport(act.actId, false).toString()).toBe(JSON.stringify(act));
+  } finally { reopened.dispose(); }
 });
 
 test('#1201 resolves only the producer-declared acts across an intervening publication and preserves exact bytes through restart and replay', async () => {
