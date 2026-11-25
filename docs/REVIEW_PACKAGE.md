@@ -1307,10 +1307,10 @@ reader. The same declaration is used in both places. A producer that cannot
 seal a predecessor omits the whole declaration. Review refuses a partial
 declaration before the owner's page can display the publication.
 
-A standalone `review.json` opens a build beside an earlier one without a job,
-the use Compare served. Open the package through the existing CLI with its
-manifest. A writer CLI for preparing the declaration is a follow-up before
-[Compare retirement (#1213)](https://github.com/rig-c/review/issues/1213).
+A standalone `review.json` opens a build beside an earlier one without a job.
+`rig-review open CURRENT --previous PREVIOUS` retains byte-identical package
+files in pair-specific review state and generates a manifest there with the
+admitted declaration. The two input packages remain unchanged.
 
 ```ts
 previousBuild?: {
@@ -1458,10 +1458,12 @@ The trusted `JobPublicationReader` package context and the record reader's
 `PlanContext` may declare `checkpointEvidence`. Package-only API@2, API@3 package
 publications in record-and-package mode, and model-free record plan publications
 share this declaration. It is admitted only through the trusted reader and its
-exact work-root-relative file closure. Each packet binds an admitted checkpoint
-subject to an existing plan step. Package aliases use the subject's
-`planStepId ?? checkpointId`. Record checkpoints use the same checkpoint and plan
-step ID. Option-set publications refuse this extension.
+exact work-root-relative file closure. Each packet binds to an existing plan
+step and does not need a declared checkpoint subject ([Review #1229](https://github.com/rig-c/review/issues/1229)).
+When the publication does declare a checkpoint subject with the packet's
+checkpoint ID, its `planStepId ?? checkpointId` must equal the packet's
+`planStepId`. Record packets use the same checkpoint and plan step ID.
+Option-set publications refuse this extension.
 
 The collection contains ordered packets with exactly these fields.
 

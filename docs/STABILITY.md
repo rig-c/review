@@ -343,10 +343,7 @@ behavior. The producer omits the whole declaration when it cannot seal a
 predecessor. Review refuses a partial declaration before the owner's page
 can display the publication.
 
-The standalone manifest lets a reviewer open a build beside an earlier one
-without a job, the use Compare served. The existing package CLI takes the
-manifest as before. A writer CLI is a follow-up before
-[Compare retirement (#1213)](https://github.com/rig-c/review/issues/1213).
+Additive (#1216). [`rig-review open CURRENT --previous PREVIOUS`](WORKFLOWS.md#one-command-owner-handoff) retains both package closures in pair-specific review state and opens an admitted standalone manifest. Stdout remains URL-only.
 
 A present `readPublished` callback requires a nonempty `readerId`. A present
 `installWriterBinding` callback requires a nonempty `bindingId`. A present

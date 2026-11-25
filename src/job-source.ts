@@ -2,7 +2,7 @@ import {resolvePartsPaintingInRig} from './parts-view.ts';
 import {checkpointEvidenceFields, checkpointEvidenceMetadata, readCheckpointEvidenceBytes} from './job-checkpoint-evidence.ts';
 import {previousDraftFields} from './job-previous-draft.ts';
 import { randomUUID } from 'node:crypto';
-import { type Dirent, lstatSync, readdirSync, realpathSync, type Stats } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync, type Stats } from 'node:fs';
 import { mkdir, open, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { PNG } from 'pngjs';
@@ -731,7 +731,6 @@ export function assertRetainedSnapshotIntact(
 ): void {
   assertRetainedSnapshotRoot(snapshotRoot, snapshotIdentity, refusalCode);
   const expectedFiles = new Map<string, string>();
-  const expectedDirs = new Set<string>(['']);
   for (const seal of seals) {
     let normalizedPath: string;
     let normalizedSha: string;
@@ -743,52 +742,45 @@ export function assertRetainedSnapshotIntact(
     }
     if (expectedFiles.has(normalizedPath)) throw new JobError(refusalCode);
     expectedFiles.set(normalizedPath, normalizedSha);
-    let dir = posix.dirname(normalizedPath);
-    while (dir !== '.' && dir !== '') {
-      expectedDirs.add(dir);
-      dir = posix.dirname(dir);
-    }
   }
-  const visitedFiles = new Set<string>();
+  assertRetainedSnapshotLayout(snapshotRoot, expectedFiles.keys(), [], () => new JobError(refusalCode));
+  for (const [path, sha256] of expectedFiles) {
+    try { if (jobHash(sourceBytes(snapshotRoot, path)) === sha256) continue; }
+    catch { /* Use the caller's snapshot refusal. */ }
+    throw new JobError(refusalCode);
+  }
+}
+
+/** An exact file and directory inventory, shared by job and standalone retained snapshots. */
+export function assertRetainedSnapshotLayout(snapshotRoot: string, files: Iterable<string>, directories: readonly string[],
+  refuse: (path: string, reason: string) => Error): void {
+  const expectedFiles = new Set(files);
+  const expectedDirs = new Set(directories);
+  expectedDirs.delete('');
+  for (const path of [...expectedFiles, ...expectedDirs]) {
+    for (let dir = posix.dirname(path); dir !== '.'; dir = posix.dirname(dir)) expectedDirs.add(dir);
+  }
   const visitDir = (relDir: string): void => {
     const absDir = relDir ? join(snapshotRoot, relDir) : snapshotRoot;
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(absDir, { withFileTypes: true });
-    } catch {
-      throw new JobError(refusalCode);
-    }
-    for (const entry of entries) {
-      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
-      const abs = join(absDir, entry.name);
+    let entries: string[];
+    try { entries = readdirSync(absDir); }
+    catch { throw refuse(relDir, 'retained directory unavailable'); }
+    for (const name of entries) {
+      const rel = relDir ? `${relDir}/${name}` : name;
       let stat: Stats;
-      try {
-        stat = lstatSync(abs);
-      } catch {
-        throw new JobError(refusalCode);
-      }
-      if (stat.isSymbolicLink()) throw new JobError(refusalCode);
+      try { stat = lstatSync(join(absDir, name)); }
+      catch { throw refuse(rel, 'retained entry unavailable'); }
       if (stat.isDirectory()) {
-        if (!expectedDirs.has(rel)) throw new JobError(refusalCode);
+        if (!expectedDirs.delete(rel)) throw refuse(rel, 'unexpected retained directory');
         visitDir(rel);
       } else if (stat.isFile()) {
-        const expectedSha = expectedFiles.get(rel);
-        if (!expectedSha || visitedFiles.has(rel)) throw new JobError(refusalCode);
-        let bytes: Buffer;
-        try {
-          bytes = sourceBytes(snapshotRoot, rel);
-        } catch {
-          throw new JobError(refusalCode);
-        }
-        if (jobHash(bytes) !== expectedSha) throw new JobError(refusalCode);
-        visitedFiles.add(rel);
-      } else {
-        throw new JobError(refusalCode);
-      }
+        if (!expectedFiles.delete(rel)) throw refuse(rel, 'unexpected retained asset');
+      } else throw refuse(rel, 'retained entry is not a regular file or directory');
     }
   };
   visitDir('');
-  if (visitedFiles.size !== expectedFiles.size) throw new JobError(refusalCode);
+  const missing = expectedFiles.values().next().value ?? expectedDirs.values().next().value;
+  if (missing !== undefined) throw refuse(missing, 'retained entry unavailable');
 }
 
 function extractReaderToken(error: unknown): string | null {
