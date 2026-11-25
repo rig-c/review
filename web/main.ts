@@ -2274,8 +2274,9 @@ function renderPendingSubjects(subjects:readonly {kind:string;stage?:string}[]):
  if(host?.checkpointPair)syncCheckpointPair();
  if(refreshVerdictComments){comments?.refresh();partsSubject?.refreshComments();}
  if(host?.recordSubmission?.()==='submitted')firstPublicationPrompt=false;
- // #1228: a displayed record publication with nothing pending and nothing submitted reads the comment line, never the waiting line.
- const recordCommentMode=!!host?.record&&host.recordSubmission?.()!=='submitted';
+ // #1228: a displayed record publication takes the comment line where the first-publication waiting line stood;
+ // answered and submitted states keep their own line, and progress still takes over the headline.
+ const recordCommentMode=!!host?.record&&firstPublicationPrompt;
  renderAskHeadline(labels.join(' · ')||((typeof commentHost==='function'&&commentHost())||recordCommentMode?"We're looking at the work together. Leave your thoughts as comments.":firstPublicationPrompt?t('job.waiting',undefined,'en'):'Nothing is waiting for your answer.'));
  if(subjects.length)firstPublicationPrompt=false;
  renderDraftState();
