@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | [`@rig-c/review/job-host`](#managed-owner-host) | Installed Bun entry | Supported import contract. Changes to its public names and signatures require explicit public-contract review. See the [runtime inventory](#named-export-inventory) and [source exports](../src/job-host.ts). | Review #489 |
 | CLI and `@rig-c/review/package.json` | Installed CLI and package metadata subpath | Supported. | Before Review #489 |
-| [Interview-stage project opening](#interview-stage-project-opening) | `rig-review open` with `--project` and `--picks-dir` | Supported without a version or draft selector for an interview-stage project that has neither a recorded draft nor a recorded review package. | Review #731 |
+| [Interview-stage project opening](#interview-stage-project-opening) | `rig-review open` with `--project` and `--picks-dir` | CLI flag and `rig-review/interview-picks@1` file readers remain supported for compatibility; the workspace renders the named `INTERVIEW_PICKS_DISABLED` refusal instead of an answer form (#1230). | Review #731 |
 | [Package-only job API](REVIEW_PACKAGE.md#live-job-contract) | `rig-review/job-api@2` | Default package-only host contract. | C4 (Review #501) |
 | [Record-and-package job API](REVIEW_PACKAGE.md#model-free-record-mode-and-source-seam) | `rig-review/job-api@3` | Additive record mode with its own capability and reuse checks. | Review #588 |
 | [Finalized job acts](#act-and-ask-schemas-currently-accepted) | `rig-review/act@2` through `rig-review/act@10` | Consumers narrow by `schema`. Historical acts retain their original bytes and readers. | C4 (Review #501) and subsequent revisions |
@@ -26,7 +26,7 @@
 | `rig-review/act@4` | Record acts through `parseRecordAct`, including historical interview picks, signoff and reopen. Record checkpoint uses this schema. |
 | `rig-review/act@5` | Historical parts verdict with pointed issues. |
 | `rig-review/act@6` | Structured comment acts through `parseCommentsAct`, including historical package and record interview picks. |
-| `rig-review/act@7` | Context-aware comment acts through `parseContextCommentsAct`. Interview picks use @6. |
+| `rig-review/act@7` | Context-aware comment acts through `parseContextCommentsAct`. Historical interview picks use @6. |
 | `rig-review/act@8` | `parseMeshEditsAct` accepts the @7 envelope with optional mesh edits on a rig Request changes verdict. Fresh verdicts carrying mesh edits without chest landmark edits use @8. |
 | `rig-review/act@9` | `parseChestLandmarksAct` accepts chest landmark edits on a compiled-rig Request changes verdict, with optional mesh edits and comment context. |
 | `rig-review/act@10` | Comment-only acts through `parseCommentOnlyAct`: comments and optional mesh-edit or chest-landmark carriers on the displayed publication, sent without an ask. No verdict, outcome, decision or selections. Historical @2–@9 acts keep their readers. |
@@ -71,6 +71,9 @@ code inventory is `JOB_ERROR_CODES` in [the job contract source](../src/job-cont
 | Fresh record `reopen` asks and acts | 4.10.0 (#989) | Historical records and acts keep their readers and compatibility types. |
 | Fresh `signoff` asks and acts (including `plan-approved`) | #1227 | Historical records and acts keep their readers and compatibility types. |
 | Fresh `interview-picks` asks and acts | #1230 | Declared picks subjects, historical acts and `rig-review/interview-picks@1` files keep their readers and compatibility types. |
+| Interview answer form | #1230 | Live job comments (`rig-review/act@10`); option-set pictures stay in the shared main view. |
+| `--picks-dir`'s UI | #1230 | Now the `INTERVIEW_PICKS_DISABLED` refusal on the workspace; CLI and file readers still read `rig-review/interview-picks@1`. |
+| Historical interview answer display | #1230 | A person can no longer see an old interview answer or its note on a Review screen; agents and the CLI read them byte for byte. |
 
 ## History
 
@@ -1083,7 +1086,7 @@ accepts it with the checkpoint and signoff `words` check and still refuses any
 other extra key. A pin on a sealed question image takes the same label as a plan
 picture pin, and `api/interview` adds the image's sealed `path` and `sha256` on
 record publications. Consumers of historical act@4 use `parseRecordAct`.
-Fresh picks carry structured comments through `parseCommentsAct` as described
+Historical act@6 picks carry structured comments through `parseCommentsAct` as described
 in the [comments decoder contract](REVIEW_PACKAGE.md#comments-decoder-contract).
 
 ### Package manifest `frames` declaration
