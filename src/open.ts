@@ -9,7 +9,7 @@ import {constants,type Stats} from 'node:fs';
 import {basename,dirname,join,resolve,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {loadReferencedReview,selectedReference,assertReviewUnchanged} from './reference.ts';
-import {loadReview,UnrecognizedOutputError,type ReviewPackage} from './manifest.ts';
+import {loadReview,reviewProducerStarts,UnrecognizedOutputError,type ReviewPackage} from './manifest.ts';
 import {loadCompare,assertCompareUnchanged,type ComparePackage} from './compare.ts';
 import {startServer} from './server.ts';
 import {startCompareServer} from './compare-server.ts';
@@ -43,7 +43,12 @@ const appRoot=fileURLToPath(new URL('..',import.meta.url));
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sleep=(ms:number)=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 export const defaultStateDir=()=>process.env.RIG_REVIEW_STATE_DIR??join(homedir(),'.local','state','rig-c-review');
-export async function loadOpenPackage(inputs:OpenInputs,options:{cwd?:string}={}):Promise<OpenPackage>{
+export async function loadOpenReview(inputs:OpenInputs,options:{cwd?:string;stateDir?:string}={}):Promise<ReviewPackage>{
+ const {previousProducerRoot}=await import('./open-previous.ts');
+ const original=await previousProducerRoot(inputs.input,options.stateDir??defaultStateDir());
+ return loadReferencedReview(inputs.input,inputs.reference,handoffFlags(inputs),options.cwd,undefined,original);
+}
+export async function loadOpenPackage(inputs:OpenInputs,options:{cwd?:string;stateDir?:string}={}):Promise<OpenPackage>{
  if(inputs.project&&inputs.project.version===undefined&&inputs.project.draftId===undefined){
   if(inputs.compare!==undefined||inputs.reference!==undefined||inputs.animation!==undefined||inputs.control||inputs.direct||inputs.viewOnly||handoffFlags(inputs))throw new Error('OPEN_OPTION_INVALID --project: interview-only open takes only the project root, --project and --picks-dir');
   const joined=joinProject(null,inputs.project);
@@ -52,7 +57,7 @@ export async function loadOpenPackage(inputs:OpenInputs,options:{cwd?:string}={}
   return {mode:'interview',p:null,joined,selection:null,contentHash:joined.sourceHash,inputs:{input:joined.opened.root,project:joined.designation}};
  }
  // Handoff flags become canonical absolute paths here, so the worker and every reload read exactly these files.
- if(!inputs.compare){const base=await loadReferencedReview(inputs.input,inputs.reference,handoffFlags(inputs),options.cwd);const joined=inputs.project?joinProject(base,inputs.project,{starts:[options.cwd??process.cwd()]}):undefined;const p=joined?.review??base,selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);if(inputs.viewOnly)p.viewOnly=true;return {mode:'single',p,selection,contentHash:p.sourceHash,...(joined?{joined}:{}),inputs:{input:p.manifestPath,...(joined?{project:joined.designation}:{}),...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{}),...(p.handoffInputs??{})}};}
+ if(!inputs.compare){const base=await loadOpenReview(inputs,options);const joined=inputs.project?joinProject(base,inputs.project,{starts:[options.cwd??process.cwd()]}):undefined;const p=joined?.review??base,selection=selectAnimation([{label:'single',catalog:p.feedbackCatalog,report:p.report}],inputs.animation,true);if(inputs.viewOnly)p.viewOnly=true;return {mode:'single',p,selection,contentHash:p.sourceHash,...(joined?{joined}:{}),inputs:{input:p.manifestPath,...(joined?{project:joined.designation}:{}),...(selectedReference(p)?{reference:selectedReference(p)!.path}:{}),...(selection?{animation:selection.name}:{}),...(inputs.control?{control:true}:{}),...(p.handoffInputs??{})}};}
  if(inputs.project)throw new Error('INTERVIEW_SOURCE_MISMATCH: compare takes no joined project');
  if(handoffFlags(inputs))throw new HandoffError('HANDOFF_FLAGS_INVALID','--config','compare takes no producer handoff; open one package with --config');
  if(!inputs.reference)throw new Error('open compare: explicit --reference required');
@@ -69,7 +74,7 @@ export async function openFingerprint():Promise<string>{
  hash.update('bun.lock\0');try{hash.update(await readFile(join(appRoot,'bun.lock')));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;hash.update('(absent)');}
  hash.update('@rig-c/play/package.json\0');hash.update(await readFile(playPackagePath()));return hash.digest('hex');
 }
-export function openKey(p:OpenPackage,fingerprint:string):string {return digest({fingerprint,installation:appRoot,mode:p.mode,inputs:p.inputs,content:p.contentHash,identity:p.mode==='interview'?{projectHash:p.joined.opened.hash}:p.mode==='single'?p.p.reviewedSource:p.p.response.binding,...(p.mode==='single'&&p.joined?{projectHash:p.joined.opened.hash}:{})});}
+export function openKey(p:OpenPackage,fingerprint:string):string {return digest({fingerprint,installation:appRoot,mode:p.mode,inputs:p.inputs,content:p.contentHash,identity:p.mode==='interview'?{projectHash:p.joined.opened.hash}:p.mode==='single'?p.p.reviewedSource:p.p.response.binding,...(p.mode==='single'&&p.joined?{projectHash:p.joined.opened.hash}:{}),...(p.mode==='single'&&p.p.originalProducerRoot?{originalProducerRoot:p.p.originalProducerRoot}:{})});}
 /** Handoff URL: the managed front's `/instances/<key>/` path (or the worker's own origin when direct). The
  * capability rides in the fragment, which browsers never send to a server; the page stores and strips it. */
 export function openUrl(record:Pick<RecordFile,'origin'|'key'|'contentHash'|'capability'>,front?:string):string {const url=new URL(front?`${front}/instances/${record.key}/`:record.origin);url.searchParams.set('input',record.contentHash);url.searchParams.set('handoff',record.key);url.hash='cap='+record.capability;return url.href;}
@@ -123,7 +128,7 @@ async function verifyOpenLoad(p:OpenPackage,viewOnly:boolean,cwd=process.cwd()):
   if(p.joined?.draft)return;
   try{await verifyCompiledModel(p.p.root,p.p.manifest.model,p.selection?.name,p.p.manifest.sets);}
   catch(error){throw new Error(`OPEN_MODEL_UNAVAILABLE: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
-  const handoffReason=await verifyHandoffReadiness(p.p,[p.p.root,cwd],viewOnly);
+  const handoffReason=await verifyHandoffReadiness(p.p,reviewProducerStarts(p.p,cwd),viewOnly);
   if(handoffReason)throw new Error(`OPEN_MODEL_UNAVAILABLE: ${handoffReason}`);
   return;
  }
@@ -139,7 +144,7 @@ export async function prepareOpenTarget(inputs: OpenInputs, options: OpenOptions
  const viewOnly=options.viewOnly??inputs.viewOnly??false;
  for(const path of [inputs.input,...(inputs.compare!==undefined?[inputs.compare]:[])])await assertOpenInput(path);
  if(inputs.compare!==undefined&&!inputs.reference)throw new Error('OPEN_REFERENCE_REQUIRED: compare: explicit --reference required');
- let p:OpenPackage;try{p=await loadOpenPackage(inputs,{cwd:options.cwd});}catch(error){throw await openRefusal(error,inputs);}
+ let p:OpenPackage;try{p=await loadOpenPackage(inputs,options);}catch(error){throw await openRefusal(error,inputs);}
  fingerprint??=await openFingerprint();const key=openKey(p,fingerprint);
  // #187: canonical (symlinks and ancestors resolved) and outside every supplied folder: the package, the build root a check package belongs to, the handoff root.
  const stateDir=destinationDirectory(options.stateDir??defaultStateDir(),'OPEN_STATE_INVALID: the state directory path has a non-directory component or a symlink loop'),roots=p.mode==='interview'?[{kind:'package' as const,path:p.joined.opened.root}]:p.mode==='single'?stateRoots(p.p):[...stateRoots(p.p.a),...stateRoots(p.p.b)];
@@ -179,7 +184,7 @@ export async function runOpenWorker(requestPath:string):Promise<void>{
  const raw=await smallJson(requestPath) as WorkerRequest;if(raw.schema!=='rig-review-open-request/1'||!raw.identity||!recordValue({schema:'rig-review-open-instance/1',...raw.identity,pid:process.pid,origin:'http://127.0.0.1:1',mode:'single',capability:'0'.repeat(64)},raw.identity.key))throw new Error('open worker: invalid request');
  const spec=raw,control=await realpath(join(spec.stateDir,'open'));if(dirname(await realpath(requestPath))!==control||spec.request!==requestPath||spec.registry!==join(control,spec.identity.key+'.json')||!Number.isSafeInteger(spec.idleMs)||spec.idleMs<100)throw new Error('open worker: invalid state locations or idle limit');
  const workerCwd=typeof spec.cwd==='string'&&isAbsolute(spec.cwd)?spec.cwd:undefined;
- const p=await loadOpenPackage(spec.inputs,{cwd:workerCwd}),fingerprint=await openFingerprint();if(fingerprint!==spec.identity.fingerprint||openKey(p,fingerprint)!==spec.identity.key||p.contentHash!==spec.identity.contentHash)throw new Error('open worker: inputs changed before startup');
+ const p=await loadOpenPackage(spec.inputs,{cwd:workerCwd,stateDir:spec.stateDir}),fingerprint=await openFingerprint();if(fingerprint!==spec.identity.fingerprint||openKey(p,fingerprint)!==spec.identity.key||p.contentHash!==spec.identity.contentHash)throw new Error('open worker: inputs changed before startup');
  if(spec.inputs.control&&(!spec.controlToken||!/^[a-f0-9-]{36}$/.test(spec.controlToken)))throw new Error('open control: invalid private capability');
  // The worker mints its own page capability; it lives only in this process and the private record.
  const removeRecord=async()=>{const current=await readRecord(spec.registry,spec.identity.key);if(current?.nonce===spec.identity.nonce)await unlink(spec.registry).catch(()=>{});};
@@ -195,7 +200,7 @@ export async function runOpenWorker(requestPath:string):Promise<void>{
 /** Read/control an already running, explicitly opted-in exact binding. Never starts a worker. */
 export async function controlReview(inputs:OpenInputs,commandOptions:{pageId?:string;expectedRevision?:number;requestId?:string;command?:ControlCommand;waitMs?:number;stateDir?:string}={}):Promise<unknown>{
  const wait=commandOptions.waitMs??10000;if(!Number.isSafeInteger(wait)||wait<0||wait>30000)throw new Error('CONTROL_WAIT: expected integer 0..30000');
- const p=await loadOpenPackage({...inputs,control:true}),fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
+ const p=await loadOpenPackage({...inputs,control:true},commandOptions),fingerprint=await openFingerprint(),key=openKey(p,fingerprint);
  const stateDir=destinationDirectory(commandOptions.stateDir??defaultStateDir(),'CONTROL_STATE: the state directory path has a non-directory component or a symlink loop');
  const workspace=await (await import('./open-workspace-launch.ts')).workspaceControlLocator(stateDir,key);
  let record:{origin:string;controlToken:string;capability:string},prefix='';

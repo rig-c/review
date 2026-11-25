@@ -1,6 +1,6 @@
 import {constants} from 'node:fs';
 import {copyFile, lstat, mkdir, realpath, writeFile} from 'node:fs/promises';
-import {basename, dirname, join, relative, resolve} from 'node:path';
+import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {isDeepStrictEqual} from 'node:util';
 import {jobHash} from './job-api.ts';
 import {JOB_PREVIOUS_BUILD_SCHEMA} from './job-contract.ts';
@@ -10,7 +10,7 @@ import {BUILD_ROOT_FILES} from './handoff.ts';
 import {checkedPath} from './interview-project.ts';
 import {loadReview, parsePreviousBuild, previousBuildFileError, type PreviousOpenSource, type ReviewPackage} from './manifest.ts';
 import {handoffFlags, type OpenInputs} from './open.ts';
-import {assertPrivate, writePrivate} from './open-workspace-state.ts';
+import {assertPrivate, readPrivate, writePrivate} from './open-workspace-state.ts';
 import {hashReferenceFile} from './reference.ts';
 import {canonicalStatePath, stateDirInside, stateRoots, type StateRoot} from './state-dir.ts';
 
@@ -22,6 +22,33 @@ export interface PreviousOpenOptions {
   previousAtlas?: string;
   clipMap: ReadonlyMap<string, string>;
   noClipMap?: boolean;
+}
+
+const previousStateDirectory = (state: string) => join(canonicalStatePath(state), 'previous-builds');
+const sourceRecordPath = (container: string, identity: string) => join(container, identity + '.source.json');
+const sourceRecordSchema = 'rig-review-previous-source/1';
+
+/** Only a generated manifest in this invocation's private Review state can recover its original lookup root. */
+export async function previousProducerRoot(input: string, state: string): Promise<string | undefined> {
+  const path = await realpath(input);
+  const generated = /^_*review-with-previous-([a-f0-9]{64})\.json$/.exec(basename(path));
+  if (!generated) return undefined;
+  const container = previousStateDirectory(state);
+  const [identity, current] = relative(container, path).split(sep);
+  if (!identity || identity !== generated[1] || current !== 'current') return undefined;
+  const pair = join(container, identity), manifest = relative(pair, path);
+  const record = sourceRecordPath(container, identity);
+  await assertPrivate(container, true);
+  await assertPrivate(pair, true);
+  const value = await readPrivate(record) as Partial<{schema: string; manifest: string; manifestHash: string; originalRoot: string}> | null;
+  if (value === null) return undefined; // Retained before original lookup roots were recorded.
+  if (value.schema !== sourceRecordSchema || value.manifest !== manifest ||
+      typeof value.originalRoot !== 'string' || !isAbsolute(value.originalRoot) ||
+      canonicalStatePath(value.originalRoot) !== value.originalRoot ||
+      (await hashReferenceFile(clonePath(pair, manifest))).sha256 !== value.manifestHash) {
+    throw previousBuildFileError(manifest, 'retained manifest or producer origin does not match the state record');
+  }
+  return value.originalRoot;
 }
 
 function clonePath(root: string, path: string, directory = false) {
@@ -87,7 +114,7 @@ export async function preparePreviousOpen(inputs: OpenInputs, pair: PreviousOpen
   if (current.manifest.previousBuild) throw previousBuildFileError(current.manifestPath,'current package already declares previousBuild');
 
   const roots=[...stateRoots(current),...stateRoots(previous)];
-  const stateDir=canonicalStatePath(state), container=join(stateDir,'previous-builds');
+  const stateDir=canonicalStatePath(state), container=previousStateDirectory(stateDir);
   for (const path of [stateDir,container,join(stateDir,inputs.direct?'open':'owner-workspace')]) assertOutside(path,roots);
 
   const currentClips=(current.feedbackCatalog.animations??[]).map(clip=>clip.name);
@@ -136,7 +163,7 @@ export async function preparePreviousOpen(inputs: OpenInputs, pair: PreviousOpen
       if(actual?.sha256!==hash)throw previousBuildFileError(file,'retained asset unavailable or hash mismatch');
     }
     const open=openInputs(directory);
-    const retained=await loadReview(open.input,{handoff:handoffFlags(open)});
+    const retained=await loadReview(open.input,{handoff:handoffFlags(open),originalProducerRoot:current.root});
     if(!isDeepStrictEqual(retained.handoff?.record,current.handoff?.record))
       throw previousBuildFileError(current.handoff?.record.config.path??manifestName,'producer handoff changed after relocation');
     assertRetainedSnapshotLayout(directory,retainedFiles.keys(),retainedDirectories,previousBuildFileError);
@@ -157,6 +184,11 @@ export async function preparePreviousOpen(inputs: OpenInputs, pair: PreviousOpen
     await validate(temporary);
   });
   await validate(path);
+  const record=sourceRecordPath(container,identity);
+  const source={schema:sourceRecordSchema,manifest:manifestPath,manifestHash,originalRoot:current.root};
+  const existing=await readPrivate(record);
+  if (existing===null) await writePrivate(record,source);
+  else if (!isDeepStrictEqual(existing,source)) throw previousBuildFileError(manifestPath,'retained producer origin has changed');
   const unmapped=currentClips.filter(name=>!mapping.has(name)||!previousClips.has(mapping.get(name)!));
   return {inputs:openInputs(path),path,clipMap,unmapped};
 }

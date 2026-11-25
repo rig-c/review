@@ -76,8 +76,8 @@ export interface HandoffRecord {
 /** `source` (#109): the declared source painting's absolute path, which `propose --from-config` reads; null when none was declared. */
 /** `full` / `head` (#115): the declared See-through runs' absolute paths, which `rig-parts build` reads; null when none was declared. */
 /** `keypoints` (#111): the declared keypoint file's absolute path, which a cloth recipe Apply's `propose --keypoints` reads; null when none was declared. */
-export interface Handoff { record: HandoffRecord; config: string; parts: string | null; rig: string | null; root: string; flags?: HandoffFlags; source?: string | null; full?: string | null; head?: string | null; keypoints?: string | null; starts?: readonly string[] }
-export interface ResolveHandoffOptions { starts?: readonly string[] }
+export interface Handoff { record: HandoffRecord; config: string; parts: string | null; rig: string | null; root: string; flags?: HandoffFlags; source?: string | null; full?: string | null; head?: string | null; keypoints?: string | null; starts?: readonly string[]; originalConfigStarts?: readonly string[] }
+export interface ResolveHandoffOptions { starts?: readonly string[]; originalProducerRoot?: string }
 
 export class HandoffError extends Error {
   constructor(readonly code: string, readonly field: string, readonly detail: string) { super(`${code} ${field}: ${detail}`); }
@@ -337,7 +337,10 @@ async function record(root: string, base: string, how: HandoffRecord['how'], via
   // Files the config names that the producer reads, resolved against the config's own directory.
   let parsed: unknown = null;
   try { parsed = JSON.parse(await readFile(config, 'utf8')); } catch { /* the producer refuses an unreadable config by name */ }
-  const searchStarts = [dirname(config), base, root, ...(options.starts ?? [process.cwd()])];
+  const localStarts = [dirname(config), base, root];
+  const originalRoot = options.originalProducerRoot;
+  const configStarts = originalRoot ? localStarts.map(path => resolve(originalRoot, relative(root, path))) : localStarts;
+  const searchStarts = [...configStarts, ...(options.starts ?? [process.cwd()])];
   const { partsRoot, references } = configNamedReferences(parsed, searchStarts);
   for (const ref of references) {
     const field = `config ${ref.at}`, lexical = resolve(dirname(config), ref.value);
@@ -398,6 +401,7 @@ async function record(root: string, base: string, how: HandoffRecord['how'], via
     record: { schema: HANDOFF_SCHEMA, how, via, outside: !inside(root, config), config: { path: show(config), sha256: files.get(show(config))!.sha256 }, parts: parts ? show(parts) : null, rig: rig ? show(rig) : null, source, full: extra.full ? show(extra.full) : null, head: extra.head ? show(extra.head) : null, ...(extra.keypoints ? { keypoints: { path: show(extra.keypoints), sha256: files.get(show(extra.keypoints))!.sha256 } } : {}), files: sorted, missing },
     config, parts, rig, root: base, source: extra.source ?? null, full: extra.full ?? null, head: extra.head ?? null, keypoints: extra.keypoints ?? null,
     starts: searchStarts,
+    ...(originalRoot ? { originalConfigStarts: searchStarts } : {}),
   };
 }
 

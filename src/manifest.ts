@@ -49,8 +49,13 @@ export interface ReviewPackage { scene?:SceneInspection; direction?:DirectionIns
   cwd?: string;
   /** Explicit producer lookup roots, retained for source revalidation. */
   handoffStarts?: readonly string[];
+  /** Launcher-validated original package root when opening a retained pair. */
+  originalProducerRoot?: string;
   /** #329: the handoff's source painting, served at a fixed route by its pinned hash; absent when the handoff knows none. */
   sourcePainting?: SourcePainting }
+export function reviewProducerStarts(p: ReviewPackage, cwd = process.cwd()): string[] {
+  return [p.originalProducerRoot ?? p.root, cwd];
+}
 function fail(field: string, expected: string): never { throw new Error(`${field}: expected ${expected}`); }
 export function object(value: unknown, field: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) fail(field, 'object'); return value as Record<string, unknown>; }
 export function string(value: unknown, field: string): string { if (typeof value !== 'string' || !value.trim() || value.length > 10000) fail(field, 'nonempty string (at most 10000 characters)'); return value; }
@@ -328,6 +333,7 @@ interface ReviewLoadOptions {
   handoff?: HandoffFlags | false;
   cwd?: string;
   handoffStarts?: readonly string[];
+  originalProducerRoot?: string;
   /** Load only the adapter's build model and its sealed page images. */
   sealedPlayback?: ReadonlyMap<string, string>;
   /** Standalone pairing retains the loader's exact closure and the original manifest fields. */
@@ -429,7 +435,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
   const reportPath=files.has('report.json')?'report.json':authoringPath('report.json');let report:ReportSeeds|null=null;let frames:ReviewFrames|null=null;let modelMetadata:Record<string,unknown>|null=null;let directionInput:unknown;
   // The handoff files are hashed beside the package: their record joins the reviewed identity (and so the session file).
   const {handoff,reason:handoffReason}=options.handoff===false?{handoff:null,reason:null}:
-    await resolveHandoff(root,manifest.producer,options.handoff,{starts:options.handoffStarts??[options.cwd??process.cwd()]});
+    await resolveHandoff(root,manifest.producer,options.handoff,{starts:options.handoffStarts??[options.cwd??process.cwd()],originalProducerRoot:options.originalProducerRoot});
   // #329: the source painting the handoff knows is the first reference, outside the package's own files.
   const painting=sourcePainting(manifest,handoff,directory);
   let scene:SceneInspection|undefined;
@@ -479,7 +485,7 @@ export async function loadReview(input: string, options: ReviewLoadOptions = {})
     previousOpen.capture({rawManifest:adapterManifest??rawManifest,files:fileHashes,playback});
   }
   const feedbackCatalog:FeedbackCatalog={rig:manifest.id,bones:modelNames(modelMetadata,'bones'),slots:modelNames(modelMetadata,'slots'),animations,clock:report?.clock??null,clockAnimation:report?.animation??null,...(frames&&animations?{frameClocks:declaredFrameClocks(frames,animations,report)}:{}),...(discoverTurnDials(modelMetadata).length?{turnDials:discoverTurnDials(modelMetadata)}:{})};
-  return {...(scene?{scene}:{}),...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,frames,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{}),...(options.cwd?{cwd:options.cwd}:{}),...(options.handoffStarts?{handoffStarts:options.handoffStarts}:{})};
+  return {...(scene?{scene}:{}),...(direction?{direction}:{}),...(manifest.sets?{setsHash:fileHashes.get(manifest.sets)!}:{}),referenceHashes:Object.fromEntries(manifest.references.map(r=>[r.id,r.id===painting?.id?painting.sha256:fileHashes.get(r.path)!])),root,manifestPath,manifest,sourceHash:hash.digest('hex'),reviewedSource,files,report,frames,feedbackCatalog,handoff,handoffReason,...(handoff?.flags?{handoffInputs:handoff.flags}:{}),...(buildRoot?{buildRoot}:{}),...(painting?{sourcePainting:painting}:{}),...(options.cwd?{cwd:options.cwd}:{}),...(options.handoffStarts?{handoffStarts:options.handoffStarts}:{}),...(options.originalProducerRoot?{originalProducerRoot:options.originalProducerRoot}:{})};
 }
 
 /** #329: the reference id and served path of the handoff's source painting; the path is a name, never a package file. */

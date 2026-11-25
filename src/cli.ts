@@ -7,12 +7,12 @@ import {appliedValue,parseCorrection,projectPartsDescription,projectSessionCorre
 import {createRebuilds} from './rebuild.ts';
 import {readFile} from 'node:fs/promises';
 import {parseControlCommand} from './control.ts';
-import { loadReview } from './manifest.ts';
+import { loadReview, reviewProducerStarts } from './manifest.ts';
 import { formatFeedbackIssues,feedbackWithCommentGroups,formatCorrectionIssue } from './feedback-export.ts';
 import {loadReferencedReview,selectedReference,assertReviewUnchanged} from './reference.ts';
 import {animationDiagnostic,selectAnimation} from './animation-selection.ts';
 import {shellWord} from './open-shell.ts';
-import {openReview,buildOpenDiagnostic,controlReview,loadOpenPackage,defaultStateDir,handoffFlags,type OpenInputs} from './open.ts';
+import {openReview,buildOpenDiagnostic,controlReview,loadOpenPackage,loadOpenReview,defaultStateDir,handoffFlags,type OpenInputs} from './open.ts';
 import type {PreviousOpenOptions} from './open-previous.ts';
 import {checkHandoffFlags,HANDOFF_FLAGS} from './handoff.ts';
 import { readFeedbackSession, readFeedbackCompareSession } from './session-history.ts';
@@ -375,7 +375,7 @@ export async function main(args:string[],options:{stateDir?:string}={}){
   const handoffProblem=checkHandoffFlags(handoff);if(handoffProblem)throw new Error(handoffProblem);if(compare&&handoffFlags(handoff))throw new Error('--config: compare takes no producer handoff');
   if(projectOptions.length)handoff.project=parseOpenInputs([input,...projectOptions,...(compare?['--compare',compare]:[])],{interview:false}).project;
   if(compare){if(correctionId)throw new Error('CORRECTION_COMPARE_UNSUPPORTED: select a single reviewed package');if(command!=='feedback')throw new Error('--compare: use open or feedback');const loaded=await loadOpenPackage({input,compare,reference,animation});if(loaded.mode!=='compare')throw new Error('Expected comparison');printFeedback(await readFeedbackCompareSession(loaded.p,options.stateDir));return;}
-  const base=await loadReferencedReview(input,reference,handoffFlags(handoff));
+  const base=await loadOpenReview({...handoff,reference},options);
   const joined=handoff.project?joinProject(base,handoff.project):undefined,p=joined?.review??base;
   const unchanged=()=>joined?.assertCurrent()??assertReviewUnchanged(p);
   if(viewOnly)p.viewOnly=true;// Serving starts on the report's clip when it names one; check and feedback validate only an explicit flag.
@@ -389,7 +389,7 @@ export async function main(args:string[],options:{stateDir?:string}={}){
     const correction=parseCorrection((item?.context as any)?.correction);
     if(!item||!correction||session.feedbackWarnings.some(warning=>warning.id===item.id))throw new Error('CORRECTION_ITEM_INVALID: expected a valid saved correction');
     const source={id:p.manifest.id,revision:p.manifest.revision,sourceHash:p.sourceHash,reviewedSource:p.reviewedSource};
-    const rebuilds=createRebuilds(p,{stateDir,starts:[p.root,process.cwd()],unchanged,bones:p.feedbackCatalog.bones});
+    const rebuilds=createRebuilds(p,{stateDir,starts:reviewProducerStarts(p),unchanged,bones:p.feedbackCatalog.bones});
     const settled=correction.path==='made'&&correction.selector.kind!=='post'?await rebuilds.correctionEvidence(appliedValue(item)):undefined;
     const projected=projectSessionCorrection({...correction,session,sessionBytes:bytes,source,itemId:item.id,settled,direction:p.direction});
     await unchanged();

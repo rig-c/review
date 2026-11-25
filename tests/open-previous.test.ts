@@ -1,7 +1,7 @@
 import {afterEach, expect, test} from 'bun:test';
 import {cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, truncate, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {dirname, join} from 'node:path';
+import {basename, dirname, join, relative} from 'node:path';
 import {jobHash} from '../src/job-api.ts';
 import type {JobPreviousBuild} from '../src/job-contract.ts';
 
@@ -70,10 +70,10 @@ async function fixture() {
 }
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-async function runCli(state: string, args: string[], managedPort?: number) {
+async function runCli(state: string, args: string[], managedPort?: number, cwd?: string) {
   if (!stateDirs.includes(state)) stateDirs.push(state);
   const child = Bun.spawn([process.execPath, cli, ...args], {
-    stdout: 'pipe', stderr: 'pipe', env: {...process.env, RIG_REVIEW_STATE_DIR: state,
+    cwd, stdout: 'pipe', stderr: 'pipe', env: {...process.env, RIG_REVIEW_STATE_DIR: state,
       ...(managedPort === undefined ? {} : {RIG_REVIEW_FRONT_PORT: String(managedPort)})},
   });
   const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -189,8 +189,7 @@ test('the same demo pair requires explicit --view-only when no producer handoff 
   expect((await opened(await launch(f))).metadata.capabilities.playback).toBe(true);
 }, 30000);
 
-test('a producer config beside a bare out folder stays available after pairing and reopening', async () => {
-  const f = await fixture();
+async function bareProducer(f: Fixture) {
   const producer = join(f.root, 'producer');
   const current = join(producer, 'out');
   await mkdir(join(current, 'rig'), {recursive: true});
@@ -204,6 +203,12 @@ test('a producer config beside a bare out folder stays available after pairing a
   }));
   await writeFile(join(current, 'parts.json'), '{}');
   for (const file of ['rig.json', 'motion.json', 'mesh_report.json']) await writeFile(join(current, 'rig', file), '{}');
+  return {producer, current};
+}
+
+test('a producer config beside a bare out folder stays available after pairing and reopening', async () => {
+  const f = await fixture();
+  const {producer, current} = await bareProducer(f);
   const before = await tree(producer);
   const pair = await opened(await runCli(f.state,
     ['open', current, '--previous', f.previous, '--animation', 'inspect', '--direct']));
@@ -219,6 +224,87 @@ test('a producer config beside a bare out folder stays available after pairing a
     sourceHash: pair.metadata.sourceHash, reviewedSource: pair.metadata.reviewedSource,
   });
   expect(await tree(producer)).toEqual(before);
+}, 30000);
+
+test('paired open keeps the original project producer from an external cwd', async () => {
+  const f = await fixture();
+  const {producer, current} = await bareProducer(f);
+  const cwd = join(f.root, 'external cwd');
+  await mkdir(cwd);
+  const version = '1.99.1216';
+  for (const [name, bin, script] of [
+    ['@rig-c/parts', 'rig-parts', `
+      const {cpSync} = require('node:fs');
+      const {join} = require('node:path');
+      const args = process.argv.slice(2);
+      const value = flag => args[args.indexOf(flag) + 1];
+      if (args[0] === 'rig') cpSync(join(value('--parts'), 'rig'), value('--out'), {recursive: true});
+      else if (args[0] === 'remesh') {console.error('FAIL  PROJECT_ONLY_PRODUCER: remesh reached'); process.exit(1);}
+    `],
+    ['@rig-c/core', 'rigc', 'process.exit(0);'],
+  ] as const) {
+    const root = join(producer, 'node_modules', name);
+    await mkdir(root, {recursive: true});
+    await writeFile(join(root, 'package.json'), JSON.stringify({name, version, bin: {[bin]: './tool.cjs'}}));
+    await writeFile(join(root, 'tool.cjs'), script);
+  }
+  const before = await Promise.all([tree(producer), tree(f.previous)]);
+  const open = (args: string[], port?: number, from = cwd) => runCli(f.state, ['open', ...args, '--animation', 'inspect',
+    ...(port === undefined ? ['--direct'] : [])], port, from);
+  const producerStatus = {available: true, producer: {package: '@rig-c/parts', version}};
+  const plain = await open([current]);
+  expect(plain).toMatchObject({exit: 0});
+  const plainRebuild = new URL('api/rebuild', plain.stdout.trim());
+  expect(await (await fetch(plainRebuild)).json()).toMatchObject(producerStatus);
+
+  const args = [current, '--previous', f.previous];
+  const pair = await opened(await open(args));
+  expect((await open(args)).stdout).toBe(pair.url.href + '\n');
+  const reopen = await open([pair.manifest]);
+  expect(reopen).toMatchObject({exit: 0, stdout: pair.url.href + '\n'});
+  const rebuild = new URL('rebuild', pair.api);
+  const status = await (await fetch(rebuild)).json();
+  expect(status).toMatchObject(producerStatus);
+  const started = await fetch(rebuild, {method: 'POST', headers: {Origin: pair.url.origin,
+    'Content-Type': 'application/json', 'X-Review-Capability': pair.url.hash.slice(5)},
+    body: JSON.stringify({part: 'topwear', configHash: status.inputs.configHash,
+      regions: [{name: 'bust', shape: 'circle', cx: 414, cy: 342, r: 50, bone: 'rigid', spacing: 13, band: 30}]})});
+  let job = await started.json();
+  expect({httpStatus: started.status, ...job}).toMatchObject({httpStatus: 202});
+  for (let i = 0; job.status === 'running' && i < 200; i++) {
+    await Bun.sleep(25);
+    job = await (await fetch(new URL('rebuild/' + job.id, pair.api))).json();
+  }
+  expect(job).toMatchObject({status: 'refused', producer: {version}, producerLine: 'FAIL  PROJECT_ONLY_PRODUCER: remesh reached'});
+
+  const listener = Bun.serve({hostname: '127.0.0.1', port: 0, fetch: () => new Response()});
+  const port = listener.port!;
+  await listener.stop(true);
+  const repoCwd = join(import.meta.dir, '..');
+  const coldManaged = await open([pair.manifest], port, repoCwd);
+  expect(coldManaged).toMatchObject({exit: 0});
+  const managed = await opened(await open(args, port, repoCwd), true);
+  expect(coldManaged.stdout).toBe(managed.url.href + '\n');
+  expect(managed.manifest).toBe(pair.manifest);
+  expect(await (await fetch(new URL('rebuild', managed.api))).json()).toMatchObject(producerStatus);
+  expect(await open([pair.manifest], port, repoCwd)).toMatchObject({exit: 0, stdout: managed.url.href + '\n'});
+
+  const forgedContainer = join(f.root, 'forged', 'previous-builds');
+  const identity = basename(pair.state);
+  const forgedPair = join(forgedContainer, identity);
+  await mkdir(forgedContainer, {recursive: true, mode: 0o700});
+  await cp(pair.state, forgedPair, {recursive: true});
+  const record = identity + '.source.json';
+  await cp(join(dirname(pair.state), record), join(forgedContainer, record));
+  const forged = await open([join(forgedPair, relative(pair.state, pair.manifest))]);
+  expect(forged).toMatchObject({exit: 1, stderr: expect.stringContaining('MODELING_PRODUCER_NOT_INSTALLED')});
+
+  const retained = await readFile(pair.manifest);
+  await writeFile(pair.manifest, JSON.stringify({...JSON.parse(retained.toString()), originalProducerRoot: forgedContainer}));
+  const tampered = await open([pair.manifest]);
+  expect(tampered).toMatchObject({exit: 1, stderr: expect.stringContaining('retained manifest or producer origin does not match')});
+  await writeFile(pair.manifest, retained);
+  expect(await Promise.all([tree(producer), tree(f.previous)])).toEqual(before);
 }, 30000);
 
 test('paired open keeps a selected local reference and control on the exact admitted manifest', async () => {
