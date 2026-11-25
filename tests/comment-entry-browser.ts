@@ -66,8 +66,9 @@ const generalEntryVisible = `!!document.querySelector('${generalButton}')?.check
 async function openLiveVerdict(page:InputCdpSession,wait:Wait,live:LivePublication,lang:Language):Promise<LiveVerdict> {
   const {kind,fixture,publication}=live;
   await wait(`${ready}&&document.querySelector('#save')?.hidden===true`);
-  // #1226 owner ruling: "Add general comment" is available with no ask on a live rig; parts still waits for its verdict ask.
-  assert.equal(await page.evaluate<boolean>(generalEntryVisible),kind==='rig','a published source alone offers general comments on a rig only');
+  // #1226 owner ruling: "Add general comment" is available with no ask on a live rig.
+  // #1242 owner ruling: the parts screen sends comments the same way, so it offers the entry with no ask too.
+  assert.equal(await page.evaluate<boolean>(generalEntryVisible),true,'a published source alone offers general comments');
   await page.evaluate(`window.__commentEntryBeforeAsk=true`);
 
   // #1227: checkpoint until #1229 retires record asks

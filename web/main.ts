@@ -445,7 +445,8 @@ function renderDraftState(): void {
     if(answered&&!recordAnswered)for(const row of recordComments)answeredRecordRows.set(row.id,JSON.stringify(row));
     recordAnswered=answered;
   }
-  if(recordSubmission&&!(recordSubmission==='submitted'&&typeof commentHost==='function'&&commentHost()&&hasUnsentContent())){
+  // #1242: on a record screen a comment written after the answer falls to Send comments' own state.
+  if(recordSubmission&&!(host?.record&&recordSubmission==='submitted'&&typeof commentHost==='function'&&commentHost()&&hasUnsentContent())){
     rigInspector.actBar.setSaveState(recordSubmission==='sending'?{kind:'saving',text:'Sending'}:{kind:'saved',text:'Submitted'});
     recordSaveStateShown=true;
     renderAnswerControls();return;
@@ -464,6 +465,8 @@ function renderDraftState(): void {
     rigInspector.actBar.setSaveState(saving?{kind:'saving',text:'Sending'}:!unsent&&live&&host?.verdictAnswered?.()?{kind:'saved',text:live}:
       !unsent&&typeof answerSaved!=='undefined'&&answerSaved?{kind:'saved',text:'Answer saved'}:
       !unsent&&(commentSendState==='sent'||!!session?.updatedAt||Object.keys(sentAloneRows()).length>0)?{kind:'saved',text:'Submitted'}:{kind:'unsaved',text:'Not submitted'});
+    // The footer repeats a saved record answer, as below.
+    if(!unsent&&typeof answerSaved!=='undefined'&&answerSaved&&!saving&&host?.record&&!el('review-message').classList.contains('error'))message(sourceTextContent(el('dirty')),false,true);
     return;
   }
   if (draftStatus === null && !live && !answerSaved && !dirty && !saving && !draftConflict && !actReadOnly && !session?.updatedAt) return;
