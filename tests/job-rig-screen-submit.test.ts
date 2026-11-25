@@ -583,9 +583,9 @@ test('#1231 Send comments carries pending Edit Mesh and chest drafts as act@10 c
     const config = {path, sha256: jobHash(bytes)};
     f.setContext({...f.getContext(), files: [config], chestLandmarks: [{...chestEdit, source: {...chestEdit.source, configHash: config.sha256}}]});
     const publication = await f.publish();
-    const page = await f.display(publication), requests: UISubmissionV3[] = [];
+    const page = await f.display(publication), requests: UISubmissionV3[] = [], prompts: string[] = [];
     const cleared: {mesh: unknown[][]; chest: unknown[][]} = {mesh: [], chest: []};
-    async function send(model: typeof publication.source.model) {
+    async function send(model: typeof publication.source.model, general = ['The chest sits low.']) {
       const display = {publication: {...publication, source: {...publication.source, model}}} as unknown as DisplayPublicationV3;
       const initial = baseline();
       const prepared: JobRigScreenPrepared = {jobRigScreen: true, display, entry: 'http://127.0.0.1:4318/retained/',
@@ -593,6 +593,8 @@ test('#1231 Send comments carries pending Edit Mesh and chest drafts as act@10 c
           reviewedSource: initial.reviewedSource, sourceHash: publication.source.sourceHash}, checkpoints: new Set()};
       const screen = createJobRigScreen({host: {classList: {remove() {}}, replaceChildren() {}} as unknown as HTMLElement,
         pageId: page.pageId, access: {capability: 'synthetic-ui', headers: () => new Headers()},
+        // HQ ruling (#1231): Send comments never confirms, even with mesh edits; a confirm here would cancel the send.
+        confirm: text => {prompts.push(text); return false;},
         window: {
           state: () => ({pending: f.session.status().pending as unknown as PendingAskV3[], receipt: page,
             generation: f.session.status().generation, preparing: false, closed: false}),
@@ -607,7 +609,7 @@ test('#1231 Send comments carries pending Edit Mesh and chest drafts as act@10 c
         }});
       screen.commit(prepared);
       await screen.painted(prepared, new AbortController().signal);
-      return rigHost()!.submitComments!([], ['The chest sits low.']);
+      return rigHost()!.submitComments!([], general);
     }
     const file = publication.source.model!;
     // A carrier bound to a model the daemon did not retain is a stale view; nothing is cleared.
@@ -629,6 +631,12 @@ test('#1231 Send comments carries pending Edit Mesh and chest drafts as act@10 c
     expect(f.session.readActExport(act.actId, false).toString()).toBe(JSON.stringify(act));
     expect(JSON.stringify(parseCommentOnlyAct(JSON.parse(f.session.readActExport(act.actId, false).toString())))).toBe(JSON.stringify(act));
     expect(cleared).toEqual({mesh: [[meshEdit]], chest: [[chestEdit]]});
+    // Edits alone, with no comment, are a valid Send comments act.
+    setRigHost(null);
+    expect(await send(file, [])).toBe('job.saved');
+    expect(requests.at(-1)).toMatchObject({kind: 'comments', value: {comments: [],
+      carriers: [{kind: 'mesh-edits', file, meshEdits}, {kind: 'chest-landmarks', file, chestLandmarks}]}});
+    expect(prompts).toEqual([]);
   } finally {
     setRigHost(null);
     if (savedDocument) Object.defineProperty(globalThis, 'document', savedDocument);
