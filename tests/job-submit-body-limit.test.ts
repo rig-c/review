@@ -10,7 +10,7 @@ import {PNG} from 'pngjs';
 // CI's 2.8 s DPR 1 result puts the DPR 2 estimate at 5.6 s before headroom.
 const dpr2TimeoutMs = 8_000;
 
-for (const ratio of [1, 2]) test(`#785 24-slot idle verdict with signoff pending and synthetic DPR ${ratio} capture through the owner front`, async () => {
+for (const ratio of [1, 2]) test(`#785 24-slot idle verdict and synthetic DPR ${ratio} capture through the owner front`, async () => {
   const f = await jobFixture({scratchParent: process.env.TMPDIR});
   let front: ReturnType<typeof createJobFront> | undefined;
   const server = Bun.serve({hostname: '127.0.0.1', port: 0,
@@ -20,9 +20,9 @@ for (const ratio of [1, 2]) test(`#785 24-slot idle verdict with signoff pending
   try {
     const {bytes: painting, slots} = await growJobRigFixture(f, 1920, 1080);
     const {input, publication, ask} = await rigStillInput(f, 0, 'idle');
-    const signoff = await f.ask(publication, {kind: 'signoff', stage: 'rig-review'});
+    // #1235: no signoff sample ask rides along; the rig screen's unasked-kind filtering has its own #709 tests.
     const decisions = jobRigScreenDecisions({status: 'approved', checkpoints: {}, feedback: []},
-      [ask, signoff], publication.publicationId);
+      [ask], publication.publicationId);
     expect(decisions.map(item => item.kind)).toEqual(['review-verdict']);
     // A synthetic uncompressed-detail bitmap at the owner's pane size, not a browser rendering claim.
     const width = 767 * ratio, height = 770 * ratio, pixels = new PNG({width, height});
@@ -51,7 +51,7 @@ for (const ratio of [1, 2]) test(`#785 24-slot idle verdict with signoff pending
     expect(result.value.kind).toBe('review-verdict');
     expect(result.value.value.comments).toEqual([]);
     expect(f.session.status().pending.some(item => item.askId === ask.askId)).toBe(false);
-    expect(f.session.status().pending.map(item => item.askId)).toEqual([signoff.askId]);
+    expect(f.session.status().pending).toEqual([]);
     expect(JSON.parse(f.session.readActExport(result.value.actId, false).toString())).toEqual(result.value);
   } finally {
     front.stop(); await server.stop(true); await f.close();

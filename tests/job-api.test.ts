@@ -73,13 +73,13 @@ const permutedFeedbackComment = (): JobComment => ({
 });
 
 test('#653 P1 raw non-still export validates comments but retains original entry and Feedback anchor key order', async () => {
-  const f = await fixture(), publication = await f.publish(), ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'}),
-    page = await f.display(publication);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: f.session.status().generation, submissionId: '653-order', kind: 'checkpoint',
-    value: {checkpointId: 'step-one', outcome: 'pass', words: 'old checkpoint'}}));
+  // #1235: the committed sample is the comment-only act@10; the planted row is a historical act@6 checkpoint.
+  const f = await fixture(), publication = await f.publish(), page = await f.display(publication);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page,
+    expectedGeneration: f.session.status().generation, submissionId: '653-order', kind: 'comments',
+    value: {comments: [{text: 'old comment'}]}}));
   if (!saved.ok) throw new Error(saved.error.code);
-  const fresh = {...saved.value, schema: 'rig-review/act@6', value: {
+  const fresh = {...saved.value, schema: 'rig-review/act@6', kind: 'checkpoint', askId: 'historical-ask', value: {
     checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass', comments: [permutedFeedbackComment()],
   }};
   const raw = JSON.stringify(fresh), db = new Database(join(f.state, 'jobs.sqlite'));
@@ -219,7 +219,7 @@ test('#900 an already waiting subscription sees an independent attachment publis
     await Bun.sleep(0);
     const asked = await call({...f.base(), verb: 'ask', expectedGeneration: attached.status().generation,
       idempotencyKey: '900-attached-ask', publicationId: published.value.publicationId,
-      subject: {kind: 'checkpoint', checkpointId: 'step-one'}});
+      subject: {kind: 'review-verdict', stage: 'rig-review'}});
     expect(asked.ok).toBe(true);
     const second = await subscriptionDeadline(pending);
     expect(second.done).toBe(false);
@@ -478,10 +478,10 @@ test('CLI streams response bytes up to the full-act envelope bound, cancels on o
 
 test('public next and consumer act reads are independent of a renamed private page-storage field', async () => {
   const f = await fixture(), publication = await f.publish();
-  const ask = await f.ask(publication, { kind: 'checkpoint', checkpointId: 'step-one' }), page = await f.display(publication);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: ask.askId,
-    expectedGeneration: f.session.status().generation, submissionId: 'storage-projection', kind: 'checkpoint',
-    value: { checkpointId: 'step-one', outcome: 'pass', words: '' } }));
+  const page = await f.display(publication);
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page,
+    expectedGeneration: f.session.status().generation, submissionId: 'storage-projection', kind: 'comments',
+    value: { comments: [{ text: 'storage projection' }] } }));
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
   const request = { ...f.base(), verb: 'next', after: null, waitMs: 0 };
@@ -504,14 +504,13 @@ test('public next and consumer act reads are independent of a renamed private pa
   }
 });
 
-test('#557 control default checkpoint fetch keeps the API envelope and exact reviewer value', async () => {
+test('#557 control default comment fetch keeps the API envelope and exact reviewer value', async () => {
   const f = await fixture();
   const publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
   const page = await f.display(publication);
-  const value = {checkpointId: 'step-one', outcome: 'pass' as const, words: ' \n원문 그대로\t '};
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: f.session.status().generation, submissionId: '557-default', kind: 'checkpoint', value}));
+  const value = {comments: [{text: ' \n원문 그대로\t '}]};
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page,
+    expectedGeneration: f.session.status().generation, submissionId: '557-default', kind: 'comments', value}));
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
   const request = {...f.base(), verb: 'fetch-act', actId: saved.value.actId};
@@ -519,20 +518,18 @@ test('#557 control default checkpoint fetch keeps the API envelope and exact rev
   expect(await response.text()).toBe(JSON.stringify({schema: JOB_API_SCHEMA, verb: 'fetch-act',
     jobId: f.session.jobId, requestId: request.requestId, generation: f.session.status().generation,
     ok: true, value: saved.value}));
-  expect(saved.value.schema).toBe('rig-review/act@6');
+  expect(saved.value.schema).toBe('rig-review/act@10');
   expect(saved.value).not.toHaveProperty('still');
-  expect(saved.value.value).toEqual({checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass',
-    comments: [{text: value.words, anchor: {checkpointId: 'step-one', planStepId: 'step-one'}}]});
+  expect(saved.value.value).toEqual(value);
 });
 
 test('#557 R08 raw negotiation returns the act bytes while the default envelope remains separate', async () => {
   const f = await fixture();
   const publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
   const page = await f.display(publication);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: f.session.status().generation, submissionId: '557-raw', kind: 'checkpoint',
-    value: {checkpointId: 'step-one', outcome: 'pass', words: ' \n원문\t '}}));
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page,
+    expectedGeneration: f.session.status().generation, submissionId: '557-raw', kind: 'comments',
+    value: {comments: [{text: ' \n원문\t '}]}}));
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
   const response = await f.ports.handleJobApi(new Request(f.origin + `/jobs/${f.session.jobId}/api`, {
@@ -579,11 +576,10 @@ test('#557 control an agent bearer cannot negotiate raw act or PNG consumer read
 test('#557 R09 production CLI consumes its existing grant on stdin and writes only raw act bytes', async () => {
   const f = await fixture();
   const publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
   const page = await f.display(publication);
-  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: ask.askId,
-    expectedGeneration: f.session.status().generation, submissionId: '557-cli', kind: 'checkpoint',
-    value: {checkpointId: 'step-one', outcome: 'pass', words: ' \n원문\t '}}));
+  const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page,
+    expectedGeneration: f.session.status().generation, submissionId: '557-cli', kind: 'comments',
+    value: {comments: [{text: ' \n원문\t '}]}}));
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
   const server = Bun.serve({hostname: '127.0.0.1', port: 0,

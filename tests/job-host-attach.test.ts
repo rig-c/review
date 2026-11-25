@@ -956,18 +956,19 @@ test('CP1 later semantic publish ask next UI finalization writer fetch and close
   expect(published.ok).toBe(true); expect(reads).toBe(1);
   expect((await semantic(attached, 'publish', fields)).value).toEqual(published.value); expect(reads).toBe(1);
   const stale = await semantic(attached, 'ask', {expectedGeneration: 0, idempotencyKey: 'stale', publicationId: published.value.publicationId,
-    subject: {kind: 'checkpoint', checkpointId: 'step-one'}});
+    subject: {kind: 'review-verdict', stage: 'rig-review'}});
   expect(stale).toMatchObject({ok: false, error: {code: 'JOB_GENERATION_STALE'}});
   const ask = await semantic(attached, 'ask', {expectedGeneration: 1, idempotencyKey: 'attached-ask', publicationId: published.value.publicationId,
-    subject: {kind: 'checkpoint', checkpointId: 'step-one'}}); expect(ask.ok).toBe(true);
+    subject: {kind: 'review-verdict', stage: 'rig-review'}}); expect(ask.ok).toBe(true);
   expect(await semantic(attached, 'next', {after: null, waitMs: 0})).toMatchObject({ok: true, value: {status: 'events'}});
   const uiHeaders = {'Content-Type': 'application/json', Origin: attached.origin, 'X-Review-Capability': credentials.ui};
   const display = await attached.ports.ackDisplayed(attached.session.jobId, new Request(attached.origin + `/jobs/${attached.session.jobId}/ui/displayed`, {
     method: 'POST', headers: uiHeaders, body: JSON.stringify({publicationId: published.value.publicationId, pageId: 'attached-page', sourceHash: published.value.source.sourceHash})}));
   expect(display.ok).toBe(true); if (!display.ok) throw new Error('display');
   const act = await attached.ports.commitUIAct(attached.session.jobId, new Request(attached.origin + `/jobs/${attached.session.jobId}/ui/acts`, {
-    method: 'POST', headers: uiHeaders, body: JSON.stringify({...display.value, askId: ask.value.askId,
-      expectedGeneration: attached.session.status().generation, submissionId: 'attached-act', kind: 'checkpoint', value: {checkpointId: 'step-one', outcome: 'pass', words: ' exact '}})}));
+    // #1235: the finalized sample is the comment-only act@10; the ask above stays pending.
+    method: 'POST', headers: uiHeaders, body: JSON.stringify({...display.value,
+      expectedGeneration: attached.session.status().generation, submissionId: 'attached-act', kind: 'comments', value: {comments: [{text: ' exact '}]}})}));
   expect(act.ok).toBe(true); if (!act.ok) throw new Error('act');
   const fetchAct = async (capability: string) => {
     const res = await attached.ports.handleJobApi(new Request(attached.origin + `/jobs/${attached.session.jobId}/api`, {

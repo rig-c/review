@@ -70,16 +70,17 @@ for (const language of ['en', 'ko'] as const) test(`#785 ${code} says NOT submit
   const front = createJobFront({origin: f.origin, ports: f.ports, resource: async () => ''});
   setLanguagePreference(language);
   try {
-    const publication = await f.publish(), ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+    // #1235: the pending sample ask is the rig verdict; the oversized sample is the comment-only act@10.
+    const publication = await f.publish(), ask = await f.ask(publication, {kind: 'review-verdict', stage: 'rig-review'});
     const page = await f.display(publication), current = baseline(), original = structuredClone(current);
     current.status = 'approved';
     const app = await mainSave(current, original, {async submit() {
       if (code !== 'JOB_BODY_LIMIT') throw new Error(code);
       const access = jobWindowAccess(f.origin + '/jobs/' + f.session.jobId + '/#cap=' + f.credentials.ui, null, () => {});
       const transport = createJobWindowTransport(access, (async (url, init) => front.fetch(new Request(new URL(String(url), f.origin), {...init, headers: {...Object.fromEntries(new Headers(init?.headers)), Origin: f.origin}}))) as typeof fetch);
-      const result = await transport.submit({...page, askId: ask.askId,
-        expectedGeneration: f.session.status().generation, submissionId: 'oversized', kind: 'checkpoint',
-        value: {checkpointId: 'step-one', outcome: 'pass', words: 'x'.repeat(jobBodyLimit)}});
+      const result = await transport.submit({...page,
+        expectedGeneration: f.session.status().generation, submissionId: 'oversized', kind: 'comments',
+        value: {comments: [{text: 'x'.repeat(jobBodyLimit)}]}} as never);
       expect(result.ok).toBe(false);
       if (result.ok) throw Error('EXPECTED_REFUSAL');
       expect(result.error.code).toBe('JOB_BODY_LIMIT');

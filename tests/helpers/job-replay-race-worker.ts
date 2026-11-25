@@ -1,5 +1,5 @@
 import { readSync, writeSync } from 'node:fs';
-import type { JobAskRequest, JobPublishRequest, JobUISubmission } from '../../src/job-contract.ts';
+import type { JobAskRequest, JobCommentUISubmission, JobPublishRequest, JobUISubmission } from '../../src/job-contract.ts';
 import { JobSession, type JobSessionOptions } from '../../src/job-session.ts';
 import type { JobPublishedContext } from '../../src/job-source.ts';
 import { JobError, JobStore } from '../../src/job-store.ts';
@@ -8,7 +8,7 @@ export type ReplayRaceInput = {
   options: Pick<JobSessionOptions, 'root' | 'stateDir' | 'fingerprint' | 'reviewer'>;
   context: JobPublishedContext;
   gated: boolean;
-} & ({ kind: 'agent'; request: JobPublishRequest | JobAskRequest } | { kind: 'ui'; request: JobUISubmission });
+} & ({ kind: 'agent'; request: JobPublishRequest | JobAskRequest } | { kind: 'ui'; request: JobUISubmission | JobCommentUISubmission });
 
 export interface ReplayRaceMessage {
   event: 'ready' | 'enter' | 'result';

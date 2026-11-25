@@ -136,19 +136,17 @@ const fixtures: Awaited<ReturnType<typeof jobFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
 async function fixture() { const f = await jobFixture(); fixtures.push(f); return f; }
 
-test('actual UI ports finalize exact empty/whitespace words with host-declared authority and idempotent act IDs', async () => {
+test('actual UI ports finalize exact whitespace-bearing comment text with host-declared authority and idempotent act IDs', async () => {
   const f = await fixture(), publication = await f.publish();
-  for (const text of ['', ' \n\t ', '원문\nline two']) {
-    const ask = await f.ask(publication, { kind: 'checkpoint', checkpointId: 'step-one' });
+  // #1235: the sample act is the comment-only act@10; an act with no comment refuses (JOB_ACT_INVALID).
+  for (const [index, text] of [' \n원문\t ', '원문\nline two'].entries()) {
     const page = await f.display(publication);
-    const input = { ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-      submissionId: 'submit-' + ask.askId, kind: 'checkpoint', value: { checkpointId: 'step-one', outcome: 'pass', words: text } };
+    const input = { ...page, expectedGeneration: f.session.status().generation,
+      submissionId: 'submit-' + index, kind: 'comments', value: { comments: [{ text }] } };
     const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
     expect(saved.ok).toBe(true);
     if (!saved.ok) throw new Error(saved.error.code);
-    // A blank note has no comment form; nothing is padded.
-    expect(saved.value.value).toEqual({ checkpointId: 'step-one', planStepId: 'step-one', outcome: 'pass',
-      comments: text.trim() ? [{ text, anchor: { checkpointId: 'step-one', planStepId: 'step-one' } }] : [] });
+    expect(saved.value.value).toEqual({ comments: [{ text }] });
     expect(saved.value.authority).toEqual({ actor: 'human', channel: 'review-ui', reviewer: { id: 'declared-owner', role: 'owner' } });
     expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input)))).toEqual(saved);
     const fetched = await (await f.call({ ...f.base(), verb: 'fetch-act', actId: saved.value.actId }, f.session.writerGrant().fetchCapability)).json();
@@ -210,9 +208,10 @@ test('review verdict remains separate from sign-off and is bound to the displaye
 
 test('P1 unrelated agent ask does not stale a captured pending UI act and future generations still refuse', async () => {
   const f = await fixture(), publication = await f.publish();
-  const ask = await f.ask(publication, { kind: 'checkpoint', checkpointId: 'step-one' }), page = await f.display(publication);
-  const input = { ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: 'captured-ui', kind: 'checkpoint', value: { checkpointId: 'step-one', outcome: 'pass', words: '' } };
+  // #1235: the captured sample is the comment-only act@10; it answers no ask.
+  const page = await f.display(publication);
+  const input = { ...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'captured-ui', kind: 'comments', value: { comments: [{ text: 'captured' }] } };
   const unrelated = await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
   const future = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input,
     submissionId: 'future-ui', expectedGeneration: f.session.status().generation + 1 }));
@@ -223,13 +222,9 @@ test('P1 unrelated agent ask does not stale a captured pending UI act and future
   if (!saved.ok) console.log(JSON.stringify({ pendingUIRefusal: saved.error }));
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error(saved.error.code);
-  expect(saved.value.askId).toBe(ask.askId);
+  expect(saved.value).not.toHaveProperty('askId');
   expect(f.session.status().pending.map(item => item.askId)).toContain(unrelated.askId);
   expect(await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input))).toEqual(saved);
-  const duplicate = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...input,
-    submissionId: 'duplicate-ui', expectedGeneration: f.session.status().generation }));
-  expect(duplicate.ok).toBe(false);
-  if (!duplicate.ok) expect(duplicate.error.code).toBe('JOB_ASK_SUPERSEDED');
   const staleAgent = await (await f.call({ ...f.base(), verb: 'ask', expectedGeneration: agentGeneration,
     idempotencyKey: 'stale-agent-cas', publicationId: publication.publicationId,
     subject: { kind: 'review-verdict', stage: 'rig-review' } })).json();
@@ -238,17 +233,15 @@ test('P1 unrelated agent ask does not stale a captured pending UI act and future
 
 test('pending UI act still refuses a rotated nonce, changed source and superseded publication', async () => {
   const f = await fixture(), publication = await f.publish();
-  const ask = await f.ask(publication, { kind: 'checkpoint', checkpointId: 'step-one' }), page = await f.display(publication);
-  const input = { ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: 'pending-bindings', kind: 'checkpoint' as const, value: { checkpointId: 'step-one', outcome: 'pass' as const, words: '' } };
+  // #1235: the sample act is the comment-only act@10.
+  const page = await f.display(publication);
+  const input = { ...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'pending-bindings', kind: 'comments' as const, value: { comments: [{ text: 'pending bindings' }] } };
   const freshPage = await f.display(publication);
   await f.ask(publication, { kind: 'review-verdict', stage: 'rig-review' });
   const wrongNonce = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
   expect(wrongNonce.ok).toBe(false);
   if (!wrongNonce.ok) expect(wrongNonce.error.code).toBe('JOB_DISPLAY_MISMATCH');
-  const retained = f.session.retainedSource(publication.publicationId);
-  expect(() => finalizeJobAct({ jobId: f.session.jobId, submission: { ...input, ...freshPage },
-    ask: { ...ask, status: 'superseded' }, retained, reviewer: { id: 'declared-owner', role: 'owner' } })).toThrow('JOB_ASK_SUPERSEDED');
   const manifestPath = join(f.root, 'out/review.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   await writeFile(manifestPath, JSON.stringify({ ...manifest, revision: 'changed-source' }));

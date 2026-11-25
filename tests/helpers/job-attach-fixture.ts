@@ -12,7 +12,7 @@ import type {OptionContext, PlanContext, RecordActKind} from '../../src/job-cont
 // Every UI submission here is an explicitly synthetic test fixture. No real
 // owner's review or producer acceptance is represented by these acts.
 let sequence = 0;
-/** A live owner host, a strict attachment beside it and a pending checkpoint ask on its head. */
+/** A live owner host, a strict attachment beside it, a pending rig verdict ask on its head and a comment-only act@10 to send (#1235). */
 export async function attachedPair(fixtures: Awaited<ReturnType<typeof jobFixture>>[], hosts: JobOwnerHost[]) {
   const f = await jobFixture();
   fixtures.push(f);
@@ -49,7 +49,7 @@ export async function attachedPair(fixtures: Awaited<ReturnType<typeof jobFixtur
   const publication = published.value;
   const asked = await agentCall(owner, {verb: 'ask', expectedGeneration: owner.session.status().generation,
     idempotencyKey: `ask-${++sequence}`, publicationId: publication.publicationId,
-    subject: {kind: 'checkpoint', checkpointId: 'step-one'}});
+    subject: {kind: 'review-verdict', stage: 'rig-review'}});
   expect(asked.ok).toBe(true);
   async function display(pageId = 'page-one') {
     const shown = await owner.ports.ackDisplayed(jobId, uiRequest('displayed',
@@ -58,9 +58,8 @@ export async function attachedPair(fixtures: Awaited<ReturnType<typeof jobFixtur
     return shown.value;
   }
   const page = await display();
-  const act = {...page, askId: asked.value.askId, expectedGeneration: owner.session.status().generation,
-    submissionId: 'synthetic-cross-session-act', kind: 'checkpoint',
-    value: {checkpointId: 'step-one', outcome: 'pass', words: 'synthetic'}};
+  const act = {...page, expectedGeneration: owner.session.status().generation,
+    submissionId: 'synthetic-cross-session-act', kind: 'comments', value: {comments: [{text: 'synthetic'}]}};
   const head = await agentCall(attached, {verb: 'next', after: null, waitMs: 0});
   expect(head.ok).toBe(true);
   return {owner, attached, agentCall, display, publish, act, cursor: head.value.cursor as string,
@@ -81,14 +80,16 @@ const recordCases = {
     value: {stage: 'plan-approved', words: 'synthetic'}},
 } as const satisfies Record<RecordActKind, {subject: object; value: object}>;
 
-/** A live record-and-package owner host with a strict attachment and a pending record ask of `kind`. */
-export async function recordAttachedPair(scratches: string[], hosts: JobOwnerHost[], kind: RecordActKind = 'checkpoint') {
+/** A live record-and-package owner host with a strict attachment and a pending record ask of `kind`.
+ * `comments` asks nothing and sends the comment-only act@10 on a plan record (#1235). */
+export async function recordAttachedPair(scratches: string[], hosts: JobOwnerHost[], kind: RecordActKind | 'comments' = 'comments') {
   const scratch = await mkdtemp(join(realpathSync(tmpdir()), 'review-1005-record-'));
   scratches.push(scratch);
   const root = join(scratch, 'input');
   await mkdir(root);
   const workspace = kind === 'interview-picks' ? createSyntheticOptionRecordWorkspace(root)
-    : createSyntheticPlanRecordWorkspace(root, {subjects: [recordCases.checkpoint.subject, recordCases.signoff.subject, recordCases.reopen.subject]});
+    : createSyntheticPlanRecordWorkspace(root, {subjects: kind === 'comments' ? [recordCases.signoff.subject]
+      : [recordCases.checkpoint.subject, recordCases.signoff.subject, recordCases.reopen.subject]});
   const reader = createSyntheticRecordReader({onPlan: () => structuredClone(workspace.context as PlanContext),
     onOption: () => structuredClone(workspace.context as OptionContext)});
   const options: JobHostOptions = {
@@ -120,9 +121,9 @@ export async function recordAttachedPair(scratches: string[], hosts: JobOwnerHos
     freeze: {kind: 'producer-held', holdId: 'synthetic-held-freeze', record: workspace.record}});
   expect(published.ok).toBe(true);
   const publication = published.value;
-  const asked = await agentCall(owner, {verb: 'ask', expectedGeneration: owner.session.status().generation,
+  const asked = kind === 'comments' ? undefined : await agentCall(owner, {verb: 'ask', expectedGeneration: owner.session.status().generation,
     idempotencyKey: `ask-${++sequence}`, publicationId: publication.publicationId, subject: recordCases[kind].subject});
-  if (!asked.ok) throw new Error(JSON.stringify(asked));
+  if (asked && !asked.ok) throw new Error(JSON.stringify(asked));
   const display = async (pageId = 'page-record') => {
     const shown = await owner.ports.ackDisplayed(jobId, uiRequest('displayed',
       {publicationId: publication.publicationId, pageId, sourceHash: publication.source.sourceHash}));
@@ -130,8 +131,10 @@ export async function recordAttachedPair(scratches: string[], hosts: JobOwnerHos
     return shown.value;
   };
   const page = await display();
-  const act = {...page, askId: asked.value.askId, expectedGeneration: owner.session.status().generation,
-    submissionId: `synthetic-record-${kind}`, kind, value: recordCases[kind].value};
+  const act = kind === 'comments' ? {...page, expectedGeneration: owner.session.status().generation,
+    submissionId: 'synthetic-record-comments', kind, value: {comments: [{text: 'synthetic'}]}}
+    : {...page, askId: asked.value.askId, expectedGeneration: owner.session.status().generation,
+      submissionId: `synthetic-record-${kind}`, kind, value: recordCases[kind].value};
   const head = await agentCall(attached, {verb: 'next', after: null, waitMs: 0});
   expect(head.ok).toBe(true);
   return {owner, attached, agentCall, display, act, cursor: head.value.cursor as string,

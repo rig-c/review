@@ -37,12 +37,12 @@ async function recordControl(name: string, value: unknown) {
 async function prepared() {
   const f = await fixture();
   const publication = await f.publish();
-  const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+  // #1235: the sample act is the comment-only act@10; it needs no ask.
   const page = await f.display(publication);
-  const input = {...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: 'synthetic-wait-act', kind: 'checkpoint',
-    value: {checkpointId: 'step-one', outcome: 'pass', words: ' \n원문 그대로🙂\t '}};
-  return {f, publication, ask, page, input};
+  const input = {...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'synthetic-wait-act', kind: 'comments',
+    value: {comments: [{text: ' \n원문 그대로🙂\t '}]}};
+  return {f, publication, page, input};
 }
 
 test('--until act accepts the signed CLI ceiling while the HTTP request stays at 30 seconds', () => {
@@ -77,11 +77,10 @@ test('non-act batches advance only the accepted cursor and the whole terminal ba
   const first = await (await f.call({...f.base(), verb: 'next', after: null, waitMs: 0})).json();
   const saved = await f.ports.commitUIAct(f.session.jobId, f.uiRequest(input));
   expect(saved.ok).toBe(true);
-  const secondAsk = await f.ask(publication, {kind: 'signoff', stage: 'plan-approved'});
   const page = await f.display(publication);
-  expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page, askId: secondAsk.askId,
-    expectedGeneration: f.session.status().generation, submissionId: 'synthetic-second', kind: 'signoff',
-    value: {stage: 'plan-approved', decision: 'approved', words: '\n second act '}}))).ok).toBe(true);
+  expect((await f.ports.commitUIAct(f.session.jobId, f.uiRequest({...page,
+    expectedGeneration: f.session.status().generation, submissionId: 'synthetic-second', kind: 'comments',
+    value: {comments: [{text: '\n second act '}]}}))).ok).toBe(true);
   const terminal = await (await f.call({...f.base(), verb: 'next', after: first.value.cursor, waitMs: 0})).json();
   const requests: Record<string, unknown>[] = [], out: string[] = [];
   await jobCommand(['next', f.origin + '/jobs/' + f.session.jobId, '--until', 'act', '--wait-ms', '600000'], options(async (_url, init) => {
@@ -242,7 +241,7 @@ async function waitForMonotonicTarget(monotonicStarted: number, targetMs: number
 }
 
 test('normal CLI invocation waits across the genuine 30-second server boundary for a synthetic UI act after 31 seconds', async () => {
-  const {f, publication, ask} = await prepared();
+  const {f, publication} = await prepared();
   const host = await live(f);
   const displayed = await (await host.ui('displayed', {publicationId: publication.publicationId, pageId: 'synthetic-live-page',
     sourceHash: publication.source.sourceHash})).json();
@@ -255,9 +254,9 @@ test('normal CLI invocation waits across the genuine 30-second server boundary f
     await host.ready;
     await waitForMonotonicTarget(monotonicStarted, 31000, handle => {timer = handle;});
     const committedMs = performance.now() - monotonicStarted;
-    const value = {checkpointId: 'step-one', outcome: 'pass', words: ' \nsynthetic UI fixture 원문🙂\t '};
-    const committed = await (await host.ui('acts', {...displayed.value, askId: ask.askId,
-      expectedGeneration: f.session.status().generation, submissionId: 'synthetic-live-31s', kind: 'checkpoint', value})).json();
+    const value = {comments: [{text: ' \nsynthetic UI fixture 원문🙂\t '}]};
+    const committed = await (await host.ui('acts', {...displayed.value,
+      expectedGeneration: f.session.status().generation, submissionId: 'synthetic-live-31s', kind: 'comments', value})).json();
     expect(committed.ok).toBe(true);
     const result = await process.result;
     const monotonicElapsedMs = performance.now() - monotonicStarted;
@@ -266,8 +265,8 @@ test('normal CLI invocation waits across the genuine 30-second server boundary f
     const terminal = JSON.parse(result.stdout);
     const event = terminal.value.events.find((event: {type: string}) => event.type === 'act');
     expect(event.act).toEqual(committed.value);
-    expect(event.act.schema).toBe('rig-review/act@6');
-    expect(event.act.value.comments).toEqual([{text: value.words, anchor: {checkpointId: 'step-one', planStepId: 'step-one'}}]);
+    expect(event.act.schema).toBe('rig-review/act@10');
+    expect(event.act.value.comments).toEqual(value.comments);
     expect(committedMs).toBeGreaterThanOrEqual(31000);
     expect(monotonicElapsedMs).toBeGreaterThanOrEqual(31000);
     expect(host.requests).toHaveLength(2);

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { JobStore } from '../src/job-store.ts';
 import { Database } from 'bun:sqlite';
 import { jobFixture, jobInputHashes } from './helpers/job-api-fixture.ts';
+import { rigStillCapture } from './helpers/job-rig-still.ts';
 import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { JobSession } from '../src/job-session.ts';
@@ -85,10 +86,10 @@ test('a real record move after snapshot refuses by name and keeps the previous p
 
 test('new publication preserves old retained bytes and makes old displayed submissions stale', async () => {
   const f = await fixture(), first = await f.publish();
-  const ask = await f.ask(first, { kind: 'checkpoint', checkpointId: 'step-one' });
+  // #1235: the captured sample is the comment-only act@10.
   const page = await f.display(first);
-  const captured = { ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: 'old-draft', kind: 'checkpoint', value: { checkpointId: 'step-one', outcome: 'pass', words: '' } };
+  const captured = { ...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'old-draft', kind: 'comments', value: { comments: [{ text: 'old draft' }] } };
   const path = join(f.root, 'out/review.json'), original = await readFile(path, 'utf8');
   await writeFile(path, JSON.stringify({ ...JSON.parse(original), revision: '2' }));
   const second = await f.publish();
@@ -234,9 +235,9 @@ test('process death after a real uncommitted SQL write rolls back document and r
 
 test('process death after act commit is recovered by same-act replay with no duplicate generation or event', async () => {
   const f = await fixture(), publication = await f.publish();
-  const ask = await f.ask(publication, { kind: 'checkpoint', checkpointId: 'step-one' }), page = await f.display(publication);
-  const input = { ...page, askId: ask.askId, expectedGeneration: f.session.status().generation,
-    submissionId: 'crash-retry', kind: 'checkpoint', value: { checkpointId: 'step-one', outcome: 'pass', words: '' } };
+  const page = await f.display(publication);
+  const input = { ...page, expectedGeneration: f.session.status().generation,
+    submissionId: 'crash-retry', kind: 'comments', value: { comments: [{ text: 'crash retry' }] } };
   const child = Bun.spawn([process.execPath, join(import.meta.dir, 'helpers/job-agent-client.ts'), 'commit-act-crash'], {
     stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
   });
@@ -356,7 +357,7 @@ test('#1022 replay of a superseded publish or ask refuses by name and names the 
   const publishA = await f.publishRequest('publish-a');
   const firstA = await (await f.call(publishA)).json();
   const askA = { ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation, idempotencyKey: 'ask-a',
-    publicationId: firstA.value.publicationId, subject: { kind: 'checkpoint', checkpointId: 'step-one' } };
+    publicationId: firstA.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } };
   const firstAskA = await (await f.call(askA)).json();
   expect(firstAskA.ok).toBe(true);
   // Still current: the stored receipts come back exactly as before (the envelope reports the current generation, as on main).
@@ -365,16 +366,18 @@ test('#1022 replay of a superseded publish or ask refuses by name and names the 
   expect(await receipt(askA)).toEqual({ok: true, value: firstAskA.value});
 
   // An ask whose act was finalized keeps its stored receipt.
+  // #1235: the answered sample is the rig verdict with its synthetic still, not a signoff.
   const signoffA = { ...f.base(), verb: 'ask', expectedGeneration: f.session.status().generation, idempotencyKey: 'ask-a-signoff',
-    publicationId: firstA.value.publicationId, subject: { kind: 'signoff', stage: 'plan-approved' } };
+    publicationId: firstA.value.publicationId, subject: { kind: 'review-verdict', stage: 'rig-review' } };
   const firstSignoffA = await (await f.call(signoffA)).json();
   const page = await f.display(firstA.value);
   const committed = await f.ports.commitUIAct(f.session.jobId, f.uiRequest({ ...page, askId: firstSignoffA.value.askId,
-    expectedGeneration: f.session.status().generation, submissionId: 'signoff-a', kind: 'signoff',
-    value: { stage: 'plan-approved', decision: 'approved', words: '' } }));
+    expectedGeneration: f.session.status().generation, submissionId: 'signoff-a', kind: 'review-verdict',
+    value: { stage: 'rig-review', verdict: 'approved', words: '' },
+    capture: rigStillCapture(firstA.value, firstSignoffA.value, page).capture }));
   expect(committed.ok).toBe(true);
 
-  // B replaces A before the checkpoint ask is answered.
+  // B replaces A before the first ask is answered.
   const publicationB = await f.publish();
   const head = 'head ' + publicationB.publicationId;
   const publishReplay = await (await f.call(publishA)).json();

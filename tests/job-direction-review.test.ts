@@ -97,7 +97,8 @@ test('#1088 publish, ask, display, finalize, fetch and replay preserve act bytes
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'review-1088-host-')));
   const root = join(scratch, 'work');
   mkdirSync(root);
-  const fixture = createSyntheticPlanRecordWorkspace(root, {subjects: [signoff, checkpoint]});
+  // #1235: the record sample is the direction signoff alone; checkpoint is no longer a sample subject.
+  const fixture = createSyntheticPlanRecordWorkspace(root, {subjects: [signoff]});
   const original = fixture.files.map(file => readFileSync(join(root, file.path)));
   const sessions: JobSession[] = [];
   try {
@@ -137,7 +138,7 @@ test('#1088 publish, ask, display, finalize, fetch and replay preserve act bytes
       expect((await metadata.json()).recordSource).toEqual(publication.source);
 
       const ask = {verb: 'ask-batch', expectedGeneration: 1, idempotencyKey: 'ask',
-        publicationId: publication.publicationId, subjects: [signoff, checkpoint]};
+        publicationId: publication.publicationId, subjects: [signoff]};
       if (projection) {
         inventory = retainedRead = drift;
         expect(await (await api.call(ask)).json()).toMatchObject({ok: false, generation: 1,
@@ -147,7 +148,7 @@ test('#1088 publish, ask, display, finalize, fetch and replay preserve act bytes
       const asked = await (await api.call(ask)).json();
       expect(asked.ok).toBe(true);
       const asks: PendingAskV3[] = asked.value.asks;
-      expect(asks).toHaveLength(2);
+      expect(asks).toHaveLength(1);
       const receipt = await api.display({publicationId: publication.publicationId, pageId: 'owner',
         sourceHash: retained.source.sourceHash});
       if (!receipt.ok) throw new Error(receipt.error.code);
@@ -158,9 +159,7 @@ test('#1088 publish, ask, display, finalize, fetch and replay preserve act bytes
         const fields = {...receipt.value, askId: pending.askId, submissionId: pending.subject.kind,
           expectedGeneration: session.status().generation};
         const words = '  Original approval · 원문\n';
-        const submission: UISubmissionV3 = pending.subject.kind === 'signoff'
-          ? {...fields, kind: 'signoff', value: {stage: signoff.stage, decision: 'approved', words}}
-          : {...fields, kind: 'checkpoint', value: {checkpointId: checkpoint.checkpointId, outcome: 'pass', words}};
+        const submission: UISubmissionV3 = {...fields, kind: 'signoff', value: {stage: signoff.stage, decision: 'approved', words}};
         if (projection && pending.subject.kind === 'signoff') {
           retainedRead = drift;
           expect(await api.commit(submission)).toMatchObject({ok: false, error: {code: 'JOB_ACT_SOURCE_STALE'}});
@@ -172,12 +171,10 @@ test('#1088 publish, ask, display, finalize, fetch and replay preserve act bytes
         const act = parseRecordAct(committed.value);
         expect(Object.hasOwn(act.source, 'directionReview')).toBe(false);
         expect(() => parseRecordAct({...act, source: {...act.source, directionReview}})).toThrow('JOB_ACT_INVALID');
-        if (act.kind !== 'signoff' && act.kind !== 'checkpoint') throw new Error('Expected signoff or checkpoint act');
+        if (act.kind !== 'signoff') throw new Error('Expected signoff act');
         const comments = [{text: act.value.words}];
-        const commentsAct: JobCommentsAct = act.kind === 'signoff'
-          ? {...act, schema: JOB_COMMENTS_ACT_SCHEMA, value: {stage: act.value.stage, decision: act.value.decision, comments}}
-          : {...act, schema: JOB_COMMENTS_ACT_SCHEMA, value: {checkpointId: act.value.checkpointId,
-            planStepId: act.value.planStepId, outcome: act.value.outcome, comments}};
+        const commentsAct: JobCommentsAct =
+          {...act, schema: JOB_COMMENTS_ACT_SCHEMA, value: {stage: act.value.stage, decision: act.value.decision, comments}};
         expect(parseCommentsAct(commentsAct)).toEqual(commentsAct);
         expect(() => parseCommentsAct({...commentsAct, source: {...act.source, directionReview}})).toThrow('JOB_ACT_INVALID');
         const response = await api.fetch(act.actId);

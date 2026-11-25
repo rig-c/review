@@ -80,11 +80,10 @@ test('#817 HTTP owner refusals preserve response and report sanitized metadata',
         await refused(post(url, overflow), 413, 'JOB_BODY_LIMIT', bytes(overflow), jobCaptureBodyLimit);
 
         const publication = await f.publish();
-        const ask = await f.ask(publication, {kind: 'checkpoint', checkpointId: 'step-one'});
+        // #1235: the sample act is the comment-only act@10; ask refusals use the rig verdict below.
         const page = await f.display(publication);
-        const input = {...page, askId: ask.askId, expectedGeneration: host.session.status().generation,
-            submissionId: 'owner-submit', kind: 'checkpoint',
-            value: {checkpointId: 'step-one', outcome: 'pass', words: privateText}};
+        const input = {...page, expectedGeneration: host.session.status().generation,
+            submissionId: 'owner-submit', kind: 'comments', value: {comments: [{text: privateText}]}};
         const refuseAct = async (patch: object, code: string, status = 409) => {
             const body = JSON.stringify({...input, ...patch});
             await refused(post(url, body), status, code, bytes(body));
@@ -92,8 +91,7 @@ test('#817 HTTP owner refusals preserve response and report sanitized metadata',
         await refuseAct({kind: 'mesh-edit'}, 'JOB_ACT_KIND_DISABLED');
         await refuseAct({expectedGeneration: input.expectedGeneration + 1}, 'JOB_GENERATION_STALE');
         await refuseAct({displayedNonce: 'unknown-nonce'}, 'JOB_DISPLAY_MISMATCH');
-        await refuseAct({askId: 'unknown-ask'}, 'JOB_ASK_INVALID');
-        await refuseAct({value: {...input.value, outcome: 'invalid'}}, 'JOB_ACT_INVALID');
+        await refuseAct({value: {comments: []}}, 'JOB_ACT_INVALID');
         const manifestPath = join(f.root, 'out/review.json');
         const manifest = await readFile(manifestPath);
         try {
@@ -107,8 +105,7 @@ test('#817 HTTP owner refusals preserve response and report sanitized metadata',
         expect((await post(url.replace('/ui/acts', '/ui/displayed'), '{}')).status).toBe(400);
         expect((await post(url.replace('/ui/acts', '/api'), '{}')).status).toBe(400);
         expect(events).toHaveLength(previous);
-        await refuseAct({value: {...input.value, words: 'Changed'}}, 'JOB_IDEMPOTENCY_CONFLICT');
-        await refuseAct({submissionId: 'duplicate-owner-submit'}, 'JOB_ASK_SUPERSEDED');
+        await refuseAct({value: {comments: [{text: 'Changed'}]}}, 'JOB_IDEMPOTENCY_CONFLICT');
         await f.publish();
         await refuseAct({submissionId: 'stale-owner-submit'}, 'JOB_ACT_SOURCE_STALE');
 
@@ -124,6 +121,13 @@ test('#817 HTTP owner refusals preserve response and report sanitized metadata',
         await refuseStill({png: 'invalid'}, 'JOB_STILL_CAPTURE_FAILED');
         const largePNG = 'data:image/png;base64,' + Buffer.alloc(jobStillByteLimit + 1).toString('base64');
         await refuseStill({png: largePNG}, 'JOB_STILL_CAPTURE_FAILED', jobStillByteLimit);
+        const refuseAsked = (patch: object, code: string) => {
+            const body = JSON.stringify({...rig.input, ...patch});
+            return refused(post(url, body), 409, code, bytes(body));
+        };
+        await refuseAsked({askId: 'unknown-ask'}, 'JOB_ASK_INVALID');
+        expect((await post(url, JSON.stringify(rig.input))).status).toBe(200);
+        await refuseAsked({submissionId: 'duplicate-owner-submit'}, 'JOB_ASK_SUPERSEDED');
 
         await f.call({...f.base(), verb: 'close', expectedGeneration: host.session.status().generation,
             idempotencyKey: 'close-job', reason: 'synthetic done'});
