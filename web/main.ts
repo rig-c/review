@@ -4028,7 +4028,7 @@ function restoreCommentInspection(value:unknown,timeOnly?:boolean,row?:CommentRo
  return restoreInspection(parseBookmark(value,inspectionBinding()),lifecycle.signal,!!timeOnly,true,feedback);
 }
 function setupComments():void {
- if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.filter(row=>!isSentAlone(row)).length;if(host?.direction)dirty=dirty||recordComments.length>0;}
+ if(host?.direction||host?.record){restoreRecordComments();liveIssueCount=()=>recordComments.filter(row=>!(typeof isSentAlone==='function'&&isSentAlone(row))).length;if(host?.direction)dirty=dirty||recordComments.length>0;}
  if(host?.verdictComments){restoreRecordComments();if(host.verdictComments.rows.length)markDirty();}
  comments=bindStageComments<CommentRow,CommentPose>({answeredDirectionFeedback:host?.direction?.answeredDirectionFeedback,general:host?.record||host?.direction||host?.verdictComments?{
   create:summary=>({id:crypto.randomUUID(),summary}),matches:row=>!('target' in row),
