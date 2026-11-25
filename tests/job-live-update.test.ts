@@ -187,7 +187,7 @@ test('#743 window replacement keeps preparing until asynchronous rollback restor
 
 test('#743 no-picture record attaches owned lifecycle only after asynchronous workspace readiness',async()=>{
  const source=await Bun.file(new URL('../web/main.ts',import.meta.url)).text();
- const body=source.slice(source.indexOf('async function startRecord('),source.indexOf('/** #1041 B: checkpoint, signoff and plan-approval forms'));
+ const body=source.slice(source.indexOf('async function startRecord('),source.indexOf('\nlet unregisterQuestion:'));
  const js=new Bun.Transpiler({loader:'ts'}).transformSync(body),events:string[]=[],disposers:Function[]=[];
  let settle!:()=>void,attached:any;
  const commentButton={disabled:true},stageCommentButton={disabled:true};let commentsSetup=0;

@@ -638,9 +638,10 @@ test('#809 pending ask heading uses full subject sentences in EN/KO and names th
  const raw={text:'',hidden:false,removeAttribute(){}};
  let statusRefreshes=0;const render=new Function('askHeadline','setSourceText','renderDraftState','t','setSourceAttribute','let pendingAnswers=[],firstPublicationPrompt=false,partsSubject=null,host=null,askSentence="",jobProgress=null,progressTimer;'+new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))+';return renderPendingSubjects;')(raw,(_:unknown,text:string)=>{raw.text=text;},()=>{statusRefreshes++;},t,()=>{});
  render([]);expect(raw.hidden).toBe(false);expect(t(raw.text,undefined,'en')).toBe('Nothing is waiting for your answer.');expect(t(raw.text,undefined,'ko')).toBe('답변을 기다리는 요청이 없어요.');
- render([{kind:'review-verdict',stage:'rig-review'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
- expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Review this checkpoint.');
- expect(t(raw.text,undefined,'ko')).toBe('리그와 모션을 확인해 주세요. · 이 체크포인트를 검토해 주세요.');
+ // #1229: checkpoint asks are retired and produce no ask sentence; active subjects still join with full EN/KO sentences.
+ render([{kind:'review-verdict',stage:'rig-review'},{kind:'interview-picks'},{kind:'checkpoint',checkpointId:'step-one'}]);expect(raw.hidden).toBe(false);
+ expect(t(raw.text,undefined,'en')).toBe('Check the rig and motion. · Answer these questions.');
+ expect(t(raw.text,undefined,'ko')).toBe('리그와 모션을 확인해 주세요. · 이 질문에 답해 주세요.');
  render([]);expect(raw.hidden).toBe(false);expect(raw.text).toBe('Nothing is waiting for your answer.');expect(statusRefreshes).toBe(3);
 });
 

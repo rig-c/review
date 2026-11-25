@@ -1558,7 +1558,7 @@ test('#1009 provenance rig and motion SHA rows localize Not supplied in KO/EN wh
  const mainSource=await readFile(new URL('../web/main.ts',import.meta.url),'utf8');
  const compareSource=await readFile(new URL('../web/compare.ts',import.meta.url),'utf8');
  const transpiler=new Bun.Transpiler({loader:'ts'});
- const rpStart=mainSource.indexOf('function renderProvenance(): void {'),rpEnd=mainSource.indexOf('\nfunction checkpointEntry(',rpStart);
+ const rpStart=mainSource.indexOf('function renderProvenance(): void {'),rpEnd=mainSource.indexOf('\nfunction renderCheckpoints(',rpStart);
  const partsStart=mainSource.indexOf(' const renderPartsProvenance='),partsEnd=mainSource.indexOf('\n text(\'provenance-full\'',partsStart);
  const reportStart=mainSource.indexOf('function initReport(): void {'),reportEnd=mainSource.indexOf('\nfunction renderReportEvents(',reportStart);
  const cmpStart=compareSource.indexOf('function provenance(): void {'),cmpEnd=compareSource.indexOf('\nfunction renderFeedbackSelection(',cmpStart);

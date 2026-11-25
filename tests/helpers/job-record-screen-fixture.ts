@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {JobSession} from '../../src/job-session.ts';
 import {JobError} from '../../src/job-store.ts';
 import {createJobHostPorts} from '../../src/job-api.ts';
-import {prepareJobRecordAct} from '../../src/job-act.ts';
+import {finalizeCommentOnlyAct, prepareJobRecordAct} from '../../src/job-act.ts';
 import type {JobRetainedRecordSource} from '../../src/job-source.ts';
 import {createJobFront, jobWindowResources, retainedPublicationRoutes} from '../../src/job-front.ts';
 import {JOB_API_V3_SCHEMA, type DisplayPublicationV3, type NextValueV3, type PendingAskV3, type PublicationV3, type UISubmissionV3, type RecordSignoffStage} from '../../src/job-contract.ts';
@@ -57,9 +57,12 @@ export async function recordScreenFixture(kind:RecordScreenKind,picture:boolean|
  const ports={...fake.ports,async commitUIAct(_job:string,request:Request){
   const input=await request.json() as UISubmissionV3;submissions.push(structuredClone(input));
   try{
-   const act=prepareJobRecordAct({jobId:session.jobId,submission:input,ask,retained:session.retainedSourceV3(ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-'+kind,at:'2026-11-08T12:00:00.000Z'});
+   // #1229: plan records submit comments directly via Send comments (act@10) with no checkpoint form.
+   const act=input.kind==='comments'
+    ?finalizeCommentOnlyAct({jobId:session.jobId,submission:input as never,retained:session.retainedSourceV3(input.publicationId) as never,reviewer:{id:'synthetic-owner',role:'owner'}})
+    :prepareJobRecordAct({jobId:session.jobId,submission:input,ask,retained:session.retainedSourceV3(ask.publicationId) as JobRetainedRecordSource,reviewer:{id:'synthetic-owner',role:'owner'},actId:'act-'+kind,at:'2026-11-08T12:00:00.000Z'});
    const path=join(writeRoot,mode+'.json');await mkdir(writeRoot,{recursive:true});await writeFile(path,JSON.stringify(act));files.push(path);
-   return {ok:true as const,value:act};
+   return {ok:true as const,value:act as never};
   }catch(error){await mkdir(writeRoot,{recursive:true});await writeFile(join(writeRoot,mode+'.refusal.json'),JSON.stringify({error:String(error),input},null,2)+'\n');const code=error instanceof JobError?error.code:'JOB_ACT_INVALID';return {ok:false as const,error:{code,message:String(error)}};}
  }};
  const routes=retainedPublicationRoutes(session);

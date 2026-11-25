@@ -9,19 +9,20 @@ import {join} from 'node:path';
 import {createJobRigScreen} from '../web/job-rig-screen.ts';
 import type {InterviewDisplayQuestion} from '../web/interview-panel.ts';
 import {rigHost,setRigHost} from '../web/rig-host.ts';
-import {createJobFormDrafts,createJobFormHelpers,formFor,jobCheckpointContext,jobPublicationRoutes,prepareJobForms,prepareJobInspection,type JobFormDependencies} from '../web/job-session.ts';
+import {createJobFormDrafts,createJobFormHelpers,formFor,jobPublicationRoutes,prepareJobForms,prepareJobInspection,type JobFormDependencies} from '../web/job-session.ts';
 import {JOB_API_V3_SCHEMA,jobRawActMediaType,type ActV3,type DisplayPublicationV3,type JobFileIdentity,type PendingAskV3,type RecordSignoffStage,type UISubmissionV3} from '../src/job-contract.ts';
 import {optionSetsJobFixture,recordScreenDom,recordScreenFixture} from './helpers/job-record-screen-fixture.ts';
 import {rigPictureCases,SYNTHETIC_RIG_MODEL,SYNTHETIC_RIG_PAGE,SYNTHETIC_RIG_ROOT,type PostPictureCase} from './helpers/job-record-fixture.ts';
 
-async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'|'signoff'='checkpoint',boundParts=false,signoffStage?:RecordSignoffStage,postPicture?:PostPictureCase){
+// #1229: checkpoint forms retired; default record screen harness exercises active interview-picks forms.
+async function harness(picture:boolean|'parts'=false,capability:string|null='fixture',kind:'checkpoint'|'interview-picks'|'signoff'='interview-picks',boundParts=false,signoffStage?:RecordSignoffStage,postPicture?:PostPictureCase){
  const f=await recordScreenFixture(kind,picture,undefined,signoffStage,boundParts,true,undefined,false,false,postPicture),dom=await recordScreenDom();dom.set('location',{origin:f.origin});
  const state={pending:[f.ask] as PendingAskV3[],receipt:null as {publicationId:string;pageId:string;displayedNonce:string}|null,generation:f.display.publication.generation,preparing:false,closed:false};
  const submitted:UISubmissionV3[]=[],store=new Map<string,string>();
  const node=((tag:string,key?:string)=>{const value=dom.document.createElement(tag);if(key)value.textContent=key;return value;}) as JobFormDependencies['node'];
  let screen:ReturnType<typeof createJobRigScreen>;
  const drafts=createJobFormDrafts({jobId:f.session.jobId,current:()=>screen.mounted()?.record?.inspection??null,forms:()=>screen.mounted()?.record?.forms??new Map(),storage:()=>({setItem:(k,v)=>{store.set(k,v);}})});
- const deps:JobFormDependencies={node,translate:key=>key,helpers:{...createJobFormHelpers(node,key=>key),jobCheckpointContext,assertJobAskSource:(ask,display)=>{prepareJobForms(display,[ask],()=>null);}},draftStorage:()=>({getItem:k=>store.get(k)??null}),...drafts,access:{capability},pageId:'fixture-page',window:{state:()=>state,submit:async input=>{submitted.push(input);return {ok:false,error:{code:'JOB_ACT_INVALID',message:'fixture refusal'}};}}};
+ const deps:JobFormDependencies={node,translate:key=>key,helpers:{...createJobFormHelpers(node,key=>key),assertJobAskSource:(ask,display)=>{prepareJobForms(display,[ask],()=>null);}},draftStorage:()=>({getItem:k=>store.get(k)??null}),...drafts,access:{capability},pageId:'fixture-page',window:{state:()=>state,submit:async input=>{submitted.push(input);return {ok:false,error:{code:'JOB_ACT_INVALID',message:'fixture refusal'}};}}};
  const reads:string[]=[];
  const options:Parameters<typeof createJobRigScreen>[0]={host:{classList:{remove(){}},replaceChildren(){}} as unknown as HTMLElement,pageId:deps.pageId,access:{capability,headers:()=>new Headers(capability?{'X-Review-Capability':capability}:{})},window:deps.window,formDependencies:deps,
   readPublication:async id=>{reads.push(id);const value=f.fake.publications.get(id);return value?{ok:true,value}:{ok:false,error:{code:'JOB_PUBLICATION_UNKNOWN',message:'unknown'}};},
@@ -71,66 +72,71 @@ for(const mutant of ['foreign-job','cycle','generation','source','cancel-before'
  }finally{await h.close();}
 });
 
-test('#750 no picture, receipt rearm, new ask, dirty form identity and closed submit refusal',async()=>{
+test('#750 no picture, receipt rearm, ignored retired asks, dirty form identity and closed submit refusal',async()=>{
  const h=await harness();try{
   const ready=await h.screen.prepare(h.f.display,new AbortController().signal);expect(ready?.record?.picture).toBeNull();h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
   const entry=ready!.record!.forms.get(h.f.ask.askId)!;expect(entry.fieldset.disabled).toBe(true);
   h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'first'};h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(false);
-  expect(entry.form.querySelector('textarea')).toBeNull();
-  entry.form.commentWords=()=> '[general]\nretained reviewer words';entry.form.oninput!({} as never);
+  const note=entry.form.querySelector<HTMLTextAreaElement>('textarea[name="note"]')!;
+  note.value='retained reviewer words';entry.dirty=true;h.deps.saveDraft();
   const saved=[...h.store.values()][0]!;expect(saved).toContain('retained reviewer words');
   h.state.preparing=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);
   h.state.preparing=false;h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'rearmed'};
-  h.state.pending.push({...h.f.ask,askId:'later-checkpoint'},{...h.f.ask,askId:'ignored-signoff',subject:{kind:'signoff',stage:'plan-approved'}},{...h.f.ask,askId:'ignored-reopen',subject:{kind:'reopen',stage:'plan-approved'}});h.screen.changed(h.state);
-  expect(ready!.record!.forms.size).toBe(2);expect(ready!.record!.forms.has('ignored-signoff')).toBe(false);expect(ready!.record!.forms.has('ignored-reopen')).toBe(false);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(entry.read()).toMatchObject({words:'[general]\nretained reviewer words'});expect(entry.fieldset.disabled).toBe(false);
-  const restored=formFor(h.f.ask,ready!.record!.inspection,h.deps);restored.form.commentWords=entry.form.commentWords;expect(restored.read()).toEqual(entry.read());
+  // #1229: checkpoint asks join signoff and reopen as ignored non-mounting asks.
+  h.state.pending.push({...h.f.ask,askId:'ignored-checkpoint',subject:{kind:'checkpoint',checkpointId:'step_layout'}},{...h.f.ask,askId:'ignored-signoff',subject:{kind:'signoff',stage:'plan-approved'}},{...h.f.ask,askId:'ignored-reopen',subject:{kind:'reopen',stage:'plan-approved'}});h.screen.changed(h.state);
+  expect(ready!.record!.forms.size).toBe(1);expect(ready!.record!.forms.has('ignored-checkpoint')).toBe(false);expect(ready!.record!.forms.has('ignored-signoff')).toBe(false);expect(ready!.record!.forms.has('ignored-reopen')).toBe(false);expect(ready!.record!.forms.get(h.f.ask.askId)).toBe(entry);expect(entry.read()).toMatchObject({note:'retained reviewer words'});expect(entry.fieldset.disabled).toBe(false);
+  const restored=formFor(h.f.ask,ready!.record!.inspection,h.deps);expect(restored.read()).toEqual(entry.read());
   h.state.closed=true;h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(true);await entry.form.onsubmit!({preventDefault(){}} as never);expect(h.submitted).toHaveLength(0);
  }finally{await h.close();}
 });
 
-test('#989 and #1228 a publication resumed with historical pending reopen and signoff asks plus a checkpoint ask loads, shows only the checkpoint form and submits it',async()=>{
+test('#989, #1228 and #1229 a publication resumed with historical pending reopen, signoff and checkpoint asks plus an interview ask loads, shows only the interview form and submits it',async()=>{
  const h=await harness();try{
-  const checkpointAsk=h.f.ask;
+  const interviewAsk=h.f.ask;
+  const checkpointAsk:PendingAskV3={...h.f.ask,askId:'ask-checkpoint',subject:{kind:'checkpoint',checkpointId:'step_layout'}};
   const signoffAsk:PendingAskV3={...h.f.ask,askId:'ask-signoff',subject:{kind:'signoff',stage:'plan-approved'}};
   const reopenAsk:PendingAskV3={...h.f.ask,askId:'ask-reopen',subject:{kind:'reopen',stage:'plan-approved'}};
-  h.state.pending=[reopenAsk,signoffAsk,checkpointAsk];
+  h.state.pending=[reopenAsk,signoffAsk,checkpointAsk,interviewAsk];
   let mountedForms:readonly HTMLElement[]=[];
   h.options.load=async()=>{rigHost()!.attach({stage:()=>null,redraw(){},message(){},recordForms(forms){mountedForms=forms;}});rigHost()!.displayed();};
   const ready=await h.screen.prepare(h.f.display,new AbortController().signal);
-  expect([...ready!.record!.forms.keys()]).toEqual([checkpointAsk.askId]);
+  expect([...ready!.record!.forms.keys()]).toEqual([interviewAsk.askId]);
   h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
-  h.state.receipt={publicationId:checkpointAsk.publicationId,pageId:h.deps.pageId,displayedNonce:'resumed-nonce'};
+  h.state.receipt={publicationId:interviewAsk.publicationId,pageId:h.deps.pageId,displayedNonce:'resumed-nonce'};
   h.screen.changed(h.state);
   expect(ready!.record!.forms.size).toBe(1);
   expect(ready!.record!.forms.has('ask-reopen')).toBe(false);
   expect(ready!.record!.forms.has('ask-signoff')).toBe(false);
+  expect(ready!.record!.forms.has('ask-checkpoint')).toBe(false);
   expect(mountedForms).toHaveLength(1);
-  const entry=ready!.record!.forms.get(checkpointAsk.askId)!;
+  const entry=ready!.record!.forms.get(interviewAsk.askId)!;
   expect(entry.fieldset.disabled).toBe(false);
-  entry.form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='pass';
-  entry.form.commentWords=()=>'[general]\ncheckpoint on resumed job';
+  for(const input of entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')){input.checked=['biped_std','density_high'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
+  entry.form.querySelector<HTMLTextAreaElement>('textarea[name="note"]')!.value='interview on resumed job';
   await entry.form.onsubmit!({preventDefault(){}} as never);
   expect(h.submitted).toEqual([{
-   kind:'checkpoint',
-   publicationId:checkpointAsk.publicationId,
-   askId:checkpointAsk.askId,
+   kind:'interview-picks',
+   publicationId:interviewAsk.publicationId,
+   askId:interviewAsk.askId,
    pageId:h.deps.pageId,
    displayedNonce:'resumed-nonce',
    expectedGeneration:h.state.generation,
    submissionId:entry.submissionId,
-   value:{checkpointId:(checkpointAsk.subject as {checkpointId:string}).checkpointId,outcome:'pass',words:'[general]\ncheckpoint on resumed job'},
+   value:{questionId:(interviewAsk.subject as {questionId:string}).questionId,selections:[{itemId:'topology',optionId:'biped_std',otherText:null},{itemId:'detail_level',optionId:'density_high',otherText:null}],note:'interview on resumed job'},
   }]);
  }finally{await h.close();}
 });
 
-test('#1228 a publication declaring signoff shows no form and no error on record, surfaces JOB_ASK_UNSUPPORTED on a model ask, and replays historical signoff acts byte-exact', async () => {
+test('#1228 and #1229 publications declaring signoff or checkpoint show no form and no error on record, keep rig screen clean on legacy checkpoint asks, and replay historical acts byte-exact', async () => {
  const {parseRecordAct} = await import('../src/job-api.ts');
  const {matchesJobRecordAct, isPendingOwnerAsk} = await import('../web/job-session.ts');
  const h = await harness(true, 'fixture', 'signoff', false, 'direction-review');
  try {
   expect(isPendingOwnerAsk(h.f.ask)).toBe(false);
-  // 1) Record publication carrying a sign-off subject: once with no ask sent, once with a pending signoff ask.
-  for (const pending of [[] as PendingAskV3[], [h.f.ask]]) {
+  const cpRecordAsk: PendingAskV3 = {...h.f.ask, askId: 'ask-checkpoint', subject: {kind: 'checkpoint', checkpointId: 'step_layout'}};
+  expect(isPendingOwnerAsk(cpRecordAsk)).toBe(false);
+  // 1) Record publication carrying sign-off and checkpoint subjects: no ask, pending signoff, and pending checkpoint all render zero forms and zero errors.
+  for (const pending of [[] as PendingAskV3[], [h.f.ask], [cpRecordAsk]]) {
    h.state.pending = [...pending];
    let mountedForms: readonly HTMLElement[] = [];
    const messages: [string, boolean | undefined][] = [];
@@ -192,6 +198,33 @@ test('#1228 a publication declaring signoff shows no form and no error on record
   const storedBytes = JSON.stringify(historical);
   expect(JSON.stringify(parseRecordAct(JSON.parse(storedBytes)))).toBe(storedBytes);
   expect(matchesJobRecordAct(h.f.ask, historical, h.f.session.jobId)).toBe(true);
+  // #1229: legacy pending checkpoint ask on a model package keeps the rig screen clean without refusal, fresh submission refuses JOB_ACT_KIND_DISABLED, and historical checkpoint act@4 matches.
+  const plannedPkgSource = {...picture.publication.source, plan: {steps: [{id: 'step-one', hash: '1'.repeat(64)}]}} as typeof picture.publication.source;
+  const plannedPicture = {...picture, publication: {...picture.publication, source: plannedPkgSource}} as typeof picture;
+  const legacyPkgCp: PendingAskV3 = {askId: 'legacy-pkg-cp', publicationId: plannedPicture.publication.publicationId, source: plannedPkgSource, status: 'pending', subject: {kind: 'checkpoint', checkpointId: 'step-one'}};
+  h.state.pending = [legacyPkgCp];
+  const legacyRig = await h.screen.prepare(plannedPicture, new AbortController().signal);
+  expect(legacyRig!.refusal).toBeUndefined();
+  const refusedCp = await h.f.ports.commitUIAct(h.f.session.jobId, new Request(h.f.origin + '/ui/acts', {
+   method: 'POST',
+   body: JSON.stringify({
+    kind: 'checkpoint', publicationId: cpRecordAsk.publicationId, askId: cpRecordAsk.askId,
+    pageId: 'historical-page', displayedNonce: 'historical-nonce',
+    expectedGeneration: h.f.display.publication.generation, submissionId: 'fresh-checkpoint',
+    value: {checkpointId: 'step_layout', outcome: 'pass', words: '[general]\nFresh pass'},
+   }),
+  }));
+  expect(refusedCp).toMatchObject({ok: false, error: {code: 'JOB_ACT_KIND_DISABLED'}});
+  const historicalCp: ActV3 = {
+   schema: 'rig-review/act@4', actId: 'act-historical-cp', jobId: h.f.session.jobId,
+   askId: cpRecordAsk.askId, publicationId: cpRecordAsk.publicationId, kind: 'checkpoint',
+   authority: {actor: 'human', channel: 'review-ui', reviewer: {id: 'synthetic-owner', role: 'owner'}},
+   at: '2026-11-08T12:00:00.000Z',
+   source: binding,
+   value: {checkpointId: 'step_layout', planStepId: 'step_layout', outcome: 'pass', words: '[general]\nHistorical pass'},
+  };
+  expect(JSON.stringify(parseRecordAct(JSON.parse(JSON.stringify(historicalCp))))).toBe(JSON.stringify(historicalCp));
+  expect(matchesJobRecordAct(cpRecordAsk, historicalCp, h.f.session.jobId)).toBe(true);
  } finally {
   await h.close();
  }
@@ -220,7 +253,7 @@ test('#774 all shared publications keep one stream; cancellation never mounts an
    jobWindowAccess:()=>({jobId:'fixture'}),i18nDouble:{onLanguageChange:()=>()=>{}},t:(key:string)=>key,createJobFormHelpers:()=>({}),createJobFormDrafts:()=>({saveDraft(){}}),createJobWindowTransport:()=>({}),
    createJobRigScreen:()=>({waiting:async()=>{},mounted:()=>mounted?prepared:null,prepare:async()=>prepared,changed(){changed++;},report(){reports++;},painted:async()=>{paints++;}}),
    createJobWindow:(options:any)=>{adapter=options.adapter;return {stop(){aborted=true;},state:()=>({}),event(){}};},startJobWindowEvents:()=>{streams++;return {done:Promise.resolve(),displayed(){}};},
-   assertJobAskSource(){},jobCheckpointContext,jobPublicationRoutes,jobWindowRefusal:String,globalThis:{addEventListener(){},removeEventListener(){}},JOB_HUB_READY:'ready',jobHubMessageMatches(){}};
+   assertJobAskSource(){},jobPublicationRoutes,jobWindowRefusal:String,globalThis:{addEventListener(){},removeEventListener(){}},JOB_HUB_READY:'ready',jobHubMessageMatches(){}};
   const stop=await run(environment)({append(){notices.push('append');},prepend(){notices.push('prepend');},querySelectorAll:()=>[]});
   expect(await adapter.prepare({},controller.signal)).toBe(prepared);await adapter.painted(prepared,controller.signal);expect(paints).toBe(1);
   adapter.changed({error:'fixture load failure'});expect(changed).toBe(1);expect(reports).toBe(mounted?0:0);expect(notices).toEqual(mounted?[]:['prepend']);
@@ -294,8 +327,9 @@ test('#715 a parts-backed record uses the real parts host and source binding',as
   expect(ready?.record?.picture?.parts?.items.map(item=>item.name)).toEqual(['body','front']);
   h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);
   expect(rigHost()!.subject).toBe('parts');expect(rigHost()!.record?.sourceHash).toBe(h.f.display.publication.source.sourceHash);
-  const entry=ready!.record!.forms.get(h.f.ask.askId)!;expect(entry.form.querySelector('textarea')).toBeNull();
-  entry.form.commentWords=()=> '[general]\nParts record comment';expect(entry.read()).toMatchObject({words:'[general]\nParts record comment'});
+  const entry=ready!.record!.forms.get(h.f.ask.askId)!;
+  const note=entry.form.querySelector<HTMLTextAreaElement>('textarea[name="note"]')!;
+  note.value='Parts record comment';expect(entry.read()).toMatchObject({note:'Parts record comment'});
  }finally{await h.close();}
 });
 
@@ -310,7 +344,7 @@ test('#722 real form saves only checked radios, restores Other with empty contra
   const store=new Map<string,string>(),forms=new Map<string,ReturnType<typeof formFor>>();
   const node=((tag:string,key?:string)=>{const value=dom.document.createElement(tag);if(key)value.textContent=key;return value;}) as JobFormDependencies['node'];
   const drafts=createJobFormDrafts({jobId:f.session.jobId,current:()=>inspection!,forms:()=>forms,storage:()=>({setItem:(key,value)=>{store.set(key,value);}})});
-  const deps:JobFormDependencies={node,translate:key=>key,helpers:{...createJobFormHelpers(node,key=>key),jobCheckpointContext,assertJobAskSource:(ask,display)=>{prepareJobForms(display,[ask],()=>null);}},draftStorage:()=>({getItem:key=>store.get(key)??null}),...drafts,access:{capability:'fixture'},pageId:'page',window:{state:()=>({pending:[f.ask],receipt:null,preparing:false,closed:false,generation:1}),submit:async()=>{throw new Error('No submission in draft test');}}};
+  const deps:JobFormDependencies={node,translate:key=>key,helpers:{...createJobFormHelpers(node,key=>key),assertJobAskSource:(ask,display)=>{prepareJobForms(display,[ask],()=>null);}},draftStorage:()=>({getItem:key=>store.get(key)??null}),...drafts,access:{capability:'fixture'},pageId:'page',window:{state:()=>({pending:[f.ask],receipt:null,preparing:false,closed:false,generation:1}),submit:async()=>{throw new Error('No submission in draft test');}}};
   const entry=formFor(f.ask,inspection,deps);forms.set(f.ask.askId,entry);
   expect(entry.form.querySelector<HTMLButtonElement>('button[type=submit]')!.hidden).toBe(false);
   const radios=[...entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')],identities=radios.map(input=>({name:input.name,value:input.value}));
@@ -384,19 +418,22 @@ test('#722 real form saves only checked radios, restores Other with empty contra
 
 
 // HQ 89f85831: projected prose is the label; source identities stay in tooltips.
-for (const language of ['en','ko'] as const) for (const rule of [1,2,3,4,5,6]) test(`#756 human text/title rule ${rule} (${language})`,async()=>{
+// #1229: rules 4 and 6 covered the retired checkpoint form; rule 5 now asserts checkpoint, signoff and reopen all refuse formFor,
+// and rule 6 asserts the source badge on the active interview-picks form.
+for (const language of ['en','ko'] as const) for (const rule of [1,2,3,5,6]) test(`#756 human text/title rule ${rule} (${language})`,async()=>{
  const i18n=await import('../web/i18n.ts'),preference=i18n.getLanguagePreference(),link=i18n.getLinkLanguage();
- i18n.setLinkLanguage(null);i18n.setLanguagePreference(language);const h=await harness();
+ i18n.setLinkLanguage(null);i18n.setLanguagePreference(language);const h=await harness(false,'fixture',rule===6?'interview-picks':'checkpoint');
  try{
   const prepared=await h.screen.prepare(h.f.display,new AbortController().signal),inspection=prepared!.record!.inspection;
-  const source=h.f.ask.source,plan=source.plan!,before=JSON.stringify(source),original=inspection.metadata.planText!;
-  if(original.status!=='projected')throw new Error('Expected projected fixture');
-  const descriptions=['  Inspect layout <literal> 한글\n','Inspect weights'];
-  const projection={...original,steps:original.steps.map((row,index)=>({...row,does:descriptions[index]!,rests_on:[plan.steps[1]!.id,'external producer text',plan.steps[0]!.id],issues:row.issues.filter(issue=>!['does','rests_on'].includes(issue.field))}))};
-  inspection.metadata.planText=projection;
+  const source=h.f.ask.source,before=JSON.stringify(source);
   const node=((tag:string,key?:string)=>{const element=h.dom.document.createElement(tag);if(key)element.textContent=i18n.t(key);return element;}) as JobFormDependencies['node'];
-  const helpers=createJobFormHelpers(node,i18n.t),deps={...h.deps,node,translate:i18n.t,helpers:{...helpers,jobCheckpointContext,assertJobAskSource:h.deps.helpers.assertJobAskSource}};
+  const helpers=createJobFormHelpers(node,i18n.t),deps={...h.deps,node,translate:i18n.t,helpers:{...helpers,assertJobAskSource:h.deps.helpers.assertJobAskSource}};
   if(rule<=3){
+   const plan=source.plan!,original=inspection.metadata.planText!;
+   if(original.status!=='projected')throw new Error('Expected projected fixture');
+   const descriptions=['  Inspect layout <literal> 한글\n','Inspect weights'];
+   const projection={...original,steps:original.steps.map((row,index)=>({...row,does:descriptions[index]!,rests_on:[plan.steps[1]!.id,'external producer text',plan.steps[0]!.id],issues:row.issues.filter(issue=>!['does','rests_on'].includes(issue.field))}))};
+   inspection.metadata.planText=projection;
    const list=helpers.planTextList(plan,projection,rule===1?plan.steps[1]!.id:undefined);
    for(const step of plan.steps){expect(list.textContent).not.toContain(step.id);expect(list.textContent).not.toContain(step.hash);}
    expect(list.querySelector('[data-job-plan-field="does"]')).toBeNull();
@@ -404,13 +441,13 @@ for (const language of ['en','ko'] as const) for (const rule of [1,2,3,4,5,6]) t
    if(rule===1){expect(summaries).toHaveLength(1);expect(summaries[0]!.textContent).toBe(descriptions[1]!);expect(summaries[0]!.title).toContain(plan.steps[1]!.id);}
    if(rule===2)for(const [index,summary]of summaries.entries()){expect(summary.textContent).toBe(descriptions[index]!);expect(summary.title).toContain(plan.steps[index]!.id);expect(summary.title).toContain(plan.steps[index]!.hash);}
    if(rule===3){const entries=[...list.querySelector('[data-job-plan-field="rests_on"]')!.querySelectorAll('li')];expect(entries.slice(0,3).map(item=>item.textContent)).toEqual([descriptions[1]!,'external producer text',descriptions[0]!]);expect(entries[0]!.title).toBe(plan.steps[1]!.id);expect(entries[2]!.title).toBe(plan.steps[0]!.id);}
-  }else if(rule===4){
-   const form=formFor(h.f.ask,inspection,deps).form,heading=form.querySelector('h3')!;
-   expect(heading.textContent).toBe(descriptions[0]!);expect(heading.title).toBe((h.f.ask.subject as {checkpointId:string}).checkpointId);
-   expect(form.textContent).not.toContain(plan.steps[0]!.id);expect(form.textContent).not.toContain(plan.steps[0]!.hash);
   }else if(rule===5){
+   expect(()=>formFor({...h.f.ask,subject:{kind:'checkpoint',checkpointId:'step_layout'}},inspection,deps)).toThrow('JOB_ACT_KIND_DISABLED');
    expect(()=>formFor({...h.f.ask,subject:{kind:'signoff',stage:'plan-approved'}},inspection,deps)).toThrow('JOB_ACT_KIND_DISABLED');
    expect(()=>formFor({...h.f.ask,subject:{kind:'reopen',stage:'plan-approved'}},inspection,deps)).toThrow('JOB_ACT_KIND_DISABLED');
+   expect('Pass' in enCatalog).toBe(false);expect('Pass' in koCatalog).toBe(false);
+   expect('job.fail' in enCatalog).toBe(false);expect('job.fail' in koCatalog).toBe(false);
+   expect('Review this checkpoint.' in enCatalog).toBe(false);expect('Review this checkpoint.' in koCatalog).toBe(false);
    expect('job.signoff' in enCatalog).toBe(false);expect('job.signoff' in koCatalog).toBe(false);
    expect('Approve this stage.' in enCatalog).toBe(false);expect('Approve this stage.' in koCatalog).toBe(false);
    expect('job.reopen' in enCatalog).toBe(false);expect('job.reopen' in koCatalog).toBe(false);
@@ -418,35 +455,30 @@ for (const language of ['en','ko'] as const) for (const rule of [1,2,3,4,5,6]) t
   }else{
    const form=formFor(h.f.ask,inspection,deps).form,line=form.querySelector<HTMLElement>('.job-source')!;
    expect(line.textContent).toBe(h.f.display.publication.label);expect(line.title).toBe(source.sourceHash);
-   for(const raw of [source.sourceHash,source.projectHash!,...plan.steps.map(item=>item.hash)])expect(form.textContent).not.toContain(raw);
+   for(const raw of [source.sourceHash,source.projectHash!])expect(form.textContent).not.toContain(raw);
   }
   expect(JSON.stringify(source)).toBe(before);inspection.dispose();
  }finally{await h.close();i18n.setLinkLanguage(link);i18n.setLanguagePreference(preference);}
 });
 
-for(const absence of ['absent','invalid','limit','no-issue','no-projection'] as const)test(`#756 missing plan prose uses existing ${absence} copy and refreshes checkpoint headings in place`,async()=>{
+// #1229: checkpoint form heading retired; planTextList keeps missing plan prose copy and live language refresh in place.
+for(const absence of ['absent','invalid','limit','no-issue','no-projection'] as const)test(`#756 missing plan prose uses existing ${absence} copy and refreshes plan step summaries in place`,async()=>{
  const i18n=await import('../web/i18n.ts'),preference=i18n.getLanguagePreference(),link=i18n.getLinkLanguage();
- i18n.setLinkLanguage(null);i18n.setLanguagePreference('en');const h=await harness();let unbind:(()=>void)|undefined;
+ i18n.setLinkLanguage(null);i18n.setLanguagePreference('en');const h=await harness(false,'fixture','checkpoint');let unbind:(()=>void)|undefined;
  try{
   const prepared=await h.screen.prepare(h.f.display,new AbortController().signal),inspection=prepared!.record!.inspection;
-  const checkpointId=(h.f.ask.subject as {checkpointId:string}).checkpointId,plan=h.f.ask.source.plan!;
+  const plan=h.f.ask.source.plan!;
   const original=inspection.metadata.planText!;if(original.status!=='projected')throw new Error('Expected projected fixture');
   inspection.metadata.planText=absence==='no-projection'?undefined:{...original,steps:original.steps.map((row,index)=>{const {does,issues,...rest}=row;return {...rest,rests_on:[plan.steps[1-index]!.id],issues:[...issues.filter(issue=>!['does','rests_on'].includes(issue.field)),...absence==='no-issue'?[]:[{field:'does' as const,reason:absence as 'absent'|'invalid'|'limit'}]]};})};
-  // A historical runtime row can exist without a title, although current manifests require one.
-  inspection.metadata.manifest={checkpoints:[{id:checkpointId}]} as NonNullable<typeof inspection.metadata.manifest>;
   const node=((tag:string,key?:string)=>{const element=h.dom.document.createElement(tag);if(key){element.dataset.jobText=key;element.textContent=i18n.t(key);}return element;}) as JobFormDependencies['node'];
-  const deps={...h.deps,node,translate:i18n.t,helpers:{...createJobFormHelpers(node,i18n.t),jobCheckpointContext,assertJobAskSource:h.deps.helpers.assertJobAskSource}};
-  const form=formFor(h.f.ask,inspection,deps).form,heading=form.querySelector('h3')!,container=h.dom.document.createElement('div');container.append(form);
-  inspection.metadata.manifest.checkpoints[0]!.title='Existing human title';const named=formFor(h.f.ask,inspection,deps).form,namedHeading=named.querySelector('h3')!;container.append(named);
+  const helpers=createJobFormHelpers(node,i18n.t),list=helpers.planTextList(plan,inspection.metadata.planText),container=h.dom.document.createElement('div');container.append(list);
   const source=await readFile(new URL('../web/job-session.ts',import.meta.url),'utf8'),subscription=source.split('\n').find(line=>line.includes('const localize=i18n.onLanguageChange('))!;
   expect(subscription).toBeDefined();unbind=new Function('i18n','t','host',new Bun.Transpiler({loader:'ts'}).transformSync(subscription+';return localize;'))(i18n,i18n.t,container);
   for(const language of ['ko','en'] as const){
    i18n.setLanguagePreference(language);const reason=absence==='no-issue'||absence==='no-projection'?'absent':absence,copy=i18n.t('job.plan.field.'+reason);
-   expect(form.querySelector('h3')).toBe(heading);expect(heading.textContent).toBe(copy);expect(heading.title).toBe(checkpointId);
-   expect(namedHeading.textContent).toBe('Existing human title');expect(namedHeading.title).toBe(checkpointId);
-   for(const summary of form.querySelectorAll('summary')){expect(summary.textContent).toBe(copy);expect(summary.title).toContain(plan.steps[0]!.id);expect(summary.title).toContain(plan.steps[0]!.hash);}
-   for(const rest of form.querySelector('[data-job-plan-field="rests_on"]')?.querySelectorAll('li')??[]){expect(rest.textContent).toBe(copy);expect(rest.title).toBe(plan.steps[1]!.id);}
-   for(const step of plan.steps){expect(form.textContent).not.toContain(step.id);expect(form.textContent).not.toContain(step.hash);}
+   for(const [index,summary]of [...list.querySelectorAll('summary')].entries()){expect(summary.textContent).toBe(copy);expect(summary.title).toContain(plan.steps[index]!.id);expect(summary.title).toContain(plan.steps[index]!.hash);}
+   for(const [index,rest]of [...list.querySelectorAll('[data-job-plan-field="rests_on"] li')].entries()){expect(rest.textContent).toBe(copy);expect((rest as HTMLElement).title).toBe(plan.steps[1-index]!.id);}
+   for(const step of plan.steps){expect(list.textContent).not.toContain(step.id);expect(list.textContent).not.toContain(step.hash);}
   }
   inspection.dispose();
  }finally{unbind?.();await h.close();i18n.setLinkLanguage(link);i18n.setLanguagePreference(preference);}
@@ -461,31 +493,27 @@ for(const picture of [true,'parts'] as const)for(const capability of ['fixture',
   expect(readOnlyReason(host.access,true,host.ownerActAccess)).toBe(capability?null:readOnlyMessage);
   h.state.receipt={publicationId:h.f.ask.publicationId,pageId:h.deps.pageId,displayedNonce:'ready'};h.screen.changed(h.state);
   const entry=prepared!.record!.forms.get(h.f.ask.askId)!;expect(entry.fieldset.disabled).toBe(!capability);
-  entry.form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='pass';await entry.form.onsubmit!({preventDefault(){}} as never);
+  for(const input of entry.form.querySelectorAll<HTMLInputElement>('input[type=radio]')){input.checked=['biped_std','density_high'].includes(input.value);if(input.checked)input.dispatchEvent(new Event('change'));}
+  await entry.form.onsubmit!({preventDefault(){}} as never);
   expect(h.submitted).toHaveLength(capability?1:0);
   for(const method of ['POST','PUT','PATCH','DELETE'])await expect(host.read('/api/stage-parts/verdict',method)).rejects.toThrow('JOB_REVIEW_READ_ONLY');
   expect(host.access.headers().has('X-Review-Capability')).toBe(false);
  }finally{await h.close();}
 });
 
-test('#784 model-less reference checkpoint survives preparation, receipt rearm and later ask refresh',async()=>{
+// #1229: model-less reference packages open with no ask; checkpoint asks no longer mount a form.
+test('#784 and #1229 model-less reference package prepares and mounts with no ask while checkpoint asks are unsupported without a model',async()=>{
  const h=await harness();
  try{
   const base=fixturePublication(),original=base.publication.source;
   const source={...original,model:null,selector:null,plan:{steps:[{id:'step-one',hash:'1'.repeat(64)}]}};
   const display={...base,publication:{...base.publication,source}} as DisplayPublicationV3,bytes=new Uint8Array([1,2,3]);
   const manifest=parseManifest({schema:'rig-review/1',...source.package,title:'Reference-only',references:[{id:'photo',type:'image',label:'Photo',path:'photo.png'}],checkpoints:[{id:'photo-check',title:'Check photo',reference:'photo'}]});
-  const ask={askId:'photo-check',publicationId:base.publication.publicationId,status:'pending',source,subject:{kind:'checkpoint',checkpointId:'photo-check',planStepId:'step-one'}} as PendingAskV3;
-  h.state.pending.splice(0,h.state.pending.length,ask);
+  h.state.pending.splice(0,h.state.pending.length);
   h.dom.set('fetch',async(input:RequestInfo|URL)=>String(input).endsWith('/review')?Response.json({manifest,sourceHash:source.sourceHash,reviewedSource:{packageRevision:'1',viewerVersion:'synthetic',runtimeVersion:'synthetic',rig:null,motion:null},referenceHashes:{photo:jobHash(bytes)},capabilities:{playback:false},feedbackCatalog:{slots:null}}):new Response(bytes));
   const ready=await h.screen.prepare(display,new AbortController().signal);
-  expect(ready!.record!.inspection.references).toHaveLength(1);expect(ready!.record!.picture!.review!.manifest.references[0]!.id).toBe('photo');expect(ready!.refusal).toBeUndefined();
-  h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);expect(rigHost()!.record!.hasPicture).toBe(true);
-  const entry=ready!.record!.forms.get(ask.askId)!;expect(entry).toBeDefined();expect(entry.fieldset.disabled).toBe(true);
-  h.state.receipt={publicationId:ask.publicationId,pageId:h.deps.pageId,displayedNonce:'reference-ready'};h.screen.changed(h.state);expect(entry.fieldset.disabled).toBe(false);
-  h.state.pending.push({...ask,askId:'later-photo-check'});h.screen.changed(h.state);expect(ready!.record!.forms.has('later-photo-check')).toBe(true);expect(ready!.record!.forms.get(ask.askId)).toBe(entry);
-  entry.form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='pass';entry.form.commentWords=()=> '[general]\nreference comment';await entry.form.onsubmit!({preventDefault(){}} as never);
-  expect(h.submitted).toHaveLength(1);expect(h.submitted[0]).toMatchObject({kind:'checkpoint',askId:ask.askId,value:{checkpointId:'photo-check',outcome:'pass',words:'[general]\nreference comment'}});
+  expect(ready!.record!.picture!.review!.manifest.references[0]!.id).toBe('photo');expect(ready!.refusal).toBeUndefined();
+  h.screen.commit(ready!);await h.screen.painted(ready!,new AbortController().signal);expect(rigHost()!.subject).toBeUndefined();
  }finally{await h.close();}
 });
 
@@ -558,19 +586,11 @@ test('#814 bound record image route serves only the sealed part and rejects writ
  }finally{await h.close();}
 });
 
-test('#809 checkpoint answers reuse the form contract without the evidence grid',async()=>{
- const h=await harness();try{
+// #1229: checkpoint Pass/Fail form retired; checkpoint asks mount zero record forms.
+test('#809 and #1229 checkpoint asks mount no Pass/Fail form on the record screen',async()=>{
+ const h=await harness(false,'fixture','checkpoint');try{
   const ready=await h.screen.prepare(h.f.display,new AbortController().signal);
-  const entry=ready!.record!.forms.get(h.f.ask.askId)!;
-  expect(entry.form.querySelector<HTMLSelectElement>('select[name=outcome]')!.hidden).toBe(true);
-  expect(entry.form.querySelector('[data-job-checkpoint-evidence]')).toBeNull();
-  const answers=[...entry.form.querySelectorAll<HTMLButtonElement>('button[type=submit]')];
-  expect(answers.map((button:any)=>button.textContent).sort()).toEqual(['Pass','job.fail'].sort());
-  for(const [label,outcome]of [['Pass','pass'],['job.fail','fail']]){
-   const button=answers.find((item:any)=>item.textContent===label)!;
-   button.click();
-   expect(entry.read()).toMatchObject({checkpointId:h.f.ask.subject.kind==='checkpoint'?h.f.ask.subject.checkpointId:'',outcome,words:''});
-  }
+  expect(ready!.record!.forms.size).toBe(0);
   ready!.record!.inspection.dispose();
  }finally{await h.close();}
 });
@@ -624,7 +644,7 @@ test('#1112 a sealed rig question hides the option file row and exports the orig
   };
   let act: ActV3 | undefined;
   entry = formFor(ask,inspection,{node,translate:i18n.t,
-   helpers:{...createJobFormHelpers(node,i18n.t),jobCheckpointContext,assertJobAskSource:(bound,display)=>{prepareJobForms(display,[bound],()=>null);}},
+   helpers:{...createJobFormHelpers(node,i18n.t),assertJobAskSource:(bound,display)=>{prepareJobForms(display,[bound],()=>null);}},
    draftStorage:()=>({getItem:()=>null}),localDraftKey:()=> 'review-1112',saveDraft(){},
    pageId,access:{capability:f.session.hostCredentials().ui},
    window:{state:()=>({...f.session.status(),receipt,preparing:false,closed:false}),

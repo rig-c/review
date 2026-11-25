@@ -122,7 +122,8 @@ function isRecordAnswer(kind: string): boolean {
     return kind === 'signoff' || kind === 'checkpoint';
 }
 export function isPendingOwnerAsk(ask: PendingAskV3): boolean {
-    return ask.status === 'pending' && ask.subject.kind !== 'signoff' && JOB_ENABLED_ACT_KINDS.some(kind => kind === ask.subject.kind);
+    return ask.status === 'pending' && ask.subject.kind !== 'signoff' && ask.subject.kind !== 'checkpoint' &&
+        JOB_ENABLED_ACT_KINDS.some(kind => kind === ask.subject.kind);
 }
 /** Match the finalized envelope to the displayed ask. Record acts omit the display-only direction summary. */
 export function matchesJobRecordAct(ask: PendingAskV3, act: ActV3 | undefined, jobId: string | undefined, submission?: UISubmissionV3): boolean {
@@ -196,24 +197,6 @@ export function jobPlanTextForSource(value: unknown, source: SourceV3): JobPlanT
         projection.steps.some((row, index) => row.id !== source.plan!.steps[index]?.id || row.hash !== source.plan!.steps[index]?.hash)))
         return mismatch();
     return projection;
-}
-
-/** C2 publishes the plan mapping in the ask. Legacy checkpoint metadata is optional guidance. */
-export function jobCheckpointContext(
-    ask: PendingAskV3,
-    checkpoints: readonly Pick<Checkpoint, 'id' | 'title' | 'note'>[],
-) {
-    if (ask.subject.kind !== 'checkpoint') throw new Error('JOB_ASK_INVALID');
-    const checkpointId = ask.subject.checkpointId;
-    const planStepId = ('planStepId' in ask.subject ? ask.subject.planStepId : undefined) ?? checkpointId;
-    const step = ask.source.plan?.steps.find(item => item.id === planStepId);
-    if (!step) throw new Error('JOB_ASK_INVALID');
-    const checkpoint = checkpoints.find(item => item.id === checkpointId);
-    return {
-        step,
-        title: checkpoint?.title ?? checkpointId,
-        note: checkpoint?.note ?? '',
-    };
 }
 
 /** No network, DOM or storage is accessed until the supplied adapter does so. */
@@ -1556,7 +1539,6 @@ export interface JobFormDependencies {
     translate: typeof import('./i18n.ts').t;
     helpers: ReturnType<typeof createJobFormHelpers> & {
         assertJobAskSource: typeof assertJobAskSource;
-        jobCheckpointContext: typeof jobCheckpointContext;
     };
     draftStorage(): Pick<Storage, 'getItem'>;
     localDraftKey(display: DisplayPublicationV3): string;
@@ -1571,7 +1553,7 @@ export interface JobFormDependencies {
 
 /** Build the existing answer form with explicit host dependencies. */
     function formFor(ask: JobWindowAsk, prepared: JobPreparedInspection, deps: JobFormDependencies): JobForm {
-        const {node, translate: t, helpers: {selectValues, imageGallery, planTextList, planStepText, assertJobAskSource, jobCheckpointContext},
+        const {node, translate: t, helpers: {assertJobAskSource},
             draftStorage, localDraftKey, saveDraft, window, access, pageId} = deps;
         if (ask.publicationId !== prepared.display.publication.publicationId)
             throw new Error('JOB_DISPLAY_MISMATCH');
@@ -1592,10 +1574,6 @@ export interface JobFormDependencies {
         fields.append(source);
         const subject = ask.subject;
         if(subject.kind==='review-verdict')throw new Error('JOB_ACT_KIND_DISABLED');
-        const commentOnly = subject.kind === 'checkpoint';
-        if(commentOnly)fields.append(node('p','job.commentsFromWorkspace'));
-        let retainedCommentWords='';
-        const commentWords=()=>form.commentWords?.()??retainedCommentWords;
         let read: () => UISubmissionV3['value'];
         let submitKey = 'Submit review';
         let disposeInterview:(()=>void)|undefined;
@@ -1655,53 +1633,17 @@ export interface JobFormDependencies {
             read=readInterview;
             submitKey = 'interview.save';
         }
-        else if (subject.kind === 'checkpoint') {
-            form.dataset.checkpointId = subject.checkpointId;
-            const checkpoint = jobCheckpointContext(ask, prepared.metadata.manifest?.checkpoints ?? []);
-            const heading = node('h3');
-            heading.textContent = checkpoint.title;
-            heading.title = subject.checkpointId;
-            heading.setAttribute('translate', 'no');
-            if (prepared.metadata.manifest?.checkpoints.find(item => item.id === subject.checkpointId)?.title == null)
-                planStepText(heading, checkpoint.step, prepared.metadata.planText);
-            fields.prepend(heading);
-            const guidance = node('p');
-            guidance.textContent = checkpoint.note;
-            guidance.setAttribute('translate', 'no');
-            fields.append(guidance, planTextList(ask.source.plan!, prepared.metadata.planText, checkpoint.step.id));
-            const evidence = prepared.checkpointEvidence?.find(item => item.packet.checkpointId === subject.checkpointId);
-            const declared = ask.source.checkpointEvidence?.find(item => item.checkpointId === subject.checkpointId);
-            if (Boolean(declared) !== Boolean(evidence) || evidence &&
-                (JSON.stringify(evidence.packet) !== JSON.stringify(declared) || evidence.packet.planStepId !== checkpoint.step.id)) {
-                throw new Error('CHECKPOINT_EVIDENCE_INVALID');
-            }
-            const outcome = selectValues(['', 'pass', 'fail'], ['Pending', 'Pass', 'job.fail']);
-            outcome.required = true;
-            outcome.hidden = true;
-            outcome.name = 'outcome';
-            fields.append(outcome);
-            read = () => ({ checkpointId: subject.checkpointId, outcome: outcome.value as 'pass' | 'fail', words: commentWords() });
-            submitKey = 'job.saveCheckpoint';
-        }
-        else if(subject.kind==='parts-verdict')throw new Error('JOB_ACT_KIND_DISABLED');
         else {
             throw new Error('JOB_ACT_KIND_DISABLED');
         }
         const submit = interviewForm?.submit??node('button', submitKey);
         submit.type = 'submit';
         submit.classList.add('primary');
-        if(subject.kind==='checkpoint'){
-            submit.dataset.jobText='Pass';submit.textContent=t('Pass');
-            submit.onclick=()=>{form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='pass';form.dispatchEvent(new Event('input'));};
-            const fail=node('button','job.fail');fail.type='submit';
-            fail.onclick=()=>{form.querySelector<HTMLSelectElement>('select[name=outcome]')!.value='fail';form.dispatchEvent(new Event('input'));};
-            fields.append(fail);
-        }
         fields.append(submit);
         const status = interviewForm?.status??node('p');
         status.setAttribute('role', 'status');
         form.append(status);
-        let disposed = false, recordSubmitted = false;
+        let disposed = false;
         const dispose = () => {if (disposed) return; disposed = true; entry.submitting = false; disposeInterview?.();};
         const entry: JobForm = { form, fieldset: fields, read, submissionId: crypto.randomUUID(), dirty: false,
             submitting: false, dispose };
@@ -1740,12 +1682,8 @@ export interface JobFormDependencies {
                     ? [...(saved.forms ?? [])].reverse().find((item: {
                         askId: string;
                         value?: Record<string, unknown>;
-                    }) =>
-                        subject.kind === 'interview-picks' ? item.value?.questionId === subject.questionId :
-                        subject.kind === 'checkpoint' && item.value?.checkpointId === subject.checkpointId
-                    )
+                    }) => subject.kind === 'interview-picks' && item.value?.questionId === subject.questionId)
                     : undefined);
-                if(commentOnly&&typeof original?.value?.words==='string'&&original.value.words.length<=10000)retainedCommentWords=original.value.words;
                 for (const input of form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name],textarea[name],select[name]')) {
                     const restored = original?.controls?.find((item: {
                         name: string;
@@ -1766,11 +1704,11 @@ export interface JobFormDependencies {
             }
         }
         catch { /* Invalid or unavailable local drafts grant no submission authority. */ }
-        form.oninput = () => { if (disposed || recordSubmitted) return; entry.dirty = true; entry.submissionId = crypto.randomUUID(); saveDraft(); };
+        form.oninput = () => { if (disposed) return; entry.dirty = true; entry.submissionId = crypto.randomUUID(); saveDraft(); };
         let attemptedValue:string|undefined;
         form.onsubmit = async (event) => {
             event.preventDefault();
-            if (disposed || entry.submitting || recordSubmitted) return;
+            if (disposed || entry.submitting) return;
             const state = window.state();
             const receipt = state.receipt;
             if (!receipt || state.preparing || state.closed || !access.capability || !form.reportValidity())
@@ -1779,21 +1717,16 @@ export interface JobFormDependencies {
                 const draft=read();
                 const value=form.interviewComments?{...draft,comments:form.interviewComments()}:draft;
                 const key=JSON.stringify(value);
-                if((commentOnly||form.interviewComments)&&attemptedValue!==undefined&&attemptedValue!==key)entry.submissionId=crypto.randomUUID();
+                if(form.interviewComments&&attemptedValue!==undefined&&attemptedValue!==key)entry.submissionId=crypto.randomUUID();
                 attemptedValue=key;
                 const input = { kind: subject.kind, publicationId: ask.publicationId,
                     askId: ask.askId, pageId, displayedNonce: receipt.displayedNonce,
                     expectedGeneration: state.generation, submissionId: entry.submissionId, value } as UISubmissionV3;
                 const activeAsk = state.pending.find(item => item.askId === ask.askId);
                 if (!activeAsk) throw new Error('JOB_ASK_INVALID');
-                if (commentOnly && (activeAsk.status !== 'pending' || receipt.publicationId !== ask.publicationId)) return;
                 entry.submitting = true;
                 fields.disabled = true;
-                if (commentOnly) {
-                    delete status.dataset.jobText;
-                    status.textContent = '';
-                    form.dispatchEvent(new Event('job-answer-sending'));
-                } else if (interviewForm) {
+                if (interviewForm) {
                     interviewRefusal = undefined;
                     status.removeAttribute('title');
                     updateInterviewSubmit(true);
@@ -1808,14 +1741,10 @@ export interface JobFormDependencies {
                 if (disposed) return;
                 if (!result.ok)
                     throw new Error(result.error.code, {cause: (result.error as {cause?: unknown}).cause});
-                if (commentOnly && !matchesJobRecordAct(ask, result.value, jobId, frozen)) {
-                    throw new Error('JOB_ACT_INVALID');
-                }
-                recordSubmitted = commentOnly;
                 entry.submitting = false;
                 entry.dirty = false;
                 if (interviewForm) updateInterviewSubmit(false);
-                status.dataset.jobText = commentOnly ? 'Submitted' : 'job.saved';
+                status.dataset.jobText = 'job.saved';
                 status.textContent = t(status.dataset.jobText);
                 if(subject.kind==='interview-picks'){form.dataset.interviewAnswered='true';form.dispatchEvent(new Event('change'));}
                 saveDraft();
@@ -1829,14 +1758,15 @@ export interface JobFormDependencies {
                     delete status.dataset.jobText;
                     interviewRefusal = {error};
                     renderInterviewRefusal();
+                    const message = error instanceof Error ? error.message : error;
+                    if (!(typeof message === 'string' && Object.hasOwn(enCatalog, message) && Object.hasOwn(koCatalog, message)))
+                        console.error('[job-window]', 'JOB_ACT_INVALID', error);
                 } else {
                     status.dataset.jobText = error instanceof Error && Object.hasOwn(enCatalog, error.message) && Object.hasOwn(koCatalog, error.message)
                         ? error.message : 'JOB_ACT_INVALID';
                     status.textContent = jobWindowRefusal(error, 'JOB_ACT_INVALID');
                 }
-                const current = window.state();
-                fields.disabled = commentOnly && (current.closed || current.preparing || current.receipt?.publicationId !== ask.publicationId ||
-                    !current.pending.some(item => item.askId === ask.askId && item.status === 'pending'));
+                fields.disabled = false;
                 // A shared question-set submit waits on every member; a failed one must let it re-enable for the retry.
                 form.dispatchEvent(new Event('job-answer-failed'));
             }
@@ -1947,7 +1877,7 @@ export async function mountJobScreen(host:HTMLElement):Promise<()=>void> {
     const drafts=createJobFormDrafts({jobId:access.jobId,current:()=>modalState()?.inspection??null,forms:()=>modalState()?.forms??emptyForms,storage:()=>localStorage});
     const transport=createJobWindowTransport(access);
     let stopped=false;
-    const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource,jobCheckpointContext},draftStorage:()=>localStorage,...drafts,access,pageId,
+    const dependencies:JobFormDependencies={node,translate:t,helpers:{...helpers,assertJobAskSource},draftStorage:()=>localStorage,...drafts,access,pageId,
         window:{state:()=>window.state(),submit:input=>window.submit(input)}};
     const rigScreen=createJobRigScreen({host,pageId,access,translate:(key,values)=>i18n.t(key,values,'en'),confirm:text=>globalThis.confirm(i18n.tr(text)),refusal:jobWindowRefusal,formDependencies:dependencies,
         window:{state:()=>window.state(),submit:input=>window.submit(input)},readPublication:(id,signal)=>transport.readPublication(id,signal),
